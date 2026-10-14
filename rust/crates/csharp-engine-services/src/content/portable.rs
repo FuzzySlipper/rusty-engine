@@ -161,15 +161,12 @@ pub(super) unsafe extern "C" fn open_member(
             .ok_or_else(|| format!("missing file member '{id}' in portable asset"))
     });
     match member {
-        Ok(member) => match bridge.retain(member) {
-            Some(handle) => {
-                unsafe {
-                    *result = handle;
-                }
-                ABI_OK
+        Ok(member) => {
+            unsafe {
+                *result = bridge.retain(member);
             }
-            None => 0,
-        },
+            ABI_OK
+        }
         Err(message) => bridge.portable.fail(message, error),
     }
 }
@@ -419,7 +416,7 @@ mod tests {
         assert_eq!(loose.closure, bundled.closure);
         assert_eq!(loose.members["body"].bytes, bundled.members["body"].bytes);
         let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
-        let reference = bridge.retain(source("bundle/")).unwrap();
+        let reference = bridge.retain(source("bundle/"));
         let api = super::super::api(&mut bridge);
         let mut asset = NativePortableAssetHandle::default();
         let mut error = unsafe { std::mem::zeroed() };
@@ -476,15 +473,13 @@ mod tests {
             ("color.png".to_owned(), Arc::from(b"image".as_slice())),
         ]));
         let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
-        let reference = bridge
-            .retain(AdmittedContent {
-                path: "asset.json".to_owned(),
-                identity: ContentIdentity::default(),
-                bytes: body,
-                transient: false,
-                files,
-            })
-            .unwrap();
+        let reference = bridge.retain(AdmittedContent {
+            path: "asset.json".to_owned(),
+            identity: ContentIdentity::default(),
+            bytes: body,
+            transient: false,
+            files,
+        });
         let api = super::super::api(&mut bridge);
         let mut asset = NativePortableAssetHandle::default();
         let mut error = unsafe { std::mem::zeroed() };

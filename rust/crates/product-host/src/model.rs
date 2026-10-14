@@ -475,7 +475,6 @@ pub enum ProductHostRuntimeScheduleState {
 #[serde(rename_all = "kebab-case")]
 pub enum ProductHostRuntimeFault {
     OwnerReported,
-    CounterExhausted,
 }
 
 /// Direct operation result supplied by the generated runtime.

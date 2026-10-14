@@ -62,15 +62,7 @@ impl RuntimeSpatialBridge {
             )
             .map_err(|error| world_origin_error("CSHARP_WORLD_ORIGIN_PREPARE", error))?;
         let value = self.next_world_origin_prepared;
-        self.next_world_origin_prepared = self
-            .next_world_origin_prepared
-            .checked_add(1)
-            .ok_or_else(|| {
-                world_origin_error(
-                    "CSHARP_WORLD_ORIGIN_PREPARE",
-                    "world-origin prepared handles exhausted",
-                )
-            })?;
+        self.next_world_origin_prepared += 1;
         self.prepared_world_origins.insert(
             value,
             PreparedWorldOriginOwner {

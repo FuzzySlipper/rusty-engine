@@ -213,9 +213,7 @@ impl RuntimeImplicitBridge {
     }
     fn allocate_volume(&mut self) -> Result<u64> {
         let value = self.next_volume;
-        self.next_volume = value
-            .checked_add(1)
-            .ok_or_else(|| error("sampled volume identity exhausted"))?;
+        self.next_volume = value + 1;
         Ok(value)
     }
     fn retain_density_snapshot(
@@ -242,9 +240,7 @@ impl RuntimeImplicitBridge {
     }
     fn allocate_node(&mut self) -> Result<u64> {
         let value = self.next_node;
-        self.next_node = value
-            .checked_add(1)
-            .ok_or_else(|| error("implicit node identity exhausted"))?;
+        self.next_node = value + 1;
         Ok(value)
     }
     fn edit(
@@ -726,9 +722,7 @@ unsafe extern "C" fn create_field(
     }
     call(context, result, operation_error, |b| {
         let value = b.next_field;
-        b.next_field = value
-            .checked_add(1)
-            .ok_or_else(|| error("field identity exhausted"))?;
+        b.next_field = value + 1;
         b.stage()?.fields.insert(
             value,
             RetainedField {

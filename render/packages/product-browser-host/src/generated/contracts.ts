@@ -236,7 +236,7 @@ frame: ProductHostDrawnFrame | null, };
  */
 export type ProductHostRuntimeBinding = { instanceId: CanonicalU64, generation: CanonicalU64, controlRevision: CanonicalU64, };
 
-export type ProductHostRuntimeFault = "owner-reported" | "counter-exhausted";
+export type ProductHostRuntimeFault = "owner-reported";
 
 export type ProductHostRuntimeOutput = { "kind": "binding", runtime: ProductHostRuntimeBinding, nextInputSequence: CanonicalU64, 
 /**

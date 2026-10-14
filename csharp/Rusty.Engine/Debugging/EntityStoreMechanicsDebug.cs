@@ -5,12 +5,11 @@ namespace Rusty.Engine.Debugging;
 
 public sealed partial class EntityStoreDebugModule
 {
-    /// <summary>Explicitly registers bounded live Stats, Effects, Inventory and Equipment projections,
-    /// replacing earlier ones; it neither discovers nor registers stores or components.</summary>
+    /// <summary>Explicitly registers live Stats, Effects, Inventory and Equipment projections listing
+    /// up to <paramref name="maximumEntries"/> entries of each kind, replacing earlier ones; it neither
+    /// discovers nor registers stores or components.</summary>
     public void RegisterMechanicsProjections(int maximumEntries = 16)
     {
-        if (maximumEntries is < 1 or > MaximumPageSize)
-            throw new ArgumentOutOfRangeException(nameof(maximumEntries));
         RegisterProjection<StatsComponent>((in StatsComponent value) => FormatStats(value, maximumEntries));
         RegisterProjection<EffectsComponent>((in EffectsComponent value) => FormatEffects(value, maximumEntries));
         RegisterProjection<InventoryComponent>((in InventoryComponent value) => FormatInventory(value, maximumEntries));

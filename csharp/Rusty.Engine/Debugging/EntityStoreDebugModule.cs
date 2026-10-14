@@ -23,10 +23,6 @@ public delegate string EntityStoreDebugProjection<T>(in T value) where T : notnu
 /// </summary>
 public sealed partial class EntityStoreDebugModule : IDebugCommandModule
 {
-    public const int MaximumPageSize = 64;
-    public const int MaximumResultLength = 4096;
-    public const int MaximumStoreNameLength = 64;
-
     private readonly SortedDictionary<string, EntityStore> _stores = new(StringComparer.Ordinal);
     private readonly SortedDictionary<ComponentTypeKey, Projection> _projections = [];
     private readonly Dictionary<Type, Projection> _typedProjections = [];
@@ -38,15 +34,13 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
     /// </summary>
     public void RegisterStore(string name, EntityStore store)
     {
-        ValidateStoreName(name);
-        ValidateStore(store);
+        ArgumentNullException.ThrowIfNull(store);
         _stores[name] = store;
     }
 
     /// <summary>Removes an existing store registration without disposing the product-owned store.</summary>
     public void UnregisterStore(string name)
     {
-        ValidateStoreName(name);
         if (!_stores.Remove(name))
         {
             throw new InvalidOperationException($"A debug store named '{name}' is not registered.");
@@ -91,14 +85,9 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
             return DebugCommandResult.Success($"store={name};revision={snapshot.Revision};next={snapshot.NextEntityValue};entities={snapshot.Entities.Count};active={active};disabled={disabled};tombstoned={tombstoned}");
         });
 
-    [DebugCommand("entity.list", Description = "Lists a bounded, lifecycle-selected EntityStore page after an entity-id cursor.")]
+    [DebugCommand("entity.list", Description = "Lists a page of up to limit lifecycle-selected EntityStore entities after an entity-id cursor.")]
     public DebugCommandResult ListEntities(string store, EntityStoreDebugSelector selector, ulong cursor, int limit)
-    {
-        if (!Enum.IsDefined(selector))
-        {
-            return Invalid("The entity selector is not supported.");
-        }
-        return WithPage(store, limit, (name, snapshot, pageLimit) =>
+        => WithPage(store, limit, (name, snapshot, pageLimit) =>
         {
             EntityStoreDebugEntitySnapshot[] rows = snapshot.Entities
                 .Where(entity => entity.Entity.Value > cursor && Matches(selector, entity.Lifecycle))
@@ -115,7 +104,6 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
             }
             return DebugCommandResult.Success(output.ToString());
         });
-    }
 
     [DebugCommand("entity.get", Description = "Shows one EntityStore entity, containment, component keys, and revisions.")]
     public DebugCommandResult GetEntity(string store, ulong entity)
@@ -138,7 +126,7 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
             return DebugCommandResult.Success(output.ToString());
         });
 
-    [DebugCommand("entity.children", Description = "Lists a bounded page of direct contained EntityStore children after an entity-id cursor.")]
+    [DebugCommand("entity.children", Description = "Lists a page of up to limit direct contained EntityStore children after an entity-id cursor.")]
     public DebugCommandResult ListChildren(string store, ulong entity, ulong cursor, int limit)
         => WithPage(store, limit, (name, snapshot, pageLimit) =>
         {
@@ -205,27 +193,7 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
     }
 
     private DebugCommandResult WithPage(string store, int limit, Func<string, EntityStoreDebugSnapshot, int, DebugCommandResult> query)
-    {
-        if (limit is <= 0 or > MaximumPageSize)
-        {
-            return Invalid($"Page limit must be between 1 and {MaximumPageSize}.");
-        }
-        return WithStore(store, (name, snapshot) => query(name, snapshot, limit));
-    }
-
-    private static void ValidateStoreName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name) || name.Length > MaximumStoreNameLength || name.Any(char.IsWhiteSpace))
-        {
-            throw new ArgumentException($"A store name must be a non-empty, whitespace-free token of at most {MaximumStoreNameLength} characters.", nameof(name));
-        }
-    }
-
-    private static void ValidateStore(EntityStore store)
-    {
-        ArgumentNullException.ThrowIfNull(store);
-        store.ValidateDebugRegistration();
-    }
+        => WithStore(store, (name, snapshot) => query(name, snapshot, limit));
 
     private static bool Matches(EntityStoreDebugSelector selector, EntityLifecycle lifecycle)
         => selector switch
@@ -244,12 +212,7 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
         => typeId.IsSpecified ? typeId.Value : "unspecified";
 
     private static DebugCommandResult Invalid(string message)
-        => DebugCommandResult.Failure(DebugCommandStatus.InvalidArguments, BoundedMessage(message));
-
-    private static string BoundedMessage(string message)
-        => message.Length <= MaximumResultLength
-            ? message
-            : string.Concat(message.AsSpan(0, MaximumResultLength - 3), "...");
+        => DebugCommandResult.Failure(DebugCommandStatus.InvalidArguments, message);
 
     private abstract class Projection(ComponentType? descriptor)
     {
@@ -291,34 +254,14 @@ public sealed partial class EntityStoreDebugModule : IDebugCommandModule
     private sealed class DebugOutput
     {
         private readonly StringBuilder _builder = new();
-        private bool _truncated;
 
         internal void Append(string value)
         {
-            if (_truncated)
-            {
-                return;
-            }
-            int available = MaximumResultLength - _builder.Length;
             if (_builder.Length != 0)
             {
-                if (available <= 1)
-                {
-                    _truncated = true;
-                    return;
-                }
                 _builder.Append(';');
-                available--;
             }
-            if (value.Length <= available)
-            {
-                _builder.Append(value);
-                return;
-            }
-            const string suffix = "...";
-            _builder.Append(value.AsSpan(0, Math.Max(0, available - suffix.Length)));
-            _builder.Append(suffix.AsSpan(0, Math.Min(suffix.Length, available)));
-            _truncated = true;
+            _builder.Append(value);
         }
 
         public override string ToString() => _builder.ToString();

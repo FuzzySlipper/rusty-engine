@@ -29,11 +29,6 @@ public sealed class EquipmentSlotDefinition
             .Select(value => value ?? throw new ArgumentException("Slot classifications cannot be null.", nameof(values)))
             .OrderBy(value => value.Value, StringComparer.Ordinal)
             .ToArray();
-        if (copied.Distinct().Count() != copied.Length)
-        {
-            throw new ArgumentException("Slot classifications must be unique.", nameof(values));
-        }
-
         return Array.AsReadOnly(copied);
     }
 }

@@ -698,7 +698,6 @@ pub enum RuntimeInputError {
     WireMalformed,
     WireEventLimit,
     SequenceOutOfOrder { expected: u64, received: u64 },
-    SequenceExhausted,
     BindingMismatch,
     InvalidRebindClear,
     DuplicateIntent,

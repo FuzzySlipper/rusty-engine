@@ -48,8 +48,6 @@ pub(crate) const RELOAD_CONTENT_COMMAND: &str = "reload-content";
 pub(crate) const PRODUCT_STOPPED_EXIT_CODE: u8 = 79;
 use product_bundle::ProductBundle;
 
-const MAX_PHYSICAL_MAPPINGS: usize = 256;
-const MAX_MAPPING_CHORD_CONTROLS: usize = 8;
 static NEXT_DIRECT_RUNTIME_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 
 const PHYSICAL_MAPPING_USAGE: &str = "--physical-mapping <mapping-id>=<intent-id>:<trigger>\n\
@@ -1121,11 +1119,6 @@ impl Arguments {
                     )?)?)
                 }
                 "--physical-mapping" => {
-                    if physical_mappings.len() == MAX_PHYSICAL_MAPPINGS {
-                        return Err(format!(
-                            "--physical-mapping accepts at most {MAX_PHYSICAL_MAPPINGS} declarations"
-                        ));
-                    }
                     physical_mappings.push(parse_physical_mapping(
                         &values
                             .next()
@@ -1142,12 +1135,9 @@ impl Arguments {
                     let iterations = values
                         .next()
                         .ok_or("--performance-probe requires an iteration count")?
-                        .parse::<u32>()
-                        .map_err(|_| "--performance-probe must be an integer in 1..=256")?;
-                    if iterations == 0 || iterations > 256 {
-                        return Err("--performance-probe must be in 1..=256".to_owned());
-                    }
-                    performance_probe = Some(iterations);
+                        .parse::<std::num::NonZeroU32>()
+                        .map_err(|_| "--performance-probe must be a positive integer")?;
+                    performance_probe = Some(iterations.get());
                 }
                 "--supervised" => supervised = true,
                 "--debugger" => debugger = true,
@@ -1204,7 +1194,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory|product.rpak> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--diagnostics-log <file>] [--activity-file <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <1..=256> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. A release Product is one container file (`rusty build --pack`) holding product.json, UI and content, with the managed/native artifacts loose beside it. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--cef-dir` overrides the runtime pack's `lib/cef` and each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`). `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--activity-file` marks the host's last use (input, control, live debug, a page attaching; not frame pulls) in that file's time, which `rusty dev` reads to stop idle sessions. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory|product.rpak> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--diagnostics-log <file>] [--activity-file <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <iterations> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. A release Product is one container file (`rusty build --pack`) holding product.json, UI and content, with the managed/native artifacts loose beside it. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--cef-dir` overrides the runtime pack's `lib/cef` and each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`). `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--activity-file` marks the host's last use (input, control, live debug, a page attaching; not frame pulls) in that file's time, which `rusty dev` reads to stop idle sessions. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -1449,19 +1439,7 @@ fn parse_mapping_qualifiers<'a>(
 }
 
 fn parse_chord(value: &str) -> Result<Vec<KeyboardControl>, String> {
-    let controls = value
-        .split('+')
-        .map(parse_keyboard_control)
-        .collect::<Result<Vec<_>, _>>()?;
-    if controls.is_empty() || controls.len() > MAX_MAPPING_CHORD_CONTROLS {
-        return Err(format!(
-            "--physical-mapping chord must contain 1 to {MAX_MAPPING_CHORD_CONTROLS} keyboard controls"
-        ));
-    }
-    if (1..controls.len()).any(|index| controls[..index].contains(&controls[index])) {
-        return Err("--physical-mapping chord controls must be unique".to_owned());
-    }
-    Ok(controls)
+    value.split('+').map(parse_keyboard_control).collect()
 }
 
 fn parse_input_edge(value: &str) -> Result<InputEdge, String> {
@@ -1972,29 +1950,6 @@ mod tests {
             "move=move.forward:pointer-axis:x",
         ]);
         assert!(mismatch.contains("IntentValueKindMismatch"));
-    }
-
-    #[test]
-    fn parser_enforces_mapping_and_chord_declaration_bounds() {
-        let mut values = vec!["--direct-intent", "move.forward=digital"];
-        for _ in 0..=MAX_PHYSICAL_MAPPINGS {
-            values.extend(["--physical-mapping", "move=move.forward:key:key-w:held"]);
-        }
-        let error = parse_test_error(&values);
-        assert!(error.contains("at most 256"));
-
-        let chord = (0..=MAX_MAPPING_CHORD_CONTROLS)
-            .map(|_| "key-w")
-            .collect::<Vec<_>>()
-            .join("+");
-        let declaration = format!("move=move.forward:key:key-w:held:chord={chord}");
-        let error = parse_test_error(&[
-            "--direct-intent",
-            "move.forward=digital",
-            "--physical-mapping",
-            &declaration,
-        ]);
-        assert!(error.contains("1 to 8"));
     }
 
     #[test]

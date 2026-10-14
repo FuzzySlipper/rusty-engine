@@ -17,9 +17,7 @@ pub(super) unsafe extern "C" fn create_audit(
     }
     call(context, result, operation_error, |b| {
         let value = b.next_audit;
-        b.next_audit = value
-            .checked_add(1)
-            .ok_or_else(|| error("audit identity overflow"))?;
+        b.next_audit = value + 1;
         b.stage()?.audits.insert(value, AuditCollection::default());
         Ok(NativeImplicitAuditHandle { value })
     })

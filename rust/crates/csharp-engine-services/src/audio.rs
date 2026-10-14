@@ -577,12 +577,7 @@ impl RuntimeAudioBridge {
         );
         let staged = self.staged_mut()?;
         let handle = staged.state.next_clip;
-        staged.state.next_clip = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_CLIP_HANDLE",
-                "audio clip handles exhausted",
-            )
-        })?;
+        staged.state.next_clip = handle + 1;
         staged
             .state
             .assets
@@ -753,12 +748,7 @@ impl RuntimeAudioBridge {
                     "audio signal handles exhausted the JSON-safe range",
                 ));
             }
-            staged.state.next_signal = value.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_AUDIO_SIGNAL_HANDLE",
-                    "audio signal handles exhausted",
-                )
-            })?;
+            staged.state.next_signal = value + 1;
             NativeAudioSignalHandle { value }
         };
         self.stage_op(AudioProjectionOp::Emit {
@@ -895,14 +885,7 @@ impl RuntimeAudioBridge {
     }
 
     fn next_voice_handle(&mut self) -> Result<u64, CsharpEngineServicesError> {
-        let voice = self.staged_mut()?.state.next_voice;
-        voice.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_AUDIO_VOICE_HANDLE",
-                "audio voice handles exhausted",
-            )
-        })?;
-        Ok(voice)
+        Ok(self.staged_mut()?.state.next_voice)
     }
 
     fn retain_voice(state: &mut AudioState, voice: u64, clip: u64) -> NativeAudioVoiceHandle {

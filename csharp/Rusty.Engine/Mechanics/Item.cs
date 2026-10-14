@@ -14,10 +14,6 @@ public sealed class ItemState
     /// </param>
     public ItemState(EntityId entity, ItemDefinition definition, IEnumerable<ItemCapacityCost>? capacityCosts = null)
     {
-        if (entity.Value == 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(entity), "Unique item entities must be non-zero.");
-        }
         ArgumentNullException.ThrowIfNull(definition);
         if (definition.Kind != ItemKind.Unique)
         {

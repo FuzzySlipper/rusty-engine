@@ -677,9 +677,7 @@ impl SpatialCollisionSource {
     ) {
         let mut next_identity = self.next_cursor_identity.borrow_mut();
         let cursor_identity = *next_identity;
-        *next_identity = next_identity
-            .checked_add(1)
-            .expect("spatial collision cursor identities exhausted");
+        *next_identity += 1;
         self.scenes.borrow_mut().insert(
             handle.value,
             SpatialCollisionSceneState {
@@ -873,12 +871,7 @@ impl RuntimeSpatialBridge {
             CsharpEngineServicesError::new("CSHARP_SPATIAL_CREATE", error.to_string())
         })?;
         let value = self.next_session;
-        self.next_session = self.next_session.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_SPATIAL_SESSION",
-                "spatial session handles exhausted",
-            )
-        })?;
+        self.next_session += 1;
         let scene = Arc::new(scene);
         self.sessions.insert(
             value,
@@ -1155,7 +1148,7 @@ impl RuntimeSpatialBridge {
                     current.projection.grid(),
                     current.policy.max_step_cells,
                     current.grid_origin,
-                    next_navigation_revision(session.navigation_revision)?,
+                    session.navigation_revision + 1,
                     base.map(|(_, content)| &content.navigation),
                     remaining(),
                 )?)
@@ -1359,7 +1352,7 @@ impl RuntimeSpatialBridge {
                         format!("{error:?}"),
                     )
                 })?;
-            let navigation_revision = next_navigation_revision(session.navigation_revision)?;
+            let navigation_revision = session.navigation_revision + 1;
             let navigation = NavigationState {
                 source: NavigationSource::HostWalkableCells,
                 projection: navigation_projection,
@@ -1595,7 +1588,7 @@ impl RuntimeSpatialBridge {
                 chunk_size: request.navigation_chunk_size,
                 max_step_cells: request.navigation_max_step_cells,
             })?;
-            let navigation_revision = next_navigation_revision(session.navigation_revision)?;
+            let navigation_revision = session.navigation_revision + 1;
             let navigation = compose_content_navigation(
                 grid,
                 max_step_cells,
@@ -1714,7 +1707,7 @@ impl RuntimeSpatialBridge {
         };
         let traversal = NavTraversalOverlay::empty(&projection);
         let session = self.session_mut(request.session)?;
-        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
         let receipt = NativeNavigationReplaceReceipt {
             walkable_cell_count: projection.walkable_len() as u64,
@@ -1779,7 +1772,7 @@ impl RuntimeSpatialBridge {
         })?;
         let traversal = NavTraversalOverlay::empty(&projection);
         let session = self.session_mut(request.session)?;
-        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
         let receipt = NativeNavigationReplaceReceipt {
             walkable_cell_count: projection.walkable_len() as u64,
@@ -1948,7 +1941,7 @@ impl RuntimeSpatialBridge {
         let components = NavComponents::label(&projection, &edge_admission, policy);
         let traversal = NavTraversalOverlay::empty(&projection);
         let session = self.session_mut(request.session)?;
-        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
         let projection_hash = collision_navigation_projection_hash(&projection, &edge_admission);
         let receipt = NativeCollisionNavigationReplaceReceipt {
@@ -2026,7 +2019,7 @@ impl RuntimeSpatialBridge {
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_NAVIGATION_TRAVERSAL", error.label())
         })?;
-        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
         let navigation = session
             .navigation
@@ -2053,7 +2046,7 @@ impl RuntimeSpatialBridge {
             )
         })?;
         let traversal = NavTraversalOverlay::empty(&navigation.projection);
-        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
         navigation.traversal = traversal;
         navigation.revision = navigation_revision;
@@ -2102,7 +2095,7 @@ impl RuntimeSpatialBridge {
                     "voxel-derived navigation is unavailable",
                 )
             })?;
-        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
         let navigation = session
             .navigation
@@ -2139,7 +2132,7 @@ impl RuntimeSpatialBridge {
                     "voxel-derived navigation is unavailable",
                 )
             })?;
-        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
         let navigation = session
             .navigation
@@ -2455,7 +2448,7 @@ impl RuntimeSpatialBridge {
         request: NativeNavigationClearRequest,
     ) -> Result<(), CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
-        session.navigation_revision = next_navigation_revision(session.navigation_revision)?;
+        session.navigation_revision += 1;
         session.navigation = None;
         session.content = SpatialContentComposition::default();
         Ok(())
@@ -5499,12 +5492,6 @@ fn collision_navigation_projection_hash(
     // wall or a climbable lip, so fold the retained edge policy into that
     // identity rather than reporting a stale cell-only hash.
     projection.projection_hash().rotate_left(17) ^ edges.admission_hash().rotate_right(11)
-}
-
-fn next_navigation_revision(current: u64) -> Result<u64, CsharpEngineServicesError> {
-    current.checked_add(1).ok_or_else(|| {
-        CsharpEngineServicesError::new("CSHARP_NAVIGATION", "navigation revision exhausted")
-    })
 }
 
 fn nav_cell(value: NativePlanarNavCell) -> VoxelCoord {

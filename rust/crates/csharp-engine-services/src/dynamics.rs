@@ -225,16 +225,10 @@ impl RuntimeDynamicsBridge {
         }
     }
 
-    fn allocate(counter: &mut u64, kind: &'static str) -> Result<u64, CsharpEngineServicesError> {
+    fn allocate(counter: &mut u64) -> u64 {
         let value = *counter;
-        if value == 0 {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_DYNAMICS_HANDLE",
-                format!("{kind} handles exhausted"),
-            ));
-        }
-        *counter = counter.checked_add(1).unwrap_or(0);
-        Ok(value)
+        *counter += 1;
+        value
     }
 
     fn create_world(
@@ -248,7 +242,7 @@ impl RuntimeDynamicsBridge {
                 "gravity was not finite",
             ));
         }
-        let value = Self::allocate(&mut self.next_world, "world")?;
+        let value = Self::allocate(&mut self.next_world);
         self.worlds.insert(
             value,
             WorldSlot::Active(DynamicsWorld {
@@ -387,7 +381,7 @@ impl RuntimeDynamicsBridge {
         config: BodyConfig,
     ) -> Result<NativeDynamicsBodyHandle, CsharpEngineServicesError> {
         self.active_world(world_handle)?;
-        let handle = Self::allocate(&mut self.next_body, "body")?;
+        let handle = Self::allocate(&mut self.next_body);
         let world = self.active_world_mut(world_handle)?;
         world
             .solver

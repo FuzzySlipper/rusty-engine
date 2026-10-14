@@ -36,8 +36,6 @@ public static class PlaytestTraversal
     public static string Probe(ISpatialService spatial, SpatialSession session, Vector3 feet,
         float height, float stepHeight, float distance, ReadOnlyMemory<SpatialEntityCollider> entities)
     {
-        if (!float.IsFinite(distance) || distance <= 0 || distance > 8)
-            throw new ArgumentOutOfRangeException(nameof(distance), "Probe distance must be in (0,8].");
         var samples = new List<object>();
         void Cast(string label, Vector3 origin, Vector3 direction, double range)
         {

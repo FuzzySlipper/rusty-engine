@@ -19,11 +19,11 @@ impl RuntimeRngBridge {
         }
     }
 
-    fn insert(&mut self, stream: ScopedRng) -> Option<NativeRngHandle> {
+    fn insert(&mut self, stream: ScopedRng) -> NativeRngHandle {
         let handle = self.next_stream;
-        self.next_stream = handle.checked_add(1)?;
+        self.next_stream += 1;
         self.streams.insert(handle, stream);
-        Some(NativeRngHandle { value: handle })
+        NativeRngHandle { value: handle }
     }
 
     fn stream_mut(&mut self, handle: NativeRngHandle) -> Option<&mut ScopedRng> {
@@ -120,13 +120,8 @@ unsafe extern "C" fn create_scoped_rng(
         Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeRngBridge>() };
-    match bridge.insert(ScopedRng::new(RngSeed::new(request.seed), scope)) {
-        Some(handle) => {
-            unsafe { *result = handle };
-            ABI_OK
-        }
-        None => 0,
-    }
+    unsafe { *result = bridge.insert(ScopedRng::new(RngSeed::new(request.seed), scope)) };
+    ABI_OK
 }
 
 unsafe extern "C" fn fork_scoped_rng(
@@ -153,13 +148,8 @@ unsafe extern "C" fn fork_scoped_rng(
     else {
         return 0;
     };
-    match bridge.insert(child) {
-        Some(handle) => {
-            unsafe { *result = handle };
-            ABI_OK
-        }
-        None => 0,
-    }
+    unsafe { *result = bridge.insert(child) };
+    ABI_OK
 }
 
 unsafe extern "C" fn destroy_scoped_rng(context: *mut c_void, handle: NativeRngHandle) -> i32 {

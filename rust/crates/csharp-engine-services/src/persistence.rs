@@ -59,18 +59,18 @@ impl RuntimePersistenceBridge {
         }
     }
 
-    fn insert_store(&mut self, store: DurableStore) -> Option<NativePersistenceStoreHandle> {
+    fn insert_store(&mut self, store: DurableStore) -> NativePersistenceStoreHandle {
         let value = self.next_store;
-        self.next_store = value.checked_add(1)?;
+        self.next_store += 1;
         self.stores.insert(value, store);
-        Some(NativePersistenceStoreHandle { value })
+        NativePersistenceStoreHandle { value }
     }
 
-    fn insert_blob(&mut self, blob: PersistenceBlob) -> Option<NativePersistenceBlobHandle> {
+    fn insert_blob(&mut self, blob: PersistenceBlob) -> NativePersistenceBlobHandle {
         let value = self.next_blob;
-        self.next_blob = value.checked_add(1)?;
+        self.next_blob += 1;
         self.blobs.insert(value, blob);
-        Some(NativePersistenceBlobHandle { value })
+        NativePersistenceBlobHandle { value }
     }
 
     fn store_path(
@@ -106,8 +106,7 @@ impl RuntimePersistenceBridge {
                 "creating persistence scope `{scope}` failed: {error}"
             ))
         })?;
-        self.insert_store(DurableStore { root })
-            .ok_or_else(handle_exhausted)
+        Ok(self.insert_store(DurableStore { root }))
     }
 
     fn save(
@@ -184,7 +183,7 @@ impl RuntimePersistenceBridge {
             revision: 0,
             payload: Vec::new(),
         });
-        self.insert_blob(blob).ok_or_else(handle_exhausted)
+        Ok(self.insert_blob(blob))
     }
 }
 
@@ -428,13 +427,6 @@ unsafe fn borrowed_bytes<'a>(
 
 fn io_error(detail: String) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new("CSHARP_PERSISTENCE_IO", detail)
-}
-
-fn handle_exhausted() -> CsharpEngineServicesError {
-    CsharpEngineServicesError::new(
-        "CSHARP_PERSISTENCE_HANDLES",
-        "persistence handle identities are exhausted",
-    )
 }
 
 fn storage_path(

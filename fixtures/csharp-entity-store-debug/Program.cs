@@ -98,9 +98,10 @@ internal static class Program
             && page.Contains("entity=2:lifecycle=Disabled", StringComparison.Ordinal), "entity page was not deterministic");
         Require(catalog.Execute("entity.list alpha All 18446744073709551615 1") is { Succeeded: true, Message: var terminal }
             && terminal.Contains("count=0", StringComparison.Ordinal), "cursor overflow did not produce an empty page");
-        Require(catalog.Execute("entity.list alpha All 0 0").Status == DebugCommandStatus.InvalidArguments, "zero page limit was accepted");
-        Require(catalog.Execute("entity.list alpha All 0 65").Status == DebugCommandStatus.InvalidArguments, "over-cap page limit was accepted");
-        Require(catalog.Execute("entity.list alpha 99 0 1").Status == DebugCommandStatus.InvalidArguments, "unknown selector was accepted");
+        Require(catalog.Execute("entity.list alpha All 0 1000") is { Succeeded: true, Message: var wide }
+            && wide.Contains("count=2", StringComparison.Ordinal), "a page larger than the store did not list every entity");
+        Require(catalog.Execute("entity.list alpha All 0 0") is { Succeeded: true, Message: var empty }
+            && empty.Contains("count=0", StringComparison.Ordinal), "a zero page limit did not give an empty page");
         Require(catalog.Execute("entity.get alpha 1") is { Succeeded: true, Message: var entity }
             && entity.Contains("children=2", StringComparison.Ordinal)
             && entity.Contains("component=1024", StringComparison.Ordinal)
@@ -125,12 +126,13 @@ internal static class Program
         var standalone = new EntityStore([Product.HealthForFixture]);
         direct.RegisterStore("standalone", standalone);
         direct.RegisterProjection(Product.HealthForFixture, static (in Health value) => new string('x', value.Current));
-        RequireThrows(() => direct.RegisterStore("not valid", standalone), "invalid world name was accepted");
-        RequireThrows(() => direct.RegisterStore(new string('x', EntityStoreDebugModule.MaximumStoreNameLength + 1), standalone), "oversized world name was accepted");
-        EntityId oversizedEntity = standalone.Create();
-        standalone.Set(oversizedEntity, Product.HealthForFixture, new Health(EntityStoreDebugModule.MaximumResultLength));
-        Require(direct.GetComponent("standalone", oversizedEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var oversized }
-            && oversized.Length == EntityStoreDebugModule.MaximumResultLength, "oversized projection output was not bounded");
+        direct.RegisterStore("two words", standalone);
+        Require(direct.Summary("two words").Succeeded, "a store name with a space was not inspectable");
+        const int LongProjection = 10_000;
+        EntityId longEntity = standalone.Create();
+        standalone.Set(longEntity, Product.HealthForFixture, new Health(LongProjection));
+        Require(direct.GetComponent("standalone", longEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var whole }
+            && whole.Contains(new string('x', LongProjection), StringComparison.Ordinal), "a long projection was not returned whole");
         standalone.Dispose();
         Require(direct.Summary("standalone").Status == DebugCommandStatus.Failed, "disposed world did not report a bounded failure");
 
@@ -143,9 +145,10 @@ internal static class Program
 
         var disposedReplacement = new EntityStore([Product.HealthForFixture]);
         disposedReplacement.Dispose();
-        RequireThrows(() => generations.RegisterStore("current", disposedReplacement), "disposed replacement world was accepted");
         Require(generations.GetComponent("current", originalEntity.Value, Product.HealthForFixture.Key.Value) is { Succeeded: true, Message: var preserved }
-            && preserved.Contains("value=current=11", StringComparison.Ordinal), "failed replacement corrupted the existing registration");
+            && preserved.Contains("value=current=11", StringComparison.Ordinal), "the registered store was not read");
+        generations.RegisterStore("current", disposedReplacement);
+        Require(generations.Summary("current").Status == DebugCommandStatus.Failed, "a disposed registered store was not reported");
 
         var replacement = new EntityStore([Product.HealthForFixture]);
         EntityId replacementEntity = replacement.Create();

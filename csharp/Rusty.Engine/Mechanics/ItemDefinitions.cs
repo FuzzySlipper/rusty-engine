@@ -127,19 +127,10 @@ public sealed class ItemDefinition
             return Array.Empty<ItemCapacityCost>();
         }
 
+        // A metric named more than once counts each cost: capacity totals sum them.
         ItemCapacityCost[] costs = values
             .OrderBy(value => value.Metric.Value, StringComparer.Ordinal)
             .ToArray();
-        for (int index = 1; index < costs.Length; index++)
-        {
-            if (costs[index - 1].Metric == costs[index].Metric)
-            {
-                throw new ArgumentException(
-                    $"Item capacity metric {costs[index].Metric} was declared more than once.",
-                    nameof(values));
-            }
-        }
-
         return Array.AsReadOnly(costs);
     }
 
@@ -155,16 +146,9 @@ public sealed class ItemDefinition
 
         T[] copied = values
             .Select(value => value ?? throw new ArgumentException($"{name} cannot contain null values.", nameof(values)))
+            .Distinct()
             .OrderBy(value => value.Value, StringComparer.Ordinal)
             .ToArray();
-        for (int index = 1; index < copied.Length; index++)
-        {
-            if (copied[index - 1] == copied[index])
-            {
-                throw new ArgumentException($"{name} must be unique.", nameof(values));
-            }
-        }
-
         return Array.AsReadOnly(copied);
     }
 }

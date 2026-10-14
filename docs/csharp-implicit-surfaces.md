@@ -540,9 +540,9 @@ without a numeric descriptor. Descriptor-specific projections remain available
 and take precedence for that descriptor. `entity.get` reports component types and
 keys for `entity.component`. Every command reads the currently registered store
 and current component fields, even when in-place edits leave structural revisions
-unchanged. Mechanics projections limit entries and all projection output is
-bounded to 4096 characters. Returned debug metadata is an observation, not a
-save. Registration is local and explicit; there is no mechanics discovery.
+unchanged. Mechanics projections list up to `maximumEntries` entries of each
+kind (16 by default). Returned debug metadata is an observation, not a save.
+Registration is local and explicit; there is no mechanics discovery.
 
 ### Spatial debugging maps
 

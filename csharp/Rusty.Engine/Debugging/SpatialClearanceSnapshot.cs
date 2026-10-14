@@ -13,8 +13,6 @@ public static class SpatialClearanceSnapshot
     {
         Vector3 target = targetFeet + Vector3.UnitY * (bodyHeight * .5f);
         Vector3 translation = target - center;
-        if (!float.IsFinite(translation.LengthSquared()) || translation.Length() > 8)
-            throw new ArgumentOutOfRangeException(nameof(targetFeet), "Target must be within 8 world units of the current body.");
         double halfHeight = Math.Max(0, bodyHeight * .5 - config.Shape.Radius);
         SpatialCapsuleQueryRequest Request(Vector3 at, Vector3 delta, double skin) => new(session, at,
             halfHeight, config.Shape.Radius, delta, skin, new(1, uint.MaxValue), entities, ReadOnlyMemory<ulong>.Empty);
@@ -64,6 +62,6 @@ public static class SpatialClearanceSnapshot
 
 public sealed class SpatialClearanceDebugModule(Func<double, double, double, DebugCommandResult> inspect) : IDebugCommandModule
 {
-    [DebugCommand("spatial.clearance", Description = "Read-only current/target body overlap, direct capsule sweep and support below target. XYZ target feet, within 8 units. Does not plan a route or advance time.")]
+    [DebugCommand("spatial.clearance", Description = "Read-only current/target body overlap, direct capsule sweep and support below target. XYZ target feet. Does not plan a route or advance time.")]
     public DebugCommandResult Inspect(double x, double y, double z) => inspect(x, y, z);
 }

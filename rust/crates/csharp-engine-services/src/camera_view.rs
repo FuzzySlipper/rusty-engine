@@ -389,9 +389,7 @@ impl RuntimeCameraViewBridge {
         validate_descriptor(&descriptor)?;
         let staged = self.staged_mut()?;
         let handle = staged.state.next_camera;
-        staged.state.next_camera = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle overflow")
-        })?;
+        staged.state.next_camera = handle + 1;
         staged.state.cameras.insert(
             handle,
             CameraEntry {
@@ -444,12 +442,7 @@ impl RuntimeCameraViewBridge {
                 CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle is not live")
             })?;
         if let Some(mut motion) = motion {
-            let next_sample_id = camera.next_sample_id.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_CAMERA_SAMPLE_ID",
-                    "camera sample identity overflow",
-                )
-            })?;
+            let next_sample_id = camera.next_sample_id + 1;
             motion.sample_id = camera.next_sample_id.to_string();
             camera.next_sample_id = next_sample_id;
             camera.motion = Some(motion);
@@ -476,9 +469,7 @@ impl RuntimeCameraViewBridge {
             ));
         }
         let replacement = state.next_camera;
-        state.next_camera = replacement.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_CAMERA_HANDLE", "camera handle overflow")
-        })?;
+        state.next_camera = replacement + 1;
         state.cameras.remove(&request.camera.value);
         state.cameras.insert(
             replacement,
@@ -511,9 +502,7 @@ impl RuntimeCameraViewBridge {
     ) -> Result<NativeCameraTargetHandle, CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
         let handle = staged.state.next_target;
-        let next_target = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_CAMERA_TARGET_HANDLE", "target handle overflow")
-        })?;
+        let next_target = handle + 1;
         let target = CameraTargetState {
             descriptor,
             revision: 1,
@@ -543,12 +532,7 @@ impl RuntimeCameraViewBridge {
         })?;
         let target = CameraTargetState {
             descriptor: request.descriptor,
-            revision: current.revision.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_CAMERA_TARGET_REVISION",
-                    "target revision overflow",
-                )
-            })?,
+            revision: current.revision + 1,
         };
         let rendered = composition_target(handle, target);
         rendered.validate().map_err(target_descriptor_error)?;
@@ -572,9 +556,7 @@ impl RuntimeCameraViewBridge {
             ));
         }
         let handle = state.next_target;
-        let next_target = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_CAMERA_TARGET_HANDLE", "target handle overflow")
-        })?;
+        let next_target = handle + 1;
         let target = CameraTargetState {
             descriptor: request.replacement,
             revision: 1,
@@ -3189,23 +3171,6 @@ mod tests {
             .expect_err("a dead camera");
         unchanged(&bridge, "a dead active camera");
 
-        // A replacement whose handle cannot be issued keeps the camera it
-        // would have replaced.
-        let issued = staged_state(&bridge).next_camera;
-        bridge.staged.as_mut().unwrap().state.next_camera = u64::MAX;
-        assert_eq!(
-            bridge
-                .replace(NativeCameraReplaceRequest {
-                    camera: cameras[0],
-                    replacement: camera_descriptor(FULL),
-                })
-                .expect_err("handle overflow")
-                .code(),
-            "CSHARP_CAMERA_HANDLE"
-        );
-        bridge.staged.as_mut().unwrap().state.next_camera = issued;
-        unchanged(&bridge, "a replacement without a handle");
-
         let mut call = bridge.take_staged_call().expect("refusals keep the call");
         assert_eq!(
             call.take_composition(),
@@ -3421,28 +3386,6 @@ mod tests {
                 .expect_err("invalid delay")
                 .code(),
             "CSHARP_CAMERA_SAMPLE_DELAY"
-        );
-
-        bridge
-            .staged
-            .as_mut()
-            .unwrap()
-            .state
-            .cameras
-            .get_mut(&camera.value)
-            .unwrap()
-            .next_sample_id = u64::MAX;
-        assert_eq!(
-            bridge
-                .update_sample(sample_request(
-                    camera,
-                    descriptor,
-                    NativeCameraInterpolation::Position,
-                    false,
-                ))
-                .expect_err("sample identity overflow")
-                .code(),
-            "CSHARP_CAMERA_SAMPLE_ID"
         );
     }
 

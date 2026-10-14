@@ -149,7 +149,7 @@ test('only the typed lifecycle clock regression is a dropped cadence observation
     diagnostic: 'observed clock regressed',
   };
   assert.equal(isDroppedClockRegression(dropped), true);
-  assert.equal(isDroppedClockRegression({ ...dropped, code: 'CSHARP_LIFECYCLE_COUNTER_EXHAUSTED' }), false);
+  assert.equal(isDroppedClockRegression({ ...dropped, code: 'CSHARP_LIFECYCLE_WRONG_STATE' }), false);
   assert.equal(isDroppedClockRegression({ ...dropped, disposition: 'terminal' }), false);
   assert.equal(isDroppedClockRegression({ ...dropped, operation: 'input' }), false);
 });

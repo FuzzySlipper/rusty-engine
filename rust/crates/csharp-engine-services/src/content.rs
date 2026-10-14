@@ -180,11 +180,11 @@ impl RuntimeContentBridge {
             .collect()
     }
 
-    fn retain(&mut self, content: AdmittedContent) -> Option<NativeContentReferenceHandle> {
+    fn retain(&mut self, content: AdmittedContent) -> NativeContentReferenceHandle {
         let value = self.next_reference;
-        self.next_reference = value.checked_add(1)?;
+        self.next_reference += 1;
         self.references.insert(value, content);
-        Some(NativeContentReferenceHandle { value })
+        NativeContentReferenceHandle { value }
     }
 
     /// Engine-internal composition seam for semantic owners. The retained
@@ -362,9 +362,7 @@ pub(crate) unsafe extern "C" fn admit_reference(
         files: ContentFiles::snapshot(files),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    let Some(handle) = bridge.retain(content) else {
-        return 0;
-    };
+    let handle = bridge.retain(content);
     unsafe { *result = handle };
     ABI_OK
 }
@@ -389,9 +387,7 @@ unsafe extern "C" fn open_reference(
     let Some(content) = bridge.catalog.get(path).cloned() else {
         return 0;
     };
-    let Some(handle) = bridge.retain(content) else {
-        return 0;
-    };
+    let handle = bridge.retain(content);
     unsafe { *result = handle };
     ABI_OK
 }
@@ -426,9 +422,7 @@ unsafe extern "C" fn resolve_reference(
             Err(refusal) => return refuse(&refusal, error),
         },
     };
-    let Some(handle) = bridge.retain(content) else {
-        return 0;
-    };
+    let handle = bridge.retain(content);
     unsafe { *result = handle };
     ABI_OK
 }
@@ -525,8 +519,8 @@ pub(crate) mod tests {
         let mut bridge = RuntimeContentBridge::new(files);
         assert_eq!(body_hashes(), before, "startup hashes no bodies");
 
-        let first = bridge.retain(bridge.catalog["used.bin"].clone()).unwrap();
-        let second = bridge.retain(bridge.catalog["used.bin"].clone()).unwrap();
+        let first = bridge.retain(bridge.catalog["used.bin"].clone());
+        let second = bridge.retain(bridge.catalog["used.bin"].clone());
         assert_eq!(body_hashes(), before, "opening a reference hashes nothing");
         let identity = bridge.retained_content(first).unwrap().sha256();
         assert_eq!(identity, sha256_words(&Sha256::digest(b"first body")));
@@ -648,7 +642,7 @@ pub(crate) mod tests {
         let body: Arc<[u8]> = Arc::from(vec![7; 1024 * 1024 + 13]);
         let mut bridge =
             RuntimeContentBridge::new(BTreeMap::from([("large".to_owned(), body.clone())]));
-        let handle = bridge.retain(bridge.catalog["large"].clone()).unwrap();
+        let handle = bridge.retain(bridge.catalog["large"].clone());
         let backing = bridge
             .read_bytes(NativeContentReadBytesRequest {
                 reference: handle,
@@ -784,9 +778,7 @@ pub(crate) mod tests {
             ("other.json".to_owned(), Arc::from(&b"[]"[..])),
         ]);
         let mut bridge = RuntimeContentBridge::new(files);
-        let before = bridge
-            .retain(bridge.catalog["tuning.json"].clone())
-            .unwrap();
+        let before = bridge.retain(bridge.catalog["tuning.json"].clone());
         let changed = bridge.reload(BTreeMap::from([(
             "tuning.json".to_owned(),
             Arc::from(&b"{\"a\":2}"[..]),

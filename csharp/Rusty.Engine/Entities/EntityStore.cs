@@ -506,8 +506,6 @@ public sealed class EntityStore : IDisposable
         return new EntityStoreDebugSnapshot(_state.Revision, _state.NextEntityValue, entities.ToArray(), componentFamilies);
     }
 
-    internal void ValidateDebugRegistration() => ThrowIfDisposed();
-
     public void Dispose()
     {
         if (_isDisposed)

@@ -958,16 +958,7 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
                 )?))
             }
             "--session" => session = true,
-            "--label" => {
-                let value = required_value(&mut values, "--label")?;
-                if value.is_empty() || value.len() > 80 || value.chars().any(char::is_control) {
-                    return Err(
-                        "RUSTY_DEV_ARGUMENT: --label must be 1 to 80 printable characters"
-                            .to_owned(),
-                    );
-                }
-                label = Some(value);
-            }
+            "--label" => label = Some(required_value(&mut values, "--label")?),
             "--keep" => keep = true,
             "--instance" => {
                 instance = Some(instance_name(required_value(&mut values, "--instance")?)?)
@@ -3305,7 +3296,6 @@ mod tests {
             Err("disabled")
         );
         assert!(parse_dev(vec!["--idle-timeout".to_owned(), "soon".to_owned()]).is_err());
-        assert!(parse_dev(vec!["--label".to_owned(), String::new()]).is_err());
     }
 
     #[test]

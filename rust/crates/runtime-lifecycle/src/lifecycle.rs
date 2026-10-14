@@ -104,7 +104,7 @@ impl RuntimeLifecycle {
     /// downstream menu or inspector can project the last accepted facts.
     pub fn pause(&mut self) -> Result<LifecycleReceipt, RuntimeLifecycleError> {
         self.require_state(LifecycleOperation::Pause, &[RuntimeState::Running])?;
-        self.advance_control_revision()?;
+        self.advance_control_revision();
         self.state = RuntimeState::Paused;
         self.clear_realtime_baseline();
         Ok(self.receipt(LifecycleOperation::Pause))
@@ -120,7 +120,7 @@ impl RuntimeLifecycle {
             LifecycleOperation::Resume,
             &[RuntimeState::Paused, RuntimeState::Faulted],
         )?;
-        self.advance_control_revision()?;
+        self.advance_control_revision();
         self.state = RuntimeState::Running;
         self.fault = None;
         self.clear_realtime_baseline();
@@ -146,7 +146,7 @@ impl RuntimeLifecycle {
     /// Stops this lifecycle permanently and invalidates every prior token.
     pub fn shutdown(&mut self) -> Result<LifecycleReceipt, RuntimeLifecycleError> {
         self.require_not_state(LifecycleOperation::Shutdown, RuntimeState::Shutdown)?;
-        self.advance_control_revision()?;
+        self.advance_control_revision();
         self.state = RuntimeState::Shutdown;
         self.reset_realtime_progress();
         Ok(self.receipt(LifecycleOperation::Shutdown))
@@ -164,7 +164,7 @@ impl RuntimeLifecycle {
             LifecycleOperation::ReportFault,
             &[RuntimeState::Running, RuntimeState::Paused],
         )?;
-        self.advance_control_revision()?;
+        self.advance_control_revision();
         self.state = RuntimeState::Faulted;
         self.fault = Some(fault);
         self.reset_realtime_progress();
@@ -184,7 +184,7 @@ impl RuntimeLifecycle {
             lifecycle_operation,
             &[RuntimeState::Running, RuntimeState::Paused],
         )?;
-        self.advance_control_revision()?;
+        self.advance_control_revision();
         Ok(self.receipt(lifecycle_operation))
     }
 
@@ -216,10 +216,7 @@ impl RuntimeLifecycle {
         };
 
         if observed_time < previous {
-            self.clock_regressions = match self.clock_regressions.checked_add(1) {
-                Some(value) => value,
-                None => return self.counter_exhausted(),
-            };
+            self.clock_regressions += 1;
             return Err(RuntimeLifecycleError::ClockRegression {
                 previous,
                 observed: observed_time,
@@ -232,10 +229,9 @@ impl RuntimeLifecycle {
         let elapsed_scaled = u128::from(elapsed_nanoseconds)
             * u128::from(config.fixed_step_hz())
             * u128::from(self.gameplay.rate.parts_per_million());
-        let scaled_total = match realtime.scaled_remainder.checked_add(elapsed_scaled) {
-            Some(value) => value,
-            None => return self.counter_exhausted(),
-        };
+        // Below 2^128: the product of a u64, a u32 and a u32 leaves more than
+        // 2^96 of headroom for a remainder below one step.
+        let scaled_total = realtime.scaled_remainder + elapsed_scaled;
         let due_steps = scaled_total / SCALED_STEP;
         let mut scaled_remainder = scaled_total % SCALED_STEP;
         let mut admitted_count = due_steps.min(u128::from(config.max_catch_up_steps())) as u32;
@@ -249,21 +245,14 @@ impl RuntimeLifecycle {
             scaled_remainder = 0;
         }
 
-        let next_dropped = match self.dropped_realtime_steps.checked_add(dropped_steps) {
-            Some(value) => value,
-            None => return self.counter_exhausted(),
-        };
-        let simulation = if admitted_count == 0 {
-            None
-        } else {
-            Some(self.prepare_simulation_admission(admitted_count)?)
-        };
+        let simulation =
+            (admitted_count > 0).then(|| self.prepare_simulation_admission(admitted_count));
 
         self.realtime = RealtimeState {
             last_observed_time: Some(observed_time),
             scaled_remainder,
         };
-        self.dropped_realtime_steps = next_dropped;
+        self.dropped_realtime_steps += dropped_steps;
         if advancing > 0 {
             self.gameplay.advance_remaining_steps = advancing - admitted_count;
             if self.gameplay.advance_remaining_steps == 0 {
@@ -307,7 +296,7 @@ impl RuntimeLifecycle {
             &[RuntimeState::Running],
         )?;
         self.clear_realtime_baseline();
-        self.prepare_simulation_admission(1)
+        Ok(self.prepare_simulation_admission(1))
     }
 
     /// Selects how fast realtime admission follows host time from the next
@@ -368,9 +357,6 @@ impl RuntimeLifecycle {
     /// available before start, after fault, or after shutdown.
     pub fn admit_presentation(&mut self) -> Result<PresentationAdmission, RuntimeLifecycleError> {
         self.require_presentation_state(LifecycleOperation::AdmitPresentation)?;
-        if self.next_presentation == u64::MAX {
-            return self.counter_exhausted();
-        }
         let token = PresentationToken::new(
             self.instance_id,
             self.generation,
@@ -452,12 +438,8 @@ impl RuntimeLifecycle {
         &mut self,
         operation: LifecycleOperation,
     ) -> Result<LifecycleReceipt, RuntimeLifecycleError> {
-        let generation = match self.generation.0.checked_add(1) {
-            Some(value) => RuntimeGeneration(value),
-            None => return self.counter_exhausted(),
-        };
-        self.advance_control_revision()?;
-        self.generation = generation;
+        self.advance_control_revision();
+        self.generation = RuntimeGeneration(self.generation.0 + 1);
         self.state = RuntimeState::Running;
         self.next_simulation_step = 0;
         self.next_presentation = 0;
@@ -473,16 +455,8 @@ impl RuntimeLifecycle {
         Ok(self.receipt(operation))
     }
 
-    fn prepare_simulation_admission(
-        &mut self,
-        step_count: u32,
-    ) -> Result<SimulationAdmission, RuntimeLifecycleError> {
+    fn prepare_simulation_admission(&mut self, step_count: u32) -> SimulationAdmission {
         debug_assert!(step_count > 0);
-        let count = u64::from(step_count);
-        let next_step = match self.next_simulation_step.checked_add(count) {
-            Some(value) => value,
-            None => return self.counter_exhausted(),
-        };
         let admission = SimulationAdmission::new(
             self.instance_id,
             self.generation,
@@ -490,16 +464,12 @@ impl RuntimeLifecycle {
             SimulationStep(self.next_simulation_step),
             step_count,
         );
-        self.next_simulation_step = next_step;
-        Ok(admission)
+        self.next_simulation_step += u64::from(step_count);
+        admission
     }
 
-    fn advance_control_revision(&mut self) -> Result<(), RuntimeLifecycleError> {
-        self.control_revision = match self.control_revision.0.checked_add(1) {
-            Some(value) => RuntimeControlRevision(value),
-            None => return self.counter_exhausted(),
-        };
-        Ok(())
+    fn advance_control_revision(&mut self) {
+        self.control_revision.0 += 1;
     }
 
     fn reset_realtime_progress(&mut self) {
@@ -591,13 +561,6 @@ impl RuntimeLifecycle {
             _ => unreachable!("token validation identifies exactly one token family"),
         }
     }
-
-    fn counter_exhausted<T>(&mut self) -> Result<T, RuntimeLifecycleError> {
-        self.state = RuntimeState::Faulted;
-        self.fault = Some(RuntimeFault::CounterExhausted);
-        self.reset_realtime_progress();
-        Err(RuntimeLifecycleError::CounterExhausted)
-    }
 }
 
 /// The fraction of a step owed, in the readout's `nanoseconds * hertz` units.
@@ -610,26 +573,6 @@ fn scaled_remainder_u32(value: u128) -> u32 {
 mod tests {
     use super::*;
     use crate::RuntimeInstanceId;
-
-    #[test]
-    fn simulation_sequence_exhaustion_faults_instead_of_wrapping() {
-        let mut lifecycle = RuntimeLifecycle::new(
-            RuntimeInstanceId::new(7),
-            RuntimeLifecycleConfig::new(60, 4).unwrap(),
-        );
-        lifecycle.start().unwrap();
-        lifecycle.next_simulation_step = u64::MAX;
-
-        assert_eq!(
-            lifecycle.admit_manual_step(),
-            Err(RuntimeLifecycleError::CounterExhausted)
-        );
-        assert_eq!(lifecycle.state(), RuntimeState::Faulted);
-        assert_eq!(
-            lifecycle.readout().fault(),
-            Some(RuntimeFault::CounterExhausted)
-        );
-    }
 
     #[test]
     fn owed_steps_follow_host_time_between_observations_without_admitting() {

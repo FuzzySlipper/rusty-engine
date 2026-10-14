@@ -220,12 +220,7 @@ impl RuntimeVoxelScenePresentationBridge {
         )?;
         let staged = self.staged_mut()?;
         let value = staged.state.next_presentation;
-        staged.state.next_presentation = value.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VOXEL_SCENE_PRESENTATION_HANDLE",
-                "voxel scene presentation handle space overflowed",
-            )
-        })?;
+        staged.state.next_presentation = value + 1;
         let renderer_slots = allocate_renderer_slots(
             resolved.base_materials.keys().map(|slot| (*slot, *slot)),
             staged

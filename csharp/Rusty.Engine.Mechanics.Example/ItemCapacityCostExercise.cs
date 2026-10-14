@@ -58,8 +58,9 @@ internal static class ItemCapacityCostExercise
             () => store.SetCapacityCosts(plain, [new ItemCapacityCost(weight, 21)]),
             "a cost change beyond the container's capacity was admitted");
         Require(Weight(store, pack, weight) == PackLimit, "a refused cost change changed capacity");
-        ExpectArgument(() => store.SetCapacityCosts(plain, [new ItemCapacityCost(weight, 1), new ItemCapacityCost(weight, 2)]),
-            "a cost list naming a metric twice was admitted");
+        store.SetCapacityCosts(plain, [new ItemCapacityCost(weight, 1), new ItemCapacityCost(weight, 2)]);
+        Require(Weight(store, pack, weight) == HeavyLanternWeight + 3,
+            "a cost list naming a metric twice did not count both costs");
 
         // Null returns to the definition's costs; an empty list costs nothing.
         store.SetCapacityCosts(plain, null);
@@ -122,20 +123,6 @@ internal static class ItemCapacityCostExercise
         catch (MechanicsException exception) when (exception.Reason == reason)
         {
             Require(store.Revision == revision, $"{message} (the store revision changed)");
-            return;
-        }
-
-        throw new InvalidOperationException(message);
-    }
-
-    private static void ExpectArgument(Action action, string message)
-    {
-        try
-        {
-            action();
-        }
-        catch (ArgumentException)
-        {
             return;
         }
 

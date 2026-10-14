@@ -805,9 +805,6 @@ struct InputClaim {
     renewed: std::time::Instant,
 }
 
-/// The longest input lease a harness may hold between inputs.
-const MAX_INPUT_CLAIM_LEASE: std::time::Duration = std::time::Duration::from_secs(3600);
-
 // The product host serializes every call with one mutex. The native handle
 // has no ambient access from Rust and is destroyed before the retained product
 // host is released (or the NativeAOT mapping is retained for process exit).
@@ -1226,12 +1223,6 @@ impl CsharpProductRuntime {
         &mut self,
         iterations: u32,
     ) -> Result<Vec<u128>, CsharpProductRuntimeError> {
-        if iterations == 0 || iterations > 256 {
-            return Err(CsharpProductRuntimeError::new(
-                "CSHARP_PERFORMANCE_ITERATIONS",
-                "performance probe iterations must be in 1..=256",
-            ));
-        }
         if self.lifecycle.state() == RuntimeState::Created {
             ProductHostRuntime::lifecycle(self, ProductHostLifecycleOperation::Start).map_err(
                 |error| {
@@ -3103,18 +3094,6 @@ impl ProductHostRuntime for CsharpProductRuntime {
     ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
     {
         self.require_current_control_binding(Some(binding))?;
-        if label.trim().is_empty() || label.len() > 64 || label.chars().any(char::is_control) {
-            return Err(ProductHostRuntimeError::new_not_applied(
-                "CSHARP_CONTROL_CLAIM",
-                "a claim label is 1..=64 bytes of visible text",
-            ));
-        }
-        if lease.is_zero() || lease > MAX_INPUT_CLAIM_LEASE {
-            return Err(ProductHostRuntimeError::new_not_applied(
-                "CSHARP_CONTROL_CLAIM",
-                "a claim lease is 1 ms to one hour",
-            ));
-        }
         self.lifecycle
             .change_control(RuntimeControlOperation::Replace)
             .map_err(|error| self.lifecycle_runtime_error(error))?;
@@ -3835,9 +3814,6 @@ fn dev_readout(readout: RuntimeLifecycleReadout) -> ProductHostRuntimeReadout {
             runtime_lifecycle::RuntimeFault::OwnerReported => {
                 ProductHostRuntimeFault::OwnerReported
             }
-            runtime_lifecycle::RuntimeFault::CounterExhausted => {
-                ProductHostRuntimeFault::CounterExhausted
-            }
         });
     }
     projected
@@ -3966,7 +3942,6 @@ fn lifecycle_error_code(error: &runtime_lifecycle::RuntimeLifecycleError) -> &'s
         RuntimeLifecycleError::GameplayAdvanceWithoutRate => {
             "CSHARP_LIFECYCLE_GAMEPLAY_ADVANCE_WITHOUT_RATE"
         }
-        RuntimeLifecycleError::CounterExhausted => "CSHARP_LIFECYCLE_COUNTER_EXHAUSTED",
     }
 }
 
@@ -3994,7 +3969,6 @@ fn input_error_code(error: &runtime_input::RuntimeInputError) -> &'static str {
         RuntimeInputError::WireMalformed => "CSHARP_INPUT_WIRE_MALFORMED",
         RuntimeInputError::WireEventLimit => "CSHARP_INPUT_WIRE_EVENT_LIMIT",
         RuntimeInputError::SequenceOutOfOrder { .. } => "CSHARP_INPUT_SEQUENCE_OUT_OF_ORDER",
-        RuntimeInputError::SequenceExhausted => "CSHARP_INPUT_SEQUENCE_EXHAUSTED",
         RuntimeInputError::BindingMismatch => "CSHARP_INPUT_BINDING_MISMATCH",
         RuntimeInputError::InvalidRebindClear => "CSHARP_INPUT_INVALID_REBIND_CLEAR",
         RuntimeInputError::DuplicateIntent => "CSHARP_INPUT_DUPLICATE_INTENT",
@@ -9154,19 +9128,7 @@ mod tests {
             other => panic!("a control change publishes a binding first, not {other:?}"),
         };
 
-        let refused = |result: Result<_, ProductHostRuntimeError>| match result {
-            Err(error) => error.code().to_owned(),
-            Ok(_) => panic!("refused"),
-        };
         let lease = std::time::Duration::from_secs(60);
-        assert_eq!(
-            refused(runtime.claim_control(page, " ".to_owned(), lease)),
-            "CSHARP_CONTROL_CLAIM"
-        );
-        assert_eq!(
-            refused(runtime.claim_control(page, "agent".to_owned(), std::time::Duration::ZERO)),
-            "CSHARP_CONTROL_CLAIM"
-        );
 
         // A claim moves the binding, clears held input, and names its holder.
         let (_, outputs) = runtime
@@ -9577,9 +9539,11 @@ mod tests {
             "CSHARP_LIFECYCLE_CLOCK_REGRESSION"
         );
         assert_eq!(
-            lifecycle_runtime_error(runtime_lifecycle::RuntimeLifecycleError::CounterExhausted)
-                .code(),
-            "CSHARP_LIFECYCLE_COUNTER_EXHAUSTED"
+            lifecycle_runtime_error(
+                runtime_lifecycle::RuntimeLifecycleError::GameplayAdvanceWithoutRate
+            )
+            .code(),
+            "CSHARP_LIFECYCLE_GAMEPLAY_ADVANCE_WITHOUT_RATE"
         );
         assert_eq!(
             input_runtime_error(runtime_input::RuntimeInputError::BindingMismatch).code(),

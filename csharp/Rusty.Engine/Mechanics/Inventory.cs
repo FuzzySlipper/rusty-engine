@@ -9,11 +9,6 @@ public readonly record struct InventoryStack
     {
         Id = id ?? throw new ArgumentNullException(nameof(id));
         Definition = definition ?? throw new ArgumentNullException(nameof(definition));
-        if (quantity == 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(quantity));
-        }
-
         Quantity = quantity;
     }
 
@@ -340,21 +335,10 @@ public sealed class InventoryState
         IEnumerable<InventoryCapacityLimit>? capacityLimits = null)
     {
         Owner = owner;
-        if (capacityLimits is null)
+        foreach (InventoryCapacityLimit limit in capacityLimits ?? [])
         {
-            return;
+            _capacityLimits[limit.Metric] = limit;
         }
-
-        foreach (InventoryCapacityLimit limit in capacityLimits)
-        {
-            if (!_capacityLimits.TryAdd(limit.Metric, limit))
-            {
-                throw new ArgumentException(
-                    $"Capacity metric {limit.Metric} was declared more than once.",
-                    nameof(capacityLimits));
-            }
-        }
-
     }
 
     public EntityId Owner { get; }

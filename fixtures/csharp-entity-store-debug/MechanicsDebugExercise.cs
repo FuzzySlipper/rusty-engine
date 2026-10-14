@@ -79,7 +79,7 @@ internal static class MechanicsDebugExercise
         var match = Regex.Match(metadata, @"component=(\d+):revision=\d+:type=" + type);
         Require(match.Success, "component metadata missing for " + type);
         var result = debug.GetComponent("game", entity.Value, uint.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture));
-        Require(result.Succeeded && result.Message.Length <= EntityStoreDebugModule.MaximumResultLength, "bounded projection failed");
+        Require(result.Succeeded, "projection failed");
         return result.Message;
     }
 

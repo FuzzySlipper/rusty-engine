@@ -329,9 +329,7 @@ impl RuntimeAuthoredContentBridge {
         catalog: AdmittedAssetCatalog,
     ) -> Result<NativeAuthoredCatalogHandle, AuthoredError> {
         let value = self.next_catalog;
-        self.next_catalog = value
-            .checked_add(1)
-            .ok_or_else(|| AuthoredError::simple("catalog handle exhausted"))?;
+        self.next_catalog = value + 1;
         self.catalogs.insert(value, catalog);
         Ok(NativeAuthoredCatalogHandle { value })
     }
@@ -624,9 +622,7 @@ impl RuntimeAuthoredContentBridge {
         registry: ValidatedPrefabRegistry,
     ) -> Result<NativeAuthoredPrefabRegistryHandle, AuthoredError> {
         let value = self.next_prefab_registry;
-        self.next_prefab_registry = value
-            .checked_add(1)
-            .ok_or_else(|| AuthoredError::simple("prefab registry handle exhausted"))?;
+        self.next_prefab_registry = value + 1;
         self.prefab_registries.insert(value, registry);
         Ok(NativeAuthoredPrefabRegistryHandle { value })
     }
@@ -999,9 +995,7 @@ impl RuntimeAuthoredContentBridge {
         plan: SceneAdmissionPlan,
     ) -> Result<NativeAuthoredScenePlanHandle, AuthoredError> {
         let value = self.next_scene_plan;
-        self.next_scene_plan = value
-            .checked_add(1)
-            .ok_or_else(|| AuthoredError::simple("scene plan handle exhausted"))?;
+        self.next_scene_plan = value + 1;
         self.scene_plans.insert(
             value,
             ScenePlanOwner {

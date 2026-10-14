@@ -8,16 +8,9 @@ namespace Rusty.Engine.Debugging;
 /// This formats retained collision facts; it does not reconstruct a second world.</summary>
 public static class SpatialGridSnapshot
 {
-    public const int MaximumCells = 8192;
-
     public static string Capture(ISpatialService spatial, SpatialMapRequest footprint, uint layers,
         SpatialMapObservation observation)
     {
-        if (layers == 0 || footprint.Columns == 0 || footprint.Rows == 0 ||
-            footprint.Columns > 31 || footprint.Rows > 31 || layers > 31 ||
-            (ulong)layers * footprint.Columns * footprint.Rows > MaximumCells ||
-            !double.IsFinite(footprint.CellSize) || footprint.CellSize <= 0)
-            throw new ArgumentOutOfRangeException(nameof(layers), "Grid requires positive dimensions <=31, <=8192 cells and positive finite cell size.");
         using MemoryStream stream = new();
         using (Utf8JsonWriter w = new(stream))
         {

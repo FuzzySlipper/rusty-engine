@@ -11,8 +11,7 @@ namespace Rusty.Engine.Debugging;
 public sealed partial class InteractionDebugModule(WorldInteraction interaction, int maximumCandidates = 64) : IDebugCommandModule
 {
     private readonly WorldInteraction _interaction = interaction ?? throw new ArgumentNullException(nameof(interaction));
-    private readonly int _maximumCandidates = maximumCandidates is >= 1 and <= 256
-        ? maximumCandidates : throw new ArgumentOutOfRangeException(nameof(maximumCandidates));
+    private readonly int _maximumCandidates = maximumCandidates;
 
     [DebugCommand("interaction.help", Description = "World-object interaction green path: inspect candidate IDs/reasons, then interaction.use <id> <revision>. Target-ID assistance avoids pixel hunting; ordinary reach, visibility and product rules still apply.")]
     public DebugCommandResult Help() => DebugCommandResult.Success(

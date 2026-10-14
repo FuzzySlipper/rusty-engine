@@ -78,13 +78,9 @@ public sealed class EffectDefinition
 
         SourceDefinitionId[] sources = sourceDefinitions
             .Select(source => source ?? throw new ArgumentException("Effect source IDs cannot be null."))
+            .Distinct()
             .OrderBy(source => source.Value, StringComparer.Ordinal)
             .ToArray();
-        if (sources.Distinct().Count() != sources.Length)
-        {
-            throw new ArgumentException("An effect cannot activate one source definition twice.");
-        }
-
         return Array.AsReadOnly(sources);
     }
 }

@@ -184,7 +184,7 @@ impl RuntimeDynamicsBridge {
         let mut solver_bones = Vec::with_capacity(bones.len());
         for (tip, shape, mass) in specs {
             solver_bones.push(RagdollBone {
-                body: DynamicsBodyId(Self::allocate(&mut self.next_body, "body")?),
+                body: DynamicsBodyId(Self::allocate(&mut self.next_body)),
                 tip,
                 shape,
                 mass,
@@ -215,7 +215,7 @@ impl RuntimeDynamicsBridge {
             .solver
             .insert_ragdoll(&solver_bones, &solver_links, material, &spawn)
             .map_err(solver_error("CSHARP_RAGDOLL"))?;
-        let handle = Self::allocate(&mut self.next_ragdoll, "ragdoll")?;
+        let handle = Self::allocate(&mut self.next_ragdoll);
         self.ragdolls.insert(
             handle,
             RagdollSlot::Active(Ragdoll {

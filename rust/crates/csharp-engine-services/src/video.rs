@@ -176,12 +176,7 @@ impl RuntimeVideoBridge {
             CsharpRenderResource::admit_video(format!("content/{path}"), bytes, content_hash)?;
         let staged = self.staged()?;
         let handle = staged.state.next_handle;
-        staged.state.next_handle = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_VIDEO_HANDLE",
-                "video playback handles exhausted",
-            )
-        })?;
+        staged.state.next_handle = handle + 1;
         let clip = VideoClipRef {
             asset: resource.identity().to_owned(),
             content_hash: resource.content_hash().to_owned(),

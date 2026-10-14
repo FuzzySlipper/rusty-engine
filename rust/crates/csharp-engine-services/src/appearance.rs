@@ -2421,12 +2421,7 @@ impl RuntimeAppearanceBridge {
         let handle = {
             let staged = self.staged_mut()?;
             let value = staged.state.next_ghost_plate;
-            staged.state.next_ghost_plate = value.checked_add(1).ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_GHOST_PLATE_HANDLE",
-                    "ghost plate handle space overflowed",
-                )
-            })?;
+            staged.state.next_ghost_plate = value + 1;
             value
         };
         self.stage_ghost_plate(
@@ -3369,9 +3364,7 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
         let handle = staged.state.next_appearance;
-        staged.state.next_appearance = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_APPEARANCE_HANDLE", "appearance handle overflow")
-        })?;
+        staged.state.next_appearance = handle + 1;
         let identity = format!("appearance/native-{handle}");
         staged
             .state
@@ -3418,9 +3411,7 @@ impl RuntimeAppearanceBridge {
             ));
         }
         let handle = staged.state.next_light;
-        let next_light = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_LIGHT_HANDLE", "light handle overflow")
-        })?;
+        let next_light = handle + 1;
         set_light(staged, None, handle, fact)?;
         staged.state.next_light = next_light;
         Ok(NativeLightHandle { value: handle })
@@ -3475,9 +3466,7 @@ impl RuntimeAppearanceBridge {
             ));
         }
         let handle = staged.state.next_light;
-        let next_light = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_LIGHT_HANDLE", "light handle overflow")
-        })?;
+        let next_light = handle + 1;
         let previous = staged
             .state
             .lights
@@ -3526,9 +3515,7 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeMaterialHandle, CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
         let handle = staged.state.next_material;
-        let next_material = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_MATERIAL_HANDLE", "material handle overflow")
-        })?;
+        let next_material = handle + 1;
         let id = runtime_material_id(handle);
         let descriptor = material_descriptor(id.clone(), request, &staged.state.render_resources)?;
         let textures =
@@ -3578,9 +3565,7 @@ impl RuntimeAppearanceBridge {
         let mut material = authored.project_renderer_material(request.catalog, material_id)?;
         let staged = self.staged_mut()?;
         let handle = staged.state.next_material;
-        staged.state.next_material = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_MATERIAL_HANDLE", "material handle overflow")
-        })?;
+        staged.state.next_material = handle + 1;
         material.id = format!("material/csharp-authored-{handle}");
 
         let texture = match material.texture.as_deref() {
@@ -3769,9 +3754,7 @@ impl RuntimeAppearanceBridge {
             })
             .collect();
         let handle = state.next_material;
-        let next_material = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_MATERIAL_HANDLE", "material handle overflow")
-        })?;
+        let next_material = handle + 1;
         material.id = runtime_material_id(handle);
         material.terrain_layers = Some(render_model::MaterialTerrainLayersDescriptor {
             layers,
@@ -4587,12 +4570,6 @@ impl RuntimeAppearanceBridge {
                 "sprite atlas must contain at least one frame",
             ));
         }
-        if request.texture.value == 0 {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_HANDLE",
-                "invalid resource handle",
-            ));
-        }
         let resource = self.resource(request.texture.value)?.clone();
         if resource.kind() != CsharpRenderResourceKind::Texture {
             return Err(CsharpEngineServicesError::new(
@@ -4627,12 +4604,7 @@ impl RuntimeAppearanceBridge {
             .map(|frame| (frame.frame, frame))
             .collect();
         let staged = self.staged_mut()?;
-        staged.state.next_sprite_atlas = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_SPRITE_ATLAS_HANDLE",
-                "sprite atlas handle overflow",
-            )
-        })?;
+        staged.state.next_sprite_atlas = handle + 1;
         staged
             .state
             .projector
@@ -5212,12 +5184,7 @@ impl RuntimeAppearanceBridge {
         })?;
         let staged = self.staged_mut()?;
         let state = &mut *staged.state;
-        state.next_sprite_playback = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_SPRITE_PLAYBACK_HANDLE",
-                "sprite playback handle overflow",
-            )
-        })?;
+        state.next_sprite_playback = handle + 1;
         state.sprite_playbacks.insert(
             handle,
             RuntimeSpritePlayback {
@@ -5311,12 +5278,7 @@ impl RuntimeAppearanceBridge {
                 ));
             }
         }
-        playback.revision = playback.revision.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_SPRITE_PLAYBACK_REVISION",
-                "sprite playback revision overflow",
-            )
-        })?;
+        playback.revision += 1;
         let frame_id = playback.frames[playback.frame_index].frame_id;
         self.set_sprite_frame(NativeSpriteFrameUpdateRequest {
             appearance: NativeAppearanceHandle {
@@ -5353,12 +5315,7 @@ impl RuntimeAppearanceBridge {
                 )
             })?
             .frame_id;
-        let revision = playback.revision.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_SPRITE_PLAYBACK_REVISION",
-                "sprite playback revision overflow",
-            )
-        })?;
+        let revision = playback.revision + 1;
 
         // Validate and update the renderer-owned sprite before committing the
         // copied playback cursor. Because both mutations live in the staged
@@ -5437,13 +5394,7 @@ impl RuntimeAppearanceBridge {
                             }
                             NativeSpritePlaybackLoopMode::Loop => {
                                 playback.frame_index = 0;
-                                playback.cycle =
-                                    playback.cycle.checked_add(1).ok_or_else(|| {
-                                        CsharpEngineServicesError::new(
-                                            "CSHARP_SPRITE_PLAYBACK_CYCLE",
-                                            "sprite playback cycle overflow",
-                                        )
-                                    })?;
+                                playback.cycle += 1;
                             }
                         }
                     } else {
@@ -5453,12 +5404,7 @@ impl RuntimeAppearanceBridge {
                     append_sprite_playback_markers(&mut playback, &mut crossings)?;
                 }
                 if advanced {
-                    playback.revision = playback.revision.checked_add(1).ok_or_else(|| {
-                        CsharpEngineServicesError::new(
-                            "CSHARP_SPRITE_PLAYBACK_REVISION",
-                            "sprite playback revision overflow",
-                        )
-                    })?;
+                    playback.revision += 1;
                 }
             }
         }
@@ -5877,12 +5823,7 @@ impl RuntimeAppearanceBridge {
         let (asset, content_hash) = self.animation_instance_mesh(request, None)?;
         let state = &mut *self.staged_mut()?.state;
         let handle = state.next_animation_instance;
-        state.next_animation_instance = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_INSTANCE",
-                "animation instance handles exhausted",
-            )
-        })?;
+        state.next_animation_instance = handle + 1;
         count_user(
             &mut state.appearance_animation_instances,
             request.appearance.value,
@@ -6089,12 +6030,7 @@ impl RuntimeAppearanceBridge {
             .clone();
         let staged = self.staged_mut()?;
         let handle = staged.state.next_animation_graph;
-        staged.state.next_animation_graph = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_GRAPH",
-                "animation graph handles exhausted",
-            )
-        })?;
+        staged.state.next_animation_graph = handle + 1;
         staged.state.animation_graphs.insert(
             handle,
             AnimationGraphBuilder {
@@ -6311,12 +6247,7 @@ impl RuntimeAppearanceBridge {
             });
         let index = graph.definition.transitions.len() - 1;
         let handle = staged.state.next_animation_transition;
-        staged.state.next_animation_transition = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_TRANSITION",
-                "animation transition handles exhausted",
-            )
-        })?;
+        staged.state.next_animation_transition = handle + 1;
         staged.state.animation_transitions.insert(
             handle,
             AnimationTransitionRef {
@@ -6484,12 +6415,7 @@ impl RuntimeAppearanceBridge {
                 CsharpEngineServicesError::new("CSHARP_ANIMATION_CONTROLLER", error.to_string())
             })?;
         let handle = staged.state.next_animation_controller;
-        staged.state.next_animation_controller = handle.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_CONTROLLER",
-                "animation controller handles exhausted",
-            )
-        })?;
+        staged.state.next_animation_controller = handle + 1;
         staged
             .state
             .animation_instances
@@ -8015,12 +7941,7 @@ fn append_sprite_playback_markers(
         .filter(|marker| marker.frame_index as usize == playback.frame_index)
     {
         let sequence = playback.next_crossing_sequence;
-        playback.next_crossing_sequence = sequence.checked_add(1).ok_or_else(|| {
-            CsharpEngineServicesError::new(
-                "CSHARP_SPRITE_PLAYBACK_MARKER",
-                "sprite playback marker sequence overflow",
-            )
-        })?;
+        playback.next_crossing_sequence = sequence + 1;
         crossings.push(NativeSpritePlaybackMarkerCrossing {
             marker_id: marker.marker_id,
             frame_id: playback.frames[playback.frame_index].frame_id,

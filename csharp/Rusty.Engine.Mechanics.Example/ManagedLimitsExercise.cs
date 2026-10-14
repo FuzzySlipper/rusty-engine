@@ -20,7 +20,8 @@ internal static class ManagedLimitsExercise
         StatId identity = StatId.Parse(longValue);
         Check(identity.Value == longValue, "managed identity was normalized or truncated");
         Check(StatId.Parse("Health") != StatId.Parse("health"), "managed identity equality is not ordinal and case-sensitive");
-        ExpectArgument(() => StatId.Parse(string.Empty), "empty managed identity was admitted");
+        Check(StatId.TryParse(string.Empty, out StatId? empty) && empty!.Value.Length == 0,
+            "an empty managed identity was refused");
     }
 
     private static void AcceptsEffectsBeyondFormerCollectionLimit()
@@ -133,20 +134,6 @@ internal static class ManagedLimitsExercise
         Check(definition.States.Count == states.Length
             && definition.Transitions.Count == transitions.Length,
             "state-machine graph retained a former managed policy ceiling");
-    }
-
-    private static void ExpectArgument(Action action, string message)
-    {
-        try
-        {
-            action();
-        }
-        catch (ArgumentException)
-        {
-            return;
-        }
-
-        throw new InvalidOperationException(message);
     }
 
     private static void ExpectRefusal(MechanicsRefusal reason, Action action, string message)

@@ -476,7 +476,7 @@ impl RenderResourceRegistry {
 
     pub(crate) fn get(&self, handle: u64) -> Option<&CsharpRenderResource> {
         self.entries
-            .get(&usize::try_from(handle.saturating_sub(1)).ok()?)
+            .get(&usize::try_from(handle.checked_sub(1)?).ok()?)
     }
 
     /// The live resource with this asset identity.
@@ -505,12 +505,16 @@ impl RenderResourceRegistry {
         &self,
         handle: u64,
     ) -> Result<&CsharpRenderResource, CsharpEngineServicesError> {
-        let index = usize::try_from(handle.saturating_sub(1)).map_err(|_| {
-            CsharpEngineServicesError::new(
-                "CSHARP_RENDER_RESOURCE_HANDLE",
-                "invalid resource handle",
-            )
-        })?;
+        // Handle 0 names no resource; it must not alias the first slot.
+        let index = handle
+            .checked_sub(1)
+            .and_then(|slot| usize::try_from(slot).ok())
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_RENDER_RESOURCE_HANDLE",
+                    "invalid resource handle",
+                )
+            })?;
         self.entries.get(&index).ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_RENDER_RESOURCE_HANDLE",
@@ -523,7 +527,7 @@ impl RenderResourceRegistry {
     /// association extends in place.
     pub(crate) fn animated_mesh_mut(&mut self, handle: u64) -> Option<&mut AnimatedMeshAsset> {
         self.entries
-            .get_mut(&usize::try_from(handle.saturating_sub(1)).ok()?)?
+            .get_mut(&usize::try_from(handle.checked_sub(1)?).ok()?)?
             .animated_mesh
             .as_mut()
     }
@@ -553,20 +557,12 @@ impl RenderResourceRegistry {
         let handle = if let Some(handle) = self.identities.get(resource.asset_identity()).copied() {
             handle
         } else {
-            let handle = u64::try_from(self.next)
-                .map_err(|_| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_RENDER_RESOURCE_HANDLE",
-                        "renderer resource handle overflowed",
-                    )
-                })?
-                .checked_add(1)
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_RENDER_RESOURCE_HANDLE",
-                        "renderer resource handle overflowed",
-                    )
-                })?;
+            let handle = u64::try_from(self.next).map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_RENDER_RESOURCE_HANDLE",
+                    "renderer resource handle overflowed",
+                )
+            })? + 1;
             self.identities
                 .insert(resource.asset_identity().to_owned(), handle);
             self.bodies
@@ -1141,9 +1137,7 @@ impl GeneratedMeshes {
             material_handles.insert(handle);
         }
         let handle = self.next_resource;
-        let next = handle
-            .checked_add(1)
-            .ok_or_else(|| invalid("mesh handle overflow"))?;
+        let next = handle + 1;
         let definition = StaticMeshAsset {
             asset: format!("mesh/runtime-{handle}"),
             payload,
@@ -1213,9 +1207,7 @@ impl GeneratedMeshes {
             .collect();
         let material_handles = source.material_handles.clone();
         let handle = self.next_partition;
-        self.next_partition = handle
-            .checked_add(1)
-            .ok_or_else(|| invalid("mesh partition handle overflow"))?;
+        self.next_partition = handle + 1;
         self.count_materials(&material_handles, true);
         self.partitions.insert(
             handle,
@@ -1254,9 +1246,7 @@ impl GeneratedMeshes {
             .get_mut(request.index as usize)
             .ok_or_else(|| invalid("mesh partition index is out of range"))?;
         let handle = self.next_resource;
-        let next = handle
-            .checked_add(1)
-            .ok_or_else(|| invalid("mesh resource handle overflow"))?;
+        let next = handle + 1;
         let mut definition = part
             .take()
             .ok_or_else(|| invalid("mesh partition part was already taken"))?;
@@ -1295,12 +1285,8 @@ impl GeneratedMeshes {
         };
         let (position_chunks, position_remainder) = positions.as_chunks::<3>();
         let (index_chunks, index_remainder) = indices.as_chunks::<3>();
-        if !position_remainder.is_empty() || !index_remainder.is_empty() {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_COLLISION_MESH_INVALID",
-                "inline Graphics mesh had incomplete collision geometry",
-            ));
-        }
+        // Generated meshes and their partition parts build both streams in triples.
+        debug_assert!(position_remainder.is_empty() && index_remainder.is_empty());
         Ok((
             position_chunks
                 .iter()
@@ -1924,6 +1910,12 @@ pub(crate) mod tests {
             .admit(texture(NativeTextureFilter::Linear))
             .unwrap();
         assert_ne!(nearest, linear, "one image, two samplings");
+        // Handle 0 names nothing, even with the first slot live.
+        assert!(registry.get(0).is_none());
+        assert_eq!(
+            registry.resource(0).map(|_| ()).unwrap_err().code(),
+            "CSHARP_RENDER_RESOURCE_HANDLE"
+        );
         let body = registry.get(nearest).unwrap().identity().to_owned();
         assert_eq!(registry.get(linear).unwrap().identity(), body);
         let asset = registry.get(linear).unwrap().asset_identity().to_owned();

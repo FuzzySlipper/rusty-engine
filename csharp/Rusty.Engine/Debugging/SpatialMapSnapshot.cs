@@ -119,21 +119,12 @@ public sealed class SpatialMapSnapshot
         int maximumAnnotations)
     {
         ArgumentNullException.ThrowIfNull(spatial);
-        ValidateRequest(request);
-        ValidateObservation(observation);
         if (maximumAnnotations < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(maximumAnnotations));
         }
 
         SpatialMapResult receipt = spatial.ReadMap(request);
-        int expectedCellCount = checked((int)((ulong)request.Columns * request.Rows));
-        if (receipt.Cells.Length != expectedCellCount)
-        {
-            throw new InvalidOperationException(
-                $"Spatial map returned {receipt.Cells.Length} cells for {request.Columns} by {request.Rows} geometry.");
-        }
-
         // Retain a managed array so either formatter can index the cells directly.
         SpatialMapCell[] copiedCells = receipt.Cells.ToArray();
         SpatialMapGeometry geometry = new(
@@ -313,7 +304,7 @@ public sealed class SpatialMapSnapshot
         for (int index = 0; index < annotations.Length; index++)
         {
             SpatialMapAnnotation annotation = annotations[index];
-            ValidateAnnotation(annotation, index);
+            ArgumentNullException.ThrowIfNull(annotation.StableId, nameof(annotations));
             if (!TryGetCell(geometry, annotation.WorldPosition, out uint column, out uint row))
             {
                 horizontalOutOfView++;
@@ -328,13 +319,6 @@ public sealed class SpatialMapSnapshot
         }
 
         inBounds.Sort(static (left, right) => StringComparer.Ordinal.Compare(left.Annotation.StableId, right.Annotation.StableId));
-        for (int index = 1; index < inBounds.Count; index++)
-        {
-            if (StringComparer.Ordinal.Equals(inBounds[index - 1].Annotation.StableId, inBounds[index].Annotation.StableId))
-            {
-                throw new ArgumentException($"Spatial map annotations contain duplicate stable ID '{inBounds[index].Annotation.StableId}'.", nameof(annotations));
-            }
-        }
 
         int retainedCount = Math.Min(inBounds.Count, maximumAnnotations);
         SpatialMapPlacedAnnotation[] retained = inBounds.Take(retainedCount).ToArray();
@@ -416,40 +400,6 @@ public sealed class SpatialMapSnapshot
             hash *= 16777619;
         }
         return EntityGlyphAlphabet[(int)(hash % (uint)EntityGlyphAlphabet.Length)];
-    }
-
-    private static void ValidateRequest(SpatialMapRequest request)
-    {
-        if (!float.IsFinite(request.Origin.X) || !float.IsFinite(request.Origin.Y) || !float.IsFinite(request.Origin.Z)
-            || !double.IsFinite(request.CellSize) || request.CellSize <= 0
-            || request.Columns == 0 || request.Rows == 0
-            || !double.IsFinite(request.CollisionMinY) || !double.IsFinite(request.CollisionMaxY)
-            || !double.IsFinite(request.NavigationMinY) || !double.IsFinite(request.NavigationMaxY)
-            || request.CollisionMinY >= request.CollisionMaxY || request.NavigationMinY > request.NavigationMaxY)
-        {
-            throw new ArgumentException("Spatial map geometry must be finite, ordered, and contain at least one cell.", nameof(request));
-        }
-    }
-
-    private static void ValidateObservation(SpatialMapObservation observation)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(observation.Stamp);
-        if (!float.IsFinite(observation.PlayerPosition.X) || !float.IsFinite(observation.PlayerPosition.Y) || !float.IsFinite(observation.PlayerPosition.Z)
-            || !float.IsFinite(observation.PlayerFacing.X) || !float.IsFinite(observation.PlayerFacing.Y) || !float.IsFinite(observation.PlayerFacing.Z))
-        {
-            throw new ArgumentException("Spatial map observation vectors must be finite.", nameof(observation));
-        }
-    }
-
-    private static void ValidateAnnotation(SpatialMapAnnotation annotation, int index)
-    {
-        if (string.IsNullOrWhiteSpace(annotation.StableId))
-        {
-            throw new ArgumentException($"Spatial map annotation {index} has no stable ID.", nameof(annotation));
-        }
-        ArgumentNullException.ThrowIfNull(annotation.Label);
-        ArgumentNullException.ThrowIfNull(annotation.Relation);
-        ArgumentNullException.ThrowIfNull(annotation.State);
     }
 
     private static void AppendVector(StringBuilder output, Vector3 value)

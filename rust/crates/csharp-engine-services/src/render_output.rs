@@ -143,9 +143,7 @@ impl RuntimeRenderOutputBridge {
         request: Request,
     ) -> Result<NativeRenderOutputHandle, CsharpEngineServicesError> {
         let id = self.next;
-        self.next = id
-            .checked_add(1)
-            .ok_or_else(|| error("output handles exhausted"))?;
+        self.next = id + 1;
         self.staged()?.entries.insert(
             id,
             Entry {

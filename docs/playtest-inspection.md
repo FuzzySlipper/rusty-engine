@@ -201,9 +201,9 @@ Register `SpatialInspectionDebugModule` with product delegates for the current
 session, player pose and controller tuning. `SpatialGridSnapshot.Capture` formats
 stacked native `ReadMap` collision queries into an XYZ occupancy volume. Each Y
 slice contains Z rows whose characters increase along X. Origin, cell size,
-dimensions and source/legend accompany the result. The helper permits at most
-31 cells per axis and 8192 cells total. Products choose which dynamic colliders
-to supply and document that coverage. Empty collision cells do not prove a route.
+dimensions and source/legend accompany the result. Products choose which
+dynamic colliders to supply and document that coverage. Empty collision cells do
+not prove a route.
 
 `PlaytestTraversal.Probe` samples native rays at ankle, above-step and head heights,
 plus nearby downward floor rays. Products can pair these with their latest
@@ -226,7 +226,7 @@ debug command remains `interaction.inspect`.
 `SpatialClearanceSnapshot.Capture` uses the current body height/radius and the
 existing native capsule overlap/cast queries. `SpatialClearanceDebugModule`
 exposes it as `spatial.clearance x y z`; the browser assist operation is
-`clearance`, with world XYZ target feet within eight units. Products supply their
+`clearance`, with world XYZ target feet. Products supply their
 current body height, controller configuration and dynamic colliders.
 
 The result distinguishes current overlap, first contact along a straight sweep,

@@ -367,12 +367,7 @@ impl RuntimeDiagnosticsSink {
             event.severity = RuntimeDiagnosticSeverity::Warning;
         }
         event.sequence = inner.next_sequence;
-        inner.next_sequence = inner.next_sequence.checked_add(1).ok_or_else(|| {
-            RuntimeDiagnosticsError::new(
-                "RUNTIME_DIAGNOSTICS_SEQUENCE",
-                "diagnostic sequence exhausted",
-            )
-        })?;
+        inner.next_sequence += 1;
         event.monotonic_nanoseconds = monotonic_nanoseconds(inner.started);
         match event.severity {
             RuntimeDiagnosticSeverity::Warning => {

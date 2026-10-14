@@ -423,9 +423,9 @@ impl BundleState {
         Ok(None)
     }
 
-    fn next(&mut self) -> Option<u64> {
-        self.next = self.next.checked_add(1)?;
-        Some(self.next)
+    fn next(&mut self) -> u64 {
+        self.next += 1;
+        self.next
     }
 }
 
@@ -482,9 +482,7 @@ pub(super) unsafe extern "C" fn open_bundle(
     let Some(bundle) = bridge.bundles.source.load(id) else {
         return 0;
     };
-    let Some(value) = bridge.bundles.next() else {
-        return 0;
-    };
+    let value = bridge.bundles.next();
     bridge.bundles.open.insert(value, bundle);
     unsafe {
         *result = NativeContentBundleHandle { value };
@@ -523,9 +521,7 @@ pub(super) unsafe extern "C" fn open_container(
         Err(refusal) => return refuse(&refusal, error),
     };
     let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
-    let Some(value) = bridge.bundles.next() else {
-        return 0;
-    };
+    let value = bridge.bundles.next();
     bridge.bundles.open.insert(value, bundle);
     unsafe {
         *result = NativeContentBundleHandle { value };
@@ -639,11 +635,8 @@ pub(super) unsafe extern "C" fn open_bundle_reference(
         Ok(None) => return 0,
         Err(refusal) => return refuse(&refusal, error),
     };
-    let Some(handle) = bridge.retain(file) else {
-        return 0;
-    };
     unsafe {
-        *result = handle;
+        *result = bridge.retain(file);
     }
     ABI_OK
 }

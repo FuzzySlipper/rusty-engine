@@ -269,29 +269,28 @@ fn presentation_is_never_implicitly_admitted_by_realtime_advance() {
 }
 
 #[test]
-fn realtime_configuration_enforces_runtime_bounds() {
+fn realtime_configuration_refuses_only_zero_values() {
     assert_eq!(
         RuntimeLifecycleConfig::new(0, 1),
         Err(RuntimeLifecycleConfigError::ZeroFixedStepHz)
     );
     assert_eq!(
-        RuntimeLifecycleConfig::new(241, 1),
-        Err(RuntimeLifecycleConfigError::FixedStepHzExceedsMaximum)
-    );
-    assert_eq!(
         RuntimeLifecycleConfig::new(1, 0),
         Err(RuntimeLifecycleConfigError::ZeroCatchUpSteps)
     );
-    assert_eq!(
-        RuntimeLifecycleConfig::new(1, 17),
-        Err(RuntimeLifecycleConfigError::CatchUpStepsExceedMaximum)
-    );
-    assert_eq!(
-        RuntimeLifecycleConfig::new(240, 16)
-            .unwrap()
-            .fixed_step_hz(),
-        240
-    );
+
+    // A 500 Hz simulation with a 32-step catch-up window admits a 20-step
+    // burst whole.
+    let mut lifecycle = realtime(500, 32);
+    lifecycle.start().unwrap();
+    lifecycle
+        .advance_realtime(HostMonotonicTime::from_nanoseconds(0))
+        .unwrap();
+    lifecycle
+        .advance_realtime(HostMonotonicTime::from_nanoseconds(40_000_000))
+        .unwrap();
+    assert_eq!(lifecycle.readout().admitted_simulation_steps(), 20);
+    assert_eq!(lifecycle.readout().dropped_realtime_steps(), 0);
 }
 
 #[test]

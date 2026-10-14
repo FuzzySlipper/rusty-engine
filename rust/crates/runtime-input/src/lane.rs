@@ -194,7 +194,7 @@ impl RuntimeInputLane {
             dropped_count,
             accepted_through,
             consumed_through,
-            expected_sequence(self.last_sequence).ok(),
+            Some(expected_sequence(self.last_sequence)),
             accepted_indices,
         ))
     }
@@ -209,13 +209,7 @@ impl RuntimeInputLane {
         if event.runtime() != self.binding {
             return self.rebind_event(event);
         }
-        let expected = match expected_sequence(self.last_sequence) {
-            Ok(value) => value,
-            Err(error) => {
-                self.clear_state();
-                return Err(error);
-            }
-        };
+        let expected = expected_sequence(self.last_sequence);
         if event.sequence() != expected {
             self.clear_state();
             return Err(RuntimeInputError::SequenceOutOfOrder {
@@ -424,8 +418,7 @@ impl RuntimeInputLane {
         }
         event_binding == self.binding
             && event.context() == &self.context
-            && expected_sequence(self.last_sequence)
-                .is_ok_and(|expected| event.sequence() < expected)
+            && event.sequence() < expected_sequence(self.last_sequence)
     }
 
     fn checkpoint(&self) -> InputLaneCheckpoint {
@@ -754,12 +747,8 @@ fn same_declared_intents(
             .map(|intent| (intent.id(), intent.value_kind(), intent.payload_contract())))
 }
 
-fn expected_sequence(last: Option<u64>) -> Result<u64, RuntimeInputError> {
-    match last {
-        None => Ok(0),
-        Some(u64::MAX) => Err(RuntimeInputError::SequenceExhausted),
-        Some(sequence) => Ok(sequence + 1),
-    }
+fn expected_sequence(last: Option<u64>) -> u64 {
+    last.map_or(0, |sequence| sequence + 1)
 }
 
 fn set_button<T: Copy + PartialEq>(
@@ -1071,20 +1060,4 @@ fn axis_trigger(
     value: AxisValue,
 ) -> Result<Option<(RuntimeIntentValue, IntentPhase)>, RuntimeInputError> {
     Ok((value.value() != 0.0).then_some((RuntimeIntentValue::Axis { value }, IntentPhase::Axis)))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::expected_sequence;
-    use crate::RuntimeInputError;
-
-    #[test]
-    fn sequence_exhaustion_never_wraps_to_a_reused_zero() {
-        assert_eq!(expected_sequence(None), Ok(0));
-        assert_eq!(expected_sequence(Some(u64::MAX - 1)), Ok(u64::MAX));
-        assert_eq!(
-            expected_sequence(Some(u64::MAX)),
-            Err(RuntimeInputError::SequenceExhausted)
-        );
-    }
 }

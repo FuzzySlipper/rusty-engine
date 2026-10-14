@@ -5,12 +5,6 @@ pub(crate) const SCALED_NANOSECONDS_PER_SECOND: u128 = 1_000_000_000;
 /// Parts per million of realtime: a gameplay rate's unit.
 pub const GAMEPLAY_RATE_REALTIME_PPM: u32 = 1_000_000;
 
-/// Highest fixed-step rate accepted by the reusable runtime lifecycle.
-/// Products may choose to apply a stricter policy at their own edge.
-pub const MAX_REALTIME_HZ: u32 = 240;
-/// Highest bounded realtime catch-up batch accepted by the reusable lifecycle.
-pub const MAX_REALTIME_CATCH_UP_STEPS: u32 = 16;
-
 /// Maximum UTF-8 bytes in a neutral runtime identity.
 ///
 /// Runtime owners use these identifiers only as bounded caller-chosen labels;
@@ -137,7 +131,8 @@ pub struct RuntimeLifecycleConfig {
 }
 
 impl RuntimeLifecycleConfig {
-    /// Creates bounded, allocation-free fixed-step settings.
+    /// Creates allocation-free fixed-step settings. Both values must be
+    /// non-zero; the realtime arithmetic is exact for any `u32` rate.
     pub const fn new(
         fixed_step_hz: u32,
         max_catch_up_steps: u32,
@@ -145,14 +140,8 @@ impl RuntimeLifecycleConfig {
         if fixed_step_hz == 0 {
             return Err(RuntimeLifecycleConfigError::ZeroFixedStepHz);
         }
-        if fixed_step_hz > MAX_REALTIME_HZ {
-            return Err(RuntimeLifecycleConfigError::FixedStepHzExceedsMaximum);
-        }
         if max_catch_up_steps == 0 {
             return Err(RuntimeLifecycleConfigError::ZeroCatchUpSteps);
-        }
-        if max_catch_up_steps > MAX_REALTIME_CATCH_UP_STEPS {
-            return Err(RuntimeLifecycleConfigError::CatchUpStepsExceedMaximum);
         }
         Ok(Self {
             fixed_step_hz,
@@ -173,9 +162,7 @@ impl RuntimeLifecycleConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeLifecycleConfigError {
     ZeroFixedStepHz,
-    FixedStepHzExceedsMaximum,
     ZeroCatchUpSteps,
-    CatchUpStepsExceedMaximum,
 }
 
 impl fmt::Display for RuntimeLifecycleConfigError {
@@ -284,14 +271,12 @@ impl LifecycleReceipt {
     }
 }
 
-/// The reason a caller or the lifecycle put the current run into `Faulted`.
+/// The reason a caller put the current run into `Faulted`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeFault {
     /// A named downstream owner failed. Its detailed diagnostics remain with
     /// that owner rather than becoming a generic Engine error payload.
     OwnerReported,
-    /// An internal monotonic identifier or diagnostic counter was exhausted.
-    CounterExhausted,
 }
 
 /// A simulation step sequence number admitted by this lifecycle instance.
@@ -776,7 +761,6 @@ pub enum RuntimeLifecycleError {
     },
     /// A bounded gameplay advance needs a positive rate to make progress.
     GameplayAdvanceWithoutRate,
-    CounterExhausted,
 }
 
 impl fmt::Display for RuntimeLifecycleError {

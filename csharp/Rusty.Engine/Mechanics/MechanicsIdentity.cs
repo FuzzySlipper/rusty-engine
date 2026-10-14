@@ -10,26 +10,13 @@ public abstract record MechanicsIdentity
 {
     protected MechanicsIdentity(string value)
     {
-        Value = MechanicsIdentityValidation.Validate(value, GetType().Name);
+        ArgumentNullException.ThrowIfNull(value);
+        Value = value;
     }
 
     public string Value { get; }
 
     public override string ToString() => Value;
-}
-
-internal static class MechanicsIdentityValidation
-{
-    internal static string Validate(string? value, string kind)
-    {
-        ArgumentNullException.ThrowIfNull(value);
-        if (value.Length == 0)
-        {
-            throw new ArgumentException($"{kind} identities cannot be empty.", nameof(value));
-        }
-
-        return value;
-    }
 }
 
 /// <summary>Identity for one evaluated exact or continuous stat.</summary>
@@ -41,16 +28,8 @@ public sealed record StatId : MechanicsIdentity
 
     public static bool TryParse(string? value, out StatId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -63,16 +42,8 @@ public sealed record TrackId : MechanicsIdentity
 
     public static bool TryParse(string? value, out TrackId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -85,16 +56,8 @@ public sealed record SourceDefinitionId : MechanicsIdentity
 
     public static bool TryParse(string? value, out SourceDefinitionId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -107,16 +70,8 @@ public sealed record SourceInstanceId : MechanicsIdentity
 
     public static bool TryParse(string? value, out SourceInstanceId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -129,16 +84,8 @@ public sealed record StackingGroupId : MechanicsIdentity
 
     public static bool TryParse(string? value, out StackingGroupId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -151,16 +98,8 @@ public sealed record EffectDefinitionId : MechanicsIdentity
 
     public static bool TryParse(string? value, out EffectDefinitionId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -173,16 +112,8 @@ public sealed record EffectInstanceId : MechanicsIdentity
 
     public static bool TryParse(string? value, out EffectInstanceId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -195,16 +126,8 @@ public sealed record OperationId : MechanicsIdentity
 
     public static bool TryParse(string? value, out OperationId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -217,16 +140,8 @@ public sealed record ItemDefinitionId : MechanicsIdentity
 
     public static bool TryParse(string? value, out ItemDefinitionId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -243,16 +158,8 @@ public sealed record InventoryStackId : MechanicsIdentity
 
     public static bool TryParse(string? value, out InventoryStackId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -265,16 +172,8 @@ public sealed record CapacityMetricId : MechanicsIdentity
 
     public static bool TryParse(string? value, out CapacityMetricId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -287,16 +186,8 @@ public sealed record EquipmentSlotId : MechanicsIdentity
 
     public static bool TryParse(string? value, out EquipmentSlotId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -309,16 +200,8 @@ public sealed record ItemClassificationId : MechanicsIdentity
 
     public static bool TryParse(string? value, out ItemClassificationId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
@@ -331,16 +214,8 @@ public sealed record EquipmentExclusivityId : MechanicsIdentity
 
     public static bool TryParse(string? value, out EquipmentExclusivityId? result)
     {
-        try
-        {
-            result = value is null ? null : Parse(value);
-            return result is not null;
-        }
-        catch (ArgumentException)
-        {
-            result = null;
-            return false;
-        }
+        result = value is null ? null : new(value);
+        return result is not null;
     }
 }
 
