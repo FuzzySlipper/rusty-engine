@@ -122,6 +122,11 @@ static void ExerciseAspect()
 
     RequireClose(square.NormalizedPoint.X, 0.75d, "square aspect projection was incorrect");
     RequireClose(wide.NormalizedPoint.X, 0.625d, "explicit wide aspect projection was incorrect");
+
+    // A collapsed viewport has no aspect; its projection is not finite and never inside the clip volume.
+    CameraProjectionResult collapsed = CameraQueries.Project(camera, 0d, point);
+    Require(!collapsed.InClip && !float.IsFinite(collapsed.NormalizedPoint.X),
+        "collapsed viewport projection claimed a finite clip-space point");
 }
 
 static CameraDescriptor DerivedCamera(CameraProjectionKind kind, double fovYDegrees, double verticalSize) => new(

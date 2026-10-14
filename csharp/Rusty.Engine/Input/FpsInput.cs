@@ -96,11 +96,6 @@ public sealed class FpsInput
     /// <summary>Reads retained controls. Controller look is integrated by the supplied seconds; pointer input is not.</summary>
     public FpsInputFrame Read(float simulationDeltaSeconds)
     {
-        if (!float.IsFinite(simulationDeltaSeconds) || simulationDeltaSeconds < 0f)
-        {
-            throw new ArgumentOutOfRangeException(nameof(simulationDeltaSeconds), "Simulation delta must be finite and non-negative seconds.");
-        }
-
         FpsInputBindings bindings = Config.Bindings;
         Vector2 keyboardMovement = new(
             Axis(Physical.Held(bindings.RightKey), Physical.Held(bindings.LeftKey)),
@@ -148,8 +143,8 @@ public sealed class FpsInput
 
     private static void ValidateConfig(FpsInputConfig config)
     {
-        _ = AnalogInput.ApplyRadialDeadzone(Vector2.Zero, config.MoveDeadzone);
-        _ = AnalogInput.ApplyRadialDeadzone(Vector2.Zero, config.LookDeadzone);
+        ValidateDeadzone(config.MoveDeadzone);
+        ValidateDeadzone(config.LookDeadzone);
         if (Look.Diagnose(new LookRequest(default, Vector2.Zero, config.PointerLookConfig)) != LookDiagnostic.Accepted)
         {
             throw new ArgumentOutOfRangeException(nameof(config), "Pointer look configuration must be accepted by Look.");
@@ -160,6 +155,15 @@ public sealed class FpsInput
             || config.ControllerVerticalRadiansPerSecond < 0f)
         {
             throw new ArgumentOutOfRangeException(nameof(config), "Controller look sensitivity must be finite radians per second and non-negative.");
+        }
+    }
+
+    private static void ValidateDeadzone(RadialDeadzone deadzone)
+    {
+        if (!float.IsFinite(deadzone.InnerRadius) || !float.IsFinite(deadzone.OuterRadius) || !float.IsFinite(deadzone.Exponent)
+            || deadzone.InnerRadius < 0f || deadzone.InnerRadius >= deadzone.OuterRadius || deadzone.OuterRadius > 1f || deadzone.Exponent <= 0f)
+        {
+            throw new ArgumentOutOfRangeException(nameof(deadzone), "Dead zone inner radius must be below outer in [0, 1], and exponent must be positive.");
         }
     }
 }

@@ -444,8 +444,10 @@ the tint white.
 Look math is `Look.Integrate(request)` (and `Reset`, `Rebase`, `Diagnose`) in
 the managed toolkit. Use `Look.IntegrateClamped` for interactive pointer/stick
 input: it saturates large finite angular deltas at the configured limit so a
-quick mouse turn does not throw out of the product update. `Integrate` rejects
-a delta beyond that bound.
+quick mouse turn does not throw out of the product update. It does not recheck
+the configuration each call: check one with `Diagnose` where it is chosen
+(`FpsInput` checks its tuning when constructed). `Integrate` rejects a delta
+beyond that bound.
 
 Controller sticks arrive as `ControllerAxis` physical input with the normalized
 value in `ProductInputEvent.X`. Analog buttons (including standard-gamepad

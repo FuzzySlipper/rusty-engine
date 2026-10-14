@@ -29,12 +29,6 @@ Require(MathF.Abs(nextLook.After.YawRadians + 1.5f) < 0.0001f
     && nextLook.After.PitchRadians == -0.25f, "interactive look did not continue after a large delta");
 Require(Look.IntegrateClamped(new LookRequest(lookBefore, new(0.75f, 1f), lookConfig)) == looked,
     "interactive look changed in-range behavior");
-try
-{
-    Look.IntegrateClamped(new LookRequest(lookBefore, new(float.NaN, 0f), lookConfig));
-    throw new InvalidOperationException("interactive look accepted non-finite input");
-}
-catch (ArgumentException) { }
 var scheduler = new SimulationScheduler();
 var defaultOrder = new List<string>();
 var defaultPipeline = new UpdatePipeline(engine);

@@ -19,12 +19,12 @@ public readonly record struct CameraRay(Vector3 Origin, Vector3 Direction);
 /// Stateless camera projection and unprojection matching Rusty Engine camera presentation.
 /// The caller supplies the aspect ratio of its selected viewport; this helper never reads a live
 /// host surface, renderer, or camera handle. Normalized points use a bottom-left origin, where
-/// <c>(0, 0)</c> is bottom-left and <c>(1, 1)</c> is top-right.
+/// <c>(0, 0)</c> is bottom-left and <c>(1, 1)</c> is top-right. Projection and ray queries take
+/// the camera as given: a non-finite or degenerate descriptor or aspect gives non-finite results.
 /// </summary>
 public static class CameraQueries
 {
     private const double DegreesToRadians = Math.PI / 180d;
-    private const double MinimumBasisLengthSquared = 1e-12d;
 
     /// <summary>
     /// Derives a <see cref="CameraBasisMode.Derived"/> pose that faces <paramref name="target"/>
@@ -79,7 +79,6 @@ public static class CameraQueries
         Vector3 worldPoint)
     {
         CameraFrame frame = Resolve(camera, aspect);
-        RequireFinite(worldPoint, nameof(worldPoint));
 
         Vector3 local = worldPoint - camera.Pose.Position;
         double horizontal = Dot(local, frame.Right);
@@ -112,11 +111,6 @@ public static class CameraQueries
     public static CameraRay Ray(CameraDescriptor camera, double aspect, Vector2 normalizedPoint)
     {
         CameraFrame frame = Resolve(camera, aspect);
-        if (!float.IsFinite(normalizedPoint.X) || !float.IsFinite(normalizedPoint.Y))
-        {
-            throw new ArgumentException("Normalized point must be finite.", nameof(normalizedPoint));
-        }
-
         double x = normalizedPoint.X * 2d - 1d;
         double y = normalizedPoint.Y * 2d - 1d;
         return frame.Projection.Kind switch
@@ -176,13 +170,6 @@ public static class CameraQueries
 
     private static CameraFrame Resolve(CameraDescriptor camera, double aspect)
     {
-        RequireFinite(aspect, nameof(aspect));
-        if (aspect <= 0d) throw new ArgumentOutOfRangeException(nameof(aspect), "Aspect must be greater than zero.");
-        RequireFinite(camera.Pose.Position, nameof(camera));
-        RequireFinite(camera.Pose.PitchDegrees, nameof(camera));
-        RequireFinite(camera.Pose.YawDegrees, nameof(camera));
-        ValidateProjection(camera.Projection);
-
         return camera.BasisMode switch
         {
             CameraBasisMode.Derived => DerivedFrame(camera.Pose.Position, camera.Pose.PitchDegrees, camera.Pose.YawDegrees, camera.Projection, aspect),
@@ -219,46 +206,13 @@ public static class CameraQueries
         CameraProjection projection,
         double aspect)
     {
-        RequireFinite(basis.Forward, nameof(basis));
-        RequireFinite(basis.Right, nameof(basis));
-        RequireFinite(basis.Up, nameof(basis));
-
         // This matches the renderer's explicit-basis realization: render-wgpu consumes Forward
-        // and Up, then derives a perpendicular right axis. The descriptor's Right is still
-        // checked for a valid copied descriptor, but does not override that realization.
+        // and Up, then derives a perpendicular right axis. The descriptor's Right does not
+        // override that realization.
         Vector3 forward = Normalize(basis.Forward);
         Vector3 right = Normalize(Cross(forward, basis.Up));
         Vector3 up = Normalize(Cross(right, forward));
         return new CameraFrame(position, forward, right, up, projection, aspect);
-    }
-
-    private static void ValidateProjection(CameraProjection projection)
-    {
-        RequireFinite(projection.Near, nameof(projection));
-        RequireFinite(projection.Far, nameof(projection));
-        if (projection.Near <= 0d || projection.Far <= projection.Near)
-        {
-            throw new ArgumentException("Camera near/far values must be positive and ordered.", nameof(projection));
-        }
-
-        switch (projection.Kind)
-        {
-            case CameraProjectionKind.Perspective
-                when double.IsFinite(projection.FovYDegrees)
-                && projection.FovYDegrees > 0d
-                && projection.FovYDegrees < 180d:
-            return;
-            case CameraProjectionKind.Orthographic
-                when double.IsFinite(projection.VerticalSize)
-                && projection.VerticalSize > 0d:
-            return;
-            case CameraProjectionKind.Perspective:
-                throw new ArgumentException("Perspective vertical field of view must be between zero and 180 degrees.", nameof(projection));
-            case CameraProjectionKind.Orthographic:
-                throw new ArgumentException("Orthographic vertical size must be greater than zero.", nameof(projection));
-            default:
-                throw new ArgumentException("Camera projection kind is not supported.", nameof(projection));
-        }
     }
 
     private static Vector3 Add(Vector3 first, Vector3 second, Vector3 third = default, Vector3 fourth = default) =>
@@ -279,43 +233,11 @@ public static class CameraQueries
     private static double Dot(Vector3 first, Vector3 second) =>
         (double)first.X * second.X + (double)first.Y * second.Y + (double)first.Z * second.Z;
 
-    private static Vector3 Normalize(Vector3 value)
-    {
-        double lengthSquared = Dot(value, value);
-        if (!double.IsFinite(lengthSquared) || lengthSquared <= MinimumBasisLengthSquared)
-        {
-            throw new ArgumentException("Camera basis must provide non-parallel, non-zero forward and up vectors.");
-        }
-        return Scale(value, 1d / Math.Sqrt(lengthSquared));
-    }
+    private static Vector3 Normalize(Vector3 value) => Scale(value, 1d / Math.Sqrt(Dot(value, value)));
 
-    private static Vector2 ToVector2(double x, double y)
-    {
-        return new Vector2((float)x, (float)y);
-    }
+    private static Vector2 ToVector2(double x, double y) => new((float)x, (float)y);
 
-    private static Vector3 ToVector3(double x, double y, double z)
-    {
-        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(z)
-            || Math.Abs(x) > float.MaxValue || Math.Abs(y) > float.MaxValue || Math.Abs(z) > float.MaxValue)
-        {
-            throw new ArgumentException("Camera query result is not representable as a world vector.");
-        }
-        return new Vector3((float)x, (float)y, (float)z);
-    }
-
-    private static void RequireFinite(double value, string parameterName)
-    {
-        if (!double.IsFinite(value)) throw new ArgumentException("Camera query inputs must be finite.", parameterName);
-    }
-
-    private static void RequireFinite(Vector3 value, string parameterName)
-    {
-        if (!IsFinite(value))
-        {
-            throw new ArgumentException("Camera query inputs must be finite.", parameterName);
-        }
-    }
+    private static Vector3 ToVector3(double x, double y, double z) => new((float)x, (float)y, (float)z);
 
     private static bool IsFinite(Vector3 value) =>
         float.IsFinite(value.X) && float.IsFinite(value.Y) && float.IsFinite(value.Z);

@@ -100,9 +100,11 @@ locked, unavailable and occluded targets cannot be used.
 `InteractionQuery` contains ray origin/direction, acquisition/release half-angles
 in radians, distances in world units, and ranking weights. Release bounds enclose
 acquisition bounds. Higher priority wins, then weighted angular/distance score,
-then stable ID. A selected eligible target persists within release bounds even
-when another target becomes slightly closer. Explicit cycling chooses another
-eligible acquisition target. Selection does not perform an action.
+then stable ID and revision. Queries and candidates are used as given rather
+than checked: a degenerate ray or a non-finite point or reach selects nothing. A
+selected eligible target persists within release bounds even when another
+target becomes slightly closer. Explicit cycling chooses another eligible
+acquisition target. Selection does not perform an action.
 
 `Observe` returns candidates within release bounds; `Inspect` includes all
 supplied candidates for discovery. `Preview` reports what `Update` would select
@@ -140,10 +142,12 @@ active)` before applying controller look. Deltas are already time-integrated:
 X is yaw-right, Y is pitch-up. The query direction is the look before those
 deltas. The result reports focus, adjusted deltas, correction and slowdown.
 `AimAssistConfig` selects slowdown angle/minimum scale, maximum tracking radians
-per second, shot cone and maximum shot correction radians. Tracking uses admitted
-simulation time; deliberate input away from a target receives no slowdown or
-tracking. When inactive, focus clears. Apply the returned delta through normal
-`Look.IntegrateClamped`; do not add a second simulation or input loop.
+per second, shot cone and maximum shot correction radians. An `AimAssist`
+checks a configuration the first time it sees that instance. Tracking uses
+admitted simulation time; deliberate input away from a target receives no
+slowdown or tracking. When inactive, focus clears. Apply the returned delta
+through normal `Look.IntegrateClamped`; do not add a second simulation or input
+loop.
 
 At fire time, `CorrectShot` revalidates the retained target with fresh facts and
 returns a direction corrected only inside the shot cone and angular limit.

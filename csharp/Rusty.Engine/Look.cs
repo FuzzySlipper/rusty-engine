@@ -77,18 +77,14 @@ public static class Look
 
     /// <summary>
     /// Applies interactive input, saturating each angular delta at the product's
-    /// configured maximum. Large finite mouse/stick samples do not reject the
-    /// update; invalid configuration, state, and non-finite input still do.
-    /// Use <see cref="Integrate"/> when exceeding the limit must reject a command.
+    /// configured maximum, so large mouse/stick samples do not reject the update.
+    /// The configuration is the product's own tuning and is not rechecked here; use
+    /// <see cref="Diagnose"/> once where it is chosen. A non-finite delta or state gives
+    /// a non-finite result that <see cref="Reset"/> clears. Use <see cref="Integrate"/>
+    /// when a request must be classified and exceeding the limit must reject a command.
     /// </summary>
     public static LookReceipt IntegrateClamped(LookRequest request)
     {
-        LookDiagnostic diagnostic = Diagnose(request);
-        if (diagnostic is not (LookDiagnostic.Accepted or LookDiagnostic.DeltaLimitExceeded))
-        {
-            throw new ArgumentException($"Look request was rejected: {diagnostic}.", nameof(request));
-        }
-
         // Multiply before narrowing so finite input cannot overflow before it
         // reaches the configured angular bound.
         float yawDelta = (float)Math.Clamp(

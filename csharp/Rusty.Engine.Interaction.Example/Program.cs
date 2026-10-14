@@ -34,6 +34,14 @@ foreach (var (candidate, expected) in new[] {
 Check(InteractionFocus.Revalidate(A.Target, [A with { Target = new(1,2) }], query) == InteractionReason.StaleTarget, "Reused ID invalidates old query");
 Check(InteractionFocus.Revalidate(A.Target, [], query) == InteractionReason.InvalidTarget, "Removed target cannot activate");
 Check(focus.Update([A],query).Candidates[0].Candidate.Route == InteractionRoute.Unknown, "Visibility does not invent navigation evidence");
+// Candidates and queries are product facts used as given: equal ranks fall back to ID then
+// revision whatever the enumeration order, and degenerate facts select nothing.
+var older = A with { Target = new(1, 0) };
+Check(new InteractionFocus().Update([A, older], query).Selected == older.Target
+    && new InteractionFocus().Update([older, A], query).Selected == older.Target, "Revision breaks an ID tie deterministically");
+Check(new InteractionFocus().Update([A with { ReachDistance = float.NaN }], query).Reason == InteractionReason.OutOfReach, "Non-finite reach is never within reach");
+Check(new InteractionFocus().Update([A with { Point = new(float.NaN, 0, 0) }], query).Selected is null, "Non-finite point is never selected");
+Check(new InteractionFocus().Update([A], query with { Direction = Vector3.Zero }).Selected is null, "Degenerate ray selects nothing");
 Console.WriteLine("Interaction selection, hysteresis, cycling, query and use-time invalidation checks passed.");
 
 focus.Clear();
@@ -120,6 +128,12 @@ Check(corrected.Assisted && corrected.Direction.X > 0 && corrected.CorrectionRad
 Check(!assist.CorrectShot(-Vector3.UnitZ, [target with { Visibility = InteractionVisibility.Occluded }], aimQuery, config, active:true).Assisted, "Fresh shot occlusion disables magnetism");
 Check(!assist.CorrectShot(-Vector3.UnitZ, [target with { Target = new(1,2) }], aimQuery, config, active:true).Assisted, "Reincarnated target cannot attract shot");
 Check(assist.Update([target], aimQuery, Vector2.Zero, .016f, config, active:false).Focus.Selected is null, "Disabling controller assistance clears target");
+// Configuration is checked when an instance is first seen; a changed copy is a new instance.
+static bool Rejects(Action action) { try { action(); return false; } catch (ArgumentException) { return true; } }
+Check(Rejects(() => new AimAssist().Update([target], aimQuery, Vector2.Zero, .016f, config with { MinimumLookScale = 2 }, active:true)), "Invalid aim configuration is refused");
+Check(Rejects(() => assist.Update([target], aimQuery, Vector2.Zero, .016f, config with { TrackingRadiansPerSecond = -1 }, active:true)), "A changed copy of an admitted configuration is checked again");
+Check(Rejects(() => assist.CorrectShot(-Vector3.UnitZ, [target], aimQuery, config with { MaximumShotCorrectionRadians = 1 }, active:true)), "Shot correction checks a new configuration");
+Check(assist.Update([target], aimQuery, Vector2.Zero, .016f, config, active:true).Focus.Selected == target.Target, "The admitted configuration still applies");
 Console.WriteLine("World interaction discovery/shared use and bounded controller aim assistance checks passed.");
 
 sealed class TestInteractionScene(InteractionCandidate candidate, InteractionQuery query) : IWorldInteractionScene

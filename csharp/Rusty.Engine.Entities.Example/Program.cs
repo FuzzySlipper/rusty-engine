@@ -708,18 +708,21 @@ static void ExerciseAppearanceEntityComposition()
     EntityGraphicsProjectionReceipt receipt = adapter.Publish(entries);
     Require(graphics.PublishCalls == 1
         && receipt.Facts.Span.Length == 2
-        && graphics.LastSnapshot.Span[0].ObjectId == first.Value
-        && graphics.LastSnapshot.Span[0].Appearance == firstHandle
-        && graphics.LastSnapshot.Span[1].ObjectId == second.Value
-        && graphics.LastSnapshot.Span[1].Appearance == secondHandle
-        && graphics.LastSnapshot.Span[1].HasParentObject
-        && graphics.LastSnapshot.Span[1].ParentObjectId == first.Value,
-        "graphics adapter did not publish caller-owned handles and hierarchy in parent-before-child order");
+        && graphics.LastSnapshot.Span[0].ObjectId == second.Value
+        && graphics.LastSnapshot.Span[0].Appearance == secondHandle
+        && graphics.LastSnapshot.Span[0].HasParentObject
+        && graphics.LastSnapshot.Span[0].ParentObjectId == first.Value
+        && graphics.LastSnapshot.Span[1].ObjectId == first.Value
+        && graphics.LastSnapshot.Span[1].Appearance == firstHandle
+        && !graphics.LastSnapshot.Span[1].HasParentObject,
+        "graphics adapter did not publish caller-owned handles and hierarchy in the caller's order");
 
-    Throws(
-        () => adapter.Publish(
-            new EntityGraphicsProjectionEntry[] { new(second, secondHandle, true, RenderLayer.Debug, new EntityId(999)) }),
-        "graphics adapter accepted a parent that was absent from its complete snapshot");
+    // The Engine judges the hierarchy against the whole snapshot; the adapter forwards it as given.
+    adapter.Publish(new EntityGraphicsProjectionEntry[] { new(second, secondHandle, true, RenderLayer.Debug, new EntityId(999)) });
+    Require(graphics.PublishCalls == 2
+        && graphics.LastSnapshot.Span.Length == 1
+        && graphics.LastSnapshot.Span[0].ParentObjectId == 999,
+        "graphics adapter did not leave the hierarchy check to the Engine");
 }
 
 sealed class SpatialServiceFake : ISpatialService

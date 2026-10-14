@@ -84,6 +84,22 @@ static void ExerciseFpsComposition()
     LookReceipt look = fps.IntegrateLook(new LookState(0f, 0f), frame);
     Require(look.After.YawRadians > frame.ControllerLookRadians.X && look.After.PitchRadians < 0f,
         "default pointer/controller vertical input was not inverted through Look.IntegrateClamped");
+
+    // FPS tuning is checked once, when the helper is constructed, not on each read.
+    foreach (FpsInputConfig invalid in new[]
+    {
+        FpsInputConfig.Standard with { MoveDeadzone = new RadialDeadzone(0.5f, 0.5f, 1f) },
+        FpsInputConfig.Standard with { LookDeadzone = new RadialDeadzone(0.1f, 1f, 0f) },
+        FpsInputConfig.Standard with { ControllerHorizontalRadiansPerSecond = -1f },
+    })
+    {
+        try
+        {
+            _ = new FpsInput(invalid);
+            throw new InvalidOperationException("FPS input accepted invalid tuning");
+        }
+        catch (ArgumentOutOfRangeException) { }
+    }
 }
 
 static ProductInputEvent Event(

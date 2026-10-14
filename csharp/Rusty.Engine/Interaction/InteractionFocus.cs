@@ -85,7 +85,6 @@ public sealed class InteractionFocus
     /// action path only on Ready. Never use a previously returned observation as authorization.</summary>
     public static InteractionReason Revalidate(InteractionTarget target, ReadOnlySpan<InteractionCandidate> current, InteractionQuery query)
     {
-        Validate(query);
         bool identityPresent = false;
         foreach (InteractionCandidate candidate in current)
         {
@@ -119,12 +118,9 @@ public sealed class InteractionFocus
 
     private static List<InteractionObservation> Evaluate(ReadOnlySpan<InteractionCandidate> candidates, InteractionQuery query, bool includeOutside = false)
     {
-        Validate(query);
         List<InteractionObservation> rows = new();
-        HashSet<ulong> identities = new();
         foreach (InteractionCandidate candidate in candidates)
         {
-            if (!identities.Add(candidate.Target.Id)) throw new ArgumentException("Candidate IDs must be unique within a query.", nameof(candidates));
             InteractionObservation row = EvaluateOne(candidate, query);
             if (includeOutside || row.WithinRelease) rows.Add(row);
         }
@@ -134,15 +130,15 @@ public sealed class InteractionFocus
             if (priority != 0) return priority;
             double Score(InteractionObservation x) => query.AngularWeight * (double)x.AngleRadians + query.DistanceWeight * (double)x.Distance;
             int score = Score(a).CompareTo(Score(b));
-            return score != 0 ? score : a.Candidate.Target.Id.CompareTo(b.Candidate.Target.Id);
+            if (score != 0) return score;
+            int id = a.Candidate.Target.Id.CompareTo(b.Candidate.Target.Id);
+            return id != 0 ? id : a.Candidate.Target.Revision.CompareTo(b.Candidate.Target.Revision);
         });
         return rows;
     }
 
     private static InteractionObservation EvaluateOne(InteractionCandidate candidate, InteractionQuery query)
     {
-        if (!Finite(candidate.Point) || !float.IsFinite(candidate.ReachDistance) || candidate.ReachDistance < 0 || !float.IsFinite(candidate.Priority))
-            throw new ArgumentException("Candidate point, reach and priority must be finite; reach must be nonnegative.", nameof(candidate));
         Vector3 offset = candidate.Point - query.Origin;
         float distance = Vector3.Distance(candidate.Point, query.DistanceOrigin ?? query.Origin);
         float angle = offset.LengthSquared() == 0 ? 0 : MathF.Acos(Math.Clamp(Vector3.Dot(Vector3.Normalize(offset), Vector3.Normalize(query.Direction)), -1, 1));
@@ -157,21 +153,10 @@ public sealed class InteractionFocus
             {
                 InteractionVisibility.Occluded => InteractionReason.Occluded,
                 InteractionVisibility.Unknown => InteractionReason.VisibilityUnknown,
-                _ => distance > candidate.ReachDistance ? InteractionReason.OutOfReach : InteractionReason.Ready,
+                _ => distance <= candidate.ReachDistance ? InteractionReason.Ready : InteractionReason.OutOfReach,
             },
         };
         if (!release) reason = InteractionReason.OutsideQuery;
         return new(candidate, distance, angle, acquire, release, reason, false);
-    }
-
-    private static bool Finite(Vector3 x) => float.IsFinite(x.X) && float.IsFinite(x.Y) && float.IsFinite(x.Z);
-    private static void Validate(InteractionQuery q)
-    {
-        if (!Finite(q.Origin) || (q.DistanceOrigin is {} distanceOrigin && !Finite(distanceOrigin)) || !Finite(q.Direction) || q.Direction.LengthSquared() <= 0 || !float.IsFinite(q.Direction.LengthSquared())
-            || !float.IsFinite(q.AcquireAngleRadians) || !float.IsFinite(q.ReleaseAngleRadians)
-            || q.AcquireAngleRadians < 0 || q.ReleaseAngleRadians < q.AcquireAngleRadians || q.ReleaseAngleRadians > MathF.PI
-            || !float.IsFinite(q.MaximumDistance) || !float.IsFinite(q.ReleaseDistance) || q.MaximumDistance < 0 || q.ReleaseDistance < q.MaximumDistance
-            || !float.IsFinite(q.AngularWeight) || q.AngularWeight < 0 || !float.IsFinite(q.DistanceWeight) || q.DistanceWeight < 0)
-            throw new ArgumentException("Invalid interaction ray, cone, distance or ranking configuration.", nameof(q));
     }
 }

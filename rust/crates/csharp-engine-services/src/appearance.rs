@@ -11800,6 +11800,32 @@ pub(super) mod tests {
         let facts = [child_fact, parent_fact];
         unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }
             .expect("hierarchical snapshot");
+
+        // The managed entity projection forwards snapshots as given. A
+        // repeated object takes its last fact; the Engine refuses a missing
+        // parent and a cycle, and a refused snapshot adds nothing to the call.
+        let repeated = [child_fact, parent_fact, parent_fact];
+        unsafe { bridge.stage_snapshot(repeated.as_ptr(), repeated.len()) }
+            .expect("a repeated object takes its last fact");
+        let mut orphan = child_fact;
+        orphan.parent_object_id = 99;
+        let mut cyclic_parent = parent_fact;
+        cyclic_parent.has_parent_object = true;
+        cyclic_parent.parent_object_id = child_fact.object_id;
+        for refused in [vec![orphan, parent_fact], vec![child_fact, cyclic_parent]] {
+            let error = unsafe { bridge.stage_snapshot(refused.as_ptr(), refused.len()) }
+                .expect_err("invalid hierarchy is refused");
+            assert_eq!(error.code(), "CSHARP_VISUAL_SNAPSHOT");
+        }
+        assert_eq!(
+            bridge
+                .staged_ref()
+                .unwrap()
+                .state
+                .projector
+                .retained_objects(),
+            2
+        );
         let staged = bridge.take_staged_call();
         assert!(matches!(
             staged.render_ops().as_slice(),

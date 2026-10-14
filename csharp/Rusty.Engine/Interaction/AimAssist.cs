@@ -21,6 +21,7 @@ public readonly record struct AimShotReadout(Vector3 Direction, InteractionTarge
 public sealed class AimAssist
 {
     private const float AngularEpsilon = 0.000001f;
+    private AimAssistConfig? _admittedConfig;
     public InteractionFocus Focus { get; } = new();
 
     /// <summary>Input is already time-integrated yaw-right/pitch-up radians. Query direction is the
@@ -28,9 +29,7 @@ public sealed class AimAssist
     public AimAssistReadout Update(ReadOnlySpan<InteractionCandidate> candidates, InteractionQuery query,
         Vector2 lookDeltaRadians, float simulationSeconds, AimAssistConfig config, bool active)
     {
-        Validate(config);
-        if (!float.IsFinite(simulationSeconds) || simulationSeconds < 0 || !Finite(lookDeltaRadians))
-            throw new ArgumentOutOfRangeException(nameof(simulationSeconds));
+        Admit(config);
         if (!active) Focus.Clear();
         InteractionReadout focus = active ? Focus.Update(candidates, query) : Focus.Observe(candidates, query);
         if (!active || focus.Selected is null)
@@ -61,9 +60,7 @@ public sealed class AimAssist
     public AimShotReadout CorrectShot(Vector3 direction, ReadOnlySpan<InteractionCandidate> candidates,
         InteractionQuery query, AimAssistConfig config, bool active)
     {
-        Validate(config);
-        if (!Finite(direction) || direction.LengthSquared() <= 0 || !float.IsFinite(direction.LengthSquared()))
-            throw new ArgumentException("Shot direction must be finite and nonzero.", nameof(direction));
+        Admit(config);
         direction = Vector3.Normalize(direction);
         AimShotReadout unchanged = new(direction, null, 0, false);
         if (!active || Focus.Selected is not {} target || config.MaximumShotCorrectionRadians == 0)
@@ -95,10 +92,12 @@ public sealed class AimAssist
             - MathF.Atan2(direction.Y, MathF.Sqrt(direction.X * direction.X + direction.Z * direction.Z));
         return new(yaw, pitch);
     }
-    private static bool Finite(Vector2 x) => float.IsFinite(x.X) && float.IsFinite(x.Y);
-    private static bool Finite(Vector3 x) => float.IsFinite(x.X) && float.IsFinite(x.Y) && float.IsFinite(x.Z);
-    private static void Validate(AimAssistConfig c)
+
+    /// <summary>Checks a configuration the first time this instance sees it. A config is an
+    /// immutable record, so the same instance keeps the values that were checked.</summary>
+    private void Admit(AimAssistConfig c)
     {
+        if (ReferenceEquals(c, _admittedConfig)) return;
         if (!float.IsFinite(c.SlowdownAngleRadians) || c.SlowdownAngleRadians < 0 || c.SlowdownAngleRadians > MathF.PI
             || !float.IsFinite(c.MinimumLookScale) || c.MinimumLookScale < 0 || c.MinimumLookScale > 1
             || !float.IsFinite(c.TrackingRadiansPerSecond) || c.TrackingRadiansPerSecond < 0
@@ -106,5 +105,6 @@ public sealed class AimAssist
             || !float.IsFinite(c.MaximumShotCorrectionRadians) || c.MaximumShotCorrectionRadians < 0
             || c.MaximumShotCorrectionRadians > c.ShotConeRadians)
             throw new ArgumentException("Invalid aim assistance configuration.", nameof(c));
+        _admittedConfig = c;
     }
 }
