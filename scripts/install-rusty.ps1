@@ -52,8 +52,11 @@ try {
     $archivePath = Join-Path $work $archive
     Invoke-WebRequest "$url.sha256" -OutFile "$archivePath.sha256" -UseBasicParsing
     Invoke-WebRequest $url -OutFile $archivePath -UseBasicParsing
+    # The archive's one hash: its rusty.exe runs next, and `rusty install
+    # --archive` takes this digest instead of hashing the archive again.
     $expected = ((Get-Content "$archivePath.sha256" -Raw).Trim() -split "\s+")[0]
-    if ((Get-FileHash $archivePath -Algorithm SHA256).Hash -ne $expected) {
+    $digest = (Get-FileHash $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($digest -ne $expected) {
         throw "install-rusty: $archive does not match its published SHA-256."
     }
 
@@ -71,7 +74,12 @@ try {
         New-Item -ItemType Directory -Force -Path $cache | Out-Null
         Set-Content -Path (Join-Path $cache "config.json") -Value "{`"releases`": `"$mirror`"}" -Encoding Ascii
     }
-    & $candidate install --archive $archivePath
+    $install = @("install", "--archive", $archivePath)
+    # An older pair's rusty.exe hashes the archive itself.
+    if ((& $candidate install --help | Out-String).Contains("--verified-sha256")) {
+        $install += @("--verified-sha256", $digest)
+    }
+    & $candidate @install
     if ($LASTEXITCODE -ne 0) {
         throw "install-rusty: rusty install --archive failed."
     }

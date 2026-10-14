@@ -79,22 +79,32 @@ url="$releases/download/csharp-sdk-v$version/$archive"
 echo "install-rusty: downloading Engine pair $version"
 curl -fsSL --retry 3 -o "$work/$archive.sha256" "$url.sha256"
 curl -fsSL --retry 3 -o "$work/$archive" "$url"
-(cd "$work" && sha256sum --check --quiet "$archive.sha256")
+# The archive's one hash: its rusty runs next, and `rusty install --archive`
+# takes this digest instead of hashing the archive again.
+digest=$(sha256sum "$work/$archive" | awk '{print $1}')
+published=$(awk 'NF { print $1; exit }' "$work/$archive.sha256")
+[[ "$digest" == "${published,,}" ]] || {
+    echo "install-rusty: $archive does not match its published SHA-256." >&2
+    exit 1
+}
 
 tar -xzf "$work/$archive" -C "$work" "$name/runtime-pack/bin/rusty"
 candidate="$work/$name/runtime-pack/bin/rusty"
 # Pairs published before the install workflow ship a dev-only rusty. Check the
 # candidate before it replaces the command on PATH.
-"$candidate" install --help >/dev/null 2>&1 || {
+install_help=$("$candidate" install --help 2>&1) || {
     echo "install-rusty: pair $version predates \`rusty install\`; bootstrap the newest pair (omit --version). A newer rusty still installs and runs products pinned to $version." >&2
     exit 1
 }
+install=(install --archive "$work/$archive")
+# An older pair's rusty hashes the archive itself.
+[[ "$install_help" != *--verified-sha256* ]] || install+=(--verified-sha256 "$digest")
 if [[ -n "$mirror" ]]; then
     cache=${XDG_CACHE_HOME:-$HOME/.cache}/rusty-engine
     mkdir -p "$cache"
     printf '{"releases": "%s"}\n' "$mirror" > "$cache/config.json"
 fi
-"$candidate" install --archive "$work/$archive"
+"$candidate" "${install[@]}"
 mkdir -p "$bin_dir"
 install -m 755 "$candidate" "$bin_dir/.rusty.incoming.$$"
 mv -f "$bin_dir/.rusty.incoming.$$" "$bin_dir/rusty"

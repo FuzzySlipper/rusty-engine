@@ -709,6 +709,7 @@ struct BuildOptions {
 struct InstallOptions {
     project: Option<PathBuf>,
     archive: Option<PathBuf>,
+    verified_sha256: Option<String>,
 }
 
 #[derive(Debug)]
@@ -1133,6 +1134,7 @@ fn parse_install(values: Vec<String>) -> Result<InstallOptions, String> {
     let mut options = InstallOptions {
         project: None,
         archive: None,
+        verified_sha256: None,
     };
     while let Some(value) = values.next() {
         match value.as_str() {
@@ -1142,8 +1144,14 @@ fn parse_install(values: Vec<String>) -> Result<InstallOptions, String> {
             "--archive" => {
                 options.archive = Some(PathBuf::from(required_value(&mut values, "--archive")?))
             }
+            "--verified-sha256" => {
+                options.verified_sha256 = Some(required_value(&mut values, "--verified-sha256")?)
+            }
             _ => return Err(unknown_argument("install", &value, install_usage)),
         }
+    }
+    if options.verified_sha256.is_some() && options.archive.is_none() {
+        return Err("RUSTY_ARGUMENT: --verified-sha256 describes an --archive".to_owned());
     }
     Ok(options)
 }
@@ -1468,7 +1476,7 @@ fn pack_content(options: &PackContentOptions) -> Result<ExitCode, String> {
 
 fn install_usage() -> String {
     format!(
-        "usage: rusty install [--project <path>] [--archive <pair.tar.gz>]
+        "usage: rusty install [--project <path>] [--archive <pair.tar.gz> [--verified-sha256 <digest>]]
 
 Installs the Engine SDK/runtime pair pinned by the product (the <{pin}> element in the nearest
 {pin_file} at or above --project, default the current directory). It downloads the pair once,
@@ -1476,6 +1484,8 @@ checks its SHA-256 and identity, and keeps it in the shared cache for every prod
 never changes the pin. An already installed pair needs no network.
 
 --archive installs a pair archive you already have; its .sha256 file must sit beside it.
+--verified-sha256 <digest> is the archive's SHA-256 as the caller has just computed it, as the
+bootstrap scripts do; it is compared with the .sha256 file instead of hashing the archive again.
 
 Examples:
   rusty install
@@ -2067,7 +2077,7 @@ fn exit_code(status: ExitStatus) -> ExitCode {
 
 fn install(options: &InstallOptions) -> Result<ExitCode, String> {
     if let Some(archive) = &options.archive {
-        let pair = pair::install_archive(&absolute(archive)?)?;
+        let pair = pair::install_archive(&absolute(archive)?, options.verified_sha256.as_deref())?;
         println!(
             "Installed Engine pair {} at {}",
             pair.version,

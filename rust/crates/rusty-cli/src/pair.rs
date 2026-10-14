@@ -575,7 +575,7 @@ fn install_desktop_pack_from(
             pair.version
         ));
     }
-    verify_checksum(&archive)?;
+    verify_checksum(&archive, None)?;
     let incoming = IncomingDirectory::create(&pair.root, "desktop-extract")?;
     let status = Command::new("tar")
         .arg("-xJf")
@@ -641,13 +641,19 @@ pub fn install_version(version: &str) -> Result<(InstalledPair, bool), String> {
             "RUSTY_INSTALL_NOT_PUBLISHED: no published pair {version} at {archive_url}. Check the version, or use `rusty update --check` to see the newest pair."
         ));
     }
-    let pair = install_archive(&archive)?;
+    let pair = install_archive(&archive, None)?;
     Ok((pair, true))
 }
 
 /// Installs a pair archive that sits next to its `.sha256` file. This is the
 /// path for archives obtained another way, and the bootstrap's last step.
-pub fn install_archive(archive: &Path) -> Result<InstalledPair, String> {
+/// `verified_sha256` is the archive's digest as the caller has just computed
+/// it; it is checked against the `.sha256` file instead of hashing the
+/// archive again.
+pub fn install_archive(
+    archive: &Path,
+    verified_sha256: Option<&str>,
+) -> Result<InstalledPair, String> {
     let name = archive
         .file_name()
         .and_then(|name| name.to_str())
@@ -667,7 +673,7 @@ pub fn install_archive(archive: &Path) -> Result<InstalledPair, String> {
     if let Some(pair) = installed(version)? {
         return Ok(pair);
     }
-    verify_checksum(archive)?;
+    verify_checksum(archive, verified_sha256)?;
 
     let pairs = pairs_root()?;
     fs::create_dir_all(&pairs).map_err(|error| {
@@ -722,7 +728,7 @@ pub fn install_archive(archive: &Path) -> Result<InstalledPair, String> {
     })
 }
 
-fn verify_checksum(archive: &Path) -> Result<(), String> {
+fn verify_checksum(archive: &Path, verified_sha256: Option<&str>) -> Result<(), String> {
     let checksum_path = PathBuf::from(format!("{}.sha256", archive.display()));
     let expected = fs::read_to_string(&checksum_path)
         .map_err(|error| {
@@ -735,6 +741,16 @@ fn verify_checksum(archive: &Path) -> Result<(), String> {
         .next()
         .unwrap_or_default()
         .to_ascii_lowercase();
+    if let Some(verified) = verified_sha256 {
+        return if verified.eq_ignore_ascii_case(&expected) {
+            Ok(())
+        } else {
+            Err(format!(
+                "RUSTY_INSTALL_CHECKSUM: `{}` was verified as SHA-256 {verified}, but its .sha256 names {expected}; download the pair again",
+                archive.display()
+            ))
+        };
+    }
     let mut file = fs::File::open(archive).map_err(|error| {
         format!(
             "RUSTY_INSTALL_ARCHIVE: could not open `{}`: {error}",
@@ -1151,6 +1167,31 @@ mod tests {
             ))
         );
         assert_eq!(compare_url("0.1.0-dev.playtest-20260928c", &target), None);
+    }
+
+    #[test]
+    fn an_archive_is_hashed_unless_the_caller_gives_the_digest_it_computed() {
+        let base = env::temp_dir().join(format!("rusty-checksum-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        fs::create_dir_all(&base).unwrap();
+        let archive = base.join("pair.tar.gz");
+        let published = format!("{:x}", Sha256::digest(b"published"));
+        fs::write(
+            base.join("pair.tar.gz.sha256"),
+            format!("{published}  pair.tar.gz\n"),
+        )
+        .unwrap();
+        fs::write(&archive, b"tampered").unwrap();
+        // A standalone --archive hashes the archive and refuses changed bytes.
+        let error = verify_checksum(&archive, None).unwrap_err();
+        assert!(error.starts_with("RUSTY_INSTALL_CHECKSUM"), "{error}");
+        // The bootstrap's digest is compared with the .sha256; the archive
+        // itself is not read again.
+        fs::remove_file(&archive).unwrap();
+        verify_checksum(&archive, Some(&published.to_ascii_uppercase())).unwrap();
+        let error = verify_checksum(&archive, Some(&"0".repeat(64))).unwrap_err();
+        assert!(error.starts_with("RUSTY_INSTALL_CHECKSUM"), "{error}");
+        fs::remove_dir_all(base).unwrap();
     }
 
     /// A pair in a temporary cache, and a release directory beside it that

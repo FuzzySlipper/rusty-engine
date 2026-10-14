@@ -27,7 +27,10 @@ irm https://raw.githubusercontent.com/FuzzySlipper/rusty-engine/main/scripts/ins
 
 The bootstrap downloads the newest pair, checks its SHA-256, puts that pair's
 `rusty` in `~/.local/bin` (`--bin-dir`; `-BinDir` on Windows, which also adds
-it to the user PATH), and installs the pair into the shared cache. On Windows
+it to the user PATH), and installs the pair into the shared cache. It hashes
+the archive once, before running that `rusty`, and hands the digest to
+`rusty install --archive --verified-sha256` (a pair's `rusty` without that
+option hashes the archive again itself). On Windows
 the newest pair may not have its Windows archive yet (see
 [Windows](#windows)); the script then says so. Service managers and Den brokers that start commands with their
 own `PATH` may not include `~/.local/bin`; launch configurations use
