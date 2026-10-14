@@ -45,6 +45,7 @@ public readonly record struct EquipmentAssignment(EquipmentSlotId Slot, EntityId
 public sealed class EquipmentState
 {
     private readonly Dictionary<EquipmentSlotId, EquipmentSlotEntry> _assignments = [];
+    private readonly SortedDictionary<EntityId, EquippedItem> _items = [];
 
     public EquipmentState(EntityId owner)
     {
@@ -60,7 +61,7 @@ public sealed class EquipmentState
         .Select(entry => new EquipmentAssignment(entry.Slot.Id, entry.Item))
         .ToArray();
 
-    public bool ContainsItem(EntityId item) => _assignments.Values.Any(entry => entry.Item == item);
+    public bool ContainsItem(EntityId item) => _items.ContainsKey(item);
 
     internal EquipmentState Clone()
     {
@@ -72,23 +73,48 @@ public sealed class EquipmentState
         {
             result._assignments.Add(id, entry);
         }
+        foreach ((EntityId item, EquippedItem equipped) in _items)
+        {
+            result._items.Add(item, equipped);
+        }
 
         return result;
     }
 
-    internal IEnumerable<EquipmentSlotEntry> Entries() => _assignments.Values;
+    /// <summary>Equipped items in entity order, each with its definition and slots.</summary>
+    internal IEnumerable<KeyValuePair<EntityId, EquippedItem>> Items() => _items;
 
     internal bool TryGet(EquipmentSlotId slot, out EquipmentSlotEntry? entry) =>
         _assignments.TryGetValue(slot, out entry);
 
-    internal void Set(EquipmentSlotDefinition slot, EntityId item) =>
-        _assignments[slot.Id] = new EquipmentSlotEntry(slot, item);
+    internal bool TryGetItem(EntityId item, out EquippedItem? equipped) =>
+        _items.TryGetValue(item, out equipped);
 
-    internal bool Remove(EquipmentSlotId slot) => _assignments.Remove(slot);
+    internal void Add(EntityId item, ItemDefinition definition, EquipmentSlotDefinition[] slots)
+    {
+        foreach (EquipmentSlotDefinition slot in slots)
+        {
+            _assignments[slot.Id] = new EquipmentSlotEntry(slot, item);
+        }
+        _items.Add(item, new EquippedItem(definition, Array.ConvertAll(slots, slot => slot.Id)));
+    }
+
+    internal EquipmentSlotId[] Remove(EntityId item)
+    {
+        EquipmentSlotId[] slots = _items[item].Slots;
+        foreach (EquipmentSlotId slot in slots)
+        {
+            _assignments.Remove(slot);
+        }
+        _items.Remove(item);
+        return slots;
+    }
 
     internal void SetRevision(ulong revision) => Revision = revision;
 
     internal sealed record EquipmentSlotEntry(EquipmentSlotDefinition Slot, EntityId Item);
+
+    internal sealed record EquippedItem(ItemDefinition Definition, EquipmentSlotId[] Slots);
 }
 
 /// <summary>Kind of one equipment mutation.</summary>
@@ -184,33 +210,21 @@ public sealed partial class InventoryStore
 
         EquipmentSlotDefinition[] requested = CopyRequestedSlots(slots);
         EnsureRequestedSlotCount(itemState.Definition, requested);
-        EquipmentState candidate = equipment.Clone();
-        foreach (EquipmentSlotDefinition slot in requested)
-        {
-            if (candidate.TryGet(slot.Id, out EquipmentState.EquipmentSlotEntry? occupied)
-                && occupied is not null)
-            {
-                throw new MechanicsException(
-                    MechanicsRefusal.Occupied,
-                    $"Equipment slot {slot.Id} is occupied by item {occupied.Item.Value}.");
-            }
-            candidate.Set(slot, item);
-        }
-
-        IReadOnlyList<EquipmentSourceActivation> activations = ValidateEquipment(owner, candidate, out _);
-        IReadOnlyList<EquipmentSlotChange> changes = Changes(equipment, candidate);
-        candidate.SetRevision(checked(candidate.Revision + 1));
-        _equipment[owner] = candidate;
+        EnsureSlotsAccept(equipment, itemState, requested, outgoing: null);
+        ulong revisionBefore = equipment.Revision;
+        ulong revisionAfter = checked(revisionBefore + 1);
+        equipment.Add(item, itemState.Definition, requested);
+        equipment.SetRevision(revisionAfter);
         TouchStore();
         return new EquipmentMutationReceipt(
             EquipmentMutationKind.Equip,
             owner,
             item,
             null,
-            equipment.Revision,
-            candidate.Revision,
-            changes,
-            activations);
+            revisionBefore,
+            revisionAfter,
+            Changes([], null, Array.ConvertAll(requested, slot => slot.Id), item),
+            SourceActivations(owner, equipment));
     }
 
     internal EquipmentMutationReceipt UnequipCore(EntityId owner, EntityId item)
@@ -221,26 +235,20 @@ public sealed partial class InventoryStore
             throw new MechanicsException(MechanicsRefusal.NotFound, $"Unique item {item.Value} is not equipped by {owner.Value}.");
         }
 
-        EquipmentState candidate = equipment.Clone();
-        foreach (EquipmentAssignment assignment in equipment.Assignments.Where(value => value.Item == item))
-        {
-            candidate.Remove(assignment.Slot);
-        }
-
-        IReadOnlyList<EquipmentSourceActivation> activations = ValidateEquipment(owner, candidate, out _);
-        IReadOnlyList<EquipmentSlotChange> changes = Changes(equipment, candidate);
-        candidate.SetRevision(checked(candidate.Revision + 1));
-        _equipment[owner] = candidate;
+        ulong revisionBefore = equipment.Revision;
+        ulong revisionAfter = checked(revisionBefore + 1);
+        EquipmentSlotId[] removed = equipment.Remove(item);
+        equipment.SetRevision(revisionAfter);
         TouchStore();
         return new EquipmentMutationReceipt(
             EquipmentMutationKind.Unequip,
             owner,
             item,
             null,
-            equipment.Revision,
-            candidate.Revision,
-            changes,
-            activations);
+            revisionBefore,
+            revisionAfter,
+            Changes(removed, item, [], null),
+            SourceActivations(owner, equipment));
     }
 
     internal EquipmentMutationReceipt SwapCore(
@@ -270,97 +278,80 @@ public sealed partial class InventoryStore
 
         EquipmentSlotDefinition[] requested = CopyRequestedSlots(slots);
         EnsureRequestedSlotCount(incoming.Definition, requested);
-        EquipmentState candidate = equipment.Clone();
-        foreach (EquipmentAssignment assignment in equipment.Assignments.Where(value => value.Item == outgoingItem))
-        {
-            candidate.Remove(assignment.Slot);
-        }
-        foreach (EquipmentSlotDefinition slot in requested)
-        {
-            if (candidate.TryGet(slot.Id, out EquipmentState.EquipmentSlotEntry? occupied)
-                && occupied is not null)
-            {
-                throw new MechanicsException(
-                    MechanicsRefusal.Occupied,
-                    $"Equipment slot {slot.Id} is occupied by item {occupied.Item.Value}.");
-            }
-            candidate.Set(slot, incomingItem);
-        }
-
-        IReadOnlyList<EquipmentSourceActivation> activations = ValidateEquipment(owner, candidate, out _);
-        IReadOnlyList<EquipmentSlotChange> changes = Changes(equipment, candidate);
-        candidate.SetRevision(checked(candidate.Revision + 1));
-        _equipment[owner] = candidate;
+        EnsureSlotsAccept(equipment, incoming, requested, outgoingItem);
+        ulong revisionBefore = equipment.Revision;
+        ulong revisionAfter = checked(revisionBefore + 1);
+        EquipmentSlotId[] removed = equipment.Remove(outgoingItem);
+        equipment.Add(incomingItem, incoming.Definition, requested);
+        equipment.SetRevision(revisionAfter);
         TouchStore();
         return new EquipmentMutationReceipt(
             EquipmentMutationKind.Swap,
             owner,
             incomingItem,
             outgoingItem,
-            equipment.Revision,
-            candidate.Revision,
-            changes,
-            activations);
+            revisionBefore,
+            revisionAfter,
+            Changes(removed, outgoingItem, Array.ConvertAll(requested, slot => slot.Id), incomingItem),
+            SourceActivations(owner, equipment));
     }
 
-    private IReadOnlyList<EquipmentSourceActivation> ValidateEquipment(
-        EntityId owner,
+    /// <summary>
+    /// Admits an incoming item to its requested slots: each must be free (or held by the outgoing
+    /// item of a swap) and accept the item's classifications, and no other equipped item may hold
+    /// its exclusivity group. Items already equipped were admitted when they were equipped.
+    /// </summary>
+    private static void EnsureSlotsAccept(
         EquipmentState equipment,
-        out IReadOnlyList<EntityId> observedItems)
+        ItemState incoming,
+        EquipmentSlotDefinition[] requested,
+        EntityId? outgoing)
     {
-        Dictionary<EntityId, List<EquipmentState.EquipmentSlotEntry>> byItem = [];
-        foreach (EquipmentState.EquipmentSlotEntry assignment in equipment.Entries())
+        foreach (EquipmentSlotDefinition slot in requested)
         {
-            if (!byItem.TryGetValue(assignment.Item, out List<EquipmentState.EquipmentSlotEntry>? itemSlots))
+            if (equipment.TryGet(slot.Id, out EquipmentState.EquipmentSlotEntry? occupied)
+                && occupied is not null
+                && occupied.Item != outgoing)
             {
-                itemSlots = [];
-                byItem.Add(assignment.Item, itemSlots);
+                throw new MechanicsException(
+                    MechanicsRefusal.Occupied,
+                    $"Equipment slot {slot.Id} is occupied by item {occupied.Item.Value}.");
             }
-            itemSlots.Add(assignment);
         }
 
-        Dictionary<EquipmentExclusivityId, EntityId> exclusiveItems = [];
-        List<EntityId> itemIds = byItem.Keys.OrderBy(value => value).ToList();
-        List<EquipmentSourceActivation> activations = [];
-        foreach (EntityId item in itemIds)
+        foreach (EquipmentSlotDefinition slot in requested)
         {
-            ItemState itemState = RequireItem(item);
-            EnsureContainedBy(item, owner);
-            ItemEquipmentPolicy? policy = itemState.Definition.Equipment
-                ?? throw new MechanicsException(MechanicsRefusal.Incompatible, $"Item {item.Value} is not equippable.");
-            List<EquipmentState.EquipmentSlotEntry> assignments = byItem[item];
-            if (assignments.Count != policy.RequiredSlots)
+            if (slot.AllowedClassifications.Count != 0
+                && !slot.AllowedClassifications.Any(
+                    classification => incoming.Definition.Classifications.Contains(classification)))
             {
                 throw new MechanicsException(
                     MechanicsRefusal.Incompatible,
-                    $"Item {item.Value} requires {policy.RequiredSlots} equipment slots but has {assignments.Count}.");
+                    $"Item {incoming.Entity.Value} does not match equipment slot {slot.Id} classifications.");
             }
+        }
 
-            foreach (EquipmentState.EquipmentSlotEntry assignment in assignments)
+        if (incoming.Definition.Equipment?.ExclusiveGroup is EquipmentExclusivityId exclusiveGroup)
+        {
+            foreach ((EntityId item, EquipmentState.EquippedItem equipped) in equipment.Items())
             {
-                if (assignment.Slot.AllowedClassifications.Count != 0
-                    && !assignment.Slot.AllowedClassifications.Any(
-                        classification => itemState.Definition.Classifications.Contains(classification)))
-                {
-                    throw new MechanicsException(
-                        MechanicsRefusal.Incompatible,
-                        $"Item {item.Value} does not match equipment slot {assignment.Slot.Id} classifications.");
-                }
-            }
-
-            if (policy.ExclusiveGroup is EquipmentExclusivityId exclusiveGroup)
-            {
-                if (exclusiveItems.TryGetValue(exclusiveGroup, out EntityId existing)
-                    && existing != item)
+                if (item != outgoing && equipped.Definition.Equipment?.ExclusiveGroup == exclusiveGroup)
                 {
                     throw new MechanicsException(
                         MechanicsRefusal.Occupied,
-                        $"Equipment exclusivity group {exclusiveGroup} already contains item {existing.Value}.");
+                        $"Equipment exclusivity group {exclusiveGroup} already contains item {item.Value}.");
                 }
-                exclusiveItems[exclusiveGroup] = item;
             }
+        }
+    }
 
-            foreach (SourceDefinitionId source in itemState.Definition.SourceDefinitions)
+    /// <summary>Every source of every item the owner has equipped, in item then definition order.</summary>
+    private static IReadOnlyList<EquipmentSourceActivation> SourceActivations(EntityId owner, EquipmentState equipment)
+    {
+        List<EquipmentSourceActivation> activations = [];
+        foreach ((EntityId item, EquipmentState.EquippedItem equipped) in equipment.Items())
+        {
+            foreach (SourceDefinitionId source in equipped.Definition.SourceDefinitions)
             {
                 activations.Add(new EquipmentSourceActivation(
                     new EquippedItemSourceIdentity(owner, item, source),
@@ -368,8 +359,7 @@ public sealed partial class InventoryStore
             }
         }
 
-        observedItems = itemIds;
-        return Array.AsReadOnly(activations.ToArray());
+        return activations.AsReadOnly();
     }
 
     private static EquipmentSlotDefinition[] CopyRequestedSlots(
@@ -410,27 +400,27 @@ public sealed partial class InventoryStore
         }
     }
 
+    /// <summary>The slots one mutation touched, in slot order: those the outgoing item left and the incoming item took.</summary>
     private static IReadOnlyList<EquipmentSlotChange> Changes(
-        EquipmentState before,
-        EquipmentState after)
+        EquipmentSlotId[] vacated,
+        EntityId? outgoing,
+        EquipmentSlotId[] taken,
+        EntityId? incoming)
     {
-        Dictionary<EquipmentSlotId, EntityId> oldValues = before.Assignments
-            .ToDictionary(value => value.Slot, value => value.Item);
-        Dictionary<EquipmentSlotId, EntityId> newValues = after.Assignments
-            .ToDictionary(value => value.Slot, value => value.Item);
-        EquipmentSlotId[] slots = oldValues.Keys
-            .Concat(newValues.Keys)
-            .Distinct()
-            .OrderBy(value => value.Value, StringComparer.Ordinal)
-            .ToArray();
-        return Array.AsReadOnly(slots
-            .Where(slot => !oldValues.TryGetValue(slot, out EntityId oldItem)
-                || !newValues.TryGetValue(slot, out EntityId newItem)
-                || oldItem != newItem)
-            .Select(slot => new EquipmentSlotChange(
-                slot,
-                oldValues.TryGetValue(slot, out EntityId oldItem) ? oldItem : null,
-                newValues.TryGetValue(slot, out EntityId newItem) ? newItem : null))
-            .ToArray());
+        var changes = new List<EquipmentSlotChange>(vacated.Length + taken.Length);
+        foreach (EquipmentSlotId slot in vacated)
+        {
+            changes.Add(new EquipmentSlotChange(slot, outgoing, Array.IndexOf(taken, slot) >= 0 ? incoming : null));
+        }
+        foreach (EquipmentSlotId slot in taken)
+        {
+            if (Array.IndexOf(vacated, slot) < 0)
+            {
+                changes.Add(new EquipmentSlotChange(slot, null, incoming));
+            }
+        }
+
+        changes.Sort((left, right) => string.CompareOrdinal(left.Slot.Value, right.Slot.Value));
+        return changes.AsReadOnly();
     }
 }

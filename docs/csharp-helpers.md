@@ -209,7 +209,8 @@ For authored provenance, `SetSources(statId, sources)` accepts `StatSource` valu
 with typed contributions, priorities and stacking groups. Sources sort by priority,
 identity and definition; equal-strength selections keep the first in that order.
 `UniqueByDefinition` selects the first activation of each source definition.
-`RemoveSource` removes one activation; `Explain()` returns an immutable evaluation
+Sources sharing an identity each take part in that order. `RemoveSource` removes
+the activations with one identity; `Explain()` returns an immutable evaluation
 readout with applied, suppressed and inapplicable decisions. These are optional;
 ordinary `AddModifier` needs no source identities or operation records. Local
 modifiers keep insertion order and precede authored contributions within each

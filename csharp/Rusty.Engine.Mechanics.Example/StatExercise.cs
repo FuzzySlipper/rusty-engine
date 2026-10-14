@@ -106,10 +106,12 @@ internal static class StatExercise
         stat.SetSources(ability, [Source("first", "same", 4, 10, MechanicsStackingPolicy.UniqueByDefinition),
             Source("second", "same", 6, 20, MechanicsStackingPolicy.UniqueByDefinition)]);
         Equal(44, stat.Value, "unique means source definition, not activation identity");
-        Reject(() => stat.SetSources(ability, [first, Source("first", "other", 6, 20)]));
-        Equal(44, stat.Value, "duplicate identity across priorities rejected without mutation");
         Reject(() => stat.SetSources(ability, [first, Source("second", "other", 6, 20, MechanicsStackingPolicy.Sum)]));
         Equal(44, stat.Value, "invalid stacking group rejected without mutation");
+        stat.SetSources(ability, [first, Source("first", "other", 6, 20)]);
+        Equal(46, stat.Value, "sources sharing an identity are each ordered and selected");
+        Check(stat.RemoveSource(first.Identity), "shared-identity source removal");
+        Equal(40, stat.Value, "removing an identity removes every source carrying it");
 
         var speed = new Stat(1, minimum: 0, maximum: 1);
         var speedId = StatId.Parse("speed");

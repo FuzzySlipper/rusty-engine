@@ -184,34 +184,53 @@ public sealed class EffectsComponent
         ArgumentNullException.ThrowIfNull(instance);
         ArgumentNullException.ThrowIfNull(provenance);
         ActiveEffect current = new(instance, definition, provenance, stacks);
-        if (_effects.Any(effect => effect.Instance == instance))
+        int index = SearchIndex(instance);
+        if (index >= 0)
         {
             throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Effect instance {instance} is already active.");
         }
 
-        ActiveEffect[] matching = _effects
-            .Where(effect => effect.Definition.StackingGroup == definition.StackingGroup)
-            .ToArray();
+        int matching = 0;
+        bool sameProvenance = false;
+        bool otherPolicy = false;
+        foreach (ActiveEffect effect in _effects)
+        {
+            if (effect.Definition.StackingGroup == definition.StackingGroup)
+            {
+                matching++;
+                sameProvenance |= effect.Provenance == provenance;
+                otherPolicy |= effect.Definition.Stacking != definition.Stacking;
+            }
+        }
+
         switch (definition.Stacking)
         {
             case EffectStackingPolicy.IndependentByProvenance:
-                if (matching.Any(effect => effect.Provenance == provenance))
+                if (sameProvenance)
                 {
                     throw new MechanicsException(
                         MechanicsRefusal.AlreadyPresent,
                         $"Effect group {definition.StackingGroup} already has this provenance.");
                 }
 
-                if (matching.Length >= definition.MaximumInstances)
+                if (matching >= definition.MaximumInstances)
                 {
                     throw new MechanicsException(
                         MechanicsRefusal.Capacity,
                         $"Effect group {definition.StackingGroup} has reached its instance limit.");
                 }
+
+                // A refresh or replace group holds its one effect; an independent effect cannot join it.
+                if (otherPolicy)
+                {
+                    throw new MechanicsException(
+                        MechanicsRefusal.Inconsistent,
+                        $"Effect group {definition.StackingGroup} uses more than one stacking policy.");
+                }
                 break;
             case EffectStackingPolicy.Refresh:
             case EffectStackingPolicy.Replace:
-                if (matching.Length != 0)
+                if (matching != 0)
                 {
                     throw new MechanicsException(
                         MechanicsRefusal.AlreadyPresent,
@@ -222,11 +241,8 @@ public sealed class EffectsComponent
                 throw new MechanicsException(MechanicsRefusal.Inconsistent, "Unknown effect stacking policy.");
         }
 
-        return Publish(
-            EffectMutationKind.Apply,
-            [.. _effects, current],
-            [],
-            current);
+        _effects.Insert(~index, current);
+        return Receipt(EffectMutationKind.Apply, [], current);
     }
 
     public EffectMutationReceipt Refresh(
@@ -244,9 +260,8 @@ public sealed class EffectsComponent
         }
 
         ActiveEffect current = new(instance, previous.Definition, provenance, stacks);
-        List<ActiveEffect> candidate = [.. _effects];
-        candidate[index] = current;
-        return Publish(EffectMutationKind.Refresh, candidate, [previous], current);
+        _effects[index] = current;
+        return Receipt(EffectMutationKind.Refresh, [previous], current);
     }
 
     public EffectMutationReceipt Replace(
@@ -264,7 +279,12 @@ public sealed class EffectsComponent
         }
 
         ActiveEffect current = new(instance, definition, provenance, stacks);
-        List<ActiveEffect> candidate = [];
+        int existing = SearchIndex(instance);
+        if (existing >= 0 && _effects[existing].Definition.StackingGroup != definition.StackingGroup)
+        {
+            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Effect instance {instance} is already active.");
+        }
+
         List<ActiveEffect> removed = [];
         foreach (ActiveEffect effect in _effects)
         {
@@ -272,19 +292,15 @@ public sealed class EffectsComponent
             {
                 removed.Add(effect);
             }
-            else
-            {
-                candidate.Add(effect);
-            }
         }
 
-        if (candidate.Any(effect => effect.Instance == instance))
+        if (removed.Count != 0)
         {
-            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Effect instance {instance} is already active.");
+            _effects.RemoveAll(effect => effect.Definition.StackingGroup == definition.StackingGroup);
         }
 
-        candidate.Add(current);
-        return Publish(EffectMutationKind.Replace, candidate, removed, current);
+        _effects.Insert(~SearchIndex(instance), current);
+        return Receipt(EffectMutationKind.Replace, removed.AsReadOnly(), current);
     }
 
     /// <summary>Removes one active effect at the caller's chosen time.</summary>
@@ -300,36 +316,19 @@ public sealed class EffectsComponent
         ArgumentNullException.ThrowIfNull(instance);
         int index = FindIndex(instance);
         ActiveEffect removed = _effects[index];
-        List<ActiveEffect> candidate = [.. _effects];
-        candidate.RemoveAt(index);
-        return Publish(kind, candidate, [removed], null);
+        _effects.RemoveAt(index);
+        return Receipt(kind, [removed], null);
     }
 
-    private EffectMutationReceipt Publish(
+    private EffectMutationReceipt Receipt(
         EffectMutationKind kind,
-        IEnumerable<ActiveEffect> candidate,
-        IEnumerable<ActiveEffect> removed,
-        ActiveEffect? current)
-    {
-        ActiveEffect[] validated = candidate
-            .OrderBy(effect => effect.Instance.Value, StringComparer.Ordinal)
-            .ToArray();
-        ValidateCollection(validated);
-        EffectSourceActivation[] activations = current is null
-            ? []
-            : ActivateSources(current);
-
-        _effects.Clear();
-        _effects.AddRange(validated);
-        ActiveEffect[] removedArray = removed
-            .OrderBy(effect => effect.Instance.Value, StringComparer.Ordinal)
-            .ToArray();
-        return new EffectMutationReceipt(
+        IReadOnlyList<ActiveEffect> removed,
+        ActiveEffect? current) =>
+        new(
             kind,
-            Array.AsReadOnly(removedArray),
+            removed,
             current,
-            Array.AsReadOnly(activations));
-    }
+            current is null ? Array.Empty<EffectSourceActivation>() : Array.AsReadOnly(ActivateSources(current)));
 
     private EffectSourceActivation[] ActivateSources(ActiveEffect effect)
     {
@@ -347,49 +346,38 @@ public sealed class EffectsComponent
         return activations.ToArray();
     }
 
-    private void ValidateCollection(IReadOnlyList<ActiveEffect> effects)
-    {
-        if (effects.Select(effect => effect.Instance).Distinct().Count() != effects.Count)
-        {
-            throw new MechanicsException(MechanicsRefusal.AlreadyPresent, "Active effect instances must have unique identities.");
-        }
-
-        foreach (IGrouping<StackingGroupId, ActiveEffect> group in effects.GroupBy(
-            effect => effect.Definition.StackingGroup))
-        {
-            ActiveEffect[] members = group.ToArray();
-            EffectStackingPolicy policy = members[0].Definition.Stacking;
-            if (members.Any(effect => effect.Definition.Stacking != policy))
-            {
-                throw new MechanicsException(
-                    MechanicsRefusal.Inconsistent,
-                    $"Effect group {group.Key} uses more than one stacking policy.");
-            }
-
-            if (policy == EffectStackingPolicy.IndependentByProvenance)
-            {
-                if (members.Length > members[0].Definition.MaximumInstances
-                    || members.Select(effect => effect.Provenance).Distinct().Count() != members.Length)
-                {
-                    throw new MechanicsException(
-                        MechanicsRefusal.Inconsistent,
-                        $"Effect group {group.Key} violates independent stacking limits.");
-                }
-            }
-            else if (members.Length > 1)
-            {
-                throw new MechanicsException(
-                    MechanicsRefusal.Inconsistent,
-                    $"Effect group {group.Key} allows only one active effect.");
-            }
-        }
-    }
-
     private int FindIndex(EffectInstanceId instance)
     {
-        int index = _effects.FindIndex(effect => effect.Instance == instance);
+        int index = SearchIndex(instance);
         return index >= 0
             ? index
             : throw new MechanicsException(MechanicsRefusal.NotFound, $"Effect instance {instance} is not active.");
+    }
+
+    /// <summary>The instance's index in the instance-ordered list, or the complement of where it would go.</summary>
+    private int SearchIndex(EffectInstanceId instance)
+    {
+        int low = 0;
+        int high = _effects.Count - 1;
+        while (low <= high)
+        {
+            int middle = low + ((high - low) >> 1);
+            int order = string.CompareOrdinal(_effects[middle].Instance.Value, instance.Value);
+            if (order == 0)
+            {
+                return middle;
+            }
+
+            if (order < 0)
+            {
+                low = middle + 1;
+            }
+            else
+            {
+                high = middle - 1;
+            }
+        }
+
+        return ~low;
     }
 }

@@ -331,6 +331,9 @@ public sealed class InventoryState
 {
     private readonly Dictionary<InventoryStackId, InventoryStackEntry> _stacks = [];
     private readonly Dictionary<CapacityMetricId, InventoryCapacityLimit> _capacityLimits = [];
+    // Positive capacity totals: stack costs and, once registered, the costs of the unique items
+    // the store says this owner contains. Each change applies its own delta.
+    private readonly Dictionary<CapacityMetricId, ulong> _used = [];
 
     public InventoryState(
         EntityId owner,
@@ -414,6 +417,10 @@ public sealed class InventoryState
         {
             result._stacks.Add(id, entry);
         }
+        foreach ((CapacityMetricId metric, ulong used) in _used)
+        {
+            result._used.Add(metric, used);
+        }
 
         return result;
     }
@@ -467,7 +474,6 @@ public sealed class InventoryState
                     MechanicsRefusal.StackMaximum,
                     $"Item {stack.Definition.Id} cannot exceed quantity {stack.Definition.MaximumQuantity}; attempted {stack.Quantity}.");
             }
-            EnsureCompatibleDefinition(result, stack.Definition);
             if (!result._stacks.TryAdd(stack.Id, new InventoryStackEntry(stack.Id, stack.Definition, stack.Quantity)))
             {
                 throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Inventory stack {stack.Id} was restored more than once for owner {owner.Value}.");
@@ -478,18 +484,18 @@ public sealed class InventoryState
         return result;
     }
 
+    /// <summary>Counts the stacks' costs afresh and refuses a total above its limit.</summary>
     internal void ValidateFungibleCapacity()
     {
-        Dictionary<CapacityMetricId, ulong> used = CapacityLimits
-            .ToDictionary(limit => limit.Metric, _ => 0UL);
+        _used.Clear();
         foreach (InventoryStackEntry entry in _stacks.Values)
         {
-            InventoryStore.AddCapacityCosts(used, entry.Definition.CapacityCosts, entry.Quantity);
+            InventoryStore.AddCapacityCosts(_used, entry.Definition.CapacityCosts, entry.Quantity);
         }
 
         foreach (InventoryCapacityLimit limit in CapacityLimits)
         {
-            if (used.TryGetValue(limit.Metric, out ulong amount) && amount > limit.Maximum)
+            if (_used.TryGetValue(limit.Metric, out ulong amount) && amount > limit.Maximum)
             {
                 throw new MechanicsException(
                     MechanicsRefusal.Capacity,
@@ -498,17 +504,106 @@ public sealed class InventoryState
         }
     }
 
-    private static void EnsureCompatibleDefinition(InventoryState inventory, ItemDefinition definition)
+    /// <summary>Every limited or used capacity metric, in metric order.</summary>
+    internal IReadOnlyList<CapacityUsage> Capacity()
     {
-        foreach (InventoryStackEntry entry in inventory._stacks.Values.Where(entry => entry.Definition.Id == definition.Id))
+        var metrics = new List<CapacityMetricId>(_used.Count + _capacityLimits.Count);
+        metrics.AddRange(_used.Keys);
+        foreach (CapacityMetricId metric in _capacityLimits.Keys)
         {
-            if (!entry.Definition.Matches(definition))
+            if (!_used.ContainsKey(metric))
             {
-                throw new MechanicsException(
-                    MechanicsRefusal.Inconsistent,
-                    $"Item definition {definition.Id} conflicts with the definition already stored in this inventory.");
+                metrics.Add(metric);
             }
         }
+        metrics.Sort((left, right) => string.CompareOrdinal(left.Value, right.Value));
+
+        var result = new CapacityUsage[metrics.Count];
+        for (int index = 0; index < result.Length; index++)
+        {
+            CapacityMetricId metric = metrics[index];
+            result[index] = new CapacityUsage(
+                metric,
+                _used.GetValueOrDefault(metric),
+                _capacityLimits.TryGetValue(metric, out InventoryCapacityLimit limit) ? limit.Maximum : null);
+        }
+
+        return Array.AsReadOnly(result);
+    }
+
+    /// <summary>
+    /// The totals that removing one set of costs and adding another would leave. Nothing changes
+    /// here, so a refusal (overflow, or a total above its limit) leaves the inventory as it was.
+    /// </summary>
+    internal (CapacityMetricId Metric, ulong Used)[] PlanUsage(
+        IReadOnlyList<ItemCapacityCost> removed,
+        ulong removedQuantity,
+        IReadOnlyList<ItemCapacityCost> added,
+        ulong addedQuantity)
+    {
+        var totals = new List<(CapacityMetricId Metric, ulong Used)>(removed.Count + added.Count);
+        foreach (ItemCapacityCost cost in removed)
+        {
+            int index = TotalIndex(totals, cost.Metric);
+            totals[index] = (cost.Metric, totals[index].Used - cost.Units * removedQuantity);
+        }
+
+        foreach (ItemCapacityCost cost in added)
+        {
+            int index = TotalIndex(totals, cost.Metric);
+            try
+            {
+                totals[index] = (cost.Metric, checked(totals[index].Used + checked(cost.Units * addedQuantity)));
+            }
+            catch (OverflowException)
+            {
+                throw new MechanicsException(
+                    MechanicsRefusal.Overflow,
+                    $"Capacity arithmetic overflowed for metric {cost.Metric}.");
+            }
+        }
+
+        totals.Sort((left, right) => string.CompareOrdinal(left.Metric.Value, right.Metric.Value));
+        foreach ((CapacityMetricId metric, ulong amount) in totals)
+        {
+            if (_capacityLimits.TryGetValue(metric, out InventoryCapacityLimit limit) && amount > limit.Maximum)
+            {
+                throw new MechanicsException(
+                    MechanicsRefusal.Capacity,
+                    $"Inventory {Owner.Value} exceeds capacity {metric}: attempted {amount}, maximum {limit.Maximum}.");
+            }
+        }
+
+        return totals.ToArray();
+    }
+
+    internal void CommitUsage((CapacityMetricId Metric, ulong Used)[] totals)
+    {
+        foreach ((CapacityMetricId metric, ulong amount) in totals)
+        {
+            if (amount == 0)
+            {
+                _used.Remove(metric);
+            }
+            else
+            {
+                _used[metric] = amount;
+            }
+        }
+    }
+
+    private int TotalIndex(List<(CapacityMetricId Metric, ulong Used)> totals, CapacityMetricId metric)
+    {
+        for (int index = 0; index < totals.Count; index++)
+        {
+            if (totals[index].Metric == metric)
+            {
+                return index;
+            }
+        }
+
+        totals.Add((metric, _used.GetValueOrDefault(metric)));
+        return totals.Count - 1;
     }
 }
 
@@ -542,7 +637,7 @@ public sealed partial class InventoryStore
             throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Inventory owner {state.Owner.Value} is already registered.");
         }
         InventoryState admitted = state.Clone();
-        _ = ComputeCapacity(admitted.Owner, admitted);
+        admitted.ValidateFungibleCapacity();
         _inventories.Add(admitted.Owner, admitted);
 
         TouchStore();
@@ -635,7 +730,7 @@ public sealed partial class InventoryStore
     public InventoryView View(EntityId owner)
     {
         InventoryState inventory = RequireInventory(owner);
-        return BuildView(owner, inventory, ComputeCapacity(owner, inventory));
+        return BuildView(owner, inventory, inventory.Capacity());
     }
 
     /// <summary>
@@ -725,7 +820,6 @@ public sealed partial class InventoryStore
         EnsureFungible(definition);
         EnsurePositiveQuantity(quantity);
         InventoryState inventory = RequireInventory(owner);
-        EnsureNoDefinitionConflict(inventory, definition);
         if (inventory.TryGetEntry(stack, out InventoryState.InventoryStackEntry? existing)
             && existing is not null)
         {
@@ -748,13 +842,13 @@ public sealed partial class InventoryStore
                 $"Item {definition.Id} cannot exceed quantity {definition.MaximumQuantity}; attempted {after}.");
         }
 
-        ulong inventoryRevisionBefore = _revision;
-        IReadOnlyList<CapacityUsage> capacityBefore = ComputeCapacity(owner, inventory);
-        InventoryState candidate = inventory.Clone();
-        candidate.SetEntry(stack, definition, after);
-        IReadOnlyList<CapacityUsage> capacityAfter = ComputeCapacity(owner, candidate);
-        candidate.SetRevision(checked(candidate.Revision + 1));
-        _inventories[owner] = candidate;
+        IReadOnlyList<CapacityUsage> capacityBefore = inventory.Capacity();
+        var usage = inventory.PlanUsage([], 0, definition.CapacityCosts, quantity);
+        ulong revisionBefore = inventory.Revision;
+        ulong revisionAfter = checked(revisionBefore + 1);
+        inventory.SetEntry(stack, definition, after);
+        inventory.CommitUsage(usage);
+        inventory.SetRevision(revisionAfter);
         TouchStore();
         return new InventoryMutationReceipt(
             InventoryMutationKind.Grant,
@@ -764,10 +858,10 @@ public sealed partial class InventoryStore
             quantity,
             before,
             after,
-            inventory.Revision,
-            candidate.Revision,
+            revisionBefore,
+            revisionAfter,
             capacityBefore,
-            capacityAfter);
+            inventory.Capacity());
     }
 
     internal InventoryMutationReceipt ConsumeCore(
@@ -793,13 +887,13 @@ public sealed partial class InventoryStore
         }
 
         ulong after = before - quantity;
-        ulong inventoryRevisionBefore = _revision;
-        IReadOnlyList<CapacityUsage> capacityBefore = ComputeCapacity(owner, inventory);
-        InventoryState candidate = inventory.Clone();
-        candidate.SetEntry(stack, entry.Definition, after);
-        IReadOnlyList<CapacityUsage> capacityAfter = ComputeCapacity(owner, candidate);
-        candidate.SetRevision(checked(candidate.Revision + 1));
-        _inventories[owner] = candidate;
+        IReadOnlyList<CapacityUsage> capacityBefore = inventory.Capacity();
+        var usage = inventory.PlanUsage(entry.Definition.CapacityCosts, quantity, [], 0);
+        ulong revisionBefore = inventory.Revision;
+        ulong revisionAfter = checked(revisionBefore + 1);
+        inventory.SetEntry(stack, entry.Definition, after);
+        inventory.CommitUsage(usage);
+        inventory.SetRevision(revisionAfter);
         TouchStore();
         return new InventoryMutationReceipt(
             InventoryMutationKind.Consume,
@@ -809,10 +903,10 @@ public sealed partial class InventoryStore
             quantity,
             before,
             after,
-            inventory.Revision,
-            candidate.Revision,
+            revisionBefore,
+            revisionAfter,
             capacityBefore,
-            capacityAfter);
+            inventory.Capacity());
     }
 
     internal InventoryTransferReceipt TransferFungibleCore(
@@ -883,10 +977,6 @@ public sealed partial class InventoryStore
         {
             EnsureDefinitionMatches(source.Definition, destination.Definition);
         }
-        else
-        {
-            EnsureNoDefinitionConflict(to, source.Definition);
-        }
 
         ulong destinationBefore = destination?.Quantity ?? 0;
         ulong destinationAfter;
@@ -906,18 +996,20 @@ public sealed partial class InventoryStore
         }
 
         ulong sourceAfter = source.Quantity - quantity;
-        IReadOnlyList<CapacityUsage> sourceCapacityBefore = ComputeCapacity(fromOwner, from);
-        IReadOnlyList<CapacityUsage> destinationCapacityBefore = ComputeCapacity(toOwner, to);
-        InventoryState fromCandidate = from.Clone();
-        InventoryState toCandidate = to.Clone();
-        fromCandidate.SetEntry(sourceStack, source.Definition, sourceAfter);
-        toCandidate.SetEntry(destinationStack, source.Definition, destinationAfter);
-        IReadOnlyList<CapacityUsage> sourceCapacityAfter = ComputeCapacity(fromOwner, fromCandidate);
-        IReadOnlyList<CapacityUsage> destinationCapacityAfter = ComputeCapacity(toOwner, toCandidate);
-        fromCandidate.SetRevision(checked(fromCandidate.Revision + 1));
-        toCandidate.SetRevision(checked(toCandidate.Revision + 1));
-        _inventories[fromOwner] = fromCandidate;
-        _inventories[toOwner] = toCandidate;
+        IReadOnlyList<CapacityUsage> sourceCapacityBefore = from.Capacity();
+        IReadOnlyList<CapacityUsage> destinationCapacityBefore = to.Capacity();
+        var sourceUsage = from.PlanUsage(source.Definition.CapacityCosts, quantity, [], 0);
+        var destinationUsage = to.PlanUsage([], 0, source.Definition.CapacityCosts, quantity);
+        ulong fromRevisionBefore = from.Revision;
+        ulong fromRevisionAfter = checked(fromRevisionBefore + 1);
+        ulong toRevisionBefore = to.Revision;
+        ulong toRevisionAfter = checked(toRevisionBefore + 1);
+        from.SetEntry(sourceStack, source.Definition, sourceAfter);
+        from.CommitUsage(sourceUsage);
+        from.SetRevision(fromRevisionAfter);
+        to.SetEntry(destinationStack, source.Definition, destinationAfter);
+        to.CommitUsage(destinationUsage);
+        to.SetRevision(toRevisionAfter);
         TouchStore();
         return new InventoryTransferReceipt(
             fromOwner,
@@ -930,14 +1022,14 @@ public sealed partial class InventoryStore
             sourceAfter,
             destinationBefore,
             destinationAfter,
-            from.Revision,
-            fromCandidate.Revision,
-            to.Revision,
-            toCandidate.Revision,
+            fromRevisionBefore,
+            fromRevisionAfter,
+            toRevisionBefore,
+            toRevisionAfter,
             sourceCapacityBefore,
-            sourceCapacityAfter,
+            from.Capacity(),
             destinationCapacityBefore,
-            destinationCapacityAfter);
+            to.Capacity());
     }
 
     internal InventorySplitReceipt SplitFungibleCore(
@@ -971,12 +1063,12 @@ public sealed partial class InventoryStore
                 $"Split quantity {quantity} must be less than stack {sourceStack} quantity {source.Quantity}.");
         }
 
-        InventoryState candidate = inventory.Clone();
-        candidate.SetEntry(sourceStack, source.Definition, source.Quantity - quantity);
-        candidate.SetEntry(splitStack, source.Definition, quantity);
-        _ = ComputeCapacity(owner, candidate);
-        candidate.SetRevision(checked(candidate.Revision + 1));
-        _inventories[owner] = candidate;
+        // Both stacks share one definition, so the owner's capacity totals stay as they are.
+        ulong revisionBefore = inventory.Revision;
+        ulong revisionAfter = checked(revisionBefore + 1);
+        inventory.SetEntry(sourceStack, source.Definition, source.Quantity - quantity);
+        inventory.SetEntry(splitStack, source.Definition, quantity);
+        inventory.SetRevision(revisionAfter);
         TouchStore();
         return new InventorySplitReceipt(
             owner,
@@ -986,8 +1078,8 @@ public sealed partial class InventoryStore
             quantity,
             source.Quantity,
             source.Quantity - quantity,
-            inventory.Revision,
-            candidate.Revision);
+            revisionBefore,
+            revisionAfter);
     }
 
     internal InventoryMergeReceipt MergeFungibleCore(
@@ -1026,12 +1118,12 @@ public sealed partial class InventoryStore
                 $"Item {source.Definition.Id} cannot exceed quantity {source.Definition.MaximumQuantity}; attempted {destinationAfter}.");
         }
 
-        InventoryState candidate = inventory.Clone();
-        candidate.RemoveEntry(sourceStack);
-        candidate.SetEntry(destinationStack, destination.Definition, destinationAfter);
-        _ = ComputeCapacity(owner, candidate);
-        candidate.SetRevision(checked(candidate.Revision + 1));
-        _inventories[owner] = candidate;
+        // Matching definitions carry the same costs, so the owner's capacity totals stay as they are.
+        ulong revisionBefore = inventory.Revision;
+        ulong revisionAfter = checked(revisionBefore + 1);
+        inventory.RemoveEntry(sourceStack);
+        inventory.SetEntry(destinationStack, destination.Definition, destinationAfter);
+        inventory.SetRevision(revisionAfter);
         TouchStore();
         return new InventoryMergeReceipt(
             owner,
@@ -1041,21 +1133,21 @@ public sealed partial class InventoryStore
             source.Quantity,
             destination.Quantity,
             destinationAfter,
-            inventory.Revision,
-            candidate.Revision);
+            revisionBefore,
+            revisionAfter);
     }
 
     /// <summary>
-    /// A working copy for an edit. Operations replace inventory and equipment
-    /// states rather than changing them, so those are shared; containment child
-    /// sets change in place and are copied.
+    /// A working copy for an edit. Operations change inventory and equipment states
+    /// and containment child sets in place, so those are copied; item states are
+    /// replaced rather than changed, so those are shared.
     /// </summary>
     private InventoryStore Clone() => new()
     {
         _revision = _revision,
-        _inventories = new(_inventories),
+        _inventories = _inventories.ToDictionary(entry => entry.Key, entry => entry.Value.Clone()),
         _items = new(_items),
-        _equipment = new(_equipment),
+        _equipment = _equipment.ToDictionary(entry => entry.Key, entry => entry.Value.Clone()),
         _containment = new(_containment),
         _containedChildren = _containedChildren.ToDictionary(
             entry => entry.Key, entry => new SortedSet<EntityId>(entry.Value)),
@@ -1115,64 +1207,6 @@ public sealed partial class InventoryStore
             capacity);
     }
 
-    private IReadOnlyList<CapacityUsage> ComputeCapacity(
-        EntityId owner,
-        InventoryState inventory,
-        EntityId? excludedItem = null,
-        EntityId? includedItem = null,
-        ItemState? includedState = null)
-    {
-        var used = new Dictionary<CapacityMetricId, ulong>();
-        foreach (InventoryCapacityLimit limit in inventory.CapacityLimits)
-        {
-            used.TryAdd(limit.Metric, 0);
-        }
-
-        foreach (InventoryState.InventoryStackEntry entry in inventory.Entries())
-        {
-            AddCapacityCosts(used, entry.Definition.CapacityCosts, entry.Quantity);
-        }
-
-        if (_containedChildren.TryGetValue(owner, out SortedSet<EntityId>? children))
-        {
-            foreach (EntityId child in children)
-            {
-                if (excludedItem == child)
-                {
-                    continue;
-                }
-                AddCapacityCosts(used, RequireItem(child).CapacityCosts, 1);
-            }
-        }
-
-        if (includedItem is EntityId included
-            && (!_containment.TryGetValue(included, out EntityId current) || current != owner))
-        {
-            ItemState state = _items.TryGetValue(included, out ItemState? stored)
-                ? stored
-                : includedState
-                    ?? throw new MechanicsException(MechanicsRefusal.NotFound, $"Unique item entity {included.Value} is not registered.");
-            AddCapacityCosts(used, state.CapacityCosts, 1);
-        }
-
-        Dictionary<CapacityMetricId, ulong> limits = inventory.CapacityLimits
-            .ToDictionary(limit => limit.Metric, limit => limit.Maximum);
-        var result = new List<CapacityUsage>(used.Count);
-        foreach ((CapacityMetricId metric, ulong amount) in used.OrderBy(entry => entry.Key.Value, StringComparer.Ordinal))
-        {
-            ulong? maximum = limits.TryGetValue(metric, out ulong maximumValue) ? maximumValue : null;
-            if (maximum is ulong admittedMaximum && amount > admittedMaximum)
-            {
-                throw new MechanicsException(
-                    MechanicsRefusal.Capacity,
-                    $"Inventory {owner.Value} exceeds capacity {metric}: attempted {amount}, maximum {admittedMaximum}.");
-            }
-            result.Add(new CapacityUsage(metric, amount, maximum));
-        }
-
-        return Array.AsReadOnly(result.ToArray());
-    }
-
     internal static void AddCapacityCosts(
         Dictionary<CapacityMetricId, ulong> used,
         IReadOnlyList<ItemCapacityCost> costs,
@@ -1224,14 +1258,6 @@ public sealed partial class InventoryStore
         if (quantity == 0)
         {
             throw new MechanicsException(MechanicsRefusal.InvalidRequest, "Inventory quantities must be positive.");
-        }
-    }
-
-    private static void EnsureNoDefinitionConflict(InventoryState inventory, ItemDefinition definition)
-    {
-        foreach (InventoryState.InventoryStackEntry entry in inventory.Entries().Where(entry => entry.Definition.Id == definition.Id))
-        {
-            EnsureDefinitionMatches(definition, entry.Definition);
         }
     }
 }

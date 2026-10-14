@@ -25,7 +25,7 @@ public readonly record struct EffectSourceActivation(
 /// <summary>
 /// Orders source activations by the same stable tuple used by the Rust
 /// mechanics donor: priority, provenance identity, then source definition.
-/// Duplicate provenance is rejected instead of silently overwriting a source.
+/// Sources sharing a provenance identity stay separate, in that order.
 /// </summary>
 public static class MechanicsSourceOrdering
 {
@@ -40,7 +40,7 @@ public static class MechanicsSourceOrdering
         ArgumentNullException.ThrowIfNull(definition);
         ArgumentNullException.ThrowIfNull(priority);
 
-        SourceOrderEntry<T>[] ordered = values
+        return values
             .Select(value => new SourceOrderEntry<T>(
                 value,
                 identity(value) ?? throw new ArgumentException("A source identity cannot be null."),
@@ -49,16 +49,8 @@ public static class MechanicsSourceOrdering
             .OrderBy(entry => entry.Priority)
             .ThenBy(entry => entry.Identity)
             .ThenBy(entry => entry.Definition.Value, StringComparer.Ordinal)
+            .Select(entry => entry.Value)
             .ToArray();
-
-        var identities = new HashSet<MechanicsSourceIdentity>();
-        foreach (var entry in ordered)
-        {
-            if (!identities.Add(entry.Identity))
-                throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Source identity {entry.Identity} was activated more than once.");
-        }
-
-        return ordered.Select(entry => entry.Value).ToArray();
     }
 
     private readonly record struct SourceOrderEntry<T>(

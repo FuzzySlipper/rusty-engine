@@ -229,14 +229,14 @@ public sealed partial class InventoryStore
             throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Unique item entity {item.Entity.Value} already has a container.");
         }
         ulong inventoryRevisionBefore = _revision;
-        IReadOnlyList<CapacityUsage> before = ComputeCapacity(owner, inventory);
-        IReadOnlyList<CapacityUsage> after = ComputeCapacity(owner, inventory, includedItem: item.Entity, includedState: item);
+        IReadOnlyList<CapacityUsage> before = inventory.Capacity();
+        var usage = inventory.PlanUsage([], 0, item.CapacityCosts, 1);
+        ulong revisionAfter = checked(inventory.Revision + 1);
 
         _items.Add(item.Entity, item);
         SetContainment(item.Entity, owner);
-        InventoryState updated = inventory.Clone();
-        updated.SetRevision(checked(updated.Revision + 1));
-        _inventories[owner] = updated;
+        inventory.CommitUsage(usage);
+        inventory.SetRevision(revisionAfter);
         TouchStore();
         return new ItemMaterializationReceipt(
             item.Entity,
@@ -245,7 +245,7 @@ public sealed partial class InventoryStore
             inventoryRevisionBefore,
             _revision,
             before,
-            after);
+            inventory.Capacity());
     }
 
     internal ItemTransferReceipt TransferUniqueCore(
@@ -277,25 +277,19 @@ public sealed partial class InventoryStore
                 $"Unique item {item.Value} must be unequipped before transfer.");
         }
         ulong inventoryRevisionBefore = _revision;
-        IReadOnlyList<CapacityUsage> fromBefore = ComputeCapacity(fromOwner, fromInventory);
-        IReadOnlyList<CapacityUsage> toBefore = ComputeCapacity(toOwner, toInventory);
-        IReadOnlyList<CapacityUsage> fromAfter = ComputeCapacity(
-            fromOwner,
-            fromInventory,
-            excludedItem: item);
-        IReadOnlyList<CapacityUsage> toAfter = ComputeCapacity(
-            toOwner,
-            toInventory,
-            includedItem: item);
+        IReadOnlyList<CapacityUsage> fromBefore = fromInventory.Capacity();
+        IReadOnlyList<CapacityUsage> toBefore = toInventory.Capacity();
+        var fromUsage = fromInventory.PlanUsage(itemState.CapacityCosts, 1, [], 0);
+        var toUsage = toInventory.PlanUsage([], 0, itemState.CapacityCosts, 1);
+        ulong fromRevisionAfter = checked(fromInventory.Revision + 1);
+        ulong toRevisionAfter = checked(toInventory.Revision + 1);
 
         RemoveContainment(item, fromOwner);
         SetContainment(item, toOwner);
-        InventoryState updatedFrom = fromInventory.Clone();
-        updatedFrom.SetRevision(checked(updatedFrom.Revision + 1));
-        InventoryState updatedTo = toInventory.Clone();
-        updatedTo.SetRevision(checked(updatedTo.Revision + 1));
-        _inventories[fromOwner] = updatedFrom;
-        _inventories[toOwner] = updatedTo;
+        fromInventory.CommitUsage(fromUsage);
+        fromInventory.SetRevision(fromRevisionAfter);
+        toInventory.CommitUsage(toUsage);
+        toInventory.SetRevision(toRevisionAfter);
         TouchStore();
         return new ItemTransferReceipt(
             item,
@@ -305,15 +299,18 @@ public sealed partial class InventoryStore
             inventoryRevisionBefore,
             _revision,
             fromBefore,
-            fromAfter,
+            fromInventory.Capacity(),
             toBefore,
-            toAfter);
+            toInventory.Capacity());
     }
 
     internal ItemDestroyReceipt DestroyUniqueCore(EntityId item)
     {
         ItemState itemState = RequireItem(item);
-        if (IsEquippedAnywhere(item))
+        bool contained = _containment.TryGetValue(item, out EntityId owner);
+        // Only its container can have it equipped: equipping requires containment, and an
+        // equipped item cannot be transferred.
+        if (contained && IsEquipped(owner, item))
         {
             throw new MechanicsException(
                 MechanicsRefusal.Equipped,
@@ -322,13 +319,15 @@ public sealed partial class InventoryStore
 
         ulong inventoryRevisionBefore = _revision;
         EntityId? formerOwner = null;
-        if (_containment.TryGetValue(item, out EntityId owner))
+        if (contained)
         {
             formerOwner = owner;
+            InventoryState inventory = RequireInventory(owner);
+            var usage = inventory.PlanUsage(itemState.CapacityCosts, 1, [], 0);
+            ulong revisionAfter = checked(inventory.Revision + 1);
             RemoveContainment(item, owner);
-            InventoryState inventory = RequireInventory(owner).Clone();
-            inventory.SetRevision(checked(inventory.Revision + 1));
-            _inventories[owner] = inventory;
+            inventory.CommitUsage(usage);
+            inventory.SetRevision(revisionAfter);
         }
 
         _items.Remove(item);
@@ -355,24 +354,15 @@ public sealed partial class InventoryStore
         }
 
         InventoryState inventory = RequireInventory(owner);
-        IReadOnlyList<CapacityUsage> before = ComputeCapacity(owner, inventory);
+        IReadOnlyList<CapacityUsage> before = inventory.Capacity();
+        var usage = inventory.PlanUsage(current.CapacityCosts, 1, updated.CapacityCosts, 1);
+        ulong revisionAfter = checked(inventory.Revision + 1);
         _items[item] = updated;
-        IReadOnlyList<CapacityUsage> after;
-        try
-        {
-            after = ComputeCapacity(owner, inventory);
-        }
-        catch
-        {
-            _items[item] = current;
-            throw;
-        }
-        InventoryState updatedInventory = inventory.Clone();
-        updatedInventory.SetRevision(checked(updatedInventory.Revision + 1));
-        _inventories[owner] = updatedInventory;
+        inventory.CommitUsage(usage);
+        inventory.SetRevision(revisionAfter);
         TouchStore();
         return new ItemCapacityCostReceipt(
-            item, current.Definition.Id, owner, inventoryRevisionBefore, _revision, before, after);
+            item, current.Definition.Id, owner, inventoryRevisionBefore, _revision, before, inventory.Capacity());
     }
 
     private void SetContainment(EntityId child, EntityId container)
@@ -407,7 +397,4 @@ public sealed partial class InventoryStore
     private bool IsEquipped(EntityId owner, EntityId item) =>
         _equipment.TryGetValue(owner, out EquipmentState? state)
         && state.ContainsItem(item);
-
-    private bool IsEquippedAnywhere(EntityId item) =>
-        _equipment.Values.Any(state => state.ContainsItem(item));
 }

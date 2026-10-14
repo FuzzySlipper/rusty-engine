@@ -10,6 +10,7 @@ AddressableInventoryStacksExercise.Run();
 OwnerRetirementExercise.Run();
 ExerciseEffectPolicies();
 ExerciseManagedInventory();
+MechanicsDeltaExercise.Run();
 ManagedLimitsExercise.Run();
 ItemCapacityCostExercise.Run();
 
