@@ -3,9 +3,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    codec::normalize_and_rehash, validate_annotation_layer, VoxelAnnotationBounds,
-    VoxelAnnotationError, VoxelAnnotationKind, VoxelAnnotationLayer, VoxelAnnotationLimits,
-    VoxelAnnotationRegion, VoxelAnnotationSelection, VoxelAnnotationSparseRun,
+    codec::normalize_and_rehash, VoxelAnnotationBounds, VoxelAnnotationError, VoxelAnnotationKind,
+    VoxelAnnotationLayer, VoxelAnnotationLimits, VoxelAnnotationRegion, VoxelAnnotationSelection,
+    VoxelAnnotationSparseRun,
 };
 
 pub const MAX_ANNOTATION_COMMANDS_PER_TRANSACTION: usize = 256;
@@ -78,7 +78,6 @@ pub struct VoxelAnnotationEditReceipt {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxelAnnotationEditError {
-    InvalidCurrent(VoxelAnnotationError),
     StaleLayerHash { expected: String, actual: String },
     EmptyTransaction,
     TooManyCommands { limit: usize, actual: usize },
@@ -100,59 +99,59 @@ impl std::error::Error for VoxelAnnotationEditError {}
 pub struct VoxelAnnotationEditService;
 
 impl VoxelAnnotationEditService {
-    /// Apply a complete edit batch to a validated clone, then swap. Rejections
-    /// never partially mutate the caller's layer.
+    /// Apply a complete edit batch to a candidate copy and swap it in once it
+    /// is valid and its identities are computed. The expected hash must name
+    /// the layer's current contents. Rejections never mutate the caller's
+    /// layer.
     pub fn apply(
         layer: &mut VoxelAnnotationLayer,
         transaction: VoxelAnnotationEditTransaction,
     ) -> Result<VoxelAnnotationEditReceipt, VoxelAnnotationEditError> {
-        validate_annotation_layer(layer, None, VoxelAnnotationLimits::default())
-            .map_err(VoxelAnnotationEditError::InvalidCurrent)?;
         if transaction.expected_layer_hash != layer.content_hashes.canonical_layer {
             return Err(VoxelAnnotationEditError::StaleLayerHash {
                 expected: transaction.expected_layer_hash,
                 actual: layer.content_hashes.canonical_layer.clone(),
             });
         }
-        if transaction.commands.is_empty() {
+        let command_count = transaction.commands.len();
+        if command_count == 0 {
             return Err(VoxelAnnotationEditError::EmptyTransaction);
         }
-        if transaction.commands.len() > MAX_ANNOTATION_COMMANDS_PER_TRANSACTION {
+        if command_count > MAX_ANNOTATION_COMMANDS_PER_TRANSACTION {
             return Err(VoxelAnnotationEditError::TooManyCommands {
                 limit: MAX_ANNOTATION_COMMANDS_PER_TRANSACTION,
-                actual: transaction.commands.len(),
+                actual: command_count,
             });
         }
 
-        let before_layer = layer.content_hashes.canonical_layer.clone();
-        let before_membership = layer.content_hashes.membership_data.clone();
         let mut candidate = layer.clone();
         let mut affected = BTreeSet::new();
-        for command in transaction.commands.iter().cloned() {
+        for command in transaction.commands {
             apply_command(&mut candidate, command, &mut affected)?;
         }
-        normalize_and_rehash(&mut candidate, VoxelAnnotationLimits::default())
+        normalize_and_rehash(&mut candidate, None, VoxelAnnotationLimits::default())
             .map_err(VoxelAnnotationEditError::InvalidCandidate)?;
-        if candidate.content_hashes.canonical_layer == before_layer {
+        if candidate.content_hashes.canonical_layer == layer.content_hashes.canonical_layer {
             return Err(VoxelAnnotationEditError::NoChanges);
         }
-        let receipt = VoxelAnnotationEditReceipt {
-            layer_hash_before: before_layer,
-            layer_hash_after: candidate.content_hashes.canonical_layer.clone(),
-            membership_hash_before: before_membership,
-            membership_hash_after: candidate.content_hashes.membership_data.clone(),
+        let assigned_cell_count = candidate
+            .regions
+            .iter()
+            .flat_map(|region| &region.selection.sparse_runs)
+            .map(|run| u64::from(run.length))
+            .sum();
+        let region_count = candidate.regions.len();
+        let before = std::mem::replace(layer, candidate);
+        Ok(VoxelAnnotationEditReceipt {
+            layer_hash_before: before.content_hashes.canonical_layer,
+            layer_hash_after: layer.content_hashes.canonical_layer.clone(),
+            membership_hash_before: before.content_hashes.membership_data,
+            membership_hash_after: layer.content_hashes.membership_data.clone(),
             affected_region_ids: affected.into_iter().collect(),
-            command_count: transaction.commands.len(),
-            region_count: candidate.regions.len(),
-            assigned_cell_count: candidate
-                .regions
-                .iter()
-                .flat_map(|region| &region.selection.sparse_runs)
-                .map(|run| u64::from(run.length))
-                .sum(),
-        };
-        *layer = candidate;
-        Ok(receipt)
+            command_count,
+            region_count,
+            assigned_cell_count,
+        })
     }
 }
 

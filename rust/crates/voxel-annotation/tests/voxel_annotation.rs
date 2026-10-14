@@ -4,8 +4,9 @@ use voxel_annotation::{
     VoxelAnnotationDiagnosticCode, VoxelAnnotationEditCommand, VoxelAnnotationEditError,
     VoxelAnnotationEditService, VoxelAnnotationEditTransaction, VoxelAnnotationKind,
     VoxelAnnotationLayerDraft, VoxelAnnotationLimits, VoxelAnnotationProvenanceKind,
-    VoxelAnnotationProvenanceRef, VoxelAnnotationQuery, VoxelAnnotationQueryMode,
-    VoxelAnnotationRegion, VoxelAnnotationSelection, VoxelAnnotationSparseRun,
+    VoxelAnnotationProvenanceRef, VoxelAnnotationQuery, VoxelAnnotationQueryError,
+    VoxelAnnotationQueryMode, VoxelAnnotationRegion, VoxelAnnotationSelection,
+    VoxelAnnotationSparseRun,
 };
 use voxel_asset::{
     with_computed_content_hash, VoxelAsset, VoxelAssetBounds, VoxelAssetGrid,
@@ -26,12 +27,12 @@ fn draft_finalization_is_canonical_queryable_and_strict() {
     assert!(layer.content_hashes.membership_data.starts_with("sha256:"));
 
     let encoded = encode_annotation_layer(&layer).unwrap();
-    let decoded = decode_annotation_layer(&encoded).unwrap();
+    let decoded = decode_annotation_layer(&encoded, Some(&target)).unwrap();
     assert_eq!(decoded, layer);
     assert_eq!(encode_annotation_layer(&decoded).unwrap(), encoded);
     let mut json: serde_json::Value = serde_json::from_str(&encoded).unwrap();
     json["regions"][0]["surprise"] = true.into();
-    assert!(decode_annotation_layer(&serde_json::to_string(&json).unwrap()).is_err());
+    assert!(decode_annotation_layer(&serde_json::to_string(&json).unwrap(), None).is_err());
 
     let readout = query_annotation_layer(
         &layer,
@@ -46,6 +47,46 @@ fn draft_finalization_is_canonical_queryable_and_strict() {
     .unwrap();
     assert_eq!(readout.matched_regions.len(), 1);
     assert_eq!(readout.matched_regions[0].region_id, "region/spawn");
+
+    let everything = query_annotation_layer(
+        &layer,
+        &VoxelAnnotationQuery {
+            expected_layer_hash: None,
+            mode: VoxelAnnotationQueryMode::LayerSummary,
+            max_results: usize::MAX,
+        },
+    )
+    .unwrap();
+    assert_eq!(everything.matched_regions.len(), 1);
+    assert!(!everything.truncated);
+}
+
+#[test]
+fn decode_takes_identity_from_contents_and_checks_the_target() {
+    let target = target_asset();
+    let layer =
+        finalize_annotation_draft(draft(&target), &target, VoxelAnnotationLimits::default())
+            .unwrap();
+    let encoded = encode_annotation_layer(&layer).unwrap();
+
+    let mut edited: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    edited["regions"][0]["label"] = "Edited without a new identity".into();
+    let error = decode_annotation_layer(&serde_json::to_string(&edited).unwrap(), None)
+        .expect_err("recorded identity no longer names these contents");
+    assert_eq!(
+        error.diagnostics()[0].code,
+        VoxelAnnotationDiagnosticCode::ContentHashMismatch
+    );
+
+    let mut other_target = target.clone();
+    other_target.voxel_data_hash =
+        "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string();
+    let error = decode_annotation_layer(&encoded, Some(&other_target))
+        .expect_err("layer annotates a different voxel data identity");
+    assert_eq!(
+        error.diagnostics()[0].code,
+        VoxelAnnotationDiagnosticCode::TargetHashMismatch
+    );
 }
 
 #[test]
@@ -137,6 +178,39 @@ fn edit_batches_are_hash_guarded_atomic_and_cover_region_operations() {
         receipt.membership_hash_after
     );
     assert_eq!(receipt.assigned_cell_count, 2);
+    assert_eq!(
+        receipt.layer_hash_after,
+        layer.content_hashes.canonical_layer
+    );
+    assert!(matches!(
+        query_annotation_layer(
+            &layer,
+            &VoxelAnnotationQuery {
+                expected_layer_hash: Some(receipt.layer_hash_before.clone()),
+                mode: VoxelAnnotationQueryMode::LayerSummary,
+                max_results: 8,
+            },
+        ),
+        Err(VoxelAnnotationQueryError::StaleLayerHash { .. })
+    ));
+    let edited = query_annotation_layer(
+        &layer,
+        &VoxelAnnotationQuery {
+            expected_layer_hash: Some(receipt.layer_hash_after.clone()),
+            mode: VoxelAnnotationQueryMode::Region {
+                region_id: "region/spawn".to_string(),
+            },
+            max_results: 8,
+        },
+    )
+    .unwrap();
+    assert_eq!(edited.layer_hash, receipt.layer_hash_after);
+    assert_eq!(edited.matched_regions[0].label, "Primary Spawn");
+    assert_eq!(edited.matched_regions[0].tags, ["entry", "safe"]);
+    let reloaded =
+        decode_annotation_layer(&encode_annotation_layer(&layer).unwrap(), Some(&target))
+            .expect("an edited layer reloads with the identity the edit computed");
+    assert_eq!(reloaded, layer);
 
     let accepted = layer.clone();
     let expected = layer.content_hashes.canonical_layer.clone();

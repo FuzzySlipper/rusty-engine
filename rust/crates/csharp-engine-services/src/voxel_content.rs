@@ -16,10 +16,9 @@ use csharp_engine_abi::*;
 use render_model::{RenderFrameDiff, RenderMaterialDescriptor, RenderMetadata, Transform};
 use render_projection::{VoxelObjectProjectionInstance, VoxelObjectRenderProjector};
 use voxel_annotation::{
-    decode_annotation_layer, query_annotation_layer, validate_annotation_layer,
-    VoxelAnnotationBounds, VoxelAnnotationEditCommand, VoxelAnnotationEditService,
-    VoxelAnnotationEditTransaction, VoxelAnnotationKind, VoxelAnnotationLayer,
-    VoxelAnnotationLimits, VoxelAnnotationQuery, VoxelAnnotationQueryMode,
+    decode_annotation_layer, query_annotation_layer, VoxelAnnotationBounds,
+    VoxelAnnotationEditCommand, VoxelAnnotationEditService, VoxelAnnotationEditTransaction,
+    VoxelAnnotationKind, VoxelAnnotationLayer, VoxelAnnotationQuery, VoxelAnnotationQueryMode,
     VoxelAnnotationRegionReadout,
 };
 use voxel_asset::{decode_voxel_asset, represented_voxel_count, VoxelAsset, VoxelFrame};
@@ -521,50 +520,28 @@ impl RuntimeVoxelContentBridge {
         expected_layer_hash: String,
         command: VoxelAnnotationEditCommand,
     ) -> Result<NativeVoxelAnnotationEditResult, CsharpEngineServicesError> {
-        let (next_revision, mut candidate) = {
-            let annotation = self.annotation(handle)?;
-            (
-                annotation.revision.checked_add(1).ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_VOXEL_ANNOTATION_REVISION",
-                        "annotation revision overflowed",
-                    )
-                })?,
-                annotation.layer.clone(),
-            )
-        };
-        let transaction = VoxelAnnotationEditTransaction {
-            expected_layer_hash,
-            commands: vec![command],
-        };
-        // Preflight the owner transaction and construct every fallible ABI
-        // receipt value before mutating the retained layer. This preserves the
-        // owner's all-or-nothing guarantee through result construction too.
-        let candidate_receipt =
-            VoxelAnnotationEditService::apply(&mut candidate, transaction.clone()).map_err(
-                |_| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_VOXEL_ANNOTATION_EDIT",
-                        "voxel annotation metadata edit was rejected",
-                    )
-                },
-            )?;
-        let (result, retained_backing) =
-            Self::prepare_edit_result(candidate_receipt, next_revision)?;
-        let receipt =
-            VoxelAnnotationEditService::apply(&mut self.annotation_mut(handle)?.layer, transaction)
-                .map_err(|_| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_VOXEL_ANNOTATION_EDIT",
-                        "annotation metadata changed during its atomic commit",
-                    )
-                })?;
-        debug_assert_eq!(
-            result.layer_hash_after,
-            hash(&receipt.layer_hash_after).unwrap_or_default()
-        );
         let annotation = self.annotation_mut(handle)?;
+        let next_revision = annotation.revision.checked_add(1).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_ANNOTATION_REVISION",
+                "annotation revision overflowed",
+            )
+        })?;
+        let receipt = VoxelAnnotationEditService::apply(
+            &mut annotation.layer,
+            VoxelAnnotationEditTransaction {
+                expected_layer_hash,
+                commands: vec![command],
+            },
+        )
+        .map_err(|_| {
+            CsharpEngineServicesError::new(
+                "CSHARP_VOXEL_ANNOTATION_EDIT",
+                "voxel annotation metadata edit was rejected",
+            )
+        })?;
         annotation.revision = next_revision;
+        let (result, retained_backing) = Self::prepare_edit_result(receipt, next_revision)?;
         self.borrowed.hold(retained_backing);
         Ok(result)
     }
@@ -1458,18 +1435,15 @@ unsafe extern "C" fn admit_annotation(
         Ok(value) => value,
         Err(_) => return 0,
     };
-    let layer = match decode_annotation_layer(body) {
-        Ok(value) => value,
-        Err(_) => return 0,
-    };
     let bridge = unsafe { &mut *context.cast::<RuntimeVoxelContentBridge>() };
     let asset = match bridge.asset_arc(request.asset) {
         Ok(value) => value,
         Err(refusal) => return refuse(&refusal, error),
     };
-    if validate_annotation_layer(&layer, Some(&asset), Default::default()).is_err() {
-        return 0;
-    }
+    let layer = match decode_annotation_layer(body, Some(&asset)) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
     match bridge.insert_annotation(asset, layer) {
         Some(handle) => {
             unsafe { *output = handle };
@@ -1498,17 +1472,14 @@ unsafe extern "C" fn load_annotation_from_content(
         Ok(value) => value,
         Err(_) => return 0,
     };
-    let layer = match decode_annotation_layer(body) {
-        Ok(value) => value,
-        Err(_) => return 0,
-    };
     let asset = match bridge.asset_arc(request.asset) {
         Ok(value) => value,
         Err(refusal) => return refuse(&refusal, error),
     };
-    if validate_annotation_layer(&layer, Some(&asset), Default::default()).is_err() {
-        return 0;
-    }
+    let layer = match decode_annotation_layer(body, Some(&asset)) {
+        Ok(value) => value,
+        Err(_) => return 0,
+    };
     match bridge.insert_annotation(asset, layer) {
         Some(handle) => {
             unsafe { *output = handle };
@@ -2218,16 +2189,13 @@ unsafe fn borrowed_bytes<'a>(value: NativeByteSlice) -> Result<&'a [u8], ()> {
     }
 }
 
-/// Copies a bounded, synchronous tag input before an edit can reach the
-/// retained annotation owner. No product pointer is preserved after return.
+/// Copies a synchronous tag input before an edit can reach the retained
+/// annotation owner, which enforces the tag quota. No product pointer is
+/// preserved after return.
 unsafe fn borrowed_annotation_tags(
     tags: *const NativeVoxelAnnotationTag,
     tags_len: usize,
 ) -> Result<Vec<String>, ()> {
-    let limits = VoxelAnnotationLimits::default();
-    if tags_len > limits.max_tags_per_region {
-        return Err(());
-    }
     if tags_len == 0 {
         return Ok(Vec::new());
     }
@@ -2482,7 +2450,8 @@ mod tests {
     use std::collections::BTreeMap;
     use voxel_annotation::{
         encode_annotation_layer, finalize_annotation_draft, VoxelAnnotationLayerDraft,
-        VoxelAnnotationRegion, VoxelAnnotationSelection, VoxelAnnotationSparseRun,
+        VoxelAnnotationLimits, VoxelAnnotationRegion, VoxelAnnotationSelection,
+        VoxelAnnotationSparseRun,
     };
     use voxel_asset::{
         encode_voxel_asset, encode_voxel_object, with_computed_content_hash,
@@ -3692,6 +3661,102 @@ mod tests {
             vec!["café", "combat"]
         );
 
+        let retained_before = bridge
+            .annotation(annotation_handle)
+            .expect("retained annotation")
+            .layer
+            .clone();
+        let mut refused = unsafe { std::mem::zeroed::<NativeVoxelAnnotationEditResult>() };
+        assert_eq!(
+            unsafe {
+                (api.set_annotation_bounds)(
+                    api.context,
+                    &NativeSetVoxelAnnotationBoundsRequest {
+                        annotation: annotation_handle,
+                        expected_layer_hash: tags_edit.layer_hash_after,
+                        region_id: NativeUtf8Slice {
+                            bytes: region_a.as_ptr(),
+                            len: region_a.len(),
+                        },
+                        bounds: NativeVoxelAnnotationBounds { max_x: 5, ..bounds },
+                    },
+                    &mut refused,
+                    std::ptr::null_mut(),
+                )
+            },
+            0,
+            "bounds outside the target are refused by the owner"
+        );
+        let many_tags: Vec<String> = (0..=VoxelAnnotationLimits::default().max_tags_per_region)
+            .map(|index| format!("tag-{index}"))
+            .collect();
+        let many_tags: Vec<_> = many_tags
+            .iter()
+            .map(|tag| NativeVoxelAnnotationTag {
+                value: NativeUtf8Slice {
+                    bytes: tag.as_ptr(),
+                    len: tag.len(),
+                },
+            })
+            .collect();
+        assert_eq!(
+            unsafe {
+                (api.set_annotation_tags)(
+                    api.context,
+                    &NativeSetVoxelAnnotationTagsRequest {
+                        annotation: annotation_handle,
+                        expected_layer_hash: tags_edit.layer_hash_after,
+                        region_id: NativeUtf8Slice {
+                            bytes: region_a.as_ptr(),
+                            len: region_a.len(),
+                        },
+                        tags: many_tags.as_ptr(),
+                        tags_len: many_tags.len(),
+                    },
+                    &mut refused,
+                    std::ptr::null_mut(),
+                )
+            },
+            0,
+            "the owner enforces the tag quota"
+        );
+        let retained = bridge
+            .annotation(annotation_handle)
+            .expect("retained annotation");
+        assert_eq!(
+            retained.layer, retained_before,
+            "refused edits change nothing"
+        );
+        assert_eq!(retained.revision, 5);
+
+        let mut stale_query = unsafe { std::mem::zeroed::<NativeVoxelAnnotationRegionResult>() };
+        assert_eq!(
+            unsafe {
+                (api.query_annotation)(
+                    api.context,
+                    &NativeVoxelAnnotationQueryRequest {
+                        annotation: annotation_handle,
+                        mode: NativeVoxelAnnotationQueryMode::LayerSummary,
+                        coordinate_x: 0,
+                        coordinate_y: 0,
+                        coordinate_z: 0,
+                        bounds,
+                        region_id: NativeUtf8Slice {
+                            bytes: std::ptr::null(),
+                            len: 0,
+                        },
+                        has_expected_layer_hash: true,
+                        expected_layer_hash: initial_hash,
+                        max_results: 8,
+                    },
+                    &mut stale_query,
+                    std::ptr::null_mut(),
+                )
+            },
+            0,
+            "a query at the loaded identity is stale after edits"
+        );
+
         let mut after = unsafe { std::mem::zeroed::<NativeVoxelAnnotationRegionResult>() };
         assert_eq!(
             unsafe {
@@ -3708,9 +3773,9 @@ mod tests {
                             bytes: region_a.as_ptr(),
                             len: region_a.len(),
                         },
-                        has_expected_layer_hash: false,
-                        expected_layer_hash: NativeVoxelContentHash::default(),
-                        max_results: 1,
+                        has_expected_layer_hash: true,
+                        expected_layer_hash: tags_edit.layer_hash_after,
+                        max_results: u32::MAX,
                     },
                     &mut after,
                     std::ptr::null_mut(),
@@ -3719,6 +3784,8 @@ mod tests {
             ABI_OK
         );
         assert_eq!(after.revision, 5);
+        assert_eq!(after.layer_hash, tags_edit.layer_hash_after);
+        assert_eq!(after.regions_len, 1);
         assert_eq!(
             unsafe { (*after.regions).kind },
             NativeVoxelAnnotationKind::Room

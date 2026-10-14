@@ -74,42 +74,20 @@ pub fn finalize_annotation_draft(
             membership_data: String::new(),
         },
     };
-    normalize_layer(&mut layer);
-    let diagnostics = semantic_diagnostics(&layer, Some(target), limits);
-    if !diagnostics.is_empty() {
-        return Err(VoxelAnnotationError::Invalid(diagnostics));
-    }
-    set_hashes(&mut layer);
-    validate_annotation_layer(&layer, Some(target), limits)?;
+    normalize_and_rehash(&mut layer, Some(target), limits)?;
     Ok(layer)
 }
 
+/// Checks a layer's meaning: schema, identities, bounds, regions, parents and
+/// quotas, plus the supplied target when one is given. It does not recompute
+/// `content_hashes`; finalize, decode and edits compute them whenever the
+/// layer's contents change.
 pub fn validate_annotation_layer(
     layer: &VoxelAnnotationLayer,
     target: Option<&VoxelAsset>,
     limits: VoxelAnnotationLimits,
 ) -> Result<(), VoxelAnnotationError> {
-    let mut diagnostics = semantic_diagnostics(layer, target, limits);
-    let canonical_hash = canonical_layer_hash(layer);
-    let membership_hash = membership_data_hash(layer);
-    if !valid_sha256(&layer.content_hashes.canonical_layer)
-        || layer.content_hashes.canonical_layer != canonical_hash
-    {
-        diagnostics.push(diagnostic(
-            VoxelAnnotationDiagnosticCode::ContentHashMismatch,
-            "contentHashes.canonicalLayer",
-            "canonical layer hash is missing, malformed, or stale",
-        ));
-    }
-    if !valid_sha256(&layer.content_hashes.membership_data)
-        || layer.content_hashes.membership_data != membership_hash
-    {
-        diagnostics.push(diagnostic(
-            VoxelAnnotationDiagnosticCode::ContentHashMismatch,
-            "contentHashes.membershipData",
-            "membership data hash is missing, malformed, or stale",
-        ));
-    }
+    let diagnostics = semantic_diagnostics(layer, target, limits);
     if diagnostics.is_empty() {
         Ok(())
     } else {
@@ -138,7 +116,15 @@ pub fn encode_annotation_layer(
     Ok(encoded)
 }
 
-pub fn decode_annotation_layer(input: &str) -> Result<VoxelAnnotationLayer, VoxelAnnotationError> {
+/// Decodes a layer and establishes its identity from its contents. The
+/// recorded `contentHashes` must equal the computed ones, so a layer whose
+/// contents changed without a new identity cannot satisfy an expected-hash
+/// check written against the old contents. `target`, when given, must be the
+/// voxel asset the layer annotates.
+pub fn decode_annotation_layer(
+    input: &str,
+    target: Option<&VoxelAsset>,
+) -> Result<VoxelAnnotationLayer, VoxelAnnotationError> {
     if input.len() > MAX_ANNOTATION_BYTES {
         return Err(VoxelAnnotationError::ResourceLimit {
             limit: MAX_ANNOTATION_BYTES,
@@ -157,8 +143,15 @@ pub fn decode_annotation_layer(input: &str) -> Result<VoxelAnnotationLayer, Voxe
             path: "$".to_string(),
             message: error.to_string(),
         })?;
-    validate_annotation_layer(&layer, None, VoxelAnnotationLimits::default())?;
-    normalize_layer(&mut layer);
+    let recorded = layer.content_hashes.clone();
+    normalize_and_rehash(&mut layer, target, VoxelAnnotationLimits::default())?;
+    if layer.content_hashes != recorded {
+        return Err(VoxelAnnotationError::Invalid(vec![diagnostic(
+            VoxelAnnotationDiagnosticCode::ContentHashMismatch,
+            "contentHashes",
+            "recorded content hashes do not match the layer contents",
+        )]));
+    }
     Ok(layer)
 }
 
@@ -182,19 +175,17 @@ pub fn export_annotation_layer(
     })
 }
 
+/// Canonicalizes changed contents, checks their meaning and computes the
+/// layer's identities once. Every path that changes contents ends here.
 pub(crate) fn normalize_and_rehash(
     layer: &mut VoxelAnnotationLayer,
+    target: Option<&VoxelAsset>,
     limits: VoxelAnnotationLimits,
 ) -> Result<(), VoxelAnnotationError> {
     normalize_layer(layer);
-    layer.content_hashes.canonical_layer.clear();
-    layer.content_hashes.membership_data.clear();
-    let diagnostics = semantic_diagnostics(layer, None, limits);
-    if !diagnostics.is_empty() {
-        return Err(VoxelAnnotationError::Invalid(diagnostics));
-    }
+    validate_annotation_layer(layer, target, limits)?;
     set_hashes(layer);
-    validate_annotation_layer(layer, None, limits)
+    Ok(())
 }
 
 fn semantic_diagnostics(
@@ -507,35 +498,25 @@ fn normalize_layer(layer: &mut VoxelAnnotationLayer) {
     });
 }
 
+/// Computes both identities of an already normalized layer. The canonical
+/// hash covers the layer serialized with empty hash fields.
 fn set_hashes(layer: &mut VoxelAnnotationLayer) {
-    layer.content_hashes.membership_data = membership_data_hash(layer);
-    layer.content_hashes.canonical_layer = canonical_layer_hash(layer);
-}
-
-fn canonical_layer_hash(layer: &VoxelAnnotationLayer) -> String {
-    let mut canonical = layer.clone();
-    normalize_layer(&mut canonical);
-    canonical.content_hashes.canonical_layer.clear();
-    canonical.content_hashes.membership_data.clear();
-    let bytes = serde_json::to_vec(&canonical).expect("annotation layer serializes");
-    format!("sha256:{:x}", Sha256::digest(bytes))
-}
-
-fn membership_data_hash(layer: &VoxelAnnotationLayer) -> String {
-    let mut canonical = layer.clone();
-    normalize_layer(&mut canonical);
-    let mut bytes = Vec::new();
-    for region in canonical.regions {
-        bytes.extend_from_slice(&(region.region_id.len() as u64).to_le_bytes());
-        bytes.extend_from_slice(region.region_id.as_bytes());
-        for run in region.selection.sparse_runs {
+    layer.content_hashes.canonical_layer.clear();
+    layer.content_hashes.membership_data.clear();
+    let canonical = serde_json::to_vec(&*layer).expect("annotation layer serializes");
+    layer.content_hashes.canonical_layer = format!("sha256:{:x}", Sha256::digest(canonical));
+    let mut membership = Sha256::new();
+    for region in &layer.regions {
+        membership.update((region.region_id.len() as u64).to_le_bytes());
+        membership.update(region.region_id.as_bytes());
+        for run in &region.selection.sparse_runs {
             for coordinate in run.start {
-                bytes.extend_from_slice(&coordinate.to_le_bytes());
+                membership.update(coordinate.to_le_bytes());
             }
-            bytes.extend_from_slice(&run.length.to_le_bytes());
+            membership.update(run.length.to_le_bytes());
         }
     }
-    format!("sha256:{:x}", Sha256::digest(bytes))
+    layer.content_hashes.membership_data = format!("sha256:{:x}", membership.finalize());
 }
 
 fn valid_sha256(value: &str) -> bool {

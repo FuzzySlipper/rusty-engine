@@ -1,8 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    validate_annotation_layer, VoxelAnnotationBounds, VoxelAnnotationError, VoxelAnnotationKind,
-    VoxelAnnotationLayer, VoxelAnnotationLimits, VoxelAnnotationRegion,
+    VoxelAnnotationBounds, VoxelAnnotationKind, VoxelAnnotationLayer, VoxelAnnotationRegion,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +23,8 @@ pub struct VoxelAnnotationQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub expected_layer_hash: Option<String>,
     pub mode: VoxelAnnotationQueryMode,
+    /// Returns at most this many matches; `truncated` reports whether more
+    /// regions matched.
     pub max_results: usize,
 }
 
@@ -50,9 +51,7 @@ pub struct VoxelAnnotationQueryReadout {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VoxelAnnotationQueryError {
-    InvalidLayer(VoxelAnnotationError),
     StaleLayerHash { expected: String, actual: String },
-    InvalidLimit { maximum: usize, actual: usize },
     OutOfBounds,
 }
 
@@ -68,16 +67,6 @@ pub fn query_annotation_layer(
     layer: &VoxelAnnotationLayer,
     request: &VoxelAnnotationQuery,
 ) -> Result<VoxelAnnotationQueryReadout, VoxelAnnotationQueryError> {
-    validate_annotation_layer(layer, None, VoxelAnnotationLimits::default())
-        .map_err(VoxelAnnotationQueryError::InvalidLayer)?;
-    if request.max_results == 0
-        || request.max_results > VoxelAnnotationLimits::default().max_regions
-    {
-        return Err(VoxelAnnotationQueryError::InvalidLimit {
-            maximum: VoxelAnnotationLimits::default().max_regions,
-            actual: request.max_results,
-        });
-    }
     if let Some(expected) = &request.expected_layer_hash {
         if expected != &layer.content_hashes.canonical_layer {
             return Err(VoxelAnnotationQueryError::StaleLayerHash {
