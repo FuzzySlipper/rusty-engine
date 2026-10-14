@@ -1236,7 +1236,8 @@ SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArt
   `Id`. Planar navigation becomes one projection over the base artifact's cells
   (`ReplaceContentArtifact`) and every placed artifact's. Paths cross between
   neighbouring closures as within one. A cell two artifacts both declare is
-  walkable, at the higher support.
+  walkable, at the higher support. A call recomposes only the placements it
+  adds, removes or replaces, not the rest of the resident world.
 - **Grid.** All of them must share one cell size and level quantum
   (`CSHARP_SPATIAL_CONTENT_NAVIGATION_GRID`). The integer topology is the base
   artifact's, or, with no base, the local frame when the first artifact was
