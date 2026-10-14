@@ -644,8 +644,9 @@ pub struct NavTraversalCell {
 /// Canonical, owned per-cell traversal rules for a [`NavProjection`].
 ///
 /// The map deliberately carries no product interpretation: callers decide
-/// the values while this owner validates membership and admissibility and
-/// keeps deterministic lookup and the stable hash.
+/// the values while this owner keeps deterministic lookup and the stable
+/// hash. A record for a cell the projection does not walk is retained but
+/// never read, since search only enters walkable cells.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NavTraversalOverlay {
     cells: BTreeMap<VoxelCoord, NavTraversalCell>,
@@ -653,103 +654,23 @@ pub struct NavTraversalOverlay {
 }
 
 impl NavTraversalOverlay {
-    /// Build canonical traversal rules for one already-admitted projection.
-    /// The last record for a coordinate wins; otherwise input order does not
-    /// affect retained state or the overlay hash.
+    /// Build canonical traversal rules. The last record for a coordinate
+    /// wins; otherwise input order does not affect retained state or the
+    /// overlay hash.
     pub fn from_cells(
-        projection: &NavProjection,
         cells: impl IntoIterator<Item = NavTraversalCell>,
     ) -> Result<Self, NavTraversalOverlayError> {
         let mut canonical = BTreeMap::new();
         for cell in cells {
+            // The planar A* estimate (`PlanarEstimate`) is a lower bound only
+            // while every entered cell costs at least one; a zero cost would
+            // let it return a path that is not the cheapest.
             if cell.cost == 0 {
                 return Err(NavTraversalOverlayError::ZeroCost { coord: cell.coord });
-            }
-            if !projection.is_walkable(cell.coord) {
-                return Err(NavTraversalOverlayError::CellOutsideProjection { coord: cell.coord });
             }
             canonical.insert(cell.coord, cell);
         }
         let overlay_hash = hash_traversal_cells(&canonical);
-        Ok(Self {
-            cells: canonical,
-            overlay_hash,
-        })
-    }
-
-    /// The empty overlay preserves ordinary allowed, unit-cost traversal.
-    pub fn empty(projection: &NavProjection) -> Self {
-        Self::from_cells(projection, std::iter::empty()).expect("empty overlay is valid")
-    }
-
-    pub fn len(&self) -> usize {
-        self.cells.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
-    }
-
-    pub fn overlay_hash(&self) -> u64 {
-        self.overlay_hash
-    }
-
-    pub fn is_allowed(&self, coord: VoxelCoord) -> bool {
-        self.cells.get(&coord).is_none_or(|cell| cell.allowed)
-    }
-
-    pub fn cost_for(&self, coord: VoxelCoord) -> u64 {
-        self.cells.get(&coord).map_or(1, |cell| cell.cost)
-    }
-}
-
-/// Why a caller-provided traversal overlay was rejected before replacement.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NavTraversalOverlayError {
-    CellOutsideProjection { coord: VoxelCoord },
-    ZeroCost { coord: VoxelCoord },
-}
-
-/// One purpose-neutral traversal rule for a volumetric navigation cell.
-///
-/// Volumetric queries use dynamic voxel/agent-volume occupancy rather than the
-/// planar [`NavProjection`] membership set.  Consequently these records are
-/// deliberately not checked against a planar projection.  A missing record is
-/// allowed with the unit cost, just as it is for [`NavTraversalOverlay`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct VolumetricNavTraversalCell {
-    pub coord: VoxelCoord,
-    pub allowed: bool,
-    pub cost: u64,
-}
-
-/// Canonical traversal rules for a volumetric navigation query.
-///
-/// The overlay is independent of the planar surface projection.  Admission
-/// only owns non-zero costs, last-record-wins canonical order and a
-/// deterministic hash.  Voxel occupancy and agent-volume validity remain
-/// query concerns owned by the volumetric pathfinding service.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VolumetricNavTraversalOverlay {
-    cells: BTreeMap<VoxelCoord, VolumetricNavTraversalCell>,
-    overlay_hash: u64,
-}
-
-impl VolumetricNavTraversalOverlay {
-    /// Build canonical traversal rules without requiring planar projection
-    /// membership. The last record for a coordinate wins; otherwise input
-    /// order does not affect retained state or its hash.
-    pub fn from_cells(
-        cells: impl IntoIterator<Item = VolumetricNavTraversalCell>,
-    ) -> Result<Self, VolumetricNavTraversalOverlayError> {
-        let mut canonical = BTreeMap::new();
-        for cell in cells {
-            if cell.cost == 0 {
-                return Err(VolumetricNavTraversalOverlayError::ZeroCost { coord: cell.coord });
-            }
-            canonical.insert(cell.coord, cell);
-        }
-        let overlay_hash = hash_volumetric_traversal_cells(&canonical);
         Ok(Self {
             cells: canonical,
             overlay_hash,
@@ -782,25 +703,82 @@ impl VolumetricNavTraversalOverlay {
     }
 }
 
-/// Why a caller-provided volumetric traversal overlay was rejected before
-/// replacement.
+/// Why a caller-provided traversal overlay was rejected before replacement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum VolumetricNavTraversalOverlayError {
+pub enum NavTraversalOverlayError {
     ZeroCost { coord: VoxelCoord },
 }
 
-impl VolumetricNavTraversalOverlayError {
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::ZeroCost { .. } => "zeroCost",
+/// One purpose-neutral traversal rule for a volumetric navigation cell.
+///
+/// Volumetric queries use dynamic voxel/agent-volume occupancy rather than the
+/// planar [`NavProjection`] membership set. A missing record is allowed with
+/// the unit cost, just as it is for [`NavTraversalOverlay`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VolumetricNavTraversalCell {
+    pub coord: VoxelCoord,
+    pub allowed: bool,
+    pub cost: u64,
+}
+
+/// Canonical traversal rules for a volumetric navigation query.
+///
+/// The overlay is independent of the planar surface projection. It owns
+/// last-record-wins canonical order and a deterministic hash; a zero cost is
+/// valid, since the volumetric search uses no distance estimate. Voxel
+/// occupancy and agent-volume validity remain query concerns owned by the
+/// volumetric pathfinding service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VolumetricNavTraversalOverlay {
+    cells: BTreeMap<VoxelCoord, VolumetricNavTraversalCell>,
+    overlay_hash: u64,
+}
+
+impl VolumetricNavTraversalOverlay {
+    /// Build canonical traversal rules without requiring planar projection
+    /// membership. The last record for a coordinate wins; otherwise input
+    /// order does not affect retained state or its hash.
+    pub fn from_cells(cells: impl IntoIterator<Item = VolumetricNavTraversalCell>) -> Self {
+        let canonical = cells
+            .into_iter()
+            .map(|cell| (cell.coord, cell))
+            .collect::<BTreeMap<_, _>>();
+        let overlay_hash = hash_volumetric_traversal_cells(&canonical);
+        Self {
+            cells: canonical,
+            overlay_hash,
         }
+    }
+
+    /// The empty overlay preserves ordinary allowed, unit-cost traversal.
+    pub fn empty() -> Self {
+        Self::from_cells(std::iter::empty())
+    }
+
+    pub fn len(&self) -> usize {
+        self.cells.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+
+    pub fn overlay_hash(&self) -> u64 {
+        self.overlay_hash
+    }
+
+    pub fn is_allowed(&self, coord: VoxelCoord) -> bool {
+        self.cells.get(&coord).is_none_or(|cell| cell.allowed)
+    }
+
+    pub fn cost_for(&self, coord: VoxelCoord) -> u64 {
+        self.cells.get(&coord).map_or(1, |cell| cell.cost)
     }
 }
 
 impl NavTraversalOverlayError {
     pub const fn label(self) -> &'static str {
         match self {
-            NavTraversalOverlayError::CellOutsideProjection { .. } => "cellOutsideProjection",
             NavTraversalOverlayError::ZeroCost { .. } => "zeroCost",
         }
     }
@@ -996,6 +974,7 @@ pub enum WeightedVolumetricNavPathError {
 pub struct DirectNavMovementRequest {
     pub from: Vec3,
     pub target: Vec3,
+    /// Finite and positive; the caller checks it once, before its path search.
     pub max_step_units: f32,
 }
 
@@ -1013,18 +992,19 @@ pub struct DirectNavMovementReadout {
     pub path_hash: u64,
 }
 
-/// Why a direct-nav movement request was rejected.
+/// Why a direct-nav movement request was rejected. A step target can be a
+/// cell centre whose height comes from content support heights, which no
+/// earlier owner bounds to the f32 range, so the computed positions are
+/// checked here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DirectNavMovementError {
     NonFinitePosition,
-    InvalidStep,
 }
 
 impl DirectNavMovementError {
     pub const fn label(self) -> &'static str {
         match self {
             DirectNavMovementError::NonFinitePosition => "nonFinitePosition",
-            DirectNavMovementError::InvalidStep => "invalidStep",
         }
     }
 }
@@ -1903,9 +1883,6 @@ pub fn propose_direct_nav_movement(
     if !vec3_is_finite(request.from) || !vec3_is_finite(request.target) {
         return Err(DirectNavMovementError::NonFinitePosition);
     }
-    if !request.max_step_units.is_finite() || request.max_step_units <= 0.0 {
-        return Err(DirectNavMovementError::InvalidStep);
-    }
 
     let delta = request.target - request.from;
     let distance = delta.length();
@@ -2479,7 +2456,7 @@ mod tests {
         let path = find_path_with_edge_admission(&projection, &edges, None, query, policy).unwrap();
         assert_eq!(path.path, vec![start, goal]);
 
-        let overlay = NavTraversalOverlay::empty(&projection);
+        let overlay = NavTraversalOverlay::empty();
         let weighted = |edges: &NavEdgeAdmission| {
             find_weighted_path_with_edge_admission(
                 &projection,
@@ -2521,7 +2498,7 @@ mod tests {
         };
         let components = NavComponents::label(&projection, &edges, policy);
         assert_eq!(components.len(), 2);
-        let overlay = NavTraversalOverlay::empty(&projection);
+        let overlay = NavTraversalOverlay::empty();
         let query = NavPathQuery {
             start: near[0],
             goal: far[3],
@@ -2601,14 +2578,11 @@ mod tests {
         assert_eq!(back.outcome, NavPathOutcome::NoPath);
         assert_eq!(back.visited, 1);
         assert_eq!(back.nearest, Some(cells[2]));
-        let overlay = NavTraversalOverlay::from_cells(
-            &projection,
-            [NavTraversalCell {
-                coord: cells[1],
-                allowed: false,
-                cost: 1,
-            }],
-        )
+        let overlay = NavTraversalOverlay::from_cells([NavTraversalCell {
+            coord: cells[1],
+            allowed: false,
+            cost: 1,
+        }])
         .unwrap();
         let blocked = find_path_with_traversal_and_edge_admission(
             &projection,
@@ -2647,26 +2621,23 @@ mod tests {
         ];
         let projection =
             NavProjection::from_walkable_cells(test_grid(), direct.into_iter().chain(detour));
-        let overlay = NavTraversalOverlay::from_cells(
-            &projection,
-            [
-                NavTraversalCell {
-                    coord: direct[1],
-                    allowed: true,
-                    cost: 10,
-                },
-                NavTraversalCell {
-                    coord: direct[2],
-                    allowed: true,
-                    cost: 10,
-                },
-                NavTraversalCell {
-                    coord: direct[3],
-                    allowed: true,
-                    cost: 10,
-                },
-            ],
-        )
+        let overlay = NavTraversalOverlay::from_cells([
+            NavTraversalCell {
+                coord: direct[1],
+                allowed: true,
+                cost: 10,
+            },
+            NavTraversalCell {
+                coord: direct[2],
+                allowed: true,
+                cost: 10,
+            },
+            NavTraversalCell {
+                coord: direct[3],
+                allowed: true,
+                cost: 10,
+            },
+        ])
         .expect("overlay");
 
         let readout = find_weighted_path_with_policy(
@@ -2703,14 +2674,11 @@ mod tests {
         let projection =
             NavProjection::from_walkable_cells(test_grid(), direct.into_iter().chain(alternate));
 
-        let fallback = NavTraversalOverlay::from_cells(
-            &projection,
-            [NavTraversalCell {
-                coord: direct[1],
-                allowed: false,
-                cost: 1,
-            }],
-        )
+        let fallback = NavTraversalOverlay::from_cells([NavTraversalCell {
+            coord: direct[1],
+            allowed: false,
+            cost: 1,
+        }])
         .expect("fallback overlay");
         let fallback_readout = find_weighted_path_with_policy(
             &projection,
@@ -2729,21 +2697,18 @@ mod tests {
             vec![start, alternate[0], alternate[1], alternate[2], goal]
         );
 
-        let no_path = NavTraversalOverlay::from_cells(
-            &projection,
-            [
-                NavTraversalCell {
-                    coord: direct[1],
-                    allowed: false,
-                    cost: 1,
-                },
-                NavTraversalCell {
-                    coord: alternate[1],
-                    allowed: false,
-                    cost: 1,
-                },
-            ],
-        )
+        let no_path = NavTraversalOverlay::from_cells([
+            NavTraversalCell {
+                coord: direct[1],
+                allowed: false,
+                cost: 1,
+            },
+            NavTraversalCell {
+                coord: alternate[1],
+                allowed: false,
+                cost: 1,
+            },
+        ])
         .expect("no-path overlay");
         let no_path_readout = find_weighted_path_with_policy(
             &projection,
@@ -2780,81 +2745,89 @@ mod tests {
                 cost: 3,
             },
         ];
-        let forward = NavTraversalOverlay::from_cells(&projection, records).expect("forward");
-        let reverse = NavTraversalOverlay::from_cells(&projection, records.into_iter().rev())
-            .expect("reverse");
+        let forward = NavTraversalOverlay::from_cells(records).expect("forward");
+        let reverse = NavTraversalOverlay::from_cells(records.into_iter().rev()).expect("reverse");
         assert_eq!(forward, reverse);
         assert_eq!(forward.overlay_hash(), reverse.overlay_hash());
         assert_eq!(forward.len(), 2);
 
         assert_eq!(
-            NavTraversalOverlay::from_cells(
-                &projection,
-                [NavTraversalCell {
-                    coord: cells[1],
-                    allowed: true,
-                    cost: 0,
-                }],
-            ),
+            NavTraversalOverlay::from_cells([NavTraversalCell {
+                coord: cells[1],
+                allowed: true,
+                cost: 0,
+            }],),
             Err(NavTraversalOverlayError::ZeroCost { coord: cells[1] })
         );
-        let repeated = NavTraversalOverlay::from_cells(
-            &projection,
-            [
-                NavTraversalCell {
-                    coord: cells[1],
-                    allowed: true,
-                    cost: 1,
-                },
-                NavTraversalCell {
-                    coord: cells[1],
-                    allowed: false,
-                    cost: 1,
-                },
-            ],
-        )
+        let repeated = NavTraversalOverlay::from_cells([
+            NavTraversalCell {
+                coord: cells[1],
+                allowed: true,
+                cost: 1,
+            },
+            NavTraversalCell {
+                coord: cells[1],
+                allowed: false,
+                cost: 1,
+            },
+        ])
         .expect("a repeated coordinate keeps its last record");
         assert_eq!(repeated.len(), 1);
         assert!(!repeated.is_allowed(cells[1]));
         assert_eq!(
             repeated,
-            NavTraversalOverlay::from_cells(
-                &projection,
-                [NavTraversalCell {
-                    coord: cells[1],
-                    allowed: false,
-                    cost: 1,
-                }],
-            )
+            NavTraversalOverlay::from_cells([NavTraversalCell {
+                coord: cells[1],
+                allowed: false,
+                cost: 1,
+            }],)
             .unwrap()
         );
-        let outside = VoxelCoord::new(9, 0, 0);
+        // A rule for a cell the projection does not walk is kept but never
+        // read: search enters only walkable cells.
+        let outside = VoxelCoord::new(1, 0, 1);
+        let unwalked = NavTraversalOverlay::from_cells([NavTraversalCell {
+            coord: outside,
+            allowed: false,
+            cost: 9,
+        }])
+        .expect("a rule for an unwalkable cell is admitted");
+        assert_eq!(unwalked.len(), 1);
+        let query = NavPathQuery {
+            start: cells[0],
+            goal: cells[2],
+            max_visited: 16,
+        };
+        let policy = PlanarNavNeighborPolicy {
+            diagonal: true,
+            ..PlanarNavNeighborPolicy::default()
+        };
+        let plain = find_weighted_path_with_policy(
+            &projection,
+            &NavTraversalOverlay::empty(),
+            query,
+            policy,
+        )
+        .expect("plain path");
+        let ruled = find_weighted_path_with_policy(&projection, &unwalked, query, policy)
+            .expect("path beside an unwalkable rule");
+        assert_eq!(ruled.outcome, WeightedNavPathOutcome::Reached);
         assert_eq!(
-            NavTraversalOverlay::from_cells(
-                &projection,
-                [NavTraversalCell {
-                    coord: outside,
-                    allowed: true,
-                    cost: 1,
-                }],
-            ),
-            Err(NavTraversalOverlayError::CellOutsideProjection { coord: outside })
+            (ruled.path, ruled.total_cost, ruled.visited),
+            (plain.path, plain.total_cost, plain.visited)
         );
 
         // The product decides how many cells it rules; 70,000 records simply work.
         let large_cells = (0..70_000)
             .map(|x| VoxelCoord::new(x, 1, 0))
             .collect::<Vec<_>>();
-        let large_projection =
-            NavProjection::from_walkable_cells(test_grid(), large_cells.iter().copied());
-        let large = NavTraversalOverlay::from_cells(
-            &large_projection,
-            large_cells.iter().copied().map(|coord| NavTraversalCell {
+        let large = NavTraversalOverlay::from_cells(large_cells.iter().copied().map(|coord| {
+            NavTraversalCell {
                 coord,
                 allowed: coord.x != 50_000,
                 cost: 2,
-            }),
-        )
+            }
+        }))
         .expect("large overlay");
         assert_eq!(large.len(), 70_000);
         assert!(!large.is_allowed(VoxelCoord::new(50_000, 1, 0)));
@@ -2869,7 +2842,7 @@ mod tests {
             VoxelCoord::new(2, 0, 0),
         ];
         let projection = NavProjection::from_walkable_cells(test_grid(), cells);
-        let empty = NavTraversalOverlay::empty(&projection);
+        let empty = NavTraversalOverlay::empty();
         let budget = find_weighted_path_with_policy(
             &projection,
             &empty,
@@ -2884,21 +2857,18 @@ mod tests {
         assert_eq!(budget.outcome, WeightedNavPathOutcome::BudgetExhausted);
         assert_eq!(budget.visited, 1);
 
-        let overflow = NavTraversalOverlay::from_cells(
-            &projection,
-            [
-                NavTraversalCell {
-                    coord: cells[1],
-                    allowed: true,
-                    cost: u64::MAX,
-                },
-                NavTraversalCell {
-                    coord: cells[2],
-                    allowed: true,
-                    cost: 1,
-                },
-            ],
-        )
+        let overflow = NavTraversalOverlay::from_cells([
+            NavTraversalCell {
+                coord: cells[1],
+                allowed: true,
+                cost: u64::MAX,
+            },
+            NavTraversalCell {
+                coord: cells[2],
+                allowed: true,
+                cost: 1,
+            },
+        ])
         .expect("overflow overlay");
         assert_eq!(
             find_weighted_path_with_policy(
@@ -3269,9 +3239,8 @@ mod tests {
                 cost: 2,
             },
         ];
-        let forward = VolumetricNavTraversalOverlay::from_cells(records).expect("forward overlay");
-        let reverse =
-            VolumetricNavTraversalOverlay::from_cells(records.into_iter().rev()).expect("reverse");
+        let forward = VolumetricNavTraversalOverlay::from_cells(records);
+        let reverse = VolumetricNavTraversalOverlay::from_cells(records.into_iter().rev());
         assert_eq!(forward, reverse);
         assert_eq!(forward.cost_for(path[0]), 1);
         assert!(forward.is_allowed(path[0]));
@@ -3286,7 +3255,7 @@ mod tests {
     }
 
     #[test]
-    fn weighted_volumetric_overlay_blocks_keeps_last_record_and_rejects_zero_cost() {
+    fn weighted_volumetric_overlay_blocks_and_keeps_last_record() {
         let mut world = solid_test_world();
         let start = VoxelCoord::new(1, 1, 1);
         let goal = VoxelCoord::new(1, 2, 1);
@@ -3297,8 +3266,7 @@ mod tests {
             coord: goal,
             allowed: false,
             cost: 1,
-        }])
-        .expect("blocked overlay");
+        }]);
         assert_eq!(
             find_weighted_volumetric_path(&world, &blocked, volumetric_query(start, goal, 16)),
             Err(WeightedVolumetricNavPathError::GoalBlocked { goal })
@@ -3315,21 +3283,46 @@ mod tests {
                 allowed: false,
                 cost: 2,
             },
-        ])
-        .expect("a repeated coordinate keeps its last record");
+        ]);
         assert_eq!(repeated.len(), 1);
         assert_eq!(repeated.cost_for(goal), 2);
         assert_eq!(
             find_weighted_volumetric_path(&world, &repeated, volumetric_query(start, goal, 16)),
             Err(WeightedVolumetricNavPathError::GoalBlocked { goal })
         );
-        assert_eq!(
-            VolumetricNavTraversalOverlay::from_cells([VolumetricNavTraversalCell {
-                coord: start,
+    }
+
+    #[test]
+    fn weighted_volumetric_zero_cost_cells_give_the_cheapest_route() {
+        let mut world = solid_test_world();
+        let start = VoxelCoord::new(1, 1, 1);
+        let goal = VoxelCoord::new(3, 1, 1);
+        let direct = VoxelCoord::new(2, 1, 1);
+        let detour = [
+            VoxelCoord::new(1, 1, 2),
+            VoxelCoord::new(2, 1, 2),
+            VoxelCoord::new(3, 1, 2),
+        ];
+        for coord in [start, direct, goal].into_iter().chain(detour) {
+            carve_empty(&mut world, coord);
+        }
+        // The volumetric search has no distance estimate, so free cells are
+        // ordinary weights: the longer free detour costs 1, the direct route 2.
+        let overlay = VolumetricNavTraversalOverlay::from_cells(detour.map(|coord| {
+            VolumetricNavTraversalCell {
+                coord,
                 allowed: true,
                 cost: 0,
-            }]),
-            Err(VolumetricNavTraversalOverlayError::ZeroCost { coord: start })
+            }
+        }));
+        let readout =
+            find_weighted_volumetric_path(&world, &overlay, volumetric_query(start, goal, 32))
+                .expect("weighted volumetric path");
+        assert_eq!(readout.outcome, WeightedNavPathOutcome::Reached);
+        assert_eq!(readout.total_cost, 1);
+        assert_eq!(
+            readout.path,
+            vec![start, detour[0], detour[1], detour[2], goal]
         );
     }
 
@@ -3392,7 +3385,7 @@ mod tests {
                 .map(move |(x, z)| (from, cell(x, z)))
                 .filter(|(from, to)| (to.y - from.y).abs() <= 2)
         }));
-        let overlay = NavTraversalOverlay::empty(&projection);
+        let overlay = NavTraversalOverlay::empty();
         let started = std::time::Instant::now();
         for _ in 0..REPEATS {
             std::hint::black_box(NavComponents::label(&projection, &edges, policy));
@@ -3475,14 +3468,6 @@ mod tests {
                 max_step_units: 0.35,
             }),
             Err(DirectNavMovementError::NonFinitePosition)
-        );
-        assert_eq!(
-            propose_direct_nav_movement(DirectNavMovementRequest {
-                from: Vec3::ZERO,
-                target: Vec3::ONE,
-                max_step_units: 0.0,
-            }),
-            Err(DirectNavMovementError::InvalidStep)
         );
     }
 }

@@ -153,9 +153,6 @@ use svc_mesh::{mesh_chunk_in_world_with_options, MeshError};
 use svc_spatial::VoxelWorld;
 use svc_volume::{VolumeError, VoxelChunk};
 
-/// Upper bound for one scheduled motion phase. The caller controls cadence, but
-/// a single accidental multi-second step cannot become an unbounded entity-state edit.
-pub const MAX_MOTION_DELTA_SECONDS: f32 = 1.0;
 pub const MAX_CHUNK_SIZE: u32 = 64;
 
 #[derive(
@@ -2059,8 +2056,9 @@ impl KinematicMotionSystem {
         bodies: &[KinematicBodyView],
         dynamic_blockers: &[KinematicBodyView],
     ) -> Result<KinematicMotionResolution, MotionPhaseError> {
-        if !delta_seconds.is_finite() || !(0.0..=MAX_MOTION_DELTA_SECONDS).contains(&delta_seconds)
-        {
+        // Each axis sweeps continuously, so any finite step resolves; a NaN
+        // one would read as blocked and silently zero every velocity.
+        if !delta_seconds.is_finite() || delta_seconds < 0.0 {
             return Err(MotionPhaseError::InvalidDeltaSeconds {
                 actual: delta_seconds,
             });

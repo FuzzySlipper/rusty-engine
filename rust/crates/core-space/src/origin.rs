@@ -28,6 +28,8 @@ pub struct GlobalPosition {
     offset: [f64; 3],
 }
 
+/// A stored pair whose offset leaves `[0, 1)` reads as the same point in its
+/// canonical form, as [`GlobalPosition::new`] builds it.
 impl<'de> Deserialize<'de> for GlobalPosition {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -41,13 +43,7 @@ impl<'de> Deserialize<'de> for GlobalPosition {
         }
 
         let stored = StoredGlobalPosition::deserialize(deserializer)?;
-        let value = Self::new(stored.cell, stored.offset).map_err(serde::de::Error::custom)?;
-        if value.cell != stored.cell || value.offset != stored.offset {
-            return Err(serde::de::Error::custom(
-                "global position cell/offset pair is not canonical",
-            ));
-        }
-        Ok(value)
+        Self::new(stored.cell, stored.offset).map_err(serde::de::Error::custom)
     }
 }
 
@@ -180,6 +176,14 @@ mod tests {
         let encoded = serde_json::to_vec(&position).unwrap();
         assert_eq!(
             serde_json::from_slice::<GlobalPosition>(&encoded).unwrap(),
+            position
+        );
+        // A non-canonical stored pair reads as the same point.
+        assert_eq!(
+            serde_json::from_str::<GlobalPosition>(
+                r#"{"cell":[-900001,12,800000],"offset":[1.125,0.5,0.875]}"#
+            )
+            .unwrap(),
             position
         );
     }

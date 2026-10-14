@@ -117,6 +117,37 @@ fn first_person_motion_updates_pose_and_clamps_pitch() {
 }
 
 #[test]
+fn first_person_negative_speed_or_step_moves_the_other_way() {
+    let id = EntityId::new(3);
+    for (delta_seconds, speed_units_per_second) in [(0.5, -4.0), (-0.5, 4.0)] {
+        let mut state = EntityState::from_definitions([
+            EntityDefinition::new(id, "camera").with_transform(Vec3::ZERO)
+        ])
+        .expect("fixture");
+        let receipt = FirstPersonMotionService
+            .apply(
+                &mut state,
+                0,
+                FirstPersonMotionCommand {
+                    entity: id,
+                    tick: 1,
+                    input: FirstPersonMotionInput {
+                        move_forward: 1.0,
+                        move_right: 0.0,
+                        move_up: 0.0,
+                        yaw_delta_degrees: 0.0,
+                        pitch_delta_degrees: 0.0,
+                        delta_seconds,
+                        speed_units_per_second,
+                    },
+                },
+            )
+            .expect("motion");
+        assert_eq!(receipt.to.position, Vec3::new(0.0, 0.0, 2.0));
+    }
+}
+
+#[test]
 fn first_person_collision_keeps_look_rotation_when_translation_blocks() {
     let mut state = collision_fixture();
     let receipt = FirstPersonMotionService

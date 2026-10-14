@@ -642,8 +642,10 @@ pub struct NativeNavigationReplaceReceipt {
     pub navigation_revision: u64,
 }
 
-/// One bounded purpose-neutral traversal rule. `allowed == false` prevents
-/// entry; omitted cells remain allowed with traversal cost one.
+/// One purpose-neutral traversal rule. `allowed == false` prevents entry;
+/// omitted cells remain allowed with traversal cost one. A cost is at least
+/// one, which the planar A* estimate relies on; a rule for a cell the
+/// projection does not walk is kept and never read.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeNavigationTraversalCell {
@@ -676,9 +678,9 @@ pub struct NativeNavigationTraversalClearRequest {
     pub session: NativeSpatialSessionHandle,
 }
 
-/// One bounded purpose-neutral traversal rule for volumetric navigation.
-/// Unlike the planar traversal cell, this is not validated against a
-/// NavProjection: volumetric occupancy is admitted dynamically by the query.
+/// One purpose-neutral traversal rule for volumetric navigation. Volumetric
+/// occupancy is admitted dynamically by the query, and since that search
+/// uses no distance estimate a cost may be zero.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeNavigationVolumetricTraversalCell {

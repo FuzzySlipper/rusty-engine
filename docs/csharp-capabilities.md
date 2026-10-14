@@ -173,10 +173,10 @@ stop at that boundary rather than inventing C#, TypeScript, or browser
 rendering to fill it.
 
 Volumetric navigation is keyed by voxel coordinates and the resident voxel
-source, not by planar `NavProjection` membership. Its overlay admits bounded
-allowed/cost records; omitted cells remain allowed at unit cost, while the
-volumetric query still owns occupancy, agent-volume, neighbors, budget, and
-deterministic ordering. Replacement and weighted-query receipts expose both
+source, not by planar `NavProjection` membership. Its overlay takes
+allowed/cost records, a zero cost included; omitted cells remain allowed at
+unit cost, while the volumetric query still owns occupancy, agent-volume,
+neighbors, budget, and deterministic ordering. Replacement and weighted-query receipts expose both
 the overlay hash and volumetric source hash (the voxel scene's maintained
 solid-voxel identity) so callers can identify the facts used without treating
 a surface projection hash as authoritative.

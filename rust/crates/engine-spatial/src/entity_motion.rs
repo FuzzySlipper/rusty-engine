@@ -454,10 +454,7 @@ fn validate_first_person_input(
         input.delta_seconds,
         input.speed_units_per_second,
     ];
-    if values.iter().any(|value| !value.is_finite())
-        || input.delta_seconds < 0.0
-        || input.speed_units_per_second < 0.0
-    {
+    if values.iter().any(|value| !value.is_finite()) {
         return Err(FirstPersonMotionError::InvalidInput { entity });
     }
     Ok(())

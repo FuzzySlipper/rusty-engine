@@ -308,6 +308,36 @@ fn repeated_positive_and_negative_rebases_do_not_accumulate_or_alias() {
 }
 
 #[test]
+fn rebases_reach_origin_cells_at_the_ends_of_the_i64_range() {
+    let entity = EntityId::new(52);
+    let mut origin = WorldOriginState::default();
+    let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    for far in [i64::MAX - 8, i64::MIN + 8] {
+        let global_position = GlobalPosition::new([far + 2, 1, 0], [0.25, 0.5, 0.0]).unwrap();
+        let affected = rebase(
+            &mut origin,
+            &mut scene,
+            WorldOrigin::new([far, 0, 0]),
+            vec![WorldOriginEntity {
+                entity,
+                transform: EntityTransform::at(Vec3::ZERO),
+                global_position,
+            }],
+        );
+        assert_eq!(origin.origin(), WorldOrigin::new([far, 0, 0]));
+        assert_eq!(scene.world_origin(), WorldOrigin::new([far, 0, 0]));
+        assert_eq!(affected[0].transform.translation, Vec3::new(2.25, 1.5, 0.0));
+        assert_eq!(
+            GlobalPosition::from_local(
+                origin.origin(),
+                affected[0].transform.translation.to_array()
+            ),
+            Ok(global_position)
+        );
+    }
+}
+
+#[test]
 fn failed_prepare_publishes_nothing_and_edits_after_prepare_survive() {
     let (mut origin, mut scene) = fixture();
     let origin_before = origin.readout();

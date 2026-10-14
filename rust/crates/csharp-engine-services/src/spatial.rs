@@ -1299,7 +1299,7 @@ impl RuntimeSpatialBridge {
         );
         let navigation_cell_count = navigation_projection.walkable_len() as u64;
         let navigation_projection_hash = navigation_projection.projection_hash();
-        let navigation_traversal = NavTraversalOverlay::empty(&navigation_projection);
+        let navigation_traversal = NavTraversalOverlay::empty();
         let navigation_vertical_mapping = NavigationVerticalMapping::new(
             cells.level_quantum,
             cells.cells.iter().copied().collect(),
@@ -1701,7 +1701,7 @@ impl RuntimeSpatialBridge {
             })?,
             diagonal: false,
         };
-        let traversal = NavTraversalOverlay::empty(&projection);
+        let traversal = NavTraversalOverlay::empty();
         let session = self.session_mut(request.session)?;
         session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
@@ -1766,7 +1766,7 @@ impl RuntimeSpatialBridge {
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_NAVIGATION_CONFIG", error.label())
         })?;
-        let traversal = NavTraversalOverlay::empty(&projection);
+        let traversal = NavTraversalOverlay::empty();
         let session = self.session_mut(request.session)?;
         session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
@@ -1939,7 +1939,7 @@ impl RuntimeSpatialBridge {
             jumps,
         } = graph;
         let components = NavComponents::label(&projection, &edge_admission, policy);
-        let traversal = NavTraversalOverlay::empty(&projection);
+        let traversal = NavTraversalOverlay::empty();
         let session = self.session_mut(request.session)?;
         session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
@@ -1998,33 +1998,24 @@ impl RuntimeSpatialBridge {
                 "navigation traversal cells",
             )
         }?;
-        let session = self.session_mut(request.session)?;
-        let traversal = NavTraversalOverlay::from_cells(
-            &session
-                .navigation
-                .as_ref()
-                .ok_or_else(|| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_NAVIGATION_TRAVERSAL",
-                        "navigation projection is unavailable",
-                    )
-                })?
-                .projection,
-            cells.iter().map(|cell| NavTraversalCell {
+        let traversal =
+            NavTraversalOverlay::from_cells(cells.iter().map(|cell| NavTraversalCell {
                 coord: nav_cell(cell.cell),
                 allowed: cell.allowed,
                 cost: cell.traversal_cost,
-            }),
-        )
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_NAVIGATION_TRAVERSAL", error.label())
+            }))
+            .map_err(|error| {
+                CsharpEngineServicesError::new("CSHARP_NAVIGATION_TRAVERSAL", error.label())
+            })?;
+        let session = self.session_mut(request.session)?;
+        let navigation = session.navigation.as_mut().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_NAVIGATION_TRAVERSAL",
+                "navigation projection is unavailable",
+            )
         })?;
         session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
-        let navigation = session
-            .navigation
-            .as_mut()
-            .expect("navigation checked above");
         navigation.traversal = traversal;
         navigation.revision = navigation_revision;
         Ok(NativeNavigationTraversalReplaceReceipt {
@@ -2045,7 +2036,7 @@ impl RuntimeSpatialBridge {
                 "navigation projection is unavailable",
             )
         })?;
-        let traversal = NavTraversalOverlay::empty(&navigation.projection);
+        let traversal = NavTraversalOverlay::empty();
         session.navigation_revision += 1;
         let navigation_revision = session.navigation_revision;
         navigation.traversal = traversal;
@@ -2074,10 +2065,7 @@ impl RuntimeSpatialBridge {
                 allowed: cell.allowed,
                 cost: cell.traversal_cost,
             }
-        }))
-        .map_err(|error| {
-            CsharpEngineServicesError::new("CSHARP_NAVIGATION_VOLUMETRIC_TRAVERSAL", error.label())
-        })?;
+        }));
         let session = self.session_mut(request.session)?;
         let source_hash = session
             .navigation
@@ -2523,6 +2511,12 @@ fn evaluate_navigation_step_facts(
             Vec::new(),
         );
     }
+    if !request.max_step_units.is_finite() || request.max_step_units <= 0.0 {
+        return (
+            navigation_step_failure(navigation, NativeNavigationPathOutcome::InvalidStep),
+            Vec::new(),
+        );
+    }
     let start = navigation.world_cell(from);
     let goal = navigation.world_cell(target);
     // Evaluation is the read-only route used by assisted movement. It must use
@@ -2583,15 +2577,13 @@ fn evaluate_navigation_step_facts(
         target: step_target,
         max_step_units: request.max_step_units,
     });
-    let movement = match movement {
-        Ok(movement) => movement,
-        Err(error) => {
-            let outcome = match error.label() {
-                "nonFinitePosition" => NativeNavigationPathOutcome::NonFinitePosition,
-                _ => NativeNavigationPathOutcome::InvalidStep,
-            };
-            return (navigation_step_failure(navigation, outcome), Vec::new());
-        }
+    let Ok(movement) = movement else {
+        // An intermediate cell centre carries an unbounded content support
+        // height, so the computed step target can still be non-finite.
+        return (
+            navigation_step_failure(navigation, NativeNavigationPathOutcome::NonFinitePosition),
+            Vec::new(),
+        );
     };
     (
         NativeNavigationStepResult {
@@ -5347,7 +5339,7 @@ fn compose_content_navigation<'a>(
     let projection = NavProjection::from_walkable_cells(grid, supports.keys().copied());
     Ok(NavigationState {
         source: NavigationSource::HostWalkableCells,
-        traversal: NavTraversalOverlay::empty(&projection),
+        traversal: NavTraversalOverlay::empty(),
         projection_hash: projection.projection_hash(),
         projection,
         policy: PlanarNavNeighborPolicy {
@@ -7278,20 +7270,25 @@ mod tests {
         );
         assert_unchanged(receipt, NativeNavigationPathOutcome::NonFinitePosition);
 
-        let mut invalid_step = navigation_step_request(session, 32);
-        invalid_step.max_step_units = 0.0;
-        assert_eq!(
-            unsafe {
-                (api.evaluate_navigation_step)(
-                    api.context,
-                    invalid_step,
-                    &mut receipt,
-                    std::ptr::null_mut(),
-                )
-            },
-            ABI_OK
-        );
-        assert_unchanged(receipt, NativeNavigationPathOutcome::InvalidStep);
+        // A bad step is refused before the path search: even with a budget
+        // the search would refuse, the step is what is reported.
+        for (max_step_units, max_visited) in [(0.0, 32), (-0.5, 32), (f32::NAN, 32), (-0.5, 0)] {
+            let mut invalid_step = navigation_step_request(session, max_visited);
+            invalid_step.max_step_units = max_step_units;
+            assert_eq!(
+                unsafe {
+                    (api.evaluate_navigation_step)(
+                        api.context,
+                        invalid_step,
+                        &mut receipt,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            assert_unchanged(receipt, NativeNavigationPathOutcome::InvalidStep);
+            assert_eq!(receipt.visited, 0);
+        }
 
         assert_eq!(
             unsafe {
@@ -9467,6 +9464,98 @@ mod tests {
         let released = Arc::downgrade(changed);
         residency(&mut bridge, &[], &[4]);
         assert!(released.upgrade().is_none());
+    }
+
+    #[test]
+    fn a_non_finite_intermediate_cell_centre_refuses_the_step() {
+        // The fixture strip with only the middle cell's support height raised
+        // past the f32 range: the artifact admits it, and the step toward
+        // that cell's centre would otherwise carry a NaN height.
+        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../fixtures/csharp-spatial-artifact/valid.json");
+        let valid: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixture).unwrap()).unwrap();
+        let step = |support_height: f64| {
+            let mut artifact = valid.clone();
+            artifact["navigation"]["cells"][1]["supportHeight"] = support_height.into();
+            let path = "spatial/floor.json";
+            let mut content = crate::content::RuntimeContentBridge::new(BTreeMap::from([(
+                path.to_owned(),
+                Arc::from(serde_json::to_vec(&artifact).unwrap()),
+            )]));
+            let api = crate::content::api(&mut content);
+            let mut reference = NativeContentReferenceHandle::default();
+            assert_eq!(
+                unsafe {
+                    (api.open_reference)(
+                        api.context,
+                        &NativeContentOpenRequest {
+                            path: NativeUtf8Slice {
+                                bytes: path.as_ptr(),
+                                len: path.len(),
+                            },
+                        },
+                        &mut reference,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            let mut bridge = RuntimeSpatialBridge::new();
+            bridge.bind_content(&content);
+            let session = bridge
+                .create(NativeSpatialSessionConfig {
+                    collision_voxel_size: 1.0,
+                    collision_chunk_size: 8,
+                    voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                })
+                .expect("session creates");
+            bridge
+                .replace_content_artifact(&NativeSpatialContentArtifactReplaceRequest {
+                    session,
+                    content: reference,
+                    navigation_grid_id: 7,
+                    navigation_chunk_size: 8,
+                    navigation_max_step_cells: 1,
+                })
+                .expect("artifact admits");
+            bridge
+                .evaluate_navigation(NativeNavigationStepRequest {
+                    session,
+                    from: NativeVec3 {
+                        x: 0.5,
+                        y: 0.0,
+                        z: 0.5,
+                    },
+                    target: NativeVec3 {
+                        x: 2.5,
+                        y: 0.0,
+                        z: 0.5,
+                    },
+                    max_step_units: 0.5,
+                    max_visited: 32,
+                })
+                .expect("step evaluates")
+        };
+
+        let flat = step(0.0);
+        assert_eq!(flat.outcome, NativeNavigationPathOutcome::Reached);
+        assert_eq!(
+            (
+                flat.next_waypoint.x,
+                flat.next_waypoint.y,
+                flat.next_waypoint.z
+            ),
+            (1.0, 0.0, 0.5)
+        );
+        assert_eq!(flat.next_path_cell.x, 1);
+
+        let raised = step(1e39);
+        assert_eq!(
+            raised.outcome,
+            NativeNavigationPathOutcome::NonFinitePosition
+        );
+        assert_eq!(raised.reached, 0);
     }
 
     #[test]

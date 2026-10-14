@@ -146,6 +146,55 @@ fn central_motion_phase_blocks_one_axis_without_tunneling() {
 }
 
 #[test]
+fn a_multi_second_motion_phase_integrates_and_still_blocks() {
+    let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[9, 1, 2]]).expect("valid scene");
+    let free = EntityId::new(1);
+    let walled = EntityId::new(2);
+    let mut entities = EntityState::from_definitions([
+        EntityDefinition::new(free, "free")
+            .with_transform(Vec3::new(0.5, 1.5, 0.5))
+            .with_kinematic(Vec3::new(0.25, 0.25, 0.25), Vec3::new(2.0, 0.0, 0.0)),
+        EntityDefinition::new(walled, "walled")
+            .with_transform(Vec3::new(0.5, 1.5, 2.5))
+            .with_kinematic(Vec3::new(0.25, 0.25, 0.25), Vec3::new(4.0, 0.0, 0.0)),
+    ])
+    .expect("valid entity state");
+
+    let receipt = KinematicMotionSystem::run(&mut entities, &scene, 3.0).expect("3 s phase");
+
+    assert_eq!(receipt.moved_bodies, 1);
+    assert_eq!(receipt.blocked_axes, 1);
+    let translation = |id| {
+        entities
+            .view(id)
+            .expect("mover")
+            .transform
+            .expect("transform")
+            .translation
+    };
+    assert_eq!(translation(free), Vec3::new(6.5, 1.5, 0.5));
+    // The 12-unit sweep meets the wall at x 9 and is blocked rather than
+    // passing through it.
+    assert_eq!(translation(walled), Vec3::new(0.5, 1.5, 2.5));
+    assert_eq!(
+        entities
+            .view(walled)
+            .expect("walled")
+            .kinematic
+            .expect("kinematic")
+            .velocity,
+        Vec3::ZERO
+    );
+
+    for delta_seconds in [f32::NAN, f32::INFINITY, -0.25] {
+        assert!(matches!(
+            KinematicMotionSystem::run(&mut entities, &scene, delta_seconds),
+            Err(engine_spatial::MotionPhaseError::InvalidDeltaSeconds { .. })
+        ));
+    }
+}
+
+#[test]
 fn one_motion_phase_commits_many_entities_at_one_revision() {
     let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).expect("empty scene");
     let definitions = (1..=32).map(|raw| {

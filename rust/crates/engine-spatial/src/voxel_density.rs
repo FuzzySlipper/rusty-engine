@@ -1048,5 +1048,5 @@ fn write(
     }
     chunk
         .set_density(local, sample.density)
-        .expect("validated finite density");
+        .expect("local coordinate from the grid");
 }

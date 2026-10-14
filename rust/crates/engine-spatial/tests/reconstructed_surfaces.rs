@@ -442,14 +442,18 @@ fn residency_carries_densities_through_eviction_and_rebase() {
     positive.densities[0] = 0.4;
     let mut not_finite = payload(3);
     not_finite.densities[0] = f32::NAN;
-    assert!(VoxelChunkResidencyService::apply(
-        &mut scene,
-        &[VoxelChunkResidencyOperation::Admit {
-            chunk: VoxelChunkIdentity::new(3, 0, 0),
-            payload: not_finite,
-        }],
-    )
-    .is_err());
+    assert!(matches!(
+        VoxelChunkResidencyService::apply(
+            &mut scene,
+            &[VoxelChunkResidencyOperation::Admit {
+                chunk: VoxelChunkIdentity::new(3, 0, 0),
+                payload: not_finite,
+            }],
+        ),
+        Err(engine_spatial::VoxelChunkResidencyApplyError::Rejected(
+            engine_spatial::VoxelChunkResidencyRejection::InvalidDensities { operation_index: 0 }
+        ))
+    ));
     VoxelChunkResidencyService::apply(
         &mut scene,
         &[VoxelChunkResidencyOperation::Admit {

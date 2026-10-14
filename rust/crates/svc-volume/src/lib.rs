@@ -53,8 +53,8 @@ pub enum VolumeError {
         local: LocalVoxelCoord,
         dims: ChunkDims,
     },
-    /// A density was not finite, a density array did not match the chunk, or
-    /// an edge axis was not 0, 1 or 2.
+    /// A density array did not match the chunk, or an edge axis was not 0, 1
+    /// or 2.
     InvalidDensity,
 }
 
@@ -67,10 +67,9 @@ impl core::fmt::Display for VolumeError {
                 local.to_array(),
                 dims.to_array()
             ),
-            VolumeError::InvalidDensity => write!(
-                f,
-                "voxel densities must be finite and match the chunk's cell count"
-            ),
+            VolumeError::InvalidDensity => {
+                write!(f, "voxel densities must match the chunk's cell count")
+            }
         }
     }
 }
@@ -375,11 +374,12 @@ impl VoxelChunk {
     }
 
     /// Replace every density (storage order), or drop them with `None`.
-    /// Only magnitudes are kept; signs follow solidity.
+    /// Only magnitudes are kept; signs follow solidity. Callers pass finite
+    /// densities: residency and density edits check theirs on admission.
     pub fn set_densities(&mut self, values: Option<&[f32]>) -> Result<bool, VolumeError> {
         let next = match values {
             Some(values) => {
-                if values.len() != self.cells.len() || !values.iter().all(|v| v.is_finite()) {
+                if values.len() != self.cells.len() {
                     return Err(VolumeError::InvalidDensity);
                 }
                 Some(Densities(values.iter().map(|v| v.abs()).collect()))
@@ -394,16 +394,13 @@ impl VoxelChunk {
         Ok(true)
     }
 
-    /// Set one voxel's density magnitude. The first explicit density gives
-    /// every other voxel the default magnitude.
+    /// Set one voxel's density magnitude, which the caller keeps finite. The
+    /// first explicit density gives every other voxel the default magnitude.
     pub fn set_density(&mut self, local: LocalVoxelCoord, value: f32) -> Result<bool, VolumeError> {
         let index = self.index(local).ok_or(VolumeError::OutOfBounds {
             local,
             dims: self.dims,
         })?;
-        if !value.is_finite() {
-            return Err(VolumeError::InvalidDensity);
-        }
         let magnitude = value.abs();
         let values = self.densities.get_or_insert_with(|| {
             Densities(vec![DEFAULT_DENSITY_MAGNITUDE; self.cells.len()].into_boxed_slice())

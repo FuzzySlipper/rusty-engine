@@ -6,7 +6,6 @@ use entity_state::EntityTransform;
 use crate::VoxelCollisionScene;
 
 pub const DEFAULT_LOCAL_COORDINATE_ENVELOPE: f32 = 16_384.0;
-const MAX_WORLD_ORIGIN_CELL_ABS: u64 = 9_000_000_000_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WorldOriginState {
@@ -128,9 +127,6 @@ impl PreparedWorldOriginRebase {
 #[derive(Debug)]
 pub enum WorldOriginRebaseError {
     InvalidEnvelope,
-    OriginOutsideExactF64Range {
-        axis: usize,
-    },
     OriginRevisionExhausted,
     Position {
         entity: EntityId,
@@ -159,7 +155,6 @@ impl WorldOriginRebaseService {
         origin: &WorldOriginState,
         request: WorldOriginRebaseRequest,
     ) -> Result<PreparedWorldOriginRebase, WorldOriginRebaseError> {
-        validate_origin(request.target_origin)?;
         let mut affected_transforms = Vec::with_capacity(request.entities.len());
         let mut excluded = Vec::new();
         for value in request.entities {
@@ -230,19 +225,9 @@ impl WorldOriginRebaseService {
     }
 }
 
-fn validate_origin(origin: WorldOrigin) -> Result<(), WorldOriginRebaseError> {
-    if let Some(axis) = origin
-        .cell()
-        .iter()
-        .position(|value| value.unsigned_abs() > MAX_WORLD_ORIGIN_CELL_ABS)
-    {
-        return Err(WorldOriginRebaseError::OriginOutsideExactF64Range { axis });
-    }
-    Ok(())
-}
-
+/// `GlobalPosition::local` needs a finite, positive envelope.
 fn validate_envelope(envelope: f32) -> Result<(), WorldOriginRebaseError> {
-    if !envelope.is_finite() || !(1.0..=1_000_000.0).contains(&envelope) {
+    if !envelope.is_finite() || envelope <= 0.0 {
         return Err(WorldOriginRebaseError::InvalidEnvelope);
     }
     Ok(())
