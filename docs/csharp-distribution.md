@@ -105,9 +105,9 @@ Engine contributors select a runtime explicitly with `rusty dev --runtime
 ## Verify a pair by hand
 
 The CI consumer check exercises every published archive before publication,
-and `rusty dev` compares the host's `--identity` with the runtime manifest at
-each launch. To check an extracted pair's full payload yourself, run its
-bundled verifier:
+and the host refuses a product built against another pair's ABI when it binds
+(`CSHARP_PRODUCT_ABI_MISMATCH`). To check an extracted pair's full payload
+yourself, run its bundled verifier:
 
 ```bash
 ./rusty-engine-csharp-pair-0.1.0-dev.abc123def456-linux-x64/verify-pair.sh \

@@ -46,7 +46,6 @@ input_fingerprint() {
         find "$generator_dir" \( -name bin -o -name obj \) -prune -o -type f -print0
     } | LC_ALL=C sort -z | xargs -0 sha256sum
     clang --version 2>&1 || true
-    dotnet --version 2>&1 || true
     printf 'output %s\ninputs %s\n' "$output_dir" "$inputs_dir"
 }
 output_hashes() {

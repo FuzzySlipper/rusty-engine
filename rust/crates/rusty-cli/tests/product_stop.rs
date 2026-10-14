@@ -38,11 +38,6 @@ fn a_product_stop_during_a_restage_stops_rusty_dev_without_a_new_host() {
     fs::create_dir_all(root.join("product")).unwrap();
     fs::write(root.join("product/product.json"), "{}").unwrap();
     fs::write(root.join("product.csproj"), "<Project/>").unwrap();
-    fs::write(
-        root.join("runtime-manifest.json"),
-        r#"{"artifact":"rusty.product.runtime-pack","schemaVersion":1,"target":"linux-x64","runtime":{}}"#,
-    )
-    .unwrap();
     for (name, script) in [
         // Staging. During the restage the host ends (the player quits while
         // the C# build runs), and staging then succeeds.
@@ -68,7 +63,6 @@ fi
         (
             "rusty-product-host",
             r#"#!/bin/sh
-if [ "$1" = "--identity" ]; then echo '{}'; exit 0; fi
 echo started >> "$STOP_TEST_ROOT/starts"
 while [ ! -e "$STOP_TEST_ROOT/quit" ]; do sleep 0.02; done
 touch "$STOP_TEST_ROOT/exited"

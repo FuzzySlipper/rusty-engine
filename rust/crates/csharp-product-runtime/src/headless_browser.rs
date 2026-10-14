@@ -8,10 +8,9 @@
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::atomic::{AtomicU64, Ordering},
-    thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 static NEXT_PROFILE_ID: AtomicU64 = AtomicU64::new(0);
@@ -70,7 +69,7 @@ impl HeadlessBrowser {
             }
         }
 
-        let mut child = match command.spawn() {
+        let child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
                 let _ = fs::remove_dir_all(&profile);
@@ -80,29 +79,6 @@ impl HeadlessBrowser {
                 ));
             }
         };
-
-        // Catch invalid browser flags, unusable profiles, and immediate
-        // process startup failures while preserving the useful exit status.
-        thread::sleep(Duration::from_millis(150));
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                let _ = stop_browser_processes(&mut child);
-                let _ = fs::remove_dir_all(&profile);
-                return Err(format!(
-                    "RUSTY_HEADLESS_BROWSER_EXIT: `{}` exited during startup with {status}",
-                    executable.display()
-                ));
-            }
-            Ok(None) => {}
-            Err(error) => {
-                let _ = stop_browser_processes(&mut child);
-                let _ = fs::remove_dir_all(&profile);
-                return Err(format!(
-                    "RUSTY_HEADLESS_BROWSER_WAIT: could not inspect `{}` startup: {error}",
-                    executable.display()
-                ));
-            }
-        }
 
         eprintln!(
             "RUSTY_HEADLESS_BROWSER started pid={} executable={} url={} profile={}",
@@ -121,6 +97,13 @@ impl HeadlessBrowser {
     /// The browser's pid, which also names its process group.
     pub(crate) fn id(&self) -> u32 {
         self.child.id()
+    }
+
+    /// The browser's exit status once it has ended. The supervisor polls this
+    /// beside the runtime's, so a browser that cannot start (an unusable
+    /// profile, a bad flag) or that ends later stops the host.
+    pub(crate) fn exited(&mut self) -> Option<ExitStatus> {
+        self.child.try_wait().ok().flatten()
     }
 
     pub(crate) fn shutdown(mut self) -> Result<(), String> {
@@ -153,12 +136,12 @@ fn stop_browser_processes(child: &mut Child) -> std::io::Result<()> {
     {
         let process_group = format!("-{}", child.id());
         let termination = signal_process_group("TERM", &process_group);
-        let deadline = std::time::Instant::now() + Duration::from_secs(1);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
         let mut wait_error = None;
         while std::time::Instant::now() < deadline {
             match child.try_wait() {
                 Ok(Some(_)) => break,
-                Ok(None) => thread::sleep(Duration::from_millis(25)),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(25)),
                 Err(error) => {
                     wait_error = Some(error);
                     break;
@@ -322,5 +305,34 @@ mod tests {
         assert!(live.exists());
         assert!(unrelated.exists());
         fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn a_browser_that_ends_after_launch_reports_its_exit_and_shutdown_removes_its_profile() {
+        use std::os::unix::fs::PermissionsExt;
+        let scripts = tempfile::tempdir().unwrap();
+        let chromium = scripts.path().join("chromium");
+        // Ends after the startup window a fixed wait would have watched.
+        fs::write(&chromium, "#!/bin/sh\nsleep 0.3\nexit 1\n").unwrap();
+        fs::set_permissions(&chromium, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut browser = HeadlessBrowser::launch("http://127.0.0.1:9/", Some(&chromium)).unwrap();
+        let profile = browser.profile.clone();
+        assert!(profile.is_dir());
+        assert!(browser.exited().is_none(), "the browser is still running");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let status = loop {
+            if let Some(status) = browser.exited() {
+                break status;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the exit was never observed"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert_eq!(status.code(), Some(1));
+        browser.shutdown().unwrap();
+        assert!(!profile.exists());
     }
 }

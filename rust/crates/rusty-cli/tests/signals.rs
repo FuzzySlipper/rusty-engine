@@ -24,8 +24,6 @@ fn termination_signals_close_supervision_and_wait_for_disposal() {
         fs::create_dir_all(root.join("product")).unwrap();
         fs::write(root.join("product/product.json"), "{}").unwrap();
         fs::write(root.join("product.csproj"), "<Project/>").unwrap();
-        fs::write(root.join("runtime-manifest.json"),
-            r#"{"artifact":"rusty.product.runtime-pack","schemaVersion":1,"target":"linux-x64","runtime":{}}"#).unwrap();
         for (name, script) in [
             (
                 "dotnet",
@@ -42,7 +40,6 @@ done
             (
                 "rusty-product-host",
                 r#"#!/bin/sh
-if [ "$1" = "--identity" ]; then echo '{}'; exit 0; fi
 echo ready > "$SIGNAL_TEST_ROOT/ready"
 cat >/dev/null
 sleep 0.1

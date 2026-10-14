@@ -328,7 +328,7 @@ release information.
 | `Rusty Engine pair … is not installed` from a restore | Run `rusty install`. |
 | `NU1101`/`NU1603` for Rusty.Engine, or types missing after `rusty update` | The project files let NuGet pick another SDK. `rusty status` names the missing feed declaration or loose reference and prints the fix. |
 | `RUSTY_NETWORK` | Only install, update and the first window-mode run need the network; everything else uses the cache. |
-| `RUSTY_DEV_RUNTIME_IDENTITY` or an ABI identity mismatch | The package and runtime are from different pairs. Reinstall the pinned pair; never add version negotiation or handwritten interop. |
+| `CSHARP_PRODUCT_ABI_MISMATCH` | The package and runtime are from different pairs. Reinstall the pinned pair; never add version negotiation or handwritten interop. |
 | `RUSTY_DESKTOP_NOT_PUBLISHED` | The pinned pair has no desktop runtime pack. Move to a newer pair with `rusty update`. |
 | hostfxr or CoreCLR fails to load | `rusty dev` sets `DOTNET_ROOT` from `dotnet` on `PATH`; set it yourself when running the host another way. |
 | `rusty: not found` under a service manager or Den broker | The bootstrap installs into `~/.local/bin`, which such environments may leave off `PATH`. Launch with `PATH="$HOME/.local/bin:$PATH" exec rusty dev --project …`. |

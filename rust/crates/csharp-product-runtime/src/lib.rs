@@ -603,6 +603,9 @@ fn product_from_handshake(
     host: &NativeProductAbiHandshakeV1,
     product: NativeProductAbiHandshakeV1,
 ) -> Result<NativeProductApi, CsharpProductRuntimeError> {
+    // The host's sizes are its real layout, while its fingerprint is the
+    // checked-in generator output; the sizes still refuse a product when
+    // that file is stale relative to the tables.
     if host.protocol_version != product.protocol_version
         || host.engine_api_size != product.engine_api_size
         || host.product_api_size != product.product_api_size

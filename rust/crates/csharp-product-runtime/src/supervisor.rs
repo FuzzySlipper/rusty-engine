@@ -178,6 +178,25 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
                 runtime = start_or_pause(&mut launch, &unavailable, &diagnostics);
             }
         }
+        // Nothing reopens the page, so a browser that ends, during startup
+        // or later, stops the host like an unsupervised runtime exit.
+        if let Some(status) = headless_browser
+            .as_mut()
+            .and_then(headless_browser::HeadlessBrowser::exited)
+        {
+            let detail = format!("the headless browser exited ({status})");
+            publish_supervisor_diagnostic(&diagnostics, "RUSTY_HEADLESS_BROWSER_EXIT", &detail);
+            unavailable.stop();
+            if let Some(runtime) = runtime {
+                let _ = runtime.stop();
+            }
+            if let Some(browser) = headless_browser {
+                let _ = browser.shutdown();
+            }
+            return Err(format!(
+                "RUSTY_HEADLESS_BROWSER_EXIT: {detail}; stopping the host"
+            ));
+        }
         let Some(commands) = &commands else {
             thread::sleep(POLL_INTERVAL);
             continue;

@@ -23,7 +23,6 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-use serde::Deserialize;
 use serde_json::Value;
 
 use pair::{InstalledPair, Pin};
@@ -1535,16 +1534,6 @@ Examples:
 struct RuntimePack {
     root: PathBuf,
     host: PathBuf,
-    manifest: RuntimeManifest,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RuntimeManifest {
-    artifact: String,
-    schema_version: u32,
-    target: String,
-    runtime: Value,
 }
 
 impl RuntimePack {
@@ -1558,70 +1547,20 @@ impl RuntimePack {
         } else {
             runtime_beside_current_executable(&options.project)?
         };
-        Self::at(root)
+        Ok(Self::at(root))
     }
 
-    fn at(root: PathBuf) -> Result<Self, String> {
-        let manifest_path = root.join("runtime-manifest.json");
-        let manifest = fs::read(&manifest_path)
-            .map_err(|error| {
-                format!(
-                    "RUSTY_DEV_RUNTIME_MANIFEST: could not read `{}`: {error}",
-                    manifest_path.display()
-                )
-            })
-            .and_then(|bytes| {
-                serde_json::from_slice(&bytes).map_err(|error| {
-                    format!(
-                        "RUSTY_DEV_RUNTIME_MANIFEST: `{}` is invalid JSON: {error}",
-                        manifest_path.display()
-                    )
-                })
-            })?;
+    fn at(root: PathBuf) -> Self {
         let host = root.join(format!("bin/rusty-product-host{}", env::consts::EXE_SUFFIX));
-        Ok(Self {
-            root,
-            host,
-            manifest,
-        })
+        Self { root, host }
     }
 
+    /// A pack's host and manifest come from one archive or one pack build,
+    /// and the product's ABI is compared with the host's at bind; only a
+    /// missing host is reported here.
     fn verify(&self) -> Result<(), String> {
-        if self.manifest.artifact != "rusty.product.runtime-pack"
-            || self.manifest.schema_version != 1
-        {
-            return Err("RUSTY_DEV_RUNTIME_IDENTITY: runtime manifest must be rusty.product.runtime-pack schemaVersion 1".to_owned());
-        }
-        if self.manifest.target != pair::TARGET {
-            return Err(format!(
-                "RUSTY_DEV_RUNTIME_TARGET: runtime pack target `{}` is not supported by this host",
-                self.manifest.target
-            ));
-        }
         if !self.host.is_file() {
             return Err(format!("RUSTY_DEV_RUNTIME_HOST: matched host `{}` is missing; rebuild or select the exact runtime pack", self.host.display()));
-        }
-        let output = Command::new(&self.host)
-            .arg("--identity")
-            .output()
-            .map_err(|error| {
-                format!(
-                    "RUSTY_DEV_RUNTIME_HOST: could not execute `{}`: {error}",
-                    self.host.display()
-                )
-            })?;
-        if !output.status.success() {
-            return Err(format!(
-                "RUSTY_DEV_RUNTIME_HOST: `{}` --identity failed with {}",
-                self.host.display(),
-                output.status
-            ));
-        }
-        let actual: Value = serde_json::from_slice(&output.stdout).map_err(|error| {
-            format!("RUSTY_DEV_RUNTIME_IDENTITY: host identity is not valid JSON: {error}")
-        })?;
-        if actual != self.manifest.runtime {
-            return Err("RUSTY_DEV_RUNTIME_IDENTITY: runtime-manifest.json does not match bin/rusty-product-host --identity; select one complete runtime pack or rebuild it".to_owned());
         }
         Ok(())
     }
@@ -1797,7 +1736,7 @@ fn window_runtime(
         "desktop-pack",
         serde_json::json!({ "runtimePack": root, "downloaded": downloaded }),
     );
-    let desktop = RuntimePack::at(root)?;
+    let desktop = RuntimePack::at(root);
     desktop.verify()?;
     Ok(desktop)
 }
