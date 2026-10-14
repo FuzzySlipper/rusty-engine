@@ -2,9 +2,10 @@
 set -euo pipefail
 
 # Publish the exact exercised artifact as release csharp-sdk-v<version>. The
-# pair CI workflow runs this after the packaged-consumer check, on the same
-# bytes. Discovery is GitHub's Latest release plus the stable pair-release.json
-# asset in every release:
+# pair CI workflow runs this after the packaged-consumer check verified the
+# pair, on the same bytes; the archive and desktop pack digests are the ones
+# their builds wrote beside them in that job. Discovery is GitHub's Latest
+# release plus the stable pair-release.json asset in every release:
 #   https://github.com/<repo>/releases/latest/download/pair-release.json
 #   https://github.com/<repo>/releases/download/csharp-sdk-v<version>/pair-release.json
 # Assets go to a draft first; one edit then publishes the release and moves
@@ -36,7 +37,7 @@ if [[ -n "${positional[1]:-}" ]]; then
     info=$(realpath -- "${positional[1]}")
     [[ -f "$info/release-info.json" ]] || { echo "release information is missing: $info/release-info.json" >&2; exit 1; }
 fi
-"$script_dir/verify-csharp-release-pair.sh" --archive "$archive"
+archive_sha256=$(awk 'NF { print $1; exit }' "$archive.sha256")
 manifest=$(tar -xOf "$archive" --wildcards '*/pair-manifest.json')
 revision=$(jq -r '.sourceRevision' <<<"$manifest")
 version=$(jq -r '.package.version' <<<"$manifest")
@@ -68,13 +69,10 @@ if [[ -n "$desktop" ]]; then
         echo "the desktop pack $desktop_name is not this pair's ($version)" >&2
         exit 1
     }
-    (cd "$(dirname -- "$desktop")" && sha256sum --check --status "$desktop_name.sha256") || {
-        echo "the desktop pack $desktop_name does not match its .sha256" >&2
-        exit 1
-    }
+    desktop_sha256=$(awk 'NF { print $1; exit }' "$desktop.sha256")
     assets+=("$desktop" "$desktop.sha256")
     desktop_pack=$(jq -n --arg name "$desktop_name" \
-        --arg sha256 "$(sha256sum "$desktop" | awk '{print $1}')" \
+        --arg sha256 "$desktop_sha256" \
         --argjson bytes "$(wc -c < "$desktop" | tr -d '[:space:]')" \
         --arg url "https://github.com/$repo/releases/download/$tag/$desktop_name" \
         '{name: $name, sha256: $sha256, bytes: $bytes, url: $url}')
@@ -97,7 +95,7 @@ if [[ -n "${GITHUB_RUN_ID:-}" ]]; then
 fi
 jq -n \
     --arg version "$version" --arg revision "$revision" --arg tag "$tag" \
-    --arg name "$archive_name" --arg sha256 "$(sha256sum "$archive" | awk '{print $1}')" \
+    --arg name "$archive_name" --arg sha256 "$archive_sha256" \
     --argjson bytes "$(wc -c < "$archive" | tr -d '[:space:]')" \
     --arg url "https://github.com/$repo/releases/download/$tag/$archive_name" \
     --arg run "$run_url" --argjson manifest "$manifest" --argjson info "$release_info" \

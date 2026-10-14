@@ -71,6 +71,12 @@ git clean -q -fd
 pnpm install --frozen-lockfile --reporter=silent
 rm -rf "$posix/out"
 scripts/build-csharp-release-pair.sh --sdk-feed "$posix/sdk-feed" --output "$posix/out/pair"
+# The pair's bundled verifier, as a Windows consumer runs it, is this job's one
+# payload verification.
+mkdir "$posix/out/verify"
+tar -xzf "$posix/out/pair/$pair-win-x64.tar.gz" -C "$posix/out/verify"
+"$posix/out/verify/$pair-win-x64/verify-pair.sh" --directory "$posix/out/verify/$pair-win-x64"
+rm -rf "$posix/out/verify"
 scripts/build-desktop-runtime-pack-archive.sh --output "$posix/out/desktop"
 EOF
 cat > "$work/build.ps1" <<'EOF'
@@ -89,8 +95,9 @@ scp -q "$host:$remote/out/pair/$pair-win-x64.tar.gz" "$host:$remote/out/pair/$pa
     "$host:$remote/out/desktop/$desktop-win-x64.tar.xz" "$host:$remote/out/desktop/$desktop-win-x64.tar.xz.sha256" "$work/out/"
 (cd "$work/out" && sha256sum --check --status "$pair-win-x64.tar.gz.sha256" "$desktop-win-x64.tar.xz.sha256")
 
+# The check above read each file; its .sha256 names the digest.
 asset() {
-    jq -n --arg name "$1" --arg sha256 "$(sha256sum "$work/out/$1" | awk '{print $1}')" \
+    jq -n --arg name "$1" --arg sha256 "$(awk 'NF { print $1; exit }' "$work/out/$1.sha256")" \
         --argjson bytes "$(wc -c < "$work/out/$1" | tr -d '[:space:]')" \
         --arg url "https://github.com/$repo/releases/download/$tag/$1" '{name: $name, sha256: $sha256, bytes: $bytes, url: $url}'
 }

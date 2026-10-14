@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Verify a released C# SDK/runtime pair without consulting an Engine checkout.
-# The package, runtime manifest, host identity, and every payload hash must
-# describe the same immutable source revision and ABI before it is consumed.
-# It runs where the pair runs: Linux, or Git Bash on Windows.
+# Verify an extracted C# SDK/runtime pair without consulting an Engine
+# checkout. The package, runtime manifest, host identity, and every payload
+# hash must describe the same immutable source revision and ABI before it is
+# consumed. Each payload file is hashed once, against the pair manifest, which
+# carries the runtime manifest's own digests for the runtime pack. It runs
+# where the pair runs: Linux, or Git Bash on Windows.
 
 case "$(uname -s)" in
     MINGW* | MSYS*)
@@ -16,24 +18,12 @@ case "$(uname -s)" in
 esac
 
 usage() {
-    echo "usage: $(basename "$0") (--archive <pair.tar.gz> | --directory <extracted-pair>)" >&2
+    echo "usage: $(basename "$0") --directory <extracted-pair>" >&2
 }
 
-archive=""
 pair_root=""
-temporary=""
-cleanup() {
-    [[ -z "$temporary" ]] || rm -rf -- "$temporary"
-}
-trap cleanup EXIT
-
 while (($#)); do
     case "$1" in
-        --archive)
-            (($# >= 2)) || { usage; exit 2; }
-            archive=$2
-            shift 2
-            ;;
         --directory)
             (($# >= 2)) || { usage; exit 2; }
             pair_root=$2
@@ -50,7 +40,7 @@ while (($#)); do
     esac
 done
 
-if [[ -n "$archive" && -n "$pair_root" ]] || [[ -z "$archive" && -z "$pair_root" ]]; then
+if [[ -z "$pair_root" ]]; then
     usage
     exit 2
 fi
@@ -59,20 +49,6 @@ fail() {
     echo "RUSTY_ENGINE_PAIR_$1: $2" >&2
     exit 1
 }
-
-if [[ -n "$archive" ]]; then
-    [[ -f "$archive" ]] || fail ARCHIVE "pair archive is missing: $archive"
-    checksum="$archive.sha256"
-    [[ -f "$checksum" ]] || fail CHECKSUM "pair checksum is missing: $checksum"
-    expected=$(awk 'NF { print $1; exit }' "$checksum")
-    actual=$(sha256sum "$archive" | awk '{print $1}')
-    [[ "$expected" == "$actual" ]] || fail CHECKSUM "pair archive checksum does not match $checksum"
-    temporary=$(mktemp -d "${TMPDIR:-/tmp}/rusty-engine-pair-verify.XXXXXX")
-    tar -xzf "$archive" -C "$temporary" || fail ARCHIVE "pair archive could not be extracted"
-    mapfile -t roots < <(find "$temporary" -mindepth 1 -maxdepth 1 -type d -print)
-    [[ ${#roots[@]} -eq 1 ]] || fail ARCHIVE "pair archive must contain exactly one root directory"
-    pair_root=${roots[0]}
-fi
 
 [[ -d "$pair_root" ]] || fail LAYOUT "pair directory is missing: $pair_root"
 manifest="$pair_root/pair-manifest.json"
@@ -141,12 +117,5 @@ host="$runtime_pack/bin/rusty-product-host$pair_exe"
 host_identity=$($host --identity) || fail RUNTIME_HOST "runtime host --identity failed"
 jq -e --argjson host "$host_identity" '.runtime == $host' "$runtime_manifest" >/dev/null \
     || fail RUNTIME_HOST "runtime host identity does not match runtime manifest"
-
-while IFS=$'\t' read -r path digest bytes; do
-    file="$runtime_pack/$path"
-    [[ -f "$file" ]] || fail RUNTIME_PAYLOAD "runtime manifest payload is missing: $path"
-    [[ $(sha256sum "$file" | awk '{print $1}') == "$digest" ]] || fail RUNTIME_PAYLOAD "runtime manifest payload hash does not match: $path"
-    [[ $(wc -c < "$file" | tr -d '[:space:]') == "$bytes" ]] || fail RUNTIME_PAYLOAD "runtime manifest payload size does not match: $path"
-done < <(jq -r '.files[] | [.path, .sha256, (.bytes | tostring)] | @tsv' "$runtime_manifest")
 
 printf 'csharp release pair verified: %s\n' "$pair_root"

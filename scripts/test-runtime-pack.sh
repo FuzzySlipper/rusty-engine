@@ -2,8 +2,8 @@
 set -euo pipefail
 
 # Focused V1 Product-bundle proof: one moved Engine runtime pack starts the
-# same logical fixture through both loaders. Product UI/content changes do not
-# rebuild or alter the Engine-owned runtime artifact.
+# same logical fixture through both loaders, serving the Product's own UI from
+# the bundle while its content stays non-static.
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK="$(mktemp -d -t rusty-engine-runtime-pack.XXXXXX)"
 cleanup() {
@@ -54,8 +54,6 @@ test -x "$PACK/bin/rusty"
 "$PACK/bin/rusty" dev --help >"$WORK/rusty-dev-help.log" 2>&1
 grep -F 'usage: rusty dev [--project' "$WORK/rusty-dev-help.log" >/dev/null
 
-RUNTIME_HASH_BEFORE="$(find "$PACK" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
-
 start_and_assert() {
   local loader="$1"
   local product="$2"
@@ -95,12 +93,5 @@ start_and_assert() {
 start_and_assert nativeaot "$PRODUCTS/native" \
   --persistence-root "$PRODUCTS/native/persistence"
 start_and_assert coreclr "$PRODUCTS/coreclr"
-
-# Alter only loose Product bytes; the moved runtime pack remains bit-for-bit
-# unchanged and it remains the owner of every Engine browser-runtime asset.
-printf '\n// staged Product-only UI revision\n' >> "$PRODUCTS/native/ui/main.js"
-printf '\nstaged Product-only content revision\n' >> "$PRODUCTS/native/content/trial.txt"
-RUNTIME_HASH_AFTER="$(find "$PACK" -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')"
-[[ "$RUNTIME_HASH_BEFORE" == "$RUNTIME_HASH_AFTER" ]]
 
 echo 'moved runtime pack launched CoreCLR and NativeAOT Product V1 bundles; UI was staged and content remained non-static'

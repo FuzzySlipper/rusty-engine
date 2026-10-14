@@ -17,7 +17,6 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 archive=$1
 run_aot=${2:-}
-"$script_dir/verify-csharp-release-pair.sh" --archive "$archive" >/dev/null
 
 work=$(mktemp -d "${TMPDIR:-/tmp}/rusty-engine-pair-consumer.XXXXXX")
 host_pid=""
@@ -39,6 +38,8 @@ trap cleanup EXIT
 tar -xzf "$archive" -C "$work"
 pair_root=$(find "$work" -mindepth 1 -maxdepth 1 -type d -print -quit)
 [[ -n "$pair_root" ]] || { echo "RUSTY_ENGINE_PAIR_TEST_LAYOUT: pair archive was empty" >&2; exit 1; }
+# The pair's own verifier, as a consumer runs it, is this job's one payload
+# verification; publication relies on it for the same bytes.
 "$pair_root/verify-pair.sh" --directory "$pair_root" >/dev/null
 version=$(jq -r '.package.version' "$pair_root/pair-manifest.json")
 feed="$pair_root/sdk-feed"
@@ -374,11 +375,11 @@ done
 echo "Packaged $loader inventory, input, persistence, residency, capture, and export checks passed"
 done
 
-tampered="$work/tampered-pair"
-cp -a "$pair_root" "$tampered"
-printf '\n' >> "$tampered/runtime-pack/runtime-manifest.json"
-if "$tampered/verify-pair.sh" --directory "$tampered" > "$work/tamper.log" 2>&1; then
-    echo "RUSTY_ENGINE_PAIR_TEST_TAMPER: verifier accepted a modified runtime manifest" >&2
+# The extracted pair is disposable now: change its first payload file in place.
+tampered=$(jq -r '.payload[0].path' "$pair_root/pair-manifest.json")
+printf '\n' >> "$pair_root/$tampered"
+if "$pair_root/verify-pair.sh" --directory "$pair_root" > "$work/tamper.log" 2>&1; then
+    echo "RUSTY_ENGINE_PAIR_TEST_TAMPER: verifier accepted a modified $tampered" >&2
     exit 1
 fi
 grep -F 'RUSTY_ENGINE_PAIR_PAYLOAD' "$work/tamper.log" >/dev/null || {

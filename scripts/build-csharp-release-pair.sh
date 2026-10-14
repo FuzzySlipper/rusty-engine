@@ -138,17 +138,19 @@ pair_manifest="$pair_root/pair-manifest.json"
     printf '  "runtime": {"path":"runtime-pack","sourceRevision":"%s","abi":%s},\n' "$runtime_revision" "$(jq -c '.runtime.abi' "$runtime_manifest")"
     printf '  "payload": [\n'
     first=1
-    while IFS= read -r file; do
-        relative=${file#"$pair_root/"}
-        digest=$(sha256sum "$file" | awk '{print $1}')
-        bytes=$(wc -c < "$file" | tr -d '[:space:]')
+    while IFS=$'\t' read -r relative digest bytes; do
         if ((first)); then first=0; else printf ',\n'; fi
         printf '    {"path":"%s","sha256":"%s","bytes":%s}' "$relative" "$digest" "$bytes"
-    done < <(find "$sdk_feed" "$runtime_pack" "$pair_root/verify-pair.sh" -type f -print | LC_ALL=C sort)
+    done < <({
+        # The runtime manifest already holds the digest of every other
+        # runtime-pack file.
+        jq -r '.files[] | ["runtime-pack/" + .path, .sha256, (.bytes | tostring)] | @tsv' "$runtime_manifest"
+        while IFS= read -r file; do
+            printf '%s\t%s\t%s\n' "${file#"$pair_root/"}" "$(sha256sum "$file" | awk '{print $1}')" "$(wc -c < "$file" | tr -d '[:space:]')"
+        done < <(find "$sdk_feed" "$runtime_manifest" "$pair_root/verify-pair.sh" -type f -print)
+    } | LC_ALL=C sort)
     printf '\n  ]\n}\n'
 } > "$pair_manifest"
-
-"$script_dir/verify-csharp-release-pair.sh" --directory "$pair_root" >/dev/null
 
 mkdir "$output"
 timestamp=$(git show -s --format=%ct HEAD)
