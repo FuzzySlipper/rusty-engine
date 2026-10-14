@@ -342,6 +342,7 @@ impl ComposedCells {
                 cell_centers,
                 !self.translated.is_empty(),
                 None,
+                true,
                 grid.voxel_size(),
             )),
             revision,
@@ -596,10 +597,16 @@ struct NavigationVerticalMapping {
     /// Collision-derived navigation maps a point to a nearby support; an
     /// admitted artifact maps it to the level its height rounds to.
     snap: Option<SupportSnap>,
+    /// Whether [`Self::columns`] keys a cell by the grid column its centre
+    /// lies in (composed artifact cells) rather than its own column
+    /// (collision-derived supports, which stand off their column's centre).
+    columns_by_centre: bool,
     /// Every supported cell, ordered by the X/Z column a position looks it
-    /// up in: the cell's own column, or with continuous translation the grid
-    /// column its centre lies in. A position reads only the columns near it,
-    /// whatever the session's cell count.
+    /// up in. A composed cell's centre lies in its own column until an
+    /// artifact is translated, so one keying serves both lookups and a
+    /// translation arriving or leaving changes only its own cells' keys. A
+    /// position reads only the columns near it, whatever the session's cell
+    /// count.
     columns: BTreeSet<([i64; 2], VoxelCoord)>,
 }
 
@@ -608,11 +615,11 @@ struct NavigationVerticalMapping {
 fn lookup_column(
     cell: VoxelCoord,
     center: Option<&[f64; 2]>,
-    continuous: bool,
+    by_centre: bool,
     cell_size: f64,
 ) -> [i64; 2] {
     match center {
-        Some(center) if continuous => center.map(|at| (at / cell_size).floor() as i64),
+        Some(center) if by_centre => center.map(|at| (at / cell_size).floor() as i64),
         _ => [cell.x, cell.z],
     }
 }
@@ -624,34 +631,26 @@ impl NavigationVerticalMapping {
         cell_centers: BTreeMap<VoxelCoord, [f64; 2]>,
         has_continuous_horizontal_translation: bool,
         snap: Option<SupportSnap>,
+        columns_by_centre: bool,
         cell_size: f64,
     ) -> Self {
-        let mut mapping = Self {
+        let columns = support_heights
+            .keys()
+            .map(|&cell| {
+                let key =
+                    lookup_column(cell, cell_centers.get(&cell), columns_by_centre, cell_size);
+                (key, cell)
+            })
+            .collect();
+        Self {
             level_quantum,
             support_heights,
             cell_centers,
             has_continuous_horizontal_translation,
             snap,
-            columns: BTreeSet::new(),
-        };
-        mapping.index_columns(cell_size);
-        mapping
-    }
-
-    fn index_columns(&mut self, cell_size: f64) {
-        self.columns = self
-            .support_heights
-            .keys()
-            .map(|&cell| {
-                let key = lookup_column(
-                    cell,
-                    self.cell_centers.get(&cell),
-                    self.has_continuous_horizontal_translation,
-                    cell_size,
-                );
-                (key, cell)
-            })
-            .collect();
+            columns_by_centre,
+            columns,
+        }
     }
 
     /// The cells looked up in column `x` at rows `z`.
@@ -676,25 +675,21 @@ impl NavigationState {
         let Some(vertical) = self.vertical_mapping.as_mut() else {
             return;
         };
-        let continuous = !composed.translated.is_empty();
-        // A lookup that changes its keying is indexed again whole.
-        let reindex = continuous != vertical.has_continuous_horizontal_translation;
-        let keyed = vertical.has_continuous_horizontal_translation;
+        let by_centre = vertical.columns_by_centre;
         let mut walkable = Vec::new();
         for &cell in touched {
             let was = vertical.support_heights.contains_key(&cell);
-            if was && !reindex {
-                let key = lookup_column(cell, vertical.cell_centers.get(&cell), keyed, cell_size);
+            if was {
+                let key =
+                    lookup_column(cell, vertical.cell_centers.get(&cell), by_centre, cell_size);
                 vertical.columns.remove(&(key, cell));
             }
             match composed.composed(cell) {
                 Some((support, center)) => {
                     vertical.support_heights.insert(cell, support);
                     vertical.cell_centers.insert(cell, center);
-                    if !reindex {
-                        let key = lookup_column(cell, Some(&center), keyed, cell_size);
-                        vertical.columns.insert((key, cell));
-                    }
+                    let key = lookup_column(cell, Some(&center), by_centre, cell_size);
+                    vertical.columns.insert((key, cell));
                     if !was {
                         walkable.push((cell, true));
                     }
@@ -708,10 +703,7 @@ impl NavigationState {
                 }
             }
         }
-        if reindex {
-            vertical.has_continuous_horizontal_translation = continuous;
-            vertical.index_columns(cell_size);
-        }
+        vertical.has_continuous_horizontal_translation = !composed.translated.is_empty();
         vertical.level_quantum = level_quantum;
         self.projection.set_walkable_cells(walkable);
         self.projection_hash = self.projection.projection_hash();
@@ -2313,6 +2305,7 @@ impl RuntimeSpatialBridge {
             cell_centers,
             false,
             Some(snap),
+            false,
             request.config.cell_size,
         );
         cache.set_installed(navigation_revision);
@@ -5680,6 +5673,7 @@ fn compose_content_navigation<'a>(
             cell_centers,
             has_continuous_horizontal_translation,
             None,
+            true,
             grid.voxel_size(),
         )),
         revision,
@@ -9900,6 +9894,55 @@ mod tests {
         )
     }
 
+    /// The cells a position query may answer for `position`, read from
+    /// every support rather than the column lookup: in an aligned
+    /// composition the nearest support in the position's own column, else
+    /// the level its height rounds to; with a translated artifact the
+    /// nearest support whose footprint contains it.
+    fn composed_position_cells(navigation: &NavigationState, position: Vec3) -> Vec<VoxelCoord> {
+        let vertical = navigation.vertical_mapping.as_ref().unwrap();
+        let [px, y, pz] =
+            navigation.grid_position([position.x, position.y, position.z].map(f64::from));
+        let grid = navigation.projection.grid();
+        let base = grid.world_to_voxel(core_space::WorldPos::new(px, y, pz));
+        let half_cell = grid.voxel_size() * 0.5;
+        let keyed: Vec<((f64, f64), VoxelCoord)> = vertical
+            .support_heights
+            .iter()
+            .filter_map(|(&cell, &support)| {
+                if vertical.has_continuous_horizontal_translation {
+                    let [center_x, center_z] = vertical.cell_centers[&cell];
+                    let across = (center_x - half_cell - px)
+                        .max(px - (center_x + half_cell))
+                        .max(0.0)
+                        .hypot(
+                            (center_z - half_cell - pz)
+                                .max(pz - (center_z + half_cell))
+                                .max(0.0),
+                        );
+                    (across <= f64::EPSILON).then_some(((across, (y - support).abs()), cell))
+                } else {
+                    (cell.x == base.x && cell.z == base.z)
+                        .then_some(((0.0, (y - support).abs()), cell))
+                }
+            })
+            .collect();
+        let Some(&(best, _)) = keyed.iter().min_by(|(left, _), (right, _)| {
+            left.0.total_cmp(&right.0).then(left.1.total_cmp(&right.1))
+        }) else {
+            return vec![if vertical.has_continuous_horizontal_translation {
+                VoxelCoord::new(base.x, i64::MIN, base.z)
+            } else {
+                VoxelCoord::new(base.x, (y / vertical.level_quantum).round() as i64, base.z)
+            }];
+        };
+        keyed
+            .into_iter()
+            .filter(|(key, _)| *key == best)
+            .map(|(_, cell)| cell)
+            .collect()
+    }
+
     #[test]
     fn residency_recomposes_only_changed_artifacts_as_a_whole_composition_would() {
         let paths = [
@@ -9907,6 +9950,8 @@ mod tests {
             "spatial/b.json",
             "spatial/c.json",
             "spatial/d.json",
+            "spatial/e.json",
+            "spatial/f.json",
         ];
         let mut content = crate::content::RuntimeContentBridge::new(BTreeMap::from([
             // A base with a cell it declares twice and two levels.
@@ -9946,8 +9991,23 @@ mod tests {
                 paths[3].to_owned(),
                 spatial_artifact("d", 0.5, &[(0, 0, 0, 0.0)]),
             ),
+            // A wider floor, and one small cell to translate beside it.
+            (
+                paths[4].to_owned(),
+                spatial_artifact(
+                    "e",
+                    0.25,
+                    &(0..6)
+                        .flat_map(|column| (0..6).map(move |row| (column, row, 0, 0.0)))
+                        .collect::<Vec<_>>(),
+                ),
+            ),
+            (
+                paths[5].to_owned(),
+                spatial_artifact("f", 0.25, &[(0, 0, 0, 0.5)]),
+            ),
         ]));
-        let [a, b, c, d] = paths.map(|path| open_content(&mut content, path));
+        let [a, b, c, d, e, f] = paths.map(|path| open_content(&mut content, path));
         let mut bridge = RuntimeSpatialBridge::new();
         bridge.bind_content(&content);
         let session = create_session(&api(&mut bridge));
@@ -10018,7 +10078,31 @@ mod tests {
                 composed_navigation_view(navigation),
                 composed_navigation_view(&whole)
             );
+            // Positions over every cell, changed or not, find what the
+            // supports say they should.
+            for x in (-16..72).map(|step| step as f32 * 0.25 + 0.1) {
+                for z in (-16..72).map(|step| step as f32 * 0.25 + 0.1) {
+                    for y in [0.0, 0.3, 1.0] {
+                        let position = Vec3::new(x, y, z);
+                        let cell = navigation.world_cell(position);
+                        assert!(
+                            composed_position_cells(navigation, position).contains(&cell),
+                            "{position:?} found {cell:?}"
+                        );
+                    }
+                }
+            }
             navigation.projection.walkable_len()
+        };
+        let continuous = |bridge: &RuntimeSpatialBridge| {
+            bridge.sessions[&session.value]
+                .navigation
+                .as_ref()
+                .unwrap()
+                .vertical_mapping
+                .as_ref()
+                .unwrap()
+                .has_continuous_horizontal_translation
         };
 
         bridge
@@ -10043,16 +10127,7 @@ mod tests {
         )
         .unwrap();
         assert_whole(&bridge);
-        assert!(
-            bridge.sessions[&session.value]
-                .navigation
-                .as_ref()
-                .unwrap()
-                .vertical_mapping
-                .as_ref()
-                .unwrap()
-                .has_continuous_horizontal_translation
-        );
+        assert!(continuous(&bridge));
         // Replace one, remove another, and tie with the base.
         residency(&mut bridge, &[place(2, b, [0, 0, 1], 2, [0.0; 3])], &[1]).unwrap();
         assert_whole(&bridge);
@@ -10126,24 +10201,36 @@ mod tests {
         remove_instances(&mut bridge, &[base_instance]);
         assert!(bridge.sessions[&session.value].content.base.is_none());
         assert_whole(&bridge);
-        // The last translated artifact is gone: the lookup is keyed by
-        // integer column again.
-        assert!(
-            !bridge.sessions[&session.value]
-                .navigation
-                .as_ref()
-                .unwrap()
-                .vertical_mapping
-                .as_ref()
-                .unwrap()
-                .has_continuous_horizontal_translation
-        );
-        // A translated arrival keys it by centre again.
+        // The last translated artifact is gone: positions look up their own
+        // column again.
+        assert!(!continuous(&bridge));
+        // A translated arrival looks them up by footprint again.
         residency(&mut bridge, &[place(6, a, [-3, 0, 0], 0, quarter)], &[]).unwrap();
         assert_whole(&bridge);
+        assert!(continuous(&bridge));
+        // Beside a wider aligned floor, one small translated cell arrives
+        // and leaves, by content residency and by collision residency,
+        // changing only its own cell.
+        residency(&mut bridge, &[place(8, e, [8, 0, 8], 0, [0.0; 3])], &[6]).unwrap();
+        assert!(assert_whole(&bridge) > 36);
+        assert!(!continuous(&bridge));
+        let small = place(9, f, [9, 1, 9], 0, [0.25, 0.0, 0.0]);
+        residency(&mut bridge, &[small], &[]).unwrap();
+        assert_whole(&bridge);
+        assert!(continuous(&bridge));
+        residency(&mut bridge, &[], &[9]).unwrap();
+        assert_whole(&bridge);
+        assert!(!continuous(&bridge));
+        // Its centre further than the next column over.
+        let small = place(9, f, [9, 1, 9], 0, [2.75, 0.0, 0.0]);
+        residency(&mut bridge, &[small], &[]).unwrap();
+        assert_whole(&bridge);
+        remove_instances(&mut bridge, &[9]);
+        assert_whole(&bridge);
+        assert!(!continuous(&bridge));
         // Removing everything leaves an empty composition; another level
         // quantum may start it again.
-        residency(&mut bridge, &[], &[1, 2, 4, 6, 7]).unwrap();
+        residency(&mut bridge, &[], &[1, 2, 4, 6, 7, 8]).unwrap();
         assert_eq!(assert_whole(&bridge), 0);
         residency(&mut bridge, &[place(5, d, [5, 0, 5], 0, [0.0; 3])], &[]).unwrap();
         assert_eq!(assert_whole(&bridge), 1);
