@@ -37,6 +37,12 @@ internal static class ItemCapacityCostExercise
         store.MaterializeUnique(new ItemState(heavy, lantern, [new ItemCapacityCost(weight, HeavyLanternWeight)]), pack);
         store.MaterializeUnique(new ItemState(plain, lantern), pack);
         Require(Weight(store, pack, weight) == HeavyLanternWeight + LanternWeight, "per-item costs were not counted");
+        // A state read from a store carries the unique items' costs in that store; another store
+        // that admits it counts only the stacks, because it holds none of those items.
+        Require(store.TryGetInventory(pack, out InventoryState? packSnapshot), "the pack inventory was missing");
+        var other = new InventoryStore();
+        other.RegisterInventory(packSnapshot!);
+        Require(Weight(other, pack, weight) == 0, "an admitted inventory kept another store's unique-item costs");
         Require(store.TryGetItem(heavy, out ItemState? heavyState) && heavyState!.Definition == lantern
             && heavyState.CapacityCosts.Single().Units == HeavyLanternWeight,
             "an item with its own costs lost its definition or costs");

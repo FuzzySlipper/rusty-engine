@@ -82,7 +82,23 @@ public static class PlanarRecipes
                 cappedEnd + normal * halfWidth,
                 cappedEnd - normal * halfWidth,
             ];
-            segments[i] = ValidateConvexPrism(rectangle, bottom, top, expansion: 0f);
+            // The rectangle is convex and winds clockwise by construction, so each edge's left
+            // normal faces outward; no polygon checks are needed.
+            Vector3[] normals = new Vector3[rectangle.Length];
+            float[] offsets = new float[rectangle.Length];
+            for (int side = 0; side < rectangle.Length; side++)
+            {
+                Vector2 corner = rectangle[side];
+                Vector2 edge = rectangle[(side + 1) % rectangle.Length] - corner;
+                float edgeLength = edge.Length();
+                normals[side] = new Vector3(-edge.Y / edgeLength, 0f, edge.X / edgeLength);
+                offsets[side] = normals[side].X * corner.X + normals[side].Z * corner.Y;
+                if (!IsFinite(normals[side]) || !float.IsFinite(offsets[side]))
+                {
+                    throw new ArgumentException("Walkway side planes must have finite coefficients.", nameof(centerline));
+                }
+            }
+            segments[i] = new ValidatedPrism(normals, offsets);
         }
 
         ImplicitNode walkway = BuildConvexPrism(recipe, segments[0], bottom, top);

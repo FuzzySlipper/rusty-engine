@@ -67,28 +67,32 @@ internal static class AddressableInventoryStacksExercise
         Require(store.Revision == beforeCapacityRevision && SameStacks(beforeCapacity, store.View(destination)),
             "capacity-rejected selected-stack transfer changed the ledger");
 
-        ulong beforeRejectedRestore = store.Revision;
+        // A save made before the product lowered a limit still loads. The stack and the inventory
+        // stay above their limits; additions that would grow them are refused, removals are not.
+        EntityId overLimit = new(43);
+        ItemDefinition tightenedSupply = new(supply.Id, ItemKind.Fungible, maximumQuantity: 3, capacityCosts: supply.CapacityCosts);
+        InventoryState overLimitState = InventoryState.Restore(
+            overLimit,
+            [new InventoryStackCapture(rejectedStack, tightenedSupply, 5)],
+            [new InventoryCapacityLimit(mass, 3)]);
+        store.RegisterInventory(overLimitState);
+        RequireStacks(store.View(overLimit), (rejectedStack, 5));
+        Require(store.View(overLimit).Capacity.Single().Used == 5, "an over-capacity restore was not counted");
+        ulong beforeOverLimitGrant = store.Revision;
+        ExpectRefusal(
+            MechanicsRefusal.StackMaximum,
+            () => store.Grant(overLimit, tightenedSupply, rejectedStack, 1),
+            "a grant onto a stack above its lowered maximum succeeded");
         ExpectRefusal(
             MechanicsRefusal.Capacity,
-            () => InventoryState.Restore(
-                new EntityId(43),
-                [new InventoryStackCapture(rejectedStack, supply, 4)],
-                [new InventoryCapacityLimit(mass, 3)]),
-            "over-capacity stack capture was restored");
-        Require(store.Revision == beforeRejectedRestore && !store.TryGetInventory(new EntityId(43), out _),
-            "rejected stack restore changed the existing store");
-
-        InventoryState registrationCandidate = InventoryState.Restore(
-            new EntityId(43),
-            [new InventoryStackCapture(rejectedStack, supply, 4)],
-            [new InventoryCapacityLimit(mass, 4)]);
-        registrationCandidate.SetCapacityLimit(new InventoryCapacityLimit(mass, 3));
-        ExpectRefusal(
-            MechanicsRefusal.Capacity,
-            () => store.RegisterInventory(registrationCandidate),
-            "over-capacity standalone inventory was registered");
-        Require(store.Revision == beforeRejectedRestore && !store.TryGetInventory(new EntityId(43), out _),
-            "rejected inventory registration changed the store");
+            () => store.Grant(overLimit, tightenedSupply, InventoryStackId.Parse("over-limit-new"), 1),
+            "a grant into an inventory above its capacity succeeded");
+        Require(store.Revision == beforeOverLimitGrant, "refused over-limit grants changed the store");
+        store.Consume(overLimit, rejectedStack, 1);
+        RequireStacks(store.View(overLimit), (rejectedStack, 4));
+        Require(store.View(overLimit).Capacity.Single().Used == 4, "consuming above capacity did not count down");
+        store.Consume(overLimit, rejectedStack, 4);
+        store.RetireOwner(overLimit);
 
         InventoryState ownerCapture = RequireInventory(store, owner);
         InventoryState destinationCapture = RequireInventory(store, destination);

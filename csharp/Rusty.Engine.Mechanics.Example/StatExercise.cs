@@ -54,10 +54,7 @@ internal static class StatExercise
         Reject(() => intact.SetBounds(20, 10));
         Reject(() => intact.Maximum = double.PositiveInfinity);
         Reject(() => intact.Quantum = -1);
-        Reject(() => intact.Rounding = (MidpointRounding)99);
-        Reject(() => intact.IntegerRounding = (MidpointRounding)99);
         Reject(() => intact.AddModifier(double.PositiveInfinity));
-        Reject(() => intact.AddModifier(1, (StatModifierKind)99));
         Reject(() => intact.AddModifier(double.MaxValue, StatModifierKind.Multiply));
         Reject(() => intact.AddModifier(-1, StatModifierKind.Maximum));
         Equal(10, intact.BaseValue, "rejected base preserved");
@@ -108,6 +105,14 @@ internal static class StatExercise
         Equal(44, stat.Value, "unique means source definition, not activation identity");
         Reject(() => stat.SetSources(ability, [first, Source("second", "other", 6, 20, MechanicsStackingPolicy.Sum)]));
         Equal(44, stat.Value, "invalid stacking group rejected without mutation");
+        var multiplyGear = new StatSource(new IntrinsicSourceIdentity(null, SourceInstanceId.Parse("multiply-gear")),
+            SourceDefinitionId.Parse("multiply-gear"), 0,
+            [new(ability, group, MechanicsStackingPolicy.Highest, new StatContribution.Multiply(2))]);
+        Reject(() => stat.SetSources(ability, [first, multiplyGear]));
+        Equal(44, stat.Value, "highest group mixing contribution kinds rejected without mutation");
+        stat.BaseValue = 41;
+        Equal(45, stat.Value, "later base changes evaluate the admitted sources");
+        stat.BaseValue = 40;
         stat.SetSources(ability, [first, Source("first", "other", 6, 20)]);
         Equal(46, stat.Value, "sources sharing an identity are each ordered and selected");
         Check(stat.RemoveSource(first.Identity), "shared-identity source removal");

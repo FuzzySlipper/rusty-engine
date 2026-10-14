@@ -73,6 +73,35 @@ static void VerifyWalkways()
     Require(service.PlaneCount == 12 && service.IntersectionCount == 10 && service.UnionCount == 1,
         "two square-capped walkway segments were not prism-unioned");
 
+    // A diagonal segment builds the same planes as the prism of its square-capped rectangle.
+    Vector2 start = new(50f, 20f);
+    Vector2 end = new(56f, 16f);
+    const float HalfWidth = 1.75f;
+    var walkwayService = new RecordingImplicitSurfacesService();
+    using (var walkwayRecipe = new ImplicitRecipe(walkwayService))
+    {
+        PlanarRecipes.Walkway(walkwayRecipe, [start, end], HalfWidth, -1.5f, -0.75f);
+    }
+    Vector2 direction = end - start;
+    direction /= MathF.Sqrt(direction.LengthSquared());
+    Vector2 side = new(-direction.Y, direction.X);
+    Vector2 cappedStart = start - direction * HalfWidth;
+    Vector2 cappedEnd = end + direction * HalfWidth;
+    var prismService = new RecordingImplicitSurfacesService();
+    using (var prismRecipe = new ImplicitRecipe(prismService))
+    {
+        PlanarRecipes.ConvexPrism(prismRecipe,
+        [
+            cappedStart - side * HalfWidth,
+            cappedStart + side * HalfWidth,
+            cappedEnd + side * HalfWidth,
+            cappedEnd - side * HalfWidth,
+        ], -1.5f, -0.75f);
+    }
+    Require(walkwayService.Planes.Select(plane => (plane.Normal, plane.Offset))
+            .SequenceEqual(prismService.Planes.Select(plane => (plane.Normal, plane.Offset))),
+        "a walkway segment's planes differ from its rectangle prism");
+
     var invalidService = new RecordingImplicitSurfacesService();
     using var invalidRecipe = new ImplicitRecipe(invalidService);
     RequireRejectedWithoutMutation(invalidService, "late zero-length walkway segment", () =>

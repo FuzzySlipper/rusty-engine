@@ -37,7 +37,6 @@ public sealed record StatContributionDefinition
         Group = group ?? throw new ArgumentNullException(nameof(group));
         Contribution = contribution ?? throw new ArgumentNullException(nameof(contribution));
         global::Rusty.Engine.Mechanics.Stat.Finite(contribution.Magnitude, nameof(contribution));
-        if (!Enum.IsDefined(stacking)) throw new ArgumentOutOfRangeException(nameof(stacking));
         Stacking = stacking;
     }
     public StatId Stat { get; }

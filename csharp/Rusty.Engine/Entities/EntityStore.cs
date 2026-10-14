@@ -71,14 +71,9 @@ public sealed class EntityStore : IDisposable
     public EntityId Create(EntityTypeId typeId, EntityLifecycle lifecycle = EntityLifecycle.Active)
     {
         ThrowIfDisposed();
-        EntityLifecycleValidation.EnsureDefined(lifecycle, nameof(lifecycle));
         if (lifecycle == EntityLifecycle.Tombstoned)
         {
             throw new ArgumentOutOfRangeException(nameof(lifecycle), "New entities must be alive.");
-        }
-        if (_state.NextEntityValue == ulong.MaxValue)
-        {
-            throw new InvalidOperationException("Entity identity space is exhausted.");
         }
 
         EntityId entity = new(_state.NextEntityValue++);
@@ -123,7 +118,6 @@ public sealed class EntityStore : IDisposable
     public void SetLifecycle(EntityId entity, EntityLifecycle lifecycle)
     {
         ThrowIfDisposed();
-        EntityLifecycleValidation.EnsureDefined(lifecycle, nameof(lifecycle));
         EntityRecord record = RequireEntity(entity);
         if (record.Lifecycle == EntityLifecycle.Tombstoned)
         {

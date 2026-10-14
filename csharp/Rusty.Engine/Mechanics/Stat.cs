@@ -30,7 +30,9 @@ public sealed class Stat
         double quantum = 0, MidpointRounding rounding = MidpointRounding.AwayFromZero,
         MidpointRounding integerRounding = MidpointRounding.AwayFromZero)
     {
-        ValidateRounding(integerRounding);
+        Finite(baseValue, nameof(baseValue));
+        ValidateBounds(minimum, maximum);
+        ValidateQuantum(quantum);
         _evaluation = Evaluate(baseValue, minimum, maximum, quantum, rounding, _modifiers, null, _sources);
         _baseValue = baseValue;
         _minimum = minimum;
@@ -45,6 +47,7 @@ public sealed class Stat
         get => _baseValue;
         set
         {
+            Finite(value, nameof(value));
             var next = Evaluate(value, _minimum, _maximum, _quantum, _rounding, _modifiers, _sourceStat, _sources);
             var tracks = PrepareTracks(next.Value);
             _baseValue = value;
@@ -58,7 +61,7 @@ public sealed class Stat
     public MidpointRounding IntegerRounding
     {
         get => _integerRounding;
-        set { ValidateRounding(value); _integerRounding = value; }
+        set => _integerRounding = value;
     }
     /// <summary>Read-only authored sources currently applied to this stat.</summary>
     public IReadOnlyList<StatSource> Sources => Array.AsReadOnly(_sources);
@@ -69,6 +72,7 @@ public sealed class Stat
 
     public void SetBounds(double minimum, double maximum)
     {
+        ValidateBounds(minimum, maximum);
         var next = Evaluate(_baseValue, minimum, maximum, _quantum, _rounding, _modifiers, _sourceStat, _sources);
         var tracks = PrepareTracks(next.Value);
         _minimum = minimum;
@@ -79,6 +83,7 @@ public sealed class Stat
     /// <summary>Zero disables quantization. Resolved bounds win over off-grid rounded endpoints.</summary>
     public void SetQuantization(double quantum, MidpointRounding rounding = MidpointRounding.AwayFromZero)
     {
+        ValidateQuantum(quantum);
         var next = Evaluate(_baseValue, _minimum, _maximum, quantum, rounding, _modifiers, _sourceStat, _sources);
         var tracks = PrepareTracks(next.Value);
         _quantum = quantum;
@@ -89,7 +94,6 @@ public sealed class Stat
     public StatModifierHandle AddModifier(double amount, StatModifierKind kind = StatModifierKind.Add)
     {
         Finite(amount, nameof(amount));
-        if (!Enum.IsDefined(kind)) throw new ArgumentOutOfRangeException(nameof(kind));
         var handle = new StatModifierHandle();
         List<Modifier> modifiers = [.. _modifiers, new(handle, kind, amount)];
         var next = Evaluate(_baseValue, _minimum, _maximum, _quantum, _rounding, modifiers, _sourceStat, _sources);
@@ -127,6 +131,7 @@ public sealed class Stat
         ArgumentNullException.ThrowIfNull(sources);
         var ordered = MechanicsSourceOrdering.Order(sources,
             source => source.Identity, source => source.Definition, source => source.Priority).ToArray();
+        ValidateGroups(stat, ordered);
         var next = Evaluate(_baseValue, _minimum, _maximum, _quantum, _rounding, _modifiers, stat, ordered);
         var tracks = PrepareTracks(next.Value);
         _sourceStat = stat;
@@ -200,9 +205,39 @@ public sealed class Stat
         return value;
     }
 
-    private static void ValidateRounding(MidpointRounding mode)
+    private static void ValidateBounds(double minimum, double maximum)
     {
-        if (!Enum.IsDefined(mode)) throw new ArgumentOutOfRangeException(nameof(mode));
+        Finite(minimum, nameof(minimum));
+        Finite(maximum, nameof(maximum));
+        if (minimum > maximum) throw new ArgumentException("Stat bounds are inverted.");
+    }
+
+    private static void ValidateQuantum(double quantum)
+    {
+        Finite(quantum, nameof(quantum));
+        if (quantum < 0) throw new ArgumentOutOfRangeException(nameof(quantum));
+    }
+
+    /// <summary>
+    /// Sources only change here, so each stacking group's contributions to this stat are checked
+    /// once: one policy per group, and one contribution kind for highest/lowest selection.
+    /// </summary>
+    private static void ValidateGroups(StatId stat, StatSource[] sources)
+    {
+        var groups = new Dictionary<StackingGroupId, StatContributionDefinition>();
+        foreach (var source in sources)
+            foreach (var contribution in source.Contributions)
+            {
+                if (contribution.Stat != stat || groups.TryAdd(contribution.Group, contribution)) continue;
+                var first = groups[contribution.Group];
+                if (first.Stacking != contribution.Stacking)
+                    throw new MechanicsException(MechanicsRefusal.Inconsistent,
+                        $"Stacking group {contribution.Group.Value} uses more than one policy.");
+                if (first.Stacking is MechanicsStackingPolicy.Highest or MechanicsStackingPolicy.Lowest
+                    && first.Contribution.Kind != contribution.Contribution.Kind)
+                    throw new MechanicsException(MechanicsRefusal.Inconsistent,
+                        "Highest/lowest stacking requires one contribution kind.");
+            }
     }
 
     internal static double Quantize(double value, double quantum, MidpointRounding rounding)
@@ -220,13 +255,6 @@ public sealed class Stat
     private static StatEvaluation Evaluate(double baseValue, double minimum, double maximum, double quantum,
         MidpointRounding rounding, IReadOnlyList<Modifier> modifiers, StatId? stat, IReadOnlyList<StatSource> sources)
     {
-        Finite(baseValue, nameof(baseValue));
-        Finite(minimum, nameof(minimum));
-        Finite(maximum, nameof(maximum));
-        Finite(quantum, nameof(quantum));
-        ValidateRounding(rounding);
-        if (minimum > maximum) throw new ArgumentException("Stat bounds are inverted.");
-        if (quantum < 0) throw new ArgumentOutOfRangeException(nameof(quantum));
         var decisions = new List<StatDecision>();
         var candidates = new List<Candidate>();
         foreach (var source in sources)
@@ -247,9 +275,8 @@ public sealed class Stat
         foreach (var group in candidates.GroupBy(candidate => candidate.Definition.Group))
         {
             var members = group.ToArray();
+            // SetSources admitted one policy and, for highest/lowest, one kind per group.
             var policy = members[0].Definition.Stacking;
-            if (members.Any(member => member.Definition.Stacking != policy))
-                throw new MechanicsException(MechanicsRefusal.Inconsistent, $"Stacking group {group.Key.Value} uses more than one policy.");
             IEnumerable<Candidate> selected;
             switch (policy)
             {
@@ -258,9 +285,6 @@ public sealed class Stat
                     selected = members.DistinctBy(member => member.SourceDefinition); break;
                 case MechanicsStackingPolicy.Highest:
                 case MechanicsStackingPolicy.Lowest:
-                    var kind = members[0].Definition.Contribution.Kind;
-                    if (members.Any(member => member.Definition.Contribution.Kind != kind))
-                        throw new MechanicsException(MechanicsRefusal.Inconsistent, "Highest/lowest stacking requires one contribution kind.");
                     selected = [policy == MechanicsStackingPolicy.Highest
                         ? members.MaxBy(member => member.Definition.Contribution.Magnitude)!
                         : members.MinBy(member => member.Definition.Contribution.Magnitude)!];
@@ -276,7 +300,6 @@ public sealed class Stat
         double additions = baseValue;
         foreach (var (kind, amount) in operations)
         {
-            Finite(amount, nameof(amount));
             if (kind == StatModifierKind.Add) additions = Result(additions + amount);
             else if (kind == StatModifierKind.Minimum) minimum = Math.Max(minimum, amount);
             else if (kind == StatModifierKind.Maximum) maximum = Math.Min(maximum, amount);

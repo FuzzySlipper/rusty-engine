@@ -209,6 +209,9 @@ For authored provenance, `SetSources(statId, sources)` accepts `StatSource` valu
 with typed contributions, priorities and stacking groups. Sources sort by priority,
 identity and definition; equal-strength selections keep the first in that order.
 `UniqueByDefinition` selects the first activation of each source definition.
+A stacking group's contributions to the stat share one policy, and one
+contribution kind under `Highest`/`Lowest`; `SetSources` refuses a mix with
+`Inconsistent`.
 Sources sharing an identity each take part in that order. `RemoveSource` removes
 the activations with one identity; `Explain()` returns an immutable evaluation
 readout with applied, suppressed and inapplicable decisions. These are optional;

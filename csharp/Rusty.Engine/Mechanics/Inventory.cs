@@ -435,7 +435,10 @@ public sealed class InventoryState
 
     /// <summary>
     /// Rebuilds one owner inventory from product-owned stack captures. Stack IDs
-    /// are owner-scoped and must be unique within this restored inventory.
+    /// are owner-scoped and must be unique within this restored inventory. A
+    /// stack above its definition's maximum quantity, or an inventory above a
+    /// capacity limit, restores as captured: later additions that would grow it
+    /// are refused, and removals are not.
     /// </summary>
     public static InventoryState Restore(
         EntityId owner,
@@ -446,45 +449,25 @@ public sealed class InventoryState
         var result = new InventoryState(owner, capacityLimits);
         foreach (InventoryStackCapture stack in stacks)
         {
-            if (stack.Id is null || stack.Definition is null || stack.Quantity == 0)
-            {
-                throw new ArgumentException(
-                    "Inventory stack captures require a positive quantity, stack identity and item definition.",
-                    nameof(stacks));
-            }
-            if (stack.Quantity > stack.Definition.MaximumQuantity)
-            {
-                throw new MechanicsException(
-                    MechanicsRefusal.StackMaximum,
-                    $"Item {stack.Definition.Id} cannot exceed quantity {stack.Definition.MaximumQuantity}; attempted {stack.Quantity}.");
-            }
             if (!result._stacks.TryAdd(stack.Id, new InventoryStackEntry(stack.Id, stack.Definition, stack.Quantity)))
             {
                 throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Inventory stack {stack.Id} was restored more than once for owner {owner.Value}.");
             }
         }
 
-        result.ValidateFungibleCapacity();
         return result;
     }
 
-    /// <summary>Counts the stacks' costs afresh and refuses a total above its limit.</summary>
-    internal void ValidateFungibleCapacity()
+    /// <summary>
+    /// Counts the stacks' costs afresh. A store does this once when it admits a state, because a
+    /// state read from a store also carries the costs of the unique items that store held.
+    /// </summary>
+    internal void CountStackUsage()
     {
         _used.Clear();
         foreach (InventoryStackEntry entry in _stacks.Values)
         {
             InventoryStore.AddCapacityCosts(_used, entry.Definition.CapacityCosts, entry.Quantity);
-        }
-
-        foreach (InventoryCapacityLimit limit in CapacityLimits)
-        {
-            if (_used.TryGetValue(limit.Metric, out ulong amount) && amount > limit.Maximum)
-            {
-                throw new MechanicsException(
-                    MechanicsRefusal.Capacity,
-                    $"Inventory {Owner.Value} exceeds capacity {limit.Metric}: attempted {amount}, maximum {limit.Maximum}.");
-            }
         }
     }
 
@@ -517,7 +500,8 @@ public sealed class InventoryState
 
     /// <summary>
     /// The totals that removing one set of costs and adding another would leave. Nothing changes
-    /// here, so a refusal (overflow, or a total above its limit) leaves the inventory as it was.
+    /// here, so a refusal (overflow, or a total that grows above its limit) leaves the inventory
+    /// as it was.
     /// </summary>
     internal (CapacityMetricId Metric, ulong Used)[] PlanUsage(
         IReadOnlyList<ItemCapacityCost> removed,
@@ -550,7 +534,10 @@ public sealed class InventoryState
         totals.Sort((left, right) => string.CompareOrdinal(left.Metric.Value, right.Metric.Value));
         foreach ((CapacityMetricId metric, ulong amount) in totals)
         {
-            if (_capacityLimits.TryGetValue(metric, out InventoryCapacityLimit limit) && amount > limit.Maximum)
+            // Only growth is refused, so an inventory restored above a limit can still shed load.
+            if (_capacityLimits.TryGetValue(metric, out InventoryCapacityLimit limit)
+                && amount > limit.Maximum
+                && amount > _used.GetValueOrDefault(metric))
             {
                 throw new MechanicsException(
                     MechanicsRefusal.Capacity,
@@ -621,7 +608,7 @@ public sealed partial class InventoryStore
             throw new MechanicsException(MechanicsRefusal.AlreadyPresent, $"Inventory owner {state.Owner.Value} is already registered.");
         }
         InventoryState admitted = state.Clone();
-        admitted.ValidateFungibleCapacity();
+        admitted.CountStackUsage();
         _inventories.Add(admitted.Owner, admitted);
 
         TouchStore();
@@ -691,17 +678,12 @@ public sealed partial class InventoryStore
         return false;
     }
 
-    public bool TryGetEquipment(EntityId owner, out EquipmentState? state)
-    {
-        if (_equipment.TryGetValue(owner, out EquipmentState? value))
-        {
-            state = value.Clone();
-            return true;
-        }
-
-        state = null;
-        return false;
-    }
+    /// <summary>
+    /// The store's own equipment state for an owner. It has no public mutator; read it again
+    /// after a change, because a published edit replaces it.
+    /// </summary>
+    public bool TryGetEquipment(EntityId owner, out EquipmentState? state) =>
+        _equipment.TryGetValue(owner, out state);
 
     public bool TryGetContainer(EntityId child, out EntityId container) =>
         _containment.TryGetValue(child, out container);

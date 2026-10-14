@@ -18,9 +18,6 @@ public sealed class Track
         Stat.Finite(quantum, nameof(quantum));
         if (minimum > maximum.Value) throw new ArgumentException("Track minimum exceeds its maximum.");
         if (quantum < 0) throw new ArgumentOutOfRangeException(nameof(quantum));
-        if (!Enum.IsDefined(maximumChangePolicy)) throw new ArgumentOutOfRangeException(nameof(maximumChangePolicy));
-        if (!Enum.IsDefined(rounding)) throw new ArgumentOutOfRangeException(nameof(rounding));
-        if (!Enum.IsDefined(integerRounding)) throw new ArgumentOutOfRangeException(nameof(integerRounding));
         _minimum = minimum;
         MaximumChangePolicy = maximumChangePolicy;
         Quantum = quantum;

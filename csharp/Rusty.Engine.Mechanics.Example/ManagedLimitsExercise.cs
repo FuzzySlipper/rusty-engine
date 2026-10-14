@@ -134,6 +134,12 @@ internal static class ManagedLimitsExercise
         Check(definition.States.Count == states.Length
             && definition.Transitions.Count == transitions.Length,
             "state-machine graph retained a former managed policy ceiling");
+
+        var repeated = new StateMachineDefinition(2, [3, 1, 3], [new(1, 3), new(1, 3)]);
+        Check(repeated.States.Select(state => state.Value).SequenceEqual([1UL, 3UL])
+            && repeated.Transitions.Count == 1
+            && repeated.AllowsTransition(1, 3),
+            "a repeated state or transition was not declared once");
     }
 
     private static void ExpectRefusal(MechanicsRefusal reason, Action action, string message)

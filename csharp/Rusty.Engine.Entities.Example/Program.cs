@@ -125,7 +125,6 @@ static void ExercisePreparedValueEdits()
     store.Commit(new EntityBatch().Set(entity, values, 4));
     Require(store.Get(entity, values) == 4, "a batch write did not apply");
     Require(ReferenceEquals(store.Get(entity, references).Values, source), "a batch write copied an unrelated family");
-    Throws(() => store.Create((EntityLifecycle)99), "create admitted an undeclared lifecycle");
     store.Dispose();
     Throws(() => store.Diagnostics(), "disposed store allowed diagnostics");
 }

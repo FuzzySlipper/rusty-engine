@@ -438,7 +438,9 @@ Every inventory mutation selects an explicit stack ID; the store never derives
 one from definition text. Definition-level quantity reads aggregate all stacks
 of that definition.
 `InventoryState.CaptureStacks()` and `InventoryState.Restore(...)` retain stack
-IDs, definitions and quantities; restore and registration validate capacity.
+IDs, definitions and quantities. A save made before a product lowered a
+`MaximumQuantity` or capacity limit still loads as captured: additions that would
+grow the stack or capacity total are refused, and removals are not.
 Persist product metadata keyed by those owner/stack IDs, or map them to save-local
 identities and re-grant on rebuild. No second quantity ledger or metadata-encoded
 definition ID is needed.

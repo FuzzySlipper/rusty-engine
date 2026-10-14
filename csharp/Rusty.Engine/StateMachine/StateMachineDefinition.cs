@@ -24,25 +24,14 @@ public sealed class StateMachineDefinition
         ArgumentNullException.ThrowIfNull(states);
         ArgumentNullException.ThrowIfNull(transitions);
 
-        ulong[] stateValues = states.ToArray();
-        if (stateValues.Length == 0)
+        _stateValues = new HashSet<ulong>(states);
+        if (_stateValues.Count == 0)
         {
             throw new ArgumentException("A state-machine definition must declare at least one state.", nameof(states));
         }
-        _stateValues = new HashSet<ulong>(stateValues.Length);
-        foreach (ulong state in stateValues)
-        {
-            if (!_stateValues.Add(state))
-            {
-                throw new ArgumentException(
-                    $"State-machine definition {machine} declares state {state} more than once.",
-                    nameof(states));
-            }
-        }
 
-        StateMachineTransition[] transitionValues = transitions.ToArray();
-        _transitionValues = new HashSet<StateMachineTransition>(transitionValues.Length);
-        foreach (StateMachineTransition transition in transitionValues)
+        _transitionValues = new HashSet<StateMachineTransition>(transitions);
+        foreach (StateMachineTransition transition in _transitionValues)
         {
             if (!_stateValues.Contains(transition.From) || !_stateValues.Contains(transition.To))
             {
@@ -50,16 +39,10 @@ public sealed class StateMachineDefinition
                     $"Transition {transition.From}->{transition.To} refers to an undeclared state.",
                     nameof(transitions));
             }
-            if (!_transitionValues.Add(transition))
-            {
-                throw new ArgumentException(
-                    $"State-machine definition {machine} declares transition {transition.From}->{transition.To} more than once.",
-                    nameof(transitions));
-            }
         }
 
         Machine = machine;
-        States = Array.AsReadOnly(stateValues.OrderBy(value => value).Select(value => new StateMachineState(value)).ToArray());
+        States = Array.AsReadOnly(_stateValues.Order().Select(value => new StateMachineState(value)).ToArray());
         Transitions = Array.AsReadOnly(_transitionValues
             .OrderBy(transition => transition.From)
             .ThenBy(transition => transition.To)
@@ -118,12 +101,7 @@ public sealed class StateMachineDefinition
             throw new InvalidOperationException(
                 $"State-machine {Machine} expected revision {expectedValue}, but instance is at {instance.Revision}.");
         }
-        if (instance.Revision == ulong.MaxValue)
-        {
-            throw new InvalidOperationException($"State-machine {Machine} revision is exhausted.");
-        }
-
-        ulong revision = instance.Revision + 1;
+        ulong revision = checked(instance.Revision + 1);
         StateMachineInstance updated = new(Machine, next, revision);
         return new StateMachineTransitionReceipt(updated, instance.Current, revision);
     }
