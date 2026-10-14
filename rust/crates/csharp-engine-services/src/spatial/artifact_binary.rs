@@ -1,7 +1,6 @@
 //! The binary encoding of the Spatial content artifact: the same facts as the
-//! JSON schema, recognised by its magic, decoded into the same artifact and
-//! validated by the same checks. A cell's level is not stored: validation
-//! requires it to equal `round(supportHeight / levelQuantum)`, so it is
+//! JSON schema, recognised by its magic and decoded into the same artifact.
+//! A cell's level is not stored: it is `round(supportHeight / levelQuantum)`,
 //! derived from the height.
 //!
 //! Little-endian, no padding:
@@ -28,7 +27,7 @@ use super::{
 pub(super) const MAGIC: &[u8; 8] = b"RSPATIAL";
 
 /// Decodes a binary artifact whose bytes begin with [`MAGIC`]. The error
-/// says what was malformed; validation of the facts happens afterwards.
+/// says what was malformed.
 pub(super) fn decode(bytes: &[u8]) -> Result<SpatialContentArtifact, String> {
     let mut reader = Reader {
         bytes,
@@ -245,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn a_damaged_binary_artifact_is_refused_as_schema_and_bad_facts_as_json_ones_are() {
+    fn a_damaged_binary_artifact_is_refused_as_schema() {
         let binary = fixture("valid.rspatial");
         assert_eq!(
             refusal(&binary[..binary.len() - 1]),
@@ -260,20 +259,10 @@ mod tests {
         let counts = MAGIC.len() + 8 + 11 * 8 + 4 + 20 + 4 + 26;
         huge[counts + 16..counts + 24].copy_from_slice(&u64::MAX.to_le_bytes());
         assert_eq!(refusal(&huge), "CSHARP_SPATIAL_CONTENT_SCHEMA");
-
-        let mut artifact = parse_spatial_content_artifact("valid", &binary).unwrap();
-        artifact.bounds.min[0] = 4.0;
-        assert_eq!(refusal(&encode(&artifact)), "CSHARP_SPATIAL_CONTENT_BOUNDS");
-        let mut artifact = parse_spatial_content_artifact("valid", &binary).unwrap();
-        artifact.navigation.cells[1].column = 0;
-        assert_eq!(
-            refusal(&encode(&artifact)),
-            "CSHARP_SPATIAL_CONTENT_NAVIGATION"
-        );
     }
 
     /// A town-sized artifact (rusty-dagger's Charing: 544,563 cells and about
-    /// 100,000 collision vertices), parsed and validated from each encoding.
+    /// 100,000 collision vertices), parsed from each encoding.
     /// `cargo test --release -p csharp-engine-services --lib measure_artifact -- --ignored --nocapture`.
     #[test]
     #[ignore = "timing measurement"]
@@ -320,13 +309,7 @@ mod tests {
         let started = std::time::Instant::now();
         let _ = decode(&binary).unwrap();
         println!("binary decode alone: {:?}", started.elapsed());
-        println!(
-            "JSON: {} bytes, parsed and validated in {json_time:?}",
-            json.len()
-        );
-        println!(
-            "binary: {} bytes, parsed and validated in {binary_time:?}",
-            binary.len()
-        );
+        println!("JSON: {} bytes, parsed in {json_time:?}", json.len());
+        println!("binary: {} bytes, parsed in {binary_time:?}", binary.len());
     }
 }

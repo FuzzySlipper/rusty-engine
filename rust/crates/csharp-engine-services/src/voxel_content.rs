@@ -1155,16 +1155,12 @@ unsafe extern "C" fn publish_asset_to_spatial(
         Some(value) if !value.is_null() => unsafe { &mut *value },
         _ => return 0,
     };
-    let prepared = match spatial.prepare_voxel_asset(request.session, &asset) {
+    let facts = match spatial.publish_voxel_asset(request.session, &asset) {
         Ok(value) => value,
         Err(refusal) => return refuse(&refusal, error),
     };
-    let facts = prepared.facts();
     let (result, backing) =
         bridge.prepare_asset_spatial_publish(&asset, facts, voxel_data_hash, content_hash);
-    if spatial.commit_voxel_asset(prepared).is_err() {
-        return 0;
-    }
     bridge.borrowed.hold(backing);
     unsafe { *output = result };
     ABI_OK

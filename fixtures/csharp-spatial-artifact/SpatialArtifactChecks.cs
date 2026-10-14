@@ -7,7 +7,7 @@ namespace SdkPackageConsumer;
 internal static class SpatialArtifactChecks
 {
     private const string ValidPath = "spatial-artifact/valid.json";
-    private const string InvalidPath = "spatial-artifact/bad-bounds.json";
+    private const string InvalidPath = "spatial-artifact/bad-triangle.json";
     private const string BinaryPath = "spatial-artifact/valid.rspatial";
     private const ulong NavigationGridId = 7;
     private const uint ChunkSize = 8;
@@ -55,13 +55,13 @@ internal static class SpatialArtifactChecks
         try
         {
             engine.Spatial.ReplaceContentArtifact(request with { Content = invalid });
-            throw new InvalidOperationException("out-of-bounds artifact was accepted");
+            throw new InvalidOperationException("artifact with a triangle outside its vertices was accepted");
         }
         catch (EngineCallException error)
         {
             Require(error.Service == "Spatial" && error.Operation == "ReplaceContentArtifact"
                 && error.Diagnostics.Length == 1
-                && error.Diagnostics.Span[0].Code == "CSHARP_SPATIAL_CONTENT_BOUNDS"
+                && error.Diagnostics.Span[0].Code == "CSHARP_SPATIAL_CONTENT_COLLISION"
                 && !string.IsNullOrWhiteSpace(error.Diagnostics.Span[0].Message),
                 "generated exception lost the named artifact refusal");
         }

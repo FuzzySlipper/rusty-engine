@@ -1,5 +1,5 @@
 use super::*;
-use asset_catalog::portable::{PortableAssets, PortableDefinition};
+use asset_catalog::portable::{PortableAsset, PortableAssets, PortableDefinition};
 
 #[derive(Default)]
 pub(super) struct PortableState {
@@ -8,7 +8,9 @@ pub(super) struct PortableState {
     next: u64,
 }
 struct Asset {
-    document: PortableAssets,
+    /// The selected asset's dependency closure, resolved at load: each
+    /// member after the ones it depends on, the selected asset last.
+    closure: Vec<PortableAsset>,
     selected: String,
     members: BTreeMap<String, AdmittedContent>,
 }
@@ -61,7 +63,7 @@ fn build(source: AdmittedContent, selected: String) -> Result<Asset, String> {
         .map(|(p, _)| format!("{p}/"))
         .unwrap_or_default();
     let mut members = BTreeMap::new();
-    for asset in closure {
+    for asset in &closure {
         if let PortableDefinition::Texture { path } | PortableDefinition::Model { path, .. } =
             &asset.definition
         {
@@ -89,7 +91,7 @@ fn build(source: AdmittedContent, selected: String) -> Result<Asset, String> {
         }
     }
     Ok(Asset {
-        document,
+        closure: closure.into_iter().cloned().collect(),
         selected,
         members,
     })
@@ -197,12 +199,7 @@ impl Readout {
     }
     fn build(asset: &Asset) -> Self {
         let mut out = Self::default();
-        // Resolution succeeded when the immutable asset was loaded.
-        for member in asset
-            .document
-            .resolve(&asset.selected)
-            .expect("retained resolved descriptor")
-        {
+        for member in &asset.closure {
             let (kind, path) = match &member.definition {
                 PortableDefinition::Draft { .. } => unreachable!("resolved members are complete"),
                 PortableDefinition::Attachment {
@@ -356,9 +353,9 @@ pub(super) unsafe extern "C" fn read(
     };
     let mut readout = Readout::build(asset);
     let convention = match &asset
-        .document
-        .asset(&asset.selected)
-        .expect("resolved asset")
+        .closure
+        .last()
+        .expect("a closure holds its asset")
         .definition
     {
         PortableDefinition::Sprite {
@@ -419,7 +416,7 @@ mod tests {
     fn loose_and_bundle_contexts_resolve_equivalent_semantics_and_retain_members() {
         let loose = build(source("loose/"), "body".into()).unwrap();
         let bundled = build(source("bundles/models/"), "body".into()).unwrap();
-        assert_eq!(loose.document, bundled.document);
+        assert_eq!(loose.closure, bundled.closure);
         assert_eq!(loose.members["body"].bytes, bundled.members["body"].bytes);
         let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
         let reference = bridge.retain(source("bundle/")).unwrap();
@@ -469,6 +466,82 @@ mod tests {
             ABI_OK
         );
         assert!(bridge.portable.assets.is_empty());
+    }
+    #[test]
+    fn a_readout_lists_the_closure_resolved_at_load() {
+        let body: Arc<[u8]> = Arc::from(br#"{"schemaVersion":1,"assets":[{"id":"body","kind":"model","path":"body.glb","clips":{"idle":"Idle"},"materials":{"Body":"paint"}},{"id":"paint","kind":"material","textures":{"baseColor":"color"}},{"id":"color","kind":"texture","path":"color.png"},{"id":"unrelated-draft"}]}"#.as_slice());
+        let files = super::ContentFiles::snapshot(BTreeMap::from([
+            ("asset.json".to_owned(), body.clone()),
+            ("body.glb".to_owned(), Arc::from(b"model".as_slice())),
+            ("color.png".to_owned(), Arc::from(b"image".as_slice())),
+        ]));
+        let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
+        let reference = bridge
+            .retain(AdmittedContent {
+                path: "asset.json".to_owned(),
+                identity: ContentIdentity::default(),
+                bytes: body,
+                transient: false,
+                files,
+            })
+            .unwrap();
+        let api = super::super::api(&mut bridge);
+        let mut asset = NativePortableAssetHandle::default();
+        let mut error = unsafe { std::mem::zeroed() };
+        assert_eq!(
+            unsafe {
+                (api.load_portable_asset)(
+                    api.context,
+                    &NativePortableAssetLoadRequest {
+                        descriptor: reference,
+                        asset_id: slice("body"),
+                    },
+                    &mut asset,
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        let text = |value: NativeUtf8Slice| unsafe {
+            std::str::from_utf8(std::slice::from_raw_parts(value.bytes, value.len))
+                .unwrap()
+                .to_owned()
+        };
+        for _ in 0..2 {
+            let mut readout = unsafe { std::mem::zeroed::<NativePortableAssetReadoutResult>() };
+            assert_eq!(
+                unsafe { (api.read_portable_asset)(api.context, asset, &mut readout) },
+                ABI_OK
+            );
+            assert_eq!(text(readout.asset_id), "body");
+            let members =
+                unsafe { std::slice::from_raw_parts(readout.members, readout.members_len) };
+            let members: Vec<_> = members
+                .iter()
+                .map(|member| (text(member.id), member.kind, text(member.path)))
+                .collect();
+            assert_eq!(
+                members,
+                [
+                    (
+                        "color".to_owned(),
+                        NativePortableAssetKind::Texture,
+                        "color.png".to_owned()
+                    ),
+                    (
+                        "paint".to_owned(),
+                        NativePortableAssetKind::Material,
+                        String::new()
+                    ),
+                    (
+                        "body".to_owned(),
+                        NativePortableAssetKind::Model,
+                        "body.glb".to_owned()
+                    ),
+                ]
+            );
+            assert_eq!(readout.relationships_len, 3);
+        }
     }
     #[test]
     fn reference_context_does_not_fall_back_to_unrelated_catalog_files() {

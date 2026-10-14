@@ -8,7 +8,7 @@ pub struct NativeSpatialSessionHandle {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct NativeSpatialSessionConfig {
     pub collision_voxel_size: f64,
     pub collision_chunk_size: u32,
@@ -1575,24 +1575,24 @@ pub struct NativeCharacterContinuationCaptureRequest {
 /// borrowed result or session handle: product persistence may retain it, then
 /// restore it only into a compatible newly-created Spatial session. The
 /// source identity and generation are diagnostic provenance from the capture;
-/// compatibility is established by the typed config, motion, target-session,
-/// and canonical-content checks rather than by resolving an old native handle.
+/// compatibility is the target session's configuration and canonical content
+/// matching the captured ones, not resolving an old native handle. The
+/// voxel content identity names voxels in cells, so the session
+/// configuration that sizes and surfaces them is part of it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCharacterContinuationCheckpoint {
     pub source_session_identity: u64,
     pub source_generation: u64,
-    pub spatial_session_fingerprint: u64,
+    pub spatial_session: NativeSpatialSessionConfig,
     pub content_authority_hash: u64,
-    pub config_fingerprint: u64,
     pub config: NativeCharacterControllerConfig,
     pub motion: NativeCharacterMotion,
 }
 
 /// Restores a copied continuation after the product has restored its authored
-/// pose and recreated compatible Spatial content. The checkpoint carries its
-/// own controller configuration so the Engine can reject corruption or drift
-/// before returning the next-call motion value.
+/// pose and recreated compatible Spatial content. The checkpoint's
+/// configuration is the one to supply to the next character step.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCharacterContinuationRestoreRequest {

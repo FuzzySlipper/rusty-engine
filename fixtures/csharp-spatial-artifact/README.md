@@ -2,8 +2,8 @@
 
 `valid.json` is a three-cell floor in the Engine's spatial content
 format. It contains a two-triangle collision mesh and precomputed navigation.
-`bad-bounds.json` differs only in bounds whose minimum exceeds their maximum,
-producing `CSHARP_SPATIAL_CONTENT_BOUNDS`.
+`bad-triangle.json` differs only in a triangle naming a vertex the mesh does
+not have, producing `CSHARP_SPATIAL_CONTENT_COLLISION`.
 `valid.rspatial` holds the same facts in the binary encoding
 (`docs/csharp-lifecycle.md#generated-level-artifact-admission`); the check
 admits it and compares its counts, navigation projection hash and queries

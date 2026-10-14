@@ -49,7 +49,7 @@ static-mesh collision and planar navigation together. Voxel content and
 residency are kept. A refused operation leaves the previous spatial state
 intact and throws `EngineCallException` with service `Spatial`, operation
 `ReplaceContentArtifact` and a named diagnostic (for example
-`CSHARP_SPATIAL_CONTENT_BOUNDS`).
+`CSHARP_SPATIAL_CONTENT_COLLISION`).
 
 Generation recipes, required connectivity, portal/socket pairing, gameplay
 meaning and Procgen provenance checks belong to the generator/importer or

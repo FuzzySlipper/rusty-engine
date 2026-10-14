@@ -1148,9 +1148,15 @@ catch (EngineCallException error)
 }
 ```
 
-The Engine resolves the immutable reference, parses the schema, and checks
-finite bounds, triangle indices and navigation coordinates. It prepares
-collision and navigation before changing either. Success replaces all retained
+The Engine resolves the immutable reference and parses the artifact once per
+content digest: later admissions and placements of the same bytes reuse it,
+and a reloaded file, being other bytes, is parsed anew. The artifact is
+trusted generator output. Admission refuses a schema it cannot read, a level
+quantum it cannot divide by, a navigation cell size the grid cannot use, and
+collision geometry the collision owner refuses (such as a triangle naming a
+vertex the mesh lacks); bounds, ids and the derivation settings describe the
+artifact and are not checked against its geometry. It prepares collision and
+navigation before changing either. Success replaces all retained
 static-mesh assets/instances and planar navigation and clears the traversal
 overlay; voxel content and residency are untouched. The returned digest,
 revisions, counts and projection hashes—and `ReadContentArtifact`—identify the
@@ -1159,12 +1165,12 @@ copied spatial state.
 
 The same facts can also be written as a compact binary file, recognised by
 its first eight bytes, `RSPATIAL`. It is admitted through the same call with
-the same validation and refusals, so a binary file and the JSON file of the
+the same refusals, so a binary file and the JSON file of the
 same facts install the same collision and navigation: the receipt's counts and
 navigation projection hash match. Its collision projection hash differs,
 because the collider asset is named by the artifact's content digest. Use it for large
 navigation sets: a town of 544,563 cells is about 12 MB instead of 43 MB of
-JSON, and parses and validates in about 15 ms instead of 75 ms. Write
+JSON, and parses in about 12 ms instead of 66 ms. Write
 little-endian, with no padding:
 
 | Field | Encoding |
@@ -1182,7 +1188,7 @@ little-endian, with no padding:
 | cell `walkable` flags | ⌈count / 8⌉ bytes; cell `i` is bit `i % 8` of byte `i / 8` |
 
 A cell's `level` is not stored: it is `round(supportHeight / levelQuantum)`,
-which the JSON form must state and validation checks. Cells written in
+which the JSON form states. Cells written in
 (column, row, level) order admit fastest. [`valid.rspatial`](../fixtures/csharp-spatial-artifact/valid.rspatial)
 is `valid.json` in this encoding.
 
@@ -1191,8 +1197,8 @@ A truncated or otherwise malformed binary file is refused with
 `CSHARP_SPATIAL_CONTENT_SCHEMA`.
 `EngineCallException` reports service `Spatial`, operation
 `ReplaceContentArtifact`, and a named diagnostic such as
-`CSHARP_SPATIAL_CONTENT_BOUNDS`, `CSHARP_SPATIAL_CONTENT_COLLISION`,
-`CSHARP_SPATIAL_CONTENT_NAVIGATION` or `CSHARP_SPATIAL_CONTENT_SCHEMA`.
+`CSHARP_SPATIAL_CONTENT_COLLISION`, `CSHARP_SPATIAL_CONTENT_NAVIGATION` or
+`CSHARP_SPATIAL_CONTENT_SCHEMA`.
 An unknown or disposed reference reports `CSHARP_SPATIAL_CONTENT_REFERENCE`.
 
 ### Placed artifacts side by side
@@ -1264,7 +1270,7 @@ Procgen payload hash. These semantic checks belong in the generator/importer or
 product before this call.
 
 The [packaged C# fixture](../fixtures/csharp-spatial-artifact/SpatialArtifactChecks.cs) verifies
-collision ray hits, navigation, named extent rejection, unchanged residency and
+collision ray hits, navigation, named geometry rejection, unchanged residency and
 successful admission after a refusal via `scripts/test-csharp-sdk-package.sh
 --coreclr-smoke`.
 
@@ -1341,9 +1347,10 @@ recreating a compatible `SpatialSession` and its canonical content, call
 `RestoreCharacterContinuation`; use its returned `Motion` and the checkpoint's
 `Config` for the next `ProposeCharacterStep`, while supplying current
 product-authored support and obstacle facts as usual. Capture rejects a
-generation other than the latest step's. Restore rejects invalid motion, a
-changed session configuration, changed canonical content, and a target session
-that has already stepped a character. A checkpoint is a plain value. Its source
+generation other than the latest step's. Restore rejects a changed session
+configuration, changed canonical content, and a target session that has
+already stepped a character. A checkpoint is a plain value, restored as
+captured: its motion and `Config` are what the next step uses. Its source
 session identity and generation are copied diagnostic provenance, not a native
 handle that remains resolvable after save/load.
 
