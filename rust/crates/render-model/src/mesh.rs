@@ -44,6 +44,10 @@ pub enum MeshResourceEncoding {
     PackedStreamsLeV3,
 }
 
+/// Prefix of the retained materials a payload mesh's groups bind by slot:
+/// slot `N` draws `voxel-material/N`.
+pub const PAYLOAD_SLOT_MATERIAL_PREFIX: &str = "voxel-material/";
+
 /// Largest integer-valued tile coordinate that survives an f32 transport
 /// exactly. Voxel producers use the same limit when admitting coordinates.
 pub const MAX_EXACT_VOXEL_TILE_COORDINATE: f32 = 16_777_216.0;

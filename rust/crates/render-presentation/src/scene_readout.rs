@@ -84,7 +84,7 @@ pub struct SceneObjectDetail<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct SceneMaterialBinding<'a> {
     pub slot: u16,
-    pub material: &'a str,
+    pub material: std::borrow::Cow<'a, str>,
     /// The instance overrides the asset's material in this slot.
     pub overridden: bool,
     /// The retained material; `None` while it is not defined.
@@ -95,6 +95,11 @@ pub struct SceneMaterialBinding<'a> {
     /// The product shader that shades it in place of the standard one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shader: Option<SceneShader<'a>>,
+    /// The terrain layers of the material a payload chunk draws, narrowed
+    /// to them in this order (the payload's `layer_palette`); empty for
+    /// the material's own layers.
+    #[serde(skip_serializing_if = "<[u8]>::is_empty")]
+    pub layer_palette: &'a [u8],
 }
 
 /// A product shader as committed: its identity and keywords.
@@ -321,11 +326,12 @@ impl PresentationWorld {
     }
 
     /// A mesh node's slots: its asset's materials with the instance's
-    /// overrides over them.
+    /// overrides over them, or a payload's groups' slot materials.
     fn material_bindings<'a>(
         &'a self,
         node: &'a PresentationNode,
     ) -> Vec<SceneMaterialBinding<'a>> {
+        use std::borrow::Cow;
         let retained = &*self.retained;
         let (asset_slots, overrides): (&[MeshMaterialSlot], &[MeshMaterialSlot]) = match &node.kind
         {
@@ -343,7 +349,13 @@ impl PresentationWorld {
                     .map_or(&[], |asset| &asset.material_slots[..]),
                 &instance.material_overrides,
             ),
-            NodeKind::VoxelObject(instance) => (&[], &instance.material_overrides),
+            NodeKind::VoxelObject(instance) => (
+                retained
+                    .voxel_objects
+                    .get(&instance.asset)
+                    .map_or(&[], |asset| &asset.material_slots[..]),
+                &instance.material_overrides,
+            ),
             NodeKind::Scatter(patch) => (
                 retained
                     .static_meshes
@@ -351,6 +363,28 @@ impl PresentationWorld {
                     .map_or(&[], |asset| &asset.material_slots[..]),
                 &patch.material_overrides,
             ),
+            NodeKind::Primitive(_) => {
+                let Some(payload) = &node.mesh_payload else {
+                    return Vec::new();
+                };
+                let slots: std::collections::BTreeSet<u16> = payload
+                    .groups
+                    .iter()
+                    .map(|group| group.material_slot)
+                    .collect();
+                return slots
+                    .into_iter()
+                    .map(|slot| {
+                        let mut binding = self.material_binding(
+                            slot,
+                            Cow::Owned(format!("{PAYLOAD_SLOT_MATERIAL_PREFIX}{slot}")),
+                            false,
+                        );
+                        binding.layer_palette = &payload.layer_palette;
+                        binding
+                    })
+                    .collect();
+            }
             _ => return Vec::new(),
         };
         let mut slots: std::collections::BTreeMap<u16, (&str, bool)> = asset_slots
@@ -363,30 +397,43 @@ impl PresentationWorld {
         slots
             .into_iter()
             .map(|(slot, (material, overridden))| {
-                let descriptor = retained
-                    .materials
-                    .get(material)
-                    .map(|material| material.as_ref());
-                SceneMaterialBinding {
-                    slot,
-                    material,
-                    overridden,
-                    descriptor,
-                    features: descriptor.map(material_features).unwrap_or_default(),
-                    shader: descriptor
-                        .and_then(|material| material.shader.as_ref())
-                        .map(|shader| {
-                            let defined = retained.shaders.get(&shader.shader);
-                            SceneShader {
-                                id: &shader.shader,
-                                path: defined.map(|defined| defined.path.as_str()),
-                                keywords: defined.map_or(&[], |defined| &defined.keywords[..]),
-                                missing: defined.is_none(),
-                            }
-                        }),
-                }
+                self.material_binding(slot, Cow::Borrowed(material), overridden)
             })
             .collect()
+    }
+
+    /// One slot bound to `material`, with its retained descriptor and
+    /// shader.
+    fn material_binding<'a>(
+        &'a self,
+        slot: u16,
+        material: std::borrow::Cow<'a, str>,
+        overridden: bool,
+    ) -> SceneMaterialBinding<'a> {
+        let retained = &*self.retained;
+        let descriptor = retained
+            .materials
+            .get(material.as_ref())
+            .map(|material| material.as_ref());
+        SceneMaterialBinding {
+            slot,
+            material,
+            overridden,
+            descriptor,
+            features: descriptor.map(material_features).unwrap_or_default(),
+            shader: descriptor
+                .and_then(|material| material.shader.as_ref())
+                .map(|shader| {
+                    let defined = retained.shaders.get(&shader.shader);
+                    SceneShader {
+                        id: &shader.shader,
+                        path: defined.map(|defined| defined.path.as_str()),
+                        keywords: defined.map_or(&[], |defined| &defined.keywords[..]),
+                        missing: defined.is_none(),
+                    }
+                }),
+            layer_palette: &[],
+        }
     }
 
     fn local_bounds(&self, node: &PresentationNode) -> Option<([f32; 3], [f32; 3])> {
@@ -709,6 +756,132 @@ mod tests {
     }
 
     #[test]
+    fn voxel_objects_and_payload_chunks_read_the_materials_they_draw() {
+        let slot = |slot: u16, material: &str| MeshMaterialSlot {
+            slot,
+            material: material.to_owned(),
+        };
+        let mut payload = super::super::tests::static_mesh("mesh/chunk").payload;
+        payload.groups = vec![
+            MeshGroupDescriptor {
+                material_slot: 1,
+                start: 0,
+                count: 3,
+            },
+            MeshGroupDescriptor {
+                material_slot: 4,
+                start: 3,
+                count: 3,
+            },
+        ];
+        payload.layer_palette = vec![2, 5];
+        let voxel =
+            |handle: u64, overrides: Vec<MeshMaterialSlot>| RenderDiff::CreateVoxelObjectInstance {
+                handle: RenderHandle::new(handle),
+                parent: None,
+                instance: VoxelObjectInstanceDescriptor {
+                    asset: "voxel-object/barrel".to_owned(),
+                    frame: 0,
+                    transform: Transform::IDENTITY,
+                    visible: true,
+                    material_overrides: overrides,
+                    metadata: RenderMetadata::default(),
+                },
+            };
+        let mut world = PresentationWorld::default();
+        world
+            .apply(RenderFrameDiff::from_ops(vec![
+                RenderDiff::DefineMaterial {
+                    material: material("material/wood", serde_json::json!({ "unlit": true })),
+                },
+                RenderDiff::DefineMaterial {
+                    material: material("material/iron", serde_json::json!({})),
+                },
+                RenderDiff::DefineMaterial {
+                    material: material(
+                        "voxel-material/1",
+                        serde_json::json!({ "flatShading": true }),
+                    ),
+                },
+                RenderDiff::DefineVoxelObject {
+                    asset: VoxelObjectRenderAsset {
+                        asset: "voxel-object/barrel".to_owned(),
+                        content_hash: "hash".to_owned(),
+                        meshes: vec![VoxelObjectRenderMesh {
+                            payload: payload.clone(),
+                        }],
+                        frames: vec![VoxelObjectRenderFrame {
+                            id: "idle".to_owned(),
+                            mesh: 0,
+                        }],
+                        material_slots: vec![slot(0, "material/wood"), slot(1, "material/wood")],
+                    },
+                },
+                voxel(1, Vec::new()),
+                voxel(2, vec![slot(1, "material/iron")]),
+                create(3, None, Geometry::Cube, Transform::IDENTITY),
+                RenderDiff::ReplaceMeshPayload {
+                    handle: RenderHandle::new(3),
+                    payload,
+                },
+            ]))
+            .unwrap();
+        /// Slot, material, overridden, features and layer palette.
+        type Read = (u16, String, bool, Vec<&'static str>, Vec<u8>);
+        let read = |handle: u64| -> Vec<Read> {
+            let detail = world
+                .scene_object_detail(RenderHandle::new(handle))
+                .unwrap();
+            detail
+                .materials
+                .iter()
+                .map(|binding| {
+                    (
+                        binding.slot,
+                        binding.material.to_string(),
+                        binding.overridden,
+                        binding.features.clone(),
+                        binding.layer_palette.to_vec(),
+                    )
+                })
+                .collect()
+        };
+        // The asset's slots, untouched.
+        assert_eq!(
+            read(1),
+            [
+                (0, "material/wood".to_owned(), false, vec!["UNLIT"], vec![]),
+                (1, "material/wood".to_owned(), false, vec!["UNLIT"], vec![]),
+            ]
+        );
+        // One slot overridden, the other the asset's.
+        assert_eq!(
+            read(2),
+            [
+                (0, "material/wood".to_owned(), false, vec!["UNLIT"], vec![]),
+                (1, "material/iron".to_owned(), true, vec![], vec![]),
+            ]
+        );
+        // A payload's groups draw their slot materials, narrowed to its
+        // palette; slot 4 has none defined.
+        assert_eq!(
+            read(3),
+            [
+                (
+                    1,
+                    "voxel-material/1".to_owned(),
+                    false,
+                    vec!["FLAT_SHADING"],
+                    vec![2, 5]
+                ),
+                (4, "voxel-material/4".to_owned(), false, vec![], vec![2, 5]),
+            ]
+        );
+        let chunk = world.scene_object_detail(RenderHandle::new(3)).unwrap();
+        assert!(chunk.materials[0].descriptor.is_some() && chunk.materials[1].descriptor.is_none());
+    }
+
+    #[test]
     fn a_replaced_payload_bounds_the_primitive_it_replaced() {
         let mut world = PresentationWorld::default();
         let mut payload = super::super::tests::static_mesh("mesh/payload").payload;
@@ -736,25 +909,27 @@ mod tests {
         );
     }
 
+    /// A plain material `id` with `extra` descriptor fields.
+    fn material(id: &str, extra: serde_json::Value) -> RenderMaterialDescriptor {
+        let mut value = serde_json::json!({
+            "id": id,
+            "color": [1.0, 1.0, 1.0, 1.0],
+            "texture": null,
+            "roughness": 0.5,
+            "textureTint": [1.0, 1.0, 1.0, 1.0],
+            "emissionColor": [0.0, 0.0, 0.0],
+            "emissionIntensity": 0.0,
+            "uvStrategy": "flat",
+        });
+        value
+            .as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        serde_json::from_value(value).unwrap()
+    }
+
     #[test]
     fn an_object_detail_resolves_its_material_slots_features_and_shader() {
-        let material = |id: &str, extra: serde_json::Value| -> RenderMaterialDescriptor {
-            let mut value = serde_json::json!({
-                "id": id,
-                "color": [1.0, 1.0, 1.0, 1.0],
-                "texture": null,
-                "roughness": 0.5,
-                "textureTint": [1.0, 1.0, 1.0, 1.0],
-                "emissionColor": [0.0, 0.0, 0.0],
-                "emissionIntensity": 0.0,
-                "uvStrategy": "flat",
-            });
-            value
-                .as_object_mut()
-                .unwrap()
-                .extend(extra.as_object().unwrap().clone());
-            serde_json::from_value(value).unwrap()
-        };
         let mut asset = super::super::tests::static_mesh("mesh/crate");
         asset.material_slots = vec![
             MeshMaterialSlot {
@@ -816,14 +991,14 @@ mod tests {
         assert_eq!(
             (
                 plain.slot,
-                plain.material,
+                &*plain.material,
                 plain.overridden,
                 plain.features.len()
             ),
             (0, "material/plain", false, 0)
         );
         assert_eq!(
-            (ghost.slot, ghost.material, ghost.overridden),
+            (ghost.slot, &*ghost.material, ghost.overridden),
             (1, "material/ghost", true)
         );
         assert_eq!(ghost.features, ["UNLIT", "ALPHA", "PRODUCT_SHADER"]);

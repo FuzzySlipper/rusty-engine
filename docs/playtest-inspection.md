@@ -157,8 +157,10 @@ carries the world `revision` it read.
 - `engine.scene.object HANDLE` adds the committed description (the node's
   descriptor as published), material override and instance parameters, the
   pose controls in force on an animated mesh, and the child handles. A mesh's
-  `materials` lists each slot as committed (the asset's material, or the
-  instance's override over it) with its retained material, the standard
+  or voxel object's `materials` lists each slot as committed (the asset's
+  material, or the instance's override over it), and a primitive drawing a
+  replaced payload lists its groups' `voxel-material/N` slots with the
+  payload's `layerPalette`. Each has its retained material, the standard
   shader features it turns on (`UNLIT`, `WIND`, `ALPHA`, …) and any product
   shader with its path and keywords.
 - `engine.scene.composition` answers the cameras, targets, views (with any

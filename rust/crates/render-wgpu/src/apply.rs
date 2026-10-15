@@ -9,7 +9,7 @@ use glam::{Mat4, Vec3};
 use render_model::{
     Geometry, LightDescriptor, MaterialAlphaModeDescriptor, RenderDiff, RenderHandle, RenderLayer,
     RenderMaterialDescriptor, ShadowCasting, StaticMeshAsset, TextureColorSpace, TextureDescriptor,
-    TextureFilter, TextureWrap, VoxelSurfaceAlphaModeDescriptor,
+    TextureFilter, TextureWrap, VoxelSurfaceAlphaModeDescriptor, PAYLOAD_SLOT_MATERIAL_PREFIX,
 };
 use wgpu::util::DeviceExt;
 
@@ -56,8 +56,6 @@ const MATERIAL_UNIFORM_BYTES: usize = 480;
 const MATERIAL_ANISOTROPY: u16 = 16;
 /// Payload groups without a voxel material are fully rough.
 const FALLBACK_ROUGHNESS: f32 = 1.0;
-/// Prefix of the retained materials payload mesh groups bind by slot.
-const PAYLOAD_SLOT_MATERIAL_PREFIX: &str = "voxel-material/";
 /// The terrain layers a material draws over its own (`material.wgsl`
 /// `layer_albedo_1` to `layer_albedo_3`).
 const DRAWN_TERRAIN_LAYERS: usize = 3;
