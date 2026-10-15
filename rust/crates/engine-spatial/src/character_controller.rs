@@ -27,6 +27,10 @@ const SOLVER_STEP_SECONDS: f32 = 1.0 / 15.0;
 /// The longest step a command may ask for: the runtime's slowest fixed step
 /// (1 Hz), fifteen sub-steps.
 const MAXIMUM_STEP_SECONDS: f32 = 1.0;
+/// The radius of the probe dropped at a step's tread probe centre, as a
+/// fraction of the support radius: thin enough to find what lies under the
+/// centre, still a valid capsule however the recovery nudge is set.
+const TREAD_CENTRE_PROBE_FRACTION: f64 = 0.01;
 
 macro_rules! defaulted_config {
     ($name:ident { $($field:ident : $ty:ty = $value:expr),+ $(,)? }) => {
@@ -2609,14 +2613,14 @@ fn try_step(
         }
         // A tilted tread touches the probe off its centre, by the offset its
         // normal implies, but so does a rim. The tread must also lie under the
-        // probe's centre: a thin probe there meets its plane at the height the
-        // plane predicts, where a rim's leaves it to the floor below.
+        // probe's centre: a thin probe there meets its plane where the plane
+        // predicts, where a rim's leaves it to the floor below.
         let nudge = f64::from(config.recovery.normal_nudge);
         if (tread.point.x - tread_probe.center.x).abs() > nudge
             || (tread.point.z - tread_probe.center.z).abs() > nudge
         {
             let centre = CharacterCapsule {
-                radius: nudge,
+                radius: radius * TREAD_CENTRE_PROBE_FRACTION,
                 ..tread_probe
             };
             let Some(under) = cast_step(
@@ -2628,10 +2632,12 @@ fn try_step(
                 return Ok((None, casts));
             };
             let predicted = tread.point.y
-                - (f64::from(tread_normal.x) * (centre.center.x - tread.point.x)
-                    + f64::from(tread_normal.z) * (centre.center.z - tread.point.z))
+                - (f64::from(tread_normal.x) * (under.point.x - tread.point.x)
+                    + f64::from(tread_normal.z) * (under.point.z - tread.point.z))
                     / f64::from(tread_normal.y);
-            if (under.point.y - predicted).abs() > f64::from(config.shape.contact_skin) + nudge {
+            if (under.point.y - predicted).abs()
+                > f64::from(config.shape.contact_skin) + centre.radius
+            {
                 return Ok((None, casts));
             }
         }
