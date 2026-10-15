@@ -871,6 +871,18 @@ mod tests {
         assert_eq!(median(&mut []), 0.0);
     }
 
+    /// Held by each test that writes stub renderers and runs them. A script
+    /// still open for writing in one test, inherited by a process another
+    /// test is forking, refuses to execute (ETXTBSY), so those tests take
+    /// turns.
+    #[cfg(unix)]
+    fn stub_renderers() -> std::sync::MutexGuard<'static, ()> {
+        static STUBS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        STUBS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// A lane directory with one scene, `a`, and a baseline renderer that
     /// reports `baseline_adapter`; returns it and a candidate that reports
     /// `candidate_adapter`. Each renderer is a script that copies a small
@@ -933,6 +945,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_selection_that_names_no_scene_fails_and_names_what_it_missed() {
+        let _stubs = stub_renderers();
         let gpu = ("Radeon", false);
         let (root, candidate) = stub_lane("selection", gpu, gpu);
         let everything = run_stub(&root, &candidate, &[]);
@@ -961,6 +974,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn a_software_adapter_on_either_side_is_reported_and_never_concludes_success() {
+        let _stubs = stub_renderers();
         let gpu = ("Radeon", false);
         let software = ("llvmpipe", true);
         for (name, baseline, candidate) in
