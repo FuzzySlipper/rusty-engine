@@ -711,6 +711,7 @@ pub use render_wgpu::{Gpu, Renderer, SceneDriver};
 
 mod content_source_debug;
 mod playtest;
+mod scene_debug;
 
 /// A finished product call: what it published, any input mapping it
 /// selected, and the product exception or Engine error that ended it.
@@ -3273,6 +3274,9 @@ impl ProductHostRuntime for CsharpProductRuntime {
         if let Some(result) = self.execute_content_source_debug(command) {
             return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
+        if let Some(result) = self.execute_scene_debug(command) {
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
         if let Some(frames) = self
             .frame_output
             .as_ref()
@@ -3349,7 +3353,10 @@ impl ProductHostRuntime for CsharpProductRuntime {
                         error.detail().to_owned(),
                     ))
                 })?;
-        let catalog = catalog.with_renderer_diagnostics().with_content_source();
+        let catalog = catalog
+            .with_renderer_diagnostics()
+            .with_content_source()
+            .with_scene_readouts();
         let catalog = if self.frame_output.is_some() {
             catalog.with_runtime_renderer_inspection()
         } else {

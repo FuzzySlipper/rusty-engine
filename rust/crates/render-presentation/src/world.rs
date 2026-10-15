@@ -10,6 +10,10 @@ use std::{
 use crate::PresentationFrameDiff;
 use render_model::*;
 
+#[path = "scene_readout.rs"]
+mod scene_readout;
+pub use scene_readout::*;
+
 pub const PRESENTATION_WORLD_STREAM: &str = "presentation-world";
 
 #[derive(Debug, Clone, PartialEq)]
@@ -96,6 +100,8 @@ struct PresentationNode {
     material_parameters: BTreeMap<u16, MaterialInstanceParameters>,
     playback: AnimatedMeshPlaybackTimeline,
     pose: render_model::AnimatedMeshPose,
+    /// The world revision that last created or changed the node.
+    changed: u64,
 }
 
 /// A complete graphics baseline and the exact continuation point it represents.
@@ -384,6 +390,7 @@ fn group_node(node: &PresentationNode) -> PresentationNode {
         material_parameters: BTreeMap::new(),
         playback: node.playback.clone(),
         pose: Default::default(),
+        changed: node.changed,
     }
 }
 
@@ -1204,20 +1211,26 @@ impl PresentationWorld {
                 material_override: None,
                 material_parameters: BTreeMap::new(),
                 pose: Default::default(),
+                changed: self.revision.saturating_add(1),
             }),
         );
         Ok(())
     }
 
+    /// A node to change in the revision being applied.
     fn node_mut(
         &mut self,
         handle: RenderHandle,
     ) -> Result<&mut PresentationNode, PresentationWorldError> {
-        self.retained
+        let changed = self.revision.saturating_add(1);
+        let node = self
+            .retained
             .nodes
             .get_mut(&handle)
             .map(Arc::make_mut)
-            .ok_or(PresentationWorldError::UnknownNode(handle))
+            .ok_or(PresentationWorldError::UnknownNode(handle))?;
+        node.changed = changed;
+        Ok(node)
     }
 
     fn apply_operation(&mut self, op: &RenderDiff) -> Result<(), PresentationWorldError> {

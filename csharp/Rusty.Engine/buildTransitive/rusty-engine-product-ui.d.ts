@@ -1044,6 +1044,88 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debu
         dispose(): void;
     }
 }
+declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-model" {
+    /** One committed scene object as `engine.scene.objects` lists it. */
+    export interface SceneObject {
+        readonly handle: number;
+        readonly parent?: number;
+        readonly parentJoint?: string;
+        readonly kind: string;
+        readonly layer: string;
+        readonly visible?: boolean;
+        readonly entity?: number;
+        readonly label?: string;
+        readonly resource?: string;
+        readonly local?: SceneTransform;
+        readonly world: SceneTransform;
+        readonly bounds?: SceneBounds;
+        readonly children: number;
+        readonly changedRevision: number;
+    }
+    export interface SceneTransform {
+        readonly translation: readonly [number, number, number];
+        readonly rotation: readonly [number, number, number, number];
+        readonly scale: readonly [number, number, number];
+    }
+    export interface SceneBounds {
+        readonly localMin: readonly [number, number, number];
+        readonly localMax: readonly [number, number, number];
+        readonly worldMin: readonly [number, number, number];
+        readonly worldMax: readonly [number, number, number];
+    }
+    /** One page of `engine.scene.objects`. */
+    export interface SceneObjectPage {
+        readonly revision: number;
+        readonly page: number;
+        readonly pages: number;
+        readonly total: number;
+        readonly objects: readonly (SceneObject & {
+            readonly depth: number;
+        })[];
+    }
+    /** `engine.scene.object`: the listing plus the committed description. */
+    export interface SceneObjectDetail extends SceneObject {
+        readonly revision: number;
+        readonly description: Readonly<Record<string, unknown>>;
+        readonly childHandles: readonly number[];
+        readonly pose?: unknown;
+        readonly materialOverride?: unknown;
+        readonly materialParameters?: unknown;
+    }
+    export function parseObjectPage(text: string): SceneObjectPage;
+    export function parseObjectDetail(text: string): SceneObjectDetail;
+    /** The roots, one page: `engine.scene.objects * 0`. */
+    export function rootsCommand(page?: number): string;
+    /** A node and its children, one page: `engine.scene.objects <handle> 1`. */
+    export function childrenCommand(handle: number, page?: number): string;
+    export function objectCommand(handle: number): string;
+    /** The tree row's text: what the object is and what names it. */
+    export function objectLabel(object: SceneObject): string;
+    export function formatVector(values: readonly number[]): string;
+    /** The selected object's facts, as label/value rows. */
+    export function objectFacts(object: SceneObject): [string, string][];
+}
+declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel" {
+    import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
+    /** Configuration for one mounted scene tree panel. */
+    export interface SceneTreePanelOptions {
+        /** Uses the same-origin live-debug HTTP transport when omitted. */
+        readonly transport?: LiveDebugTransport;
+    }
+    /**
+     * A tree over the committed scene (`engine.scene.objects`) and the selected
+     * object's facts (`engine.scene.object`). It holds no product state: every
+     * row is a reading, read again on Refresh.
+     */
+    export class SceneTreePanel {
+        #private;
+        readonly element: HTMLElement;
+        constructor(document: Document, options: SceneTreePanelOptions);
+        /** Reads the roots, every expanded node's children and the selection again. */
+        refresh(): Promise<void>;
+        dispose(): void;
+    }
+}
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-model" {
     /** The `tunables.v1` description a product's `TunablesDebugModule` answers. */
     export interface TunablesDescription {
@@ -1199,7 +1281,9 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/renderer-
 declare module "@rusty-engine/live-debug" {
     import type { LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
     import type { LiveDebugPanelPresentation } from "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel-model";
+    import { type SceneTreePanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel";
     import { type TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
+    export type { SceneTreePanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel";
     export type { TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
     export type { TunableChooser, TunableControl, TunableGroup, TunableKind, TunableTimeline, TunablesDescription, } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-model";
     export { mountRendererMetricsWidget, type RendererMetricsWidgetMount, type RendererMetricsWidgetMountOptions, } from "@rusty-engine/live-debug/internal/live-debug-panel/src/renderer-metrics-widget";
@@ -1238,6 +1322,19 @@ declare module "@rusty-engine/live-debug" {
      * through the Engine content source under `rusty dev`) and Reset.
      */
     export function mountTunablesPanel(host: HTMLElement, options?: TunablesPanelOptions): TunablesPanelMount;
+    /** A mounted scene tree panel. */
+    export interface SceneTreePanelMount {
+        /** Reads the tree and the selected object again. */
+        refresh(): Promise<void>;
+        /** Removes the panel and stops its requests. */
+        dispose(): void;
+    }
+    /**
+     * Mounts the Engine scene tree into a product-owned element: the committed
+     * scene's objects as a tree (`engine.scene.objects`) and the selected
+     * object's facts (`engine.scene.object`). It holds no product state.
+     */
+    export function mountSceneTreePanel(host: HTMLElement, options?: SceneTreePanelOptions): SceneTreePanelMount;
 }
 declare module "@rusty-engine/video-options/internal/video-options/src/video-options-model" {
     /**

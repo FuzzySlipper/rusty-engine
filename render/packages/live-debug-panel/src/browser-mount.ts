@@ -2,8 +2,10 @@ import type { LiveDebugTransport } from '@rusty-engine/live-debug-client';
 
 import { LiveDebugPanel } from './live-debug-panel.js';
 import type { LiveDebugPanelPresentation } from './live-debug-panel-model.js';
+import { SceneTreePanel, type SceneTreePanelOptions } from './scene-tree-panel.js';
 import { TunablesPanel, type TunablesPanelOptions } from './tunables-panel.js';
 
+export type { SceneTreePanelOptions } from './scene-tree-panel.js';
 export type { TunablesPanelOptions } from './tunables-panel.js';
 export type {
   TunableChooser,
@@ -88,6 +90,29 @@ export function mountTunablesPanel(host: HTMLElement, options: TunablesPanelOpti
     throw new TypeError('Tunables panel mounting requires an HTMLElement host.');
   }
   const panel = new TunablesPanel(host.ownerDocument, options);
+  host.appendChild(panel.element);
+  void panel.refresh();
+  return { refresh: () => panel.refresh(), dispose: () => panel.dispose() };
+}
+
+/** A mounted scene tree panel. */
+export interface SceneTreePanelMount {
+  /** Reads the tree and the selected object again. */
+  refresh(): Promise<void>;
+  /** Removes the panel and stops its requests. */
+  dispose(): void;
+}
+
+/**
+ * Mounts the Engine scene tree into a product-owned element: the committed
+ * scene's objects as a tree (`engine.scene.objects`) and the selected
+ * object's facts (`engine.scene.object`). It holds no product state.
+ */
+export function mountSceneTreePanel(host: HTMLElement, options: SceneTreePanelOptions = {}): SceneTreePanelMount {
+  if (!(host instanceof HTMLElement)) {
+    throw new TypeError('Scene tree panel mounting requires an HTMLElement host.');
+  }
+  const panel = new SceneTreePanel(host.ownerDocument, options);
   host.appendChild(panel.element);
   void panel.refresh();
   return { refresh: () => panel.refresh(), dispose: () => panel.dispose() };

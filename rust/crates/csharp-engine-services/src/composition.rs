@@ -995,6 +995,11 @@ impl EngineServiceSet {
         self.presentation_world.elapsed_seconds()
     }
 
+    /// The committed presentation world, for readings of the scene.
+    pub fn presentation_world(&self) -> &render_presentation::PresentationWorld {
+        &self.presentation_world
+    }
+
     /// World-space origin of the committed graphics node published for an
     /// entity, for entity-attached audio emitters.
     pub fn entity_world_position(&self, entity: u64) -> Option<[f32; 3]> {

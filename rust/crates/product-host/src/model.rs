@@ -577,6 +577,47 @@ impl ProductHostDebugCatalog {
         self
     }
 
+    /// Adds the readings of the committed scene (`engine.scene.*`).
+    pub fn with_scene_readouts(mut self) -> Self {
+        self.available = true;
+        let parameter = |name: &str| ProductHostDebugCommandParameterDescriptor {
+            name: name.to_owned(),
+            type_name: "string".to_owned(),
+        };
+        for (name, description, parameters) in [
+            (
+                "engine.scene.objects",
+                "List committed scene objects depth first: engine.scene.objects [ROOT|*] [DEPTH] [--layer L] [--page N]; each with parent, layer, local and world transform, resource, visibility and bounds, 100 per page",
+                vec![parameter("arguments")],
+            ),
+            (
+                "engine.scene.object",
+                "Read one committed scene object in full: engine.scene.object <handle>; its description, material, joint attachment, pose controls and the revision that last changed it",
+                vec![parameter("handle")],
+            ),
+            (
+                "engine.scene.composition",
+                "Read the cameras, targets, views and presentations the product committed",
+                Vec::new(),
+            ),
+            (
+                "engine.scene.resources",
+                "List the committed scene's resource descriptors and the admitted resource bodies with their sizes",
+                Vec::new(),
+            ),
+        ] {
+            if self.commands.iter().any(|command| command.name == name) {
+                continue;
+            }
+            self.commands.push(ProductHostDebugCommandDescriptor {
+                name: name.to_owned(),
+                description: description.to_owned(),
+                parameters,
+            });
+        }
+        self
+    }
+
     /// Adds the developer content source commands. Outside `rusty dev` they
     /// refuse with `CONTENT_SOURCE_UNAVAILABLE`.
     pub fn with_content_source(mut self) -> Self {

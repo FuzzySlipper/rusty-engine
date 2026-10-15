@@ -20,6 +20,9 @@ Native live-debug commands (require the ordinary live-debug opt-in):
 - `engine.content.source.read PATH` and `engine.content.source.edit PATH
   SHA256 EDITS`: read a source content file and save JSON pointer edits into
   it under `rusty dev` ([content source](csharp-product-project.md#content-source)).
+- `engine.scene.objects`, `engine.scene.object`, `engine.scene.composition`
+  and `engine.scene.resources`: readings of the committed scene
+  ([scene readouts](#scene-readouts)).
 
 A playtest harness drives the runtime directly: debug commands through
 `/__rusty/product/runtime/debug/execute`, input through a
@@ -126,6 +129,49 @@ same way without a page: `tunables.describe`, `tunables.set`, then
 `engine.content.source.read` and `engine.content.source.edit` to save.
 `fixtures/csharp-live-tuning` declares a handful of tunables bound to one
 file and mounts the panel.
+
+## Scene readouts
+
+The `engine.scene.*` commands read the scene as the product committed it: the
+presentation world the services hold, not the renderer's tables. Each answer
+carries the world `revision` it read.
+
+- `engine.scene.objects [ROOT|*] [DEPTH] [--layer L] [--page N]` lists objects
+  depth first in handle order, from `ROOT` or every root (`*`), down `DEPTH`
+  levels (all when omitted; `0` lists the roots only), 100 a page. Each has its
+  handle, parent and parent joint, kind, layer (its root's), visibility, source
+  entity and label, the asset it draws, its local transform, its world
+  transform composed through its parents, its bounds, its child count and
+  `changedRevision`, the world revision that last created or changed it.
+  `total` and `pages` say how many matched.
+- `engine.scene.object HANDLE` adds the committed description (the node's
+  descriptor as published), material override and instance parameters, the
+  pose controls in force on an animated mesh, and the child handles.
+- `engine.scene.composition` answers the cameras, targets, views (with any
+  viewport anchor name) and presentations the product committed. The
+  `engine.renderer.camera` observer is the renderer's, not the product's, so
+  `engine.renderer.presentation` reports it instead.
+- `engine.scene.resources` lists the committed descriptors (textures, shaders,
+  materials, atlases, meshes, voxel objects) with how many users name each,
+  and the admitted resource bodies with their kind and size in bytes.
+
+Limits of a reading:
+
+- A world transform is composed when asked, through the parents' transforms.
+  A node that hangs from a joint (`parentJoint`) leaves out the joint's pose,
+  which only the renderer evaluates; read the joint with
+  [`ReadJointPose`](skeleton-poses.md#writing-and-reading).
+- Bounds are in the node's own space and as the world box around them:
+  primitives' unit shapes, a static mesh's payload bounds, and an animated
+  mesh's asset bounds at rest, not its current pose.
+- Whether an object was drawn or culled is not kept per object.
+  `engine.renderer` reports the frame's draws.
+
+`mountSceneTreePanel(element, { transport? })` from `@rusty-engine/live-debug`
+mounts a tree over these commands: roots first, a node's children read when it
+is expanded, the selected object's facts and committed description, and Refresh
+to read them again. It holds no product state.
+`fixtures/csharp-skeleton-poses` mounts it.
 
 ## Time, drawing and camera
 
