@@ -1103,9 +1103,9 @@ fn metal_materials_lose_their_diffuse_and_tint_their_specular() {
 }
 
 #[test]
-fn linear_textures_mipmap_so_a_receding_tiled_floor_settles_to_its_average() {
+fn mipmapped_textures_settle_a_receding_floor_and_nearest_ones_stay_crisp_up_close() {
     // A one-texel black and white checker tiled 200 times over a 100 m
-    // floor, seen at a grazing angle.
+    // floor, seen at a grazing angle and from just above.
     let checker: Vec<u8> = (0..64)
         .flat_map(|texel| {
             let white = (texel % 8 + texel / 8) % 2 == 0;
@@ -1125,7 +1125,7 @@ fn linear_textures_mipmap_so_a_receding_tiled_floor_settles_to_its_average() {
         vec![0, 2, 1, 0, 3, 2],
         &[(0, 6)],
     );
-    let render = |filter: TextureFilter| {
+    let render = |filter: TextureFilter, (eye, pitch): ([f64; 3], f64)| {
         let mut harness = Harness::new(RendererOptions::default());
         let mut texture =
             harness
@@ -1140,8 +1140,10 @@ fn linear_textures_mipmap_so_a_receding_tiled_floor_settles_to_its_average() {
             static_mesh("mesh/floor", floor.clone(), "material/checker"),
             instance(1, None, "mesh/floor", Transform::IDENTITY),
         ]);
-        harness.render(&camera([0.0, 1.5, 0.0], 0.0, -8.0)).1
+        harness.render(&camera(eye, 0.0, pitch)).1
     };
+    let receding = ([0.0, 1.5, 0.0], -8.0);
+    let close = ([0.0, 0.2, 0.0], -89.0);
     // Luminance spread along rows just below the horizon, where each pixel
     // covers many texels.
     let far_spread = |rgba: &[u8]| {
@@ -1159,12 +1161,32 @@ fn linear_textures_mipmap_so_a_receding_tiled_floor_settles_to_its_average() {
     };
     // No reference image: anisotropic filtering is implementation-defined,
     // and llvmpipe and RADV differ on this checker near the Nyquist limit.
-    let mipmapped = render(TextureFilter::Linear);
-    let single = render(TextureFilter::Nearest);
-    let (smooth, aliased) = (far_spread(&mipmapped), far_spread(&single));
+    let aliased = far_spread(&render(TextureFilter::Nearest, receding));
+    for filter in [TextureFilter::Linear, TextureFilter::NearestMipmapped] {
+        let smooth = far_spread(&render(filter, receding));
+        assert!(
+            smooth * 4.0 < aliased,
+            "far {filter:?} texels average to grey with mips: spread {smooth} against \
+             {aliased} unmipmapped"
+        );
+    }
+    // Up close a texel spans many pixels and is magnified: nearest, as
+    // `Nearest` draws it, not blended across its edges as `Linear` is.
+    let unlike = |a: &[u8], b: &[u8]| {
+        let (a, b) = (a.as_chunks::<4>().0, b.as_chunks::<4>().0);
+        let differing = a
+            .iter()
+            .zip(b)
+            .filter(|(a, b)| a[1].abs_diff(b[1]) > 8)
+            .count();
+        differing as f32 / a.len() as f32
+    };
+    let nearest = render(TextureFilter::Nearest, close);
+    let crisp = unlike(&render(TextureFilter::NearestMipmapped, close), &nearest);
+    let soft = unlike(&render(TextureFilter::Linear, close), &nearest);
     assert!(
-        smooth * 4.0 < aliased,
-        "far texels average to grey with mips: spread {smooth} against {aliased} unmipmapped"
+        crisp < 0.01 && soft > 0.2,
+        "close texels magnify nearest: {crisp} of pixels unlike Nearest's, {soft} linear"
     );
 }
 

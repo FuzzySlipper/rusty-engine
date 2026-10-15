@@ -110,8 +110,16 @@ pub enum NativeAuthoredUvStrategy {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAuthoredTextureFilter {
+    /// Nearest texels at every distance, without mipmaps: crisp up close,
+    /// aliasing where a texel is smaller than a pixel.
     Nearest = 0,
+    /// Linear texels up close; mipmaps blended trilinearly and anisotropically
+    /// at a distance.
     Linear = 1,
+    /// Nearest texels up close; mipmaps blended trilinearly at a distance.
+    /// Anisotropic filtering needs linear magnification, so surfaces at a
+    /// grazing angle blur sooner than with `Linear`.
+    NearestMipmapped = 2,
 }
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

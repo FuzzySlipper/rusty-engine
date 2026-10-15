@@ -111,6 +111,7 @@ impl CsharpRenderResource {
             match filter {
                 NativeTextureFilter::Nearest => TextureFilter::Nearest,
                 NativeTextureFilter::Linear => TextureFilter::Linear,
+                NativeTextureFilter::NearestMipmapped => TextureFilter::NearestMipmapped,
             },
             match wrap {
                 NativeTextureWrap::Clamp => TextureWrap::Clamp,
@@ -1955,6 +1956,15 @@ pub(crate) mod tests {
             .admit(texture(NativeTextureFilter::Linear))
             .unwrap();
         assert_ne!(nearest, linear, "one image, two samplings");
+        let sampled = |filter| texture(filter).texture().cloned().expect("texture");
+        let nearest_mipmapped = sampled(NativeTextureFilter::NearestMipmapped);
+        assert_eq!(
+            nearest_mipmapped.filter,
+            render_model::TextureFilter::NearestMipmapped
+        );
+        for other in [NativeTextureFilter::Nearest, NativeTextureFilter::Linear] {
+            assert_ne!(nearest_mipmapped.id, sampled(other).id);
+        }
         // Handle 0 names nothing, even with the first slot live.
         assert!(registry.get(0).is_none());
         assert_eq!(

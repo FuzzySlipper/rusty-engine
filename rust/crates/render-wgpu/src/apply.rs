@@ -1246,9 +1246,9 @@ impl Renderer {
             height,
             pixels,
             srgb,
-            descriptor.filter == TextureFilter::Nearest,
+            descriptor.filter != TextureFilter::Linear,
             descriptor.wrap == TextureWrap::Repeat,
-            descriptor.filter == TextureFilter::Linear,
+            descriptor.filter != TextureFilter::Nearest,
         )
     }
 

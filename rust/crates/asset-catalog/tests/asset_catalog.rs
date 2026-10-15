@@ -75,7 +75,7 @@ fn surface_catalog() -> AssetCatalog {
         .with_texture(TextureDefinition {
             width: 32,
             height: 32,
-            filter: TextureFilter::Nearest,
+            filter: TextureFilter::NearestMipmapped,
             wrap: TextureWrap::Repeat,
         });
     let atlas_texture = CatalogEntry::new(id("texture/voxel-atlas"), 3)

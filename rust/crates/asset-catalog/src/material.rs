@@ -38,6 +38,7 @@ pub enum TextureFilter {
     #[default]
     Nearest,
     Linear,
+    NearestMipmapped,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

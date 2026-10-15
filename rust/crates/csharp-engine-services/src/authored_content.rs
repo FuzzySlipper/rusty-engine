@@ -1658,6 +1658,7 @@ fn native_texture_filter(value: TextureFilter) -> NativeAuthoredTextureFilter {
     match value {
         TextureFilter::Nearest => NativeAuthoredTextureFilter::Nearest,
         TextureFilter::Linear => NativeAuthoredTextureFilter::Linear,
+        TextureFilter::NearestMipmapped => NativeAuthoredTextureFilter::NearestMipmapped,
     }
 }
 fn native_texture_wrap(value: TextureWrap) -> NativeAuthoredTextureWrap {
@@ -1873,6 +1874,7 @@ fn texture_filter(value: NativeAuthoredTextureFilter) -> Result<TextureFilter, A
     match value {
         NativeAuthoredTextureFilter::Nearest => Ok(TextureFilter::Nearest),
         NativeAuthoredTextureFilter::Linear => Ok(TextureFilter::Linear),
+        NativeAuthoredTextureFilter::NearestMipmapped => Ok(TextureFilter::NearestMipmapped),
     }
 }
 fn texture_wrap(value: NativeAuthoredTextureWrap) -> Result<TextureWrap, AuthoredError> {

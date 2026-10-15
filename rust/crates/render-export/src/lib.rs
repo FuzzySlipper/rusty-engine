@@ -49,6 +49,7 @@ const UNSIGNED_INT: u32 = 5125;
 const MODE_LINES: u32 = 1;
 const NEAREST: u32 = 9728;
 const LINEAR: u32 = 9729;
+const LINEAR_MIPMAP_LINEAR: u32 = 9987;
 const CLAMP_TO_EDGE: u32 = 33071;
 const REPEAT: u32 = 10497;
 
@@ -934,14 +935,15 @@ impl<'a> Writer<'a> {
         };
         let index = self.texture(
             &bytes,
-            descriptor.filter == TextureFilter::Nearest,
+            descriptor.filter != TextureFilter::Linear,
+            descriptor.filter != TextureFilter::Nearest,
             descriptor.wrap == TextureWrap::Repeat,
         );
         self.textures.insert(id.to_owned(), index);
         Ok(Some(index))
     }
 
-    fn texture(&mut self, png: &[u8], nearest: bool, repeat: bool) -> usize {
+    fn texture(&mut self, png: &[u8], nearest: bool, mipmaps: bool, repeat: bool) -> usize {
         let view = self.document.view(png, None);
         self.document
             .images
@@ -952,7 +954,7 @@ impl<'a> Writer<'a> {
         );
         self.document.samplers.push(json!({
             "magFilter": filter,
-            "minFilter": filter,
+            "minFilter": if mipmaps { LINEAR_MIPMAP_LINEAR } else { filter },
             "wrapS": wrap,
             "wrapT": wrap,
         }));
@@ -1183,7 +1185,7 @@ impl<'a> Writer<'a> {
     fn embedded_texture(&mut self, texture: &GlbTexture) -> Option<usize> {
         let image = texture.image.as_ref()?;
         let png = encode_png(image.width, image.height, &image.rgba).ok()?;
-        Some(self.texture(&png, texture.nearest, texture.repeat))
+        Some(self.texture(&png, texture.nearest, texture.mipmaps, texture.repeat))
     }
 
     fn animation(&mut self, id: &str, clip: &GlbClip, nodes: &[usize]) {

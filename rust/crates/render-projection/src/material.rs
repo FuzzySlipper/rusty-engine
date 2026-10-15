@@ -152,6 +152,7 @@ fn project_surface(
         filter: match surface.filter {
             CatalogTextureFilter::Nearest => TextureFilter::Nearest,
             CatalogTextureFilter::Linear => TextureFilter::Linear,
+            CatalogTextureFilter::NearestMipmapped => TextureFilter::NearestMipmapped,
         },
         wrap: match surface.wrap {
             CatalogTextureWrap::Clamp => TextureWrap::Clamp,

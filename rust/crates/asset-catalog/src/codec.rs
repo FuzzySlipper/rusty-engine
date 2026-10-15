@@ -763,6 +763,7 @@ fn texture_filter_tag(value: TextureFilter) -> &'static str {
     match value {
         TextureFilter::Nearest => "nearest",
         TextureFilter::Linear => "linear",
+        TextureFilter::NearestMipmapped => "nearestMipmapped",
     }
 }
 
@@ -770,6 +771,7 @@ fn parse_texture_filter(path: &str, value: &str) -> Result<TextureFilter, AssetC
     match value {
         "nearest" => Ok(TextureFilter::Nearest),
         "linear" => Ok(TextureFilter::Linear),
+        "nearestMipmapped" => Ok(TextureFilter::NearestMipmapped),
         other => Err(AssetCatalogCodecError::new(
             path,
             format!("unsupported texture filter `{other}`"),

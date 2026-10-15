@@ -836,9 +836,14 @@ pub enum MaterialParametersError {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TextureFilter {
+    /// Nearest texels at every distance, from the base level only.
     #[default]
     Nearest,
+    /// Linear texels up close, trilinear and anisotropic through mipmaps.
     Linear,
+    /// Nearest texels up close, trilinear through mipmaps at a distance,
+    /// without anisotropic filtering, which needs linear magnification.
+    NearestMipmapped,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]

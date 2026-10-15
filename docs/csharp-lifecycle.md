@@ -691,7 +691,8 @@ var texture = engine.Graphics.OpenResource(new RenderResourceRequest(
     "textures/stone.png", TextureFilter.Nearest, TextureWrap.Repeat));
 ```
 
-`TextureFilter.Linear` is also available. A fourth argument,
+`TextureFilter.Linear` and `TextureFilter.NearestMipmapped` are also
+available. A fourth argument,
 `TextureColorSpace.Linear`, opens a PNG as data rather than sRGB colour; normal
 maps need it. The same PNG opened both ways is two retained textures. A linear texture gets a mip chain
 at upload, built in linear light, and materials sample it trilinearly with
@@ -699,8 +700,14 @@ at upload, built in linear light, and materials sample it trilinearly with
 costs about 40 ms and a third more memory for a 2048² colour texture.
 Voxel-surface tiling picks its level from the unwrapped tile coordinate,
 clamped so an atlas region keeps at least 4×4 texels. Nearest textures stay
-single-level, for pixel art. Sky panoramas, sprites and particles always
-sample the base level. GLB textures follow their sampler's `minFilter`.
+single-level, for pixel art seen up close. A `NearestMipmapped` texture gets
+the same mip chain and magnifies nearest: crisp texels up close, blended
+trilinearly at a distance. Anisotropic filtering needs linear magnification,
+so it goes without, and surfaces seen at a grazing angle blur sooner than a
+linear texture's. `AuthoredTextureFilter` offers the same three modes. Sky
+panoramas, sprites and particles always sample the base level. GLB textures
+magnify by their sampler's `magFilter` and read mipmaps when its `minFilter`
+is a mipmap filter.
 Sampling applies only to PNG resources. The same PNG can be selected with different samplers: pixel content
 is shared, while each sampler has its own retained texture identity. Keep
 sprite/atlas resources clamped unless their authored usage calls for something
