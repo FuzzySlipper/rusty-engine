@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) const OVERLAY_COMMAND: &str = "engine.inspect.overlay";
 
-const OVERLAY_USAGE: &str = "usage: engine.inspect.overlay [list] | show|hide [sets | set NAME | debug-layer | camera | joints HANDLE | bounds HANDLE | ik HANDLE]";
+const OVERLAY_USAGE: &str = "usage: engine.inspect.overlay [list] | show|hide [sets | set NAME [in VIEW] | debug-layer | camera | joints HANDLE | bounds HANDLE | ik HANDLE]";
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -16,6 +16,8 @@ struct OverlayAnswer {
     all_sets: bool,
     debug_layer: bool,
     camera: bool,
+    /// Sets shown only in one view, by set.
+    only_in: std::collections::BTreeMap<String, String>,
     joints: Vec<u64>,
     bounds: Vec<u64>,
     ik: Vec<u64>,
@@ -61,6 +63,16 @@ fn change(
             } else {
                 shown.sets.remove(*name);
             }
+            shown.only_in.remove(*name);
+        }
+        ["set", name, "in", view] => {
+            if show {
+                shown.sets.insert((*name).to_owned());
+                shown.only_in.insert((*name).to_owned(), (*view).to_owned());
+            } else {
+                shown.sets.remove(*name);
+                shown.only_in.remove(*name);
+            }
         }
         ["debug-layer"] => shown.debug_layer = show,
         ["camera"] => shown.camera = show,
@@ -104,6 +116,7 @@ impl CsharpProductRuntime {
             all_sets: shown.all_sets,
             debug_layer: shown.debug_layer,
             camera: shown.camera,
+            only_in: shown.only_in.clone(),
             joints: shown.joints.iter().copied().collect(),
             bounds: shown.bounds.iter().copied().collect(),
             ik: shown.ik.iter().copied().collect(),
@@ -135,6 +148,12 @@ mod tests {
         assert!(all.all_sets && all.debug_layer && !all.camera);
         let joints = change(all.clone(), true, &["joints", "7"]).unwrap();
         assert_eq!(joints.joints.iter().copied().collect::<Vec<_>>(), [7]);
+        let only = change(none.clone(), true, &["set", "guide", "in", "side"]).unwrap();
+        assert_eq!(only.only_in.get("guide").map(String::as_str), Some("side"));
+        assert!(change(only, true, &["set", "guide"])
+            .unwrap()
+            .only_in
+            .is_empty());
         let named = change(none.clone(), true, &["set", "guide"]).unwrap();
         assert!(named.sets.contains("guide") && named.any());
         assert!(!change(named, false, &["set", "guide"]).unwrap().any());

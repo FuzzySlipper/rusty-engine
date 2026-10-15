@@ -119,6 +119,10 @@ pub struct Capture {
     /// The overlay sets drawn, with their revisions, when the capture asked
     /// for overlays; `None` when it left them out.
     pub overlays: Option<BTreeMap<String, u64>>,
+    /// The inspection view drawn, for a capture of one.
+    pub view: Option<crate::InspectionView>,
+    /// The Engine presentation time the frame shows.
+    pub presentation_seconds: f64,
 }
 
 /// The committed scene in a renderer on one device.
@@ -165,6 +169,10 @@ struct Scene {
     player_settings: render_model::RendererSettingsOverrides,
     /// What inspection shows, kept across rebaselines.
     overlay_shown: crate::OverlayShown,
+    /// The inspection views, kept across rebaselines.
+    inspection_views: Vec<crate::InspectionView>,
+    /// The inspection view pointer input goes to.
+    selected_view: Option<String>,
 }
 
 impl SceneDriver {
@@ -191,6 +199,8 @@ impl SceneDriver {
                 composition_revision: 0,
                 observer: None,
                 overlay_shown: crate::OverlayShown::default(),
+                inspection_views: Vec::new(),
+                selected_view: None,
                 viewport_anchors: RendererViewportAnchors::new(),
                 player_settings: render_model::RendererSettingsOverrides::default(),
             }),
@@ -250,6 +260,8 @@ impl SceneDriver {
         scene.apply(baseline, resources, entities, state, now);
         let shown = scene.overlay_shown.clone();
         scene.renderer.set_overlay_shown(shown);
+        let views = scene.inspection_views.clone();
+        scene.renderer.set_inspection_views(views);
         scene.changed = true;
         drop(scene);
         self.wake.notify_all();
@@ -294,6 +306,109 @@ impl SceneDriver {
         scene.changed = true;
         drop(scene);
         self.wake.notify_all();
+    }
+
+    /// Replaces the inspection views; the next frame draws them.
+    pub fn set_inspection_views(&self, views: Vec<crate::InspectionView>) {
+        let mut scene = self.scene();
+        if scene.inspection_views == views {
+            return;
+        }
+        scene.inspection_views = views.clone();
+        scene.renderer.set_inspection_views(views);
+        scene.changed = true;
+        drop(scene);
+        self.wake.notify_all();
+    }
+
+    pub fn inspection_views(&self) -> Vec<crate::InspectionView> {
+        self.scene().inspection_views.clone()
+    }
+
+    /// The inspection view that takes pointer input; a host keeps it.
+    pub fn select_inspection_view(&self, id: Option<String>) {
+        self.scene().selected_view = id;
+    }
+
+    pub fn selected_inspection_view(&self) -> Option<String> {
+        self.scene().selected_view.clone()
+    }
+
+    /// The camera of the composition's first primary view now (never the
+    /// observer): what inspection views frame the player's camera by.
+    pub fn primary_camera(
+        &self,
+    ) -> Option<(
+        RendererCameraPose,
+        render_host_contracts::RendererCameraProjection,
+    )> {
+        let now = self.now();
+        let mut scene = self.scene();
+        let size = scene
+            .renderer
+            .surface_size()
+            .unwrap_or(DEFAULT_CAPTURE_SIZE);
+        let camera = scene.renderer.primary_overlay_camera(now, size)?;
+        Some((
+            crate::camera::pose_readout(camera.pose).0,
+            camera.projection,
+        ))
+    }
+
+    /// Draws one inspection view once into a target of its own, as
+    /// [`SceneDriver::capture`] draws the composition; `None` when there is
+    /// no such view.
+    pub fn capture_view(
+        &self,
+        id: &str,
+        size: Option<(u32, u32)>,
+        overlays: bool,
+    ) -> Option<Capture> {
+        let now = self.now();
+        let mut scene = self.scene();
+        let view = scene
+            .inspection_views
+            .iter()
+            .find(|view| view.id == id)?
+            .clone();
+        let (width, height) = size
+            .or(scene.renderer.surface_size())
+            .unwrap_or(DEFAULT_CAPTURE_SIZE);
+        let target = OffscreenTarget::new(&self.gpu, width, height, scene.renderer.samples());
+        let (width, height) = target.size();
+        let shown = scene.overlay_shown.clone();
+        if !overlays && shown.any() {
+            scene
+                .renderer
+                .set_overlay_shown(crate::OverlayShown::default());
+        }
+        let drawn_overlays = (overlays && shown.any()).then(|| scene.renderer.overlay_revisions());
+        scene.present_at(now);
+        scene.renderer.render_inspection_view(&target, id, now);
+        if !overlays && shown.any() {
+            scene.renderer.set_overlay_shown(shown);
+        }
+        scene.realized_seconds = scene.elapsed_seconds;
+        scene.collect_facts();
+        scene.captures += 1;
+        let capture = Capture {
+            sequence: scene.captures,
+            step: scene.step,
+            held: scene.held,
+            width,
+            height,
+            rgba: Vec::new(),
+            video: false,
+            composition: scene.composition.clone(),
+            cameras: Vec::new(),
+            overlays: drawn_overlays,
+            view: Some(view),
+            presentation_seconds: scene.drawn_seconds,
+        };
+        drop(scene);
+        let mut rgba = Vec::new();
+        target.read_rgba_into(&self.gpu, &mut rgba);
+        Some(Capture { rgba, ..capture })
     }
 
     /// What inspection shows, and the overlay sets the renderer holds.
@@ -473,6 +588,8 @@ impl SceneDriver {
             composition: scene.composition.clone(),
             cameras,
             overlays: drawn_overlays,
+            view: None,
+            presentation_seconds: scene.drawn_seconds,
         };
         drop(scene);
         let mut rgba = Vec::new();

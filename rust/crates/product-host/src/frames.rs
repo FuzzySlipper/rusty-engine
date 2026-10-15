@@ -249,14 +249,17 @@ fn encode_frame(sequence: u64, frame: &ProductHostFrame) -> Arc<[u8]> {
 }
 
 /// A tool's capture request: the frame's size, or the output's when `None`,
-/// its payload format, and whether it draws what inspection shows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// its payload format, whether it draws what inspection shows, and the
+/// inspection view it draws instead of the composition.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProductHostCaptureRequest {
     pub size: Option<(u32, u32)>,
     /// [`ProductHostFrameFormat::Png`] or [`ProductHostFrameFormat::Rgba8`].
     pub format: ProductHostFrameFormat,
     /// `overlays=1`: draw the overlays and Debug layer inspection shows.
     pub overlays: bool,
+    /// `view=ID`: draw that inspection view.
+    pub view: Option<String>,
 }
 
 /// One captured frame, numbered by capture rather than by the stream, with
@@ -265,6 +268,9 @@ pub struct ProductHostCapture {
     pub sequence: u64,
     pub frame: ProductHostFrame,
     pub cameras: serde_json::Value,
+    /// The inspection view drawn, its camera and the presentation time, for
+    /// a capture of one.
+    pub view: Option<serde_json::Value>,
     /// The overlay sets drawn and their revisions, for a capture that drew
     /// overlays.
     pub overlays: Option<serde_json::Value>,
@@ -285,7 +291,8 @@ pub(crate) fn capture_request(path: &str) -> Result<ProductHostCaptureRequest, &
         None if path == PRODUCT_HOST_FRAME_CAPTURE_PATH => "",
         _ => return Err("unknown capture route"),
     };
-    let (mut format, mut width, mut height, mut overlays) = (None, None, None, None);
+    let (mut format, mut width, mut height, mut overlays, mut view) =
+        (None, None, None, None, None);
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
         let (name, value) = pair.split_once('=').ok_or("malformed capture query")?;
         let repeated = match name {
@@ -316,6 +323,12 @@ pub(crate) fn capture_request(path: &str) -> Result<ProductHostCaptureRequest, &
                     _ => return Err("capture overlays is 1 or 0"),
                 })
                 .is_some(),
+            "view" => {
+                if value.is_empty() {
+                    return Err("capture view names an inspection view");
+                }
+                view.replace(value.to_owned()).is_some()
+            }
             _ => return Err("unknown capture query parameter"),
         };
         if repeated {
@@ -331,6 +344,7 @@ pub(crate) fn capture_request(path: &str) -> Result<ProductHostCaptureRequest, &
         size,
         format: format.unwrap_or(ProductHostFrameFormat::Png),
         overlays: overlays.unwrap_or(false),
+        view,
     })
 }
 
@@ -403,6 +417,7 @@ mod tests {
                 size: None,
                 format: ProductHostFrameFormat::Png,
                 overlays: false,
+                view: None,
             })
         );
         assert_eq!(
@@ -411,7 +426,12 @@ mod tests {
                 size: Some((640, 360)),
                 format: ProductHostFrameFormat::Rgba8,
                 overlays: false,
+                view: None,
             })
+        );
+        assert_eq!(
+            parse("?view=side&overlays=1").map(|request| request.view),
+            Ok(Some("side".to_owned()))
         );
         assert_eq!(
             parse("?overlays=1").map(|request| request.overlays),

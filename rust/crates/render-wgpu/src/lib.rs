@@ -39,6 +39,7 @@ mod ghost;
 mod glb;
 mod gpu;
 mod image_effect;
+mod inspection;
 mod labels;
 mod light_clusters;
 mod overlays;
@@ -104,8 +105,9 @@ pub use driver::{
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
+pub use inspection::InspectionView;
 pub use light_clusters::LightClusterReadout;
-pub use overlays::{OverlaySetReadout, OverlayShown};
+pub use overlays::{OverlaySetReadout, OverlayShown, PLAYER_VIEW};
 pub use particles::EntityPositions;
 pub use probes::IndirectLightReadout;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
@@ -459,6 +461,8 @@ pub struct Renderer {
     ghost_pipelines: ghost::GhostPipelines,
     /// Overlay sets and what inspection shows (`overlays.rs`).
     overlays: overlays::Overlays,
+    /// Engine-owned cameras drawn beside the product's (`inspection.rs`).
+    inspection_views: Vec<inspection::InspectionView>,
     /// Counts applied deltas; offscreen composition targets re-render when
     /// it moves past the value they were drawn at.
     scene_generation: u64,
@@ -669,6 +673,7 @@ impl Renderer {
             ghosts: HashMap::new(),
             ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
             overlays: overlays::Overlays::new(),
+            inspection_views: Vec::new(),
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             scaled: None,

@@ -558,6 +558,8 @@ impl Renderer {
     ) -> ViewStats {
         let clear = self.environment_clear();
         let world_camera = camera::camera_matrices(pose, &camera.projection, area.aspect());
+        let player = self.overlays.player_viewmodel_to_world;
+        self.aim_overlay_labels(crate::overlays::PLAYER_VIEW, player);
         let labels = self.place_labels(&world_camera, area);
         let world = self.encode_view(ViewPass {
             target: *target,
@@ -569,7 +571,7 @@ impl Renderer {
             sky: true,
             backdrop: None,
             camera_id: Some(camera.id.as_str()),
-            overlays,
+            overlays: overlays.then_some(crate::overlays::PLAYER_VIEW),
         });
         self.capture_sky(&world_camera, Some(camera.id.as_str()), clear);
         // Depth-layer labels test the world's depth before the viewmodel
@@ -591,7 +593,7 @@ impl Renderer {
             sky: false,
             backdrop: None,
             camera_id: None,
-            overlays,
+            overlays: overlays.then_some(crate::overlays::PLAYER_VIEW),
         });
         let top_labels = self.draw_labels(target, area, &labels, LabelPass::OnTop);
         let mut stats = world + viewmodel;
@@ -632,20 +634,8 @@ impl Renderer {
         }
 
         // Overlays resolve once a frame, for the first primary view's camera.
-        let primary_camera = plan.steps.iter().find_map(|step| match step {
-            PrimaryStep::View { view, camera } => Some(crate::overlays::OverlayCamera {
-                pose: poses[*camera],
-                projection: composition.cameras[*camera].projection,
-                viewmodel_fov_y_degrees: composition.cameras[*camera].viewmodel_fov_y_degrees,
-                aspect: pixel_viewport(
-                    &composition.views[*view].viewport,
-                    primary.width,
-                    primary.height,
-                )
-                .aspect(),
-            }),
-            PrimaryStep::Presentation { .. } => None,
-        });
+        let primary_camera =
+            first_primary_camera(&composition, &plan, &poses, (primary.width, primary.height));
         self.resolve_overlays(primary_camera);
 
         let clear = self.environment_clear();
@@ -696,7 +686,7 @@ impl Renderer {
                     sky: true,
                     backdrop: None,
                     camera_id: Some(composition.cameras[*camera].id.as_str()),
-                    overlays: false,
+                    overlays: None,
                 });
                 stats.offscreen_views += 1;
             }
@@ -752,6 +742,7 @@ impl Renderer {
                 }
             }
         }
+        stats += self.draw_anchored_inspection_views(&primary, primary_camera);
         let state = &mut self.composition;
         state.drawn_use.clone_from(&plan.cameras);
         state.drawn_observer = observer;
@@ -759,6 +750,33 @@ impl Renderer {
         state.plan = plan;
         state.composition = Some(composition);
         stats
+    }
+
+    /// The primary camera at `time_seconds`, for a target of `size`: the
+    /// camera of the composition's first primary view.
+    pub(crate) fn primary_overlay_camera(
+        &mut self,
+        time_seconds: f64,
+        size: (u32, u32),
+    ) -> Option<crate::overlays::OverlayCamera> {
+        let state = &mut self.composition;
+        let composition = state.composition.as_ref()?;
+        let poses: Vec<CameraPose> = composition
+            .cameras
+            .iter()
+            .zip(&mut state.motions)
+            .map(|(camera, motion)| {
+                motion
+                    .pose(time_seconds)
+                    .unwrap_or_else(|| camera::descriptor_pose(camera))
+            })
+            .collect();
+        first_primary_camera(composition, &state.plan, &poses, size)
+    }
+
+    /// The rect the page reports for a view anchor.
+    pub(crate) fn composition_anchor(&self, name: &str) -> Option<RendererViewport> {
+        self.composition.anchors.get(name).copied()
     }
 
     /// How each camera of the installed composition drew in the last
@@ -924,6 +942,24 @@ fn composition_target(
         drawn: None,
         last_refreshed_frame: None,
     }
+}
+
+/// The camera of a composition's first primary view, posed by `poses`.
+fn first_primary_camera(
+    composition: &RendererViewComposition,
+    plan: &Plan,
+    poses: &[CameraPose],
+    (width, height): (u32, u32),
+) -> Option<crate::overlays::OverlayCamera> {
+    plan.steps.iter().find_map(|step| match step {
+        PrimaryStep::View { view, camera } => Some(crate::overlays::OverlayCamera {
+            pose: poses[*camera],
+            projection: composition.cameras[*camera].projection,
+            viewmodel_fov_y_degrees: composition.cameras[*camera].viewmodel_fov_y_degrees,
+            aspect: pixel_viewport(&composition.views[*view].viewport, width, height).aspect(),
+        }),
+        PrimaryStep::Presentation { .. } => None,
+    })
 }
 
 #[cfg(test)]

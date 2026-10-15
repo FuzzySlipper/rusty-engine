@@ -122,7 +122,7 @@ impl Renderer {
             sky,
             backdrop: None,
             camera_id: None,
-            overlays: false,
+            overlays: None,
         });
         if request.viewmodel {
             self.encode_view(ViewPass {
@@ -135,7 +135,7 @@ impl Renderer {
                 sky: false,
                 backdrop: None,
                 camera_id: None,
-                overlays: false,
+                overlays: None,
             });
         }
         Capture { color, depth }

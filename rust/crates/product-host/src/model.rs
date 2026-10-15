@@ -565,8 +565,12 @@ impl ProductHostDebugCatalog {
                 "Draw one frame now, even on demand, and name its frame sequence and step",
             ),
             (
+                "engine.inspect.view",
+                "Engine cameras beside the player view: engine.inspect.view [list] | create ID [anchor NAME] | close ID | select ID | camera ID X Y Z YAW PITCH [FOV] | orbit ID DYAW DPITCH | pan ID DX DY | zoom ID FACTOR | frame ID front|back|left|right|side|top|underside|close HANDLE|camera | capture ID PATH [WIDTH HEIGHT] [overlays]",
+            ),
+            (
                 "engine.inspect.overlay",
-                "Read or change what inspection draws: engine.inspect.overlay [list] | show|hide [sets | set NAME | debug-layer | camera | joints HANDLE | bounds HANDLE | ik HANDLE]; bare show shows every set and the Debug layer, bare hide hides everything",
+                "Read or change what inspection draws: engine.inspect.overlay [list] | show|hide [sets | set NAME [in VIEW] | debug-layer | camera | joints HANDLE | bounds HANDLE | ik HANDLE]; bare show shows every set and the Debug layer, bare hide hides everything; in VIEW shows a set only in that inspection view (or player)",
             ),
         ] {
             if self.commands.iter().any(|command| command.name == name) {

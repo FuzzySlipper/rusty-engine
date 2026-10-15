@@ -24,6 +24,8 @@ Native live-debug commands (require the ordinary live-debug opt-in):
   and `engine.scene.resources`: readings of the committed scene
   ([scene readouts](#scene-readouts)).
 - `engine.inspect.overlay`: what inspection draws ([overlays](#overlays)).
+- `engine.inspect.view`: Engine cameras beside the player view
+  ([inspection views](#inspection-views)).
 
 A playtest harness drives the runtime directly: debug commands through
 `/__rusty/product/runtime/debug/execute`, input through a
@@ -222,10 +224,74 @@ shows every set and the Debug layer; a bare `hide` hides everything. What is
 shown is the runtime's, shared by every page, and survives a rebaseline but
 not a restage.
 
-Overlays draw in the player view and from the `engine.renderer.camera`
-observer. Captures leave them out unless they ask
+Overlays draw in the player view, from the `engine.renderer.camera`
+observer and in inspection views. `show set NAME in VIEW` shows a set only in
+one view: an inspection view's id, or `player` for the primary views.
+Captures leave overlays out unless they ask
 ([captures](presentation-capture.md#captures)).
 `fixtures/csharp-skeleton-poses` publishes a set with an item in each space.
+
+## Inspection views
+
+Inspection views are Engine cameras drawn beside the product's views. They
+change nothing the product committed: no camera, pose, stance or aim. The
+player view keeps drawing; `engine.scene.composition` does not list them,
+and `engine.renderer.presentation` (`inspectionViews`) and
+`engine.inspect.view` do.
+
+A view draws in one of two places:
+
+- **An anchored rect.** `create ID anchor NAME` draws the view over the
+  player view where the page reports an element anchored under `NAME`
+  (`context.viewport.anchor(name, element)` in the product UI). It draws each
+  frame the page reports that rect and nowhere else; with no rect it draws
+  nothing.
+- **Captures only.** `create ID` makes a view that draws only for
+  `engine.inspect.view capture` and `frames/capture?view=ID`.
+
+A view draws the world from its own camera, then the viewmodel layer as world
+geometry at the primary camera's pose, depth-tested against the world. So a
+camera-held assembly stays where the player's camera holds it, however the
+inspection camera moves, while the player view keeps drawing it camera-local
+with its own viewmodel field of view. Overlays on viewmodel nodes and in
+camera space follow it. A view has no per-view resources; closing it
+releases nothing but its entry.
+
+`engine.inspect.view`:
+
+- `list` (or nothing): the views, their camera poses and projections, focus
+  points and anchors, the selected view, and the player's camera.
+- `create ID [anchor NAME]`: a view to the right of the player's camera,
+  looking at the space just in front of it.
+- `close ID`, `select ID`: remove a view; mark the view that takes pointer
+  input.
+- `camera ID X Y Z YAW PITCH [FOV]`: an absolute pose (Engine yaw: zero faces
+  -Z, positive turns toward +X), and optionally a vertical field of view.
+- `orbit ID DYAW DPITCH`, `pan ID DX DY`, `zoom ID FACTOR`: move about the
+  view's focus point; pan moves the focus with the camera, zoom scales the
+  distance to it.
+- `frame ID front|back|left|right|side|top|underside|close SUBJECT`: frame a
+  committed object (`SUBJECT` a handle from `engine.scene.objects`) by its
+  world bounds, looking along the object's own axes (front from +Z, side and
+  right from +X, top from +Y, underside from -Y), or with `close` from where
+  the view is, nearer. A viewmodel object's bounds and axes are placed by
+  the player's camera. `SUBJECT` `camera` frames the space just in front of
+  the player's camera. The framing leaves 15% around the bounds; pitch stays
+  within 89 degrees of level.
+- `capture ID PATH [WIDTH HEIGHT] [overlays]`: draw the view into a PNG at
+  `PATH` (relative to the host's working directory) and answer its size,
+  simulation step, held flag, presentation time, camera and the overlay sets
+  drawn. The tool capture route draws views too
+  ([captures](presentation-capture.md#captures)).
+
+Hold time with `engine.time.mode manual` to capture the player view and each
+view at the same step: every view reads the one committed simulation and
+the poses the renderer evaluated.
+
+The scene tree's selected object has **Frame in view**, which frames the
+selected view (else the first) on it from the side, and **Bounds**, which
+shows or hides its bounds overlay. `fixtures/csharp-skeleton-poses` holds a
+model on the viewmodel layer and has two panes to anchor views to.
 
 ## Time, drawing and camera
 

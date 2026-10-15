@@ -2333,8 +2333,11 @@ fn capture_response<R: ProductHostRuntime>(
                 "application/x-rusty-frame",
                 crate::frames::encode_capture(&captured),
             );
-            response.cameras = Some(captured.cameras.to_string());
-            response.overlays = captured.overlays.map(|overlays| overlays.to_string());
+            response.capture = Some(Box::new(CaptureHeaders {
+                cameras: captured.cameras.to_string(),
+                overlays: captured.overlays.map(|overlays| overlays.to_string()),
+                view: captured.view.map(|view| view.to_string()),
+            }));
             response
         }
         Err(detail) => HttpResponse::error(500, "PRODUCT_HOST_CAPTURE", &detail),
@@ -4034,10 +4037,18 @@ struct HttpResponse {
     output_through: Option<u64>,
     commit_disposition: Option<CommitDisposition>,
     delivery_certainty: Option<ResponseDeliveryCertainty>,
-    /// A capture's drawn cameras, as JSON.
-    cameras: Option<String>,
-    /// A capture's drawn overlay sets and revisions, as JSON.
+    /// A capture's facts, sent as headers.
+    capture: Option<Box<CaptureHeaders>>,
+}
+
+/// What a tool capture's response headers say, as JSON.
+struct CaptureHeaders {
+    /// The drawn cameras.
+    cameras: String,
+    /// The drawn overlay sets and revisions.
     overlays: Option<String>,
+    /// The inspection view drawn.
+    view: Option<String>,
 }
 
 /// Preserve the runtime's mutation certainty even on a typed rejection.
@@ -4092,8 +4103,7 @@ impl HttpResponse {
             output_through: None,
             commit_disposition: None,
             delivery_certainty: None,
-            cameras: None,
-            overlays: None,
+            capture: None,
         }
     }
 
@@ -4182,11 +4192,14 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<
     if let Some(output_through) = response.output_through {
         write!(stream, "X-Rusty-Output-Through: {output_through}\r\n")?;
     }
-    if let Some(cameras) = &response.cameras {
-        write!(stream, "X-Rusty-Frame-Cameras: {cameras}\r\n")?;
-    }
-    if let Some(overlays) = &response.overlays {
-        write!(stream, "X-Rusty-Frame-Overlays: {overlays}\r\n")?;
+    if let Some(capture) = &response.capture {
+        write!(stream, "X-Rusty-Frame-Cameras: {}\r\n", capture.cameras)?;
+        if let Some(overlays) = &capture.overlays {
+            write!(stream, "X-Rusty-Frame-Overlays: {overlays}\r\n")?;
+        }
+        if let Some(view) = &capture.view {
+            write!(stream, "X-Rusty-Frame-View: {view}\r\n")?;
+        }
     }
     if let Some(disposition) = response.commit_disposition {
         write!(

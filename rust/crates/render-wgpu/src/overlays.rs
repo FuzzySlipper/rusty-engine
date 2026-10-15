@@ -75,7 +75,13 @@ pub struct OverlayShown {
     pub bounds: BTreeSet<u64>,
     /// Animated instances whose IK targets and shortfalls draw.
     pub ik: BTreeSet<u64>,
+    /// Sets shown only in one view: the player view ([`PLAYER_VIEW`]) or an
+    /// inspection view, by id.
+    pub only_in: BTreeMap<String, String>,
 }
+
+/// The view key of the primary views, for [`OverlayShown::only_in`].
+pub const PLAYER_VIEW: &str = "player";
 
 impl OverlayShown {
     pub fn any(&self) -> bool {
@@ -122,15 +128,30 @@ pub(crate) struct Overlays {
     sets: BTreeMap<String, RetainedSet>,
     revisions: u64,
     pub shown: OverlayShown,
-    /// This frame's vertices, by bucket (see [`bucket`]).
+    /// This frame's vertices, by bucket (see [`bucket`]): every view's,
+    /// and each view's own.
     ranges: [Range<u32>; 4],
+    view_ranges: BTreeMap<String, [Range<u32>; 4]>,
     vertices: Vec<LineVertex>,
     buffer: Option<wgpu::Buffer>,
     shader: Option<(wgpu::ShaderModule, wgpu::PipelineLayout)>,
     /// Per target: depth-tested and on-top pipelines.
     pipelines: Vec<(ColorTarget, [wgpu::RenderPipeline; 2])>,
-    /// The billboard labels the last resolve made.
-    labels: usize,
+    /// The frame's labels, by reserved handle offset, for aiming them per
+    /// view.
+    labels: Vec<LabelRecord>,
+    /// A viewmodel point drawn with the player view's viewmodel
+    /// projection, as the world point its world projection puts at the same
+    /// pixel.
+    pub(crate) player_viewmodel_to_world: Option<Mat4>,
+}
+
+/// Where one overlay label is, in its pass's coordinates.
+struct LabelRecord {
+    layer: ViewLayer,
+    point: Vec3,
+    /// The only view it shows in.
+    view: Option<String>,
 }
 
 /// Index of a bucket of lines: world or viewmodel pass, tested or on top.
@@ -145,11 +166,13 @@ impl Overlays {
             revisions: 0,
             shown: OverlayShown::default(),
             ranges: Default::default(),
+            view_ranges: BTreeMap::new(),
             vertices: Vec::new(),
             buffer: None,
             shader: None,
             pipelines: Vec::new(),
-            labels: 0,
+            labels: Vec::new(),
+            player_viewmodel_to_world: None,
         }
     }
 
@@ -190,11 +213,17 @@ impl Overlays {
             .collect()
     }
 
-    /// Lines this frame draws in a pass of `layer`.
-    pub fn lines(&self, layer: ViewLayer) -> u32 {
-        [false, true]
-            .into_iter()
-            .map(|on_top| self.ranges[bucket(layer, on_top)].len() as u32 / 2)
+    /// The bucket ranges a view draws: every view's, then its own.
+    fn view_buckets<'a>(&'a self, view: &str) -> impl Iterator<Item = &'a [Range<u32>; 4]> {
+        std::iter::once(&self.ranges).chain(self.view_ranges.get(view))
+    }
+
+    /// Lines this frame draws in `view`'s pass of `layer`.
+    pub fn lines(&self, layer: ViewLayer, view: &str) -> u32 {
+        self.view_buckets(view)
+            .flat_map(|ranges| {
+                [false, true].map(|on_top| ranges[bucket(layer, on_top)].len() as u32 / 2)
+            })
             .sum()
     }
 
@@ -283,6 +312,7 @@ impl Overlays {
         pass: &mut wgpu::RenderPass<'_>,
         layer: ViewLayer,
         target: ColorTarget,
+        view: &str,
     ) -> u32 {
         let (Some(buffer), Some((_, pipelines))) = (
             &self.buffer,
@@ -293,15 +323,17 @@ impl Overlays {
             return 0;
         };
         let mut draws = 0;
-        for (on_top, pipeline) in [false, true].into_iter().zip(pipelines) {
-            let range = self.ranges[bucket(layer, on_top)].clone();
-            if range.is_empty() {
-                continue;
+        for ranges in self.view_buckets(view) {
+            for (on_top, pipeline) in [false, true].into_iter().zip(pipelines) {
+                let range = ranges[bucket(layer, on_top)].clone();
+                if range.is_empty() {
+                    continue;
+                }
+                pass.set_pipeline(pipeline);
+                pass.set_vertex_buffer(0, buffer.slice(..));
+                pass.draw(range, 0..1);
+                draws += 1;
             }
-            pass.set_pipeline(pipeline);
-            pass.set_vertex_buffer(0, buffer.slice(..));
-            pass.draw(range, 0..1);
-            draws += 1;
         }
         draws
     }
@@ -466,15 +498,9 @@ impl Renderer {
         let mut vertices = std::mem::take(&mut self.overlays.vertices);
         vertices.clear();
         self.overlays.ranges = Default::default();
-        let mut labels: Vec<(Vec3, String, [f32; 4], bool)> = Vec::new();
-        if !self.overlays.shown.any() {
-            self.overlays.vertices = vertices;
-            self.realize_overlay_labels(labels);
-            return;
-        }
-        // A viewmodel point drawn with the viewmodel's projection, as the
-        // world point the world projection puts at the same pixel.
-        let viewmodel_to_world = camera.map(|camera| {
+        self.overlays.view_ranges.clear();
+        let mut labels: Vec<(LabelRecord, String, [f32; 4], bool)> = Vec::new();
+        self.overlays.player_viewmodel_to_world = camera.map(|camera| {
             let world = camera::camera_matrices(camera.pose, &camera.projection, camera.aspect);
             let viewmodel = camera::viewmodel_matrices(
                 &camera.projection,
@@ -483,29 +509,40 @@ impl Renderer {
             );
             world.view_proj.inverse() * viewmodel.view_proj
         });
+        if !self.overlays.shown.any() {
+            self.overlays.vertices = vertices;
+            self.realize_overlay_labels(labels);
+            return;
+        }
         let mut buckets: [Vec<LineVertex>; 4] = Default::default();
+        let mut view_buckets: BTreeMap<String, [Vec<LineVertex>; 4]> = BTreeMap::new();
         let entities = self.entity_handles();
         let shown = &self.overlays.shown;
         for (name, retained) in &self.overlays.sets {
             if !shown.shows_set(name) {
                 continue;
             }
+            let only_in = shown.only_in.get(name);
+            let out = match only_in {
+                Some(view) => view_buckets.entry(view.clone()).or_default(),
+                None => &mut buckets,
+            };
             for item in &retained.set.items {
                 if let Some((layer, to_pass)) = self.item_space(item, &entities) {
                     if let OverlayShape::Label { at, text } = &item.shape {
-                        let at = to_pass.transform_point3(Vec3::from_array(*at));
-                        let anchor = match (layer, viewmodel_to_world) {
-                            (ViewLayer::Viewmodel, Some(to_world)) => to_world.project_point3(at),
-                            (ViewLayer::Viewmodel, None) => continue,
-                            _ => at,
-                        };
+                        let point = to_pass.transform_point3(Vec3::from_array(*at));
                         // A viewmodel label is over the world it is drawn on.
                         let on_top = item.on_top || layer == ViewLayer::Viewmodel;
-                        labels.push((anchor, text.clone(), item.color, on_top));
+                        let record = LabelRecord {
+                            layer,
+                            point,
+                            view: only_in.cloned(),
+                        };
+                        labels.push((record, text.clone(), item.color, on_top));
                         continue;
                     }
                     let mut pen = Pen {
-                        out: &mut buckets[bucket(layer, item.on_top)],
+                        out: &mut out[bucket(layer, item.on_top)],
                         to_pass,
                         color: item.color,
                     };
@@ -541,10 +578,17 @@ impl Renderer {
             });
             pen.axes(camera.pose.position, camera.pose.orientation, CAMERA_AXES);
         }
-        for (index, lines) in buckets.iter().enumerate() {
-            let start = vertices.len() as u32;
-            vertices.extend_from_slice(lines);
-            self.overlays.ranges[index] = start..vertices.len() as u32;
+        let mut append = |lines: &[Vec<LineVertex>; 4]| -> [Range<u32>; 4] {
+            std::array::from_fn(|index| {
+                let start = vertices.len() as u32;
+                vertices.extend_from_slice(&lines[index]);
+                start..vertices.len() as u32
+            })
+        };
+        self.overlays.ranges = append(&buckets);
+        for (view, lines) in &view_buckets {
+            let ranges = append(lines);
+            self.overlays.view_ranges.insert(view.clone(), ranges);
         }
         if !vertices.is_empty() {
             let bytes: &[u8] = bytemuck::cast_slice(&vertices);
@@ -570,18 +614,20 @@ impl Renderer {
     }
 
     /// Makes the frame's overlay labels billboard labels on reserved
-    /// handles, and removes the ones the last frame had beyond them. A label
-    /// whose text and look are unchanged keeps its raster.
-    fn realize_overlay_labels(&mut self, labels: Vec<(Vec3, String, [f32; 4], bool)>) {
+    /// handles, aimed for the player view, and removes the ones the last
+    /// frame had beyond them. A label whose text and look are unchanged
+    /// keeps its raster.
+    fn realize_overlay_labels(&mut self, labels: Vec<(LabelRecord, String, [f32; 4], bool)>) {
         use render_presentation::{
             BillboardAnchor, BillboardContent, BillboardDescriptor, BillboardFontRef,
             BillboardHandle, BillboardLayer, BillboardProjectionOp,
         };
-        let count = labels.len();
-        for (index, (anchor, text, color, on_top)) in labels.into_iter().enumerate() {
+        let before = self.overlays.labels.len();
+        let mut records = Vec::with_capacity(labels.len());
+        for (index, (record, text, color, on_top)) in labels.into_iter().enumerate() {
             let descriptor = BillboardDescriptor {
                 anchor: BillboardAnchor::World {
-                    position: anchor.to_array(),
+                    position: record.point.to_array(),
                 },
                 content: BillboardContent::Text {
                     localization_key: String::new(),
@@ -610,8 +656,9 @@ impl Renderer {
                 &crate::resources::NoResources,
                 &|_| None,
             );
+            records.push(record);
         }
-        for index in count..self.overlays.labels {
+        for index in records.len()..before {
             let handle = BillboardHandle::new(FIRST_LABEL_HANDLE - index as u64);
             let _ = self.labels.apply(
                 &BillboardProjectionOp::Destroy { handle },
@@ -619,7 +666,32 @@ impl Renderer {
                 &|_| None,
             );
         }
-        self.overlays.labels = count;
+        self.overlays.labels = records;
+        let player = self.overlays.player_viewmodel_to_world;
+        self.aim_overlay_labels(PLAYER_VIEW, player);
+    }
+
+    /// Anchors the overlay labels for one view: a world label where it is, a
+    /// viewmodel label through `viewmodel_to_world` (hidden without one),
+    /// and a label of a set shown only in another view hidden.
+    pub(crate) fn aim_overlay_labels(&mut self, view: &str, viewmodel_to_world: Option<Mat4>) {
+        for (index, record) in self.overlays.labels.iter().enumerate() {
+            let handle =
+                render_presentation::BillboardHandle::new(FIRST_LABEL_HANDLE - index as u64);
+            let Some(label) = self.labels.active.get_mut(&handle) else {
+                continue;
+            };
+            label.anchor = if record.view.as_deref().is_some_and(|only| only != view) {
+                None
+            } else {
+                match record.layer {
+                    ViewLayer::Viewmodel => {
+                        viewmodel_to_world.map(|to_world| to_world.project_point3(record.point))
+                    }
+                    _ => Some(record.point),
+                }
+            };
+        }
     }
 
     /// The lowest handle published for each entity.

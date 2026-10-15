@@ -1104,6 +1104,22 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tre
     export function formatVector(values: readonly number[]): string;
     /** The selected object's facts, as label/value rows. */
     export function objectFacts(object: SceneObject): [string, string][];
+    /** What `engine.inspect.view` lists: the views and the selected one. */
+    export interface InspectionViews {
+        readonly views: readonly {
+            readonly id: string;
+        }[];
+        readonly selected?: string;
+    }
+    export function viewsCommand(): string;
+    export function parseViews(text: string): InspectionViews;
+    /** Frames `view` on the object from its side. */
+    export function frameCommand(view: string, handle: number): string;
+    export function overlaysCommand(): string;
+    export function parseOverlays(text: string): {
+        readonly bounds: readonly number[];
+    };
+    export function boundsCommand(handle: number, show: boolean): string;
 }
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel" {
     import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";

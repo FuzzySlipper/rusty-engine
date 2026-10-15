@@ -102,7 +102,7 @@ pub(crate) struct Finish {
     /// Finish pipelines by the image's format and the world's samples.
     pipelines: Vec<(ColorTarget, wgpu::RenderPipeline)>,
     /// Transparent viewport clears by HDR target sample count.
-    clears: Vec<(u32, wgpu::RenderPipeline)>,
+    clears: Vec<((u32, bool), wgpu::RenderPipeline)>,
     targets: Vec<HdrTarget>,
     pub post: Post,
     frame: u64,
@@ -672,14 +672,19 @@ impl Finish {
     }
 
     /// Clear the viewport of a multisampled or single-sample HDR target to
-    /// transparent and its depth to the far plane.
+    /// transparent and, with `depth`, its depth to the far plane.
     pub fn clear_viewport(
         &mut self,
         device: &wgpu::Device,
         pass: &mut wgpu::RenderPass<'_>,
         samples: u32,
+        depth: bool,
     ) {
-        let index = match self.clears.iter().position(|(key, _)| *key == samples) {
+        let index = match self
+            .clears
+            .iter()
+            .position(|(key, _)| *key == (samples, depth))
+        {
             Some(index) => index,
             None => {
                 let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -700,7 +705,7 @@ impl Finish {
                     primitive: Default::default(),
                     depth_stencil: Some(wgpu::DepthStencilState {
                         format: DEPTH_FORMAT,
-                        depth_write_enabled: Some(true),
+                        depth_write_enabled: Some(depth),
                         depth_compare: Some(wgpu::CompareFunction::Always),
                         stencil: Default::default(),
                         bias: Default::default(),
@@ -718,7 +723,7 @@ impl Finish {
                     multiview_mask: None,
                     cache: None,
                 });
-                self.clears.push((samples, pipeline));
+                self.clears.push(((samples, depth), pipeline));
                 self.clears.len() - 1
             }
         };

@@ -300,6 +300,9 @@ pub(crate) enum PassStart {
     Target,
     /// Clear only the viewport, keeping what earlier passes drew elsewhere.
     Viewport,
+    /// Clear only the viewport's colour and keep the depth the view's world
+    /// pass drew: an inspection view's viewmodel, placed in the world.
+    KeepDepth,
 }
 
 pub(crate) struct ViewPass<'a> {
@@ -318,8 +321,9 @@ pub(crate) struct ViewPass<'a> {
     /// The composition camera drawing the view, whose backdrop link it
     /// takes before every view's.
     pub camera_id: Option<&'a str>,
-    /// Draw the frame's overlay lines for this pass's layer.
-    pub overlays: bool,
+    /// Draw the frame's overlay lines for this pass's layer, as this view
+    /// (`PLAYER_VIEW` or an inspection view's id) shows them.
+    pub overlays: Option<&'a str>,
 }
 
 impl Renderer {
@@ -2070,7 +2074,7 @@ impl Renderer {
             sky: false,
             backdrop: Some(backdrop.link),
             camera_id: view.camera_id,
-            overlays: false,
+            overlays: None,
         })
     }
 
@@ -2146,7 +2150,7 @@ impl Renderer {
                 sky: true,
                 backdrop: None,
                 camera_id: Some(CAPTURE_VIEWS[face as usize]),
-                overlays: false,
+                overlays: None,
             };
             self.submit_background(&face_view);
             if let Some(backdrop) = self.backdrop_camera(&face_camera, camera_id) {
@@ -2506,11 +2510,9 @@ impl Renderer {
         };
         let effects = self.prepare_effects(&view, hdr_format);
         let slot = view.layer as usize;
-        let overlay_lines = if view.overlays {
-            self.overlays.lines(view.layer)
-        } else {
-            0
-        };
+        let overlay_lines = view
+            .overlays
+            .map_or(0, |key| self.overlays.lines(view.layer, key));
         if overlay_lines > 0 {
             self.overlays
                 .ensure_pipelines(&self.gpu.device, &self.layouts.frame, hdr_format);
@@ -2820,9 +2822,13 @@ impl Renderer {
             in_viewport(&mut pass);
             if !whole {
                 // A viewport of a shared HDR target clears with a triangle,
-                // depth included.
-                self.finish
-                    .clear_viewport(&self.gpu.device, &mut pass, view.target.samples);
+                // depth included unless the pass keeps it.
+                self.finish.clear_viewport(
+                    &self.gpu.device,
+                    &mut pass,
+                    view.target.samples,
+                    view.start != PassStart::KeepDepth,
+                );
             }
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             let occlusion_bind_group = self.ambient_occlusion.apply_bind_group(occlusion.as_ref());
@@ -2915,7 +2921,12 @@ impl Renderer {
             );
             if overlay_lines > 0 {
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
-                encoded.draws += self.overlays.draw(&mut pass, view.layer, hdr_format);
+                encoded.draws += self.overlays.draw(
+                    &mut pass,
+                    view.layer,
+                    hdr_format,
+                    view.overlays.unwrap_or_default(),
+                );
             }
             parts = encoded;
         }

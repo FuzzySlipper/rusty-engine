@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { childrenCommand, objectFacts, objectLabel, parseObjectPage, rootsCommand } from './scene-tree-model.js';
+import {
+  boundsCommand,
+  childrenCommand,
+  frameCommand,
+  objectFacts,
+  objectLabel,
+  parseObjectPage,
+  parseOverlays,
+  parseViews,
+  rootsCommand,
+} from './scene-tree-model.js';
 
 const page = JSON.stringify({
   revision: 4,
@@ -53,4 +63,13 @@ test('tree commands list roots and one level of children, paged', () => {
   assert.equal(rootsCommand(), 'engine.scene.objects * 0');
   assert.equal(childrenCommand(7), 'engine.scene.objects 7 1');
   assert.equal(childrenCommand(7, 2), 'engine.scene.objects 7 1 --page 2');
+});
+
+test('the object actions frame the selected view and toggle the bounds overlay', () => {
+  const views = parseViews('{"views":[{"id":"side"},{"id":"grip"}],"selected":"grip"}');
+  assert.equal(views.selected, 'grip');
+  assert.equal(frameCommand('grip', 7), 'engine.inspect.view frame grip side 7');
+  assert.deepEqual(parseOverlays('{"on":true,"bounds":[7]}').bounds, [7]);
+  assert.equal(boundsCommand(7, false), 'engine.inspect.overlay hide bounds 7');
+  assert.throws(() => parseViews('{}'));
 });

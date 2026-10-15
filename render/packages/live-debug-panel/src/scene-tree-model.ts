@@ -110,3 +110,37 @@ export function objectFacts(object: SceneObject): [string, string][] {
   rows.push(['changed', `revision ${object.changedRevision}`]);
   return rows;
 }
+
+/** What `engine.inspect.view` lists: the views and the selected one. */
+export interface InspectionViews {
+  readonly views: readonly { readonly id: string }[];
+  readonly selected?: string;
+}
+
+export function viewsCommand(): string {
+  return 'engine.inspect.view list';
+}
+
+export function parseViews(text: string): InspectionViews {
+  const views = JSON.parse(text) as InspectionViews;
+  if (!Array.isArray(views.views)) throw new Error('engine.inspect.view answered without views');
+  return views;
+}
+
+/** Frames `view` on the object from its side. */
+export function frameCommand(view: string, handle: number): string {
+  return `engine.inspect.view frame ${view} side ${handle}`;
+}
+
+export function overlaysCommand(): string {
+  return 'engine.inspect.overlay list';
+}
+
+export function parseOverlays(text: string): { readonly bounds: readonly number[] } {
+  const overlays = JSON.parse(text) as { bounds?: number[] };
+  return { bounds: overlays.bounds ?? [] };
+}
+
+export function boundsCommand(handle: number, show: boolean): string {
+  return `engine.inspect.overlay ${show ? 'show' : 'hide'} bounds ${handle}`;
+}

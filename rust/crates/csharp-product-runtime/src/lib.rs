@@ -711,6 +711,7 @@ pub use render_wgpu::{Gpu, Renderer, SceneDriver};
 
 mod content_source_debug;
 mod inspect_debug;
+mod inspect_view;
 mod playtest;
 mod scene_debug;
 
@@ -3279,6 +3280,9 @@ impl ProductHostRuntime for CsharpProductRuntime {
             return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
         if let Some(result) = self.execute_inspect_debug(command) {
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
+        if let Some(result) = self.execute_inspect_view(command) {
             return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
         if let Some(frames) = self

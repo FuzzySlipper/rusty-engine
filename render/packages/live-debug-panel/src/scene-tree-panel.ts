@@ -1,7 +1,13 @@
 import { createLiveDebugHttpTransport, type LiveDebugTransport } from '@rusty-engine/live-debug-client';
 
 import {
+  boundsCommand,
   childrenCommand,
+  frameCommand,
+  overlaysCommand,
+  parseOverlays,
+  parseViews,
+  viewsCommand,
   objectCommand,
   objectFacts,
   objectLabel,
@@ -50,6 +56,7 @@ const STYLE = `
 .rusty-scene-tree__name[aria-selected=true] { border-color: var(--_rs-accent); color: var(--_rs-accent); }
 .rusty-scene-tree__more { color: var(--_rs-muted); }
 .rusty-scene-tree__detail { border-top: 1px solid var(--_rs-border); padding-top: 0.4rem; }
+.rusty-scene-tree__actions { display: flex; gap: 0.35rem; flex-wrap: wrap; margin: 0.3rem 0; }
 .rusty-scene-tree__facts { display: grid; grid-template-columns: max-content 1fr; gap: 0.1rem 0.6rem; margin: 0; }
 .rusty-scene-tree__facts dt { color: var(--_rs-muted); }
 .rusty-scene-tree__facts dd { margin: 0; overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
@@ -199,7 +206,36 @@ export class SceneTreePanel {
     const description = this.#make('details', 'rusty-scene-tree__description');
     const committed = { description: detail.description, pose: detail.pose, materialOverride: detail.materialOverride, materialParameters: detail.materialParameters };
     description.append(this.#make('summary', '', 'Committed description'), this.#make('pre', '', JSON.stringify(committed, null, 2)));
-    this.#detail.replaceChildren(facts, description);
+    this.#detail.replaceChildren(this.#actions(detail.handle), facts, description);
+  }
+
+  /** Frame the selected inspection view on the object; show or hide its bounds. */
+  #actions(handle: number): HTMLElement {
+    const actions = this.#make('div', 'rusty-scene-tree__actions');
+    const button = (label: string, run: () => Promise<string>): void => {
+      const element = this.#make('button', '', label) as HTMLButtonElement;
+      element.type = 'button';
+      element.addEventListener('click', () => {
+        void run()
+          .then((message) => this.#report(message, false))
+          .catch((error: unknown) => this.#report(error, true));
+      });
+      actions.append(element);
+    };
+    button('Frame in view', async () => {
+      const views = parseViews(await this.#send(viewsCommand()));
+      const view = views.selected ?? views.views[0]?.id;
+      if (view === undefined) throw new Error('No inspection view: engine.inspect.view create ID anchor NAME');
+      await this.#send(frameCommand(view, handle));
+      return `Framed ${handle} in ${view}.`;
+    });
+    button('Bounds', async () => {
+      const overlays = parseOverlays(await this.#send(overlaysCommand()));
+      const shown = overlays.bounds.includes(handle);
+      await this.#send(boundsCommand(handle, !shown));
+      return shown ? `Bounds of ${handle} hidden.` : `Bounds of ${handle} shown.`;
+    });
+    return actions;
   }
 
   async #send(command: string): Promise<string> {

@@ -819,7 +819,7 @@ fn a_capture_draws_through_the_runtime_hook_and_is_never_a_viewer() {
     let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
     let seen = Arc::clone(&requests);
     let capture: product_host::ProductHostFrameCapture = Arc::new(move |request| {
-        seen.lock().unwrap().push(request);
+        seen.lock().unwrap().push(request.clone());
         Ok(product_host::ProductHostCapture {
             sequence: 3,
             frame: product_host::ProductHostFrame {
@@ -833,6 +833,7 @@ fn a_capture_draws_through_the_runtime_hook_and_is_never_a_viewer() {
             },
             cameras: serde_json::json!([{ "id": "main", "observer": false }]),
             overlays: None,
+            view: None,
         })
     });
     let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
@@ -889,11 +890,13 @@ fn a_capture_draws_through_the_runtime_hook_and_is_never_a_viewer() {
                 size: Some((2, 1)),
                 format: product_host::ProductHostFrameFormat::Rgba8,
                 overlays: false,
+                view: None,
             },
             product_host::ProductHostCaptureRequest {
                 size: None,
                 format: product_host::ProductHostFrameFormat::Png,
                 overlays: false,
+                view: None,
             },
         ]
     );

@@ -14,6 +14,10 @@ namespace CsharpSkeletonPoses;
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
     private const ulong BodyId = 9784;
+    /// <summary>A held model on the viewmodel layer, in the camera's space: an assembly inspection views look at from outside.</summary>
+    private const ulong HeldId = 9785;
+    /// <summary>The 0.8 m rod laid forward, a quarter of its length, low and right of the view.</summary>
+    private static readonly Transform HeldPlacement = new(new(0.2f, -0.2f, -0.4f), Quaternion.CreateFromYawPitchRoll(0.3f, -1.35f, 0), new(0.3f, 0.3f, 0.3f));
     private const string Clip = "idle";
     private const float CircleRadius = 0.2f;
     private const float CircleSecondsPerTurn = 4f;
@@ -35,6 +39,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly Camera camera;
     private readonly RenderResource bodyResource;
     private readonly Appearance body;
+    private readonly RenderResource heldResource;
+    private readonly Appearance held;
     private readonly AnimationInstance instance;
     private readonly uint arm, forearm, hand;
     private readonly uint[] finger;
@@ -62,7 +68,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         using var source = engine.Content.OpenReference(new("body.glb"));
         bodyResource = engine.Animation.OpenAnimatedMeshFromContent(new(source));
         body = engine.Animation.CreateAnimatedMeshAppearance(new(bodyResource));
-        engine.Graphics.PublishSnapshot([new(BodyId, false, 0, new(Vector3.Zero, Quaternion.Identity, Vector3.One), body, true, RenderLayer.Scene)]);
+        using var heldSource = engine.Content.OpenReference(new("weapon.glb"));
+        heldResource = engine.Animation.OpenAnimatedMeshFromContent(new(heldSource));
+        held = engine.Animation.CreateAnimatedMeshAppearance(new(heldResource));
+        engine.Graphics.PublishSnapshot([
+            new(BodyId, false, 0, new(Vector3.Zero, Quaternion.Identity, Vector3.One), body, true, RenderLayer.Scene),
+            new(HeldId, false, 0, HeldPlacement, held, true, RenderLayer.Viewmodel),
+        ]);
         instance = engine.Animation.CreateInstance(new(body, BodyId));
         engine.Animation.SetPlayback(new(instance, AnimationPlaybackKind.Play, Clip, AnimationLoopMode.Repeat, 1, 1, true, 0, false, 0));
         ReadOnlyMemory<AnimationJointInfo> rig = engine.Animation.ReadJoints(bodyResource);
@@ -80,6 +92,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             OverlayItem.Marker(OverlayPlace.AtJoint(BodyId, hand), Vector3.Zero, 0.08f, HandColor, onTop: true),
             OverlayItem.Label(OverlayPlace.AtJoint(BodyId, hand), new(0, 0.12f, 0), "right hand", HandColor, onTop: true),
             OverlayItem.Marker(OverlayPlace.Camera, new(0, 0, -1), 0.02f, GuideColor, onTop: true),
+            OverlayItem.Axes(OverlayPlace.Model(HeldId), Vector3.Zero, Quaternion.Identity, 0.05f, onTop: true),
+            OverlayItem.Label(OverlayPlace.Model(HeldId), new(0, 0.04f, 0), "held", HandColor, onTop: true),
         ]));
     }
 
@@ -195,6 +209,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.Graphics.PublishSnapshot(ReadOnlySpan<AppearanceFact>.Empty);
         body.Dispose();
         bodyResource.Dispose();
+        held.Dispose();
+        heldResource.Dispose();
         camera.Dispose();
     }
 }

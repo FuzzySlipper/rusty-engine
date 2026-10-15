@@ -262,10 +262,20 @@ impl FrameOutput {
             .as_ref()
             .map(|(streamer, _)| Arc::downgrade(streamer));
         Arc::new(move |request: product_host::ProductHostCaptureRequest| {
-            let captured = match streamer.as_ref().and_then(std::sync::Weak::upgrade) {
-                Some(streamer) => streamer.capture(request.size, request.overlays),
-                None => driver.capture(request.size, request.overlays),
+            let streamer = streamer.as_ref().and_then(std::sync::Weak::upgrade);
+            let captured = match (&request.view, streamer) {
+                (Some(view), _) => driver
+                    .capture_view(view, request.size, request.overlays)
+                    .ok_or_else(|| format!("INSPECT_NO_VIEW: no inspection view {view}"))?,
+                (None, Some(streamer)) => streamer.capture(request.size, request.overlays),
+                (None, None) => driver.capture(request.size, request.overlays),
             };
+            let view = captured.view.as_ref().map(|view| {
+                json!({
+                    "view": crate::inspect_view::view_answer(view, None),
+                    "presentationSeconds": captured.presentation_seconds,
+                })
+            });
             let payload = match request.format {
                 product_host::ProductHostFrameFormat::Png => {
                     render_wgpu::encode_png(captured.width, captured.height, &captured.rgba)?
@@ -289,6 +299,7 @@ impl FrameOutput {
                     payload,
                 },
                 cameras: Value::Array(cameras),
+                view,
                 overlays: captured.overlays.map(|overlays| {
                     Value::Object(
                         overlays
@@ -551,6 +562,18 @@ impl FrameOutput {
             .ok_or_else(|| "the renderer did not draw the requested frame in time".to_owned())
     }
 
+    /// The inspection views as `engine.inspect.view` lists them.
+    fn inspection_views(&self) -> Value {
+        let selected = self.driver.selected_inspection_view();
+        let views: Vec<_> = self
+            .driver
+            .inspection_views()
+            .iter()
+            .map(|view| crate::inspect_view::view_answer(view, selected.as_deref()))
+            .collect();
+        serde_json::to_value(views).unwrap_or(Value::Null)
+    }
+
     /// The `engine.renderer.presentation` observation of the last drawn
     /// frame, in the browser surface's shape. Rendering and the runtime share
     /// one process, so the observation always belongs to `runtime`.
@@ -623,6 +646,7 @@ impl FrameOutput {
             },
             "captureCorrelation": "frame-sequence",
             "worldReadiness": "unavailable",
+            "inspectionViews": self.inspection_views(),
         })
     }
 
