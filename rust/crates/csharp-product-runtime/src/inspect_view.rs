@@ -215,7 +215,7 @@ impl CsharpProductRuntime {
                         .map(|view| view_answer(view, selected.as_deref()))
                         .collect(),
                     selected,
-                    player: driver.primary_camera().map(|(pose, _)| pose),
+                    player: driver.primary_camera().map(|camera| camera.pose),
                 })
                 .map_err(|error| error.to_string())
             }),
@@ -341,9 +341,14 @@ impl CsharpProductRuntime {
         anchor: Option<String>,
     ) -> InspectionView {
         let (focus, eye) = match driver.primary_camera() {
-            Some((pose, _)) => {
-                let (forward, right, up) = basis(pose.yaw_degrees, pose.pitch_degrees);
-                let focus = add(pose.position, scale(forward, NEW_VIEW_FOCUS_AHEAD));
+            Some(camera) => {
+                let turn = camera.orientation;
+                let (forward, right, up) = (
+                    rotate(turn, [0.0, 0.0, -1.0]),
+                    rotate(turn, [1.0, 0.0, 0.0]),
+                    rotate(turn, [0.0, 1.0, 0.0]),
+                );
+                let focus = add(camera.pose.position, scale(forward, NEW_VIEW_FOCUS_AHEAD));
                 let eye = add(
                     add(focus, scale(right, NEW_VIEW_SIDE)),
                     scale(up, NEW_VIEW_RISE),
@@ -374,26 +379,14 @@ impl CsharpProductRuntime {
         driver: &render_wgpu::SceneDriver,
         subject: &str,
     ) -> Result<(V3, f64, [f64; 4]), String> {
+        // The player's camera, roll included: viewmodel parts are placed by it.
         let player = driver.primary_camera();
-        let player_frame = |pose: &RendererCameraPose| {
-            let half_yaw = -pose.yaw_degrees.to_radians() * 0.5;
-            let half_pitch = pose.pitch_degrees.to_radians() * 0.5;
-            // Yaw about y, then pitch about x, as camera poses turn.
-            let (sy, cy, sp, cp) = (
-                half_yaw.sin(),
-                half_yaw.cos(),
-                half_pitch.sin(),
-                half_pitch.cos(),
-            );
-            [cy * sp, sy * cp, -sy * sp, cy * cp]
-        };
         if subject == "camera" {
-            let (pose, _) = player.ok_or("INSPECT_NO_CAMERA: the product has no primary camera")?;
-            let (forward, ..) = basis(pose.yaw_degrees, pose.pitch_degrees);
+            let camera = player.ok_or("INSPECT_NO_CAMERA: the product has no primary camera")?;
             return Ok((
-                add(pose.position, scale(forward, CAMERA_FRAME_AHEAD)),
+                in_camera_space(&camera, [0.0, 0.0, -CAMERA_FRAME_AHEAD]),
                 CAMERA_FRAME_RADIUS,
-                player_frame(&pose),
+                camera.orientation,
             ));
         }
         let handle: u64 = subject.parse().map_err(|_| VIEW_USAGE.to_owned())?;
@@ -414,9 +407,8 @@ impl CsharpProductRuntime {
             return Ok((center, radius.max(VIEW_NEAR), rotation));
         }
         // A viewmodel object is placed in the player's camera space.
-        let (pose, _) = player.ok_or("INSPECT_NO_CAMERA: the product has no primary camera")?;
-        let frame = player_frame(&pose);
-        let [x, y, z, w] = frame;
+        let camera = player.ok_or("INSPECT_NO_CAMERA: the product has no primary camera")?;
+        let [x, y, z, w] = camera.orientation;
         let [ox, oy, oz, ow] = rotation;
         let composed = [
             w * ox + x * ow + y * oz - z * oy,
@@ -425,7 +417,7 @@ impl CsharpProductRuntime {
             w * ow - x * ox - y * oy - z * oz,
         ];
         Ok((
-            add(pose.position, rotate(frame, center)),
+            in_camera_space(&camera, center),
             radius.max(VIEW_NEAR),
             composed,
         ))
@@ -473,6 +465,12 @@ impl CsharpProductRuntime {
         })
         .map_err(|error| error.to_string())
     }
+}
+
+/// A point in the player camera's space, in the world: where the renderer
+/// places a viewmodel part there.
+fn in_camera_space(camera: &render_wgpu::PrimaryCamera, point: V3) -> V3 {
+    add(camera.pose.position, rotate(camera.orientation, point))
 }
 
 /// `view` framed on `center`: along `rotation`'s axes for a named framing,
@@ -585,6 +583,33 @@ mod tests {
         assert_eq!((right, up), ([1.0, 0.0, 0.0], [0.0, 1.0, 0.0]));
         assert!(
             (looking_at([0.0, 5.0, 0.0], [0.0; 3]).pitch_degrees + MAX_PITCH_DEGREES).abs() < 1e-9
+        );
+    }
+
+    #[test]
+    fn a_held_point_is_placed_by_the_rolled_camera() {
+        // Forward -Z with up -X: a quarter roll about the view axis.
+        let half = std::f64::consts::FRAC_PI_4;
+        let camera = render_wgpu::PrimaryCamera {
+            pose: RendererCameraPose {
+                position: [0.0; 3],
+                yaw_degrees: 0.0,
+                pitch_degrees: 0.0,
+            },
+            orientation: [0.0, 0.0, half.sin(), half.cos()],
+            projection: RendererCameraProjection::Perspective {
+                fov_y_degrees: 60.0,
+                near: 0.05,
+                far: 100.0,
+            },
+        };
+        let placed = in_camera_space(&camera, [0.2, -0.2, -0.4]);
+        assert!(
+            placed
+                .iter()
+                .zip([0.2, 0.2, -0.4])
+                .all(|(a, b)| (a - b).abs() < 1e-9),
+            "{placed:?}"
         );
     }
 

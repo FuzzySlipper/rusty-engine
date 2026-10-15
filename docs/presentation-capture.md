@@ -60,7 +60,9 @@ Three captures are available, and they show different things:
   - **Overlays.** A capture leaves out what inspection shows
     ([overlays](playtest-inspection.md#overlays)) unless it asks with
     `overlays=1`. Then `X-Rusty-Frame-Overlays` holds the overlay sets it
-    drew and their revisions, as `{"name": revision}`.
+    drew and their revisions, as `{"name": revision}`: for a view capture
+    the sets that view shows, for a composition capture those the player
+    view and the inspection views it drew show.
   - **Inspection views.** `view=ID` draws that
     [inspection view](playtest-inspection.md#inspection-views) instead of
     the product's composition. `X-Rusty-Frame-View` holds the view (id,

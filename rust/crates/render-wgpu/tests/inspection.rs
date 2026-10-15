@@ -112,6 +112,36 @@ fn an_anchored_view_draws_at_its_rect_only_while_the_page_reports_it() {
 }
 
 #[test]
+fn a_frame_records_the_inspection_views_it_drew_with_their_cameras() {
+    let mut harness = harness();
+    let side = looking_at_eye("side", [1.2, 0.8, 0.6], Some("pane"));
+    let capture_only = looking_at_eye("off", [0.0, 2.0, 2.0], None);
+    harness
+        .renderer
+        .set_inspection_views(vec![side.clone(), capture_only]);
+    harness.composition(0.0);
+    assert!(
+        harness.renderer.drawn_inspection_views().is_empty(),
+        "no rect reported, no capture-only view: nothing drawn"
+    );
+    harness
+        .renderer
+        .set_viewport_anchors([("pane".to_owned(), viewport(0.5, 0.0, 0.5, 0.5))].into());
+    harness.composition(0.0);
+    assert_eq!(
+        harness.renderer.drawn_inspection_views(),
+        std::slice::from_ref(&side)
+    );
+    // A camera change shows in the next frame's record, not the last one's.
+    let mut moved = side.clone();
+    moved.pose.position = [2.0, 1.0, 0.0];
+    harness.renderer.set_inspection_views(vec![moved.clone()]);
+    assert_eq!(harness.renderer.drawn_inspection_views(), [side]);
+    harness.composition(0.0);
+    assert_eq!(harness.renderer.drawn_inspection_views(), [moved]);
+}
+
+#[test]
 fn the_viewmodel_stays_at_the_primary_camera_as_an_inspection_camera_moves() {
     let mut harness = harness();
     let target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, 4);

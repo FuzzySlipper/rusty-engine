@@ -247,9 +247,10 @@ Captures leave overlays out unless they ask
 
 Inspection views are Engine cameras drawn beside the product's views. They
 change nothing the product committed: no camera, pose, stance or aim. The
-player view keeps drawing; `engine.scene.composition` does not list them,
-and `engine.renderer.presentation` (`inspectionViews`) and
-`engine.inspect.view` do.
+player view keeps drawing; `engine.scene.composition` does not list them.
+`engine.inspect.view` lists them as configured, and
+`engine.renderer.presentation` (`submitted.inspectionViews`) the ones the
+reported frame drew, with their cameras then.
 
 A view draws in one of two places:
 
@@ -287,7 +288,7 @@ releases nothing but its entry.
   world bounds, looking along the object's own axes (front from +Z, side and
   right from +X, top from +Y, underside from -Y), or with `close` from where
   the view is, nearer. A viewmodel object's bounds and axes are placed by
-  the player's camera. `SUBJECT` `camera` frames the space just in front of
+  the player's camera, roll included. `SUBJECT` `camera` frames the space just in front of
   the player's camera, and `target NAME` one of the product's
   [inspection targets](#inspection-targets) by its radius and frame. The
   framing leaves 15% around the bounds; pitch stays within 89 degrees of

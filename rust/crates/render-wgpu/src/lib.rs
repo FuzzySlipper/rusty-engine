@@ -100,7 +100,8 @@ pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionR
 pub use culling::GpuCullingReadout;
 pub use distance_fields::DistanceFieldReadout;
 pub use driver::{
-    Capture, PresentationLead, SceneChange, SceneDriver, SceneFrame, SceneState, SceneView,
+    Capture, PresentationLead, PrimaryCamera, SceneChange, SceneDriver, SceneFrame, SceneState,
+    SceneView,
 };
 pub use frame::FrameStats;
 pub use ghost::GhostPlateReadout;
@@ -463,6 +464,8 @@ pub struct Renderer {
     overlays: overlays::Overlays,
     /// Engine-owned cameras drawn beside the product's (`inspection.rs`).
     inspection_views: Vec<inspection::InspectionView>,
+    /// The ones the last composition frame drew.
+    drawn_inspection: Vec<inspection::InspectionView>,
     /// Counts applied deltas; offscreen composition targets re-render when
     /// it moves past the value they were drawn at.
     scene_generation: u64,
@@ -674,6 +677,7 @@ impl Renderer {
             ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
             overlays: overlays::Overlays::new(),
             inspection_views: Vec::new(),
+            drawn_inspection: Vec::new(),
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             scaled: None,

@@ -87,6 +87,8 @@ pub struct DrawnFrame {
     /// pose, or the observer's where the observer replaced it in primary
     /// views (`Renderer::drawn_cameras`).
     pub cameras: Vec<DrawnCamera>,
+    /// The inspection views it drew, with their cameras then.
+    pub inspection_views: Vec<render_wgpu::InspectionView>,
     /// A playing video clip covered the frame.
     pub video: bool,
 }
@@ -366,6 +368,7 @@ fn render_loop(driver: &SceneDriver, shared: &Shared, frames: &ProductHostFrameS
             composition_revision: shown.composition_revision,
             observer: shown.observer,
             cameras: shown.cameras,
+            inspection_views: shown.inspection_views,
             video,
         };
         let mut state = shared.state();

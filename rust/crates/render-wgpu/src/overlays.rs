@@ -202,11 +202,18 @@ impl Overlays {
             .collect()
     }
 
-    /// The shown sets' revisions, as a capture that drew them reports.
-    pub fn drawn_revisions(&self) -> BTreeMap<String, u64> {
+    /// The revisions of the sets shown in any of `views` (view keys), as a
+    /// capture that drew those views reports them.
+    pub fn drawn_revisions(&self, views: &[&str]) -> BTreeMap<String, u64> {
         self.sets
             .iter()
             .filter(|(name, _)| self.shown.shows_set(name))
+            .filter(|(name, _)| {
+                self.shown
+                    .only_in
+                    .get(*name)
+                    .is_none_or(|only| views.contains(&only.as_str()))
+            })
             .map(|(name, retained)| (name.clone(), retained.revision))
             .collect()
     }
@@ -457,9 +464,9 @@ impl Renderer {
         self.overlays.readout()
     }
 
-    /// The shown overlay sets' revisions.
-    pub(crate) fn overlay_revisions(&self) -> BTreeMap<String, u64> {
-        self.overlays.drawn_revisions()
+    /// The revisions of the overlay sets shown in any of `views`.
+    pub(crate) fn overlay_revisions(&self, views: &[&str]) -> BTreeMap<String, u64> {
+        self.overlays.drawn_revisions(views)
     }
 
     /// Shows or hides what inspection draws. The Debug layer's parts follow.
@@ -834,5 +841,44 @@ fn pass_layer(layer: RenderLayer) -> ViewLayer {
     match ViewLayer::of(layer) {
         ViewLayer::Viewmodel => ViewLayer::Viewmodel,
         _ => ViewLayer::World,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use render_model::OverlayItem;
+
+    fn set() -> OverlaySetDescriptor {
+        OverlaySetDescriptor {
+            items: vec![OverlayItem {
+                shape: OverlayShape::Marker {
+                    at: [0.0; 3],
+                    size: 1.0,
+                },
+                space: OverlaySpace::World,
+                color: [1.0; 4],
+                on_top: false,
+            }],
+        }
+    }
+
+    #[test]
+    fn a_capture_reports_only_the_sets_shown_in_the_views_it_drew() {
+        let mut overlays = Overlays::new();
+        overlays.set("everywhere", &set());
+        overlays.set("side-only", &set());
+        overlays.shown.all_sets = true;
+        overlays
+            .shown
+            .only_in
+            .insert("side-only".to_owned(), "side".to_owned());
+        let names = |views: &[&str]| -> Vec<String> {
+            overlays.drawn_revisions(views).into_keys().collect()
+        };
+        assert_eq!(names(&["side"]), ["everywhere", "side-only"]);
+        assert_eq!(names(&["grip"]), ["everywhere"]);
+        assert_eq!(names(&[PLAYER_VIEW]), ["everywhere"]);
+        assert_eq!(names(&[PLAYER_VIEW, "side"]), ["everywhere", "side-only"]);
     }
 }

@@ -562,18 +562,6 @@ impl FrameOutput {
             .ok_or_else(|| "the renderer did not draw the requested frame in time".to_owned())
     }
 
-    /// The inspection views as `engine.inspect.view` lists them.
-    fn inspection_views(&self) -> Value {
-        let selected = self.driver.selected_inspection_view();
-        let views: Vec<_> = self
-            .driver
-            .inspection_views()
-            .iter()
-            .map(|view| crate::inspect_view::view_answer(view, selected.as_deref()))
-            .collect();
-        serde_json::to_value(views).unwrap_or(Value::Null)
-    }
-
     /// The `engine.renderer.presentation` observation of the last drawn
     /// frame, in the browser surface's shape. Rendering and the runtime share
     /// one process, so the observation always belongs to `runtime`.
@@ -640,13 +628,19 @@ impl FrameOutput {
                     "fallbackCamera": null,
                     "observer": frame.observer,
                     "views": views,
+                    // The inspection views this frame drew, with their cameras then.
+                    "inspectionViews": frame
+                        .inspection_views
+                        .iter()
+                        .map(|view| crate::inspect_view::view_answer(view, None))
+                        .collect::<Vec<_>>(),
                 },
                 "gpuCompletion": "unavailable",
                 "captureCorrelation": "frame-sequence",
             },
             "captureCorrelation": "frame-sequence",
             "worldReadiness": "unavailable",
-            "inspectionViews": self.inspection_views(),
+
         })
     }
 

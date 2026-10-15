@@ -37,6 +37,12 @@ impl Renderer {
         self.inspection_views = views;
     }
 
+    /// The inspection views the last composition frame drew, with the
+    /// cameras it drew them from.
+    pub fn drawn_inspection_views(&self) -> Vec<InspectionView> {
+        self.drawn_inspection.clone()
+    }
+
     /// The anchored inspection views the page shows, at their rects.
     pub(crate) fn draw_anchored_inspection_views(
         &mut self,
@@ -44,6 +50,7 @@ impl Renderer {
         primary_camera: Option<OverlayCamera>,
     ) -> ViewStats {
         let mut stats = ViewStats::default();
+        self.drawn_inspection.clear();
         let views: Vec<(InspectionView, PixelRect)> = self
             .inspection_views
             .iter()
@@ -67,6 +74,7 @@ impl Renderer {
                     primary_camera,
                     PassStart::Viewport,
                 );
+            self.drawn_inspection.push(view);
         }
         stats
     }

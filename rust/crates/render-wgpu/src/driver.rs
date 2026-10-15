@@ -87,6 +87,19 @@ pub struct SceneFrame {
     /// How each of `composition`'s cameras drew: its sampled pose, or the
     /// observer's where the observer replaced it in primary views.
     pub cameras: Vec<DrawnCamera>,
+    /// The inspection views it drew, with their cameras then.
+    pub inspection_views: Vec<crate::InspectionView>,
+}
+
+/// The camera of the composition's first primary view, as it is now.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PrimaryCamera {
+    /// Position, yaw and pitch, as the Engine describes cameras.
+    pub pose: RendererCameraPose,
+    /// Its whole orientation (`[x, y, z, w]`), roll included: what a
+    /// viewmodel's parts are placed by.
+    pub orientation: [f64; 4],
+    pub projection: render_host_contracts::RendererCameraProjection,
 }
 
 /// The inspection state of the committed scene.
@@ -336,12 +349,7 @@ impl SceneDriver {
 
     /// The camera of the composition's first primary view now (never the
     /// observer): what inspection views frame the player's camera by.
-    pub fn primary_camera(
-        &self,
-    ) -> Option<(
-        RendererCameraPose,
-        render_host_contracts::RendererCameraProjection,
-    )> {
+    pub fn primary_camera(&self) -> Option<PrimaryCamera> {
         let now = self.now();
         let mut scene = self.scene();
         let size = scene
@@ -349,10 +357,11 @@ impl SceneDriver {
             .surface_size()
             .unwrap_or(DEFAULT_CAPTURE_SIZE);
         let camera = scene.renderer.primary_overlay_camera(now, size)?;
-        Some((
-            crate::camera::pose_readout(camera.pose).0,
-            camera.projection,
-        ))
+        Some(PrimaryCamera {
+            pose: crate::camera::pose_readout(camera.pose).0,
+            orientation: camera.pose.orientation.to_array().map(f64::from),
+            projection: camera.projection,
+        })
     }
 
     /// A point and frame (`[x, y, z, w]`) in an overlay space, in the world
@@ -410,9 +419,11 @@ impl SceneDriver {
                 .renderer
                 .set_overlay_shown(crate::OverlayShown::default());
         }
-        let drawn_overlays = (overlays && shown.any()).then(|| scene.renderer.overlay_revisions());
         scene.present_at(now);
         scene.renderer.render_inspection_view(&target, id, now);
+        // Only the sets this view shows.
+        let drawn_overlays =
+            (overlays && shown.any()).then(|| scene.renderer.overlay_revisions(&[id]));
         if !overlays && shown.any() {
             scene.renderer.set_overlay_shown(shown);
         }
@@ -524,6 +535,7 @@ impl SceneDriver {
             composition_revision: scene.composition_revision,
             observer: scene.observer,
             cameras: scene.renderer.drawn_cameras(),
+            inspection_views: scene.renderer.drawn_inspection_views(),
         };
         (result, shown)
     }
@@ -586,7 +598,6 @@ impl SceneDriver {
                 .renderer
                 .set_overlay_shown(crate::OverlayShown::default());
         }
-        let drawn_overlays = (overlays && shown.any()).then(|| scene.renderer.overlay_revisions());
         let (width, height) = size
             .or(scene.renderer.surface_size())
             .unwrap_or(DEFAULT_CAPTURE_SIZE);
@@ -598,6 +609,14 @@ impl SceneDriver {
         scene.renderer.set_pixel_ratio(fitted_ratio);
         let video = scene.renderer.render_view_composition(&target, now).video;
         scene.renderer.set_pixel_ratio(ratio);
+        // The sets the player view and the inspection views it drew show.
+        let drawn_overlays = (overlays && shown.any()).then(|| {
+            let drawn = scene.renderer.drawn_inspection_views();
+            let views: Vec<&str> = std::iter::once(crate::PLAYER_VIEW)
+                .chain(drawn.iter().map(|view| view.id.as_str()))
+                .collect();
+            scene.renderer.overlay_revisions(&views)
+        });
         if !overlays && shown.any() {
             scene.renderer.set_overlay_shown(shown);
         }
