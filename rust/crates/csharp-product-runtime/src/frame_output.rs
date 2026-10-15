@@ -354,6 +354,7 @@ impl FrameOutput {
                     world,
                     joints,
                     rest,
+                    ik_chains,
                 } => poses.push(JointPoseReport {
                     object_id,
                     generation,
@@ -361,6 +362,7 @@ impl FrameOutput {
                     world,
                     joints,
                     rest,
+                    ik_chains,
                 }),
                 fact => facts.extend(self.engine_fact(fact)),
             }

@@ -17,8 +17,11 @@ dotnet restore CsharpSkeletonPoses.csproj --source /path/to/pair/sdk-feed
 Live-debug commands:
 
 - `pose.inspect` reports joint reports, the hand's error against the drawn
-  target, the worst pole-side dot, elbow flips and the finger's turn from the
-  hand.
+  target, the worst pole-side dot, elbow flips, the finger's turn from the
+  hand, and the reported IK chain: its shortfall, whether it straightened, and
+  the worst difference between that shortfall and the hand-to-target distance
+  computed from the reported joints.
+- `pose.far <true|false>` moves the circle beyond the arm's reach.
 - `pose.curl <0..1>` sets the finger curl weight.
 - `pose.reach <true|false>` turns the IK on or off.
 - `pose.reset` clears the worst-case readings.

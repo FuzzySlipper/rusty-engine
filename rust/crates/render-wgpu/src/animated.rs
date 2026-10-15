@@ -30,8 +30,9 @@ use glam::{Mat4, Quat, Vec3};
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshClipPose, AnimatedMeshInspection,
     AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, AnimatedMeshPlaybackTimeline,
-    AnimatedMeshPose, AnimationLoopMode, MaterialAlphaModeDescriptor, MaterialInstanceParameters,
-    MaterialUvStrategy, PosedJoint, RenderHandle, RenderMaterialDescriptor, Transform,
+    AnimatedMeshPose, AnimationLoopMode, IkChainReach, MaterialAlphaModeDescriptor,
+    MaterialInstanceParameters, MaterialUvStrategy, PosedJoint, RenderHandle,
+    RenderMaterialDescriptor, Transform,
 };
 
 use render_presentation::{AnimationControllerProjectionState, AnimationProjectionOp};
@@ -77,6 +78,8 @@ pub enum AnimationFact {
         /// The rest pose, in the same form: in the first report after
         /// reporting starts.
         rest: Option<Vec<PosedJoint>>,
+        /// Each two-bone IK chain, in the order the pose gave them.
+        ik_chains: Vec<IkChainReach>,
     },
 }
 
@@ -238,6 +241,8 @@ pub(crate) struct AnimatedInstance {
     joints_pending: bool,
     /// The rest pose has been reported since reporting started.
     rest_reported: bool,
+    /// The IK chains of the evaluated pose, when it reports its joints.
+    ik: Vec<crate::pose::IkSolve>,
     /// Per-instance skinned vertex buffers, by (node, primitive).
     skinned: HashMap<(u32, u32), GpuMesh>,
     /// The GLB node each of the node row's parts draws, in part order.
@@ -746,6 +751,7 @@ impl Renderer {
                 posed_world: Mat4::IDENTITY,
                 joints_pending: false,
                 rest_reported: false,
+                ik: Vec::new(),
                 skinned: HashMap::new(),
                 part_nodes: Vec::new(),
                 parameters: BTreeMap::new(),
@@ -1078,6 +1084,28 @@ impl Renderer {
                 joints(&crate::pose::compose(&asset.model, &locals))
             });
             instance.rest_reported = true;
+            let ik_chains = instance
+                .ik
+                .iter()
+                .map(|solve| {
+                    let end = solve
+                        .end
+                        .and_then(|node| instance.pose.get(node))
+                        .map_or(Vec3::ZERO, |end| end.w_axis.truncate());
+                    let (target_world, end_world) = (
+                        world.transform_point3(solve.target),
+                        world.transform_point3(end),
+                    );
+                    IkChainReach {
+                        target_model: solve.target.to_array(),
+                        target_world: target_world.to_array(),
+                        end_model: end.to_array(),
+                        end_world: end_world.to_array(),
+                        shortfall: end_world.distance(target_world),
+                        straightened: solve.straightened,
+                    }
+                })
+                .collect();
             self.animation_facts.push(AnimationFact::JointPose {
                 object_id,
                 generation: instance.generation,
@@ -1085,6 +1113,7 @@ impl Renderer {
                 world: convert::transform_of(world),
                 joints: joints(&instance.pose),
                 rest,
+                ik_chains,
             });
         }
     }
@@ -1164,6 +1193,7 @@ impl Renderer {
             sample_locals(&asset.model, &asset.clips, &actions),
             &instance.controls,
             world,
+            &mut instance.ik,
         );
         instance.posed_world = world;
         instance.joints_pending = instance.controls.report_joints;

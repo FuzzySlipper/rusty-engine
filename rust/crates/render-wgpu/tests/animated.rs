@@ -929,6 +929,74 @@ fn pose_controls_reach_a_world_target_and_report_the_drawn_joints() {
     assert!(joint_poses(&mut harness).is_empty(), "reporting stopped");
 }
 
+/// Each IK chain of a reporting pose is reported from the solve that ran:
+/// a reachable target with no shortfall, one beyond reach straightened toward
+/// with the shortfall the drawn hand leaves.
+#[test]
+fn a_reported_pose_carries_each_ik_chains_target_and_shortfall() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let (arm, forearm, hand) = (
+        rig_joint(&body, "RightArm"),
+        rig_joint(&body, "RightForeArm"),
+        rig_joint(&body, "RightHand"),
+    );
+    harness.apply(vec![move_body(2.0)]);
+    let reach = |target: [f32; 3]| RenderDiff::SetAnimatedMeshPose {
+        handle: RenderHandle::new(BODY),
+        pose: AnimatedMeshPose {
+            two_bone_ik: vec![TwoBoneIkConstraint {
+                root: arm,
+                mid: forearm,
+                end: hand,
+                space: PoseSpace::World,
+                target,
+                pole: [2.0, 1.0, -3.0],
+                weight: 1.0,
+            }],
+            overrides: Vec::new(),
+            layers: Vec::new(),
+            report_joints: true,
+        },
+    };
+    let chains = |harness: &mut Harness| {
+        harness
+            .renderer
+            .take_animation_facts()
+            .into_iter()
+            .find_map(|fact| match fact {
+                AnimationFact::JointPose {
+                    joints, ik_chains, ..
+                } => Some((joints, ik_chains)),
+                _ => None,
+            })
+            .expect("a joint report")
+    };
+    let view = character_view();
+
+    harness.apply(vec![reach([1.6, 1.4, 0.5])]);
+    harness.render(&view);
+    let (_, reached) = chains(&mut harness);
+    assert_eq!(reached.len(), 1);
+    assert!(!reached[0].straightened);
+    assert!(reached[0].shortfall < 1e-3, "{:?}", reached[0]);
+    assert!(distance(reached[0].target_world, [1.6, 1.4, 0.5]) < 1e-4);
+
+    let far = [6.0, 1.4, 0.5];
+    harness.apply(vec![reach(far)]);
+    harness.render(&view);
+    let (joints, beyond) = chains(&mut harness);
+    let chain = beyond[0];
+    assert!(chain.straightened);
+    let drawn = joints[hand as usize].world.translation;
+    assert!(distance(chain.end_world, drawn) < 1e-4);
+    assert!(
+        (chain.shortfall - distance(drawn, far)).abs() < 1e-4 && chain.shortfall > 1.0,
+        "{chain:?}"
+    );
+}
+
 #[test]
 fn a_controller_created_again_for_another_target_drives_only_that_one() {
     use render_presentation::{

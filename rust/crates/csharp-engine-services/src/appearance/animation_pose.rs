@@ -21,6 +21,8 @@ pub struct JointPoseReport {
     pub joints: Vec<PosedJoint>,
     /// The rest pose, when the report carries it.
     pub rest: Option<Vec<PosedJoint>>,
+    /// Each two-bone IK chain of the pose, in the order it gave them.
+    pub ik_chains: Vec<IkChainReach>,
 }
 
 /// The latest report of one object, with the rest pose its renderer last
@@ -102,6 +104,10 @@ fn pose_space(space: NativePoseSpace) -> PoseSpace {
 
 fn vec3(value: NativeVec3) -> [f32; 3] {
     [value.x, value.y, value.z]
+}
+
+fn native_vec3([x, y, z]: [f32; 3]) -> NativeVec3 {
+    NativeVec3 { x, y, z }
 }
 
 fn native_transform_of(value: &Transform) -> NativeTransform {
@@ -278,6 +284,8 @@ impl RuntimeAppearanceBridge {
             return Ok(NativeAnimationJointPoseResult {
                 joints: std::ptr::null(),
                 joints_len: 0,
+                ik_chains: std::ptr::null(),
+                ik_chains_len: 0,
                 world: native_transform_of(&Transform::IDENTITY),
                 seconds: 0.0,
                 reported: false,
@@ -292,14 +300,29 @@ impl RuntimeAppearanceBridge {
                 world: native_transform_of(&joint.world),
             })
             .collect::<Box<[_]>>();
+        let ik_chains = reported
+            .latest
+            .ik_chains
+            .iter()
+            .map(|chain| NativeIkChainReach {
+                target_model: native_vec3(chain.target_model),
+                target_world: native_vec3(chain.target_world),
+                end_model: native_vec3(chain.end_model),
+                end_world: native_vec3(chain.end_world),
+                shortfall: chain.shortfall,
+                straightened: chain.straightened,
+            })
+            .collect::<Box<[_]>>();
         let result = NativeAnimationJointPoseResult {
             joints: joints.as_ptr(),
             joints_len: joints.len(),
+            ik_chains: ik_chains.as_ptr(),
+            ik_chains_len: ik_chains.len(),
             world: native_transform_of(&reported.latest.world),
             seconds: reported.latest.seconds,
             reported: true,
         };
-        self.borrowed.hold(joints);
+        self.borrowed.hold((joints, ik_chains));
         Ok(result)
     }
 
@@ -671,6 +694,14 @@ mod tests {
                 world: Transform::IDENTITY,
                 joints: vec![joint(1.0); joints.len()],
                 rest: Some(vec![joint(0.0); joints.len()]),
+                ik_chains: vec![IkChainReach {
+                    target_model: [3.0, 0.0, 0.0],
+                    target_world: [4.0, 0.0, 0.0],
+                    end_model: [2.0, 0.0, 0.0],
+                    end_world: [3.0, 0.0, 0.0],
+                    shortfall: 1.0,
+                    straightened: true,
+                }],
             },
             JointPoseReport {
                 object_id: 99,
@@ -679,6 +710,7 @@ mod tests {
                 world: Transform::IDENTITY,
                 joints: Vec::new(),
                 rest: None,
+                ik_chains: Vec::new(),
             },
         ]);
         assert_eq!(bridge.joint_poses.len(), 1, "only live instances are kept");
@@ -691,6 +723,13 @@ mod tests {
             (read.model.translation.x, read.world.translation.x),
             (1.0, 2.0)
         );
+        assert_eq!(pose.ik_chains_len, 1);
+        let chain = unsafe { *pose.ik_chains };
+        assert_eq!(
+            (chain.target_world.x, chain.end_world.x, chain.shortfall),
+            (4.0, 3.0, 1.0)
+        );
+        assert!(chain.straightened);
 
         // Destroying the instance clears the controls it left on the target,
         // and its object's reports.
@@ -707,6 +746,7 @@ mod tests {
             world: Transform::IDENTITY,
             joints: vec![joint(1.0); joints.len()],
             rest: None,
+            ik_chains: Vec::new(),
         }]);
         assert!(bridge.joint_poses.is_empty());
     }

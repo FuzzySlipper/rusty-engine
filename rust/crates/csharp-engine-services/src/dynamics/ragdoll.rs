@@ -572,6 +572,7 @@ mod tests {
             world: Transform::IDENTITY,
             joints: pose(&joints, drop),
             rest: rest.then(|| pose(&joints, 0.0)),
+            ik_chains: Vec::new(),
         };
         appearance.ingest_joint_poses([
             report(1.0, 0.0, true),

@@ -81,6 +81,22 @@ pub struct PosedJoint {
     pub world: crate::Transform,
 }
 
+/// One two-bone IK chain of a reported pose, from the solve that ran: its
+/// target, the end joint as drawn (after overrides and layers), and how far
+/// the end is from the target in the scene.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IkChainReach {
+    pub target_model: [f32; 3],
+    pub target_world: [f32; 3],
+    pub end_model: [f32; 3],
+    pub end_world: [f32; 3],
+    /// Scene distance from the drawn end joint to the target.
+    pub shortfall: f32,
+    /// The target lay beyond the chain's reach, so the solve straightened
+    /// the chain toward it.
+    pub straightened: bool,
+}
+
 /// A set of joints placed in the world together (a ragdoll's bones), mixed
 /// over the pose below by one `weight`. The mix is of each placed joint's
 /// transform relative to its parent, so the placed joints blend as one pose:

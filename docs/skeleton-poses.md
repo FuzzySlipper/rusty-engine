@@ -25,7 +25,8 @@ Vector3 handAt = drawn.Joints.Span[(int)hand].World.Translation;
 
 `fixtures/csharp-skeleton-poses` reaches a circling target with a fixed pole,
 curls a finger over the idle clip, and checks the reported hand against the
-target it was given (`pose.inspect`, `pose.curl <0..1>`, `pose.reach <bool>`).
+target it was given (`pose.inspect`, `pose.curl <0..1>`, `pose.reach <bool>`,
+`pose.far <bool>` for a target beyond reach).
 
 ## Fitting to a held model
 
@@ -111,7 +112,14 @@ is drawn. `ReadJointPose` returns the latest report:
   controls of that call;
 - each joint's transform in the instance's space (`Model`) and in the scene
   (`World`), reported again whenever the instance or a parent moves;
-- the instance's world placement, and the Engine time it was evaluated at.
+- the instance's world placement, and the Engine time it was evaluated at;
+- `IkChains`, one per `TwoBoneIk` in the order given, from the solve that ran:
+  the target and the end joint as drawn (after overrides and layers), each in
+  the instance's space and in the scene; `Shortfall`, the scene distance from
+  the end joint to the target; and `Straightened`, true when the target lay
+  beyond the chain's reach and the solve straightened the chain toward it.
+  A product that labels a pose out of reach reads these instead of comparing
+  joints with the targets it sent.
 
 `Reported` stays false until the first report. Reports need the renderer, so
 the headless test host (`EngineTestHost`) has none.

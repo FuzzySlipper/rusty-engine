@@ -20,6 +20,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     /// <summary>The circle's centre and the pole, from the rest shoulder in world metres.</summary>
     private static readonly Vector3 CircleOffset = new(-0.25f, -0.3f, 0.35f);
     private static readonly Vector3 PoleOffset = new(-0.6f, -0.6f, -0.6f);
+    /// <summary>Where <c>pose.far</c> moves the circle: beyond the arm's reach.</summary>
+    private static readonly Vector3 FarOffset = new(-1.5f, -0.3f, 0.35f);
     /// <summary>An elbow that moves further than this in one step has flipped.</summary>
     private const float FlipStepMetres = 0.1f;
     private static readonly Quaternion FingerCurl = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2);
@@ -35,6 +37,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly uint joints;
     private float curl;
     private bool reaching = true;
+    private bool far;
     private Vector3? shoulder;
     private Vector3? drawnTarget;
     private Vector3? previousElbow;
@@ -42,6 +45,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private int reports, flips;
     private double reportedSeconds;
     private float fingerAngle;
+    private float chainShortfall = float.NaN, worstShortfallMismatch;
+    private bool chainStraightened;
 
     public Product(ProductCreateContext context)
     {
@@ -79,7 +84,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         }
         double seconds = update.Facts.SimulationStep * update.Facts.FixedDeltaSeconds;
         float turn = (float)(seconds / CircleSecondsPerTurn * Math.Tau);
-        Vector3 target = rest + CircleOffset + CircleRadius * new Vector3(MathF.Cos(turn), MathF.Sin(turn), 0);
+        Vector3 target = rest + (far ? FarOffset : CircleOffset) + CircleRadius * new Vector3(MathF.Cos(turn), MathF.Sin(turn), 0);
         TwoBoneIk[] ik = reaching ? [new(arm, forearm, hand, PoseSpace.World, target, rest + PoleOffset, 1)] : [];
         JointOverride[] overrides = [.. finger.Select(joint => JointOverride.AddLocalRotation(joint, FingerCurl, curl))];
         engine.Animation.SetPose(new(instance, ik, overrides, true));
@@ -113,6 +118,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             }
         }
         previousElbow = elbow;
+        if (drawn.IkChains.Length > 0)
+        {
+            // The Engine's shortfall against the one computed from the reported joints.
+            IkChainReach chain = drawn.IkChains.Span[0];
+            chainShortfall = chain.Shortfall;
+            chainStraightened = chain.Straightened;
+            worstShortfallMismatch = MathF.Max(worstShortfallMismatch,
+                MathF.Abs(chain.Shortfall - Vector3.Distance(handAt, chain.TargetWorld)));
+        }
         // The first finger joint's turn from the hand, in the hand's frame.
         Quaternion relative = Quaternion.Inverse(pose[(int)hand].Model.Rotation) * pose[(int)finger[0]].Model.Rotation;
         fingerAngle = 2 * MathF.Acos(Math.Clamp(MathF.Abs(relative.W), 0, 1)) * 180 / MathF.PI;
@@ -133,18 +147,27 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return Inspect();
     }
 
+    [DebugCommand("pose.far")]
+    public string Far(bool enabled)
+    {
+        far = enabled;
+        previousElbow = null;
+        return Inspect();
+    }
+
     [DebugCommand("pose.reset")]
     public string Reset()
     {
         worstHandError = 0;
         worstPoleSide = 1;
         flips = 0;
+        worstShortfallMismatch = 0;
         return Inspect();
     }
 
     [DebugCommand("pose.inspect")]
     public string Inspect() => string.Create(CultureInfo.InvariantCulture,
-        $"joints={joints}; reports={reports}; seconds={reportedSeconds:F3}; reaching={reaching}; handError={handError:F4}; worstHandError={worstHandError:F4}; worstPoleSide={worstPoleSide:F3}; flips={flips}; curl={curl:F2}; fingerAngle={fingerAngle:F1}");
+        $"joints={joints}; reports={reports}; seconds={reportedSeconds:F3}; reaching={reaching}; handError={handError:F4}; worstHandError={worstHandError:F4}; worstPoleSide={worstPoleSide:F3}; flips={flips}; curl={curl:F2}; fingerAngle={fingerAngle:F1}; far={far}; shortfall={chainShortfall:F4}; straightened={chainStraightened}; worstShortfallMismatch={worstShortfallMismatch:F5}");
 
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
     public void Start() { }

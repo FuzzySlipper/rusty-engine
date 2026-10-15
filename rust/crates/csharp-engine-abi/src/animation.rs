@@ -358,16 +358,35 @@ pub struct NativeJointPose {
     pub world: NativeTransform,
 }
 
+/// One two-bone IK chain of an evaluated pose, from the solve that ran: its
+/// target and the end joint as drawn (after overrides and layers), in the
+/// instance's space and in the scene. `shortfall` is the scene distance from
+/// the end joint to the target; `straightened` is true when the target lay
+/// beyond the chain's reach and the solve straightened the chain toward it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeIkChainReach {
+    pub target_model: NativeVec3,
+    pub target_world: NativeVec3,
+    pub end_model: NativeVec3,
+    pub end_world: NativeVec3,
+    pub shortfall: f32,
+    pub straightened: bool,
+}
+
 /// The pose the renderer evaluated for the previous call, per joint in
-/// `ReadJoints` order, with the instance's world placement and the Engine
-/// time it was evaluated at. `reported` is false until a reporting instance
-/// was first evaluated. `joints` points into Animation bridge storage until
-/// the next call on the same context.
+/// `ReadJoints` order and per two-bone IK chain in the order the pose gave
+/// them, with the instance's world placement and the Engine time it was
+/// evaluated at. `reported` is false until a reporting instance was first
+/// evaluated. `joints` and `ik_chains` point into Animation bridge storage
+/// until the next call on the same context.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationJointPoseResult {
     pub joints: *const NativeJointPose,
     pub joints_len: usize,
+    pub ik_chains: *const NativeIkChainReach,
+    pub ik_chains_len: usize,
     pub world: NativeTransform,
     pub seconds: f64,
     pub reported: bool,

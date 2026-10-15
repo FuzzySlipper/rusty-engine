@@ -32,24 +32,58 @@ pub(crate) fn compose(model: &GlbModel, locals: &[Trs]) -> Vec<Mat4> {
     posed
 }
 
+/// One two-bone IK chain as its solve saw it, for the joint report.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct IkSolve {
+    /// The target in instance space.
+    pub(crate) target: Vec3,
+    /// The chain's end node, when the rig names it.
+    pub(crate) end: Option<usize>,
+    /// The target lay beyond the chain's reach and the solve straightened
+    /// the chain toward it.
+    pub(crate) straightened: bool,
+}
+
 /// The sampled `locals` under `pose`: IK in order, then overrides, then
 /// layers, composed. `rig` maps rig joint indices to nodes; `world` places the
 /// instance, for `World` values. A joint the rig does not name is skipped.
+/// For a pose that reports its joints, `solves` receives each IK chain in
+/// order.
 pub(crate) fn controlled(
     model: &GlbModel,
     rig: &[Option<usize>],
     mut locals: Vec<Trs>,
     pose: &AnimatedMeshPose,
     world: Mat4,
+    solves: &mut Vec<IkSolve>,
 ) -> Vec<Mat4> {
+    solves.clear();
     if !pose.controls() {
         return compose(model, &locals);
     }
     let to_model = world.inverse();
     let node = |joint: u32| rig.get(joint as usize).copied().flatten();
     for ik in &pose.two_bone_ik {
-        if let (Some(root), Some(mid), Some(end)) = (node(ik.root), node(ik.mid), node(ik.end)) {
-            solve_two_bone(model, &mut locals, [root, mid, end], ik, to_model);
+        let (target, pole) = match ik.space {
+            PoseSpace::World => (
+                to_model.transform_point3(convert::vec3(ik.target)),
+                to_model.transform_point3(convert::vec3(ik.pole)),
+            ),
+            _ => (convert::vec3(ik.target), convert::vec3(ik.pole)),
+        };
+        let end = node(ik.end);
+        let straightened = match (node(ik.root), node(ik.mid), end) {
+            (Some(root), Some(mid), Some(end)) => {
+                solve_two_bone(model, &mut locals, [root, mid, end], ik, target, pole)
+            }
+            _ => false,
+        };
+        if pose.report_joints {
+            solves.push(IkSolve {
+                target,
+                end,
+                straightened,
+            });
         }
     }
     let mut by_node: HashMap<usize, Vec<&JointOverride>> = HashMap::new();
@@ -227,16 +261,19 @@ fn override_placed(
 }
 
 /// Rotate `root` so `mid` lies on the bend the pole selects, then `mid` so
-/// `end` reaches the target, each by the constraint's weight.
+/// `end` reaches `target`, each by the constraint's weight. `target` and
+/// `pole` are in instance space. Answers whether the target lay beyond
+/// reach, so the chain was straightened toward it.
 fn solve_two_bone(
     model: &GlbModel,
     locals: &mut [Trs],
     [root, mid, end]: [usize; 3],
     ik: &TwoBoneIkConstraint,
-    to_model: Mat4,
-) {
+    target: Vec3,
+    pole: Vec3,
+) -> bool {
     if ik.weight <= 0.0 {
-        return;
+        return false;
     }
     let posed = compose(model, locals);
     let origin = |node: usize, posed: &[Mat4]| posed[node].w_axis.truncate();
@@ -245,25 +282,17 @@ fn solve_two_bone(
         origin(mid, &posed),
         origin(end, &posed),
     );
-    let (target, pole) = match ik.space {
-        PoseSpace::World => (
-            to_model.transform_point3(convert::vec3(ik.target)),
-            to_model.transform_point3(convert::vec3(ik.pole)),
-        ),
-        _ => (convert::vec3(ik.target), convert::vec3(ik.pole)),
-    };
     let upper = (b - a).length();
     let lower = (c - b).length();
     let reach = (target - a).length();
     if upper < DEGENERATE || lower < DEGENERATE || reach < DEGENERATE {
-        return;
+        return false;
     }
     let direction = (target - a) / reach;
     let span = upper + lower;
-    let distance = reach.clamp(
-        (upper - lower).abs() + span * REACH_MARGIN,
-        span * (1.0 - REACH_MARGIN),
-    );
+    let longest = span * (1.0 - REACH_MARGIN);
+    let straightened = reach > longest;
+    let distance = reach.clamp((upper - lower).abs() + span * REACH_MARGIN, longest);
     let off_axis = |point: Vec3| {
         let offset = point - a;
         offset - direction * offset.dot(direction)
@@ -290,7 +319,7 @@ fn solve_two_bone(
     let (b, c) = (origin(mid, &posed), origin(end, &posed));
     let (from, to) = (c - b, end_goal - b);
     if from.length() < DEGENERATE || to.length() < DEGENERATE {
-        return;
+        return straightened;
     }
     let turn = Quat::from_rotation_arc(from.normalize(), to.normalize());
     rotate_about(
@@ -300,6 +329,7 @@ fn solve_two_bone(
         mid,
         Quat::IDENTITY.slerp(turn, ik.weight),
     );
+    straightened
 }
 
 /// Turn `node` by the instance-space rotation `turn` about its own origin,
@@ -379,6 +409,17 @@ mod tests {
 
     const RIG: [Option<usize>; 3] = [Some(0), Some(1), Some(2)];
 
+    /// The evaluator without its IK report.
+    fn controlled(
+        model: &GlbModel,
+        rig: &[Option<usize>],
+        locals: Vec<Trs>,
+        pose: &AnimatedMeshPose,
+        world: Mat4,
+    ) -> Vec<Mat4> {
+        super::controlled(model, rig, locals, pose, world, &mut Vec::new())
+    }
+
     fn position(posed: &[Mat4], node: usize) -> Vec3 {
         posed[node].w_axis.truncate()
     }
@@ -443,6 +484,40 @@ mod tests {
             Mat4::IDENTITY,
         );
         assert_eq!(untouched, compose(&model, &rest(&model)));
+    }
+
+    #[test]
+    fn a_reporting_pose_records_each_chains_target_and_whether_it_straightened() {
+        let model = arm();
+        let world = Mat4::from_translation(Vec3::new(3.0, 0.0, 0.0));
+        let mut pose = ik(Vec3::new(1.0, 1.0, 0.0), Vec3::Z, 1.0);
+        pose.two_bone_ik.push(pose.two_bone_ik[0].clone());
+        pose.two_bone_ik[1].space = PoseSpace::World;
+        pose.two_bone_ik[1].target = [3.0, 5.0, 0.0];
+        pose.report_joints = true;
+        let mut solves = Vec::new();
+        super::controlled(&model, &RIG, rest(&model), &pose, world, &mut solves);
+        assert_eq!(
+            solves,
+            [
+                IkSolve {
+                    target: Vec3::new(1.0, 1.0, 0.0),
+                    end: Some(2),
+                    straightened: false,
+                },
+                IkSolve {
+                    target: Vec3::new(0.0, 5.0, 0.0),
+                    end: Some(2),
+                    straightened: true,
+                },
+            ]
+        );
+        pose.report_joints = false;
+        super::controlled(&model, &RIG, rest(&model), &pose, world, &mut solves);
+        assert!(
+            solves.is_empty(),
+            "only a reporting pose records its chains"
+        );
     }
 
     #[test]
