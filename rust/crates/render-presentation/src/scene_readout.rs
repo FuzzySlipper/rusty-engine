@@ -3,7 +3,6 @@
 //! the world as committed. Nothing here is kept up to date: a reading
 //! composes what it reports when it is asked.
 
-use glam::{Mat4, Quat, Vec3};
 use serde::Serialize;
 
 use super::{NodeKind, PresentationNode, PresentationWorld, Resource};
@@ -246,7 +245,7 @@ impl PresentationWorld {
 
     /// `handle`'s world matrix, composed through its parents.
     fn composed(&self, handle: RenderHandle) -> Option<Mat4> {
-        let mut world = Mat4::IDENTITY;
+        let mut world = IDENTITY;
         let mut cursor = Some(handle);
         // Parents are admitted acyclic; the bound only stops a corrupt chain.
         for _ in 0..=self.retained.nodes.len() {
@@ -255,7 +254,7 @@ impl PresentationWorld {
             };
             let node = self.retained.nodes.get(&handle)?;
             if let Some(transform) = node.kind.transform() {
-                world = matrix(transform) * world;
+                world = multiply(&matrix(transform), &world);
             }
             cursor = node.parent;
         }
@@ -357,27 +356,133 @@ fn resource(kind: &NodeKind) -> Option<&str> {
     }
 }
 
+/// A 4x4 matrix by columns. The readings compose a few transforms per
+/// object on request; the renderer's matrix library stays the renderer's.
+type Mat4 = [[f32; 4]; 4];
+
+const IDENTITY: Mat4 = [
+    [1.0, 0.0, 0.0, 0.0],
+    [0.0, 1.0, 0.0, 0.0],
+    [0.0, 0.0, 1.0, 0.0],
+    [0.0, 0.0, 0.0, 1.0],
+];
+
+/// Scale, then rotate (`[x, y, z, w]`, normalized), then translate.
 fn matrix(transform: &Transform) -> Mat4 {
     let [x, y, z, w] = transform.rotation;
-    Mat4::from_scale_rotation_translation(
-        Vec3::from_array(transform.scale),
-        Quat::from_xyzw(x, y, z, w).normalize(),
-        Vec3::from_array(transform.translation),
-    )
+    let length = (x * x + y * y + z * z + w * w).sqrt();
+    let (x, y, z, w) = if length > 0.0 {
+        (x / length, y / length, z / length, w / length)
+    } else {
+        (0.0, 0.0, 0.0, 1.0)
+    };
+    let rotation = [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y + z * w),
+            2.0 * (x * z - y * w),
+        ],
+        [
+            2.0 * (x * y - z * w),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z + x * w),
+        ],
+        [
+            2.0 * (x * z + y * w),
+            2.0 * (y * z - x * w),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ];
+    let mut out = IDENTITY;
+    for (column, axis) in rotation.iter().enumerate() {
+        for row in 0..3 {
+            out[column][row] = axis[row] * transform.scale[column];
+        }
+    }
+    out[3][..3].copy_from_slice(&transform.translation);
+    out
 }
 
-fn transform_of(matrix: Mat4) -> Transform {
-    let (scale, rotation, translation) = matrix.to_scale_rotation_translation();
+fn multiply(a: &Mat4, b: &Mat4) -> Mat4 {
+    std::array::from_fn(|column| {
+        std::array::from_fn(|row| (0..4).map(|k| a[k][row] * b[column][k]).sum())
+    })
+}
+
+fn transform_point(m: &Mat4, point: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|row| {
+        m[0][row] * point[0] + m[1][row] * point[1] + m[2][row] * point[2] + m[3][row]
+    })
+}
+
+/// The translation, rotation and scale of an affine matrix; a mirroring
+/// matrix gives a negative x scale.
+fn transform_of(m: Mat4) -> Transform {
+    let length = |column: usize| {
+        (0..3)
+            .map(|row| m[column][row] * m[column][row])
+            .sum::<f32>()
+            .sqrt()
+    };
+    let determinant = m[0][0] * (m[1][1] * m[2][2] - m[2][1] * m[1][2])
+        - m[1][0] * (m[0][1] * m[2][2] - m[2][1] * m[0][2])
+        + m[2][0] * (m[0][1] * m[1][2] - m[1][1] * m[0][2]);
+    let mut scale = [length(0), length(1), length(2)];
+    if determinant < 0.0 {
+        scale[0] = -scale[0];
+    }
+    // The rotation's columns, unscaled.
+    let r = |column: usize, row: usize| {
+        if scale[column] == 0.0 {
+            0.0
+        } else {
+            m[column][row] / scale[column]
+        }
+    };
+    let trace = r(0, 0) + r(1, 1) + r(2, 2);
+    let (x, y, z, w) = if trace > 0.0 {
+        let s = (trace + 1.0).sqrt() * 2.0;
+        (
+            (r(1, 2) - r(2, 1)) / s,
+            (r(2, 0) - r(0, 2)) / s,
+            (r(0, 1) - r(1, 0)) / s,
+            s / 4.0,
+        )
+    } else if r(0, 0) > r(1, 1) && r(0, 0) > r(2, 2) {
+        let s = (1.0 + r(0, 0) - r(1, 1) - r(2, 2)).sqrt() * 2.0;
+        (
+            s / 4.0,
+            (r(1, 0) + r(0, 1)) / s,
+            (r(2, 0) + r(0, 2)) / s,
+            (r(1, 2) - r(2, 1)) / s,
+        )
+    } else if r(1, 1) > r(2, 2) {
+        let s = (1.0 + r(1, 1) - r(0, 0) - r(2, 2)).sqrt() * 2.0;
+        (
+            (r(1, 0) + r(0, 1)) / s,
+            s / 4.0,
+            (r(2, 1) + r(1, 2)) / s,
+            (r(2, 0) - r(0, 2)) / s,
+        )
+    } else {
+        let s = (1.0 + r(2, 2) - r(0, 0) - r(1, 1)).sqrt() * 2.0;
+        (
+            (r(2, 0) + r(0, 2)) / s,
+            (r(2, 1) + r(1, 2)) / s,
+            s / 4.0,
+            (r(0, 1) - r(1, 0)) / s,
+        )
+    };
     Transform {
-        translation: translation.to_array(),
-        rotation: rotation.normalize().to_array(),
-        scale: scale.to_array(),
+        translation: [m[3][0], m[3][1], m[3][2]],
+        rotation: [x, y, z, w],
+        scale,
     }
 }
 
 /// The world box around a local box's eight corners.
 fn world_box(world: Mat4, min: [f32; 3], max: [f32; 3]) -> ([f32; 3], [f32; 3]) {
-    let (mut low, mut high) = (Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY));
+    let (mut low, mut high) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
     for corner in 0..8 {
         let pick = |axis: usize| {
             if corner & (1 << axis) == 0 {
@@ -386,11 +491,13 @@ fn world_box(world: Mat4, min: [f32; 3], max: [f32; 3]) -> ([f32; 3], [f32; 3]) 
                 max[axis]
             }
         };
-        let point = world.transform_point3(Vec3::new(pick(0), pick(1), pick(2)));
-        low = low.min(point);
-        high = high.max(point);
+        let point = transform_point(&world, [pick(0), pick(1), pick(2)]);
+        for axis in 0..3 {
+            low[axis] = low[axis].min(point[axis]);
+            high[axis] = high[axis].max(point[axis]);
+        }
     }
-    (low.to_array(), high.to_array())
+    (low, high)
 }
 
 #[cfg(test)]
@@ -420,6 +527,37 @@ mod tests {
             translation,
             scale: [scale; 3],
             ..Transform::IDENTITY
+        }
+    }
+
+    #[test]
+    fn a_composed_transform_reads_back_its_rotation_and_scale() {
+        for (x, y, z, w) in [
+            (0.0, 0.0, 0.0, 1.0),
+            (
+                0.0,
+                std::f32::consts::FRAC_1_SQRT_2,
+                0.0,
+                std::f32::consts::FRAC_1_SQRT_2,
+            ),
+            (0.6, 0.0, 0.0, -0.8),
+            (0.1, 0.2, 0.3, 0.9273618),
+        ] {
+            let transform = Transform {
+                translation: [1.0, -2.0, 3.0],
+                rotation: [x, y, z, w],
+                scale: [2.0, 0.5, 3.0],
+            };
+            let read = transform_of(multiply(&IDENTITY, &matrix(&transform)));
+            let same = |a: [f32; 4], b: [f32; 4]| {
+                let dot: f32 = (0..4).map(|i| a[i] * b[i]).sum();
+                dot.abs() > 0.99999
+            };
+            assert!(same(read.rotation, transform.rotation), "{read:?}");
+            for axis in 0..3 {
+                assert!((read.scale[axis] - transform.scale[axis]).abs() < 1e-5);
+                assert!((read.translation[axis] - transform.translation[axis]).abs() < 1e-5);
+            }
         }
     }
 

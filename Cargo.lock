@@ -5731,7 +5731,6 @@ dependencies = [
 name = "render-presentation"
 version = "0.1.0"
 dependencies = [
- "glam 0.30.10",
  "render-model",
  "serde",
  "serde_json",
