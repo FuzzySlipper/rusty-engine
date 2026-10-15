@@ -44,50 +44,13 @@ export interface TunableControl {
   readonly value: number;
   readonly options?: readonly string[];
   readonly reshapes: boolean;
-  /** Where Save writes the value: a content-root-relative JSON file and a JSON pointer. */
+  /** Where `tunables.save` writes the value: a content-root-relative JSON file and a JSON pointer. */
   readonly source?: { readonly path: string; readonly pointer: string };
-}
-
-/** A bound source file as `engine.content.source.read` answered it. */
-export interface SourceFile {
-  readonly sha256: string;
-  readonly document: unknown;
 }
 
 /** Fills `{name}` placeholders; a missing value fills nothing. */
 export function fillTemplate(template: string, values: Readonly<Record<string, string | number>>): string {
   return template.replace(/\{(\w+)\}/g, (_, name: string) => String(values[name] ?? ''));
-}
-
-/** The value an RFC 6901 pointer names in a parsed document, or undefined. */
-export function resolvePointer(document: unknown, pointer: string): unknown {
-  if (pointer === '') return document;
-  if (!pointer.startsWith('/')) return undefined;
-  let value: unknown = document;
-  for (const raw of pointer.slice(1).split('/')) {
-    const token = raw.replace(/~1/g, '/').replace(/~0/g, '~');
-    if (Array.isArray(value)) {
-      if (!/^(0|[1-9][0-9]*)$/.test(token)) return undefined;
-      value = value[Number(token)];
-    } else if (value !== null && typeof value === 'object') {
-      if (!Object.prototype.hasOwnProperty.call(value, token)) return undefined;
-      value = (value as Record<string, unknown>)[token];
-    } else {
-      return undefined;
-    }
-  }
-  return value;
-}
-
-/** The control value a source JSON value stands for, or undefined when it cannot be compared. */
-export function controlValueOf(control: TunableControl, source: unknown): number | undefined {
-  if (typeof source === 'number') return source;
-  if (typeof source === 'boolean') return source ? 1 : 0;
-  if (typeof source === 'string') {
-    const index = control.options?.indexOf(source) ?? -1;
-    return index >= 0 ? index : undefined;
-  }
-  return undefined;
 }
 
 /** The decimals a step shows: 0.05 and 2.5 show two and one, 1 and 10 none. */
@@ -103,52 +66,67 @@ export function atStep(control: TunableControl, value: number): number {
   return Number(value.toFixed(stepDecimals(control.step)));
 }
 
-/** The JSON value to save for a control's live value, in the source value's own type. */
-export function sourceValueOf(control: TunableControl, value: number, previous: unknown): unknown {
-  if (typeof previous === 'boolean' || (previous === undefined && control.kind === 'toggle')) return value >= 0.5;
-  if (typeof previous === 'string' && control.options) {
-    return control.options[Math.round(value)] ?? previous;
-  }
-  return atStep(control, value);
+/** One control whose live value differs from its bound file's, as `tunables.diff` answers it. */
+export interface TunableUnsaved {
+  readonly id: string;
+  readonly label: string;
+  readonly pointer: string;
+  readonly live: number;
+  /** The file's value as a control value: what Reset sets back. */
+  readonly saved: number;
+  /** The JSON Save writes. */
+  readonly save: unknown;
 }
 
-/** Whether a control's live value differs from what its source holds (floats at half a step). */
-export function isUnsaved(control: TunableControl, value: number, source: unknown): boolean {
-  const saved = controlValueOf(control, source);
-  if (saved === undefined) return false;
-  if (control.kind === 'toggle') return value >= 0.5 !== saved >= 0.5;
-  if (control.kind === 'choice') return Math.round(value) !== Math.round(saved);
-  const tolerance = control.step > 0 ? control.step / 2 : 0;
-  return Math.abs(value - saved) > tolerance;
+/** One bound file in a diff: its SHA-256 for `tunables.save` and its unsaved controls, or why it cannot be read. */
+export interface TunablesDiffFile {
+  readonly path: string;
+  readonly sha256?: string;
+  readonly error?: string;
+  readonly unsaved: readonly TunableUnsaved[];
 }
 
-/** The files the description's controls are bound to, in first-seen order. */
-export function boundFiles(description: TunablesDescription): string[] {
-  const files: string[] = [];
-  for (const group of description.groups) {
-    for (const control of group.controls) {
-      const path = control.source?.path;
-      if (path !== undefined && !files.includes(path)) files.push(path);
-    }
-  }
-  return files;
+/** The `tunables.diff` answer. */
+export interface TunablesDiff {
+  readonly files: readonly TunablesDiffFile[];
 }
 
-/** The RFC 6902 replace operations that save a file's unsaved controls. */
-export function saveEdits(
-  controls: readonly TunableControl[],
-  values: ReadonlyMap<string, number>,
-  file: SourceFile,
-): { op: 'replace'; path: string; value: unknown }[] {
-  const edits: { op: 'replace'; path: string; value: unknown }[] = [];
-  for (const control of controls) {
-    if (!control.source) continue;
-    const value = values.get(control.id) ?? control.value;
-    const source = resolvePointer(file.document, control.source.pointer);
-    if (!isUnsaved(control, value, source)) continue;
-    edits.push({ op: 'replace', path: control.source.pointer, value: sourceValueOf(control, value, source) });
-  }
-  return edits;
+/** The answer of `tunables.set-many` and `tunables.reset`: each control's value kept or refusal, then the description. */
+export interface TunablesApplied {
+  readonly results: readonly { readonly id: string; readonly value?: number; readonly refused?: string }[];
+  readonly refused: number;
+  readonly description: TunablesDescription;
+}
+
+export function parseDiff(message: string): TunablesDiff {
+  const value = JSON.parse(message) as { files?: Partial<TunablesDiffFile>[] };
+  return {
+    files: (value.files ?? []).map((file) => ({ ...file, path: file.path ?? '', unsaved: file.unsaved ?? [] })),
+  };
+}
+
+export function parseApplied(message: string): TunablesApplied {
+  const value = JSON.parse(message) as Omit<TunablesApplied, 'description'> & { description: unknown };
+  return {
+    results: value.results ?? [],
+    refused: value.refused ?? 0,
+    description: parseDescription(JSON.stringify(value.description)),
+  };
+}
+
+/** The refusals of an applied batch, one line each; empty when every control was applied. */
+export function refusals(applied: TunablesApplied): string {
+  return applied.results
+    .filter((result) => result.refused !== undefined)
+    .map((result) => `${result.id}: ${result.refused}`)
+    .join('\n');
+}
+
+/** The unsaved controls of a diff by id, with the file each is bound to. */
+export function unsavedControls(diff: TunablesDiff): Map<string, TunableUnsaved & { readonly path: string }> {
+  const unsaved = new Map<string, TunableUnsaved & { readonly path: string }>();
+  for (const file of diff.files) for (const control of file.unsaved) unsaved.set(control.id, { ...control, path: file.path });
+  return unsaved;
 }
 
 /** Parses a describe answer, refusing anything that is not a `tunables.v1` description. */
@@ -172,7 +150,7 @@ export function parseDescription(message: string): TunablesDescription {
  * Live control values: the value each control shows, and the value the
  * product accepted (from the description or a set's answer). One set per
  * control is in flight; a newer request replaces one still waiting. Save
- * persists accepted values only, after the controls' sets settle.
+ * and Reset wait for the controls' sets to settle.
  */
 export class LiveValues {
   readonly #send: (id: string, value: number) => Promise<number>;

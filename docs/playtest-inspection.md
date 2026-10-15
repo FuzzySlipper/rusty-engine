@@ -96,47 +96,69 @@ A product describes what a developer may tune, the Engine panel renders it,
 typed live-debug commands carry the changes, and the
 [content source](csharp-product-project.md#content-source) saves them.
 
-The product registers `Rusty.Engine.Debugging.TunablesDebugModule` with a
-delegate that builds the current `TunablesPage`, and optionally one that
-applies a chooser. A page holds groups of `Tunable`s: a `TunableControl`
-(`Slider`, `Toggle` as 0/1, or `Choice` as an option index, with id, label,
-range, step and live value) and the owner call that applies a value. A
-control may carry a `TunableSource`: a content-root-relative JSON file and a
-JSON pointer that hold its saved value (a boolean for a toggle, the option
-name or index for a choice). A page may also carry choosers (what is being
-tuned), a timeline (keys, duration, the held key, play speeds) with the
-product's own `key {key}`, `at {seconds}` and `play {speed}` command
-templates, and a notice. Declarations are explicit: no reflection or
-attribute scan.
+The product registers `Rusty.Engine.Debugging.TunablesDebugModule` with its
+content source (`engine.ContentSource`), a delegate that builds the current
+`TunablesPage`, and optionally one that applies a chooser. A page holds
+groups of `Tunable`s: a `TunableControl` (`Slider`, `Toggle` as 0/1, or
+`Choice` as an option index, with id, label, range, step and live value) and
+the owner call that applies a value. A control may carry a `TunableSource`: a
+content-root-relative JSON file and a JSON pointer that hold its saved value
+(a boolean for a toggle, the option name or index for a choice). A page may
+also carry choosers (what is being tuned), a timeline (keys, duration, the
+held key, play speeds) with the product's own `key {key}`, `at {seconds}` and
+`play {speed}` command templates, and a notice. Declarations are explicit: no
+reflection or attribute scan.
 
 The module's commands answer the `tunables.v1` contract:
 
 - `tunables.describe`: the page as JSON, with the command templates the
-  panel uses (`select`, `set`, the content source's `read` and `edit`, and the
+  panel uses (`select`, `set`, `setMany`, `diff`, `save`, `reset`, and the
   product's own).
 - `tunables.select CHOOSER VALUE`: applies a chooser, then describes again.
 - `tunables.set ID VALUE`: applies one value, clamped to its range; answers
   the value kept.
+- `tunables.set-many ID=VALUE,ID=VALUE`: applies the pairs in order, a
+  choice's value as its index or option name, describing again after a
+  control that reshapes the page. It answers each control's `value` kept or
+  why it was `refused`, the count refused, and the `description` after the
+  batch; a refused control leaves the others applied.
+- `tunables.diff`: the page shown (title, chooser values, held key) and, per
+  bound file, its `sha256` and each `unsaved` control (live value differs
+  from the file's, floats at half a step) with its pointer, `live` and
+  `saved` values and the JSON Save would write; a file that cannot be read
+  has an `error`.
+- `tunables.save PATH SHA256`: writes the file's unsaved controls, only
+  their pointers, at each control's step and in the saved value's type, if
+  the file still has the SHA-256 its diff answered. It answers the pointers
+  `saved` and the new `sha256`.
+- `tunables.reset PATH`: sets every unsaved control of the file back to the
+  file's value, answered as `set-many` is.
+
+Save and reset go through the content source, so its refusals pass through
+with their code: `CONTENT_SOURCE_STALE` when the file changed after the diff,
+`CONTENT_SOURCE_UNAVAILABLE` outside `rusty dev`, where tuning still works
+live.
 
 `mountTunablesPanel(element, { transport?, describe? })` from
 `@rusty-engine/live-debug` mounts the panel. It renders the description and
-sends commands; it holds no product state. On each describe it reads every
-bound file once through `engine.content.source.read`, resolves the pointers,
-and marks a control unsaved when its live value differs from the file's
-(floats at half a step). Each bound file shows its unsaved count, **Save**
-(one `engine.content.source.edit` of replace operations, with the read's
-SHA-256, writing values at the control's step) and **Reset** (each unsaved
-control set back to the file's value); each control has its own reset. A
-refusal, such as `CONTENT_SOURCE_STALE` after the file changed or
-`CONTENT_SOURCE_UNAVAILABLE` outside `rusty dev`, shows with its code, and
-outside `rusty dev` the panel still tunes live with no Save. A control whose
-change `reshapes` the page describes again after it; groups keep their
-folding and the panel its scroll. Style it with the
-`--rusty-tunables-*` custom properties or its `rusty-tunables` classes.
+sends the commands above; it holds no product state. After each describe and
+each set it asks `tunables.diff` and marks the unsaved controls. Each bound
+file shows its unsaved count, **Save** (`tunables.save` with the latest
+diff's SHA-256) and **Reset** (`tunables.reset`); each control has its own
+reset to the file's value. A refusal shows with its code, and after
+`CONTENT_SOURCE_STALE` the panel describes again. A control whose change
+`reshapes` the page describes again after it; groups keep their folding and
+the panel its scroll. Style it with the `--rusty-tunables-*` custom
+properties or its `rusty-tunables` classes.
 
-Everything the panel does is a live-debug command, so a harness tunes the
-same way without a page: `tunables.describe`, `tunables.set`, then
-`engine.content.source.read` and `engine.content.source.edit` to save.
+A harness tunes the same way without a page, for example:
+
+```text
+tunables.set-many marker.size=1.2,marker.color=teal,floor.shade=0.4
+tunables.diff
+tunables.save tuning/marker.json <sha256 from the diff>
+```
+
 `fixtures/csharp-live-tuning` declares a handful of tunables bound to one
 file and mounts the panel in the [developer shell](#developer-shell).
 

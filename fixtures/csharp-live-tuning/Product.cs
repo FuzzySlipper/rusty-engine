@@ -124,7 +124,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)
     {
         registrar.Register(this);
-        registrar.Register(new TunablesDebugModule(Tunables));
+        registrar.Register(new TunablesDebugModule(engine.ContentSource, Tunables));
     }
 
     /// <summary>The page the Engine tunables panel shows: each control applies to the live

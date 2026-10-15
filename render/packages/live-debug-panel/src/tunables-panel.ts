@@ -2,17 +2,16 @@ import { createLiveDebugHttpTransport, type LiveDebugTransport } from '@rusty-en
 
 import {
   atStep,
-  boundFiles,
-  controlValueOf,
   fillTemplate,
-  isUnsaved,
   LiveValues,
+  parseApplied,
   parseDescription,
-  resolvePointer,
-  saveEdits,
-  type SourceFile,
+  parseDiff,
+  refusals,
+  unsavedControls,
   type TunableControl,
   type TunablesDescription,
+  type TunablesDiff,
 } from './tunables-model.js';
 
 const STYLE_ID = 'rusty-tunables-style';
@@ -81,9 +80,9 @@ interface ControlView {
 
 /**
  * Renders a product's `tunables.v1` description and sends commands; it holds
- * no product state. Controls bound to a source file show unsaved changes, and
- * each bound file has Save (the Engine content source's pointer edits) and
- * Reset (the saved values set back live).
+ * no product state. Controls bound to a source file show the unsaved changes
+ * `tunables.diff` answers, and each bound file has Save (`tunables.save`) and
+ * Reset (`tunables.reset`).
  */
 export class TunablesPanel {
   readonly element: HTMLElement;
@@ -93,12 +92,12 @@ export class TunablesPanel {
   readonly #abort = new AbortController();
   readonly #folded = new Set<string>();
   readonly #live = new LiveValues((id, value) => this.#applyValue(id, value));
-  readonly #files = new Map<string, SourceFile>();
   readonly #views = new Map<string, ControlView>();
   /** Per key, the work waiting behind the request in flight (null: none). */
   readonly #queued = new Map<string, (() => Promise<void>) | null>();
   #description: TunablesDescription | null = null;
-  #sourceError: string | null = null;
+  #diff: TunablesDiff = { files: [] };
+  #diffError: string | null = null;
   #status: HTMLElement;
   #fileRows = new Map<string, { count: HTMLElement; save: HTMLButtonElement; reset: HTMLButtonElement }>();
 
@@ -115,7 +114,7 @@ export class TunablesPanel {
     this.element.append(this.#status);
   }
 
-  /** Describes again and re-reads the bound files. */
+  /** Describes again and compares the bound files. */
   async refresh(): Promise<void> {
     try {
       const command = this.#description?.commands['describe'] ?? this.#describe;
@@ -146,28 +145,26 @@ export class TunablesPanel {
     this.#live.reset(
       description.groups.flatMap((group) => group.controls.map((control) => [control.id, control.value] as const)),
     );
-    await this.#readFiles();
+    await this.#readDiff();
     this.#render();
   }
 
-  async #readFiles(): Promise<void> {
-    this.#files.clear();
-    this.#sourceError = null;
-    for (const path of boundFiles(this.#description!)) {
-      try {
-        await this.#readFile(path);
-      } catch (error) {
-        this.#sourceError = error instanceof Error ? error.message : String(error);
-        this.#files.clear();
-        return;
-      }
+  async #readDiff(): Promise<void> {
+    try {
+      this.#diff = parseDiff(await this.#send(this.#command('diff', {}) ?? 'tunables.diff'));
+      this.#diffError = null;
+    } catch (error) {
+      this.#diff = { files: [] };
+      this.#diffError = error instanceof Error ? error.message : String(error);
     }
   }
 
-  async #readFile(path: string): Promise<void> {
-    const command = this.#command('read', { path }) ?? `engine.content.source.read ${path}`;
-    const answer = JSON.parse(await this.#send(command)) as { sha256: string; text: string };
-    this.#files.set(path, { sha256: answer.sha256, document: JSON.parse(answer.text) as unknown });
+  /** Compares again once the sets in flight answer, then marks what is unsaved. */
+  #compare(): void {
+    this.#latest('diff', async () => {
+      await this.#readDiff();
+      this.#updateMarks();
+    });
   }
 
   #render(): void {
@@ -180,7 +177,7 @@ export class TunablesPanel {
     if (description.notice) this.element.append(this.#make('p', 'rusty-tunables__notice', description.notice));
     this.#renderChoosers(description);
     this.#renderTimeline(description);
-    this.#renderFiles(description);
+    this.#renderFiles();
     for (const group of description.groups) {
       const details = this.#make('details', 'rusty-tunables__group') as HTMLDetailsElement;
       details.open = !this.#folded.has(group.id);
@@ -263,26 +260,24 @@ export class TunablesPanel {
       .catch((error: unknown) => this.#report(error, true));
   }
 
-  #renderFiles(description: TunablesDescription): void {
-    if (this.#sourceError !== null) {
-      this.element.append(this.#make('p', 'rusty-tunables__notice', `Source unavailable: ${this.#sourceError}`));
+  #renderFiles(): void {
+    if (this.#diffError !== null) {
+      this.element.append(this.#make('p', 'rusty-tunables__notice', `Source unavailable: ${this.#diffError}`));
       return;
     }
-    for (const path of boundFiles(description)) {
+    for (const file of this.#diff.files) {
       const row = this.#make('div', 'rusty-tunables__row rusty-tunables__file');
-      const name = this.#make('span', 'rusty-tunables__file-name', path);
+      const name = this.#make('span', 'rusty-tunables__file-name', file.path);
       const count = this.#make('span', 'rusty-tunables__unsaved');
       const save = this.#make('button', '', 'Save') as HTMLButtonElement;
       const reset = this.#make('button', '', 'Reset') as HTMLButtonElement;
       save.type = reset.type = 'button';
-      save.addEventListener('click', () => void this.#save(path));
-      reset.addEventListener('click', () => {
-        for (const control of this.#controlsOf(path)) this.#reset(control);
-      });
+      save.addEventListener('click', () => void this.#save(file.path));
+      reset.addEventListener('click', () => void this.#resetFile(file.path));
       const actions = this.#make('span', 'rusty-tunables__row');
       actions.append(count, save, reset);
       row.append(name, actions);
-      this.#fileRows.set(path, { count, save, reset });
+      this.#fileRows.set(file.path, { count, save, reset });
       this.element.append(row);
     }
   }
@@ -366,45 +361,58 @@ export class TunablesPanel {
   /** Applies a value live; the control then shows what the product kept. */
   #set(control: TunableControl, value: number, committed: boolean): void {
     const settled = this.#live.set(control.id, value);
-    this.#updateMarks();
     void settled
       .then(() => {
         if (committed && control.reshapes) return this.refresh();
+        this.#compare();
         return undefined;
       })
       .catch((error: unknown) => this.#report(error, true))
       .finally(() => {
         const shown = this.#live.shown(control.id);
         if (shown !== undefined) this.#views.get(control.id)?.show(shown);
-        this.#updateMarks();
       });
   }
 
+  /** Sets one control back to its file's value, as the last diff answered it. */
   #reset(control: TunableControl): void {
-    const file = control.source && this.#files.get(control.source.path);
-    if (!file || !control.source) return;
-    const saved = controlValueOf(control, resolvePointer(file.document, control.source.pointer));
+    const saved = unsavedControls(this.#diff).get(control.id)?.saved;
     if (saved === undefined) return;
     this.#views.get(control.id)?.show(saved);
     this.#set(control, saved, true);
   }
 
-  async #save(path: string): Promise<void> {
-    const file = this.#files.get(path);
-    if (!file) return;
-    // Save what the product accepted, once the file's sets have answered.
-    const controls = this.#controlsOf(path);
-    await this.#live.settled(controls.map((control) => control.id));
-    const edits = saveEdits(controls, this.#live.accepted, file);
-    if (edits.length === 0) return;
-    const command =
-      this.#command('edit', { path, sha256: file.sha256, edits: JSON.stringify(edits) }) ??
-      `engine.content.source.edit ${path} ${file.sha256} ${JSON.stringify(edits)}`;
+  /** Sets every unsaved control of a file back to the file's values. */
+  async #resetFile(path: string): Promise<void> {
+    const command = this.#command('reset', { path });
+    if (command === null) return;
     try {
-      await this.#send(command);
-      await this.#readFile(path);
+      await this.#live.settled(this.#controlsOf(path).map((control) => control.id));
+      const applied = parseApplied(await this.#send(command));
+      await this.#apply(applied.description);
+      const refused = refusals(applied);
+      this.#report(refused || `Reset ${applied.results.length} value${applied.results.length === 1 ? '' : 's'} from ${path}.`, refused !== '');
+    } catch (error) {
+      this.#report(error, true);
+    }
+  }
+
+  /**
+   * Saves a file's unsaved controls if it still has the SHA-256 of the diff
+   * the panel shows, so a change to the file since is refused, not saved over.
+   */
+  async #save(path: string): Promise<void> {
+    // Save what the product accepted, once the file's sets have answered.
+    await this.#live.settled(this.#controlsOf(path).map((control) => control.id));
+    const sha256 = this.#diff.files.find((candidate) => candidate.path === path)?.sha256;
+    if (sha256 === undefined) return;
+    const command = this.#command('save', { path, sha256 });
+    if (command === null) return;
+    try {
+      const saved = (JSON.parse(await this.#send(command)) as { saved: string[] }).saved;
+      await this.#readDiff();
       this.#updateMarks();
-      this.#report(`Saved ${edits.length} value${edits.length === 1 ? '' : 's'} to ${path}.`, false);
+      this.#report(`Saved ${saved.length} value${saved.length === 1 ? '' : 's'} to ${path}.`, false);
     } catch (error) {
       // The file changed elsewhere, and a live file has reached the product
       // too: show what the product and the file hold now.
@@ -420,19 +428,14 @@ export class TunablesPanel {
   }
 
   #updateMarks(): void {
-    const unsaved = new Map<string, number>();
+    const unsaved = unsavedControls(this.#diff);
     for (const { control, row } of this.#views.values()) {
-      const file = control.source && this.#files.get(control.source.path);
-      const dirty =
-        !!file &&
-        !!control.source &&
-        isUnsaved(control, this.#live.shown(control.id) ?? control.value, resolvePointer(file.document, control.source.pointer));
-      row.classList.toggle('rusty-tunables__control--unsaved', dirty);
-      if (dirty && control.source) unsaved.set(control.source.path, (unsaved.get(control.source.path) ?? 0) + 1);
+      row.classList.toggle('rusty-tunables__control--unsaved', unsaved.has(control.id));
     }
     for (const [path, { count, save, reset }] of this.#fileRows) {
-      const changed = unsaved.get(path) ?? 0;
-      count.textContent = changed === 0 ? 'saved' : `${changed} unsaved`;
+      const file = this.#diff.files.find((candidate) => candidate.path === path);
+      const changed = file?.unsaved.length ?? 0;
+      count.textContent = file?.error ?? (changed === 0 ? 'saved' : `${changed} unsaved`);
       save.disabled = reset.disabled = changed === 0;
     }
   }

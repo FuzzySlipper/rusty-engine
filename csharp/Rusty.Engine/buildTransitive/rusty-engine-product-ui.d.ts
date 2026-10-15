@@ -1197,46 +1197,65 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-
         readonly value: number;
         readonly options?: readonly string[];
         readonly reshapes: boolean;
-        /** Where Save writes the value: a content-root-relative JSON file and a JSON pointer. */
+        /** Where `tunables.save` writes the value: a content-root-relative JSON file and a JSON pointer. */
         readonly source?: {
             readonly path: string;
             readonly pointer: string;
         };
     }
-    /** A bound source file as `engine.content.source.read` answered it. */
-    export interface SourceFile {
-        readonly sha256: string;
-        readonly document: unknown;
-    }
     /** Fills `{name}` placeholders; a missing value fills nothing. */
     export function fillTemplate(template: string, values: Readonly<Record<string, string | number>>): string;
-    /** The value an RFC 6901 pointer names in a parsed document, or undefined. */
-    export function resolvePointer(document: unknown, pointer: string): unknown;
-    /** The control value a source JSON value stands for, or undefined when it cannot be compared. */
-    export function controlValueOf(control: TunableControl, source: unknown): number | undefined;
     /** The decimals a step shows: 0.05 and 2.5 show two and one, 1 and 10 none. */
     export function stepDecimals(step: number): number;
     /** A value as the step spells it, so a saved slider writes 0.25, not 0.25000000372529. */
     export function atStep(control: TunableControl, value: number): number;
-    /** The JSON value to save for a control's live value, in the source value's own type. */
-    export function sourceValueOf(control: TunableControl, value: number, previous: unknown): unknown;
-    /** Whether a control's live value differs from what its source holds (floats at half a step). */
-    export function isUnsaved(control: TunableControl, value: number, source: unknown): boolean;
-    /** The files the description's controls are bound to, in first-seen order. */
-    export function boundFiles(description: TunablesDescription): string[];
-    /** The RFC 6902 replace operations that save a file's unsaved controls. */
-    export function saveEdits(controls: readonly TunableControl[], values: ReadonlyMap<string, number>, file: SourceFile): {
-        op: 'replace';
-        path: string;
-        value: unknown;
-    }[];
+    /** One control whose live value differs from its bound file's, as `tunables.diff` answers it. */
+    export interface TunableUnsaved {
+        readonly id: string;
+        readonly label: string;
+        readonly pointer: string;
+        readonly live: number;
+        /** The file's value as a control value: what Reset sets back. */
+        readonly saved: number;
+        /** The JSON Save writes. */
+        readonly save: unknown;
+    }
+    /** One bound file in a diff: its SHA-256 for `tunables.save` and its unsaved controls, or why it cannot be read. */
+    export interface TunablesDiffFile {
+        readonly path: string;
+        readonly sha256?: string;
+        readonly error?: string;
+        readonly unsaved: readonly TunableUnsaved[];
+    }
+    /** The `tunables.diff` answer. */
+    export interface TunablesDiff {
+        readonly files: readonly TunablesDiffFile[];
+    }
+    /** The answer of `tunables.set-many` and `tunables.reset`: each control's value kept or refusal, then the description. */
+    export interface TunablesApplied {
+        readonly results: readonly {
+            readonly id: string;
+            readonly value?: number;
+            readonly refused?: string;
+        }[];
+        readonly refused: number;
+        readonly description: TunablesDescription;
+    }
+    export function parseDiff(message: string): TunablesDiff;
+    export function parseApplied(message: string): TunablesApplied;
+    /** The refusals of an applied batch, one line each; empty when every control was applied. */
+    export function refusals(applied: TunablesApplied): string;
+    /** The unsaved controls of a diff by id, with the file each is bound to. */
+    export function unsavedControls(diff: TunablesDiff): Map<string, TunableUnsaved & {
+        readonly path: string;
+    }>;
     /** Parses a describe answer, refusing anything that is not a `tunables.v1` description. */
     export function parseDescription(message: string): TunablesDescription;
     /**
      * Live control values: the value each control shows, and the value the
      * product accepted (from the description or a set's answer). One set per
      * control is in flight; a newer request replaces one still waiting. Save
-     * persists accepted values only, after the controls' sets settle.
+     * and Reset wait for the controls' sets to settle.
      */
     export class LiveValues {
         #private;
@@ -1267,15 +1286,15 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-
     }
     /**
      * Renders a product's `tunables.v1` description and sends commands; it holds
-     * no product state. Controls bound to a source file show unsaved changes, and
-     * each bound file has Save (the Engine content source's pointer edits) and
-     * Reset (the saved values set back live).
+     * no product state. Controls bound to a source file show the unsaved changes
+     * `tunables.diff` answers, and each bound file has Save (`tunables.save`) and
+     * Reset (`tunables.reset`).
      */
     export class TunablesPanel {
         #private;
         readonly element: HTMLElement;
         constructor(document: Document, options: TunablesPanelOptions);
-        /** Describes again and re-reads the bound files. */
+        /** Describes again and compares the bound files. */
         refresh(): Promise<void>;
         dispose(): void;
     }

@@ -32,3 +32,11 @@ Live-debug commands, beside the panel's `tunables.*` and the Engine's
   instance, which a runtime replacement would change.
 - `livetuning.source.size SIZE` saves a marker size through the C#
   ContentSource service and applies it.
+
+Tuning without a page, with the module's commands:
+
+```text
+tunables.set-many marker.size=1.2,marker.color=teal,floor.shade=0.4
+tunables.diff
+tunables.save tuning/marker.json <sha256 from the diff>
+```
