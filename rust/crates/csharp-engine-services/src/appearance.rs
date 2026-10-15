@@ -16090,6 +16090,191 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert!(playing.len() == 1 && playing[0] > 0.0);
     }
 
+    /// One clip pack serves two primary meshes on its rig, each posed by its
+    /// own controller; a snapshot's presentation baseline, replayed into a
+    /// fresh world as `rusty-scene-render` does, still poses both.
+    #[test]
+    fn one_clip_pack_poses_two_meshes_and_a_snapshot_keeps_both() {
+        const CHARACTER_GLB: &[u8] = include_bytes!(
+            "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
+        );
+        // Byte-distinct copies of one rigged GLB: two primaries and a pack.
+        let variant = |generator: &[u8]| -> Arc<[u8]> {
+            let from = b"FBX2glTF";
+            assert_eq!(generator.len(), from.len());
+            let mut bytes = CHARACTER_GLB.to_vec();
+            let at = bytes
+                .windows(from.len())
+                .position(|window| window == from)
+                .expect("the fixture names its generator");
+            bytes[at..at + from.len()].copy_from_slice(generator);
+            Arc::from(bytes)
+        };
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert("a.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        content_resources.insert("b.glb".to_owned(), variant(b"FBX2GLTF"));
+        content_resources.insert("pack.glb".to_owned(), variant(b"fbx2gltf"));
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let slice = |bytes: &[u8]| NativeUtf8Slice {
+            bytes: bytes.as_ptr(),
+            len: bytes.len(),
+        };
+        let none = NativeUtf8Slice {
+            bytes: std::ptr::null(),
+            len: 0,
+        };
+
+        bridge.begin_call();
+        let pack = bridge
+            .open_animation_clip_pack(&NativeAnimationClipPackResourceRequest {
+                path: slice(b"pack.glb"),
+            })
+            .expect("clip pack");
+        // The fixture's clips share the primaries' ids; the pack's are
+        // renamed in memory, as the clip-pack admission test does.
+        bridge
+            .staged
+            .as_mut()
+            .unwrap()
+            .state
+            .render_resources
+            .animated_mesh_mut(pack.value)
+            .unwrap()
+            .clips
+            .iter_mut()
+            .enumerate()
+            .for_each(|(index, clip)| clip.id = format!("pack-clip-{index}"));
+        let clip = b"pack-clip-1";
+        let mut characters = Vec::new();
+        for (path, object_id) in [(&b"a.glb"[..], 7), (&b"b.glb"[..], 8)] {
+            let resource = bridge
+                .open_animated_mesh(&NativeAnimatedMeshResourceRequest { path: slice(path) })
+                .expect("primary");
+            bridge
+                .associate_animation_clip_pack(&NativeAnimationClipPackAssociationRequest {
+                    primary_mesh: resource,
+                    clip_pack: pack,
+                    producer: slice(b"test"),
+                    license: slice(b"CC0-1.0"),
+                })
+                .expect("the one pack associates with each primary");
+            let appearance = bridge
+                .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+                .expect("appearance");
+            let instance = bridge
+                .create_animation_instance(NativeAnimationInstanceRequest {
+                    appearance,
+                    object_id,
+                })
+                .expect("instance");
+            let graph = bridge
+                .create_animation_graph(&NativeAnimationGraphCreateRequest {
+                    resource,
+                    graph_id: slice(path),
+                    version: 1,
+                    initial_state_id: slice(b"move"),
+                })
+                .expect("graph");
+            bridge
+                .define_animation_state(&NativeAnimationStateDefinitionRequest {
+                    graph,
+                    state_id: slice(b"move"),
+                    motion_kind: NativeAnimationMotionKind::Clip,
+                    clip_a: slice(clip),
+                    clip_b: none,
+                    parameter_id: none,
+                    minimum_milli: 0,
+                    maximum_milli: 0,
+                    speed_milli: 1000,
+                })
+                .expect("a state on the pack's clip");
+            let controller = bridge
+                .create_animation_controller(NativeAnimationControllerCreateRequest {
+                    graph,
+                    instance,
+                    tick_duration_millis: 16,
+                })
+                .expect("controller");
+            characters.push((
+                NativeAppearanceFact {
+                    object_id,
+                    ..appearance_fact(appearance)
+                },
+                controller,
+            ));
+        }
+        let facts = characters.iter().map(|(fact, _)| *fact).collect::<Vec<_>>();
+        unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }.expect("both placed");
+        // Each controller plays its own length.
+        for (ticks, (_, controller)) in [3, 6].into_iter().zip(&characters) {
+            for tick in 1..=ticks {
+                bridge
+                    .tick_animation(NativeAnimationTickRequest {
+                        controller: *controller,
+                        tick,
+                    })
+                    .expect("tick");
+            }
+        }
+        let targets = [7, 8].map(|object| {
+            bridge
+                .staged_ref()
+                .unwrap()
+                .state
+                .projector
+                .object_handle(object)
+                .expect("target")
+        });
+        let call = bridge.take_staged_call();
+        let frames = call
+            .outputs
+            .iter()
+            .filter_map(|output| match output {
+                RuntimeAppearanceCallOutput::Frame(frame) => Some(frame.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        bridge.commit(call);
+
+        // The snapshot's scene: the render frames, then the presentation
+        // baseline in place of the live animation updates.
+        let mut world = render_presentation::PresentationWorld::default();
+        for frame in frames {
+            world.apply(frame).expect("render frame");
+        }
+        for frame in RuntimeAppearanceBridge::snapshot_presentation_state(&bridge.state) {
+            world
+                .apply_presentation(frame)
+                .expect("presentation baseline");
+        }
+        let poses = targets.map(|target| {
+            let captured = world.capture_output_scene(target, false).expect("capture");
+            let poses = captured
+                .ops
+                .iter()
+                .filter_map(|op| match op {
+                    RenderDiff::SetAnimatedMeshPlayback {
+                        handle,
+                        playback: AnimatedMeshPlaybackCommand::SamplePose { clips },
+                    } if *handle == target => Some(clips.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(poses.len(), 1, "{target:?} is posed by one controller");
+            let [pose] = poses[0].as_slice() else {
+                panic!("one clip poses {target:?}: {poses:?}");
+            };
+            assert_eq!(pose.clip, "pack-clip-1");
+            pose.time_seconds
+        });
+        assert!(poses[0] > 0.0, "{poses:?}");
+        assert!(
+            poses[1] > poses[0],
+            "each controller keeps its own time: {poses:?}"
+        );
+    }
+
     #[test]
     fn animated_controller_disposal_emits_owner_destroy_before_target_removal() {
         const CHARACTER_GLB: &[u8] = include_bytes!(
