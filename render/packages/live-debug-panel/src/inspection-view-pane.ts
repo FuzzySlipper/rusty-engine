@@ -2,11 +2,13 @@ import { createLiveDebugHttpTransport, type LiveDebugTransport } from '@rusty-en
 
 import {
   captureUrl,
+  DragGesture,
   dragOrbit,
   dragPan,
   focusDistance,
   inspectCommands,
   subjects,
+  ViewOverlayToggle,
   wheelZoom,
 } from './inspection-view-model.js';
 
@@ -83,9 +85,11 @@ export class InspectionViewPane {
   readonly #subject: HTMLSelectElement;
   readonly #status: HTMLElement;
   readonly #release: () => void;
-  #overlays = false;
+  readonly #overlays: ViewOverlayToggle;
+  readonly #overlayButton: HTMLButtonElement;
   #pending: Promise<unknown> = Promise.resolve();
-  #drag: { x: number; y: number; dx: number; dy: number; pan: boolean; distance: number } | null = null;
+  #drag: DragGesture | null = null;
+  #distance = 1;
   #flush: number | null = null;
   readonly #requested: string;
 
@@ -107,13 +111,14 @@ export class InspectionViewPane {
     for (const framing of options.framings ?? ['front', 'side', 'underside', 'close']) {
       bar.append(this.#button(framing, () => this.#run(inspectCommands.frame(this.id, framing, this.#subject.value))));
     }
-    const overlays = this.#button('Overlays', async () => {
-      this.#overlays = !this.#overlays;
-      overlays.setAttribute('aria-pressed', String(this.#overlays));
-      return this.#run(this.#overlays ? inspectCommands.showSets() : inspectCommands.hideSets());
+    // Shows every overlay set in this pane's view only.
+    this.#overlays = new ViewOverlayToggle(this.id, (command) => this.#run(command, false));
+    this.#overlayButton = this.#button('Overlays', async () => {
+      await this.#overlays.toggle();
+      this.#showOverlayState();
     });
-    overlays.setAttribute('aria-pressed', 'false');
-    bar.append(overlays, this.#button('Capture', () => this.#capture()));
+    this.#overlayButton.setAttribute('aria-pressed', 'false');
+    bar.append(this.#overlayButton, this.#button('Capture', () => this.#capture()));
     this.#surface = this.#make('div', 'rusty-inspection-view__surface');
     this.#surface.tabIndex = 0;
     this.#surface.setAttribute('aria-label', `Inspection view ${this.id}`);
@@ -139,19 +144,29 @@ export class InspectionViewPane {
       this.#subject.value = chosen;
       const framing = listed.find((subject) => subject.value === chosen)?.framing ?? 'side';
       await this.#run(inspectCommands.frame(this.id, framing, chosen));
+      await this.#overlays.sync();
+      this.#showOverlayState();
       if (missing) this.#report(`No ${this.#requested}: framing the player camera.`, false);
     } catch (error) {
       this.#report(error, true);
     }
   }
 
-  /** Closes the view and gives the surface's input back. */
+  /** Closes the view, undoes its own overlay choice and gives the surface's input back. */
   dispose(): void {
     if (this.#flush !== null) this.#document.defaultView?.clearTimeout(this.#flush);
     this.#release();
-    void this.#transport.execute(inspectCommands.close(this.id)).catch(() => undefined);
+    const pressed = this.#overlays.pressed;
+    void (async () => {
+      if (pressed) await this.#transport.execute(inspectCommands.hideSetsIn(this.id)).catch(() => undefined);
+      await this.#transport.execute(inspectCommands.close(this.id)).catch(() => undefined);
+    })();
     this.#abort.abort();
     this.element.remove();
+  }
+
+  #showOverlayState(): void {
+    this.#overlayButton.setAttribute('aria-pressed', String(this.#overlays.pressed));
   }
 
   #anchor(): string {
@@ -163,26 +178,27 @@ export class InspectionViewPane {
     surface.addEventListener('pointerdown', (event) => {
       surface.setPointerCapture(event.pointerId);
       surface.focus();
-      this.#drag = { x: event.clientX, y: event.clientY, dx: 0, dy: 0, pan: event.shiftKey, distance: 1 };
+      this.#drag = new DragGesture(event.clientX, event.clientY, event.shiftKey);
       void this.#run(inspectCommands.select(this.id), false);
       void this.#send('engine.inspect.view list')
         .then((listing) => {
-          if (this.#drag) this.#drag.distance = focusDistance(listing, this.id);
+          this.#distance = focusDistance(listing, this.id);
         })
         .catch(() => undefined);
     });
     surface.addEventListener('pointermove', (event) => {
-      const drag = this.#drag;
-      if (!drag) return;
-      drag.dx += event.clientX - drag.x;
-      drag.dy += event.clientY - drag.y;
-      drag.x = event.clientX;
-      drag.y = event.clientY;
+      if (!this.#drag) return;
+      this.#drag.move(event.clientX, event.clientY);
       this.#schedule();
     });
+    // Release sends what the gesture moved since the last send, at once.
     const end = (event: PointerEvent): void => {
       if (surface.hasPointerCapture(event.pointerId)) surface.releasePointerCapture(event.pointerId);
-      this.#schedule();
+      if (!this.#drag) return;
+      this.#drag.move(event.clientX, event.clientY);
+      if (this.#flush !== null) this.#document.defaultView?.clearTimeout(this.#flush);
+      this.#flush = null;
+      this.#sendDrag(this.#drag);
       this.#drag = null;
     };
     surface.addEventListener('pointerup', end);
@@ -203,17 +219,19 @@ export class InspectionViewPane {
     const window = this.#document.defaultView;
     const send = (): void => {
       this.#flush = null;
-      const drag = this.#drag;
-      if (!drag || (drag.dx === 0 && drag.dy === 0)) return;
-      const command = drag.pan
-        ? inspectCommands.pan(this.id, ...dragPan(drag.dx, drag.dy, drag.distance))
-        : inspectCommands.orbit(this.id, ...dragOrbit(drag.dx, drag.dy));
-      drag.dx = 0;
-      drag.dy = 0;
-      void this.#run(command, false);
+      if (this.#drag) this.#sendDrag(this.#drag);
     };
     if (window) this.#flush = window.setTimeout(send, 50);
     else send();
+  }
+
+  #sendDrag(drag: DragGesture): void {
+    const moved = drag.take();
+    if (!moved) return;
+    const command = drag.pan
+      ? inspectCommands.pan(this.id, ...dragPan(moved[0], moved[1], this.#distance))
+      : inspectCommands.orbit(this.id, ...dragOrbit(moved[0], moved[1]));
+    void this.#run(command, false).catch(() => undefined);
   }
 
   async #capture(): Promise<string> {

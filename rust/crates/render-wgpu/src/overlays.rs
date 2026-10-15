@@ -76,6 +76,9 @@ pub struct OverlayShown {
     /// Sets shown only in one view: the player view ([`PLAYER_VIEW`]) or an
     /// inspection view, by id.
     pub only_in: BTreeMap<String, String>,
+    /// Views that show every product set, whatever else is shown: an
+    /// inspection view pane's own overlay toggle.
+    pub sets_in: BTreeSet<String>,
 }
 
 /// The view key of the primary views, for [`OverlayShown::only_in`].
@@ -90,10 +93,27 @@ impl OverlayShown {
             || !self.joints.is_empty()
             || !self.bounds.is_empty()
             || !self.ik.is_empty()
+            || !self.sets_in.is_empty()
     }
 
     fn shows_set(&self, name: &str) -> bool {
         self.all_sets || self.sets.contains(name)
+    }
+
+    /// Where a set draws: `None` for every view, else each view by key.
+    fn set_scopes(&self, name: &str) -> Vec<Option<&str>> {
+        let mut scopes: Vec<Option<&str>> = Vec::new();
+        if self.shows_set(name) {
+            scopes.push(self.only_in.get(name).map(String::as_str));
+        }
+        if !scopes.contains(&None) {
+            for view in &self.sets_in {
+                if !scopes.contains(&Some(view.as_str())) {
+                    scopes.push(Some(view.as_str()));
+                }
+            }
+        }
+        scopes
     }
 }
 
@@ -197,7 +217,7 @@ impl Overlays {
                 name: name.clone(),
                 items: retained.set.items.len(),
                 revision: retained.revision,
-                shown: self.shown.shows_set(name),
+                shown: !self.shown.set_scopes(name).is_empty(),
             })
             .collect()
     }
@@ -207,12 +227,11 @@ impl Overlays {
     pub fn drawn_revisions(&self, views: &[&str]) -> BTreeMap<String, u64> {
         self.sets
             .iter()
-            .filter(|(name, _)| self.shown.shows_set(name))
             .filter(|(name, _)| {
                 self.shown
-                    .only_in
-                    .get(*name)
-                    .is_none_or(|only| views.contains(&only.as_str()))
+                    .set_scopes(name)
+                    .iter()
+                    .any(|scope| scope.is_none_or(|view| views.contains(&view)))
             })
             .map(|(name, retained)| (name.clone(), retained.revision))
             .collect()
@@ -524,16 +543,15 @@ impl Renderer {
         let entities = self.entity_handles();
         let shown = &self.overlays.shown;
         for (name, retained) in &self.overlays.sets {
-            if !shown.shows_set(name) {
-                continue;
-            }
-            let only_in = shown.only_in.get(name);
-            let out = match only_in {
-                Some(view) => view_buckets.entry(view.clone()).or_default(),
-                None => &mut buckets,
-            };
-            for item in &retained.set.items {
-                if let Some((layer, to_pass)) = self.item_space(item.space, &entities) {
+            for scope in shown.set_scopes(name) {
+                let out = match scope {
+                    Some(view) => view_buckets.entry(view.to_owned()).or_default(),
+                    None => &mut buckets,
+                };
+                for item in &retained.set.items {
+                    let Some((layer, to_pass)) = self.item_space(item.space, &entities) else {
+                        continue;
+                    };
                     if let OverlayShape::Label { at, text } = &item.shape {
                         let point = to_pass.transform_point3(Vec3::from_array(*at));
                         // A viewmodel label is over the world it is drawn on.
@@ -541,7 +559,7 @@ impl Renderer {
                         let record = LabelRecord {
                             layer,
                             point,
-                            view: only_in.cloned(),
+                            view: scope.map(str::to_owned),
                         };
                         labels.push((record, text.clone(), item.color, on_top));
                         continue;
@@ -880,5 +898,28 @@ mod tests {
         assert_eq!(names(&["grip"]), ["everywhere"]);
         assert_eq!(names(&[PLAYER_VIEW]), ["everywhere"]);
         assert_eq!(names(&[PLAYER_VIEW, "side"]), ["everywhere", "side-only"]);
+    }
+
+    #[test]
+    fn a_view_showing_every_set_draws_them_there_only() {
+        let mut overlays = Overlays::new();
+        overlays.set("guide", &set());
+        overlays.shown.sets_in.insert("grip".to_owned());
+        assert!(overlays.shown.any());
+        assert_eq!(overlays.shown.set_scopes("guide"), [Some("grip")]);
+        assert_eq!(overlays.drawn_revisions(&[PLAYER_VIEW]).len(), 0);
+        assert_eq!(overlays.drawn_revisions(&["grip"]).len(), 1);
+        // Shown everywhere already: the view adds nothing.
+        overlays.shown.all_sets = true;
+        assert_eq!(overlays.shown.set_scopes("guide"), [None]);
+        // Shown only in another view: both views draw it.
+        overlays
+            .shown
+            .only_in
+            .insert("guide".to_owned(), "side".to_owned());
+        assert_eq!(
+            overlays.shown.set_scopes("guide"),
+            [Some("side"), Some("grip")]
+        );
     }
 }

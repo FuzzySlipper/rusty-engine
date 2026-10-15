@@ -230,8 +230,9 @@ The renderer draws its own inspection from what it already evaluated:
 
 Handles are the ones `engine.scene.objects` lists. `engine.inspect.overlay`
 reads what is shown and the product's sets (items, revision, shown);
-`engine.inspect.overlay show|hide` with `sets`, `set NAME`, `debug-layer`,
-`camera`, `joints H`, `bounds H` or `ik H` changes one thing. A bare `show`
+`engine.inspect.overlay show|hide` with `sets`, `sets in VIEW` (every set,
+in that view only), `set NAME`, `debug-layer`, `camera`, `joints H`,
+`bounds H` or `ik H` changes one thing. A bare `show`
 shows every set and the Debug layer; a bare `hide` hides everything. What is
 shown is the runtime's, shared by every page, and survives a rebaseline but
 not a restage.
@@ -341,9 +342,13 @@ view in a product-owned element. The pane anchors its surface through the
 product UI's viewport port, so the Engine draws the view there, creates the
 view on mount and closes it on dispose. Its bar picks the subject (the player
 camera or a product target; a target the product does not offer now falls
-back to the camera), frames it with the framing buttons, toggles overlay
-sets, and downloads a capture of the view. On the surface, a drag orbits about
-the focus, a Shift-drag pans and the wheel zooms. Every action is an
+back to the camera), frames it with the framing buttons, and downloads a
+capture of the view. Its Overlays toggle shows every overlay set in its own
+view (`show sets in ID`), reads that state back from the Engine and is undone
+when the pane closes, so two panes toggle independently and leave the player
+view alone. On the surface, a drag orbits about the focus, a Shift-drag pans
+and the wheel zooms; releasing sends what the drag moved since the last send.
+Every action is an
 `engine.inspect.*` command, so an agent does the same without a pointer.
 
 The surface is interactive UI: while the pointer is on it, the game does not

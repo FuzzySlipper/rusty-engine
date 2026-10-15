@@ -1055,9 +1055,8 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/inspectio
         readonly pan: (id: string, right: number, up: number) => string;
         readonly zoom: (id: string, factor: number) => string;
         readonly targets: () => string;
-        readonly showSetsIn: (id: string, sets: readonly string[]) => string[];
-        readonly showSets: () => string;
-        readonly hideSets: () => string;
+        readonly showSetsIn: (id: string) => string;
+        readonly hideSetsIn: (id: string) => string;
         readonly overlays: () => string;
     };
     /** The tool capture route for one view, with its overlays. */
@@ -1082,6 +1081,37 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/inspectio
     }[];
     /** A view's distance from its focus, from an `engine.inspect.view` listing. */
     export function focusDistance(listing: string, id: string): number;
+    /**
+     * A drag's movement not yet sent. Moves add to it; `take` hands over what
+     * accumulated (null when nothing did), so the last segment of a gesture is
+     * sent on release rather than lost.
+     */
+    export class DragGesture {
+        #private;
+        readonly pan: boolean;
+        constructor(x: number, y: number, pan: boolean);
+        move(x: number, y: number): void;
+        take(): [number, number] | null;
+    }
+    /** Which views show every overlay set, from an `engine.inspect.overlay` answer. */
+    export function setsIn(answer: string): readonly string[];
+    /**
+     * A pane's overlay toggle: whether its own view shows every overlay set.
+     * Its state is read back from the Engine after each change, so two panes'
+     * toggles each show their own view, and releasing one leaves the others'.
+     */
+    export class ViewOverlayToggle {
+        #private;
+        readonly id: string;
+        readonly send: (command: string) => Promise<string>;
+        constructor(id: string, send: (command: string) => Promise<string>);
+        get pressed(): boolean;
+        /** Reads whether the view shows every set now. */
+        sync(): Promise<boolean>;
+        toggle(): Promise<boolean>;
+        /** Stops the view showing every set, if this toggle turned it on. */
+        release(): Promise<void>;
+    }
 }
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-pane" {
     import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
@@ -1117,7 +1147,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/inspectio
         constructor(document: Document, options: InspectionViewOptions);
         /** Creates the view, lists the product's targets and frames the first subject. */
         open(): Promise<void>;
-        /** Closes the view and gives the surface's input back. */
+        /** Closes the view, undoes its own overlay choice and gives the surface's input back. */
         dispose(): void;
     }
 }

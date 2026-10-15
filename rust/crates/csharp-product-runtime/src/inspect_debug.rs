@@ -6,7 +6,7 @@ use super::*;
 
 pub(super) const OVERLAY_COMMAND: &str = "engine.inspect.overlay";
 
-const OVERLAY_USAGE: &str = "usage: engine.inspect.overlay [list] | show|hide [sets | set NAME [in VIEW] | debug-layer | camera | joints HANDLE | bounds HANDLE | ik HANDLE]";
+const OVERLAY_USAGE: &str = "usage: engine.inspect.overlay [list] | show|hide [sets [in VIEW] | set NAME [in VIEW] | debug-layer | camera | joints HANDLE | bounds HANDLE | ik HANDLE]";
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +18,8 @@ struct OverlayAnswer {
     camera: bool,
     /// Sets shown only in one view, by set.
     only_in: std::collections::BTreeMap<String, String>,
+    /// Views that show every set.
+    sets_in: Vec<String>,
     joints: Vec<u64>,
     bounds: Vec<u64>,
     ik: Vec<u64>,
@@ -56,6 +58,13 @@ fn change(
         ["sets"] => {
             shown.all_sets = show;
             shown.sets.clear();
+        }
+        ["sets", "in", view] => {
+            if show {
+                shown.sets_in.insert((*view).to_owned());
+            } else {
+                shown.sets_in.remove(*view);
+            }
         }
         ["set", name] => {
             if show {
@@ -117,6 +126,7 @@ impl CsharpProductRuntime {
             debug_layer: shown.debug_layer,
             camera: shown.camera,
             only_in: shown.only_in.clone(),
+            sets_in: shown.sets_in.iter().cloned().collect(),
             joints: shown.joints.iter().copied().collect(),
             bounds: shown.bounds.iter().copied().collect(),
             ik: shown.ik.iter().copied().collect(),
@@ -148,6 +158,11 @@ mod tests {
         assert!(all.all_sets && all.debug_layer && !all.camera);
         let joints = change(all.clone(), true, &["joints", "7"]).unwrap();
         assert_eq!(joints.joints.iter().copied().collect::<Vec<_>>(), [7]);
+        let in_view = change(none.clone(), true, &["sets", "in", "grip"]).unwrap();
+        assert!(in_view.sets_in.contains("grip") && in_view.any() && !in_view.all_sets);
+        assert!(!change(in_view, false, &["sets", "in", "grip"])
+            .unwrap()
+            .any());
         let only = change(none.clone(), true, &["set", "guide", "in", "side"]).unwrap();
         assert_eq!(only.only_in.get("guide").map(String::as_str), Some("side"));
         assert!(change(only, true, &["set", "guide"])
