@@ -1782,9 +1782,10 @@ impl Renderer {
     }
 }
 
-/// Upload RGBA8 pixels (sRGB or linear) with nearest or linear filtering and
-/// repeat or clamp wrapping. With `mipmaps`, the full mip chain is built for
-/// material sampling (trilinear); every other user samples the base level.
+/// Upload RGBA8 pixels (sRGB or linear) with nearest or linear magnification
+/// and repeat or clamp wrapping. With `mipmaps`, the full mip chain is built
+/// for material sampling, which minifies trilinearly; every other user samples
+/// the base level.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn upload_rgba_texture(
     gpu: &crate::Gpu,
@@ -1833,13 +1834,13 @@ pub(crate) fn upload_rgba_texture(
     } else {
         wgpu::AddressMode::ClampToEdge
     };
-    let sampler = |mipmap_filter, anisotropy_clamp| {
+    let sampler = |min_filter, mipmap_filter, anisotropy_clamp| {
         gpu.device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some(label),
             address_mode_u: address,
             address_mode_v: address,
             mag_filter: filter,
-            min_filter: filter,
+            min_filter,
             mipmap_filter,
             anisotropy_clamp,
             ..Default::default()
@@ -1851,13 +1852,18 @@ pub(crate) fn upload_rgba_texture(
             mip_level_count: Some(1),
             ..Default::default()
         }),
-        sampler: sampler(wgpu::MipmapFilterMode::Nearest, 1),
+        sampler: sampler(filter, wgpu::MipmapFilterMode::Nearest, 1),
         mipped: (levels > 1).then(|| {
             (
                 texture.create_view(&Default::default()),
-                // Mipmapped textures are linear-filtered, which anisotropic
-                // filtering requires; it keeps grazing surfaces sharp.
-                sampler(wgpu::MipmapFilterMode::Linear, MATERIAL_ANISOTROPY),
+                // Mipmaps minify trilinearly. Anisotropic filtering keeps
+                // grazing surfaces sharp but needs every filter linear, so a
+                // nearest-magnified texture goes without it.
+                sampler(
+                    wgpu::FilterMode::Linear,
+                    wgpu::MipmapFilterMode::Linear,
+                    if nearest { 1 } else { MATERIAL_ANISOTROPY },
+                ),
             )
         }),
     }

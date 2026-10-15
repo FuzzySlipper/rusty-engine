@@ -40,6 +40,9 @@ struct Streams {
     uvs1: Option<[f32; 8]>,
     /// One TANGENT for all four vertices.
     tangent: Option<[f32; 4]>,
+    /// The sampler's minFilter instead of nearest; it magnifies nearest and
+    /// repeats either way.
+    min_filter: Option<u32>,
 }
 
 /// A GLB with one plane facing +Z (x and y in -1..1, uv's v down the image
@@ -125,7 +128,12 @@ fn plane_glb_with(material: Value, images: &[Vec<u8>], streams: Streams) -> Vec<
         "bufferViews": views,
         "buffers": [{"byteLength": bin.len()}],
         "images": image_values,
-        "samplers": [{"magFilter": 9728, "minFilter": 9728, "wrapS": 10497, "wrapT": 10497}],
+        "samplers": [{
+            "magFilter": 9728,
+            "minFilter": streams.min_filter.unwrap_or(9728),
+            "wrapS": 10497,
+            "wrapT": 10497,
+        }],
         "textures": (0..images.len()).map(|source| json!({"source": source, "sampler": 0})).collect::<Vec<_>>(),
         "materials": [material],
     });
@@ -393,6 +401,38 @@ fn the_base_colour_tiles_and_shifts_through_its_texture_transform() {
         )),
         ['g', 'r', 'g', 'r']
     );
+}
+
+#[test]
+fn a_nearest_magnified_sampler_with_mipmapped_minification_draws_crisp_texels() {
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const GREEN: [u8; 4] = [0, 255, 0, 255];
+    const NEAREST_MIPMAP_NEAREST: u32 = 9984;
+    const LINEAR_MIPMAP_LINEAR: u32 = 9987;
+    // Columns just either side of the plane's middle, where magnified linear
+    // filtering blends the two texels.
+    const BESIDE_MIDDLE: [usize; 2] = [156, 164];
+    // Blender's glTF exporter writes "Closest" interpolation as mag NEAREST,
+    // min NEAREST_MIPMAP_NEAREST.
+    for min_filter in [NEAREST_MIPMAP_NEAREST, LINEAR_MIPMAP_LINEAR] {
+        let glb = plane_glb_with(
+            json!({
+                "pbrMetallicRoughness": {"baseColorTexture": {"index": 0}},
+                "extensions": {"KHR_materials_unlit": {}},
+            }),
+            &[pair(RED, GREEN)],
+            Streams {
+                min_filter: Some(min_filter),
+                ..Streams::default()
+            },
+        );
+        let frame = render(glb, Vec::new());
+        let [left, right] = BESIDE_MIDDLE.map(|x| pixel(&frame, x));
+        assert!(
+            left[0] > 200 && left[1] < 50 && right[1] > 200 && right[0] < 50,
+            "min filter {min_filter}: texels stay crisp beside the middle: {left:?} {right:?}"
+        );
+    }
 }
 
 /// A normal map tilted up the image (+Y), lit from above or below.
