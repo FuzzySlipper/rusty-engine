@@ -143,10 +143,13 @@ live.
 `@rusty-engine/live-debug` mounts the panel. It renders the description and
 sends the commands above; it holds no product state. After each describe and
 each set it asks `tunables.diff` and marks the unsaved controls. Each bound
-file shows its unsaved count, **Save** (`tunables.save` with the latest
-diff's SHA-256) and **Reset** (`tunables.reset`); each control has its own
-reset to the file's value. A refusal shows with its code, and after
-`CONTENT_SOURCE_STALE` the panel describes again. A control whose change
+file shows its unsaved count, **Save** (`tunables.save`) and **Reset**
+(`tunables.reset`); each control has its own reset to the file's value.
+Save names the SHA-256 of the file as the panel last described or saved it,
+so a file changed elsewhere since shows "changed on disk" and its Save is
+refused with `CONTENT_SOURCE_STALE`, after which the panel describes again.
+A comparison that fails shows the files as unavailable, with Save off, until
+one answers. A refusal shows with its code. A control whose change
 `reshapes` the page describes again after it; groups keep their folding and
 the panel its scroll. Style it with the `--rusty-tunables-*` custom
 properties or its `rusty-tunables` classes.

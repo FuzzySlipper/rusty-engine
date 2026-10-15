@@ -1249,6 +1249,39 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-
     export function unsavedControls(diff: TunablesDiff): Map<string, TunableUnsaved & {
         readonly path: string;
     }>;
+    /** A bound file's row: what it shows and which of its buttons work. */
+    export interface TunableFileState {
+        readonly text: string;
+        readonly canSave: boolean;
+        readonly canReset: boolean;
+    }
+    /**
+     * What the panel knows of its bound files: the latest comparison, or why it
+     * failed, and per file the SHA-256 Save names. That baseline moves only when
+     * the panel describes again, saves or resets, so the comparisons after each
+     * set never make a change made elsewhere savable over: Save is refused
+     * `CONTENT_SOURCE_STALE` until the panel describes again.
+     */
+    export class TunableSources {
+        #private;
+        /** A comparison made with a description: Save names its files' SHA-256 from now on. */
+        adopt(diff: TunablesDiff): void;
+        /** A comparison after a change: marks what is unsaved, keeps what Save names. */
+        compared(diff: TunablesDiff): void;
+        /** A comparison that failed: the files' state is unknown until one answers. */
+        failed(error: string): void;
+        /** A save answered the file's new SHA-256. */
+        saved(path: string, sha256: string): void;
+        get diff(): TunablesDiff;
+        get error(): string | null;
+        /** The SHA-256 Save names for a file, or undefined when no description compared it. */
+        baseline(path: string): string | undefined;
+        /** The unsaved controls of the latest comparison that answered. */
+        unsaved(): Map<string, TunableUnsaved & {
+            readonly path: string;
+        }>;
+        state(path: string): TunableFileState;
+    }
     /** Parses a describe answer, refusing anything that is not a `tunables.v1` description. */
     export function parseDescription(message: string): TunablesDescription;
     /**

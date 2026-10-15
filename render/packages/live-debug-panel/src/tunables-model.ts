@@ -129,6 +129,84 @@ export function unsavedControls(diff: TunablesDiff): Map<string, TunableUnsaved 
   return unsaved;
 }
 
+/** A bound file's row: what it shows and which of its buttons work. */
+export interface TunableFileState {
+  readonly text: string;
+  readonly canSave: boolean;
+  readonly canReset: boolean;
+}
+
+/**
+ * What the panel knows of its bound files: the latest comparison, or why it
+ * failed, and per file the SHA-256 Save names. That baseline moves only when
+ * the panel describes again, saves or resets, so the comparisons after each
+ * set never make a change made elsewhere savable over: Save is refused
+ * `CONTENT_SOURCE_STALE` until the panel describes again.
+ */
+export class TunableSources {
+  #diff: TunablesDiff = { files: [] };
+  #error: string | null = null;
+  readonly #baseline = new Map<string, string>();
+
+  /** A comparison made with a description: Save names its files' SHA-256 from now on. */
+  adopt(diff: TunablesDiff): void {
+    this.compared(diff);
+    this.#baseline.clear();
+    for (const file of diff.files) if (file.sha256 !== undefined) this.#baseline.set(file.path, file.sha256);
+  }
+
+  /** A comparison after a change: marks what is unsaved, keeps what Save names. */
+  compared(diff: TunablesDiff): void {
+    this.#diff = diff;
+    this.#error = null;
+  }
+
+  /** A comparison that failed: the files' state is unknown until one answers. */
+  failed(error: string): void {
+    this.#error = error;
+  }
+
+  /** A save answered the file's new SHA-256. */
+  saved(path: string, sha256: string): void {
+    this.#baseline.set(path, sha256);
+  }
+
+  get diff(): TunablesDiff {
+    return this.#diff;
+  }
+
+  get error(): string | null {
+    return this.#error;
+  }
+
+  /** The SHA-256 Save names for a file, or undefined when no description compared it. */
+  baseline(path: string): string | undefined {
+    return this.#baseline.get(path);
+  }
+
+  /** The unsaved controls of the latest comparison that answered. */
+  unsaved(): Map<string, TunableUnsaved & { readonly path: string }> {
+    return unsavedControls(this.#diff);
+  }
+
+  state(path: string): TunableFileState {
+    const unavailable = { text: 'unavailable', canSave: false, canReset: false };
+    if (this.#error !== null) return unavailable;
+    const file = this.#diff.files.find((candidate) => candidate.path === path);
+    if (file === undefined) return unavailable;
+    if (file.error !== undefined) return { text: file.error, canSave: false, canReset: false };
+    const changed = file.unsaved.length;
+    const baseline = this.#baseline.get(path);
+    const elsewhere = baseline !== undefined && file.sha256 !== baseline;
+    const count = changed === 0 ? 'saved' : `${changed} unsaved`;
+    return {
+      text: elsewhere ? `${changed === 0 ? '' : `${count}, `}changed on disk` : count,
+      canSave: changed > 0 && baseline !== undefined,
+      canReset: changed > 0,
+    };
+  }
+}
+
 /** Parses a describe answer, refusing anything that is not a `tunables.v1` description. */
 export function parseDescription(message: string): TunablesDescription {
   const value = JSON.parse(message) as Partial<TunablesDescription>;

@@ -8,10 +8,9 @@ import {
   parseDescription,
   parseDiff,
   refusals,
-  unsavedControls,
+  TunableSources,
   type TunableControl,
   type TunablesDescription,
-  type TunablesDiff,
 } from './tunables-model.js';
 
 const STYLE_ID = 'rusty-tunables-style';
@@ -96,8 +95,9 @@ export class TunablesPanel {
   /** Per key, the work waiting behind the request in flight (null: none). */
   readonly #queued = new Map<string, (() => Promise<void>) | null>();
   #description: TunablesDescription | null = null;
-  #diff: TunablesDiff = { files: [] };
-  #diffError: string | null = null;
+  readonly #sources = new TunableSources();
+  /** The status shows a comparison that failed, until one answers. */
+  #compareFailed = false;
   #status: HTMLElement;
   #fileRows = new Map<string, { count: HTMLElement; save: HTMLButtonElement; reset: HTMLButtonElement }>();
 
@@ -145,26 +145,40 @@ export class TunablesPanel {
     this.#live.reset(
       description.groups.flatMap((group) => group.controls.map((control) => [control.id, control.value] as const)),
     );
-    await this.#readDiff();
+    await this.#readDiff(true);
     this.#render();
   }
 
-  async #readDiff(): Promise<void> {
+  /**
+   * Compares the bound files; `adopt` (with a description) makes the answer
+   * what Save names. Answers whether the comparison answered.
+   */
+  async #readDiff(adopt: boolean): Promise<boolean> {
     try {
-      this.#diff = parseDiff(await this.#send(this.#command('diff', {}) ?? 'tunables.diff'));
-      this.#diffError = null;
+      const diff = parseDiff(await this.#send(this.#command('diff', {}) ?? 'tunables.diff'));
+      if (adopt) this.#sources.adopt(diff);
+      else this.#sources.compared(diff);
+      return true;
     } catch (error) {
-      this.#diff = { files: [] };
-      this.#diffError = error instanceof Error ? error.message : String(error);
+      this.#sources.failed(error instanceof Error ? error.message : String(error));
+      return false;
     }
   }
 
-  /** Compares again once the sets in flight answer, then marks what is unsaved. */
+  /** Compares again once the sets in flight answer, then marks what is unsaved, or why it cannot. */
   #compare(): void {
     this.#latest('diff', async () => {
-      await this.#readDiff();
+      const answered = await this.#readDiff(false);
       this.#updateMarks();
+      this.#reportComparison(answered, `Could not compare the source files: ${this.#sources.error}`);
     });
+  }
+
+  /** Reports a comparison that failed, and that one answers again after. */
+  #reportComparison(answered: boolean, failure: string): void {
+    if (!answered) this.#report(failure, true);
+    else if (this.#compareFailed) this.#report('The source files compare again.', false);
+    this.#compareFailed = !answered;
   }
 
   #render(): void {
@@ -261,11 +275,11 @@ export class TunablesPanel {
   }
 
   #renderFiles(): void {
-    if (this.#diffError !== null) {
-      this.element.append(this.#make('p', 'rusty-tunables__notice', `Source unavailable: ${this.#diffError}`));
+    if (this.#sources.error !== null) {
+      this.element.append(this.#make('p', 'rusty-tunables__notice', `Source unavailable: ${this.#sources.error}`));
       return;
     }
-    for (const file of this.#diff.files) {
+    for (const file of this.#sources.diff.files) {
       const row = this.#make('div', 'rusty-tunables__row rusty-tunables__file');
       const name = this.#make('span', 'rusty-tunables__file-name', file.path);
       const count = this.#make('span', 'rusty-tunables__unsaved');
@@ -376,7 +390,7 @@ export class TunablesPanel {
 
   /** Sets one control back to its file's value, as the last diff answered it. */
   #reset(control: TunableControl): void {
-    const saved = unsavedControls(this.#diff).get(control.id)?.saved;
+    const saved = this.#sources.unsaved().get(control.id)?.saved;
     if (saved === undefined) return;
     this.#views.get(control.id)?.show(saved);
     this.#set(control, saved, true);
@@ -398,26 +412,35 @@ export class TunablesPanel {
   }
 
   /**
-   * Saves a file's unsaved controls if it still has the SHA-256 of the diff
-   * the panel shows, so a change to the file since is refused, not saved over.
+   * Saves a file's unsaved controls if it still has the SHA-256 the panel
+   * last described or saved it with, so a change to the file since is
+   * refused, not saved over.
    */
   async #save(path: string): Promise<void> {
     // Save what the product accepted, once the file's sets have answered.
     await this.#live.settled(this.#controlsOf(path).map((control) => control.id));
-    const sha256 = this.#diff.files.find((candidate) => candidate.path === path)?.sha256;
-    if (sha256 === undefined) return;
-    const command = this.#command('save', { path, sha256 });
+    const sha256 = this.#sources.baseline(path);
+    const command = sha256 === undefined ? null : this.#command('save', { path, sha256 });
     if (command === null) return;
+    let saved: { saved: string[]; sha256: string };
     try {
-      const saved = (JSON.parse(await this.#send(command)) as { saved: string[] }).saved;
-      await this.#readDiff();
-      this.#updateMarks();
-      this.#report(`Saved ${saved.length} value${saved.length === 1 ? '' : 's'} to ${path}.`, false);
+      saved = JSON.parse(await this.#send(command)) as { saved: string[]; sha256: string };
     } catch (error) {
       // The file changed elsewhere, and a live file has reached the product
       // too: show what the product and the file hold now.
       if (error instanceof Error && error.message.startsWith('CONTENT_SOURCE_STALE')) await this.refresh();
       this.#report(error, true);
+      return;
+    }
+    this.#sources.saved(path, saved.sha256);
+    const answered = await this.#readDiff(false);
+    this.#updateMarks();
+    const count = `${saved.saved.length} value${saved.saved.length === 1 ? '' : 's'}`;
+    if (answered) {
+      this.#compareFailed = false;
+      this.#report(`Saved ${count} to ${path}.`, false);
+    } else {
+      this.#reportComparison(false, `Saved ${count} to ${path}, but could not compare it again: ${this.#sources.error}`);
     }
   }
 
@@ -428,15 +451,15 @@ export class TunablesPanel {
   }
 
   #updateMarks(): void {
-    const unsaved = unsavedControls(this.#diff);
+    const unsaved = this.#sources.unsaved();
     for (const { control, row } of this.#views.values()) {
       row.classList.toggle('rusty-tunables__control--unsaved', unsaved.has(control.id));
     }
     for (const [path, { count, save, reset }] of this.#fileRows) {
-      const file = this.#diff.files.find((candidate) => candidate.path === path);
-      const changed = file?.unsaved.length ?? 0;
-      count.textContent = file?.error ?? (changed === 0 ? 'saved' : `${changed} unsaved`);
-      save.disabled = reset.disabled = changed === 0;
+      const state = this.#sources.state(path);
+      count.textContent = state.text;
+      save.disabled = !state.canSave;
+      reset.disabled = !state.canReset;
     }
   }
 

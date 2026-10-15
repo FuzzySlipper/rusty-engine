@@ -10,8 +10,10 @@ import {
   parseDiff,
   refusals,
   stepDecimals,
+  TunableSources,
   unsavedControls,
   type TunableControl,
+  type TunablesDiff,
 } from './tunables-model.js';
 
 const slider: TunableControl = {
@@ -64,6 +66,37 @@ test('an applied batch keeps its refusals and the description after it', () => {
   assert.equal(applied.description.groups[0]?.controls[0]?.id, 'marker.size');
   assert.equal(refusals(applied), "nope: No control 'nope' on this page.");
   assert.equal(refusals({ ...applied, results: [{ id: 'marker.size', value: 2 }] }), '');
+});
+
+const file = 'tuning/marker.json';
+const compared = (sha256: string, ...ids: string[]): TunablesDiff => ({
+  files: [{ path: file, sha256, unsaved: ids.map((id) => ({ id, label: id, pointer: `/${id}`, live: 1, saved: 0, save: 1 })) }],
+});
+
+test('comparisons after a set keep the SHA-256 Save names, so a change made elsewhere is refused', () => {
+  const sources = new TunableSources();
+  sources.adopt(compared('described'));
+  // a is tuned here while b changes in the file elsewhere: the next comparison shows both.
+  sources.compared(compared('edited elsewhere', 'a', 'b'));
+  assert.equal(sources.baseline(file), 'described', 'Save still names the described file');
+  assert.deepEqual(sources.state(file), { text: '2 unsaved, changed on disk', canSave: true, canReset: true });
+  sources.saved(file, 'saved');
+  sources.compared(compared('saved'));
+  assert.deepEqual(sources.state(file), { text: 'saved', canSave: false, canReset: false });
+  sources.adopt(compared('described again', 'b'));
+  assert.equal(sources.baseline(file), 'described again', 'describing again takes the file as it is');
+});
+
+test('a comparison that fails leaves the files unknown, not saved', () => {
+  const sources = new TunableSources();
+  sources.adopt(compared('described', 'a'));
+  sources.failed('connection lost');
+  assert.equal(sources.error, 'connection lost');
+  assert.deepEqual(sources.state(file), { text: 'unavailable', canSave: false, canReset: false });
+  sources.compared(compared('described', 'a'));
+  assert.deepEqual(sources.state(file), { text: '1 unsaved', canSave: true, canReset: true });
+  sources.compared({ files: [{ path: file, error: 'CONTENT_SOURCE_UNAVAILABLE: not in rusty dev', unsaved: [] }] });
+  assert.deepEqual(sources.state(file), { text: 'CONTENT_SOURCE_UNAVAILABLE: not in rusty dev', canSave: false, canReset: false });
 });
 
 /** A set the test answers when it chooses: kept value or refusal. */
