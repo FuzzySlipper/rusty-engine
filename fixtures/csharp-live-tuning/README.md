@@ -11,7 +11,8 @@ colour, spin and the floor's shade.
   file reaches the running product as `ProductUpdate.ContentChanges` and the
   marker follows, with no runtime replacement. `content/notes.txt` is not
   declared: editing it restages the whole Product.
-- The page mounts the tunables panel over the product's `TunablesDebugModule`.
+- The page mounts the developer shell with the tunables panel (over the
+  product's `TunablesDebugModule`) and the scene tree; F3 toggles it.
   Each control applies live; Save writes the changed values into
   `content/tuning/marker.json` (and its staged copy) as one-line edits, and
   Reset sets them back from the file.

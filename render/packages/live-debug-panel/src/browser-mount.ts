@@ -2,10 +2,17 @@ import type { LiveDebugTransport } from '@rusty-engine/live-debug-client';
 
 import { LiveDebugPanel } from './live-debug-panel.js';
 import type { LiveDebugPanelPresentation } from './live-debug-panel-model.js';
+import { DeveloperShell, type DeveloperShellMount, type DeveloperShellOptions } from './developer-shell.js';
 import { InspectionViewPane, type InspectionViewOptions } from './inspection-view-pane.js';
+import { mountRendererMetricsWidget as mountMetrics } from './renderer-metrics-widget.js';
 import { SceneTreePanel, type SceneTreePanelOptions } from './scene-tree-panel.js';
 import { TunablesPanel, type TunablesPanelOptions } from './tunables-panel.js';
 
+export type {
+  DeveloperShellMount,
+  DeveloperShellOptions,
+  DeveloperShellPanel,
+} from './developer-shell.js';
 export type { InspectionViewOptions, InspectionViewport } from './inspection-view-pane.js';
 export type { SceneTreePanelOptions } from './scene-tree-panel.js';
 export type { TunablesPanelOptions } from './tunables-panel.js';
@@ -143,4 +150,30 @@ export function mountInspectionView(host: HTMLElement, options: InspectionViewOp
   host.appendChild(pane.element);
   void pane.open();
   return { id: pane.id, dispose: () => pane.dispose() };
+}
+
+/**
+ * Mounts a developer shell into a product-owned element (usually the UI
+ * root): the Engine's console, tunables, scene tree, inspection view panes
+ * and renderer metrics, and the product's own panels, docked or tabbed beside
+ * play without pausing it. It starts closed; the product binds a key to
+ * `toggle`. Closed, it holds no panel and sends nothing.
+ */
+export function mountDeveloperShell(host: HTMLElement, options: DeveloperShellOptions): DeveloperShellMount {
+  if (!(host instanceof HTMLElement)) {
+    throw new TypeError('Developer shell mounting requires an HTMLElement host.');
+  }
+  return new DeveloperShell(host, options, {
+    console: (element) =>
+      mountLiveDebugPanel(element, {
+        enabled: true,
+        presentation: 'inline',
+        ...(options.transport ? { transport: options.transport } : {}),
+      }),
+    tunables: (element, panelOptions) => mountTunablesPanel(element, panelOptions),
+    scene: (element, transport) => mountSceneTreePanel(element, transport ? { transport } : {}),
+    view: (element, viewOptions) => mountInspectionView(element, viewOptions),
+    metrics: (element, transport) =>
+      mountMetrics(element, { initiallyVisible: true, ...(transport ? { transport } : {}) }),
+  });
 }

@@ -1121,104 +1121,6 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/inspectio
         dispose(): void;
     }
 }
-declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-model" {
-    /** One committed scene object as `engine.scene.objects` lists it. */
-    export interface SceneObject {
-        readonly handle: number;
-        readonly parent?: number;
-        readonly parentJoint?: string;
-        readonly kind: string;
-        readonly layer: string;
-        readonly visible?: boolean;
-        readonly entity?: number;
-        readonly label?: string;
-        readonly resource?: string;
-        readonly local?: SceneTransform;
-        readonly world: SceneTransform;
-        readonly bounds?: SceneBounds;
-        readonly children: number;
-        readonly changedRevision: number;
-    }
-    export interface SceneTransform {
-        readonly translation: readonly [number, number, number];
-        readonly rotation: readonly [number, number, number, number];
-        readonly scale: readonly [number, number, number];
-    }
-    export interface SceneBounds {
-        readonly localMin: readonly [number, number, number];
-        readonly localMax: readonly [number, number, number];
-        readonly worldMin: readonly [number, number, number];
-        readonly worldMax: readonly [number, number, number];
-    }
-    /** One page of `engine.scene.objects`. */
-    export interface SceneObjectPage {
-        readonly revision: number;
-        readonly page: number;
-        readonly pages: number;
-        readonly total: number;
-        readonly objects: readonly (SceneObject & {
-            readonly depth: number;
-        })[];
-    }
-    /** `engine.scene.object`: the listing plus the committed description. */
-    export interface SceneObjectDetail extends SceneObject {
-        readonly revision: number;
-        readonly description: Readonly<Record<string, unknown>>;
-        readonly childHandles: readonly number[];
-        readonly pose?: unknown;
-        readonly materialOverride?: unknown;
-        readonly materialParameters?: unknown;
-    }
-    export function parseObjectPage(text: string): SceneObjectPage;
-    export function parseObjectDetail(text: string): SceneObjectDetail;
-    /** The roots, one page: `engine.scene.objects * 0`. */
-    export function rootsCommand(page?: number): string;
-    /** A node and its children, one page: `engine.scene.objects <handle> 1`. */
-    export function childrenCommand(handle: number, page?: number): string;
-    export function objectCommand(handle: number): string;
-    /** The tree row's text: what the object is and what names it. */
-    export function objectLabel(object: SceneObject): string;
-    export function formatVector(values: readonly number[]): string;
-    /** The selected object's facts, as label/value rows. */
-    export function objectFacts(object: SceneObject): [string, string][];
-    /** What `engine.inspect.view` lists: the views and the selected one. */
-    export interface InspectionViews {
-        readonly views: readonly {
-            readonly id: string;
-        }[];
-        readonly selected?: string;
-    }
-    export function viewsCommand(): string;
-    export function parseViews(text: string): InspectionViews;
-    /** Frames `view` on the object from its side. */
-    export function frameCommand(view: string, handle: number): string;
-    export function overlaysCommand(): string;
-    export function parseOverlays(text: string): {
-        readonly bounds: readonly number[];
-    };
-    export function boundsCommand(handle: number, show: boolean): string;
-}
-declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel" {
-    import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
-    /** Configuration for one mounted scene tree panel. */
-    export interface SceneTreePanelOptions {
-        /** Uses the same-origin live-debug HTTP transport when omitted. */
-        readonly transport?: LiveDebugTransport;
-    }
-    /**
-     * A tree over the committed scene (`engine.scene.objects`) and the selected
-     * object's facts (`engine.scene.object`). It holds no product state: every
-     * row is a reading, read again on Refresh.
-     */
-    export class SceneTreePanel {
-        #private;
-        readonly element: HTMLElement;
-        constructor(document: Document, options: SceneTreePanelOptions);
-        /** Reads the roots, every expanded node's children and the selection again. */
-        refresh(): Promise<void>;
-        dispose(): void;
-    }
-}
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-model" {
     /** The `tunables.v1` description a product's `TunablesDebugModule` answers. */
     export interface TunablesDescription {
@@ -1348,6 +1250,80 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-
         dispose(): void;
     }
 }
+declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/developer-shell" {
+    import type { LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
+    import type { InspectionViewOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-pane";
+    import type { TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
+    /** Something a panel mount gives back. */
+    interface Disposable {
+        dispose(): void;
+    }
+    /** One panel the shell docks: an Engine panel, or the product's own DOM. */
+    export type DeveloperShellPanel = {
+        readonly kind: 'console';
+        readonly title?: string;
+    } | {
+        readonly kind: 'tunables';
+        readonly title?: string;
+        readonly options?: TunablesPanelOptions;
+    } | {
+        readonly kind: 'scene';
+        readonly title?: string;
+    } | {
+        readonly kind: 'view';
+        readonly title?: string;
+        readonly options: InspectionViewOptions;
+    } | {
+        readonly kind: 'metrics';
+        readonly title?: string;
+    } | {
+        readonly kind: 'product';
+        readonly title: string;
+        /** Fills `element`; the shell calls `dispose` when it closes. */
+        mount(element: HTMLElement): Disposable;
+    };
+    /** Configuration for a developer shell. */
+    export interface DeveloperShellOptions {
+        readonly panels: readonly DeveloperShellPanel[];
+        /** `dock` stacks every panel; `tabs` shows one at a time. `dock` when omitted. */
+        readonly presentation?: 'dock' | 'tabs';
+        /** The side of the host it docks to; `right` when omitted. */
+        readonly side?: 'left' | 'right';
+        /** Passed to the Engine panels; their same-origin transport when omitted. */
+        readonly transport?: LiveDebugTransport;
+    }
+    /** A mounted developer shell. The product binds its key to `toggle`. */
+    export interface DeveloperShellMount {
+        readonly isOpen: boolean;
+        open(): Promise<void>;
+        close(): void;
+        toggle(): Promise<void>;
+        /** Closes the shell for good. */
+        dispose(): void;
+    }
+    /** The Engine panels' mount functions; the browser entry passes its own. */
+    export interface DeveloperShellMounts {
+        console(element: HTMLElement): Promise<Disposable>;
+        tunables(element: HTMLElement, options: TunablesPanelOptions): Disposable;
+        scene(element: HTMLElement, transport?: LiveDebugTransport): Disposable;
+        view(element: HTMLElement, options: InspectionViewOptions): Disposable;
+        metrics(element: HTMLElement, transport?: LiveDebugTransport): Disposable;
+    }
+    /**
+     * Docks the Engine's developer panels (and the product's own) beside play
+     * without pausing it. Closed, it holds no panel and sends nothing: opening
+     * mounts each panel, closing disposes them all. It holds no product state.
+     */
+    export class DeveloperShell implements DeveloperShellMount {
+        #private;
+        constructor(host: HTMLElement, options: DeveloperShellOptions, mounts: DeveloperShellMounts);
+        get isOpen(): boolean;
+        open(): Promise<void>;
+        close(): void;
+        toggle(): Promise<void>;
+        dispose(): void;
+    }
+}
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/renderer-metrics-widget" {
     import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
     /** Explicit, product-owned configuration for one optional renderer metrics widget. */
@@ -1371,12 +1347,112 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/renderer-
      */
     export function mountRendererMetricsWidget(host: HTMLElement, options?: RendererMetricsWidgetMountOptions): RendererMetricsWidgetMount;
 }
+declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-model" {
+    /** One committed scene object as `engine.scene.objects` lists it. */
+    export interface SceneObject {
+        readonly handle: number;
+        readonly parent?: number;
+        readonly parentJoint?: string;
+        readonly kind: string;
+        readonly layer: string;
+        readonly visible?: boolean;
+        readonly entity?: number;
+        readonly label?: string;
+        readonly resource?: string;
+        readonly local?: SceneTransform;
+        readonly world: SceneTransform;
+        readonly bounds?: SceneBounds;
+        readonly children: number;
+        readonly changedRevision: number;
+    }
+    export interface SceneTransform {
+        readonly translation: readonly [number, number, number];
+        readonly rotation: readonly [number, number, number, number];
+        readonly scale: readonly [number, number, number];
+    }
+    export interface SceneBounds {
+        readonly localMin: readonly [number, number, number];
+        readonly localMax: readonly [number, number, number];
+        readonly worldMin: readonly [number, number, number];
+        readonly worldMax: readonly [number, number, number];
+    }
+    /** One page of `engine.scene.objects`. */
+    export interface SceneObjectPage {
+        readonly revision: number;
+        readonly page: number;
+        readonly pages: number;
+        readonly total: number;
+        readonly objects: readonly (SceneObject & {
+            readonly depth: number;
+        })[];
+    }
+    /** `engine.scene.object`: the listing plus the committed description. */
+    export interface SceneObjectDetail extends SceneObject {
+        readonly revision: number;
+        readonly description: Readonly<Record<string, unknown>>;
+        readonly childHandles: readonly number[];
+        readonly pose?: unknown;
+        readonly materialOverride?: unknown;
+        readonly materialParameters?: unknown;
+    }
+    export function parseObjectPage(text: string): SceneObjectPage;
+    export function parseObjectDetail(text: string): SceneObjectDetail;
+    /** The roots, one page: `engine.scene.objects * 0`. */
+    export function rootsCommand(page?: number): string;
+    /** A node and its children, one page: `engine.scene.objects <handle> 1`. */
+    export function childrenCommand(handle: number, page?: number): string;
+    export function objectCommand(handle: number): string;
+    /** The tree row's text: what the object is and what names it. */
+    export function objectLabel(object: SceneObject): string;
+    export function formatVector(values: readonly number[]): string;
+    /** The selected object's facts, as label/value rows. */
+    export function objectFacts(object: SceneObject): [string, string][];
+    /** What `engine.inspect.view` lists: the views and the selected one. */
+    export interface InspectionViews {
+        readonly views: readonly {
+            readonly id: string;
+        }[];
+        readonly selected?: string;
+    }
+    export function viewsCommand(): string;
+    export function parseViews(text: string): InspectionViews;
+    /** Frames `view` on the object from its side. */
+    export function frameCommand(view: string, handle: number): string;
+    export function overlaysCommand(): string;
+    export function parseOverlays(text: string): {
+        readonly bounds: readonly number[];
+    };
+    export function boundsCommand(handle: number, show: boolean): string;
+}
+declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel" {
+    import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
+    /** Configuration for one mounted scene tree panel. */
+    export interface SceneTreePanelOptions {
+        /** Uses the same-origin live-debug HTTP transport when omitted. */
+        readonly transport?: LiveDebugTransport;
+    }
+    /**
+     * A tree over the committed scene (`engine.scene.objects`) and the selected
+     * object's facts (`engine.scene.object`). It holds no product state: every
+     * row is a reading, read again on Refresh.
+     */
+    export class SceneTreePanel {
+        #private;
+        readonly element: HTMLElement;
+        constructor(document: Document, options: SceneTreePanelOptions);
+        /** Reads the roots, every expanded node's children and the selection again. */
+        refresh(): Promise<void>;
+        dispose(): void;
+    }
+}
 declare module "@rusty-engine/live-debug" {
     import type { LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
     import type { LiveDebugPanelPresentation } from "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel-model";
+    import { type DeveloperShellMount, type DeveloperShellOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/developer-shell";
     import { type InspectionViewOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-pane";
     import { type SceneTreePanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel";
     import { type TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
+    export type { DeveloperShellMount, DeveloperShellOptions, DeveloperShellPanel, } from "@rusty-engine/live-debug/internal/live-debug-panel/src/developer-shell";
     export type { InspectionViewOptions, InspectionViewport } from "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-pane";
     export type { SceneTreePanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel";
     export type { TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
@@ -1445,6 +1521,14 @@ declare module "@rusty-engine/live-debug" {
      * command. It holds no product state.
      */
     export function mountInspectionView(host: HTMLElement, options: InspectionViewOptions): InspectionViewMount;
+    /**
+     * Mounts a developer shell into a product-owned element (usually the UI
+     * root): the Engine's console, tunables, scene tree, inspection view panes
+     * and renderer metrics, and the product's own panels, docked or tabbed beside
+     * play without pausing it. It starts closed; the product binds a key to
+     * `toggle`. Closed, it holds no panel and sends nothing.
+     */
+    export function mountDeveloperShell(host: HTMLElement, options: DeveloperShellOptions): DeveloperShellMount;
 }
 declare module "@rusty-engine/video-options/internal/video-options/src/video-options-model" {
     /**

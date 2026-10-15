@@ -138,7 +138,7 @@ Everything the panel does is a live-debug command, so a harness tunes the
 same way without a page: `tunables.describe`, `tunables.set`, then
 `engine.content.source.read` and `engine.content.source.edit` to save.
 `fixtures/csharp-live-tuning` declares a handful of tunables bound to one
-file and mounts the panel.
+file and mounts the panel in the [developer shell](#developer-shell).
 
 ## Scene readouts
 
@@ -350,6 +350,19 @@ renderer evaluated. A probe marker shows where the product measured, at the
 radius it gave; a nearest-triangle "inside" depends on the model's winding.
 Neither proves exact contact with a skinned surface, and the Engine makes no
 skinned-surface guarantee. A joint's place is the drawn pose, not physics.
+
+## Developer shell
+
+`mountDeveloperShell(element, { panels, presentation?, side?, transport? })`
+from `@rusty-engine/live-debug` docks the Engine's developer panels beside
+play without pausing it: `{ kind: 'console' }`, `'tunables'`, `'scene'`,
+`{ kind: 'view', options }` (an inspection view pane), `'metrics'`, and
+`{ kind: 'product', title, mount(element) }` for the product's own DOM.
+`presentation: 'dock'` stacks them; `'tabs'` shows one at a time. It starts
+closed and holds no panel and sends nothing while closed; `open`, `close` and
+`toggle` mount and dispose every panel, and the product binds the key. Its
+look follows the `--rusty-shell-*` custom properties, and each panel keeps its
+own. It holds no product state.
 
 ## Time, drawing and camera
 
