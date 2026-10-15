@@ -2247,3 +2247,136 @@ fn airborne_character_landing_on_steep_ramp_keeps_sliding_down() {
         "steep contact must permit gravity-driven descent: first={start:?} final={end:?}"
     );
 }
+
+/// Six 0.3 m risers, each followed by a 0.38 m tread that rises 15 degrees
+/// away from the approach, then a flat landing; the flight climbs toward -z
+/// from the voxel floor at y = 1.
+fn tilted_tread_stair_scene() -> (VoxelCollisionScene, f64) {
+    const RISER: f64 = 0.3;
+    const TREAD_DEPTH: f64 = 0.38;
+    const STEPS: usize = 6;
+    const FIRST_RISER_Z: f64 = -0.6;
+    const LANDING_DEPTH: f64 = 40.0;
+    const HALF_WIDTH: f64 = 2.0;
+    let tread_rise = TREAD_DEPTH * 15.0_f64.to_radians().tan();
+    let mut positions = Vec::new();
+    let mut triangles = Vec::new();
+    let mut quad = |corners: [[f64; 3]; 4]| {
+        let base = positions.len() as u32;
+        positions.extend(corners);
+        triangles.extend([[base, base + 1, base + 2], [base, base + 2, base + 3]]);
+    };
+    let mut bottom = 1.0;
+    for step in 0..=STEPS {
+        let z = FIRST_RISER_Z - step as f64 * TREAD_DEPTH;
+        let top = bottom + RISER;
+        quad([
+            [-HALF_WIDTH, bottom, z],
+            [HALF_WIDTH, bottom, z],
+            [HALF_WIDTH, top, z],
+            [-HALF_WIDTH, top, z],
+        ]);
+        let (depth, far) = if step == STEPS {
+            (LANDING_DEPTH, top)
+        } else {
+            (TREAD_DEPTH, top + tread_rise)
+        };
+        quad([
+            [-HALF_WIDTH, top, z],
+            [HALF_WIDTH, top, z],
+            [HALF_WIDTH, far, z - depth],
+            [-HALF_WIDTH, far, z - depth],
+        ]);
+        bottom = far;
+    }
+    let mut scene = floor_scene();
+    let asset = StaticMeshColliderAsset::new(StaticMeshAssetId(1), positions, triangles).unwrap();
+    scene
+        .replace_static_mesh_colliders(
+            vec![asset],
+            vec![StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(1),
+                asset: StaticMeshAssetId(1),
+                transform: StaticMeshTransform::IDENTITY,
+            }],
+        )
+        .unwrap();
+    (scene, bottom)
+}
+
+#[test]
+fn a_walk_climbs_a_stair_whose_treads_tilt_toward_the_climber() {
+    let (scene, landing) = tilted_tread_stair_scene();
+    let (entity, mut state) = character(1.9);
+    let mut config = CharacterControllerConfig::default();
+    config.shape.standing_height = 1.8;
+    config.shape.radius = 0.25;
+    config.surface.maximum_step_height = 0.75;
+    let mut service = CharacterControllerService::default();
+    for sequence in 1..=480 {
+        service
+            .step(
+                &mut state,
+                &scene,
+                entity,
+                &config,
+                command(sequence, Vec2::new(0.0, 1.0)),
+            )
+            .unwrap();
+    }
+    let transform = state.transform(entity).unwrap();
+    assert!(
+        transform.translation.z < -4.0
+            && (f64::from(transform.translation.y) - (landing + 0.9)).abs() < 0.05,
+        "walked up the flight onto the landing at {landing}: {transform:?}"
+    );
+}
+
+#[test]
+fn a_thin_strip_at_riser_height_is_a_rim_not_a_tread() {
+    // The tread probe beyond a 6 cm strip rests on its far edge with a
+    // standable contact normal; the floor under the probe's centre is lower.
+    let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    let player = EntityId::new(1);
+    let mut state = EntityState::from_definitions([
+        EntityDefinition::new(player, "player")
+            .with_transform(Vec3::new(0.0, 1.9, 0.6))
+            .with_character_motion(CharacterMotionComponent::at_rest(1.9)),
+        EntityDefinition::new(EntityId::new(2), "floor")
+            .with_transform(Vec3::new(0.0, 0.5, 0.0))
+            .with_bounds(Vec3::new(-4.0, -0.5, -4.0), Vec3::new(4.0, 0.5, 4.0))
+            .with_collision(true, false),
+        EntityDefinition::new(EntityId::new(3), "thin-strip")
+            .with_transform(Vec3::new(0.0, 1.15, 0.0))
+            .with_bounds(Vec3::new(-2.0, -0.15, -0.03), Vec3::new(2.0, 0.15, 0.03))
+            .with_collision(true, false),
+    ])
+    .unwrap();
+    let mut config = CharacterControllerConfig::default();
+    config.shape.standing_height = 1.8;
+    config.shape.radius = 0.25;
+    config.surface.maximum_step_height = 0.75;
+    let mut service = CharacterControllerService::default();
+    let mut attempted = false;
+    for sequence in 1..=120 {
+        let receipt = service
+            .step(
+                &mut state,
+                &scene,
+                player,
+                &config,
+                command(sequence, Vec2::new(0.0, 1.0)),
+            )
+            .unwrap();
+        attempted |= receipt.step.is_some();
+        assert!(
+            receipt.step.is_none_or(|step| !step.accepted)
+                && receipt.transform_after.translation.y <= 1.901,
+            "a strip without a tread must not authorize an up-step: {receipt:?}"
+        );
+    }
+    assert!(
+        attempted,
+        "the strip should be evaluated as a step candidate"
+    );
+}

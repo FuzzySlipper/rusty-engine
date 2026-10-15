@@ -2603,14 +2603,37 @@ fn try_step(
         } else {
             (tread.point.y - landing.point.y).abs() <= f64::from(landing_height_tolerance)
         };
-        if !standable(vec3_from_world(tread.normal)?, config)
-            || !tread_matches_landing
-            || (tread.point.x - tread_probe.center.x).abs()
-                > f64::from(config.recovery.normal_nudge)
-            || (tread.point.z - tread_probe.center.z).abs()
-                > f64::from(config.recovery.normal_nudge)
-        {
+        let tread_normal = vec3_from_world(tread.normal)?;
+        if !standable(tread_normal, config) || !tread_matches_landing {
             return Ok((None, casts));
+        }
+        // A tilted tread touches the probe off its centre, by the offset its
+        // normal implies, but so does a rim. The tread must also lie under the
+        // probe's centre: a thin probe there meets its plane at the height the
+        // plane predicts, where a rim's leaves it to the floor below.
+        let nudge = f64::from(config.recovery.normal_nudge);
+        if (tread.point.x - tread_probe.center.x).abs() > nudge
+            || (tread.point.z - tread_probe.center.z).abs() > nudge
+        {
+            let centre = CharacterCapsule {
+                radius: nudge,
+                ..tread_probe
+            };
+            let Some(under) = cast_step(
+                centre,
+                WorldVec::new(0.0, -f64::from(downward_distance) - radius, 0.0),
+                0.0,
+            )?
+            else {
+                return Ok((None, casts));
+            };
+            let predicted = tread.point.y
+                - (f64::from(tread_normal.x) * (centre.center.x - tread.point.x)
+                    + f64::from(tread_normal.z) * (centre.center.z - tread.point.z))
+                    / f64::from(tread_normal.y);
+            if (under.point.y - predicted).abs() > f64::from(config.shape.contact_skin) + nudge {
+                return Ok((None, casts));
+            }
         }
         tread
     };
