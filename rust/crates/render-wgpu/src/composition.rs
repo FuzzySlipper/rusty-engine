@@ -558,8 +558,15 @@ impl Renderer {
     ) -> ViewStats {
         let clear = self.environment_clear();
         let world_camera = camera::camera_matrices(pose, &camera.projection, area.aspect());
-        let player = self.overlays.player_viewmodel_to_world;
-        self.aim_overlay_labels(crate::overlays::PLAYER_VIEW, player);
+        let viewmodel_camera = camera::viewmodel_matrices(
+            &camera.projection,
+            camera.viewmodel_fov_y_degrees,
+            area.aspect(),
+        );
+        // A viewmodel label goes where this view's world projection puts the
+        // pixel its viewmodel projection draws the point at.
+        let viewmodel_to_world = world_camera.view_proj.inverse() * viewmodel_camera.view_proj;
+        self.aim_overlay_labels(crate::overlays::PLAYER_VIEW, Some(viewmodel_to_world));
         let labels = self.place_labels(&world_camera, area);
         let world = self.encode_view(ViewPass {
             target: *target,
@@ -582,11 +589,7 @@ impl Renderer {
         let viewmodel = self.encode_view(ViewPass {
             target: *target,
             viewport: area,
-            camera: camera::viewmodel_matrices(
-                &camera.projection,
-                camera.viewmodel_fov_y_degrees,
-                area.aspect(),
-            ),
+            camera: viewmodel_camera,
             layer: ViewLayer::Viewmodel,
             start: PassStart::Target,
             clear,
@@ -955,7 +958,6 @@ fn first_primary_camera(
         PrimaryStep::View { view, camera } => Some(crate::overlays::OverlayCamera {
             pose: poses[*camera],
             projection: composition.cameras[*camera].projection,
-            viewmodel_fov_y_degrees: composition.cameras[*camera].viewmodel_fov_y_degrees,
             aspect: pixel_viewport(&composition.views[*view].viewport, width, height).aspect(),
         }),
         PrimaryStep::Presentation { .. } => None,

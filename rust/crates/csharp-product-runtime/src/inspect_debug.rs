@@ -20,6 +20,8 @@ struct OverlayAnswer {
     only_in: std::collections::BTreeMap<String, String>,
     /// Views that show every set.
     sets_in: Vec<String>,
+    /// Sets hidden by name from every set.
+    hidden: Vec<String>,
     joints: Vec<u64>,
     bounds: Vec<u64>,
     ik: Vec<u64>,
@@ -53,11 +55,13 @@ fn change(
         [] if show => {
             shown.all_sets = true;
             shown.debug_layer = true;
+            shown.hidden.clear();
         }
         [] => shown = render_wgpu::OverlayShown::default(),
         ["sets"] => {
             shown.all_sets = show;
             shown.sets.clear();
+            shown.hidden.clear();
         }
         ["sets", "in", view] => {
             if show {
@@ -69,17 +73,21 @@ fn change(
         ["set", name] => {
             if show {
                 shown.sets.insert((*name).to_owned());
+                shown.hidden.remove(*name);
             } else {
                 shown.sets.remove(*name);
+                shown.hidden.insert((*name).to_owned());
             }
             shown.only_in.remove(*name);
         }
         ["set", name, "in", view] => {
             if show {
                 shown.sets.insert((*name).to_owned());
+                shown.hidden.remove(*name);
                 shown.only_in.insert((*name).to_owned(), (*view).to_owned());
             } else {
                 shown.sets.remove(*name);
+                shown.hidden.insert((*name).to_owned());
                 shown.only_in.remove(*name);
             }
         }
@@ -127,6 +135,7 @@ impl CsharpProductRuntime {
             camera: shown.camera,
             only_in: shown.only_in.clone(),
             sets_in: shown.sets_in.iter().cloned().collect(),
+            hidden: shown.hidden.iter().cloned().collect(),
             joints: shown.joints.iter().copied().collect(),
             bounds: shown.bounds.iter().copied().collect(),
             ik: shown.ik.iter().copied().collect(),
@@ -173,6 +182,17 @@ mod tests {
         assert!(named.sets.contains("guide") && named.any());
         assert!(!change(named, false, &["set", "guide"]).unwrap().any());
         assert!(!change(joints, false, &[]).unwrap().any());
+        // A set hidden by name stays out of every set, and comes back by
+        // name or with every set.
+        let hidden = change(all.clone(), false, &["set", "guide"]).unwrap();
+        assert!(hidden.all_sets && hidden.hidden.contains("guide"));
+        let back = change(hidden.clone(), true, &["set", "guide"]).unwrap();
+        assert!(back.hidden.is_empty() && back.sets.contains("guide"));
+        assert!(change(hidden.clone(), true, &["sets"])
+            .unwrap()
+            .hidden
+            .is_empty());
+        assert!(change(hidden, true, &[]).unwrap().hidden.is_empty());
         assert!(change(none.clone(), true, &["joints", "x"]).is_err());
         assert!(change(none, true, &["floor"]).is_err());
     }

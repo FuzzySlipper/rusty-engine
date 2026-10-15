@@ -79,6 +79,9 @@ pub struct OverlayShown {
     /// Views that show every product set, whatever else is shown: an
     /// inspection view pane's own overlay toggle.
     pub sets_in: BTreeSet<String>,
+    /// Sets hidden by name from [`all_sets`](Self::all_sets) and
+    /// [`sets_in`](Self::sets_in).
+    pub hidden: BTreeSet<String>,
 }
 
 /// The view key of the primary views, for [`OverlayShown::only_in`].
@@ -97,7 +100,7 @@ impl OverlayShown {
     }
 
     fn shows_set(&self, name: &str) -> bool {
-        self.all_sets || self.sets.contains(name)
+        self.sets.contains(name) || (self.all_sets && !self.hidden.contains(name))
     }
 
     /// Where a set draws: `None` for every view, else each view by key.
@@ -106,7 +109,7 @@ impl OverlayShown {
         if self.shows_set(name) {
             scopes.push(self.only_in.get(name).map(String::as_str));
         }
-        if !scopes.contains(&None) {
+        if !scopes.contains(&None) && !self.hidden.contains(name) {
             for view in &self.sets_in {
                 if !scopes.contains(&Some(view.as_str())) {
                     scopes.push(Some(view.as_str()));
@@ -134,7 +137,6 @@ pub(crate) struct OverlayCamera {
     pub pose: CameraPose,
     pub projection: RendererCameraProjection,
     pub aspect: f32,
-    pub viewmodel_fov_y_degrees: f64,
 }
 
 struct RetainedSet {
@@ -158,10 +160,6 @@ pub(crate) struct Overlays {
     /// The frame's labels, by reserved handle offset, for aiming them per
     /// view.
     labels: Vec<LabelRecord>,
-    /// A viewmodel point drawn with the player view's viewmodel
-    /// projection, as the world point its world projection puts at the same
-    /// pixel.
-    pub(crate) player_viewmodel_to_world: Option<Mat4>,
 }
 
 /// Where one overlay label is, in its pass's coordinates.
@@ -190,7 +188,6 @@ impl Overlays {
             shader: None,
             pipelines: Vec::new(),
             labels: Vec::new(),
-            player_viewmodel_to_world: None,
         }
     }
 
@@ -524,15 +521,6 @@ impl Renderer {
         self.overlays.ranges = Default::default();
         self.overlays.view_ranges.clear();
         let mut labels: Vec<(LabelRecord, String, [f32; 4], bool)> = Vec::new();
-        self.overlays.player_viewmodel_to_world = camera.map(|camera| {
-            let world = camera::camera_matrices(camera.pose, &camera.projection, camera.aspect);
-            let viewmodel = camera::viewmodel_matrices(
-                &camera.projection,
-                camera.viewmodel_fov_y_degrees,
-                camera.aspect,
-            );
-            world.view_proj.inverse() * viewmodel.view_proj
-        });
         if !self.overlays.shown.any() {
             self.overlays.vertices = vertices;
             self.realize_overlay_labels(labels);
@@ -637,7 +625,7 @@ impl Renderer {
     }
 
     /// Makes the frame's overlay labels billboard labels on reserved
-    /// handles, aimed for the player view, and removes the ones the last
+    /// handles, aimed by each view that draws them, and removes the ones the last
     /// frame had beyond them. A label whose text and look are unchanged
     /// keeps its raster.
     fn realize_overlay_labels(&mut self, labels: Vec<(LabelRecord, String, [f32; 4], bool)>) {
@@ -690,8 +678,6 @@ impl Renderer {
             );
         }
         self.overlays.labels = records;
-        let player = self.overlays.player_viewmodel_to_world;
-        self.aim_overlay_labels(PLAYER_VIEW, player);
     }
 
     /// Anchors the overlay labels for one view: a world label where it is, a
@@ -898,6 +884,25 @@ mod tests {
         assert_eq!(names(&["grip"]), ["everywhere"]);
         assert_eq!(names(&[PLAYER_VIEW]), ["everywhere"]);
         assert_eq!(names(&[PLAYER_VIEW, "side"]), ["everywhere", "side-only"]);
+    }
+
+    #[test]
+    fn a_set_hidden_by_name_stays_hidden_from_every_set_until_shown() {
+        let mut overlays = Overlays::new();
+        overlays.set("guide", &set());
+        overlays.set("other", &set());
+        overlays.shown.all_sets = true;
+        overlays.shown.sets_in.insert("grip".to_owned());
+        overlays.shown.hidden.insert("guide".to_owned());
+        assert!(overlays.shown.set_scopes("guide").is_empty());
+        assert_eq!(overlays.shown.set_scopes("other"), [None]);
+        let names = |overlays: &Overlays, views: &[&str]| -> Vec<String> {
+            overlays.drawn_revisions(views).into_keys().collect()
+        };
+        assert_eq!(names(&overlays, &[PLAYER_VIEW, "grip"]), ["other"]);
+        // Shown by name again, it draws whatever else is hidden.
+        overlays.shown.sets.insert("guide".to_owned());
+        assert_eq!(names(&overlays, &[PLAYER_VIEW]), ["guide", "other"]);
     }
 
     #[test]

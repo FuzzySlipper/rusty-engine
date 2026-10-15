@@ -213,7 +213,7 @@ The shapes are `Segment`, `Marker` (three crossed lines), `Axes` (red, green
 and blue), `WireBox`, `WireSphere`, `Frustum` and `Label`. Each has a linear
 colour, and `onTop` draws it over the scene instead of depth-tested against
 it. Labels use the Engine's billboard text; a label in viewmodel or camera
-space draws on top. An item whose entity or joint draws nothing is not drawn.
+space draws on top, placed by each view's own camera as its lines are. An item whose entity or joint draws nothing is not drawn.
 
 The renderer draws its own inspection from what it already evaluated:
 
@@ -232,7 +232,9 @@ Handles are the ones `engine.scene.objects` lists. `engine.inspect.overlay`
 reads what is shown and the product's sets (items, revision, shown);
 `engine.inspect.overlay show|hide` with `sets`, `sets in VIEW` (every set,
 in that view only), `set NAME`, `debug-layer`, `camera`, `joints H`,
-`bounds H` or `ik H` changes one thing. A bare `show`
+`bounds H` or `ik H` changes one thing. `hide set NAME` also keeps that set
+out of `sets` and every `sets in VIEW` (the answer's `hidden`) until it is
+shown by name or with `show sets`. A bare `show`
 shows every set and the Debug layer; a bare `hide` hides everything. What is
 shown is the runtime's, shared by every page, and survives a rebaseline but
 not a restage.

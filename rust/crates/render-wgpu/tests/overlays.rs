@@ -174,3 +174,53 @@ fn overlays_and_the_debug_layer_draw_only_while_inspection_shows_them() {
     }]);
     assert!(harness.renderer.overlay_sets().is_empty());
 }
+
+#[test]
+fn a_camera_space_label_stays_on_its_marker_in_every_view() {
+    let mut harness = harness();
+    // Over the sky, where the marker's colour is its own.
+    let at = [0.0, 0.25, -1.0];
+    harness.apply(vec![RenderDiff::SetOverlaySet {
+        name: "held".to_owned(),
+        set: OverlaySetDescriptor {
+            items: vec![
+                OverlayItem {
+                    shape: OverlayShape::Marker { at, size: 0.4 },
+                    space: OverlaySpace::Camera,
+                    color: MAGENTA,
+                    on_top: true,
+                },
+                OverlayItem {
+                    shape: OverlayShape::Label {
+                        at,
+                        text: "HELD".to_owned(),
+                    },
+                    space: OverlaySpace::Camera,
+                    color: CYAN,
+                    on_top: true,
+                },
+            ],
+        },
+    }]);
+    harness
+        .renderer
+        .set_overlay_shown(shown(|shown| shown.all_sets = true));
+    let aligned = |rgba: &[u8], what: &str| {
+        let (marker_x, marker) = find(rgba, MAGENTA);
+        let (label_x, label) = find(rgba, CYAN);
+        assert!(
+            marker > 10 && label > 10,
+            "{what}: both draw ({marker}, {label})"
+        );
+        assert!(
+            (marker_x - label_x).abs() < 12.0,
+            "{what}: the label at x {label_x} is on its marker at x {marker_x}"
+        );
+    };
+    aligned(&harness.composition(0.0).1, "the player view");
+
+    // The observer moves the world's projection, not the viewmodel's.
+    let observer = camera("observer", [0.5, 0.6, 1.0], 0.0, -6.0);
+    harness.renderer.set_observer(Some(observer.pose));
+    aligned(&harness.composition(0.0).1, "the observer");
+}
