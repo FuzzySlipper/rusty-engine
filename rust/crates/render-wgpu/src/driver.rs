@@ -355,6 +355,34 @@ impl SceneDriver {
         ))
     }
 
+    /// A point and frame (`[x, y, z, w]`) in an overlay space, in the world
+    /// now; `None` when the space's node or joint draws nothing.
+    pub fn resolve_point(
+        &self,
+        space: render_model::OverlaySpace,
+        point: [f32; 3],
+        rotation: [f32; 4],
+    ) -> Option<([f32; 3], [f32; 4])> {
+        let now = self.now();
+        let mut scene = self.scene();
+        let size = scene
+            .renderer
+            .surface_size()
+            .unwrap_or(DEFAULT_CAPTURE_SIZE);
+        let primary = scene
+            .renderer
+            .primary_overlay_camera(now, size)
+            .map(|camera| camera.pose);
+        let [x, y, z, w] = rotation;
+        let (point, frame) = scene.renderer.resolve_overlay_point(
+            space,
+            glam::Vec3::from_array(point),
+            glam::Quat::from_xyzw(x, y, z, w).normalize(),
+            primary,
+        )?;
+        Some((point.to_array(), frame.to_array()))
+    }
+
     /// Draws one inspection view once into a target of its own, as
     /// [`SceneDriver::capture`] draws the composition; `None` when there is
     /// no such view.

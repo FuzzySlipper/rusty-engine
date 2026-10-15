@@ -23,10 +23,12 @@ Live-debug commands:
   computed from the reported joints.
 - `pose.far <true|false>` moves the circle beyond the arm's reach.
 
-It holds a model on the viewmodel layer, placed in the camera's space, and
-its page has two panes inspection views anchor to (`inspect-a` and
-`inspect-b`): `engine.inspect.view create side anchor inspect-a`, then
-`engine.inspect.view frame side side camera`.
+It holds a model on the viewmodel layer, placed in the camera's space. Its
+page mounts two inspection view panes: `side`, framing the space before the
+camera, and `hand`, framing the right hand from below. It registers inspection
+targets (`engine.inspect.target list`): `right-hand`, `held-tip` and
+`view-centre`, which `engine.inspect.view frame side side target held-tip`
+frames.
 
 It publishes the overlay set `fixture.guide`, one item in each overlay space:
 a world segment along x, a box around the body in its model space, axes, a

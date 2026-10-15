@@ -8,8 +8,10 @@ use render_host_contracts::{RendererCameraPose, RendererCameraProjection};
 use render_wgpu::InspectionView;
 
 pub(super) const VIEW_COMMAND: &str = "engine.inspect.view";
+/// The product command `InspectionTargetsDebugModule` serves.
+pub(super) const TARGETS_COMMAND: &str = "inspect.targets";
 
-const VIEW_USAGE: &str = "usage: engine.inspect.view [list] | create ID [anchor NAME] | close ID | select ID | camera ID X Y Z YAW PITCH [FOV] | orbit ID DYAW DPITCH | pan ID DX DY | zoom ID FACTOR | frame ID front|back|left|right|side|top|underside|close HANDLE|camera | capture ID PATH [WIDTH HEIGHT] [overlays]";
+const VIEW_USAGE: &str = "usage: engine.inspect.view [list] | create ID [anchor NAME] | close ID | select ID | camera ID X Y Z YAW PITCH [FOV] | orbit ID DYAW DPITCH | pan ID DX DY | zoom ID FACTOR | frame ID front|back|left|right|side|top|underside|close HANDLE|camera|target NAME | capture ID PATH [WIDTH HEIGHT] [overlays]";
 
 /// A new view's vertical field of view, near and far planes.
 const VIEW_FOV_DEGREES: f64 = 50.0;
@@ -158,8 +160,38 @@ pub(crate) fn view_answer(view: &InspectionView, selected: Option<&str>) -> View
 }
 
 impl CsharpProductRuntime {
-    /// Answers `engine.inspect.view`; none for any other command.
-    pub(super) fn execute_inspect_view(&self, command: &str) -> Option<ProductHostDebugResult> {
+    /// Runs a command through the product's debug catalog, as one product
+    /// call.
+    pub(super) fn execute_product_debug(
+        &mut self,
+        command: &str,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostDebugResult>, ProductHostRuntimeError> {
+        let (execute, release) = (self.api.execute_debug, self.api.release_debug_result);
+
+        // Debug commands may use ordinary generated Engine services, and their
+        // changes stay like any other call's.
+        self.services.begin_call(ui_binding(&self.lifecycle));
+        let callback_result = call_debug(execute, release, self.handle, command);
+        let finished = self.finish_product_call(callback_result.as_ref().err().cloned());
+        self.settle_gameplay_time();
+        match (callback_result, finished.failure) {
+            (Ok(result), None) => Ok(ProductHostRuntimeReceipt::new(result, finished.outputs)),
+            (_, Some(failure)) => {
+                // The next receipt carries what the command did publish.
+                self.pending_recovery_outputs.extend(finished.outputs);
+                Err(self.runtime_error(failure))
+            }
+            (Err(_), None) => unreachable!("a callback error is the call's failure"),
+        }
+    }
+
+    /// Answers `engine.inspect.view`; none for any other command. `targets`
+    /// is the product's `inspect.targets` answer, for a framing on a target.
+    pub(super) fn execute_inspect_view(
+        &self,
+        command: &str,
+        targets: Option<&str>,
+    ) -> Option<ProductHostDebugResult> {
         let words: Vec<&str> = command.split_whitespace().collect();
         let (first, rest) = words.split_first()?;
         if *first != VIEW_COMMAND {
@@ -174,7 +206,7 @@ impl CsharpProductRuntime {
         let driver = frames.driver();
         let answer = match rest {
             ["capture", id, path, more @ ..] => self.capture_view(&driver, id, path, more),
-            _ => self.change_views(&driver, rest).and_then(|()| {
+            _ => self.change_views(&driver, rest, targets).and_then(|()| {
                 let selected = driver.selected_inspection_view();
                 serde_json::to_string(&ViewsAnswer {
                     views: driver
@@ -198,6 +230,7 @@ impl CsharpProductRuntime {
         &self,
         driver: &render_wgpu::SceneDriver,
         words: &[&str],
+        targets: Option<&str>,
     ) -> Result<(), String> {
         let mut views = driver.inspection_views();
         let find = |views: &mut Vec<InspectionView>, id: &str| -> Result<usize, String> {
@@ -283,31 +316,15 @@ impl CsharpProductRuntime {
                 let offset = sub(view.pose.position, view.focus);
                 view.pose.position = add(view.focus, scale(offset, factor));
             }
+            ["frame", id, framing, "target", name] => {
+                let index = find(&mut views, id)?;
+                let (center, radius, rotation) = target_framed(driver, targets, name)?;
+                frame(&mut views[index], framing, center, radius, rotation)?;
+            }
             ["frame", id, framing, subject] => {
                 let index = find(&mut views, id)?;
                 let (center, radius, rotation) = self.framed(driver, subject)?;
-                let view = &mut views[index];
-                let current = sub(view.pose.position, view.focus);
-                let direction = match *framing {
-                    "front" => rotate(rotation, [0.0, 0.0, 1.0]),
-                    "back" => rotate(rotation, [0.0, 0.0, -1.0]),
-                    "left" => rotate(rotation, [-1.0, 0.0, 0.0]),
-                    "right" | "side" => rotate(rotation, [1.0, 0.0, 0.0]),
-                    "top" => rotate(rotation, [0.0, 1.0, 0.0]),
-                    "underside" => rotate(rotation, [0.0, -1.0, 0.0]),
-                    "close" => scale(current, 1.0 / length(current).max(1e-9)),
-                    _ => return Err(VIEW_USAGE.to_owned()),
-                };
-                let half_fov = (fov_degrees(&view.projection) * 0.5).to_radians();
-                let fit = radius / half_fov.sin() * FRAME_MARGIN;
-                let distance = if *framing == "close" {
-                    fit * CLOSE_FACTOR
-                } else {
-                    fit
-                };
-                let eye = add(center, scale(direction, distance));
-                view.pose = looking_at(eye, center);
-                view.focus = center;
+                frame(&mut views[index], framing, center, radius, rotation)?;
             }
             _ => return Err(VIEW_USAGE.to_owned()),
         }
@@ -456,6 +473,98 @@ impl CsharpProductRuntime {
         })
         .map_err(|error| error.to_string())
     }
+}
+
+/// `view` framed on `center`: along `rotation`'s axes for a named framing,
+/// or nearer from where it is for `close`.
+fn frame(
+    view: &mut InspectionView,
+    framing: &str,
+    center: V3,
+    radius: f64,
+    rotation: [f64; 4],
+) -> Result<(), String> {
+    let current = sub(view.pose.position, view.focus);
+    let direction = match framing {
+        "front" => rotate(rotation, [0.0, 0.0, 1.0]),
+        "back" => rotate(rotation, [0.0, 0.0, -1.0]),
+        "left" => rotate(rotation, [-1.0, 0.0, 0.0]),
+        "right" | "side" => rotate(rotation, [1.0, 0.0, 0.0]),
+        "top" => rotate(rotation, [0.0, 1.0, 0.0]),
+        "underside" => rotate(rotation, [0.0, -1.0, 0.0]),
+        "close" => scale(current, 1.0 / length(current).max(1e-9)),
+        _ => return Err(VIEW_USAGE.to_owned()),
+    };
+    let half_fov = (fov_degrees(&view.projection) * 0.5).to_radians();
+    let fit = radius / half_fov.sin() * FRAME_MARGIN;
+    let distance = if framing == "close" {
+        fit * CLOSE_FACTOR
+    } else {
+        fit
+    };
+    view.pose = looking_at(add(center, scale(direction, distance)), center);
+    view.focus = center;
+    Ok(())
+}
+
+/// The product's `inspect.targets.v1` list, as far as framing reads it.
+#[derive(serde::Deserialize)]
+struct TargetList {
+    targets: Vec<TargetEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct TargetEntry {
+    name: String,
+    space: TargetSpace,
+    point: [f32; 3],
+    rotation: [f32; 4],
+    radius: f32,
+}
+
+#[derive(serde::Deserialize)]
+struct TargetSpace {
+    kind: String,
+    #[serde(default)]
+    entity: u64,
+    #[serde(default)]
+    joint: u32,
+}
+
+/// The world centre, radius and frame of the product's target `name`.
+fn target_framed(
+    driver: &render_wgpu::SceneDriver,
+    targets: Option<&str>,
+    name: &str,
+) -> Result<(V3, f64, [f64; 4]), String> {
+    let listed = targets
+        .ok_or("INSPECT_NO_TARGETS: the product registers no InspectionTargetsDebugModule")?;
+    let list: TargetList = serde_json::from_str(listed)
+        .map_err(|error| format!("INSPECT_NO_TARGETS: inspect.targets answered {error}"))?;
+    let target = list
+        .targets
+        .iter()
+        .find(|target| target.name == name)
+        .ok_or_else(|| format!("INSPECT_NO_TARGET: no inspection target {name}"))?;
+    let space = match target.space.kind.as_str() {
+        "world" => render_model::OverlaySpace::World,
+        "model" => render_model::OverlaySpace::Model {
+            entity: target.space.entity,
+        },
+        "joint" => render_model::OverlaySpace::Joint {
+            entity: target.space.entity,
+            joint: target.space.joint,
+        },
+        _ => render_model::OverlaySpace::Camera,
+    };
+    let (point, rotation) = driver
+        .resolve_point(space, target.point, target.rotation)
+        .ok_or_else(|| format!("INSPECT_TARGET_UNPLACED: target {name} is on nothing drawn"))?;
+    Ok((
+        point.map(f64::from),
+        f64::from(target.radius).max(VIEW_NEAR),
+        rotation.map(f64::from),
+    ))
 }
 
 #[cfg(test)]

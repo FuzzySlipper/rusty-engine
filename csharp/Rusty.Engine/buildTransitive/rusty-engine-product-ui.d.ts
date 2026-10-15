@@ -1044,6 +1044,83 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debu
         dispose(): void;
     }
 }
+declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-model" {
+    /** The commands a view pane sends; every action of the pane is one of them. */
+    export const inspectCommands: {
+        readonly create: (id: string, anchor: string) => string;
+        readonly close: (id: string) => string;
+        readonly select: (id: string) => string;
+        readonly frame: (id: string, framing: string, subject: string) => string;
+        readonly orbit: (id: string, yaw: number, pitch: number) => string;
+        readonly pan: (id: string, right: number, up: number) => string;
+        readonly zoom: (id: string, factor: number) => string;
+        readonly targets: () => string;
+        readonly showSetsIn: (id: string, sets: readonly string[]) => string[];
+        readonly showSets: () => string;
+        readonly hideSets: () => string;
+        readonly overlays: () => string;
+    };
+    /** The tool capture route for one view, with its overlays. */
+    export function captureUrl(id: string, width: number, height: number): string;
+    /** Degrees of orbit per pixel dragged, metres of pan per pixel per metre away, zoom per wheel notch. */
+    export const POINTER: {
+        readonly orbitDegrees: 0.4;
+        readonly panPerPixel: 0.002;
+        readonly zoomStep: 1.12;
+    };
+    /** A drag of `dx`, `dy` pixels as an orbit: right turns the camera right about the focus, down raises it. */
+    export function dragOrbit(dx: number, dy: number): [number, number];
+    /** A drag as a pan, scaled by the distance to the focus so near and far pan alike on screen. */
+    export function dragPan(dx: number, dy: number, distance: number): [number, number];
+    /** A wheel delta as a zoom factor: away zooms out. */
+    export function wheelZoom(deltaY: number): number;
+    /** The subjects a pane frames: the space before the player's camera, then the product's targets. */
+    export function subjects(targetsAnswer: string | null): {
+        value: string;
+        label: string;
+        framing?: string;
+    }[];
+    /** A view's distance from its focus, from an `engine.inspect.view` listing. */
+    export function focusDistance(listing: string, id: string): number;
+}
+declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-pane" {
+    import { type LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
+    /** The product UI's viewport port (`context.viewport` in `mountProductUi`). */
+    export interface InspectionViewport {
+        anchor(name: string, element: HTMLElement): () => void;
+    }
+    /** Configuration for one mounted inspection view pane. */
+    export interface InspectionViewOptions {
+        /** Anchors the pane's surface, so the Engine draws the view there. */
+        readonly viewport: InspectionViewport;
+        /** The view's id; a pane-numbered one when omitted. */
+        readonly id?: string;
+        /** Uses the same-origin live-debug HTTP transport when omitted. */
+        readonly transport?: LiveDebugTransport;
+        /** The framing buttons, in order. */
+        readonly framings?: readonly string[];
+        /** The subject framed first: `camera`, `target NAME` or a scene handle. */
+        readonly subject?: string;
+    }
+    /**
+     * One inspection view in a DOM element: the Engine draws the view under the
+     * pane's surface, and the pane sends commands. Dragging orbits about the
+     * focus, Shift-drag pans, the wheel zooms; the bar frames the player's camera
+     * or a product target, toggles overlays in the view and downloads a capture.
+     * The surface takes pointer input while it is used and gives it back when the
+     * pane closes; closing the pane closes its view. It holds no product state.
+     */
+    export class InspectionViewPane {
+        #private;
+        readonly element: HTMLElement;
+        readonly id: string;
+        constructor(document: Document, options: InspectionViewOptions);
+        /** Creates the view, lists the product's targets and frames the first subject. */
+        open(): Promise<void>;
+        /** Closes the view and gives the surface's input back. */
+        dispose(): void;
+    }
+}
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-model" {
     /** One committed scene object as `engine.scene.objects` lists it. */
     export interface SceneObject {
@@ -1297,8 +1374,10 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/renderer-
 declare module "@rusty-engine/live-debug" {
     import type { LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
     import type { LiveDebugPanelPresentation } from "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel-model";
+    import { type InspectionViewOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-pane";
     import { type SceneTreePanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel";
     import { type TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
+    export type { InspectionViewOptions, InspectionViewport } from "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-pane";
     export type { SceneTreePanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel";
     export type { TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
     export type { TunableChooser, TunableControl, TunableGroup, TunableKind, TunableTimeline, TunablesDescription, } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-model";
@@ -1351,6 +1430,21 @@ declare module "@rusty-engine/live-debug" {
      * object's facts (`engine.scene.object`). It holds no product state.
      */
     export function mountSceneTreePanel(host: HTMLElement, options?: SceneTreePanelOptions): SceneTreePanelMount;
+    /** A mounted inspection view pane. */
+    export interface InspectionViewMount {
+        /** The inspection view's id, for `engine.inspect.view` commands. */
+        readonly id: string;
+        /** Closes the view, gives the pane's input back and removes the pane. */
+        dispose(): void;
+    }
+    /**
+     * Mounts one Engine inspection view into a product-owned element: the
+     * Engine draws the view under the pane (anchored through the product UI's
+     * `context.viewport`), and the pane orbits, pans, zooms, frames the player's
+     * camera or a product target, toggles overlays and captures, each a debug
+     * command. It holds no product state.
+     */
+    export function mountInspectionView(host: HTMLElement, options: InspectionViewOptions): InspectionViewMount;
 }
 declare module "@rusty-engine/video-options/internal/video-options/src/video-options-model" {
     /**

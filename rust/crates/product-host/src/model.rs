@@ -566,7 +566,11 @@ impl ProductHostDebugCatalog {
             ),
             (
                 "engine.inspect.view",
-                "Engine cameras beside the player view: engine.inspect.view [list] | create ID [anchor NAME] | close ID | select ID | camera ID X Y Z YAW PITCH [FOV] | orbit ID DYAW DPITCH | pan ID DX DY | zoom ID FACTOR | frame ID front|back|left|right|side|top|underside|close HANDLE|camera | capture ID PATH [WIDTH HEIGHT] [overlays]",
+                "Engine cameras beside the player view: engine.inspect.view [list] | create ID [anchor NAME] | close ID | select ID | camera ID X Y Z YAW PITCH [FOV] | orbit ID DYAW DPITCH | pan ID DX DY | zoom ID FACTOR | frame ID front|back|left|right|side|top|underside|close HANDLE|camera|target NAME | capture ID PATH [WIDTH HEIGHT] [overlays]",
+            ),
+            (
+                "engine.inspect.target",
+                "List the product's inspection targets (its InspectionTargetsDebugModule's inspect.targets) and publish their markers as the overlay set inspect.targets",
             ),
             (
                 "engine.inspect.overlay",

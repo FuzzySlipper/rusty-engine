@@ -196,7 +196,19 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string Inspect() => string.Create(CultureInfo.InvariantCulture,
         $"joints={joints}; reports={reports}; seconds={reportedSeconds:F3}; reaching={reaching}; handError={handError:F4}; worstHandError={worstHandError:F4}; worstPoleSide={worstPoleSide:F3}; flips={flips}; curl={curl:F2}; fingerAngle={fingerAngle:F1}; far={far}; shortfall={chainShortfall:F4}; straightened={chainStraightened}; worstShortfallMismatch={worstShortfallMismatch:F5}");
 
-    public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
+    public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)
+    {
+        registrar.Register(this);
+        registrar.Register(new InspectionTargetsDebugModule(engine.Graphics, Targets));
+    }
+
+    /// <summary>What inspection views frame: the right hand's grip, the held model's tip and the space before the camera.</summary>
+    private IReadOnlyList<InspectionTarget> Targets() =>
+    [
+        new("right-hand", OverlayPlace.AtJoint(BodyId, hand), Vector3.Zero) { Radius = 0.15f, Framing = "underside" },
+        new("held-tip", OverlayPlace.Model(HeldId), new(0, 0.8f, 0)) { Radius = 0.08f, Framing = "side" },
+        new("view-centre", OverlayPlace.Camera, new(0, 0, -1)) { Radius = 0.2f },
+    ];
     public void Start() { }
     public void Pause() { }
     public void Resume() { }

@@ -14,9 +14,7 @@ use std::ops::Range;
 
 use glam::{Mat4, Quat, Vec3};
 use render_host_contracts::RendererCameraProjection;
-use render_model::{
-    OverlayItem, OverlaySetDescriptor, OverlayShape, OverlaySpace, RenderHandle, RenderLayer,
-};
+use render_model::{OverlaySetDescriptor, OverlayShape, OverlaySpace, RenderHandle, RenderLayer};
 
 use crate::camera::{self, CameraPose};
 use crate::frame::ViewLayer;
@@ -528,7 +526,7 @@ impl Renderer {
                 None => &mut buckets,
             };
             for item in &retained.set.items {
-                if let Some((layer, to_pass)) = self.item_space(item, &entities) {
+                if let Some((layer, to_pass)) = self.item_space(item.space, &entities) {
                     if let OverlayShape::Label { at, text } = &item.shape {
                         let point = to_pass.transform_point3(Vec3::from_array(*at));
                         // A viewmodel label is over the world it is drawn on.
@@ -694,6 +692,31 @@ impl Renderer {
         }
     }
 
+    /// A point and frame in an overlay space, in the world: a viewmodel's
+    /// placed by `primary`, the primary camera. `None` when the space's node
+    /// or joint draws nothing, or a viewmodel point has no camera.
+    pub(crate) fn resolve_overlay_point(
+        &self,
+        space: OverlaySpace,
+        point: Vec3,
+        rotation: Quat,
+        primary: Option<CameraPose>,
+    ) -> Option<(Vec3, Quat)> {
+        let (layer, to_pass) = self.item_space(space, &self.entity_handles())?;
+        let to_world = match layer {
+            ViewLayer::Viewmodel => {
+                let primary = primary?;
+                Mat4::from_rotation_translation(primary.orientation, primary.position) * to_pass
+            }
+            _ => to_pass,
+        };
+        let (_, frame, _) = to_world.to_scale_rotation_translation();
+        Some((
+            to_world.transform_point3(point),
+            (frame * rotation).normalize(),
+        ))
+    }
+
     /// The lowest handle published for each entity.
     fn entity_handles(&self) -> HashMap<u64, RenderHandle> {
         let mut handles: HashMap<u64, RenderHandle> = HashMap::new();
@@ -712,7 +735,7 @@ impl Renderer {
     /// coordinates; `None` when its node or joint draws nothing.
     fn item_space(
         &self,
-        item: &OverlayItem,
+        space: OverlaySpace,
         entities: &HashMap<u64, RenderHandle>,
     ) -> Option<(ViewLayer, Mat4)> {
         let node_space = |entity: u64, joint: Option<u32>| {
@@ -730,7 +753,7 @@ impl Renderer {
             };
             Some((pass_layer(node.world_layer), node.world * joint))
         };
-        match item.space {
+        match space {
             OverlaySpace::World => Some((ViewLayer::World, Mat4::IDENTITY)),
             OverlaySpace::Camera => Some((ViewLayer::Viewmodel, Mat4::IDENTITY)),
             OverlaySpace::Model { entity } => node_space(entity, None),

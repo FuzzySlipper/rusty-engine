@@ -26,6 +26,13 @@ Native live-debug commands (require the ordinary live-debug opt-in):
 - `engine.inspect.overlay`: what inspection draws ([overlays](#overlays)).
 - `engine.inspect.view`: Engine cameras beside the player view
   ([inspection views](#inspection-views)).
+- `engine.inspect.target`: the product's named inspection points
+  ([inspection targets](#inspection-targets)).
+
+The scene readouts, overlays, inspection views and targets are readings of the
+one committed scene and the poses the renderer drew, hosted beside the game:
+none of them is a second description of the scene, and none changes what the
+product committed.
 
 A playtest harness drives the runtime directly: debug commands through
 `/__rusty/product/runtime/debug/execute`, input through a
@@ -276,8 +283,10 @@ releases nothing but its entry.
   right from +X, top from +Y, underside from -Y), or with `close` from where
   the view is, nearer. A viewmodel object's bounds and axes are placed by
   the player's camera. `SUBJECT` `camera` frames the space just in front of
-  the player's camera. The framing leaves 15% around the bounds; pitch stays
-  within 89 degrees of level.
+  the player's camera, and `target NAME` one of the product's
+  [inspection targets](#inspection-targets) by its radius and frame. The
+  framing leaves 15% around the bounds; pitch stays within 89 degrees of
+  level.
 - `capture ID PATH [WIDTH HEIGHT] [overlays]`: draw the view into a PNG at
   `PATH` (relative to the host's working directory) and answer its size,
   simulation step, held flag, presentation time, camera and the overlay sets
@@ -291,7 +300,56 @@ the poses the renderer evaluated.
 The scene tree's selected object has **Frame in view**, which frames the
 selected view (else the first) on it from the side, and **Bounds**, which
 shows or hides its bounds overlay. `fixtures/csharp-skeleton-poses` holds a
-model on the viewmodel layer and has two panes to anchor views to.
+model on the viewmodel layer, registers targets and mounts two view panes.
+
+## Inspection targets
+
+A product names the points worth looking at (grips, probes, reach targets,
+muzzles) and the Engine frames and marks them; the product never positions an
+inspection camera. Register an `InspectionTargetsDebugModule(engine.Graphics,
+targets)` with the debug catalog, where `targets` lists `InspectionTarget`s:
+
+```csharp
+registrar.Register(new InspectionTargetsDebugModule(engine.Graphics, () =>
+[
+    new("off-grip", OverlayPlace.Camera, offGrip) { Rotation = item, Radius = 0.1f, Framing = "underside" },
+    new("right-hand", OverlayPlace.AtJoint(BodyId, hand), Vector3.Zero) { Radius = 0.15f },
+]));
+```
+
+A target is placed like an overlay item, so one on a joint or in camera space
+follows what it is on. `Rotation` is the frame framings look along, `Radius`
+how much around it a framing shows, and `Framing` the one a pane offers
+first. Names are single words, as commands name them.
+`engine.inspect.target list` (the module's `inspect.targets`) answers the
+`inspect.targets.v1` list and publishes the targets as the overlay set
+`inspect.targets`: a marker, axes and a label each, drawn while inspection
+shows it. `engine.inspect.view frame ID FRAMING target NAME` frames a view on
+one, as it is placed now.
+
+## View panes
+
+`mountInspectionView(element, { viewport: context.viewport, id?, subject?,
+framings?, transport? })` from `@rusty-engine/live-debug` puts one inspection
+view in a product-owned element. The pane anchors its surface through the
+product UI's viewport port, so the Engine draws the view there, creates the
+view on mount and closes it on dispose. Its bar picks the subject (the player
+camera or a product target; a target the product does not offer now falls
+back to the camera), frames it with the framing buttons, toggles overlay
+sets, and downloads a capture of the view. On the surface, a drag orbits about
+the focus, a Shift-drag pans and the wheel zooms. Every action is an
+`engine.inspect.*` command, so an agent does the same without a pointer.
+
+The surface is interactive UI: while the pointer is on it, the game does not
+receive it, and it selects its view on press. Closing the pane gives the
+input back. Panes hold no product state; a product mounts them in its own
+developer UI, as `fixtures/csharp-skeleton-poses` does under the player view.
+
+What stays approximate: overlays draw what a product publishes and what the
+renderer evaluated. A probe marker shows where the product measured, at the
+radius it gave; a nearest-triangle "inside" depends on the model's winding.
+Neither proves exact contact with a skinned surface, and the Engine makes no
+skinned-surface guarantee. A joint's place is the drawn pose, not physics.
 
 ## Time, drawing and camera
 

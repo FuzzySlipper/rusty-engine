@@ -2,9 +2,11 @@ import type { LiveDebugTransport } from '@rusty-engine/live-debug-client';
 
 import { LiveDebugPanel } from './live-debug-panel.js';
 import type { LiveDebugPanelPresentation } from './live-debug-panel-model.js';
+import { InspectionViewPane, type InspectionViewOptions } from './inspection-view-pane.js';
 import { SceneTreePanel, type SceneTreePanelOptions } from './scene-tree-panel.js';
 import { TunablesPanel, type TunablesPanelOptions } from './tunables-panel.js';
 
+export type { InspectionViewOptions, InspectionViewport } from './inspection-view-pane.js';
 export type { SceneTreePanelOptions } from './scene-tree-panel.js';
 export type { TunablesPanelOptions } from './tunables-panel.js';
 export type {
@@ -116,4 +118,29 @@ export function mountSceneTreePanel(host: HTMLElement, options: SceneTreePanelOp
   host.appendChild(panel.element);
   void panel.refresh();
   return { refresh: () => panel.refresh(), dispose: () => panel.dispose() };
+}
+
+/** A mounted inspection view pane. */
+export interface InspectionViewMount {
+  /** The inspection view's id, for `engine.inspect.view` commands. */
+  readonly id: string;
+  /** Closes the view, gives the pane's input back and removes the pane. */
+  dispose(): void;
+}
+
+/**
+ * Mounts one Engine inspection view into a product-owned element: the
+ * Engine draws the view under the pane (anchored through the product UI's
+ * `context.viewport`), and the pane orbits, pans, zooms, frames the player's
+ * camera or a product target, toggles overlays and captures, each a debug
+ * command. It holds no product state.
+ */
+export function mountInspectionView(host: HTMLElement, options: InspectionViewOptions): InspectionViewMount {
+  if (!(host instanceof HTMLElement)) {
+    throw new TypeError('Inspection view mounting requires an HTMLElement host.');
+  }
+  const pane = new InspectionViewPane(host.ownerDocument, options);
+  host.appendChild(pane.element);
+  void pane.open();
+  return { id: pane.id, dispose: () => pane.dispose() };
 }

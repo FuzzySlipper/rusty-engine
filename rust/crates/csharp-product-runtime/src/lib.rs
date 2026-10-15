@@ -3282,7 +3282,25 @@ impl ProductHostRuntime for CsharpProductRuntime {
         if let Some(result) = self.execute_inspect_debug(command) {
             return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
-        if let Some(result) = self.execute_inspect_view(command) {
+        // Inspection targets are the product's: its `inspect.targets` lists
+        // them, and a framing on one reads that list first.
+        let words: Vec<&str> = command.split_whitespace().collect();
+        if matches!(
+            words.as_slice(),
+            ["engine.inspect.target"] | ["engine.inspect.target", "list"]
+        ) {
+            return self.execute_product_debug(inspect_view::TARGETS_COMMAND);
+        }
+        if let ["engine.inspect.view", "frame", _, _, "target", _] = words.as_slice() {
+            let listed = self.execute_product_debug(inspect_view::TARGETS_COMMAND)?;
+            let (listing, outputs) = listed.into_parts();
+            let targets = listing.succeeded().then_some(listing.message());
+            let result = self
+                .execute_inspect_view(command, targets)
+                .expect("an engine.inspect.view command");
+            return Ok(ProductHostRuntimeReceipt::new(result, outputs));
+        }
+        if let Some(result) = self.execute_inspect_view(command, None) {
             return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
         if let Some(frames) = self
@@ -3322,23 +3340,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
             let result = self.execute_renderer_debug(action)?;
             return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
-        let (execute, release) = (self.api.execute_debug, self.api.release_debug_result);
-
-        // Debug commands may use ordinary generated Engine services, and their
-        // changes stay like any other call's.
-        self.services.begin_call(ui_binding(&self.lifecycle));
-        let callback_result = call_debug(execute, release, self.handle, command);
-        let finished = self.finish_product_call(callback_result.as_ref().err().cloned());
-        self.settle_gameplay_time();
-        match (callback_result, finished.failure) {
-            (Ok(result), None) => Ok(ProductHostRuntimeReceipt::new(result, finished.outputs)),
-            (_, Some(failure)) => {
-                // The next receipt carries what the command did publish.
-                self.pending_recovery_outputs.extend(finished.outputs);
-                Err(self.runtime_error(failure))
-            }
-            (Err(_), None) => unreachable!("a callback error is the call's failure"),
-        }
+        self.execute_product_debug(command)
     }
 
     fn describe_debug(
