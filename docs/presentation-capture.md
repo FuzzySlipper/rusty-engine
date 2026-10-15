@@ -46,7 +46,7 @@ Three captures are available, and they show different things:
   the world only, not the product's DOM UI. The step in the header is the
   frame's own, so no separate observation is needed to correlate it.
 - **Tool captures.**
-  `GET /__rusty/product/runtime/frames/capture?format=png|rgba[&width=W&height=H]`
+  `GET /__rusty/product/runtime/frames/capture?format=png|rgba[&width=W&height=H][&overlays=1]`
   draws one world frame for a tool, in stream or window output.
   - **Its own target.** It draws at the requested size, or else at the
     output's (the stream's last frame, or the window's surface). It never
@@ -57,6 +57,10 @@ Three captures are available, and they show different things:
     video flags. Its sequence counts captures, apart from the stream's.
   - **Cameras.** `X-Rusty-Frame-Cameras` holds the drawn cameras, as
     `engine.renderer.presentation` reports them.
+  - **Overlays.** A capture leaves out what inspection shows
+    ([overlays](playtest-inspection.md#overlays)) unless it asks with
+    `overlays=1`. Then `X-Rusty-Frame-Overlays` holds the overlay sets it
+    drew and their revisions, as `{"name": revision}`.
   - **Window output.** A window capture holds the world only; the UI
     overlay is not in it.
   - **Tying a capture to a step.** Hold time with `engine.time.mode manual`,

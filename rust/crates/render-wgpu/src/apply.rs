@@ -32,6 +32,8 @@ struct NodePlacement {
     visible: bool,
     layer: RenderLayer,
     shadow_casting: ShadowCasting,
+    /// The entity the node was published for (`source_entity`).
+    entity: Option<u64>,
 }
 
 /// An op the backend skipped, with the reason. Rendering continues without it.
@@ -238,6 +240,7 @@ impl Renderer {
                 self.touch_indirect_light();
             }
             RenderDiff::SetRendererSettings { settings } => self.set_settings(settings),
+            RenderDiff::SetOverlaySet { name, set } => self.overlays.set(name, set),
             RenderDiff::SetToneMapping { tone_mapping } => {
                 self.tables.tone_mapping = *tone_mapping;
             }
@@ -270,6 +273,7 @@ impl Renderer {
                         visible: node.visible,
                         layer: node.layer,
                         shadow_casting: node.shadow_casting,
+                        entity: node.metadata.source_entity,
                     },
                     kind,
                 );
@@ -286,6 +290,7 @@ impl Renderer {
                     visible: instance.visible,
                     layer: instance.layer,
                     shadow_casting: instance.shadow_casting,
+                    entity: instance.metadata.source_entity,
                 },
                 NodeKind::StaticMesh {
                     asset: instance.asset.clone(),
@@ -309,6 +314,7 @@ impl Renderer {
                     visible: true,
                     layer: RenderLayer::Scene,
                     shadow_casting: patch.shadow_casting,
+                    entity: None,
                 },
                 NodeKind::Scatter(Box::new(patch.clone())),
             ),
@@ -325,6 +331,7 @@ impl Renderer {
                         visible: instance.visible,
                         layer: instance.layer,
                         shadow_casting: instance.shadow_casting,
+                        entity: instance.metadata.source_entity,
                     },
                     NodeKind::AnimatedMesh(Box::new(instance.clone())),
                 );
@@ -342,6 +349,7 @@ impl Renderer {
                     visible: instance.visible,
                     layer: RenderLayer::Scene,
                     shadow_casting: ShadowCasting::Cast,
+                    entity: instance.metadata.source_entity,
                 },
                 NodeKind::VoxelObject(Box::new(instance.clone())),
             ),
@@ -366,6 +374,7 @@ impl Renderer {
                         layer: sprite.layer,
                         shadow_casting: // Sprites cast by their own shadow policy.
                     ShadowCasting::Cast,
+                        entity: sprite.metadata.source_entity,
                     },
                     NodeKind::Sprite(Box::new(row)),
                 )
@@ -391,6 +400,7 @@ impl Renderer {
                         visible: sprite.visible,
                         layer: sprite.layer,
                         shadow_casting: ShadowCasting::Cast,
+                        entity: sprite.metadata.source_entity,
                     },
                     NodeKind::Sprite(Box::new(row)),
                 )
@@ -408,6 +418,7 @@ impl Renderer {
                         visible: true,
                         layer: RenderLayer::Scene,
                         shadow_casting: ShadowCasting::Cast,
+                        entity: None,
                     },
                     NodeKind::Light(light.clone()),
                 );
@@ -427,9 +438,12 @@ impl Renderer {
                 transform,
                 material,
                 visible,
-                ..
+                metadata,
             } => {
                 let node = self.node_mut(*handle)?;
+                if let Some(metadata) = metadata {
+                    node.entity = metadata.source_entity;
+                }
                 if let Some(transform) = transform {
                     node.local = crate::convert::transform_matrix(transform);
                 }
@@ -673,6 +687,7 @@ impl Renderer {
             visible,
             layer,
             shadow_casting,
+            entity,
         } = placement;
         if self.tables.nodes.contains_key(&handle) {
             self.destroy_node(handle);
@@ -713,6 +728,7 @@ impl Renderer {
                 layer,
                 world_layer: layer,
                 shadow_casting,
+                entity,
                 kind,
                 parts: Vec::new(),
                 names: Vec::new(),
@@ -2724,6 +2740,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetIndirectLight { .. } => "setIndirectLight",
         RenderDiff::SetSkyLight { .. } => "setSkyLight",
         RenderDiff::SetRendererSettings { .. } => "setRendererSettings",
+        RenderDiff::SetOverlaySet { .. } => "setOverlaySet",
         RenderDiff::SetToneMapping { .. } => "setToneMapping",
         RenderDiff::DefineSpriteAtlas { .. } => "defineSpriteAtlas",
         RenderDiff::ReleaseSpriteAtlas { .. } => "releaseSpriteAtlas",

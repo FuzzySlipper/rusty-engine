@@ -832,6 +832,7 @@ fn a_capture_draws_through_the_runtime_hook_and_is_never_a_viewer() {
                 payload: b"rgbargba".to_vec(),
             },
             cameras: serde_json::json!([{ "id": "main", "observer": false }]),
+            overlays: None,
         })
     });
     let bundle = ProductHostBundle::new(vec![ProductHostBundleEntry::new(
@@ -887,10 +888,12 @@ fn a_capture_draws_through_the_runtime_hook_and_is_never_a_viewer() {
             product_host::ProductHostCaptureRequest {
                 size: Some((2, 1)),
                 format: product_host::ProductHostFrameFormat::Rgba8,
+                overlays: false,
             },
             product_host::ProductHostCaptureRequest {
                 size: None,
                 format: product_host::ProductHostFrameFormat::Png,
+                overlays: false,
             },
         ]
     );

@@ -1187,13 +1187,19 @@ impl Renderer {
             .nodes
             .get(&handle)
             .map_or(Mat4::IDENTITY, |node| node.world);
+        // Recorded for the joint report and for an IK overlay.
+        let record =
+            instance.controls.report_joints || self.overlays.shown.ik.contains(&handle.raw());
+        if !record {
+            instance.ik.clear();
+        }
         let pose = crate::pose::controlled(
             &asset.model,
             &asset.rig,
             sample_locals(&asset.model, &asset.clips, &actions),
             &instance.controls,
             world,
-            &mut instance.ik,
+            record.then_some(&mut instance.ik),
         );
         instance.posed_world = world;
         instance.joints_pending = instance.controls.report_joints;
@@ -1494,6 +1500,65 @@ impl Renderer {
     /// joint-attached child hangs from each frame.
     pub(crate) fn joint_pose_at(&self, handle: RenderHandle, node: usize) -> Option<Mat4> {
         self.tables.animated.get(&handle)?.pose.get(node).copied()
+    }
+
+    /// The node of an animated instance's rig joint.
+    pub(crate) fn rig_node(&self, handle: RenderHandle, joint: u32) -> Option<usize> {
+        let instance = self.tables.animated.get(&handle)?;
+        let asset = self.tables.animated_assets.get(instance.slot)?;
+        asset.rig.get(joint as usize).copied().flatten()
+    }
+
+    /// Each rig joint of an animated instance with the nearest rig joint
+    /// above it, as drawn, in the instance's space: its bones.
+    pub(crate) fn joint_bones(&self, handle: RenderHandle) -> Vec<(Vec3, Vec3)> {
+        let Some(instance) = self.tables.animated.get(&handle) else {
+            return Vec::new();
+        };
+        let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
+            return Vec::new();
+        };
+        let in_rig: std::collections::HashSet<usize> =
+            asset.rig.iter().flatten().copied().collect();
+        let at = |node: usize| instance.pose.get(node).map(|pose| pose.w_axis.truncate());
+        asset
+            .rig
+            .iter()
+            .flatten()
+            .filter_map(|&node| {
+                let mut parent = asset.model.nodes[node].parent;
+                while let Some(above) = parent.filter(|above| !in_rig.contains(above)) {
+                    parent = asset.model.nodes[above].parent;
+                }
+                Some((at(node)?, at(parent?)?))
+            })
+            .collect()
+    }
+
+    /// An animated instance's IK chains from its last posing, in its space:
+    /// each target, the drawn end joint, and whether the chain straightened.
+    pub(crate) fn ik_reaches(&self, handle: RenderHandle) -> Vec<(Vec3, Option<Vec3>, bool)> {
+        let Some(instance) = self.tables.animated.get(&handle) else {
+            return Vec::new();
+        };
+        instance
+            .ik
+            .iter()
+            .map(|solve| {
+                let end = solve
+                    .end
+                    .and_then(|node| instance.pose.get(node))
+                    .map(|pose| pose.w_axis.truncate());
+                (solve.target, end, solve.straightened)
+            })
+            .collect()
+    }
+
+    /// Poses an animated instance again at the next frame.
+    pub(crate) fn repose_animated(&mut self, handle: RenderHandle) {
+        if let Some(instance) = self.tables.animated.get_mut(&handle) {
+            instance.pose_dirty = true;
+        }
     }
 
     /// The parts of an animated instance's node, in draw order: each GLB node

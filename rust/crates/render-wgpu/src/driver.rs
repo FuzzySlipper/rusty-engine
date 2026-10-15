@@ -116,6 +116,9 @@ pub struct Capture {
     pub composition: Option<Arc<RendererViewComposition>>,
     /// How each of `composition`'s cameras drew.
     pub cameras: Vec<DrawnCamera>,
+    /// The overlay sets drawn, with their revisions, when the capture asked
+    /// for overlays; `None` when it left them out.
+    pub overlays: Option<BTreeMap<String, u64>>,
 }
 
 /// The committed scene in a renderer on one device.
@@ -160,6 +163,8 @@ struct Scene {
     viewport_anchors: RendererViewportAnchors,
     /// The player's choices of renderer settings, kept across rebaselines.
     player_settings: render_model::RendererSettingsOverrides,
+    /// What inspection shows, kept across rebaselines.
+    overlay_shown: crate::OverlayShown,
 }
 
 impl SceneDriver {
@@ -185,6 +190,7 @@ impl SceneDriver {
                 composition: None,
                 composition_revision: 0,
                 observer: None,
+                overlay_shown: crate::OverlayShown::default(),
                 viewport_anchors: RendererViewportAnchors::new(),
                 player_settings: render_model::RendererSettingsOverrides::default(),
             }),
@@ -242,6 +248,8 @@ impl SceneDriver {
         scene.animation_facts.clear();
         scene.video_facts.clear();
         scene.apply(baseline, resources, entities, state, now);
+        let shown = scene.overlay_shown.clone();
+        scene.renderer.set_overlay_shown(shown);
         scene.changed = true;
         drop(scene);
         self.wake.notify_all();
@@ -272,6 +280,26 @@ impl SceneDriver {
         scene.changed = true;
         drop(scene);
         self.wake.notify_all();
+    }
+
+    /// What inspection shows: overlay sets, the Debug layer and the
+    /// renderer's own inspection drawing. The next frame follows.
+    pub fn set_overlay_shown(&self, shown: crate::OverlayShown) {
+        let mut scene = self.scene();
+        if scene.overlay_shown == shown {
+            return;
+        }
+        scene.overlay_shown = shown.clone();
+        scene.renderer.set_overlay_shown(shown);
+        scene.changed = true;
+        drop(scene);
+        self.wake.notify_all();
+    }
+
+    /// What inspection shows, and the overlay sets the renderer holds.
+    pub fn overlays(&self) -> (crate::OverlayShown, Vec<crate::OverlaySetReadout>) {
+        let scene = self.scene();
+        (scene.overlay_shown.clone(), scene.renderer.overlay_sets())
     }
 
     /// Where the product UI's anchored views draw (see
@@ -405,9 +433,17 @@ impl SceneDriver {
     /// the pixel ratio the last output drew with. A capture changes no
     /// output's frame size or pixel ratio and draws into no output; its
     /// facts are reported like a drawn frame's.
-    pub fn capture(&self, size: Option<(u32, u32)>) -> Capture {
+    pub fn capture(&self, size: Option<(u32, u32)>, overlays: bool) -> Capture {
         let now = self.now();
         let mut scene = self.scene();
+        // A capture leaves out what inspection shows unless it asks for it.
+        let shown = scene.overlay_shown.clone();
+        if !overlays && shown.any() {
+            scene
+                .renderer
+                .set_overlay_shown(crate::OverlayShown::default());
+        }
+        let drawn_overlays = (overlays && shown.any()).then(|| scene.renderer.overlay_revisions());
         let (width, height) = size
             .or(scene.renderer.surface_size())
             .unwrap_or(DEFAULT_CAPTURE_SIZE);
@@ -419,6 +455,9 @@ impl SceneDriver {
         scene.renderer.set_pixel_ratio(fitted_ratio);
         let video = scene.renderer.render_view_composition(&target, now).video;
         scene.renderer.set_pixel_ratio(ratio);
+        if !overlays && shown.any() {
+            scene.renderer.set_overlay_shown(shown);
+        }
         let cameras = scene.renderer.drawn_cameras();
         scene.realized_seconds = scene.elapsed_seconds;
         scene.collect_facts();
@@ -433,6 +472,7 @@ impl SceneDriver {
             video,
             composition: scene.composition.clone(),
             cameras,
+            overlays: drawn_overlays,
         };
         drop(scene);
         let mut rgba = Vec::new();

@@ -124,6 +124,9 @@ pub struct FrameStats {
     /// (frustum tests and grouping) and shadow caster lists; 0 when every
     /// list was current.
     pub cpu_batch_us: u32,
+    /// Overlay lines drawn across view passes; 0 while inspection shows
+    /// nothing (`overlays.rs`).
+    pub overlay_lines: u32,
 }
 
 /// What one view pass drew.
@@ -139,6 +142,7 @@ pub(crate) struct ViewStats {
     pub sprite_batch_instances: u32,
     pub pipeline_binds: u32,
     pub pipelines_created: u32,
+    pub overlay_lines: u32,
 }
 
 impl Add for ViewStats {
@@ -156,6 +160,7 @@ impl Add for ViewStats {
             sprite_batch_instances: self.sprite_batch_instances + other.sprite_batch_instances,
             pipeline_binds: self.pipeline_binds + other.pipeline_binds,
             pipelines_created: self.pipelines_created + other.pipelines_created,
+            overlay_lines: self.overlay_lines + other.overlay_lines,
         }
     }
 }
@@ -172,6 +177,7 @@ impl AddAssign<ViewStats> for FrameStats {
         self.sprite_batch_instances += view.sprite_batch_instances;
         self.pipeline_binds += view.pipeline_binds;
         self.pipelines_created += view.pipelines_created;
+        self.overlay_lines += view.overlay_lines;
     }
 }
 
@@ -312,6 +318,8 @@ pub(crate) struct ViewPass<'a> {
     /// The composition camera drawing the view, whose backdrop link it
     /// takes before every view's.
     pub camera_id: Option<&'a str>,
+    /// Draw the frame's overlay lines for this pass's layer.
+    pub overlays: bool,
 }
 
 impl Renderer {
@@ -2062,6 +2070,7 @@ impl Renderer {
             sky: false,
             backdrop: Some(backdrop.link),
             camera_id: view.camera_id,
+            overlays: false,
         })
     }
 
@@ -2137,6 +2146,7 @@ impl Renderer {
                 sky: true,
                 backdrop: None,
                 camera_id: Some(CAPTURE_VIEWS[face as usize]),
+                overlays: false,
             };
             self.submit_background(&face_view);
             if let Some(backdrop) = self.backdrop_camera(&face_camera, camera_id) {
@@ -2496,8 +2506,18 @@ impl Renderer {
         };
         let effects = self.prepare_effects(&view, hdr_format);
         let slot = view.layer as usize;
+        let overlay_lines = if view.overlays {
+            self.overlays.lines(view.layer)
+        } else {
+            0
+        };
+        if overlay_lines > 0 {
+            self.overlays
+                .ensure_pipelines(&self.gpu.device, &self.layouts.frame, hdr_format);
+        }
         // With GPU culling the opaque parts are candidates, not in the list.
         if !world_layer
+            && overlay_lines == 0
             && effects.draws() == 0
             && self.views[slot].as_ref().is_none_or(|cache| {
                 cache.list.batches.is_empty()
@@ -2893,6 +2913,10 @@ impl Renderer {
                 &effects,
                 self.builtins.get(&Builtin::Cube),
             );
+            if overlay_lines > 0 {
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                encoded.draws += self.overlays.draw(&mut pass, view.layer, hdr_format);
+            }
             parts = encoded;
         }
         self.finish.resolve_layer(view.layer, &mut encoder);
@@ -3087,6 +3111,7 @@ impl Renderer {
             sprite_batch_instances: effects.batch_instances,
             pipeline_binds: parts.pipeline_binds + shadows.encoded.pipeline_binds,
             pipelines_created: pipelines_created + shadows.pipelines_created,
+            overlay_lines,
         }
     }
 }

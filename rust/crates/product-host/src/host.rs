@@ -2334,6 +2334,7 @@ fn capture_response<R: ProductHostRuntime>(
                 crate::frames::encode_capture(&captured),
             );
             response.cameras = Some(captured.cameras.to_string());
+            response.overlays = captured.overlays.map(|overlays| overlays.to_string());
             response
         }
         Err(detail) => HttpResponse::error(500, "PRODUCT_HOST_CAPTURE", &detail),
@@ -4035,6 +4036,8 @@ struct HttpResponse {
     delivery_certainty: Option<ResponseDeliveryCertainty>,
     /// A capture's drawn cameras, as JSON.
     cameras: Option<String>,
+    /// A capture's drawn overlay sets and revisions, as JSON.
+    overlays: Option<String>,
 }
 
 /// Preserve the runtime's mutation certainty even on a typed rejection.
@@ -4090,6 +4093,7 @@ impl HttpResponse {
             commit_disposition: None,
             delivery_certainty: None,
             cameras: None,
+            overlays: None,
         }
     }
 
@@ -4180,6 +4184,9 @@ fn write_response(stream: &mut TcpStream, response: HttpResponse) -> io::Result<
     }
     if let Some(cameras) = &response.cameras {
         write!(stream, "X-Rusty-Frame-Cameras: {cameras}\r\n")?;
+    }
+    if let Some(overlays) = &response.overlays {
+        write!(stream, "X-Rusty-Frame-Overlays: {overlays}\r\n")?;
     }
     if let Some(disposition) = response.commit_disposition {
         write!(

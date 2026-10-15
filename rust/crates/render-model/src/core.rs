@@ -1275,6 +1275,11 @@ pub enum RenderDiff {
     SetRendererSettings {
         settings: RendererSettingsDescriptor,
     },
+    /// Replaces the named overlay set; an empty set removes it.
+    SetOverlaySet {
+        name: String,
+        set: crate::OverlaySetDescriptor,
+    },
     DefineSpriteAtlas {
         atlas: SpriteAtlasDescriptor,
     },
@@ -1445,6 +1450,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetIndirectLight { .. }
                 | RenderDiff::SetSkyLight { .. }
                 | RenderDiff::SetRendererSettings { .. }
+                | RenderDiff::SetOverlaySet { .. }
                 | RenderDiff::DefineSpriteAtlas { .. }
                 | RenderDiff::ReleaseSpriteAtlas { .. }
                 | RenderDiff::ReleaseStaticMesh { .. }

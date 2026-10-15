@@ -10600,6 +10600,110 @@ pub(crate) unsafe extern "C" fn publish_appearance_changes(
     })
 }
 
+pub(crate) unsafe extern "C" fn publish_overlay_set(
+    context: *mut c_void,
+    request: *const NativeOverlaySetRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() {
+            return 0;
+        }
+        // SAFETY: context points at a box retained by `CsharpProductRuntime`.
+        let bridge = unsafe { &mut *context.cast::<RuntimeAppearanceBridge>() };
+        // SAFETY: the request and its spans are borrowed for this synchronous call.
+        let request = unsafe { &*request };
+        let outcome = (|| {
+            let name =
+                unsafe { borrowed_utf8(request.name.bytes, request.name.len, "overlay set name") }?;
+            let rows =
+                unsafe { borrowed_slice(request.items, request.items_len, "overlay items") }?;
+            let items = rows
+                .iter()
+                .map(|row| {
+                    let vec = |value: NativeVec3| [value.x, value.y, value.z];
+                    let rotation = [
+                        row.rotation.x,
+                        row.rotation.y,
+                        row.rotation.z,
+                        row.rotation.w,
+                    ];
+                    let shape = match row.shape {
+                        NativeOverlayShape::Segment => OverlayShape::Segment {
+                            from: vec(row.a),
+                            to: vec(row.b),
+                        },
+                        NativeOverlayShape::Marker => OverlayShape::Marker {
+                            at: vec(row.a),
+                            size: row.size,
+                        },
+                        NativeOverlayShape::Axes => OverlayShape::Axes {
+                            at: vec(row.a),
+                            rotation,
+                            length: row.size,
+                        },
+                        NativeOverlayShape::WireBox => OverlayShape::WireBox {
+                            center: vec(row.a),
+                            half_extents: vec(row.b),
+                            rotation,
+                        },
+                        NativeOverlayShape::WireSphere => OverlayShape::WireSphere {
+                            center: vec(row.a),
+                            radius: row.size,
+                        },
+                        NativeOverlayShape::Frustum => OverlayShape::Frustum {
+                            at: vec(row.a),
+                            rotation,
+                            fov_y_degrees: row.lens.x,
+                            aspect: row.lens.y,
+                            near: row.lens.z,
+                            far: row.lens.w,
+                        },
+                        NativeOverlayShape::Label => OverlayShape::Label {
+                            at: vec(row.a),
+                            text: unsafe {
+                                borrowed_utf8(row.text.bytes, row.text.len, "overlay label")
+                            }?
+                            .to_owned(),
+                        },
+                    };
+                    let space = match row.space {
+                        NativeOverlaySpace::World => OverlaySpace::World,
+                        NativeOverlaySpace::Model => OverlaySpace::Model { entity: row.entity },
+                        NativeOverlaySpace::Joint => OverlaySpace::Joint {
+                            entity: row.entity,
+                            joint: row.joint,
+                        },
+                        NativeOverlaySpace::Camera => OverlaySpace::Camera,
+                    };
+                    Ok(OverlayItem {
+                        shape,
+                        space,
+                        color: [row.color.r, row.color.g, row.color.b, row.color.a],
+                        on_top: row.on_top,
+                    })
+                })
+                .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
+            let staged = bridge.staged_mut()?;
+            push_extra_frame(
+                staged,
+                render_model::RenderFrameDiff::from_ops(vec![RenderDiff::SetOverlaySet {
+                    name: name.to_owned(),
+                    set: OverlaySetDescriptor { items },
+                }]),
+            );
+            Ok::<(), CsharpEngineServicesError>(())
+        })();
+        match outcome {
+            Ok(()) => ABI_OK,
+            Err(error) => {
+                bridge.operation_error = Some(error);
+                0
+            }
+        }
+    })
+}
+
 /// Runs one graphics operation and returns its refusal through the receipt.
 /// A refusal is operation-local: the operation leaves staged state unchanged,
 /// and the generated caller owns the resulting exception. Nothing latches.
@@ -10707,6 +10811,113 @@ pub(super) mod tests {
             "REFUSED"
         );
         assert!(bridge.operation_error.is_none());
+        bridge.end_call();
+    }
+
+    #[test]
+    fn an_overlay_set_reaches_the_call_as_one_set_overlay_op() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let text = |s: &'static str| NativeUtf8Slice {
+            bytes: s.as_ptr(),
+            len: s.len(),
+        };
+        let vec = |x, y, z| NativeVec3 { x, y, z };
+        let item = |shape, space, text| NativeOverlayItem {
+            shape,
+            space,
+            entity: 9,
+            joint: 3,
+            a: vec(1.0, 2.0, 3.0),
+            b: vec(4.0, 5.0, 6.0),
+            rotation: NativeQuat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            size: 0.5,
+            lens: NativeVec4 {
+                x: 60.0,
+                y: 1.5,
+                z: 0.1,
+                w: 10.0,
+            },
+            color: NativeColor {
+                r: 1.0,
+                g: 0.0,
+                b: 1.0,
+                a: 1.0,
+            },
+            on_top: true,
+            text,
+        };
+        let items = [
+            item(
+                NativeOverlayShape::Segment,
+                NativeOverlaySpace::World,
+                text(""),
+            ),
+            item(
+                NativeOverlayShape::Label,
+                NativeOverlaySpace::Joint,
+                text("grip"),
+            ),
+            item(
+                NativeOverlayShape::Frustum,
+                NativeOverlaySpace::Model,
+                text(""),
+            ),
+        ];
+        let request = NativeOverlaySetRequest {
+            name: text("guide"),
+            items: items.as_ptr(),
+            items_len: items.len(),
+        };
+        let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+        let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+        assert_eq!(
+            unsafe { publish_overlay_set(context, &request, &mut receipt) },
+            ABI_OK
+        );
+        let staged = bridge.staged_ref().unwrap();
+        let Some(RuntimeAppearanceCallOutput::Frame(frame)) = staged.outputs.last() else {
+            panic!("a frame output");
+        };
+        let [RenderDiff::SetOverlaySet { name, set }] = frame.ops.as_slice() else {
+            panic!("one overlay op: {:?}", frame.ops);
+        };
+        assert_eq!(name, "guide");
+        assert_eq!(
+            set.items[0].shape,
+            OverlayShape::Segment {
+                from: [1.0, 2.0, 3.0],
+                to: [4.0, 5.0, 6.0]
+            }
+        );
+        assert_eq!(
+            (&set.items[1].shape, set.items[1].space),
+            (
+                &OverlayShape::Label {
+                    at: [1.0, 2.0, 3.0],
+                    text: "grip".to_owned()
+                },
+                OverlaySpace::Joint {
+                    entity: 9,
+                    joint: 3
+                }
+            )
+        );
+        assert!(matches!(
+            set.items[2].shape,
+            OverlayShape::Frustum {
+                fov_y_degrees: 60.0,
+                far: 10.0,
+                ..
+            }
+        ));
+        assert!(set.items.iter().all(|item| item.on_top));
         bridge.end_call();
     }
 

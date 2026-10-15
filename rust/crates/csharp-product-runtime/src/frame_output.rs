@@ -263,8 +263,8 @@ impl FrameOutput {
             .map(|(streamer, _)| Arc::downgrade(streamer));
         Arc::new(move |request: product_host::ProductHostCaptureRequest| {
             let captured = match streamer.as_ref().and_then(std::sync::Weak::upgrade) {
-                Some(streamer) => streamer.capture(request.size),
-                None => driver.capture(request.size),
+                Some(streamer) => streamer.capture(request.size, request.overlays),
+                None => driver.capture(request.size, request.overlays),
             };
             let payload = match request.format {
                 product_host::ProductHostFrameFormat::Png => {
@@ -289,6 +289,14 @@ impl FrameOutput {
                     payload,
                 },
                 cameras: Value::Array(cameras),
+                overlays: captured.overlays.map(|overlays| {
+                    Value::Object(
+                        overlays
+                            .into_iter()
+                            .map(|(name, revision)| (name, Value::from(revision)))
+                            .collect(),
+                    )
+                }),
             })
         })
     }

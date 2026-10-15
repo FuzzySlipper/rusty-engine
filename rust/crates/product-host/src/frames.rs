@@ -249,12 +249,14 @@ fn encode_frame(sequence: u64, frame: &ProductHostFrame) -> Arc<[u8]> {
 }
 
 /// A tool's capture request: the frame's size, or the output's when `None`,
-/// and its payload format.
+/// its payload format, and whether it draws what inspection shows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProductHostCaptureRequest {
     pub size: Option<(u32, u32)>,
     /// [`ProductHostFrameFormat::Png`] or [`ProductHostFrameFormat::Rgba8`].
     pub format: ProductHostFrameFormat,
+    /// `overlays=1`: draw the overlays and Debug layer inspection shows.
+    pub overlays: bool,
 }
 
 /// One captured frame, numbered by capture rather than by the stream, with
@@ -263,6 +265,9 @@ pub struct ProductHostCapture {
     pub sequence: u64,
     pub frame: ProductHostFrame,
     pub cameras: serde_json::Value,
+    /// The overlay sets drawn and their revisions, for a capture that drew
+    /// overlays.
+    pub overlays: Option<serde_json::Value>,
 }
 
 /// Draws a capture; the runtime supplies it for either render output.
@@ -280,7 +285,7 @@ pub(crate) fn capture_request(path: &str) -> Result<ProductHostCaptureRequest, &
         None if path == PRODUCT_HOST_FRAME_CAPTURE_PATH => "",
         _ => return Err("unknown capture route"),
     };
-    let (mut format, mut width, mut height) = (None, None, None);
+    let (mut format, mut width, mut height, mut overlays) = (None, None, None, None);
     for pair in query.split('&').filter(|pair| !pair.is_empty()) {
         let (name, value) = pair.split_once('=').ok_or("malformed capture query")?;
         let repeated = match name {
@@ -304,6 +309,13 @@ pub(crate) fn capture_request(path: &str) -> Result<ProductHostCaptureRequest, &
                 };
                 slot.replace(side).is_some()
             }
+            "overlays" => overlays
+                .replace(match value {
+                    "1" | "true" => true,
+                    "0" | "false" => false,
+                    _ => return Err("capture overlays is 1 or 0"),
+                })
+                .is_some(),
             _ => return Err("unknown capture query parameter"),
         };
         if repeated {
@@ -318,6 +330,7 @@ pub(crate) fn capture_request(path: &str) -> Result<ProductHostCaptureRequest, &
     Ok(ProductHostCaptureRequest {
         size,
         format: format.unwrap_or(ProductHostFrameFormat::Png),
+        overlays: overlays.unwrap_or(false),
     })
 }
 
@@ -389,6 +402,7 @@ mod tests {
             Ok(ProductHostCaptureRequest {
                 size: None,
                 format: ProductHostFrameFormat::Png,
+                overlays: false,
             })
         );
         assert_eq!(
@@ -396,8 +410,14 @@ mod tests {
             Ok(ProductHostCaptureRequest {
                 size: Some((640, 360)),
                 format: ProductHostFrameFormat::Rgba8,
+                overlays: false,
             })
         );
+        assert_eq!(
+            parse("?overlays=1").map(|request| request.overlays),
+            Ok(true)
+        );
+        assert!(parse("?overlays=yes").is_err());
         assert!(parse("?format=jpeg").is_err());
         assert!(parse("?width=640").is_err());
         assert!(parse("?width=0&height=1").is_err());

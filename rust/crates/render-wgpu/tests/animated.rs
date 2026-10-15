@@ -997,6 +997,86 @@ fn a_reported_pose_carries_each_ik_chains_target_and_shortfall() {
     );
 }
 
+/// The renderer's own inspection drawing on the character: its joint chain
+/// from the pose it evaluated, and each IK chain's target and shortfall
+/// segment, which it records for the overlay without a joint report.
+#[test]
+fn inspection_draws_the_joint_chain_and_ik_reach_of_an_instance() {
+    use render_host_contracts::{
+        RendererCompositionView, RendererViewComposition, RendererViewTarget, RendererViewport,
+    };
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let joint = |name| rig_joint(&body, name);
+    harness.apply(vec![
+        move_body(2.0),
+        RenderDiff::SetAnimatedMeshPose {
+            handle: RenderHandle::new(BODY),
+            pose: AnimatedMeshPose {
+                two_bone_ik: vec![TwoBoneIkConstraint {
+                    root: joint("RightArm"),
+                    mid: joint("RightForeArm"),
+                    end: joint("RightHand"),
+                    space: PoseSpace::World,
+                    target: [6.0, 1.4, 0.5],
+                    pole: [2.0, 1.0, -3.0],
+                    weight: 1.0,
+                }],
+                overrides: Vec::new(),
+                layers: Vec::new(),
+                report_joints: false,
+            },
+        },
+    ]);
+    let view = character_view();
+    harness.renderer.set_view_composition(
+        &RendererViewComposition {
+            cameras: vec![view.clone()],
+            targets: Vec::new(),
+            views: vec![RendererCompositionView {
+                id: "main".to_owned(),
+                camera_id: view.id.clone(),
+                target: RendererViewTarget::Primary,
+                viewport: RendererViewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                order: 0,
+                viewport_anchor: None,
+            }],
+            presentations: Vec::new(),
+        },
+        0.0,
+    );
+    let draw = |harness: &mut Harness| {
+        harness
+            .renderer
+            .render_view_composition(&harness.target, 0.0)
+            .overlay_lines
+    };
+    let mut shown = render_wgpu::OverlayShown::default();
+    shown.joints.insert(BODY);
+    harness.renderer.set_overlay_shown(shown.clone());
+    let joints = draw(&mut harness);
+    // Each rig joint below another draws its bone and a three-line cross.
+    let bones = body
+        .rig
+        .as_ref()
+        .unwrap()
+        .joints
+        .iter()
+        .filter(|joint| joint.parent.is_some())
+        .count() as u32;
+    assert_eq!(joints, bones * 4);
+    shown.ik.insert(BODY);
+    harness.renderer.set_overlay_shown(shown);
+    // Posed again to record the chain, then drawn: a cross and a segment.
+    assert_eq!(draw(&mut harness), joints + 4);
+}
+
 #[test]
 fn a_controller_created_again_for_another_target_drives_only_that_one() {
     use render_presentation::{

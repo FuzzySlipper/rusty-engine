@@ -430,7 +430,7 @@ fn run() -> Result<(), String> {
     let bake_ms = indirect.map(|_| ms(baked));
     // The first frame on a new target also compiles its pipelines.
     let captured = Instant::now();
-    let capture = driver.capture(Some((width, height)));
+    let capture = driver.capture(Some((width, height)), false);
     let capture_ms = ms(captured);
     std::fs::write(&out, encode_png(width, height, &capture.rgba)?)
         .map_err(|error| format!("{}: {error}", out.display()))?;

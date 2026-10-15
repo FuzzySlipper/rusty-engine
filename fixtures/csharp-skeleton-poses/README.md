@@ -22,6 +22,14 @@ Live-debug commands:
   the worst difference between that shortfall and the hand-to-target distance
   computed from the reported joints.
 - `pose.far <true|false>` moves the circle beyond the arm's reach.
+
+It publishes the overlay set `fixture.guide`, one item in each overlay space:
+a world segment along x, a box around the body in its model space, axes, a
+marker and a label on the right hand joint, and a marker at the centre of the
+camera's view. `engine.inspect.overlay show` draws it;
+`engine.inspect.overlay show joints <handle>` and `show ik <handle>` draw the
+Engine's joint chain and the arm's IK reach, with the body's handle from
+`engine.scene.objects`.
 - `pose.curl <0..1>` sets the finger curl weight.
 - `pose.reach <true|false>` turns the IK on or off.
 - `pose.reset` clears the worst-case readings.

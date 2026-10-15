@@ -1117,6 +1117,76 @@ pub struct NativeAppearanceChangesRequest {
     pub attachments: *const NativeMeshJointAttachment,
     pub attachments_len: usize,
 }
+/// What an overlay item draws.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeOverlayShape {
+    /// From `a` to `b`.
+    Segment = 0,
+    /// Three short crossed lines `size` long at `a`.
+    Marker = 1,
+    /// The x, y and z axes, `size` long, of the frame at `a` turned by
+    /// `rotation`, in red, green and blue.
+    Axes = 2,
+    /// A box at `a` with half extents `b`, turned by `rotation`.
+    WireBox = 3,
+    /// Three great circles about `a`, radius `size`.
+    WireSphere = 4,
+    /// A perspective frustum from `a` looking down its -z turned by
+    /// `rotation`; `lens` is (vertical fov degrees, aspect, near, far).
+    Frustum = 5,
+    /// `text` facing the viewer, anchored at `a`.
+    Label = 6,
+}
+
+/// The space an overlay item's values are in. `Model` and `Joint` name the
+/// node published for `entity` (and for `Joint` its rig joint `joint`, as
+/// drawn); `Camera` is the primary camera's space, where a viewmodel's
+/// parts are placed.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeOverlaySpace {
+    World = 0,
+    Model = 1,
+    Joint = 2,
+    Camera = 3,
+}
+
+/// One overlay item; `shape` says which values it reads. `on_top` draws it
+/// over the scene instead of depth-tested against it. `color` is linear
+/// RGBA.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeOverlayItem {
+    pub shape: NativeOverlayShape,
+    pub space: NativeOverlaySpace,
+    pub entity: u64,
+    pub joint: u32,
+    pub a: NativeVec3,
+    pub b: NativeVec3,
+    pub rotation: NativeQuat,
+    pub size: f32,
+    pub lens: NativeVec4,
+    pub color: NativeColor,
+    pub on_top: bool,
+    pub text: NativeUtf8Slice,
+}
+
+/// Replaces the named overlay set: inspection drawing on the Debug layer,
+/// drawn only while inspection shows it. An empty set removes it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeOverlaySetRequest {
+    pub name: NativeUtf8Slice,
+    pub items: *const NativeOverlayItem,
+    pub items_len: usize,
+}
+pub type NativePublishOverlaySet = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeOverlaySetRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativePublishAppearanceChanges = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     *const NativeAppearanceChangesRequest,

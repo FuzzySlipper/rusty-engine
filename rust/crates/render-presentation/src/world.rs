@@ -171,6 +171,8 @@ struct RetainedGraphics {
     /// The renderer settings the product selected at runtime; `None` while
     /// its manifest's initial values stand.
     renderer_settings: Option<RendererSettingsDescriptor>,
+    /// The named overlay sets (`SetOverlaySet`), none of them empty.
+    overlays: BTreeMap<String, Arc<OverlaySetDescriptor>>,
     controllers: BTreeMap<crate::AnimationProjectionHandle, crate::AnimationProjectionDescriptor>,
 }
 
@@ -524,6 +526,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetIndirectLight { indirect_light } if &self.retained.indirect_light == indirect_light)
                 || matches!(&op, RenderDiff::SetSkyLight { sky_light } if &self.retained.sky_light == sky_light)
                 || matches!(&op, RenderDiff::SetRendererSettings { settings } if self.retained.renderer_settings.as_ref() == Some(settings))
+                || matches!(&op, RenderDiff::SetOverlaySet { name, set } if self.retained.overlays.get(name).map_or(set.items.is_empty(), |current| current.as_ref() == set))
             {
                 continue;
             }
@@ -721,6 +724,8 @@ impl PresentationWorld {
             indirect_light,
             sky_light,
             renderer_settings,
+            // Overlays are inspection drawing, not part of a captured scene.
+            overlays: _,
             controllers,
         } = &*self.retained;
         if !live_nodes.contains_key(&source) {
@@ -1046,6 +1051,12 @@ impl PresentationWorld {
         }
         if let Some(settings) = self.retained.renderer_settings {
             ops.push(RenderDiff::SetRendererSettings { settings });
+        }
+        for (name, set) in &self.retained.overlays {
+            ops.push(RenderDiff::SetOverlaySet {
+                name: name.clone(),
+                set: set.as_ref().clone(),
+            });
         }
         // Creation requires an existing parent and parents cannot be changed,
         // so this traversal is acyclic by construction.
@@ -1662,6 +1673,15 @@ impl PresentationWorld {
             }
             RenderDiff::SetRendererSettings { settings } => {
                 self.retained.renderer_settings = Some(*settings);
+            }
+            RenderDiff::SetOverlaySet { name, set } => {
+                if set.items.is_empty() {
+                    self.retained.overlays.remove(name);
+                } else {
+                    self.retained
+                        .overlays
+                        .insert(name.clone(), Arc::new(set.clone()));
+                }
             }
         }
         Ok(())

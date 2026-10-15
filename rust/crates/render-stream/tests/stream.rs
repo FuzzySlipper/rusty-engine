@@ -205,7 +205,7 @@ fn frames_follow_viewers_and_simulation_time() {
     // A tool's capture publishes nothing to the stream; without a size it
     // takes the stream's last frame size.
     let latest = streamer.inspection().last_drawn.unwrap().sequence;
-    let default = streamer.capture(None);
+    let default = streamer.capture(None, false);
     assert_eq!(
         (default.width, default.height),
         (observed.width, observed.height)
@@ -234,9 +234,9 @@ fn frames_follow_viewers_and_simulation_time() {
     assert_eq!(drawn_ratio(), 1.6);
     // A capture at the stream's size draws that frame; one larger than the
     // device draws at its own fitted ratio and leaves the stream's.
-    let default = streamer.capture(None);
+    let default = streamer.capture(None, false);
     assert_eq!((default.width, default.height), (wide.width, wide.height));
-    let oversized = streamer.capture(Some((side * 2, 64)));
+    let oversized = streamer.capture(Some((side * 2, 64)), false);
     assert_eq!(oversized.width, side);
     assert_eq!(drawn_ratio(), 1.6);
     drop(streamer);

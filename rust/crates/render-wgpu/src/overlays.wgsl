@@ -1,0 +1,26 @@
+// Overlay lines: positions already in the pass's world (or viewmodel)
+// coordinates, drawn with the view's projection from the frame uniform.
+
+struct Frame {
+    view_proj: mat4x4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> frame: Frame;
+
+struct LineVarying {
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+}
+
+@vertex
+fn vs_line(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>) -> LineVarying {
+    var out: LineVarying;
+    out.position = frame.view_proj * vec4<f32>(position, 1.0);
+    out.color = color;
+    return out;
+}
+
+@fragment
+fn fs_line(in: LineVarying) -> @location(0) vec4<f32> {
+    return in.color;
+}

@@ -537,6 +537,7 @@ impl Renderer {
             camera::descriptor_pose(camera),
             camera,
             PassStart::Target,
+            false,
         );
         let mut stats = FrameStats {
             lights: self.lights.world.count,
@@ -553,6 +554,7 @@ impl Renderer {
         pose: CameraPose,
         camera: &RendererCompositionCamera,
         start: PassStart,
+        overlays: bool,
     ) -> ViewStats {
         let clear = self.environment_clear();
         let world_camera = camera::camera_matrices(pose, &camera.projection, area.aspect());
@@ -567,6 +569,7 @@ impl Renderer {
             sky: true,
             backdrop: None,
             camera_id: Some(camera.id.as_str()),
+            overlays,
         });
         self.capture_sky(&world_camera, Some(camera.id.as_str()), clear);
         // Depth-layer labels test the world's depth before the viewmodel
@@ -588,6 +591,7 @@ impl Renderer {
             sky: false,
             backdrop: None,
             camera_id: None,
+            overlays,
         });
         let top_labels = self.draw_labels(target, area, &labels, LabelPass::OnTop);
         let mut stats = world + viewmodel;
@@ -626,6 +630,23 @@ impl Renderer {
                     .unwrap_or_else(|| camera::descriptor_pose(camera)),
             );
         }
+
+        // Overlays resolve once a frame, for the first primary view's camera.
+        let primary_camera = plan.steps.iter().find_map(|step| match step {
+            PrimaryStep::View { view, camera } => Some(crate::overlays::OverlayCamera {
+                pose: poses[*camera],
+                projection: composition.cameras[*camera].projection,
+                viewmodel_fov_y_degrees: composition.cameras[*camera].viewmodel_fov_y_degrees,
+                aspect: pixel_viewport(
+                    &composition.views[*view].viewport,
+                    primary.width,
+                    primary.height,
+                )
+                .aspect(),
+            }),
+            PrimaryStep::Presentation { .. } => None,
+        });
+        self.resolve_overlays(primary_camera);
 
         let clear = self.environment_clear();
         for (target_index, views) in &plan.offscreen {
@@ -675,6 +696,7 @@ impl Renderer {
                     sky: true,
                     backdrop: None,
                     camera_id: Some(composition.cameras[*camera].id.as_str()),
+                    overlays: false,
                 });
                 stats.offscreen_views += 1;
             }
@@ -712,6 +734,7 @@ impl Renderer {
                         pose,
                         &composition.cameras[*camera],
                         start,
+                        true,
                     );
                 }
                 PrimaryStep::Presentation {

@@ -564,6 +564,10 @@ impl ProductHostDebugCatalog {
                 "engine.renderer.frame",
                 "Draw one frame now, even on demand, and name its frame sequence and step",
             ),
+            (
+                "engine.inspect.overlay",
+                "Read or change what inspection draws: engine.inspect.overlay [list] | show|hide [sets | set NAME | debug-layer | camera | joints HANDLE | bounds HANDLE | ik HANDLE]; bare show shows every set and the Debug layer, bare hide hides everything",
+            ),
         ] {
             if self.commands.iter().any(|command| command.name == name) {
                 continue;

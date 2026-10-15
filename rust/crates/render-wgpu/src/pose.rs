@@ -47,17 +47,18 @@ pub(crate) struct IkSolve {
 /// The sampled `locals` under `pose`: IK in order, then overrides, then
 /// layers, composed. `rig` maps rig joint indices to nodes; `world` places the
 /// instance, for `World` values. A joint the rig does not name is skipped.
-/// For a pose that reports its joints, `solves` receives each IK chain in
-/// order.
+/// `solves`, when given, receives each IK chain in order.
 pub(crate) fn controlled(
     model: &GlbModel,
     rig: &[Option<usize>],
     mut locals: Vec<Trs>,
     pose: &AnimatedMeshPose,
     world: Mat4,
-    solves: &mut Vec<IkSolve>,
+    mut solves: Option<&mut Vec<IkSolve>>,
 ) -> Vec<Mat4> {
-    solves.clear();
+    if let Some(solves) = solves.as_deref_mut() {
+        solves.clear();
+    }
     if !pose.controls() {
         return compose(model, &locals);
     }
@@ -78,7 +79,7 @@ pub(crate) fn controlled(
             }
             _ => false,
         };
-        if pose.report_joints {
+        if let Some(solves) = solves.as_deref_mut() {
             solves.push(IkSolve {
                 target,
                 end,
@@ -417,7 +418,7 @@ mod tests {
         pose: &AnimatedMeshPose,
         world: Mat4,
     ) -> Vec<Mat4> {
-        super::controlled(model, rig, locals, pose, world, &mut Vec::new())
+        super::controlled(model, rig, locals, pose, world, None)
     }
 
     fn position(posed: &[Mat4], node: usize) -> Vec3 {
@@ -487,16 +488,15 @@ mod tests {
     }
 
     #[test]
-    fn a_reporting_pose_records_each_chains_target_and_whether_it_straightened() {
+    fn a_recorded_pose_records_each_chains_target_and_whether_it_straightened() {
         let model = arm();
         let world = Mat4::from_translation(Vec3::new(3.0, 0.0, 0.0));
         let mut pose = ik(Vec3::new(1.0, 1.0, 0.0), Vec3::Z, 1.0);
         pose.two_bone_ik.push(pose.two_bone_ik[0].clone());
         pose.two_bone_ik[1].space = PoseSpace::World;
         pose.two_bone_ik[1].target = [3.0, 5.0, 0.0];
-        pose.report_joints = true;
         let mut solves = Vec::new();
-        super::controlled(&model, &RIG, rest(&model), &pose, world, &mut solves);
+        super::controlled(&model, &RIG, rest(&model), &pose, world, Some(&mut solves));
         assert_eq!(
             solves,
             [
@@ -512,12 +512,9 @@ mod tests {
                 },
             ]
         );
-        pose.report_joints = false;
-        super::controlled(&model, &RIG, rest(&model), &pose, world, &mut solves);
-        assert!(
-            solves.is_empty(),
-            "only a reporting pose records its chains"
-        );
+        pose.two_bone_ik.clear();
+        super::controlled(&model, &RIG, rest(&model), &pose, world, Some(&mut solves));
+        assert!(solves.is_empty(), "a pose without IK records no chains");
     }
 
     #[test]

@@ -1598,6 +1598,7 @@ pub struct NativeGraphicsApi {
     pub destroy_appearance: NativeDestroyAppearance,
     pub publish_snapshot: NativePublishAppearanceSnapshot,
     pub publish_changes: NativePublishAppearanceChanges,
+    pub publish_overlay_set: NativePublishOverlaySet,
     pub create_light: NativeCreateLight,
     pub update_light: NativeUpdateLight,
     pub replace_light: NativeReplaceLight,

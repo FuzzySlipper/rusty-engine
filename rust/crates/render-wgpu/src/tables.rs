@@ -424,6 +424,9 @@ pub(crate) struct NodeRow {
     pub world_layer: RenderLayer,
     /// Whether the node's own parts cast shadows; not inherited.
     pub shadow_casting: ShadowCasting,
+    /// The entity the node was published for (`source_entity`), which
+    /// overlay items name.
+    pub entity: Option<u64>,
     pub kind: NodeKind,
     pub parts: Vec<PartId>,
     /// The `names` ids of the assets and materials its parts were derived
@@ -567,6 +570,8 @@ pub(crate) struct Parts {
     pub runs: HashMap<PartId, Run>,
     /// Runs whose copies were written since their bounds were.
     dirty_runs: HashSet<PartId>,
+    /// Debug-layer parts draw: inspection shows the Debug layer.
+    debug_shown: bool,
 }
 
 impl Parts {
@@ -644,6 +649,7 @@ impl Parts {
         layer: RenderLayer,
         casts_shadows: bool,
     ) {
+        let shown = shown && (layer != RenderLayer::Debug || self.debug_shown);
         let world = &match self.state[id as usize].local {
             Some(local) => *world * local,
             None => *world,
@@ -695,6 +701,18 @@ impl Parts {
                 self.moved.insert(id);
             }
         }
+    }
+
+    /// Whether Debug-layer parts draw; their nodes write them again.
+    pub fn set_debug_shown(&mut self, shown: bool) {
+        self.debug_shown = shown;
+    }
+
+    /// A live part's world bounds.
+    pub fn world_bounds(&self, id: PartId) -> Option<Aabb> {
+        self.meta.get(id as usize)?.as_ref()?;
+        let bounds = self.state[id as usize].world_bounds;
+        (!bounds.is_empty()).then_some(bounds)
     }
 
     /// Make `ids` (inserted, one mesh group's copies) a run led by the

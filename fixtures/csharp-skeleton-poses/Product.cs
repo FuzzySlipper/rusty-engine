@@ -26,6 +26,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const float FlipStepMetres = 0.1f;
     private static readonly Quaternion FingerCurl = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2);
     private static readonly string[] Finger = ["RightHandIndex1", "RightHandIndex2", "RightHandIndex3"];
+    /// <summary>The overlay set the fixture publishes: one item in each overlay space.</summary>
+    private const string GuideSet = "fixture.guide";
+    private static readonly Color GuideColor = new(1, 0.2f, 1, 1);
+    private static readonly Color HandColor = new(0.2f, 1, 1, 1);
 
     private readonly IEngineContext engine;
     private readonly Camera camera;
@@ -68,6 +72,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         hand = AnimationJoints.IndexOf(rig.Span, "RightHand");
         finger = [.. Finger.Select(id => AnimationJoints.IndexOf(rig.Span, id))];
         engine.Animation.SetPose(AnimationPoseRequest.ReportOnly(instance));
+        // Drawn only while inspection shows it: engine.inspect.overlay show.
+        engine.Graphics.PublishOverlaySet(new(GuideSet, [
+            OverlayItem.Segment(OverlayPlace.World, new(-1, 0, 0), new(1, 0, 0), GuideColor),
+            OverlayItem.WireBox(OverlayPlace.Model(BodyId), new(0, 1.9f, 0), new(1.8f, 1.9f, 0.55f), Quaternion.Identity, GuideColor),
+            OverlayItem.Axes(OverlayPlace.AtJoint(BodyId, hand), Vector3.Zero, Quaternion.Identity, 0.15f, onTop: true),
+            OverlayItem.Marker(OverlayPlace.AtJoint(BodyId, hand), Vector3.Zero, 0.08f, HandColor, onTop: true),
+            OverlayItem.Label(OverlayPlace.AtJoint(BodyId, hand), new(0, 0.12f, 0), "right hand", HandColor, onTop: true),
+            OverlayItem.Marker(OverlayPlace.Camera, new(0, 0, -1), 0.02f, GuideColor, onTop: true),
+        ]));
     }
 
     public ProductUpdateResult Update(ProductUpdate update)

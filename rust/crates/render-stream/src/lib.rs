@@ -198,9 +198,9 @@ impl FrameStreamer {
 
     /// A tool's capture ([`SceneDriver::capture`]), at `size` or else the
     /// stream's last frame size.
-    pub fn capture(&self, size: Option<(u32, u32)>) -> Capture {
+    pub fn capture(&self, size: Option<(u32, u32)>, overlays: bool) -> Capture {
         let output_size = self.shared.state().output_size;
-        self.driver.capture(size.or(output_size))
+        self.driver.capture(size.or(output_size), overlays)
     }
 
     pub fn inspection(&self) -> StreamInspection {

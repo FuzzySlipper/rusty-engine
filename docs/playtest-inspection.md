@@ -23,6 +23,7 @@ Native live-debug commands (require the ordinary live-debug opt-in):
 - `engine.scene.objects`, `engine.scene.object`, `engine.scene.composition`
   and `engine.scene.resources`: readings of the committed scene
   ([scene readouts](#scene-readouts)).
+- `engine.inspect.overlay`: what inspection draws ([overlays](#overlays)).
 
 A playtest harness drives the runtime directly: debug commands through
 `/__rusty/product/runtime/debug/execute`, input through a
@@ -172,6 +173,59 @@ mounts a tree over these commands: roots first, a node's children read when it
 is expanded, the selected object's facts and committed description, and Refresh
 to read them again. It holds no product state.
 `fixtures/csharp-skeleton-poses` mounts it.
+
+## Overlays
+
+Overlays are inspection drawing: lines, shapes and labels over the primary
+views, drawn only while inspection shows them. While it shows nothing,
+nothing is resolved, uploaded or drawn (`FrameStats.overlay_lines` is 0), and
+nodes on `RenderLayer.Debug` are hidden too.
+
+A product publishes named sets with `Graphics.PublishOverlaySet(new(name,
+items))`. A set stays until replaced; an empty one removes it. Publishing the
+same items again costs nothing. Each `OverlayItem` is placed in an
+`OverlayPlace`:
+
+- `World`;
+- `Model(entity)`: the node the entity's appearance published;
+- `AtJoint(entity, joint)`: a rig joint of its animated mesh, as drawn, so an
+  item on a hand follows the pose. The joint's position and orientation place
+  it, in metres; a rig's joint scale (an armature's unit conversion) does not;
+- `Camera`: the primary camera's space, x right, y up, looking down -z, where
+  a viewmodel's parts are placed. Items on a viewmodel node or in camera space
+  draw with the viewmodel's projection.
+
+The shapes are `Segment`, `Marker` (three crossed lines), `Axes` (red, green
+and blue), `WireBox`, `WireSphere`, `Frustum` and `Label`. Each has a linear
+colour, and `onTop` draws it over the scene instead of depth-tested against
+it. Labels use the Engine's billboard text; a label in viewmodel or camera
+space draws on top. An item whose entity or joint draws nothing is not drawn.
+
+The renderer draws its own inspection from what it already evaluated:
+
+- `joints HANDLE`: an animated instance's joint chain, each joint with a
+  cross, from the pose it drew;
+- `bounds HANDLE`: the world box around a node's parts, the bounds the
+  renderer culls with;
+- `ik HANDLE`: each two-bone IK chain's target as a cross and the segment
+  from the drawn end joint to it, green when reached and red when the chain
+  straightened short of it (the solve [`IkChains`](skeleton-poses.md#writing-and-reading)
+  reports);
+- `camera`: the primary camera's frustum and axes, to see from an
+  [observer](#time-drawing-and-camera).
+
+Handles are the ones `engine.scene.objects` lists. `engine.inspect.overlay`
+reads what is shown and the product's sets (items, revision, shown);
+`engine.inspect.overlay show|hide` with `sets`, `set NAME`, `debug-layer`,
+`camera`, `joints H`, `bounds H` or `ik H` changes one thing. A bare `show`
+shows every set and the Debug layer; a bare `hide` hides everything. What is
+shown is the runtime's, shared by every page, and survives a rebaseline but
+not a restage.
+
+Overlays draw in the player view and from the `engine.renderer.camera`
+observer. Captures leave them out unless they ask
+([captures](presentation-capture.md#captures)).
+`fixtures/csharp-skeleton-poses` publishes a set with an item in each space.
 
 ## Time, drawing and camera
 

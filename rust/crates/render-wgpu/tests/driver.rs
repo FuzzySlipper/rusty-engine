@@ -122,14 +122,14 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
 
     // A tool's capture draws at its own size and counts its own sequence;
     // with no size and no window it draws at 1280x720.
-    let capture = scene.capture(Some((40, 20)));
+    let capture = scene.capture(Some((40, 20)), false);
     assert_eq!(
         (capture.width, capture.height, capture.rgba.len()),
         (40, 20, 40 * 20 * 4)
     );
     assert_eq!((capture.step, capture.held, capture.sequence), (3, true, 1));
     assert!(capture.cameras[0].observer, "it draws what an output draws");
-    let default = scene.capture(None);
+    let default = scene.capture(None, false);
     assert_eq!(
         (default.width, default.height, default.sequence),
         (1280, 720, 2)

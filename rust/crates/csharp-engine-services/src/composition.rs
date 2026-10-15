@@ -113,6 +113,7 @@ fn engine_api(
         authored_content: crate::authored_content::api(authored_content_bridge),
         graphics: NativeGraphicsApi {
             publish_changes: crate::appearance::publish_appearance_changes,
+            publish_overlay_set: crate::appearance::publish_overlay_set,
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,
             read_texture_info: crate::appearance::read_texture_info,
