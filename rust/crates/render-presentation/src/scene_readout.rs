@@ -71,7 +71,42 @@ pub struct SceneObjectDetail<'a> {
     /// The pose controls in force on an animated mesh.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pose: Option<&'a AnimatedMeshPose>,
+    /// A mesh's material slots as committed: the asset's, with the
+    /// instance's overrides over them, each resolved to its retained
+    /// material, its shader features and any product shader.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<SceneMaterialBinding<'a>>,
     pub child_handles: Vec<u64>,
+}
+
+/// One material slot of a mesh as committed.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneMaterialBinding<'a> {
+    pub slot: u16,
+    pub material: &'a str,
+    /// The instance overrides the asset's material in this slot.
+    pub overridden: bool,
+    /// The retained material; `None` while it is not defined.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub descriptor: Option<&'a RenderMaterialDescriptor>,
+    /// The standard shader features the material turns on, by keyword.
+    pub features: Vec<&'static str>,
+    /// The product shader that shades it in place of the standard one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shader: Option<SceneShader<'a>>,
+}
+
+/// A product shader as committed: its identity and keywords.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneShader<'a> {
+    pub id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<&'a str>,
+    pub keywords: &'a [String],
+    /// The shader is not defined in the committed scene.
+    pub missing: bool,
 }
 
 /// The descriptor a node was committed with.
@@ -174,6 +209,7 @@ impl PresentationWorld {
             material_override: node.material_override.as_ref(),
             material_parameters: &node.material_parameters,
             morph_focus: node.morph_focus,
+            materials: self.material_bindings(node),
             pose: matches!(node.kind, NodeKind::AnimatedMesh(_))
                 .then_some(&node.pose)
                 .filter(|pose| **pose != AnimatedMeshPose::default()),
@@ -243,6 +279,14 @@ impl PresentationWorld {
         resources
     }
 
+    /// Where a committed node's origin is in the world, composed through its
+    /// parents: the one composition `entity_world_position` and the readings
+    /// share.
+    pub(super) fn scene_world_translation(&self, handle: RenderHandle) -> Option<[f32; 3]> {
+        let world = self.composed(handle)?;
+        Some([world[3][0], world[3][1], world[3][2]])
+    }
+
     /// `handle`'s world matrix, composed through its parents.
     fn composed(&self, handle: RenderHandle) -> Option<Mat4> {
         let mut world = IDENTITY;
@@ -276,9 +320,83 @@ impl PresentationWorld {
         RenderLayer::Scene
     }
 
+    /// A mesh node's slots: its asset's materials with the instance's
+    /// overrides over them.
+    fn material_bindings<'a>(
+        &'a self,
+        node: &'a PresentationNode,
+    ) -> Vec<SceneMaterialBinding<'a>> {
+        let retained = &*self.retained;
+        let (asset_slots, overrides): (&[MeshMaterialSlot], &[MeshMaterialSlot]) = match &node.kind
+        {
+            NodeKind::StaticMesh(instance) => (
+                retained
+                    .static_meshes
+                    .get(&instance.asset)
+                    .map_or(&[], |asset| &asset.material_slots[..]),
+                &instance.material_overrides,
+            ),
+            NodeKind::AnimatedMesh(instance) => (
+                retained
+                    .animated_meshes
+                    .get(&instance.asset)
+                    .map_or(&[], |asset| &asset.material_slots[..]),
+                &instance.material_overrides,
+            ),
+            NodeKind::VoxelObject(instance) => (&[], &instance.material_overrides),
+            NodeKind::Scatter(patch) => (
+                retained
+                    .static_meshes
+                    .get(&patch.asset)
+                    .map_or(&[], |asset| &asset.material_slots[..]),
+                &patch.material_overrides,
+            ),
+            _ => return Vec::new(),
+        };
+        let mut slots: std::collections::BTreeMap<u16, (&str, bool)> = asset_slots
+            .iter()
+            .map(|slot| (slot.slot, (slot.material.as_str(), false)))
+            .collect();
+        for slot in overrides {
+            slots.insert(slot.slot, (slot.material.as_str(), true));
+        }
+        slots
+            .into_iter()
+            .map(|(slot, (material, overridden))| {
+                let descriptor = retained
+                    .materials
+                    .get(material)
+                    .map(|material| material.as_ref());
+                SceneMaterialBinding {
+                    slot,
+                    material,
+                    overridden,
+                    descriptor,
+                    features: descriptor.map(material_features).unwrap_or_default(),
+                    shader: descriptor
+                        .and_then(|material| material.shader.as_ref())
+                        .map(|shader| {
+                            let defined = retained.shaders.get(&shader.shader);
+                            SceneShader {
+                                id: &shader.shader,
+                                path: defined.map(|defined| defined.path.as_str()),
+                                keywords: defined.map_or(&[], |defined| &defined.keywords[..]),
+                                missing: defined.is_none(),
+                            }
+                        }),
+                }
+            })
+            .collect()
+    }
+
     fn local_bounds(&self, node: &PresentationNode) -> Option<([f32; 3], [f32; 3])> {
         const HALF: f32 = 0.5;
         match &node.kind {
+            // A replaced payload is what the node draws.
+            NodeKind::Primitive(_) if node.mesh_payload.is_some() => node
+                .mesh_payload
+                .as_ref()
+                .map(|payload| (payload.bounds.min, payload.bounds.max)),
             NodeKind::Primitive(primitive) => match primitive.geometry {
                 Geometry::Group | Geometry::Point => None,
                 Geometry::Cube | Geometry::Sphere => Some(([-HALF; 3], [HALF; 3])),
@@ -287,12 +405,7 @@ impl PresentationWorld {
                     std::array::from_fn(|axis| a[axis].min(b[axis])),
                     std::array::from_fn(|axis| a[axis].max(b[axis])),
                 )),
-            }
-            .or_else(|| {
-                node.mesh_payload
-                    .as_ref()
-                    .map(|payload| (payload.bounds.min, payload.bounds.max))
-            }),
+            },
             NodeKind::StaticMesh(instance) => self
                 .retained
                 .static_meshes
@@ -306,6 +419,35 @@ impl PresentationWorld {
             _ => None,
         }
     }
+}
+
+/// The standard shader features a material turns on, by the keywords the
+/// standard shader names them with.
+fn material_features(material: &RenderMaterialDescriptor) -> Vec<&'static str> {
+    [
+        (material.unlit, "UNLIT"),
+        (material.flat_shading, "FLAT_SHADING"),
+        (material.keep_dry, "KEEP_DRY"),
+        (material.wind.is_some(), "WIND"),
+        (material.water.is_some(), "WATER"),
+        (material.normal_map.is_some(), "NORMAL_MAP"),
+        (material.emission_map.is_some(), "EMISSION_MAP"),
+        (material.occlusion_map.is_some(), "OCCLUSION_MAP"),
+        (material.triplanar.is_some(), "TRIPLANAR"),
+        (material.stochastic_tiling.is_some(), "STOCHASTIC_TILING"),
+        (material.terrain_layers.is_some(), "TERRAIN_LAYERS"),
+        (material.voxel_surface.is_some(), "VOXEL_SURFACE"),
+        (material.double_sided, "DOUBLE_SIDED"),
+        (
+            material.alpha_mode != MaterialAlphaModeDescriptor::Opaque,
+            "ALPHA",
+        ),
+        (material.translucent_shadow, "TRANSLUCENT_SHADOW"),
+        (material.shader.is_some(), "PRODUCT_SHADER"),
+    ]
+    .into_iter()
+    .filter_map(|(on, name)| on.then_some(name))
+    .collect()
 }
 
 fn kind_name(kind: &NodeKind) -> &'static str {
@@ -528,6 +670,170 @@ mod tests {
             scale: [scale; 3],
             ..Transform::IDENTITY
         }
+    }
+
+    #[test]
+    fn an_entity_position_and_a_scene_reading_compose_alike() {
+        let mut world = PresentationWorld::default();
+        let mut parent = RenderNode::new(Geometry::Group);
+        // Not a unit quaternion: both readings normalize it, as the renderer does.
+        parent.transform.rotation = [0.0, 0.0, 2.0, 0.0];
+        let mut child = RenderNode::new(Geometry::Cube);
+        child.transform.translation = [1.0, 0.0, 0.0];
+        child.metadata.source_entity = Some(5);
+        world
+            .apply(RenderFrameDiff::from_ops(vec![
+                RenderDiff::Create {
+                    handle: RenderHandle::new(1),
+                    parent: None,
+                    node: parent,
+                },
+                RenderDiff::Create {
+                    handle: RenderHandle::new(2),
+                    parent: Some(RenderHandle::new(1)),
+                    node: child,
+                },
+            ]))
+            .unwrap();
+        let read = world
+            .scene_object(RenderHandle::new(2))
+            .unwrap()
+            .world
+            .translation;
+        let entity = world.entity_world_position(5).unwrap();
+        assert_eq!(read, entity);
+        assert!(
+            (entity[0] + 1.0).abs() < 1e-6 && entity[1].abs() < 1e-6,
+            "{entity:?}"
+        );
+    }
+
+    #[test]
+    fn a_replaced_payload_bounds_the_primitive_it_replaced() {
+        let mut world = PresentationWorld::default();
+        let mut payload = super::super::tests::static_mesh("mesh/payload").payload;
+        payload.bounds = MeshBoundsDescriptor {
+            min: [0.0; 3],
+            max: [10.0, 20.0, 30.0],
+        };
+        world
+            .apply(RenderFrameDiff::from_ops(vec![
+                create(1, None, Geometry::Cube, Transform::IDENTITY),
+                RenderDiff::ReplaceMeshPayload {
+                    handle: RenderHandle::new(1),
+                    payload,
+                },
+            ]))
+            .unwrap();
+        let bounds = world
+            .scene_object(RenderHandle::new(1))
+            .unwrap()
+            .bounds
+            .unwrap();
+        assert_eq!(
+            (bounds.local_min, bounds.local_max),
+            ([0.0; 3], [10.0, 20.0, 30.0])
+        );
+    }
+
+    #[test]
+    fn an_object_detail_resolves_its_material_slots_features_and_shader() {
+        let material = |id: &str, extra: serde_json::Value| -> RenderMaterialDescriptor {
+            let mut value = serde_json::json!({
+                "id": id,
+                "color": [1.0, 1.0, 1.0, 1.0],
+                "texture": null,
+                "roughness": 0.5,
+                "textureTint": [1.0, 1.0, 1.0, 1.0],
+                "emissionColor": [0.0, 0.0, 0.0],
+                "emissionIntensity": 0.0,
+                "uvStrategy": "flat",
+            });
+            value
+                .as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            serde_json::from_value(value).unwrap()
+        };
+        let mut asset = super::super::tests::static_mesh("mesh/crate");
+        asset.material_slots = vec![
+            MeshMaterialSlot {
+                slot: 0,
+                material: "material/plain".to_owned(),
+            },
+            MeshMaterialSlot {
+                slot: 1,
+                material: "material/plain".to_owned(),
+            },
+        ];
+        let mut world = PresentationWorld::default();
+        world
+            .apply(RenderFrameDiff::from_ops(vec![
+                RenderDiff::DefineShader {
+                    shader: ShaderDescriptor {
+                        id: "shader/dissolve".to_owned(),
+                        path: "shaders/dissolve.wgsl".to_owned(),
+                        source: "fn x() {}".to_owned(),
+                        keywords: vec!["DISSOLVE".to_owned()],
+                    },
+                },
+                RenderDiff::DefineMaterial {
+                    material: material("material/plain", serde_json::json!({})),
+                },
+                RenderDiff::DefineMaterial {
+                    material: material(
+                        "material/ghost",
+                        serde_json::json!({
+                            "unlit": true,
+                            "alphaMode": { "kind": "blend" },
+                            "shader": { "shader": "shader/dissolve", "parameters": [[0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0]] },
+                        }),
+                    ),
+                },
+                RenderDiff::DefineStaticMesh { asset },
+                RenderDiff::CreateStaticMeshInstance {
+                    handle: RenderHandle::new(1),
+                    parent: None,
+                    instance: StaticMeshInstanceDescriptor {
+                        asset: "mesh/crate".to_owned(),
+                        transform: Transform::IDENTITY,
+                        visible: true,
+                        material_overrides: vec![MeshMaterialSlot {
+                            slot: 1,
+                            material: "material/ghost".to_owned(),
+                        }],
+                        metadata: RenderMetadata::default(),
+                        layer: RenderLayer::Scene,
+                        shadow_casting: Default::default(),
+                    },
+                },
+            ]))
+            .unwrap();
+        let detail = world.scene_object_detail(RenderHandle::new(1)).unwrap();
+        let [plain, ghost] = detail.materials.as_slice() else {
+            panic!("{:?}", detail.materials)
+        };
+        assert_eq!(
+            (
+                plain.slot,
+                plain.material,
+                plain.overridden,
+                plain.features.len()
+            ),
+            (0, "material/plain", false, 0)
+        );
+        assert_eq!(
+            (ghost.slot, ghost.material, ghost.overridden),
+            (1, "material/ghost", true)
+        );
+        assert_eq!(ghost.features, ["UNLIT", "ALPHA", "PRODUCT_SHADER"]);
+        let shader = ghost.shader.as_ref().unwrap();
+        assert_eq!(
+            (shader.id, shader.keywords, shader.missing),
+            ("shader/dissolve", &["DISSOLVE".to_owned()][..], false)
+        );
+        let json = serde_json::to_value(&detail).unwrap();
+        assert_eq!(json["materials"][1]["descriptor"]["unlit"], true);
     }
 
     #[test]

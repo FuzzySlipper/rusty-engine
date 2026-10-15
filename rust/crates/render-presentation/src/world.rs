@@ -61,33 +61,6 @@ impl NodeKind {
     }
 }
 
-/// `translation + rotation * (scale * point)`, rotation an `[x, y, z, w]`
-/// unit quaternion.
-fn transform_point(transform: &Transform, point: [f32; 3]) -> [f32; 3] {
-    let scaled = [
-        point[0] * transform.scale[0],
-        point[1] * transform.scale[1],
-        point[2] * transform.scale[2],
-    ];
-    let [x, y, z, w] = transform.rotation;
-    // v' = v + 2w(q × v) + 2 q × (q × v)
-    let cross = |a: [f32; 3], b: [f32; 3]| {
-        [
-            a[1] * b[2] - a[2] * b[1],
-            a[2] * b[0] - a[0] * b[2],
-            a[0] * b[1] - a[1] * b[0],
-        ]
-    };
-    let q = [x, y, z];
-    let t = cross(q, scaled).map(|value| value * 2.0);
-    let u = cross(q, t);
-    [
-        transform.translation[0] + scaled[0] + w * t[0] + u[0],
-        transform.translation[1] + scaled[1] + w * t[1] + u[1],
-        transform.translation[2] + scaled[2] + w * t[2] + u[2],
-    ]
-}
-
 #[derive(Debug, Clone, PartialEq)]
 struct PresentationNode {
     parent_joint: Option<String>,
@@ -462,20 +435,8 @@ impl PresentationWorld {
     /// Of several nodes published for one entity, the lowest handle answers.
     pub fn entity_world_position(&self, entity: u64) -> Option<[f32; 3]> {
         let node = *self.retained.entity_nodes.get(&entity)?.first()?;
-        let mut cursor = Some(node);
-        let mut position = [0.0; 3];
-        // Parents are admitted acyclic; the bound only stops a corrupt chain.
-        for _ in 0..=self.retained.nodes.len() {
-            let Some(handle) = cursor else {
-                return Some(position);
-            };
-            let node = self.retained.nodes.get(&handle)?;
-            if let Some(transform) = node.kind.transform() {
-                position = transform_point(transform, position);
-            }
-            cursor = node.parent;
-        }
-        None
+        // The same composition the scene readouts report (`scene_readout.rs`).
+        self.scene_world_translation(node)
     }
 
     /// Apply admitted graphics in order to the caller-owned candidate.
@@ -1696,7 +1657,7 @@ mod tests {
         RenderFrameDiff::from_ops(ops)
     }
 
-    fn static_mesh(asset: &str) -> StaticMeshAsset {
+    pub(super) fn static_mesh(asset: &str) -> StaticMeshAsset {
         StaticMeshAsset {
             asset: asset.to_string(),
             payload: MeshPayloadDescriptor {

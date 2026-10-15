@@ -156,7 +156,11 @@ carries the world `revision` it read.
   `total` and `pages` say how many matched.
 - `engine.scene.object HANDLE` adds the committed description (the node's
   descriptor as published), material override and instance parameters, the
-  pose controls in force on an animated mesh, and the child handles.
+  pose controls in force on an animated mesh, and the child handles. A mesh's
+  `materials` lists each slot as committed (the asset's material, or the
+  instance's override over it) with its retained material, the standard
+  shader features it turns on (`UNLIT`, `WIND`, `ALPHA`, …) and any product
+  shader with its path and keywords.
 - `engine.scene.composition` answers the cameras, targets, views (with any
   viewport anchor name) and presentations the product committed. The
   `engine.renderer.camera` observer is the renderer's, not the product's, so
@@ -167,7 +171,8 @@ carries the world `revision` it read.
 
 Limits of a reading:
 
-- A world transform is composed when asked, through the parents' transforms.
+- A world transform is composed when asked, through the parents' transforms,
+  as the presentation world places an entity for audio and particles.
   A node that hangs from a joint (`parentJoint`) leaves out the joint's pose,
   which only the renderer evaluates; read the joint with
   [`ReadJointPose`](skeleton-poses.md#writing-and-reading).
