@@ -269,8 +269,8 @@ pub struct ProductHostScatterSelectionStatistics {
 
 /// The occlusion test of the last world view's selected copies
 /// (`RendererSettings` `OcclusionCulling`): its farthest-depth pyramid's
-/// level-0 size and levels, and whether the ambient occlusion pre-pass's
-/// depth served (no depth pass of its own).
+/// level-0 size and levels, and the samples per pixel of the occluder depth
+/// it was reduced from (the world pass's).
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductHostOcclusionStatistics {
@@ -278,7 +278,7 @@ pub struct ProductHostOcclusionStatistics {
     pub refused: Option<String>,
     pub size: [u32; 2],
     pub levels: u32,
-    pub shared_depth: bool,
+    pub samples: u32,
 }
 
 /// The impostor levels' baked views: how many meshes are baked, their

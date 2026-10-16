@@ -248,10 +248,10 @@ overflowedClusters: number, };
 /**
  * The occlusion test of the last world view's selected copies
  * (`RendererSettings` `OcclusionCulling`): its farthest-depth pyramid's
- * level-0 size and levels, and whether the ambient occlusion pre-pass's
- * depth served (no depth pass of its own).
+ * level-0 size and levels, and the samples per pixel of the occluder depth
+ * it was reduced from (the world pass's).
  */
-export type ProductHostOcclusionStatistics = { enabled: boolean, refused: string | null, size: [number, number], levels: number, sharedDepth: boolean, };
+export type ProductHostOcclusionStatistics = { enabled: boolean, refused: string | null, size: [number, number], levels: number, samples: number, };
 
 /**
  * Closed operation identities returned by direct runtime calls.

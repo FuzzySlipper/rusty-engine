@@ -1008,7 +1008,7 @@ fn copies_wholly_behind_an_opaque_wall_are_dropped_and_the_picture_stays() {
     for ambient_occlusion in [false, true] {
         let (expected, _, _) = occluded_scene(false, ambient_occlusion, ops.clone());
         let (frame, selection, occlusion) = occluded_scene(true, ambient_occlusion, ops.clone());
-        assert!(occlusion.enabled && occlusion.shared_depth == ambient_occlusion);
+        assert!(occlusion.enabled);
         assert_eq!(
             (selection.drawn, selection.occluded),
             (2, 3),
@@ -1321,4 +1321,125 @@ fn a_fixed_lights_shadow_follows_the_copies_level_as_the_eye_moves() {
         differing, 0,
         "{differing} pixels differ from a renderer that started near"
     );
+}
+
+/// Two wall halves 3 m off with a vertical slit `gap` metres wide between
+/// them, centred on x = `at`.
+fn slit_wall(gap: f32, at: f32) -> Vec<RenderDiff> {
+    let half = |x: f32| {
+        let mut payload = cube();
+        if let MeshPayloadSource::Inline { positions, .. } = &mut payload.source {
+            for point in positions.as_chunks_mut::<3>().0 {
+                point[0] *= 3.0;
+                point[1] *= 2.0;
+                point[2] *= 0.2;
+            }
+        }
+        payload.bounds = MeshBoundsDescriptor {
+            min: [-1.5, -1.0, -0.1],
+            max: [1.5, 1.0, 0.1],
+        };
+        (payload, x)
+    };
+    let mut ops = Vec::new();
+    for (index, (payload, x)) in [half(at - gap / 2.0 - 1.5), half(at + gap / 2.0 + 1.5)]
+        .into_iter()
+        .enumerate()
+    {
+        let name = format!("wall-{index}");
+        ops.extend(coloured_mesh(&name, payload, [0.4, 0.4, 0.45, 1.0]));
+        ops.push(instance(
+            30 + index as u64,
+            None,
+            &name,
+            transform([x, 0.0, -3.0], 0.0, 1.0),
+        ));
+    }
+    ops
+}
+
+#[test]
+fn copies_seen_through_an_opening_narrower_than_a_pixel_stay() {
+    // A post behind a slit a fifth of a pixel wide, the eye stepping
+    // sideways so the slit crosses the pixels' samples, with and without
+    // ambient occlusion: every frame is the one without occlusion culling.
+    let eyes: Vec<_> = (0..6)
+        .map(|step| camera("eye", [f64::from(step) * 0.004, 0.0, 0.0], 0.0, 0.0))
+        .collect();
+    let frames = |culling: bool, ambient_occlusion: bool| {
+        let mut ambient = render_wgpu::AmbientOcclusion::default();
+        if ambient_occlusion {
+            ambient.path = render_wgpu::AmbientOcclusionPath::Raster;
+            ambient.strength = 1.0;
+        }
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            occlusion_culling: culling,
+            ambient_occlusion: ambient,
+            ..RendererOptions::default()
+        });
+        let mut ops = stage(false);
+        ops.extend(slit_wall(0.004, 0.0));
+        let post = copy([0.0, 0.0, -2.0], [1.0, 0.2, 0.2]);
+        ops.push(patch(20, 5, vec![post], ScatterFade::default(), false));
+        harness.apply(ops);
+        eyes.iter()
+            .map(|eye| {
+                for _ in 0..2 {
+                    harness.renderer.render_offscreen(eye, &harness.target);
+                }
+                harness.target.read_rgba(&harness.gpu)
+            })
+            .collect::<Vec<_>>()
+    };
+    for ambient_occlusion in [false, true] {
+        let expected = frames(false, ambient_occlusion);
+        let culled = frames(true, ambient_occlusion);
+        let seen = expected
+            .iter()
+            .filter(|frame| {
+                frame
+                    .chunks(4)
+                    .any(|p| u16::from(p[0]) > u16::from(p[1]) + 15)
+            })
+            .count();
+        assert!(seen > 0, "the post shows through the slit");
+        for (step, (a, b)) in expected.iter().zip(&culled).enumerate() {
+            let differing = a
+                .chunks(4)
+                .zip(b.chunks(4))
+                .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 2))
+                .count();
+            assert_eq!(
+                differing, 0,
+                "AO {ambient_occlusion}, step {step}: {differing} pixels differ"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_masked_wall_hides_no_copies() {
+    // A masked material keeps the samples its alpha covers, which the world
+    // pass may share out differently from a depth pass: it never occludes.
+    let mut ops = coloured_mesh("wall", wall(), [0.4, 0.4, 0.45, 1.0]);
+    if let RenderDiff::DefineMaterial { material } = &mut ops[0] {
+        material.alpha_mode = MaterialAlphaModeDescriptor::Mask { cutoff: 0.5 };
+    }
+    ops.push(instance(
+        30,
+        None,
+        "wall",
+        transform([0.0, 0.0, -3.0], 0.0, 1.0),
+    ));
+    let copies: Vec<_> = [-0.6, 0.0, 0.6]
+        .into_iter()
+        .map(|x| copy([x, 0.0, -2.0], [1.0; 3]))
+        .collect();
+    ops.push(patch(20, 5, copies, ScatterFade::default(), false));
+    let (expected, _, _) = occluded_scene(false, false, ops.clone());
+    let (frame, selection, occlusion) = occluded_scene(true, false, ops);
+    assert!(occlusion.enabled);
+    assert_eq!(selection.occluded, 0, "{selection:?}");
+    assert_eq!(frame, expected);
 }

@@ -542,7 +542,7 @@ fn run() -> Result<(), String> {
         "refused": gpu_readout.occlusion.refused,
         "size": gpu_readout.occlusion.size,
         "levels": gpu_readout.occlusion.levels,
-        "sharedDepth": gpu_readout.occlusion.shared_depth,
+        "samples": gpu_readout.occlusion.samples,
     });
     let report = json!({
         "snapshot": snapshot_path.display().to_string(),

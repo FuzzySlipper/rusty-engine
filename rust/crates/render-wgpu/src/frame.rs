@@ -19,7 +19,6 @@ use render_model::{
     RenderLayer, ToneMappingDescriptor, ToneMappingOperator, WindDescriptor,
 };
 
-use crate::ambient_occlusion::PrepassPart;
 use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
@@ -28,7 +27,6 @@ use crate::distance_fields::{world_box, FieldEntry};
 use crate::effects::EffectsPass;
 use crate::finish::{FinishPost, HDR_FORMAT};
 use crate::light_clusters::{ClusterUniform, CLUSTER_CAPACITY};
-use crate::occlusion::OccluderDepth;
 use crate::pipelines::{Layouts, Pipelines};
 use crate::shaders::Features;
 use crate::shadows::{self, ShadowMaps};
@@ -2711,6 +2709,32 @@ impl Renderer {
         } else {
             Vec::new()
         };
+        // The occluders (`occlusion.rs`): the opaque batches other than
+        // scatter copies whose materials keep every sample they cover, at the
+        // world pass's samples per pixel.
+        let occluders: Vec<batch::Batch> = if occluding {
+            let samples = view.target.samples;
+            let occluders: Vec<batch::Batch> = prepass_batches
+                .iter()
+                .copied()
+                .filter(|draw| {
+                    let features = self.tables.parts.state[draw.part as usize].class.features;
+                    !features.caster_fragment() && !features.contains(Features::SCATTER)
+                })
+                .collect();
+            for draw in &occluders {
+                let features = self.tables.parts.state[draw.part as usize].class.features;
+                pipelines_created += u32::from(self.layouts.prepare_occluder(
+                    &self.gpu.device,
+                    features,
+                    draw.pass,
+                    samples,
+                ));
+            }
+            occluders
+        } else {
+            Vec::new()
+        };
         let whole = view.start == PassStart::Target;
         if world_layer {
             // Ghost plates snap per view; a view is known by its viewport.
@@ -2767,38 +2791,22 @@ impl Renderer {
             self.shadows.write_camera(&self.gpu.queue, &view_proj);
         }
         if occluding {
-            // The occluders: the ambient occlusion pre-pass's depth when it
-            // runs (its copies follow the test), else a depth pass of its
-            // own.
-            match &occlusion {
-                Some(ambient) => {
-                    self.ambient_occlusion.encode_prepass(
-                        &mut encoder,
-                        ambient,
-                        PrepassPart::Whole,
-                        |pass| draw_opaque(self, pass),
-                    );
-                    self.occlusion.build(
-                        &self.gpu,
-                        &mut encoder,
-                        OccluderDepth::Shared(
-                            self.ambient_occlusion.depth(ambient),
-                            ambient.region(),
-                        ),
-                    );
-                }
-                None => {
-                    let region = self.occlusion.prepare_depth(
-                        &self.gpu,
-                        (view.target.width, view.target.height),
-                        view.viewport,
-                    );
-                    self.occlusion
-                        .encode_depth(&mut encoder, region, |pass| draw_opaque(self, pass));
-                    self.occlusion
-                        .build(&self.gpu, &mut encoder, OccluderDepth::Own(region));
-                }
-            }
+            let samples = view.target.samples;
+            self.occlusion.prepare_depth(
+                &self.gpu,
+                (view.target.width, view.target.height),
+                samples,
+            );
+            self.occlusion
+                .encode_depth(&mut encoder, view.viewport, |pass| {
+                    let camera_offset = ShadowMaps::layer_offset(self.shadows.camera_slot());
+                    pass.set_bind_group(0, &self.caster_bind_group, &[]);
+                    pass.set_bind_group(2, &self.shadows.layer_bind_group, &[camera_offset]);
+                    self.draw_batches(pass, &occluders, |pass, features| {
+                        self.layouts.prepass.sampled(pass, features, samples)
+                    });
+                });
+            self.occlusion.build(&self.gpu, &mut encoder, view.viewport);
         } else if world_layer {
             self.occlusion.skipped();
         }
@@ -2850,38 +2858,15 @@ impl Renderer {
             ViewLayer::Viewmodel => Default::default(),
         };
         if let Some(occlusion) = &occlusion {
-            let draw_copies = |pass: &mut wgpu::RenderPass<'_>| {
-                if selected {
-                    self.draw_selected(pass, false, |pass, features| {
-                        self.layouts.prepass.get(pass, features)
-                    });
-                }
-            };
-            if occluding {
-                // Its opaque batches drew as the occluders; its copies
-                // follow the test.
-                self.ambient_occlusion.encode_prepass(
-                    &mut encoder,
-                    occlusion,
-                    PrepassPart::Copies,
-                    |pass| {
-                        let camera_offset = ShadowMaps::layer_offset(self.shadows.camera_slot());
-                        pass.set_bind_group(0, &self.caster_bind_group, &[]);
-                        pass.set_bind_group(2, &self.shadows.layer_bind_group, &[camera_offset]);
-                        draw_copies(pass);
-                    },
-                );
-            } else {
-                self.ambient_occlusion.encode_prepass(
-                    &mut encoder,
-                    occlusion,
-                    PrepassPart::Whole,
-                    |pass| {
-                        draw_opaque(self, pass);
-                        draw_copies(pass);
-                    },
-                );
-            }
+            self.ambient_occlusion
+                .encode_prepass(&mut encoder, occlusion, |pass| {
+                    draw_opaque(self, pass);
+                    if selected {
+                        self.draw_selected(pass, false, |pass, features| {
+                            self.layouts.prepass.get(pass, features)
+                        });
+                    }
+                });
             if occlusion.path() == AmbientOcclusionPath::DistanceField {
                 self.gather_field_entries();
                 let (_, entries) = self.field_entries.as_ref().expect("gathered above");

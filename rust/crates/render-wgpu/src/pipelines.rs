@@ -193,14 +193,20 @@ impl ShadowPipelines {
 /// opaque batches depth-only with the world pass's culling and winding.
 #[derive(Default)]
 pub(crate) struct PrepassPipelines {
-    pipelines: HashMap<(Features, Pass), wgpu::RenderPipeline>,
+    /// By caster features, pass and samples per pixel.
+    pipelines: HashMap<(Features, Pass, u32), wgpu::RenderPipeline>,
 }
 
 impl PrepassPipelines {
-    /// A pipeline `Layouts::prepare_prepass` made before the pass was
-    /// encoded.
+    /// A single-sample pipeline `Layouts::prepare_prepass` made before the
+    /// pass was encoded.
     pub fn get(&self, pass: Pass, features: Features) -> &wgpu::RenderPipeline {
-        &self.pipelines[&(features.caster(), pass)]
+        self.sampled(pass, features, 1)
+    }
+
+    /// A pipeline at `samples` per pixel (`Layouts::prepare_occluder`).
+    pub fn sampled(&self, pass: Pass, features: Features, samples: u32) -> &wgpu::RenderPipeline {
+        &self.pipelines[&(features.caster(), pass, samples)]
     }
 }
 
@@ -1022,8 +1028,34 @@ impl Layouts {
         features: Features,
         pass: Pass,
     ) -> bool {
+        self.prepare_depth_only(device, features, pass, 1)
+    }
+
+    /// The pre-pass pipeline at `samples` per pixel, for a view's occluder
+    /// depth (`occlusion.rs`), which samples as its world pass does.
+    pub fn prepare_occluder(
+        &mut self,
+        device: &wgpu::Device,
+        features: Features,
+        pass: Pass,
+        samples: u32,
+    ) -> bool {
+        self.prepare_depth_only(device, features, pass, samples)
+    }
+
+    fn prepare_depth_only(
+        &mut self,
+        device: &wgpu::Device,
+        features: Features,
+        pass: Pass,
+        samples: u32,
+    ) -> bool {
         let features = features.caster();
-        if self.prepass.pipelines.contains_key(&(features, pass)) {
+        if self
+            .prepass
+            .pipelines
+            .contains_key(&(features, pass, samples))
+        {
             return false;
         }
         let shader = self
@@ -1057,7 +1089,10 @@ impl Layouts {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: Default::default(),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..Default::default()
+            },
             fragment: features.caster_fragment().then(|| wgpu::FragmentState {
                 module: shader,
                 entry_point: Some("fs_shadow"),
@@ -1067,7 +1102,9 @@ impl Layouts {
             multiview_mask: None,
             cache: None,
         });
-        self.prepass.pipelines.insert((features, pass), pipeline);
+        self.prepass
+            .pipelines
+            .insert((features, pass, samples), pipeline);
         true
     }
 }

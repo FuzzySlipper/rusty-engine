@@ -165,27 +165,30 @@ it. Without compute, copies draw at their first level (the readout's
 
 With the renderer setting `OcclusionCulling` (`RendererSettings.Set(...
 with { OcclusionCulling = true })`, or the player's video option *Vegetation
-occlusion*), each world view first draws its opaque parts other than
-scattered copies depth-only, reduces that depth to a farthest-depth pyramid,
-and drops from the camera's list every copy whose bounds lie wholly behind
-it. With screen-space ambient occlusion on, its pre-pass is that depth and
-the extra cost is the pyramid (about 0.04 ms at 1280×720 on an RX 9070
-XT); without it, the view draws a half-resolution depth pass of its own
-(about 0.09 ms in all). The depth is the frame's own, so nothing the
-selection keeps appears a frame late, and camera motion, origin rebases and
-edits need nothing more. A masked part, such as a hand-placed tree's
-foliage, writes only the depth of what it keeps; scattered copies never
-hide each other, and the shadows' list is not tested.
+occlusion*), each world view first draws its occluders depth-only at its
+world pass's size and samples per pixel, reduces that depth (each pixel's
+farthest sample) to a farthest-depth pyramid, and drops from the camera's
+list every copy whose bounds lie wholly behind it. The occluders are its
+opaque parts other than scattered copies whose materials keep every sample
+they cover: a masked or product-discarding material never occludes, since
+the world pass may share its samples out differently. Sampling as the world
+pass does, the depth keeps every opening a world-pass sample sees through,
+however narrow. With GPU culling on, the culled candidates do not occlude.
+The depth is the frame's own, so nothing the selection keeps appears a
+frame late, and camera motion, origin rebases and edits need nothing more.
+Scattered copies never hide each other, and the shadows' list is not
+tested.
 
-It pays where opaque surfaces hide many copies and is neutral in open
-country. In CraftSurvive, at 1280×720: inside a dense forest 24% of
-the drawn copies were hidden and the world pass fell from 5.04 to 4.70 ms;
-looking past a near crown, 75% and 3.34 to 3.01 ms; up a long slope with
-forest beyond it, 18% and no measurable change; from a raised vista, 3% and
-none. The picture was the same in every case. A copy hidden behind terrain
-mostly costs vertex work only, since the depth test already discards its
-pixels, so the gain follows the number of hidden copies more than their
-area.
+The depth pass and pyramid cost about 0.14 ms at 1280×720 with 4×
+antialiasing on an RX 9070 XT, in the `occlusion` pass. It pays where
+opaque surfaces hide many copies at once. In CraftSurvive, looking past a
+near crown hid 75% of the drawn copies and the world pass fell from 3.65 to
+3.31 ms; inside a dense forest (25% hidden), up a long slope with forest
+beyond it (19%) and from a raised vista (3%) the change stayed within the
+run-to-run spread. The picture was the same in every case. A copy hidden
+behind terrain mostly costs vertex work only, since the depth test already
+discards its pixels, so the gain follows the number of hidden copies more
+than their area.
 
 ## Budgets and readout
 
@@ -209,10 +212,8 @@ selection: runs, parts, draws and copies selected, and (a frame later) copies
 tested, drawn (a crossfading copy twice), drawn for shadows, thinned away,
 outside the view and hidden behind its depth (`occluded`), with draws at
 levels 1 to 3; its GPU time is the `scatter-select` pass. `gpu.occlusion`
-reports the occlusion test: on, its pyramid's size and levels, and whether
-the ambient occlusion pre-pass's depth served; its GPU time is the
-`occlusion` pass (with `ao-prepass-copies`, the pre-pass's copies drawn after
-the test).
+reports the occlusion test: on, its pyramid's size and levels, and its
+depth's samples per pixel; its GPU time is the `occlusion` pass.
 
 Copies are never nodes, entities, colliders or pickable, and they cast
 shadows only when the layer asks.

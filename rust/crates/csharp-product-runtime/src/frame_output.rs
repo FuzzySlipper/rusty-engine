@@ -1019,7 +1019,7 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             refused: readout.occlusion.refused,
             size: readout.occlusion.size,
             levels: readout.occlusion.levels,
-            shared_depth: readout.occlusion.shared_depth,
+            samples: readout.occlusion.samples,
         },
         impostors: ProductHostImpostorStatistics {
             impostors: readout.impostors.impostors,

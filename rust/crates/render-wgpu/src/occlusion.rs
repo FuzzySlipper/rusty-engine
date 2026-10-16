@@ -2,16 +2,17 @@
 //! (#10020, `hiz.wgsl`).
 //!
 //! With `RendererOptions::occlusion_culling`, a world view that selects
-//! scatter copies (`scatter_select.rs`) first draws its opaque non-scatter
-//! batches depth-only: the ambient occlusion pre-pass when it runs (its
-//! depth then serves both), otherwise a half-resolution depth pass of its
-//! own. That depth is reduced to a farthest-depth pyramid, and the
-//! selection drops from the camera's list a copy whose bounds lie wholly
-//! behind it. The depth is this frame's, so camera motion, rebases and
-//! edits need nothing more, and nothing the selection keeps is missing for
-//! a frame. A masked part writes the depth of what it keeps, so a canopy's
-//! holes stay open; scatter copies never occlude. The shadows' list is not
-//! tested.
+//! scatter copies (`scatter_select.rs`) first draws its occluders depth-only
+//! at its world pass's size and samples per pixel: its opaque parts other
+//! than scatter copies whose materials keep every sample they cover (none
+//! masked, none with a product caster stage that may discard). Sampling as
+//! the world pass does, the depth leaves open every opening a world-pass
+//! sample sees through. That depth, each pixel's farthest sample, is
+//! reduced to a farthest-depth pyramid, and the selection drops from the
+//! camera's list a copy whose bounds lie wholly behind it. The depth is
+//! this frame's, so camera motion, rebases and edits need nothing more, and
+//! nothing the selection keeps is missing for a frame. Scatter copies never
+//! occlude, and the shadows' list is not tested.
 
 use crate::frame::PixelRect;
 use crate::target::DEPTH_FORMAT;
@@ -35,17 +36,8 @@ pub struct OcclusionReadout {
     /// two) and its levels.
     pub size: [u32; 2],
     pub levels: u32,
-    /// Its depth was the ambient occlusion pre-pass's, with no pass of its
-    /// own.
-    pub shared_depth: bool,
-}
-
-/// Where a view's occluder depth comes from.
-pub(crate) enum OccluderDepth<'a> {
-    /// The ambient occlusion pre-pass's depth, over this region of it.
-    Shared(&'a wgpu::TextureView, PixelRect),
-    /// [`Occlusion::encode_depth`]'s, drawn just before over this region.
-    Own(PixelRect),
+    /// Samples per pixel of its depth (the world pass's).
+    pub samples: u32,
 }
 
 /// What the selection tests against: the pyramid and the size of the
@@ -58,8 +50,10 @@ pub(crate) struct Occluders<'a> {
 
 struct Pipelines {
     seed_layout: wgpu::BindGroupLayout,
+    seed_samples_layout: wgpu::BindGroupLayout,
     reduce_layout: wgpu::BindGroupLayout,
     seed: wgpu::ComputePipeline,
+    seed_samples: wgpu::ComputePipeline,
     reduce: wgpu::ComputePipeline,
 }
 
@@ -74,8 +68,8 @@ pub(crate) struct Occlusion {
     pipelines: Result<Pipelines, String>,
     seed: wgpu::Buffer,
     pyramid: Option<Pyramid>,
-    /// The view's own half-resolution depth, when no pre-pass shares one.
-    depth: Option<((u32, u32), wgpu::TextureView)>,
+    /// The views' occluder depth: its size, samples per pixel and view.
+    depth: Option<((u32, u32), u32, wgpu::TextureView)>,
     region: [u32; 2],
     timer: Option<PassTimer>,
     readout: OcclusionReadout,
@@ -97,7 +91,7 @@ impl Occlusion {
                     },
                     count: None,
                 };
-                let seed_layout =
+                let seed_layout = |binding, multisampled| {
                     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                         label: Some("render-wgpu occlusion seed"),
                         entries: &[
@@ -112,18 +106,21 @@ impl Occlusion {
                                 count: None,
                             },
                             wgpu::BindGroupLayoutEntry {
-                                binding: 1,
+                                binding,
                                 visibility: wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::Texture {
                                     sample_type: wgpu::TextureSampleType::Depth,
                                     view_dimension: wgpu::TextureViewDimension::D2,
-                                    multisampled: false,
+                                    multisampled,
                                 },
                                 count: None,
                             },
                             storage(2),
                         ],
-                    });
+                    })
+                };
+                let (seed_layout, seed_samples_layout) =
+                    (seed_layout(1, false), seed_layout(5, true));
                 let reduce_layout =
                     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                         label: Some("render-wgpu occlusion reduce"),
@@ -161,8 +158,10 @@ impl Occlusion {
                 };
                 Ok(Pipelines {
                     seed: pipeline(&seed_layout, "cs_seed"),
+                    seed_samples: pipeline(&seed_samples_layout, "cs_seed_samples"),
                     reduce: pipeline(&reduce_layout, "cs_reduce"),
                     seed_layout,
+                    seed_samples_layout,
                     reduce_layout,
                 })
             }
@@ -190,37 +189,34 @@ impl Occlusion {
         self.pipelines.is_ok()
     }
 
-    /// Ready the view's own half-resolution occluder depth for a target of
-    /// `size`, and the region `area` covers in it. Starts the occlusion's
-    /// timing.
-    pub fn prepare_depth(&mut self, gpu: &Gpu, size: (u32, u32), area: PixelRect) -> PixelRect {
+    /// Ready the view's occluder depth for a world pass drawing a target of
+    /// `size` at `samples` per pixel. Starts the occlusion's timing.
+    pub fn prepare_depth(&mut self, gpu: &Gpu, size: (u32, u32), samples: u32) {
         if let Some(timer) = &mut self.timer {
             timer.collect(gpu);
         }
-        let half = (size.0.div_ceil(2).max(1), size.1.div_ceil(2).max(1));
-        if self.depth.as_ref().is_none_or(|(at, _)| *at != half) {
+        let size = (size.0.max(1), size.1.max(1));
+        if self
+            .depth
+            .as_ref()
+            .is_none_or(|(at, count, _)| (*at, *count) != (size, samples))
+        {
             let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("render-wgpu occlusion depth"),
                 size: wgpu::Extent3d {
-                    width: half.0,
-                    height: half.1,
+                    width: size.0,
+                    height: size.1,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
-                sample_count: 1,
+                sample_count: samples,
                 dimension: wgpu::TextureDimension::D2,
                 format: DEPTH_FORMAT,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
-            self.depth = Some((half, texture.create_view(&Default::default())));
-        }
-        PixelRect {
-            x: area.x / 2,
-            y: area.y / 2,
-            width: (area.x + area.width).div_ceil(2) - area.x / 2,
-            height: (area.y + area.height).div_ceil(2) - area.y / 2,
+            self.depth = Some((size, samples, texture.create_view(&Default::default())));
         }
     }
 
@@ -233,7 +229,7 @@ impl Occlusion {
         region: PixelRect,
         draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
     ) {
-        let (_, depth) = self.depth.as_ref().expect("prepare_depth made it");
+        let (_, _, depth) = self.depth.as_ref().expect("prepare_depth made it");
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("occlusion-depth"),
             color_attachments: &[],
@@ -264,35 +260,14 @@ impl Occlusion {
         draw(&mut pass);
     }
 
-    /// Reduce the view's occluder depth to the pyramid the selection tests
-    /// against. Ends the occlusion's timing (starts it too for shared
-    /// depth).
-    pub fn build(
-        &mut self,
-        gpu: &Gpu,
-        encoder: &mut wgpu::CommandEncoder,
-        source: OccluderDepth<'_>,
-    ) {
+    /// Reduce the view's occluder depth over `region` (its viewport) to the
+    /// pyramid the selection tests against. Ends the occlusion's timing.
+    pub fn build(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, region: PixelRect) {
         let Ok(pipelines) = &self.pipelines else {
             return;
         };
-        let shared = matches!(source, OccluderDepth::Shared(..));
-        if shared {
-            if let Some(timer) = &mut self.timer {
-                timer.collect(gpu);
-            }
-        }
-        let (depth, region) = match source {
-            OccluderDepth::Shared(depth, region) => (depth.clone(), region),
-            OccluderDepth::Own(region) => (
-                self.depth
-                    .as_ref()
-                    .expect("prepare_depth made it")
-                    .1
-                    .clone(),
-                region,
-            ),
-        };
+        let (_, samples, depth) = self.depth.as_ref().expect("prepare_depth made it");
+        let (samples, depth) = (*samples, depth.clone());
         let size = (
             region.width.max(1).next_power_of_two(),
             region.height.max(1).next_power_of_two(),
@@ -345,16 +320,21 @@ impl Occlusion {
                 (size.1 >> level).max(1).div_ceil(WORKGROUP),
             )
         };
+        let (seed_pipeline, seed_layout, depth_binding) = if samples > 1 {
+            (&pipelines.seed_samples, &pipelines.seed_samples_layout, 5)
+        } else {
+            (&pipelines.seed, &pipelines.seed_layout, 1)
+        };
         let seed_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render-wgpu occlusion seed"),
-            layout: &pipelines.seed_layout,
+            layout: seed_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
                     resource: self.seed.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 1,
+                    binding: depth_binding,
                     resource: wgpu::BindingResource::TextureView(&depth),
                 },
                 wgpu::BindGroupEntry {
@@ -365,16 +345,17 @@ impl Occlusion {
         });
         let last = pyramid.levels - 1;
         for level in 0..pyramid.levels {
-            let writes = self.timer.as_ref().and_then(|timer| {
-                timer.compute_writes_between(shared && level == 0, level == last)
-            });
+            let writes = self
+                .timer
+                .as_ref()
+                .and_then(|timer| timer.compute_writes_between(false, level == last));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some(PASS),
                 timestamp_writes: writes,
             });
             let (x, y) = groups(level);
             if level == 0 {
-                pass.set_pipeline(&pipelines.seed);
+                pass.set_pipeline(seed_pipeline);
                 pass.set_bind_group(0, &seed_group, &[]);
             } else {
                 let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -409,7 +390,7 @@ impl Occlusion {
             refused: None,
             size: [size.0, size.1],
             levels: pyramid.levels,
-            shared_depth: shared,
+            samples,
         };
     }
 

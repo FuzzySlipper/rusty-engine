@@ -364,10 +364,10 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         id: "occlusionCulling",
         label: "Vegetation occlusion",
         group: "Advanced",
-        description: "Skips grass, plants and trees hidden behind terrain, buildings and foliage: helps in forests, costs a little in open country.",
+        description: "Skips grass, plants and trees hidden behind terrain and buildings: helps where much is hidden, costs a little in open country.",
         kind: RendererSettingKind::Toggle,
         restart: false,
-        cost: "About 0.04 ms at 1280×720 on an RX 9070 XT with ambient occlusion on (0.09 ms without). In CraftSurvive it saved 0.33 ms inside a forest and 0.34 ms behind a near crown, and nothing measurable on open slopes and vistas.",
+        cost: "About 0.14 ms at 1280×720 with 4× antialiasing on an RX 9070 XT. In CraftSurvive it saved 0.34 ms looking past a near crown; in a forest, on open slopes and at vistas the change stayed within the run-to-run spread.",
         gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: Some("true"), requires: None, setup: Some(GallerySetup::Product("scattered vegetation (Vegetation fields or voxel scatter)")) },
     },
 ];
