@@ -289,6 +289,9 @@ struct Content {
     surface: TileSurface,
     cover: Option<Vec<f32>>,
     records: Vec<VegetationRecord>,
+    /// The layers its records name, in order: a layer of records alone
+    /// (no density) grows nothing on a tile without its own.
+    recorded: Vec<u32>,
     /// Lowest and highest world height sampled.
     heights: [f32; 2],
     generation: u64,
@@ -573,10 +576,14 @@ impl VegetationFields {
                 .map_or(0, |classes| classes.len() * 4)
             + cover.as_ref().map_or(0, |cover| cover.len() * 4)
             + records.len() * std::mem::size_of::<VegetationRecord>()) as u64;
+        let mut recorded: Vec<u32> = records.iter().map(|record| record.layer).collect();
+        recorded.sort_unstable();
+        recorded.dedup();
         tile.content = Some(Arc::new(Content {
             surface: TileSurface::new(&retained.heightfield, 0, samples),
             cover,
             records,
+            recorded,
             heights: if heights[0] <= heights[1] {
                 heights
             } else {
@@ -768,9 +775,8 @@ impl VegetationFields {
         // their counts; those unknown are placed as the budget allows.
         struct Candidate {
             tile: (i64, i64),
-            /// Its tile's place in `nearest`.
+            /// Its tile's place in `nearest` (and its samples in `contents`).
             at: usize,
-            content: Arc<Content>,
             generations: [u64; 2],
             known: Option<u32>,
             /// Its patch's generations and copies, and its bare entry.
@@ -813,6 +819,11 @@ impl VegetationFields {
                     tile,
                     content,
                 } = *near_tile;
+                // A layer of records alone has nothing to place on a tile
+                // without its records, and nothing of it is drawn there.
+                if layer.density <= 0.0 && content.recorded.binary_search(&key).is_err() {
+                    continue;
+                }
                 let held = tile.patches.contains_key(&key);
                 let limit =
                     f64::from(layer.reach) * if held { VEGETATION_HYSTERESIS } else { 1.0 } + step;
@@ -828,7 +839,6 @@ impl VegetationFields {
                 list.push(Candidate {
                     tile: tile_key,
                     at,
-                    content: content.clone(),
                     generations,
                     known,
                     drawn: tile
@@ -847,6 +857,10 @@ impl VegetationFields {
             .map(|(at, near_tile)| (near_tile.key, at))
             .collect();
         let tile_count = nearest.len();
+        let contents: Vec<Arc<Content>> = nearest
+            .iter()
+            .map(|near_tile| near_tile.content.clone())
+            .collect();
         drop(nearest);
         // Placing: the candidates whose counts are unknown, nearest first
         // across layers (the budget goes where it shows most), at most the
@@ -873,7 +887,7 @@ impl VegetationFields {
             place(
                 &layout,
                 candidate.tile,
-                &candidate.content,
+                &contents[candidate.at],
                 key,
                 &layers[&key].0,
             )
@@ -937,7 +951,7 @@ impl VegetationFields {
                     .drawn
                     .is_some_and(|(drawn, _)| drawn == generations);
                 if !drawn && !fresh.contains_key(&slot) {
-                    late.push((slot, candidate.content.clone()));
+                    late.push((slot, contents[candidate.at].clone()));
                 }
             }
         }
