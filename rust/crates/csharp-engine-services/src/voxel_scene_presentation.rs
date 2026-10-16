@@ -2201,7 +2201,8 @@ mod tests {
             && patch.fade
                 == ScatterFade {
                     start: 7.0,
-                    end: 10.0
+                    end: 10.0,
+                    ..ScatterFade::default()
                 }
             && patch.shadow_casting == render_model::ShadowCasting::None
             && !patch.instances.is_empty()));

@@ -50,6 +50,8 @@ The root [README](../README.md) is the repository landing page and
   that follows the drawn surface.
 - [Heightfield terrain](heightfield-terrain.md): product-sampled ground in
   geomorphing clipmap rings about a focus, drawn and picked by the Engine.
+- [Vegetation fields](vegetation-fields.md): grass, plants and placed things
+  grown in tiles over product-sampled ground, beyond any voxel residency.
 - [Water fields](water-fields.md): regions of moving column water over a
   product's ground, advanced on an Engine worker through admitted time,
   sampled and drawn.

@@ -45,8 +45,9 @@ use product_host::{
     ProductHostGpuPass, ProductHostGpuStatistics, ProductHostIndirectLightStatistics,
     ProductHostLightClusterStatistics, ProductHostPresentedFrame, ProductHostRendererInspection,
     ProductHostRendererSettingValues, ProductHostRendererSettings, ProductHostRendererStatistics,
-    ProductHostShadowStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
-    ProductHostTimedStep, ProductHostWindowMedians, ProductHostWindowStatistics,
+    ProductHostScatterStatistics, ProductHostShadowStatistics, ProductHostStreamMedians,
+    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
+    ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -701,6 +702,7 @@ impl FrameOutput {
                     self.driver.settings_readout(),
                     self.stream.is_some(),
                 ),
+                scatter: scatter_statistics(self.driver.scatter_upload_readout()),
             };
         };
         let StreamStats {
@@ -742,6 +744,7 @@ impl FrameOutput {
             shadows: shadow_statistics(&self.driver),
             gpu: gpu_statistics(self.driver.gpu_readout()),
             settings: settings_statistics(self.driver.settings_readout(), self.stream.is_some()),
+            scatter: scatter_statistics(self.driver.scatter_upload_readout()),
         }
     }
 
@@ -850,6 +853,15 @@ fn unix_ms(at: SystemTime) -> f64 {
 
 fn ms(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1000.0
+}
+
+fn scatter_statistics(readout: render_wgpu::ScatterUploadReadout) -> ProductHostScatterStatistics {
+    ProductHostScatterStatistics {
+        patches: readout.patches,
+        copies: readout.copies,
+        apply_microseconds: readout.apply_microseconds,
+        row_bytes: readout.row_bytes,
+    }
 }
 
 fn settings_statistics(

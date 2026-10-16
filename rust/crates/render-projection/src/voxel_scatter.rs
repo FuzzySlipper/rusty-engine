@@ -111,6 +111,7 @@ impl VoxelScatter {
             ScatterFade {
                 start: self.radius - self.fade,
                 end: self.radius,
+                ..ScatterFade::default()
             }
         } else {
             ScatterFade::default()
@@ -583,29 +584,47 @@ pub(crate) fn place(
         })
         .take(MAX_SCATTER_PATCH_INSTANCES)
         .map(|point| {
-            let draw = |salt: i64| unit(hash(point.key, salt, 0, 0)) as f32;
-            let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
-            let shade = draw(2);
-            let yaw = draw(3) * std::f32::consts::TAU;
-            ScatterInstance {
-                translation: point.position,
-                rotation: multiply(lean(point.normal, scatter.align), about_y(yaw)),
-                scale: lerp(scatter.scale[0], scatter.scale[1], draw(1)),
-                tint: std::array::from_fn(|channel| {
-                    lerp(scatter.tints[0][channel], scatter.tints[1][channel], shade)
-                }),
-            }
+            copy_at(
+                point.position,
+                point.normal,
+                point.key,
+                scatter.align,
+                scatter.scale,
+                scatter.tints,
+            )
         })
         .collect()
 }
 
-fn about_y(angle: f32) -> [f32; 4] {
+/// The copy a spot with `key` grows: its scale, shade and turn about the
+/// vertical drawn from the key, leaned `align` of the way onto `normal`.
+pub(crate) fn copy_at(
+    translation: [f32; 3],
+    normal: [f32; 3],
+    key: u64,
+    align: f32,
+    scale: [f32; 2],
+    tints: [[f32; 3]; 2],
+) -> ScatterInstance {
+    let draw = |salt: i64| unit(hash(key, salt, 0, 0)) as f32;
+    let lerp = |a: f32, b: f32, t: f32| a + (b - a) * t;
+    let shade = draw(2);
+    let yaw = draw(3) * std::f32::consts::TAU;
+    ScatterInstance {
+        translation,
+        rotation: multiply(lean(normal, align), about_y(yaw)),
+        scale: lerp(scale[0], scale[1], draw(1)),
+        tint: std::array::from_fn(|channel| lerp(tints[0][channel], tints[1][channel], shade)),
+    }
+}
+
+pub(crate) fn about_y(angle: f32) -> [f32; 4] {
     let half = angle * 0.5;
     [0.0, half.sin(), 0.0, half.cos()]
 }
 
 /// The rotation taking up (+y) `share` of the way to `normal`.
-fn lean(normal: [f32; 3], share: f32) -> [f32; 4] {
+pub(crate) fn lean(normal: [f32; 3], share: f32) -> [f32; 4] {
     // The axis is up × normal; the angle is acos(normal.y).
     let axis = [normal[2], 0.0, -normal[0]];
     let length = (axis[0] * axis[0] + axis[2] * axis[2]).sqrt();
@@ -617,7 +636,7 @@ fn lean(normal: [f32; 3], share: f32) -> [f32; 4] {
     [axis[0] * scale, 0.0, axis[2] * scale, half.cos()]
 }
 
-fn multiply(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
+pub(crate) fn multiply(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let [ax, ay, az, aw] = a;
     let [bx, by, bz, bw] = b;
     let product = [

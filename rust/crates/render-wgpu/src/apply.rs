@@ -304,18 +304,32 @@ impl Renderer {
                 handle,
                 parent,
                 patch,
-            } => self.insert_node(
-                *handle,
-                *parent,
-                NodePlacement {
-                    local: glam::Mat4::IDENTITY,
-                    visible: true,
-                    layer: RenderLayer::Scene,
-                    shadow_casting: patch.shadow_casting,
-                    entity: None,
-                },
-                NodeKind::Scatter(Box::new(patch.clone())),
-            ),
+            } => {
+                let started = std::time::Instant::now();
+                self.insert_node(
+                    *handle,
+                    *parent,
+                    NodePlacement {
+                        local: glam::Mat4::IDENTITY,
+                        visible: true,
+                        layer: RenderLayer::Scene,
+                        shadow_casting: patch.shadow_casting,
+                        entity: None,
+                    },
+                    NodeKind::Scatter(Box::new(patch.clone())),
+                );
+                // A part per copy and mesh group, each a GPU row.
+                let parts = self
+                    .tables
+                    .nodes
+                    .get(handle)
+                    .map_or(0, |node| node.parts.len());
+                let upload = &mut self.scatter_upload;
+                upload.patches += 1;
+                upload.copies += patch.instances.len() as u64;
+                upload.apply_microseconds += started.elapsed().as_micros() as u64;
+                upload.row_bytes += (parts * crate::tables::PART_ROW_FLOATS * 4) as u64;
+            }
             RenderDiff::CreateAnimatedMeshInstance {
                 handle,
                 parent,
@@ -1042,7 +1056,12 @@ impl Renderer {
                                 ],
                                 emission,
                             );
-                            row.fade = [patch.fade.start, patch.fade.end, 0.0, 0.0];
+                            row.fade = [
+                                patch.fade.start,
+                                patch.fade.end,
+                                patch.fade.near_start,
+                                patch.fade.near_end,
+                            ];
                             parts.push((
                                 Part {
                                     mesh: MeshRef::Static(mesh_id),

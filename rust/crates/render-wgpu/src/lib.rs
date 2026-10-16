@@ -104,6 +104,18 @@ pub use driver::{
     SceneView,
 };
 pub use frame::FrameStats;
+
+/// Scatter patches taken in since the renderer was made (cumulative: read
+/// twice and subtract): the patches and copies created, the CPU time
+/// spent turning them into drawable parts, and the bytes of GPU rows
+/// those parts upload.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScatterUploadReadout {
+    pub patches: u64,
+    pub copies: u64,
+    pub apply_microseconds: u64,
+    pub row_bytes: u64,
+}
 pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
 pub use inspection::InspectionView;
@@ -480,6 +492,8 @@ pub struct Renderer {
     /// CPU time this frame spent building draw lists (`batch`), reported as
     /// `FrameStats::cpu_batch_us`.
     batch_time: std::time::Duration,
+    /// What scattered patches have cost to take in (`ScatterUploadReadout`).
+    scatter_upload: ScatterUploadReadout,
     ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
     /// The world's HDR targets and the finish pass.
     finish: finish::Finish,
@@ -683,6 +697,7 @@ impl Renderer {
             scaled: None,
             display_vsync_only: None,
             batch_time: std::time::Duration::ZERO,
+            scatter_upload: ScatterUploadReadout::default(),
             ambient_occlusion,
             finish,
             distance_fields,
@@ -867,6 +882,11 @@ impl Renderer {
             volumetric_fog,
             volumetric_clouds,
         }
+    }
+
+    /// What the scatter patches made so far cost to take in.
+    pub fn scatter_upload_readout(&self) -> ScatterUploadReadout {
+        self.scatter_upload
     }
 
     /// The renderer's GPU passes (ambient occlusion's, then the world, its

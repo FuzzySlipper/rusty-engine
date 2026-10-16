@@ -516,7 +516,7 @@ fn ray_box(origin: [f64; 3], direction: [f64; 3], min: [f64; 3], max: [f64; 3]) 
 }
 
 /// `work` over `items` on scoped threads, a few items each, in order.
-fn in_parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+pub fn in_parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
     const PER_THREAD: usize = 2;
     let threads = std::thread::available_parallelism()
         .map_or(1, |cores| cores.get())

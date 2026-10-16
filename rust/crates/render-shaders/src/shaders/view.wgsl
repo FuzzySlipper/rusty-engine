@@ -53,14 +53,27 @@ fn world_equivalent(p: vec3<f32>) -> vec3<f32> {
 // covers: the finish pass reads the target's alpha as coverage. Call before
 // any discard: it takes a derivative.
 // A part's distance fade (`Part::fade`): its vertex drawn toward the part's
-// origin as the camera nears the fade's end, so a scattered copy sinks into
-// its spot rather than popping out.
+// origin as the camera nears the fade's end (x to y), so a scattered copy
+// sinks into its spot rather than popping out, and grown out of it from the
+// near band's start to its end (z to w; whole from z when they are equal),
+// where another patch hands the copy over.
 fn fade_toward_origin(row: Part, world: vec3<f32>) -> vec3<f32> {
-    if (row.fade.y <= 0.0) {
+    if (row.fade.y <= 0.0 && row.fade.w <= 0.0) {
         return world;
     }
     let origin = row.model[3].xyz;
-    let keep = 1.0 - smoothstep(row.fade.x, row.fade.y, distance(origin, frame.camera.xyz));
+    let away = distance(origin, frame.camera.xyz);
+    var keep = 1.0;
+    if (row.fade.y > 0.0) {
+        keep = 1.0 - smoothstep(row.fade.x, row.fade.y, away);
+    }
+    if (row.fade.w > 0.0) {
+        if (row.fade.w > row.fade.z) {
+            keep *= smoothstep(row.fade.z, row.fade.w, away);
+        } else {
+            keep *= step(row.fade.z, away);
+        }
+    }
     return origin + (world - origin) * keep;
 }
 

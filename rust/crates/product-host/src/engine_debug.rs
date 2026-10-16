@@ -60,6 +60,25 @@ pub struct ProductHostRendererStatistics {
     pub gpu: ProductHostGpuStatistics,
     /// The renderer settings in effect (`RendererSettings`).
     pub settings: ProductHostRendererSettings,
+    /// The scatter patches taken in so far.
+    pub scatter: ProductHostScatterStatistics,
+}
+
+/// Scatter patches (grass, plants, vegetation tiles) the renderer has taken
+/// in since it was made; read twice and subtract for a span's upload.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostScatterStatistics {
+    #[ts(type = "number")]
+    pub patches: u64,
+    #[ts(type = "number")]
+    pub copies: u64,
+    /// CPU microseconds turning them into drawable parts.
+    #[ts(type = "number")]
+    pub apply_microseconds: u64,
+    /// GPU row bytes those parts upload.
+    #[ts(type = "number")]
+    pub row_bytes: u64,
 }
 
 /// The renderer settings (`RendererSettings`): what the product or its

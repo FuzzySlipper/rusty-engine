@@ -923,6 +923,7 @@ sealed class PersistenceEngineContext(IPersistenceService persistence) : IEngine
     public IRandomService Random => throw new NotSupportedException();
     public IVoxelScenePresentationService VoxelScenePresentation => throw new NotSupportedException();
     public IHeightfieldService Heightfield => throw new NotSupportedException();
+    public IVegetationService Vegetation => throw new NotSupportedException();
     public IWaterFieldService WaterField => throw new NotSupportedException();
     public IPersistenceService Persistence { get; } = persistence;
     public IHttpService Http => throw new NotSupportedException();

@@ -659,6 +659,11 @@ impl SceneDriver {
         self.scene().renderer.gpu_readout()
     }
 
+    /// The scatter patches taken in so far ([`Renderer::scatter_upload_readout`]).
+    pub fn scatter_upload_readout(&self) -> crate::ScatterUploadReadout {
+        self.scene().renderer.scatter_upload_readout()
+    }
+
     /// Ops the renderer could not realize, by op, and the last one's detail.
     pub fn skipped_ops(&self) -> (BTreeMap<&'static str, u64>, Option<String>) {
         let scene = self.scene();

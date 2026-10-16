@@ -8,6 +8,7 @@ mod material;
 mod resource_list;
 mod retained;
 mod runtime_appearance;
+mod vegetation;
 mod voxel;
 mod voxel_object;
 mod voxel_scatter;
@@ -19,6 +20,7 @@ pub use material::*;
 pub use resource_list::*;
 pub use retained::*;
 pub use runtime_appearance::*;
+pub use vegetation::*;
 pub use voxel::*;
 pub use voxel_object::*;
 pub use voxel_scatter::{

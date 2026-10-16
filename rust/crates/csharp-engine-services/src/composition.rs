@@ -71,6 +71,7 @@ fn engine_api(
     voxel_content_bridge: &mut RuntimeVoxelContentBridge,
     voxel_scene_presentation_bridge: &mut RuntimeVoxelScenePresentationBridge,
     heightfield_bridge: &mut crate::heightfield::RuntimeHeightfieldBridge,
+    vegetation_bridge: &mut crate::vegetation::RuntimeVegetationBridge,
     water_field_bridge: &mut crate::water_field::RuntimeWaterFieldBridge,
     implicit_bridge: &mut crate::implicit_surfaces::RuntimeImplicitBridge,
     rng_bridge: &mut RuntimeRngBridge,
@@ -107,6 +108,7 @@ fn engine_api(
             appearance_bridge,
         ),
         heightfield: crate::heightfield::api(heightfield_bridge, appearance_bridge),
+        vegetation: crate::vegetation::api(vegetation_bridge, appearance_bridge),
         water_field: crate::water_field::api(water_field_bridge, appearance_bridge),
         content: crate::content::api(content_bridge),
         content_source: crate::content_source::api(content_source_bridge),
@@ -342,6 +344,7 @@ pub struct EngineServiceSet {
     voxel_content: RuntimeVoxelContentBridge,
     voxel_scene_presentation: RuntimeVoxelScenePresentationBridge,
     heightfield: crate::heightfield::RuntimeHeightfieldBridge,
+    vegetation: crate::vegetation::RuntimeVegetationBridge,
     water_field: crate::water_field::RuntimeWaterFieldBridge,
     implicit: crate::implicit_surfaces::RuntimeImplicitBridge,
     rng: RuntimeRngBridge,
@@ -374,6 +377,7 @@ struct ServiceCalls {
     voxel_content: crate::voxel_content::RuntimeVoxelContentCall,
     voxel_scene_presentation: crate::voxel_scene_presentation::RuntimeVoxelScenePresentationCall,
     heightfield: crate::heightfield::RuntimeHeightfieldCall,
+    vegetation: crate::vegetation::RuntimeVegetationCall,
 }
 
 /// Engine observations from one product call.
@@ -475,6 +479,8 @@ impl EngineServiceSet {
             RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         let heightfield =
             crate::heightfield::RuntimeHeightfieldBridge::new(spatial.collision_source());
+        let vegetation =
+            crate::vegetation::RuntimeVegetationBridge::new(spatial.collision_source());
         let water_field =
             crate::water_field::RuntimeWaterFieldBridge::new(spatial.collision_source());
         let mut camera_view = Box::new(RuntimeCameraViewBridge::new());
@@ -517,6 +523,7 @@ impl EngineServiceSet {
             voxel_content,
             voxel_scene_presentation,
             heightfield,
+            vegetation,
             water_field,
             implicit: crate::implicit_surfaces::RuntimeImplicitBridge::new(),
             rng: crate::rng::RuntimeRngBridge::new(),
@@ -553,6 +560,7 @@ impl EngineServiceSet {
             &mut self.voxel_content,
             &mut self.voxel_scene_presentation,
             &mut self.heightfield,
+            &mut self.vegetation,
             &mut self.water_field,
             &mut self.implicit,
             &mut self.rng,
@@ -741,6 +749,7 @@ impl EngineServiceSet {
         self.voxel_content.begin_call();
         self.voxel_scene_presentation.begin_call();
         self.heightfield.begin_call();
+        self.vegetation.begin_call();
         self.water_field.begin_call(update);
         self.implicit.begin_call();
     }
@@ -845,6 +854,7 @@ impl EngineServiceSet {
             voxel_content: self.voxel_content.take_staged_call()?,
             voxel_scene_presentation: self.voxel_scene_presentation.take_staged_call()?,
             heightfield: self.heightfield.take_staged_call()?,
+            vegetation: self.vegetation.take_staged_call()?,
         };
         let output = self.settle_call(&mut calls);
         self.presentation_world = calls.presentation_world;
@@ -858,6 +868,7 @@ impl EngineServiceSet {
         self.voxel_scene_presentation
             .commit_call(calls.voxel_scene_presentation);
         self.heightfield.commit_call(calls.heightfield);
+        self.vegetation.commit_call(calls.vegetation);
         Ok(CsharpEngineCall {
             input_mapping_replacement,
             output: output?,
@@ -920,6 +931,11 @@ impl EngineServiceSet {
                     Some(world)
                 }
             })?;
+        // Vegetation fields focused on a camera measure from where it stands
+        // now; placing runs on worker threads here.
+        self.vegetation.settle(&mut calls.vegetation, |camera| {
+            cameras.camera_position(camera)
+        })?;
         // Water fields take the time this call admitted and draw what their
         // workers last published.
         self.water_field.settle()?;
@@ -1104,7 +1120,8 @@ impl EngineServiceSet {
             .collect::<Vec<_>>();
         // Heightfield nodes made before this call go ahead of its Graphics
         // work, which may release a material they drew with.
-        let early = std::mem::take(&mut call.heightfield.early);
+        let mut early = std::mem::take(&mut call.heightfield.early);
+        early.append(&mut call.vegetation.early);
         let appearance = if early.is_empty() {
             appearance
         } else {
@@ -1119,6 +1136,7 @@ impl EngineServiceSet {
         frames.append(&mut call.voxel_content.frames);
         frames.append(&mut call.voxel_scene_presentation.frames);
         frames.append(&mut call.heightfield.frames);
+        frames.append(&mut call.vegetation.frames);
         CsharpEngineCallOutput {
             render_output: Vec::new(),
             appearance,

@@ -724,6 +724,10 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          * The renderer settings in effect (`RendererSettings`).
          */
         settings: ProductHostRendererSettings;
+        /**
+         * The scatter patches taken in so far.
+         */
+        scatter: ProductHostScatterStatistics;
     };
     /**
      * Answer to `engine.renderer`, `.status`, `.show`, `.hide` and `.toggle`.
@@ -750,6 +754,22 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         instanceId: CanonicalU64;
         generation: CanonicalU64;
         controlRevision: CanonicalU64;
+    };
+    /**
+     * Scatter patches (grass, plants, vegetation tiles) the renderer has taken
+     * in since it was made; read twice and subtract for a span's upload.
+     */
+    export type ProductHostScatterStatistics = {
+        patches: number;
+        copies: number;
+        /**
+         * CPU microseconds turning them into drawable parts.
+         */
+        applyMicroseconds: number;
+        /**
+         * GPU row bytes those parts upload.
+         */
+        rowBytes: number;
     };
     /**
      * The scene's shadow layers and which requesting lights cast.

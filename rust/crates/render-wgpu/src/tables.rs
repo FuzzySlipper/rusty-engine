@@ -504,8 +504,9 @@ pub(crate) struct PartRow {
     /// Texture-space origin (xyz) and cells per unit (w): where triplanar
     /// materials project the part's positions from. Set from its mesh.
     pub texture_space: [f32; 4],
-    /// The part shrinks into its origin between these distances from the
-    /// camera (`ScatterFade`); an end of 0 keeps it whole. A morphing
+    /// The part shrinks into its origin between the first two distances
+    /// from the camera and grows out of it between the last two
+    /// (`ScatterFade`); an end of 0 keeps it whole. A morphing
     /// mesh's part: its morph's range and its focus in the part's own x and
     /// z (`rusty::view::morph_share`).
     pub fade: [f32; 4],

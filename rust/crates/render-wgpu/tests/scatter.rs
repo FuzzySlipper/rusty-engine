@@ -253,14 +253,17 @@ fn copies_shrink_away_over_the_fade_distance() {
     let near = count(ScatterFade {
         start: 10.0,
         end: 20.0,
+        ..ScatterFade::default()
     });
     let fading = count(ScatterFade {
         start: 3.0,
         end: 5.5,
+        ..ScatterFade::default()
     });
     let gone = count(ScatterFade {
         start: 1.0,
         end: 2.0,
+        ..ScatterFade::default()
     });
     assert_eq!(near, unfaded, "within the fade's start a copy is whole");
     assert!(
@@ -268,6 +271,40 @@ fn copies_shrink_away_over_the_fade_distance() {
         "{fading} of {unfaded} pixels while fading"
     );
     assert_eq!(gone, 0, "beyond the fade's end a copy is gone");
+}
+
+#[test]
+fn copies_grow_in_past_the_near_band() {
+    let count = |fade: ScatterFade| {
+        let mut harness = harness(false);
+        let mut ops = stage(false);
+        ops.push(patch(20, 5, whole(), fade, true));
+        harness.apply(ops);
+        bright(&render(&mut harness).1)
+    };
+    // The copies stand 4 to 4.5 m from the eye.
+    let whole_copies = count(ScatterFade::default());
+    let past = count(ScatterFade {
+        near_start: 1.0,
+        near_end: 2.0,
+        ..ScatterFade::default()
+    });
+    let growing = count(ScatterFade {
+        near_start: 3.0,
+        near_end: 5.5,
+        ..ScatterFade::default()
+    });
+    let cut = count(ScatterFade {
+        near_start: 6.0,
+        near_end: 6.0,
+        ..ScatterFade::default()
+    });
+    assert_eq!(past, whole_copies, "past the near band a copy is whole");
+    assert!(
+        growing > 0 && growing < whole_copies * 3 / 4,
+        "{growing} of {whole_copies} pixels while growing in"
+    );
+    assert_eq!(cut, 0, "within a hard near cut a copy is gone");
 }
 
 #[test]
@@ -311,6 +348,7 @@ fn gpu_culling_draws_the_cpu_picture_of_a_patch() {
         ScatterFade {
             start: 6.0,
             end: 9.0,
+            ..ScatterFade::default()
         },
         true,
     ));

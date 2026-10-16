@@ -31,12 +31,20 @@ pub struct ScatterInstance {
 
 /// Copies shrink into their origin between `start` and `end` metres from the
 /// camera and are gone beyond `end`; `end` 0 keeps them whole at any
-/// distance.
+/// distance. Nearer than `near_start` they are gone too, and they grow back
+/// to whole by `near_end` (equal: whole from `near_start`); `near_end` 0
+/// keeps them whole however near. A copy another patch hands over to at
+/// some distance (`render_projection::vegetation`) fades in where the
+/// other fades out.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ScatterFade {
     pub start: f32,
     pub end: f32,
+    #[serde(default)]
+    pub near_start: f32,
+    #[serde(default)]
+    pub near_end: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -77,9 +85,19 @@ impl ScatterPatchDescriptor {
         if let Some(index) = self.instances.iter().position(|instance| !instance.valid()) {
             return Err(ScatterPatchError::InvalidInstance { index });
         }
-        let ScatterFade { start, end } = self.fade;
-        if !(start.is_finite() && end.is_finite() && start >= 0.0 && end >= 0.0)
+        let ScatterFade {
+            start,
+            end,
+            near_start,
+            near_end,
+        } = self.fade;
+        let distances = [start, end, near_start, near_end];
+        if !distances
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0)
             || (end > 0.0 && end <= start)
+            || (near_end > 0.0 && near_end < near_start)
+            || (end > 0.0 && near_end > 0.0 && near_end > start)
         {
             return Err(ScatterPatchError::InvalidFade);
         }
@@ -124,6 +142,7 @@ mod tests {
             fade: ScatterFade {
                 start: 20.0,
                 end: 30.0,
+                ..ScatterFade::default()
             },
             shadow_casting: ShadowCasting::None,
         }
@@ -145,8 +164,17 @@ mod tests {
         bad.fade = ScatterFade {
             start: 30.0,
             end: 20.0,
+            ..ScatterFade::default()
         };
         assert_eq!(bad.validate(), Err(ScatterPatchError::InvalidFade));
+        let mut near = patch();
+        near.fade.near_start = 4.0;
+        near.fade.near_end = 6.0;
+        assert_eq!(near.validate(), Ok(()));
+        near.fade.near_end = 25.0;
+        assert_eq!(near.validate(), Err(ScatterPatchError::InvalidFade));
+        near.fade.near_end = 3.0;
+        assert_eq!(near.validate(), Err(ScatterPatchError::InvalidFade));
         let mut whole = patch();
         whole.fade = ScatterFade::default();
         assert_eq!(whole.validate(), Ok(()));

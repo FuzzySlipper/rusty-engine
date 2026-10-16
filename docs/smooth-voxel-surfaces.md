@@ -402,7 +402,10 @@ the rest:
   chunk. Nearer chunks come first within `MaximumInstances`, and the budget
   follows the camera: a step that makes another chunk nearest moves the
   copies to it. A chunk the budget leaves bare is counted once and not
-  sampled again until it remeshes.
+  sampled again until it remeshes. Beyond full-resolution chunks, a
+  [vegetation field](vegetation-fields.md) layer of the same key, seed and
+  density grows the same spots over product-sampled ground, so the scatter
+  can hand its copies over at its fade.
 - **Keeping out.** `SetScatterExclusions(new(presentation, boxes))` replaces
   the presentation's exclusion boxes (`VoxelSceneScatterExclusion(min, max)`,
   axis-aligned in the scene's space), such as the ground under built floors

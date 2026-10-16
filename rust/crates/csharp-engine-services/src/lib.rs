@@ -30,6 +30,7 @@ mod session;
 mod spatial;
 mod tween;
 mod ui;
+mod vegetation;
 mod video;
 mod voxel;
 mod voxel_content;

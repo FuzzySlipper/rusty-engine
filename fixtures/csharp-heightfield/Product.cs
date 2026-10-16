@@ -43,6 +43,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly AuthoredCatalog catalog;
     private Heightfield? heightfield;
     private HeightfieldStreamer? streamer;
+    private readonly Vegetation vegetation;
     private bool layers;
     /// <summary>0: the hills in the scene; 1: the continent in tiers; 2: the continent in halving rings.</summary>
     private int continent;
@@ -70,6 +71,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         camera = engine.CameraView.CreateCamera(Descriptor(new(0, 200, 0), 0));
         engine.CameraView.SetActiveCamera(camera);
         engine.CameraView.SetBackgroundColor(new(FogColor));
+        vegetation = new Vegetation(engine, camera);
     }
 
     public void Start() => Build();
@@ -95,6 +97,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         }
 
         streamer = new HeightfieldStreamer(engine, heightfield, new Ground(layers, continent == 0 ? 1 : 25), CommitsPerUpdate);
+        // Grass and trees grow over the hills, not the continent.
+        vegetation.Show(continent == 0);
         Settling();
     }
 
@@ -111,6 +115,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         if (flying) angle += seconds * Speed / Radius;
         Fly();
         streamer!.Update();
+        vegetation.Update();
         if (double.IsNaN(settleSeconds) && engine.Heightfield.Read(heightfield!).Settled)
             settleSeconds = Stopwatch.GetElapsedTime(settleStarted).TotalSeconds;
         return ProductUpdateResult.None;
@@ -244,6 +249,30 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return Inspect();
     }
 
+    [DebugCommand("vegetation.inspect", Description = "Reports the near and far vegetation fields: tiles, patches, copies, budget and deferred work, the last call's placement, selection and publication time, invalidations and the streamers' sampling.")]
+    public string InspectVegetation() => vegetation.Inspect();
+
+    [DebugCommand("vegetation.show", Description = "1 grows grass and trees over the hills; 0 removes them.")]
+    public string ShowVegetation(float on)
+    {
+        vegetation.Show(on != 0 && continent == 0);
+        return vegetation.Inspect();
+    }
+
+    [DebugCommand("vegetation.tune", Description = "Sets the grass per square metre and how far the far field grows it (metres).")]
+    public string TuneVegetation(float grassPerSquareMetre, float reach)
+    {
+        vegetation.Tune(grassPerSquareMetre, reach);
+        return vegetation.Inspect();
+    }
+
+    [DebugCommand("vegetation.invalidate", Description = "Samples and places again every vegetation tile within this many metres of the camera.")]
+    public string InvalidateVegetation(float metres)
+    {
+        vegetation.Invalidate(eye.X, eye.Z, metres);
+        return vegetation.Inspect();
+    }
+
     [DebugCommand("heightfield.pick", Description = "Picks the drawn ground along a ray from a point in a direction.")]
     public string Pick(float x, float y, float z, float dx, float dy, float dz)
     {
@@ -260,6 +289,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     public void Dispose()
     {
+        vegetation.Dispose();
         streamer?.Dispose();
         heightfield?.Dispose();
         layered.Dispose();
@@ -315,6 +345,24 @@ internal sealed class Ground(bool layers, double spread) : IHeightfieldSampler
             samples.SetColor(i, j, new(colour.X, colour.Y, colour.Z, 1));
         }
     }
+
+    internal const double SeaLevelMetres = SeaLevel;
+
+    /// <summary>The hills' land at a place, in metres (spread 1).</summary>
+    internal static double Lift1(double x, double z) => Height(x, z);
+
+    /// <summary>Grass grows on the hills' land above the sand, below the snow and gentler than rock.</summary>
+    internal static bool Grassland(double x, double z)
+    {
+        double height = Height(x, z);
+        return height >= SeaLevel + SandBand && height <= SnowLine && Slope(x, z, 1) < RockSlopeFrom;
+    }
+
+    /// <summary>Broad patches for the woods, 0 to 1.</summary>
+    internal static double Woods(double x, double z) => Noise(x, z, 3);
+
+    /// <summary>A deterministic draw in 0 to 1 for a cell and a salt.</summary>
+    internal static double Unit(long x, long z, int salt) => Hash(x, z, salt + 100);
 
     /// <summary>The land at a place: the hills' shape spread and raised.</summary>
     private double Lift(double x, double z) => rise * Height(x / spread, z / spread);
