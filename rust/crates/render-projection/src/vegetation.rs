@@ -51,7 +51,7 @@ pub const VEGETATION_GROUND_CLASSES: u32 = 64;
 pub const MAX_VEGETATION_DENSITY: f32 = 64.0;
 
 /// Mixed into a layer's seed for the draw that thins a spot by its cover.
-const COVER_SALT: u64 = 0xc0_7e5a_17;
+const COVER_SALT: u64 = 0xc07e_5a17;
 /// The keys a spot's copy is drawn from, as voxel scatter keys them.
 const KEY_SALT: u64 = 0x5ca7_7e7a;
 
@@ -252,6 +252,9 @@ pub struct VegetationReadout {
     /// The samples and records held, in bytes.
     pub sample_bytes: u64,
 }
+
+/// A layer's key and a tile.
+type Slot = (u32, (i64, i64));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum NodeKey {
@@ -789,7 +792,7 @@ impl VegetationFields {
             )
         });
         let mut placement_time = placing.elapsed();
-        let mut fresh: BTreeMap<(u32, (i64, i64)), Vec<ScatterInstance>> = BTreeMap::new();
+        let mut fresh: BTreeMap<Slot, Vec<ScatterInstance>> = BTreeMap::new();
         for (&(index, key), instances) in jobs.iter().zip(placed) {
             let candidate = &mut candidates.get_mut(&key).expect("a job's layer")[index];
             candidate.known = Some(instances.len() as u32);
@@ -801,7 +804,7 @@ impl VegetationFields {
         // Choosing: within each layer's budget, nearest first. A tile layer
         // waiting to be placed again counts and draws what it has meanwhile.
         let selecting = Instant::now();
-        let mut chosen: BTreeMap<(u32, (i64, i64)), [u64; 2]> = BTreeMap::new();
+        let mut chosen: BTreeMap<Slot, [u64; 2]> = BTreeMap::new();
         let mut over_budget = 0u32;
         for (&key, list) in &candidates {
             let mut budget = u64::from(retained.layers[&key].0.maximum_instances);
@@ -832,7 +835,7 @@ impl VegetationFields {
         }
         // Chosen tile layers last counted while the budget left them out
         // need their copies again: they take the placements left.
-        let mut late: Vec<((u32, (i64, i64)), Arc<Content>)> = Vec::new();
+        let mut late: Vec<(Slot, Arc<Content>)> = Vec::new();
         for (&(key, tile_key), generations) in &chosen {
             let tile = &retained.tiles[&tile_key];
             let drawn = tile

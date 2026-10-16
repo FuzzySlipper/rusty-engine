@@ -1153,7 +1153,7 @@ impl Renderer {
             let state = &parts.state[id];
             // Scattered copies are clutter, not the scene light bounces in.
             if !state.shown
-                || state.leader.is_some()
+                || state.copies.is_some()
                 || state.layer != RenderLayer::Scene
                 || state.class.blend
                 || state.class.lines

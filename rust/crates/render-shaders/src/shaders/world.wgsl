@@ -9,7 +9,7 @@
 // (PRODUCT_DISPLACES) and give their normals (PRODUCT_DISPLACES_NORMAL).
 
 #import rusty::types::{texture_space_position, Vertex}
-#import rusty::view::{frame, parts, instances, mask_coverage, fade_toward_origin, morph_share, morph_normal}
+#import rusty::view::{frame, parts, instances, copies, copy_row, mask_coverage, fade_toward_origin, morph_share, morph_normal}
 #ifdef WIND
 #import rusty::wind::wind_displace
 #endif
@@ -130,8 +130,14 @@ fn vs_world(
 #endif
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
+#ifdef SCATTER
+    let scattered = copies[instance];
+    let part = bitcast<u32>(scattered.tint.w);
+    let row = copy_row(scattered);
+#else
     let part = instances[instance];
     let row = parts[part];
+#endif
 #ifdef MORPH
     let share = morph_share(row, mesh_position);
     let position = mesh_position + vec3<f32>(0.0, morph.x * share, 0.0);
@@ -174,7 +180,11 @@ fn vs_world(
     out.clip_position = out.clip;
 #endif
     out.part = part;
+#ifdef SCATTER
+    out.color = vec4<f32>(color.rgb * scattered.tint.rgb, color.a);
+#else
     out.color = color;
+#endif
 #ifdef VERTEX_TANGENTS
     let model = mat3x3<f32>(row.model[0].xyz, row.model[1].xyz, row.model[2].xyz);
     out.tangent = vec4<f32>(model * tangent.xyz, tangent.w * sign(determinant(model)));

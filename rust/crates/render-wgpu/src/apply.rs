@@ -318,17 +318,18 @@ impl Renderer {
                     },
                     NodeKind::Scatter(Box::new(patch.clone())),
                 );
-                // A part per copy and mesh group, each a GPU row.
+                // A part per mesh group, each drawing a row per copy.
                 let parts = self
                     .tables
                     .nodes
                     .get(handle)
                     .map_or(0, |node| node.parts.len());
+                let copies = patch.instances.len();
                 let upload = &mut self.scatter_upload;
                 upload.patches += 1;
-                upload.copies += patch.instances.len() as u64;
+                upload.copies += copies as u64;
                 upload.apply_microseconds += started.elapsed().as_micros() as u64;
-                upload.row_bytes += (parts * crate::tables::PART_ROW_FLOATS * 4) as u64;
+                upload.row_bytes += (parts * copies * crate::scatter::COPY_FLOATS * 4) as u64;
             }
             RenderDiff::CreateAnimatedMeshInstance {
                 handle,
@@ -819,10 +820,9 @@ impl Renderer {
         let names = &mut self.tables.names;
         let materials = &self.tables.materials;
         let mut parts: Vec<(Part, PartRow)> = Vec::new();
-        // A scattered node's copies: each part's transform under the node,
-        // and the runs (part index ranges) its mesh groups make.
-        let mut locals: Vec<glam::Mat4> = Vec::new();
-        let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+        // A scattered node's copies under the node and their rows (`scatter.rs`),
+        // which each of its parts (one a mesh group) draws.
+        let mut scattered: Option<(Vec<glam::Mat4>, Vec<f32>)> = None;
         match &node.kind {
             NodeKind::Primitive {
                 geometry,
@@ -1028,6 +1028,12 @@ impl Renderer {
                             )
                         })
                         .collect();
+                    let rows: Vec<f32> = patch
+                        .instances
+                        .iter()
+                        .flat_map(|instance| crate::scatter::copy_row(instance, 0))
+                        .collect();
+                    scattered = Some((copies, rows));
                     for (slot, start, count) in &mesh.groups {
                         let material_id = patch
                             .material_overrides
@@ -1044,37 +1050,24 @@ impl Renderer {
                             }
                             None => (MaterialRef::LitFallback, slot_color(*slot), [0.0; 3]),
                         };
-                        let first = parts.len();
-                        for (instance, local) in patch.instances.iter().zip(&copies) {
-                            let tint = instance.tint;
-                            let mut row = PartRow::new(
-                                [
-                                    color[0] * tint[0],
-                                    color[1] * tint[1],
-                                    color[2] * tint[2],
-                                    color[3],
-                                ],
-                                emission,
-                            );
-                            row.fade = [
-                                patch.fade.start,
-                                patch.fade.end,
-                                patch.fade.near_start,
-                                patch.fade.near_end,
-                            ];
-                            parts.push((
-                                Part {
-                                    mesh: MeshRef::Static(mesh_id),
-                                    first_index: *start,
-                                    index_count: *count,
-                                    material: material_ref.clone(),
-                                    wireframe: false,
-                                },
-                                row,
-                            ));
-                            locals.push(*local);
-                        }
-                        runs.push(first..parts.len());
+                        // Each copy's tint is its row's (`ScatterCopy`).
+                        let mut row = PartRow::new(color, emission);
+                        row.fade = [
+                            patch.fade.start,
+                            patch.fade.end,
+                            patch.fade.near_start,
+                            patch.fade.near_end,
+                        ];
+                        parts.push((
+                            Part {
+                                mesh: MeshRef::Static(mesh_id),
+                                first_index: *start,
+                                index_count: *count,
+                                material: material_ref,
+                                wireframe: false,
+                            },
+                            row,
+                        ));
                     }
                 }
             }
@@ -1083,8 +1076,9 @@ impl Renderer {
         let (world, shown, layer) = (node.world, node.world_visible, node.world_layer);
         let casts = node.shadow_casting.is_cast();
         let mut ids = Vec::with_capacity(parts.len());
-        let mut leader = None;
-        for (index, (mut part, mut row)) in parts.into_iter().enumerate() {
+        // A scattered node's copies' bounds under it, the same for each part.
+        let mut scattered_bounds: Option<Aabb> = None;
+        for (mut part, mut row) in parts {
             if let MeshRef::Builtin(kind) = part.mesh {
                 part.index_count = self.builtins[&kind].groups[0].2;
             }
@@ -1102,7 +1096,14 @@ impl Renderer {
             if let Some(morph) = mesh.morph.as_ref() {
                 row.fade = self.morph_fade(handle, morph);
             }
-            let bounds = mesh.bounds;
+            let bounds = match &scattered {
+                Some((copies, _)) => *scattered_bounds.get_or_insert_with(|| {
+                    copies.iter().fold(Aabb::EMPTY, |bounds, copy| {
+                        bounds.union(&mesh.bounds.transformed(copy))
+                    })
+                }),
+                None => mesh.bounds,
+            };
             if part.wireframe {
                 mesh.edges
                     .get_or_init(|| edge_buffer(&self.gpu.device, &mesh.cpu.indices));
@@ -1119,7 +1120,8 @@ impl Renderer {
                 MaterialRef::Unlit => (None, Features::UNLIT),
                 MaterialRef::LitFallback => (None, Features::default()),
             };
-            let features = features | mesh.features();
+            let features =
+                (features | mesh.features()).with(Features::SCATTER, scattered.is_some());
             let displacement = descriptor
                 .and_then(|descriptor| descriptor.shader.as_ref())
                 .map_or(0.0, |shader| shader.displacement_bound);
@@ -1136,21 +1138,18 @@ impl Renderer {
                 .tables
                 .parts
                 .insert(part, row, bounds, displacement, class);
-            if let Some(local) = locals.get(index) {
-                // A copy follows its run from the first write, so it marks
-                // nothing the indirect light reads.
-                if runs.iter().any(|run| run.start == index) {
-                    leader = Some(id);
+            if let Some((_, rows)) = &scattered {
+                // The part's copies, each naming it; set before the first
+                // write, so they mark nothing the indirect light reads.
+                let mut rows = rows.clone();
+                for row in rows.as_chunks_mut::<{ crate::scatter::COPY_FLOATS }>().0 {
+                    row[crate::scatter::COPY_FLOATS - 1] = f32::from_bits(id);
                 }
-                let state = &mut self.tables.parts.state[id as usize];
-                state.local = Some(*local);
-                state.leader = leader;
+                let copies = self.scatter_copies.insert(rows);
+                self.tables.parts.state[id as usize].copies = Some(copies);
             }
             self.tables.parts.write(id, &world, shown, layer, casts);
             ids.push(id);
-        }
-        for run in runs {
-            self.tables.parts.make_run(ids[run].to_vec());
         }
         used.sort_unstable();
         used.dedup();

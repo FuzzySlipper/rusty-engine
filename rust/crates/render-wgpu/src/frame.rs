@@ -430,7 +430,12 @@ impl Renderer {
         self.probes.begin_frame();
         self.probes.poll(&self.gpu);
         let uploaded = self.upload_parts();
-        self.tables.parts.settle_runs();
+        for range in std::mem::take(&mut self.tables.parts.freed_copies) {
+            self.scatter_copies.remove(range);
+        }
+        if self.scatter_copies.upload(&self.gpu) {
+            self.rebind_frame();
+        }
         let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
         let moved = std::mem::take(&mut self.tables.parts.moved);
         let former = std::mem::take(&mut self.tables.parts.former_bounds);
@@ -520,27 +525,25 @@ impl Renderer {
                         &reached.as_ref().expect("reach culled").1
                     }
                 };
-                // A light's caster that moves (or a run member of it) turns
-                // dynamic for the layer: its moves then redraw only the
-                // dynamic casters over the cached static ones. Cascades
-                // re-fit with the camera and keep one list.
-                let moves = |id: &PartId| {
-                    moved.contains(id)
-                        || parts
-                            .runs
-                            .get(id)
-                            .is_some_and(|run| run.ids.iter().any(|member| moved.contains(member)))
-                };
+                // A light's caster that moves turns dynamic for the layer: its
+                // moves then redraw only the dynamic casters over the cached
+                // static ones. Cascades re-fit with the camera and keep one
+                // list.
+                let moves = |id: &PartId| moved.contains(id);
                 if !cascades {
                     layer.dynamic_parts.retain(|id| inside.contains(id));
                     // Only a caster the layer already drew: a part arriving
                     // (or every part, at the first upload) is not moving.
                     let drew = |id: &PartId| {
-                        layer.casters.ids.contains(id) || layer.dynamic.ids.contains(id)
+                        let [casters, dynamic] = [&layer.casters, &layer.dynamic];
+                        casters.ids.contains(id)
+                            || dynamic.ids.contains(id)
+                            || casters.runs.contains(id)
+                            || dynamic.runs.contains(id)
                     };
                     let moving: Vec<PartId> = inside
                         .iter()
-                        .filter(|id| drew(id) && moves(id))
+                        .filter(|id| moves(id) && drew(id))
                         .copied()
                         .collect();
                     for id in &moving {
@@ -559,10 +562,14 @@ impl Renderer {
                 base += dynamic.instances();
                 if list.ids != layer.casters.ids
                     || dynamic.ids != layer.dynamic.ids
+                    || list.runs != layer.casters.runs
+                    || dynamic.runs != layer.dynamic.runs
                     || list
                         .ids
                         .iter()
                         .chain(&dynamic.ids)
+                        .chain(&list.runs)
+                        .chain(&dynamic.runs)
                         .any(|id| moved.contains(id))
                 {
                     layer.stale = true;
@@ -1257,6 +1264,7 @@ impl Renderer {
                 clusters: &self.light_clusters.clusters,
                 probes: &self.probes,
                 cloud_regions: &self.cloud_regions_buffer,
+                copies: self.scatter_copies.buffer(),
             },
         );
         self.caster_bind_group = caster_bind_group(
@@ -1266,6 +1274,7 @@ impl Renderer {
             &self.parts_buffer,
             &self.instances_buffer,
             &self.shadows,
+            self.scatter_copies.buffer(),
         );
     }
 
@@ -1338,10 +1347,11 @@ impl Renderer {
                     candidates
                 }
             };
-            // Blended parts follow the candidates in the list region.
+            // Scatter runs and blended parts follow the candidates in the list
+            // region.
             let blended_base = base + candidates.list.instances();
             let started = std::time::Instant::now();
-            let list = batch::blended_list(&self.tables.parts, layer, &frustum, eye, blended_base);
+            let list = batch::cpu_list(&self.tables.parts, layer, &frustum, eye, blended_base);
             self.batch_time += started.elapsed();
             uploaded += self.upload_instances(blended_base, &list.ids);
             (list, Some(candidates))
@@ -1481,7 +1491,8 @@ impl Renderer {
         };
         // A layer with dynamic casters keeps its static casters' depth in the
         // static cache, unless time moves every caster (`retimed`).
-        let cached_path = |layer: &shadows::ShadowLayer| !retimed && layer.dynamic.instances() > 0;
+        let cached_path =
+            |layer: &shadows::ShadowLayer| !retimed && !layer.dynamic.batches.is_empty();
         let generation = if self
             .shadows
             .layers
@@ -1553,7 +1564,7 @@ impl Renderer {
                         pass.draw(0..3, 0..1);
                     }
                     drawn.encoded += casters_into(&mut pass, &layer.casters);
-                    drawn.casters += layer.casters.instances();
+                    drawn.casters += layer.casters.drawn();
                     cached.push((index, token));
                 }
                 // The tile: the static depth restored, the dynamic casters
@@ -1577,7 +1588,7 @@ impl Renderer {
                 );
                 pass.draw(0..3, tile.page..tile.page + 1);
                 drawn.encoded += casters_into(&mut pass, &layer.dynamic);
-                drawn.casters += layer.dynamic.instances();
+                drawn.casters += layer.dynamic.drawn();
             } else {
                 let mut pass = tile_pass(
                     encoder,
@@ -1591,7 +1602,7 @@ impl Renderer {
                 }
                 drawn.encoded += casters_into(&mut pass, &layer.casters);
                 drawn.encoded += casters_into(&mut pass, &layer.dynamic);
-                drawn.casters += layer.casters.instances() + layer.dynamic.instances();
+                drawn.casters += layer.casters.drawn() + layer.dynamic.drawn();
             }
         }
         for (index, layer) in self.shadows.layers.iter_mut().enumerate() {
@@ -1599,7 +1610,7 @@ impl Renderer {
                 continue;
             }
             layer.stale = false;
-            if retimed || layer.dynamic.instances() == 0 {
+            if retimed || layer.dynamic.batches.is_empty() {
                 layer.cached = None;
             }
             if let Some((_, token)) = cached.iter().find(|(at, _)| *at == index) {
@@ -2579,11 +2590,11 @@ impl Renderer {
             .is_some();
         let prepass_batches: Vec<batch::Batch> = if occlusion.is_some() {
             pipelines_created += self.layouts.start_prepass(&self.gpu.device);
+            // The CPU list's opaque batches: every one, or with GPU culling
+            // its scatter runs beside the culled candidates.
             let cache = self.views[slot].as_ref().expect("view list is current");
             cache
-                .candidates
-                .as_ref()
-                .map_or(&cache.list, |candidates| &candidates.list)
+                .list
                 .batches
                 .iter()
                 .copied()
@@ -2649,6 +2660,9 @@ impl Renderer {
                                 candidates,
                                 |pass, features| self.layouts.prepass.get(pass, features),
                             );
+                            self.draw_batches(pass, &prepass_batches, |pass, features| {
+                                self.layouts.prepass.get(pass, features)
+                            });
                         }
                         None => {
                             self.draw_batches(pass, &prepass_batches, |pass, features| {
@@ -2842,6 +2856,12 @@ impl Renderer {
                         |pass, features| pipelines.get(pass, features),
                     );
                     multi_draws = runs;
+                    // The scatter runs the CPU lists beside the candidates.
+                    let mut encoded = encoded;
+                    encoded +=
+                        self.draw_batches(&mut pass, &batches[..blend_start], |pass, features| {
+                            pipelines.get(pass, features)
+                        });
                     encoded
                 }
                 None => self.draw_batches(&mut pass, &batches[..blend_start], |pass, features| {
@@ -3110,7 +3130,7 @@ impl Renderer {
             self.culling.submitted();
         }
         let instances =
-            list.instances() + candidates.map_or(0, |candidates| candidates.list.instances());
+            list.drawn() + candidates.map_or(0, |candidates| candidates.list.instances());
         ViewStats {
             draws,
             instances,
@@ -3155,6 +3175,7 @@ pub(crate) struct FrameBindings<'a> {
     pub clusters: &'a wgpu::Buffer,
     pub probes: &'a crate::probes::ProbeVolume,
     pub cloud_regions: &'a wgpu::Buffer,
+    pub copies: &'a wgpu::Buffer,
 }
 
 pub(crate) fn frame_bind_group(
@@ -3222,6 +3243,10 @@ pub(crate) fn frame_bind_group(
                 binding: 13,
                 resource: bindings.cloud_regions.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 14,
+                resource: bindings.copies.as_entire_binding(),
+            },
         ],
     })
 }
@@ -3233,6 +3258,7 @@ pub(crate) fn caster_bind_group(
     parts: &wgpu::Buffer,
     instances: &wgpu::Buffer,
     shadows: &ShadowMaps,
+    copies: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("render-wgpu casters"),
@@ -3253,6 +3279,10 @@ pub(crate) fn caster_bind_group(
             wgpu::BindGroupEntry {
                 binding: 6,
                 resource: shadows.views_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 14,
+                resource: copies.as_entire_binding(),
             },
         ],
     })

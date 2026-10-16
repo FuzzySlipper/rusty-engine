@@ -51,6 +51,7 @@ mod precipitation;
 mod primitives;
 mod probes;
 mod resources;
+mod scatter;
 mod shaders;
 mod shadows;
 mod sky_light;
@@ -494,6 +495,8 @@ pub struct Renderer {
     batch_time: std::time::Duration,
     /// What scattered patches have cost to take in (`ScatterUploadReadout`).
     scatter_upload: ScatterUploadReadout,
+    /// Every scatter run's copies (`scatter.rs`).
+    scatter_copies: scatter::ScatterCopies,
     ambient_occlusion: ambient_occlusion::AmbientOcclusionPass,
     /// The world's HDR targets and the finish pass.
     finish: finish::Finish,
@@ -543,6 +546,7 @@ impl Renderer {
         let shadow_timer = timing::PassTimer::new(gpu, "shadows");
         let backdrop_shadow_timer = timing::PassTimer::new(gpu, "backdrop-shadows");
         let probes = probes::ProbeVolume::new(gpu);
+        let scatter_copies = scatter::ScatterCopies::new(gpu);
         let light_clusters = light_clusters::LightClusters::new(
             gpu,
             pipelines::standard(layouts.shaders.module(
@@ -572,6 +576,7 @@ impl Renderer {
                 clusters: &light_clusters.clusters,
                 probes: &probes,
                 cloud_regions: &cloud_regions_buffer,
+                copies: scatter_copies.buffer(),
             },
         );
         let caster_bind_group = frame::caster_bind_group(
@@ -581,6 +586,7 @@ impl Renderer {
             &parts_buffer,
             &instances_buffer,
             &shadows,
+            scatter_copies.buffer(),
         );
         let white = white_texture(gpu);
         let (unlit_material, lit_fallback_material) =
@@ -698,6 +704,7 @@ impl Renderer {
             display_vsync_only: None,
             batch_time: std::time::Duration::ZERO,
             scatter_upload: ScatterUploadReadout::default(),
+            scatter_copies,
             ambient_occlusion,
             finish,
             distance_fields,

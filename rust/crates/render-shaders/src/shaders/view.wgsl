@@ -1,8 +1,8 @@
 #define_import_path rusty::view
 
 // Group 0 of the world, sprite and ghost passes (`Layouts::frame`); the
-// shadow caster pass binds `parts`, `instances` and `shadow_views` at the
-// same numbers (`Layouts::casters`).
+// shadow caster pass binds `parts`, `instances`, `shadow_views` and `copies`
+// at the same numbers (`Layouts::casters`).
 
 #import rusty::types::{Frame, Part, Light, ShadowView, CloudRegion}
 
@@ -34,6 +34,45 @@
 @group(0) @binding(12) var probes_sampler: sampler;
 // The cloud regions (`rusty::clouds`), `frame.cloud_drift.z` of them.
 @group(0) @binding(13) var<storage, read> cloud_regions: array<CloudRegion>;
+
+// A scatter run's copy (render-wgpu `scatter.rs`): where it stands under its
+// part's model (xyz) and its uniform scale (w), its turn (a unit quaternion
+// x, y, z, w), and its linear tint (xyz) with its part's id (w, bits).
+struct ScatterCopy {
+    place: vec4<f32>,
+    turn: vec4<f32>,
+    tint: vec4<f32>,
+};
+
+// The copies of every scatter run; a SCATTER draw's instances index them.
+// The shadow caster pass binds them at the same number.
+@group(0) @binding(14) var<storage, read> copies: array<ScatterCopy>;
+
+// The part row a SCATTER instance draws with: its run's part, with the
+// copy placed, turned and scaled under the part's model.
+fn copy_row(scattered: ScatterCopy) -> Part {
+    var row = parts[bitcast<u32>(scattered.tint.w)];
+    let q = scattered.turn;
+    let turn = mat3x3<f32>(
+        vec3<f32>(1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.w * q.z), 2.0 * (q.x * q.z - q.w * q.y)),
+        vec3<f32>(2.0 * (q.x * q.y - q.w * q.z), 1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z + q.w * q.x)),
+        vec3<f32>(2.0 * (q.x * q.z + q.w * q.y), 2.0 * (q.y * q.z - q.w * q.x), 1.0 - 2.0 * (q.x * q.x + q.y * q.y)),
+    );
+    let scale = scattered.place.w;
+    row.model = row.model * mat4x4<f32>(
+        vec4<f32>(turn[0] * scale, 0.0),
+        vec4<f32>(turn[1] * scale, 0.0),
+        vec4<f32>(turn[2] * scale, 0.0),
+        vec4<f32>(scattered.place.xyz, 1.0),
+    );
+    // The inverse transpose of a turn and a uniform scale: the turn over
+    // the scale.
+    let normal = mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * turn * (1.0 / scale);
+    row.normal_x = vec4<f32>(normal[0], row.normal_x.w);
+    row.normal_y = vec4<f32>(normal[1], row.normal_y.w);
+    row.normal_z = vec4<f32>(normal[2], row.normal_z.w);
+    return row;
+}
 
 // Where `p` stands in the world: itself, or in a backdrop pass
 // (`Frame.backdrop`) the world point the backdrop's `p` stands for, so fog

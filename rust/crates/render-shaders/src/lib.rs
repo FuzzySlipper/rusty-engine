@@ -88,11 +88,16 @@ impl Features {
     /// and the part's `fade` row is the morph's range and focus
     /// (`rusty::view::morph_share`). It has no tangents or occlusion.
     pub const MORPH: Self = Self::bit(65536);
+    /// The part draws a scatter run's copies (a mesh-instance feature, not a
+    /// material one): each instance is a row of `rusty::view::copies`, placed
+    /// under the part's model and tinting the vertex colour, not an id in
+    /// `instances`.
+    pub const SCATTER: Self = Self::bit(131072);
     /// Every standard feature's bit.
     #[cfg(test)]
-    const ALL_BITS: u32 = 131071;
+    const ALL_BITS: u32 = 262143;
 
-    const DEFS: [(Self, &'static str); 17] = [
+    const DEFS: [(Self, &'static str); 18] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -110,6 +115,7 @@ impl Features {
         (Self::WATER, "WATER"),
         (Self::VERTEX_OCCLUSION, "VERTEX_OCCLUSION"),
         (Self::MORPH, "MORPH"),
+        (Self::SCATTER, "SCATTER"),
     ];
 
     const fn bit(bits: u32) -> Self {
@@ -154,7 +160,8 @@ impl Features {
                     | Self::LAYER_WEIGHTS.bits
                     | Self::VERTEX_OCCLUSION.bits
                     | Self::WIND.bits
-                    | Self::MORPH.bits),
+                    | Self::MORPH.bits
+                    | Self::SCATTER.bits),
             product: if self.product & (PRODUCT_CASTS | PRODUCT_DISPLACES) != 0 {
                 self.product
             } else {
@@ -203,6 +210,12 @@ impl Features {
             layers_without_surface,
             excluded(Self::WATER, Self::MASK | Self::NORMAL_MAP),
             excluded(Self::MORPH, Self::VERTEX_TANGENTS | Self::VERTEX_OCCLUSION),
+            // A scatter run copies a static mesh: never a heightfield tile,
+            // a water surface or layered voxel ground.
+            excluded(
+                Self::SCATTER,
+                Self::MORPH | Self::WATER | Self::LAYER_WEIGHTS | Self::TERRAIN_LAYERS,
+            ),
         ];
         !exclusions.contains(&true)
     }

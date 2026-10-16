@@ -63,7 +63,8 @@ impl Pass {
 }
 
 /// One instanced draw: `instances` parts sharing `part`'s mesh range and
-/// material, whose ids start at `first_instance` in the instance buffer.
+/// material, whose ids start at `first_instance` in the instance buffer; or
+/// for a scatter run, its copies, whose rows start there.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Batch {
     pub pass: Pass,
@@ -77,11 +78,19 @@ pub(crate) struct DrawList {
     pub batches: Vec<Batch>,
     /// Part ids, one run per batch; offset by the list's base in the buffer.
     pub ids: Vec<u32>,
+    /// The scatter runs it draws, which take no ids.
+    pub runs: Vec<PartId>,
 }
 
 impl DrawList {
+    /// The ids the list takes in the instance buffer.
     pub fn instances(&self) -> u32 {
         self.ids.len() as u32
+    }
+
+    /// The instances its batches draw: parts, and scatter runs' copies.
+    pub fn drawn(&self) -> u32 {
+        self.batches.iter().map(|batch| batch.instances).sum()
     }
 }
 
@@ -133,7 +142,6 @@ pub(crate) fn view_list(
         if parts.meta[id].is_none()
             || !state.shown
             || ViewLayer::of(state.layer) != layer
-            || parts.follows(id as PartId)
             || !frustum.intersects(parts.cull_bounds(id as PartId))
         {
             continue;
@@ -152,7 +160,7 @@ pub(crate) fn view_list(
         };
         entries.push((pass.bucket(), features, order, id as PartId, pass));
     }
-    group(parts, entries, base, true)
+    group(parts, entries, base)
 }
 
 /// (sort bucket, features (opaque passes), order within the bucket, part,
@@ -161,12 +169,17 @@ type Entry = (Pass, Features, u32, PartId, Pass);
 
 /// The opaque parts a view layer may draw, grouped as `view_list` groups
 /// them but not culled: the GPU cull (`culling.rs`) tests each against the
-/// frustum. Rebuilt only when the parts regroup. Scattered copies are
-/// candidates one by one: the GPU culls each by its own bounds.
+/// frustum. Rebuilt only when the parts regroup. A scatter run is not a
+/// candidate: its copies draw from their own rows, so the CPU list keeps it
+/// (`cpu_list`).
 pub(crate) fn opaque_candidates(parts: &Parts, layer: ViewLayer, base: u32) -> DrawList {
     let mut entries: Vec<Entry> = Vec::new();
     for (id, state) in parts.state.iter().enumerate() {
-        if parts.meta[id].is_none() || !state.shown || ViewLayer::of(state.layer) != layer {
+        if parts.meta[id].is_none()
+            || !state.shown
+            || ViewLayer::of(state.layer) != layer
+            || state.copies.is_some()
+        {
             continue;
         }
         let pass = Pass::of(state.class, state.mirrored);
@@ -175,13 +188,13 @@ pub(crate) fn opaque_candidates(parts: &Parts, layer: ViewLayer, base: u32) -> D
         }
         entries.push((pass, state.class.features, state.key, id as PartId, pass));
     }
-    group(parts, entries, base, false)
+    group(parts, entries, base)
 }
 
-/// The blended parts a view pass sees, back to front from `eye`: the CPU
-/// keeps these beside GPU-culled opaque candidates, since their order is
-/// the camera's.
-pub(crate) fn blended_list(
+/// What the CPU lists beside GPU-culled opaque candidates: the scatter runs
+/// a view pass sees, then its blended parts back to front from `eye`, whose
+/// order is the camera's.
+pub(crate) fn cpu_list(
     parts: &Parts,
     layer: ViewLayer,
     frustum: &Frustum,
@@ -195,7 +208,7 @@ pub(crate) fn blended_list(
         }
         let pass = Pass::of(state.class, state.mirrored);
         let bounds = parts.cull_bounds(id as PartId);
-        if !pass.blends() || parts.follows(id as PartId) || !frustum.intersects(bounds) {
+        if !(pass.blends() || state.copies.is_some()) || !frustum.intersects(bounds) {
             continue;
         }
         let center = (bounds.min + bounds.max) * 0.5;
@@ -207,13 +220,13 @@ pub(crate) fn blended_list(
             pass,
         ));
     }
-    group(parts, entries, base, true)
+    group(parts, entries, base)
 }
 
 /// Parts that may cast shadows: every shown triangle part of the scene layer
 /// whose node casts (`ShadowCasting::Cast`) and whose material does (an
-/// opaque one, or a blended one with `translucent_shadow`). A scattered run
-/// is one candidate, its leader.
+/// opaque one, or a blended one with `translucent_shadow`). A scatter run
+/// is one candidate.
 pub(crate) fn caster_candidates(parts: &Parts, layer: RenderLayer) -> Vec<PartId> {
     parts
         .state
@@ -226,7 +239,6 @@ pub(crate) fn caster_candidates(parts: &Parts, layer: RenderLayer) -> Vec<PartId
                 && state.class.shadow
                 && state.layer == layer
                 && !state.class.lines
-                && !parts.follows(*id as PartId)
         })
         .map(|(id, _)| id as PartId)
         .collect()
@@ -276,28 +288,29 @@ pub(crate) fn caster_list(
         let pass = Pass::of(opaque, state.mirrored);
         entries.push((pass, state.class.features.caster(), state.key, id, pass));
     }
-    group(parts, entries, base, true)
+    group(parts, entries, base)
 }
 
-/// Batch sorted entries into instance runs. With `runs`, a scattered run's
-/// leader stands for its whole run: one batch of all its copies.
-fn group(parts: &Parts, mut entries: Vec<Entry>, base: u32, runs: bool) -> DrawList {
+/// Batch sorted entries into instance runs. A scatter run is a batch of its
+/// own, its instances its copies' rows (`scatter.rs`), not ids.
+fn group(parts: &Parts, mut entries: Vec<Entry>, base: u32) -> DrawList {
     entries.sort_unstable();
     let mut list = DrawList {
         batches: Vec::new(),
         ids: Vec::with_capacity(entries.len()),
+        runs: Vec::new(),
     };
     let mut previous: Option<(Pass, u32)> = None;
     for (_, _, _, id, pass) in entries {
         let key = parts.state[id as usize].key;
-        if let Some(run) = runs.then(|| parts.runs.get(&id)).flatten() {
+        if let Some(copies) = parts.state[id as usize].copies {
+            list.runs.push(id);
             list.batches.push(Batch {
                 pass,
                 part: id,
-                first_instance: base + list.ids.len() as u32,
-                instances: run.ids.len() as u32,
+                first_instance: copies.first,
+                instances: copies.count,
             });
-            list.ids.extend_from_slice(&run.ids);
             // The next part starts a batch of its own.
             previous = None;
             continue;

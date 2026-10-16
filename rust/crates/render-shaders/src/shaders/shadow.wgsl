@@ -6,7 +6,7 @@
 // product's `cast_shadow` may discard.
 
 #import rusty::types::{texture_space_position, Caster, Vertex}
-#import rusty::view::{parts, instances, shadow_views, fade_toward_origin, morph_share, morph_normal}
+#import rusty::view::{parts, instances, copies, copy_row, shadow_views, fade_toward_origin, morph_share, morph_normal}
 #import rusty::material::{material, albedo, albedo_sampler}
 #import rusty::surface::{transform_uv, voxel_uv, triplanar_uvs, triplanar_weights, hex_tiles, hex_texture}
 #ifdef WIND
@@ -48,8 +48,14 @@ fn vs_shadow(
 #endif
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
+#ifdef SCATTER
+    let scattered = copies[instance];
+    let part = bitcast<u32>(scattered.tint.w);
+    let row = copy_row(scattered);
+#else
     let part = instances[instance];
     let row = parts[part];
+#endif
 #ifdef MORPH
     let share = morph_share(row, mesh_position);
     let position = mesh_position + vec3<f32>(0.0, morph.x * share, 0.0);

@@ -487,9 +487,10 @@ pub(crate) struct PartState {
     pub layer: RenderLayer,
     /// The part casts into shadow layers (`ShadowCasting::Cast`).
     pub casts_shadows: bool,
-    /// A scattered copy (`NodeKind::Scatter`): the first copy of its mesh
-    /// group, which leads the run the CPU lists cull and draw as one.
-    pub leader: Option<PartId>,
+    /// A scatter run (`NodeKind::Scatter`): one mesh group's copies, rows of
+    /// `scatter::ScatterCopies` its draw instances (SCATTER), culled and
+    /// listed as this one part by their bounds together.
+    pub copies: Option<crate::scatter::CopyRange>,
 }
 
 /// GPU row per part: model matrix, normal matrix (3 columns), linear colour
@@ -521,12 +522,6 @@ impl PartRow {
             fade: [0.0; 4],
         }
     }
-}
-
-/// A run of scattered copies drawn as one: its parts and their world bounds.
-pub(crate) struct Run {
-    pub ids: Vec<PartId>,
-    pub bounds: Aabb,
 }
 
 /// Object-space positions, for meshes without a texture space.
@@ -567,10 +562,9 @@ pub(crate) struct Parts {
     keys: HashMap<BatchKey, (u32, u32)>,
     free_keys: Vec<u32>,
     next_key: u32,
-    /// Scattered runs by their leader.
-    pub runs: HashMap<PartId, Run>,
-    /// Runs whose copies were written since their bounds were.
-    dirty_runs: HashSet<PartId>,
+    /// Scatter runs' rows removed since they were last given back
+    /// (`ScatterCopies::remove`).
+    pub freed_copies: Vec<crate::scatter::CopyRange>,
     /// Debug-layer parts draw: inspection shows the Debug layer.
     debug_shown: bool,
 }
@@ -596,7 +590,7 @@ impl Parts {
             shown: false,
             layer: RenderLayer::Scene,
             casts_shadows: true,
-            leader: None,
+            copies: None,
         };
         let id = if let Some(id) = self.free.pop() {
             self.meta[id as usize] = Some(part);
@@ -619,14 +613,13 @@ impl Parts {
     pub fn remove(&mut self, id: PartId) {
         if let Some(part) = self.meta[id as usize].take() {
             self.release_key(part);
-            if self.state[id as usize].leader.is_none() {
+            if self.state[id as usize].copies.is_none() {
                 self.former_bounds
                     .push(self.state[id as usize].world_bounds);
             }
         }
-        if self.state[id as usize].leader.take() == Some(id) {
-            self.runs.remove(&id);
-            self.dirty_runs.remove(&id);
+        if let Some(copies) = self.state[id as usize].copies.take() {
+            self.freed_copies.push(copies);
         }
         self.dirty.remove(&id);
         self.free.push(id);
@@ -682,9 +675,9 @@ impl Parts {
             .transformed(world)
             .grown(state.displacement);
         // Scattered copies are not the indirect light's scene: they mark no
-        // bricks, and their run re-culls as a whole.
-        let leader = state.leader;
-        if leader.is_none() && !state.world_bounds.is_empty() && state.world_bounds != bounds {
+        // bricks.
+        let scattered = state.copies.is_some();
+        if !scattered && !state.world_bounds.is_empty() && state.world_bounds != bounds {
             self.former_bounds.push(state.world_bounds);
         }
         state.world_bounds = bounds;
@@ -693,15 +686,7 @@ impl Parts {
         state.layer = layer;
         state.casts_shadows = casts_shadows;
         self.dirty.insert(id);
-        match leader {
-            Some(leader) => {
-                self.dirty_runs.insert(leader);
-                self.regrouped = true;
-            }
-            None => {
-                self.moved.insert(id);
-            }
-        }
+        self.moved.insert(id);
     }
 
     /// Whether Debug-layer parts draw; their nodes write them again.
@@ -716,48 +701,9 @@ impl Parts {
         (!bounds.is_empty()).then_some(bounds)
     }
 
-    /// Make `ids` (inserted, one mesh group's copies) a run led by the
-    /// first.
-    pub fn make_run(&mut self, ids: Vec<PartId>) {
-        let Some(&leader) = ids.first() else { return };
-        for &id in &ids {
-            self.state[id as usize].leader = Some(leader);
-        }
-        self.dirty_runs.insert(leader);
-        self.runs.insert(
-            leader,
-            Run {
-                ids,
-                bounds: Aabb::EMPTY,
-            },
-        );
-    }
-
-    /// Bring the bounds of runs whose copies moved up to date.
-    pub fn settle_runs(&mut self) {
-        for leader in std::mem::take(&mut self.dirty_runs) {
-            if let Some(run) = self.runs.get_mut(&leader) {
-                run.bounds = run.ids.iter().fold(Aabb::EMPTY, |bounds, id| {
-                    bounds.union(&self.state[*id as usize].world_bounds)
-                });
-            }
-        }
-    }
-
-    /// Whether the CPU lists skip this part: a scattered copy they draw
-    /// through its run's leader.
-    pub fn follows(&self, id: PartId) -> bool {
-        self.state[id as usize]
-            .leader
-            .is_some_and(|leader| leader != id)
-    }
-
-    /// The bounds the CPU lists cull a part by: its run's for a leader.
+    /// The bounds the CPU lists cull a part by.
     pub fn cull_bounds(&self, id: PartId) -> &Aabb {
-        match self.runs.get(&id) {
-            Some(run) => &run.bounds,
-            None => &self.state[id as usize].world_bounds,
-        }
+        &self.state[id as usize].world_bounds
     }
 
     fn acquire_key(&mut self, part: &Part) -> u32 {

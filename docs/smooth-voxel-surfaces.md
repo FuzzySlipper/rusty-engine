@@ -388,9 +388,11 @@ the rest:
   a hash of its spot.
 - **Drawing.** A chunk's copies of one scatter are one scatter patch, a child
   of the chunk's node: one instanced draw per mesh group, culled by the
-  patch's bounds (the GPU cull, when on, culls each copy). Copies are rows of
-  the patch, never nodes, entities, colliders or pickable, and the indirect
-  light volume does not see them. They shrink toward their origin over the
+  patch's bounds, the GPU cull or not. Each copy is a 48-byte row of one
+  renderer buffer (its place, turn, scale and tint), so draw lists, culling and
+  shadow casters see one entry per patch and mesh group however many copies it
+  holds. Copies are never nodes, entities, colliders or pickable, and the
+  indirect light volume does not see them. They shrink toward their origin over the
   fade distance from the camera, in the vertex stage and the shadow pass
   alike, so nothing pops at the edge of the radius. The material's wind
   sways them: bend grows with height above each copy's own origin.
