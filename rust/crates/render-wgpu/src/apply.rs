@@ -1959,15 +1959,17 @@ impl Renderer {
             layer_palette: Vec::new(),
             vertex_occlusion: false,
             morph: None,
+            // Copied from too: the selected scatter copies draw from a pool
+            // of their meshes (`mesh_pool.rs`).
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),
-                usage: wgpu::BufferUsages::VERTEX,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
             }),
             indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(indices),
-                usage: wgpu::BufferUsages::INDEX,
+                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC,
             }),
             topology,
             groups,

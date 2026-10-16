@@ -43,6 +43,7 @@ mod impostor;
 mod inspection;
 mod labels;
 mod light_clusters;
+mod mesh_pool;
 mod occlusion;
 mod overlays;
 mod particles;
@@ -533,6 +534,8 @@ pub struct Renderer {
     /// Selected scatter copies tested against the view's opaque depth
     /// (`occlusion.rs`).
     occlusion: occlusion::Occlusion,
+    /// The meshes the selected scatter copies draw, pooled (`mesh_pool.rs`).
+    mesh_pool: mesh_pool::MeshPool,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     /// Rain or snow around the camera (`precipitation.rs`).
@@ -757,6 +760,7 @@ impl Renderer {
             scatter_select,
             impostors: impostor::Impostors::new(device),
             occlusion,
+            mesh_pool: mesh_pool::MeshPool::new(gpu),
             composition: Default::default(),
             effects,
             precipitation,

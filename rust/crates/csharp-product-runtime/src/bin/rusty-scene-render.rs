@@ -534,6 +534,8 @@ fn run() -> Result<(), String> {
         "runs": gpu_readout.scatter_selection.runs,
         "parts": gpu_readout.scatter_selection.parts,
         "draws": gpu_readout.scatter_selection.draws,
+        "commands": gpu_readout.scatter_selection.commands,
+        "poolBytes": gpu_readout.scatter_selection.pool_bytes,
         "copies": gpu_readout.scatter_selection.copies,
         "tested": gpu_readout.scatter_selection.tested,
         "drawn": gpu_readout.scatter_selection.drawn,

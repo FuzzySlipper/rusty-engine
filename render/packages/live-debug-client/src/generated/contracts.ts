@@ -376,6 +376,12 @@ refused?: string,
  */
 runs: number, parts: number, draws: number, copies: number, 
 /**
+ * The commands the camera's draws take (a run sharing pass, features
+ * and material is one multi-draw), and the bytes of the mesh pool they
+ * draw from.
+ */
+commands: number, poolBytes: number, 
+/**
  * From the last read-back pass: copies tested, drawn for the camera (a
  * crossfading copy twice), drawn for the shadows, thinned away,
  * outside the frustum and inside it but hidden behind the view's

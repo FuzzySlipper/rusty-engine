@@ -155,7 +155,9 @@ inside the view, at the level their distance reaches. Copies outside the
 view, past reach or thinned away cost no vertex work, and the CPU's draw
 lists hold no copy at all. Every tile's copies of one mesh, material and
 pipeline draw together, so the draws follow the layers' meshes and levels,
-not the tiles. Every world shadow layer takes the casting copies the same
+not the tiles. The meshes they draw are copied into one shared vertex and
+index buffer, so the draws of one pass, pipeline and material (the variants
+of a species with the same bark and leaves) are one multi-draw command. Every world shadow layer takes the casting copies the same
 way without the view test: the sun's cascades those within their reach (the
 light's `range`), and a point, spot or ambient light's layer those inside
 it. Without compute, copies draw at their first level (the readout's
@@ -218,7 +220,9 @@ of the upload is `engine.renderer` statistics' `scatter`: patches and copies
 taken in since it was made, the CPU time turning them into drawable parts and
 the GPU row bytes they upload; read it twice and subtract for a span.
 `engine.renderer`'s `gpu.scatterSelection` reports the last world view's
-selection: runs, parts, draws and copies selected, and (a frame later) copies
+selection: runs, parts, draws and copies selected, the commands its draws
+take and the bytes of their mesh pool (`commands`, `poolBytes`), and (a
+frame later) copies
 tested, drawn (a crossfading copy twice), drawn for shadows, thinned away,
 outside the view and hidden behind its depth (`occluded`), with draws at
 levels 1 to 3; its GPU time is the `scatter-select` pass. `gpu.occlusion`

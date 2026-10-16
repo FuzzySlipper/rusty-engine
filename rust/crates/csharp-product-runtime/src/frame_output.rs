@@ -1005,6 +1005,8 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             runs: readout.scatter_selection.runs,
             parts: readout.scatter_selection.parts,
             draws: readout.scatter_selection.draws,
+            commands: readout.scatter_selection.commands,
+            pool_bytes: readout.scatter_selection.pool_bytes,
             copies: readout.scatter_selection.copies,
             tested: readout.scatter_selection.tested,
             drawn: readout.scatter_selection.drawn,

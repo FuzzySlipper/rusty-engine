@@ -31,7 +31,7 @@ use crate::pipelines::{Layouts, Pipelines};
 use crate::shaders::Features;
 use crate::shadows::{self, ShadowMaps};
 use crate::tables::{
-    Builtin, Environment, GpuMesh, MaterialRef, NodeKind, Part, PartId, PART_ROW_FLOATS,
+    Builtin, Environment, GpuMesh, MaterialRef, MeshRef, NodeKind, Part, PartId, PART_ROW_FLOATS,
 };
 use crate::target::{ColorTarget, TargetView};
 use crate::water;
@@ -449,6 +449,16 @@ impl Renderer {
             if rebuilt {
                 recast = self.scatter_select.casts();
                 self.scatter_select.build(&self.gpu, &self.tables);
+                let (tables, builtins) = (&self.tables, &self.builtins);
+                self.scatter_select.pool_meshes(
+                    &self.gpu,
+                    &mut self.mesh_pool,
+                    |mesh| match mesh {
+                        MeshRef::Static(asset) => tables.static_meshes.get(*asset),
+                        MeshRef::Builtin(kind) => builtins.get(kind),
+                        _ => None,
+                    },
+                );
                 recast |= self.scatter_select.casts();
             }
             let state = &self.tables.parts.state;
@@ -1717,18 +1727,33 @@ impl Renderer {
     }
 
     /// Draw the scatter selection from the camera's list or the shadows'
-    /// (only draws that cast), each draw from its indirect arguments.
+    /// (only draws that cast). A run of pooled draws sharing pass, features
+    /// and material (`ScatterSelect::pool_meshes`), their arguments side by
+    /// side, is one multi-draw from the mesh pool.
     fn draw_selected<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'_>,
         shadow: bool,
         pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
     ) -> Encoded {
+        let draws = &self.scatter_select.draws;
         let mut current: Option<(batch::Pass, Features)> = None;
+        let mut pool_bound = false;
         let mut encoded = Encoded::default();
-        for selected in &self.scatter_select.draws {
+        let mut index = 0;
+        while index < draws.len() {
+            let selected = &draws[index];
             if shadow && !selected.casts {
+                index += 1;
                 continue;
+            }
+            let mut end = index + 1;
+            while selected.pooled
+                && end < draws.len()
+                && draws[end].run == selected.run
+                && (!shadow || draws[end].casts)
+            {
+                end += 1;
             }
             let state = &self.tables.parts.state[selected.part as usize];
             let (_, mesh, material, features) = self.drawn_part(selected.part);
@@ -1740,21 +1765,37 @@ impl Renderer {
                 encoded.pipeline_binds += 1;
             }
             pass.set_bind_group(1, material, &[]);
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            if let Some(second) = mesh.second_stream() {
-                pass.set_vertex_buffer(1, second.slice(..));
+            if selected.pooled {
+                if !pool_bound {
+                    pass.set_vertex_buffer(0, self.mesh_pool.vertices.slice(..));
+                    pass.set_index_buffer(
+                        self.mesh_pool.indices.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    pool_bound = true;
+                }
+            } else {
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                if let Some(second) = mesh.second_stream() {
+                    pass.set_vertex_buffer(1, second.slice(..));
+                }
+                pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pool_bound = false;
             }
-            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
-            let draw = if shadow {
+            let first = if shadow {
                 selected.shadow
             } else {
                 selected.camera
             };
-            pass.draw_indexed_indirect(
-                &self.scatter_select.args,
-                crate::scatter_select::ScatterSelect::args_offset(draw),
-            );
+            let offset = crate::scatter_select::ScatterSelect::args_offset(first);
+            let count = (end - index) as u32;
+            if count > 1 {
+                pass.multi_draw_indexed_indirect(&self.scatter_select.args, offset, count);
+            } else {
+                pass.draw_indexed_indirect(&self.scatter_select.args, offset);
+            }
             encoded.draws += 1;
+            index = end;
         }
         encoded
     }

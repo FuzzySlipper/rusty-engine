@@ -21,10 +21,13 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use glam::{Mat4, Vec3};
 
 use crate::batch::Frustum;
+use crate::batch::Pass;
 use crate::frame::ViewLayer;
+use crate::mesh_pool::MeshPool;
 use crate::occlusion::Occluders;
 use crate::shaders::Features;
 use crate::shadows::CopyReach;
+use crate::tables::{GpuMesh, MaterialRef, MeshRef};
 use crate::tables::{PartId, Tables};
 use crate::timing::{GpuPassTiming, PassTimer};
 use crate::Gpu;
@@ -53,7 +56,7 @@ const MAX_ROW: u32 = 1 << 24;
 /// pipeline (`part` one of them, for those), its arguments in the camera's
 /// and the shadows' lists, and where its entries start in the selection's
 /// region of the instance buffer (in entries, two words each).
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone)]
 pub(crate) struct SelectedDraw {
     pub part: PartId,
     pub camera: u32,
@@ -62,8 +65,18 @@ pub(crate) struct SelectedDraw {
     pub casts: bool,
     camera_entries: u32,
     shadow_entries: u32,
+    /// Its mesh, and its index range there; once pooled
+    /// (`MeshPool`), the range in the pool and the mesh's base vertex.
+    mesh: MeshRef,
     first_index: u32,
     index_count: u32,
+    base_vertex: u32,
+    pub pooled: bool,
+    /// What draws of one command share: pass, features and material.
+    merge: (Pass, Features, (u8, u32)),
+    /// Its run: the draws after it in the same run, pooled, draw in one
+    /// multi-draw with it.
+    pub run: u32,
 }
 
 /// The selection of the last world view pass, for diagnostics.
@@ -78,6 +91,11 @@ pub struct ScatterSelectionReadout {
     pub parts: u32,
     pub draws: u32,
     pub copies: u32,
+    /// The commands the camera's draws take (a run sharing pass, features
+    /// and material is one multi-draw), and the bytes of the mesh pool they
+    /// draw from.
+    pub commands: u32,
+    pub pool_bytes: u64,
     /// From the last read-back pass: copies tested, drawn for the camera
     /// (a crossfading copy twice), drawn for the shadows, thinned away,
     /// outside the frustum and inside it but hidden behind the view's
@@ -119,6 +137,8 @@ pub(crate) struct ScatterSelect {
     values: [u32; STATS],
     casts_windy: bool,
     casts_displaced: bool,
+    commands: u32,
+    pool_bytes: u64,
     last_eye: Option<Vec3>,
     eye_moved: bool,
 }
@@ -263,6 +283,8 @@ impl ScatterSelect {
             part_count: 0,
             casts_windy: false,
             casts_displaced: false,
+            commands: 0,
+            pool_bytes: 0,
             last_eye: None,
             eye_moved: false,
             chunk_count: 0,
@@ -276,6 +298,47 @@ impl ScatterSelect {
 
     pub fn available(&self) -> bool {
         self.pipeline.is_some()
+    }
+
+    /// Place the draws' meshes in `pool` (each found by `mesh_of`) and
+    /// number their runs: a run of draws sharing pass, features and
+    /// material, all pooled, is one command. After [`Self::build`].
+    pub fn pool_meshes<'a>(
+        &mut self,
+        gpu: &Gpu,
+        pool: &mut MeshPool,
+        mesh_of: impl Fn(&MeshRef) -> Option<&'a GpuMesh>,
+    ) {
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-wgpu scatter mesh pool"),
+            });
+        pool.begin();
+        for draw in &mut self.draws {
+            let placed = mesh_of(&draw.mesh)
+                .and_then(|mesh| pool.place(gpu, &mut encoder, &draw.mesh, mesh));
+            draw.pooled = placed.is_some();
+            if let Some((base_vertex, first_index)) = placed {
+                draw.base_vertex = base_vertex;
+                draw.first_index += first_index;
+            }
+        }
+        pool.finish();
+        gpu.queue.submit([encoder.finish()]);
+        let mut run = 0;
+        let mut commands = 0;
+        let mut previous: Option<(Pass, Features, (u8, u32))> = None;
+        for draw in &mut self.draws {
+            if !draw.pooled || previous != Some(draw.merge) {
+                run += 1;
+                commands += 1;
+            }
+            previous = draw.pooled.then_some(draw.merge);
+            draw.run = run;
+        }
+        self.commands = commands;
+        self.pool_bytes = pool.bytes();
     }
 
     /// A draw of the selection casts shadows.
@@ -344,6 +407,11 @@ impl ScatterSelect {
                         ))
                         .or_insert_with(|| {
                             let meta = parts.meta[id as usize].as_ref().expect("a live part");
+                            let material = match &meta.material {
+                                MaterialRef::Retained(id) => (0, *id),
+                                MaterialRef::Unlit => (1, 0),
+                                MaterialRef::LitFallback => (2, 0),
+                            };
                             draws.push(SelectedDraw {
                                 part: id,
                                 camera: 0,
@@ -351,8 +419,17 @@ impl ScatterSelect {
                                 casts,
                                 camera_entries: 0,
                                 shadow_entries: 0,
+                                mesh: meta.mesh.clone(),
                                 first_index: meta.first_index,
                                 index_count: meta.index_count,
+                                base_vertex: 0,
+                                pooled: false,
+                                merge: (
+                                    Pass::of(state.class, state.mirrored),
+                                    state.class.features,
+                                    material,
+                                ),
+                                run: 0,
                             });
                             reserves.push(false);
                             draws.len() as u32 - 1
@@ -412,20 +489,19 @@ impl ScatterSelect {
         // bindings change least; the camera's arguments first, then the
         // shadows', and each draw's entries after the last's.
         let mut order: Vec<u32> = (0..draws.len() as u32).collect();
+        // By pass, features and material, so a run of draws sharing them
+        // draws as one command from the mesh pool.
         order.sort_by_key(|&draw| {
-            let state = &parts.state[draws[draw as usize].part as usize];
-            (
-                state.class.features,
-                state.key,
-                draws[draw as usize].first_index,
-            )
+            let selected = &draws[draw as usize];
+            let state = &parts.state[selected.part as usize];
+            (selected.merge, state.key, selected.first_index)
         });
         let count = draws.len() as u32;
         let mut entries = 0u32;
         let mut slots = vec![0u32; draws.len()];
         let mut ordered = Vec::with_capacity(draws.len());
         for (slot, &draw) in order.iter().enumerate() {
-            let mut selected = draws[draw as usize];
+            let mut selected = draws[draw as usize].clone();
             let capacity = selected.camera_entries;
             selected.camera = slot as u32;
             selected.shadow = count + slot as u32;
@@ -545,7 +621,7 @@ impl ScatterSelect {
                         index_count: draw.index_count,
                         instance_count: 0,
                         first_index: draw.first_index,
-                        base_vertex: 0,
+                        base_vertex: draw.base_vertex as i32,
                         first_instance: base + entries,
                     }
                     .as_bytes(),
@@ -698,6 +774,8 @@ impl ScatterSelect {
             runs: self.run_count,
             parts: self.part_count,
             draws: self.draws.len() as u32,
+            commands: self.commands,
+            pool_bytes: self.pool_bytes,
             copies: self.copy_count,
             tested,
             drawn,

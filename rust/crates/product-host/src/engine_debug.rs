@@ -254,6 +254,12 @@ pub struct ProductHostScatterSelectionStatistics {
     pub parts: u32,
     pub draws: u32,
     pub copies: u32,
+    /// The commands the camera's draws take (a run sharing pass, features
+    /// and material is one multi-draw), and the bytes of the mesh pool they
+    /// draw from.
+    pub commands: u32,
+    #[ts(type = "number")]
+    pub pool_bytes: u64,
     /// From the last read-back pass: copies tested, drawn for the camera (a
     /// crossfading copy twice), drawn for the shadows, thinned away,
     /// outside the frustum and inside it but hidden behind the view's

@@ -1484,3 +1484,106 @@ fn wind_material_copies_in_still_air_leave_the_shadow_maps_alone() {
         assert_eq!(stats.shadow_layers, 0, "step {step}: {stats:?}");
     }
 }
+
+#[test]
+fn patches_of_two_meshes_with_one_material_draw_in_one_command() {
+    // Posts and wide posts share a material: two draws, one multi-draw from
+    // the mesh pool, and the picture of the same posts as instances.
+    let wide = || {
+        let mut payload = post();
+        if let MeshPayloadSource::Inline { positions, .. } = &mut payload.source {
+            for point in positions.as_chunks_mut::<3>().0 {
+                point[0] *= 2.0;
+            }
+        }
+        payload.bounds = MeshBoundsDescriptor {
+            min: [-0.3, 0.0, -0.15],
+            max: [0.3, 1.0, 0.15],
+        };
+        payload
+    };
+    let scene = |scattered: bool| {
+        let mut harness = harness(false);
+        let mut ops = stage(false);
+        // The wide post binds the post's material.
+        let mut defined = coloured_mesh("wide", wide(), [0.9, 0.9, 0.9, 1.0]);
+        if let RenderDiff::DefineStaticMesh { asset } = &mut defined[1] {
+            asset.material_slots[0].material = format!("material/{POST}");
+        }
+        ops.push(defined.remove(1));
+        if scattered {
+            ops.push(patch(
+                20,
+                5,
+                vec![copy(SPOTS[0], [1.0; 3])],
+                ScatterFade::default(),
+                false,
+            ));
+            let mut wide_patch = patch(
+                21,
+                5,
+                vec![copy(SPOTS[2], [1.0; 3])],
+                ScatterFade::default(),
+                false,
+            );
+            if let RenderDiff::CreateScatterPatch { patch, .. } = &mut wide_patch {
+                patch.asset = "mesh/wide".to_owned();
+            }
+            ops.push(wide_patch);
+        } else {
+            ops.push(instance(20, Some(5), POST, transform(SPOTS[0], 0.0, 1.0)));
+            ops.push(instance(21, Some(5), "wide", transform(SPOTS[2], 0.0, 1.0)));
+        }
+        harness.apply(ops);
+        let selection = selection_counts(&mut harness);
+        (render(&mut harness).1, selection)
+    };
+    let (expected, _) = scene(false);
+    let (frame, selection) = scene(true);
+    if !selection.enabled {
+        return;
+    }
+    assert_eq!(
+        (selection.draws, selection.commands),
+        (2, 1),
+        "{selection:?}"
+    );
+    assert!(selection.pool_bytes > 0);
+    assert_eq!(frame, expected);
+}
+
+#[test]
+fn a_mesh_defined_anew_draws_anew_from_the_pool() {
+    // The posts' mesh is defined again twice as wide after the copies drew:
+    // they draw the new mesh, as a scene that had it from the start does.
+    let wide = || {
+        let mut payload = post();
+        if let MeshPayloadSource::Inline { positions, .. } = &mut payload.source {
+            for point in positions.as_chunks_mut::<3>().0 {
+                point[0] *= 2.0;
+            }
+        }
+        payload.bounds = MeshBoundsDescriptor {
+            min: [-0.3, 0.0, -0.15],
+            max: [0.3, 1.0, 0.15],
+        };
+        payload
+    };
+    let redefine = || coloured_mesh(POST, wide(), [0.9, 0.9, 0.9, 1.0]).remove(1);
+    let mut changed = harness(false);
+    let mut ops = stage(false);
+    ops.push(patch(20, 5, whole(), ScatterFade::default(), false));
+    changed.apply(ops);
+    render(&mut changed);
+    changed.apply(vec![redefine()]);
+    render(&mut changed);
+    let (_, frame) = render(&mut changed);
+    let mut fresh = harness(false);
+    let mut ops = stage(false);
+    ops.push(redefine());
+    ops.push(patch(20, 5, whole(), ScatterFade::default(), false));
+    fresh.apply(ops);
+    render(&mut fresh);
+    let (_, expected) = render(&mut fresh);
+    assert_eq!(frame, expected);
+}
