@@ -161,6 +161,32 @@ light's `range`), and a point, spot or ambient light's layer those inside
 it. Without compute, copies draw at their first level (the readout's
 `scatterSelection.refused` says why).
 
+### Occlusion
+
+With the renderer setting `OcclusionCulling` (`RendererSettings.Set(...
+with { OcclusionCulling = true })`, or the player's video option *Vegetation
+occlusion*), each world view first draws its opaque parts other than
+scattered copies depth-only, reduces that depth to a farthest-depth pyramid,
+and drops from the camera's list every copy whose bounds lie wholly behind
+it. With screen-space ambient occlusion on, its pre-pass is that depth and
+the extra cost is the pyramid (about 0.04 ms at 1280×720 on an RX 9070
+XT); without it, the view draws a half-resolution depth pass of its own
+(about 0.09 ms in all). The depth is the frame's own, so nothing the
+selection keeps appears a frame late, and camera motion, origin rebases and
+edits need nothing more. A masked part, such as a hand-placed tree's
+foliage, writes only the depth of what it keeps; scattered copies never
+hide each other, and the shadows' list is not tested.
+
+It pays where opaque surfaces hide many copies and is neutral in open
+country. In CraftSurvive, at 1280×720: inside a dense forest 24% of
+the drawn copies were hidden and the world pass fell from 5.04 to 4.70 ms;
+looking past a near crown, 75% and 3.34 to 3.01 ms; up a long slope with
+forest beyond it, 18% and no measurable change; from a raised vista, 3% and
+none. The picture was the same in every case. A copy hidden behind terrain
+mostly costs vertex work only, since the depth test already discards its
+pixels, so the gain follows the number of hidden copies more than their
+area.
+
 ## Budgets and readout
 
 - `MaximumInstances`: the layer's copies are given to its tiles nearest
@@ -180,9 +206,13 @@ taken in since it was made, the CPU time turning them into drawable parts and
 the GPU row bytes they upload; read it twice and subtract for a span.
 `engine.renderer`'s `gpu.scatterSelection` reports the last world view's
 selection: runs, parts, draws and copies selected, and (a frame later) copies
-tested, drawn (a crossfading copy twice), drawn for shadows, thinned away
-and outside the view, with draws at levels 1 to 3; its GPU time is the
-`scatter-select` pass.
+tested, drawn (a crossfading copy twice), drawn for shadows, thinned away,
+outside the view and hidden behind its depth (`occluded`), with draws at
+levels 1 to 3; its GPU time is the `scatter-select` pass. `gpu.occlusion`
+reports the occlusion test: on, its pyramid's size and levels, and whether
+the ambient occlusion pre-pass's depth served; its GPU time is the
+`occlusion` pass (with `ao-prepass-copies`, the pre-pass's copies drawn after
+the test).
 
 Copies are never nodes, entities, colliders or pickable, and they cast
 shadows only when the layer asks.

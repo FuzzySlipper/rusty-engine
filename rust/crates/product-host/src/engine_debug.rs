@@ -110,6 +110,7 @@ pub struct ProductHostRendererSettingValues {
     pub vsync: bool,
     pub clustered_lighting: bool,
     pub gpu_culling: bool,
+    pub occlusion_culling: bool,
     /// `off`, `low` or `high`.
     pub volumetric_fog: String,
     /// `off`, `low` or `high`.
@@ -158,6 +159,7 @@ pub struct ProductHostGpuStatistics {
     pub gpu_culling: ProductHostGpuCullingStatistics,
     pub scatter_selection: ProductHostScatterSelectionStatistics,
     pub impostors: ProductHostImpostorStatistics,
+    pub occlusion: ProductHostOcclusionStatistics,
     pub indirect_light: ProductHostIndirectLightStatistics,
 }
 
@@ -253,14 +255,30 @@ pub struct ProductHostScatterSelectionStatistics {
     pub draws: u32,
     pub copies: u32,
     /// From the last read-back pass: copies tested, drawn for the camera (a
-    /// crossfading copy twice), drawn for the shadows, thinned away and
-    /// outside the frustum, and the camera's draws at levels 1 to 3.
+    /// crossfading copy twice), drawn for the shadows, thinned away,
+    /// outside the frustum and inside it but hidden behind the view's
+    /// opaque depth, and the camera's draws at levels 1 to 3.
     pub tested: u32,
     pub drawn: u32,
     pub shadow: u32,
     pub thinned: u32,
     pub outside: u32,
+    pub occluded: u32,
     pub levels: [u32; 3],
+}
+
+/// The occlusion test of the last world view's selected copies
+/// (`RendererSettings` `OcclusionCulling`): its farthest-depth pyramid's
+/// level-0 size and levels, and whether the ambient occlusion pre-pass's
+/// depth served (no depth pass of its own).
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostOcclusionStatistics {
+    pub enabled: bool,
+    pub refused: Option<String>,
+    pub size: [u32; 2],
+    pub levels: u32,
+    pub shared_depth: bool,
 }
 
 /// The impostor levels' baked views: how many meshes are baked, their

@@ -522,6 +522,28 @@ fn run() -> Result<(), String> {
         ("gpuCulling", settings.gpu_culling),
         ("volumetricFog", settings.volumetric_fog),
     ];
+    // Built apart: the report is past `json!`'s recursion limit.
+    let scatter_selection = json!({
+        "enabled": gpu_readout.scatter_selection.enabled,
+        "runs": gpu_readout.scatter_selection.runs,
+        "parts": gpu_readout.scatter_selection.parts,
+        "draws": gpu_readout.scatter_selection.draws,
+        "copies": gpu_readout.scatter_selection.copies,
+        "tested": gpu_readout.scatter_selection.tested,
+        "drawn": gpu_readout.scatter_selection.drawn,
+        "shadow": gpu_readout.scatter_selection.shadow,
+        "thinned": gpu_readout.scatter_selection.thinned,
+        "outside": gpu_readout.scatter_selection.outside,
+        "occluded": gpu_readout.scatter_selection.occluded,
+        "levels": gpu_readout.scatter_selection.levels,
+    });
+    let occlusion = json!({
+        "enabled": gpu_readout.occlusion.enabled,
+        "refused": gpu_readout.occlusion.refused,
+        "size": gpu_readout.occlusion.size,
+        "levels": gpu_readout.occlusion.levels,
+        "sharedDepth": gpu_readout.occlusion.shared_depth,
+    });
     let report = json!({
         "snapshot": snapshot_path.display().to_string(),
         "product": snapshot.metadata.product,
@@ -622,6 +644,8 @@ fn run() -> Result<(), String> {
                 "visible": gpu_readout.gpu_culling.visible,
                 "multiDraws": gpu_readout.gpu_culling.multi_draws,
             },
+            "scatterSelection": scatter_selection,
+            "occlusion": occlusion,
         },
     });
     println!(

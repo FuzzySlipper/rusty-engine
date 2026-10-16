@@ -22,6 +22,7 @@ use glam::{Mat4, Vec3};
 
 use crate::batch::Frustum;
 use crate::frame::ViewLayer;
+use crate::occlusion::Occluders;
 use crate::shaders::Features;
 use crate::shadows::CopyReach;
 use crate::tables::{PartId, Tables};
@@ -33,13 +34,14 @@ const PASS: &str = "scatter-select";
 /// The fixed shadow layers' spheres `Params` holds; more widen the eye's
 /// reach to take them in.
 const SPHERES: usize = 16;
-/// `Params`: six planes, the eye, the counts and the spheres.
-const PARAMS_BYTES: u64 = 6 * 16 + 16 + 16 + SPHERES as u64 * 16;
+/// `Params`: six planes, the eye, the counts, the spheres, the view's
+/// matrix and the occluders.
+const PARAMS_BYTES: u64 = 6 * 16 + 16 + 16 + SPHERES as u64 * 16 + 64 + 16;
 /// `Run`: eight vectors.
 const RUN_FLOATS: usize = 32;
 /// `wgpu::util::DrawIndexedIndirectArgs`.
 pub(crate) const ARGS_BYTES: u64 = 20;
-const STATS: usize = 8;
+const STATS: usize = 9;
 /// Chunks a dispatch row holds (the limit on a dimension).
 const ROW_CHUNKS: u32 = 65_535;
 /// The most parts an entry can name (20 bits).
@@ -77,13 +79,16 @@ pub struct ScatterSelectionReadout {
     pub draws: u32,
     pub copies: u32,
     /// From the last read-back pass: copies tested, drawn for the camera
-    /// (a crossfading copy twice), drawn for the shadows, thinned away and
-    /// outside the frustum, and the camera's draws at levels 1 to 3.
+    /// (a crossfading copy twice), drawn for the shadows, thinned away,
+    /// outside the frustum and inside it but hidden behind the view's
+    /// opaque depth (`occlusion.rs`), and the camera's draws at levels 1
+    /// to 3.
     pub tested: u32,
     pub drawn: u32,
     pub shadow: u32,
     pub thinned: u32,
     pub outside: u32,
+    pub occluded: u32,
     pub levels: [u32; 3],
 }
 
@@ -98,6 +103,8 @@ pub(crate) struct ScatterSelect {
     pub args: wgpu::Buffer,
     stats: wgpu::Buffer,
     stats_readback: wgpu::Buffer,
+    /// Bound in place of a view's occluder pyramid when it has none.
+    no_occluders: wgpu::TextureView,
     pending_stats: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
     timer: Option<PassTimer>,
     /// The draws, in order (by features, mesh and material).
@@ -146,6 +153,16 @@ impl ScatterSelect {
                 storage(6, false),
                 storage(7, false),
                 storage(8, false),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 9,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         let mut refused = gpu.compute_refusal([WORKGROUP, 1, 1], 0);
@@ -221,6 +238,22 @@ impl ScatterSelect {
                 wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             ),
             pending_stats: None,
+            no_occluders: device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some("render-wgpu scatter select no occluders"),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::R32Float,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default()),
             timer: PassTimer::new(gpu, PASS),
             draws: Vec::new(),
             part_count: 0,
@@ -439,8 +472,9 @@ impl ScatterSelect {
 
     /// Select the runs for a view pass from `eye` through `view_proj`: its
     /// draws' arguments reset (their entries at `base` in `instances`), the
-    /// copies chosen into them, and the shadows' list of the copies the
-    /// world's shadow layers reach (`reaches`, none without shadows).
+    /// copies chosen into them (none hidden behind `occluders`, when the
+    /// view has them), and the shadows' list of the copies the world's
+    /// shadow layers reach (`reaches`, none without shadows).
     #[allow(
         clippy::too_many_arguments,
         reason = "one dispatch over the frame's buffers"
@@ -454,6 +488,7 @@ impl ScatterSelect {
         view_proj: &Mat4,
         eye: Vec3,
         reaches: Vec<CopyReach>,
+        occluders: Option<Occluders<'_>>,
     ) {
         self.collect(gpu);
         if let Some(timer) = &mut self.timer {
@@ -521,6 +556,14 @@ impl ScatterSelect {
                 centre.x, centre.y, centre.z, radius,
             ]));
         }
+        params.extend_from_slice(bytemuck::cast_slice(&view_proj.to_cols_array()));
+        let (pyramid, region, levels) = match &occluders {
+            Some(occluders) => (occluders.pyramid, occluders.region, occluders.levels),
+            None => (&self.no_occluders, [0, 0], 0),
+        };
+        for value in [region[0], region[1], levels, 0] {
+            params.extend_from_slice(&value.to_le_bytes());
+        }
         gpu.queue.write_buffer(&self.params, 0, &params);
         let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render-wgpu scatter select"),
@@ -539,7 +582,13 @@ impl ScatterSelect {
             .map(|(binding, buffer)| wgpu::BindGroupEntry {
                 binding,
                 resource: buffer.as_entire_binding(),
-            }),
+            })
+            .into_iter()
+            .chain([wgpu::BindGroupEntry {
+                binding: 9,
+                resource: wgpu::BindingResource::TextureView(pyramid),
+            }])
+            .collect::<Vec<_>>(),
         });
         encoder.clear_buffer(&self.stats, 0, None);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -612,7 +661,7 @@ impl ScatterSelect {
     }
 
     pub fn readout(&self) -> ScatterSelectionReadout {
-        let [tested, drawn, shadow, thinned, outside, one, two, three] = self.values;
+        let [tested, drawn, shadow, thinned, outside, one, two, three, occluded] = self.values;
         ScatterSelectionReadout {
             enabled: self.enabled,
             refused: self.refused.clone(),
@@ -625,6 +674,7 @@ impl ScatterSelect {
             shadow,
             thinned,
             outside,
+            occluded,
             levels: [one, two, three],
         }
     }

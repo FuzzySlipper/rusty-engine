@@ -6,7 +6,8 @@
 // up so its ground stays as covered), at the level its distance from the
 // camera reaches; within a level's band it draws at both levels, sharing
 // the samples between them (`rusty::view::fade_mask`). The camera's list
-// also needs the copy inside the frustum; the shadow list takes every copy
+// also needs the copy inside the frustum and, with occluders, not wholly
+// behind the view's opaque depth; the shadow list takes every copy
 // of a run that casts within the cascades' reach of the camera or inside a
 // fixed shadow layer, at its nearer-weighted level (an impostor's at the
 // last mesh level), whole.
@@ -23,6 +24,11 @@ struct Params {
     counts: vec4<u32>,
     // The fixed shadow layers' spheres (centre, radius).
     spheres: array<vec4<f32>, 16>,
+    // The camera's view and projection, for the occlusion test.
+    view_proj: mat4x4<f32>,
+    // x, y: the view's region in the pyramid's level-0 texels; z: its
+    // levels (0: no occlusion test).
+    occlusion: vec4<u32>,
 };
 
 struct Run {
@@ -73,11 +79,19 @@ struct DrawArgs {
 // The instance buffer (`rusty::view::instances`).
 @group(0) @binding(7) var<storage, read_write> entries: array<u32>;
 // 0: copies tested, 1: camera draws, 2: shadow draws, 3: thinned out,
-// 4: outside the frustum, 5..7: camera draws at levels 1 to 3.
-@group(0) @binding(8) var<storage, read_write> stats: array<atomic<u32>, 8>;
+// 4: outside the frustum, 5..7: camera draws at levels 1 to 3, 8: inside
+// the frustum but occluded.
+@group(0) @binding(8) var<storage, read_write> stats: array<atomic<u32>, 9>;
+// The view's farthest-depth pyramid (render-wgpu `occlusion.rs`): level 0
+// covers the view's region from its top-left texel.
+@group(0) @binding(9) var occluders: texture_2d<f32>;
 
 // The largest scale-up an entry carries (`rusty::view::SELECTED_MAX_SCALE`).
 const MAX_SCALE: f32 = 4.0;
+// The most texels across an occlusion test reads at its level (up to one
+// more than this each way): the finer the level, the closer the farthest
+// depth follows the copy's outline.
+const OCCLUSION_SPAN: f32 = 4.0;
 // How far below its share a copy's rank fades it in.
 const THIN_SOFTNESS: f32 = 0.04;
 
@@ -89,6 +103,55 @@ fn visible(center: vec3<f32>, radius: f32) -> bool {
         }
     }
     return true;
+}
+
+// A copy `radius` about `center` lies wholly behind the view's occluders:
+// its bounding box's nearest depth is farther than the farthest occluder
+// depth over the texels its projection covers, widened by one level-0
+// texel, at the level where it spans at most `OCCLUSION_SPAN` texels. Bounds crossing
+// the near plane, or wider than the pyramid's top level, are visible.
+fn occluded(center: vec3<f32>, radius: f32) -> bool {
+    let levels = params.occlusion.z;
+    if levels == 0u {
+        return false;
+    }
+    var low = vec3<f32>(1e30);
+    var high = vec2<f32>(-1e30);
+    for (var corner = 0u; corner < 8u; corner++) {
+        let offset = vec3<f32>(
+            select(-radius, radius, (corner & 1u) != 0u),
+            select(-radius, radius, (corner & 2u) != 0u),
+            select(-radius, radius, (corner & 4u) != 0u),
+        );
+        let clip = params.view_proj * vec4<f32>(center + offset, 1.0);
+        if clip.w <= 1e-4 {
+            return false;
+        }
+        let ndc = clip.xyz / clip.w;
+        low = min(low, ndc);
+        high = max(high, ndc.xy);
+    }
+    if low.z <= 0.0 {
+        return false;
+    }
+    let size = vec2<f32>(params.occlusion.xy);
+    let top_left = vec2<f32>(low.x, -high.y) * 0.5 + 0.5;
+    let bottom_right = vec2<f32>(high.x, -low.y) * 0.5 + 0.5;
+    let a = clamp(top_left * size - 1.0, vec2<f32>(0.0), size - 1.0);
+    let b = clamp(bottom_right * size + 1.0, vec2<f32>(0.0), size - 1.0);
+    let level = u32(ceil(log2(max(max(b.x - a.x, b.y - a.y) / OCCLUSION_SPAN, 1.0))));
+    if level >= levels {
+        return false;
+    }
+    let texel_a = vec2<u32>(a) >> vec2<u32>(level);
+    let texel_b = vec2<u32>(b) >> vec2<u32>(level);
+    var farthest = 0.0;
+    for (var y = texel_a.y; y <= texel_b.y; y++) {
+        for (var x = texel_a.x; x <= texel_b.x; x++) {
+            farthest = max(farthest, textureLoad(occluders, vec2<u32>(x, y), i32(level)).r);
+        }
+    }
+    return low.z > farthest;
 }
 
 // The share of copies kept `distance` from the camera.
@@ -193,7 +256,9 @@ fn cs_select(
     }
     let model_scale = length(row.model[0].xyz);
     let radius = run.shape.z * scattered.place.w * scale * model_scale;
-    if visible(origin, radius) {
+    let inside = visible(origin, radius);
+    let hidden = inside && occluded(origin, radius);
+    if inside && !hidden {
         let outgoing = u32(round((1.0 - incoming) * kept * 127.0));
         if outgoing > 0u {
             append(level, run, row_index | (outgoing << 24u), scale_bits, false);
@@ -208,6 +273,8 @@ fn cs_select(
             atomicAdd(&stats[1], 1u);
             atomicAdd(&stats[5u + level], 1u);
         }
+    } else if hidden {
+        atomicAdd(&stats[8], 1u);
     } else {
         atomicAdd(&stats[4], 1u);
     }

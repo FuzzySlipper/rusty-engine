@@ -397,6 +397,9 @@ pub enum Entry {
     /// A static mesh's impostor views baked into atlases
     /// (`impostor_bake.wgsl`).
     ImpostorBake,
+    /// A view's occluder depth reduced to a farthest-depth pyramid
+    /// (`hiz.wgsl`, compute).
+    Hiz,
 }
 
 impl Entry {
@@ -459,6 +462,7 @@ impl Entry {
                 "shaders/impostor_bake.wgsl",
                 include_str!("shaders/impostor_bake.wgsl"),
             ),
+            Self::Hiz => ("shaders/hiz.wgsl", include_str!("shaders/hiz.wgsl")),
         }
     }
 }
@@ -825,6 +829,7 @@ mod tests {
             Entry::VolumetricFog,
             Entry::ScatterSelect,
             Entry::ImpostorBake,
+            Entry::Hiz,
         ] {
             compose(&mut shaders, entry, Features::default());
         }

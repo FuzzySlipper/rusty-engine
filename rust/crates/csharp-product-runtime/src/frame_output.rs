@@ -44,8 +44,8 @@ use product_host::{
     ProductHostDrawnFrame, ProductHostFrameStream, ProductHostGpuCullingStatistics,
     ProductHostGpuPass, ProductHostGpuStatistics, ProductHostImpostorStatistics,
     ProductHostIndirectLightStatistics, ProductHostLightClusterStatistics,
-    ProductHostPresentedFrame, ProductHostRendererInspection, ProductHostRendererSettingValues,
-    ProductHostRendererSettings, ProductHostRendererStatistics,
+    ProductHostOcclusionStatistics, ProductHostPresentedFrame, ProductHostRendererInspection,
+    ProductHostRendererSettingValues, ProductHostRendererSettings, ProductHostRendererStatistics,
     ProductHostScatterSelectionStatistics, ProductHostScatterStatistics,
     ProductHostShadowStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
     ProductHostTimedStep, ProductHostWindowMedians, ProductHostWindowStatistics,
@@ -678,6 +678,7 @@ impl FrameOutput {
             vsync_refusal,
             clustered_lighting_refusal: refusal(readout.clustered_lighting),
             gpu_culling_refusal: refusal(readout.gpu_culling),
+            occlusion_culling_refusal: refusal(readout.occlusion_culling),
             volumetric_fog_refusal: refusal(readout.volumetric_fog),
             volumetric_clouds_refusal: refusal(readout.volumetric_clouds),
         }
@@ -887,6 +888,7 @@ fn settings_statistics(
             vsync: settings.vsync,
             clustered_lighting: settings.clustered_lighting,
             gpu_culling: settings.gpu_culling,
+            occlusion_culling: settings.occlusion_culling,
             volumetric_fog: match settings.volumetric_fog {
                 render_model::VolumetricFogQuality::Off => "off",
                 render_model::VolumetricFogQuality::Low => "low",
@@ -917,6 +919,7 @@ fn settings_statistics(
         ("vsync", readout.vsync),
         ("clusteredLighting", readout.clustered_lighting),
         ("gpuCulling", readout.gpu_culling),
+        ("occlusionCulling", readout.occlusion_culling),
         ("volumetricFog", readout.volumetric_fog),
         ("volumetricClouds", readout.volumetric_clouds),
     ] {
@@ -1008,7 +1011,15 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             shadow: readout.scatter_selection.shadow,
             thinned: readout.scatter_selection.thinned,
             outside: readout.scatter_selection.outside,
+            occluded: readout.scatter_selection.occluded,
             levels: readout.scatter_selection.levels,
+        },
+        occlusion: ProductHostOcclusionStatistics {
+            enabled: readout.occlusion.enabled,
+            refused: readout.occlusion.refused,
+            size: readout.occlusion.size,
+            levels: readout.occlusion.levels,
+            shared_depth: readout.occlusion.shared_depth,
         },
         impostors: ProductHostImpostorStatistics {
             impostors: readout.impostors.impostors,

@@ -83,6 +83,9 @@ pub struct NativeRendererSettingsRequest {
     /// Test each view's opaque parts against its frustum on the GPU and draw
     /// them indirectly, instead of building the draw list on the CPU.
     pub gpu_culling: bool,
+    /// Drop scattered copies (grass, plants, trees) hidden behind each world
+    /// view's opaque depth before they draw.
+    pub occlusion_culling: bool,
     /// Light the fog medium and fog volumes (`CameraView.SetVolumetricFog`,
     /// `SetFogVolume`) in a froxel grid.
     pub volumetric_fog: NativeVolumetricFogQuality,
@@ -120,6 +123,7 @@ pub struct NativeRendererSettingsReadout {
     pub vsync_refusal: NativeRendererSettingRefusal,
     pub clustered_lighting_refusal: NativeRendererSettingRefusal,
     pub gpu_culling_refusal: NativeRendererSettingRefusal,
+    pub occlusion_culling_refusal: NativeRendererSettingRefusal,
     pub volumetric_fog_refusal: NativeRendererSettingRefusal,
     pub volumetric_clouds_refusal: NativeRendererSettingRefusal,
 }

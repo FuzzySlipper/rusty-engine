@@ -360,6 +360,16 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         cost: "Slower in every scene measured at 1920×1080 on an RX 9070 XT: +0.5 ms in a hotel corridor, +0.9 ms in a canyon, +5.8 ms in a CraftSurvive meadow. Only scenes of many thousand parts could gain.",
         gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: Some("true"), requires: None, setup: None },
     },
+    RendererSettingOption {
+        id: "occlusionCulling",
+        label: "Vegetation occlusion",
+        group: "Advanced",
+        description: "Skips grass, plants and trees hidden behind terrain, buildings and foliage: helps in forests, costs a little in open country.",
+        kind: RendererSettingKind::Toggle,
+        restart: false,
+        cost: "About 0.04 ms at 1280×720 on an RX 9070 XT with ambient occlusion on (0.09 ms without). In CraftSurvive it saved 0.33 ms inside a forest and 0.34 ms behind a near crown, and nothing measurable on open slopes and vistas.",
+        gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: Some("true"), requires: None, setup: Some(GallerySetup::Product("scattered vegetation (Vegetation fields or voxel scatter)")) },
+    },
 ];
 
 /// A named set of choices the player can apply at once.
@@ -422,6 +432,8 @@ pub struct RendererSettingsOverrides {
     pub clustered_lighting: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_culling: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub occlusion_culling: Option<bool>,
 }
 
 /// `Option<Option<T>>` as absent / `null` / a value.
@@ -493,6 +505,9 @@ impl RendererSettingsOverrides {
         if let Some(value) = self.gpu_culling {
             settings.gpu_culling = value;
         }
+        if let Some(value) = self.occlusion_culling {
+            settings.occlusion_culling = value;
+        }
         settings
     }
 
@@ -512,6 +527,7 @@ impl RendererSettingsOverrides {
             "volumetricClouds" => self.volumetric_clouds.is_some(),
             "clusteredLighting" => self.clustered_lighting.is_some(),
             "gpuCulling" => self.gpu_culling.is_some(),
+            "occlusionCulling" => self.occlusion_culling.is_some(),
             _ => false,
         }
     }
@@ -596,6 +612,7 @@ impl RendererSettingsOverrides {
             }
             "clusteredLighting" => self.clustered_lighting = Some(toggle()?),
             "gpuCulling" => self.gpu_culling = Some(toggle()?),
+            "occlusionCulling" => self.occlusion_culling = Some(toggle()?),
             _ => return Err(format!("no renderer setting {id}")),
         }
         Ok(())
@@ -617,6 +634,7 @@ impl RendererSettingsOverrides {
             "volumetricClouds" => self.volumetric_clouds = None,
             "clusteredLighting" => self.clustered_lighting = None,
             "gpuCulling" => self.gpu_culling = None,
+            "occlusionCulling" => self.occlusion_culling = None,
             _ => return Err(format!("no renderer setting {id}")),
         }
         Ok(())
@@ -691,6 +709,7 @@ impl RendererSettingsOverrides {
             volumetric_clouds: preset.volumetric_clouds.or(self.volumetric_clouds),
             clustered_lighting: preset.clustered_lighting.or(self.clustered_lighting),
             gpu_culling: preset.gpu_culling.or(self.gpu_culling),
+            occlusion_culling: preset.occlusion_culling.or(self.occlusion_culling),
         }
     }
 }
@@ -735,6 +754,7 @@ pub fn renderer_setting_value(settings: &RendererSettingsDescriptor, id: &str) -
         }),
         "clusteredLighting" => Value::from(settings.clustered_lighting),
         "gpuCulling" => Value::from(settings.gpu_culling),
+        "occlusionCulling" => Value::from(settings.occlusion_culling),
         _ => return None,
     })
 }

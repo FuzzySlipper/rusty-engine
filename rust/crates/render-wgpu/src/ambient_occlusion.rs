@@ -57,6 +57,9 @@ const APPLY_BYTES: u64 = 16;
 const MAX_TARGETS: usize = 4;
 
 const PREPASS: &str = "ao-prepass";
+/// The pre-pass's selected scatter copies, drawn after the occlusion test
+/// that reads its other batches (`occlusion.rs`).
+const PREPASS_COPIES: &str = "ao-prepass-copies";
 const OCCLUSION: &str = "ao-occlusion";
 const BLUR: &str = "ao-blur";
 
@@ -120,6 +123,23 @@ impl ViewOcclusion {
     }
 }
 
+impl AmbientOcclusionPass {
+    /// The pre-pass depth of a view, which also serves as its occluders
+    /// (`occlusion.rs`).
+    pub fn depth(&self, view: &ViewOcclusion) -> &wgpu::TextureView {
+        &self.targets[view.target].depth
+    }
+}
+
+/// Which batches a pre-pass draws: all of them, or (after the first, with
+/// the other batches, drew as a view's occluders) the selected scatter
+/// copies over that depth.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrepassPart {
+    Whole,
+    Copies,
+}
+
 /// One world view's occlusion this frame: its target's resources and the
 /// half-resolution region its viewport covers.
 pub(crate) struct ViewOcclusion {
@@ -167,6 +187,9 @@ pub(crate) struct AmbientOcclusionPass {
     off: wgpu::BindGroup,
     targets: Vec<Target>,
     prepass_timer: Option<PassTimer>,
+    prepass_copies_timer: Option<PassTimer>,
+    /// This view's pre-pass drew its copies apart (`PrepassPart::Copies`).
+    copies_apart: std::cell::Cell<bool>,
     occlusion_timer: Option<PassTimer>,
     blur_timer: Option<PassTimer>,
     last_path: AmbientOcclusionPath,
@@ -400,6 +423,8 @@ impl AmbientOcclusionPass {
             off,
             targets: Vec::new(),
             prepass_timer: PassTimer::new(gpu, PREPASS),
+            prepass_copies_timer: PassTimer::new(gpu, PREPASS_COPIES),
+            copies_apart: std::cell::Cell::new(false),
             occlusion_timer: PassTimer::new(gpu, OCCLUSION),
             blur_timer: PassTimer::new(gpu, BLUR),
             last_path: AmbientOcclusionPath::Off,
@@ -435,6 +460,7 @@ impl AmbientOcclusionPass {
         let changed_path = path != self.last_path;
         for timer in [
             &mut self.prepass_timer,
+            &mut self.prepass_copies_timer,
             &mut self.occlusion_timer,
             &mut self.blur_timer,
         ]
@@ -495,9 +521,15 @@ impl AmbientOcclusionPass {
         &self,
         encoder: &mut wgpu::CommandEncoder,
         view: &ViewOcclusion,
+        part: PrepassPart,
         draw: impl FnOnce(&mut wgpu::RenderPass<'_>),
     ) {
         let target = &self.targets[view.target];
+        let (load, timer) = match part {
+            PrepassPart::Whole => (wgpu::LoadOp::Clear(1.0), &self.prepass_timer),
+            PrepassPart::Copies => (wgpu::LoadOp::Load, &self.prepass_copies_timer),
+        };
+        self.copies_apart.set(part == PrepassPart::Copies);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(PREPASS),
@@ -505,15 +537,12 @@ impl AmbientOcclusionPass {
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &target.depth,
                     depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
+                        load,
                         store: wgpu::StoreOp::Store,
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: self
-                    .prepass_timer
-                    .as_ref()
-                    .and_then(PassTimer::render_writes),
+                timestamp_writes: timer.as_ref().and_then(PassTimer::render_writes),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -534,6 +563,11 @@ impl AmbientOcclusionPass {
     ) {
         if let Some(timer) = &mut self.prepass_timer {
             timer.resolve(encoder);
+        }
+        if self.copies_apart.take() {
+            if let Some(timer) = &mut self.prepass_copies_timer {
+                timer.resolve(encoder);
+            }
         }
         if view.path == AmbientOcclusionPath::DistanceField {
             let target = &mut self.targets[view.target];
@@ -642,6 +676,7 @@ impl AmbientOcclusionPass {
     pub fn submitted(&mut self) {
         for timer in [
             &mut self.prepass_timer,
+            &mut self.prepass_copies_timer,
             &mut self.occlusion_timer,
             &mut self.blur_timer,
         ]
@@ -662,19 +697,24 @@ impl AmbientOcclusionPass {
     }
 
     /// The pre-pass, occlusion and blur timings, in frame order.
+    /// The passes' timings; the pre-pass's copies only once a view drew
+    /// them apart (`PrepassPart::Copies`).
     pub fn timings(&self) -> Vec<GpuPassTiming> {
-        [
-            (&self.prepass_timer, PREPASS),
-            (&self.occlusion_timer, OCCLUSION),
-            (&self.blur_timer, BLUR),
-        ]
-        .into_iter()
-        .map(|(timer, pass)| {
+        let timing = |timer: &Option<PassTimer>, pass| {
             timer
                 .as_ref()
                 .map_or_else(|| untimed(pass), PassTimer::readout)
-        })
-        .collect()
+        };
+        let mut timings = vec![timing(&self.prepass_timer, PREPASS)];
+        timings.extend(
+            self.prepass_copies_timer
+                .as_ref()
+                .map(PassTimer::readout)
+                .filter(|copies| copies.timed_frames > 0),
+        );
+        timings.push(timing(&self.occlusion_timer, OCCLUSION));
+        timings.push(timing(&self.blur_timer, BLUR));
+        timings
     }
 
     /// The resources for a target size, made on first use; the least

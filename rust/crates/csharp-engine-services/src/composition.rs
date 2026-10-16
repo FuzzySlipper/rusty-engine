@@ -1710,6 +1710,7 @@ mod tests {
             vsync: false,
             clustered_lighting: true,
             gpu_culling: true,
+            occlusion_culling: true,
             volumetric_fog: csharp_engine_abi::NativeVolumetricFogQuality::Off,
             volumetric_clouds: csharp_engine_abi::NativeVolumetricCloudsQuality::Off,
         };
@@ -1735,6 +1736,7 @@ mod tests {
                 vsync: false,
                 clustered_lighting: true,
                 gpu_culling: true,
+                occlusion_culling: true,
                 volumetric_fog: render_model::VolumetricFogQuality::Off,
                 volumetric_clouds: render_model::VolumetricCloudsQuality::Off,
             },
@@ -1759,6 +1761,7 @@ mod tests {
             vsync_refusal: NativeRendererSettingRefusal::NoDisplay,
             clustered_lighting_refusal: NativeRendererSettingRefusal::None,
             gpu_culling_refusal: NativeRendererSettingRefusal::None,
+            occlusion_culling_refusal: NativeRendererSettingRefusal::None,
             volumetric_fog_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
             volumetric_clouds_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
         };

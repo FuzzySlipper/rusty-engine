@@ -726,6 +726,8 @@ impl ProductRendererSettings {
                     "renderer.lighting.clusteredLighting",
                 )?,
                 gpu_culling: switch(value.gpu_culling.as_deref(), "renderer.gpuCulling")?,
+                // Products turn it on through `RendererSettings.Set`.
+                occlusion_culling: false,
                 volumetric_fog,
                 volumetric_clouds,
             },

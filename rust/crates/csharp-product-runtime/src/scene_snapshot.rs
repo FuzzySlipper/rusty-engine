@@ -114,6 +114,10 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before GPU culling existed cull on the CPU.
     #[serde(default)]
     pub gpu_culling: bool,
+    /// Snapshots written before occlusion culling existed draw every
+    /// selected copy.
+    #[serde(default)]
+    pub occlusion_culling: bool,
     /// Snapshots written before the sample count was a setting drew with 4.
     #[serde(default = "default_samples")]
     pub samples: u32,
@@ -226,6 +230,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             ambient_occlusion: options.ambient_occlusion.into(),
             clustered_lighting: options.clustered_lighting,
             gpu_culling: options.gpu_culling,
+            occlusion_culling: options.occlusion_culling,
             samples: options.samples,
             vsync: options.vsync,
             render_scale: options.render_scale,
@@ -246,6 +251,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             ambient_occlusion: options.ambient_occlusion.into(),
             clustered_lighting: options.clustered_lighting,
             gpu_culling: options.gpu_culling,
+            occlusion_culling: options.occlusion_culling,
             samples: options.samples,
             vsync: options.vsync,
             render_scale: options.render_scale,

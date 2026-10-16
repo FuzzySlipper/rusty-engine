@@ -76,6 +76,7 @@ impl RuntimeRendererSettingsBridge {
                 vsync_refusal: NativeRendererSettingRefusal::None,
                 clustered_lighting_refusal: NativeRendererSettingRefusal::None,
                 gpu_culling_refusal: NativeRendererSettingRefusal::None,
+                occlusion_culling_refusal: NativeRendererSettingRefusal::None,
                 volumetric_fog_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
                 volumetric_clouds_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
             },
@@ -96,6 +97,7 @@ impl RuntimeRendererSettingsBridge {
             "vsync" => readout.vsync_refusal,
             "clusteredLighting" => readout.clustered_lighting_refusal,
             "gpuCulling" => readout.gpu_culling_refusal,
+            "occlusionCulling" => readout.occlusion_culling_refusal,
             "volumetricFog" => readout.volumetric_fog_refusal,
             "volumetricClouds" => readout.volumetric_clouds_refusal,
             _ => NativeRendererSettingRefusal::None,
@@ -236,6 +238,7 @@ pub(crate) fn renderer_settings_descriptor(
         vsync: request.vsync,
         clustered_lighting: request.clustered_lighting,
         gpu_culling: request.gpu_culling,
+        occlusion_culling: request.occlusion_culling,
         volumetric_fog: match request.volumetric_fog {
             NativeVolumetricFogQuality::Off => VolumetricFogQuality::Off,
             NativeVolumetricFogQuality::Low => VolumetricFogQuality::Low,
@@ -274,6 +277,7 @@ pub fn renderer_settings_request(
         vsync: settings.vsync,
         clustered_lighting: settings.clustered_lighting,
         gpu_culling: settings.gpu_culling,
+        occlusion_culling: settings.occlusion_culling,
         volumetric_fog: match settings.volumetric_fog {
             VolumetricFogQuality::Off => NativeVolumetricFogQuality::Off,
             VolumetricFogQuality::Low => NativeVolumetricFogQuality::Low,

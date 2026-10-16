@@ -19,6 +19,7 @@ use render_model::{
     RenderLayer, ToneMappingDescriptor, ToneMappingOperator, WindDescriptor,
 };
 
+use crate::ambient_occlusion::PrepassPart;
 use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
@@ -27,6 +28,7 @@ use crate::distance_fields::{world_box, FieldEntry};
 use crate::effects::EffectsPass;
 use crate::finish::{FinishPost, HDR_FORMAT};
 use crate::light_clusters::{ClusterUniform, CLUSTER_CAPACITY};
+use crate::occlusion::OccluderDepth;
 use crate::pipelines::{Layouts, Pipelines};
 use crate::shaders::Features;
 use crate::shadows::{self, ShadowMaps};
@@ -2679,7 +2681,14 @@ impl Renderer {
             .expect("view list is current")
             .candidates
             .is_some();
-        let prepass_batches: Vec<batch::Batch> = if occlusion.is_some() {
+        // The world's selected scatter copies, and whether the view first
+        // draws its opaque depth to drop those hidden behind it
+        // (`occlusion.rs`).
+        let selected = view.layer == ViewLayer::World
+            && self.tables.parts.selecting
+            && !self.scatter_select.draws.is_empty();
+        let occluding = selected && self.options.occlusion_culling && self.occlusion.available();
+        let prepass_batches: Vec<batch::Batch> = if occlusion.is_some() || occluding {
             pipelines_created += self.layouts.start_prepass(&self.gpu.device);
             // The CPU list's opaque batches: every one, or with GPU culling
             // its scatter runs beside the culled candidates.
@@ -2710,11 +2719,83 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render-wgpu view"),
             });
+        // The GPU cull writes the opaque visible runs and indirect arguments
+        // every pass, before anything draws them.
+        if culled {
+            let candidates = self.views[slot]
+                .as_ref()
+                .and_then(|cache| cache.candidates.as_ref())
+                .expect("culled view has candidates");
+            self.culling.encode(
+                &self.gpu,
+                &mut encoder,
+                &self.instances_buffer,
+                view.layer,
+                candidates,
+                &view_proj,
+            );
+        } else {
+            self.culling.skipped();
+        }
+        // The opaque non-scatter batches depth-only, with the pre-pass
+        // pipelines and the camera in the shadow matrices' camera slot.
+        let draw_opaque = |this: &Self, pass: &mut wgpu::RenderPass<'_>| {
+            let camera_offset = ShadowMaps::layer_offset(this.shadows.camera_slot());
+            pass.set_bind_group(0, &this.caster_bind_group, &[]);
+            pass.set_bind_group(2, &this.shadows.layer_bind_group, &[camera_offset]);
+            if let Some(candidates) = this.views[slot]
+                .as_ref()
+                .and_then(|cache| cache.candidates.as_ref())
+            {
+                this.draw_batches_indirect(pass, view.layer, candidates, |pass, features| {
+                    this.layouts.prepass.get(pass, features)
+                });
+            }
+            this.draw_batches(pass, &prepass_batches, |pass, features| {
+                this.layouts.prepass.get(pass, features)
+            });
+        };
+        if occlusion.is_some() || occluding {
+            self.shadows.write_camera(&self.gpu.queue, &view_proj);
+        }
+        if occluding {
+            // The occluders: the ambient occlusion pre-pass's depth when it
+            // runs (its copies follow the test), else a depth pass of its
+            // own.
+            match &occlusion {
+                Some(ambient) => {
+                    self.ambient_occlusion.encode_prepass(
+                        &mut encoder,
+                        ambient,
+                        PrepassPart::Whole,
+                        |pass| draw_opaque(self, pass),
+                    );
+                    self.occlusion.build(
+                        &self.gpu,
+                        &mut encoder,
+                        OccluderDepth::Shared(
+                            self.ambient_occlusion.depth(ambient),
+                            ambient.region(),
+                        ),
+                    );
+                }
+                None => {
+                    let region = self.occlusion.prepare_depth(
+                        &self.gpu,
+                        (view.target.width, view.target.height),
+                        view.viewport,
+                    );
+                    self.occlusion
+                        .encode_depth(&mut encoder, region, |pass| draw_opaque(self, pass));
+                    self.occlusion
+                        .build(&self.gpu, &mut encoder, OccluderDepth::Own(region));
+                }
+            }
+        } else if world_layer {
+            self.occlusion.skipped();
+        }
         // The world's scatter runs, copy by copy, before anything draws them
         // (`scatter_select.rs`).
-        let selected = view.layer == ViewLayer::World
-            && self.tables.parts.selecting
-            && !self.scatter_select.draws.is_empty();
         if selected {
             // `update_view_list` reserved the selection's region.
             let base = self.selection_base();
@@ -2739,6 +2820,11 @@ impl Renderer {
                 } else {
                     Vec::new()
                 },
+                if occluding {
+                    self.occlusion.occluders()
+                } else {
+                    None
+                },
             );
         }
         let shadows = match view.layer {
@@ -2746,58 +2832,39 @@ impl Renderer {
             ViewLayer::Backdrop => self.encode_shadows(&mut encoder, true),
             ViewLayer::Viewmodel => Default::default(),
         };
-        // The GPU cull writes the opaque visible runs and indirect arguments
-        // every pass, before anything draws them.
-        if culled {
-            let candidates = self.views[slot]
-                .as_ref()
-                .and_then(|cache| cache.candidates.as_ref())
-                .expect("culled view has candidates");
-            self.culling.encode(
-                &self.gpu,
-                &mut encoder,
-                &self.instances_buffer,
-                view.layer,
-                candidates,
-                &view_proj,
-            );
-        } else {
-            self.culling.skipped();
-        }
         if let Some(occlusion) = &occlusion {
-            self.shadows.write_camera(&self.gpu.queue, &view_proj);
-            let camera_offset = ShadowMaps::layer_offset(self.shadows.camera_slot());
-            self.ambient_occlusion
-                .encode_prepass(&mut encoder, occlusion, |pass| {
-                    pass.set_bind_group(0, &self.caster_bind_group, &[]);
-                    pass.set_bind_group(2, &self.shadows.layer_bind_group, &[camera_offset]);
-                    match self.views[slot]
-                        .as_ref()
-                        .and_then(|cache| cache.candidates.as_ref())
-                    {
-                        Some(candidates) => {
-                            self.draw_batches_indirect(
-                                pass,
-                                view.layer,
-                                candidates,
-                                |pass, features| self.layouts.prepass.get(pass, features),
-                            );
-                            self.draw_batches(pass, &prepass_batches, |pass, features| {
-                                self.layouts.prepass.get(pass, features)
-                            });
-                        }
-                        None => {
-                            self.draw_batches(pass, &prepass_batches, |pass, features| {
-                                self.layouts.prepass.get(pass, features)
-                            });
-                        }
-                    }
-                    if selected {
-                        self.draw_selected(pass, false, |pass, features| {
-                            self.layouts.prepass.get(pass, features)
-                        });
-                    }
-                });
+            let draw_copies = |pass: &mut wgpu::RenderPass<'_>| {
+                if selected {
+                    self.draw_selected(pass, false, |pass, features| {
+                        self.layouts.prepass.get(pass, features)
+                    });
+                }
+            };
+            if occluding {
+                // Its opaque batches drew as the occluders; its copies
+                // follow the test.
+                self.ambient_occlusion.encode_prepass(
+                    &mut encoder,
+                    occlusion,
+                    PrepassPart::Copies,
+                    |pass| {
+                        let camera_offset = ShadowMaps::layer_offset(self.shadows.camera_slot());
+                        pass.set_bind_group(0, &self.caster_bind_group, &[]);
+                        pass.set_bind_group(2, &self.shadows.layer_bind_group, &[camera_offset]);
+                        draw_copies(pass);
+                    },
+                );
+            } else {
+                self.ambient_occlusion.encode_prepass(
+                    &mut encoder,
+                    occlusion,
+                    PrepassPart::Whole,
+                    |pass| {
+                        draw_opaque(self, pass);
+                        draw_copies(pass);
+                    },
+                );
+            }
             if occlusion.path() == AmbientOcclusionPath::DistanceField {
                 self.gather_field_entries();
                 let (_, entries) = self.field_entries.as_ref().expect("gathered above");
@@ -3259,6 +3326,7 @@ impl Renderer {
         }
         if selected {
             self.scatter_select.submitted();
+            self.occlusion.submitted();
         }
         if culled {
             self.culling.drew(multi_draws);

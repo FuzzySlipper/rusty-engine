@@ -935,3 +935,112 @@ fn an_impostor_level_draws_the_posts_baked_views_as_cards() {
         "{agree} of {WIDTH} columns agree"
     );
 }
+
+/// An opaque wall 5 m wide and 2 m tall across the view, 3 m off.
+fn wall() -> MeshPayloadDescriptor {
+    let mut payload = cube();
+    let MeshPayloadSource::Inline { positions, .. } = &mut payload.source else {
+        unreachable!()
+    };
+    for point in positions.as_chunks_mut::<3>().0 {
+        point[0] *= 5.0;
+        point[1] *= 2.0;
+        point[2] *= 0.2;
+    }
+    payload.bounds = MeshBoundsDescriptor {
+        min: [-2.5, -1.0, -0.1],
+        max: [2.5, 1.0, 0.1],
+    };
+    payload
+}
+
+/// The frame and the selection's counts of a scene with occlusion culling
+/// as asked, through the view's own depth or the ambient occlusion
+/// pre-pass's.
+fn occluded_scene(
+    occlusion_culling: bool,
+    ambient_occlusion: bool,
+    extra: Vec<RenderDiff>,
+) -> (
+    Vec<u8>,
+    render_wgpu::ScatterSelectionReadout,
+    render_wgpu::OcclusionReadout,
+) {
+    let mut ambient = render_wgpu::AmbientOcclusion::default();
+    if ambient_occlusion {
+        ambient.path = render_wgpu::AmbientOcclusionPath::Raster;
+        ambient.strength = 1.0;
+    }
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        occlusion_culling,
+        ambient_occlusion: ambient,
+        ..RendererOptions::default()
+    });
+    let mut ops = stage(false);
+    ops.extend(extra);
+    harness.apply(ops);
+    let selection = selection_counts(&mut harness);
+    let frame = render(&mut harness).1;
+    (frame, selection, harness.renderer.gpu_readout().occlusion)
+}
+
+#[test]
+fn copies_wholly_behind_an_opaque_wall_are_dropped_and_the_picture_stays() {
+    // Three posts 2 m behind a wall 3 m off: hidden, bounds and all. One
+    // beside the wall and one standing over its top edge: seen.
+    let mut ops = coloured_mesh("wall", wall(), [0.4, 0.4, 0.45, 1.0]);
+    ops.push(instance(
+        30,
+        None,
+        "wall",
+        transform([0.0, 0.0, -3.0], 0.0, 1.0),
+    ));
+    let mut copies: Vec<_> = [-0.6, 0.0, 0.6]
+        .into_iter()
+        .map(|x| copy([x, 0.0, -2.0], [1.0; 3]))
+        .collect();
+    copies.push(copy([4.0, 0.0, -2.0], [1.0; 3]));
+    let mut tall = copy([0.5, 1.75, -2.0], [1.0; 3]);
+    tall.tint = [1.0, 0.2, 0.2];
+    copies.push(tall);
+    ops.push(patch(20, 5, copies, ScatterFade::default(), false));
+    for ambient_occlusion in [false, true] {
+        let (expected, _, _) = occluded_scene(false, ambient_occlusion, ops.clone());
+        let (frame, selection, occlusion) = occluded_scene(true, ambient_occlusion, ops.clone());
+        assert!(occlusion.enabled && occlusion.shared_depth == ambient_occlusion);
+        assert_eq!(
+            (selection.drawn, selection.occluded),
+            (2, 3),
+            "AO {ambient_occlusion}: {selection:?}"
+        );
+        assert_eq!(
+            frame, expected,
+            "AO {ambient_occlusion}: the picture changed"
+        );
+    }
+}
+
+#[test]
+fn copies_never_hide_copies() {
+    // A post ten times as large stands in front of three small ones: the
+    // copies are not occluders, so all four draw.
+    let mut big = copy([0.0, -0.5, 0.5], [1.0; 3]);
+    big.scale = 10.0;
+    let mut copies: Vec<_> = [-0.3, 0.0, 0.3]
+        .into_iter()
+        .map(|x| copy([x, 0.0, -3.0], [1.0; 3]))
+        .collect();
+    copies.push(big);
+    let (_, selection, occlusion) = occluded_scene(
+        true,
+        false,
+        vec![patch(20, 5, copies, ScatterFade::default(), false)],
+    );
+    assert!(occlusion.enabled);
+    assert_eq!(
+        (selection.drawn, selection.occluded),
+        (4, 0),
+        "{selection:?}"
+    );
+}

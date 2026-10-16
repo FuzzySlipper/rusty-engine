@@ -327,6 +327,7 @@ impl Renderer {
                 ambient_occlusion: Default::default(),
                 clustered_lighting: false,
                 gpu_culling: false,
+                occlusion_culling: false,
                 samples: 1,
                 vsync: false,
                 render_scale: 1.0,

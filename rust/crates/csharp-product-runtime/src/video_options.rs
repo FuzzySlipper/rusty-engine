@@ -147,6 +147,7 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         "vsync" => readout.vsync,
         "clusteredLighting" => readout.clustered_lighting,
         "gpuCulling" => readout.gpu_culling,
+        "occlusionCulling" => readout.occlusion_culling,
         "volumetricFog" => readout.volumetric_fog,
         "volumetricClouds" => readout.volumetric_clouds,
         _ => None,
@@ -342,6 +343,7 @@ mod tests {
             vsync: None,
             clustered_lighting: Some(SettingRefusal::NoComputeShaders),
             gpu_culling: None,
+            occlusion_culling: None,
             volumetric_fog: None,
             volumetric_clouds: None,
         };

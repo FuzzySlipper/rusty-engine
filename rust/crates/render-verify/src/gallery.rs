@@ -570,6 +570,7 @@ mod tests {
                 "volumetricClouds-low",
                 "clusteredLighting-true",
                 "gpuCulling-true",
+                "occlusionCulling-true",
                 "indirectLight",
                 "everything",
             ]
@@ -589,6 +590,7 @@ mod tests {
                 backdrop_shadows: true,
                 clustered_lighting: true,
                 gpu_culling: true,
+                occlusion_culling: true,
                 volumetric_fog: VolumetricFogQuality::High,
                 volumetric_clouds: VolumetricCloudsQuality::High,
                 ..RendererSettingsDescriptor::DEFAULT

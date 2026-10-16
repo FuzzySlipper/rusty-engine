@@ -43,6 +43,7 @@ mod impostor;
 mod inspection;
 mod labels;
 mod light_clusters;
+mod occlusion;
 mod overlays;
 mod particles;
 mod pipelines;
@@ -108,6 +109,7 @@ pub use driver::{
 };
 pub use frame::FrameStats;
 pub use impostor::ImpostorReadout;
+pub use occlusion::OcclusionReadout;
 pub use scatter_select::ScatterSelectionReadout;
 
 /// Scatter patches taken in since the renderer was made (cumulative: read
@@ -199,6 +201,8 @@ pub struct GpuReadout {
     pub scatter_selection: ScatterSelectionReadout,
     /// The impostors baked (`impostor.rs`).
     pub impostors: ImpostorReadout,
+    /// The occlusion test of selected scatter copies (`occlusion.rs`).
+    pub occlusion: OcclusionReadout,
     /// The indirect light volume (`probes.rs`).
     pub indirect_light: IndirectLightReadout,
     /// The volumetric fog the last world view drew (`volumetric_fog.rs`).
@@ -251,6 +255,10 @@ pub struct RendererOptions {
     /// list on the CPU each time the camera moves. Off by default; a device
     /// without indirect draws keeps the CPU list regardless.
     pub gpu_culling: bool,
+    /// Drop a world view's selected scatter copies hidden behind its opaque
+    /// non-scatter depth (`occlusion.rs`). Off by default; a device
+    /// without compute or without the selection draws them regardless.
+    pub occlusion_culling: bool,
     /// Samples per pixel of the primary destination (the offscreen primary
     /// target and the window surface): 1, 2 or 4. Offscreen render targets
     /// and captures stay single-sample.
@@ -283,6 +291,7 @@ impl Default for RendererOptions {
             ambient_occlusion: AmbientOcclusion::default(),
             clustered_lighting: false,
             gpu_culling: false,
+            occlusion_culling: false,
             samples: RendererSettingsDescriptor::DEFAULT.antialiasing,
             vsync: RendererSettingsDescriptor::DEFAULT.vsync,
             render_scale: RendererSettingsDescriptor::DEFAULT.render_scale,
@@ -322,6 +331,7 @@ impl RendererOptions {
         self.render_scale = settings.render_scale;
         self.clustered_lighting = settings.clustered_lighting;
         self.gpu_culling = settings.gpu_culling;
+        self.occlusion_culling = settings.occlusion_culling;
         self.volumetric_fog = settings.volumetric_fog;
         self.volumetric_clouds = settings.volumetric_clouds;
         self
@@ -349,6 +359,7 @@ impl RendererOptions {
             vsync: self.vsync,
             clustered_lighting: self.clustered_lighting,
             gpu_culling: self.gpu_culling,
+            occlusion_culling: self.occlusion_culling,
             volumetric_fog: self.volumetric_fog,
             volumetric_clouds: self.volumetric_clouds,
         }
@@ -391,6 +402,7 @@ pub struct RendererSettingsReadout {
     pub vsync: Option<SettingRefusal>,
     pub clustered_lighting: Option<SettingRefusal>,
     pub gpu_culling: Option<SettingRefusal>,
+    pub occlusion_culling: Option<SettingRefusal>,
     pub volumetric_fog: Option<SettingRefusal>,
     pub volumetric_clouds: Option<SettingRefusal>,
 }
@@ -518,6 +530,9 @@ pub struct Renderer {
     scatter_select: scatter_select::ScatterSelect,
     /// Impostor levels' baked views (`impostor.rs`).
     impostors: impostor::Impostors,
+    /// Selected scatter copies tested against the view's opaque depth
+    /// (`occlusion.rs`).
+    occlusion: occlusion::Occlusion,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     /// Rain or snow around the camera (`precipitation.rs`).
@@ -582,6 +597,14 @@ impl Renderer {
                 Entry::ScatterSelect,
                 Features::default(),
             )),
+        );
+        let occlusion = occlusion::Occlusion::new(
+            gpu,
+            pipelines::standard(
+                layouts
+                    .shaders
+                    .module(device, Entry::Hiz, Features::default()),
+            ),
         );
         let frame_bind_group = frame::frame_bind_group(
             device,
@@ -733,6 +756,7 @@ impl Renderer {
             culling,
             scatter_select,
             impostors: impostor::Impostors::new(device),
+            occlusion,
             composition: Default::default(),
             effects,
             precipitation,
@@ -878,6 +902,16 @@ impl Renderer {
             effective.gpu_culling = false;
             SettingRefusal::NoIndirectDraws
         });
+        let occlusion_culling = (requested.occlusion_culling
+            && !(self.occlusion.available() && self.scatter_select.available()))
+        .then(|| {
+            effective.occlusion_culling = false;
+            if self.occlusion.available() {
+                SettingRefusal::NoIndirectDraws
+            } else {
+                SettingRefusal::NoComputeShaders
+            }
+        });
         let vsync = (!requested.vsync && self.display_vsync_only == Some(true)).then(|| {
             effective.vsync = true;
             SettingRefusal::VsyncOnly
@@ -909,6 +943,7 @@ impl Renderer {
             vsync,
             clustered_lighting,
             gpu_culling,
+            occlusion_culling,
             volumetric_fog,
             volumetric_clouds,
         }
@@ -947,6 +982,7 @@ impl Renderer {
                     self.light_clusters.timing(),
                     self.volumetric_fog.timing(),
                     self.culling.timing(),
+                    self.occlusion.timing(),
                     self.scatter_select.timing(),
                     self.sky_light.timing(),
                     self.image_effect.timing(),
@@ -958,6 +994,7 @@ impl Renderer {
             gpu_culling: self.culling.readout(),
             scatter_selection: self.scatter_select.readout(),
             impostors: self.impostors.readout(),
+            occlusion: self.occlusion.readout(),
             indirect_light: self.probes.readout(),
             volumetric_fog: self.volumetric_fog.readout(),
             backdrop: self.backdrop,

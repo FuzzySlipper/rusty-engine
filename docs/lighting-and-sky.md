@@ -350,6 +350,7 @@ renderer setting, is reported and ignored.
 | `volumetricClouds` | Lighting | `off`, `low`, `high` |
 | `clusteredLighting` | Advanced | on or off |
 | `gpuCulling` | Advanced | on or off |
+| `occlusionCulling` | Advanced | on or off |
 
 The presets Low, Medium, High and Ultra set render scale, antialiasing,
 shadows, their budget, the occlusion mode, and volumetric fog and clouds

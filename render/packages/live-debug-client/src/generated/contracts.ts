@@ -135,7 +135,7 @@ timestamps: boolean, limits: ProductHostComputeLimits,
 /**
  * The timed passes, in frame order.
  */
-passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, distanceFields: ProductHostDistanceFieldStatistics, lightClusters: ProductHostLightClusterStatistics, gpuCulling: ProductHostGpuCullingStatistics, scatterSelection: ProductHostScatterSelectionStatistics, impostors: ProductHostImpostorStatistics, indirectLight: ProductHostIndirectLightStatistics, };
+passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, distanceFields: ProductHostDistanceFieldStatistics, lightClusters: ProductHostLightClusterStatistics, gpuCulling: ProductHostGpuCullingStatistics, scatterSelection: ProductHostScatterSelectionStatistics, impostors: ProductHostImpostorStatistics, occlusion: ProductHostOcclusionStatistics, indirectLight: ProductHostIndirectLightStatistics, };
 
 /**
  * The impostor levels' baked views: how many meshes are baked, their
@@ -246,6 +246,14 @@ globalLights: number,
 overflowedClusters: number, };
 
 /**
+ * The occlusion test of the last world view's selected copies
+ * (`RendererSettings` `OcclusionCulling`): its farthest-depth pyramid's
+ * level-0 size and levels, and whether the ambient occlusion pre-pass's
+ * depth served (no depth pass of its own).
+ */
+export type ProductHostOcclusionStatistics = { enabled: boolean, refused: string | null, size: [number, number], levels: number, sharedDepth: boolean, };
+
+/**
  * Closed operation identities returned by direct runtime calls.
  */
 export type ProductHostOperationKind = "connect" | "start" | "pause" | "resume" | "restart" | "shutdown" | "report-fault" | "replace-control" | "release-control" | "claim-control" | "input" | "advance-realtime" | "complete-timeline" | "execute-debug";
@@ -274,7 +282,7 @@ antialiasing: number,
 /**
  * The fraction of the primary destination's size the world draws at.
  */
-renderScale: number, vsync: boolean, clusteredLighting: boolean, gpuCulling: boolean, 
+renderScale: number, vsync: boolean, clusteredLighting: boolean, gpuCulling: boolean, occlusionCulling: boolean, 
 /**
  * `off`, `low` or `high`.
  */
@@ -369,10 +377,11 @@ refused?: string,
 runs: number, parts: number, draws: number, copies: number, 
 /**
  * From the last read-back pass: copies tested, drawn for the camera (a
- * crossfading copy twice), drawn for the shadows, thinned away and
- * outside the frustum, and the camera's draws at levels 1 to 3.
+ * crossfading copy twice), drawn for the shadows, thinned away,
+ * outside the frustum and inside it but hidden behind the view's
+ * opaque depth, and the camera's draws at levels 1 to 3.
  */
-tested: number, drawn: number, shadow: number, thinned: number, outside: number, levels: [number, number, number], };
+tested: number, drawn: number, shadow: number, thinned: number, outside: number, occluded: number, levels: [number, number, number], };
 
 /**
  * Scatter patches (grass, plants, vegetation tiles) the renderer has taken
