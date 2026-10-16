@@ -112,7 +112,10 @@ fn tiles_in_reach_are_asked_for_nearest_first_and_grow_their_density() {
     assert!(requests
         .windows(2)
         .all(|pair| distance(&pair[0]) <= distance(&pair[1])));
-    assert!(requests.iter().all(|request| distance(request) <= 40.0));
+    // Within the reach, widened by a selection step (a sixteenth of a tile).
+    assert!(requests
+        .iter()
+        .all(|request| distance(request) <= 40.0 + 16.0 * VEGETATION_SELECTION_STEP));
     assert_eq!(fields.requests(FIELD, 3).len(), 3);
 
     let operations = fill(&mut fields, [8.0, 2.0, 8.0], |_, _| 2.0);
@@ -566,4 +569,97 @@ fn a_rebase_moves_the_root_and_nothing_else() {
         RenderDiff::Update { transform: Some(transform), .. }
             if transform.translation == [-1000.0, 0.0, 0.0]
     ));
+}
+
+/// Fill every waiting tile flat and settle at `focus`, returning the field's
+/// patches by tile after.
+fn walk_to(fields: &mut VegetationFields, focus: [f64; 3]) -> Vec<RenderDiff> {
+    let mut operations = fields.settle(FIELD, [0.0; 3], Some(focus)).unwrap();
+    for request in fields.requests(FIELD, 0) {
+        let content = sampled(&request, |_, _| 2.0);
+        fields
+            .commit(FIELD, (request.x, request.z), request.revision, content)
+            .unwrap();
+    }
+    operations.extend(fields.settle(FIELD, [0.0; 3], Some(focus)).unwrap());
+    operations
+}
+
+fn held(fields: &VegetationFields) -> std::collections::BTreeSet<(i64, i64)> {
+    (-8..8)
+        .flat_map(|x| (-8..8).map(move |z| (x, z)))
+        .filter(|&tile| fields.patch_handle(FIELD, tile, GRASS).is_some())
+        .collect()
+}
+
+#[test]
+fn a_settle_with_nothing_changed_chooses_nothing_again() {
+    let mut fields = fields(1_000);
+    fill(&mut fields, [8.0, 2.0, 8.0], |_, _| 2.0);
+    let before = fields.readout(FIELD).unwrap();
+    // Still, and moving within a step: nothing to do.
+    for focus in [[8.0, 2.0, 8.0], [8.5, 2.0, 8.3]] {
+        let operations = fields.settle(FIELD, [0.0; 3], Some(focus)).unwrap();
+        assert!(operations.is_empty(), "{operations:?}");
+    }
+    let still = fields.readout(FIELD).unwrap();
+    assert_eq!(still.settles_skipped, before.settles_skipped + 2);
+    assert_eq!(still.settles_reselected, before.settles_reselected);
+    assert_eq!(
+        (still.patches, still.instances),
+        (before.patches, before.instances)
+    );
+    // Past a step it chooses again; so it does after a change.
+    fields
+        .settle(FIELD, [0.0; 3], Some([10.0, 2.0, 8.0]))
+        .unwrap();
+    assert_eq!(
+        fields.readout(FIELD).unwrap().settles_reselected,
+        before.settles_reselected + 1
+    );
+    fields.invalidate(FIELD, [0.0, 0.0], [1.0, 1.0]).unwrap();
+    fields
+        .settle(FIELD, [0.0; 3], Some([10.0, 2.0, 8.0]))
+        .unwrap();
+    assert_eq!(
+        fields.readout(FIELD).unwrap().settles_reselected,
+        before.settles_reselected + 2
+    );
+    let mut sparser = grass();
+    sparser.density *= 0.5;
+    fields.set_layer(FIELD, GRASS, sparser).unwrap();
+    fields
+        .settle(FIELD, [0.0; 3], Some([10.0, 2.0, 8.0]))
+        .unwrap();
+    assert_eq!(
+        fields.readout(FIELD).unwrap().settles_reselected,
+        before.settles_reselected + 3
+    );
+}
+
+#[test]
+fn a_field_walked_in_small_steps_holds_what_a_field_settled_there_holds() {
+    // Walked across 30 m in half-step moves, the field holds every tile
+    // layer a fresh field settled at the end holds, and nothing past the
+    // widened reach.
+    let mut walked = fields(1_000);
+    let mut fresh = fields(1_000);
+    let end = [38.0, 2.0, 8.0];
+    let mut x = 8.0;
+    while x < end[0] {
+        walk_to(&mut walked, [x, 2.0, 8.0]);
+        x += 0.5;
+    }
+    walk_to(&mut walked, end);
+    walk_to(&mut fresh, end);
+    let (walked, fresh_tiles) = (held(&walked), held(&fresh));
+    assert!(
+        fresh_tiles.is_subset(&walked),
+        "fresh {fresh_tiles:?}, walked {walked:?}"
+    );
+    let reach = f64::from(grass().reach) * VEGETATION_HYSTERESIS + 16.0 * VEGETATION_SELECTION_STEP;
+    let retained = &fresh.fields[&FIELD];
+    for tile in &walked {
+        assert!(retained.flat_distance(end, *tile) <= reach, "{tile:?}");
+    }
 }

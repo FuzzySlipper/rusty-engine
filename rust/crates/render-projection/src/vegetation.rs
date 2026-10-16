@@ -25,7 +25,7 @@
 //! Placing is the costly step: it runs on worker threads, at most
 //! `placements_per_settle` tile layers a settle, and what waits is counted.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -44,6 +44,12 @@ use crate::{HandleAllocationError, RenderHandleNamespace, StableHandleRegistry};
 /// A tile is kept, and a layer's patch on it, until it is this many times
 /// the reach away, so a focus on the boundary does not rebuild it.
 pub const VEGETATION_HYSTERESIS: f64 = 1.1;
+
+/// A settle chooses again only once the focus has moved this share of a
+/// tile from where it last chose (or the field changed); choosing, it
+/// widens every reach by that much, so the tiles it keeps cover any focus
+/// within it.
+pub const VEGETATION_SELECTION_STEP: f64 = 1.0 / 16.0;
 
 /// Ground classes are 0 to 63: a layer's `grounds` holds a bit for each.
 pub const VEGETATION_GROUND_CLASSES: u32 = 64;
@@ -260,6 +266,11 @@ pub struct VegetationReadout {
     pub replaced_patches: u64,
     /// The samples and records held, in bytes.
     pub sample_bytes: u64,
+    /// Since the field was made: settles that had nothing to choose again
+    /// (no change, the focus within a step of the last choice), and those
+    /// that chose again.
+    pub settles_skipped: u64,
+    pub settles_reselected: u64,
 }
 
 /// A layer's key and a tile.
@@ -319,6 +330,10 @@ struct Field {
     next_revision: u32,
     next_generation: u64,
     readout: VegetationReadout,
+    /// Its layers or tiles changed since the last choice.
+    changed: bool,
+    /// The focus the last choice was made for.
+    chosen_at: Option<[f64; 3]>,
 }
 
 impl Field {
@@ -422,6 +437,8 @@ impl VegetationFields {
                 next_revision: 0,
                 next_generation: 0,
                 readout: VegetationReadout::default(),
+                changed: true,
+                chosen_at: None,
             },
         );
         Ok(())
@@ -465,6 +482,7 @@ impl VegetationFields {
         }
         let generation = retained.generation();
         retained.layers.insert(key, (layer, generation));
+        retained.changed = true;
         Ok(())
     }
 
@@ -478,6 +496,7 @@ impl VegetationFields {
         if retained.layers.remove(&key).is_none() {
             return Ok(Vec::new());
         }
+        retained.changed = true;
         let mut operations = Vec::new();
         for (&(x, z), tile) in &mut retained.tiles {
             tile.bare.remove(&key);
@@ -567,6 +586,7 @@ impl VegetationFields {
             bytes,
         }));
         tile.current = true;
+        retained.changed = true;
         Ok(true)
     }
 
@@ -594,6 +614,7 @@ impl VegetationFields {
             tile.revision = revision;
             tile.current = false;
             retained.readout.invalidated_tiles += 1;
+            retained.changed = true;
         }
         Ok(())
     }
@@ -682,6 +703,22 @@ impl VegetationFields {
             readout.publication_microseconds = 0;
             return Ok(operations);
         };
+        // Nothing to choose again: no change, nothing deferred, the focus
+        // within a step of the last choice, whose widened reaches cover it.
+        let step = retained.layout.tile_size * VEGETATION_SELECTION_STEP;
+        let near_last = retained.chosen_at.is_some_and(|at| {
+            let [dx, dy, dz] = [0, 1, 2].map(|axis| at[axis] - focus[axis]);
+            (dx * dx + dy * dy + dz * dz).sqrt() <= step
+        });
+        if !retained.changed && readout.deferred == 0 && near_last {
+            readout.settles_skipped += 1;
+            readout.selection_microseconds = started.elapsed().as_micros() as u64;
+            readout.publication_microseconds = 0;
+            return Ok(operations);
+        }
+        readout.settles_reselected += 1;
+        retained.changed = false;
+        retained.chosen_at = Some(focus);
 
         // Residency: the tiles within the farthest reach, kept a little past it.
         let reach = retained.reach();
@@ -700,14 +737,14 @@ impl VegetationFields {
         }
         if reach > 0.0 {
             let size = retained.layout.tile_size;
-            let low =
-                [focus[0] - reach, focus[2] - reach].map(|value| (value / size).floor() as i64);
-            let high =
-                [focus[0] + reach, focus[2] + reach].map(|value| (value / size).floor() as i64);
+            let low = [focus[0] - reach - step, focus[2] - reach - step]
+                .map(|value| (value / size).floor() as i64);
+            let high = [focus[0] + reach + step, focus[2] + reach + step]
+                .map(|value| (value / size).floor() as i64);
             for x in low[0]..=high[0] {
                 for z in low[1]..=high[1] {
                     if retained.tiles.contains_key(&(x, z))
-                        || retained.flat_distance(focus, (x, z)) > reach
+                        || retained.flat_distance(focus, (x, z)) > reach + step
                     {
                         continue;
                     }
@@ -731,21 +768,55 @@ impl VegetationFields {
         // their counts; those unknown are placed as the budget allows.
         struct Candidate {
             tile: (i64, i64),
+            /// Its tile's place in `nearest`.
+            at: usize,
             content: Arc<Content>,
             generations: [u64; 2],
             known: Option<u32>,
+            /// Its patch's generations and copies, and its bare entry.
+            drawn: Option<([u64; 2], u32)>,
+            bare: Option<([u64; 2], u32)>,
         }
+        // Each tile's distances once, the tiles nearest first: every
+        // layer's candidates are those of them within its reach, in order.
+        struct Near<'a> {
+            key: (i64, i64),
+            distances: [f64; 2],
+            tile: &'a Tile,
+            content: &'a Arc<Content>,
+        }
+        let mut nearest: Vec<Near<'_>> = retained
+            .tiles
+            .iter()
+            .filter_map(|(&key, tile)| {
+                let content = tile.content.as_ref()?;
+                Some(Near {
+                    key,
+                    distances: retained.distances(focus, key, Some(content)),
+                    tile,
+                    content,
+                })
+            })
+            .collect();
+        nearest.sort_by(|a, b| {
+            a.distances[0]
+                .total_cmp(&b.distances[0])
+                .then(a.key.cmp(&b.key))
+        });
         let mut candidates: BTreeMap<u32, Vec<Candidate>> = BTreeMap::new();
         for (&key, (layer, layer_generation)) in &retained.layers {
-            let mut list: Vec<(f64, Candidate)> = Vec::new();
-            for (&tile_key, tile) in &retained.tiles {
-                let Some(content) = &tile.content else {
-                    continue;
-                };
-                let [near, far] = retained.distances(focus, tile_key, Some(content));
+            let mut list: Vec<Candidate> = Vec::new();
+            for (at, near_tile) in nearest.iter().enumerate() {
+                let Near {
+                    key: tile_key,
+                    distances: [near, far],
+                    tile,
+                    content,
+                } = *near_tile;
                 let held = tile.patches.contains_key(&key);
-                let limit = f64::from(layer.reach) * if held { VEGETATION_HYSTERESIS } else { 1.0 };
-                if near > limit || (layer.near > 0.0 && far < f64::from(layer.near)) {
+                let limit =
+                    f64::from(layer.reach) * if held { VEGETATION_HYSTERESIS } else { 1.0 } + step;
+                if near > limit || (layer.near > 0.0 && far < f64::from(layer.near) - step) {
                     continue;
                 }
                 let generations = [content.generation, *layer_generation];
@@ -754,22 +825,29 @@ impl VegetationFields {
                     (_, Some((made, count))) if *made == generations => Some(*count),
                     _ => None,
                 };
-                list.push((
-                    near,
-                    Candidate {
-                        tile: tile_key,
-                        content: content.clone(),
-                        generations,
-                        known,
-                    },
-                ));
+                list.push(Candidate {
+                    tile: tile_key,
+                    at,
+                    content: content.clone(),
+                    generations,
+                    known,
+                    drawn: tile
+                        .patches
+                        .get(&key)
+                        .map(|patch| (patch.generations, patch.instances)),
+                    bare: tile.bare.get(&key).copied(),
+                });
             }
-            list.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.tile.cmp(&b.1.tile)));
-            candidates.insert(
-                key,
-                list.into_iter().map(|(_, candidate)| candidate).collect(),
-            );
+            candidates.insert(key, list);
         }
+        // Where each tile stands in `nearest`, for what is chosen on it.
+        let tile_at: HashMap<(i64, i64), usize> = nearest
+            .iter()
+            .enumerate()
+            .map(|(at, near_tile)| (near_tile.key, at))
+            .collect();
+        let tile_count = nearest.len();
+        drop(nearest);
         // Placing: the candidates whose counts are unknown, nearest first
         // across layers (the budget goes where it shows most), at most the
         // field's placements a settle.
@@ -813,49 +891,62 @@ impl VegetationFields {
         // Choosing: within each layer's budget, nearest first. A tile layer
         // waiting to be placed again counts and draws what it has meanwhile.
         let selecting = Instant::now();
-        let mut chosen: BTreeMap<Slot, [u64; 2]> = BTreeMap::new();
+        // What is chosen on each tile (in `nearest` order), by layer key in
+        // order. A tile is touched only where its bare entry changes. Chosen
+        // tile layers last counted while the budget left them out need
+        // their copies again: they take the placements left, nearest first
+        // in each layer.
+        let mut chosen: Vec<Vec<(u32, [u64; 2])>> = vec![Vec::new(); tile_count];
+        let mut late: Vec<(Slot, Arc<Content>)> = Vec::new();
         let mut over_budget = 0u32;
         for (&key, list) in &candidates {
             let mut budget = u64::from(retained.layers[&key].0.maximum_instances);
             for candidate in list {
-                let tile = retained
-                    .tiles
-                    .get_mut(&candidate.tile)
-                    .expect("a candidate's tile");
-                let (count, generations) = match (candidate.known, tile.patches.get(&key)) {
+                let (count, generations) = match (candidate.known, candidate.drawn) {
                     (Some(count), _) => (count, candidate.generations),
-                    (None, Some(patch)) => (patch.instances, patch.generations),
+                    (None, Some((generations, count))) => (count, generations),
                     (None, None) => continue,
                 };
-                if count == 0 {
-                    // Bare ground: nothing to draw until it changes.
-                    tile.bare.insert(key, (generations, 0));
-                    continue;
-                }
-                if u64::from(count) > budget {
-                    tile.bare.insert(key, (generations, count));
+                // Bare ground draws nothing until it changes; past the
+                // budget, it is counted.
+                let bare = if count == 0 {
+                    Some((generations, 0))
+                } else if u64::from(count) > budget {
                     over_budget += 1;
+                    Some((generations, count))
+                } else {
+                    budget -= u64::from(count);
+                    None
+                };
+                if bare != candidate.bare {
+                    let tile = retained
+                        .tiles
+                        .get_mut(&candidate.tile)
+                        .expect("a candidate's tile");
+                    match bare {
+                        Some(entry) => tile.bare.insert(key, entry),
+                        None => tile.bare.remove(&key),
+                    };
+                }
+                if bare.is_some() {
                     continue;
                 }
-                budget -= u64::from(count);
-                tile.bare.remove(&key);
-                chosen.insert((key, candidate.tile), generations);
+                chosen[candidate.at].push((key, generations));
+                let slot = (key, candidate.tile);
+                let drawn = candidate
+                    .drawn
+                    .is_some_and(|(drawn, _)| drawn == generations);
+                if !drawn && !fresh.contains_key(&slot) {
+                    late.push((slot, candidate.content.clone()));
+                }
             }
         }
-        // Chosen tile layers last counted while the budget left them out
-        // need their copies again: they take the placements left.
-        let mut late: Vec<(Slot, Arc<Content>)> = Vec::new();
-        for (&(key, tile_key), generations) in &chosen {
-            let tile = &retained.tiles[&tile_key];
-            let drawn = tile
-                .patches
-                .get(&key)
-                .is_some_and(|patch| patch.generations == *generations);
-            if !drawn && !fresh.contains_key(&(key, tile_key)) {
-                let content = tile.content.clone().expect("chosen tiles have samples");
-                late.push(((key, tile_key), content));
-            }
-        }
+        let chosen_on = |tile_key: (i64, i64), key: u32| -> Option<[u64; 2]> {
+            let on = &chosen[*tile_at.get(&tile_key)?];
+            on.binary_search_by_key(&key, |(layer, _)| *layer)
+                .ok()
+                .map(|index| on[index].1)
+        };
         let left = placements.saturating_sub(jobs.len());
         if late.len() > left {
             deferred += (late.len() - left) as u32;
@@ -881,10 +972,10 @@ impl VegetationFields {
             let (x, z) = tile_key;
             let mut leaving: Vec<(u32, bool)> = Vec::new();
             for (&key, patch) in &tile.patches {
-                match chosen.get(&(key, tile_key)) {
+                match chosen_on(tile_key, key) {
                     None => leaving.push((key, false)),
                     Some(generations)
-                        if *generations != patch.generations
+                        if generations != patch.generations
                             && fresh.contains_key(&(key, tile_key)) =>
                     {
                         leaving.push((key, generations[0] != patch.generations[0]));
@@ -902,7 +993,7 @@ impl VegetationFields {
             }
         }
         for ((key, tile_key), instances) in fresh {
-            let Some(generations) = chosen.get(&(key, tile_key)).copied() else {
+            let Some(generations) = chosen_on(tile_key, key) else {
                 continue;
             };
             let tile = retained.tiles.get_mut(&tile_key).expect("a chosen tile");

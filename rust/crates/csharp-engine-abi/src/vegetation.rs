@@ -254,6 +254,11 @@ pub struct NativeVegetationReadout {
     pub replaced_patches: u64,
     /// The samples and records held, in bytes.
     pub sample_bytes: u64,
+    /// Since the field was made: calls that had nothing to choose again (no
+    /// change, the focus within a sixteenth of a tile of the last choice),
+    /// and calls that chose again.
+    pub settles_skipped: u64,
+    pub settles_reselected: u64,
 }
 
 pub type NativeCreateVegetationField = unsafe extern "C" fn(

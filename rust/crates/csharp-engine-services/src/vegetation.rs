@@ -638,6 +638,8 @@ fn native_readout(readout: VegetationReadout) -> NativeVegetationReadout {
         invalidated_tiles: readout.invalidated_tiles,
         replaced_patches: readout.replaced_patches,
         sample_bytes: readout.sample_bytes,
+        settles_skipped: readout.settles_skipped,
+        settles_reselected: readout.settles_reselected,
     }
 }
 

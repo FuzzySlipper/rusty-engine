@@ -197,13 +197,21 @@ than their area.
 - `PlacementsPerCall` (64): the most tile layers a call places. Placing runs
   on worker threads as the call finishes; what waits is counted (`Deferred`)
   and placed by the next calls, nearest first.
+- Choosing again: a call chooses its tile layers again only when the field
+  changed (a layer set or removed, a tile committed or invalidated), work
+  was left waiting, or the focus moved a sixteenth of a tile from where it
+  last chose. Otherwise it costs nothing. Choosing, it widens every reach by
+  that much, so what it keeps covers any focus within it; the copies' fades
+  are drawn from the camera itself.
 
 `Read` (and every call) returns the field's readout: tiles held and waiting
 (`Tiles`, `PendingTiles`), patches and copies drawn, `OverBudget`, `Deferred`,
 the last call's placements (`Placed`, `PlacedInstances`) and its time placing,
 choosing what is drawn and turning that into renderer work
 (`PlacementMicroseconds`, `SelectionMicroseconds`, `PublicationMicroseconds`),
-`InvalidatedTiles`, `ReplacedPatches` and `SampleBytes`. The renderer's side
+`InvalidatedTiles`, `ReplacedPatches`, `SampleBytes`, and the calls that
+had nothing to choose again and those that chose again (`SettlesSkipped`,
+`SettlesReselected`). The renderer's side
 of the upload is `engine.renderer` statistics' `scatter`: patches and copies
 taken in since it was made, the CPU time turning them into drawable parts and
 the GPU row bytes they upload; read it twice and subtract for a span.
