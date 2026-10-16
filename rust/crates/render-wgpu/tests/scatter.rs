@@ -1044,3 +1044,96 @@ fn copies_never_hide_copies() {
         "{selection:?}"
     );
 }
+
+#[test]
+fn a_patch_destroyed_before_its_first_draw_takes_its_pending_rows_with_it() {
+    // More copies than the copy buffer first holds, made and destroyed
+    // between draws: nothing of them is written, and the next patch draws.
+    let mut harness = harness(false);
+    let mut ops = stage(false);
+    let many: Vec<_> = (0..5_000)
+        .map(|index| {
+            copy(
+                [
+                    (index % 100) as f32 * 0.05,
+                    0.0,
+                    -(index / 100) as f32 * 0.05,
+                ],
+                [1.0; 3],
+            )
+        })
+        .collect();
+    ops.push(patch(20, 5, many, ScatterFade::default(), false));
+    ops.push(RenderDiff::Destroy {
+        handle: RenderHandle::new(20),
+    });
+    harness.apply(ops);
+    render(&mut harness);
+    harness.apply(vec![patch(21, 5, whole(), ScatterFade::default(), false)]);
+    let (_, frame) = render(&mut harness);
+    assert!(bright(&frame) > 100, "the next patch draws");
+}
+
+#[test]
+fn a_turned_copy_maps_its_triplanar_normals_as_an_instance_does() {
+    // A tilted normal map through triplanar planes, under a raking sun: the
+    // copy's own turn takes the mapped normal into the world.
+    const YAW: f32 = 60.0;
+    let scene = |scattered: bool| {
+        let mut harness = harness(false);
+        let mut ops = stage(false);
+        let texel = [
+            ((0.6_f32 * 0.5 + 0.5) * 255.0).round() as u8,
+            128,
+            ((0.8_f32 * 0.5 + 0.5) * 255.0).round() as u8,
+            255,
+        ];
+        let (mut define_map, _) = harness.resources.texture(
+            "texture/tilted",
+            2,
+            2,
+            &texel.repeat(4),
+            TextureFilter::Linear,
+        );
+        if let RenderDiff::DefineTexture { texture } = &mut define_map {
+            texture.wrap = TextureWrap::Repeat;
+            if let Some(payload) = texture.payload.as_mut() {
+                payload.color_space = TextureColorSpace::Linear;
+            }
+        }
+        let mut mapped = coloured_mesh("mapped", post(), [0.9, 0.9, 0.9, 1.0]);
+        if let RenderDiff::DefineMaterial { material } = &mut mapped[0] {
+            material.triplanar = Some(MaterialTriplanarDescriptor { sharpness: 4.0 });
+            material.normal_map = Some(MaterialNormalMapDescriptor {
+                texture: "texture/tilted".to_owned(),
+                scale: 1.0,
+            });
+        }
+        ops.push(define_map);
+        ops.extend(mapped);
+        let at = [0.0, 0.0, 0.0];
+        if scattered {
+            let half = YAW.to_radians() * 0.5;
+            let mut turned = copy(at, [1.0; 3]);
+            turned.rotation = [0.0, half.sin(), 0.0, half.cos()];
+            turned.scale = 1.5;
+            let mut created = patch(20, 5, vec![turned], ScatterFade::default(), false);
+            if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+                patch.asset = "mesh/mapped".to_owned();
+            }
+            ops.push(created);
+        } else {
+            ops.push(instance(20, Some(5), "mapped", transform(at, YAW, 1.5)));
+        }
+        harness.apply(ops);
+        render(&mut harness).1
+    };
+    let expected = scene(false);
+    let scattered = scene(true);
+    let differing = expected
+        .chunks(4)
+        .zip(scattered.chunks(4))
+        .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 2))
+        .count();
+    assert_eq!(differing, 0, "{differing} pixels differ from the instance");
+}

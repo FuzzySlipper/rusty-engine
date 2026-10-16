@@ -77,12 +77,14 @@ impl ScatterCopies {
         CopyRange { first, count }
     }
 
-    /// Give a run's rows back.
+    /// Give a run's rows back, with their write if it has not been
+    /// uploaded yet.
     pub fn remove(&mut self, range: CopyRange) {
         if range.count == 0 {
             return;
         }
         self.held -= u64::from(range.count);
+        self.pending.retain(|(first, _)| *first != range.first);
         let at = self.free.partition_point(|free| free.first < range.first);
         self.free.insert(at, range);
         // Join it to its neighbours.

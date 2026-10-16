@@ -107,8 +107,9 @@ struct VsOut {
     // The copy's share of the samples (`rusty::view::fade_mask`).
     @location(10) @interpolate(flat) fade: f32,
 #endif
-#ifdef IMPOSTOR
-    // The copy's turn, which takes the baked normals into the world.
+#ifdef SCATTER
+    // The copy's own normal matrix (an impostor's, its turn): the fragment
+    // stage's part row is its patch's, without the copy's turn.
     @location(11) @interpolate(flat) turn_x: vec3<f32>,
     @location(12) @interpolate(flat) turn_y: vec3<f32>,
     @location(13) @interpolate(flat) turn_z: vec3<f32>,
@@ -209,6 +210,11 @@ fn vs_world(
     out.turn_z = card.turn[2];
 #else
     out.uv = uv;
+#ifdef SCATTER
+    out.turn_x = row.normal_x.xyz;
+    out.turn_y = row.normal_y.xyz;
+    out.turn_z = row.normal_z.xyz;
+#endif
 #endif
 #ifdef WATER
     out.clip_position = out.clip;
@@ -477,7 +483,11 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
     }
     mapped = normalize(mapped);
 #endif
+#ifdef SCATTER
+    var normal = normalize(mat3x3<f32>(in.turn_x, in.turn_y, in.turn_z) * mapped);
+#else
     var normal = normalize(mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * mapped);
+#endif
 #else
 #ifdef VOXEL_SURFACE
     // Through the same tiling as the base texture; the frame comes from the
