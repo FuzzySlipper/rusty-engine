@@ -1503,8 +1503,10 @@ impl Renderer {
         let ours = |layer: &shadows::ShadowLayer| layer.is_backdrop() == backdrop;
         let selected_shadows =
             !backdrop && self.tables.parts.selecting && self.scatter_select.casts();
-        // Selected copies that move with time are timed casters too.
-        let selected_timed = selected_shadows && self.scatter_select.casts_moving();
+        // Selected copies that move with time are timed casters too; the
+        // wind moves nothing in still air.
+        let wind_blows = self.tables.wind.is_some_and(|wind| wind.strength > 0.0);
+        let selected_timed = selected_shadows && self.scatter_select.casts_moving(wind_blows);
         let retimed = (self.shadows.timed[kind] || selected_timed)
             && self.shadows.time[kind] != self.presentation_time;
         if !retimed

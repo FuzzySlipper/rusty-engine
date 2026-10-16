@@ -1443,3 +1443,44 @@ fn a_masked_wall_hides_no_copies() {
     assert_eq!(selection.occluded, 0, "{selection:?}");
     assert_eq!(frame, expected);
 }
+
+#[test]
+fn wind_material_copies_in_still_air_leave_the_shadow_maps_alone() {
+    // A tree whose material bends in the wind, under the sun, with no wind
+    // blowing: as time moves with the camera still, no shadow layer draws
+    // again.
+    let mut harness = harness(true);
+    let mut ops = stage(true);
+    let mut tree_ops = coloured_mesh("windy", tree(), [0.9, 0.9, 0.9, 1.0]);
+    if let RenderDiff::DefineMaterial { material } = &mut tree_ops[0] {
+        material.wind = Some(MaterialWindDescriptor {
+            bend: 0.3,
+            flutter: 0.1,
+        });
+    }
+    ops.extend(tree_ops);
+    let mut created = patch(
+        20,
+        5,
+        vec![copy([0.0; 3], [1.0; 3])],
+        ScatterFade::default(),
+        true,
+    );
+    if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+        patch.asset = "mesh/windy".to_owned();
+    }
+    ops.push(created);
+    harness.apply(ops);
+    for step in 0..3 {
+        harness.renderer.set_animation_time(f64::from(step));
+        render(&mut harness);
+    }
+    if !harness.renderer.gpu_readout().scatter_selection.enabled {
+        return;
+    }
+    for step in 3..6 {
+        harness.renderer.set_animation_time(f64::from(step));
+        let (stats, _) = render(&mut harness);
+        assert_eq!(stats.shadow_layers, 0, "step {step}: {stats:?}");
+    }
+}
