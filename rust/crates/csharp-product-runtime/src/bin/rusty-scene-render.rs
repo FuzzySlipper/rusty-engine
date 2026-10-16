@@ -456,6 +456,7 @@ fn run() -> Result<(), String> {
         let target = OffscreenTarget::new(driver.gpu(), width, height, driver.primary_samples());
         let mut pixels = Vec::new();
         let mut costs = Vec::with_capacity(frames as usize);
+        let mut draw_costs = Vec::with_capacity(frames as usize);
         let (mut draws, mut instances, mut batch_us) = (Vec::new(), Vec::new(), Vec::new());
         for frame in 1..=frames {
             if let (true, Some(start)) = (moving, start) {
@@ -480,6 +481,7 @@ fn run() -> Result<(), String> {
             let started = Instant::now();
             let (stats, _) =
                 driver.draw(|renderer, now| renderer.render_view_composition(&target, now));
+            draw_costs.push(ms(started));
             target.read_rgba_into(driver.gpu(), &mut pixels);
             costs.push(ms(started));
             draws.push(stats.draws);
@@ -487,11 +489,15 @@ fn run() -> Result<(), String> {
             batch_us.push(stats.cpu_batch_us);
         }
         costs.sort_by(f64::total_cmp);
+        draw_costs.sort_by(f64::total_cmp);
         timing = json!({
             "frames": frames,
             "meanMs": costs.iter().sum::<f64>() / costs.len() as f64,
             "medianMs": costs[costs.len() / 2],
             "withReadback": true,
+            // The draw call alone, before the readback waits for the GPU:
+            // the renderer's CPU work a frame (the GPU idle when it starts).
+            "drawMedianMs": draw_costs[draw_costs.len() / 2],
             // Per frame, the median: draw calls, the parts they covered, and
             // the CPU microseconds building draw lists (`FrameStats`).
             "draws": median(&mut draws),

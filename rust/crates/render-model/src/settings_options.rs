@@ -367,7 +367,7 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         description: "Skips grass, plants and trees hidden behind terrain and buildings: helps where much is hidden, costs a little in open country.",
         kind: RendererSettingKind::Toggle,
         restart: false,
-        cost: "About 0.14 ms at 1280×720 with 4× antialiasing on an RX 9070 XT. In CraftSurvive it saved 0.34 ms looking past a near crown; in a forest, on open slopes and at vistas the change stayed within the run-to-run spread.",
+        cost: "About 0.14 ms of GPU at 1280×720 with 4× antialiasing on an RX 9070 XT, and 0.6 to 0.85 ms of renderer CPU in a CraftSurvive forest (its own depth pass over every opaque part). It saved 0.34 ms of GPU looking past a near crown; elsewhere the change stayed within the run-to-run spread.",
         gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: Some("true"), requires: None, setup: Some(GallerySetup::Product("scattered vegetation (Vegetation fields or voxel scatter)")) },
     },
 ];
