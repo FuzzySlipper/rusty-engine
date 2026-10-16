@@ -117,6 +117,9 @@ pub(crate) struct ScatterSelect {
     pub entries: u32,
     enabled: bool,
     values: [u32; STATS],
+    casts_moving: bool,
+    last_eye: Option<Vec3>,
+    eye_moved: bool,
 }
 
 impl ScatterSelect {
@@ -257,6 +260,9 @@ impl ScatterSelect {
             timer: PassTimer::new(gpu, PASS),
             draws: Vec::new(),
             part_count: 0,
+            casts_moving: false,
+            last_eye: None,
+            eye_moved: false,
             chunk_count: 0,
             run_count: 0,
             copy_count: 0,
@@ -273,6 +279,18 @@ impl ScatterSelect {
     /// A draw of the selection casts shadows.
     pub fn casts(&self) -> bool {
         self.draws.iter().any(|draw| draw.casts)
+    }
+
+    /// A casting draw's vertices move with presentation time (the wind, a
+    /// product's displace stage): its shadows redraw as time moves.
+    pub fn casts_moving(&self) -> bool {
+        self.casts_moving
+    }
+
+    /// The last pass selected from another eye than the one before: the
+    /// shadows' list (levels, thinning and fades by distance) may differ.
+    pub fn eye_moved(&self) -> bool {
+        self.eye_moved
     }
 
     /// Gather the world layer's runs and their parts again: after a regroup,
@@ -462,6 +480,14 @@ impl ScatterSelect {
                 mapped_at_creation: false,
             });
         }
+        self.casts_moving = ordered.iter().any(|draw| {
+            draw.casts
+                && parts.state[draw.part as usize]
+                    .class
+                    .features
+                    .caster()
+                    .moves_with_time()
+        });
         self.draws = ordered;
         self.part_count = part_count;
         self.chunk_count = (chunks.len() / 2) as u32;
@@ -498,6 +524,8 @@ impl ScatterSelect {
             return;
         };
         self.enabled = true;
+        self.eye_moved = self.last_eye != Some(eye);
+        self.last_eye = Some(eye);
         if self.draws.is_empty() {
             return;
         }

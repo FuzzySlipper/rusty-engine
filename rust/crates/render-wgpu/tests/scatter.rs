@@ -1137,3 +1137,188 @@ fn a_turned_copy_maps_its_triplanar_normals_as_an_instance_does() {
         .count();
     assert_eq!(differing, 0, "{differing} pixels differ from the instance");
 }
+
+#[test]
+fn an_impostor_bakes_again_when_its_material_is_defined_anew() {
+    // The posts' material turns blue after the cards were baked white: the
+    // cards follow it.
+    let mut harness = harness(false);
+    let mut ops = stage(false);
+    let mut created = patch(20, 5, whole(), ScatterFade::default(), false);
+    if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+        patch.lods = vec![ScatterLod {
+            asset: format!("mesh/{POST}"),
+            material_overrides: Vec::new(),
+            start: 2.0,
+            impostor: true,
+        }];
+    }
+    ops.push(created);
+    harness.apply(ops);
+    let blue = |frame: &[u8]| {
+        frame
+            .chunks(4)
+            .filter(|p| p[2] > 120 && u16::from(p[2]) > u16::from(p[0]) + 60)
+            .count()
+    };
+    let (_, white) = render(&mut harness);
+    if !harness.renderer.gpu_readout().scatter_selection.enabled {
+        return;
+    }
+    assert_eq!(blue(&white), 0);
+    let recoloured = coloured_mesh(POST, post(), [0.1, 0.2, 0.9, 1.0]);
+    harness.apply(vec![recoloured[0].clone()]);
+    let (_, frame) = render(&mut harness);
+    assert!(blue(&frame) > 100, "{} blue card pixels", blue(&frame));
+    assert_eq!(harness.renderer.gpu_readout().impostors.impostors, 1);
+}
+
+#[test]
+fn copies_shadows_move_with_the_wind_as_an_instances_do() {
+    // A tree bending in a gusting wind under the sun, the camera and light
+    // still: as time moves, its shadow moves as the same tree placed as an
+    // instance moves its own.
+    let scene = |scattered: bool| {
+        let mut harness = harness(true);
+        let mut ops = stage(true);
+        for op in &mut ops {
+            if let RenderDiff::CreateLight {
+                light: LightDescriptor::Directional { direction, .. },
+                ..
+            } = op
+            {
+                *direction = [0.5, -0.8, 0.1];
+            }
+        }
+        let mut tree_ops = coloured_mesh("windy", tree(), [0.9, 0.9, 0.9, 1.0]);
+        if let RenderDiff::DefineMaterial { material } = &mut tree_ops[0] {
+            material.wind = Some(MaterialWindDescriptor {
+                bend: 0.3,
+                flutter: 0.0,
+            });
+        }
+        ops.extend(tree_ops);
+        ops.push(RenderDiff::SetWind {
+            wind: Some(WindDescriptor {
+                direction: [1.0, 0.0],
+                strength: 3.0,
+                gust: 1.0,
+            }),
+        });
+        let at = [0.0, 0.0, 0.0];
+        if scattered {
+            let mut created = patch(
+                20,
+                5,
+                vec![copy(at, [1.0; 3])],
+                ScatterFade::default(),
+                true,
+            );
+            if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+                patch.asset = "mesh/windy".to_owned();
+            }
+            ops.push(created);
+        } else {
+            ops.push(instance(20, Some(5), "windy", transform(at, 0.0, 1.0)));
+        }
+        harness.apply(ops);
+        harness.renderer.set_animation_time(0.0);
+        render(&mut harness);
+        render(&mut harness);
+        harness.renderer.set_animation_time(5.3);
+        render(&mut harness).1
+    };
+    let expected = scene(false);
+    let scattered = scene(true);
+    let differing = expected
+        .chunks(4)
+        .zip(scattered.chunks(4))
+        .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 2))
+        .count();
+    assert_eq!(differing, 0, "{differing} pixels differ from the instance");
+}
+
+#[test]
+fn a_fixed_lights_shadow_follows_the_copies_level_as_the_eye_moves() {
+    // Under an ambient light's sky, a copy draws as a wide slab from 7 m and
+    // as a post nearer. The eye walks in across 7 m with nothing else
+    // moving: the sky's shadow follows the copy's level, as a renderer that
+    // starts at the near eye draws it.
+    const SLAB: &str = "slab";
+    let near = camera("eye", [0.0, 0.0, 0.0], 0.0, 0.0);
+    let far = camera("eye", [0.0, 0.0, 5.0], 0.0, 0.0);
+    let scene = |eyes: &[&render_host_contracts::RendererCompositionCamera]| {
+        let mut harness = harness(true);
+        let mut ops = stage(true);
+        for op in &mut ops {
+            if let RenderDiff::CreateLight {
+                light: LightDescriptor::Directional { shadow_intent, .. },
+                ..
+            } = op
+            {
+                *shadow_intent = LightShadowIntent::Disabled;
+            }
+        }
+        ops.push(RenderDiff::CreateLight {
+            handle: RenderHandle::new(78),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [1.0; 3],
+                intensity: 1.0,
+                enabled: true,
+                range: Some(8.0),
+                shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
+            },
+        });
+        let mut slab = cube();
+        if let MeshPayloadSource::Inline { positions, .. } = &mut slab.source {
+            for point in positions.as_chunks_mut::<3>().0 {
+                point[0] *= 2.5;
+                point[1] = point[1] * 0.2 + 1.2;
+                point[2] *= 2.5;
+            }
+        }
+        slab.bounds = MeshBoundsDescriptor {
+            min: [-1.25, 1.1, -1.25],
+            max: [1.25, 1.3, 1.25],
+        };
+        ops.extend(coloured_mesh(SLAB, slab, [0.9, 0.9, 0.9, 1.0]));
+        let mut created = patch(
+            20,
+            5,
+            vec![copy([0.0; 3], [1.0; 3])],
+            ScatterFade::default(),
+            true,
+        );
+        if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+            patch.lods = vec![ScatterLod {
+                asset: format!("mesh/{SLAB}"),
+                material_overrides: Vec::new(),
+                start: 7.0,
+                impostor: false,
+            }];
+        }
+        ops.push(created);
+        harness.apply(ops);
+        let mut frame = Vec::new();
+        for eye in eyes {
+            for _ in 0..2 {
+                harness.renderer.render_offscreen(eye, &harness.target);
+            }
+            frame = harness.target.read_rgba(&harness.gpu);
+        }
+        frame
+    };
+    let expected = scene(&[&near]);
+    let walked = scene(&[&far, &near]);
+    let differing = expected
+        .chunks(4)
+        .zip(walked.chunks(4))
+        .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 2))
+        .count();
+    assert_eq!(
+        differing, 0,
+        "{differing} pixels differ from a renderer that started near"
+    );
+}

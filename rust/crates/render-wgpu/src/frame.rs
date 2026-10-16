@@ -1503,7 +1503,12 @@ impl Renderer {
     ) -> ShadowsEncoded {
         let kind = usize::from(backdrop);
         let ours = |layer: &shadows::ShadowLayer| layer.is_backdrop() == backdrop;
-        let retimed = self.shadows.timed[kind] && self.shadows.time[kind] != self.presentation_time;
+        let selected_shadows =
+            !backdrop && self.tables.parts.selecting && self.scatter_select.casts();
+        // Selected copies that move with time are timed casters too.
+        let selected_timed = selected_shadows && self.scatter_select.casts_moving();
+        let retimed = (self.shadows.timed[kind] || selected_timed)
+            && self.shadows.time[kind] != self.presentation_time;
         if !retimed
             && self
                 .shadows
@@ -1514,21 +1519,24 @@ impl Renderer {
             return Default::default();
         }
         self.shadows.time[kind] = self.presentation_time;
-        self.shadows.timed[kind] = self
-            .shadows
-            .layers
-            .iter()
-            .any(|layer| ours(layer) && layer.timed);
+        self.shadows.timed[kind] = selected_timed
+            || self
+                .shadows
+                .layers
+                .iter()
+                .any(|layer| ours(layer) && layer.timed);
         let mut drawn = ShadowsEncoded {
             pipelines_created: self.layouts.start_casters(&self.gpu.device),
             ..ShadowsEncoded::default()
         };
         // A layer with dynamic casters keeps its static casters' depth in the
-        // static cache, unless time moves every caster (`retimed`).
-        let cached_path =
-            |layer: &shadows::ShadowLayer| !retimed && !layer.dynamic.batches.is_empty();
-        let selected_shadows =
-            !backdrop && self.tables.parts.selecting && !self.scatter_select.draws.is_empty();
+        // static cache, unless time moves every caster (`retimed`); so does
+        // a fixed layer the selected copies cast into, which redraws as the
+        // eye moves (their levels, thinning and fades go by its distance).
+        let cached_path = |layer: &shadows::ShadowLayer| {
+            !retimed
+                && (!layer.dynamic.batches.is_empty() || (selected_shadows && !layer.is_cascade()))
+        };
         let generation = if self
             .shadows
             .layers
@@ -2826,6 +2834,15 @@ impl Renderer {
                     None
                 },
             );
+            // A fixed layer the copies cast into follows the shadows' list
+            // as the eye moves; the cascades refit with the camera anyway.
+            if self.scatter_select.eye_moved() && self.scatter_select.casts() {
+                for layer in &mut self.shadows.layers {
+                    if !layer.is_cascade() {
+                        layer.stale = true;
+                    }
+                }
+            }
         }
         let shadows = match view.layer {
             ViewLayer::World => self.encode_shadows(&mut encoder, false),

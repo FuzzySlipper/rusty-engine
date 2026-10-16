@@ -50,12 +50,25 @@ pub struct ImpostorReadout {
 pub(crate) struct Impostors {
     layout: wgpu::BindGroupLayout,
     pipeline: Option<wgpu::RenderPipeline>,
-    /// The material each mesh and its materials bake into, by key.
-    baked: HashMap<String, String>,
+    /// Each bake by key (the material it draws with): the mesh and the
+    /// materials it was baked from.
+    baked: HashMap<String, Vec<String>>,
     readout: ImpostorReadout,
 }
 
 impl Impostors {
+    /// Forget the bakes made from `source` (a mesh or material defined anew
+    /// or released): the parts drawing them bake again when rebuilt.
+    pub fn forget(&mut self, source: &str) {
+        let before = self.baked.len();
+        self.baked
+            .retain(|_, sources| !sources.iter().any(|from| from == source));
+        let forgotten = (before - self.baked.len()) as u32;
+        let side = u64::from(VIEWS * VIEW_TEXELS);
+        self.readout.impostors -= forgotten;
+        self.readout.bytes -= u64::from(forgotten) * side * side * 8;
+    }
+
     pub fn new(device: &wgpu::Device) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu impostor bake"),
@@ -114,9 +127,10 @@ impl Renderer {
         for (slot, material) in overrides {
             key.push_str(&format!("/{slot}={material}"));
         }
-        if let Some(material) = self.impostors.baked.get(&key) {
-            return Some(material.clone());
+        if self.impostors.baked.contains_key(&key) {
+            return Some(key);
         }
+        let mut sources = vec![asset.to_owned()];
         let started = Instant::now();
         let mesh_id = self.tables.names.get(asset)?;
         let mesh = self.mesh(&MeshRef::Static(mesh_id))?;
@@ -130,6 +144,7 @@ impl Renderer {
                 .rfind(|(bound, _)| bound == slot)
                 .map(|(_, material)| material)
                 .or_else(|| mesh.slots.get(slot))?;
+            sources.push(id.clone());
             let row = self.tables.materials.get(self.tables.names.get(id)?)?;
             let color = row.descriptor.color;
             let tint = row.descriptor.texture_tint;
@@ -373,7 +388,11 @@ impl Renderer {
         let mut params = MaterialParams::of(&descriptor, Some((side, side)));
         params.parameters[0] = [center.x, center.y, center.z, radius];
         params.parameters[1] = [VIEWS as f32, 0.0, 0.0, 0.0];
+        // Recorded first: the parts drawing an earlier bake of it are rebuilt
+        // as its material is inserted, and ask for it again.
+        self.impostors.baked.insert(key.clone(), sources);
         if self.insert_material(descriptor, &params).is_err() {
+            self.impostors.baked.remove(&key);
             return None;
         }
         // The normal atlas is the card's normals (IMPOSTOR), not a tangent
@@ -382,7 +401,6 @@ impl Renderer {
         if let Some(row) = self.tables.materials.get_mut(id) {
             row.features = row.features.without(Features::NORMAL_MAP);
         }
-        self.impostors.baked.insert(key.clone(), key.clone());
         let readout = &mut self.impostors.readout;
         readout.impostors += 1;
         readout.bytes += u64::from(side * side) * 8;

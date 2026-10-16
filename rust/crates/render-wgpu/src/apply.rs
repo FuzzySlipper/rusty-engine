@@ -117,6 +117,7 @@ impl Renderer {
             RenderDiff::ReleaseMaterial { id } => {
                 // Its narrowed variants go with it; what drew any of them
                 // draws the lit fallback.
+                self.impostors.forget(id);
                 let mut released = self.release_layer_variants(id);
                 released.extend(
                     self.tables
@@ -128,6 +129,7 @@ impl Renderer {
             }
             RenderDiff::DefineStaticMesh { asset } => self.define_static_mesh(asset, resources)?,
             RenderDiff::ReleaseStaticMesh { asset } => {
+                self.impostors.forget(asset);
                 if let Some(id) = self.tables.names.get(asset) {
                     self.tables.static_meshes.remove(id);
                     self.rebuild_users(&[id]);
@@ -1654,8 +1656,10 @@ impl Renderer {
             },
         );
         // Parts bound to this material carry its colour and emission in their
-        // rows, and parts waiting for it draw the fallback: re-derive the
-        // nodes that name it.
+        // rows, parts waiting for it draw the fallback, and impostors baked
+        // with it bake again: re-derive the nodes that name it.
+        let name = self.tables.names.name(id).to_owned();
+        self.impostors.forget(&name);
         self.rebuild_users(&[id]);
         error.map_or(Ok(()), Err)
     }
@@ -1805,7 +1809,8 @@ impl Renderer {
         self.tables.static_meshes.insert(id, mesh);
         // Its instances and scatter patches draw it, including those that
         // arrived before it (scatter patches come from another service's
-        // frames than the mesh's appearance).
+        // frames than the mesh's appearance), and its impostors bake again.
+        self.impostors.forget(&asset.asset);
         self.rebuild_users(&[id]);
         Ok(())
     }
