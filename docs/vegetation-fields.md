@@ -114,6 +114,53 @@ For a voxel scatter of radius `R` and fade `f`, set the layer's `Near` to
 `R − f` and `NearFade` to `f`; for a nearer field's layer of reach `R` and
 fade `f`, the same.
 
+## Levels of detail and thinning
+
+`SetLayerDetail(new VegetationLayerDetailRequest(field, layer, lods, lodBand,
+thinning, maxScale))` gives a set layer up to three farther levels and its
+thinning; setting the layer again keeps them.
+
+- **Levels.** `VegetationLod.Mesh(appearance, start)`: from `start` metres a
+  copy draws that mesh in place of the level before. Within `lodBand` metres
+  before the start, it draws at both levels, which share each pixel's samples
+  by an ordered dither (complementary, so no pixel is covered twice). No
+  level shrinks or fades into the ground. A level's appearance and material
+  are held while the layer grows them. A `default` material (also the
+  layer's own) draws each mesh slot with the mesh's own material, so a tree's
+  bark and leaves keep theirs.
+- **Impostors.** `VegetationLod.ImpostorOf(appearance, start)`: from
+  `start`, a copy draws as a card facing the camera that shows the mesh from
+  the nearest of 64 views the renderer bakes of it (a hemi-octahedral grid
+  over the upper half of its bounding sphere, 64 texels a view, 2 MiB an
+  impostor), lit by
+  the baked normals turned with the copy. The bake draws each mesh group
+  with its own material once per mesh and set of materials, when a layer
+  first needs it; the atlases are derived from the mesh and its materials
+  alone and are not saved. A card casts no shadow: a copy at an impostor
+  level casts at the last mesh level, so keep the shadow distance short of
+  where that costs too much. `engine.renderer`'s `gpu.impostors` reports
+  the impostors baked, their atlases' bytes and the last bake's time.
+- **Thinning.** Up to four `VegetationThinningPoint(distance, share)`, in
+  increasing distance: the share of copies kept, linear between points and
+  level beyond them. A copy is kept while its rank (drawn from its spot,
+  the same for a voxel scatter's copy of the spot) is below the share. Kept
+  copies grow by the inverse square root of the share, at most `maxScale`
+  (1 to 4), so the ground stays as covered while the count falls. The
+  product chooses the profile per layer: a prairie thins slowly to a far
+  reach; a forest floor keeps everything to a short one.
+
+The renderer selects copies one by one on the GPU each frame (with compute
+and indirect draws): within the fade, past the near cut, kept by thinning,
+inside the view, at the level their distance reaches. Copies outside the
+view, past reach or thinned away cost no vertex work, and the CPU's draw
+lists hold no copy at all. Every tile's copies of one mesh, material and
+pipeline draw together, so the draws follow the layers' meshes and levels,
+not the tiles. Every world shadow layer takes the casting copies the same
+way without the view test: the sun's cascades those within their reach (the
+light's `range`), and a point, spot or ambient light's layer those inside
+it. Without compute, copies draw at their first level (the readout's
+`scatterSelection.refused` says why).
+
 ## Budgets and readout
 
 - `MaximumInstances`: the layer's copies are given to its tiles nearest
@@ -131,6 +178,11 @@ choosing what is drawn and turning that into renderer work
 of the upload is `engine.renderer` statistics' `scatter`: patches and copies
 taken in since it was made, the CPU time turning them into drawable parts and
 the GPU row bytes they upload; read it twice and subtract for a span.
+`engine.renderer`'s `gpu.scatterSelection` reports the last world view's
+selection: runs, parts, draws and copies selected, and (a frame later) copies
+tested, drawn (a crossfading copy twice), drawn for shadows, thinned away
+and outside the view, with draws at levels 1 to 3; its GPU time is the
+`scatter-select` pass.
 
 Copies are never nodes, entities, colliders or pickable, and they cast
 shadows only when the layer asks.

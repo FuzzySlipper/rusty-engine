@@ -31,7 +31,8 @@ use std::time::Instant;
 
 use render_model::{
     Geometry, MeshMaterialSlot, RenderDiff, RenderHandle, RenderNode, ScatterFade, ScatterInstance,
-    ScatterPatchDescriptor, ShadowCasting, Transform, MAX_SCATTER_PATCH_INSTANCES,
+    ScatterLod, ScatterPatchDescriptor, ScatterThinning, ShadowCasting, Transform,
+    MAX_SCATTER_PATCH_INSTANCES,
 };
 use svc_mesh::heightfield::{HeightfieldLayout, HeightfieldRingSpec, TileSamples, TileSurface};
 use svc_mesh::heightfield_tiles::in_parallel;
@@ -92,6 +93,11 @@ pub struct VegetationLayer {
     pub near_fade: f32,
     /// At most this many copies: the nearest tiles' first.
     pub maximum_instances: u32,
+    /// Farther levels of detail and the band they crossfade over
+    /// (`ScatterLod`), and coverage-preserving thinning by distance.
+    pub lods: Vec<ScatterLod>,
+    pub lod_band: f32,
+    pub thinning: ScatterThinning,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +109,7 @@ pub enum VegetationLayerError {
     Tint,
     Slope,
     Align,
+    Detail,
 }
 
 impl VegetationLayer {
@@ -144,6 +151,8 @@ impl VegetationLayer {
         if !(0.0..=1.0).contains(&self.align) {
             return Err(VegetationLayerError::Align);
         }
+        render_model::validate_detail(&self.lods, self.lod_band, &self.thinning)
+            .map_err(|_| VegetationLayerError::Detail)?;
         Ok(())
     }
 
@@ -939,6 +948,9 @@ impl VegetationFields {
                     instances,
                     fade: layer.fade_band(),
                     shadow_casting: layer.shadow_casting,
+                    lods: layer.lods.clone(),
+                    lod_band: layer.lod_band,
+                    thinning: layer.thinning.clone(),
                 },
             });
         }
@@ -1108,12 +1120,13 @@ fn place(
                 normal.map(|value| value / length.max(f32::EPSILON))
             })
             .unwrap_or([0.0, 1.0, 0.0]);
-        let shade = unit(hash(
+        let key = hash(
             layer.seed ^ KEY_SALT,
             i64::from(record.position[0].to_bits()),
             i64::from(record.position[2].to_bits()),
             1,
-        )) as f32;
+        );
+        let shade = unit(key) as f32;
         copies.push(ScatterInstance {
             translation: record.position,
             rotation: multiply(lean(normal, layer.align), about_y(record.yaw)),
@@ -1122,6 +1135,7 @@ fn place(
                 layer.tints[0][channel]
                     + (layer.tints[1][channel] - layer.tints[0][channel]) * shade
             }),
+            rank: unit(key >> 32) as f32,
         });
     }
     copies

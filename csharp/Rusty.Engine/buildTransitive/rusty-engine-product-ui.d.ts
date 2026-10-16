@@ -524,7 +524,18 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         distanceFields: ProductHostDistanceFieldStatistics;
         lightClusters: ProductHostLightClusterStatistics;
         gpuCulling: ProductHostGpuCullingStatistics;
+        scatterSelection: ProductHostScatterSelectionStatistics;
+        impostors: ProductHostImpostorStatistics;
         indirectLight: ProductHostIndirectLightStatistics;
+    };
+    /**
+     * The impostor levels' baked views: how many meshes are baked, their
+     * atlases' GPU bytes and the last bake's wall time.
+     */
+    export type ProductHostImpostorStatistics = {
+        impostors: number;
+        bytes: number;
+        bakeMs: number;
     };
     /**
      * The indirect light volume (`CameraView.SetIndirectLight`): its probes and
@@ -754,6 +765,39 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         instanceId: CanonicalU64;
         generation: CanonicalU64;
         controlRevision: CanonicalU64;
+    };
+    /**
+     * The per-copy selection of the last world view's scatter runs: grass,
+     * plants and vegetation copies chosen by distance, thinning and the
+     * frustum, at their levels of detail.
+     */
+    export type ProductHostScatterSelectionStatistics = {
+        /**
+         * The last world view selected its scatter runs on the GPU.
+         */
+        enabled: boolean;
+        /**
+         * Why this device cannot; absent while it can.
+         */
+        refused?: string;
+        /**
+         * Runs, parts and draws selected, and the copies they hold.
+         */
+        runs: number;
+        parts: number;
+        draws: number;
+        copies: number;
+        /**
+         * From the last read-back pass: copies tested, drawn for the camera (a
+         * crossfading copy twice), drawn for the shadows, thinned away and
+         * outside the frustum, and the camera's draws at levels 1 to 3.
+         */
+        tested: number;
+        drawn: number;
+        shadow: number;
+        thinned: number;
+        outside: number;
+        levels: [number, number, number];
     };
     /**
      * Scatter patches (grass, plants, vegetation tiles) the renderer has taken

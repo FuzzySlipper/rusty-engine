@@ -39,6 +39,7 @@ mod ghost;
 mod glb;
 mod gpu;
 mod image_effect;
+mod impostor;
 mod inspection;
 mod labels;
 mod light_clusters;
@@ -52,6 +53,7 @@ mod primitives;
 mod probes;
 mod resources;
 mod scatter;
+mod scatter_select;
 mod shaders;
 mod shadows;
 mod sky_light;
@@ -105,6 +107,8 @@ pub use driver::{
     SceneView,
 };
 pub use frame::FrameStats;
+pub use impostor::ImpostorReadout;
+pub use scatter_select::ScatterSelectionReadout;
 
 /// Scatter patches taken in since the renderer was made (cumulative: read
 /// twice and subtract): the patches and copies created, the CPU time
@@ -191,6 +195,10 @@ pub struct GpuReadout {
     pub distance_fields: DistanceFieldReadout,
     pub light_clusters: LightClusterReadout,
     pub gpu_culling: GpuCullingReadout,
+    /// The per-copy selection of scatter runs (`scatter_select.rs`).
+    pub scatter_selection: ScatterSelectionReadout,
+    /// The impostors baked (`impostor.rs`).
+    pub impostors: ImpostorReadout,
     /// The indirect light volume (`probes.rs`).
     pub indirect_light: IndirectLightReadout,
     /// The volumetric fog the last world view drew (`volumetric_fog.rs`).
@@ -506,6 +514,10 @@ pub struct Renderer {
     field_entries: Option<(u64, Vec<distance_fields::FieldEntry>)>,
     light_clusters: light_clusters::LightClusters,
     culling: culling::GpuCulling,
+    /// Scatter runs selected copy by copy (`scatter_select.rs`).
+    scatter_select: scatter_select::ScatterSelect,
+    /// Impostor levels' baked views (`impostor.rs`).
+    impostors: impostor::Impostors,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     /// Rain or snow around the camera (`precipitation.rs`).
@@ -562,6 +574,14 @@ impl Renderer {
                     .shaders
                     .module(device, Entry::Cull, Features::default()),
             ),
+        );
+        let scatter_select = scatter_select::ScatterSelect::new(
+            gpu,
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::ScatterSelect,
+                Features::default(),
+            )),
         );
         let frame_bind_group = frame::frame_bind_group(
             device,
@@ -711,6 +731,8 @@ impl Renderer {
             field_entries: None,
             light_clusters,
             culling,
+            scatter_select,
+            impostors: impostor::Impostors::new(device),
             composition: Default::default(),
             effects,
             precipitation,
@@ -738,6 +760,7 @@ impl Renderer {
             );
             renderer.builtins.insert(kind, mesh);
         }
+        renderer.tables.parts.selecting = renderer.scatter_select.available();
         renderer
     }
 
@@ -924,6 +947,7 @@ impl Renderer {
                     self.light_clusters.timing(),
                     self.volumetric_fog.timing(),
                     self.culling.timing(),
+                    self.scatter_select.timing(),
                     self.sky_light.timing(),
                     self.image_effect.timing(),
                 ])
@@ -932,6 +956,8 @@ impl Renderer {
             distance_fields: self.distance_fields.readout(),
             light_clusters: self.light_clusters.readout(),
             gpu_culling: self.culling.readout(),
+            scatter_selection: self.scatter_select.readout(),
+            impostors: self.impostors.readout(),
             indirect_light: self.probes.readout(),
             volumetric_fog: self.volumetric_fog.readout(),
             backdrop: self.backdrop,

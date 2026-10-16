@@ -58,6 +58,7 @@ fn copy(at: [f32; 3], tint: [f32; 3]) -> ScatterInstance {
         rotation: [0.0, 0.0, 0.0, 1.0],
         scale: 1.0,
         tint,
+        rank: 0.5,
     }
 }
 
@@ -81,6 +82,9 @@ fn patch(
             } else {
                 ShadowCasting::None
             },
+            lods: Vec::new(),
+            lod_band: 0.0,
+            thinning: Default::default(),
         },
     }
 }
@@ -162,8 +166,16 @@ fn a_patch_draws_its_copies_as_one_draw_where_instances_would_stand() {
     let (stats, drawn) = render(&mut scattered);
     assert!(bright(&drawn) > 300, "the posts are in view");
     assert_eq!(drawn, expected, "copies draw where instances would");
-    // The floor and one draw of every copy.
-    assert_eq!((stats.draws, stats.instances), (2, 4));
+    // The floor and one draw of every copy: from the CPU list, or from the
+    // per-copy selection, whose counts read back a frame later.
+    assert_eq!(stats.draws, 2);
+    let selection = selection_counts(&mut scattered);
+    if selection.enabled {
+        let copies = SPOTS.len() as u32;
+        assert_eq!((selection.tested, selection.drawn), (copies, copies));
+    } else {
+        assert_eq!(stats.instances, 4);
+    }
 
     // A patch out of view costs no draw.
     scattered.apply(vec![
@@ -181,11 +193,28 @@ fn a_patch_draws_its_copies_as_one_draw_where_instances_would_stand() {
         patch(21, 6, whole(), ScatterFade::default(), true),
     ]);
     let (stats, _) = render(&mut scattered);
-    assert_eq!(
-        (stats.draws, stats.instances),
-        (1, 1),
-        "only the floor draws"
-    );
+    let selection = selection_counts(&mut scattered);
+    if selection.enabled {
+        // Its copies are tested and none drawn.
+        assert_eq!(
+            (selection.drawn, selection.outside),
+            (0, SPOTS.len() as u32)
+        );
+    } else {
+        assert_eq!(
+            (stats.draws, stats.instances),
+            (1, 1),
+            "only the floor draws"
+        );
+    }
+}
+
+/// The selection's counts once they have read back.
+fn selection_counts(harness: &mut Harness) -> render_wgpu::ScatterSelectionReadout {
+    for _ in 0..3 {
+        render(harness);
+    }
+    harness.renderer.gpu_readout().scatter_selection
 }
 
 #[test]
@@ -375,5 +404,534 @@ fn gpu_culling_draws_the_cpu_picture_of_a_patch() {
     assert!(
         differing * 500 < cpu.len() / 4,
         "{differing} pixels differ between CPU and GPU culling"
+    );
+}
+
+/// Pixels as red as a lit red post.
+fn red(frame: &[u8]) -> usize {
+    frame
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] > 150 && pixel[1] < 75)
+        .count()
+}
+
+const RED_POST: &str = "red-post";
+
+/// Pixels where a red and a white post share the samples.
+fn mixed(frame: &[u8]) -> usize {
+    frame
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] > 150 && (75..=150).contains(&pixel[1]))
+        .count()
+}
+
+/// Pixels a post covers, white, red or both.
+fn covered(frame: &[u8]) -> usize {
+    frame
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] > 150)
+        .count()
+}
+
+/// The posts with a red level of detail from `start`, crossfading over
+/// `band`; the frame and the selection's counts.
+fn levels(start: f32, band: f32) -> (Vec<u8>, render_wgpu::ScatterSelectionReadout) {
+    let mut harness = harness(false);
+    let mut ops = stage(false);
+    ops.extend(coloured_mesh(RED_POST, post(), [0.9, 0.05, 0.05, 1.0]));
+    let mut created = patch(20, 5, whole(), ScatterFade::default(), true);
+    if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+        patch.lods = vec![ScatterLod {
+            asset: format!("mesh/{RED_POST}"),
+            material_overrides: Vec::new(),
+            start,
+            impostor: false,
+        }];
+        patch.lod_band = band;
+    }
+    ops.push(created);
+    harness.apply(ops);
+    let (_, frame) = render(&mut harness);
+    let selection = selection_counts(&mut harness);
+    (frame, selection)
+}
+
+#[test]
+fn copies_draw_the_level_their_distance_reaches_and_crossfade_between_levels() {
+    // The copies stand 4 to 4.5 m from the eye.
+    let (near_frame, near) = levels(10.0, 0.0);
+    let posts = covered(&near_frame);
+    assert!(bright(&near_frame) > 300 && red(&near_frame) == 0);
+    if !near.enabled {
+        // Without the per-copy selection, copies draw their own mesh only.
+        return;
+    }
+    assert_eq!(near.levels, [0, 0, 0]);
+    let (far_frame, far) = levels(2.0, 0.0);
+    assert!(red(&far_frame) > 300 && bright(&far_frame) == 0);
+    assert_eq!(far.levels[0], SPOTS.len() as u32);
+    // Within the band both levels draw, sharing each pixel's samples: the
+    // posts cover what they did, mixed white and red.
+    let (mid_frame, mid) = levels(5.0, 2.0);
+    let shared = mixed(&mid_frame);
+    assert!(shared > posts / 2, "{shared} of {posts}");
+    assert!(
+        covered(&mid_frame).abs_diff(posts) < posts / 10,
+        "{} against {posts}",
+        covered(&mid_frame)
+    );
+    assert_eq!(mid.drawn, 2 * SPOTS.len() as u32);
+}
+
+/// The posts ranked 0.1, 0.4 and 0.8, thinned to a share of a half past a
+/// metre, growing at most `max_scale`; their bright pixels and the counts.
+fn thinned(max_scale: f32) -> (usize, render_wgpu::ScatterSelectionReadout) {
+    let mut harness = harness(false);
+    let mut ops = stage(false);
+    let mut copies = whole();
+    for (copy, rank) in copies.iter_mut().zip([0.1, 0.4, 0.8]) {
+        copy.rank = rank;
+    }
+    let mut created = patch(20, 5, copies, ScatterFade::default(), true);
+    if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+        patch.thinning = ScatterThinning {
+            points: vec![[1.0, 0.5]],
+            max_scale,
+        };
+    }
+    ops.push(created);
+    harness.apply(ops);
+    let (_, frame) = render(&mut harness);
+    (bright(&frame), selection_counts(&mut harness))
+}
+
+#[test]
+fn thinning_keeps_the_copies_ranked_below_its_share_and_grows_them() {
+    let whole_posts = bright(&levels(10.0, 0.0).0);
+    let (kept, selection) = thinned(1.0);
+    if !selection.enabled {
+        return;
+    }
+    assert_eq!((selection.drawn, selection.thinned), (2, 1));
+    assert!(
+        kept < whole_posts && kept > whole_posts / 2,
+        "{kept} of {whole_posts}"
+    );
+    // Grown by the inverse square root of the share, the two cover more.
+    let (grown, _) = thinned(2.0);
+    assert!(grown > kept * 3 / 2, "{grown} against {kept}");
+}
+
+#[test]
+fn a_thinner_level_shows_inside_the_one_it_replaces_within_the_band() {
+    let mut harness = harness(false);
+    let mut ops = stage(false);
+    let mut thin = post();
+    let MeshPayloadSource::Inline { positions, .. } = &mut thin.source else {
+        unreachable!()
+    };
+    for point in positions.as_chunks_mut::<3>().0 {
+        point[0] *= 0.5;
+        point[2] *= 0.5;
+    }
+    ops.extend(coloured_mesh(RED_POST, thin, [0.9, 0.05, 0.05, 1.0]));
+    let mut created = patch(20, 5, whole(), ScatterFade::default(), true);
+    if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+        patch.lods = vec![ScatterLod {
+            asset: format!("mesh/{RED_POST}"),
+            material_overrides: Vec::new(),
+            start: 5.0,
+            impostor: false,
+        }];
+        patch.lod_band = 2.0;
+    }
+    ops.push(created);
+    harness.apply(ops);
+    let (_, frame) = render(&mut harness);
+    if !selection_counts(&mut harness).enabled {
+        return;
+    }
+    let reddish = frame
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[0] > 120 && pixel[1] + 40 < pixel[0])
+        .count();
+    assert!(reddish > 100, "{reddish} pixels show the incoming level");
+}
+
+#[test]
+fn patches_of_one_mesh_share_one_draw_and_draw_what_one_patch_would() {
+    let scene = |split: bool| {
+        let mut harness = harness(false);
+        let mut ops = stage(false);
+        if split {
+            for (index, at) in SPOTS.iter().enumerate() {
+                ops.push(patch(
+                    20 + index as u64,
+                    5,
+                    vec![copy(*at, [1.0; 3])],
+                    ScatterFade::default(),
+                    false,
+                ));
+            }
+        } else {
+            ops.push(patch(20, 5, whole(), ScatterFade::default(), false));
+        }
+        harness.apply(ops);
+        let selection = selection_counts(&mut harness);
+        (render(&mut harness).1, selection)
+    };
+    let (whole_frame, _) = scene(false);
+    let (split_frame, selection) = scene(true);
+    assert_eq!(
+        (
+            selection.runs,
+            selection.parts,
+            selection.draws,
+            selection.drawn
+        ),
+        (3, 3, 1, 3)
+    );
+    assert_eq!(split_frame, whole_frame);
+}
+
+#[test]
+fn shadows_take_copies_only_within_the_cascades_reach() {
+    let shadowed = |range: Option<f32>| {
+        let mut harness = harness(true);
+        let mut ops = stage(true);
+        for op in &mut ops {
+            if let RenderDiff::CreateLight {
+                light: LightDescriptor::Directional { range: reach, .. },
+                ..
+            } = op
+            {
+                *reach = range;
+            }
+        }
+        ops.push(patch(20, 5, whole(), ScatterFade::default(), true));
+        harness.apply(ops);
+        selection_counts(&mut harness).shadow
+    };
+    // The copies stand about 4 m off.
+    assert_eq!(shadowed(None), SPOTS.len() as u32);
+    assert_eq!(shadowed(Some(2.0)), 0);
+}
+
+/// A tree: a 0.2 m trunk to 1 m under a crown 1.6 m across.
+fn tree() -> MeshPayloadDescriptor {
+    let block = |half: [f32; 3], low: f32| {
+        let mut payload = cube();
+        let MeshPayloadSource::Inline { positions, .. } = &mut payload.source else {
+            unreachable!()
+        };
+        // The unit cube, to `half` either side and from `low` up.
+        for point in positions.as_chunks_mut::<3>().0 {
+            point[0] *= 2.0 * half[0];
+            point[1] = (point[1] + 0.5) * 2.0 * half[1] + low;
+            point[2] *= 2.0 * half[2];
+        }
+        payload
+    };
+    let (trunk, crown) = (block([0.1, 0.5, 0.1], 0.0), block([0.8, 0.2, 0.8], 1.0));
+    let unpack = |payload: MeshPayloadDescriptor| {
+        let MeshPayloadSource::Inline {
+            positions,
+            normals,
+            indices,
+            ..
+        } = payload.source
+        else {
+            unreachable!()
+        };
+        (positions, normals, indices)
+    };
+    let (mut positions, mut normals, mut indices) = unpack(trunk);
+    let (crown_positions, crown_normals, crown_indices) = unpack(crown);
+    let base = (positions.len() / 3) as u32;
+    positions.extend(crown_positions);
+    normals.extend(crown_normals);
+    indices.extend(crown_indices.iter().map(|index| index + base));
+    payload(positions, normals, indices)
+}
+
+/// The light a tree stands under.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Under {
+    /// The sun, high: its cascades.
+    Sun,
+    /// An ambient light's sky, which casts through one fixed layer looking
+    /// down.
+    Sky,
+    /// A spot light above, with a caster moving beside the tree, so its
+    /// layer redraws the moving casters over its cached static ones.
+    Spot,
+}
+
+#[test]
+fn a_copy_shades_and_shadows_as_an_instance_standing_there_would() {
+    // Turned and scaled, under each kind of shadow layer, near and in a far
+    // cascade, opaque, masked and in the wind: its crown shades its trunk
+    // and the ground as the same tree placed as an instance does.
+    const TREE: &str = "tree";
+    const YAW: f32 = 35.0;
+    const FAR: u64 = 6;
+    const MOVER: u64 = 8;
+    let scene =
+        |scattered: bool, away: f32, scale: f32, masked: bool, windy: bool, under: Under| {
+            let mut harness = harness(true);
+            let mut ops = stage(true);
+            for op in &mut ops {
+                if let RenderDiff::CreateLight {
+                    light:
+                        LightDescriptor::Directional {
+                            direction,
+                            shadow_intent,
+                            ..
+                        },
+                    ..
+                } = op
+                {
+                    *direction = [0.15, -1.0, 0.1];
+                    if under != Under::Sun {
+                        *shadow_intent = LightShadowIntent::Disabled;
+                    }
+                }
+            }
+            let at = [0.3 * scale, -1.0, -away];
+            match under {
+                Under::Sun => {}
+                Under::Sky => ops.push(RenderDiff::CreateLight {
+                    handle: RenderHandle::new(78),
+                    parent: None,
+                    light: LightDescriptor::Ambient {
+                        color: [1.0; 3],
+                        intensity: 1.0,
+                        enabled: true,
+                        range: Some(8.0),
+                        shadow_intent: LightShadowIntent::Requested,
+                        shadow: Default::default(),
+                    },
+                }),
+                Under::Spot => {
+                    ops.push(RenderDiff::CreateLight {
+                        handle: RenderHandle::new(78),
+                        parent: None,
+                        light: LightDescriptor::Spot {
+                            color: [1.0; 3],
+                            intensity: 40.0,
+                            enabled: true,
+                            position: [at[0] + 0.5, 4.0, at[2] + 0.5],
+                            direction: [-0.1, -1.0, -0.1],
+                            range: Some(12.0),
+                            decay: 2.0,
+                            outer_angle_radians: 0.8,
+                            penumbra: 0.2,
+                            shadow_intent: LightShadowIntent::Requested,
+                            shadow: Default::default(),
+                        },
+                    });
+                    ops.push(instance(
+                        MOVER,
+                        None,
+                        POST,
+                        transform([at[0] + 1.5, -1.0, at[2] - 1.0], 0.0, 1.0),
+                    ));
+                }
+            }
+            let mut tree_ops = coloured_mesh(TREE, tree(), [0.9, 0.9, 0.9, 1.0]);
+            if let RenderDiff::DefineMaterial { material } = &mut tree_ops[0] {
+                if masked {
+                    material.alpha_mode = MaterialAlphaModeDescriptor::Mask { cutoff: 0.5 };
+                }
+                if windy {
+                    material.wind = Some(MaterialWindDescriptor {
+                        bend: 0.0,
+                        flutter: 0.0,
+                    });
+                }
+            }
+            ops.extend(tree_ops);
+            ops.push(RenderDiff::Create {
+                handle: RenderHandle::new(FAR),
+                parent: None,
+                node: RenderNode {
+                    transform: transform(at, 0.0, 1.0),
+                    ..RenderNode::new(Geometry::Group)
+                },
+            });
+            ops.push(instance(
+                7,
+                Some(FAR),
+                "ground",
+                transform([0.0; 3], 0.0, scale * 2.0),
+            ));
+            if scattered {
+                let half = YAW.to_radians() * 0.5;
+                let mut copy = copy([0.0; 3], [1.0; 3]);
+                copy.rotation = [0.0, half.sin(), 0.0, half.cos()];
+                copy.scale = scale;
+                let mut tree = patch(20, FAR, vec![copy], ScatterFade::default(), true);
+                if let RenderDiff::CreateScatterPatch { patch, .. } = &mut tree {
+                    patch.asset = format!("mesh/{TREE}");
+                }
+                ops.push(tree);
+            } else {
+                ops.push(instance(
+                    20,
+                    Some(FAR),
+                    TREE,
+                    transform([0.0; 3], YAW, scale),
+                ));
+            }
+            harness.apply(ops);
+            render(&mut harness);
+            if under == Under::Spot {
+                for step in 1..=2 {
+                    harness.apply(vec![RenderDiff::Update {
+                        handle: RenderHandle::new(MOVER),
+                        transform: Some(transform(
+                            [at[0] + 1.5, -1.0 + 0.01 * step as f32, at[2] - 1.0],
+                            0.0,
+                            1.0,
+                        )),
+                        material: None,
+                        visible: None,
+                        metadata: None,
+                    }]);
+                    render(&mut harness);
+                }
+            }
+            render(&mut harness).1
+        };
+    for (away, scale, masked, windy, under) in [
+        (4.5, 1.2, false, false, Under::Sun),
+        (80.0, 10.0, false, false, Under::Sun),
+        (4.5, 1.2, true, true, Under::Sun),
+        (4.5, 1.2, true, true, Under::Sky),
+        (4.5, 1.2, false, false, Under::Spot),
+    ] {
+        let expected = scene(false, away, scale, masked, windy, under);
+        let scattered = scene(true, away, scale, masked, windy, under);
+        let differing = expected
+            .chunks(4)
+            .zip(scattered.chunks(4))
+            .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 2))
+            .count();
+        assert_eq!(
+            differing, 0,
+            "{under:?}, {away} m away, masked {masked}, windy {windy}: {differing} pixels differ from the instance"
+        );
+    }
+}
+
+#[test]
+fn each_run_draws_its_own_mesh_whatever_order_its_parts_draw_in() {
+    // The square's run is made first (its batch key sorts first) but has
+    // the higher handle (it is gathered second): each run still draws its
+    // own mesh's indices, as instances standing there would.
+    const SQUARE: &str = "square";
+    let scene = |scattered: bool| {
+        let mut harness = harness(false);
+        let mut ops = stage(false);
+        ops.extend(coloured_mesh(SQUARE, floor(0.8), [0.9, 0.05, 0.05, 1.0]));
+        if scattered {
+            let mut square = patch(
+                30,
+                5,
+                vec![copy([-1.0, 0.0, 0.5], [1.0; 3])],
+                ScatterFade::default(),
+                true,
+            );
+            if let RenderDiff::CreateScatterPatch { patch, .. } = &mut square {
+                patch.asset = format!("mesh/{SQUARE}");
+            }
+            ops.push(square);
+            ops.push(patch(
+                20,
+                5,
+                vec![copy([1.0, 0.0, 0.0], [1.0; 3])],
+                ScatterFade::default(),
+                true,
+            ));
+        } else {
+            ops.push(instance(
+                30,
+                Some(5),
+                SQUARE,
+                transform([-1.0, 0.0, 0.5], 0.0, 1.0),
+            ));
+            ops.push(instance(
+                20,
+                Some(5),
+                POST,
+                transform([1.0, 0.0, 0.0], 0.0, 1.0),
+            ));
+        }
+        harness.apply(ops);
+        render(&mut harness).1
+    };
+    let expected = scene(false);
+    assert_eq!(scene(true), expected);
+}
+
+#[test]
+fn an_impostor_level_draws_the_posts_baked_views_as_cards() {
+    // The posts as cards from 2 m (every copy): about where and as large as
+    // the posts themselves, lit by their baked normals.
+    let draw = |impostor_from: Option<f32>| {
+        let mut harness = harness(false);
+        let mut ops = stage(false);
+        let mut created = patch(20, 5, whole(), ScatterFade::default(), true);
+        if let (RenderDiff::CreateScatterPatch { patch, .. }, Some(start)) =
+            (&mut created, impostor_from)
+        {
+            patch.lods = vec![ScatterLod {
+                asset: format!("mesh/{POST}"),
+                material_overrides: Vec::new(),
+                start,
+                impostor: true,
+            }];
+        }
+        ops.push(created);
+        harness.apply(ops);
+        let (_, frame) = render(&mut harness);
+        let readout = harness.renderer.gpu_readout();
+        (frame, readout)
+    };
+    let (posts, _) = draw(None);
+    let (cards, readout) = draw(Some(2.0));
+    if !readout.scatter_selection.enabled {
+        return;
+    }
+    assert_eq!(readout.impostors.impostors, 1);
+    let (real, carded) = (bright(&posts), bright(&cards));
+    assert!(carded > 0, "the cards draw");
+    assert!(
+        carded.abs_diff(real) < real / 3,
+        "{carded} card pixels against {real} post pixels"
+    );
+    // Each card stands where its post does: the bright pixels' columns agree.
+    let columns = |frame: &[u8]| -> Vec<bool> {
+        (0..WIDTH)
+            .map(|x| (0..HEIGHT).any(|y| pixel(frame, WIDTH, x, y)[1] > 150))
+            .collect()
+    };
+    let (post_columns, card_columns) = (columns(&posts), columns(&cards));
+    let agree = post_columns
+        .iter()
+        .zip(&card_columns)
+        .filter(|(a, b)| a == b)
+        .count();
+    assert!(
+        agree as u32 > WIDTH * 9 / 10,
+        "{agree} of {WIDTH} columns agree"
     );
 }

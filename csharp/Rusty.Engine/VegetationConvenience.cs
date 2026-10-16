@@ -36,7 +36,7 @@ public readonly partial record struct VegetationLayerRequest
     /// scatter with the same key, seed and density grows the same spots, so its fade-out band can
     /// be this layer's <c>Near</c> and <c>NearFade</c>.
     /// </summary>
-    public VegetationLayerRequest(VegetationField Field, uint Layer, Appearance Appearance, Material Material, float Density, float Reach)
+    public VegetationLayerRequest(VegetationField Field, uint Layer, Appearance Appearance, OptionalMaterial Material, float Density, float Reach)
         : this(Field, Layer, Appearance, Material, Density, 1, 35f, 0f, 1f, 1f, Vector3.One, Vector3.One, 0, Reach, Reach * 0.25f,
             0f, 0f, 65_536, false)
     {
@@ -63,4 +63,35 @@ public readonly partial record struct VegetationTileRequest
 
     /// <summary>The world z of the tile's vertex row <paramref name="j"/> (−1 to <c>TileCells + 1</c>).</summary>
     public double SampleZ(int j) => OriginZ + (j * CellSize);
+}
+
+public readonly partial record struct VegetationLod
+{
+    /// <summary>From <paramref name="start"/> metres, copies draw <paramref name="appearance"/> with its mesh's own materials.</summary>
+    public static VegetationLod Mesh(Appearance appearance, float start) => new(appearance, default(OptionalMaterial), start, false);
+
+    /// <summary>
+    /// From <paramref name="start"/> metres, copies draw as a camera-facing card showing
+    /// <paramref name="appearance"/> (with its mesh's own materials) from the nearest of the views the
+    /// renderer bakes of it.
+    /// </summary>
+    public static VegetationLod ImpostorOf(Appearance appearance, float start) => new(appearance, default(OptionalMaterial), start, true);
+}
+
+public readonly partial record struct VegetationLayerDetailRequest
+{
+    /// <summary>
+    /// <paramref name="Layer"/>'s farther levels, crossfading over <paramref name="LodBand"/> metres
+    /// before each one's start, with no thinning.
+    /// </summary>
+    public VegetationLayerDetailRequest(VegetationField Field, uint Layer, ReadOnlyMemory<VegetationLod> Lods, float LodBand)
+        : this(Field, Layer, Lods, LodBand, ReadOnlyMemory<VegetationThinningPoint>.Empty, 1f)
+    {
+    }
+}
+
+public readonly partial record struct OptionalMaterial
+{
+    /// <summary>The material; <c>default</c> is none.</summary>
+    public static implicit operator OptionalMaterial(Material material) => new(material);
 }

@@ -145,6 +145,16 @@ impl LayerSource {
     }
 }
 
+/// Where a shadow layer takes selected scatter copies from
+/// (`ShadowLayer::copy_reach`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum CopyReach {
+    /// Within this distance of the camera.
+    Camera(f32),
+    /// Within this sphere.
+    Sphere(Vec3, f32),
+}
+
 /// The layers a light casts through; empty for a light that casts none.
 /// `row` is the light's row in the lights buffer.
 pub(crate) fn light_layers(light: &LightDescriptor, world: &Mat4, row: u32) -> Vec<LayerSource> {
@@ -549,6 +559,40 @@ impl ShadowLayer {
 
     pub fn is_cascade(&self) -> bool {
         matches!(self.source, LayerSource::Cascade { .. })
+    }
+
+    /// Where the selected scatter copies that cast into this layer stand
+    /// (`scatter_select.rs`): a world cascade's, within its reach of the
+    /// camera; a fixed layer's, within its light's reach or else its view's
+    /// bounds. `None` for a backdrop cascade or a layer without a view.
+    pub fn copy_reach(&self) -> Option<CopyReach> {
+        match self.source {
+            LayerSource::Cascade {
+                distance,
+                backdrop: false,
+                ..
+            } => Some(CopyReach::Camera(distance)),
+            LayerSource::Cascade { .. } => None,
+            LayerSource::Fixed { reach, .. } if self.has_view() => Some(match reach {
+                Some((centre, radius)) => CopyReach::Sphere(centre, radius),
+                None => {
+                    let inverse = self.view_proj.inverse();
+                    let corners = [-1.0f32, 1.0].map(|x| {
+                        [-1.0f32, 1.0].map(|y| {
+                            [0.0f32, 1.0].map(|z| inverse.project_point3(Vec3::new(x, y, z)))
+                        })
+                    });
+                    let corners = corners.as_flattened().as_flattened();
+                    let centre = corners.iter().sum::<Vec3>() / corners.len() as f32;
+                    let radius = corners
+                        .iter()
+                        .map(|corner| corner.distance(centre))
+                        .fold(0.0, f32::max);
+                    CopyReach::Sphere(centre, radius)
+                }
+            }),
+            LayerSource::Fixed { .. } => None,
+        }
     }
 
     /// A cascade fitted to the backdrop, drawn by its casters.

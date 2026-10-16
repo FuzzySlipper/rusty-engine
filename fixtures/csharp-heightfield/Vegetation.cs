@@ -10,7 +10,10 @@ namespace CsharpHeightfield;
 /// lattice is the heightfield's finest ring; the far field's 4 m lattice is its middle ring, so the
 /// grass stands on the triangles drawn there. Grass is one layer in both fields with the same key,
 /// seed and density: the near field's copies shrink away over the band where the far field's grow,
-/// one for one. Trees are placement records the product chooses per far tile.
+/// one for one, and thin with distance, the kept clumps growing so the hills stay as green (#10017).
+/// Trees are placement records the product chooses per far tile: the full cone near, a cheaper cone
+/// from <see cref="TreeMidMetres"/>, and from <see cref="TreeImpostorMetres"/> a card showing the full
+/// cone's baked view, crossfading between each.
 /// </summary>
 internal sealed class Vegetation : IDisposable
 {
@@ -22,13 +25,17 @@ internal sealed class Vegetation : IDisposable
     private const float DefaultGrassDensity = 1.5f, DefaultReach = 400, TreeReach = 800;
     private const uint MaximumGrass = 1_000_000, MaximumTrees = 50_000;
     private const double TreeCell = 14, TreeSink = .3;
+    /// <summary>Where trees take their cheaper cone and then their impostor card, and the band they crossfade over.</summary>
+    private const float TreeMidMetres = 150, TreeImpostorMetres = 320, LodBand = 10;
+    /// <summary>The far grass keeps every clump to the first distance, a third by the second, growing up to 1.7 times.</summary>
+    private const float ThinFrom = 80, ThinTo = 400, ThinShare = .33f, ThinGrowth = 1.7f;
     private const uint Grassland = 0;
 
     private readonly IEngineContext engine;
     private readonly Camera camera;
     private readonly Material grassPaint, treePaint;
-    private readonly MeshResource grassMesh, treeMesh;
-    private readonly Appearance grassLook, treeLook;
+    private readonly MeshResource grassMesh, treeMesh, treeMidMesh;
+    private readonly Appearance grassLook, treeLook, treeMidLook;
     private VegetationField? near, far;
     private VegetationStreamer? nearStreamer, farStreamer;
 
@@ -47,9 +54,11 @@ internal sealed class Vegetation : IDisposable
             FlatShading = true,
         });
         grassMesh = engine.Graphics.CreateMeshResource(Clump(grassPaint));
-        treeMesh = engine.Graphics.CreateMeshResource(Tree(treePaint));
+        treeMesh = engine.Graphics.CreateMeshResource(Tree(treePaint, 6));
+        treeMidMesh = engine.Graphics.CreateMeshResource(Tree(treePaint, 3));
         grassLook = engine.Graphics.CreateMeshAppearance(grassMesh);
         treeLook = engine.Graphics.CreateMeshAppearance(treeMesh);
+        treeMidLook = engine.Graphics.CreateMeshAppearance(treeMidMesh);
     }
 
     internal float GrassDensity { get; private set; } = DefaultGrassDensity;
@@ -100,7 +109,9 @@ internal sealed class Vegetation : IDisposable
             Near = HandOver,
             NearFade = HandOverBand,
         });
-        engine.Vegetation.SetLayer(new VegetationLayerRequest(far!, TreeLayer, treeLook, treePaint, 0, TreeReach) with
+        engine.Vegetation.SetLayerDetail(new VegetationLayerDetailRequest(far!, GrassLayer, ReadOnlyMemory<VegetationLod>.Empty, 0,
+            new VegetationThinningPoint[] { new(ThinFrom, 1), new(ThinTo, ThinShare) }, ThinGrowth));
+        engine.Vegetation.SetLayer(new VegetationLayerRequest(far!, TreeLayer, treeLook, default(OptionalMaterial), 0, TreeReach) with
         {
             Fade = TreeReach * .1f,
             TintLow = new(.8f, .9f, .8f),
@@ -108,6 +119,8 @@ internal sealed class Vegetation : IDisposable
             MaximumInstances = MaximumTrees,
             CastsShadows = true,
         });
+        engine.Vegetation.SetLayerDetail(new VegetationLayerDetailRequest(far!, TreeLayer,
+            new[] { VegetationLod.Mesh(treeMidLook, TreeMidMetres), VegetationLod.ImpostorOf(treeLook, TreeImpostorMetres) }, LodBand));
     }
 
     internal void Update()
@@ -147,8 +160,10 @@ internal sealed class Vegetation : IDisposable
         Hide();
         grassLook.Dispose();
         treeLook.Dispose();
+        treeMidLook.Dispose();
         grassMesh.Dispose();
         treeMesh.Dispose();
+        treeMidMesh.Dispose();
         grassPaint.Dispose();
         treePaint.Dispose();
     }
@@ -177,10 +192,10 @@ internal sealed class Vegetation : IDisposable
             indices.ToArray(), new MeshGroup[] { new(0, 0, (uint)indices.Count) }, new MeshMaterialBinding[] { new(0, material) });
     }
 
-    /// <summary>A six-sided cone on a short trunk, 9 m tall.</summary>
-    private static MeshResourceCreateRequest Tree(Material material)
+    /// <summary>A cone of <paramref name="sides"/> sides on a short trunk, 9 m tall.</summary>
+    private static MeshResourceCreateRequest Tree(Material material, int sides)
     {
-        const int Sides = 6;
+        int Sides = sides;
         const float Radius = 2.4f, Base = 1.5f, Top = 9f;
         List<Vector3> positions = [], normals = [];
         List<uint> indices = [];

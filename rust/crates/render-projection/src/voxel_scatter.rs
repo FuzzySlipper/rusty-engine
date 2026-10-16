@@ -509,6 +509,9 @@ impl ScatterProjection<'_> {
                     instances,
                     fade: scatter.fade_band(),
                     shadow_casting: scatter.shadow_casting,
+                    lods: Vec::new(),
+                    lod_band: 0.0,
+                    thinning: Default::default(),
                 },
             });
         }
@@ -596,8 +599,9 @@ pub(crate) fn place(
         .collect()
 }
 
-/// The copy a spot with `key` grows: its scale, shade and turn about the
-/// vertical drawn from the key, leaned `align` of the way onto `normal`.
+/// The copy a spot with `key` grows: its scale, shade, turn about the
+/// vertical and rank drawn from the key, leaned `align` of the way onto
+/// `normal`.
 pub(crate) fn copy_at(
     translation: [f32; 3],
     normal: [f32; 3],
@@ -615,6 +619,7 @@ pub(crate) fn copy_at(
         rotation: multiply(lean(normal, align), about_y(yaw)),
         scale: lerp(scale[0], scale[1], draw(1)),
         tint: std::array::from_fn(|channel| lerp(tints[0][channel], tints[1][channel], shade)),
+        rank: draw(4),
     }
 }
 

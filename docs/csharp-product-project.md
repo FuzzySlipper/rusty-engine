@@ -1083,8 +1083,9 @@ GPU time, and why a view looped (`lightClusters.fallback`).
 `RustyEngineProductGpuCulling` set to `enabled` makes each view test its
 opaque parts against the frustum in a compute pass and draw the visible ones
 through indirect draw arguments, so a camera move no longer rebuilds the
-draw list on the CPU; blended parts still sort on the CPU, and scatter
-patches, each one entry however many copies it draws, stay on the CPU list.
+draw list on the CPU; blended parts still sort on the CPU. Scatter copies
+are selected by their own GPU pass whatever this setting
+([levels of detail and thinning](vegetation-fields.md#levels-of-detail-and-thinning)).
 The default is
 `disabled`; a device without indirect draws keeps the CPU list regardless.
 This writes `renderer.gpuCulling` in the staged manifest. `engine.renderer`

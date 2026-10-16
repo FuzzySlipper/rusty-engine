@@ -38,8 +38,35 @@ struct RetainedField {
     /// The spatial session whose world it grows in (0: the scene's space).
     session: u64,
     focus: Focus,
-    /// Each layer's appearance, held while it grows.
-    layers: BTreeMap<u32, u64>,
+    layers: BTreeMap<u32, RetainedLayer>,
+}
+
+#[derive(Debug, Clone)]
+struct RetainedLayer {
+    /// The layer as `SetLayer` gave it, with no levels or thinning.
+    base: VegetationLayer,
+    /// Its farther levels and thinning (`SetLayerDetail`).
+    lods: Vec<render_model::ScatterLod>,
+    lod_band: f32,
+    thinning: render_model::ScatterThinning,
+    /// The appearance it grows, held while it grows, and its levels'.
+    appearance: u64,
+    lod_appearances: Vec<u64>,
+}
+
+impl RetainedLayer {
+    fn layer(&self) -> VegetationLayer {
+        VegetationLayer {
+            lods: self.lods.clone(),
+            lod_band: self.lod_band,
+            thinning: self.thinning.clone(),
+            ..self.base.clone()
+        }
+    }
+
+    fn held(&self) -> impl Iterator<Item = u64> + '_ {
+        std::iter::once(self.appearance).chain(self.lod_appearances.iter().copied())
+    }
 }
 
 impl RetainedField {
@@ -215,8 +242,8 @@ impl RuntimeVegetationBridge {
         let removals = staged.state.tiles.destroy(handle.value);
         staged.early.extend(removals);
         let appearance = self.appearance_mut()?;
-        for held in retained.layers.values() {
-            appearance.hold_for_scatter(*held, false)?;
+        for held in retained.layers.values().flat_map(RetainedLayer::held) {
+            appearance.hold_for_scatter(held, false)?;
         }
         Ok(())
     }
@@ -230,25 +257,102 @@ impl RuntimeVegetationBridge {
         self.readout(request.field)
     }
 
+    /// A mesh appearance's static mesh, and the overrides that draw every
+    /// slot with `material` (defined as `id`), or with the mesh's own
+    /// bindings for a default material; the operations defining it.
+    fn projected(
+        &mut self,
+        appearance: NativeAppearanceHandle,
+        material: NativeOptionalMaterial,
+        id: String,
+    ) -> Result<
+        (String, Vec<render_model::MeshMaterialSlot>, Vec<RenderDiff>),
+        CsharpEngineServicesError,
+    > {
+        let bridge = self.appearance_mut()?;
+        let (mesh, slots) = bridge.scatter_mesh(appearance)?;
+        if material.material.value == 0 {
+            return Ok((mesh, Vec::new(), Vec::new()));
+        }
+        let (mut material, textures, shader) =
+            bridge.voxel_material_projection(material.material)?;
+        material.id = id;
+        let overrides = slots
+            .into_iter()
+            .map(|slot| render_model::MeshMaterialSlot {
+                slot,
+                material: material.id.clone(),
+            })
+            .collect();
+        let operations = textures
+            .into_iter()
+            .map(|texture| RenderDiff::DefineTexture { texture })
+            .chain(shader.map(|shader| RenderDiff::DefineShader { shader }))
+            .chain(std::iter::once(RenderDiff::DefineMaterial { material }))
+            .collect();
+        Ok((mesh, overrides, operations))
+    }
+
+    /// Give a layer to the field's tiles, its definitions to the call's
+    /// frames, and keep it; the appearances it no longer holds are released.
+    fn keep_layer(
+        &mut self,
+        field: NativeVegetationFieldHandle,
+        key: u32,
+        retained_layer: RetainedLayer,
+        operations: Vec<RenderDiff>,
+    ) -> Result<NativeVegetationReadout, CsharpEngineServicesError> {
+        let layer = retained_layer.layer();
+        layer
+            .validate()
+            .map_err(|error| refused(format!("the vegetation layer is invalid: {error:?}")))?;
+        let appearance = self.appearance_mut()?;
+        for held in retained_layer.held() {
+            appearance.hold_for_scatter(held, true)?;
+        }
+        let staged = self.staged_mut()?;
+        if !operations.is_empty() {
+            staged.frames.push(RenderFrameDiff::from_ops(operations));
+        }
+        staged
+            .state
+            .tiles
+            .set_layer(field.value, key, layer)
+            .map_err(vegetation_refusal)?;
+        let replaced = staged
+            .state
+            .fields
+            .get_mut(&field.value)
+            .expect("the field was checked")
+            .layers
+            .insert(key, retained_layer);
+        if let Some(replaced) = replaced {
+            let appearance = self.appearance_mut()?;
+            for held in replaced.held() {
+                appearance.hold_for_scatter(held, false)?;
+            }
+        }
+        self.readout(field)
+    }
+
     fn set_layer(
         &mut self,
         request: NativeVegetationLayerRequest,
     ) -> Result<NativeVegetationReadout, CsharpEngineServicesError> {
-        self.retained(request.field)?;
-        let appearance = self.appearance_mut()?;
-        let (mesh, mesh_slots) = appearance.scatter_mesh(request.appearance)?;
-        let (mut material, textures, shader) =
-            appearance.voxel_material_projection(request.material)?;
-        material.id = layer_material_id(request.field.value, request.layer);
-        let layer = VegetationLayer {
+        let existing = self
+            .retained(request.field)?
+            .0
+            .layers
+            .get(&request.layer)
+            .cloned();
+        let (mesh, material_overrides, operations) = self.projected(
+            request.appearance,
+            request.material,
+            layer_material_id(request.field.value, request.layer, None),
+        )?;
+        let base = VegetationLayer {
             mesh,
-            material_overrides: mesh_slots
-                .into_iter()
-                .map(|slot| render_model::MeshMaterialSlot {
-                    slot,
-                    material: material.id.clone(),
-                })
-                .collect(),
+            material_overrides,
             shadow_casting: if request.casts_shadows {
                 ShadowCasting::Cast
             } else {
@@ -274,36 +378,83 @@ impl RuntimeVegetationBridge {
             near: request.near,
             near_fade: request.near_fade,
             maximum_instances: request.maximum_instances,
+            lods: Vec::new(),
+            lod_band: 0.0,
+            thinning: Default::default(),
         };
-        layer
-            .validate()
-            .map_err(|error| refused(format!("the vegetation layer is invalid: {error:?}")))?;
-        self.appearance_mut()?
-            .hold_for_scatter(request.appearance.value, true)?;
-        let staged = self.staged_mut()?;
-        let operations: Vec<RenderDiff> = textures
-            .into_iter()
-            .map(|texture| RenderDiff::DefineTexture { texture })
-            .chain(shader.map(|shader| RenderDiff::DefineShader { shader }))
-            .chain(std::iter::once(RenderDiff::DefineMaterial { material }))
-            .collect();
-        staged.frames.push(RenderFrameDiff::from_ops(operations));
-        staged
-            .state
-            .tiles
-            .set_layer(request.field.value, request.layer, layer)
-            .map_err(vegetation_refusal)?;
-        let replaced = staged
-            .state
-            .fields
-            .get_mut(&request.field.value)
-            .expect("the field was checked above")
+        // Setting a layer again keeps its levels and thinning.
+        let retained_layer = match existing {
+            Some(existing) => RetainedLayer {
+                base,
+                appearance: request.appearance.value,
+                ..existing
+            },
+            None => RetainedLayer {
+                base,
+                lods: Vec::new(),
+                lod_band: 0.0,
+                thinning: Default::default(),
+                appearance: request.appearance.value,
+                lod_appearances: Vec::new(),
+            },
+        };
+        self.keep_layer(request.field, request.layer, retained_layer, operations)
+    }
+
+    fn set_layer_detail(
+        &mut self,
+        request: &NativeVegetationLayerDetailRequest,
+    ) -> Result<NativeVegetationReadout, CsharpEngineServicesError> {
+        // SAFETY: generated C# pins these bounded typed arrays for the
+        // direct callback; they are copied before returning.
+        let levels =
+            unsafe { borrowed_slice(request.lods, request.lods_len, "vegetation levels")? };
+        let points = unsafe {
+            borrowed_slice(
+                request.thinning,
+                request.thinning_len,
+                "vegetation thinning",
+            )?
+        };
+        let Some(existing) = self
+            .retained(request.field)?
+            .0
             .layers
-            .insert(request.layer, request.appearance.value);
-        if let Some(replaced) = replaced {
-            self.appearance_mut()?.hold_for_scatter(replaced, false)?;
+            .get(&request.layer)
+            .cloned()
+        else {
+            return Err(refused("set the vegetation layer before its detail"));
+        };
+        let mut operations = Vec::new();
+        let mut lods = Vec::with_capacity(levels.len());
+        for (index, level) in levels.iter().enumerate() {
+            let (asset, material_overrides, defined) = self.projected(
+                level.appearance,
+                level.material,
+                layer_material_id(request.field.value, request.layer, Some(index)),
+            )?;
+            operations.extend(defined);
+            lods.push(render_model::ScatterLod {
+                asset,
+                material_overrides,
+                start: level.start,
+                impostor: level.impostor,
+            });
         }
-        self.readout(request.field)
+        let retained_layer = RetainedLayer {
+            lods,
+            lod_band: request.lod_band,
+            thinning: render_model::ScatterThinning {
+                points: points
+                    .iter()
+                    .map(|point| [point.distance, point.share])
+                    .collect(),
+                max_scale: request.max_scale,
+            },
+            lod_appearances: levels.iter().map(|level| level.appearance.value).collect(),
+            ..existing
+        };
+        self.keep_layer(request.field, request.layer, retained_layer, operations)
     }
 
     fn remove_layer(
@@ -317,7 +468,10 @@ impl RuntimeVegetationBridge {
             .map_err(vegetation_refusal)?;
         self.staged_mut()?.early.extend(removals);
         if let Some(removed) = removed {
-            self.appearance_mut()?.hold_for_scatter(removed, false)?;
+            let appearance = self.appearance_mut()?;
+            for held in removed.held() {
+                appearance.hold_for_scatter(held, false)?;
+            }
         }
         self.readout(request.field)
     }
@@ -450,8 +604,12 @@ impl RuntimeVegetationBridge {
     }
 }
 
-fn layer_material_id(field: u64, layer: u32) -> String {
-    format!("material/vegetation-{field}-{layer}")
+/// The material a layer (or its level `lod`) draws every slot with.
+fn layer_material_id(field: u64, layer: u32, lod: Option<usize>) -> String {
+    match lod {
+        None => format!("material/vegetation-{field}-{layer}"),
+        Some(lod) => format!("material/vegetation-{field}-{layer}-lod{lod}"),
+    }
 }
 
 fn focus_of(focus: NativeVegetationFocus) -> Result<Focus, CsharpEngineServicesError> {
@@ -512,6 +670,7 @@ pub(crate) fn api(
         destroy,
         set_focus,
         set_layer,
+        set_layer_detail,
         remove_layer,
         read_requests,
         commit_tile,
@@ -586,6 +745,22 @@ unsafe extern "C" fn set_layer(
     error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     unsafe { operate(context, readout, error, |bridge| bridge.set_layer(request)) }
+}
+
+unsafe extern "C" fn set_layer_detail(
+    context: *mut c_void,
+    request: *const NativeVegetationLayerDetailRequest,
+    readout: *mut NativeVegetationReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if request.is_null() {
+        return 0;
+    }
+    unsafe {
+        operate(context, readout, error, |bridge| {
+            bridge.set_layer_detail(&*request)
+        })
+    }
 }
 
 unsafe extern "C" fn remove_layer(

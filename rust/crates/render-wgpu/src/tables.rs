@@ -352,6 +352,10 @@ impl<T> Slots<T> {
         self.rows.get(id as usize)?.as_ref()
     }
 
+    pub fn get_mut(&mut self, id: u32) -> Option<&mut T> {
+        self.rows.get_mut(id as usize)?.as_mut()
+    }
+
     /// Insert or replace the row, returning the one it replaced.
     pub fn insert(&mut self, id: u32, row: T) -> Option<T> {
         let index = id as usize;
@@ -491,6 +495,10 @@ pub(crate) struct PartState {
     /// `scatter::ScatterCopies` its draw instances (SCATTER), culled and
     /// listed as this one part by their bounds together.
     pub copies: Option<crate::scatter::CopyRange>,
+    /// A scatter node's part, and the level of detail it draws: level 0's
+    /// parts hold rows and draw directly; a farther level's draw only what
+    /// the per-copy selection gives them (`scatter_select.rs`).
+    pub scatter_level: Option<u8>,
 }
 
 /// GPU row per part: model matrix, normal matrix (3 columns), linear colour
@@ -565,6 +573,9 @@ pub(crate) struct Parts {
     /// Scatter runs' rows removed since they were last given back
     /// (`ScatterCopies::remove`).
     pub freed_copies: Vec<crate::scatter::CopyRange>,
+    /// The world layer's scatter runs are selected copy by copy
+    /// (`scatter_select.rs`), not listed.
+    pub selecting: bool,
     /// Debug-layer parts draw: inspection shows the Debug layer.
     debug_shown: bool,
 }
@@ -591,6 +602,7 @@ impl Parts {
             layer: RenderLayer::Scene,
             casts_shadows: true,
             copies: None,
+            scatter_level: None,
         };
         let id = if let Some(id) = self.free.pop() {
             self.meta[id as usize] = Some(part);
@@ -699,6 +711,22 @@ impl Parts {
         self.meta.get(id as usize)?.as_ref()?;
         let bounds = self.state[id as usize].world_bounds;
         (!bounds.is_empty()).then_some(bounds)
+    }
+
+    /// Whether the CPU lists take a part: not a farther level of detail
+    /// (which only the selection draws), and while the world layer's runs
+    /// are selected, none of its opaque scatter parts.
+    pub fn listed(&self, id: PartId) -> bool {
+        let state = &self.state[id as usize];
+        match state.scatter_level {
+            None => true,
+            Some(level) if level > 0 => false,
+            Some(_) => {
+                !self.selecting
+                    || state.class.blend
+                    || crate::frame::ViewLayer::of(state.layer) != crate::frame::ViewLayer::World
+            }
+        }
     }
 
     /// The bounds the CPU lists cull a part by.
@@ -829,6 +857,34 @@ pub(crate) struct Tables {
     /// indirect light rebakes where each was and is (`probes`).
     pub changed_lights: HashSet<RenderHandle>,
     pub environment_dirty: bool,
+    /// Every scatter node's run (`scatter_select.rs`), and whether any was
+    /// made, changed or removed since the selection's last upload.
+    pub scatter_runs: HashMap<RenderHandle, ScatterRun>,
+    pub scatter_runs_changed: bool,
+}
+
+/// A scatter node's copies and the parts that draw them, by level of detail:
+/// what the per-copy selection (`scatter_select.rs`) reads.
+#[derive(Clone, Debug)]
+pub(crate) struct ScatterRun {
+    /// The copies' rows (its first level-0 part's).
+    pub copies: crate::scatter::CopyRange,
+    /// A part whose row holds the node's model and fade.
+    pub part: PartId,
+    /// Each level's parts (its mesh groups), nearest level first.
+    pub levels: Vec<Vec<PartId>>,
+    /// Where each level starts (level 0 at 0) and how far before its start
+    /// it crossfades with the level before.
+    pub starts: Vec<f32>,
+    pub band: f32,
+    /// Thinning points (distance, share) and the largest scale-up.
+    pub thinning: Vec<[f32; 2]>,
+    pub max_scale: f32,
+    /// Each copy reaches no farther than this from its origin, at scale 1.
+    pub radius: f32,
+    pub casts: bool,
+    /// Its last level that is a mesh: copies farther cast shadows at it.
+    pub last_mesh_level: u8,
 }
 
 impl Tables {
@@ -878,6 +934,8 @@ impl Tables {
             lights: HashSet::new(),
             lights_dirty: true,
             changed_lights: HashSet::new(),
+            scatter_runs: HashMap::new(),
+            scatter_runs_changed: false,
             environment_dirty: true,
         }
     }

@@ -792,6 +792,9 @@ impl Renderer {
             self.tables.sprites.remove(&handle);
             self.effects.forget_sprite_batch(handle);
             self.tables.dirty_nodes.remove(&handle);
+            if self.tables.scatter_runs.remove(&handle).is_some() {
+                self.tables.scatter_runs_changed = true;
+            }
         }
     }
 
@@ -811,6 +814,34 @@ impl Renderer {
         } else {
             Vec::new()
         };
+        if self.tables.scatter_runs.remove(&handle).is_some() {
+            self.tables.scatter_runs_changed = true;
+        }
+        // A scatter patch's impostor levels, baked before its parts are
+        // made (a level whose mesh or materials are not defined waits).
+        let impostor_levels: Vec<Option<String>> =
+            match self.tables.nodes.get(&handle).map(|node| &node.kind) {
+                Some(NodeKind::Scatter(patch)) if self.tables.parts.selecting => {
+                    let wanted_levels: Vec<(String, Vec<(u16, String)>)> = patch
+                        .lods
+                        .iter()
+                        .filter(|lod| lod.impostor)
+                        .map(|lod| {
+                            let overrides = lod
+                                .material_overrides
+                                .iter()
+                                .map(|slot| (slot.slot, slot.material.clone()))
+                                .collect();
+                            (lod.asset.clone(), overrides)
+                        })
+                        .collect();
+                    wanted_levels
+                        .into_iter()
+                        .map(|(asset, overrides)| self.impostor_material(&asset, &overrides))
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
         let Some(node) = self.tables.nodes.get_mut(&handle) else {
             return;
         };
@@ -821,8 +852,14 @@ impl Renderer {
         let materials = &self.tables.materials;
         let mut parts: Vec<(Part, PartRow)> = Vec::new();
         // A scattered node's copies under the node and their rows (`scatter.rs`),
-        // which each of its parts (one a mesh group) draws.
+        // which each of its level-0 parts (one a mesh group) draws; each
+        // part's level of detail, and where each level starts.
         let mut scattered: Option<(Vec<glam::Mat4>, Vec<f32>)> = None;
+        let mut part_levels: Vec<u8> = Vec::new();
+        let mut level_starts: Vec<f32> = Vec::new();
+        // Which parts draw impostor cards, and the last level that is a mesh.
+        let mut part_impostors: Vec<bool> = Vec::new();
+        let mut last_mesh_level = 0u8;
         match &node.kind {
             NodeKind::Primitive {
                 geometry,
@@ -1014,29 +1051,91 @@ impl Renderer {
                 }
             }
             NodeKind::Scatter(patch) => {
-                if let Some((mesh_id, mesh)) =
-                    wanted(names, &self.tables.static_meshes, &mut used, &patch.asset)
-                {
-                    let copies: Vec<glam::Mat4> = patch
-                        .instances
-                        .iter()
-                        .map(|instance| {
-                            glam::Mat4::from_scale_rotation_translation(
-                                glam::Vec3::splat(instance.scale),
-                                glam::Quat::from_array(instance.rotation),
-                                glam::Vec3::from(instance.translation),
-                            )
-                        })
-                        .collect();
-                    let rows: Vec<f32> = patch
-                        .instances
-                        .iter()
-                        .flat_map(|instance| crate::scatter::copy_row(instance, 0))
-                        .collect();
-                    scattered = Some((copies, rows));
-                    for (slot, start, count) in &mesh.groups {
-                        let material_id = patch
-                            .material_overrides
+                // Level 0 is the patch's own mesh, then its farther levels; a
+                // level whose mesh is not defined is left out until it is,
+                // and an impostor level until its views are baked.
+                let mut impostors = impostor_levels.iter();
+                let levels = std::iter::once((&patch.asset, &patch.material_overrides, 0.0, None))
+                    .chain(patch.lods.iter().map(|lod| {
+                        let impostor = lod.impostor.then(|| impostors.next().cloned().flatten());
+                        (&lod.asset, &lod.material_overrides, lod.start, impostor)
+                    }));
+                for (asset, overrides, start, impostor) in levels {
+                    let Some((mesh_id, mesh)) =
+                        wanted(names, &self.tables.static_meshes, &mut used, asset)
+                    else {
+                        if level_starts.is_empty() {
+                            break;
+                        }
+                        continue;
+                    };
+                    if let Some(baked) = impostor {
+                        // A card on the quad, with the baked views' material;
+                        // its source's materials are named so their changes
+                        // bake it again.
+                        for (slot, _, _) in &mesh.groups {
+                            if let Some(id) = overrides
+                                .iter()
+                                .rfind(|binding| binding.slot == *slot)
+                                .map(|binding| &binding.material)
+                                .or_else(|| mesh.slots.get(slot))
+                            {
+                                let _ = wanted(names, materials, &mut used, id);
+                            }
+                        }
+                        let Some((id, _)) = baked
+                            .as_ref()
+                            .and_then(|baked| wanted(names, materials, &mut used, baked))
+                        else {
+                            continue;
+                        };
+                        let level = level_starts.len() as u8;
+                        level_starts.push(start);
+                        let mut row = PartRow::new([1.0; 4], [0.0; 3]);
+                        row.fade = [
+                            patch.fade.start,
+                            patch.fade.end,
+                            patch.fade.near_start,
+                            patch.fade.near_end,
+                        ];
+                        parts.push((
+                            Part {
+                                mesh: MeshRef::Builtin(Builtin::Quad),
+                                first_index: 0,
+                                index_count: 0,
+                                material: MaterialRef::Retained(id),
+                                wireframe: false,
+                            },
+                            row,
+                        ));
+                        part_levels.push(level);
+                        part_impostors.push(true);
+                        continue;
+                    }
+                    if level_starts.is_empty() {
+                        let copies: Vec<glam::Mat4> = patch
+                            .instances
+                            .iter()
+                            .map(|instance| {
+                                glam::Mat4::from_scale_rotation_translation(
+                                    glam::Vec3::splat(instance.scale),
+                                    glam::Quat::from_array(instance.rotation),
+                                    glam::Vec3::from(instance.translation),
+                                )
+                            })
+                            .collect();
+                        let rows: Vec<f32> = patch
+                            .instances
+                            .iter()
+                            .flat_map(|instance| crate::scatter::copy_row(instance, 0))
+                            .collect();
+                        scattered = Some((copies, rows));
+                    }
+                    let level = level_starts.len() as u8;
+                    level_starts.push(start);
+                    last_mesh_level = level;
+                    for (slot, first, count) in &mesh.groups {
+                        let material_id = overrides
                             .iter()
                             .rfind(|binding| binding.slot == *slot)
                             .map(|binding| &binding.material)
@@ -1061,13 +1160,15 @@ impl Renderer {
                         parts.push((
                             Part {
                                 mesh: MeshRef::Static(mesh_id),
-                                first_index: *start,
+                                first_index: *first,
                                 index_count: *count,
                                 material: material_ref,
                                 wireframe: false,
                             },
                             row,
                         ));
+                        part_levels.push(level);
+                        part_impostors.push(false);
                     }
                 }
             }
@@ -1076,9 +1177,11 @@ impl Renderer {
         let (world, shown, layer) = (node.world, node.world_visible, node.world_layer);
         let casts = node.shadow_casting.is_cast();
         let mut ids = Vec::with_capacity(parts.len());
-        // A scattered node's copies' bounds under it, the same for each part.
-        let mut scattered_bounds: Option<Aabb> = None;
-        for (mut part, mut row) in parts {
+        // A scattered node's copies' bounds under it, by mesh, and how far a
+        // copy reaches from its origin.
+        let mut scattered_bounds: Vec<(MeshRef, Aabb)> = Vec::new();
+        let mut copy_radius: f32 = 0.0;
+        for (index, (mut part, mut row)) in parts.into_iter().enumerate() {
             if let MeshRef::Builtin(kind) = part.mesh {
                 part.index_count = self.builtins[&kind].groups[0].2;
             }
@@ -1097,11 +1200,21 @@ impl Renderer {
                 row.fade = self.morph_fade(handle, morph);
             }
             let bounds = match &scattered {
-                Some((copies, _)) => *scattered_bounds.get_or_insert_with(|| {
-                    copies.iter().fold(Aabb::EMPTY, |bounds, copy| {
-                        bounds.union(&mesh.bounds.transformed(copy))
-                    })
-                }),
+                Some((copies, _)) => {
+                    match scattered_bounds.iter().find(|(seen, _)| *seen == part.mesh) {
+                        Some((_, bounds)) => *bounds,
+                        None => {
+                            let bounds = copies.iter().fold(Aabb::EMPTY, |bounds, copy| {
+                                bounds.union(&mesh.bounds.transformed(copy))
+                            });
+                            let local = &mesh.bounds;
+                            copy_radius =
+                                copy_radius.max(local.min.abs().max(local.max.abs()).length());
+                            scattered_bounds.push((part.mesh.clone(), bounds));
+                            bounds
+                        }
+                    }
+                }
                 None => mesh.bounds,
             };
             if part.wireframe {
@@ -1120,36 +1233,80 @@ impl Renderer {
                 MaterialRef::Unlit => (None, Features::UNLIT),
                 MaterialRef::LitFallback => (None, Features::default()),
             };
-            let features =
-                (features | mesh.features()).with(Features::SCATTER, scattered.is_some());
+            let impostor = part_impostors.get(index).copied().unwrap_or(false);
+            let features = (features | mesh.features())
+                .with(Features::SCATTER, scattered.is_some())
+                .with(Features::IMPOSTOR, impostor);
             let displacement = descriptor
                 .and_then(|descriptor| descriptor.shader.as_ref())
                 .map_or(0.0, |shader| shader.displacement_bound);
             let class = PartClass {
                 blend: row.color[3] < 1.0 || descriptor.is_some_and(blends),
-                shadow: descriptor
-                    .is_none_or(|descriptor| !blends(descriptor) || descriptor.translucent_shadow),
+                // An impostor card casts no shadow: its copies cast at the
+                // last mesh level (`scatter_select.wgsl`).
+                shadow: !impostor
+                    && descriptor.is_none_or(|descriptor| {
+                        !blends(descriptor) || descriptor.translucent_shadow
+                    }),
                 double_sided: descriptor.is_some_and(|descriptor| descriptor.double_sided),
                 lines: part.wireframe || mesh.topology == Topology::Lines,
                 features,
             };
             self.prepare_part(class);
+            if part_levels.get(index).is_some() && self.tables.parts.selecting {
+                // Its selected copies draw with their own pipelines.
+                self.prepare_part(PartClass {
+                    features: class.features | Features::SCATTER_SELECTED,
+                    ..class
+                });
+            }
             let id = self
                 .tables
                 .parts
                 .insert(part, row, bounds, displacement, class);
-            if let Some((_, rows)) = &scattered {
-                // The part's copies, each naming it; set before the first
-                // write, so they mark nothing the indirect light reads.
+            let level = part_levels.get(index).copied();
+            self.tables.parts.state[id as usize].scatter_level = level;
+            if let (Some((_, rows)), Some(0)) = (&scattered, level) {
+                // A level-0 part's copies, each naming it; set before the
+                // first write, so they mark nothing the indirect light reads.
                 let mut rows = rows.clone();
                 for row in rows.as_chunks_mut::<{ crate::scatter::COPY_FLOATS }>().0 {
-                    row[crate::scatter::COPY_FLOATS - 1] = f32::from_bits(id);
+                    row[crate::scatter::PART_LANE] = f32::from_bits(id);
                 }
                 let copies = self.scatter_copies.insert(rows);
                 self.tables.parts.state[id as usize].copies = Some(copies);
             }
             self.tables.parts.write(id, &world, shown, layer, casts);
             ids.push(id);
+        }
+        if let (Some(_), Some(NodeKind::Scatter(patch))) = (
+            &scattered,
+            self.tables.nodes.get(&handle).map(|node| &node.kind),
+        ) {
+            let mut levels: Vec<Vec<crate::tables::PartId>> = vec![Vec::new(); level_starts.len()];
+            for (id, level) in ids.iter().zip(&part_levels) {
+                levels[usize::from(*level)].push(*id);
+            }
+            let first = levels[0][0];
+            let copies = self.tables.parts.state[first as usize]
+                .copies
+                .expect("a level-0 scatter part holds rows");
+            self.tables.scatter_runs.insert(
+                handle,
+                crate::tables::ScatterRun {
+                    copies,
+                    part: first,
+                    levels,
+                    starts: level_starts,
+                    band: patch.lod_band,
+                    thinning: patch.thinning.points.clone(),
+                    max_scale: patch.thinning.max_scale,
+                    radius: copy_radius,
+                    casts,
+                    last_mesh_level,
+                },
+            );
+            self.tables.scatter_runs_changed = true;
         }
         used.sort_unstable();
         used.dedup();

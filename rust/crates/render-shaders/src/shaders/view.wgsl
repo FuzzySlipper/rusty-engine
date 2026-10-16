@@ -4,7 +4,7 @@
 // shadow caster pass binds `parts`, `instances`, `shadow_views` and `copies`
 // at the same numbers (`Layouts::casters`).
 
-#import rusty::types::{Frame, Part, Light, ShadowView, CloudRegion}
+#import rusty::types::{Frame, Part, Light, ShadowView, CloudRegion, ScatterCopy}
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<storage, read> parts: array<Part>;
@@ -35,15 +35,6 @@
 // The cloud regions (`rusty::clouds`), `frame.cloud_drift.z` of them.
 @group(0) @binding(13) var<storage, read> cloud_regions: array<CloudRegion>;
 
-// A scatter run's copy (render-wgpu `scatter.rs`): where it stands under its
-// part's model (xyz) and its uniform scale (w), its turn (a unit quaternion
-// x, y, z, w), and its linear tint (xyz) with its part's id (w, bits).
-struct ScatterCopy {
-    place: vec4<f32>,
-    turn: vec4<f32>,
-    tint: vec4<f32>,
-};
-
 // The copies of every scatter run; a SCATTER draw's instances index them.
 // The shadow caster pass binds them at the same number.
 @group(0) @binding(14) var<storage, read> copies: array<ScatterCopy>;
@@ -72,6 +63,105 @@ fn copy_row(scattered: ScatterCopy) -> Part {
     row.normal_y = vec4<f32>(normal[1], row.normal_y.w);
     row.normal_z = vec4<f32>(normal[2], row.normal_z.w);
     return row;
+}
+
+// A copy the per-copy selection chose (render-wgpu `scatter_select.rs`):
+// its row with the part and scale-up the selection gave it, its tint, and
+// its share of the samples (negative: the share a crossfade's incoming level
+// takes, from the other end of the samples).
+struct SelectedCopy {
+    row: Part,
+    part: u32,
+    tint: vec3<f32>,
+    fade: f32,
+};
+
+// The largest scale-up a selection entry carries (`scatter_select.rs`).
+const SELECTED_MAX_SCALE: f32 = 4.0;
+
+// A SCATTER_SELECTED instance's copy: an entry of two words in `instances`,
+// the copy's row index with its share (7 bits) and whether it comes in
+// (top bit), then its part (20 bits) with its scale-up (12 bits).
+fn selected_copy(instance: u32) -> SelectedCopy {
+    let word = instances[2u * instance];
+    let detail = instances[2u * instance + 1u];
+    var scattered = copies[word & 0xffffffu];
+    let tint = scattered.tint.xyz;
+    scattered.tint.w = bitcast<f32>(detail & 0xfffffu);
+    scattered.place.w *= 1.0 + f32(detail >> 20u) / 4095.0 * (SELECTED_MAX_SCALE - 1.0);
+    let share = f32((word >> 24u) & 0x7fu) / 127.0;
+    return SelectedCopy(copy_row(scattered), detail & 0xfffffu, tint, select(share, -share, (word >> 31u) != 0u));
+}
+
+// Impostor views (render-wgpu `impostor.rs`): a direction at or above the
+// horizon of the mesh's own space to the unit square, hemi-octahedrally, and
+// a square's point back to its direction.
+fn hemi_octahedral(direction: vec3<f32>) -> vec2<f32> {
+    let d = vec3<f32>(direction.x, max(direction.y, 0.0), direction.z);
+    let p = d.xz / max(abs(d.x) + d.y + abs(d.z), 1e-6);
+    return vec2<f32>(p.x + p.y, p.x - p.y) * 0.5 + 0.5;
+}
+
+fn hemi_octahedral_direction(uv: vec2<f32>) -> vec3<f32> {
+    let f = uv * 2.0 - 1.0;
+    let p = vec2<f32>(f.x + f.y, f.x - f.y) * 0.5;
+    return normalize(vec3<f32>(p.x, 1.0 - abs(p.x) - abs(p.y), p.y));
+}
+
+// The right of a view looking back along `view`, in the mesh's own space
+// (up is +y, or +z looking straight down).
+fn impostor_right(view: vec3<f32>) -> vec3<f32> {
+    let up = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(view.y) > 0.999);
+    return normalize(cross(up, view));
+}
+
+// A copy's impostor card at a quad corner: the baked view nearest the
+// camera's direction in the copy's own space, faced as it was baked, around
+// the mesh's bounding sphere (`shape`: centre, radius) in a grid of
+// `frames` views a side.
+struct ImpostorCard {
+    world: vec3<f32>,
+    normal: vec3<f32>,
+    uv: vec2<f32>,
+    turn: mat3x3<f32>,
+};
+
+fn impostor_card(row: Part, corner: vec3<f32>, shape: vec4<f32>, frames: f32) -> ImpostorCard {
+    let scale = length(row.model[0].xyz);
+    let turn = mat3x3<f32>(row.model[0].xyz / scale, row.model[1].xyz / scale, row.model[2].xyz / scale);
+    let center = (row.model * vec4<f32>(shape.xyz, 1.0)).xyz;
+    let toward = transpose(turn) * normalize(frame.camera.xyz - center);
+    let grid = max(frames, 1.0);
+    let cell = clamp(floor(hemi_octahedral(toward) * grid), vec2<f32>(0.0), vec2<f32>(grid - 1.0));
+    let view = hemi_octahedral_direction((cell + 0.5) / grid);
+    let right = impostor_right(view);
+    let up = cross(view, right);
+    let offset = corner.xy * 2.0;
+    var card: ImpostorCard;
+    card.world = center + turn * (right * offset.x + up * offset.y) * shape.w * scale;
+    card.normal = turn * view;
+    card.uv = (cell + vec2<f32>(offset.x * 0.5 + 0.5, 0.5 - offset.y * 0.5)) / grid;
+    card.turn = turn;
+    return card;
+}
+
+// The samples a crossfading copy covers at a pixel: `fade` of them (a
+// negative fade, the incoming level, takes them from the other end), the
+// remainder spread over pixels by an ordered dither, so two levels fading
+// opposite ways cover each sample once between them.
+fn fade_mask(fade: f32, pixel: vec2<f32>) -> u32 {
+    let samples = max(frame.counts.z, 1u);
+    let all = (1u << samples) - 1u;
+    let p = vec2<u32>(pixel) & vec2<u32>(3u);
+    let bayer = array<f32, 16>(0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+    let rotation = (bayer[p.y * 4u + p.x] + 0.5) / 16.0;
+    let count = f32(samples);
+    if fade >= 0.0 {
+        let covered = min(u32(floor(fade * count + rotation)), samples);
+        return (1u << covered) - 1u;
+    }
+    let covered = samples - min(u32(floor((1.0 + fade) * count + rotation)), samples);
+    return all ^ ((1u << (samples - covered)) - 1u);
 }
 
 // Where `p` stands in the world: itself, or in a backdrop pass

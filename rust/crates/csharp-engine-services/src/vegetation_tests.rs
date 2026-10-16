@@ -171,7 +171,7 @@ fn layer(
     field: NativeVegetationFieldHandle,
     key: u32,
     appearance: NativeAppearanceHandle,
-    material: NativeMaterialHandle,
+    material: NativeOptionalMaterial,
     density: f32,
 ) -> NativeVegetationLayerRequest {
     NativeVegetationLayerRequest {
@@ -345,8 +345,26 @@ fn a_field_asks_for_tiles_places_its_layers_as_the_call_ends_and_redoes_only_edi
     let paint = material(&api);
     let look = blade(&api, paint);
     let field = create(&api, 8.0, 8.0);
-    set_layer(&api, layer(field, GRASS, look, paint, 1.0));
-    set_layer(&api, layer(field, TREES, look, paint, 0.0));
+    set_layer(
+        &api,
+        layer(
+            field,
+            GRASS,
+            look,
+            NativeOptionalMaterial { material: paint },
+            1.0,
+        ),
+    );
+    set_layer(
+        &api,
+        layer(
+            field,
+            TREES,
+            look,
+            NativeOptionalMaterial { material: paint },
+            0.0,
+        ),
+    );
     // Tiles are asked for once the call settles the focus.
     assert!(requests(&api, field).is_empty());
     let first = ops(&mut services);
@@ -459,7 +477,13 @@ fn refuses_a_bad_layer_and_a_dead_field() {
     let field = create(&api, 0.0, 0.0);
     let vegetation = &api.vegetation;
     let mut readout = NativeVegetationReadout::default();
-    let mut bad = layer(field, GRASS, look, paint, 1.0);
+    let mut bad = layer(
+        field,
+        GRASS,
+        look,
+        NativeOptionalMaterial { material: paint },
+        1.0,
+    );
     bad.near = 28.0;
     let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
     assert_ne!(
@@ -478,4 +502,108 @@ fn refuses_a_bad_layer_and_a_dead_field() {
         ABI_OK
     );
     let _ = ops(&mut services);
+}
+
+#[test]
+fn a_default_material_keeps_the_mesh_bindings_and_detail_adds_levels_and_thinning() {
+    let mut services = services();
+    services.begin_call(binding());
+    let api = services.api();
+    let paint = material(&api);
+    let look = blade(&api, paint);
+    let far_look = blade(&api, paint);
+    let field = create(&api, 8.0, 8.0);
+    set_layer(
+        &api,
+        layer(field, GRASS, look, NativeOptionalMaterial::default(), 1.0),
+    );
+    let levels = [NativeVegetationLod {
+        appearance: far_look,
+        material: NativeOptionalMaterial::default(),
+        start: 12.0,
+        impostor: false,
+    }];
+    let points = [
+        NativeVegetationThinningPoint {
+            distance: 10.0,
+            share: 1.0,
+        },
+        NativeVegetationThinningPoint {
+            distance: 25.0,
+            share: 0.25,
+        },
+    ];
+    let vegetation = &api.vegetation;
+    let mut readout = NativeVegetationReadout::default();
+    assert_eq!(
+        unsafe {
+            (vegetation.set_layer_detail)(
+                vegetation.context,
+                &NativeVegetationLayerDetailRequest {
+                    field,
+                    layer: GRASS,
+                    lods: levels.as_ptr(),
+                    lods_len: levels.len(),
+                    lod_band: 3.0,
+                    thinning: points.as_ptr(),
+                    thinning_len: points.len(),
+                    max_scale: 2.0,
+                },
+                &mut readout,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    // The layer must exist before its detail.
+    let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+    assert_ne!(
+        unsafe {
+            (vegetation.set_layer_detail)(
+                vegetation.context,
+                &NativeVegetationLayerDetailRequest {
+                    field,
+                    layer: 99,
+                    lods: std::ptr::null(),
+                    lods_len: 0,
+                    lod_band: 0.0,
+                    thinning: std::ptr::null(),
+                    thinning_len: 0,
+                    max_scale: 1.0,
+                },
+                &mut readout,
+                &mut error,
+            )
+        },
+        ABI_OK
+    );
+    let first = ops(&mut services);
+    assert!(!first.iter().any(|operation| matches!(
+        operation,
+        RenderDiff::DefineMaterial { material } if material.id.starts_with("material/vegetation")
+    )));
+
+    services.begin_call(binding());
+    let api = services.api();
+    for request in &requests(&api, field) {
+        assert!(commit(&api, field, request, 2.0));
+    }
+    let placed = ops(&mut services);
+    let patch = placed
+        .iter()
+        .find_map(|operation| match operation {
+            RenderDiff::CreateScatterPatch { patch, .. } => Some(patch),
+            _ => None,
+        })
+        .expect("a grass patch");
+    assert!(patch.material_overrides.is_empty());
+    assert_eq!(patch.lods.len(), 1);
+    assert_eq!((patch.lods[0].start, patch.lod_band), (12.0, 3.0));
+    assert!(patch.lods[0].material_overrides.is_empty());
+    assert_eq!(patch.thinning.points, vec![[10.0, 1.0], [25.0, 0.25]]);
+    assert_eq!(patch.thinning.max_scale, 2.0);
+    assert!(patch
+        .instances
+        .iter()
+        .all(|copy| (0.0..1.0).contains(&copy.rank)));
 }

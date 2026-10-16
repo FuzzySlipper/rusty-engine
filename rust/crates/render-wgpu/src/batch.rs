@@ -142,6 +142,7 @@ pub(crate) fn view_list(
         if parts.meta[id].is_none()
             || !state.shown
             || ViewLayer::of(state.layer) != layer
+            || !parts.listed(id as PartId)
             || !frustum.intersects(parts.cull_bounds(id as PartId))
         {
             continue;
@@ -179,6 +180,7 @@ pub(crate) fn opaque_candidates(parts: &Parts, layer: ViewLayer, base: u32) -> D
             || !state.shown
             || ViewLayer::of(state.layer) != layer
             || state.copies.is_some()
+            || !parts.listed(id as PartId)
         {
             continue;
         }
@@ -203,7 +205,11 @@ pub(crate) fn cpu_list(
 ) -> DrawList {
     let mut entries: Vec<Entry> = Vec::new();
     for (id, state) in parts.state.iter().enumerate() {
-        if parts.meta[id].is_none() || !state.shown || ViewLayer::of(state.layer) != layer {
+        if parts.meta[id].is_none()
+            || !state.shown
+            || ViewLayer::of(state.layer) != layer
+            || !parts.listed(id as PartId)
+        {
             continue;
         }
         let pass = Pass::of(state.class, state.mirrored);
@@ -239,6 +245,7 @@ pub(crate) fn caster_candidates(parts: &Parts, layer: RenderLayer) -> Vec<PartId
                 && state.class.shadow
                 && state.layer == layer
                 && !state.class.lines
+                && parts.listed(*id as PartId)
         })
         .map(|(id, _)| id as PartId)
         .collect()

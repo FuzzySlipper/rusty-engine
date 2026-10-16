@@ -439,6 +439,31 @@ impl Renderer {
         let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
         let moved = std::mem::take(&mut self.tables.parts.moved);
         let former = std::mem::take(&mut self.tables.parts.former_bounds);
+        if self.tables.parts.selecting {
+            // The selection gathers its runs again when they or their parts
+            // change; the world's shadow layers draw its shadow list, so they
+            // redraw when it changes while it casts or did, and when a
+            // selected run moves.
+            let rebuilt = regrouped || std::mem::take(&mut self.tables.scatter_runs_changed);
+            let mut recast = false;
+            if rebuilt {
+                recast = self.scatter_select.casts();
+                self.scatter_select.build(&self.gpu, &self.tables);
+                recast |= self.scatter_select.casts();
+            }
+            let state = &self.tables.parts.state;
+            if recast
+                || moved
+                    .iter()
+                    .any(|id| state[*id as usize].scatter_level.is_some())
+            {
+                for layer in &mut self.shadows.layers {
+                    if !layer.is_backdrop() {
+                        layer.stale = true;
+                    }
+                }
+            }
+        }
         if self.tables.indirect_light.is_some() {
             // A change inside the volume marks the bricks it reaches; they
             // bake once the scene is still.
@@ -666,9 +691,16 @@ impl Renderer {
     /// Grow the instance buffer to hold the view regions (each sized for
     /// every part slot) and the shadow layers' casters. A new buffer starts
     /// empty, so everything uploads again.
-    fn reserve_instances(&mut self) {
+    /// The first entry of the scatter selection's region: past the view and
+    /// caster regions, on an even word (an entry is two words).
+    fn selection_base(&self) -> u32 {
         let slots = self.tables.parts.meta.len() as u32;
-        let needed = u64::from(VIEW_REGIONS * slots + self.shadows.caster_instances()).max(1) * 4;
+        (VIEW_REGIONS * slots + self.shadows.caster_instances()).div_ceil(2)
+    }
+
+    fn reserve_instances(&mut self) {
+        let words = 2 * (self.selection_base() + self.scatter_select.entries);
+        let needed = u64::from(words).max(1) * 4;
         if needed > self.instances_buffer.size() {
             self.instances_buffer = storage_buffer(
                 &self.gpu.device,
@@ -1493,6 +1525,8 @@ impl Renderer {
         // static cache, unless time moves every caster (`retimed`).
         let cached_path =
             |layer: &shadows::ShadowLayer| !retimed && !layer.dynamic.batches.is_empty();
+        let selected_shadows =
+            !backdrop && self.tables.parts.selecting && !self.scatter_select.draws.is_empty();
         let generation = if self
             .shadows
             .layers
@@ -1549,6 +1583,18 @@ impl Renderer {
                     self.layouts.shadow.get(pass, features)
                 })
             };
+            // Every world layer takes the selected scatter copies that cast,
+            // after `casters_into` (whose bindings they draw with); they
+            // follow the camera, so never into a static cache.
+            let selected_into = |pass: &mut wgpu::RenderPass<'_>| {
+                if selected_shadows {
+                    self.draw_selected(pass, true, |pass, features| {
+                        self.layouts.shadow.get(pass, features)
+                    })
+                } else {
+                    Encoded::default()
+                }
+            };
             let ends_frame = last == Some(index);
             if use_cache {
                 if rebuild {
@@ -1588,6 +1634,7 @@ impl Renderer {
                 );
                 pass.draw(0..3, tile.page..tile.page + 1);
                 drawn.encoded += casters_into(&mut pass, &layer.dynamic);
+                drawn.encoded += selected_into(&mut pass);
                 drawn.casters += layer.dynamic.drawn();
             } else {
                 let mut pass = tile_pass(
@@ -1603,6 +1650,7 @@ impl Renderer {
                 drawn.encoded += casters_into(&mut pass, &layer.casters);
                 drawn.encoded += casters_into(&mut pass, &layer.dynamic);
                 drawn.casters += layer.casters.drawn() + layer.dynamic.drawn();
+                drawn.encoded += selected_into(&mut pass);
             }
         }
         for (index, layer) in self.shadows.layers.iter_mut().enumerate() {
@@ -1656,6 +1704,49 @@ impl Renderer {
         };
         let features = self.tables.parts.state[part as usize].class.features;
         (meta, mesh, material, features)
+    }
+
+    /// Draw the scatter selection from the camera's list or the shadows'
+    /// (only draws that cast), each draw from its indirect arguments.
+    fn draw_selected<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        shadow: bool,
+        pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
+    ) -> Encoded {
+        let mut current: Option<(batch::Pass, Features)> = None;
+        let mut encoded = Encoded::default();
+        for selected in &self.scatter_select.draws {
+            if shadow && !selected.casts {
+                continue;
+            }
+            let state = &self.tables.parts.state[selected.part as usize];
+            let (_, mesh, material, features) = self.drawn_part(selected.part);
+            let draw_pass = batch::Pass::of(state.class, state.mirrored);
+            let features = features | Features::SCATTER_SELECTED;
+            if current != Some((draw_pass, features)) {
+                pass.set_pipeline(pipeline(draw_pass, features));
+                current = Some((draw_pass, features));
+                encoded.pipeline_binds += 1;
+            }
+            pass.set_bind_group(1, material, &[]);
+            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            if let Some(second) = mesh.second_stream() {
+                pass.set_vertex_buffer(1, second.slice(..));
+            }
+            pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+            let draw = if shadow {
+                selected.shadow
+            } else {
+                selected.camera
+            };
+            pass.draw_indexed_indirect(
+                &self.scatter_select.args,
+                crate::scatter_select::ScatterSelect::args_offset(draw),
+            );
+            encoded.draws += 1;
+        }
+        encoded
     }
 
     /// Encode a draw list's batches with the pipeline each pass and material
@@ -2619,6 +2710,37 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render-wgpu view"),
             });
+        // The world's scatter runs, copy by copy, before anything draws them
+        // (`scatter_select.rs`).
+        let selected = view.layer == ViewLayer::World
+            && self.tables.parts.selecting
+            && !self.scatter_select.draws.is_empty();
+        if selected {
+            // `update_view_list` reserved the selection's region.
+            let base = self.selection_base();
+            self.scatter_select.encode(
+                &self.gpu,
+                &mut encoder,
+                [
+                    &self.parts_buffer,
+                    self.scatter_copies.buffer(),
+                    &self.instances_buffer,
+                ],
+                base,
+                &view_proj,
+                eye,
+                // Copies cast only where a world shadow layer reaches.
+                if self.options.shadows {
+                    self.shadows
+                        .layers
+                        .iter()
+                        .filter_map(shadows::ShadowLayer::copy_reach)
+                        .collect()
+                } else {
+                    Vec::new()
+                },
+            );
+        }
         let shadows = match view.layer {
             ViewLayer::World => self.encode_shadows(&mut encoder, false),
             ViewLayer::Backdrop => self.encode_shadows(&mut encoder, true),
@@ -2669,6 +2791,11 @@ impl Renderer {
                                 self.layouts.prepass.get(pass, features)
                             });
                         }
+                    }
+                    if selected {
+                        self.draw_selected(pass, false, |pass, features| {
+                            self.layouts.prepass.get(pass, features)
+                        });
                     }
                 });
             if occlusion.path() == AmbientOcclusionPath::DistanceField {
@@ -2868,6 +2995,11 @@ impl Renderer {
                     pipelines.get(pass, features)
                 }),
             };
+            if selected {
+                encoded += self.draw_selected(&mut pass, false, |pass, features| {
+                    pipelines.get(pass, features)
+                });
+            }
             if world_layer {
                 encoded.draws += self.draw_ghost_plates(&mut pass, hdr_format);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
@@ -3124,6 +3256,9 @@ impl Renderer {
         self.finish.submitted();
         if clusters.grid[3] == 1 {
             self.light_clusters.submitted();
+        }
+        if selected {
+            self.scatter_select.submitted();
         }
         if culled {
             self.culling.drew(multi_draws);

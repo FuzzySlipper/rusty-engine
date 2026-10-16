@@ -156,6 +156,8 @@ pub struct ProductHostGpuStatistics {
     pub distance_fields: ProductHostDistanceFieldStatistics,
     pub light_clusters: ProductHostLightClusterStatistics,
     pub gpu_culling: ProductHostGpuCullingStatistics,
+    pub scatter_selection: ProductHostScatterSelectionStatistics,
+    pub impostors: ProductHostImpostorStatistics,
     pub indirect_light: ProductHostIndirectLightStatistics,
 }
 
@@ -231,6 +233,45 @@ pub struct ProductHostGpuCullingStatistics {
     pub visible: u32,
     /// Runs of batches drawn with one multi-draw each.
     pub multi_draws: u32,
+}
+
+/// The per-copy selection of the last world view's scatter runs: grass,
+/// plants and vegetation copies chosen by distance, thinning and the
+/// frustum, at their levels of detail.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostScatterSelectionStatistics {
+    /// The last world view selected its scatter runs on the GPU.
+    pub enabled: bool,
+    /// Why this device cannot; absent while it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
+    /// Runs, parts and draws selected, and the copies they hold.
+    pub runs: u32,
+    pub parts: u32,
+    pub draws: u32,
+    pub copies: u32,
+    /// From the last read-back pass: copies tested, drawn for the camera (a
+    /// crossfading copy twice), drawn for the shadows, thinned away and
+    /// outside the frustum, and the camera's draws at levels 1 to 3.
+    pub tested: u32,
+    pub drawn: u32,
+    pub shadow: u32,
+    pub thinned: u32,
+    pub outside: u32,
+    pub levels: [u32; 3],
+}
+
+/// The impostor levels' baked views: how many meshes are baked, their
+/// atlases' GPU bytes and the last bake's wall time.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostImpostorStatistics {
+    pub impostors: u32,
+    #[ts(type = "number")]
+    pub bytes: u64,
+    pub bake_ms: f64,
 }
 
 /// The light clustering of the last world view.

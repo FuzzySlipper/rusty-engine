@@ -34,7 +34,7 @@ const MORPH_ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![6 
 /// The vertex streams a mesh with `features` binds: the interleaved one,
 /// then its tangents (VERTEX_TANGENTS) or its morph targets (MORPH). The
 /// shadow and pre-pass pipelines take tangents never.
-fn mesh_buffers(
+pub(crate) fn mesh_buffers(
     features: Features,
     tangents: bool,
 ) -> Vec<Option<wgpu::VertexBufferLayout<'static>>> {

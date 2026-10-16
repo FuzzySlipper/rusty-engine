@@ -12,6 +12,9 @@ Grass and trees grow over the hills in two vegetation fields (#10016): a near
 field on the finest ring's 1 m lattice and a far one on the middle ring's 4 m
 lattice, so copies stand on the drawn triangles, with the grass handed from one
 to the other one for one between 40 and 44 m; trees are placement records.
+The far grass thins with distance, its kept clumps growing so the hills stay as
+green, and trees draw a cheaper cone from 150 m and baked impostor cards from
+320 m, crossfading between levels (#10017).
 `generate-textures.py` writes `content/grass.png` and `content/rock.png`.
 
 Stage with the exact SDK version and matching feed and runtime:

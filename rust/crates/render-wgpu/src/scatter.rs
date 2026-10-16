@@ -7,8 +7,10 @@
 
 use crate::Gpu;
 
-/// `ScatterCopy` in view.wgsl: place and scale, turn, tint and part.
-pub(crate) const COPY_FLOATS: usize = 12;
+/// `ScatterCopy` in types.wgsl: place and scale, turn, tint and part, rank.
+pub(crate) const COPY_FLOATS: usize = 16;
+/// Where in a row its part's id is.
+pub(crate) const PART_LANE: usize = 11;
 const COPY_BYTES: u64 = (COPY_FLOATS * 4) as u64;
 const INITIAL_COPIES: u32 = 4096;
 
@@ -154,7 +156,8 @@ fn buffer(gpu: &Gpu, rows: u32) -> wgpu::Buffer {
     })
 }
 
-/// A copy's row: where it stands, its turn, its tint and its run's part.
+/// A copy's row: where it stands, its turn, its tint, its run's part and its
+/// rank.
 pub(crate) fn copy_row(instance: &render_model::ScatterInstance, part: u32) -> [f32; COPY_FLOATS] {
     let [x, y, z] = instance.translation;
     let [r, g, b] = instance.tint;
@@ -172,5 +175,9 @@ pub(crate) fn copy_row(instance: &render_model::ScatterInstance, part: u32) -> [
         g,
         b,
         f32::from_bits(part),
+        instance.rank,
+        0.0,
+        0.0,
+        0.0,
     ]
 }

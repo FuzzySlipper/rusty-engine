@@ -6,7 +6,7 @@
 // product's `cast_shadow` may discard.
 
 #import rusty::types::{texture_space_position, Caster, Vertex}
-#import rusty::view::{parts, instances, copies, copy_row, shadow_views, fade_toward_origin, morph_share, morph_normal}
+#import rusty::view::{parts, instances, copies, copy_row, selected_copy, impostor_card, shadow_views, fade_toward_origin, morph_share, morph_normal}
 #import rusty::material::{material, albedo, albedo_sampler}
 #import rusty::surface::{transform_uv, voxel_uv, triplanar_uvs, triplanar_weights, hex_tiles, hex_texture}
 #ifdef WIND
@@ -48,6 +48,11 @@ fn vs_shadow(
 #endif
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
+#ifdef SCATTER_SELECTED
+    let selected = selected_copy(instance);
+    let part = selected.part;
+    let row = selected.row;
+#else
 #ifdef SCATTER
     let scattered = copies[instance];
     let part = bitcast<u32>(scattered.tint.w);
@@ -56,6 +61,14 @@ fn vs_shadow(
     let part = instances[instance];
     let row = parts[part];
 #endif
+#endif
+#ifdef IMPOSTOR
+    // A card facing the camera, showing the baked view nearest its direction.
+    let card = impostor_card(row, mesh_position, material.parameters[0], material.parameters[1].x);
+    let position = mesh_position;
+    let normal = mesh_normal;
+    var world = fade_toward_origin(row, card.world);
+#else
 #ifdef MORPH
     let share = morph_share(row, mesh_position);
     let position = mesh_position + vec3<f32>(0.0, morph.x * share, 0.0);
@@ -65,6 +78,7 @@ fn vs_shadow(
     let position = mesh_position;
     let normal = mesh_normal;
     var world = fade_toward_origin(row, (row.model * vec4<f32>(position, 1.0)).xyz);
+#endif
 #endif
 #ifdef LAYER_WEIGHTS
     // The vertex colour holds layer weights.
@@ -95,7 +109,11 @@ fn vs_shadow(
     var out: VsOut;
     out.clip = shadow_views[layer.index].view_proj * vec4<f32>(world, 1.0);
     out.world_position = world;
+#ifdef IMPOSTOR
+    out.uv = card.uv;
+#else
     out.uv = uv;
+#endif
     out.part = part;
     out.alpha = alpha;
 #ifdef TRIPLANAR

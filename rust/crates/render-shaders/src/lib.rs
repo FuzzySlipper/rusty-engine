@@ -93,11 +93,22 @@ impl Features {
     /// under the part's model and tinting the vertex colour, not an id in
     /// `instances`.
     pub const SCATTER: Self = Self::bit(131072);
+    /// A SCATTER part drawing the copies the per-copy selection chose
+    /// (render-wgpu `scatter_select.rs`): each instance is an entry of two
+    /// words in `instances` naming its copy, part, scale-up and share of the
+    /// samples (`rusty::view::selected_copy`).
+    pub const SCATTER_SELECTED: Self = Self::bit(262144);
+    /// A selected copy drawn as an impostor card (render-wgpu
+    /// `impostor.rs`): the quad faces the camera, shows the baked view
+    /// nearest its direction from the material's atlas (its parameters: the
+    /// mesh's bounding sphere and the views a side), and lights by the
+    /// baked normals in the normal map's slot.
+    pub const IMPOSTOR: Self = Self::bit(524288);
     /// Every standard feature's bit.
     #[cfg(test)]
-    const ALL_BITS: u32 = 262143;
+    const ALL_BITS: u32 = 1048575;
 
-    const DEFS: [(Self, &'static str); 18] = [
+    const DEFS: [(Self, &'static str); 20] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -116,6 +127,8 @@ impl Features {
         (Self::VERTEX_OCCLUSION, "VERTEX_OCCLUSION"),
         (Self::MORPH, "MORPH"),
         (Self::SCATTER, "SCATTER"),
+        (Self::SCATTER_SELECTED, "SCATTER_SELECTED"),
+        (Self::IMPOSTOR, "IMPOSTOR"),
     ];
 
     const fn bit(bits: u32) -> Self {
@@ -124,6 +137,14 @@ impl Features {
 
     pub fn contains(self, other: Self) -> bool {
         self.bits & other.bits == other.bits
+    }
+
+    /// `self` without `other`'s bits.
+    pub fn without(self, other: Self) -> Self {
+        Self {
+            bits: self.bits & !other.bits,
+            ..self
+        }
     }
 
     /// `self` with `other` added when `on`.
@@ -161,7 +182,9 @@ impl Features {
                     | Self::VERTEX_OCCLUSION.bits
                     | Self::WIND.bits
                     | Self::MORPH.bits
-                    | Self::SCATTER.bits),
+                    | Self::SCATTER.bits
+                    | Self::SCATTER_SELECTED.bits
+                    | Self::IMPOSTOR.bits),
             product: if self.product & (PRODUCT_CASTS | PRODUCT_DISPLACES) != 0 {
                 self.product
             } else {
@@ -216,6 +239,28 @@ impl Features {
                 Self::SCATTER,
                 Self::MORPH | Self::WATER | Self::LAYER_WEIGHTS | Self::TERRAIN_LAYERS,
             ),
+            // Selected copies are a scatter run's, opaque.
+            self.contains(Self::SCATTER_SELECTED) && !self.contains(Self::SCATTER),
+            // An impostor is a selected copy's card with its baked atlas: a
+            // masked, lit, plain material.
+            self.contains(Self::IMPOSTOR)
+                && (!self.contains(Self::SCATTER_SELECTED)
+                    || !self.contains(Self::MASK)
+                    || self.bits
+                        & (Self::UNLIT
+                            | Self::VOXEL_SURFACE
+                            | Self::NORMAL_MAP
+                            | Self::EMISSIVE_MAP
+                            | Self::OCCLUSION_MAP
+                            | Self::ORM_MAP
+                            | Self::VERTEX_TANGENTS
+                            | Self::TRIPLANAR
+                            | Self::STOCHASTIC_TILING
+                            | Self::FLAT_SHADING
+                            | Self::WIND
+                            | Self::VERTEX_OCCLUSION)
+                            .bits
+                        != 0),
         ];
         !exclusions.contains(&true)
     }
@@ -346,6 +391,12 @@ pub enum Entry {
     /// Volumetric fog: a view's froxel grid lit and integrated
     /// (`volumetric_fog.wgsl`, compute).
     VolumetricFog,
+    /// Scatter runs' copies selected into indirect draws by distance,
+    /// thinning and the frustum (`scatter_select.wgsl`, compute).
+    ScatterSelect,
+    /// A static mesh's impostor views baked into atlases
+    /// (`impostor_bake.wgsl`).
+    ImpostorBake,
 }
 
 impl Entry {
@@ -399,6 +450,14 @@ impl Entry {
             Self::DistanceField => (
                 "shaders/distance_field.wgsl",
                 include_str!("shaders/distance_field.wgsl"),
+            ),
+            Self::ScatterSelect => (
+                "shaders/scatter_select.wgsl",
+                include_str!("shaders/scatter_select.wgsl"),
+            ),
+            Self::ImpostorBake => (
+                "shaders/impostor_bake.wgsl",
+                include_str!("shaders/impostor_bake.wgsl"),
             ),
         }
     }
@@ -764,6 +823,8 @@ mod tests {
             Entry::ShadowRestore,
             Entry::Precipitation,
             Entry::VolumetricFog,
+            Entry::ScatterSelect,
+            Entry::ImpostorBake,
         ] {
             compose(&mut shaders, entry, Features::default());
         }

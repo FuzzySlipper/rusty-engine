@@ -28,6 +28,9 @@ fn grass() -> VegetationLayer {
         near: 0.0,
         near_fade: 0.0,
         maximum_instances: 1_000_000,
+        lods: Vec::new(),
+        lod_band: 0.0,
+        thinning: ScatterThinning::default(),
     }
 }
 

@@ -53,7 +53,8 @@ pub struct NativeVegetationFocusRequest {
 /// not drawn, growing back over the next `near_fade` (a voxel scene scatter
 /// with the same `layer` key, `seed` and density, fading out over that band,
 /// hands its copies over one for one). Each draws `appearance` (a static
-/// mesh appearance) with `material` at a scale between `scale_min` and
+/// mesh appearance) with `material` (`default`: each mesh slot with the
+/// mesh's own material) at a scale between `scale_min` and
 /// `scale_max`, tinted between `tint_low` and `tint_high`, turned at random
 /// about its up axis and leaning `align` of the way onto the ground's
 /// normal. The nearest tiles' copies come first within
@@ -65,7 +66,7 @@ pub struct NativeVegetationLayerRequest {
     pub field: NativeVegetationFieldHandle,
     pub layer: u32,
     pub appearance: NativeAppearanceHandle,
-    pub material: NativeMaterialHandle,
+    pub material: NativeOptionalMaterial,
     pub density: f32,
     pub grounds: u64,
     pub slope_limit_degrees: f32,
@@ -83,6 +84,50 @@ pub struct NativeVegetationLayerRequest {
     pub near_fade: f32,
     pub maximum_instances: u32,
     pub casts_shadows: bool,
+}
+
+/// A farther level of detail of a layer: from `start` metres its copies draw
+/// `appearance` (a static mesh appearance) with `material` (`default`: each
+/// mesh slot with the mesh's own material), crossfading with the level
+/// before over the layer's `lod_band`. With `impostor`, the level is a
+/// camera-facing card showing `appearance` from the nearest of the views the
+/// renderer bakes of it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVegetationLod {
+    pub appearance: NativeAppearanceHandle,
+    pub material: NativeOptionalMaterial,
+    pub start: f32,
+    pub impostor: bool,
+}
+
+/// A thinning point: at `distance` metres from the camera, the share of a
+/// layer's copies kept (0 to 1, above 0).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeVegetationThinningPoint {
+    pub distance: f32,
+    pub share: f32,
+}
+
+/// A layer's farther levels of detail (at most 3, starting farther each,
+/// each past the band) and its coverage-preserving thinning: up to 4 points
+/// in increasing distance, the share linear between them and level beyond;
+/// a kept copy grows by the inverse square root of the share, at most
+/// `max_scale` (1 to 4). Replaces the layer's earlier detail; setting the
+/// layer again keeps it. The levels' appearances and materials must stay
+/// live while the layer grows them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeVegetationLayerDetailRequest {
+    pub field: NativeVegetationFieldHandle,
+    pub layer: u32,
+    pub lods: *const NativeVegetationLod,
+    pub lods_len: usize,
+    pub lod_band: f32,
+    pub thinning: *const NativeVegetationThinningPoint,
+    pub thinning_len: usize,
+    pub max_scale: f32,
 }
 
 /// Stops growing one layer: its copies are removed.
@@ -238,6 +283,13 @@ pub type NativeSetVegetationLayer = unsafe extern "C" fn(
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32;
 
+pub type NativeSetVegetationLayerDetail = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: *const NativeVegetationLayerDetailRequest,
+    readout: *mut NativeVegetationReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativeRemoveVegetationLayer = unsafe extern "C" fn(
     context: *mut c_void,
     request: NativeVegetationLayerRemoval,
@@ -285,6 +337,7 @@ pub struct NativeVegetationApi {
     pub destroy: NativeDestroyVegetationField,
     pub set_focus: NativeSetVegetationFocus,
     pub set_layer: NativeSetVegetationLayer,
+    pub set_layer_detail: NativeSetVegetationLayerDetail,
     pub remove_layer: NativeRemoveVegetationLayer,
     pub read_requests: NativeReadVegetationRequests,
     pub commit_tile: NativeCommitVegetationTile,

@@ -9,7 +9,7 @@
 // (PRODUCT_DISPLACES) and give their normals (PRODUCT_DISPLACES_NORMAL).
 
 #import rusty::types::{texture_space_position, Vertex}
-#import rusty::view::{frame, parts, instances, copies, copy_row, mask_coverage, fade_toward_origin, morph_share, morph_normal}
+#import rusty::view::{frame, parts, instances, copies, copy_row, selected_copy, impostor_card, fade_mask, mask_coverage, fade_toward_origin, morph_share, morph_normal}
 #ifdef WIND
 #import rusty::wind::wind_displace
 #endif
@@ -103,6 +103,16 @@ struct VsOut {
     // The clip position, for the pixel's place in the scene depth.
     @location(9) clip_position: vec4<f32>,
 #endif
+#ifdef SCATTER_SELECTED
+    // The copy's share of the samples (`rusty::view::fade_mask`).
+    @location(10) @interpolate(flat) fade: f32,
+#endif
+#ifdef IMPOSTOR
+    // The copy's turn, which takes the baked normals into the world.
+    @location(11) @interpolate(flat) turn_x: vec3<f32>,
+    @location(12) @interpolate(flat) turn_y: vec3<f32>,
+    @location(13) @interpolate(flat) turn_z: vec3<f32>,
+#endif
 };
 
 // The uv set (0 or 1) a slot reads; without the second stream, set 0.
@@ -130,6 +140,11 @@ fn vs_world(
 #endif
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
+#ifdef SCATTER_SELECTED
+    let selected = selected_copy(instance);
+    let part = selected.part;
+    let row = selected.row;
+#else
 #ifdef SCATTER
     let scattered = copies[instance];
     let part = bitcast<u32>(scattered.tint.w);
@@ -138,6 +153,14 @@ fn vs_world(
     let part = instances[instance];
     let row = parts[part];
 #endif
+#endif
+#ifdef IMPOSTOR
+    // A card facing the camera, showing the baked view nearest its direction.
+    let card = impostor_card(row, mesh_position, material.parameters[0], material.parameters[1].x);
+    let position = mesh_position;
+    let normal = mesh_normal;
+    var world = fade_toward_origin(row, card.world);
+#else
 #ifdef MORPH
     let share = morph_share(row, mesh_position);
     let position = mesh_position + vec3<f32>(0.0, morph.x * share, 0.0);
@@ -148,7 +171,11 @@ fn vs_world(
     let normal = mesh_normal;
     var world = fade_toward_origin(row, (row.model * vec4<f32>(position, 1.0)).xyz);
 #endif
+#endif
     var world_normal = mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * normal;
+#ifdef IMPOSTOR
+    world_normal = card.normal;
+#endif
 #ifdef WIND
 #ifdef LAYER_WEIGHTS
     world = wind_displace(world, row.model[3].xyz, 1.0);
@@ -175,15 +202,27 @@ fn vs_world(
     out.clip = frame.view_proj * vec4<f32>(world, 1.0);
     out.world_position = world;
     out.normal = world_normal;
+#ifdef IMPOSTOR
+    out.uv = card.uv;
+    out.turn_x = card.turn[0];
+    out.turn_y = card.turn[1];
+    out.turn_z = card.turn[2];
+#else
     out.uv = uv;
+#endif
 #ifdef WATER
     out.clip_position = out.clip;
 #endif
     out.part = part;
+#ifdef SCATTER_SELECTED
+    out.color = vec4<f32>(color.rgb * selected.tint, color.a);
+    out.fade = selected.fade;
+#else
 #ifdef SCATTER
     out.color = vec4<f32>(color.rgb * scattered.tint.rgb, color.a);
 #else
     out.color = color;
+#endif
 #endif
 #ifdef VERTEX_TANGENTS
     let model = mat3x3<f32>(row.model[0].xyz, row.model[1].xyz, row.model[2].xyz);
@@ -471,6 +510,11 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
 #else
     var normal = geometric;
 #endif
+#ifdef IMPOSTOR
+    // The baked view's normal, in the mesh's own space, turned with the copy.
+    let baked = textureSample(normal_map, normal_sampler, in.uv).rgb * 2.0 - 1.0;
+    normal = normalize(mat3x3<f32>(in.turn_x, in.turn_y, in.turn_z) * baked);
+#endif
     var facing = geometric;
     if !front {
         normal = -normal;
@@ -591,10 +635,16 @@ struct OpaqueOut {
 // cut edges resolve anti-aliased under multisampling.
 @fragment
 fn fs_world_opaque(in: VsOut, @builtin(front_facing) front: bool) -> OpaqueOut {
+#ifdef SCATTER_SELECTED
+    // A copy crossfading between levels covers its share of the samples.
+    let selected = fade_mask(in.fade, in.clip.xy);
+#else
+    let selected = 0xffffffffu;
+#endif
 #ifdef MASK
     let color = world_color(in, front, false);
-    return OpaqueOut(vec4<f32>(color.rgb, 1.0), mask_coverage(color.a, material.alpha_cutoff));
+    return OpaqueOut(vec4<f32>(color.rgb, 1.0), mask_coverage(color.a, material.alpha_cutoff) & selected);
 #else
-    return OpaqueOut(vec4<f32>(world_color(in, front, true).rgb, 1.0), 0xffffffffu);
+    return OpaqueOut(vec4<f32>(world_color(in, front, true).rgb, 1.0), selected);
 #endif
 }

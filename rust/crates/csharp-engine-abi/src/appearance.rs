@@ -42,6 +42,13 @@ pub struct NativeMaterialHandle {
     pub value: u64,
 }
 
+/// A material, or none (a zero handle; `default` in C#).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeOptionalMaterial {
+    pub material: NativeMaterialHandle,
+}
+
 /// RGBA. Colours are linear, drawn as given, unless a field says otherwise:
 /// billboard and label colours are sRGB, as in CSS, each 0 to 1. A linear
 /// colour's channels are not negative and may exceed 1 (an HDR tint);

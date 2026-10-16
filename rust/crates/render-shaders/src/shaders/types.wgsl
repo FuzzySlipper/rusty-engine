@@ -107,6 +107,17 @@ struct Part {
     fade: vec4<f32>,
 };
 
+// A scatter run's copy (render-wgpu `scatter.rs`): where it stands under its
+// part's model (xyz) and its uniform scale (w), its turn (a unit quaternion
+// x, y, z, w), its linear tint (xyz) with its part's id (w, bits), and its
+// rank among its patch's copies (`detail.x`).
+struct ScatterCopy {
+    place: vec4<f32>,
+    turn: vec4<f32>,
+    tint: vec4<f32>,
+    detail: vec4<f32>,
+};
+
 // Where a triplanar material projects a model-space position from: the
 // part's mesh texture space, or the model space itself.
 fn texture_space_position(row: Part, position: vec3<f32>) -> vec3<f32> {
