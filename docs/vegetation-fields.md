@@ -172,10 +172,10 @@ world pass's size and samples per pixel, reduces that depth (each pixel's
 farthest sample) to a farthest-depth pyramid, and drops from the camera's
 list every copy whose bounds lie wholly behind it. The occluders are its
 opaque parts other than scattered copies whose materials keep every sample
-they cover: a masked or product-discarding material never occludes, since
-the world pass may share its samples out differently. Sampling as the world
-pass does, the depth keeps every opening a world-pass sample sees through,
-however narrow. With GPU culling on, the culled candidates do not occlude.
+they cover: a masked material never occludes, since the world pass may
+share its samples out differently, nor does one with a product shader, whose
+shade stage may discard. Sampling as the world pass does, the depth keeps
+every opening a world-pass sample sees through, however narrow. With GPU culling on, the culled candidates do not occlude.
 The depth is the frame's own, so nothing the selection keeps appears a
 frame late, and camera motion, origin rebases and edits need nothing more.
 Scattered copies never hide each other, and the shadows' list is not

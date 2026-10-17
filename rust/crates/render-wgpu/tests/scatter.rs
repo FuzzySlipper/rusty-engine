@@ -1445,6 +1445,57 @@ fn a_masked_wall_hides_no_copies() {
 }
 
 #[test]
+fn a_wall_whose_product_shader_discards_hides_no_copies() {
+    // A product shader that discards a strip down the wall's middle in its
+    // shade stage, with no caster stage: the posts behind show through, so
+    // the wall never occludes.
+    let mut ops = vec![RenderDiff::DefineShader {
+        shader: ShaderDescriptor {
+            id: "shader/slit".into(),
+            path: "shaders/slit.wgsl".into(),
+            keywords: Vec::new(),
+            source: "#import rusty::types::Surface
+#import rusty::finish::finish
+
+fn shade(surface: Surface) -> vec4<f32> {
+    if abs(surface.world_position.x) < 0.9 {
+        discard;
+    }
+    return finish(surface.base, surface.world_position);
+}
+"
+            .into(),
+        },
+    }];
+    let mut wall_ops = coloured_mesh("wall", wall(), [0.4, 0.4, 0.45, 1.0]);
+    if let RenderDiff::DefineMaterial { material } = &mut wall_ops[0] {
+        material.shader = Some(MaterialShaderDescriptor {
+            shader: "shader/slit".into(),
+            parameters: [[0.0; 4]; 4],
+            textures: [None, None],
+            displacement_bound: 0.0,
+        });
+    }
+    ops.extend(wall_ops);
+    ops.push(instance(
+        30,
+        None,
+        "wall",
+        transform([0.0, 0.0, -3.0], 0.0, 1.0),
+    ));
+    let copies: Vec<_> = [-0.6, 0.0, 0.6]
+        .into_iter()
+        .map(|x| copy([x, 0.0, -2.0], [1.0; 3]))
+        .collect();
+    ops.push(patch(20, 5, copies, ScatterFade::default(), false));
+    let (expected, _, _) = occluded_scene(false, false, ops.clone());
+    let (frame, selection, occlusion) = occluded_scene(true, false, ops);
+    assert!(occlusion.enabled);
+    assert_eq!(selection.occluded, 0, "{selection:?}");
+    assert_eq!(frame, expected);
+}
+
+#[test]
 fn wind_material_copies_in_still_air_leave_the_shadow_maps_alone() {
     // A tree whose material bends in the wind, under the sun, with no wind
     // blowing: as time moves with the camera still, no shadow layer draws

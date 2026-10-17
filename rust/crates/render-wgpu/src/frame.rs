@@ -2754,7 +2754,8 @@ impl Renderer {
         };
         // The occluders (`occlusion.rs`): the opaque batches other than
         // scatter copies whose materials keep every sample they cover, at the
-        // world pass's samples per pixel.
+        // world pass's samples per pixel. A product shader's shade stage may
+        // discard, so its materials never occlude.
         let occluders: Vec<batch::Batch> = if occluding {
             let samples = view.target.samples;
             let occluders: Vec<batch::Batch> = prepass_batches
@@ -2762,7 +2763,9 @@ impl Renderer {
                 .copied()
                 .filter(|draw| {
                     let features = self.tables.parts.state[draw.part as usize].class.features;
-                    !features.caster_fragment() && !features.contains(Features::SCATTER)
+                    !features.caster_fragment()
+                        && features.product() == 0
+                        && !features.contains(Features::SCATTER)
                 })
                 .collect();
             for draw in &occluders {
