@@ -392,6 +392,17 @@ impl SceneDriver {
         Some((point.to_array(), frame.to_array()))
     }
 
+    /// Every overlay set's landmark pairs, measured as drawn now.
+    pub fn landmark_sets(&self) -> Vec<crate::LandmarkSetReadout> {
+        let now = self.now();
+        let mut scene = self.scene();
+        let size = scene
+            .renderer
+            .surface_size()
+            .unwrap_or(DEFAULT_CAPTURE_SIZE);
+        scene.renderer.landmark_sets(now, size)
+    }
+
     /// Draws one inspection view once into a target of its own, as
     /// [`SceneDriver::capture`] draws the composition; `None` when there is
     /// no such view.

@@ -1,10 +1,12 @@
 //! What inspection shows, as Engine live-debug commands
 //! (`engine.inspect.overlay`): the product's overlay sets, the Debug layer,
 //! and the renderer's own inspection drawing. The renderer holds the state;
-//! these commands read and set it.
+//! these commands read and set it. `engine.inspect.landmarks` reads the
+//! sets' landmark pairs as the renderer measures them.
 use super::*;
 
 pub(super) const OVERLAY_COMMAND: &str = "engine.inspect.overlay";
+pub(super) const LANDMARKS_COMMAND: &str = "engine.inspect.landmarks";
 
 const OVERLAY_USAGE: &str = "usage: engine.inspect.overlay [list] | show|hide [sets [in VIEW] | set NAME [in VIEW] | debug-layer | camera | joints HANDLE | bounds HANDLE | ik HANDLE]";
 
@@ -30,9 +32,77 @@ struct OverlayAnswer {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+struct LandmarkSetAnswer {
+    name: String,
+    revision: u64,
+    shown: bool,
+    pairs: Vec<LandmarkPairAnswer>,
+}
+
+/// One pair as drawn. `drawn` is false while either landmark is on nothing
+/// drawn, and then only the judging is answered.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LandmarkPairAnswer {
+    name: String,
+    /// Metres; 0 leaves the distance unjudged.
+    tolerance: f32,
+    aim: &'static str,
+    angle_tolerance: f32,
+    drawn: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    within: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    distance: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    angle: Option<f32>,
+    /// Where `from` is from `to` along the `to` landmark's frame: x right,
+    /// y up, z back, metres.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    offset: Option<[f32; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    from: Option<[f32; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    to: Option<[f32; 3]>,
+}
+
+fn landmark_set_answer(set: render_wgpu::LandmarkSetReadout) -> LandmarkSetAnswer {
+    LandmarkSetAnswer {
+        name: set.name,
+        revision: set.revision,
+        shown: set.shown,
+        pairs: set
+            .pairs
+            .into_iter()
+            .map(|pair| LandmarkPairAnswer {
+                name: pair.name,
+                tolerance: pair.tolerance,
+                aim: match pair.aim {
+                    render_model::LandmarkAim::None => "none",
+                    render_model::LandmarkAim::Axis => "axis",
+                    render_model::LandmarkAim::Point => "point",
+                    render_model::LandmarkAim::Line => "line",
+                },
+                angle_tolerance: pair.angle_tolerance,
+                drawn: pair.drawn.is_some(),
+                within: pair.drawn.map(|drawn| drawn.within),
+                distance: pair.drawn.map(|drawn| drawn.distance),
+                angle: pair.drawn.and_then(|drawn| drawn.angle),
+                offset: pair.drawn.map(|drawn| drawn.offset),
+                from: pair.drawn.map(|drawn| drawn.from),
+                to: pair.drawn.map(|drawn| drawn.to),
+            })
+            .collect(),
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct OverlaySetAnswer {
     name: String,
     items: usize,
+    /// Landmark pairs (`engine.inspect.landmarks`).
+    pairs: usize,
     revision: u64,
     shown: bool,
 }
@@ -102,11 +172,12 @@ fn change(
 }
 
 impl CsharpProductRuntime {
-    /// Answers `engine.inspect.overlay`; none for any other command.
+    /// Answers `engine.inspect.overlay` and `engine.inspect.landmarks`; none
+    /// for any other command.
     pub(super) fn execute_inspect_debug(&self, command: &str) -> Option<ProductHostDebugResult> {
         let words: Vec<&str> = command.split_whitespace().collect();
         let (first, rest) = words.split_first()?;
-        if *first != OVERLAY_COMMAND {
+        if *first != OVERLAY_COMMAND && *first != LANDMARKS_COMMAND {
             return None;
         }
         let Some(frames) = self.frame_output.as_ref() else {
@@ -116,6 +187,35 @@ impl CsharpProductRuntime {
             ));
         };
         let driver = frames.driver();
+        if *first == LANDMARKS_COMMAND {
+            let sets = driver.landmark_sets();
+            let sets: Vec<LandmarkSetAnswer> = match rest {
+                [] => sets.into_iter().map(landmark_set_answer).collect(),
+                [name] => match sets.into_iter().find(|set| set.name == *name) {
+                    Some(set) => vec![landmark_set_answer(set)],
+                    None => {
+                        return Some(ProductHostDebugResult::new(
+                            false,
+                            format!(
+                                "INSPECT_NO_LANDMARKS: no overlay set {name} has landmark pairs"
+                            ),
+                        ))
+                    }
+                },
+                _ => {
+                    return Some(ProductHostDebugResult::new(
+                        false,
+                        "usage: engine.inspect.landmarks [SET]".to_owned(),
+                    ))
+                }
+            };
+            return Some(
+                match serde_json::to_string(&serde_json::json!({ "sets": sets })) {
+                    Ok(message) => ProductHostDebugResult::new(true, message),
+                    Err(error) => ProductHostDebugResult::new(false, error.to_string()),
+                },
+            );
+        }
         let changed = match rest {
             [] | ["list"] => Ok(()),
             ["show", words @ ..] | ["hide", words @ ..] => {
@@ -144,6 +244,7 @@ impl CsharpProductRuntime {
                 .map(|set| OverlaySetAnswer {
                     name: set.name,
                     items: set.items,
+                    pairs: set.pairs,
                     revision: set.revision,
                     shown: set.shown,
                 })

@@ -1,6 +1,7 @@
 //! Overlay sets (`RenderDiff::SetOverlaySet`) and the renderer's own
 //! inspection drawing, as coloured lines over primary views while inspection
-//! shows them.
+//! shows them. A set's landmark pairs are measured here as drawn, for their
+//! lines and for `engine.inspect.landmarks`.
 //!
 //! Each frame that shows anything, the items are resolved into the spaces
 //! the view passes draw in: world items into the world pass, items on a
@@ -14,7 +15,10 @@ use std::ops::Range;
 
 use glam::{Mat4, Quat, Vec3};
 use render_host_contracts::RendererCameraProjection;
-use render_model::{OverlaySetDescriptor, OverlayShape, OverlaySpace, RenderHandle, RenderLayer};
+use render_model::{
+    Landmark, LandmarkAim, LandmarkPair, OverlaySetDescriptor, OverlayShape, OverlaySpace,
+    RenderHandle, RenderLayer,
+};
 
 use crate::camera::{self, CameraPose};
 use crate::frame::ViewLayer;
@@ -34,6 +38,10 @@ const BOUNDS_COLOR: [f32; 4] = [0.3, 0.9, 1.0, 1.0];
 const CAMERA_COLOR: [f32; 4] = [0.95, 0.95, 0.95, 1.0];
 const REACHED_COLOR: [f32; 4] = [0.3, 1.0, 0.4, 1.0];
 const SHORT_COLOR: [f32; 4] = [1.0, 0.25, 0.25, 1.0];
+/// The cross on a pair's `to` landmark, and how far a pair's aimed axis
+/// draws from its `from` landmark, in metres.
+const LANDMARK_MARKER: f32 = 0.008;
+const AIM_LENGTH: f32 = 0.05;
 /// Overlay labels take billboard handles counting down from here, apart from
 /// the product's, which count up from 1.
 const FIRST_LABEL_HANDLE: u64 = u64::MAX;
@@ -125,9 +133,134 @@ impl OverlayShown {
 pub struct OverlaySetReadout {
     pub name: String,
     pub items: usize,
+    pub pairs: usize,
     /// Counts this renderer's changes to the set.
     pub revision: u64,
     pub shown: bool,
+}
+
+/// One set's landmark pairs, measured as drawn now.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LandmarkSetReadout {
+    pub name: String,
+    pub revision: u64,
+    pub shown: bool,
+    pub pairs: Vec<LandmarkMeasure>,
+}
+
+/// One landmark pair as drawn: its judging and, when both landmarks are
+/// on something drawn, where they are and how they measure.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LandmarkMeasure {
+    pub name: String,
+    pub tolerance: f32,
+    pub aim: LandmarkAim,
+    pub angle_tolerance: f32,
+    pub drawn: Option<LandmarkDrawn>,
+}
+
+/// Where a pair's landmarks are drawn, in the world, and how they measure:
+/// the distance between them (metres), the angle of the `from` axis to
+/// what it aims at (degrees; `None` without an aim or an axis to measure),
+/// whether both judged measures are within tolerance, and where `from` is
+/// from `to` along the `to` landmark's frame (x right, y up, z back).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LandmarkDrawn {
+    pub from: [f32; 3],
+    pub to: [f32; 3],
+    pub distance: f32,
+    pub angle: Option<f32>,
+    pub within: bool,
+    pub offset: [f32; 3],
+}
+
+/// A landmark found as drawn, in its layer's pass coordinates.
+#[derive(Clone, Copy)]
+struct Placed {
+    layer: ViewLayer,
+    point: Vec3,
+    axis: Option<Vec3>,
+    frame: Quat,
+}
+
+impl Placed {
+    /// This landmark in `layer`'s pass coordinates: a viewmodel pass's are
+    /// the primary camera's space. `None` across layers without a camera.
+    fn in_layer(self, layer: ViewLayer, camera: Option<CameraPose>) -> Option<Self> {
+        if self.layer == layer {
+            return Some(self);
+        }
+        let camera = camera?;
+        let (turn, shift) = match layer {
+            // World to the camera's space.
+            ViewLayer::Viewmodel => {
+                let inverse = camera.orientation.inverse();
+                (inverse, -(inverse * camera.position))
+            }
+            // The camera's space to the world.
+            _ => (camera.orientation, camera.position),
+        };
+        Some(Self {
+            layer,
+            point: turn * self.point + shift,
+            axis: self.axis.map(|axis| turn * axis),
+            frame: (turn * self.frame).normalize(),
+        })
+    }
+}
+
+/// A pair measured in its `from` landmark's pass coordinates.
+struct PairDrawn {
+    layer: ViewLayer,
+    from: Placed,
+    to: Placed,
+    angle: Option<f32>,
+    within: bool,
+}
+
+impl PairDrawn {
+    fn measure(pair: &LandmarkPair, from: Placed, to: Placed) -> Self {
+        let distance = from.point.distance(to.point);
+        let aimed = match pair.aim {
+            LandmarkAim::None => None,
+            LandmarkAim::Axis => to.axis,
+            LandmarkAim::Point => Some(to.point - from.point),
+            LandmarkAim::Line => to
+                .axis
+                .map(|axis| to.point + axis * (from.point - to.point).dot(axis) - from.point),
+        };
+        let angle = from
+            .axis
+            .zip(aimed.and_then(Vec3::try_normalize))
+            .map(|(axis, aimed)| axis.dot(aimed).clamp(-1.0, 1.0).acos().to_degrees());
+        let within = (pair.tolerance <= 0.0 || distance <= pair.tolerance)
+            && (pair.aim == LandmarkAim::None
+                || angle.is_some_and(|angle| angle <= pair.angle_tolerance));
+        Self {
+            layer: from.layer,
+            from,
+            to,
+            angle,
+            within,
+        }
+    }
+
+    fn label(&self, pair: &LandmarkPair) -> String {
+        let mut text = pair.name.clone();
+        if pair.tolerance > 0.0 || pair.aim == LandmarkAim::None {
+            text += &format!(
+                " {:.1} mm",
+                self.from.point.distance(self.to.point) * 1000.0
+            );
+        }
+        if pair.aim != LandmarkAim::None {
+            match self.angle {
+                Some(angle) => text += &format!(" {angle:.0}°"),
+                None => text += " no axis",
+            }
+        }
+        text
+    }
 }
 
 /// The primary camera a frame's overlays are resolved for: the camera of
@@ -193,7 +326,7 @@ impl Overlays {
 
     /// Replaces a product set; an empty one removes it.
     pub fn set(&mut self, name: &str, set: &OverlaySetDescriptor) {
-        if set.items.is_empty() {
+        if set.is_empty() {
             self.sets.remove(name);
             return;
         }
@@ -213,6 +346,7 @@ impl Overlays {
             .map(|(name, retained)| OverlaySetReadout {
                 name: name.clone(),
                 items: retained.set.items.len(),
+                pairs: retained.set.pairs.len(),
                 revision: retained.revision,
                 shown: !self.shown.set_scopes(name).is_empty(),
             })
@@ -561,6 +695,49 @@ impl Renderer {
                 }
             }
         }
+        let primary = camera.map(|camera| camera.pose);
+        for (name, retained) in &self.overlays.sets {
+            if retained.set.pairs.is_empty() {
+                continue;
+            }
+            for scope in shown.set_scopes(name) {
+                let out = match scope {
+                    Some(view) => view_buckets.entry(view.to_owned()).or_default(),
+                    None => &mut buckets,
+                };
+                for pair in &retained.set.pairs {
+                    let Some(drawn) = self.pair_drawn(pair, &entities, primary) else {
+                        continue;
+                    };
+                    let color = if drawn.within {
+                        REACHED_COLOR
+                    } else {
+                        SHORT_COLOR
+                    };
+                    let mut pen = Pen {
+                        out: &mut out[bucket(drawn.layer, true)],
+                        to_pass: Mat4::IDENTITY,
+                        color,
+                    };
+                    let (from, to) = (drawn.from.point, drawn.to.point);
+                    pen.line(from, to);
+                    pen.cross(to, LANDMARK_MARKER);
+                    if let (
+                        LandmarkAim::Axis | LandmarkAim::Point | LandmarkAim::Line,
+                        Some(axis),
+                    ) = (pair.aim, drawn.from.axis)
+                    {
+                        pen.line(from, from + axis * AIM_LENGTH);
+                    }
+                    let record = LabelRecord {
+                        layer: drawn.layer,
+                        point: (from + to) * 0.5,
+                        view: scope.map(str::to_owned),
+                    };
+                    labels.push((record, drawn.label(pair), color, true));
+                }
+            }
+        }
         for &handle in &shown.joints {
             self.draw_joint_chain(RenderHandle::new(handle), &mut buckets);
         }
@@ -728,6 +905,159 @@ impl Renderer {
         ))
     }
 
+    /// Every set's landmark pairs measured as drawn, in the world: a
+    /// viewmodel's placed by the primary camera at `time_seconds` for a
+    /// surface of `size`.
+    pub fn landmark_sets(
+        &mut self,
+        time_seconds: f64,
+        size: (u32, u32),
+    ) -> Vec<LandmarkSetReadout> {
+        let primary = self
+            .primary_overlay_camera(time_seconds, size)
+            .map(|camera| camera.pose);
+        let entities = self.entity_handles();
+        let to_world = |placed: Placed| placed.in_layer(ViewLayer::World, primary);
+        self.overlays
+            .sets
+            .iter()
+            .filter(|(_, retained)| !retained.set.pairs.is_empty())
+            .map(|(name, retained)| LandmarkSetReadout {
+                name: name.clone(),
+                revision: retained.revision,
+                shown: !self.overlays.shown.set_scopes(name).is_empty(),
+                pairs: retained
+                    .set
+                    .pairs
+                    .iter()
+                    .map(|pair| LandmarkMeasure {
+                        name: pair.name.clone(),
+                        tolerance: pair.tolerance,
+                        aim: pair.aim,
+                        angle_tolerance: pair.angle_tolerance,
+                        drawn: self.pair_drawn(pair, &entities, primary).and_then(|drawn| {
+                            let (from, to) = (to_world(drawn.from)?, to_world(drawn.to)?);
+                            let offset = to.frame.inverse() * (from.point - to.point);
+                            Some(LandmarkDrawn {
+                                from: from.point.to_array(),
+                                to: to.point.to_array(),
+                                distance: from.point.distance(to.point),
+                                angle: drawn.angle,
+                                within: drawn.within,
+                                offset: offset.to_array(),
+                            })
+                        }),
+                    })
+                    .collect(),
+            })
+            .collect()
+    }
+
+    /// A pair measured as drawn, in its `from` landmark's pass coordinates;
+    /// `None` when either landmark is on nothing drawn.
+    fn pair_drawn(
+        &self,
+        pair: &LandmarkPair,
+        entities: &HashMap<u64, RenderHandle>,
+        primary: Option<CameraPose>,
+    ) -> Option<PairDrawn> {
+        let from = self.landmark(&pair.from, entities)?;
+        let to = self
+            .landmark(&pair.to, entities)?
+            .in_layer(from.layer, primary)?;
+        Some(PairDrawn::measure(pair, from, to))
+    }
+
+    /// A landmark as drawn, in its layer's pass coordinates; `None` when
+    /// its node or a joint it names draws nothing.
+    fn landmark(
+        &self,
+        landmark: &Landmark,
+        entities: &HashMap<u64, RenderHandle>,
+    ) -> Option<Placed> {
+        let frame = |to_pass: Mat4| to_pass.to_scale_rotation_translation().1;
+        let joint = |entity: u64, joint: u32| {
+            self.item_space(OverlaySpace::Joint { entity, joint }, entities)
+                .map(|(layer, to_pass)| (layer, to_pass.w_axis.truncate(), frame(to_pass)))
+        };
+        Some(match *landmark {
+            Landmark::At {
+                space,
+                point,
+                rotation: [x, y, z, w],
+                axis,
+            } => {
+                let (layer, to_pass) = self.item_space(space, entities)?;
+                let frame = (frame(to_pass) * Quat::from_xyzw(x, y, z, w).normalize()).normalize();
+                Placed {
+                    layer,
+                    point: to_pass.transform_point3(Vec3::from_array(point)),
+                    axis: (frame * Vec3::from_array(axis)).try_normalize(),
+                    frame,
+                }
+            }
+            Landmark::Between {
+                entity,
+                from,
+                to,
+                amount,
+            } => {
+                let (layer, from, frame) = joint(entity, from)?;
+                let (_, to, _) = joint(entity, to)?;
+                Placed {
+                    layer,
+                    point: from.lerp(to, amount),
+                    axis: (to - from).try_normalize(),
+                    frame,
+                }
+            }
+            Landmark::Beyond {
+                entity,
+                previous,
+                last,
+                amount,
+            } => {
+                // The last bone runs along the last joint's frame as the
+                // bone before it runs along the previous joint's.
+                let (_, before, before_frame) = joint(entity, previous)?;
+                let (layer, at, frame) = joint(entity, last)?;
+                let bone = at - before;
+                let axis = (frame * (before_frame.inverse() * bone)).try_normalize();
+                Placed {
+                    layer,
+                    point: at + axis.unwrap_or(Vec3::ZERO) * bone.length() * amount,
+                    axis,
+                    frame,
+                }
+            }
+            Landmark::Palm {
+                entity,
+                wrist,
+                index,
+                middle,
+                pinky,
+                along,
+                depth,
+                left,
+            } => {
+                let (layer, wrist, frame) = joint(entity, wrist)?;
+                let (_, index, _) = joint(entity, index)?;
+                let (_, middle, _) = joint(entity, middle)?;
+                let (_, pinky, _) = joint(entity, pinky)?;
+                // Index then pinky about the wrist turns out of a right
+                // palm.
+                let normal = (index - wrist).cross(pinky - wrist).try_normalize()?
+                    * if left { -1.0 } else { 1.0 };
+                Placed {
+                    layer,
+                    point: wrist.lerp(middle, along) + normal * depth,
+                    axis: Some(normal),
+                    frame,
+                }
+            }
+        })
+    }
+
     /// The lowest handle published for each entity.
     fn entity_handles(&self) -> HashMap<u64, RenderHandle> {
         let mut handles: HashMap<u64, RenderHandle> = HashMap::new();
@@ -864,6 +1194,7 @@ mod tests {
                 color: [1.0; 4],
                 on_top: false,
             }],
+            pairs: Vec::new(),
         }
     }
 

@@ -92,3 +92,27 @@ test('a closed shell mounts nothing; opening mounts each panel and closing dispo
   await shell.open();
   assert.equal(shell.isOpen, false, 'a disposed shell stays closed');
 });
+
+test("the shell's own Close button closes it and tells the product once", async () => {
+  const document = new FakeDocument();
+  const host = document.createElement('div');
+  const log: string[] = [];
+  let closed = 0;
+  const shell = new DeveloperShell(
+    host as unknown as HTMLElement,
+    { panels: [{ kind: 'scene' }], onClose: () => closed++ },
+    mounts(log),
+  );
+  shell.close();
+  assert.equal(closed, 0, 'a closed shell closing again says nothing');
+  await shell.open();
+  const bar = host.children[0]!.children[0]!;
+  const close = bar.children.find((child) => child.className === 'rusty-developer-shell__close')!;
+  close.listeners.get('click')!();
+  assert.equal(shell.isOpen, false);
+  assert.equal(closed, 1);
+  assert.deepEqual(log, ['mount scene', 'dispose scene']);
+  await shell.open();
+  shell.dispose();
+  assert.equal(closed, 2, 'disposing an open shell closes it');
+});

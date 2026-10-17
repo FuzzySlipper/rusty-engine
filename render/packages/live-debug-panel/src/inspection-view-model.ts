@@ -9,6 +9,9 @@ export const inspectCommands = {
     `engine.inspect.view orbit ${id} ${round(yaw)} ${round(pitch)}`,
   pan: (id: string, right: number, up: number) => `engine.inspect.view pan ${id} ${round(right)} ${round(up)}`,
   zoom: (id: string, factor: number) => `engine.inspect.view zoom ${id} ${round(factor)}`,
+  /** Frames the view and writes it beside a reference image, with an onion-skin panel. */
+  compare: (id: string, framing: string, subject: string, reference: string) =>
+    `engine.inspect.view compare ${id} ${framing} ${subject} ${reference} compare-${id}.png onion`,
   targets: () => 'engine.inspect.target list',
   showSetsIn: (id: string) => `engine.inspect.overlay show sets in ${id}`,
   hideSetsIn: (id: string) => `engine.inspect.overlay hide sets in ${id}`,

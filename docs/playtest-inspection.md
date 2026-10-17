@@ -24,6 +24,8 @@ Native live-debug commands (require the ordinary live-debug opt-in):
   and `engine.scene.resources`: readings of the committed scene
   ([scene readouts](#scene-readouts)).
 - `engine.inspect.overlay`: what inspection draws ([overlays](#overlays)).
+- `engine.inspect.landmarks`: the product's landmark pairs, measured as drawn
+  ([landmark pairs](#landmark-pairs)).
 - `engine.inspect.view`: Engine cameras beside the player view
   ([inspection views](#inspection-views)).
 - `engine.inspect.target`: the product's named inspection points
@@ -328,6 +330,8 @@ releases nothing but its entry.
   simulation step, held flag, presentation time, camera and the overlay sets
   drawn. The tool capture route draws views too
   ([captures](presentation-capture.md#captures)).
+- `compare ID FRAMING SUBJECT REFERENCE.png [PATH] [onion] [overlays]`:
+  [compare with a reference](#reference-comparison).
 
 Hold time with `engine.time.mode manual` to capture the player view and each
 view at the same step: every view reads the one committed simulation and
@@ -363,16 +367,108 @@ first. Names are single words, as commands name them.
 shows it. `engine.inspect.view frame ID FRAMING target NAME` frames a view on
 one, as it is placed now.
 
+## Landmark pairs
+
+Clearance says whether a hand passes into what it holds, not whether it holds
+it the right way. A product says what a right hold is as landmark pairs, and
+the Engine measures them on the poses it drew: the index pad on the trigger,
+the web up under the back strap, the palm facing the handle. The product
+never reads drawn joint positions to measure them.
+
+Pairs travel in an overlay set beside its items:
+`Graphics.PublishOverlaySet(new(name, items, pairs))`. They are retained,
+revisioned, shown and hidden like the set's items. Each `LandmarkPair` has a
+one-word name, a `from` and a `to` `Landmark`, and what it judges:
+
+- `LandmarkPair.Distance(name, from, to, tolerance)`: the distance between
+  them within `tolerance` metres.
+- `LandmarkPair.Facing(name, from, to, aim, angleTolerance, tolerance = 0)`:
+  the angle between `from`'s axis and what it aims at, within
+  `angleTolerance` degrees, and the distance too when `tolerance` is above 0.
+  `LandmarkAim.Axis` aims at `to`'s axis, `Point` at the `to` landmark, and
+  `Line` at the nearest point of the line through `to` along its axis (a palm
+  facing a handle, wherever along it the palm is).
+
+A `Landmark` is a point with an axis and a frame, found as drawn:
+
+- `Landmark.At(place, point, axis?, frame?)`: a point in an
+  [overlay place](#overlays) (world, a model, a joint, the camera). Its axis
+  (none when zero) and the frame offsets are read along are the place's frame
+  turned by `frame`.
+- `Landmark.Between(entity, from, to, amount)`: part of the way from one
+  rig joint to another, its axis along them.
+- `Landmark.Beyond(entity, previous, last, amount)`: past the last joint along
+  its own bone (as the bone before it runs along the previous joint's frame),
+  `amount` of that bone's length, its axis along that bone.
+- `Landmark.Palm(entity, wrist, index, middle, pinky, along, depth, side)`:
+  `along` of the way from the wrist to the middle finger's base and `depth`
+  metres out of the palm, its axis the palm's normal across the index and
+  pinky bases (out of a right palm, turned for a left one).
+
+`HandRig.FromJoints(joints, entity, side, wrist, thumb, index, middle, ring,
+pinky)` names a hand's rig joints once (each digit's chain from its base,
+fixed to the hand, to its last joint) and gives the standard hand landmarks:
+`Palm()`, `Web()` (between the thumb's and index finger's bases), `Pad(digit)`
+(past a digit's last joint), `Joint(digit, n)` and `AtWrist()`. Their default
+measures are `HandRig.PalmAlong`, `PalmDepth`, `WebAmount` and `PadReach`.
+
+```csharp
+HandRig hand = HandRig.FromJoints(engine.Animation.ReadJoints(arms).Span, ArmsId, HandSide.Right,
+    "R_Hand", ["R_Thumb1", "R_Thumb2", "R_Thumb3"], ["R_Index1", "R_Index2", "R_Index3"],
+    ["R_Middle1", "R_Middle2", "R_Middle3"], ["R_Ring1", "R_Ring2", "R_Ring3"], ["R_Pinky1", "R_Pinky2", "R_Pinky3"]);
+OverlayPlace pistol = OverlayPlace.Model(PistolId);
+engine.Graphics.PublishOverlaySet(new("held.landmarks", [], [
+    LandmarkPair.Distance("trigger", hand.Pad(Digit.Index), Landmark.At(pistol, trigger), 0.015f),
+    LandmarkPair.Distance("backstrap", hand.Web(), Landmark.At(pistol, backstrapTop), 0.02f),
+    LandmarkPair.Facing("facing", hand.Palm(), Landmark.At(pistol, grip, axis: butt - backstrapTop), LandmarkAim.Line, 65),
+]));
+```
+
+While inspection shows the set, each pair draws on top: a segment from `from`
+to `to`, a cross on `to`, `from`'s axis when it aims, and a label with its
+name and measure (`trigger 11.9 mm`, `facing 52°`), green when every measure
+it judges is within tolerance and red otherwise. A pair whose landmark is on
+nothing drawn is left out.
+
+`engine.inspect.landmarks [SET]` answers every set's pairs (or one set's) as
+the last frame drew them, whether shown or not: for each, its tolerances and
+aim, whether it is `drawn`, `within`, the `distance` in metres, the `angle`
+in degrees (absent without an aim or an axis to measure), `from` and `to` in
+the world, and the `offset` of `from` from `to` along `to`'s frame (x right,
+y up, z back, metres), so a report can say "3 mm below, 12 behind".
+
+What stays approximate: a landmark is where the renderer drew the joints, not
+the skinned surface; `Beyond` assumes the rig's last bone runs along its
+joint as the bone before it does; a palm needs index, middle and pinky bases.
+`fixtures/csharp-skeleton-poses` publishes `fixture.grip`: one pair within
+tolerance, one outside, one aimed.
+
+## Reference comparison
+
+`engine.inspect.view compare ID FRAMING SUBJECT REFERENCE.png [PATH] [onion]
+[overlays]` frames view `ID` on `SUBJECT` (a handle, `camera` or
+`target NAME`) as `frame` does, captures it at the reference image's size,
+and writes the capture and the reference side by side in one PNG at `PATH`
+(`compare-ID.png` when omitted; paths are relative to the host's working
+directory). `onion` adds a third panel, the reference blended half over the
+capture; `overlays` draws the shown overlay sets into the capture. It answers
+the path, the composed size, its panels, and the capture's step, held flag,
+presentation time and camera. Reference images come from the product's or a
+shared library; the Engine only frames, captures and composes.
+
 ## View panes
 
 `mountInspectionView(element, { viewport: context.viewport, id?, subject?,
-framings?, transport? })` from `@rusty-engine/live-debug` puts one inspection
+framings?, reference?, transport? })` from `@rusty-engine/live-debug` puts one inspection
 view in a product-owned element. The pane anchors its surface through the
 product UI's viewport port, so the Engine draws the view there, creates the
 view on mount and closes it on dispose. Its bar picks the subject (the player
 camera or a product target; a target the product does not offer now falls
-back to the camera), frames it with the framing buttons, and downloads a
-capture of the view. Its Overlays toggle shows every overlay set in its own
+back to the camera), frames it with the framing buttons, downloads a
+capture of the view, and compares the view with a reference image: its field
+holds a PNG path on the host (`reference` fills it), and **Compare** runs
+`engine.inspect.view compare` with the framing last used and an onion-skin
+panel, writing `compare-ID.png`. Its Overlays toggle shows every overlay set in its own
 view (`show sets in ID`), reads that state back from the Engine and is undone
 when the pane closes, so two panes toggle independently and leave the player
 view alone. On the surface, a drag orbits about the focus, a Shift-drag pans
@@ -393,16 +489,21 @@ skinned-surface guarantee. A joint's place is the drawn pose, not physics.
 
 ## Developer shell
 
-`mountDeveloperShell(element, { panels, presentation?, side?, transport? })`
+`mountDeveloperShell(element, { panels, presentation?, side?, transport?,
+onClose? })`
 from `@rusty-engine/live-debug` docks the Engine's developer panels beside
 play without pausing it: `{ kind: 'console' }`, `'tunables'`, `'scene'`,
 `{ kind: 'view', options }` (an inspection view pane), `'metrics'`, and
 `{ kind: 'product', title, mount(element) }` for the product's own DOM.
 `presentation: 'dock'` stacks them; `'tabs'` shows one at a time. It starts
 closed and holds no panel and sends nothing while closed; `open`, `close` and
-`toggle` mount and dispose every panel, and the product binds the key. Its
-look follows the `--rusty-shell-*` custom properties, and each panel keeps its
-own. It holds no product state.
+`toggle` mount and dispose every panel, and the product binds the key.
+`onClose` is called after an open shell closes, however it closed (its own
+Close button included), so the product can give play its input back. Its
+look follows the `--rusty-shell-*` custom properties (including
+`--rusty-shell-view-height` and `--rusty-shell-tunables-height` for docked
+view and tunables panels), and each panel keeps its own. It holds no product
+state.
 
 ## Time, drawing and camera
 

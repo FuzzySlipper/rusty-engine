@@ -3291,7 +3291,9 @@ impl ProductHostRuntime for CsharpProductRuntime {
         ) {
             return self.execute_product_debug(inspect_view::TARGETS_COMMAND);
         }
-        if let ["engine.inspect.view", "frame", _, _, "target", _] = words.as_slice() {
+        if let ["engine.inspect.view", "frame", _, _, "target", _]
+        | ["engine.inspect.view", "compare", _, _, "target", ..] = words.as_slice()
+        {
             let listed = self.execute_product_debug(inspect_view::TARGETS_COMMAND)?;
             let (listing, outputs) = listed.into_parts();
             let targets = listing.succeeded().then_some(listing.message());

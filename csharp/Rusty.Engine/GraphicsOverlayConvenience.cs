@@ -70,7 +70,13 @@ public readonly partial record struct OverlayItem
 public readonly partial record struct OverlaySetRequest
 {
     public OverlaySetRequest(string Name, OverlayItem[] Items)
-        : this(Name, (ReadOnlyMemory<OverlayItem>)Items)
+        : this(Name, Items, ReadOnlyMemory<LandmarkPair>.Empty)
+    {
+    }
+
+    /// <summary>A set with landmark pairs the renderer measures as drawn (<c>engine.inspect.landmarks</c>), and any items beside them.</summary>
+    public OverlaySetRequest(string Name, OverlayItem[] Items, LandmarkPair[] Pairs)
+        : this(Name, (ReadOnlyMemory<OverlayItem>)Items, (ReadOnlyMemory<LandmarkPair>)Pairs)
     {
     }
 }

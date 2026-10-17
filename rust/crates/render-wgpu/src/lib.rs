@@ -128,7 +128,10 @@ pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
 pub use inspection::InspectionView;
 pub use light_clusters::LightClusterReadout;
-pub use overlays::{OverlaySetReadout, OverlayShown, PLAYER_VIEW};
+pub use overlays::{
+    LandmarkDrawn, LandmarkMeasure, LandmarkSetReadout, OverlaySetReadout, OverlayShown,
+    PLAYER_VIEW,
+};
 pub use particles::EntityPositions;
 pub use probes::IndirectLightReadout;
 pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};

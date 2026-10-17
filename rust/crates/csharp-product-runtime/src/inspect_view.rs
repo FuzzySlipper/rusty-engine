@@ -11,7 +11,7 @@ pub(super) const VIEW_COMMAND: &str = "engine.inspect.view";
 /// The product command `InspectionTargetsDebugModule` serves.
 pub(super) const TARGETS_COMMAND: &str = "inspect.targets";
 
-const VIEW_USAGE: &str = "usage: engine.inspect.view [list] | create ID [anchor NAME] | close ID | select ID | camera ID X Y Z YAW PITCH [FOV] | orbit ID DYAW DPITCH | pan ID DX DY | zoom ID FACTOR | frame ID front|back|left|right|side|top|underside|close HANDLE|camera|target NAME | capture ID PATH [WIDTH HEIGHT] [overlays]";
+const VIEW_USAGE: &str = "usage: engine.inspect.view [list] | create ID [anchor NAME] | close ID | select ID | camera ID X Y Z YAW PITCH [FOV] | orbit ID DYAW DPITCH | pan ID DX DY | zoom ID FACTOR | frame ID front|back|left|right|side|top|underside|close HANDLE|camera|target NAME | capture ID PATH [WIDTH HEIGHT] [overlays] | compare ID FRAMING HANDLE|camera|target NAME REFERENCE.png [PATH] [onion] [overlays]";
 
 /// A new view's vertical field of view, near and far planes.
 const VIEW_FOV_DEGREES: f64 = 50.0;
@@ -34,6 +34,8 @@ const CAMERA_FRAME_RADIUS: f64 = 0.35;
 const MAX_PITCH_DEGREES: f64 = 89.0;
 /// A capture's size when it names none.
 const DEFAULT_CAPTURE: (u32, u32) = (960, 540);
+/// How much of the reference an onion-skin panel shows over the capture.
+const ONION_REFERENCE: f32 = 0.5;
 
 type V3 = [f64; 3];
 
@@ -136,6 +138,24 @@ struct ViewsAnswer {
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
+struct CompareAnswer {
+    path: String,
+    reference: String,
+    /// The composed image: capture, reference and any onion-skin panel side
+    /// by side, each `panel` wide.
+    width: u32,
+    height: u32,
+    panels: Vec<&'static str>,
+    step: u64,
+    held: bool,
+    presentation_seconds: f64,
+    view: ViewAnswer,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    overlays: Option<std::collections::BTreeMap<String, u64>>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 struct CaptureAnswer {
     path: String,
     width: u32,
@@ -206,6 +226,9 @@ impl CsharpProductRuntime {
         let driver = frames.driver();
         let answer = match rest {
             ["capture", id, path, more @ ..] => self.capture_view(&driver, id, path, more),
+            ["compare", id, framing, more @ ..] => {
+                self.compare_view(&driver, id, framing, more, targets)
+            }
             _ => self.change_views(&driver, rest, targets).and_then(|()| {
                 let selected = driver.selected_inspection_view();
                 serde_json::to_string(&ViewsAnswer {
@@ -467,6 +490,102 @@ impl CsharpProductRuntime {
     }
 }
 
+impl CsharpProductRuntime {
+    /// Frames view `id` on a subject, captures it at the reference image's
+    /// size and writes capture, reference and optionally an onion-skin
+    /// blend of the two side by side in one PNG.
+    fn compare_view(
+        &self,
+        driver: &render_wgpu::SceneDriver,
+        id: &str,
+        framing: &str,
+        words: &[&str],
+        targets: Option<&str>,
+    ) -> Result<String, String> {
+        let (subject, rest): (&[&str], &[&str]) = match words {
+            ["target", _, rest @ ..] => (&words[..2], rest),
+            [_, rest @ ..] => (&words[..1], rest),
+            [] => return Err(VIEW_USAGE.to_owned()),
+        };
+        let [reference, options @ ..] = rest else {
+            return Err(VIEW_USAGE.to_owned());
+        };
+        let (mut path, mut onion, mut overlays) = (None, false, false);
+        for word in options {
+            match *word {
+                "onion" => onion = true,
+                "overlays" => overlays = true,
+                _ if path.is_none() => path = Some(*word),
+                _ => return Err(VIEW_USAGE.to_owned()),
+            }
+        }
+        let path = path.map_or_else(|| format!("compare-{id}.png"), str::to_owned);
+        let bytes = std::fs::read(reference).map_err(|error| format!("{reference}: {error}"))?;
+        let (width, height, reference_rgba) = render_wgpu::decode_png_rgba(&bytes)
+            .map_err(|error| format!("{reference}: {error}"))?;
+        let framed: Vec<&str> = ["frame", id, framing]
+            .into_iter()
+            .chain(subject.iter().copied())
+            .collect();
+        self.change_views(driver, &framed, targets)?;
+        let capture = driver
+            .capture_view(id, Some((width, height)), overlays)
+            .ok_or_else(|| format!("INSPECT_NO_VIEW: no inspection view {id}"))?;
+        if (capture.width, capture.height) != (width, height) {
+            return Err(format!(
+                "INSPECT_CAPTURE_SIZE: the view drew {}x{}, not the reference's {width}x{height}",
+                capture.width, capture.height
+            ));
+        }
+        let mut panels = vec![capture.rgba.as_slice(), reference_rgba.as_slice()];
+        let blend: Vec<u8>;
+        if onion {
+            blend = capture
+                .rgba
+                .iter()
+                .zip(&reference_rgba)
+                .map(|(&shot, &seen)| {
+                    (f32::from(shot) + (f32::from(seen) - f32::from(shot)) * ONION_REFERENCE)
+                        .round() as u8
+                })
+                .collect();
+            panels.push(&blend);
+        }
+        let composed = side_by_side(width as usize, height as usize, &panels);
+        let png = render_wgpu::encode_png(width * panels.len() as u32, height, &composed)?;
+        std::fs::write(&path, png).map_err(|error| format!("{path}: {error}"))?;
+        let view = capture
+            .view
+            .as_ref()
+            .expect("a view capture names its view");
+        serde_json::to_string(&CompareAnswer {
+            path,
+            reference: (*reference).to_owned(),
+            width: width * panels.len() as u32,
+            height,
+            panels: ["capture", "reference", "onion"][..panels.len()].to_vec(),
+            step: capture.step,
+            held: capture.held,
+            presentation_seconds: capture.presentation_seconds,
+            view: view_answer(view, driver.selected_inspection_view().as_deref()),
+            overlays: capture.overlays,
+        })
+        .map_err(|error| error.to_string())
+    }
+}
+
+/// Equal RGBA images `width` by `height`, left to right in one.
+fn side_by_side(width: usize, height: usize, panels: &[&[u8]]) -> Vec<u8> {
+    let row = width * 4;
+    let mut out = Vec::with_capacity(row * height * panels.len());
+    for y in 0..height {
+        for panel in panels {
+            out.extend_from_slice(&panel[y * row..(y + 1) * row]);
+        }
+    }
+    out
+}
+
 /// A point in the player camera's space, in the world: where the renderer
 /// places a viewmodel part there.
 fn in_camera_space(camera: &render_wgpu::PrimaryCamera, point: V3) -> V3 {
@@ -611,6 +730,16 @@ mod tests {
                 .all(|(a, b)| (a - b).abs() < 1e-9),
             "{placed:?}"
         );
+    }
+
+    #[test]
+    fn panels_lie_side_by_side_row_by_row() {
+        let (a, b) = ([1u8; 2 * 2 * 4], [2u8; 2 * 2 * 4]);
+        let composed = side_by_side(2, 2, &[&a, &b]);
+        assert_eq!(composed.len(), 4 * 2 * 4);
+        let row: Vec<u8> = [[1u8; 8], [2u8; 8]].concat();
+        assert_eq!(&composed[..16], row.as_slice());
+        assert_eq!(&composed[16..], row.as_slice());
     }
 
     #[test]

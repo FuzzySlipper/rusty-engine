@@ -19,6 +19,10 @@ test('pane actions are inspect commands with compact numbers', () => {
   assert.equal(inspectCommands.orbit('a', ...dragOrbit(10, -5)), 'engine.inspect.view orbit a 4 -2');
   assert.equal(inspectCommands.pan('a', ...dragPan(100, 0, 2)), 'engine.inspect.view pan a -0.4 0');
   assert.ok(wheelZoom(1) > 1 && wheelZoom(-1) < 1);
+  assert.equal(
+    inspectCommands.compare('a', 'side', 'target grip', 'refs/pistol-side.png'),
+    'engine.inspect.view compare a side target grip refs/pistol-side.png compare-a.png onion',
+  );
   assert.equal(captureUrl('a b', 640, 360), '/__rusty/product/runtime/frames/capture?view=a%20b&overlays=1&width=640&height=360');
 });
 

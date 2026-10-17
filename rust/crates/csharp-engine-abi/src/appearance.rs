@@ -1179,14 +1179,84 @@ pub struct NativeOverlayItem {
     pub text: NativeUtf8Slice,
 }
 
+/// How a landmark is found as drawn; `kind` says which values it reads.
+/// Joints are rig joints of `entity`'s animated mesh (`ReadJoints` order).
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeLandmarkKind {
+    /// `point` in `space` (with `entity` and `joint` as an overlay item
+    /// has them); `axis` (zero for none) and the pair's offset frame are the
+    /// space's frame turned by `rotation`.
+    At = 0,
+    /// `amount` of the way from joint `joint` to joint `joint_b`.
+    Between = 1,
+    /// Past joint `joint_b` along its own bone, `amount` of the length from
+    /// joint `joint` to it: a fingertip's pad.
+    Beyond = 2,
+    /// A palm's centre, `amount` of the way from the wrist `joint` to the
+    /// middle finger's base `joint_c` and `depth` metres out, with the
+    /// palm's normal across the index base `joint_b` and the pinky base
+    /// `joint_d` as its axis, turned for a `left` hand.
+    Palm = 3,
+}
+
+/// What a landmark pair's `from` axis is measured against.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeLandmarkAim {
+    None = 0,
+    /// The `to` landmark's axis.
+    Axis = 1,
+    /// The way from `from` to `to`.
+    Point = 2,
+    /// The way to the nearest point of the line through `to` along its
+    /// axis.
+    Line = 3,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLandmark {
+    pub kind: NativeLandmarkKind,
+    pub space: NativeOverlaySpace,
+    pub entity: u64,
+    pub joint: u32,
+    pub joint_b: u32,
+    pub joint_c: u32,
+    pub joint_d: u32,
+    pub point: NativeVec3,
+    pub rotation: NativeQuat,
+    pub axis: NativeVec3,
+    pub amount: f32,
+    pub depth: f32,
+    pub left: bool,
+}
+
+/// Two landmarks the renderer measures as drawn: their distance against
+/// `tolerance` metres (0 leaves it unjudged) and, with an `aim`, the angle
+/// of `from`'s axis against `angle_tolerance` degrees.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLandmarkPair {
+    pub name: NativeUtf8Slice,
+    pub from: NativeLandmark,
+    pub to: NativeLandmark,
+    pub tolerance: f32,
+    pub aim: NativeLandmarkAim,
+    pub angle_tolerance: f32,
+}
+
 /// Replaces the named overlay set: inspection drawing on the Debug layer,
-/// drawn only while inspection shows it. An empty set removes it.
+/// drawn only while inspection shows it, and landmark pairs the renderer
+/// measures as drawn. An empty set removes it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeOverlaySetRequest {
     pub name: NativeUtf8Slice,
     pub items: *const NativeOverlayItem,
     pub items_len: usize,
+    pub pairs: *const NativeLandmarkPair,
+    pub pairs_len: usize,
 }
 pub type NativePublishOverlaySet = unsafe extern "C" fn(
     *mut std::ffi::c_void,

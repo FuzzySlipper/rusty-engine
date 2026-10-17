@@ -34,6 +34,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const string GuideSet = "fixture.guide";
     private static readonly Color GuideColor = new(1, 0.2f, 1, 1);
     private static readonly Color HandColor = new(0.2f, 1, 1, 1);
+    /// <summary>The landmark pairs the fixture publishes: the hand on its reach circle, the index pad on the held tip, and the finger aimed at the circle.</summary>
+    private const string GripSet = "fixture.grip";
+    /// <summary>How far from the circle's centre the reaching hand may be: the circle's radius and a margin.</summary>
+    private const float ReachTolerance = CircleRadius + 0.05f;
+    /// <summary>How near the held tip the index pad must be; it is never there, so the pair draws red.</summary>
+    private const float TriggerTolerance = 0.02f;
+    private const float AimTolerance = 60f;
+    private static readonly Vector3 HeldTip = new(0, 0.8f, 0);
 
     private readonly IEngineContext engine;
     private readonly Camera camera;
@@ -44,6 +52,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly AnimationInstance instance;
     private readonly uint arm, forearm, hand;
     private readonly uint[] finger;
+    private readonly HandRig rightHand;
     private readonly uint joints;
     private float curl;
     private bool reaching = true;
@@ -83,6 +92,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         forearm = AnimationJoints.IndexOf(rig.Span, "RightForeArm");
         hand = AnimationJoints.IndexOf(rig.Span, "RightHand");
         finger = [.. Finger.Select(id => AnimationJoints.IndexOf(rig.Span, id))];
+        // The character's hand has a thumb and an index finger only, so it has no palm landmark.
+        rightHand = HandRig.FromJoints(rig.Span, BodyId, HandSide.Right, "RightHand",
+            ["RightHandThumb1", "RightHandThumb2"], Finger, [], [], []);
         engine.Animation.SetPose(AnimationPoseRequest.ReportOnly(instance));
         // Drawn only while inspection shows it: engine.inspect.overlay show.
         engine.Graphics.PublishOverlaySet(new(GuideSet, [
@@ -124,7 +136,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         ReadOnlySpan<JointPose> pose = drawn.Joints.Span;
         reports++;
         reportedSeconds = drawn.Seconds;
-        shoulder ??= pose[(int)arm].World.Translation;
+        if (shoulder is null)
+        {
+            shoulder = pose[(int)arm].World.Translation;
+            PublishGrip();
+        }
         Vector3 handAt = pose[(int)hand].World.Translation;
         Vector3 elbow = pose[(int)forearm].World.Translation;
         if (drawnTarget is Vector3 target && shoulder is Vector3 rest)
@@ -179,7 +195,28 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         far = enabled;
         previousElbow = null;
+        PublishGrip();
         return Inspect();
+    }
+
+    /// <summary>
+    /// The landmark pairs, measured by the Engine as drawn (<c>engine.inspect.landmarks fixture.grip</c>):
+    /// the wrist within reach of the circle's centre (outside it once <c>pose.far</c> moves the
+    /// circle), the index pad on the held model's tip, which it never reaches, and the index
+    /// finger's last bone aimed at the circle's centre.
+    /// </summary>
+    private void PublishGrip()
+    {
+        if (shoulder is not Vector3 rest)
+        {
+            return;
+        }
+        Landmark centre = Landmark.At(OverlayPlace.World, rest + (far ? FarOffset : CircleOffset));
+        engine.Graphics.PublishOverlaySet(new(GripSet, [], [
+            LandmarkPair.Distance("reach", rightHand.AtWrist(), centre, ReachTolerance),
+            LandmarkPair.Distance("trigger", rightHand.Pad(Digit.Index), Landmark.At(OverlayPlace.Model(HeldId), HeldTip), TriggerTolerance),
+            LandmarkPair.Facing("pointing", rightHand.Pad(Digit.Index), centre, LandmarkAim.Point, AimTolerance),
+        ]));
     }
 
     [DebugCommand("pose.reset")]
@@ -206,7 +243,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private IReadOnlyList<InspectionTarget> Targets() =>
     [
         new("right-hand", OverlayPlace.AtJoint(BodyId, hand), Vector3.Zero) { Radius = 0.15f, Framing = "underside" },
-        new("held-tip", OverlayPlace.Model(HeldId), new(0, 0.8f, 0)) { Radius = 0.08f, Framing = "side" },
+        new("held-tip", OverlayPlace.Model(HeldId), HeldTip) { Radius = 0.08f, Framing = "side" },
         new("view-centre", OverlayPlace.Camera, new(0, 0, -1)) { Radius = 0.2f },
     ];
     public void Start() { }

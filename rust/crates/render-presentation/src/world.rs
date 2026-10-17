@@ -487,7 +487,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetIndirectLight { indirect_light } if &self.retained.indirect_light == indirect_light)
                 || matches!(&op, RenderDiff::SetSkyLight { sky_light } if &self.retained.sky_light == sky_light)
                 || matches!(&op, RenderDiff::SetRendererSettings { settings } if self.retained.renderer_settings.as_ref() == Some(settings))
-                || matches!(&op, RenderDiff::SetOverlaySet { name, set } if self.retained.overlays.get(name).map_or(set.items.is_empty(), |current| current.as_ref() == set))
+                || matches!(&op, RenderDiff::SetOverlaySet { name, set } if self.retained.overlays.get(name).map_or(set.is_empty(), |current| current.as_ref() == set))
             {
                 continue;
             }
@@ -1636,7 +1636,7 @@ impl PresentationWorld {
                 self.retained.renderer_settings = Some(*settings);
             }
             RenderDiff::SetOverlaySet { name, set } => {
-                if set.items.is_empty() {
+                if set.is_empty() {
                     self.retained.overlays.remove(name);
                 } else {
                     self.retained

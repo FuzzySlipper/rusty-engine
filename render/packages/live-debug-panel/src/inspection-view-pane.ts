@@ -38,7 +38,11 @@ const STYLE = `
   font: inherit; color: inherit; background: transparent; cursor: pointer;
   border: 1px solid var(--_ri-border); border-radius: 0.3rem; padding: 0 0.35rem;
 }
-.rusty-inspection-view__bar select { background: var(--_ri-background); }
+.rusty-inspection-view__bar select, .rusty-inspection-view__bar input { background: var(--_ri-background); }
+.rusty-inspection-view__bar input {
+  font: inherit; color: inherit; min-width: 6rem; flex: 1;
+  border: 1px solid var(--_ri-border); border-radius: 0.3rem; padding: 0 0.35rem;
+}
 .rusty-inspection-view__bar button[aria-pressed=true] { border-color: var(--_ri-accent); color: var(--_ri-accent); }
 .rusty-inspection-view__surface { flex: 1; min-height: 4rem; cursor: grab; touch-action: none; outline: none; }
 .rusty-inspection-view__surface:active { cursor: grabbing; }
@@ -63,6 +67,13 @@ export interface InspectionViewOptions {
   readonly framings?: readonly string[];
   /** The subject framed first: `camera`, `target NAME` or a scene handle. */
   readonly subject?: string;
+  /**
+   * The reference image Compare starts with: a PNG path on the host,
+   * relative to its working directory. Compare writes the view framed as
+   * the pane last framed it beside the reference, with an onion-skin
+   * panel, to `compare-ID.png` there.
+   */
+  readonly reference?: string;
 }
 
 let panes = 0;
@@ -71,7 +82,8 @@ let panes = 0;
  * One inspection view in a DOM element: the Engine draws the view under the
  * pane's surface, and the pane sends commands. Dragging orbits about the
  * focus, Shift-drag pans, the wheel zooms; the bar frames the player's camera
- * or a product target, toggles overlays in the view and downloads a capture.
+ * or a product target, toggles overlays in the view, downloads a capture and
+ * compares the view to a reference image.
  * The surface takes pointer input while it is used and gives it back when the
  * pane closes; closing the pane closes its view. It holds no product state.
  */
@@ -87,6 +99,9 @@ export class InspectionViewPane {
   readonly #release: () => void;
   readonly #overlays: ViewOverlayToggle;
   readonly #overlayButton: HTMLButtonElement;
+  readonly #reference: HTMLInputElement;
+  /** The framing last sent, which Compare frames with again. */
+  #framing = 'side';
   #pending: Promise<unknown> = Promise.resolve();
   #drag: DragGesture | null = null;
   #distance = 1;
@@ -109,7 +124,7 @@ export class InspectionViewPane {
     this.#requested = this.#subject.value;
     bar.append(this.#make('strong', '', this.id), this.#subject);
     for (const framing of options.framings ?? ['front', 'side', 'underside', 'close']) {
-      bar.append(this.#button(framing, () => this.#run(inspectCommands.frame(this.id, framing, this.#subject.value))));
+      bar.append(this.#button(framing, () => this.#frame(framing)));
     }
     // Shows every overlay set in this pane's view only.
     this.#overlays = new ViewOverlayToggle(this.id, (command) => this.#run(command, false));
@@ -118,7 +133,17 @@ export class InspectionViewPane {
       this.#showOverlayState();
     });
     this.#overlayButton.setAttribute('aria-pressed', 'false');
-    bar.append(this.#overlayButton, this.#button('Capture', () => this.#capture()));
+    this.#reference = this.#make('input', '') as HTMLInputElement;
+    this.#reference.type = 'text';
+    this.#reference.placeholder = 'reference.png';
+    this.#reference.value = options.reference ?? '';
+    this.#reference.setAttribute('aria-label', 'Reference image');
+    bar.append(
+      this.#overlayButton,
+      this.#button('Capture', () => this.#capture()),
+      this.#reference,
+      this.#button('Compare', () => this.#compare()),
+    );
     this.#surface = this.#make('div', 'rusty-inspection-view__surface');
     this.#surface.tabIndex = 0;
     this.#surface.setAttribute('aria-label', `Inspection view ${this.id}`);
@@ -142,8 +167,7 @@ export class InspectionViewPane {
       if (missing) chosen = 'camera';
       else if (!listed.some((subject) => subject.value === chosen)) this.#subject.append(this.#option(chosen, chosen));
       this.#subject.value = chosen;
-      const framing = listed.find((subject) => subject.value === chosen)?.framing ?? 'side';
-      await this.#run(inspectCommands.frame(this.id, framing, chosen));
+      await this.#frame(listed.find((subject) => subject.value === chosen)?.framing ?? 'side');
       await this.#overlays.sync();
       this.#showOverlayState();
       if (missing) this.#report(`No ${this.#requested}: framing the player camera.`, false);
@@ -234,6 +258,20 @@ export class InspectionViewPane {
     void this.#run(command, false).catch(() => undefined);
   }
 
+  #frame(framing: string): Promise<string> {
+    this.#framing = framing;
+    return this.#run(inspectCommands.frame(this.id, framing, this.#subject.value));
+  }
+
+  async #compare(): Promise<string> {
+    const reference = this.#reference.value.trim();
+    if (!reference) throw new Error('Name a reference image to compare with.');
+    const answer = JSON.parse(
+      await this.#run(inspectCommands.compare(this.id, this.#framing, this.#subject.value, reference), false),
+    ) as { path?: string; width?: number; height?: number };
+    return `Compared ${this.id}: wrote ${answer.path} (${answer.width}×${answer.height}).`;
+  }
+
   async #capture(): Promise<string> {
     const rect = this.#surface.getBoundingClientRect();
     const ratio = this.#document.defaultView?.devicePixelRatio ?? 1;
@@ -281,7 +319,7 @@ export class InspectionViewPane {
     button.addEventListener('click', () => {
       void run().then(
         (message) => {
-          if (typeof message === 'string' && message.startsWith('Captured')) this.#report(message, false);
+          if (typeof message === 'string' && /^(Captured|Compared)/.test(message)) this.#report(message, false);
         },
         (error: unknown) => this.#report(error, true),
       );

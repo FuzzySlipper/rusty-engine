@@ -10600,6 +10600,55 @@ pub(crate) unsafe extern "C" fn publish_appearance_changes(
     })
 }
 
+fn overlay_space(space: NativeOverlaySpace, entity: u64, joint: u32) -> OverlaySpace {
+    match space {
+        NativeOverlaySpace::World => OverlaySpace::World,
+        NativeOverlaySpace::Model => OverlaySpace::Model { entity },
+        NativeOverlaySpace::Joint => OverlaySpace::Joint { entity, joint },
+        NativeOverlaySpace::Camera => OverlaySpace::Camera,
+    }
+}
+
+fn landmark(row: &NativeLandmark) -> Landmark {
+    let vec = |value: NativeVec3| [value.x, value.y, value.z];
+    let entity = row.entity;
+    match row.kind {
+        NativeLandmarkKind::At => Landmark::At {
+            space: overlay_space(row.space, entity, row.joint),
+            point: vec(row.point),
+            rotation: [
+                row.rotation.x,
+                row.rotation.y,
+                row.rotation.z,
+                row.rotation.w,
+            ],
+            axis: vec(row.axis),
+        },
+        NativeLandmarkKind::Between => Landmark::Between {
+            entity,
+            from: row.joint,
+            to: row.joint_b,
+            amount: row.amount,
+        },
+        NativeLandmarkKind::Beyond => Landmark::Beyond {
+            entity,
+            previous: row.joint,
+            last: row.joint_b,
+            amount: row.amount,
+        },
+        NativeLandmarkKind::Palm => Landmark::Palm {
+            entity,
+            wrist: row.joint,
+            index: row.joint_b,
+            middle: row.joint_c,
+            pinky: row.joint_d,
+            along: row.amount,
+            depth: row.depth,
+            left: row.left,
+        },
+    }
+}
+
 pub(crate) unsafe extern "C" fn publish_overlay_set(
     context: *mut c_void,
     request: *const NativeOverlaySetRequest,
@@ -10667,20 +10716,34 @@ pub(crate) unsafe extern "C" fn publish_overlay_set(
                             .to_owned(),
                         },
                     };
-                    let space = match row.space {
-                        NativeOverlaySpace::World => OverlaySpace::World,
-                        NativeOverlaySpace::Model => OverlaySpace::Model { entity: row.entity },
-                        NativeOverlaySpace::Joint => OverlaySpace::Joint {
-                            entity: row.entity,
-                            joint: row.joint,
-                        },
-                        NativeOverlaySpace::Camera => OverlaySpace::Camera,
-                    };
                     Ok(OverlayItem {
                         shape,
-                        space,
+                        space: overlay_space(row.space, row.entity, row.joint),
                         color: [row.color.r, row.color.g, row.color.b, row.color.a],
                         on_top: row.on_top,
+                    })
+                })
+                .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
+            let rows =
+                unsafe { borrowed_slice(request.pairs, request.pairs_len, "landmark pairs") }?;
+            let pairs = rows
+                .iter()
+                .map(|row| {
+                    Ok(LandmarkPair {
+                        name: unsafe {
+                            borrowed_utf8(row.name.bytes, row.name.len, "landmark pair name")
+                        }?
+                        .to_owned(),
+                        from: landmark(&row.from),
+                        to: landmark(&row.to),
+                        tolerance: row.tolerance,
+                        aim: match row.aim {
+                            NativeLandmarkAim::None => LandmarkAim::None,
+                            NativeLandmarkAim::Axis => LandmarkAim::Axis,
+                            NativeLandmarkAim::Point => LandmarkAim::Point,
+                            NativeLandmarkAim::Line => LandmarkAim::Line,
+                        },
+                        angle_tolerance: row.angle_tolerance,
                     })
                 })
                 .collect::<Result<Vec<_>, CsharpEngineServicesError>>()?;
@@ -10689,7 +10752,7 @@ pub(crate) unsafe extern "C" fn publish_overlay_set(
                 staged,
                 render_model::RenderFrameDiff::from_ops(vec![RenderDiff::SetOverlaySet {
                     name: name.to_owned(),
-                    set: OverlaySetDescriptor { items },
+                    set: OverlaySetDescriptor { items, pairs },
                 }]),
             );
             Ok::<(), CsharpEngineServicesError>(())
@@ -10870,10 +10933,48 @@ pub(super) mod tests {
                 text(""),
             ),
         ];
+        let landmark = |kind| NativeLandmark {
+            kind,
+            space: NativeOverlaySpace::Model,
+            entity: 9,
+            joint: 1,
+            joint_b: 2,
+            joint_c: 3,
+            joint_d: 4,
+            point: NativeVec3 {
+                x: 0.0,
+                y: 0.5,
+                z: 0.0,
+            },
+            rotation: NativeQuat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            axis: NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            amount: 0.5,
+            depth: 0.01,
+            left: true,
+        };
+        let pairs = [NativeLandmarkPair {
+            name: text("palm"),
+            from: landmark(NativeLandmarkKind::Palm),
+            to: landmark(NativeLandmarkKind::At),
+            tolerance: 0.02,
+            aim: NativeLandmarkAim::Line,
+            angle_tolerance: 15.0,
+        }];
         let request = NativeOverlaySetRequest {
             name: text("guide"),
             items: items.as_ptr(),
             items_len: items.len(),
+            pairs: pairs.as_ptr(),
+            pairs_len: pairs.len(),
         };
         let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
         let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
@@ -10918,6 +11019,31 @@ pub(super) mod tests {
             }
         ));
         assert!(set.items.iter().all(|item| item.on_top));
+        assert_eq!(
+            set.pairs,
+            [LandmarkPair {
+                name: "palm".to_owned(),
+                from: Landmark::Palm {
+                    entity: 9,
+                    wrist: 1,
+                    index: 2,
+                    middle: 3,
+                    pinky: 4,
+                    along: 0.5,
+                    depth: 0.01,
+                    left: true,
+                },
+                to: Landmark::At {
+                    space: OverlaySpace::Model { entity: 9 },
+                    point: [0.0, 0.5, 0.0],
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    axis: [1.0, 0.0, 0.0],
+                },
+                tolerance: 0.02,
+                aim: LandmarkAim::Line,
+                angle_tolerance: 15.0,
+            }]
+        );
         bridge.end_call();
     }
 

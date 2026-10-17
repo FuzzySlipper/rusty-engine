@@ -1147,6 +1147,8 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/inspectio
         readonly orbit: (id: string, yaw: number, pitch: number) => string;
         readonly pan: (id: string, right: number, up: number) => string;
         readonly zoom: (id: string, factor: number) => string;
+        /** Frames the view and writes it beside a reference image, with an onion-skin panel. */
+        readonly compare: (id: string, framing: string, subject: string, reference: string) => string;
         readonly targets: () => string;
         readonly showSetsIn: (id: string) => string;
         readonly hideSetsIn: (id: string) => string;
@@ -1224,12 +1226,20 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/inspectio
         readonly framings?: readonly string[];
         /** The subject framed first: `camera`, `target NAME` or a scene handle. */
         readonly subject?: string;
+        /**
+         * The reference image Compare starts with: a PNG path on the host,
+         * relative to its working directory. Compare writes the view framed as
+         * the pane last framed it beside the reference, with an onion-skin
+         * panel, to `compare-ID.png` there.
+         */
+        readonly reference?: string;
     }
     /**
      * One inspection view in a DOM element: the Engine draws the view under the
      * pane's surface, and the pane sends commands. Dragging orbits about the
      * focus, Shift-drag pans, the wheel zooms; the bar frames the player's camera
-     * or a product target, toggles overlays in the view and downloads a capture.
+     * or a product target, toggles overlays in the view, downloads a capture and
+     * compares the view to a reference image.
      * The surface takes pointer input while it is used and gives it back when the
      * pane closes; closing the pane closes its view. It holds no product state.
      */
@@ -1466,6 +1476,11 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/developer
         readonly side?: 'left' | 'right';
         /** Passed to the Engine panels; their same-origin transport when omitted. */
         readonly transport?: LiveDebugTransport;
+        /**
+         * Called after an open shell closes, however it closed: its own Close
+         * button, `close`, `toggle` or `dispose`.
+         */
+        readonly onClose?: () => void;
     }
     /** A mounted developer shell. The product binds its key to `toggle`. */
     export interface DeveloperShellMount {

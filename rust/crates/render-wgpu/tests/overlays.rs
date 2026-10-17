@@ -1,13 +1,15 @@
 //! Overlay sets and the Debug layer (#10022): nothing draws, and nothing is
 //! resolved, while inspection shows nothing; shown sets draw their lines in
 //! the item's space, follow the node they are placed on, and the Debug
-//! layer's parts draw only while it is shown.
+//! layer's parts draw only while it is shown. Landmark pairs (#10036)
+//! measure across spaces as drawn and draw green within tolerance, red
+//! outside.
 
 mod common;
 
 use common::*;
 use render_model::*;
-use render_wgpu::{OverlayShown, RendererOptions};
+use render_wgpu::{LandmarkDrawn, OverlayShown, RendererOptions};
 
 const MARKED: u64 = 77;
 const MAGENTA: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
@@ -71,6 +73,7 @@ fn guide() -> RenderDiff {
                     on_top: true,
                 },
             ],
+            pairs: Vec::new(),
         },
     }
 }
@@ -200,6 +203,7 @@ fn a_camera_space_label_stays_on_its_marker_in_every_view() {
                     on_top: true,
                 },
             ],
+            pairs: Vec::new(),
         },
     }]);
     harness
@@ -223,4 +227,162 @@ fn a_camera_space_label_stays_on_its_marker_in_every_view() {
     let observer = camera("observer", [0.5, 0.6, 1.0], 0.0, -6.0);
     harness.renderer.set_observer(Some(observer.pose));
     aligned(&harness.composition(0.0).1, "the observer");
+}
+
+fn at(space: OverlaySpace, point: [f32; 3], axis: [f32; 3]) -> Landmark {
+    Landmark::At {
+        space,
+        point,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        axis,
+    }
+}
+
+fn pair(name: &str, from: Landmark, to: Landmark, tolerance: f32) -> LandmarkPair {
+    LandmarkPair {
+        name: name.to_owned(),
+        from,
+        to,
+        tolerance,
+        aim: LandmarkAim::None,
+        angle_tolerance: 0.0,
+    }
+}
+
+fn aimed(mut pair: LandmarkPair, aim: LandmarkAim, angle_tolerance: f32) -> LandmarkPair {
+    pair.aim = aim;
+    pair.angle_tolerance = angle_tolerance;
+    pair
+}
+
+fn close(a: [f32; 3], b: [f32; 3]) -> bool {
+    a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-3)
+}
+
+#[test]
+fn landmark_pairs_measure_across_spaces_and_draw_by_tolerance() {
+    let mut harness = harness();
+    // The blue box a metre right of the world landmarks, turned a quarter
+    // about y: its +x frame axis is the world's -z.
+    harness.apply(vec![RenderDiff::Update {
+        handle: RenderHandle::new(12),
+        transform: Some(transform([1.0, 0.0, -4.0], 90.0, 1.0)),
+        material: None,
+        visible: None,
+        metadata: None,
+    }]);
+    let boxed = OverlaySpace::Model { entity: MARKED };
+    // Where the player's camera (0, 0.6, 1), pitched 6 degrees down, sees a
+    // metre ahead.
+    let pitch = (-6.0f32).to_radians();
+    let seen = [0.0, 0.6 + pitch.sin(), 1.0 - pitch.cos()];
+    harness.apply(vec![RenderDiff::SetOverlaySet {
+        name: "grip".to_owned(),
+        set: OverlaySetDescriptor {
+            items: Vec::new(),
+            pairs: vec![
+                pair(
+                    "near",
+                    at(OverlaySpace::World, [0.98, 0.0, -4.0], [0.0; 3]),
+                    at(boxed, [0.0; 3], [0.0; 3]),
+                    0.05,
+                ),
+                pair(
+                    "far",
+                    at(OverlaySpace::World, [0.0, 0.0, -4.0], [0.0; 3]),
+                    at(boxed, [0.0; 3], [0.0; 3]),
+                    0.05,
+                ),
+                aimed(
+                    pair(
+                        "facing",
+                        at(OverlaySpace::World, [0.0, 1.0, -4.0], [1.0, 0.0, 0.0]),
+                        at(boxed, [0.0; 3], [0.0, 1.0, 0.0]),
+                        0.0,
+                    ),
+                    LandmarkAim::Line,
+                    10.0,
+                ),
+                aimed(
+                    pair(
+                        "across",
+                        at(OverlaySpace::World, [0.0, 1.0, -4.0], [0.0, 0.0, -1.0]),
+                        at(boxed, [0.0; 3], [1.0, 0.0, 0.0]),
+                        0.0,
+                    ),
+                    LandmarkAim::Axis,
+                    10.0,
+                ),
+                pair(
+                    "seen",
+                    at(OverlaySpace::Camera, [0.0, 0.0, -1.0], [0.0; 3]),
+                    at(OverlaySpace::World, seen, [0.0; 3]),
+                    0.001,
+                ),
+                pair(
+                    "nothing",
+                    at(OverlaySpace::Model { entity: 404 }, [0.0; 3], [0.0; 3]),
+                    at(boxed, [0.0; 3], [0.0; 3]),
+                    0.05,
+                ),
+            ],
+        },
+    }]);
+    // Landmarks are measured where the last frame drew them.
+    harness.composition(0.0);
+    let [set] = harness
+        .renderer
+        .landmark_sets(0.0, (WIDTH, HEIGHT))
+        .try_into()
+        .unwrap();
+    assert_eq!((set.name.as_str(), set.shown), ("grip", false));
+    let drawn = |name: &str| -> Option<LandmarkDrawn> {
+        set.pairs
+            .iter()
+            .find(|pair| pair.name == name)
+            .unwrap()
+            .drawn
+    };
+    let near = drawn("near").unwrap();
+    assert!(
+        (near.distance - 0.02).abs() < 1e-4 && near.within,
+        "{near:?}"
+    );
+    // The turned box's +z is world +x, so 2 cm toward world -x is 2 cm
+    // ahead along its -z.
+    assert!(close(near.offset, [0.0, 0.0, -0.02]), "{near:?}");
+    let far = drawn("far").unwrap();
+    assert!((far.distance - 1.0).abs() < 1e-4 && !far.within, "{far:?}");
+    assert_eq!(far.angle, None);
+    // Facing the box's vertical line: straight at it, though 1 m above it.
+    let facing = drawn("facing").unwrap();
+    assert!(facing.angle.unwrap() < 0.1 && facing.within, "{facing:?}");
+    // World -z against the box's turned +x, which is world -z.
+    let across = drawn("across").unwrap();
+    assert!(across.angle.unwrap() < 0.1 && across.within, "{across:?}");
+    let seen_pair = drawn("seen").unwrap();
+    assert!(
+        seen_pair.within,
+        "camera space reaches the world: {seen_pair:?}"
+    );
+    assert!(close(seen_pair.from, seen), "{seen_pair:?}");
+    assert_eq!(drawn("nothing"), None, "a landmark on nothing drawn");
+
+    let (stats, _) = harness.composition(0.0);
+    assert_eq!(stats.overlay_lines, 0, "a hidden set draws no pairs");
+    harness
+        .renderer
+        .set_overlay_shown(shown(|shown| shown.all_sets = true));
+    let (stats, rgba) = harness.composition(0.0);
+    // Five drawn pairs: a segment and a cross each, and the two aims.
+    assert_eq!(stats.overlay_lines, 5 * 4 + 2);
+    assert!(
+        find(&rgba, [0.0, 1.0, 0.0, 1.0]).1 > 20,
+        "pairs within draw green"
+    );
+    assert!(
+        find(&rgba, [1.0, 0.0, 0.0, 1.0]).1 > 20,
+        "a pair outside draws red"
+    );
+    assert!(harness.renderer.landmark_sets(0.0, (WIDTH, HEIGHT))[0].shown);
 }

@@ -7,7 +7,8 @@ const STYLE_ID = 'rusty-developer-shell-style';
 
 /**
  * The shell's look, overridable by the product: set the `--rusty-shell-*`
- * custom properties on `.rusty-developer-shell` or an ancestor; the panels
+ * custom properties (colours, width, font, and the docked view and tunables
+ * panels' heights) on `.rusty-developer-shell` or an ancestor; the panels
  * keep their own `--rusty-*` properties.
  */
 const STYLE = `
@@ -18,6 +19,8 @@ const STYLE = `
   --_rs-accent: var(--rusty-shell-accent, #7fb2ff);
   --_rs-width: var(--rusty-shell-width, 26rem);
   --_rs-font: var(--rusty-shell-font, 0.85rem/1.4 system-ui, sans-serif);
+  --_rs-view-height: var(--rusty-shell-view-height, 16rem);
+  --_rs-tunables-height: var(--rusty-shell-tunables-height, auto);
   position: absolute; top: 0; bottom: 0; width: var(--_rs-width); max-width: 100%;
   display: flex; flex-direction: column; box-sizing: border-box; gap: 0.4rem; padding: 0.4rem;
   color: var(--_rs-foreground); font: var(--_rs-font); overflow: hidden; z-index: 10;
@@ -40,8 +43,10 @@ const STYLE = `
 .rusty-developer-shell__panel { min-height: 0; display: flex; flex-direction: column; }
 .rusty-developer-shell__panel[hidden] { display: none; }
 .rusty-developer-shell[data-presentation=tabs] .rusty-developer-shell__panel { flex: 1; }
-.rusty-developer-shell__panel--view { height: 16rem; flex: none; }
-.rusty-developer-shell[data-presentation=tabs] .rusty-developer-shell__panel--view { height: auto; }
+.rusty-developer-shell__panel--view { height: var(--_rs-view-height); flex: none; }
+.rusty-developer-shell__panel--tunables { height: var(--_rs-tunables-height); }
+.rusty-developer-shell[data-presentation=tabs] .rusty-developer-shell__panel--view,
+.rusty-developer-shell[data-presentation=tabs] .rusty-developer-shell__panel--tunables { height: auto; }
 `;
 
 /** Something a panel mount gives back. */
@@ -72,6 +77,11 @@ export interface DeveloperShellOptions {
   readonly side?: 'left' | 'right';
   /** Passed to the Engine panels; their same-origin transport when omitted. */
   readonly transport?: LiveDebugTransport;
+  /**
+   * Called after an open shell closes, however it closed: its own Close
+   * button, `close`, `toggle` or `dispose`.
+   */
+  readonly onClose?: () => void;
 }
 
 /** A mounted developer shell. The product binds its key to `toggle`. */
@@ -186,9 +196,11 @@ export class DeveloperShell implements DeveloperShellMount {
 
   close(): void {
     const element = this.#element;
+    if (!element) return;
     this.#element = null;
     for (const mounted of this.#mounted.splice(0)) mounted.dispose();
-    element?.remove();
+    element.remove();
+    this.#options.onClose?.();
   }
 
   async toggle(): Promise<void> {
