@@ -293,6 +293,10 @@ pub(crate) struct Overlays {
     /// The frame's labels, by reserved handle offset, for aiming them per
     /// view.
     labels: Vec<LabelRecord>,
+    /// The primary camera the last drawn frame resolved overlays for: what
+    /// landmark readouts place viewmodel and camera-space points by, so
+    /// they read what was drawn without sampling camera motion again.
+    drawn_camera: Option<CameraPose>,
 }
 
 /// Where one overlay label is, in its pass's coordinates.
@@ -321,6 +325,7 @@ impl Overlays {
             shader: None,
             pipelines: Vec::new(),
             labels: Vec::new(),
+            drawn_camera: None,
         }
     }
 
@@ -650,6 +655,7 @@ impl Renderer {
     /// Resolves the frame's overlay lines for `camera` and uploads them;
     /// clears them when nothing is shown.
     pub(crate) fn resolve_overlays(&mut self, camera: Option<OverlayCamera>) {
+        self.overlays.drawn_camera = camera.map(|camera| camera.pose);
         let mut vertices = std::mem::take(&mut self.overlays.vertices);
         vertices.clear();
         self.overlays.ranges = Default::default();
@@ -905,14 +911,10 @@ impl Renderer {
         ))
     }
 
-    /// Every set's landmark pairs measured as drawn, in the world: a
-    /// viewmodel's placed by the primary camera at `time_seconds` for a
-    /// surface of `size`.
-    pub fn landmark_sets(
-        &mut self,
-        time_seconds: f64,
-        size: (u32, u32),
-    ) -> Vec<LandmarkSetReadout> {
+    /// Every set's landmark pairs measured as the last frame drew them, in
+    /// the world: a viewmodel's placed by the primary camera that frame drew
+    /// with (none before a frame, when only world-to-world pairs place).
+    pub fn landmark_sets(&self) -> Vec<LandmarkSetReadout> {
         if self
             .overlays
             .sets
@@ -921,9 +923,7 @@ impl Renderer {
         {
             return Vec::new();
         }
-        let primary = self
-            .primary_overlay_camera(time_seconds, size)
-            .map(|camera| camera.pose);
+        let primary = self.overlays.drawn_camera;
         let entities = self.entity_handles();
         let to_world = |placed: Placed| placed.in_layer(ViewLayer::World, primary);
         self.overlays

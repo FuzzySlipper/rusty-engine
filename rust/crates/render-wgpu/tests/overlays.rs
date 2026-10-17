@@ -8,6 +8,7 @@
 mod common;
 
 use common::*;
+use render_host_contracts::{RendererCameraInterpolation, RendererCameraMotion};
 use render_model::*;
 use render_wgpu::{LandmarkDrawn, OverlayShown, RendererOptions};
 
@@ -330,11 +331,7 @@ fn landmark_pairs_measure_across_spaces_and_draw_by_tolerance() {
     }]);
     // Landmarks are measured where the last frame drew them.
     harness.composition(0.0);
-    let [set] = harness
-        .renderer
-        .landmark_sets(0.0, (WIDTH, HEIGHT))
-        .try_into()
-        .unwrap();
+    let [set] = harness.renderer.landmark_sets().try_into().unwrap();
     assert_eq!((set.name.as_str(), set.shown), ("grip", false));
     let drawn = |name: &str| -> Option<LandmarkDrawn> {
         set.pairs
@@ -384,5 +381,72 @@ fn landmark_pairs_measure_across_spaces_and_draw_by_tolerance() {
         find(&rgba, [1.0, 0.0, 0.0, 1.0]).1 > 20,
         "a pair outside draws red"
     );
-    assert!(harness.renderer.landmark_sets(0.0, (WIDTH, HEIGHT))[0].shown);
+    assert!(harness.renderer.landmark_sets()[0].shown);
+}
+
+#[test]
+fn a_landmark_readout_places_camera_points_by_the_camera_the_last_frame_drew_with() {
+    let mut harness = harness();
+    // The camera moves from x 0 to x 1 between two samples a tenth of a
+    // second apart, presented 0.1 s late.
+    let sample = |id: &str, x: f64, time: f64| {
+        let mut moving = camera("moving", [x, 0.6, 1.0], 0.0, -6.0);
+        moving.motion = Some(RendererCameraMotion {
+            sample_id: id.to_owned(),
+            sample_time_seconds: time,
+            delay_seconds: 0.1,
+            interpolation: RendererCameraInterpolation::Pose,
+            cut: false,
+        });
+        composition(
+            vec![moving],
+            vec![primary_view(
+                "main",
+                "moving",
+                viewport(0.0, 0.0, 1.0, 1.0),
+                0,
+            )],
+        )
+    };
+    harness
+        .renderer
+        .set_view_composition(&sample("1", 0.0, 0.0), 0.0);
+    harness
+        .renderer
+        .set_view_composition(&sample("2", 1.0, 0.1), 0.1);
+    // A metre ahead of the camera halfway along, where it is at 0.15.
+    let pitch = (-6.0f32).to_radians();
+    let seen = |x: f32| [x, 0.6 + pitch.sin(), 1.0 - pitch.cos()];
+    harness.apply(vec![RenderDiff::SetOverlaySet {
+        name: "held".to_owned(),
+        set: OverlaySetDescriptor {
+            items: Vec::new(),
+            pairs: vec![pair(
+                "ahead",
+                at(OverlaySpace::Camera, [0.0, 0.0, -1.0], [0.0; 3]),
+                at(OverlaySpace::World, seen(0.5), [0.0; 3]),
+                0.01,
+            )],
+        },
+    }]);
+    let ahead = |harness: &Harness| harness.renderer.landmark_sets()[0].pairs[0].drawn.unwrap();
+    harness.composition(0.15);
+    let drawn = ahead(&harness);
+    assert!(
+        drawn.within && drawn.distance < 1e-3,
+        "drawn halfway: {drawn:?}"
+    );
+    assert!(close(drawn.from, seen(0.5)), "{drawn:?}");
+    // Read again later without drawing: the camera motion has moved on, but
+    // the readout is still the frame that was drawn.
+    assert_eq!(ahead(&harness), drawn);
+    // The next frame draws the camera at its last sample, and the readout
+    // follows it.
+    harness.composition(0.4);
+    let moved = ahead(&harness);
+    assert!(close(moved.from, seen(1.0)), "{moved:?}");
+    assert!(
+        !moved.within && (moved.distance - 0.5).abs() < 1e-3,
+        "{moved:?}"
+    );
 }

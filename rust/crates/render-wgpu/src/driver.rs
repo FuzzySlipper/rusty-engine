@@ -392,16 +392,11 @@ impl SceneDriver {
         Some((point.to_array(), frame.to_array()))
     }
 
-    /// Every overlay set's landmark pairs, measured as drawn now, with the
-    /// simulation step the scene shows.
+    /// Every overlay set's landmark pairs as the last frame drew them, with
+    /// the simulation step the scene shows.
     pub fn landmark_sets(&self) -> (u64, Vec<crate::LandmarkSetReadout>) {
-        let now = self.now();
-        let mut scene = self.scene();
-        let size = scene
-            .renderer
-            .surface_size()
-            .unwrap_or(DEFAULT_CAPTURE_SIZE);
-        (scene.step, scene.renderer.landmark_sets(now, size))
+        let scene = self.scene();
+        (scene.step, scene.renderer.landmark_sets())
     }
 
     /// Draws one inspection view once into a target of its own, as
