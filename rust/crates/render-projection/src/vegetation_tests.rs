@@ -638,6 +638,45 @@ fn a_settle_with_nothing_changed_chooses_nothing_again() {
 }
 
 #[test]
+fn a_field_whose_step_passes_its_margin_drains_its_requests_and_keeps_its_fringe() {
+    // A step of 1 m against a 5 m reach: a tile 5.75 m away is asked for
+    // (within reach and step) and must be kept once it arrives.
+    let mut fields = VegetationFields::default();
+    fields.create(FIELD, layout(), 1_000).unwrap();
+    let mut short = grass();
+    (short.reach, short.fade) = (5.0, 1.0);
+    fields.set_layer(FIELD, GRASS, short).unwrap();
+    let focus = [10.25, 2.0, 8.0];
+    let fringe = (1, 0);
+    walk_to(&mut fields, focus);
+    assert!(fields.requests(FIELD, 0).is_empty());
+    let readout = fields.readout(FIELD).unwrap();
+    assert_eq!(readout.pending_tiles, 0);
+    let retained = &fields.fields[&FIELD];
+    assert!((retained.flat_distance(focus, fringe) - 5.75).abs() < 1e-9);
+    assert!(retained.tiles[&fringe].content.is_some());
+    // Still: every settle is skipped.
+    for _ in 0..3 {
+        assert!(fields
+            .settle(FIELD, [0.0; 3], Some(focus))
+            .unwrap()
+            .is_empty());
+    }
+    let still = fields.readout(FIELD).unwrap();
+    assert_eq!(still.settles_skipped, readout.settles_skipped + 3);
+    assert_eq!(still.settles_reselected, readout.settles_reselected);
+    // Within a step toward it, the fringe tile's content is still there.
+    let nearer = [11.15, 2.0, 8.0];
+    fields.settle(FIELD, [0.0; 3], Some(nearer)).unwrap();
+    let moved = fields.readout(FIELD).unwrap();
+    assert_eq!(moved.settles_skipped, still.settles_skipped + 1);
+    let retained = &fields.fields[&FIELD];
+    assert!(retained.flat_distance(nearer, fringe) <= 5.0);
+    assert!(retained.tiles[&fringe].content.is_some());
+    assert!(fields.requests(FIELD, 0).is_empty());
+}
+
+#[test]
 fn a_field_walked_in_small_steps_holds_what_a_field_settled_there_holds() {
     // Walked across 30 m in half-step moves, the field holds every tile
     // layer a fresh field settled at the end holds, and nothing past the

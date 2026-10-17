@@ -42,7 +42,8 @@ use crate::voxel_scatter::{about_y, copy_at, lean, multiply};
 use crate::{HandleAllocationError, RenderHandleNamespace, StableHandleRegistry};
 
 /// A tile is kept, and a layer's patch on it, until it is this many times
-/// the reach away, so a focus on the boundary does not rebuild it.
+/// the reach (widened by a selection step) away, so a focus on the
+/// boundary does not rebuild it.
 pub const VEGETATION_HYSTERESIS: f64 = 1.1;
 
 /// A settle chooses again only once the focus has moved this share of a
@@ -727,13 +728,16 @@ impl VegetationFields {
         retained.changed = false;
         retained.chosen_at = Some(focus);
 
-        // Residency: the tiles within the farthest reach, kept a little past it.
+        // Residency: the tiles within the farthest reach widened by a step,
+        // kept a little past it.
         let reach = retained.reach();
         let leaving: Vec<(i64, i64)> = retained
             .tiles
             .keys()
             .copied()
-            .filter(|&key| retained.flat_distance(focus, key) > reach * VEGETATION_HYSTERESIS)
+            .filter(|&key| {
+                retained.flat_distance(focus, key) > (reach + step) * VEGETATION_HYSTERESIS
+            })
             .collect();
         for key in leaving {
             let tile = retained.tiles.remove(&key).expect("listed above");

@@ -36,8 +36,9 @@ world metres, and a tile's first vertex stands at a multiple of `TileSize`.
 `VegetationFocus.Following(camera)` centres the tiles on where that camera
 stands, measured as each call finishes; `VegetationFocus.At(x, y, z)` on a
 world point, which `SetFocus` moves. A tile is wanted while its nearest point
-lies within the farthest layer's reach of the focus, horizontally, and kept to
-1.1 times that, so a focus wavering on the edge samples nothing twice.
+lies within the farthest layer's reach of the focus, horizontally, widened by
+a sixteenth of a tile (see "Choosing again" below), and kept to 1.1 times that,
+so a focus wavering on the edge samples nothing twice.
 
 A product may make several fields. One lattice rarely suits every distance:
 a fine one near the walking ground and a coarse one matching a distant
