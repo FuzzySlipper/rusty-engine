@@ -104,6 +104,12 @@ Keep implementation topology in developer documentation. Do not add static
 not establish that gameplay is running. Show actionable failures and requested
 diagnostics through the Engine's diagnostics and UI surfaces.
 
+Drag UI with pointer events (`pointerdown`, `setPointerCapture`,
+`pointermove`), which behave the same in a browser, the stream and the desktop
+window. Native HTML5 drag and drop works in the desktop window only inside the
+window and carries only files, `text/plain`, `text/html` and `text/uri-list`
+data; see [native drag and drop](desktop-shell.md#shape).
+
 ## C# baseline
 
 - Enable nullable reference types and use file-scoped namespaces.

@@ -4,8 +4,9 @@
 use std::sync::Arc;
 
 use render_wgpu::web::{
-    CursorShape, EventModifiers, KeyEvent, KeyEventKind, MouseAction, MouseButton, MouseEvent,
-    NavigationEvent, WebOverlay, WebOverlayStats, WebRuntime, WebRuntimeConfig,
+    CursorShape, DragEventKind, DragInput, DragOperations, DragPayload, EventModifiers, KeyEvent,
+    KeyEventKind, MouseAction, MouseButton, MouseEvent, NavigationEvent, WebOverlay,
+    WebOverlayStats, WebRuntime, WebRuntimeConfig,
 };
 use render_wgpu::Gpu;
 use winit::{
@@ -24,6 +25,8 @@ const LOCK_REQUEST: &str = "rusty-desktop:pointer-lock";
 const LOCK_EXIT: &str = "rusty-desktop:pointer-unlock";
 const CONFINE_REQUEST: &str = "rusty-desktop:cursor-confine";
 const CONFINE_EXIT: &str = "rusty-desktop:cursor-release";
+/// Followed by the `dropEffect` the page's last `dragover` accepted.
+const DRAG_EFFECT: &str = "rusty-desktop:drag-effect:";
 
 /// Chromium's off-screen mode rejects the Pointer Lock API, so the page gets
 /// a shell-backed one: `requestPointerLock` asks the shell to grab the
@@ -41,6 +44,13 @@ const CONFINE_EXIT: &str = "rusty-desktop:cursor-release";
 /// in the background, so the shell reports window focus through
 /// `__rustyDesktopFocus`: the page gets `blur`/`focus` on `window` and
 /// `document.hasFocus()` follows the native window, as in a browser tab.
+///
+/// Chromium hands a native HTML5 drag the page starts to the shell, which
+/// carries it inside the window. The page's drop target answers Chromium, not
+/// the shell, so the shim reports the effect each `dragover` accepted, and the
+/// shell ends the drag with it. A drag carries files, `text/plain`,
+/// `text/html` and `text/uri-list`; the shim warns on `dragstart` about any
+/// other type, which reads back empty at the drop.
 const PAGE_SHIM: &str = r#"(() => {
   if (window.__rustyDesktopMotion) return;
   let locked = null;
@@ -102,6 +112,21 @@ const PAGE_SHIM: &str = r#"(() => {
     confined = false;
     document.dispatchEvent(new CustomEvent('rusty-desktop-confinement-end', { detail: { refused } }));
   };
+  const carried = new Set(['Files', 'text/plain', 'text/html', 'text/uri-list']);
+  let dragEffect = 'none';
+  window.addEventListener('dragstart', (event) => {
+    dragEffect = 'none';
+    const lost = [...(event.dataTransfer?.types ?? [])].filter((type) => !carried.has(type));
+    if (lost.length > 0) {
+      console.warn(`rusty desktop shell: a drag carries only files, text/plain, text/html and text/uri-list; ${lost.join(', ')} will be empty at the drop`);
+    }
+  });
+  window.addEventListener('dragover', (event) => {
+    const effect = event.defaultPrevented ? event.dataTransfer?.dropEffect ?? 'none' : 'none';
+    if (effect === dragEffect) return;
+    dragEffect = effect;
+    console.info('rusty-desktop:drag-effect:' + effect);
+  });
   window.__rustyDesktopMotion = (x, y) => {
     if (locked === null) return;
     locked.dispatchEvent(new PointerEvent('pointermove', {
@@ -132,6 +157,19 @@ pub(crate) struct UiOverlay {
     /// once it exists.
     focus_pending: bool,
     motion: (f64, f64),
+    /// A native drag the page started, carried inside the window.
+    drag: Option<PageDrag>,
+    /// The cursor the page last asked for, shown again after a drag.
+    page_cursor: CursorIcon,
+}
+
+struct PageDrag {
+    payload: DragPayload,
+    allowed: DragOperations,
+    /// The pointer is over the view, so the page is the drag's target.
+    over: bool,
+    /// What the page's last `dragover` accepted.
+    effect: DragOperations,
 }
 
 impl UiOverlay {
@@ -164,6 +202,8 @@ impl UiOverlay {
             focused: window.has_focus(),
             focus_pending,
             motion: (0.0, 0.0),
+            drag: None,
+            page_cursor: CursorIcon::Default,
         })
     }
 
@@ -197,6 +237,20 @@ impl UiOverlay {
                     if matches!(event, NavigationEvent::LoadStart { .. }) {
                         self.release(window, false);
                         self.unconfine(window, false);
+                        self.end_drag(window, false);
+                    }
+                }
+                NavigationEvent::DragStarted {
+                    payload,
+                    allowed_operations,
+                    ..
+                } => self.start_drag(window, payload, allowed_operations),
+                NavigationEvent::ConsoleMessage { message, .. }
+                    if message.starts_with(DRAG_EFFECT) =>
+                {
+                    if let Some(drag) = &mut self.drag {
+                        drag.effect = drag_effect(&message[DRAG_EFFECT.len()..]);
+                        window.set_cursor(drag_cursor(drag.effect));
                     }
                 }
                 NavigationEvent::ConsoleMessage { message, .. } if message == LOCK_REQUEST => {
@@ -215,8 +269,9 @@ impl UiOverlay {
             }
         }
         while let Some(shape) = self.page.poll_cursor() {
-            if !self.grabbed {
-                window.set_cursor(cursor_icon(&shape));
+            self.page_cursor = cursor_icon(&shape);
+            if !self.grabbed && self.drag.is_none() {
+                window.set_cursor(self.page_cursor);
             }
         }
     }
@@ -327,6 +382,101 @@ impl UiOverlay {
         }
     }
 
+    /// Carry the page's drag while the left button stays down. Chromium waits
+    /// for the embedder to end a drag it hands over, and takes no other input
+    /// until then, so a drag the shell cannot carry (under a lock, or after
+    /// the button already came up) ends at once, cancelled.
+    fn start_drag(&mut self, window: &Window, payload: DragPayload, allowed: DragOperations) {
+        self.end_drag(window, false);
+        self.drag = Some(PageDrag {
+            payload,
+            allowed,
+            over: false,
+            effect: DragOperations::NONE,
+        });
+        if self.grabbed || !self.buttons[0] {
+            self.end_drag(window, false);
+            return;
+        }
+        self.move_drag(window);
+    }
+
+    /// The pointer moved during a drag: enter the page, or move over it.
+    fn move_drag(&mut self, window: &Window) {
+        let (x, y) = self.cursor;
+        let modifiers = self.event_modifiers();
+        let Some(drag) = &mut self.drag else { return };
+        let (kind, payload) = if drag.over {
+            (DragEventKind::Over, None)
+        } else {
+            drag.over = true;
+            window.set_cursor(drag_cursor(drag.effect));
+            (DragEventKind::Enter, Some(drag.payload.clone()))
+        };
+        let allowed_operations = drag.allowed;
+        let _ = self.page.send_drag(DragInput {
+            kind,
+            payload,
+            x,
+            y,
+            modifiers,
+            allowed_operations,
+        });
+    }
+
+    /// The pointer left the window during a drag.
+    fn leave_drag(&mut self) {
+        let modifiers = self.event_modifiers();
+        let Some(drag) = &mut self.drag else { return };
+        if !std::mem::take(&mut drag.over) {
+            return;
+        }
+        // The effect stays: the shim reports only changes, and the first
+        // `dragover` after the pointer comes back replaces it.
+        let allowed_operations = drag.allowed;
+        let _ = self.page.send_drag(DragInput {
+            kind: DragEventKind::Leave,
+            payload: None,
+            x: -1,
+            y: -1,
+            modifiers,
+            allowed_operations,
+        });
+    }
+
+    /// End the page's drag: drop it where the pointer is when `drop`,
+    /// otherwise cancel it. Chromium sends `drop` only to a target that
+    /// accepted the last `dragover`, and the page gets `dragend` with the
+    /// accepted effect either way.
+    fn end_drag(&mut self, window: &Window, drop: bool) {
+        let Some(drag) = &self.drag else { return };
+        let dropped = drop && drag.over;
+        let effect = drag.effect;
+        let (x, y) = self.cursor;
+        if dropped {
+            let modifiers = self.event_modifiers();
+            let allowed_operations = drag.allowed;
+            let _ = self.page.send_drag(DragInput {
+                kind: DragEventKind::Drop,
+                payload: None,
+                x,
+                y,
+                modifiers,
+                allowed_operations,
+            });
+        } else {
+            self.leave_drag();
+        }
+        self.drag = None;
+        let operation = if dropped {
+            effect
+        } else {
+            DragOperations::NONE
+        };
+        let _ = self.page.finish_drag(x, y, operation);
+        window.set_cursor(self.page_cursor);
+    }
+
     /// Tell the page whether the native window has focus.
     fn report_focus(&mut self) {
         let _ = self
@@ -345,6 +495,7 @@ impl UiOverlay {
             WindowEvent::Focused(false) => {
                 self.release(window, true);
                 self.unconfine(window, true);
+                self.end_drag(window, false);
                 // Buttons and modifiers released while another window has
                 // focus never reach this one; the page clears its own held
                 // input on the blur.
@@ -361,12 +512,15 @@ impl UiOverlay {
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x as i32, position.y as i32);
-                if !self.grabbed {
+                if self.drag.is_some() {
+                    self.move_drag(window);
+                } else if !self.grabbed {
                     self.mouse(MouseButton::Left, MouseAction::Moved);
                 } else {
                     self.recentre(window);
                 }
             }
+            WindowEvent::CursorLeft { .. } if self.drag.is_some() => self.leave_drag(),
             WindowEvent::CursorLeft { .. } if !self.grabbed => {
                 // Chromium treats a move outside the view as leaving it. Keep
                 // the last position: a pointer that re-enters without moving
@@ -385,6 +539,14 @@ impl UiOverlay {
                 };
                 let pressed = *state == ElementState::Pressed;
                 self.buttons[index] = pressed;
+                // A drag takes the buttons, as a system drag loop does:
+                // releasing the left one drops.
+                if self.drag.is_some() {
+                    if index == 0 && !pressed {
+                        self.end_drag(window, true);
+                    }
+                    return;
+                }
                 let action = if pressed {
                     MouseAction::Pressed
                 } else {
@@ -392,6 +554,7 @@ impl UiOverlay {
                 };
                 self.mouse(button, action);
             }
+            WindowEvent::MouseWheel { .. } if self.drag.is_some() => {}
             WindowEvent::MouseWheel { delta, .. } => {
                 let (x, y) = match delta {
                     MouseScrollDelta::LineDelta(x, y) => (
@@ -413,6 +576,14 @@ impl UiOverlay {
                     return;
                 };
                 let pressed = event.state == ElementState::Pressed;
+                // Escape cancels a drag, and the page sees no keys during
+                // one, as in a browser.
+                if self.drag.is_some() {
+                    if code == KeyCode::Escape && pressed {
+                        self.end_drag(window, false);
+                    }
+                    return;
+                }
                 // As in a browser, Escape ends a pointer lock and the page
                 // sees the lock end, not the key. A confinement ends the same way.
                 if code == KeyCode::Escape && (self.grabbed || self.confined) {
@@ -503,6 +674,25 @@ fn cursor_icon(shape: &CursorShape) -> CursorIcon {
         CursorShape::ZoomIn => CursorIcon::ZoomIn,
         CursorShape::ZoomOut => CursorIcon::ZoomOut,
         _ => CursorIcon::Default,
+    }
+}
+
+/// The drop effect the page reported, as a drag operation.
+fn drag_effect(effect: &str) -> DragOperations {
+    match effect {
+        "copy" => DragOperations::COPY,
+        "link" => DragOperations::LINK,
+        "move" => DragOperations::MOVE,
+        _ => DragOperations::NONE,
+    }
+}
+
+fn drag_cursor(effect: DragOperations) -> CursorIcon {
+    match effect {
+        DragOperations::COPY => CursorIcon::Copy,
+        DragOperations::LINK => CursorIcon::Alias,
+        DragOperations::MOVE => CursorIcon::Move,
+        _ => CursorIcon::NoDrop,
     }
 }
 

@@ -19,8 +19,8 @@ use std::time::Instant;
 
 use welding::{CefSurfaceProducer, HostWgpuContext, ImportedTexture, PopupRect};
 pub use welding::{
-    CursorShape, EventModifiers, KeyEvent, KeyEventKind, MouseAction, MouseButton, MouseEvent,
-    NavigationEvent,
+    CursorShape, DragEventKind, DragInput, DragOperations, DragPayload, EventModifiers, KeyEvent,
+    KeyEventKind, MouseAction, MouseButton, MouseEvent, NavigationEvent,
 };
 
 use crate::{FrameStats, Gpu, Renderer, SurfaceFrame, WindowSurface};
@@ -226,6 +226,23 @@ impl WebOverlay {
         }
         self.producer
             .send_mouse_input(event)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Move the page's own drag over the view: Chromium hands a drag the
+    /// page starts to the embedder ([`NavigationEvent::DragStarted`]).
+    pub fn send_drag(&mut self, event: DragInput) -> Result<(), String> {
+        self.producer
+            .send_drag_input(event)
+            .map_err(|e| e.to_string())
+    }
+
+    /// End the page's drag at a position in the view with the operation the
+    /// drop took, [`DragOperations::NONE`] when it was cancelled. The page
+    /// gets `dragend` and ordinary input resumes.
+    pub fn finish_drag(&mut self, x: i32, y: i32, operation: DragOperations) -> Result<(), String> {
+        self.producer
+            .finish_drag_source(x, y, operation)
             .map_err(|e| e.to_string())
     }
 

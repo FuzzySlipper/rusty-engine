@@ -42,7 +42,29 @@ TypeScript UI is composited over it.
   cursor positions and DOM hover. Escape and focus loss end it too. Where the
   platform has no confining grab (macOS) the shell refuses, and the page
   falls back to the browser's drawn cursor under a lock.
-  The off-screen page keeps Chromium's focus while the window is in the
+- **Native drag and drop.** Off-screen Chromium hands an HTML5 drag the
+  page starts (`draggable`, `dragstart`) to the shell, and takes no other
+  input until the shell ends it. The shell carries it inside the window:
+  while the left button is held, pointer moves reach the page as
+  `dragenter`/`dragover`, leaving the window sends `dragleave`, releasing
+  over a target whose `dragover` called `preventDefault()` sends `drop`, and
+  the page always gets `dragend` with that `dropEffect`. Escape, focus loss
+  and releasing elsewhere cancel the drag (`dropEffect` `none`); a drag under
+  a pointer lock is cancelled at once. Differences from a browser:
+  - The drag stays in the window: nothing drags out to, or in from, other
+    applications.
+  - Only files, `text/plain`, `text/html` and `text/uri-list` travel with the
+    drag. Data under any other type (`setData('application/x-item', …)`)
+    reads back empty at the drop, and the page's console warns about it on
+    `dragstart`. Put identities in `text/plain`, or keep them in page state.
+  - The shell learns the accepted effect from `dragover` bubbling to
+    `window`; behind a `dragover` handler that stops propagation, `drop`
+    still arrives but `dragend` reports `none`.
+  - The drag image is not drawn; the cursor shows the effect instead.
+
+  Pointer-event dragging (`pointerdown`, `setPointerCapture`, `pointermove`)
+  needs none of this and behaves the same in every output.
+- **Focus.** The off-screen page keeps Chromium's focus while the window is in the
   background, so the shell reports window focus to it: focus loss sends the
   page a `blur` and makes `document.hasFocus()` false, and the input capture
   clears its held input on that `blur`, as in a browser, locked or not.
