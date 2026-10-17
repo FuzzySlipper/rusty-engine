@@ -1239,6 +1239,95 @@ fn copies_shadows_move_with_the_wind_as_an_instances_do() {
 }
 
 #[test]
+fn copies_whose_caster_stage_reads_time_cast_as_an_instance_does_as_time_moves() {
+    // A tree whose product caster stage casts only in the first half of
+    // each second, under the sun, the camera and light still and nothing
+    // else timed: at 10.6 its shadow is gone, for the copy as for the same
+    // tree placed as an instance.
+    const BLINKING: &str = "#import rusty::types::{Surface, Caster}
+#import rusty::view::frame
+#import rusty::shade::standard_shade
+
+fn shade(surface: Surface) -> vec4<f32> {
+    return standard_shade(surface);
+}
+
+fn cast_shadow(caster: Caster) {
+    if fract(frame.time.x) > 0.5 {
+        discard;
+    }
+}
+";
+    let scene = |scattered: bool| {
+        let mut harness = harness(true);
+        let mut ops = stage(true);
+        ops.push(RenderDiff::DefineShader {
+            shader: ShaderDescriptor {
+                id: "shader/blinking".into(),
+                path: "shaders/blinking.wgsl".into(),
+                keywords: Vec::new(),
+                source: BLINKING.into(),
+            },
+        });
+        let mut tree_ops = coloured_mesh("blinking", tree(), [0.9, 0.9, 0.9, 1.0]);
+        if let RenderDiff::DefineMaterial { material } = &mut tree_ops[0] {
+            material.shader = Some(MaterialShaderDescriptor {
+                shader: "shader/blinking".into(),
+                parameters: [[0.0; 4]; 4],
+                textures: [None, None],
+                displacement_bound: 0.0,
+            });
+        }
+        ops.extend(tree_ops);
+        let at = [0.0, 0.0, 0.0];
+        if scattered {
+            let mut created = patch(
+                20,
+                5,
+                vec![copy(at, [1.0; 3])],
+                ScatterFade::default(),
+                true,
+            );
+            if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+                patch.asset = "mesh/blinking".to_owned();
+            }
+            ops.push(created);
+        } else {
+            ops.push(instance(20, Some(5), "blinking", transform(at, 0.0, 1.0)));
+        }
+        harness.apply(ops);
+        let mut at = |time: f64| {
+            harness.renderer.set_animation_time(time);
+            render(&mut harness).1
+        };
+        at(10.0);
+        let cast = at(10.0);
+        let gone = at(10.6);
+        let held = at(10.6);
+        (cast, gone, held)
+    };
+    let (cast, gone, held) = scene(false);
+    assert!(cast != gone, "the instance's shadow follows time");
+    assert!(held == gone);
+    let (copy_cast, copy_gone, copy_held) = scene(true);
+    for (name, expected, scattered) in [
+        ("cast", &cast, &copy_cast),
+        ("gone", &gone, &copy_gone),
+        ("held", &held, &copy_held),
+    ] {
+        let differing = expected
+            .chunks(4)
+            .zip(scattered.chunks(4))
+            .filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 2))
+            .count();
+        assert_eq!(
+            differing, 0,
+            "{name}: {differing} pixels differ from the instance"
+        );
+    }
+}
+
+#[test]
 fn a_fixed_lights_shadow_follows_the_copies_level_as_the_eye_moves() {
     // Under an ambient light's sky, a copy draws as a wide slab from 7 m and
     // as a post nearer. The eye walks in across 7 m with nothing else

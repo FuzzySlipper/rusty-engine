@@ -140,7 +140,7 @@ pub(crate) struct ScatterSelect {
     enabled: bool,
     values: [u32; STATS],
     casts_windy: bool,
-    casts_displaced: bool,
+    casts_timed: bool,
     commands: u32,
     pool_bytes: u64,
     last_eye: Option<Vec3>,
@@ -286,7 +286,7 @@ impl ScatterSelect {
             draws: Vec::new(),
             part_count: 0,
             casts_windy: false,
-            casts_displaced: false,
+            casts_timed: false,
             commands: 0,
             pool_bytes: 0,
             last_eye: None,
@@ -351,11 +351,11 @@ impl ScatterSelect {
         self.draws.iter().any(|draw| draw.casts)
     }
 
-    /// A casting draw's vertices move with presentation time: a product's
-    /// displace stage, or the wind while it blows. Its shadows redraw as
-    /// time moves.
+    /// A casting draw's shadow changes with presentation time: a product's
+    /// caster or displace stage, or the wind while it blows. Its shadows
+    /// redraw as time moves.
     pub fn casts_moving(&self, wind_blows: bool) -> bool {
-        self.casts_displaced || (self.casts_windy && wind_blows)
+        self.casts_timed || (self.casts_windy && wind_blows)
     }
 
     /// The last pass selected from another eye than the one before: the
@@ -584,9 +584,13 @@ impl ScatterSelect {
         self.casts_windy = ordered
             .iter()
             .any(|draw| draw.casts && caster(draw).contains(Features::WIND));
-        self.casts_displaced = ordered
-            .iter()
-            .any(|draw| draw.casts && caster(draw).without(Features::WIND).moves_with_time());
+        // As the CPU lists' casters: a product caster or displace stage may
+        // read presentation time.
+        self.casts_timed = ordered.iter().any(|draw| {
+            let caster = caster(draw);
+            draw.casts
+                && (caster.product() != 0 || caster.without(Features::WIND).moves_with_time())
+        });
         self.draws = ordered;
         self.part_count = part_count;
         self.chunk_count = (chunks.len() / 2) as u32;
