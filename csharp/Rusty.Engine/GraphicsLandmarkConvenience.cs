@@ -142,3 +142,20 @@ public sealed record HandRig(ulong Entity, HandSide Side, uint Wrist, uint[] Thu
     /// <summary>The wrist, or a point in its frame.</summary>
     public Landmark AtWrist(Vector3 offset = default) => Landmark.At(OverlayPlace.AtJoint(Entity, Wrist), offset);
 }
+
+/// <summary>Reading landmark pairs as the renderer last measured them.</summary>
+public static class LandmarkReadConvenience
+{
+    /// <summary>
+    /// The pairs of overlay set <paramref name="set"/> as the renderer last measured them,
+    /// reported before each product call: the values <c>engine.inspect.landmarks</c> answers, with
+    /// the simulation step the measured scene showed (a debug command reads the current frame,
+    /// an update the scene drawn for the previous call). <c>Measured</c> is false until the renderer
+    /// has measured a set of that name (before the first frame, or with no renderer).
+    /// </summary>
+    public static LandmarkReadResult ReadLandmarks(this IGraphicsService graphics, string set)
+    {
+        ArgumentNullException.ThrowIfNull(graphics);
+        return graphics.ReadLandmarks(new LandmarkReadRequest(set));
+    }
+}

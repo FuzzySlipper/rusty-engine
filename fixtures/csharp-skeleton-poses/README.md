@@ -42,7 +42,8 @@ hand (`engine.inspect.landmarks fixture.grip`): `reach`, the wrist within
 reach of the circle's centre (outside it after `pose.far true`), `trigger`,
 the index pad on the held model's tip, which it never reaches, and
 `pointing`, the index finger's last bone aimed at the circle's centre. The
-`hand` pane's Overlays button shows them there.
+`hand` pane's Overlays button shows them there. `pose.landmarks` reads the
+same set from C# (`Graphics.ReadLandmarks`) with the command's field names.
 
 - `pose.curl <0..1>` sets the finger curl weight.
 - `pose.reach <true|false>` turns the IK on or off.

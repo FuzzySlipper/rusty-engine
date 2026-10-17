@@ -38,7 +38,10 @@ mod voxel_scene_presentation;
 mod water_field;
 mod world_origin;
 
-pub use appearance::{AnimationRealizationFact, GhostPlateRealizationFact, JointPoseReport};
+pub use appearance::{
+    AnimationRealizationFact, GhostPlateRealizationFact, JointPoseReport, LandmarkPairDrawn,
+    LandmarkPairReport, LandmarkSetReport,
+};
 pub use audio::AudioRealizationFact;
 pub use composition::{
     parse_runtime_appearance_catalog, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,

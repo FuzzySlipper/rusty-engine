@@ -1258,6 +1258,57 @@ pub struct NativeOverlaySetRequest {
     pub pairs: *const NativeLandmarkPair,
     pub pairs_len: usize,
 }
+/// Which overlay set's landmark pairs to read.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLandmarkReadRequest {
+    pub set: NativeUtf8Slice,
+}
+
+/// One landmark pair as the renderer last measured it: its judging and,
+/// when `drawn` (both landmarks on something drawn), the distance in
+/// metres, the angle in degrees when `has_angle`, whether it is `within`
+/// tolerance, both ends in the world, and where `from` is from `to` along
+/// `to`'s frame (x right, y up, z back). `name` borrows the result.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLandmarkMeasure {
+    pub name: NativeUtf8Slice,
+    pub tolerance: f32,
+    pub aim: NativeLandmarkAim,
+    pub angle_tolerance: f32,
+    pub drawn: bool,
+    pub within: bool,
+    pub distance: f32,
+    pub has_angle: bool,
+    pub angle: f32,
+    pub from: NativeVec3,
+    pub to: NativeVec3,
+    pub offset: NativeVec3,
+}
+
+/// A set's landmark pairs as the renderer last measured them, reported
+/// before each product call: `measured` is false until the renderer has
+/// measured a set of that name, `step` is the simulation step the measured
+/// scene showed and `revision` the set's renderer revision. `pairs` points
+/// into Graphics bridge storage until the next call on the same context.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeLandmarkReadResult {
+    pub pairs: *const NativeLandmarkMeasure,
+    pub pairs_len: usize,
+    pub step: u64,
+    pub revision: u64,
+    pub measured: bool,
+}
+
+pub type NativeReadLandmarks = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeLandmarkReadRequest,
+    *mut NativeLandmarkReadResult,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativePublishOverlaySet = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     *const NativeOverlaySetRequest,

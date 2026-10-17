@@ -389,6 +389,8 @@ impl FrameOutput {
             }
         }
         services.ingest_joint_poses(poses);
+        let (step, sets) = self.driver.landmark_sets();
+        services.ingest_landmarks(step, sets.into_iter().map(landmark_report).collect());
         for chunk in facts.chunks(MAX_FACTS_PER_REPORT) {
             services.ingest_animation_realization_feedback(false, 0, chunk.iter().cloned());
         }
@@ -1140,6 +1142,36 @@ fn shadow_statistics(driver: &SceneDriver) -> ProductHostShadowStatistics {
         rendered_casters: report.rendered_casters,
         atlas_bytes: report.atlas_bytes,
         static_cache_bytes: report.static_cache_bytes,
+    }
+}
+
+/// A set's landmark measures as the services hold them.
+fn landmark_report(
+    set: render_wgpu::LandmarkSetReadout,
+) -> csharp_engine_services::LandmarkSetReport {
+    csharp_engine_services::LandmarkSetReport {
+        name: set.name,
+        revision: set.revision,
+        pairs: set
+            .pairs
+            .into_iter()
+            .map(|pair| csharp_engine_services::LandmarkPairReport {
+                name: pair.name,
+                tolerance: pair.tolerance,
+                aim: pair.aim,
+                angle_tolerance: pair.angle_tolerance,
+                drawn: pair
+                    .drawn
+                    .map(|drawn| csharp_engine_services::LandmarkPairDrawn {
+                        distance: drawn.distance,
+                        angle: drawn.angle,
+                        within: drawn.within,
+                        from: drawn.from,
+                        to: drawn.to,
+                        offset: drawn.offset,
+                    }),
+            })
+            .collect(),
     }
 }
 

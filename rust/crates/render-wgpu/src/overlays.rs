@@ -913,6 +913,14 @@ impl Renderer {
         time_seconds: f64,
         size: (u32, u32),
     ) -> Vec<LandmarkSetReadout> {
+        if self
+            .overlays
+            .sets
+            .values()
+            .all(|retained| retained.set.pairs.is_empty())
+        {
+            return Vec::new();
+        }
         let primary = self
             .primary_overlay_camera(time_seconds, size)
             .map(|camera| camera.pose);

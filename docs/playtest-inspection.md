@@ -435,13 +435,27 @@ the last frame drew them, whether shown or not: for each, its tolerances and
 aim, whether it is `drawn`, `within`, the `distance` in metres, the `angle`
 in degrees (absent without an aim or an axis to measure), `from` and `to` in
 the world, and the `offset` of `from` from `to` along `to`'s frame (x right,
-y up, z back, metres), so a report can say "3 mm below, 12 behind".
+y up, z back, metres), so a report can say "3 mm below, 12 behind". It
+names the `step` the measured scene showed.
 
 What stays approximate: a landmark is where the renderer drew the joints, not
 the skinned surface; `Beyond` assumes the rig's last bone runs along its
 joint as the bone before it does; a palm needs index, middle and pinky bases.
 `fixtures/csharp-skeleton-poses` publishes `fixture.grip`: one pair within
 tolerance, one outside, one aimed.
+
+### Reading measures from C#
+
+`engine.Graphics.ReadLandmarks("held.landmarks")` returns the same measures
+in process: per pair its name, tolerances and aim, `Drawn`, `Within`,
+`Distance`, `Angle` when `HasAngle`, `From`, `To` and `Offset`, with the
+set's `Revision` and the `Step` the measured scene showed. The runtime
+reports the renderer's measures before each product call: a debug command
+reads the values `engine.inspect.landmarks` answers for the same frame, and
+an update reads the scene drawn for the previous call. `Measured` is false until the renderer has measured a set
+of that name (before the first frame, or in a host without a renderer). A
+product builds its own report wording from these numbers, as rusty-hotel's
+grip check does.
 
 ## Reference comparison
 

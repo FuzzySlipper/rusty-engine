@@ -1599,6 +1599,7 @@ pub struct NativeGraphicsApi {
     pub publish_snapshot: NativePublishAppearanceSnapshot,
     pub publish_changes: NativePublishAppearanceChanges,
     pub publish_overlay_set: NativePublishOverlaySet,
+    pub read_landmarks: NativeReadLandmarks,
     pub create_light: NativeCreateLight,
     pub update_light: NativeUpdateLight,
     pub replace_light: NativeReplaceLight,

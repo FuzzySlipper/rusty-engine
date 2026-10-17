@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using System.Text.Json;
 using Rusty.Engine;
 using Rusty.Engine.Debugging;
 
@@ -197,6 +198,49 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         previousElbow = null;
         PublishGrip();
         return Inspect();
+    }
+
+    /// <summary>
+    /// <c>fixture.grip</c> read from C# (<see cref="LandmarkReadConvenience.ReadLandmarks"/>), with
+    /// the field names <c>engine.inspect.landmarks fixture.grip</c> answers.
+    /// </summary>
+    [DebugCommand("pose.landmarks")]
+    public string Landmarks()
+    {
+        LandmarkReadResult read = engine.Graphics.ReadLandmarks(GripSet);
+        using MemoryStream stream = new();
+        using (Utf8JsonWriter json = new(stream))
+        {
+            json.WriteStartObject();
+            json.WriteBoolean("measured", read.Measured);
+            json.WriteNumber("step", read.Step);
+            json.WriteNumber("revision", read.Revision);
+            json.WriteStartArray("pairs");
+            foreach (LandmarkMeasure pair in read.Pairs.Span)
+            {
+                json.WriteStartObject();
+                json.WriteString("name", pair.Name);
+                json.WriteBoolean("drawn", pair.Drawn);
+                json.WriteBoolean("within", pair.Within);
+                json.WriteNumber("distance", pair.Distance);
+                if (pair.HasAngle)
+                {
+                    json.WriteNumber("angle", pair.Angle);
+                }
+                foreach ((string name, Vector3 value) in new[] { ("from", pair.From), ("to", pair.To), ("offset", pair.Offset) })
+                {
+                    json.WriteStartArray(name);
+                    json.WriteNumberValue(value.X);
+                    json.WriteNumberValue(value.Y);
+                    json.WriteNumberValue(value.Z);
+                    json.WriteEndArray();
+                }
+                json.WriteEndObject();
+            }
+            json.WriteEndArray();
+            json.WriteEndObject();
+        }
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
     }
 
     /// <summary>

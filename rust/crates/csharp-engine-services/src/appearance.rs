@@ -1760,6 +1760,9 @@ pub(crate) struct RuntimeAppearanceBridge {
     animation_realization_evicted: u64,
     /// The latest joints reported per animated object.
     joint_poses: BTreeMap<u64, animation_pose::ReportedJointPose>,
+    /// The overlay sets' landmark pairs as the renderer last measured them,
+    /// and the step the measured scene showed.
+    landmarks: (u64, BTreeMap<String, LandmarkSetReport>),
     authored_content: Option<*const crate::authored_content::RuntimeAuthoredContentBridge>,
     diagnostics_sink: Option<RuntimeDiagnosticsSink>,
     reported_recoverable_codes: BTreeSet<&'static str>,
@@ -1843,6 +1846,7 @@ impl RuntimeAppearanceBridge {
             animation_realization_facts: VecDeque::new(),
             animation_realization_evicted: 0,
             joint_poses: BTreeMap::new(),
+            landmarks: (0, BTreeMap::new()),
             authored_content: None,
             diagnostics_sink: None,
             reported_recoverable_codes: BTreeSet::new(),
@@ -10600,6 +10604,128 @@ pub(crate) unsafe extern "C" fn publish_appearance_changes(
     })
 }
 
+/// One overlay set's landmark pairs as the renderer measured them, for
+/// [`RuntimeAppearanceBridge::ingest_landmarks`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct LandmarkSetReport {
+    pub name: String,
+    pub revision: u64,
+    pub pairs: Vec<LandmarkPairReport>,
+}
+
+/// One pair's judging and, when both landmarks were drawn, its measures in
+/// the world (see `NativeLandmarkMeasure`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LandmarkPairReport {
+    pub name: String,
+    pub tolerance: f32,
+    pub aim: LandmarkAim,
+    pub angle_tolerance: f32,
+    pub drawn: Option<LandmarkPairDrawn>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LandmarkPairDrawn {
+    pub distance: f32,
+    pub angle: Option<f32>,
+    pub within: bool,
+    pub from: [f32; 3],
+    pub to: [f32; 3],
+    pub offset: [f32; 3],
+}
+
+impl RuntimeAppearanceBridge {
+    /// Replaces the landmark measures with the renderer's latest, measured
+    /// on a scene showing simulation `step`.
+    pub(crate) fn ingest_landmarks(&mut self, step: u64, sets: Vec<LandmarkSetReport>) {
+        self.landmarks = (
+            step,
+            sets.into_iter()
+                .map(|set| (set.name.clone(), set))
+                .collect(),
+        );
+    }
+
+    fn read_landmarks(
+        &mut self,
+        request: &NativeLandmarkReadRequest,
+    ) -> Result<NativeLandmarkReadResult, CsharpEngineServicesError> {
+        let name =
+            unsafe { borrowed_utf8(request.set.bytes, request.set.len, "landmark set name") }?;
+        let (step, sets) = &self.landmarks;
+        let Some(set) = sets.get(name) else {
+            return Ok(NativeLandmarkReadResult {
+                pairs: std::ptr::null(),
+                pairs_len: 0,
+                step: 0,
+                revision: 0,
+                measured: false,
+            });
+        };
+        let vec = |[x, y, z]: [f32; 3]| NativeVec3 { x, y, z };
+        let names: Box<[Box<str>]> = set
+            .pairs
+            .iter()
+            .map(|pair| pair.name.as_str().into())
+            .collect();
+        let pairs: Box<[NativeLandmarkMeasure]> = set
+            .pairs
+            .iter()
+            .zip(&names)
+            .map(|(pair, name)| {
+                let drawn = pair.drawn;
+                NativeLandmarkMeasure {
+                    name: NativeUtf8Slice {
+                        bytes: name.as_ptr(),
+                        len: name.len(),
+                    },
+                    tolerance: pair.tolerance,
+                    aim: match pair.aim {
+                        LandmarkAim::None => NativeLandmarkAim::None,
+                        LandmarkAim::Axis => NativeLandmarkAim::Axis,
+                        LandmarkAim::Point => NativeLandmarkAim::Point,
+                        LandmarkAim::Line => NativeLandmarkAim::Line,
+                    },
+                    angle_tolerance: pair.angle_tolerance,
+                    drawn: drawn.is_some(),
+                    within: drawn.is_some_and(|drawn| drawn.within),
+                    distance: drawn.map_or(0.0, |drawn| drawn.distance),
+                    has_angle: drawn.is_some_and(|drawn| drawn.angle.is_some()),
+                    angle: drawn.and_then(|drawn| drawn.angle).unwrap_or(0.0),
+                    from: vec(drawn.map_or([0.0; 3], |drawn| drawn.from)),
+                    to: vec(drawn.map_or([0.0; 3], |drawn| drawn.to)),
+                    offset: vec(drawn.map_or([0.0; 3], |drawn| drawn.offset)),
+                }
+            })
+            .collect();
+        let result = NativeLandmarkReadResult {
+            pairs: pairs.as_ptr(),
+            pairs_len: pairs.len(),
+            step: *step,
+            revision: set.revision,
+            measured: true,
+        };
+        self.borrowed.hold((names, pairs));
+        Ok(result)
+    }
+}
+
+pub(crate) unsafe extern "C" fn read_landmarks(
+    context: *mut c_void,
+    request: *const NativeLandmarkReadRequest,
+    result: *mut NativeLandmarkReadResult,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        // SAFETY: the request is borrowed for this synchronous call.
+        let request = unsafe { &*request };
+        animation_result(context, result, |bridge| bridge.read_landmarks(request))
+    })
+}
+
 fn overlay_space(space: NativeOverlaySpace, entity: u64, joint: u32) -> OverlaySpace {
     match space {
         NativeOverlaySpace::World => OverlaySpace::World,
@@ -10875,6 +11001,83 @@ pub(super) mod tests {
         );
         assert!(bridge.operation_error.is_none());
         bridge.end_call();
+    }
+
+    #[test]
+    fn landmark_measures_read_back_as_the_renderer_reported_them() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        let read = |bridge: &mut RuntimeAppearanceBridge, set: &'static str| {
+            let request = NativeLandmarkReadRequest {
+                set: NativeUtf8Slice {
+                    bytes: set.as_ptr(),
+                    len: set.len(),
+                },
+            };
+            let context = (bridge as *mut RuntimeAppearanceBridge).cast();
+            let mut result = unsafe { std::mem::zeroed::<NativeLandmarkReadResult>() };
+            let mut receipt = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+            assert_eq!(
+                unsafe { read_landmarks(context, &request, &mut result, &mut receipt) },
+                ABI_OK
+            );
+            result
+        };
+        assert!(!read(&mut bridge, "grip").measured, "nothing reported yet");
+        bridge.ingest_landmarks(
+            42,
+            vec![LandmarkSetReport {
+                name: "grip".to_owned(),
+                revision: 3,
+                pairs: vec![
+                    LandmarkPairReport {
+                        name: "trigger".to_owned(),
+                        tolerance: 0.015,
+                        aim: LandmarkAim::Line,
+                        angle_tolerance: 65.0,
+                        drawn: Some(LandmarkPairDrawn {
+                            distance: 0.012,
+                            angle: Some(30.0),
+                            within: true,
+                            from: [1.0, 2.0, 3.0],
+                            to: [1.0, 2.0, 3.012],
+                            offset: [0.0, -0.003, 0.012],
+                        }),
+                    },
+                    LandmarkPairReport {
+                        name: "butt".to_owned(),
+                        tolerance: 0.03,
+                        aim: LandmarkAim::None,
+                        angle_tolerance: 0.0,
+                        drawn: None,
+                    },
+                ],
+            }],
+        );
+        let result = read(&mut bridge, "grip");
+        assert!(result.measured);
+        assert_eq!((result.step, result.revision, result.pairs_len), (42, 3, 2));
+        // SAFETY: the result borrows bridge storage until the next call.
+        let pairs: Vec<NativeLandmarkMeasure> =
+            unsafe { std::slice::from_raw_parts(result.pairs, result.pairs_len) }.to_vec();
+        let name = |pair: &NativeLandmarkMeasure| {
+            String::from_utf8(
+                unsafe { std::slice::from_raw_parts(pair.name.bytes, pair.name.len) }.to_vec(),
+            )
+            .unwrap()
+        };
+        assert_eq!(name(&pairs[0]), "trigger");
+        assert_eq!(name(&pairs[1]), "butt");
+        let trigger = pairs[0];
+        assert!(trigger.drawn && trigger.within && trigger.has_angle);
+        assert_eq!((trigger.distance, trigger.angle), (0.012, 30.0));
+        assert_eq!(trigger.aim, NativeLandmarkAim::Line);
+        assert_eq!(
+            (trigger.offset.y, trigger.offset.z, trigger.to.z),
+            (-0.003, 0.012, 3.012)
+        );
+        assert!(!pairs[1].drawn && !pairs[1].within && !pairs[1].has_angle);
+        assert!(!read(&mut bridge, "other").measured);
     }
 
     #[test]

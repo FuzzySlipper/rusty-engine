@@ -116,6 +116,7 @@ fn engine_api(
         graphics: NativeGraphicsApi {
             publish_changes: crate::appearance::publish_appearance_changes,
             publish_overlay_set: crate::appearance::publish_overlay_set,
+            read_landmarks: crate::appearance::read_landmarks,
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
             open_resource: open_render_resource,
             read_texture_info: crate::appearance::read_texture_info,
@@ -792,6 +793,13 @@ impl EngineServiceSet {
     /// The joints the renderer evaluated for reporting animation instances
     /// since the last call, oldest first. Generated C# reads the latest with
     /// `ReadJointPose`.
+    /// Replaces the overlay sets' landmark measures with the renderer's
+    /// latest, measured on a scene showing simulation `step`
+    /// (`IGraphicsService.ReadLandmarks`).
+    pub fn ingest_landmarks(&mut self, step: u64, sets: Vec<crate::appearance::LandmarkSetReport>) {
+        self.appearance.ingest_landmarks(step, sets);
+    }
+
     pub fn ingest_joint_poses(
         &mut self,
         reports: impl IntoIterator<Item = crate::appearance::JointPoseReport>,

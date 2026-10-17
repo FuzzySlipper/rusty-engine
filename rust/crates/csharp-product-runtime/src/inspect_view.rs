@@ -187,6 +187,11 @@ impl CsharpProductRuntime {
         command: &str,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostDebugResult>, ProductHostRuntimeError> {
         let (execute, release) = (self.api.execute_debug, self.api.release_debug_result);
+        // A debug command reads what the renderer observed up to now, as an
+        // update does (landmark measures, joint reports).
+        if let Some(frames) = &mut self.frame_output {
+            frames.report(&mut self.services);
+        }
 
         // Debug commands may use ordinary generated Engine services, and their
         // changes stay like any other call's.

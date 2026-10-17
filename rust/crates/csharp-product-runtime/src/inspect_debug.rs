@@ -188,7 +188,7 @@ impl CsharpProductRuntime {
         };
         let driver = frames.driver();
         if *first == LANDMARKS_COMMAND {
-            let sets = driver.landmark_sets();
+            let (step, sets) = driver.landmark_sets();
             let sets: Vec<LandmarkSetAnswer> = match rest {
                 [] => sets.into_iter().map(landmark_set_answer).collect(),
                 [name] => match sets.into_iter().find(|set| set.name == *name) {
@@ -210,7 +210,7 @@ impl CsharpProductRuntime {
                 }
             };
             return Some(
-                match serde_json::to_string(&serde_json::json!({ "sets": sets })) {
+                match serde_json::to_string(&serde_json::json!({ "step": step, "sets": sets })) {
                     Ok(message) => ProductHostDebugResult::new(true, message),
                     Err(error) => ProductHostDebugResult::new(false, error.to_string()),
                 },
