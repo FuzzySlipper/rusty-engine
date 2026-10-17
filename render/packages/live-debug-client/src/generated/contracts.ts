@@ -387,7 +387,12 @@ commands: number, poolBytes: number,
  * outside the frustum and inside it but hidden behind the view's
  * opaque depth, and the camera's draws at levels 1 to 3.
  */
-tested: number, drawn: number, shadow: number, thinned: number, outside: number, occluded: number, levels: [number, number, number], };
+tested: number, drawn: number, shadow: number, thinned: number, outside: number, occluded: number, levels: [number, number, number], 
+/**
+ * Copies left undrawn because they would pass the device's storage
+ * binding limit.
+ */
+overLimit: number, };
 
 /**
  * Scatter patches (grass, plants, vegetation tiles) the renderer has taken

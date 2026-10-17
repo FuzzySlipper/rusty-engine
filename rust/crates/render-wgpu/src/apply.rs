@@ -1281,6 +1281,29 @@ impl Renderer {
             self.tables.parts.write(id, &world, shown, layer, casts);
             ids.push(id);
         }
+        if scattered.is_some() {
+            // A patch is refused whole: when one part's rows did not fit,
+            // the others give theirs back, so no group draws without the
+            // rest, and its copies are counted once, on its first part
+            // (`scatter.rs`).
+            let state = &mut self.tables.parts.state;
+            let held: Vec<_> = ids
+                .iter()
+                .filter_map(|id| state[*id as usize].copies.map(|range| (*id, range)))
+                .collect();
+            if held.iter().any(|(_, range)| range.refused > 0) {
+                let copies = held
+                    .iter()
+                    .map(|(_, range)| range.count + range.refused)
+                    .max()
+                    .unwrap_or(0);
+                for (index, (id, range)) in held.into_iter().enumerate() {
+                    self.scatter_copies.remove(range);
+                    let counted = if index == 0 { copies } else { 0 };
+                    state[id as usize].copies = Some(self.scatter_copies.refuse(counted));
+                }
+            }
+        }
         if let (Some(_), Some(NodeKind::Scatter(patch))) = (
             &scattered,
             self.tables.nodes.get(&handle).map(|node| &node.kind),

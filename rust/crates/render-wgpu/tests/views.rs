@@ -509,9 +509,9 @@ fn capture_image_writes_a_straight_alpha_png_of_the_frozen_subtree() {
     assert!(sized(side + 1, 1)
         .unwrap_err()
         .contains("exceeds the device texture limit"));
-    // wgpu's default 256 MiB readback buffer holds a square image up to
-    // 8192 pixels a side; a device drawing larger textures meets it first.
-    if side > 8192 {
+    // A device whose largest square texture's readback passes its buffer
+    // size meets that limit first.
+    if 4 * u64::from(side) * u64::from(side) > harness.gpu.max_buffer_size() {
         assert!(sized(side, side)
             .unwrap_err()
             .contains("exceeds the device readback buffer limit"));

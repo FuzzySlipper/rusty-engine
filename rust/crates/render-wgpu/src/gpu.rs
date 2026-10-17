@@ -52,6 +52,14 @@ impl Gpu {
         Self::from_instance(instance, None)
     }
 
+    /// A headless device whose storage bindings and buffers hold at most
+    /// `bytes`: for tests of what passes a device's binding limit.
+    pub fn headless_with_binding_limit(bytes: u64) -> Result<Self, GpuError> {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        Self::from_instance_limited(instance, None, Some(bytes))
+    }
+
     /// A device and a presentation surface for one window, compatible with
     /// each other. The window handle traits come from `raw-window-handle`,
     /// which winit implements, so the shell never names a wgpu type.
@@ -107,6 +115,14 @@ impl Gpu {
         instance: wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
     ) -> Result<Self, GpuError> {
+        Self::from_instance_limited(instance, surface, None)
+    }
+
+    fn from_instance_limited(
+        instance: wgpu::Instance,
+        surface: Option<&wgpu::Surface<'_>>,
+        binding_limit: Option<u64>,
+    ) -> Result<Self, GpuError> {
         let adapter = pollster::block_on(wgpu::util::initialize_adapter_from_env_or_default(
             &instance, surface,
         ))
@@ -125,7 +141,7 @@ impl Gpu {
                 & (wgpu::Features::TIMESTAMP_QUERY
                     | wgpu::Features::INDIRECT_FIRST_INSTANCE
                     | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
-            required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
+            required_limits: limits(&adapter.limits(), binding_limit),
             ..Default::default()
         };
         let (device, queue) = request_device(&adapter, descriptor)?;
@@ -154,13 +170,29 @@ impl Gpu {
         }
     }
 
+    /// The most bytes one storage buffer binding (and its buffer) holds on
+    /// this device: what bounds the scatter copies and the selection's
+    /// entries.
+    pub(crate) fn storage_binding_bytes(&self) -> u64 {
+        let limits = self.device.limits();
+        limits
+            .max_storage_buffer_binding_size
+            .min(limits.max_buffer_size)
+    }
+
+    /// The most bytes one buffer holds on this device (a capture's readback
+    /// among them).
+    pub fn max_buffer_size(&self) -> u64 {
+        self.device.limits().max_buffer_size
+    }
+
     pub fn max_texture_dimension(&self) -> u32 {
         self.device.limits().max_texture_dimension_2d
     }
 
     /// The adapter's compute limits, for diagnostics. The device takes wgpu's
-    /// default limits (`from_instance`); a kernel needing more raises them
-    /// there.
+    /// default limits but the adapter's buffer sizes (`limits`); a kernel
+    /// needing more raises them there.
     pub fn compute_limits(&self) -> ComputeLimits {
         ComputeLimits::of(&self.adapter.limits())
     }
@@ -221,6 +253,18 @@ impl Gpu {
             ));
         }
         None
+    }
+}
+
+/// wgpu's default limits at the adapter's resolution, with the adapter's
+/// largest storage binding and buffer, so dense scatter holds as many
+/// copies as the device can bind (at most `binding_limit` bytes).
+fn limits(adapter: &wgpu::Limits, binding_limit: Option<u64>) -> wgpu::Limits {
+    let cap = binding_limit.unwrap_or(u64::MAX);
+    wgpu::Limits {
+        max_storage_buffer_binding_size: adapter.max_storage_buffer_binding_size.min(cap),
+        max_buffer_size: adapter.max_buffer_size.min(cap),
+        ..wgpu::Limits::default().using_resolution(adapter.clone())
     }
 }
 

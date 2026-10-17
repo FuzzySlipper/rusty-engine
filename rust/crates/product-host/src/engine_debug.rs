@@ -271,6 +271,10 @@ pub struct ProductHostScatterSelectionStatistics {
     pub outside: u32,
     pub occluded: u32,
     pub levels: [u32; 3],
+    /// Copies left undrawn because they would pass the device's storage
+    /// binding limit.
+    #[ts(type = "number")]
+    pub over_limit: u64,
 }
 
 /// The occlusion test of the last world view's selected copies

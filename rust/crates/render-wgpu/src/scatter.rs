@@ -4,6 +4,11 @@
 //! draw's instances index the rows, so the CPU lists, culling and shadow
 //! casters see one part a run however many copies it holds, and a copy costs
 //! its row and nothing on the CPU after it is written.
+//!
+//! The buffer holds as many rows as one storage binding can
+//! (`Gpu::storage_binding_bytes`), at most `MAX_ROWS`; a run that does not
+//! fit is refused, draws nothing and is counted
+//! (`ScatterSelectionReadout::over_limit`).
 
 use crate::Gpu;
 
@@ -13,37 +18,47 @@ pub(crate) const COPY_FLOATS: usize = 16;
 pub(crate) const PART_LANE: usize = 11;
 const COPY_BYTES: u64 = (COPY_FLOATS * 4) as u64;
 const INITIAL_COPIES: u32 = 4096;
+/// The most rows a selection entry can name (24 bits, `view.wgsl`).
+pub(crate) const MAX_ROWS: u32 = 1 << 24;
 
-/// A run's rows: the first and how many.
+/// A run's rows: the first and how many, or none and how many were
+/// refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct CopyRange {
     pub first: u32,
     pub count: u32,
+    pub refused: u32,
 }
 
 pub(crate) struct ScatterCopies {
     buffer: wgpu::Buffer,
-    /// Rows the buffer holds.
+    /// Rows the buffer holds, and the most one binding holds.
     capacity: u32,
+    ceiling: u32,
     /// Rows past the last allocation never used.
     end: u32,
     /// Freed ranges, by first row, none touching another.
     free: Vec<CopyRange>,
     /// Rows written since the last upload.
     pending: Vec<(u32, Vec<f32>)>,
-    /// Rows held by runs.
+    /// Rows held by runs, and refused to runs still made.
     pub held: u64,
+    pub refused: u64,
 }
 
 impl ScatterCopies {
     pub fn new(gpu: &Gpu) -> Self {
+        let ceiling = (gpu.storage_binding_bytes() / COPY_BYTES).min(u64::from(MAX_ROWS)) as u32;
+        let capacity = INITIAL_COPIES.min(ceiling);
         Self {
-            buffer: buffer(gpu, INITIAL_COPIES),
-            capacity: INITIAL_COPIES,
+            buffer: buffer(gpu, capacity),
+            capacity,
+            ceiling,
             end: 0,
             free: Vec::new(),
             pending: Vec::new(),
             held: 0,
+            refused: 0,
         }
     }
 
@@ -52,10 +67,15 @@ impl ScatterCopies {
     }
 
     /// Rows for a run of `rows` (each `COPY_FLOATS` long): the first free
-    /// range that fits, or new ones past the end.
+    /// range that fits, or new ones past the end; none when they would
+    /// pass the ceiling.
     pub fn insert(&mut self, rows: Vec<f32>) -> CopyRange {
         let count = (rows.len() / COPY_FLOATS) as u32;
-        let first = match self.free.iter().position(|range| range.count >= count) {
+        let fits = self.free.iter().position(|range| range.count >= count);
+        if fits.is_none() && u64::from(self.end) + u64::from(count) > u64::from(self.ceiling) {
+            return self.refuse(count);
+        }
+        let first = match fits {
             Some(index) => {
                 let range = &mut self.free[index];
                 let first = range.first;
@@ -74,12 +94,27 @@ impl ScatterCopies {
         };
         self.held += u64::from(count);
         self.pending.push((first, rows));
-        CopyRange { first, count }
+        CopyRange {
+            first,
+            count,
+            refused: 0,
+        }
+    }
+
+    /// No rows for a run of `count`, counted as refused.
+    pub fn refuse(&mut self, count: u32) -> CopyRange {
+        self.refused += u64::from(count);
+        CopyRange {
+            first: 0,
+            count: 0,
+            refused: count,
+        }
     }
 
     /// Give a run's rows back, with their write if it has not been
     /// uploaded yet.
     pub fn remove(&mut self, range: CopyRange) {
+        self.refused -= u64::from(range.refused);
         if range.count == 0 {
             return;
         }
@@ -117,7 +152,11 @@ impl ScatterCopies {
     pub fn upload(&mut self, gpu: &Gpu) -> bool {
         let mut replaced = false;
         if self.end > self.capacity {
-            let capacity = self.end.next_power_of_two();
+            let capacity = self
+                .end
+                .checked_next_power_of_two()
+                .unwrap_or(u32::MAX)
+                .min(self.ceiling);
             let grown = buffer(gpu, capacity);
             let mut encoder = gpu
                 .device

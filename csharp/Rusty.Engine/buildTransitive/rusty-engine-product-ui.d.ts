@@ -822,6 +822,11 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         outside: number;
         occluded: number;
         levels: [number, number, number];
+        /**
+         * Copies left undrawn because they would pass the device's storage
+         * binding limit.
+         */
+        overLimit: number;
     };
     /**
      * Scatter patches (grass, plants, vegetation tiles) the renderer has taken

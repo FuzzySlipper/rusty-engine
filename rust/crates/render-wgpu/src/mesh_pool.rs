@@ -4,7 +4,8 @@
 //! by first index and base vertex, so every draw of one pass, pipeline and
 //! material binds the same buffers and the run of them is one multi-draw
 //! (`scatter_select.rs`, `frame.rs` `draw_selected`). A mesh with a second
-//! vertex stream is not pooled; its draws keep its own buffers.
+//! vertex stream, or one that would grow the pool past the device's buffer
+//! size, is not pooled; its draws keep its own buffers.
 
 use std::collections::HashMap;
 
@@ -32,6 +33,9 @@ pub(crate) struct MeshPool {
     pub indices: wgpu::Buffer,
     vertex_capacity: u32,
     index_capacity: u32,
+    /// The most vertices and indices a buffer holds on this device.
+    vertex_ceiling: u32,
+    index_ceiling: u32,
     vertex_end: u32,
     index_end: u32,
     entries: HashMap<MeshRef, Entry>,
@@ -39,11 +43,19 @@ pub(crate) struct MeshPool {
 
 impl MeshPool {
     pub fn new(gpu: &Gpu) -> Self {
+        let ceiling = |bytes: u64| (gpu.max_buffer_size() / bytes).min(u64::from(u32::MAX)) as u32;
+        let (vertex_ceiling, index_ceiling) = (ceiling(VERTEX_BYTES), ceiling(INDEX_BYTES));
+        let (vertex_capacity, index_capacity) = (
+            INITIAL_VERTICES.min(vertex_ceiling),
+            INITIAL_INDICES.min(index_ceiling),
+        );
         Self {
-            vertices: vertex_buffer(gpu, INITIAL_VERTICES),
-            indices: index_buffer(gpu, INITIAL_INDICES),
-            vertex_capacity: INITIAL_VERTICES,
-            index_capacity: INITIAL_INDICES,
+            vertices: vertex_buffer(gpu, vertex_capacity),
+            indices: index_buffer(gpu, index_capacity),
+            vertex_capacity,
+            index_capacity,
+            vertex_ceiling,
+            index_ceiling,
             vertex_end: 0,
             index_end: 0,
             entries: HashMap::new(),
@@ -67,7 +79,7 @@ impl MeshPool {
 
     /// Where `mesh` (`at`) is in the pool, copying it in when it is not, or
     /// was defined anew: its base vertex and first index. None for a mesh
-    /// with a second vertex stream.
+    /// with a second vertex stream, or one the pool has no room for.
     pub fn place(
         &mut self,
         gpu: &Gpu,
@@ -86,7 +98,9 @@ impl MeshPool {
         }
         let vertices = (mesh.vertices.size() / VERTEX_BYTES) as u32;
         let indices = (mesh.indices.size() / INDEX_BYTES) as u32;
-        self.reserve(gpu, encoder, vertices, indices);
+        if !self.reserve(gpu, encoder, vertices, indices) {
+            return None;
+        }
         let (base_vertex, first_index) = (self.vertex_end, self.index_end);
         encoder.copy_buffer_to_buffer(
             &mesh.vertices,
@@ -136,17 +150,28 @@ impl MeshPool {
     }
 
     /// Room for `vertices` and `indices` more, the buffers grown (their
-    /// contents copied over) when they would not fit.
+    /// contents copied over) when they would not fit; false when they would
+    /// pass the device's buffer size.
     fn reserve(
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
         vertices: u32,
         indices: u32,
-    ) {
+    ) -> bool {
+        let vertices_needed = u64::from(self.vertex_end) + u64::from(vertices);
+        let indices_needed = u64::from(self.index_end) + u64::from(indices);
+        if vertices_needed > u64::from(self.vertex_ceiling)
+            || indices_needed > u64::from(self.index_ceiling)
+        {
+            return false;
+        }
         let needed = self.vertex_end + vertices;
         if needed > self.vertex_capacity {
-            let capacity = needed.next_power_of_two();
+            let capacity = needed
+                .checked_next_power_of_two()
+                .unwrap_or(u32::MAX)
+                .min(self.vertex_ceiling);
             let grown = vertex_buffer(gpu, capacity);
             encoder.copy_buffer_to_buffer(
                 &self.vertices,
@@ -160,7 +185,10 @@ impl MeshPool {
         }
         let needed = self.index_end + indices;
         if needed > self.index_capacity {
-            let capacity = needed.next_power_of_two();
+            let capacity = needed
+                .checked_next_power_of_two()
+                .unwrap_or(u32::MAX)
+                .min(self.index_ceiling);
             let grown = index_buffer(gpu, capacity);
             encoder.copy_buffer_to_buffer(
                 &self.indices,
@@ -172,6 +200,7 @@ impl MeshPool {
             self.indices = grown;
             self.index_capacity = capacity;
         }
+        true
     }
 }
 

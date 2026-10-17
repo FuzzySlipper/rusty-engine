@@ -49,8 +49,6 @@ const STATS: usize = 9;
 const ROW_CHUNKS: u32 = 65_535;
 /// The most parts an entry can name (20 bits).
 const MAX_PART: u32 = 1 << 20;
-/// The most copy rows an entry can name (24 bits).
-const MAX_ROW: u32 = 1 << 24;
 
 /// One draw of the selection: the parts sharing a mesh, material and
 /// pipeline (`part` one of them, for those), its arguments in the camera's
@@ -108,6 +106,9 @@ pub struct ScatterSelectionReadout {
     pub outside: u32,
     pub occluded: u32,
     pub levels: [u32; 3],
+    /// Copies left undrawn because they would pass the device's storage
+    /// binding limit: refused their rows, or past the selection's entries.
+    pub over_limit: u64,
 }
 
 pub(crate) struct ScatterSelect {
@@ -133,6 +134,9 @@ pub(crate) struct ScatterSelect {
     copy_count: u32,
     /// Entries the region holds: each part's copies, once a list.
     pub entries: u32,
+    /// Copies of runs left out because their entries would pass the
+    /// binding limit.
+    over_budget: u64,
     enabled: bool,
     values: [u32; STATS],
     casts_windy: bool,
@@ -291,6 +295,7 @@ impl ScatterSelect {
             run_count: 0,
             copy_count: 0,
             entries: 0,
+            over_budget: 0,
             enabled: false,
             values: [0; STATS],
         }
@@ -360,8 +365,9 @@ impl ScatterSelect {
     }
 
     /// Gather the world layer's runs and their parts again: after a regroup,
-    /// or a run made, changed or removed.
-    pub fn build(&mut self, gpu: &Gpu, tables: &Tables) {
+    /// or a run made, changed or removed. Their entries take at most
+    /// `budget`; the runs made last are left out past it.
+    pub fn build(&mut self, gpu: &Gpu, tables: &Tables, budget: u64) {
         let parts = &tables.parts;
         let live = |id: PartId| {
             let state = &parts.state[id as usize];
@@ -383,14 +389,28 @@ impl ScatterSelect {
         let mut copies = 0u32;
         let mut run_count = 0u32;
         let mut part_count = 0u32;
+        let mut used = 0u64;
+        let mut over_budget = 0u64;
         for handle in handles {
             let run = &tables.scatter_runs[&handle];
-            if !live(run.part)
-                || run.copies.count == 0
-                || run.copies.first + run.copies.count > MAX_ROW
-            {
+            if !live(run.part) || run.copies.count == 0 {
                 continue;
             }
+            // Each live level part's copies take at most two entries: the
+            // camera's, and the shadows' when its draw holds a casting run.
+            let parts_drawn = run
+                .levels
+                .iter()
+                .take(4)
+                .flatten()
+                .filter(|id| live(**id) && **id < MAX_PART)
+                .count() as u64;
+            let cost = 2 * parts_drawn * u64::from(run.copies.count);
+            if used + cost > budget {
+                over_budget += u64::from(run.copies.count);
+                continue;
+            }
+            used += cost;
             let mut level_first = [0u32; 4];
             let mut level_count = [0u32; 4];
             for (level, ids) in run.levels.iter().take(4).enumerate() {
@@ -508,6 +528,7 @@ impl ScatterSelect {
             selected.camera_entries = entries;
             selected.shadow_entries = entries + capacity;
             entries += capacity * (1 + u32::from(reserves[draw as usize]));
+            debug_assert!(u64::from(entries) <= used);
             slots[draw as usize] = slot as u32;
             ordered.push(selected);
         }
@@ -572,6 +593,7 @@ impl ScatterSelect {
         self.run_count = run_count;
         self.copy_count = copies;
         self.entries = entries;
+        self.over_budget = over_budget;
     }
 
     /// Select the runs for a view pass from `eye` through `view_proj`: its
@@ -766,7 +788,8 @@ impl ScatterSelect {
             .map_or_else(|| crate::timing::untimed(PASS), PassTimer::readout)
     }
 
-    pub fn readout(&self) -> ScatterSelectionReadout {
+    /// The readout, with `refused` copies the copy buffer refused rows.
+    pub fn readout(&self, refused: u64) -> ScatterSelectionReadout {
         let [tested, drawn, shadow, thinned, outside, one, two, three, occluded] = self.values;
         ScatterSelectionReadout {
             enabled: self.enabled,
@@ -784,6 +807,7 @@ impl ScatterSelect {
             outside,
             occluded,
             levels: [one, two, three],
+            over_limit: self.over_budget + refused,
         }
     }
 }

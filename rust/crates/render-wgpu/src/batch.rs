@@ -311,6 +311,10 @@ fn group(parts: &Parts, mut entries: Vec<Entry>, base: u32) -> DrawList {
     for (_, _, _, id, pass) in entries {
         let key = parts.state[id as usize].key;
         if let Some(copies) = parts.state[id as usize].copies {
+            // A run refused its rows (`scatter.rs`) draws nothing.
+            if copies.count == 0 {
+                continue;
+            }
             list.runs.push(id);
             list.batches.push(Batch {
                 pass,

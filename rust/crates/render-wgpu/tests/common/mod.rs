@@ -81,7 +81,11 @@ pub fn gpu() -> Gpu {
 
 impl Harness {
     pub fn new(options: RendererOptions) -> Self {
-        let gpu = gpu();
+        Self::on(gpu(), options)
+    }
+
+    /// A harness on its own device: one a test binary makes once.
+    pub fn on(gpu: Gpu, options: RendererOptions) -> Self {
         Self {
             renderer: Renderer::new(&gpu, options),
             target: OffscreenTarget::new(&gpu, WIDTH, HEIGHT, 4),

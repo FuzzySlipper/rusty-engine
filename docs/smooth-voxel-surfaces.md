@@ -389,7 +389,8 @@ the rest:
 - **Drawing.** A chunk's copies of one scatter are one scatter patch, a child
   of the chunk's node: one instanced draw per mesh group, culled by the
   patch's bounds. Each copy is a 64-byte row of one renderer buffer (its
-  place, turn, scale, tint and rank), and with compute the renderer selects
+  place, turn, scale, tint and rank), up to the device's ceiling ([budgets
+  and readout](vegetation-fields.md#budgets-and-readout)), and with compute the renderer selects
   copies one by one on the GPU ([levels of detail and
   thinning](vegetation-fields.md#levels-of-detail-and-thinning)), so draw
   lists, culling and shadow casters hold no copy at all. Copies are never

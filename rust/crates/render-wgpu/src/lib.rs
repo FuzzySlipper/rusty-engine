@@ -996,7 +996,7 @@ impl Renderer {
             distance_fields: self.distance_fields.readout(),
             light_clusters: self.light_clusters.readout(),
             gpu_culling: self.culling.readout(),
-            scatter_selection: self.scatter_select.readout(),
+            scatter_selection: self.scatter_select.readout(self.scatter_copies.refused),
             impostors: self.impostors.readout(),
             occlusion: self.occlusion.readout(),
             indirect_light: self.probes.readout(),

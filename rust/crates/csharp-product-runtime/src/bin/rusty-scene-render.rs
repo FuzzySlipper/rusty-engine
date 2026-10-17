@@ -544,6 +544,7 @@ fn run() -> Result<(), String> {
         "outside": gpu_readout.scatter_selection.outside,
         "occluded": gpu_readout.scatter_selection.occluded,
         "levels": gpu_readout.scatter_selection.levels,
+        "overLimit": gpu_readout.scatter_selection.over_limit,
     });
     let occlusion = json!({
         "enabled": gpu_readout.occlusion.enabled,

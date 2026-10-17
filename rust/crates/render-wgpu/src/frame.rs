@@ -448,17 +448,7 @@ impl Renderer {
             let mut recast = false;
             if rebuilt {
                 recast = self.scatter_select.casts();
-                self.scatter_select.build(&self.gpu, &self.tables);
-                let (tables, builtins) = (&self.tables, &self.builtins);
-                self.scatter_select.pool_meshes(
-                    &self.gpu,
-                    &mut self.mesh_pool,
-                    |mesh| match mesh {
-                        MeshRef::Static(asset) => tables.static_meshes.get(*asset),
-                        MeshRef::Builtin(kind) => builtins.get(kind),
-                        _ => None,
-                    },
-                );
+                self.select_runs();
                 recast |= self.scatter_select.casts();
             }
             let state = &self.tables.parts.state;
@@ -625,7 +615,45 @@ impl Renderer {
         if changed {
             self.casters_uploaded = false;
         }
+        // More casters leave the selection less room: gather it again within
+        // what is left.
+        if self.tables.parts.selecting
+            && u64::from(self.scatter_select.entries) > self.selection_budget()
+        {
+            self.select_runs();
+            for layer in &mut self.shadows.layers {
+                if !layer.is_backdrop() {
+                    layer.stale = true;
+                }
+            }
+        }
         self.reserve_instances();
+    }
+
+    /// Gather the selection's runs within the instance buffer's room, and
+    /// place their meshes in the pool.
+    fn select_runs(&mut self) {
+        let budget = self.selection_budget();
+        self.scatter_select.build(&self.gpu, &self.tables, budget);
+        let (tables, builtins) = (&self.tables, &self.builtins);
+        self.scatter_select
+            .pool_meshes(&self.gpu, &mut self.mesh_pool, |mesh| match mesh {
+                MeshRef::Static(asset) => tables.static_meshes.get(*asset),
+                MeshRef::Builtin(kind) => builtins.get(kind),
+                _ => None,
+            });
+    }
+
+    /// The most bytes the instance buffer may take: one storage binding's,
+    /// on a word.
+    fn instance_bytes_limit(&self) -> u64 {
+        self.gpu.storage_binding_bytes() & !3
+    }
+
+    /// The entries the selection's region may take: the instance buffer's
+    /// room past the view and caster regions.
+    fn selection_budget(&self) -> u64 {
+        (self.instance_bytes_limit() / 8).saturating_sub(u64::from(self.selection_base()))
     }
 
     /// Fit each directional light's cascades to a world view's camera, or
@@ -710,12 +738,13 @@ impl Renderer {
 
     fn reserve_instances(&mut self) {
         let words = 2 * (self.selection_base() + self.scatter_select.entries);
-        let needed = u64::from(words).max(1) * 4;
+        let limit = self.instance_bytes_limit();
+        let needed = (u64::from(words).max(1) * 4).min(limit);
         if needed > self.instances_buffer.size() {
             self.instances_buffer = storage_buffer(
                 &self.gpu.device,
                 "render-wgpu instances",
-                needed.next_power_of_two(),
+                needed.next_power_of_two().min(limit),
             );
             self.rebind_frame();
             self.culling.invalidate();

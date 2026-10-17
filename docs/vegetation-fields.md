@@ -208,6 +208,16 @@ than their area.
   last chose. Otherwise it costs nothing. Choosing, it widens every reach by
   that much, so what it keeps covers any focus within it; the copies' fades
   are drawn from the camera itself.
+- Device ceiling: every scatter copy held is a 64-byte row per mesh group
+  in one buffer the renderer binds whole, so a device holds as many rows as
+  its largest storage binding, at most 16.7 million (2^24, what a selection
+  entry names): 2 million on a device binding 128 MiB (llvmpipe, and
+  WebGPU's default), all 16.7 million on one binding 1 GiB or more (RADV
+  binds 2 GiB). A patch that would pass it is refused whole and draws nothing until it is
+  made again; the selection leaves out a run whose entries (two for each
+  level part's copies) would pass the same binding. Both count in
+  `gpu.scatterSelection.overLimit`; keep layer budgets (`MaximumInstances`)
+  under the ceiling of the devices a product supports.
 
 `Read` (and every call) returns the field's readout: tiles held and waiting
 (`Tiles`, `PendingTiles`), patches and copies drawn, `OverBudget`, `Deferred`,
@@ -222,8 +232,8 @@ taken in since it was made, the CPU time turning them into drawable parts and
 the GPU row bytes they upload; read it twice and subtract for a span.
 `engine.renderer`'s `gpu.scatterSelection` reports the last world view's
 selection: runs, parts, draws and copies selected, the commands its draws
-take and the bytes of their mesh pool (`commands`, `poolBytes`), and (a
-frame later) copies
+take and the bytes of their mesh pool (`commands`, `poolBytes`), the copies
+left undrawn past the device ceiling (`overLimit`), and (a frame later) copies
 tested, drawn (a crossfading copy twice), drawn for shadows, thinned away,
 outside the view and hidden behind its depth (`occluded`), with draws at
 levels 1 to 3; its GPU time is the `scatter-select` pass. `gpu.occlusion`

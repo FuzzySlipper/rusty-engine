@@ -1015,6 +1015,7 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             outside: readout.scatter_selection.outside,
             occluded: readout.scatter_selection.occluded,
             levels: readout.scatter_selection.levels,
+            over_limit: readout.scatter_selection.over_limit,
         },
         occlusion: ProductHostOcclusionStatistics {
             enabled: readout.occlusion.enabled,
