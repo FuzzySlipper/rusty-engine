@@ -150,6 +150,31 @@ fn copies_past_the_binding_limit_are_refused_counted_and_the_frame_draws() {
 }
 
 #[test]
+fn a_patch_replaced_in_one_update_takes_the_rows_it_replaces() {
+    // 10,000 posts, then in one update destroyed and made again, then
+    // rebuilt as their mesh is defined anew: the rows given back are free
+    // for their replacement, so nothing passes the ceiling.
+    let mut harness = harness();
+    harness.apply(vec![patch(20, copies(10_000), 0)]);
+    let (_, alone) = readout(&mut harness);
+    harness.apply(vec![
+        RenderDiff::Destroy {
+            handle: RenderHandle::new(20),
+        },
+        patch(21, copies(10_000), 0),
+    ]);
+    let (selection, replaced) = readout(&mut harness);
+    assert_eq!(selection.over_limit, 0, "{selection:?}");
+    assert_eq!(replaced, alone);
+    let defined = coloured_mesh(POST, post(), [0.9, 0.9, 0.9, 1.0]).remove(1);
+    assert!(matches!(defined, RenderDiff::DefineStaticMesh { .. }));
+    harness.apply(vec![defined]);
+    let (selection, rebuilt) = readout(&mut harness);
+    assert_eq!(selection.over_limit, 0, "{selection:?}");
+    assert_eq!(rebuilt, alone);
+}
+
+#[test]
 fn a_patch_whose_groups_do_not_all_fit_is_refused_whole() {
     // Posts of two mesh groups take a row a group: the first group's rows
     // fit beside the posts already there, the second's do not, so the

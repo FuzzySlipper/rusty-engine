@@ -1275,6 +1275,11 @@ impl Renderer {
                 for row in rows.as_chunks_mut::<{ crate::scatter::COPY_FLOATS }>().0 {
                     row[crate::scatter::PART_LANE] = f32::from_bits(id);
                 }
+                // Rows given back this update (a patch destroyed or rebuilt)
+                // are free for these before the ceiling is met.
+                for range in std::mem::take(&mut self.tables.parts.freed_copies) {
+                    self.scatter_copies.remove(range);
+                }
                 let copies = self.scatter_copies.insert(rows);
                 self.tables.parts.state[id as usize].copies = Some(copies);
             }
