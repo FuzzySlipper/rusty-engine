@@ -46,6 +46,7 @@ pub struct CsharpRenderResource {
     texture: Option<TextureDescriptor>,
     animated_mesh: Option<AnimatedMeshAsset>,
     model_surface: ModelSurfaceCell,
+    pose_model: PoseModelCell,
 }
 
 /// A GLB model's surface in its own space, built from the model's triangles
@@ -66,6 +67,26 @@ impl PartialEq for ModelSurfaceCell {
 impl std::fmt::Debug for ModelSurfaceCell {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("ModelSurfaceCell")
+    }
+}
+
+/// An animated mesh decoded for pose sampling (`SampleJointPose`), built on
+/// the first sample and shared by every copy of the resource, so it goes
+/// with the resource's last copy. Associating a clip pack changes the mesh
+/// and starts an empty cell.
+#[derive(Clone, Default)]
+struct PoseModelCell(Arc<OnceLock<Arc<animation_pose::PoseModel>>>);
+
+/// Derived from the body and its clip packs, so not part of the value.
+impl PartialEq for PoseModelCell {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for PoseModelCell {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PoseModelCell")
     }
 }
 
@@ -133,6 +154,7 @@ impl CsharpRenderResource {
             texture: Some(descriptor),
             animated_mesh: None,
             model_surface: ModelSurfaceCell::default(),
+            pose_model: PoseModelCell::default(),
         }
     }
 
@@ -153,6 +175,7 @@ impl CsharpRenderResource {
             texture: None,
             animated_mesh: None,
             model_surface: ModelSurfaceCell::default(),
+            pose_model: PoseModelCell::default(),
         })
     }
 
@@ -168,6 +191,7 @@ impl CsharpRenderResource {
             texture: None,
             animated_mesh: None,
             model_surface: ModelSurfaceCell::default(),
+            pose_model: PoseModelCell::default(),
         }
     }
 
@@ -191,6 +215,7 @@ impl CsharpRenderResource {
             texture: None,
             animated_mesh: None,
             model_surface: ModelSurfaceCell::default(),
+            pose_model: PoseModelCell::default(),
         })
     }
 
@@ -230,6 +255,7 @@ impl CsharpRenderResource {
             texture: None,
             animated_mesh: None,
             model_surface: ModelSurfaceCell::default(),
+            pose_model: PoseModelCell::default(),
         })
     }
 
@@ -257,6 +283,7 @@ impl CsharpRenderResource {
             texture: None,
             animated_mesh: None,
             model_surface: ModelSurfaceCell::default(),
+            pose_model: PoseModelCell::default(),
         })
     }
 
@@ -281,6 +308,7 @@ impl CsharpRenderResource {
             texture: None,
             animated_mesh: None,
             model_surface: ModelSurfaceCell::default(),
+            pose_model: PoseModelCell::default(),
         })
     }
 
@@ -309,6 +337,7 @@ impl CsharpRenderResource {
             texture: None,
             animated_mesh: None,
             model_surface: ModelSurfaceCell::default(),
+            pose_model: PoseModelCell::default(),
         })
     }
 
@@ -366,6 +395,7 @@ impl CsharpRenderResource {
             texture: None,
             animated_mesh: Some(imported.animated_mesh),
             model_surface: ModelSurfaceCell::default(),
+            pose_model: PoseModelCell::default(),
         })
     }
 
@@ -415,6 +445,26 @@ impl CsharpRenderResource {
             self.model_surface.0.get_or_init(|| Arc::new(surface)),
         ))
     }
+    /// The animated mesh decoded for pose sampling, decoded once for this
+    /// body and clip-pack set. `pack_bytes` gives a clip pack's body by
+    /// resource identity.
+    pub(crate) fn pose_model<B: AsRef<[u8]>>(
+        &self,
+        pack_bytes: impl FnMut(&str) -> Option<B>,
+    ) -> Result<Arc<animation_pose::PoseModel>, String> {
+        if let Some(model) = self.pose_model.0.get() {
+            return Ok(Arc::clone(model));
+        }
+        let mesh = self
+            .animated_mesh
+            .as_ref()
+            .ok_or("the resource is not an animated mesh")?;
+        let model = animation_pose::PoseModel::decode(mesh, &self.bytes, pack_bytes)?;
+        Ok(Arc::clone(
+            self.pose_model.0.get_or_init(|| Arc::new(model)),
+        ))
+    }
+
     /// A shader resource's renderer definition, its errors naming `path`.
     pub(crate) fn shader(&self) -> Option<render_model::ShaderDescriptor> {
         (self.kind == CsharpRenderResourceKind::Shader).then(|| render_model::ShaderDescriptor {
@@ -446,6 +496,7 @@ impl CsharpRenderResource {
             texture: None,
             animated_mesh: None,
             model_surface: ModelSurfaceCell::default(),
+            pose_model: PoseModelCell::default(),
         }
     }
 }
@@ -592,11 +643,14 @@ impl RenderResourceRegistry {
 
     /// The imported descriptor of a live animated resource, which clip-pack
     /// association extends in place.
+    /// The mesh, to change: a pose model decoded from the old one is not
+    /// kept.
     pub(crate) fn animated_mesh_mut(&mut self, handle: u64) -> Option<&mut AnimatedMeshAsset> {
-        self.entries
-            .get_mut(&usize::try_from(handle.checked_sub(1)?).ok()?)?
-            .animated_mesh
-            .as_mut()
+        let resource = self
+            .entries
+            .get_mut(&usize::try_from(handle.checked_sub(1)?).ok()?)?;
+        resource.pose_model = PoseModelCell::default();
+        resource.animated_mesh.as_mut()
     }
 
     /// Stages a resource under the handle of an identical live asset, or a
@@ -1018,6 +1072,7 @@ impl RenderResourceImports {
             // resource builds its own, released with it.
             CsharpRenderResource {
                 model_surface: ModelSurfaceCell::default(),
+                pose_model: PoseModelCell::default(),
                 ..self.animated[&key].resource.clone()
             }
         };
@@ -1884,6 +1939,7 @@ pub(crate) mod tests {
                 "pub(crate) fn texture",
                 "pub(crate) fn animated_mesh",
                 "pub(crate) fn model_surface",
+                "pub(crate) fn pose_model",
                 "pub(crate) fn shader",
                 "pub(crate) fn test_mesh",
                 "pub struct RenderOutputResources",

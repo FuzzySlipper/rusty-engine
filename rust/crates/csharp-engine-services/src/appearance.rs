@@ -1793,9 +1793,6 @@ pub(crate) struct RuntimeAppearanceBridge {
     animation_realization_evicted: u64,
     /// The latest joints reported per animated object.
     joint_poses: BTreeMap<u64, animation_pose::ReportedJointPose>,
-    /// Animated meshes decoded for pose sampling, by resource, with the
-    /// clip packs they were decoded with.
-    pose_models: animation_pose::PoseModels,
     /// The overlay sets' landmark pairs as the renderer last measured them,
     /// and the step the measured scene showed.
     landmarks: (u64, BTreeMap<String, LandmarkSetReport>),
@@ -1882,7 +1879,6 @@ impl RuntimeAppearanceBridge {
             animation_realization_facts: VecDeque::new(),
             animation_realization_evicted: 0,
             joint_poses: BTreeMap::new(),
-            pose_models: Default::default(),
             landmarks: (0, BTreeMap::new()),
             authored_content: None,
             diagnostics_sink: None,

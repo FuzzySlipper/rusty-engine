@@ -49,11 +49,6 @@ pub(crate) struct RagdollSource {
 
 const NO_PARENT: u32 = u32::MAX;
 
-/// Animated meshes decoded for pose sampling, by resource handle, each with
-/// the identity (body and clip packs) it was decoded from.
-#[derive(Default)]
-pub(crate) struct PoseModels(BTreeMap<u64, (Vec<String>, Arc<::animation_pose::PoseModel>)>);
-
 /// The admitted rig of the mesh an instance plays.
 fn instance_rig<'a>(
     state: &'a RuntimeAppearanceData,
@@ -334,40 +329,26 @@ impl RuntimeAppearanceBridge {
         Ok(result)
     }
 
-    /// The decoded pose model of an animated mesh resource, decoded once
-    /// per body and clip-pack set.
+    /// The decoded pose model of an animated mesh resource, kept with the
+    /// resource.
     fn pose_model(
-        &mut self,
+        &self,
         resource: u64,
     ) -> Result<Arc<::animation_pose::PoseModel>, CsharpEngineServicesError> {
-        let state = &self.staged_ref()?.state;
-        let body = state.render_resources.resource(resource)?;
-        let mesh = body.animated_mesh().ok_or_else(|| {
-            CsharpEngineServicesError::new(
+        let resources = &self.staged_ref()?.state.render_resources;
+        let body = resources.resource(resource)?;
+        if body.animated_mesh().is_none() {
+            return Err(CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_RESOURCE",
                 "resource is not an animated mesh",
-            )
-        })?;
-        let identity: Vec<String> = std::iter::once(body.content_hash().to_owned())
-            .chain(mesh.clip_packs.iter().map(|pack| pack.content_hash.clone()))
-            .collect();
-        if let Some((known, model)) = self.pose_models.0.get(&resource) {
-            if *known == identity {
-                return Ok(Arc::clone(model));
-            }
+            ));
         }
-        let resources = &state.render_resources;
-        let model = ::animation_pose::PoseModel::decode(mesh, body.bytes(), |identity| {
+        body.pose_model(|identity| {
             resources
                 .by_identity(identity)
                 .map(|pack| pack.shared_bytes())
         })
-        .map_err(|error| pose_error(format!("the mesh could not be posed: {error}")))?;
-        let model = Arc::new(model);
-        self.pose_models
-            .0
-            .insert(resource, (identity, Arc::clone(&model)));
-        Ok(model)
+        .map_err(|error| pose_error(format!("the mesh could not be posed: {error}")))
     }
 
     fn sample_animation_joint_pose(
@@ -917,6 +898,78 @@ mod tests {
 
         let refused = sampled(&mut bridge, &request("fly", 0.5)).unwrap_err();
         assert!(refused.to_string().contains("fly"), "{refused}");
+    }
+
+    /// A decoded pose model lives with its resource: released with it, and
+    /// decoded afresh when the model is opened again.
+    #[test]
+    fn a_sampled_model_is_released_with_its_resource() {
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), {
+            let mut content = BTreeMap::new();
+            content.insert("body.glb".to_owned(), Arc::from(CHARACTER_GLB));
+            content
+        });
+        let path = b"body.glb";
+        let open = |bridge: &mut RuntimeAppearanceBridge| {
+            bridge
+                .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                    path: NativeUtf8Slice {
+                        bytes: path.as_ptr(),
+                        len: path.len(),
+                    },
+                })
+                .expect("admitted animated GLB")
+        };
+        let sample = |bridge: &mut RuntimeAppearanceBridge, resource| {
+            let result = bridge
+                .sample_animation_model_joint_pose(&NativeAnimationModelPoseSampleRequest {
+                    resource,
+                    clip: utf8("run"),
+                    time: 0.5,
+                    blend_clip: utf8(""),
+                    blend_time: 0.0,
+                    blend_weight: 0.0,
+                    normalized: true,
+                    placement: placed_at(0.0),
+                })
+                .expect("a sample");
+            assert!(result.joints_len > 0);
+        };
+        let end_call = |bridge: &mut RuntimeAppearanceBridge| {
+            let call = bridge.take_staged_call();
+            bridge.commit(call);
+        };
+        bridge.begin_call();
+        let first = open(&mut bridge);
+        sample(&mut bridge, first);
+        let decoded = Arc::downgrade(&bridge.pose_model(first.value).unwrap());
+        sample(&mut bridge, first);
+        assert!(
+            Arc::ptr_eq(
+                &decoded.upgrade().unwrap(),
+                &bridge.pose_model(first.value).unwrap()
+            ),
+            "a live resource keeps its decoded model"
+        );
+        end_call(&mut bridge);
+
+        bridge.begin_call();
+        bridge.destroy_resource(first).unwrap();
+        end_call(&mut bridge);
+        // Released bodies stay servable for the call after their release.
+        for _ in 0..2 {
+            bridge.begin_call();
+            end_call(&mut bridge);
+        }
+        assert!(
+            decoded.upgrade().is_none(),
+            "the decoded model went with its resource"
+        );
+
+        bridge.begin_call();
+        let again = open(&mut bridge);
+        sample(&mut bridge, again);
+        end_call(&mut bridge);
     }
 
     #[test]
