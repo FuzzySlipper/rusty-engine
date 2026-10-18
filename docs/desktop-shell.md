@@ -42,12 +42,10 @@ TypeScript UI is composited over it.
   cursor positions and DOM hover. Escape and focus loss end it too. Where the
   platform has no confining grab (macOS) the shell refuses, and the page
   falls back to the browser's drawn cursor under a lock.
-- **Native drag and drop is refused.** Off-screen Chromium hands an HTML5
-  drag the page starts (`draggable`, `dragstart`) to the shell and takes no
-  other input until the shell ends it. The shell ends it at once: the page
-  gets `dragend` with `dropEffect` `none`, never `drop`, and its console
-  warns. Game UI drags with pointer events
-  ([drag and drop](csharp-product-style.md#drag-and-drop)).
+- **Browser features.** The page runs in off-screen Chromium, which shows no
+  native windows of its own: no dialogs, pickers, print previews or new
+  windows. What each feature does there is
+  [below](#browser-features-in-the-window).
 - **Focus.** The off-screen page keeps Chromium's focus while the window is
   in the background, so the shell reports window focus to it: focus loss sends the
   page a `blur` and makes `document.hasFocus()` false, and the input capture
@@ -76,6 +74,34 @@ TypeScript UI is composited over it.
     KWin's Xwayland does not reparent windows, so winit reports the client
     area as the frame and the window would move down by its title bar on
     every run.
+
+## Browser features in the window
+
+The window runs the product UI page in off-screen Chromium, so a browser
+feature that would open a native window does not. None of the features below
+can lock the page's input. Those a page might rely on warn in its console
+(`rusty desktop shell: …`). Game UI keeps to the
+[green path](csharp-product-style.md#game-ui-and-diagnostic-ui); diagnostic UI
+may use any of this and runs fully in a browser.
+
+| Feature | In the window |
+| --- | --- |
+| Native HTML5 drag and drop | Refused at once: `dragend` with `dropEffect` `none`, never `drop`. Warns. |
+| `print()` | Does nothing; the shell replaces it, since off screen it never returns and freezes the page. Warns. Ctrl+P is an ordinary key. |
+| `alert`, `confirm`, `prompt` | Cancelled at once: `undefined`, `false`, `null`. Warns. |
+| `beforeunload` prompt | Not shown; the page unloads. |
+| `window.open`, `target="_blank"` links | Not opened; `window.open` returns `null`. Warns with the URL. |
+| Same-tab navigation | Replaces the UI page. |
+| File and colour pickers | Do not open. Warns on click. |
+| `<select>`, date picker | Work: the popup is drawn over the page. |
+| `<dialog>` with `showModal()` | Works. |
+| `title` tooltips | Not shown. |
+| Context menu | `contextmenu` fires; no native menu appears. |
+| Download links | Nothing downloads. |
+| Clipboard | `navigator.clipboard.writeText` works; `readText` is denied. |
+| Fullscreen API | Resolves and fills the view; the native window does not change. |
+| Notifications, geolocation and other permission prompts | Denied at once. |
+| Text entry, Tab focus, wheel scrolling | Work. IME composition has not been checked. |
 
 ## Running
 

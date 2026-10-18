@@ -104,14 +104,51 @@ Keep implementation topology in developer documentation. Do not add static
 not establish that gameplay is running. Show actionable failures and requested
 diagnostics through the Engine's diagnostics and UI surfaces.
 
-## Game UI
+## Game UI and diagnostic UI
 
-The product UI page is ordinary DOM, and a tool or utility overlay may use
-whatever browser feature it needs. Game interaction surfaces (HUD,
-inventories, menus, dialogue) keep to the path that behaves the same in a
-browser, the stream and the desktop window. That path is written down here one
-interaction at a time; [desktop shell](desktop-shell.md#shape) lists what the
-window does differently from a browser.
+Rusty Engine games ship as desktop apps. Players see the product UI page in
+the desktop window, where off-screen Chromium composites it over the scene.
+During development the same page also runs in a browser tab, which is where
+agents and tools drive it most easily. The page is ordinary DOM either way,
+and its UI is one of two kinds:
+
+- **Game UI** is what a player uses: HUD, inventories, menus, dialogue,
+  settings. It keeps to the green path below, which behaves the same in a
+  browser, the stream and the desktop window. Iterate in the browser, but
+  check game UI in `rusty dev --output window` before calling it done,
+  because the window is what ships.
+- **Diagnostic UI** is for developers and agents: debug panels, tuning,
+  inspection, test controls. It may use any browser feature, and exercising
+  it only in a browser is fine. In the window an unsupported feature does
+  nothing, or warns in the page's console, and never locks input
+  ([browser features in the window](desktop-shell.md#browser-features-in-the-window)).
+
+Keep the two apart in the page, so that a debug panel's needs never shape a
+game surface.
+
+The green path:
+
+- **Input.** Gameplay input reaches the product through the Engine's input
+  capture. UI controls take DOM pointer events (`click`, `pointerdown`,
+  `pointermove`, `pointerup`) and keyboard events.
+- **Escape and focus.** Escape ends a pointer lock or cursor confinement
+  first; the page sees the lock end, not the key. Drop held state and cancel
+  drags on the window's `blur`.
+- **Menus and modals.** Draw them in the DOM; `<dialog>` with `showModal()`
+  works everywhere. Never use `alert`, `confirm` or `prompt`: the window
+  cancels them. For a right-click menu, call `preventDefault()` on
+  `contextmenu` and draw the menu; the window shows no native one.
+- **Lists and choices.** Overflow lists scroll with the wheel. `<select>` and
+  the date picker work; the window draws their popups.
+- **Text entry.** Use `<input>` and `<textarea>`. IME composition has not been
+  checked in the window.
+- **Tooltips.** Draw them on `pointerenter`/`pointerleave`; the window never
+  shows `title` tooltips.
+- **Pickers.** Draw file and colour choices in the page. No native file or
+  colour picker opens in the window.
+- **One page.** Game UI stays in the one page. Navigating replaces the UI, and
+  `window.open` and `target="_blank"` open nothing.
+- **Drag and drop.** Use pointer events, as described next.
 
 ### Drag and drop
 

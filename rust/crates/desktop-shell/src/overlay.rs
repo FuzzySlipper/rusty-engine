@@ -42,10 +42,13 @@ const CONFINE_EXIT: &str = "rusty-desktop:cursor-release";
 /// `__rustyDesktopFocus`: the page gets `blur`/`focus` on `window` and
 /// `document.hasFocus()` follows the native window, as in a browser tab.
 ///
-/// The shell refuses native HTML5 drag and drop: Chromium hands a drag the
-/// page starts to the shell, which ends it at once, so the page gets `dragend`
-/// with `dropEffect` `none`. The shim says so in the page's console on each
-/// `dragstart`; game UI drags with pointer events instead.
+/// Browser features the window cannot carry warn in the page's console when
+/// used (docs/desktop-shell.md lists them). Two would otherwise lock the page:
+/// a native HTML5 drag, which Chromium hands to the shell and the shell ends
+/// at once (`dragend` with `dropEffect` `none`), and `print()`, which never
+/// returns off screen and is replaced with a refusal. `alert`, `confirm` and
+/// `prompt` return what Chromium's cancelled dialog returns, and file and
+/// colour pickers do not open.
 const PAGE_SHIM: &str = r#"(() => {
   if (window.__rustyDesktopMotion) return;
   let locked = null;
@@ -107,9 +110,27 @@ const PAGE_SHIM: &str = r#"(() => {
     confined = false;
     document.dispatchEvent(new CustomEvent('rusty-desktop-confinement-end', { detail: { refused } }));
   };
+  const unsupported = (what, instead) => console.warn(
+    `rusty desktop shell: ${what} in the desktop window. ${instead} (docs/desktop-shell.md#browser-features-in-the-window)`);
   window.addEventListener('dragstart', (event) => {
     if (!event.isTrusted) return;
-    console.warn('rusty desktop shell: native drag and drop is not supported in the desktop window; the drag ends at once with dropEffect none. Drag with pointer events (pointerdown, setPointerCapture, pointermove, pointerup) and set draggable="false" on images and links: see docs/csharp-product-style.md#drag-and-drop');
+    unsupported('native drag and drop is refused; the drag ends at once with dropEffect none',
+      'Drag with pointer events and set draggable="false" on images and links.');
+  }, true);
+  window.print = () => unsupported('print() does nothing', 'Nothing prints from the window.');
+  const cancelled = { alert: undefined, confirm: false, prompt: null };
+  for (const [name, answer] of Object.entries(cancelled)) {
+    window[name] = () => {
+      unsupported(`${name}() is cancelled at once`, 'Show a DOM modal such as <dialog> instead.');
+      return answer;
+    };
+  }
+  document.addEventListener('click', (event) => {
+    const input = event.target;
+    if (!event.isTrusted || !(input instanceof HTMLInputElement)) return;
+    if (input.type === 'file' || input.type === 'color') {
+      unsupported(`the ${input.type} picker does not open`, 'Draw the control in the page.');
+    }
   }, true);
   window.__rustyDesktopMotion = (x, y) => {
     if (locked === null) return;
@@ -210,6 +231,18 @@ impl UiOverlay {
                 }
                 NavigationEvent::DragStarted { x, y, .. } => {
                     let _ = self.page.refuse_drag(x, y);
+                }
+                // welding denies the new window; the page hears why.
+                NavigationEvent::NewWindowRequested { url, .. } => {
+                    let warning = format!(
+                        "rusty desktop shell: a new window for {url} is not opened in the \
+                         desktop window. Keep game UI in this page. \
+                         (docs/desktop-shell.md#browser-features-in-the-window)"
+                    );
+                    // A Rust string's debug form is a valid JavaScript string literal.
+                    let _ = self
+                        .page
+                        .execute_script(&format!("console.warn({warning:?});"));
                 }
                 NavigationEvent::ConsoleMessage { message, .. } if message == LOCK_REQUEST => {
                     self.grab(window);

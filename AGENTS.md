@@ -160,6 +160,11 @@ full guide.
 
 - Organize code by gameplay domain, with one clear mutable state owner for each
   domain. Keep systems thin: **Read → Decide → Apply → Publish**.
+- Games ship as desktop apps. Game UI (HUD, inventories, menus, dialogue)
+  keeps to the [green path](docs/csharp-product-style.md#game-ui-and-diagnostic-ui)
+  and is checked in `rusty dev --output window` before it is called done.
+  Diagnostic UI (debug, tuning, inspection, test controls) may use any
+  browser feature and may be exercised only in a browser.
 - Use views, requests, receipts, and facts when a boundary benefits from an
   explicit typed contract; do not introduce a bus or framework where a direct
   method is clearer.
