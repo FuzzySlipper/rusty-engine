@@ -104,11 +104,60 @@ Keep implementation topology in developer documentation. Do not add static
 not establish that gameplay is running. Show actionable failures and requested
 diagnostics through the Engine's diagnostics and UI surfaces.
 
-Drag UI with pointer events (`pointerdown`, `setPointerCapture`,
-`pointermove`), which behave the same in a browser, the stream and the desktop
-window. Native HTML5 drag and drop works in the desktop window only inside the
-window and carries only files, `text/plain`, `text/html` and `text/uri-list`
-data; see [native drag and drop](desktop-shell.md#shape).
+## Game UI
+
+The product UI page is ordinary DOM, and a tool or utility overlay may use
+whatever browser feature it needs. Game interaction surfaces (HUD,
+inventories, menus, dialogue) keep to the path that behaves the same in a
+browser, the stream and the desktop window. That path is written down here one
+interaction at a time; [desktop shell](desktop-shell.md#shape) lists what the
+window does differently from a browser.
+
+### Drag and drop
+
+Drag with pointer events, not HTML5 drag and drop. The desktop window refuses a
+native drag: it ends at once with `dropEffect` `none`, and the page's console
+says so.
+
+- Keep native drag out of the surface. Images and links are draggable by
+  default, and a native drag ends the pointer sequence with `pointercancel`,
+  so set `draggable="false"` on them (or call `preventDefault()` on
+  `dragstart`).
+- On `pointerdown` over an item, call `setPointerCapture(event.pointerId)` and
+  remember the item. Start the drag after a few pixels of movement, so a
+  click stays a click.
+- On `pointermove`, move a ghost element styled `pointer-events: none` and
+  find the slot under the pointer with `document.elementFromPoint`.
+- On `pointerup`, find the slot the same way and ask the product to move the
+  item. C# owns the inventory: the UI sends the request and redraws from what
+  the product publishes.
+- Cancel on `pointercancel`, `lostpointercapture`, Escape and the window's
+  `blur`.
+
+```ts
+item.draggable = false;
+item.addEventListener('pointerdown', (down) => {
+  item.setPointerCapture(down.pointerId);
+  let dragging = false;
+  const slotAt = (e: PointerEvent) =>
+    document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-slot]');
+  const move = (e: PointerEvent) => {
+    dragging ||= Math.hypot(e.clientX - down.clientX, e.clientY - down.clientY) > DRAG_START_PIXELS;
+    if (dragging) ghost.show(item, e.clientX, e.clientY, slotAt(e));
+  };
+  const end = (e: Event) => {
+    item.removeEventListener('pointermove', move);
+    item.removeEventListener('pointerup', end);
+    item.removeEventListener('pointercancel', end);
+    ghost.hide();
+    const slot = e.type === 'pointerup' && dragging ? slotAt(e as PointerEvent) : null;
+    if (slot) requestMove(item.dataset.slot!, slot.dataset.slot!);
+  };
+  item.addEventListener('pointermove', move);
+  item.addEventListener('pointerup', end);
+  item.addEventListener('pointercancel', end);
+});
+```
 
 ## C# baseline
 

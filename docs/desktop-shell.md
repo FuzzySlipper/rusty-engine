@@ -42,33 +42,14 @@ TypeScript UI is composited over it.
   cursor positions and DOM hover. Escape and focus loss end it too. Where the
   platform has no confining grab (macOS) the shell refuses, and the page
   falls back to the browser's drawn cursor under a lock.
-- **Native drag and drop.** Off-screen Chromium hands an HTML5 drag the
-  page starts (`draggable`, `dragstart`) to the shell, and takes no other
-  input until the shell ends it. The shell carries it inside the window:
-  while the left button is held, pointer moves reach the page as
-  `dragenter`/`dragover`, and leaving the window sends `dragleave`. On
-  release the shell moves the drag to that point once more and waits,
-  normally a few milliseconds, for the page's answer to that move (the
-  `dragover`, or `dragenter` on a new target), which the page shim reads once
-  the event has dispatched. If the target called `preventDefault()` with a
-  `dropEffect` the drag allows, the page gets `drop`; otherwise it gets
-  `dragleave`.
-  `dragend` always follows with the same `dropEffect` (`none` without a drop).
-  Escape, focus loss, releasing outside the window and an answer that has
-  not come within 250 ms cancel the drag; a drag under a pointer lock is
-  cancelled at once. Differences from a browser:
-  - The drag stays in the window: nothing drags out to, or in from, other
-    applications.
-  - Only files, `text/plain`, `text/html` and `text/uri-list` travel with the
-    drag. Data under any other type (`setData('application/x-item', …)`)
-    reads back empty at the drop, and the page's console warns about it on
-    `dragstart`. Put identities in `text/plain`, or keep them in page state.
-  - The drag image is not drawn; the cursor shows the effect instead.
-
-  Pointer-event dragging (`pointerdown`, `setPointerCapture`, `pointermove`)
-  needs none of this and behaves the same in every output.
-- **Focus.** The off-screen page keeps Chromium's focus while the window is in the
-  background, so the shell reports window focus to it: focus loss sends the
+- **Native drag and drop is refused.** Off-screen Chromium hands an HTML5
+  drag the page starts (`draggable`, `dragstart`) to the shell and takes no
+  other input until the shell ends it. The shell ends it at once: the page
+  gets `dragend` with `dropEffect` `none`, never `drop`, and its console
+  warns. Game UI drags with pointer events
+  ([drag and drop](csharp-product-style.md#drag-and-drop)).
+- **Focus.** The off-screen page keeps Chromium's focus while the window is
+  in the background, so the shell reports window focus to it: focus loss sends the
   page a `blur` and makes `document.hasFocus()` false, and the input capture
   clears its held input on that `blur`, as in a browser, locked or not.
 - **Video.** `render-wgpu` plays video clips (WebM, VP9 profile 0, decoded
