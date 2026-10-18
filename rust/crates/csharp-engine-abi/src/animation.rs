@@ -402,7 +402,11 @@ pub struct NativeAnimationJointPoseResult {
 /// as seconds, clamped to the clip. With `apply_pose_controls` the
 /// instance's `SetPose` controls (IK, overrides) and ragdoll layer apply
 /// after the clips. `placement` places the instance in the scene for `World`
-/// controls and the world joints. Nothing is retained or drawn.
+/// controls and the world joints. With `use_current_playback` the clip
+/// fields are ignored: the instance samples what it plays, its direct
+/// playback (under any fade) or the first controller driving it, at the time
+/// this call advances to, which the renderer draws this call at. It must be
+/// in the published scene. Nothing is retained or drawn.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationPoseSampleRequest {
@@ -415,6 +419,7 @@ pub struct NativeAnimationPoseSampleRequest {
     pub normalized: bool,
     pub placement: NativeTransform,
     pub apply_pose_controls: bool,
+    pub use_current_playback: bool,
 }
 
 /// Samples an animated mesh resource's joints (an `OpenAnimatedMesh`

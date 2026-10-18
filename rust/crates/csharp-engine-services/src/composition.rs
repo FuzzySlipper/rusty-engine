@@ -739,6 +739,10 @@ impl EngineServiceSet {
         self.call_elapsed_seconds = update.map_or(0.0, |facts| {
             facts.fixed_delta_seconds * f64::from(facts.admitted_step_count)
         });
+        self.appearance.set_presentation_clock(
+            self.presentation_world.elapsed_seconds(),
+            self.call_elapsed_seconds,
+        );
         self.appearance.begin_call_with_update(update, tween_clock);
         self.input.begin_call(accepts_input_replacement);
         self.gameplay_time.begin_call();
@@ -959,9 +963,6 @@ impl EngineServiceSet {
         // Water fields take the time this call admitted and draw what their
         // workers last published.
         self.water_field.settle()?;
-        calls
-            .presentation_world
-            .advance_elapsed(self.call_elapsed_seconds);
         let mut output = Self::take_raw_outputs(calls, sky_frame);
         // Water surfaces made before this call are removed ahead of its
         // Graphics work, which may release a material they drew with.
@@ -1001,6 +1002,13 @@ impl EngineServiceSet {
                 .apply_presentation(std::mem::take(frame))
                 .map_err(presentation_world_error)?;
         }
+        // The renderer applies a call's outputs at the time the call starts
+        // and then advances to its end, so playback the call starts is
+        // anchored at its start here too: a renderer rebuilt from the
+        // retained world plays where the live one does.
+        calls
+            .presentation_world
+            .advance_elapsed(self.call_elapsed_seconds);
         output.render_output = self.render_output.settle(
             &mut calls.render_output,
             &calls.presentation_world,
@@ -1448,6 +1456,96 @@ mod tests {
             update(&mut services, 60 + batch * 4, 4);
         }
         assert!((services.presentation_elapsed_seconds() - 2.0).abs() < 1e-9);
+    }
+
+    /// The renderer applies a call's outputs at the call's start and poses
+    /// them at its end; the retained world anchors playback the same way, so
+    /// a renderer rebuilt from it plays where the live one does.
+    #[test]
+    fn retained_playback_is_anchored_where_the_renderer_anchors_it() {
+        let mut content = BTreeMap::new();
+        content.insert(
+            "body.glb".to_owned(),
+            Arc::from(
+                &include_bytes!("../../../../fixtures/csharp-joint-attachments/content/body.glb")[..],
+            ),
+        );
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            content,
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        services.begin_update_call(
+            binding(),
+            NativeProductUpdateFacts {
+                lifecycle_state: NativeProductLifecycleState::Running,
+                generation: 1,
+                control_revision: 1,
+                observed_host_time_nanoseconds: 0,
+                simulation_step: 1,
+                fixed_step_hz: 60,
+                admitted_step_count: 6,
+                dropped_step_count: 0,
+                fixed_delta_seconds: 1.0 / 60.0,
+                gameplay_time_selected: true,
+                gameplay_rate: 1.0,
+                gameplay_advance_remaining_steps: 0,
+                host_elapsed_seconds: 0.1,
+            },
+        );
+        let (instance, _) = crate::appearance::character_for_test(&mut services.appearance);
+        let api = services.api();
+        let clip = b"idle";
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        let status = unsafe {
+            (api.animation.set_playback)(
+                api.animation.context,
+                &NativeAnimationPlaybackRequest {
+                    instance,
+                    kind: NativeAnimationPlaybackKind::Play,
+                    clip: NativeUtf8Slice {
+                        bytes: clip.as_ptr(),
+                        len: clip.len(),
+                    },
+                    loop_mode: NativeAnimationLoopMode::Repeat,
+                    speed: 1.0,
+                    weight: 1.0,
+                    restart: true,
+                    fade_seconds: 0.0,
+                    has_fade: false,
+                    normalized_time: 0.0,
+                },
+                &mut error,
+            )
+        };
+        assert_eq!(status, ABI_OK);
+        services.finish_call().unwrap();
+        assert!((services.presentation_elapsed_seconds() - 0.1).abs() < 1e-9);
+        let offset = services
+            .presentation_world()
+            .snapshot()
+            .frame
+            .ops
+            .iter()
+            .find_map(|op| match op {
+                render_model::RenderDiff::CreateAnimatedMeshInstance { instance, .. } => {
+                    match &instance.playback {
+                        Some(render_model::AnimatedMeshPlaybackCommand::Play {
+                            start_offset_seconds,
+                            ..
+                        }) => *start_offset_seconds,
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .expect("the retained instance plays");
+        assert!(
+            (offset - 0.1).abs() < 1e-9,
+            "idle started at the call's start, so it is 0.1 s in: {offset}"
+        );
     }
 
     #[test]

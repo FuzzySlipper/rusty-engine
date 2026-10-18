@@ -49,6 +49,121 @@ pub(crate) struct RagdollSource {
 
 const NO_PARENT: u32 = u32::MAX;
 
+/// What each animated render node plays, kept as the renderer keeps it:
+/// every appearance output is observed in order at the presentation time the
+/// renderer applies it (its call's start), so `SampleJointPose` can sample an
+/// instance's current playback at the time its call is drawn at. Clips stay
+/// named by id; a sample resolves them against its pose model.
+#[derive(Clone, Default)]
+pub(crate) struct PlaybackMirror {
+    /// Each animated node's direct playback, and its parent node.
+    instances: BTreeMap<RenderHandle, (Option<RenderHandle>, ::animation_pose::PlaybackState)>,
+    /// Each animation controller's target and projected state.
+    controllers: BTreeMap<u64, (RenderHandle, ::animation_pose::ControllerPlayback)>,
+}
+
+impl PlaybackMirror {
+    pub(crate) fn observe_frame(&mut self, frame: &RenderFrameDiff, now: f64) {
+        for op in &frame.ops {
+            match op {
+                RenderDiff::CreateAnimatedMeshInstance {
+                    handle,
+                    parent,
+                    instance,
+                } => {
+                    let mut state = ::animation_pose::PlaybackState::default();
+                    if let Some(playback) = &instance.playback {
+                        // A refused command leaves the playback unset, as the
+                        // renderer does.
+                        let _ = state.apply(playback, now);
+                    }
+                    self.instances.insert(*handle, (*parent, state));
+                }
+                RenderDiff::SetAnimatedMeshPlayback { handle, playback } => {
+                    if let Some((_, state)) = self.instances.get_mut(handle) {
+                        let _ = state.apply(playback, now);
+                    }
+                }
+                RenderDiff::Destroy { handle } => self.forget(*handle),
+                _ => {}
+            }
+        }
+    }
+
+    pub(crate) fn observe_presentation(&mut self, frame: &PresentationFrameDiff, now: f64) {
+        for op in &frame.ops {
+            let PresentationOp::Animation { op, .. } = op else {
+                continue;
+            };
+            match op {
+                render_presentation::AnimationProjectionOp::Create { handle, descriptor } => {
+                    self.controllers.insert(
+                        handle.raw(),
+                        (
+                            descriptor.target,
+                            ::animation_pose::ControllerPlayback::new(
+                                descriptor.controller.clone(),
+                                now,
+                            ),
+                        ),
+                    );
+                }
+                render_presentation::AnimationProjectionOp::Update { handle, controller } => {
+                    if let Some((_, playback)) = self.controllers.get_mut(&handle.raw()) {
+                        *playback =
+                            ::animation_pose::ControllerPlayback::new(controller.clone(), now);
+                    }
+                }
+                render_presentation::AnimationProjectionOp::Destroy { handle } => {
+                    self.controllers.remove(&handle.raw());
+                }
+            }
+        }
+    }
+
+    /// Drops a destroyed node, and the animated nodes it parented.
+    fn forget(&mut self, handle: RenderHandle) {
+        let mut gone = vec![handle];
+        while let Some(handle) = gone.pop() {
+            self.instances.remove(&handle);
+            gone.extend(
+                self.instances
+                    .iter()
+                    .filter(|(_, (parent, _))| *parent == Some(handle))
+                    .map(|(child, _)| *child),
+            );
+        }
+    }
+
+    /// The clip actions `target` plays at `now`, resolved against `model`:
+    /// the first controller driving it, or its direct playback, under any
+    /// fade. A node that is not animated plays nothing.
+    fn actions(
+        &self,
+        target: RenderHandle,
+        model: &::animation_pose::PoseModel,
+        now: f64,
+    ) -> Vec<::animation_pose::ClipAction> {
+        let index = |clip: &str| model.clip_index(clip);
+        let duration = |clip: usize| model.clip_duration(clip);
+        let controller = self
+            .controllers
+            .values()
+            .find(|(driven, _)| *driven == target)
+            .map(|(_, playback)| {
+                let mut playback = playback.clone();
+                playback.resolve(&index);
+                playback.actions(now, &duration)
+            });
+        let Some((_, state)) = self.instances.get(&target) else {
+            return controller.unwrap_or_default();
+        };
+        let mut state = state.clone();
+        state.resolve(&index);
+        state.actions(now, &duration, controller).0
+    }
+}
+
 /// The admitted rig of the mesh an instance plays.
 fn instance_rig<'a>(
     state: &'a RuntimeAppearanceData,
@@ -111,6 +226,19 @@ fn vec3(value: NativeVec3) -> [f32; 3] {
 
 fn native_vec3([x, y, z]: [f32; 3]) -> NativeVec3 {
     NativeVec3 { x, y, z }
+}
+
+fn transform_value(value: NativeTransform) -> Transform {
+    Transform {
+        translation: vec3(value.translation),
+        rotation: [
+            value.rotation.x,
+            value.rotation.y,
+            value.rotation.z,
+            value.rotation.w,
+        ],
+        scale: vec3(value.scale),
+    }
 }
 
 fn native_transform_of(value: &Transform) -> NativeTransform {
@@ -374,6 +502,25 @@ impl RuntimeAppearanceBridge {
             controls = instance.pose.clone();
             controls.layers.extend(instance.ragdoll.iter().cloned());
         }
+        if request.use_current_playback {
+            let staged = self.staged_ref()?;
+            let state = &staged.state;
+            let target = instance_target(
+                &state.projector,
+                &state.appearances,
+                &state.animation_instances[&request.instance.value],
+            )
+            .ok_or_else(|| {
+                pose_error("the instance is not in the published scene, so it plays nothing")
+            })?;
+            let now = staged.clock.1;
+            let model = self.pose_model(resource)?;
+            let state = &self.staged_ref()?.state;
+            let actions = state.playback_mirror.actions(target, &model, now);
+            let world = transform_value(request.placement);
+            let joints = model.sample_actions(&actions, &controls, &world);
+            return Ok(self.hold_joints(&joints));
+        }
         self.sample_joints(
             resource,
             &NativeAnimationModelPoseSampleRequest {
@@ -436,20 +583,16 @@ impl RuntimeAppearanceBridge {
         .into_iter()
         .flatten()
         .collect();
-        let placement = request.placement;
-        let world = Transform {
-            translation: vec3(placement.translation),
-            rotation: [
-                placement.rotation.x,
-                placement.rotation.y,
-                placement.rotation.z,
-                placement.rotation.w,
-            ],
-            scale: vec3(placement.scale),
-        };
+        let world = transform_value(request.placement);
         let joints = model
             .sample(&samples, controls, &world)
-            .map_err(pose_error)?
+            .map_err(pose_error)?;
+        Ok(self.hold_joints(&joints))
+    }
+
+    /// Sampled joints as a borrowed result.
+    fn hold_joints(&mut self, joints: &[PosedJoint]) -> NativeAnimationPoseSampleResult {
+        let joints = joints
             .iter()
             .map(|joint| NativeJointPose {
                 model: native_transform_of(&joint.model),
@@ -461,7 +604,7 @@ impl RuntimeAppearanceBridge {
             joints_len: joints.len(),
         };
         self.borrowed.hold(joints);
-        Ok(result)
+        result
     }
 
     /// The reports a ragdoll of `instance` spawns from, during a call.
@@ -817,6 +960,7 @@ mod tests {
             normalized: true,
             placement: placed_at(2.0),
             apply_pose_controls: true,
+            use_current_playback: false,
         };
         let early = sampled(&mut bridge, &request("run", 0.1)).unwrap();
         let late = sampled(&mut bridge, &request("run", 0.6)).unwrap();
@@ -898,6 +1042,100 @@ mod tests {
 
         let refused = sampled(&mut bridge, &request("fly", 0.5)).unwrap_err();
         assert!(refused.to_string().contains("fly"), "{refused}");
+    }
+
+    /// Sampling current playback reads what the renderer will draw for the
+    /// call: commands anchored at the call's start on the presentation
+    /// timeline, posed at its end, across calls and through a cross-fade.
+    #[test]
+    fn current_playback_is_sampled_at_the_time_the_call_is_drawn() {
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), {
+            let mut content = BTreeMap::new();
+            content.insert("body.glb".to_owned(), Arc::from(CHARACTER_GLB));
+            content
+        });
+        let play = |bridge: &mut RuntimeAppearanceBridge,
+                    instance,
+                    clip: &'static str,
+                    fade: Option<f32>| {
+            bridge
+                .set_animation_playback(&NativeAnimationPlaybackRequest {
+                    instance,
+                    kind: NativeAnimationPlaybackKind::Play,
+                    clip: utf8(clip),
+                    loop_mode: NativeAnimationLoopMode::Repeat,
+                    speed: 1.0,
+                    weight: 1.0,
+                    restart: true,
+                    fade_seconds: fade.unwrap_or(0.0),
+                    has_fade: fade.is_some(),
+                    normalized_time: 0.0,
+                })
+                .unwrap();
+        };
+        let explicit = |instance, clip, time, blend_clip, blend_time, blend_weight| {
+            NativeAnimationPoseSampleRequest {
+                instance,
+                clip: utf8(clip),
+                time,
+                blend_clip: utf8(blend_clip),
+                blend_time,
+                blend_weight,
+                normalized: false,
+                placement: placed_at(0.0),
+                apply_pose_controls: false,
+                use_current_playback: false,
+            }
+        };
+        let current = |instance| NativeAnimationPoseSampleRequest {
+            use_current_playback: true,
+            ..explicit(instance, "", 0.0, "", 0.0, 0.0)
+        };
+        let same = |a: &[NativeJointPose], b: &[NativeJointPose]| {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(a, b)| {
+                    let (a, b) = (a.model.translation, b.model.translation);
+                    (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6 && (a.z - b.z).abs() < 1e-6
+                })
+        };
+        let end_call = |bridge: &mut RuntimeAppearanceBridge| {
+            let call = bridge.take_staged_call();
+            bridge.commit(call);
+        };
+
+        // The first call runs from 1.0 to 1.25: idle starts at 1.0.
+        bridge.set_presentation_clock(1.0, 0.25);
+        bridge.begin_call();
+        let (instance, _) = character_for_test(&mut bridge);
+        play(&mut bridge, instance, "idle", None);
+        let now = sampled(&mut bridge, &current(instance)).unwrap();
+        let idle = sampled(&mut bridge, &explicit(instance, "idle", 0.25, "", 0.0, 0.0)).unwrap();
+        assert!(same(&now, &idle), "idle 0.25 s in at the call's end");
+        end_call(&mut bridge);
+
+        // The next call, 1.25 to 1.5, cross-fades to run over a second.
+        bridge.set_presentation_clock(1.25, 0.25);
+        bridge.begin_call();
+        let still = sampled(&mut bridge, &current(instance)).unwrap();
+        let idle = sampled(&mut bridge, &explicit(instance, "idle", 0.5, "", 0.0, 0.0)).unwrap();
+        assert!(same(&still, &idle), "the playback carries across calls");
+        play(&mut bridge, instance, "run", Some(1.0));
+        let fading = sampled(&mut bridge, &current(instance)).unwrap();
+        let blend = sampled(
+            &mut bridge,
+            &explicit(instance, "idle", 0.5, "run", 0.25, 0.25),
+        )
+        .unwrap();
+        assert!(same(&fading, &blend), "a quarter through the fade");
+        assert!(!same(&fading, &idle));
+        end_call(&mut bridge);
+
+        // A call with no admitted time samples where the last one drew.
+        bridge.set_presentation_clock(1.5, 0.0);
+        bridge.begin_call();
+        let held = sampled(&mut bridge, &current(instance)).unwrap();
+        assert!(same(&held, &blend));
+        end_call(&mut bridge);
     }
 
     /// A decoded pose model lives with its resource: released with it, and

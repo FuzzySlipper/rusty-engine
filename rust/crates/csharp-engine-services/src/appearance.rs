@@ -1420,6 +1420,8 @@ pub(crate) struct RuntimeAppearanceData {
     next_sprite_playback: u64,
     animated_appearances: BTreeMap<u64, u64>,
     animation_instances: BTreeMap<u64, AnimationInstance>,
+    /// What each animated render node plays, as the renderer holds it.
+    pub(crate) playback_mirror: animation_pose::PlaybackMirror,
     /// The animation instance on each product object.
     animation_objects: BTreeMap<u64, u64>,
     /// Animation instances on each appearance, with how many.
@@ -1519,6 +1521,9 @@ pub(crate) struct RuntimeAppearanceCall {
     pub(crate) outputs: Vec<RuntimeAppearanceCallOutput>,
     /// Presentation frames emitted in this call; their sequence numbers.
     presentation_frames: u32,
+    /// The presentation timeline at the call's start, which the renderer
+    /// applies its outputs at, and at its end, which it poses them at.
+    clock: (f64, f64),
 }
 
 #[derive(Clone)]
@@ -1801,6 +1806,9 @@ pub(crate) struct RuntimeAppearanceBridge {
     reported_recoverable_codes: BTreeSet<&'static str>,
     /// The world time tweens last saw owed toward the next step.
     tween_owed_seconds: f64,
+    /// The presentation timeline when the next call starts, and how far that
+    /// call advances it (`set_presentation_clock`).
+    presentation_clock: (f64, f64),
 }
 
 impl RuntimeAppearanceBridge {
@@ -1844,6 +1852,7 @@ impl RuntimeAppearanceBridge {
             next_sprite_playback: 1,
             animated_appearances: BTreeMap::new(),
             animation_instances: BTreeMap::new(),
+            playback_mirror: Default::default(),
             animation_objects: BTreeMap::new(),
             appearance_animation_instances: BTreeMap::new(),
             animation_graphs: BTreeMap::new(),
@@ -1884,6 +1893,7 @@ impl RuntimeAppearanceBridge {
             diagnostics_sink: None,
             reported_recoverable_codes: BTreeSet::new(),
             tween_owed_seconds: 0.0,
+            presentation_clock: (0.0, 0.0),
         }
     }
 
@@ -1967,6 +1977,12 @@ impl RuntimeAppearanceBridge {
         crate::tween::playing(&self.state)
     }
 
+    /// The presentation timeline the next call starts at and how far it
+    /// advances it, as the composition admits it.
+    pub(crate) fn set_presentation_clock(&mut self, start: f64, advance: f64) {
+        self.presentation_clock = (start, start + advance);
+    }
+
     /// Begins a call; with a `clock` (an update, or the Engine's own tween
     /// call) its tweens advance first.
     pub(crate) fn begin_call_with_update(
@@ -2000,6 +2016,7 @@ impl RuntimeAppearanceBridge {
             release_error: None,
             outputs: Vec::new(),
             presentation_frames: 0,
+            clock: self.presentation_clock,
         });
         self.operation_error = None;
     }
@@ -7782,12 +7799,19 @@ pub(crate) fn push_extra_frame(
     staged: &mut RuntimeAppearanceCall,
     frame: render_model::RenderFrameDiff,
 ) {
+    let now = staged.clock.0;
+    staged.state.playback_mirror.observe_frame(&frame, now);
     staged
         .outputs
         .push(RuntimeAppearanceCallOutput::Frame(frame));
 }
 
 fn push_presentation_frame(staged: &mut RuntimeAppearanceCall, frame: PresentationFrameDiff) {
+    let now = staged.clock.0;
+    staged
+        .state
+        .playback_mirror
+        .observe_presentation(&frame, now);
     staged.presentation_frames = staged.presentation_frames.saturating_add(1);
     staged
         .outputs

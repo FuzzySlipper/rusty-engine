@@ -62,7 +62,7 @@ public readonly partial record struct AnimationPoseSampleRequest
         Transform placement,
         bool normalized = true,
         bool applyPoseControls = true) =>
-        new(instance, clip, time, string.Empty, 0, 0, normalized, placement, applyPoseControls);
+        new(instance, clip, time, string.Empty, 0, 0, normalized, placement, applyPoseControls, false);
 
     /// <summary>
     /// <paramref name="clip"/> at <paramref name="time"/> blended toward
@@ -79,7 +79,19 @@ public readonly partial record struct AnimationPoseSampleRequest
         Transform placement,
         bool normalized = true,
         bool applyPoseControls = true) =>
-        new(instance, clip, time, blendClip, blendTime, blendWeight, normalized, placement, applyPoseControls);
+        new(instance, clip, time, blendClip, blendTime, blendWeight, normalized, placement, applyPoseControls, false);
+
+    /// <summary>
+    /// <paramref name="instance"/>'s joints as it plays now: its direct
+    /// playback (under any fade) or the first controller driving it, at the
+    /// time this call advances to, which the renderer draws this call at.
+    /// The instance must be in the published scene.
+    /// </summary>
+    public static AnimationPoseSampleRequest OfCurrentPlayback(
+        AnimationInstance instance,
+        Transform placement,
+        bool applyPoseControls = true) =>
+        new(instance, string.Empty, 0, string.Empty, 0, 0, false, placement, applyPoseControls, true);
 }
 
 public readonly partial record struct AnimationModelPoseSampleRequest

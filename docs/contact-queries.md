@@ -83,23 +83,32 @@ not drawn and nothing is retained. It works in the headless `EngineTestHost`,
 so a recorded fight replays identically in a test.
 
 `AnimationPoseSampleRequest.OfClip` and `OfBlend` build the common cases.
+`Normalized` reads times as fractions of the clip, as `Sample` playback
+does. Otherwise times are seconds, clamped to the clip.
+
+### Current playback
+
+`AnimationPoseSampleRequest.OfCurrentPlayback(instance, placement)` samples
+what the instance plays: its direct playback (under any cross-fade or fade
+out) or the first controller driving it. The sample is taken at the time the
+call advances to, which is the time the renderer draws the call at.
+Playback runs on the Engine's presentation timeline, which advances only with
+admitted simulation steps. A command takes effect from the start of the call
+that issues it, so a clip started this call is already a call's time in when
+the call is drawn. The instance must be in the published scene.
+
 `SampleModelJointPose(AnimationModelPoseSampleRequest.OfClip(resource, ...))`
 samples a mesh resource without an instance or controls, for example to
-measure a swing ahead of time. `Normalized` reads times as fractions of the clip, as `Sample`
-playback does. Otherwise times are seconds, clamped to the clip. The product
-passes the clip and time it is playing; the Engine does not read it back from
-the presentation timeline.
+measure a swing ahead of time.
 
 ## A melee swing
 
 ```csharp
-// Where the clip puts the swing at the previous and current update.
-static JointPose Hand(IAnimationService animation, AnimationInstance attacker,
-    float time, Transform placement, uint hand) =>
-    animation.SampleJointPose(AnimationPoseSampleRequest.OfClip(attacker, "slash", time, placement)).Span[(int)hand];
-
-JointPose before = Hand(engine.Animation, attacker, previousTime, placement, rightHand);
-JointPose after = Hand(engine.Animation, attacker, currentTime, placement, rightHand);
+// Where the swing was drawn last update, and where this update draws it.
+JointPose before = previousHand;
+JointPose after = engine.Animation.SampleJointPose(
+    AnimationPoseSampleRequest.OfCurrentPlayback(attacker, placement)).Span[(int)rightHand];
+previousHand = after;
 SpatialShape blade = SpatialShape.Capsule(Vector3.Zero, new(0, 0, -0.9f), 0.04f);
 
 // Each defender's body parts and held items, posed the same way.

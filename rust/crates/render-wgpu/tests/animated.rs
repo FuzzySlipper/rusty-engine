@@ -1248,3 +1248,175 @@ fn a_pose_sampled_without_the_renderer_matches_the_drawn_report() {
         }
     }
 }
+
+/// What an instance plays, followed outside the renderer with
+/// `animation_pose::PlaybackState` and `ControllerPlayback` from the same
+/// commands at the same Engine times (as the services follow it to sample
+/// an instance's current playback), poses as the renderer draws and reports
+/// it: direct playback, a cross-fade and a controller in a transition.
+#[test]
+fn current_playback_followed_without_the_renderer_matches_the_drawn_report() {
+    use render_presentation::{
+        AnimationControllerClipPhase, AnimationControllerProjectionState,
+        AnimationProjectionDescriptor, AnimationProjectionHandle, AnimationProjectionOp,
+        AnimationTransitionState, PresentationFrameDiff, PresentationOp, PresentationOpMeta,
+        ResolvedAnimationMotion,
+    };
+    const NO_ENTITIES: &dyn Fn(u64) -> Option<[f32; 3]> = &|_| None;
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let model = animation_pose::PoseModel::decode(
+        &body,
+        &fixture("csharp-joint-attachments/content/body.glb"),
+        |_| None::<Vec<u8>>,
+    )
+    .expect("the body poses");
+    let report = AnimatedMeshPose {
+        report_joints: true,
+        ..AnimatedMeshPose::default()
+    };
+    harness.apply(vec![
+        move_body(1.0),
+        RenderDiff::SetAnimatedMeshPose {
+            handle: RenderHandle::new(BODY),
+            pose: report.clone(),
+        },
+    ]);
+    // The scene's own playback, applied at Engine time 0.
+    let mut followed = animation_pose::PlaybackState::default();
+    followed.apply(&sample("run", 0.5), 0.0).unwrap();
+    let mut controller: Option<animation_pose::ControllerPlayback> = None;
+    let view = character_view();
+    let check = |harness: &mut Harness,
+                 followed: &mut animation_pose::PlaybackState,
+                 controller: &Option<animation_pose::ControllerPlayback>,
+                 now: f64,
+                 case: &str| {
+        harness.renderer.set_animation_time(now);
+        harness.render(&view);
+        let reports = joint_poses(harness);
+        let (seconds, world, drawn, _) = reports.last().expect("a report");
+        assert_eq!(*seconds, now, "{case}");
+        let index = |clip: &str| model.clip_index(clip);
+        let duration = |clip: usize| model.clip_duration(clip);
+        followed.resolve(&index);
+        let driving = controller.clone().map(|mut controller| {
+            controller.resolve(&index);
+            controller.actions(now, &duration)
+        });
+        let (actions, _) = followed.actions(now, &duration, driving);
+        let sampled = model.sample_actions(&actions, &report, world);
+        for (joint, (sampled, drawn)) in sampled.iter().zip(drawn).enumerate() {
+            let (a, b) = (sampled.world.translation, drawn.world.translation);
+            assert!(distance(a, b) < 1e-5, "{case}: joint {joint}: {a:?} {b:?}");
+        }
+        actions.len()
+    };
+
+    // Direct playback, applied at 1.0 and drawn at 1.4.
+    harness.renderer.set_animation_time(1.0);
+    let idle = play("idle", AnimationLoopMode::Repeat);
+    harness.apply(vec![RenderDiff::SetAnimatedMeshPlayback {
+        handle: RenderHandle::new(BODY),
+        playback: idle.clone(),
+    }]);
+    followed.apply(&idle, 1.0).unwrap();
+    assert_eq!(
+        check(&mut harness, &mut followed, &controller, 1.4, "playing"),
+        1
+    );
+
+    // A cross-fade to another clip, applied at 1.4 and drawn partway.
+    let run = AnimatedMeshPlaybackCommand::Play {
+        clip: "run".to_owned(),
+        r#loop: AnimationLoopMode::Repeat,
+        speed: 1.0,
+        weight: 1.0,
+        restart: true,
+        fade_seconds: Some(0.5),
+        start_offset_seconds: None,
+        start_paused: false,
+    };
+    harness.apply(vec![RenderDiff::SetAnimatedMeshPlayback {
+        handle: RenderHandle::new(BODY),
+        playback: run.clone(),
+    }]);
+    followed.apply(&run, 1.4).unwrap();
+    assert_eq!(
+        check(
+            &mut harness,
+            &mut followed,
+            &controller,
+            1.6,
+            "cross-fading"
+        ),
+        2,
+        "the prior clip fades under the new one"
+    );
+
+    // A controller halfway through a transition replaces direct playback
+    // (the fade still under it), applied at 1.6 and drawn at 1.75.
+    let motion = |clip: &str| ResolvedAnimationMotion {
+        clip_a: clip.to_owned(),
+        clip_b: None,
+        blend_weight_milli: 0,
+        speed_milli: 1250,
+    };
+    let state = AnimationControllerProjectionState {
+        entity: BODY,
+        graph_id: "graph/character".to_owned(),
+        graph_version: 1,
+        state_id: "run".to_owned(),
+        revision: 1,
+        controller_tick: 1,
+        phase_seconds: 0.0,
+        clip_phases: vec![
+            AnimationControllerClipPhase {
+                clip: "jump".to_owned(),
+                time_seconds: 0.2,
+            },
+            AnimationControllerClipPhase {
+                clip: "idle".to_owned(),
+                time_seconds: 0.1,
+            },
+        ],
+        motion: motion("jump"),
+        transition: Some(AnimationTransitionState {
+            transition_id: "to-idle".to_owned(),
+            from_state_id: "jump".to_owned(),
+            to_state_id: "idle".to_owned(),
+            elapsed_ticks: 3,
+            duration_ticks: 10,
+            target_motion: motion("idle"),
+        }),
+        transition_fact: None,
+    };
+    let issues = harness.renderer.apply_presentation(
+        &PresentationFrameDiff {
+            ops: vec![PresentationOp::Animation {
+                meta: PresentationOpMeta::new(0),
+                op: AnimationProjectionOp::Create {
+                    handle: AnimationProjectionHandle::new(1),
+                    descriptor: AnimationProjectionDescriptor {
+                        target: RenderHandle::new(BODY),
+                        asset: "graph/character".to_owned(),
+                        content_hash: "sha256:controller-fixture".to_owned(),
+                        tick_duration_millis: 16,
+                        controller: state.clone(),
+                    },
+                },
+            }],
+            ..PresentationFrameDiff::default()
+        },
+        &harness.resources,
+        NO_ENTITIES,
+    );
+    assert!(issues.is_empty(), "{issues:?}");
+    controller = Some(animation_pose::ControllerPlayback::new(state, 1.6));
+    assert_eq!(
+        check(&mut harness, &mut followed, &controller, 1.75, "controlled"),
+        3,
+        "the fading idle under the controller's jump and idle"
+    );
+}

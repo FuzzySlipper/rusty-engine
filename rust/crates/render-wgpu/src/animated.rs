@@ -28,14 +28,13 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use glam::{Mat4, Vec3};
 use render_model::{
-    AnimatedMeshAsset, AnimatedMeshClipPose, AnimatedMeshInspection,
-    AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, AnimatedMeshPlaybackTimeline,
-    AnimatedMeshPose, AnimationLoopMode, IkChainReach, MaterialAlphaModeDescriptor,
-    MaterialInstanceParameters, MaterialUvStrategy, PosedJoint, RenderHandle,
-    RenderMaterialDescriptor, Transform,
+    AnimatedMeshAsset, AnimatedMeshInspection, AnimatedMeshInstanceDescriptor,
+    AnimatedMeshPlaybackCommand, AnimatedMeshPlaybackTimeline, AnimatedMeshPose, AnimationLoopMode,
+    IkChainReach, MaterialAlphaModeDescriptor, MaterialInstanceParameters, MaterialUvStrategy,
+    PosedJoint, RenderHandle, RenderMaterialDescriptor, Transform,
 };
 
-use render_presentation::{AnimationControllerProjectionState, AnimationProjectionOp};
+use render_presentation::AnimationProjectionOp;
 
 use crate::apply::{MapSlot, MaterialMaps, MaterialParams};
 use crate::convert;
@@ -44,6 +43,7 @@ use crate::pipelines::{EXTRA_VERTEX_FLOATS, VERTEX_FLOATS};
 use crate::resources::ResourceSource;
 use crate::tables::{Aabb, GpuMesh, MaterialRef, NodeKind, Topology};
 use crate::Renderer;
+use animation_pose::{ControllerPlayback, PlaybackState};
 
 /// What the runtime reads back from animated meshes (animation feedback
 /// facts), keyed by the instance's source entity and its
@@ -86,71 +86,7 @@ pub enum AnimationFact {
 /// An animation controller projected onto an animated instance.
 pub(crate) struct ControllerRow {
     target: RenderHandle,
-    state: AnimationControllerProjectionState,
-    /// The Engine time this state was received at.
-    received_at: f64,
-    /// The clips this state names, resolved to the target asset's clip
-    /// indices when the state or the target's asset changes. The frame
-    /// matches the few clips the state samples against this table.
-    clips: Vec<(String, usize)>,
-}
-
-impl ControllerRow {
-    fn resolve(&mut self, asset: Option<&AnimatedAssetRow>) {
-        self.clips.clear();
-        let Some(asset) = asset else {
-            return;
-        };
-        let motions = std::iter::once(&self.state.motion).chain(
-            self.state
-                .transition
-                .iter()
-                .map(|transition| &transition.target_motion),
-        );
-        let names = motions
-            .flat_map(|motion| std::iter::once(&motion.clip_a).chain(motion.clip_b.as_ref()))
-            .chain(self.state.clip_phases.iter().map(|phase| &phase.clip));
-        for name in names {
-            if self.clips.iter().any(|(known, _)| known == name) {
-                continue;
-            }
-            if let Some(index) = asset.clip_ids.get(name) {
-                self.clips.push((name.clone(), *index));
-            }
-        }
-    }
-
-    fn clip(&self, name: &str) -> Option<usize> {
-        self.clips
-            .iter()
-            .find(|(known, _)| known == name)
-            .map(|(_, index)| *index)
-    }
-
-    /// The weighted clip times at `now`: the published phases advanced by
-    /// each clip's speed since the update.
-    fn pose(&self, now: f64) -> Vec<AnimatedMeshClipPose> {
-        let elapsed = (now - self.received_at).max(0.0);
-        let mut state = self.state.clone();
-        let speed = |clip: &str| {
-            std::iter::once(&self.state.motion)
-                .chain(
-                    self.state
-                        .transition
-                        .iter()
-                        .map(|transition| &transition.target_motion),
-                )
-                .find(|motion| motion.clip_a == clip || motion.clip_b.as_deref() == Some(clip))
-                .map_or(1.0, |motion| f64::from(motion.speed_milli) / 1000.0)
-        };
-        for phase in &mut state.clip_phases {
-            phase.time_seconds += elapsed * speed(&phase.clip);
-        }
-        match state.frozen_pose(self.state.phase_seconds + elapsed) {
-            AnimatedMeshPlaybackCommand::SamplePose { clips } => clips,
-            _ => Vec::new(),
-        }
-    }
+    playback: ControllerPlayback,
 }
 
 /// One admitted animated-mesh asset.
@@ -175,55 +111,12 @@ pub(crate) struct AnimatedAssetRow {
     rig: Vec<Option<usize>>,
 }
 
-/// One direct-playback state, kept as it fades out.
-#[derive(Clone)]
-struct Playback {
-    timeline: AnimatedMeshPlaybackTimeline,
-    /// A frozen `SamplePose`: clips with their times and weights.
-    pose: Option<Vec<AnimatedMeshClipPose>>,
-    /// The timeline's clip and the pose's clips as asset clip indices,
-    /// resolved when the playback or the asset changes (`resolve`).
-    timeline_clip: Option<usize>,
-    pose_clips: Vec<Option<usize>>,
-}
-
-impl Playback {
-    fn unset() -> Self {
-        Self {
-            timeline: AnimatedMeshPlaybackTimeline::Unset,
-            pose: None,
-            timeline_clip: None,
-            pose_clips: Vec::new(),
-        }
-    }
-
-    fn resolve(&mut self, asset: Option<&AnimatedAssetRow>) {
-        let index = |name: &str| asset.and_then(|asset| asset.clip_ids.get(name).copied());
-        self.timeline_clip = current_clip(self).and_then(|clip| index(&clip));
-        self.pose_clips = self
-            .pose
-            .iter()
-            .flatten()
-            .map(|clip| index(&clip.clip))
-            .collect();
-    }
-}
-
-struct Fade {
-    prior: Playback,
-    start: f64,
-    duration: f64,
-    /// A cross-fade also ramps the new clip in; a stop only fades out.
-    cross: bool,
-}
-
 pub(crate) struct AnimatedInstance {
     /// The asset's slot in `animated_assets` (its `names` id).
     slot: u32,
     object_id: Option<u64>,
     generation: u64,
-    playback: Playback,
-    fade: Option<Fade>,
+    playback: PlaybackState,
     /// The `once` clip whose end is reported, until any new command.
     completion: Option<String>,
     pub(crate) inspection: AnimatedMeshInspection,
@@ -303,9 +196,7 @@ impl Renderer {
                     handle.raw(),
                     ControllerRow {
                         target: descriptor.target,
-                        state: descriptor.controller.clone(),
-                        received_at: now,
-                        clips: Vec::new(),
+                        playback: ControllerPlayback::new(descriptor.controller.clone(), now),
                     },
                 );
                 // A replaced controller's former target poses without it.
@@ -329,8 +220,7 @@ impl Renderer {
                     .controllers
                     .get_mut(&handle.raw())
                     .ok_or_else(|| format!("unknown animation controller {}", handle.raw()))?;
-                row.state = controller.clone();
-                row.received_at = now;
+                row.playback = ControllerPlayback::new(controller.clone(), now);
                 let target = row.target;
                 self.resolve_controllers_of(target);
                 target
@@ -370,7 +260,7 @@ impl Renderer {
             .and_then(|instance| self.tables.animated_assets.get(instance.slot));
         for controller in self.tables.controlled.get(&target).into_iter().flatten() {
             if let Some(row) = self.tables.controllers.get_mut(controller) {
-                row.resolve(asset);
+                row.playback.resolve(&clip_index(asset));
             }
         }
     }
@@ -678,8 +568,7 @@ impl Renderer {
                 slot,
                 object_id,
                 generation,
-                playback: Playback::unset(),
-                fade: None,
+                playback: PlaybackState::default(),
                 completion: None,
                 inspection: AnimatedMeshInspection::default(),
                 bounds_pending: false,
@@ -712,10 +601,7 @@ impl Renderer {
             return;
         };
         let asset = self.tables.animated_assets.get(instance.slot);
-        instance.playback.resolve(asset);
-        if let Some(fade) = &mut instance.fade {
-            fade.prior.resolve(asset);
-        }
+        instance.playback.resolve(&clip_index(asset));
         instance.skinned.clear();
         instance.pose.clear();
         instance.pose_dirty = true;
@@ -768,37 +654,16 @@ impl Renderer {
             .animated
             .get_mut(&handle)
             .ok_or_else(|| format!("unknown animated mesh {}", handle.raw()))?;
-        let prior = instance.playback.clone();
-        let prior_clip = current_clip(&prior);
         instance.completion = None;
-        instance
-            .playback
-            .timeline
-            .apply_command(command, now)
-            .map_err(|error| format!("{error:?}"))?;
-        instance.playback.pose = match command {
-            AnimatedMeshPlaybackCommand::SamplePose { clips } => Some(clips.clone()),
-            _ => None,
-        };
-        instance.fade = None;
+        instance.playback.apply(command, now)?;
         match command {
             AnimatedMeshPlaybackCommand::Play {
                 clip,
                 r#loop,
-                fade_seconds,
                 start_offset_seconds,
                 start_paused,
                 ..
             } => {
-                let fade = fade_seconds.unwrap_or(0.0);
-                if fade > 0.0 && prior_clip.as_deref().is_some_and(|prior| prior != clip) {
-                    instance.fade = Some(Fade {
-                        prior,
-                        start: now,
-                        duration: f64::from(fade),
-                        cross: true,
-                    });
-                }
                 let duration = durations.get(clip).copied().unwrap_or(0.0);
                 let started_at_end =
                     start_offset_seconds.is_some_and(|offset| offset >= f64::from(duration));
@@ -806,23 +671,12 @@ impl Renderer {
                     instance.completion = Some(clip.clone());
                 }
             }
-            AnimatedMeshPlaybackCommand::Stop { fade_seconds } => {
-                let fade = fade_seconds.unwrap_or(0.0);
-                if fade > 0.0 {
-                    instance.fade = Some(Fade {
-                        prior,
-                        start: now,
-                        duration: f64::from(fade),
-                        cross: false,
-                    });
-                }
-            }
             AnimatedMeshPlaybackCommand::Resume => {
                 if let AnimatedMeshPlaybackTimeline::Playing {
                     clip,
                     r#loop: AnimationLoopMode::Once,
                     ..
-                } = &instance.playback.timeline
+                } = &instance.playback.playback.timeline
                 {
                     instance.completion = Some(clip.clone());
                 }
@@ -830,7 +684,7 @@ impl Renderer {
             _ => {}
         }
         let asset = self.tables.animated_assets.get(instance.slot);
-        instance.playback.resolve(asset);
+        instance.playback.resolve(&clip_index(asset));
         instance.pose_dirty = true;
         Ok(())
     }
@@ -1054,23 +908,6 @@ impl Renderer {
             instance.pose_dirty = false;
             return;
         };
-        if instance
-            .fade
-            .as_ref()
-            .is_some_and(|fade| now >= fade.start + fade.duration)
-        {
-            instance.fade = None;
-        }
-        let mut actions = Vec::new();
-        let fade_progress = instance
-            .fade
-            .as_ref()
-            .map(|fade| ((now - fade.start) / fade.duration).clamp(0.0, 1.0) as f32);
-        if let (Some(fade), Some(progress)) = (&instance.fade, fade_progress) {
-            for (clip, time, weight) in actions_of(asset, &fade.prior, now).0 {
-                actions.push((clip, time, weight * (1.0 - progress)));
-            }
-        }
         // The first of the controllers driving it, if any.
         let controller = self
             .tables
@@ -1078,34 +915,11 @@ impl Renderer {
             .get(&handle)
             .and_then(|controllers| controllers.first())
             .and_then(|controller| self.tables.controllers.get(controller));
-        let (current, finished) = match controller {
-            // A controller replaces direct playback on its target.
-            Some(controller) => (
-                controller
-                    .pose(now)
-                    .into_iter()
-                    .filter_map(|clip| {
-                        let index = controller.clip(&clip.clip)?;
-                        let time = wrap(
-                            clip.time_seconds,
-                            asset.clips[index].duration,
-                            AnimationLoopMode::Repeat,
-                        );
-                        Some((index, time, clip.weight))
-                    })
-                    .collect(),
-                false,
-            ),
-            None => actions_of(asset, &instance.playback, now),
-        };
-        let fade_in = match (&instance.fade, fade_progress) {
-            (Some(fade), Some(progress)) if fade.cross => progress,
-            _ => 1.0,
-        };
-        actions.extend(
-            current
-                .into_iter()
-                .map(|(clip, time, weight)| (clip, time, weight * fade_in)),
+        let duration = |clip: usize| asset.clips[clip].duration;
+        let (actions, finished) = instance.playback.actions(
+            now,
+            &duration,
+            controller.map(|controller| controller.playback.actions(now, &duration)),
         );
         let world = self
             .tables
@@ -1698,10 +1512,10 @@ impl Renderer {
 impl AnimatedInstance {
     /// Whether the pose moves with time.
     fn varies(&self) -> bool {
-        if self.fade.is_some() {
+        if self.playback.fade.is_some() {
             return true;
         }
-        match &self.playback.timeline {
+        match &self.playback.playback.timeline {
             // A `once` clip settles once its completion is reported.
             AnimatedMeshPlaybackTimeline::Playing { r#loop, .. } => {
                 *r#loop != AnimationLoopMode::Once || self.completion.is_some()
@@ -1711,106 +1525,9 @@ impl AnimatedInstance {
     }
 }
 
-fn current_clip(playback: &Playback) -> Option<String> {
-    match &playback.timeline {
-        AnimatedMeshPlaybackTimeline::Playing { clip, .. }
-        | AnimatedMeshPlaybackTimeline::Paused { clip, .. }
-        | AnimatedMeshPlaybackTimeline::Sampled { clip, .. } => Some(clip.clone()),
-        _ => None,
-    }
-}
-
-/// Clip times for a playback state at `now`, each wrapped by its loop mode,
-/// and whether a `once` clip has reached its end. Clips are the playback's
-/// resolved asset clip indices; an unknown clip draws nothing.
-fn actions_of(
-    asset: &AnimatedAssetRow,
-    playback: &Playback,
-    now: f64,
-) -> (Vec<(usize, f32, f32)>, bool) {
-    let duration = |clip: Option<usize>| clip.map_or(0.0, |index| asset.clips[index].duration);
-    if let Some(pose) = &playback.pose {
-        let actions = pose
-            .iter()
-            .zip(&playback.pose_clips)
-            .filter_map(|(clip, index)| {
-                let time = wrap(
-                    clip.time_seconds,
-                    duration(*index),
-                    AnimationLoopMode::Repeat,
-                );
-                index.map(|index| (index, time, clip.weight))
-            })
-            .collect();
-        return (actions, false);
-    }
-    let clip = playback.timeline_clip;
-    let action = |time: f32, weight: f32| clip.map(|index| (index, time, weight));
-    match &playback.timeline {
-        AnimatedMeshPlaybackTimeline::Playing {
-            r#loop,
-            speed,
-            weight,
-            base_offset_seconds,
-            anchor_seconds,
-            ..
-        } => {
-            let raw = base_offset_seconds + (now - anchor_seconds) * f64::from(*speed);
-            let length = duration(clip);
-            let finished = *r#loop == AnimationLoopMode::Once && raw >= f64::from(length);
-            (
-                action(wrap(raw, length, *r#loop), *weight)
-                    .into_iter()
-                    .collect(),
-                finished,
-            )
-        }
-        AnimatedMeshPlaybackTimeline::Paused {
-            r#loop,
-            weight,
-            offset_seconds,
-            ..
-        } => (
-            action(wrap(*offset_seconds, duration(clip), *r#loop), *weight)
-                .into_iter()
-                .collect(),
-            false,
-        ),
-        AnimatedMeshPlaybackTimeline::Sampled {
-            normalized_time, ..
-        } => (
-            action(duration(clip) * normalized_time, 1.0)
-                .into_iter()
-                .collect(),
-            false,
-        ),
-        AnimatedMeshPlaybackTimeline::Unset | AnimatedMeshPlaybackTimeline::Stopped => {
-            (Vec::new(), false)
-        }
-    }
-}
-
-/// A clip time wrapped by loop mode: `once` clamps, `repeat` wraps,
-/// `pingPong` reflects on odd loops.
-fn wrap(time: f64, duration: f32, mode: AnimationLoopMode) -> f32 {
-    let duration = f64::from(duration);
-    if duration <= 0.0 {
-        return 0.0;
-    }
-    let wrapped = match mode {
-        AnimationLoopMode::Once => time.clamp(0.0, duration),
-        AnimationLoopMode::Repeat => time.rem_euclid(duration),
-        AnimationLoopMode::PingPong => {
-            let cycle = (time / duration).floor();
-            let within = time - cycle * duration;
-            if (cycle as i64).rem_euclid(2) == 1 {
-                duration - within
-            } else {
-                within
-            }
-        }
-    };
-    wrapped as f32
+/// An asset's clip index by descriptor id; no asset resolves nothing.
+fn clip_index(asset: Option<&AnimatedAssetRow>) -> impl Fn(&str) -> Option<usize> + '_ {
+    move |name| asset.and_then(|asset| asset.clip_ids.get(name).copied())
 }
 
 /// The second vertex stream a primitive draws with, when its material reads
@@ -1898,17 +1615,4 @@ fn vertex_bounds(vertices: &[f32]) -> Aabb {
 /// ([`animation_pose::joint_nodes`]).
 pub fn joint_nodes(model: &GlbModel) -> HashMap<String, usize> {
     animation_pose::joint_nodes(model)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn loop_modes_wrap_clip_time() {
-        assert_eq!(wrap(1.5, 1.0, AnimationLoopMode::Once), 1.0);
-        assert_eq!(wrap(1.25, 1.0, AnimationLoopMode::Repeat), 0.25);
-        assert_eq!(wrap(1.25, 1.0, AnimationLoopMode::PingPong), 0.75);
-        assert_eq!(wrap(2.25, 1.0, AnimationLoopMode::PingPong), 0.25);
-    }
 }

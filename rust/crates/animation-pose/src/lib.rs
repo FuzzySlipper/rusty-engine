@@ -9,6 +9,7 @@
 //! callers outside the renderer read Engine transforms.
 
 mod clip;
+mod playback;
 mod pose;
 mod rig;
 
@@ -17,6 +18,7 @@ use std::collections::HashMap;
 use render_model::{AnimatedMeshAsset, AnimatedMeshPose, PosedJoint, Transform};
 
 pub use clip::{sample_locals, Channel, Clip, Interp, Path, Trs};
+pub use playback::{wrap, ClipAction, ControllerPlayback, Fade, Playback, PlaybackState};
 pub use pose::{compose, controlled, IkSolve};
 pub use rig::{
     asset_clips, decode_clips, decode_nodes, joint_nodes, posed_joints, resource_identity,
@@ -84,9 +86,14 @@ impl PoseModel {
         })
     }
 
-    /// A clip's duration in seconds, by descriptor id.
-    pub fn duration(&self, clip: &str) -> Option<f32> {
-        Some(self.clips[*self.clip_ids.get(clip)?].duration)
+    /// A clip's index in this model's clip table, by descriptor id.
+    pub fn clip_index(&self, clip: &str) -> Option<usize> {
+        self.clip_ids.get(clip).copied()
+    }
+
+    /// A clip's duration in seconds, by index.
+    pub fn clip_duration(&self, clip: usize) -> f32 {
+        self.clips[clip].duration
     }
 
     /// The rig joints posed by `samples` (blended over the rest pose) and
@@ -102,9 +109,8 @@ impl PoseModel {
         let actions = samples
             .iter()
             .map(|sample| {
-                let index = *self
-                    .clip_ids
-                    .get(sample.clip)
+                let index = self
+                    .clip_index(sample.clip)
                     .ok_or_else(|| format!("the mesh plays no clip {:?}", sample.clip))?;
                 let time = if sample.normalized {
                     self.clips[index].duration * sample.time
@@ -114,10 +120,22 @@ impl PoseModel {
                 Ok((index, time, sample.weight))
             })
             .collect::<Result<Vec<_>, String>>()?;
+        Ok(self.sample_actions(&actions, controls, world))
+    }
+
+    /// The rig joints posed by clip actions (`(clip index, seconds,
+    /// weight)`, as [`PlaybackState::actions`] gives them), then `controls`,
+    /// placed by `world`.
+    pub fn sample_actions(
+        &self,
+        actions: &[ClipAction],
+        controls: &AnimatedMeshPose,
+        world: &Transform,
+    ) -> Vec<PosedJoint> {
         let world = transform_matrix(world);
-        let locals = sample_locals(&self.rig, &self.clips, &actions);
+        let locals = sample_locals(&self.rig, &self.clips, actions);
         let pose = controlled(&self.rig, &self.joints, locals, controls, world, None);
-        Ok(posed_joints(&self.joints, &pose, world))
+        posed_joints(&self.joints, &pose, world)
     }
 
     /// The rig joints at rest, placed by `world`.

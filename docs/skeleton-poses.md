@@ -126,10 +126,11 @@ the headless test host (`EngineTestHost`) has none.
 
 ## Sampling at simulation time
 
-`SampleJointPose` poses a clip time now, without the renderer and without
-waiting a call. It uses the evaluator the renderer draws with, so the same
-clip time, controls and placement give the joints `ReadJointPose` would
-report. Hit shapes and held items can then follow the bones during the update
+`SampleJointPose` poses an instance now, without the renderer and without
+waiting a call: either a given clip time, or what the instance plays at the
+time the call is drawn at. It uses the evaluator and the playback state the
+renderer draws with, so it gives the joints `ReadJointPose` would report for
+the same controls and placement. Hit shapes and held items can then follow the bones during the update
 that decides them, in the test host as well. See
 [contact queries](contact-queries.md#pose-sampling).
 

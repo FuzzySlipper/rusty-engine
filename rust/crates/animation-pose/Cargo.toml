@@ -8,6 +8,7 @@ workspace = true
 
 [dependencies]
 render-model.workspace = true
+render-presentation.workspace = true
 # The pose evaluator's math (scripts/dependency_boundary_check.py); values
 # leave this crate as Engine arrays and transforms.
 glam.workspace = true
