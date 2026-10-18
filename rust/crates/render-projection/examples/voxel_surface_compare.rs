@@ -322,6 +322,7 @@ fn materials(
                 unlit: false,
                 flat_shading: false,
                 keep_dry: false,
+                sinks_under_snow: false,
                 wind: None,
                 water: None,
                 translucent_shadow: false,

@@ -312,6 +312,12 @@ pub struct RenderMaterialDescriptor {
     /// sheltered sign, an awning's underside or a waxed hull.
     #[serde(default, skip_serializing_if = "is_false")]
     pub keep_dry: bool,
+    /// Scatter copies drawn with it sink toward their origin under the
+    /// scene's snow and pale toward its colour (`SnowDescriptor`), as much
+    /// as the snow lies and only under the open sky: grass and flowers
+    /// under a cover.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub sinks_under_snow: bool,
     /// Sway in the scene's wind (`WindDescriptor`; the standard shader's
     /// `WIND`): the part leans with height above its origin and its vertices
     /// flutter by their colour's alpha, in the shadow maps too.
@@ -1759,6 +1765,7 @@ mod tests {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind: None,
             water: None,
             translucent_shadow: false,
@@ -1822,6 +1829,7 @@ mod tests {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind: None,
             water: None,
             translucent_shadow: false,

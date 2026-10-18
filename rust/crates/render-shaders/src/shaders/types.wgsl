@@ -217,7 +217,8 @@ struct MaterialUniform {
     water_scroll: vec4<f32>,
     water_params: vec4<f32>,
     // x: 1 when the material keeps dry under the scene's wetness
-    // (`rusty::lighting::wetted` passes it by).
+    // (`rusty::lighting::wetted` passes it by); y: 1 when its scatter
+    // copies sink and pale under snow (`world.wgsl` `snow_sunk`).
     weather: vec4<f32>,
 };
 

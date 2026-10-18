@@ -12,6 +12,9 @@
 #ifdef WIND
 #import rusty::wind::wind_displace
 #endif
+#ifdef SCATTER
+#import rusty::lighting::snow_sunk
+#endif
 #ifdef PRODUCT_CASTS
 #import rusty::product::cast_shadow
 #endif
@@ -93,6 +96,13 @@ fn vs_shadow(
 #endif
 #ifdef WIND
     world = wind_displace(world, row.model[3].xyz, alpha);
+#endif
+#ifdef SCATTER
+    // A sinking copy's shadow sinks with the snow's amount: the shadow
+    // layers cannot read the sky's layer they are drawn into.
+    if material.weather.y > 0.5 {
+        world = snow_sunk(world, row.model[3].xyz, 1.0);
+    }
 #endif
 #ifdef PRODUCT_DISPLACES
     var vertex: Vertex;

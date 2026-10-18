@@ -53,7 +53,7 @@
 }
 #import rusty::types::Surface
 #import rusty::shade::standard_shade
-#import rusty::lighting::weathered
+#import rusty::lighting::{weathered, snow_sunk, copy_open_sky}
 #ifdef DECALS
 #import rusty::decals::decaled
 #endif
@@ -190,6 +190,12 @@ fn vs_world(
     world = wind_displace(world, row.model[3].xyz, color.a);
 #endif
 #endif
+#endif
+#ifdef SCATTER
+    // Grass and flowers sink into the snow where the sky is open over them.
+    if material.weather.y > 0.5 {
+        world = snow_sunk(world, row.model[3].xyz, copy_open_sky(row.model[3].xyz));
+    }
 #endif
 #ifdef PRODUCT_SHADER
     // The vertex as placed so far, which a product's vertex stages move and
@@ -620,7 +626,12 @@ fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> 
     surface.occlusion *= mix(1.0, screen_occlusion, ambient_occlusion.params.x);
     // Rain wets what stands under the open sky (`Frame.weather`), unless
     // the material keeps dry, and snow lies on what faces up there.
-    surface = weathered(surface, material.weather.x < 0.5);
+#ifdef SCATTER
+    let pales = material.weather.y > 0.5;
+#else
+    let pales = false;
+#endif
+    surface = weathered(surface, material.weather.x < 0.5, pales);
 #ifdef DECALS
     // Decals over the opaque world, after the weather, so tracks show in
     // the snow. A scatter run's copies are vegetation; an animated mesh's

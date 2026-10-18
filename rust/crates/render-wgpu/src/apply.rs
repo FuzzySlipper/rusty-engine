@@ -2112,6 +2112,8 @@ pub(crate) struct MaterialParams {
     pub flat_shading: bool,
     /// Wetness passes it by (`MaterialUniform.weather`).
     pub keep_dry: bool,
+    /// Its scatter copies sink and pale under snow (`MaterialUniform.weather`).
+    pub sinks_under_snow: bool,
     /// Sway in the scene's wind (`rusty::wind`).
     pub wind: Option<render_model::MaterialWindDescriptor>,
     /// A water surface (`world.wgsl` `water_surface`); its textures are in
@@ -2274,6 +2276,7 @@ impl MaterialParams {
             unlit: descriptor.unlit,
             flat_shading: descriptor.flat_shading,
             keep_dry: descriptor.keep_dry,
+            sinks_under_snow: descriptor.sinks_under_snow,
             wind: descriptor.wind,
             water: descriptor.water.clone(),
             // Metalness above 1 would turn the diffuse term negative.
@@ -2512,6 +2515,7 @@ pub(crate) fn material_bind_group(
         floats[115] = water.wave_scale;
     }
     floats[116] = if params.keep_dry { 1.0 } else { 0.0 };
+    floats[117] = if params.sinks_under_snow { 1.0 } else { 0.0 };
     let uniform: &[u8] = bytemuck::cast_slice(&floats);
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),
@@ -2625,6 +2629,7 @@ pub(crate) fn builtin_materials(
                 unlit: true,
                 flat_shading: false,
                 keep_dry: false,
+                sinks_under_snow: false,
                 wind: None,
                 water: None,
                 metalness: 0.0,
@@ -2656,6 +2661,7 @@ pub(crate) fn builtin_materials(
                 unlit: false,
                 flat_shading: false,
                 keep_dry: false,
+                sinks_under_snow: false,
                 wind: None,
                 water: None,
                 metalness: 0.0,
@@ -3017,6 +3023,7 @@ mod tests {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind: None,
             water: None,
             translucent_shadow: false,

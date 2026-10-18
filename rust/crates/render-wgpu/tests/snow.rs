@@ -378,3 +378,162 @@ fn a_texel_density_steps_the_covers_edge() {
         "stepped texels blend less than a smooth edge: smooth {smooth_share:.3}, stepped {stepped_share:.3}"
     );
 }
+
+/// Tall posts scattered in a row of five about (x, 0, z), drawn with
+/// `material`.
+fn post_row(handle: u64, x: f32, z: f32, material: &str) -> Vec<RenderDiff> {
+    vec![
+        group(handle, None, transform([0.0; 3], 0.0, [1.0; 3])),
+        RenderDiff::CreateScatterPatch {
+            handle: RenderHandle::new(handle + 1),
+            parent: Some(RenderHandle::new(handle)),
+            patch: ScatterPatchDescriptor {
+                asset: "mesh/tall-post".into(),
+                material_overrides: vec![MeshMaterialSlot {
+                    slot: 0,
+                    material: material.into(),
+                }],
+                instances: (0..5)
+                    .map(|index| ScatterInstance {
+                        translation: [x + index as f32 * 0.6, 0.0, z],
+                        rotation: [0.0, 0.0, 0.0, 1.0],
+                        scale: 1.0,
+                        tint: [1.0; 3],
+                        rank: 0.5,
+                    })
+                    .collect(),
+                fade: ScatterFade::default(),
+                shadow_casting: ShadowCasting::None,
+                lods: Vec::new(),
+                lod_band: 0.0,
+                thinning: Default::default(),
+            },
+        },
+    ]
+}
+
+/// Pixels whose colour differs between two renders, in columns `x`.
+fn differing_in(a: &[u8], b: &[u8], x: std::ops::Range<u32>) -> usize {
+    let mut count = 0;
+    for row in 0..HEIGHT {
+        for column in x.clone() {
+            let at = ((row * WIDTH + column) * 4) as usize;
+            if (0..3).any(|channel| a[at + channel].abs_diff(b[at + channel]) > 3) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Grass under snow (`sinks_under_snow`): copies of a material that sinks
+/// shorten and pale under the open sky, those under the roof keep their
+/// height and colour, and copies of other materials keep their height.
+#[test]
+fn copies_that_sink_shorten_and_pale_under_the_open_sky_only() {
+    let mut harness = scene();
+    let mut grass = material("material/grass", [0.5, 0.1, 0.1, 1.0], None);
+    grass.sinks_under_snow = true;
+    harness.apply(vec![
+        RenderDiff::DefineMaterial { material: grass },
+        static_mesh(
+            "mesh/tall-post",
+            box_mesh([-0.15, -0.5, -0.15], [0.15, 1.2, 0.15], |_| 0),
+            "material/grass",
+        ),
+    ]);
+    // Low, toward -z: the sheltered row under the roof on the left, the open
+    // rows of sinking and standing posts on the right.
+    let view = camera([0.0, 0.9, 3.0], 0.0, -4.0);
+    let (left, right) = (0..WIDTH / 3, WIDTH / 2..WIDTH);
+    let ground_only = render(&mut harness, &view);
+    harness.apply(snow_and(1.0));
+    let ground_snowed = render(&mut harness, &view);
+    harness.apply(vec![RenderDiff::SetSnow { snow: None }]);
+    let mut rows = post_row(40, -5.2, -2.0, "material/grass");
+    rows.extend(post_row(50, 1.5, -2.0, "material/grass"));
+    harness.apply(rows);
+    let bare = render(&mut harness, &view);
+    harness.apply(snow_and(1.0));
+    let snowed = render(&mut harness, &view);
+    let posts =
+        |with: &[u8], without: &[u8], x: std::ops::Range<u32>| differing_in(with, without, x);
+    let (open_bare, open_snowed) = (
+        posts(&bare, &ground_only, right.clone()),
+        posts(&snowed, &ground_snowed, right.clone()),
+    );
+    assert!(open_bare > 300, "the open posts show: {open_bare}");
+    assert!(
+        open_snowed * 2 < open_bare,
+        "the open posts sink under full snow: {open_bare} pixels to {open_snowed}"
+    );
+    // The sheltered posts' own pixels draw the same under the snow, but for
+    // their anti-aliased edges against snowed ground.
+    let (mut sheltered, mut moved) = (0, 0);
+    for row in 0..HEIGHT {
+        for column in left.clone() {
+            let at = ((row * WIDTH + column) * 4) as usize;
+            let differs = |a: &[u8], b: &[u8]| {
+                (0..3).any(|channel| a[at + channel].abs_diff(b[at + channel]) > 3)
+            };
+            if differs(&bare, &ground_only) || differs(&snowed, &ground_snowed) {
+                sheltered += 1;
+                if differs(&bare, &snowed) {
+                    moved += 1;
+                }
+            }
+        }
+    }
+    assert!(
+        sheltered > 300 && moved * 20 < sheltered,
+        "the posts under the roof keep their height and colour: {moved} of {sheltered} pixels changed"
+    );
+    // The open posts that remain are paler: lighter on average.
+    let open_mean = |rgba: &[u8], ground: &[u8]| {
+        let mut sum = 0.0;
+        let mut count = 0.0;
+        for row in 0..HEIGHT {
+            for column in right.clone() {
+                let at = ((row * WIDTH + column) * 4) as usize;
+                if (0..3).any(|channel| rgba[at + channel].abs_diff(ground[at + channel]) > 3) {
+                    sum += pixel(rgba, column, row);
+                    count += 1.0;
+                }
+            }
+        }
+        sum / f64::max(count, 1.0)
+    };
+    assert!(
+        open_mean(&snowed, &ground_snowed) > open_mean(&bare, &ground_only) * 1.5,
+        "the sunk posts pale toward the snow: {:.1} to {:.1}",
+        open_mean(&bare, &ground_only),
+        open_mean(&snowed, &ground_snowed)
+    );
+
+    // Posts of a material that does not sink keep their height.
+    harness.apply(vec![
+        RenderDiff::SetSnow { snow: None },
+        RenderDiff::Destroy {
+            handle: RenderHandle::new(41),
+        },
+        RenderDiff::Destroy {
+            handle: RenderHandle::new(51),
+        },
+    ]);
+    harness.apply(post_row(60, 1.5, -2.0, "material/stone"));
+    let standing_bare = render(&mut harness, &view);
+    harness.apply(snow_and(1.0));
+    let standing_snowed = render(&mut harness, &view);
+    let (before, after) = (
+        posts(&standing_bare, &ground_only, right.clone()),
+        posts(&standing_snowed, &ground_snowed, right),
+    );
+    assert!(
+        after * 10 > before * 9,
+        "posts that do not sink keep their height: {before} pixels to {after}"
+    );
+}
+
+fn snow_and(amount: f32) -> Vec<RenderDiff> {
+    vec![snow(amount, 0.0)]
+}

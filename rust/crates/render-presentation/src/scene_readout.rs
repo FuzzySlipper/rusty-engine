@@ -475,6 +475,7 @@ fn material_features(material: &RenderMaterialDescriptor) -> Vec<&'static str> {
         (material.unlit, "UNLIT"),
         (material.flat_shading, "FLAT_SHADING"),
         (material.keep_dry, "KEEP_DRY"),
+        (material.sinks_under_snow, "SINKS_UNDER_SNOW"),
         (material.wind.is_some(), "WIND"),
         (material.water.is_some(), "WATER"),
         (material.normal_map.is_some(), "NORMAL_MAP"),

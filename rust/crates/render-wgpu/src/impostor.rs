@@ -136,8 +136,10 @@ impl Renderer {
         let mesh = self.mesh(&MeshRef::Static(mesh_id))?;
         let (vertices, indices, bounds) =
             (mesh.vertices.clone(), mesh.indices.clone(), mesh.bounds);
-        // Each group's material: its bind group, colour and alpha cutoff.
+        // Each group's material: its bind group, colour and alpha cutoff. A
+        // card sinks under snow when a material it shows does.
         let mut groups = Vec::new();
+        let mut sinks_under_snow = false;
         for (slot, first, count) in &mesh.groups {
             let id = overrides
                 .iter()
@@ -146,6 +148,7 @@ impl Renderer {
                 .or_else(|| mesh.slots.get(slot))?;
             sources.push(id.clone());
             let row = self.tables.materials.get(self.tables.names.get(id)?)?;
+            sinks_under_snow |= row.descriptor.sinks_under_snow;
             let color = row.descriptor.color;
             let tint = row.descriptor.texture_tint;
             let cutoff = match row.descriptor.alpha_mode {
@@ -381,6 +384,7 @@ impl Renderer {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow,
             wind: None,
             water: None,
             translucent_shadow: false,

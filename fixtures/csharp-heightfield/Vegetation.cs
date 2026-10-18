@@ -48,6 +48,8 @@ internal sealed class Vegetation : IDisposable
         {
             WindBend = .08f,
             WindFlutter = .06f,
+            // Clumps sink into the snow and pale under it (#10071).
+            SinksUnderSnow = true,
         });
         treePaint = engine.Graphics.CreateMaterial(new MaterialRequest(new(.08f, .2f, .07f, 1), default, .9f, one, Vector3.Zero, 0, false) with
         {

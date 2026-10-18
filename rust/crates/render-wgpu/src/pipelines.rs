@@ -337,6 +337,12 @@ impl Layouts {
             if entry.binding == 14 {
                 entry.visibility = wgpu::ShaderStages::VERTEX;
             }
+            // The shadow atlas and its sampler: a scatter copy that sinks
+            // under snow looks up the sky's layer over its origin in the
+            // vertex stage (`rusty::lighting::copy_open_sky`).
+            if entry.binding == 4 || entry.binding == 5 {
+                entry.visibility |= wgpu::ShaderStages::VERTEX;
+            }
             entry
         });
         let frame = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

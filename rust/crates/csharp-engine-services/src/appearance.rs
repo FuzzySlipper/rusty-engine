@@ -9803,6 +9803,7 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
         unlit: false,
         flat_shading: false,
         keep_dry: false,
+        sinks_under_snow: false,
         wind: None,
         water: None,
         translucent_shadow: false,
@@ -10100,6 +10101,7 @@ fn material_descriptor(
         unlit: request.unlit,
         flat_shading: request.flat_shading,
         keep_dry: request.keep_dry,
+        sinks_under_snow: request.sinks_under_snow,
         wind: (request.wind_bend != 0.0 || request.wind_flutter != 0.0).then_some(
             render_model::MaterialWindDescriptor {
                 bend: request.wind_bend,
@@ -11611,6 +11613,7 @@ pub(super) mod tests {
                 occlusion_strength: 0.0,
                 flat_shading: false,
                 keep_dry: false,
+                sinks_under_snow: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -11770,6 +11773,7 @@ pub(super) mod tests {
             occlusion_strength: 0.0,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -12032,6 +12036,7 @@ pub(super) mod tests {
                 unlit: false,
                 flat_shading: false,
                 keep_dry: false,
+                sinks_under_snow: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -12262,6 +12267,7 @@ pub(super) mod tests {
                 unlit: false,
                 flat_shading: false,
                 keep_dry: false,
+                sinks_under_snow: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -12893,6 +12899,7 @@ pub(super) mod tests {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -12957,6 +12964,7 @@ pub(super) mod tests {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -12974,12 +12982,17 @@ pub(super) mod tests {
             "material/dry".to_owned(),
             NativeMaterialRequest {
                 keep_dry: true,
+                sinks_under_snow: true,
                 ..metal
             },
             &resources,
         )
         .expect("dry material");
         assert!(dry.keep_dry, "KeepDry reaches the descriptor");
+        assert!(
+            dry.sinks_under_snow && !descriptor.sinks_under_snow,
+            "SinksUnderSnow reaches the descriptor"
+        );
         // Above-1 metalness and an HDR tint are a look; the renderer takes
         // metalness at most 1 where it shades.
         let hdr = NativeColor {
@@ -13049,6 +13062,7 @@ pub(super) mod tests {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13220,6 +13234,7 @@ pub(super) mod tests {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13318,6 +13333,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13447,6 +13463,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13676,6 +13693,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13834,6 +13852,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                     unlit: false,
                     flat_shading: false,
                     keep_dry: false,
+                    sinks_under_snow: false,
                     wind_bend: 0.0,
                     wind_flutter: 0.0,
                     water: Default::default(),
@@ -14074,6 +14093,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 unlit: false,
                 flat_shading: false,
                 keep_dry: false,
+                sinks_under_snow: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -14179,6 +14199,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: NativeMaterialWater {
@@ -15275,6 +15296,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 unlit: false,
                 flat_shading: false,
                 keep_dry: false,
+                sinks_under_snow: false,
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -15868,6 +15890,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             unlit: false,
             flat_shading: false,
             keep_dry: false,
+            sinks_under_snow: false,
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),

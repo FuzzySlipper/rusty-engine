@@ -50,4 +50,6 @@ Live debug commands:
   `CameraView.ReadWetness` reports it.
 - `weather.snow <amount> <texels per metre>`: snow over the hills, grass and
   trees, clear under the trees (an ambient light's sky layer follows the
-  camera), and the snow in force as `CameraView.ReadSnow` reports it.
+  camera), and the snow in force as `CameraView.ReadSnow` reports it. The
+  grass's material sinks under snow (`SinksUnderSnow`): clumps in the open
+  shorten and pale, those under the trees stand.

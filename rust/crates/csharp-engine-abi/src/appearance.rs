@@ -789,6 +789,15 @@ pub struct NativeMaterialRequest {
     /// A blended material casts no shadow unless this is set: then its
     /// parts cast as opaque ones do.
     pub translucent_shadow: bool,
+    /// Grass and flowers under snow (`CameraView.SetSnow`): scattered copies
+    /// drawn with this material (vegetation fields, voxel scatter, scatter
+    /// patches) sink toward their origin as deep as the snow lies, to a
+    /// fifth of their height under a full cover, and pale toward the snow's
+    /// colour; copies under a roof or a tree's crown (an ambient light's
+    /// sky layer) keep their height and colour. Their shadows sink with
+    /// the snow's amount. False (the default) stands as it is; other parts
+    /// drawn with it are not moved.
+    pub sinks_under_snow: bool,
 }
 
 /// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`),

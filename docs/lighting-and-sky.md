@@ -1236,6 +1236,18 @@ SnowReadout snow = engine.CameraView.ReadSnow();
   sky layer ([dark caves](#dark-caves-an-ambient-lights-sky)), the ground
   under a roof, an overhang or a tree's crown stays clear. Without such a
   light every surface counts as open.
+- Grass and flowers sink into it: scatter copies (vegetation fields, voxel
+  scatter, scatter patches) drawn with a material that sets
+  `SinksUnderSnow` shorten toward their origin, to a fifth of their height
+  under a full cover, and pale toward the snow's colour, as much as the snow
+  lies and the sky is open over the copy's origin (one sky-layer tap per
+  vertex), so clumps under a tree keep their height and green. Their shadows
+  and the depth pre-pass sink by the amount alone, since those passes cannot
+  read the sky's layer. Trees and rocks keep materials without it; other
+  parts drawn with such a material do not move. It draws cheaper than
+  standing grass under the same snow, since the sunk clumps cover fewer
+  pixels: 0.40 ms against 0.43 ms for the world pass under a full cover over
+  the same hills.
 - Snow lies over wetness: covered ground is the snow's colour and
   roughness, and the ground between patches stays as wet as the rain left it.
   `KeepDry` keeps a material dry, not clear of snow.
