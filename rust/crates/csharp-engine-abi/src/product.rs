@@ -1243,6 +1243,16 @@ pub type NativeSetWetness = unsafe extern "C" fn(
     *const NativeWetnessRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetSnow = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSnowRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadSnow = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeSnowReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSetBackdrop = unsafe extern "C" fn(
     *mut c_void,
     *const NativeBackdropRequest,
@@ -1824,6 +1834,8 @@ pub struct NativeCameraViewApi {
     pub set_wind: NativeSetWind,
     pub set_clouds: NativeSetClouds,
     pub set_wetness: NativeSetWetness,
+    pub set_snow: NativeSetSnow,
+    pub read_snow: NativeReadSnow,
     pub set_backdrop: NativeSetBackdrop,
     pub clear_backdrop: NativeClearBackdrop,
     pub set_cloud_region: NativeSetCloudRegion,

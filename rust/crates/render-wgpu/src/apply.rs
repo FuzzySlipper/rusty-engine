@@ -180,6 +180,7 @@ impl Renderer {
             }
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
+            RenderDiff::SetSnow { snow } => self.tables.snow = *snow,
             RenderDiff::SetBackdrop { camera, backdrop } => {
                 let linked = !self.tables.backdrops.is_empty();
                 match backdrop {
@@ -2937,6 +2938,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetWind { .. } => "setWind",
         RenderDiff::SetClouds { .. } => "setClouds",
         RenderDiff::SetWetness { .. } => "setWetness",
+        RenderDiff::SetSnow { .. } => "setSnow",
         RenderDiff::SetBackdrop { .. } => "setBackdrop",
         RenderDiff::SetCloudRegion { .. } => "setCloudRegion",
         RenderDiff::RemoveCloudRegion { .. } => "removeCloudRegion",

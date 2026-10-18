@@ -70,9 +70,9 @@ pub use engine_debug::{
     ProductHostRenderOutput, ProductHostRendererInspection, ProductHostRendererSettingValues,
     ProductHostRendererSettings, ProductHostRendererStatistics, ProductHostRendererStatus,
     ProductHostRendererWidget, ProductHostScatterSelectionStatistics, ProductHostScatterStatistics,
-    ProductHostShadowStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
-    ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep, ProductHostWindowMedians,
-    ProductHostWindowStatistics,
+    ProductHostShadowStatistics, ProductHostSnowStatistics, ProductHostStreamMedians,
+    ProductHostStreamStatistics, ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep,
+    ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 pub use error::{ProductHostError, ProductHostRuntimeError};
 pub use frames::{

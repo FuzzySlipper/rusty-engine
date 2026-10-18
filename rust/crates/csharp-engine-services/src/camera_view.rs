@@ -11,8 +11,8 @@ use render_model::{
     AtmosphereDescriptor, AutoExposureDescriptor, BloomDescriptor, CloudsDescriptor,
     ColorGradingDescriptor, FogDescriptor, IndirectAmbient, IndirectLightDescriptor,
     PrecipitationDescriptor, PrecipitationShape, RenderDiff, RenderFrameDiff,
-    SkyBackgroundDescriptor, SkyLightDescriptor, SunShaftsDescriptor, ToneMappingDescriptor,
-    ToneMappingOperator, WetnessDescriptor, WindDescriptor,
+    SkyBackgroundDescriptor, SkyLightDescriptor, SnowDescriptor, SunShaftsDescriptor,
+    ToneMappingDescriptor, ToneMappingOperator, WetnessDescriptor, WindDescriptor,
 };
 
 use crate::{
@@ -20,6 +20,10 @@ use crate::{
     composition::{borrowed_slice, ABI_OK},
     CsharpEngineServicesError,
 };
+
+/// The snow's colour when a request gives none: a slightly blue white,
+/// linear.
+pub(crate) const SNOW_WHITE: [f32; 3] = [0.82, 0.86, 0.92];
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum CameraBackground {
@@ -47,6 +51,8 @@ struct CameraState {
     /// The star field's catalogue and band, which may not be released while
     /// it draws them.
     stars: Option<NativeStarsRequest>,
+    /// The snow in force (`ReadSnow`), as the last `SetSnow` left it.
+    snow: Option<SnowDescriptor>,
     next_camera: u64,
     next_target: u64,
     /// The renderer composition `views` and `presentations` describe.
@@ -107,6 +113,7 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) wind: Option<Option<WindDescriptor>>,
     pub(crate) clouds: Option<Option<CloudsDescriptor>>,
     pub(crate) wetness: Option<Option<WetnessDescriptor>>,
+    pub(crate) snow: Option<Option<SnowDescriptor>>,
     /// Backdrop links set (Some) or cleared (None) this call, by camera
     /// handle (0: every view's).
     pub(crate) backdrops: Vec<(u64, Option<BackdropLink>)>,
@@ -200,6 +207,7 @@ impl RuntimeCameraViewBridge {
                 active_camera: None,
                 background: CameraBackground::Default,
                 stars: None,
+                snow: None,
                 next_camera: 1,
                 next_target: 1,
                 composition: RetainedComposition::default(),
@@ -315,6 +323,7 @@ impl RuntimeCameraViewBridge {
             wind: None,
             clouds: None,
             wetness: None,
+            snow: None,
             backdrops: Vec::new(),
             volumetric_fog: None,
             cloud_regions: Vec::new(),
@@ -1096,6 +1105,52 @@ impl RuntimeCameraViewBridge {
         Ok(())
     }
 
+    fn set_snow(&mut self, request: NativeSnowRequest) -> Result<(), CsharpEngineServicesError> {
+        let color = [request.color.x, request.color.y, request.color.z];
+        let snow = SnowDescriptor {
+            amount: request.amount.clamp(0.0, 1.0),
+            color: if color == [0.0; 3] { SNOW_WHITE } else { color },
+            texels_per_metre: request.texels_per_metre,
+        };
+        if !snow.amount.is_finite()
+            || !snow
+                .color
+                .iter()
+                .chain([&snow.texels_per_metre])
+                .all(|value| value.is_finite() && *value >= 0.0)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SNOW",
+                "the snow's amount must be finite, and its colour and texels per metre finite and not negative",
+            ));
+        }
+        let snow = (snow.amount > 0.0).then_some(snow);
+        let staged = self.staged_mut()?;
+        staged.state.snow = snow;
+        staged.snow = Some(snow);
+        Ok(())
+    }
+
+    /// The snow in force as this call leaves it.
+    fn read_snow(&self) -> NativeSnowReadout {
+        let state = self
+            .staged
+            .as_ref()
+            .map(|staged| &staged.state)
+            .unwrap_or(&self.state);
+        state
+            .snow
+            .map_or_else(Default::default, |snow| NativeSnowReadout {
+                amount: snow.amount,
+                color: NativeVec3 {
+                    x: snow.color[0],
+                    y: snow.color[1],
+                    z: snow.color[2],
+                },
+                texels_per_metre: snow.texels_per_metre,
+            })
+    }
+
     fn set_backdrop(
         &mut self,
         request: NativeBackdropRequest,
@@ -1737,6 +1792,9 @@ pub(crate) fn environment_frame(
     }
     if let Some(wetness) = call.wetness {
         operations.push(RenderDiff::SetWetness { wetness });
+    }
+    if let Some(snow) = call.snow {
+        operations.push(RenderDiff::SetSnow { snow });
     }
     for (id, region) in &call.cloud_regions {
         operations.push(match region {
@@ -2487,6 +2545,43 @@ pub(crate) unsafe extern "C" fn set_wetness(
             0
         }
     }
+}
+
+pub(crate) unsafe extern "C" fn set_snow(
+    context: *mut c_void,
+    request: *const NativeSnowRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_snow(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn read_snow(
+    context: *mut c_void,
+    output: *mut NativeSnowReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &*context.cast::<RuntimeCameraViewBridge>() };
+    unsafe { *output = bridge.read_snow() };
+    ABI_OK
 }
 
 pub(crate) unsafe extern "C" fn set_backdrop(

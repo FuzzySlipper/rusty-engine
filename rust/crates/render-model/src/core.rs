@@ -342,6 +342,19 @@ pub struct WetnessDescriptor {
     pub puddles: f32,
 }
 
+/// Snow lying on the scene's surfaces (`CameraView.SetSnow`): `amount`, from
+/// 0 to 1, covers lit surfaces that face up and stand under the open sky in
+/// `color` (linear), its edge broken by world-space noise. A
+/// `texels_per_metre` above 0 steps the cover's edge on a world grid of that
+/// density, so it reads as painted pixels; 0 blends it smoothly.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SnowDescriptor {
+    pub amount: f32,
+    pub color: [f32; 3],
+    pub texels_per_metre: f32,
+}
+
 /// The backdrop's link to the world (`CameraView.SetBackdrop`): parts in
 /// the `Backdrop` layer are drawn behind the world, after the sky and clouds,
 /// by a camera with each world view's rotation and field of view at
@@ -1230,6 +1243,10 @@ pub enum RenderDiff {
     SetWetness {
         wetness: Option<WetnessDescriptor>,
     },
+    /// Selects the snow lying on the scene's surfaces; None clears it.
+    SetSnow {
+        snow: Option<SnowDescriptor>,
+    },
     /// Links the `Backdrop` layer to the world views of camera `camera`, or
     /// with None to every view without a link of its own; a None link
     /// removes it.
@@ -1445,6 +1462,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetWind { .. }
                 | RenderDiff::SetClouds { .. }
                 | RenderDiff::SetWetness { .. }
+                | RenderDiff::SetSnow { .. }
                 | RenderDiff::SetBackdrop { .. }
                 | RenderDiff::SetCloudRegion { .. }
                 | RenderDiff::RemoveCloudRegion { .. }

@@ -39,3 +39,6 @@ Live debug commands:
 - `vegetation.show <0|1>`, `vegetation.tune <grass per m²> <reach>`,
   `vegetation.invalidate <metres>`.
 - `heightfield.pick <x> <y> <z> <dx> <dy> <dz>`: pick the drawn ground.
+- `weather.snow <amount> <texels per metre>`: snow over the hills, grass and
+  trees, clear under the trees (an ambient light's sky layer follows the
+  camera), and the snow in force as `CameraView.ReadSnow` reports it.

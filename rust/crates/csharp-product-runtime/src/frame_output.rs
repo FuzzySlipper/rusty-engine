@@ -47,8 +47,9 @@ use product_host::{
     ProductHostOcclusionStatistics, ProductHostPresentedFrame, ProductHostRendererInspection,
     ProductHostRendererSettingValues, ProductHostRendererSettings, ProductHostRendererStatistics,
     ProductHostScatterSelectionStatistics, ProductHostScatterStatistics,
-    ProductHostShadowStatistics, ProductHostStreamMedians, ProductHostStreamStatistics,
-    ProductHostTimedStep, ProductHostWindowMedians, ProductHostWindowStatistics,
+    ProductHostShadowStatistics, ProductHostSnowStatistics, ProductHostStreamMedians,
+    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
+    ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -1048,6 +1049,11 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             upload_bytes: readout.indirect_light.upload_bytes,
             last_batch_bricks: readout.indirect_light.last_batch_bricks,
         },
+        snow: readout.snow.map(|snow| ProductHostSnowStatistics {
+            amount: snow.amount,
+            color: snow.color,
+            texels_per_metre: snow.texels_per_metre,
+        }),
     }
 }
 

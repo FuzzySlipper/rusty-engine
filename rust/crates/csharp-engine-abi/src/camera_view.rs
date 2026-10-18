@@ -513,6 +513,34 @@ pub struct NativeWetnessRequest {
     pub puddles: f32,
 }
 
+/// Snow lying on the scene's lit surfaces. `amount` (0 to 1, clamped; 0 the
+/// default) covers what faces up and stands under the open sky in `color`
+/// (linear RGB; zero takes the Engine's snow white): all of flat ground at 1,
+/// less as a face steepens and none on walls or undersides, its edge broken
+/// by noise over the ground. Where an ambient light has a sky layer, the
+/// ground under a roof or a tree stays clear. `texels_per_metre` above 0
+/// decides the cover per texel of a world grid of that density over the
+/// ground (x, z), so its edge steps as painted pixels; 0 blends it smoothly.
+/// Snow lies over wetness: covered ground is the snow's colour.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSnowRequest {
+    pub amount: f32,
+    pub color: NativeVec3,
+    pub texels_per_metre: f32,
+}
+
+/// The snow in force, as the renderer draws it from the end of this call:
+/// `amount` 0 when there is none, its colour (the Engine's snow white when
+/// the request gave none) and texel density.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSnowReadout {
+    pub amount: f32,
+    pub color: NativeVec3,
+    pub texels_per_metre: f32,
+}
+
 /// A cloud region, placed or replaced by `id`: where the sky holds more
 /// cloud than the layer's coverage, such as a weather front's storm.
 /// `coverage` (0 to 1, clamped) fills a disc `radius` metres across around

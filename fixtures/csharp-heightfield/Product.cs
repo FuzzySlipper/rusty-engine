@@ -34,6 +34,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private static readonly HeightfieldRing[] Halving =
         [new(31.25, 4_000), new(62.5, 8_000), new(125, 16_000), new(250, 32_000), new(500, 64_000), new(1_000, ContinentRadius)];
     private const uint DefaultContinentTileCells = 16;
+    // Snow (#10069): the sky's occluded ambient light keeps the ground under trees clear over a
+    // square this many metres either side of the camera, and lights it a little.
+    private const ulong SkyLightId = 1;
+    private const float SkyHalfExtent = 96, SkyIntensity = .05f;
+    private static readonly Vector3 SkyColor = new(.6f, .7f, .9f), SnowColor = new(.82f, .86f, .92f);
     private const double ContinentFlightRadius = 100_000, ContinentFlightSpeed = 300, ContinentFlightHeight = 400;
 
     private readonly IEngineContext engine;
@@ -55,6 +60,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private double angle;
     private double eyeHeight = FlightHeight + 100;
     private Vector3 eye;
+    private Light? sky;
 
     public Product(ProductCreateContext context)
     {
@@ -136,7 +142,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         eye = new((float)x, (float)eyeHeight, (float)z);
         double heading = flying ? angle + (Math.PI / 2) : angle;
         engine.CameraView.UpdateCamera(new(camera, Descriptor(eye, heading)));
+        if (sky is not null) engine.Graphics.UpdateLight(new(sky, Sky(eye)));
     }
+
+    /// <summary>The sky's ambient light over the camera, shadowed by what stands above the ground.</summary>
+    private static LightRequest Sky(Vector3 at) => new(SkyLightId, false, 0,
+        new(LightKind.Ambient, SkyColor, SkyIntensity, true, at, Vector3.UnitY, true, SkyHalfExtent, 0, 0, 0, LightShadowIntent.Requested));
 
     private static CameraDescriptor Descriptor(Vector3 eye, double heading)
     {
@@ -273,6 +284,16 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return vegetation.Inspect();
     }
 
+    [DebugCommand("weather.snow", Description = "Snow over the hills, grass and trees: how much (0 to 1; 0 clears it) and the texels per metre its edge steps at (0: smooth). The ground under the trees stays clear.")]
+    public string Snow(float amount, float texelsPerMetre)
+    {
+        sky ??= engine.Graphics.CreateLight(Sky(eye));
+        engine.CameraView.SetSnow(new(amount, SnowColor, texelsPerMetre));
+        SnowReadout snow = engine.CameraView.ReadSnow();
+        return FormattableString.Invariant(
+            $"amount={snow.Amount:F2} color={snow.Color.X:F2},{snow.Color.Y:F2},{snow.Color.Z:F2} texelsPerMetre={snow.TexelsPerMetre:F0}");
+    }
+
     [DebugCommand("heightfield.pick", Description = "Picks the drawn ground along a ray from a point in a direction.")]
     public string Pick(float x, float y, float z, float dx, float dy, float dz)
     {
@@ -289,6 +310,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     public void Dispose()
     {
+        sky?.Dispose();
         vegetation.Dispose();
         streamer?.Dispose();
         heightfield?.Dispose();

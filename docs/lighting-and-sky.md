@@ -1193,6 +1193,53 @@ engine.CameraView.SetWetness(new(Wetness: .8f, Puddles: .5f));
   state like the wind. It costs nothing while 0; while wet, each lit
   fragment reads the sky layer once more.
 
+## Snow cover
+
+Snow lies on what faces up under the open sky, by one rule for the whole
+scene: heightfield and voxel terrain, meshes, vegetation copies and their
+impostors, and skinned meshes.
+
+```csharp
+engine.CameraView.SetSnow(new(Amount: .6f, Color: Vector3.Zero, TexelsPerMetre: 32));
+SnowReadout snow = engine.CameraView.ReadSnow();
+```
+
+- `Amount` (0 to 1, clamped) is how much lies: at 1 all of flat ground is
+  covered, at 0.5 about half of it in patches. A face holds less as it
+  steepens and none from about 73 degrees from up, so walls and undersides
+  stay clear. Noise over the ground (x, z) in patches about 1.7 m across
+  breaks the cover's edge, as snow falls from above: soft on flat ground and
+  sharper on steep faces. Where the amount, the slope and the sky decide the
+  cover outright (open flat ground under a full cover), the noise is not
+  computed.
+- `Color` is linear; zero takes the Engine's snow white (0.82, 0.86, 0.92).
+  Covered surfaces take it, rough (0.8) and not metallic.
+- `TexelsPerMetre` above 0 decides the cover per texel of a world grid of
+  that density over the ground, so its edge steps as painted pixels
+  (CraftSurvive's 32 per metre matches its textures); 0 blends it smoothly.
+- Only surfaces under the open sky are covered: where an ambient light has a
+  sky layer ([dark caves](#dark-caves-an-ambient-lights-sky)), the ground
+  under a roof, an overhang or a tree's crown stays clear. Without such a
+  light every surface counts as open.
+- Snow lies over wetness: covered ground is the snow's colour and
+  roughness, and the ground between patches stays as wet as the rain left it.
+  `KeepDry` keeps a material dry, not clear of snow.
+- It applies to standard-lit world materials after the wetness and before
+  their shade stage, so a product `shade(Surface)` receives the covered
+  surface; water and unlit materials, sprites and particles are left as
+  they are. Product WGSL reads the amount and texel density as
+  `frame.weather.z` and `.w` and the colour as `frame.snow_color.rgb`.
+- `ReadSnow` returns the snow in force from the end of the call: the amount
+  as clamped (0 without snow), the colour drawn and the texel density.
+  `engine.renderer` reports it under `gpu.snow`.
+- 0 (the default) draws exactly as none. The setting is retained camera-view
+  state like the wetness, and costs nothing while 0. With snow, each lit
+  fragment that faces up reads the sky layer once (shared with the wetness)
+  and, where the cover is not decided outright, two octaves of noise. On an
+  RX 9070 XT at 1280×720, over hills with grass and trees, the world pass
+  takes 0.10 ms more under a full cover and 0.15 ms more under a half one
+  (0.34 ms without), stepped or smooth alike.
+
 ## Precipitation
 
 Rain or snow falls around the camera:
@@ -1475,6 +1522,8 @@ the voxels around them, with the camera on the room's far corner), and
 `lighting.precipitation <drops> <shape>` (rain, shape 0, or snow, shape 1,
 around the camera; none in the room under its roof),
 `lighting.wetness <wetness> <puddles>` (the room's surfaces wet after rain),
+`lighting.snow <amount> <texels per metre>` (snow on the mesa and the open
+ground, none on the room's floor under its roof),
 `lighting.clouds <coverage>` (a drifting cloud layer over the panorama, with
 the camera up toward it; 0 clears it, and `lighting.sky` moves the sun that
 lights it from noon to dusk),

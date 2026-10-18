@@ -132,6 +132,7 @@ struct RetainedGraphics {
     wind: Option<WindDescriptor>,
     clouds: Option<CloudsDescriptor>,
     wetness: Option<WetnessDescriptor>,
+    snow: Option<render_model::SnowDescriptor>,
     /// The backdrop's links: every view's (None) and each camera's own.
     backdrops: BTreeMap<Option<String>, render_model::BackdropDescriptor>,
     volumetric_fog: Option<VolumetricFogDescriptor>,
@@ -476,6 +477,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetWind { wind } if &self.retained.wind == wind)
                 || matches!(&op, RenderDiff::SetClouds { clouds } if &self.retained.clouds == clouds)
                 || matches!(&op, RenderDiff::SetWetness { wetness } if &self.retained.wetness == wetness)
+                || matches!(&op, RenderDiff::SetSnow { snow } if &self.retained.snow == snow)
                 || matches!(&op, RenderDiff::SetBackdrop { camera, backdrop } if self.retained.backdrops.get(camera) == backdrop.as_ref())
                 || matches!(&op, RenderDiff::SetCloudRegion { id, region } if self.retained.cloud_regions.get(id) == Some(region))
                 || matches!(&op, RenderDiff::RemoveCloudRegion { id } if !self.retained.cloud_regions.contains_key(id))
@@ -676,6 +678,7 @@ impl PresentationWorld {
             wind,
             clouds,
             wetness,
+            snow,
             backdrops,
             volumetric_fog,
             cloud_regions,
@@ -825,6 +828,7 @@ impl PresentationWorld {
                 wind: *wind,
                 clouds: *clouds,
                 wetness: *wetness,
+                snow: *snow,
                 backdrops: backdrops.clone(),
                 volumetric_fog: *volumetric_fog,
                 cloud_regions: cloud_regions.clone(),
@@ -967,6 +971,11 @@ impl PresentationWorld {
         if self.retained.wetness.is_some() {
             ops.push(RenderDiff::SetWetness {
                 wetness: self.retained.wetness,
+            });
+        }
+        if self.retained.snow.is_some() {
+            ops.push(RenderDiff::SetSnow {
+                snow: self.retained.snow,
             });
         }
         for (camera, backdrop) in &self.retained.backdrops {
@@ -1596,6 +1605,9 @@ impl PresentationWorld {
             }
             RenderDiff::SetWetness { wetness } => {
                 self.retained.wetness = *wetness;
+            }
+            RenderDiff::SetSnow { snow } => {
+                self.retained.snow = *snow;
             }
             RenderDiff::SetBackdrop { camera, backdrop } => match backdrop {
                 Some(backdrop) => {

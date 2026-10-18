@@ -635,6 +635,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.SetWetness(new(Math.Clamp(wetness,0,1),Math.Clamp(puddles,0,1)));
         return Inspect();
     }
+    // Snow over what faces up under the open sky (0 to 1; 0 clears it), its edge stepped at this many texels per metre (0: smooth): the mesa and the ground whiten, the room's floor stays clear.
+    [DebugCommand("lighting.snow")]
+    public string Snow(float amount, float texelsPerMetre)
+    {
+        engine.CameraView.SetSnow(new(amount,Vector3.Zero,texelsPerMetre));
+        SnowReadout snow = engine.CameraView.ReadSnow();
+        return FormattableString.Invariant($"amount={snow.Amount:F2} color={snow.Color.X:F2},{snow.Color.Y:F2},{snow.Color.Z:F2} texelsPerMetre={snow.TexelsPerMetre:F0}");
+    }
     // The renderer settings catalogue as a product's own menu reads it (#9757): each setting's kind, Engine default, requested and drawn values, refusal, restart and cost, and its choices.
     [DebugCommand("lighting.describe")]
     public string Describe()

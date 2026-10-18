@@ -48,8 +48,9 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// colour grading; then the sun, the atmosphere, the moon and the sky's
 /// light; then
 /// the indirect light volume's origin and grid and the wind; then the cloud
-/// layer, its drift and its shape, the surfaces' wetness and the backdrop's
-/// link; then the light cluster grid and depth range.
+/// layer, its drift and its shape, the surfaces' wetness and snow, the
+/// snow's colour and the backdrop's link; then the light cluster grid and
+/// depth range.
 const FRAME_UNIFORM_BYTES: u64 = (16
     + 16
     + 4
@@ -62,6 +63,7 @@ const FRAME_UNIFORM_BYTES: u64 = (16
     + 4
     + 4 * 4
     + 3 * 4
+    + 4
     + 4
     + 4
     + 4
@@ -2633,7 +2635,8 @@ impl Renderer {
                 .queue
                 .write_buffer(&self.cloud_regions_buffer, 0, bytemuck::cast_slice(&rows));
         }
-        // How wet the surfaces are (`lighting.wgsl` `wetted`).
+        // How wet the surfaces are (`lighting.wgsl` `wetted`), and the snow
+        // lying on them (`snowed`).
         let wetness = self
             .tables
             .wetness
@@ -2641,7 +2644,20 @@ impl Renderer {
                 wetness: 0.0,
                 puddles: 0.0,
             });
-        for value in [wetness.wetness, wetness.puddles, 0.0, 0.0] {
+        let snow = self.tables.snow.unwrap_or(render_model::SnowDescriptor {
+            amount: 0.0,
+            color: [0.0; 3],
+            texels_per_metre: 0.0,
+        });
+        for value in [
+            wetness.wetness,
+            wetness.puddles,
+            snow.amount,
+            snow.texels_per_metre,
+        ] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [snow.color[0], snow.color[1], snow.color[2], 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         for value in backdrop.unwrap_or_default() {

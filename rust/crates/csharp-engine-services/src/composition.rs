@@ -223,6 +223,8 @@ fn engine_api(
             set_wind: crate::camera_view::set_wind,
             set_clouds: crate::camera_view::set_clouds,
             set_wetness: crate::camera_view::set_wetness,
+            set_snow: crate::camera_view::set_snow,
+            read_snow: crate::camera_view::read_snow,
             set_backdrop: crate::camera_view::set_backdrop,
             clear_backdrop: crate::camera_view::clear_backdrop,
             set_cloud_region: crate::camera_view::set_cloud_region,
@@ -2612,6 +2614,116 @@ mod tests {
         assert_eq!(
             call.take_output().frames[0].ops,
             [render_model::RenderDiff::SetWetness { wetness: None }]
+        );
+    }
+
+    #[test]
+    fn snow_publishes_as_retained_environment_reads_back_and_zero_clears() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let vec3 = |x, y, z| NativeVec3 { x, y, z };
+        let read = |api: &NativeEngineApi| unsafe {
+            let mut readout = NativeSnowReadout::default();
+            assert_eq!(
+                (api.camera_view.read_snow)(
+                    api.camera_view.context,
+                    &mut readout,
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+            readout
+        };
+        services.begin_call(binding());
+        let api = services.api();
+        assert_eq!(read(&api).amount, 0.0);
+        let set = |amount, color, texels_per_metre, refusal| unsafe {
+            (api.camera_view.set_snow)(
+                api.camera_view.context,
+                &NativeSnowRequest {
+                    amount,
+                    color,
+                    texels_per_metre,
+                },
+                refusal,
+            )
+        };
+        assert_eq!(
+            set(1.5, vec3(0.9, 0.9, 1.0), 32.0, std::ptr::null_mut()),
+            ABI_OK
+        );
+        let readout = read(&api);
+        assert_eq!(
+            (readout.amount, readout.color.z, readout.texels_per_metre),
+            (1.0, 1.0, 32.0),
+            "the amount clamps and the cover reads back within the call"
+        );
+        let mut call = services.finish_call().expect("snow call");
+        let selected = render_model::RenderDiff::SetSnow {
+            snow: Some(render_model::SnowDescriptor {
+                amount: 1.0,
+                color: [0.9, 0.9, 1.0],
+                texels_per_metre: 32.0,
+            }),
+        };
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            std::slice::from_ref(&selected)
+        );
+        let attachment = services.snapshot_outputs(binding());
+        let CsharpAppearanceCallOutput::Frame(frame) = &attachment.appearance[0] else {
+            panic!("baseline graphics frame");
+        };
+        assert!(frame.ops.contains(&selected));
+
+        services.begin_call(binding());
+        let api = services.api();
+        assert_eq!(read(&api).amount, 1.0, "the cover stays in force");
+        let set = |amount, color, texels_per_metre, refusal| unsafe {
+            (api.camera_view.set_snow)(
+                api.camera_view.context,
+                &NativeSnowRequest {
+                    amount,
+                    color,
+                    texels_per_metre,
+                },
+                refusal,
+            )
+        };
+        for (amount, color, texels) in [
+            (f32::NAN, vec3(1.0, 1.0, 1.0), 0.0),
+            (0.5, vec3(-1.0, 1.0, 1.0), 0.0),
+            (0.5, vec3(1.0, 1.0, 1.0), f32::INFINITY),
+        ] {
+            let mut refusal = empty_receipt();
+            assert_eq!(set(amount, color, texels, &mut refusal), 0);
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_SNOW"]);
+        }
+        // No colour takes the Engine's snow white.
+        assert_eq!(
+            set(0.25, vec3(0.0, 0.0, 0.0), 0.0, std::ptr::null_mut()),
+            ABI_OK
+        );
+        let readout = read(&api);
+        assert_eq!(
+            [readout.color.x, readout.color.y, readout.color.z],
+            crate::camera_view::SNOW_WHITE
+        );
+        assert_eq!(
+            set(0.0, vec3(1.0, 1.0, 1.0), 0.0, std::ptr::null_mut()),
+            ABI_OK
+        );
+        assert_eq!(read(&api).amount, 0.0);
+        let mut call = services.finish_call().expect("thaw");
+        assert_eq!(
+            call.take_output().frames[0].ops,
+            [render_model::RenderDiff::SetSnow { snow: None }]
         );
     }
 

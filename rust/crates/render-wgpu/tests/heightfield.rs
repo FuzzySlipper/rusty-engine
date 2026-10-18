@@ -7,15 +7,12 @@
 //! as `tests/screenshots.rs`.
 
 mod support;
-
-use std::collections::BTreeMap;
+mod terrain;
 
 use render_model::*;
-use render_projection::{HeightfieldPlacement, HeightfieldProjector};
 use render_wgpu::RendererOptions;
 use support::*;
-use svc_mesh::heightfield::{HeightfieldLayout, HeightfieldRingSpec, TileSamples};
-use svc_mesh::heightfield_tiles::HeightfieldTiles;
+use terrain::Terrain;
 
 const BACKGROUND: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
 
@@ -23,112 +20,6 @@ const BACKGROUND: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
 /// ring's 2 m cells cannot, so a swap between them would show.
 fn ground(x: f64, z: f64) -> f32 {
     (0.6 * (x * 1.9).sin() * (z * 1.3).cos() + 0.4 * (x / 7.0).sin() + 0.3 * (z / 5.0).cos()) as f32
-}
-
-fn samples(layout: &HeightfieldLayout, ring: u8, x: i64, z: i64) -> TileSamples {
-    let key = svc_mesh::heightfield::TileKey { ring, x, z };
-    let cell = layout.rings[ring as usize].cell_size;
-    let origin = layout.origin(key);
-    let side = layout.height_side() as i64;
-    TileSamples {
-        heights: (0..side * side)
-            .map(|index| {
-                let (i, j) = (index % side - 1, index / side - 1);
-                ground(origin[0] + i as f64 * cell, origin[1] + j as f64 * cell)
-            })
-            .collect(),
-        ..TileSamples::default()
-    }
-}
-
-struct Terrain {
-    tiles: HeightfieldTiles,
-    projector: HeightfieldProjector,
-    materials: BTreeMap<u32, String>,
-}
-
-impl Terrain {
-    /// 8-cell tiles: half-metre cells within 10 m, 2 m cells within 100 m.
-    fn new() -> Self {
-        let layout = HeightfieldLayout::new(
-            8,
-            &[
-                HeightfieldRingSpec {
-                    cell_size: 0.5,
-                    reach: 10.0,
-                },
-                HeightfieldRingSpec {
-                    cell_size: 2.0,
-                    reach: 100.0,
-                },
-            ],
-        )
-        .unwrap();
-        Self {
-            tiles: HeightfieldTiles::new(layout),
-            projector: HeightfieldProjector::default(),
-            materials: BTreeMap::from([(0, "material/ground".to_owned())]),
-        }
-    }
-
-    /// Focus on `focus`, sample every tile asked for, and project as the
-    /// services settle a call.
-    fn settle(&mut self, focus: [f64; 2]) -> Vec<RenderDiff> {
-        self.tiles.set_focus(Some(focus));
-        for request in self.tiles.requests(0) {
-            let samples = samples(
-                self.tiles.layout(),
-                request.key.ring,
-                request.key.x,
-                request.key.z,
-            );
-            assert!(self.tiles.commit(request.key, request.revision, samples));
-        }
-        self.tiles.mesh();
-        let changes = self.tiles.take_changes();
-        let mut ops = self
-            .projector
-            .place(
-                1,
-                HeightfieldPlacement {
-                    origin: [0.0; 3],
-                    scale: 1.0,
-                    layer: RenderLayer::Scene,
-                    shadow_casting: ShadowCasting::Cast,
-                },
-            )
-            .unwrap();
-        ops.extend(self.projector.focus(1, self.tiles.focus()));
-        for key in changes.evicted {
-            let removals = self.projector.remove_tile(1, key);
-            ops.extend(removals.early.into_iter().chain(removals.late));
-        }
-        for key in changes.meshed {
-            let origin = self.tiles.layout().origin(key);
-            match self.tiles.mesh_of(key) {
-                Some(mesh) => ops.extend(
-                    self.projector
-                        .mesh(
-                            1,
-                            key,
-                            origin,
-                            mesh,
-                            &self.materials,
-                            self.tiles.is_drawn(key),
-                        )
-                        .unwrap(),
-                ),
-                None => {
-                    let removals = self.projector.remove_tile(1, key);
-                    ops.extend(removals.early.into_iter().chain(removals.late));
-                }
-            }
-        }
-        for key in changes.shown.into_iter().chain(changes.hidden) {
-            ops.extend(self.projector.show(1, key, self.tiles.is_drawn(key)));
-        }
-        ops
-    }
 }
 
 fn scene() -> Harness {
@@ -196,7 +87,7 @@ fn mean_difference(a: &[u8], b: &[u8]) -> f64 {
 #[test]
 fn a_focus_crossing_a_ring_boundary_changes_the_picture_no_more_than_an_ordinary_step() {
     let mut harness = scene();
-    let mut terrain = Terrain::new();
+    let mut terrain = Terrain::new(ground);
     // The fine ring's region tiles are 16 m: crossing x = 16 shifts its
     // region a column, which joins at the morph's end, fully coarse.
     let mut frames = Vec::new();

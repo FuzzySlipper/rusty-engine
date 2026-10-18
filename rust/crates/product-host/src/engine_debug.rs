@@ -161,6 +161,22 @@ pub struct ProductHostGpuStatistics {
     pub impostors: ProductHostImpostorStatistics,
     pub occlusion: ProductHostOcclusionStatistics,
     pub indirect_light: ProductHostIndirectLightStatistics,
+    /// The snow in force (`CameraView.SetSnow`); absent without snow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub snow: Option<ProductHostSnowStatistics>,
+}
+
+/// The snow lying on the scene's lit surfaces, as the world pass draws it.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostSnowStatistics {
+    /// How much lies, 0 to 1.
+    pub amount: f32,
+    /// Its linear colour.
+    pub color: [f32; 3],
+    /// The texels per metre its edge steps at (0: a smooth edge).
+    pub texels_per_metre: f32,
 }
 
 /// The indirect light volume (`CameraView.SetIndirectLight`): its probes and

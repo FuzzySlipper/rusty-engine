@@ -2,6 +2,7 @@
   <PropertyGroup>
     <RustyEngineSdkPackageVersion>$(RustyEngineFixtureSdkVersion)</RustyEngineSdkPackageVersion>
     <RustyEngineProductDefaultWorldLights>neutral</RustyEngineProductDefaultWorldLights>
+    <RustyEngineProductSceneShadows>enabled</RustyEngineProductSceneShadows>
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>

@@ -53,7 +53,7 @@
 }
 #import rusty::types::Surface
 #import rusty::shade::standard_shade
-#import rusty::lighting::wetted
+#import rusty::lighting::weathered
 #ifdef PRODUCT_SHADER
 #import rusty::product::shade
 #endif
@@ -615,10 +615,8 @@ fn world_color(in: VsOut, front: bool, masked: bool) -> vec4<f32> {
         in.clip.xy * ambient_occlusion.params.yz).r;
     surface.occlusion *= mix(1.0, screen_occlusion, ambient_occlusion.params.x);
     // Rain wets what stands under the open sky (`Frame.weather`), unless
-    // the material keeps dry.
-    if material.weather.x < 0.5 {
-        surface = wetted(surface);
-    }
+    // the material keeps dry, and snow lies on what faces up there.
+    surface = weathered(surface, material.weather.x < 0.5);
 #endif
 #endif
 #ifdef PRODUCT_SHADER

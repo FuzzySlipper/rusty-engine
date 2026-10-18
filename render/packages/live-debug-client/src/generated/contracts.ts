@@ -135,7 +135,11 @@ timestamps: boolean, limits: ProductHostComputeLimits,
 /**
  * The timed passes, in frame order.
  */
-passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, distanceFields: ProductHostDistanceFieldStatistics, lightClusters: ProductHostLightClusterStatistics, gpuCulling: ProductHostGpuCullingStatistics, scatterSelection: ProductHostScatterSelectionStatistics, impostors: ProductHostImpostorStatistics, occlusion: ProductHostOcclusionStatistics, indirectLight: ProductHostIndirectLightStatistics, };
+passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusionStatistics, distanceFields: ProductHostDistanceFieldStatistics, lightClusters: ProductHostLightClusterStatistics, gpuCulling: ProductHostGpuCullingStatistics, scatterSelection: ProductHostScatterSelectionStatistics, impostors: ProductHostImpostorStatistics, occlusion: ProductHostOcclusionStatistics, indirectLight: ProductHostIndirectLightStatistics, 
+/**
+ * The snow in force (`CameraView.SetSnow`); absent without snow.
+ */
+snow?: ProductHostSnowStatistics, };
 
 /**
  * The impostor levels' baked views: how many meshes are baked, their
@@ -438,6 +442,23 @@ atlasBytes: number,
  * has moving casters (their layers redraw only those); 0 before.
  */
 staticCacheBytes: number, };
+
+/**
+ * The snow lying on the scene's lit surfaces, as the world pass draws it.
+ */
+export type ProductHostSnowStatistics = { 
+/**
+ * How much lies, 0 to 1.
+ */
+amount: number, 
+/**
+ * Its linear colour.
+ */
+color: [number, number, number], 
+/**
+ * The texels per metre its edge steps at (0: a smooth edge).
+ */
+texelsPerMetre: number, };
 
 /**
  * Median milliseconds per frame for each stage of streaming it.

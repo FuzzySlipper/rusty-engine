@@ -528,13 +528,21 @@ const PUDDLE_METRES: f32 = 2.5;
 const PUDDLE_DARKENING: f32 = 0.7;
 const PUDDLE_ROUGHNESS: f32 = 0.03;
 fn wetted(surface: Surface) -> Surface {
+    if frame.weather.x <= 0.0 || surface.normal.y < -0.3 {
+        return surface;
+    }
+    return wet_under(surface, open_sky(surface.world_position, surface.normal));
+}
+
+// `wetted` under a sky `open` (0 to 1) already looked up.
+fn wet_under(surface: Surface, open: f32) -> Surface {
     let wetness = frame.weather.x;
     let up = surface.normal.y;
     if wetness <= 0.0 || up < -0.3 {
         return surface;
     }
     let exposure = smoothstep(-0.3, 0.0, up) * mix(WET_WALLS, 1.0, clamp(up, 0.0, 1.0));
-    let wet = wetness * exposure * open_sky(surface.world_position, surface.normal);
+    let wet = wetness * exposure * open;
     if wet <= 0.0 {
         return surface;
     }
@@ -551,6 +559,111 @@ fn wetted(surface: Surface) -> Surface {
         result.base = vec4<f32>(result.base.rgb * mix(1.0, PUDDLE_DARKENING, pool), result.base.a);
         result.roughness = min(result.roughness, mix(result.roughness, PUDDLE_ROUGHNESS, pool));
         result.normal = normalize(mix(result.normal, vec3<f32>(0.0, 1.0, 0.0), pool));
+    }
+    return result;
+}
+
+// Snow (`Frame.weather.zw`, `Frame.snow_color`, `CameraView.SetSnow`): it
+// lies on lit surfaces that face up and stand under the open sky. A face
+// holds the whole amount when flat, less as it steepens and none from
+// `SNOW_STEEPEST` (about 73 degrees from up) on. Noise over the ground in
+// patches about `SNOW_PATCH_METRES` across breaks its edge, as snow falls
+// from above: soft on flat ground and sharper on steep faces. With a texel
+// density the cover is decided per texel of a world grid over the ground, so
+// its edge steps as painted pixels. Snow lies over what is wet: covered
+// ground takes the snow's colour and roughness, and the ground between
+// patches stays wet.
+const SNOW_STEEPEST: f32 = 0.3;
+const SNOW_PATCH_METRES: f32 = 1.7;
+const SNOW_BREAKUP: f32 = 0.8;
+const SNOW_EDGE_FLAT: f32 = 0.04;
+const SNOW_EDGE_STEEP: f32 = 0.01;
+const SNOW_ROUGHNESS: f32 = 0.8;
+
+// Where the snow decides its cover: `position`, or with a texel density the
+// centre of its texel on a world grid over the ground (x and z; the height
+// stays, for the sky's lookup).
+fn snow_texel(position: vec3<f32>) -> vec3<f32> {
+    let density = frame.weather.w;
+    if density <= 0.0 {
+        return position;
+    }
+    let snapped = (floor(position.xz * density) + 0.5) / density;
+    return vec3<f32>(snapped.x, position.y, snapped.y);
+}
+
+// How much of a surface at texel `at` with up component `up` under a sky
+// `open` (0 to 1) the snow covers, 0 to 1. The noise only breaks the edge:
+// where the amount, the slope and the sky decide the cover whatever it says
+// (open flat ground under a full cover), it is not taken.
+fn snow_cover(at: vec3<f32>, up: f32, open: f32) -> f32 {
+    let amount = frame.weather.z;
+    if amount <= 0.0 || up <= SNOW_STEEPEST || open <= 0.0 {
+        return 0.0;
+    }
+    let hold = smoothstep(SNOW_STEEPEST, 1.0, up);
+    let level = amount * hold * open;
+    let stepped = frame.weather.w > 0.0;
+    let edge = select(mix(SNOW_EDGE_STEEP, SNOW_EDGE_FLAT, hold), 0.0, stepped);
+    let reach = 0.5 * SNOW_BREAKUP;
+    if level - reach >= 0.5 + edge {
+        return 1.0;
+    }
+    if level + reach < 0.5 - edge {
+        return 0.0;
+    }
+    let p = at.xz / SNOW_PATCH_METRES;
+    let noise = cloud_noise(p) * 0.65 + cloud_noise(p * 2.9 + vec2<f32>(11.3, 5.1)) * 0.35;
+    let depth = level - (noise - 0.5) * SNOW_BREAKUP;
+    if stepped {
+        return step(0.5, depth);
+    }
+    return smoothstep(0.5 - edge, 0.5 + edge, depth);
+}
+
+fn snow_under(surface: Surface, at: vec3<f32>, open: f32) -> Surface {
+    let cover = snow_cover(at, surface.normal.y, open);
+    if cover <= 0.0 {
+        return surface;
+    }
+    var result = surface;
+    result.base = vec4<f32>(mix(result.base.rgb, frame.snow_color.rgb, cover), result.base.a);
+    result.metalness = mix(result.metalness, 0.0, cover);
+    result.roughness = mix(result.roughness, SNOW_ROUGHNESS, cover);
+    return result;
+}
+
+// Snow over a surface, without wetting it.
+fn snowed(surface: Surface) -> Surface {
+    if frame.weather.z <= 0.0 || surface.normal.y <= SNOW_STEEPEST {
+        return surface;
+    }
+    let at = snow_texel(surface.world_position);
+    return snow_under(surface, at, open_sky(at, surface.normal));
+}
+
+// The scene's weather over a surface: wetted, then snowed, under one look
+// at the open sky.
+fn weathered(surface: Surface, wets: bool) -> Surface {
+    let up = surface.normal.y;
+    let wet = wets && frame.weather.x > 0.0 && up >= -0.3;
+    let snow = frame.weather.z > 0.0 && up > SNOW_STEEPEST;
+    if !wet && !snow {
+        return surface;
+    }
+    // With snow the sky is looked up at its texel, so a sheltered edge
+    // steps with it; the rain's wetting does not tell the difference.
+    var at = surface.world_position;
+    if snow {
+        at = snow_texel(at);
+    }
+    let open = open_sky(at, surface.normal);
+    var result = surface;
+    if wet {
+        result = wet_under(result, open);
+    }
+    if snow {
+        result = snow_under(result, at, open);
     }
     return result;
 }

@@ -78,8 +78,12 @@ struct Frame {
     // spans.
     cloud_shape: vec4<f32>,
     // The surfaces' wetness (`lighting.wgsl` `wetted`): x how wet (0 dry to
-    // 1 soaked), y how much standing water gathers in puddles (0 to 1).
+    // 1 soaked), y how much standing water gathers in puddles (0 to 1). The
+    // snow lying on them (`snowed`): z how much (0 none to 1 covered), w the
+    // texels per metre its edge steps at (0: a smooth edge).
     weather: vec4<f32>,
+    // rgb: the snow's linear colour.
+    snow_color: vec4<f32>,
     // A backdrop pass (render-wgpu `frame.rs` `encode_backdrop`) draws in
     // backdrop units: a backdrop point p stands at xyz + p * w in the world
     // (`rusty::view::world_equivalent`). w is 0 in every other pass.

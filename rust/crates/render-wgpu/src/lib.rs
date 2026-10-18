@@ -212,6 +212,8 @@ pub struct GpuReadout {
     pub volumetric_fog: volumetric_fog::VolumetricFogReadout,
     /// The backdrop the last world view drew, if it drew one.
     pub backdrop: Option<BackdropReadout>,
+    /// The snow lying on the scene's surfaces (`lighting.wgsl` `snowed`).
+    pub snow: Option<render_model::SnowDescriptor>,
 }
 
 /// The backdrop camera a world view drew its backdrop with (`SetBackdrop`):
@@ -1004,6 +1006,7 @@ impl Renderer {
             indirect_light: self.probes.readout(),
             volumetric_fog: self.volumetric_fog.readout(),
             backdrop: self.backdrop,
+            snow: self.tables.snow,
         }
     }
 
