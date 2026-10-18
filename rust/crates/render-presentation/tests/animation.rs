@@ -398,6 +398,7 @@ fn descriptor(
     state: &AnimationControllerState,
 ) -> AnimationProjectionDescriptor {
     AnimationProjectionDescriptor {
+        received_seconds: None,
         target,
         asset: state.asset_id.clone(),
         content_hash: "ff".into(),

@@ -196,7 +196,12 @@ impl Renderer {
                     handle.raw(),
                     ControllerRow {
                         target: descriptor.target,
-                        playback: ControllerPlayback::new(descriptor.controller.clone(), now),
+                        // A baseline's state took effect before this renderer
+                        // existed; a live one takes effect now.
+                        playback: ControllerPlayback::new(
+                            descriptor.controller.clone(),
+                            descriptor.received_seconds.unwrap_or(now),
+                        ),
                     },
                 );
                 // A replaced controller's former target poses without it.
@@ -588,6 +593,13 @@ impl Renderer {
         );
         if let Some(playback) = &descriptor.playback {
             let _ = self.set_animated_playback(handle, playback);
+        }
+        // A fade a retained baseline carries keeps its own start.
+        if let (Some(fade), Some(instance)) = (
+            &descriptor.playback_fade,
+            self.tables.animated.get_mut(&handle),
+        ) {
+            instance.playback.fade = Some(fade.clone());
         }
         let _ = self.set_animated_inspection(handle, &descriptor.inspection);
         self.reset_animated_instance(handle);

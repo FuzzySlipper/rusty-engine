@@ -299,6 +299,7 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
             handle: RenderHandle::new(1),
             parent: Some(RenderHandle::new(2)),
             instance: AnimatedMeshInstanceDescriptor {
+                playback_fade: None,
                 inspection: Default::default(),
                 asset: body.asset.asset.clone(),
                 transform: Transform::IDENTITY,

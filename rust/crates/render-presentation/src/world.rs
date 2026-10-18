@@ -71,7 +71,7 @@ struct PresentationNode {
     mesh_payload: Option<MeshPayloadDescriptor>,
     material_override: Option<Material>,
     material_parameters: BTreeMap<u16, MaterialInstanceParameters>,
-    playback: AnimatedMeshPlaybackTimeline,
+    playback: render_model::PlaybackState,
     pose: render_model::AnimatedMeshPose,
     /// The world revision that last created or changed the node.
     changed: u64,
@@ -528,8 +528,10 @@ impl PresentationWorld {
 
     /// Complete a baseline that named mechanisms built from their current
     /// retained state (never historical signals) with the scene each retained
-    /// ghost plate captured. Baselines are assembled only when a fresh
-    /// attachment needs them, not at every settlement.
+    /// ghost plate captured, and with the time each animation controller's
+    /// state took effect, so a renderer built from it advances each state
+    /// from where the renderer it replaces does. Baselines are assembled only
+    /// when a fresh attachment needs them, not at every settlement.
     pub fn with_retained_captures(
         &self,
         mut frames: Vec<PresentationFrameDiff>,
@@ -542,6 +544,15 @@ impl PresentationWorld {
                 } = op
                 {
                     descriptor.captured_scene = self.retained.ghost_captures.get(handle).cloned();
+                }
+                if let crate::PresentationOp::Animation {
+                    op: crate::AnimationProjectionOp::Create { handle, descriptor },
+                    ..
+                } = op
+                {
+                    if let Some(retained) = self.retained.controllers.get(handle) {
+                        descriptor.received_seconds = retained.received_seconds;
+                    }
                 }
             }
         }
@@ -564,13 +575,14 @@ impl PresentationWorld {
             if let crate::PresentationOp::Animation { op, .. } = operation {
                 match op {
                     crate::AnimationProjectionOp::Create { handle, descriptor } => {
-                        self.retained
-                            .controllers
-                            .insert(*handle, descriptor.clone());
+                        let mut retained = descriptor.clone();
+                        retained.received_seconds = Some(self.elapsed_seconds);
+                        self.retained.controllers.insert(*handle, retained);
                     }
                     crate::AnimationProjectionOp::Update { handle, controller } => {
                         if let Some(descriptor) = self.retained.controllers.get_mut(handle) {
                             descriptor.controller = controller.clone();
+                            descriptor.received_seconds = Some(self.elapsed_seconds);
                         }
                     }
                     crate::AnimationProjectionOp::Destroy { handle } => {
@@ -1099,8 +1111,17 @@ impl PresentationWorld {
                     let mut instance = instance.clone();
                     instance.playback = node
                         .playback
+                        .playback
+                        .timeline
                         .snapshot_command(self.elapsed_seconds)
                         .expect("admitted playback timeline");
+                    // A fade still under way crosses to the new renderer
+                    // with its own start, so it draws what the live one does.
+                    instance.playback_fade = node
+                        .playback
+                        .fade
+                        .clone()
+                        .filter(|fade| self.elapsed_seconds < fade.start + fade.duration);
                     instance
                 },
             },
@@ -1187,12 +1208,15 @@ impl PresentationWorld {
                 return Err(PresentationWorldError::UnknownNode(parent));
             }
         }
-        let mut playback = AnimatedMeshPlaybackTimeline::default();
+        let mut playback = render_model::PlaybackState::default();
         if let NodeKind::AnimatedMesh(instance) = &kind {
             if let Some(command) = &instance.playback {
                 playback
-                    .apply_command(command, self.elapsed_seconds)
+                    .apply(command, self.elapsed_seconds)
                     .map_err(|_| PresentationWorldError::InvalidPlayback)?;
+            }
+            if let Some(fade) = &instance.playback_fade {
+                playback.fade = Some(fade.clone());
             }
         }
         let retained = &mut *self.retained;
@@ -1420,7 +1444,7 @@ impl PresentationWorld {
                 let now = self.elapsed_seconds;
                 let node = self.node_mut(*handle)?;
                 node.playback
-                    .apply_command(playback, now)
+                    .apply(playback, now)
                     .map_err(|_| PresentationWorldError::InvalidPlayback)?;
                 match &mut node.kind {
                     NodeKind::AnimatedMesh(value) => value.playback = Some(playback.clone()),
@@ -2952,6 +2976,7 @@ mod joint_attachment_tests {
                 handle: body,
                 parent: None,
                 instance: AnimatedMeshInstanceDescriptor {
+                    playback_fade: None,
                     asset: asset.asset.clone(),
                     transform: Transform::IDENTITY,
                     material_overrides: vec![],

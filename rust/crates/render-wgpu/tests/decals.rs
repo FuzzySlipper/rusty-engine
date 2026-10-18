@@ -416,6 +416,7 @@ fn animated_meshes_are_passed_by_unless_the_decal_asks() {
             handle: RenderHandle::new(1),
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
+                playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: imported.asset.clone(),
                 transform: Transform::IDENTITY,

@@ -1337,6 +1337,11 @@ pub struct AnimatedMeshInstanceDescriptor {
     pub visible: bool,
     pub material_overrides: Vec<MeshMaterialSlot>,
     pub playback: Option<AnimatedMeshPlaybackCommand>,
+    /// A prior playback still fading out under `playback`, carried to a
+    /// renderer built from the retained world so it draws what the renderer
+    /// it replaces drew.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub playback_fade: Option<crate::PlaybackFade>,
     pub metadata: RenderMetadata,
     /// The layer a root instance draws in; children take their root's.
     #[serde(default, skip_serializing_if = "crate::RenderLayer::is_scene")]
@@ -1512,7 +1517,13 @@ pub enum AnimatedMeshPlaybackError {
 /// Canonical retained state for direct animated-mesh playback. It turns
 /// commands into a reconstructible position on an Engine-owned timeline;
 /// renderers receive one current command and do not replay history.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
 pub enum AnimatedMeshPlaybackTimeline {
     #[default]
     Unset,

@@ -18,8 +18,9 @@ use std::collections::HashMap;
 use render_model::{AnimatedMeshAsset, AnimatedMeshPose, PosedJoint, Transform};
 
 pub use clip::{layer_clips, sample_locals, Channel, Clip, Interp, Path, Trs};
-pub use playback::{wrap, ClipAction, ControllerPlayback, Fade, Playback, PlaybackState};
+pub use playback::ControllerPlayback;
 pub use pose::{compose, controlled, IkSolve};
+pub use render_model::{wrap, ClipAction, DirectPlayback, PlaybackFade, PlaybackState};
 pub use rig::{
     asset_clips, decode_clips, decode_nodes, joint_nodes, posed_joints, resource_identity,
     rig_nodes, transform_matrix, transform_of, Rig, RigNode,

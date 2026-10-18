@@ -238,6 +238,7 @@ fn character(resources: &mut Resources) -> (Vec<RenderDiff>, AnimatedMeshAsset) 
             handle: RenderHandle::new(handle),
             parent: parent.map(RenderHandle::new),
             instance: AnimatedMeshInstanceDescriptor {
+                playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: asset.asset.clone(),
                 transform: transform([0.0; 3], 0.0, [scale; 3]),
@@ -350,6 +351,7 @@ fn a_joint_attachment_follows_the_skin_joint_when_another_node_shares_its_name()
             handle: RenderHandle::new(BODY),
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
+                playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: body.asset.clone(),
                 transform: Transform::IDENTITY,
@@ -427,6 +429,7 @@ fn a_reopened_character_renders_the_sampled_pose_as_the_original_did() {
             handle: RenderHandle::new(10),
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
+                playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: reopened.asset.clone(),
                 transform: Transform::IDENTITY,

@@ -58,6 +58,7 @@ fn animated(
         handle: RenderHandle::new(handle),
         parent: parent.map(RenderHandle::new),
         instance: AnimatedMeshInstanceDescriptor {
+            playback_fade: None,
             inspection: AnimatedMeshInspection::default(),
             asset: asset.asset.clone(),
             transform,
@@ -416,6 +417,7 @@ fn a_controller_drives_its_target_on_the_engine_timeline_and_blends_a_transition
         &frame(AnimationProjectionOp::Create {
             handle,
             descriptor: AnimationProjectionDescriptor {
+                received_seconds: None,
                 target: RenderHandle::new(BODY),
                 asset: "graph/character".to_owned(),
                 content_hash: "sha256:controller-fixture".to_owned(),
@@ -1096,6 +1098,7 @@ fn a_controller_created_again_for_another_target_drives_only_that_one() {
             op: AnimationProjectionOp::Create {
                 handle,
                 descriptor: AnimationProjectionDescriptor {
+                    received_seconds: None,
                     target: RenderHandle::new(target),
                     asset: "graph/character".to_owned(),
                     content_hash: "sha256:controller-fixture".to_owned(),
@@ -1403,6 +1406,7 @@ fn current_playback_followed_without_the_renderer_matches_the_drawn_report() {
                 op: AnimationProjectionOp::Create {
                     handle: AnimationProjectionHandle::new(1),
                     descriptor: AnimationProjectionDescriptor {
+                        received_seconds: None,
                         target: RenderHandle::new(BODY),
                         asset: "graph/character".to_owned(),
                         content_hash: "sha256:controller-fixture".to_owned(),
@@ -1560,4 +1564,146 @@ fn clip_layers_from_a_skeleton_only_pack_draw_what_pose_sampling_gives() {
         .sum();
     assert!(turn.abs() < 0.999, "the head nods");
     assert!(!moved("LeftHand"), "the left arm stays with the run");
+}
+
+/// A renderer built from the retained world partway through a cross-fade,
+/// a fade-out or a controller's update draws and reports the pose the live
+/// renderer does: the fade keeps its start and prior playback, and the
+/// controller state advances from when it took effect, not from the rebuild.
+#[test]
+fn a_renderer_rebuilt_from_the_retained_world_poses_as_the_live_one() {
+    use render_presentation::{
+        AnimationControllerClipPhase, AnimationControllerProjectionState,
+        AnimationProjectionDescriptor, AnimationProjectionHandle, AnimationProjectionOp,
+        PresentationFrameDiff, PresentationOp, PresentationOpMeta, ResolvedAnimationMotion,
+    };
+    const NO_ENTITIES: &dyn Fn(u64) -> Option<[f32; 3]> = &|_| None;
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    harness.apply(vec![RenderDiff::SetAnimatedMeshPose {
+        handle: RenderHandle::new(BODY),
+        pose: AnimatedMeshPose {
+            report_joints: true,
+            ..AnimatedMeshPose::default()
+        },
+    }]);
+    let view = character_view();
+    // Both clocks at `seconds`: the retained world's and the renderer's.
+    let at = |harness: &mut Harness, seconds: f64| {
+        let behind = seconds - harness.world.elapsed_seconds();
+        harness.world.advance_elapsed(behind);
+        harness.renderer.set_animation_time(seconds);
+    };
+    let play = |clip: &str, fade: Option<f32>| RenderDiff::SetAnimatedMeshPlayback {
+        handle: RenderHandle::new(BODY),
+        playback: AnimatedMeshPlaybackCommand::Play {
+            clip: clip.to_owned(),
+            r#loop: AnimationLoopMode::Repeat,
+            speed: 1.0,
+            weight: 1.0,
+            restart: true,
+            fade_seconds: fade,
+            start_offset_seconds: None,
+            start_paused: false,
+        },
+    };
+    let mut baseline: Vec<PresentationFrameDiff> = Vec::new();
+    let compare = |harness: &mut Harness, baseline: &[PresentationFrameDiff], case: &str| {
+        harness.render(&view);
+        let live = joint_poses(harness).pop().expect("a live report").2;
+        let mut fresh = render_wgpu::Renderer::new(&harness.gpu, harness.renderer.options());
+        fresh.set_animation_time(harness.world.elapsed_seconds());
+        let issues = fresh.apply(&harness.world.snapshot().frame, &harness.resources);
+        assert!(issues.is_empty(), "{case}: {issues:?}");
+        for frame in harness.world.with_retained_captures(baseline.to_vec()) {
+            let issues = fresh.apply_presentation(&frame, &harness.resources, NO_ENTITIES);
+            assert!(issues.is_empty(), "{case}: {issues:?}");
+        }
+        fresh.render_offscreen(&view, &harness.target);
+        let rebuilt = fresh
+            .take_animation_facts()
+            .into_iter()
+            .find_map(|fact| match fact {
+                AnimationFact::JointPose {
+                    object_id: BODY,
+                    joints,
+                    ..
+                } => Some(joints),
+                _ => None,
+            })
+            .expect("a rebuilt report");
+        for (joint, (live, rebuilt)) in live.iter().zip(&rebuilt).enumerate() {
+            let (a, b) = (live.world.translation, rebuilt.world.translation);
+            assert!(distance(a, b) < 1e-5, "{case}: joint {joint}: {a:?} {b:?}");
+        }
+    };
+
+    at(&mut harness, 1.0);
+    harness.apply(vec![play("idle", None)]);
+    at(&mut harness, 1.4);
+    harness.apply(vec![play("run", Some(1.0))]);
+    at(&mut harness, 1.9);
+    compare(&mut harness, &baseline, "halfway through a cross-fade");
+
+    harness.apply(vec![RenderDiff::SetAnimatedMeshPlayback {
+        handle: RenderHandle::new(BODY),
+        playback: AnimatedMeshPlaybackCommand::Stop {
+            fade_seconds: Some(0.8),
+        },
+    }]);
+    at(&mut harness, 2.2);
+    compare(&mut harness, &baseline, "partway through a fade-out");
+
+    harness.apply(vec![play("jump", None)]);
+    let state = AnimationControllerProjectionState {
+        entity: BODY,
+        graph_id: "graph/character".to_owned(),
+        graph_version: 1,
+        state_id: "run".to_owned(),
+        revision: 1,
+        controller_tick: 1,
+        phase_seconds: 0.0,
+        clip_phases: vec![AnimationControllerClipPhase {
+            clip: "run".to_owned(),
+            time_seconds: 0.1,
+        }],
+        motion: ResolvedAnimationMotion {
+            clip_a: "run".to_owned(),
+            clip_b: None,
+            blend_weight_milli: 0,
+            speed_milli: 1000,
+        },
+        transition: None,
+        transition_fact: None,
+    };
+    let create = PresentationFrameDiff {
+        ops: vec![PresentationOp::Animation {
+            meta: PresentationOpMeta::new(0),
+            op: AnimationProjectionOp::Create {
+                handle: AnimationProjectionHandle::new(1),
+                descriptor: AnimationProjectionDescriptor {
+                    target: RenderHandle::new(BODY),
+                    asset: "graph/character".to_owned(),
+                    content_hash: "sha256:controller-fixture".to_owned(),
+                    tick_duration_millis: 16,
+                    controller: state,
+                    received_seconds: None,
+                },
+            },
+        }],
+        ..PresentationFrameDiff::default()
+    };
+    let delta = harness.world.apply_presentation(create.clone()).unwrap();
+    let issues = harness
+        .renderer
+        .apply_presentation(&delta, &harness.resources, NO_ENTITIES);
+    assert!(issues.is_empty(), "{issues:?}");
+    // The mechanism's own baseline names the controller without a time.
+    baseline.push(create);
+    at(&mut harness, 2.7);
+    compare(
+        &mut harness,
+        &baseline,
+        "a controller updated before the rebuild",
+    );
 }

@@ -282,6 +282,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
             handle: RenderHandle::new(4),
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
+                playback_fade: None,
                 inspection: Default::default(),
                 asset: animated_mesh.asset.clone(),
                 transform: Transform::IDENTITY,

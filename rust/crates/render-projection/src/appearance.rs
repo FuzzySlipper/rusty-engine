@@ -734,6 +734,7 @@ pub(crate) fn create_node(
             handle,
             parent,
             instance: AnimatedMeshInstanceDescriptor {
+                playback_fade: None,
                 inspection: inspection.clone(),
                 asset: asset.clone(),
                 transform: node.transform,

@@ -232,6 +232,12 @@ pub struct AnimationProjectionDescriptor {
     pub content_hash: String,
     pub tick_duration_millis: u32,
     pub controller: AnimationControllerProjectionState,
+    /// The Engine presentation time `controller` took effect at, for a
+    /// renderer built from the retained world: it advances the state from
+    /// then, as the renderer it replaces does. A live update takes effect when
+    /// applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub received_seconds: Option<f64>,
 }
 
 impl AnimationProjectionDescriptor {
@@ -410,6 +416,7 @@ impl AnimationProjector {
             assets,
             targets,
             AnimationProjectionDescriptor {
+                received_seconds: None,
                 target: projection.target,
                 asset: state.asset_id.clone(),
                 content_hash: projection.content_hash,
