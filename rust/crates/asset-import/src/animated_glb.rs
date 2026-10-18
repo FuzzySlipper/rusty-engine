@@ -263,26 +263,66 @@ fn import_glb(
         channel_count,
         keyframe_count,
     ) = if parsed.document.animations().next().is_some() {
-        let imported = match import_animated_mesh_source_for_visual_metadata(
-            &animated_request,
-            source_hash.clone(),
-            parsed,
-        ) {
-            Ok(imported) => imported,
-            Err(error) => {
-                diagnostics.extend(error.diagnostics().iter().map(|item| {
+        // A GLB with a skeleton and clips but no geometry is a clip pack: it
+        // has no bind-pose mesh to measure, no materials and empty bounds.
+        let skeleton_only = parsed.document.meshes().next().is_none();
+        let conversion_failed = |error: voxel_convert::ConversionError| {
+            error
+                .diagnostics()
+                .iter()
+                .map(|item| {
                     ImportDiagnostic::error(
                         map_conversion_code(item.code, &item.message),
                         item.path.clone(),
                         item.message.clone(),
                         conversion_remedy(item.code),
                     )
-                }));
-                return failed(diagnostics);
+                })
+                .collect::<Vec<_>>()
+        };
+        let (model, source_bounds, source_material_slots) = if skeleton_only {
+            match voxel_convert::import_animated_glb(source) {
+                Ok(model) => (
+                    model,
+                    voxel_convert::MeshSourceBounds {
+                        min: [0.0; 3],
+                        max: [0.0; 3],
+                    },
+                    Vec::new(),
+                ),
+                Err(error) => {
+                    diagnostics.extend(conversion_failed(error));
+                    return failed(diagnostics);
+                }
+            }
+        } else {
+            match import_animated_mesh_source_for_visual_metadata(
+                &animated_request,
+                source_hash.clone(),
+                parsed,
+            ) {
+                Ok(imported) => {
+                    let slots = imported
+                        .source
+                        .receipt
+                        .metadata
+                        .material_slots
+                        .iter()
+                        .map(|material| material.source_material_slot)
+                        .collect::<Vec<_>>();
+                    (
+                        imported.model,
+                        imported.source.receipt.metadata.source_bounds,
+                        slots,
+                    )
+                }
+                Err(error) => {
+                    diagnostics.extend(conversion_failed(error));
+                    return failed(diagnostics);
+                }
             }
         };
-        let clips = imported
-            .model
+        let clips = model
             .clips
             .iter()
             .map(|clip| AnimationClipDescriptor {
@@ -294,21 +334,38 @@ fn import_glb(
                 ),
             })
             .collect::<Vec<_>>();
-        let channel_count = imported
-            .model
+        let channel_count = model
             .clips
             .iter()
             .map(|clip| clip.channels.len())
             .sum::<usize>();
-        let keyframe_count = imported
-            .model
+        let keyframe_count = model
             .clips
             .iter()
             .flat_map(|clip| &clip.channels)
             .map(|channel| channel.timestamps_microseconds.len() as u64)
             .sum::<u64>();
-        let rig = match derive_animation_rig_signature(&imported.model, &json_document) {
-            Ok(rig) => rig,
+        let rig = match derive_animation_rig_signature(&model, &json_document) {
+            Ok(Some(rig)) => Some(rig),
+            Ok(None) if skeleton_only => {
+                diagnostics.push(ImportDiagnostic::error(
+                    ImportCode::InvalidAnimation,
+                    asset_id.as_str(),
+                    "a GLB without meshes is an animation clip pack and needs one named skin",
+                    "export the skeleton as one named skin joint forest with the clips",
+                ));
+                return failed(diagnostics);
+            }
+            Ok(None) => None,
+            Err(message) if skeleton_only => {
+                diagnostics.push(ImportDiagnostic::error(
+                    ImportCode::InvalidAnimation,
+                    asset_id.as_str(),
+                    message,
+                    "export one named skin joint forest with a supported designated root-motion policy",
+                ));
+                return failed(diagnostics);
+            }
             Err(message) => {
                 // Embedded clips remain independently usable. We retain no
                 // approximate signature, so a later clip-pack association
@@ -325,15 +382,8 @@ fn import_glb(
         };
         (
             GlbAnimationKind::Animated,
-            imported.source.receipt.metadata.source_bounds,
-            imported
-                .source
-                .receipt
-                .metadata
-                .material_slots
-                .iter()
-                .map(|material| material.source_material_slot)
-                .collect::<Vec<_>>(),
+            source_bounds,
+            source_material_slots,
             clips,
             rig,
             channel_count,

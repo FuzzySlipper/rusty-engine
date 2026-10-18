@@ -15,10 +15,19 @@ pub use sample::{
 pub(crate) use sample::{preflight_animation_bind_pose, preflight_animation_clip_range};
 
 pub const ANIMATION_TIMESTAMP_TICKS_PER_SECOND: u64 = 1_000_000;
-pub const MAX_IMPORTED_ANIMATION_CLIPS: usize = 64;
-pub const MAX_IMPORTED_ANIMATION_CHANNELS: usize = 4_096;
-pub const MAX_IMPORTED_ANIMATION_KEYFRAMES: usize = 1_000_000;
-pub const MAX_IMPORTED_ANIMATION_VALUES: usize = 4_000_000;
+/// Keyframe timestamps one GLB's clips hold together (every channel's input
+/// accessor, counted per channel). With the value budget below this bounds
+/// what decoding a GLB's clips costs: admission decodes them as f64, and the
+/// renderer and pose sampling each keep them as f32. Clip and channel counts
+/// are not limited: a game character with 50 to 80 joints and several hundred
+/// clips of a few seconds at 30 fps is one GLB (a 60-joint, 715-clip guard is
+/// about 2.6 million keyframes and 9.5 million values). A larger animation set
+/// splits into clip packs, which have no total limit.
+pub const MAX_IMPORTED_ANIMATION_KEYFRAMES: usize = 16_000_000;
+/// Output components (3 per translation or scale key, 4 per rotation key,
+/// tripled for cubic splines) one GLB's clips hold together: at most 256 MiB
+/// as admission decodes them.
+pub const MAX_IMPORTED_ANIMATION_VALUES: usize = 32_000_000;
 /// JOINTS accessors address a skin-local table with unsigned 16-bit ordinals.
 pub const MAX_IMPORTED_JOINTS_PER_SKIN: usize = u16::MAX as usize + 1;
 pub const MAX_IMPORTED_MORPH_TARGETS: usize = 64;

@@ -98,6 +98,42 @@ The packaged fixture `fixtures/csharp-portable-assets` contains equivalent loose
 and bundle sprite/model/material documents, ordered timing, explicit missing
 directions, and repeated release/reload. `portable.inspect` reports its facts.
 
+## Animation clips and clip packs
+
+An animated GLB can carry any number of clips and channels. Admission
+limits only what decoding the GLB's clips costs, since it decodes them
+whole and the renderer and pose sampling each keep a copy:
+
+- 16 million keyframes in total, counting each channel's timestamps;
+- 32 million output values in total: 3 per translation or scale key, 4 per
+  rotation key, three times that for cubic splines.
+
+A game character with 50 to 80 joints and several hundred clips of a few
+seconds at 30 fps fits in one GLB with room to spare. A 60-joint guard with
+715 clips is about 2.6 million keyframes and 9.5 million values. Each clip
+needs a unique non-empty name. A larger set splits into clip packs, and the
+packs together have no limit.
+
+A clip pack is a GLB that carries a skeleton and clips. It needs no mesh:
+export the skeleton's nodes and its skin (joint names and inverse binds)
+with the clips, and leave out meshes and materials. Its skeleton must match
+the character's: the same joint names, parents and rest pose.
+
+```csharp
+RenderResource body = engine.Animation.OpenAnimatedMeshFromContent(new(bodySource));
+RenderResource pack = engine.Animation.OpenAnimationClipPackFromContent(new(packSource));
+engine.Animation.AssociateAnimationClipPack(new(body, pack, producer, license));
+ReadOnlyMemory<AnimationClipInfo> clips = engine.Animation.ReadClips(body);
+```
+
+Associate packs before creating an appearance or graph for the body.
+`ReadClips` then lists the body's own clips followed by each pack's, in
+association order. `ClipPack` is 0 for the body's own clips and otherwise the
+pack's position from 1. Playback names any of these clips by id, and clip
+layers name them by their index in this list (`AnimationClips.IndexOf`).
+`fixtures/csharp-animation-layers` associates a skeleton-only pack and plays
+its clips as layers.
+
 ## Mesh-to-joint attachments
 
 An asset with `kind: "attachment"` names `target` and `child` local model IDs,

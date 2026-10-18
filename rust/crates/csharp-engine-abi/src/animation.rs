@@ -303,6 +303,49 @@ pub struct NativeJointOverride {
     pub weight: f32,
 }
 
+/// One clip laid over an instance's playback at a time the product gives
+/// (`SetLayers`), by `weight` (0 to 1). `clip` indexes `ReadClips`. A layer
+/// changes only the joints and properties its clip has channels for:
+/// `additive` false moves them toward the clip's values, true adds the
+/// clip's change from its pose at `reference_time`. `time` and
+/// `reference_time` are fractions of the clip when `normalized`, otherwise
+/// seconds. `joint_weights_len` zero gives every joint the layer's weight;
+/// otherwise the request's `joint_weights[joint_weights_start..]` name the
+/// joints it changes (`ReadJoints` indices), each by its own weight.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationClipLayer {
+    pub clip: u32,
+    pub time: f32,
+    pub normalized: bool,
+    pub weight: f32,
+    pub additive: bool,
+    pub reference_time: f32,
+    pub joint_weights_start: u32,
+    pub joint_weights_len: u32,
+}
+
+/// One joint's weight in a clip layer, 0 to 1.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeAnimationJointWeight {
+    pub joint: u32,
+    pub weight: f32,
+}
+
+/// Replaces one instance's clip layers: laid in order over what it plays
+/// (its playback or controller), before pose controls. An empty list clears
+/// them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationLayersRequest {
+    pub instance: NativeAnimationInstanceHandle,
+    pub layers: *const NativeAnimationClipLayer,
+    pub layers_len: usize,
+    pub joint_weights: *const NativeAnimationJointWeight,
+    pub joint_weights_len: usize,
+}
+
 /// Rotates `root` and `mid` so `end` reaches `target`, bending toward
 /// `pole`, mixed in by `weight`. `mid` descends from `root` and `end` from
 /// `mid`. `space` is `Model` or `World`.
@@ -587,7 +630,11 @@ pub struct NativeAnimatedMeshInfo {
     pub joint_count: u32,
 }
 
-/// Strings borrow the clip-info result; the safe SDK copies them.
+/// One clip a mesh plays: its own clips first, then each associated clip
+/// pack's in association order. `clip_pack` is 0 for the mesh's own clips
+/// and otherwise the pack's position in that order, from 1. A clip's
+/// position in the list is the index clip layers name it by. Strings borrow
+/// the clip-info result; the safe SDK copies them.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationClipInfo {
@@ -595,6 +642,7 @@ pub struct NativeAnimationClipInfo {
     pub name: NativeUtf8Slice,
     pub duration_seconds: f32,
     pub has_duration: bool,
+    pub clip_pack: u32,
 }
 
 pub type NativeReadAnimatedMeshInfo = unsafe extern "C" fn(
@@ -731,5 +779,10 @@ pub type NativeSampleAnimationModelJointPose = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     *const NativeAnimationModelPoseSampleRequest,
     *mut NativeAnimationPoseSampleResult,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetAnimationLayers = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeAnimationLayersRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;

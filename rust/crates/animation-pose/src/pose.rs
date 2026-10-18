@@ -410,6 +410,7 @@ mod tests {
 
     fn ik(target: Vec3, pole: Vec3, weight: f32) -> AnimatedMeshPose {
         AnimatedMeshPose {
+            clip_layers: Vec::new(),
             two_bone_ik: vec![TwoBoneIkConstraint {
                 root: 0,
                 mid: 1,

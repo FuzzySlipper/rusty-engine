@@ -281,6 +281,7 @@ impl RuntimeAppearanceBridge {
             )?
         };
         let pose = AnimatedMeshPose {
+            clip_layers: Vec::new(),
             two_bone_ik: two_bone_ik
                 .iter()
                 .map(|ik| TwoBoneIkConstraint {
@@ -355,6 +356,93 @@ impl RuntimeAppearanceBridge {
             .get_mut(&request.instance.value)
             .expect("checked above")
             .pose = pose;
+        Ok(())
+    }
+
+    fn set_animation_layers(
+        &mut self,
+        request: &NativeAnimationLayersRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let layers =
+            unsafe { borrowed_slice(request.layers, request.layers_len, "animation clip layers")? };
+        let weights = unsafe {
+            borrowed_slice(
+                request.joint_weights,
+                request.joint_weights_len,
+                "animation layer joint weights",
+            )?
+        };
+        let state = &mut *self.staged_mut()?.state;
+        let instance = state
+            .animation_instances
+            .get(&request.instance.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_INSTANCE",
+                    "animation instance is not live",
+                )
+            })?;
+        let mesh = instance_mesh(
+            &state.animated_appearances,
+            &state.render_resources,
+            instance.appearance,
+        )
+        .ok_or_else(|| pose_error("clip layers need an animated mesh"))?;
+        let clips: Vec<&str> = mesh_clips(mesh).map(|(_, clip)| clip.id.as_str()).collect();
+        let joints = mesh.rig.as_ref().map_or(0, |rig| rig.joints.len());
+        let clip_layers = layers
+            .iter()
+            .map(|layer| {
+                let clip = clips.get(layer.clip as usize).ok_or_else(|| {
+                    pose_error(format!(
+                        "clip {} is outside the mesh's {} clips",
+                        layer.clip,
+                        clips.len()
+                    ))
+                })?;
+                let start = layer.joint_weights_start as usize;
+                let mask = start
+                    .checked_add(layer.joint_weights_len as usize)
+                    .and_then(|end| weights.get(start..end))
+                    .ok_or_else(|| pose_error("a layer's joint weights lie outside the list"))?;
+                if let Some(joint) = mask.iter().find(|joint| joint.joint as usize >= joints) {
+                    return Err(pose_error(format!(
+                        "joint {} is outside the rig's {joints} joints",
+                        joint.joint
+                    )));
+                }
+                Ok(ClipLayer {
+                    clip: (*clip).to_owned(),
+                    time: layer.time,
+                    normalized: layer.normalized,
+                    weight: layer.weight,
+                    blend: if layer.additive {
+                        ClipLayerBlend::Additive
+                    } else {
+                        ClipLayerBlend::Override
+                    },
+                    reference_time: layer.reference_time,
+                    joint_weights: mask
+                        .iter()
+                        .map(|joint| JointWeight {
+                            joint: joint.joint,
+                            weight: joint.weight,
+                        })
+                        .collect(),
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        AnimatedMeshPose {
+            clip_layers: clip_layers.clone(),
+            ..AnimatedMeshPose::default()
+        }
+        .validate()
+        .map_err(|error| pose_error(format!("invalid clip layers: {error:?}")))?;
+        state
+            .animation_instances
+            .get_mut(&request.instance.value)
+            .expect("checked above")
+            .clip_layers = clip_layers;
         Ok(())
     }
 
@@ -503,6 +591,8 @@ impl RuntimeAppearanceBridge {
             controls.layers.extend(instance.ragdoll.iter().cloned());
         }
         if request.use_current_playback {
+            // What it plays includes its clip layers.
+            controls.clip_layers.clone_from(&instance.clip_layers);
             let staged = self.staged_ref()?;
             let state = &staged.state;
             let target = instance_target(
@@ -701,6 +791,7 @@ pub(super) fn settle_poses(
             continue;
         };
         let mut pose = instance.pose.clone();
+        pose.clip_layers.clone_from(&instance.clip_layers);
         pose.layers.extend(instance.ragdoll.iter().cloned());
         let changed = match &instance.pose_sent {
             Some((sent, sent_pose)) if *sent == target => *sent_pose != pose,
@@ -739,6 +830,21 @@ pub(crate) unsafe extern "C" fn set_animation_pose(
         }
         animation_void(context, |bridge| {
             bridge.set_animation_pose(unsafe { &*request })
+        })
+    })
+}
+
+pub(crate) unsafe extern "C" fn set_animation_layers(
+    context: *mut c_void,
+    request: *const NativeAnimationLayersRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.set_animation_layers(unsafe { &*request })
         })
     })
 }
@@ -1136,6 +1242,210 @@ mod tests {
         let held = sampled(&mut bridge, &current(instance)).unwrap();
         assert!(same(&held, &blend));
         end_call(&mut bridge);
+    }
+
+    const CLIP_PACK_GLB: &[u8] =
+        include_bytes!("../../../../../fixtures/csharp-joint-attachments/content/body.clips.glb");
+
+    /// A skeleton-only clip pack's clips join the mesh's own in `ReadClips`
+    /// and play as clip layers over the playback: an override on the arm at
+    /// half weight and an additive nod, sampled as the instance plays.
+    #[test]
+    fn clip_layers_from_a_skeleton_only_pack_lay_over_the_playback() {
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), {
+            let mut content = BTreeMap::new();
+            content.insert("body.glb".to_owned(), Arc::from(CHARACTER_GLB));
+            content.insert("body.clips.glb".to_owned(), Arc::from(CLIP_PACK_GLB));
+            content
+        });
+        bridge.set_presentation_clock(0.0, 0.25);
+        bridge.begin_call();
+        let resource = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: utf8("body.glb"),
+            })
+            .unwrap();
+        let pack = bridge
+            .open_animation_clip_pack(&NativeAnimationClipPackResourceRequest {
+                path: utf8("body.clips.glb"),
+            })
+            .expect("a pack without a mesh is admitted");
+        bridge
+            .associate_animation_clip_pack(&NativeAnimationClipPackAssociationRequest {
+                primary_mesh: resource,
+                clip_pack: pack,
+                producer: utf8("fixture"),
+                license: utf8("CC0"),
+            })
+            .expect("the pack shares the body's rig");
+        let mut clips = NativeAnimationClipInfoResult {
+            clips: std::ptr::null(),
+            clips_len: 0,
+        };
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+        assert_eq!(
+            unsafe { super::read_animation_clips(context, resource, &mut clips, &mut error) },
+            ABI_OK
+        );
+        let clips: Vec<(String, u32)> =
+            unsafe { std::slice::from_raw_parts(clips.clips, clips.clips_len) }
+                .iter()
+                .map(|clip| {
+                    let id = unsafe { std::slice::from_raw_parts(clip.id.bytes, clip.id.len) };
+                    (String::from_utf8(id.to_vec()).unwrap(), clip.clip_pack)
+                })
+                .collect();
+        let expected: Vec<(String, u32)> = [
+            ("idle", 0),
+            ("run", 0),
+            ("jump", 0),
+            ("wave", 1),
+            ("nod", 1),
+            ("leap", 1),
+        ]
+        .map(|(id, pack)| (id.to_owned(), pack))
+        .to_vec();
+        assert_eq!(clips, expected, "own clips, then the pack's");
+        let joints = joint_index(&mut bridge, resource);
+        let appearance = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+            .unwrap();
+        let instance = bridge
+            .create_animation_instance(NativeAnimationInstanceRequest {
+                appearance,
+                object_id: 7,
+            })
+            .unwrap();
+        let fact = super::super::tests::appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        bridge
+            .set_animation_playback(&NativeAnimationPlaybackRequest {
+                instance,
+                kind: NativeAnimationPlaybackKind::Play,
+                clip: utf8("run"),
+                loop_mode: NativeAnimationLoopMode::Repeat,
+                speed: 1.0,
+                weight: 1.0,
+                restart: true,
+                fade_seconds: 0.0,
+                has_fade: false,
+                normalized_time: 0.0,
+            })
+            .unwrap();
+        let current = NativeAnimationPoseSampleRequest {
+            instance,
+            clip: utf8(""),
+            time: 0.0,
+            blend_clip: utf8(""),
+            blend_time: 0.0,
+            blend_weight: 0.0,
+            normalized: false,
+            placement: placed_at(0.0),
+            apply_pose_controls: false,
+            use_current_playback: true,
+        };
+        let rotation = |joints: &[NativeJointPose], joint: u32| {
+            let q = joints[joint as usize].model.rotation;
+            [q.x, q.y, q.z, q.w]
+        };
+        let base = sampled(&mut bridge, &current).unwrap();
+        let (arm, head, leg) = (joints["RightArm"], joints["Head"], joints["LeftUpLeg"]);
+        let layers = [
+            NativeAnimationClipLayer {
+                clip: 3,
+                time: 0.25,
+                normalized: true,
+                weight: 0.5,
+                additive: false,
+                reference_time: 0.0,
+                joint_weights_start: 0,
+                joint_weights_len: 2,
+            },
+            NativeAnimationClipLayer {
+                clip: 4,
+                time: 0.5,
+                normalized: true,
+                weight: 1.0,
+                additive: true,
+                reference_time: 0.0,
+                joint_weights_start: 0,
+                joint_weights_len: 0,
+            },
+        ];
+        let arms = [
+            NativeAnimationJointWeight {
+                joint: arm,
+                weight: 1.0,
+            },
+            NativeAnimationJointWeight {
+                joint: joints["RightForeArm"],
+                weight: 1.0,
+            },
+        ];
+        let set = |bridge: &mut RuntimeAppearanceBridge, layers: &[NativeAnimationClipLayer]| {
+            bridge.set_animation_layers(&NativeAnimationLayersRequest {
+                instance,
+                layers: layers.as_ptr(),
+                layers_len: layers.len(),
+                joint_weights: arms.as_ptr(),
+                joint_weights_len: arms.len(),
+            })
+        };
+        set(&mut bridge, &layers).unwrap();
+        let layered = sampled(&mut bridge, &current).unwrap();
+        assert_ne!(
+            rotation(&layered, arm),
+            rotation(&base, arm),
+            "the arm waves"
+        );
+        assert_ne!(
+            rotation(&layered, head),
+            rotation(&base, head),
+            "the head nods"
+        );
+        assert_eq!(
+            rotation(&layered, leg),
+            rotation(&base, leg),
+            "the run's legs"
+        );
+        // The layers reach the renderer with the instance's pose as the
+        // call settles.
+        let call = bridge.take_staged_call();
+        let sent = call.render_ops().into_iter().rev().find_map(|op| match op {
+            RenderDiff::SetAnimatedMeshPose { pose, .. } => Some(pose),
+            _ => None,
+        });
+        assert_eq!(sent.map(|pose| pose.clip_layers.len()), Some(2));
+        bridge.commit(call);
+
+        bridge.set_presentation_clock(0.25, 0.25);
+        bridge.begin_call();
+        let refused = set(
+            &mut bridge,
+            &[NativeAnimationClipLayer {
+                clip: 6,
+                ..layers[0]
+            }],
+        )
+        .unwrap_err();
+        assert!(
+            refused.to_string().contains("outside the mesh's 6 clips"),
+            "{refused}"
+        );
+        set(&mut bridge, &[]).unwrap();
+        let cleared = sampled(&mut bridge, &current).unwrap();
+        let run_now = sampled(
+            &mut bridge,
+            &NativeAnimationPoseSampleRequest {
+                clip: utf8("run"),
+                time: 0.5,
+                use_current_playback: false,
+                ..current
+            },
+        )
+        .unwrap();
+        assert_eq!(rotation(&cleared, arm), rotation(&run_now, arm), "cleared");
     }
 
     /// A decoded pose model lives with its resource: released with it, and

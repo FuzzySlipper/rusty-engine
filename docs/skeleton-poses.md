@@ -54,13 +54,54 @@ without a skin has no joints, and pose controls on it are refused.
 A pose is evaluated in this order:
 
 1. **Clips.** Playback or a controller samples the clips and blends them over
-   the rest pose.
+   the rest pose; then the clip layers apply in order.
 2. **Two-bone IK**, in list order.
 3. **Joint overrides.** Parents are applied before children; one joint's
    overrides apply in list order.
 4. **Ragdoll layers.** A [ragdoll](ragdolls.md) places its bones as one
    layer over the result, mixed in by its blend weight.
 5. **Skinning.** Joint attachments then hang from the result.
+
+## Clip layers
+
+`Animation.SetLayers` lays clips over what an instance plays (its playback
+or its controller) at times the product gives. Use it to mirror another
+simulation's animation layers, or to drive layered animation without a
+graph. Each layer is one clip at a time, with a weight from 0 to 1:
+
+- **Override** moves the joints the clip animates toward its pose.
+- **Additive** adds the clip's change from its pose at a reference time:
+  translation is added, rotation is applied after the joint's, and scale is
+  multiplied. This is a delta clip.
+
+A layer changes only the joints and properties its clip has channels for;
+the others keep the pose below. Optional joint weights limit a layer to the
+joints listed, each with its own weight. Layers apply in order, so a later
+override replaces what an earlier additive layer added. Clips are indexed by
+their position in `ReadClips`, which includes associated
+[clip packs](portable-assets.md#animation-clips-and-clip-packs).
+
+To hold a streamed base clip and its overlays at given times, sample the base
+with `Sample` playback (or lay it as the first override at weight 1). Then set
+the overlays every update. The list replaces the previous one, and an empty
+list clears it:
+
+```csharp
+uint parry = AnimationClips.IndexOf(clips, "layer_parry_A");
+uint breathe = AnimationClips.IndexOf(clips, "breathe_delta");
+engine.Animation.SetPlayback(new(instance, AnimationPlaybackKind.Sample, mainSequence,
+    AnimationLoopMode.Once, 1, 1, false, 0, false, mainCycle));
+layers.Clear();
+layers.Override(parry, parryCycle, parryWeight, armWeights);
+layers.Additive(breathe, breatheCycle, 1);
+engine.Animation.SetLayers(layers.ToRequest(instance));
+```
+
+Times are fractions of the clip by default, or seconds with `normalized:
+false`. Layers are evaluated before IK and joint overrides, by the same code
+in the renderer and in `SampleJointPose` of the current playback. A sample
+of an explicit clip time does not include them. `fixtures/csharp-animation-layers`
+lays a waving arm at half weight and an additive nod over a run.
 
 ## Two-bone IK
 

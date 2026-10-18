@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AnimatedMeshPose {
+    /// Clips laid over the playback's clip pose in order, before IK.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub clip_layers: Vec<ClipLayer>,
     /// Solved in order after the clip pose, before any override.
     #[serde(default)]
     pub two_bone_ik: Vec<TwoBoneIkConstraint>,
@@ -24,6 +27,49 @@ pub struct AnimatedMeshPose {
     /// Report the evaluated joints after each committed call.
     #[serde(default)]
     pub report_joints: bool,
+}
+
+/// One clip sampled at a time the product gives and laid over the pose
+/// below it, by `weight` (0 to 1) times each joint's weight. A clip changes
+/// only the joints and properties (translation, rotation, scale) it has
+/// channels for. `Override` moves them toward the clip's values; `Additive`
+/// adds the clip's change from its pose at `reference_time` (translation
+/// added, rotation applied after the joint's, scale multiplied). `time` and
+/// `reference_time` are fractions of the clip's duration when `normalized`,
+/// otherwise seconds, clamped to the clip. Without `joint_weights` every
+/// joint takes the layer's weight; with them, only the joints listed, each
+/// by its own weight.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ClipLayer {
+    /// A clip descriptor id the mesh plays (its own or a clip pack's).
+    pub clip: String,
+    pub time: f32,
+    #[serde(default)]
+    pub normalized: bool,
+    pub weight: f32,
+    #[serde(default)]
+    pub blend: ClipLayerBlend,
+    #[serde(default)]
+    pub reference_time: f32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub joint_weights: Vec<JointWeight>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClipLayerBlend {
+    #[default]
+    Override,
+    Additive,
+}
+
+/// One joint's weight in a [`ClipLayer`], 0 to 1.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JointWeight {
+    pub joint: u32,
+    pub weight: f32,
 }
 
 /// The space a pose value is given in. `Model` is the animated instance's
@@ -132,11 +178,22 @@ pub enum AnimatedMeshPoseError {
     /// IK joints that are not three distinct joints.
     IkJoints,
     InvalidTarget,
+    InvalidTime,
 }
 
 impl AnimatedMeshPose {
     pub fn validate(&self) -> Result<(), AnimatedMeshPoseError> {
         let weight = |value: f32| value.is_finite() && (0.0..=1.0).contains(&value);
+        for layer in &self.clip_layers {
+            if !weight(layer.weight)
+                || !layer.joint_weights.iter().all(|joint| weight(joint.weight))
+            {
+                return Err(AnimatedMeshPoseError::InvalidWeight);
+            }
+            if !layer.time.is_finite() || !layer.reference_time.is_finite() {
+                return Err(AnimatedMeshPoseError::InvalidTime);
+            }
+        }
         for ik in &self.two_bone_ik {
             if !weight(ik.weight) {
                 return Err(AnimatedMeshPoseError::InvalidWeight);
@@ -234,6 +291,7 @@ mod tests {
     #[test]
     fn additive_is_local_only_and_ik_needs_a_placed_space() {
         let pose = |overrides, two_bone_ik| AnimatedMeshPose {
+            clip_layers: Vec::new(),
             two_bone_ik,
             overrides,
             layers: Vec::new(),

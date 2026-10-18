@@ -1765,6 +1765,7 @@ pub struct NativeAnimationApi {
     pub replace_instance: NativeReplaceAnimationInstance,
     pub set_playback: NativeSetAnimationPlayback,
     pub set_pose: NativeSetAnimationPose,
+    pub set_layers: NativeSetAnimationLayers,
     pub create_graph: NativeCreateAnimationGraph,
     pub destroy_graph: NativeDestroyAnimationGraph,
     pub define_parameter: NativeDefineAnimationParameter,

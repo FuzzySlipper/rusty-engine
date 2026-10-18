@@ -118,7 +118,8 @@ fn import_glb_scene(
         .nodes()
         .map(|node| node.index())
         .collect::<Vec<_>>();
-    let (nodes, referenced_meshes) = traverse_default_scene(&source_nodes, &roots)?;
+    let (nodes, referenced_meshes) =
+        traverse_default_scene(&source_nodes, &roots, allow_animated_features)?;
     let (meshes, materials) = import_referenced_meshes(
         &parsed.document,
         blob,
@@ -148,7 +149,7 @@ fn collect_source_nodes(
         ));
     }
     let mesh_count = document.meshes().count();
-    if mesh_count == 0 {
+    if mesh_count == 0 && !allow_animated_features {
         return Err(ConversionError::one(
             "conversion.resourceLimit",
             "source.meshes",
@@ -193,6 +194,7 @@ fn collect_source_nodes(
 fn traverse_default_scene(
     source_nodes: &[SourceNode],
     roots: &[usize],
+    allow_animated_features: bool,
 ) -> Result<(Vec<ImportedModelNode>, BTreeSet<usize>), ConversionError> {
     if roots.is_empty() {
         return Err(ConversionError::one(
@@ -265,7 +267,7 @@ fn traverse_default_scene(
             model_transform: model_transforms[source_node_index],
         });
     }
-    if referenced_meshes.is_empty() {
+    if referenced_meshes.is_empty() && !allow_animated_features {
         return Err(ConversionError::one(
             "conversion.invalidGeometry",
             "source.scene",
@@ -392,7 +394,9 @@ fn import_referenced_meshes(
             primitives,
         });
     }
-    if materials.is_empty() {
+    // A skeleton with clips and no geometry (an animation clip pack) has no
+    // materials either.
+    if materials.is_empty() && !(allow_animated_features && meshes.is_empty()) {
         return Err(ConversionError::one(
             "conversion.resourceLimit",
             "source.materials",

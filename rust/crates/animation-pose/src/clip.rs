@@ -2,6 +2,8 @@
 
 use glam::{Mat4, Quat, Vec3};
 
+use render_model::{ClipLayer, ClipLayerBlend};
+
 use crate::Hierarchy;
 
 /// A node's local translation, rotation and scale.
@@ -226,6 +228,82 @@ pub fn sample_locals<H: Hierarchy + ?Sized>(
         .collect()
 }
 
+/// `layers` laid over `locals` in order. Each layer's clip is found by
+/// `index` (a layer naming no clip changes nothing) and its joint weights
+/// name rig joints, found through `rig`. Only the nodes and properties the
+/// clip has channels for change.
+pub fn layer_clips<H: Hierarchy + ?Sized>(
+    model: &H,
+    clips: &[Clip],
+    locals: &mut [Trs],
+    layers: &[ClipLayer],
+    rig: &[Option<usize>],
+    index: &dyn Fn(&str) -> Option<usize>,
+) {
+    let count = model.node_count();
+    let mut mask = vec![0.0f32; count];
+    for layer in layers {
+        let Some(clip) = index(&layer.clip).and_then(|clip| clips.get(clip)) else {
+            continue;
+        };
+        let at = |time: f32| {
+            if layer.normalized {
+                clip.duration * time
+            } else {
+                time
+            }
+        };
+        let (time, reference) = (at(layer.time), at(layer.reference_time));
+        let weighted = !layer.joint_weights.is_empty();
+        if weighted {
+            mask.fill(0.0);
+            for joint in &layer.joint_weights {
+                if let Some(node) = rig.get(joint.joint as usize).copied().flatten() {
+                    mask[node] = joint.weight;
+                }
+            }
+        }
+        for channel in &clip.channels {
+            let weight = layer.weight * if weighted { mask[channel.node] } else { 1.0 };
+            if weight <= 0.0 {
+                continue;
+            }
+            let local = &mut locals[channel.node];
+            match (layer.blend, channel.path) {
+                (ClipLayerBlend::Override, Path::Translation) => {
+                    local.translation = local.translation.lerp(channel.sample_vec3(time), weight);
+                }
+                (ClipLayerBlend::Override, Path::Scale) => {
+                    local.scale = local.scale.lerp(channel.sample_vec3(time), weight);
+                }
+                (ClipLayerBlend::Override, Path::Rotation) => {
+                    local.rotation = local
+                        .rotation
+                        .slerp(channel.sample_quat(time), weight)
+                        .normalize();
+                }
+                (ClipLayerBlend::Additive, Path::Translation) => {
+                    let change = channel.sample_vec3(time) - channel.sample_vec3(reference);
+                    local.translation += change * weight;
+                }
+                (ClipLayerBlend::Additive, Path::Scale) => {
+                    let from = channel.sample_vec3(reference);
+                    if from.cmpne(Vec3::ZERO).all() {
+                        let change = channel.sample_vec3(time) / from;
+                        local.scale *= Vec3::ONE.lerp(change, weight);
+                    }
+                }
+                (ClipLayerBlend::Additive, Path::Rotation) => {
+                    let change =
+                        channel.sample_quat(reference).inverse() * channel.sample_quat(time);
+                    local.rotation =
+                        (local.rotation * Quat::IDENTITY.slerp(change, weight)).normalize();
+                }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,6 +316,137 @@ mod tests {
             times: vec![0.0, 1.0, 3.0],
             values,
         }
+    }
+
+    struct Line(Vec<usize>);
+
+    impl Hierarchy for Line {
+        fn node_count(&self) -> usize {
+            self.0.len()
+        }
+        fn parent(&self, node: usize) -> Option<usize> {
+            node.checked_sub(1)
+        }
+        fn rest(&self, _: usize) -> Trs {
+            Trs {
+                translation: Vec3::ZERO,
+                rotation: Quat::IDENTITY,
+                scale: Vec3::ONE,
+            }
+        }
+        fn name(&self, _: usize) -> Option<&str> {
+            None
+        }
+        fn order(&self) -> &[usize] {
+            &self.0
+        }
+        fn skin_joints(&self) -> Vec<usize> {
+            self.0.clone()
+        }
+    }
+
+    /// A clip moving node 0 along x from 0 to 2 over 2 s and turning node 1
+    /// a quarter about y.
+    fn clip() -> Clip {
+        let half = std::f32::consts::FRAC_PI_4.sin();
+        Clip {
+            name: Some("wave".to_owned()),
+            duration: 2.0,
+            channels: vec![
+                Channel {
+                    node: 0,
+                    path: Path::Translation,
+                    interpolation: Interp::Linear,
+                    times: vec![0.0, 2.0],
+                    values: vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0],
+                },
+                Channel {
+                    node: 1,
+                    path: Path::Rotation,
+                    interpolation: Interp::Linear,
+                    times: vec![0.0, 2.0],
+                    values: vec![0.0, 0.0, 0.0, 1.0, 0.0, half, 0.0, half],
+                },
+            ],
+        }
+    }
+
+    fn layer(blend: ClipLayerBlend, time: f32, weight: f32, joints: Vec<(u32, f32)>) -> ClipLayer {
+        ClipLayer {
+            clip: "wave".to_owned(),
+            time,
+            normalized: true,
+            weight,
+            blend,
+            reference_time: 0.0,
+            joint_weights: joints
+                .into_iter()
+                .map(|(joint, weight)| render_model::JointWeight { joint, weight })
+                .collect(),
+        }
+    }
+
+    fn laid(layers: &[ClipLayer], below: Vec<Trs>) -> Vec<Trs> {
+        let model = Line(vec![0, 1, 2]);
+        let mut locals = below;
+        layer_clips(
+            &model,
+            &[clip()],
+            &mut locals,
+            layers,
+            &[Some(0), Some(1), Some(2)],
+            &|name| (name == "wave").then_some(0),
+        );
+        locals
+    }
+
+    fn rest() -> Vec<Trs> {
+        (0..3).map(|node| Line(vec![]).rest(node)).collect()
+    }
+
+    #[test]
+    fn an_override_layer_moves_only_the_joints_its_clip_animates_by_weight_and_mask() {
+        let half = laid(&[layer(ClipLayerBlend::Override, 1.0, 0.5, vec![])], rest());
+        assert!(
+            (half[0].translation.x - 1.0).abs() < 1e-6,
+            "halfway to the clip's 2"
+        );
+        assert_eq!(half[2], rest()[2], "a joint the clip has no channel for");
+        let masked = laid(
+            &[layer(ClipLayerBlend::Override, 1.0, 1.0, vec![(1, 1.0)])],
+            rest(),
+        );
+        assert_eq!(masked[0], rest()[0], "a joint left out of the mask");
+        assert!(masked[1].rotation.angle_between(Quat::IDENTITY) > 1.5);
+    }
+
+    #[test]
+    fn an_additive_layer_adds_its_change_from_the_reference_over_the_pose_below() {
+        let mut below = rest();
+        below[0].translation = Vec3::new(0.0, 5.0, 0.0);
+        below[1].rotation = Quat::from_rotation_x(0.5);
+        let added = laid(
+            &[layer(ClipLayerBlend::Additive, 0.5, 1.0, vec![])],
+            below.clone(),
+        );
+        assert!((added[0].translation - Vec3::new(1.0, 5.0, 0.0)).length() < 1e-6);
+        let expected = below[1].rotation * Quat::from_rotation_y(std::f32::consts::FRAC_PI_4);
+        assert!(added[1].rotation.angle_between(expected) < 1e-4);
+        // At its reference time an additive layer changes nothing.
+        let none = laid(
+            &[layer(ClipLayerBlend::Additive, 0.0, 1.0, vec![])],
+            below.clone(),
+        );
+        assert!((none[0].translation - below[0].translation).length() < 1e-6);
+        // Layers apply in order: an override after an additive replaces it.
+        let both = laid(
+            &[
+                layer(ClipLayerBlend::Additive, 0.5, 1.0, vec![]),
+                layer(ClipLayerBlend::Override, 0.0, 1.0, vec![]),
+            ],
+            below,
+        );
+        assert!(both[0].translation.length() < 1e-6);
     }
 
     #[test]

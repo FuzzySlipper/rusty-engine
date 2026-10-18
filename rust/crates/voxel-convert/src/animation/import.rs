@@ -405,10 +405,16 @@ fn import_skins(
     scene: &ImportedModelScene,
     nodes: &[ImportedAnimationNode],
 ) -> Result<Vec<ImportedSkin>, ConversionError> {
-    let referenced = nodes
+    let mut referenced = nodes
         .iter()
         .filter_map(|node| node.source_skin_index)
         .collect::<BTreeSet<_>>();
+    // glTF binds a skin only to a mesh node, so a skeleton exported with its
+    // clips and no geometry (a clip pack) leaves its skin unreferenced.
+    if scene.meshes.is_empty() {
+        referenced
+            .extend((0..document.skins().count()).filter_map(|index| u32::try_from(index).ok()));
+    }
     let reachable = scene
         .nodes
         .iter()

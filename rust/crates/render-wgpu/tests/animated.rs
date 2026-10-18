@@ -859,6 +859,7 @@ fn pose_controls_reach_a_world_target_and_report_the_drawn_joints() {
     let reach = |target: [f32; 3], curl: f32| RenderDiff::SetAnimatedMeshPose {
         handle: RenderHandle::new(BODY),
         pose: AnimatedMeshPose {
+            clip_layers: Vec::new(),
             two_bone_ik: vec![TwoBoneIkConstraint {
                 root: arm,
                 mid: forearm,
@@ -946,6 +947,7 @@ fn a_reported_pose_carries_each_ik_chains_target_and_shortfall() {
     let reach = |target: [f32; 3]| RenderDiff::SetAnimatedMeshPose {
         handle: RenderHandle::new(BODY),
         pose: AnimatedMeshPose {
+            clip_layers: Vec::new(),
             two_bone_ik: vec![TwoBoneIkConstraint {
                 root: arm,
                 mid: forearm,
@@ -1014,6 +1016,7 @@ fn inspection_draws_the_joint_chain_and_ik_reach_of_an_instance() {
         RenderDiff::SetAnimatedMeshPose {
             handle: RenderHandle::new(BODY),
             pose: AnimatedMeshPose {
+                clip_layers: Vec::new(),
                 two_bone_ik: vec![TwoBoneIkConstraint {
                     root: joint("RightArm"),
                     mid: joint("RightForeArm"),
@@ -1187,6 +1190,7 @@ fn a_pose_sampled_without_the_renderer_matches_the_drawn_report() {
     let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
     let finger = rig_joint(&body, "RightHandIndex1");
     let controls = AnimatedMeshPose {
+        clip_layers: Vec::new(),
         two_bone_ik: Vec::new(),
         overrides: vec![JointOverride {
             joint: finger,
@@ -1419,4 +1423,141 @@ fn current_playback_followed_without_the_renderer_matches_the_drawn_report() {
         3,
         "the fading idle under the controller's jump and idle"
     );
+}
+
+/// A clip pack that carries only the character's skeleton plays its clips
+/// as clip layers over the playback: an override on the right arm at half
+/// weight and an additive nod. The renderer draws and reports the pose
+/// `animation_pose::PoseModel` samples for the same layers.
+#[test]
+fn clip_layers_from_a_skeleton_only_pack_draw_what_pose_sampling_gives() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let mut body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let pack_path = "csharp-joint-attachments/content/body.clips.glb";
+    let pack_bytes = fixture(pack_path);
+    let pack = import_animated_glb_asset(
+        &SourceUri::RelativePath(pack_path.to_owned()),
+        &pack_bytes,
+        &ImportContext::default(),
+    )
+    .assets
+    .expect("a skeleton-only pack is admitted")
+    .animated_mesh;
+    let hash = pack.content_hash.clone().expect("content hash");
+    harness.resources.insert(
+        &format!("clip-pack-resource/{}", hash.trim_start_matches("sha256:")),
+        pack_bytes.clone(),
+    );
+    body.clip_packs.push(AnimationClipPack {
+        asset: format!("animation-clip-pack/{}", hash.trim_start_matches("sha256:")),
+        runtime_format: pack.runtime_format,
+        content_hash: hash.clone(),
+        rig: pack.rig.clone().expect("the pack's rig"),
+        clips: pack.clips.clone(),
+        provenance: AnimationClipPackProvenance {
+            producer: "fixture".to_owned(),
+            source_hash: hash,
+            target_hash: body.content_hash.clone().unwrap(),
+            license: "CC0".to_owned(),
+        },
+    });
+    let joint = |name: &str| rig_joint(&body, name);
+    let controls = AnimatedMeshPose {
+        clip_layers: vec![
+            ClipLayer {
+                clip: "wave".to_owned(),
+                time: 0.25,
+                normalized: true,
+                weight: 0.5,
+                blend: ClipLayerBlend::Override,
+                reference_time: 0.0,
+                joint_weights: vec![
+                    JointWeight {
+                        joint: joint("RightArm"),
+                        weight: 1.0,
+                    },
+                    JointWeight {
+                        joint: joint("RightForeArm"),
+                        weight: 1.0,
+                    },
+                ],
+            },
+            ClipLayer {
+                clip: "nod".to_owned(),
+                time: 0.5,
+                normalized: true,
+                weight: 1.0,
+                blend: ClipLayerBlend::Additive,
+                reference_time: 0.0,
+                joint_weights: Vec::new(),
+            },
+        ],
+        report_joints: true,
+        ..AnimatedMeshPose::default()
+    };
+    harness.apply(vec![
+        RenderDiff::DefineAnimatedMesh {
+            asset: body.clone(),
+        },
+        RenderDiff::SetAnimatedMeshPose {
+            handle: RenderHandle::new(BODY),
+            pose: controls.clone(),
+        },
+    ]);
+    harness.render(&character_view());
+    let reports = joint_poses(&mut harness);
+    let (_, world, drawn, _) = reports.last().expect("a report");
+    let model = animation_pose::PoseModel::decode(
+        &body,
+        &fixture("csharp-joint-attachments/content/body.glb"),
+        |identity| {
+            identity
+                .ends_with(&body.clip_packs[0].content_hash[7..])
+                .then(|| pack_bytes.clone())
+        },
+    )
+    .expect("the body and its pack pose");
+    let sampled = model
+        .sample(
+            &[animation_pose::ClipSample {
+                clip: "run",
+                time: 0.5,
+                normalized: true,
+                weight: 1.0,
+            }],
+            &controls,
+            world,
+        )
+        .unwrap();
+    let plain = model
+        .sample(
+            &[animation_pose::ClipSample {
+                clip: "run",
+                time: 0.5,
+                normalized: true,
+                weight: 1.0,
+            }],
+            &AnimatedMeshPose::default(),
+            world,
+        )
+        .unwrap();
+    for (index, (sampled, drawn)) in sampled.iter().zip(drawn).enumerate() {
+        let (a, b) = (sampled.world.translation, drawn.world.translation);
+        assert!(distance(a, b) < 1e-5, "joint {index}: {a:?} {b:?}");
+    }
+    let moved = |name: &str| {
+        let index = joint(name) as usize;
+        distance(
+            sampled[index].world.translation,
+            plain[index].world.translation,
+        ) > 1e-3
+    };
+    assert!(moved("RightHand"), "the arm waves");
+    let head = joint("Head") as usize;
+    let turn: f32 = (0..4)
+        .map(|i| sampled[head].world.rotation[i] * plain[head].world.rotation[i])
+        .sum();
+    assert!(turn.abs() < 0.999, "the head nods");
+    assert!(!moved("LeftHand"), "the left arm stays with the run");
 }

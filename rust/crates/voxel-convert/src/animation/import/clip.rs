@@ -10,7 +10,6 @@ use crate::animation::{
     AnimationChannelValues, AnimationInterpolation, AnimationProperty, ImportedAnimationChannel,
     ImportedAnimationClip, ImportedAnimationNode, ImportedNodeTransform,
     ANIMATION_TIMESTAMP_TICKS_PER_SECOND, MAX_ANIMATION_DURATION_MICROSECONDS,
-    MAX_IMPORTED_ANIMATION_CHANNELS, MAX_IMPORTED_ANIMATION_CLIPS,
     MAX_IMPORTED_ANIMATION_KEYFRAMES, MAX_IMPORTED_ANIMATION_VALUES,
 };
 use crate::import::validate_imported_name;
@@ -22,11 +21,11 @@ pub(super) fn import_clips(
     nodes: &[ImportedAnimationNode],
 ) -> Result<Vec<ImportedAnimationClip>, ConversionError> {
     let clip_count = document.animations().count();
-    if clip_count == 0 || clip_count > MAX_IMPORTED_ANIMATION_CLIPS {
+    if clip_count == 0 {
         return Err(ConversionError::one(
-            "conversion.resourceLimit",
+            "conversion.invalidAnimation",
             "source.animations",
-            format!("named clip count must be in 1..={MAX_IMPORTED_ANIMATION_CLIPS}"),
+            "an animated import needs at least one named clip",
         ));
     }
     let node_by_index = nodes
@@ -34,7 +33,6 @@ pub(super) fn import_clips(
         .map(|node| (node.source_node_index, node))
         .collect::<BTreeMap<_, _>>();
     let mut names = BTreeSet::new();
-    let mut total_channels = 0usize;
     let mut total_keyframes = 0usize;
     let mut total_output_components = 0usize;
     let mut clips = Vec::with_capacity(clip_count);
@@ -62,14 +60,6 @@ pub(super) fn import_clips(
         let mut duration_microseconds = 0u64;
 
         for channel in animation.channels() {
-            total_channels = total_channels.saturating_add(1);
-            if total_channels > MAX_IMPORTED_ANIMATION_CHANNELS {
-                return Err(ConversionError::one(
-                    "conversion.resourceLimit",
-                    "source.animations.channels",
-                    format!("total channel count exceeds {MAX_IMPORTED_ANIMATION_CHANNELS}"),
-                ));
-            }
             let channel_index = channel.index();
             let channel_path = format!("{path}.channels[{channel_index}]");
             let target = channel.target();

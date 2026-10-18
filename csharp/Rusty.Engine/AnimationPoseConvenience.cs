@@ -105,3 +105,69 @@ public readonly partial record struct AnimationModelPoseSampleRequest
         bool normalized = true) =>
         new(resource, clip, time, string.Empty, 0, 0, normalized, placement);
 }
+
+public static class AnimationClips
+{
+    /// <summary>The index clip layers use for the clip <paramref name="id"/>, from <see cref="IAnimationService.ReadClips"/> (the mesh's own clips, then its clip packs').</summary>
+    public static uint IndexOf(ReadOnlySpan<AnimationClipInfo> clips, string id)
+    {
+        for (var index = 0; index < clips.Length; index++)
+        {
+            if (clips[index].Id == id)
+            {
+                return (uint)index;
+            }
+        }
+
+        throw new ArgumentException($"the mesh plays no clip '{id}'", nameof(id));
+    }
+}
+
+/// <summary>
+/// One update's clip layers for <see cref="IAnimationService.SetLayers"/>,
+/// laid in order over what the instance plays. Reuse it: <see cref="Clear"/>
+/// keeps its storage.
+/// </summary>
+public sealed class AnimationLayerSet
+{
+    private readonly List<AnimationClipLayer> layers = [];
+    private readonly List<AnimationJointWeight> jointWeights = [];
+
+    public int Count => layers.Count;
+
+    public void Clear()
+    {
+        layers.Clear();
+        jointWeights.Clear();
+    }
+
+    /// <summary>
+    /// <paramref name="clip"/> at <paramref name="time"/>, moving the joints it
+    /// animates toward it by <paramref name="weight"/>; only the joints in
+    /// <paramref name="joints"/>, each by its own weight, when given.
+    /// </summary>
+    public AnimationLayerSet Override(uint clip, float time, float weight, ReadOnlySpan<AnimationJointWeight> joints = default, bool normalized = true) =>
+        Add(clip, time, weight, false, 0, joints, normalized);
+
+    /// <summary>
+    /// <paramref name="clip"/>'s change from its pose at
+    /// <paramref name="referenceTime"/> to its pose at <paramref name="time"/>,
+    /// added over the pose below by <paramref name="weight"/>: a delta clip.
+    /// </summary>
+    public AnimationLayerSet Additive(uint clip, float time, float weight, float referenceTime = 0, ReadOnlySpan<AnimationJointWeight> joints = default, bool normalized = true) =>
+        Add(clip, time, weight, true, referenceTime, joints, normalized);
+
+    public AnimationLayersRequest ToRequest(AnimationInstance instance) =>
+        new(instance, layers.ToArray(), jointWeights.ToArray());
+
+    private AnimationLayerSet Add(uint clip, float time, float weight, bool additive, float referenceTime, ReadOnlySpan<AnimationJointWeight> joints, bool normalized)
+    {
+        layers.Add(new(clip, time, normalized, weight, additive, referenceTime, (uint)jointWeights.Count, (uint)joints.Length));
+        foreach (AnimationJointWeight joint in joints)
+        {
+            jointWeights.Add(joint);
+        }
+
+        return this;
+    }
+}

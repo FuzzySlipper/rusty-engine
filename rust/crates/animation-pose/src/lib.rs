@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use render_model::{AnimatedMeshAsset, AnimatedMeshPose, PosedJoint, Transform};
 
-pub use clip::{sample_locals, Channel, Clip, Interp, Path, Trs};
+pub use clip::{layer_clips, sample_locals, Channel, Clip, Interp, Path, Trs};
 pub use playback::{wrap, ClipAction, ControllerPlayback, Fade, Playback, PlaybackState};
 pub use pose::{compose, controlled, IkSolve};
 pub use rig::{
@@ -133,7 +133,15 @@ impl PoseModel {
         world: &Transform,
     ) -> Vec<PosedJoint> {
         let world = transform_matrix(world);
-        let locals = sample_locals(&self.rig, &self.clips, actions);
+        let mut locals = sample_locals(&self.rig, &self.clips, actions);
+        layer_clips(
+            &self.rig,
+            &self.clips,
+            &mut locals,
+            &controls.clip_layers,
+            &self.joints,
+            &|clip| self.clip_index(clip),
+        );
         let pose = controlled(&self.rig, &self.joints, locals, controls, world, None);
         posed_joints(&self.joints, &pose, world)
     }

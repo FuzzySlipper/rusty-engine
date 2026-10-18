@@ -3,7 +3,6 @@ use voxel_convert::{
     sample_animation_clip_range, AnimationAnchorPolicy, AnimationBindPoseRequest,
     AnimationChannelValues, AnimationEndPolicy, AnimationSampleRangeRequest,
     AnimationSampleRequest, MAX_ANIMATION_MATERIALIZED_SNAPSHOT_BYTES,
-    MAX_IMPORTED_ANIMATION_CLIPS,
 };
 
 const CHARACTER: &[u8] = include_bytes!(concat!(
@@ -281,23 +280,6 @@ fn animated_sampling_rejects_stale_absent_unsupported_and_bounded_work() {
     });
     let error = import_animated_glb(&unsupported).unwrap_err();
     assert_eq!(error.diagnostics()[0].code, "conversion.unsupportedFeature");
-
-    let mut excessive_clips = source.clone();
-    excessive_clips = mutate_glb(&excessive_clips, |document, _bin| {
-        let template = document["animations"][0].clone();
-        document["animations"] = serde_json::Value::Array(
-            (0..=MAX_IMPORTED_ANIMATION_CLIPS)
-                .map(|index| {
-                    let mut clip = template.clone();
-                    clip["name"] = format!("clip-{index}").into();
-                    clip
-                })
-                .collect(),
-        );
-    });
-    let error = import_animated_glb(&excessive_clips).unwrap_err();
-    assert_eq!(error.diagnostics()[0].code, "conversion.resourceLimit");
-    assert_eq!(error.diagnostics()[0].path, "source.animations");
 
     let mut excessive_frames = model.clone();
     excessive_frames.clips[0].duration_microseconds = 20_000_000;

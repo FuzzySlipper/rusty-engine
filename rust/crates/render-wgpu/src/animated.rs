@@ -932,10 +932,19 @@ impl Renderer {
         if !record {
             instance.ik.clear();
         }
+        let mut locals = animation_pose::sample_locals(&asset.model, &asset.clips, &actions);
+        animation_pose::layer_clips(
+            &asset.model,
+            &asset.clips,
+            &mut locals,
+            &instance.controls.clip_layers,
+            &asset.rig,
+            &clip_index(Some(asset)),
+        );
         let pose = animation_pose::controlled(
             &asset.model,
             &asset.rig,
-            animation_pose::sample_locals(&asset.model, &asset.clips, &actions),
+            locals,
             &instance.controls,
             world,
             record.then_some(&mut instance.ik),

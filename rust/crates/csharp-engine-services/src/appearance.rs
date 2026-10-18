@@ -1552,6 +1552,8 @@ struct AnimationInstance {
     controller: Option<u64>,
     /// The product's pose controls (`SetPose`).
     pose: AnimatedMeshPose,
+    /// The product's clip layers (`SetLayers`), laid under the controls.
+    clip_layers: Vec<ClipLayer>,
     /// The layer a Dynamics ragdoll places its bones with.
     ragdoll: Option<PlacedPoseLayer>,
     /// The target and pose (the product's controls, then the ragdoll's layer)
@@ -6002,6 +6004,7 @@ impl RuntimeAppearanceBridge {
                 last_playback_target: None,
                 controller: None,
                 pose: AnimatedMeshPose::default(),
+                clip_layers: Vec::new(),
                 ragdoll: None,
                 pose_sent: None,
             },
@@ -7599,10 +7602,20 @@ fn instance_mesh<'a>(
 
 /// Every clip an animated mesh plays: its own, then its clip packs'.
 fn mesh_clip_ids(mesh: &AnimatedMeshAsset) -> impl Iterator<Item = &str> {
-    mesh.clips
-        .iter()
-        .chain(mesh.clip_packs.iter().flat_map(|pack| &pack.clips))
-        .map(|clip| clip.id.as_str())
+    mesh_clips(mesh).map(|(_, clip)| clip.id.as_str())
+}
+
+/// Every clip an animated mesh plays with its clip pack: 0 for its own,
+/// then each pack's from 1, in association order (`ReadClips`).
+pub(crate) fn mesh_clips(
+    mesh: &AnimatedMeshAsset,
+) -> impl Iterator<Item = (u32, &AnimationClipDescriptor)> {
+    mesh.clips.iter().map(|clip| (0, clip)).chain(
+        mesh.clip_packs
+            .iter()
+            .enumerate()
+            .flat_map(|(pack, clips)| clips.clips.iter().map(move |clip| (pack as u32 + 1, clip))),
+    )
 }
 
 fn command_clip(command: &AnimatedMeshPlaybackCommand) -> Option<&str> {
@@ -9372,6 +9385,7 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         replace_instance: replace_animation_instance,
         set_playback: set_animation_playback,
         set_pose: animation_pose::set_animation_pose,
+        set_layers: animation_pose::set_animation_layers,
         create_graph: create_animation_graph,
         destroy_graph: destroy_animation_graph,
         define_parameter: define_animation_parameter,
@@ -10487,7 +10501,7 @@ pub(crate) unsafe extern "C" fn read_animated_mesh_info(
             Ok(NativeAnimatedMeshInfo {
                 bounds_min: vector(mesh.bounds.min),
                 bounds_max: vector(mesh.bounds.max),
-                clip_count: mesh.clips.len() as u32,
+                clip_count: mesh_clips(mesh).count() as u32,
                 material_count: mesh.embedded_material_slots.len() as u32,
                 joint_count: mesh.rig.as_ref().map_or(0, |rig| rig.joints.len() as u32),
             })
@@ -10512,19 +10526,22 @@ pub(crate) unsafe extern "C" fn read_animation_clips(
                         "resource is not an animated mesh",
                     )
                 })?
-                .clips
                 .clone();
+            let clips = mesh_clips(&clips)
+                .map(|(pack, clip)| (pack, clip.clone()))
+                .collect::<Vec<_>>();
             let utf8 = |value: &str| NativeUtf8Slice {
                 bytes: value.as_ptr(),
                 len: value.len(),
             };
             let readout = clips
                 .iter()
-                .map(|clip| NativeAnimationClipInfo {
+                .map(|(pack, clip)| NativeAnimationClipInfo {
                     id: utf8(&clip.id),
                     name: utf8(clip.name.as_deref().unwrap_or(&clip.id)),
                     duration_seconds: clip.duration_seconds.unwrap_or_default(),
                     has_duration: clip.duration_seconds.is_some(),
+                    clip_pack: *pack,
                 })
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
