@@ -15,7 +15,8 @@ to the other one for one between 40 and 44 m; trees are placement records.
 The far grass thins with distance, its kept clumps growing so the hills stay as
 green, and trees draw a cheaper cone from 150 m and baked impostor cards from
 320 m, crossfading between levels (#10017).
-`generate-textures.py` writes `content/grass.png` and `content/rock.png`.
+`generate-textures.py` writes `content/grass.png`, `content/rock.png` and
+the decal atlas `content/marks.png`.
 
 Stage with the exact SDK version and matching feed and runtime:
 
@@ -39,6 +40,11 @@ Live debug commands:
 - `vegetation.show <0|1>`, `vegetation.tune <grass per m²> <reach>`,
   `vegetation.invalidate <metres>`.
 - `heightfield.pick <x> <y> <z> <dx> <dy> <dz>`: pick the drawn ground.
+- `heightfield.height <metres>`: fly this high over the hills.
+- `decals.scatter <count> <size> <0|1>`: scatter decals from the
+  `marks.png` atlas (a footprint, a scorch, a splash and an ash ring;
+  `generate-textures.py` writes it) over the ground where the camera looks,
+  without or with the angle falloff, and report `CameraView.ReadDecals`.
 - `weather.snow <amount> <texels per metre>`: snow over the hills, grass and
   trees, clear under the trees (an ambient light's sky layer follows the
   camera), and the snow in force as `CameraView.ReadSnow` reports it.

@@ -1240,6 +1240,70 @@ SnowReadout snow = engine.CameraView.ReadSnow();
   takes 0.10 ms more under a full cover and 0.15 ms more under a half one
   (0.34 ms without), stepped or smooth alike.
 
+## Projected decals
+
+Marks that follow the ground and meshes (footprints and tracks, a scorch,
+blood, an ash ring, a wet patch, a worn path) are decals: each is a box the
+world pass projects an atlas region through, down the box's own -y, onto the
+opaque surfaces inside it.
+
+```csharp
+engine.CameraView.SetDecalAtlas(new(marks, default)); // opened NearestMipmapped
+engine.CameraView.SetDecal(new(Id: 7, Center: foot, Rotation: facing, Size: new(.3f, .6f, .3f),
+    Region: new(0, 0, .5f, .5f), Color: new Color(1, 1, 1, .9f), Roughness: 0, NormalStrength: 0,
+    AngleFalloff: true, OnVegetation: false, OnAnimatedMeshes: false, LifeSeconds: 60, FadeSeconds: 10));
+engine.CameraView.RemoveDecal(new(7));
+DecalReadout decals = engine.CameraView.ReadDecals();
+```
+
+- `SetDecal` places or replaces decal `Id`. Every opaque, lit surface inside
+  the box takes it: voxel and heightfield terrain, static meshes, a slope, a
+  step's edge or a curved stone, so a mark never floats or clips as a flat
+  quad would. `Rotation` zero is unturned; `Size` is metres along the box's
+  own axes; `Region` is the atlas region its x and z span (zero: the whole
+  atlas), v growing toward the box's +z.
+- The atlas texel times `Color` blends over the surface's colour by the
+  texel's alpha times `Color`'s alpha, before the surface is lit, so a decal
+  takes the scene's light and shadow. Without an atlas a decal is its colour.
+  `Roughness` above 0 lays that roughness where it covers (a wet patch);
+  `NormalStrength` bends the surface by the normal atlas (`SetDecalAtlas`'s
+  `Normals`: red along the box's +x, green up the region).
+- `AngleFalloff` fades the decal on faces turning away from the box's +y,
+  whole up to about 60 degrees and gone from about 80, so a step's riser or
+  a wall does not show the projection smeared along it. Without it every
+  face in the box takes the decal.
+- Vegetation copies (scatter, their impostors) and animated meshes are
+  passed by unless `OnVegetation` or `OnAnimatedMeshes`: a footprint's box
+  does not paint the grass or the walker's feet. Water, unlit and blended
+  materials, sprites and particles are left as they are.
+- Decals lay after the [wetness](#wet-surfaces) and the
+  [snow](#snow-cover), so tracks show in the snow, and before the shade
+  stage, so a product `shade(Surface)` receives the marked surface.
+- `LifeSeconds` above 0 shows the decal that long in Engine presentation
+  time from the call that places it, then fades it out over `FadeSeconds`
+  in the shader, with no further calls, and the Engine removes it. 0 keeps it
+  until it is removed or replaced; a product may also fade one by replacing
+  it with a lower opacity.
+- The atlas is sampled with its texture's own filter, with mip levels chosen
+  from the projection's screen gradients: open it `NearestMipmapped` for
+  crisp texels up close (CraftSurvive's crunch rule), `Linear` for smooth
+  ones. `SetDecalAtlas(default)` removes the atlas; it may not be released
+  while decals sample it.
+- A scene holds at most 4,096 decals (`ReadDecals` gives the count and the
+  budget); one more is refused as `CSHARP_DECAL_BUDGET`. They are retained
+  scene state like the fog volumes, in a world-space grid of 2 m cells the
+  renderer rebuilds when they change; a still set costs no upload. A
+  fragment tests only the decals whose box reaches its cell. `engine.renderer`
+  reports `gpu.decals`: the count, grid entries, the busiest cell's count,
+  the buffer's bytes, the last upload and its CPU time. On an RX 9070 XT at
+  1280×720, over hills with grass and trees, 500 decals of 0.6 m add 0.04 ms
+  to the world pass and 2,000 add 0.09 ms (0.34 ms without), with or
+  without the angle falloff; a world view with none placed pays one read.
+  Rebuilding 2,000 takes about 0.25 ms of CPU time and uploads 0.3 MB.
+- They need 18 sampled textures per shader stage, two more than WebGPU
+  guarantees; the Vulkan and DX12 adapters this renderer targets have them.
+  A device without them lays none, and `gpu.decals.refused` says why.
+
 ## Precipitation
 
 Rain or snow falls around the camera:

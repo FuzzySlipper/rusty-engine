@@ -827,3 +827,71 @@ pub struct NativeSkyBackgroundBlendRequest {
     pub second: NativeRenderResourceHandle,
     pub amount: f32,
 }
+
+/// A projected decal, placed or replaced by `id`: a mark laid over the
+/// opaque world inside a box, such as a footprint, a scorch, blood, an ash
+/// ring, a wet patch or a worn path. The box stands at `center` (world
+/// space, as a fog volume's), turned by `rotation` (zero: unturned), `size`
+/// metres along its own x, y and z (each above 0), and projects down its own
+/// -y: every opaque, lit surface inside it takes the decal, wrapping slopes,
+/// steps and curved meshes. Its x and z span `region` of the decal atlas
+/// (`SetDecalAtlas`; u0, v0, u1, v1, v growing toward the box's +z; zero:
+/// the whole atlas). The atlas texel times `color` (linear RGB) blends over
+/// the surface's colour by the texel's alpha times `color`'s alpha (its
+/// opacity); without an atlas the decal is its colour. `roughness` above 0
+/// is the roughness where it covers (0 keeps the surface's), and
+/// `normal_strength` how strongly the normal atlas bends the surface.
+/// `angle_falloff` fades it on faces turning away from the box's +y (whole
+/// to about 60 degrees, none from about 80), so a step's riser or a wall
+/// does not show the projection smeared. Vegetation copies and animated
+/// meshes are passed by unless `on_vegetation` or `on_animated_meshes`.
+/// `life_seconds` above 0 shows it that many seconds of Engine presentation
+/// time from this call, then fades it out over `fade_seconds`, after which
+/// the Engine removes it; 0 keeps it until it is removed or replaced. At
+/// most 4096 decals; the texture's own filter samples it
+/// (`NearestMipmapped` keeps texels crisp).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDecalRequest {
+    pub id: u64,
+    pub center: NativeVec3,
+    pub rotation: NativeQuat,
+    pub size: NativeVec3,
+    pub region: NativeVec4,
+    /// Linear RGB, and the opacity in alpha.
+    pub color: NativeColor,
+    pub roughness: f32,
+    pub normal_strength: f32,
+    pub angle_falloff: bool,
+    pub on_vegetation: bool,
+    pub on_animated_meshes: bool,
+    pub life_seconds: f32,
+    pub fade_seconds: f32,
+}
+
+/// Removes decal `id`; one that is not placed is left as it is.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDecalRemoval {
+    pub id: u64,
+}
+
+/// The textures decals sample: `color` the atlas their regions come from
+/// (0 removes it, and each decal draws in its colour), and `normals` a
+/// tangent-space normal atlas laid out the same (0: none), its red along the
+/// box's +x and green up the region.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDecalAtlasRequest {
+    pub color: NativeRenderResourceReference,
+    pub normals: NativeRenderResourceReference,
+}
+
+/// The decals placed as this call leaves them, and the most a scene holds.
+/// Their GPU cost is `engine.renderer`'s `gpu.decals`.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDecalReadout {
+    pub decals: u32,
+    pub budget: u32,
+}

@@ -9,6 +9,11 @@ impl Shaders {
         Self(render_shaders::Shaders::new())
     }
 
+    /// The world pass without decals (`render_shaders::Shaders::without_decals`).
+    pub fn without_decals(self) -> Self {
+        Self(self.0.without_decals())
+    }
+
     /// The id a material shaded by `shader` adds to its features.
     pub fn product(&mut self, shader: ProductShader) -> u32 {
         self.0.product(shader)

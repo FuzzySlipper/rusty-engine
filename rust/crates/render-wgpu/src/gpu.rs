@@ -186,6 +186,18 @@ impl Gpu {
         self.device.limits().max_buffer_size
     }
 
+    /// Why this device cannot lay decals, if it cannot: the world pass binds
+    /// two more textures with them than WebGPU guarantees.
+    pub(crate) fn decals_refusal(&self) -> Option<String> {
+        let granted = self.device.limits().max_sampled_textures_per_shader_stage;
+        (granted < crate::decals::WORLD_SAMPLED_TEXTURES).then(|| {
+            format!(
+                "the device binds {granted} sampled textures per shader stage; the world pass with decals binds {}",
+                crate::decals::WORLD_SAMPLED_TEXTURES
+            )
+        })
+    }
+
     pub fn max_texture_dimension(&self) -> u32 {
         self.device.limits().max_texture_dimension_2d
     }
@@ -258,13 +270,20 @@ impl Gpu {
 
 /// wgpu's default limits at the adapter's resolution, with the adapter's
 /// largest storage binding and buffer, so dense scatter holds as many
-/// copies as the device can bind (at most `binding_limit` bytes).
+/// copies as the device can bind (at most `binding_limit` bytes), and the
+/// sampled textures a world pass with decals binds, when the adapter has
+/// them.
 fn limits(adapter: &wgpu::Limits, binding_limit: Option<u64>) -> wgpu::Limits {
     let cap = binding_limit.unwrap_or(u64::MAX);
+    let defaults = wgpu::Limits::default();
     wgpu::Limits {
         max_storage_buffer_binding_size: adapter.max_storage_buffer_binding_size.min(cap),
         max_buffer_size: adapter.max_buffer_size.min(cap),
-        ..wgpu::Limits::default().using_resolution(adapter.clone())
+        max_sampled_textures_per_shader_stage: adapter
+            .max_sampled_textures_per_shader_stage
+            .min(crate::decals::WORLD_SAMPLED_TEXTURES)
+            .max(defaults.max_sampled_textures_per_shader_stage),
+        ..defaults.using_resolution(adapter.clone())
     }
 }
 

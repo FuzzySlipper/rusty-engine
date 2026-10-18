@@ -83,7 +83,10 @@ the frames that render layers), its `bloom-exposure` passes (with sun shafts) to
 `finish` pass
 ([exposure, tone mapping and fog](lighting-and-sky.md#exposure-tone-mapping-and-fog)),
 and a frame's share of building [the sky's
-light](lighting-and-sky.md#the-skys-light) (`sky-light`). `gpu.indirectLight`
+light](lighting-and-sky.md#the-skys-light) (`sky-light`). `gpu.decals` is the [projected decals](lighting-and-sky.md#projected-decals)
+(their count, grid entries, busiest cell, bytes and last rebuild) and
+`gpu.snow` the [snow cover](lighting-and-sky.md#snow-cover) in force, whose
+shading is part of the `world` pass. `gpu.indirectLight`
 is [the probe volume](lighting-and-sky.md#indirect-light-the-probe-volume):
 its probes, bricks and bricks pending, triangles, the last brick's and
 batch's bake times, the last frame's upload bytes and the texture's bytes.

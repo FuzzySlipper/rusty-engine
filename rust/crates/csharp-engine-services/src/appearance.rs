@@ -1622,6 +1622,39 @@ impl RuntimeAppearanceCall {
 impl RuntimeAppearanceCall {
     /// An image effect's shader, its textures and its descriptor, from the
     /// resources the product opened.
+    /// The decal atlas's textures, to define, and the atlas naming them.
+    pub(crate) fn decal_atlas(
+        &self,
+        request: csharp_engine_abi::NativeDecalAtlasRequest,
+    ) -> Result<
+        (Vec<TextureDescriptor>, render_model::DecalAtlasDescriptor),
+        CsharpEngineServicesError,
+    > {
+        let texture = |reference: csharp_engine_abi::NativeRenderResourceReference| {
+            self.state
+                .render_resources
+                .resource(reference.value)
+                .ok()
+                .and_then(|resource| resource.texture().cloned())
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_DECAL_ATLAS",
+                        "a decal atlas and its normals must be texture resources",
+                    )
+                })
+        };
+        let color = texture(request.color)?;
+        let normals = match request.normals.value {
+            0 => None,
+            _ => Some(texture(request.normals)?),
+        };
+        let atlas = render_model::DecalAtlasDescriptor {
+            color: color.id.clone(),
+            normals: normals.as_ref().map(|texture| texture.id.clone()),
+        };
+        Ok((std::iter::once(color).chain(normals).collect(), atlas))
+    }
+
     pub(crate) fn image_effect(
         &self,
         request: csharp_engine_abi::NativeImageEffectRequest,

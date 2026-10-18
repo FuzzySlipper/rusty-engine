@@ -165,6 +165,33 @@ pub struct ProductHostGpuStatistics {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub snow: Option<ProductHostSnowStatistics>,
+    pub decals: ProductHostDecalStatistics,
+}
+
+/// The projected decals the world pass lays (`CameraView.SetDecal`): what
+/// they hold and what keeping them costs. Their shading is part of the
+/// `world` pass's time.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostDecalStatistics {
+    /// Why this device lays no decals; absent while it can.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
+    pub decals: u32,
+    /// Grid entries (a decal counts once in each cell bucket its box
+    /// reaches), and the most one bucket lists: what a fragment there tests.
+    pub entries: u32,
+    pub busiest_bucket: u32,
+    /// GPU bytes of their buffer, and the bytes the last change uploaded.
+    #[ts(type = "number")]
+    pub bytes: u64,
+    #[ts(type = "number")]
+    pub upload_bytes: u64,
+    /// CPU microseconds the last rebuild of the grid and rows took.
+    pub build_micros: f64,
+    /// A normal atlas bends the surfaces.
+    pub normals: bool,
 }
 
 /// The snow lying on the scene's lit surfaces, as the world pass draws it.

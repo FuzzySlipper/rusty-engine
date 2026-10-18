@@ -507,6 +507,54 @@ pub enum FogVolumeShape {
     Ellipsoid,
 }
 
+/// A projected decal (`CameraView.SetDecal`): a mark the world pass lays
+/// over the opaque surfaces inside a box, projected down its own -y axis.
+/// Positions are in the renderer's world space, as a fog volume's. The box
+/// stands at `center`, turned by `rotation` (a unit quaternion x, y, z, w),
+/// `size` metres along its own x, y and z; its x and z span the region
+/// `uv_rect` (u0, v0, u1, v1) of the decal atlas (`SetDecalAtlas`), v
+/// growing toward the box's +z.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecalDescriptor {
+    pub center: [f32; 3],
+    pub rotation: [f32; 4],
+    pub size: [f32; 3],
+    pub uv_rect: [f32; 4],
+    /// Linear tint (rgb) times the atlas, and its opacity (a).
+    pub color: [f32; 4],
+    /// The roughness where the decal covers (above 0), or 0 to keep the
+    /// surface's.
+    pub roughness: f32,
+    /// How strongly the normal atlas bends the surface (0: not at all).
+    pub normal_strength: f32,
+    /// Fade out surfaces that turn away from the box's +y, so steep faces
+    /// do not show the projection smeared along them.
+    pub angle_falloff: bool,
+    /// Also lay over vegetation copies, and over animated meshes.
+    pub on_vegetation: bool,
+    pub on_animated: bool,
+    /// The Engine presentation seconds between which it fades out, and
+    /// after which it is gone; both 0 for a decal that stays.
+    pub fade_start: f64,
+    pub fade_end: f64,
+}
+
+impl DecalDescriptor {
+    /// The most decals a scene holds.
+    pub const MAX_DECALS: usize = 4096;
+}
+
+/// The textures decals sample (`CameraView.SetDecalAtlas`): the atlas their
+/// regions come from, by texture id, and a normal atlas laid out the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DecalAtlasDescriptor {
+    pub color: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normals: Option<String>,
+}
+
 /// A fog volume (`CameraView.SetFogVolume`): a box or ellipsoid of fog the
 /// volumetric fog adds to its medium, for a valley bank, a dust wall or a
 /// cave's mist. Positions are in the renderer's world space, as an indirect
@@ -1277,6 +1325,20 @@ pub enum RenderDiff {
     RemoveFogVolume {
         id: u32,
     },
+    /// Places or replaces decal `id`.
+    SetDecal {
+        id: u64,
+        decal: DecalDescriptor,
+    },
+    /// Removes decal `id`.
+    RemoveDecal {
+        id: u64,
+    },
+    /// Selects the textures decals sample; None draws each decal in its
+    /// tint.
+    SetDecalAtlas {
+        atlas: Option<DecalAtlasDescriptor>,
+    },
     /// Selects the precipitation around the camera; None stops it.
     SetPrecipitation {
         precipitation: Option<PrecipitationDescriptor>,
@@ -1469,6 +1531,9 @@ impl RenderFrameDiff {
                 | RenderDiff::SetVolumetricFog { .. }
                 | RenderDiff::SetFogVolume { .. }
                 | RenderDiff::RemoveFogVolume { .. }
+                | RenderDiff::SetDecal { .. }
+                | RenderDiff::RemoveDecal { .. }
+                | RenderDiff::SetDecalAtlas { .. }
                 | RenderDiff::SetPrecipitation { .. }
                 | RenderDiff::SetImageEffect { .. }
                 | RenderDiff::SetIndirectLight { .. }

@@ -1,4 +1,5 @@
-"""Writes content/grass.png and content/rock.png: 64x64 tileable noise for the fixture's two terrain layers."""
+"""Writes content/grass.png and content/rock.png, 64x64 tileable noise for the fixture's two terrain layers,
+and content/marks.png, a 64x64 decal atlas of four 32x32 marks: a footprint, a scorch, a splash and an ash ring."""
 import math
 import random
 from pathlib import Path
@@ -30,3 +31,31 @@ def tile(base, spread, seed):
 content = Path(__file__).resolve().parent / "content"
 tile((92, 140, 58), 0.6, 9842).save(content / "grass.png")
 tile((128, 122, 112), 0.9, 9843).save(content / "rock.png")
+
+
+def marks():
+    image = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    half = SIZE // 2
+    for y in range(half):
+        for x in range(half):
+            u, v = (x + 0.5) / half * 2 - 1, (y + 0.5) / half * 2 - 1
+            # A footprint: a sole and a heel, toes up the region.
+            sole = (u / 0.45) ** 2 + ((v + 0.25) / 0.6) ** 2 < 1
+            heel = (u / 0.38) ** 2 + ((v - 0.6) / 0.3) ** 2 < 1
+            if sole or heel:
+                image.putpixel((x, y), (40, 34, 28, 210))
+            # A scorch: dark at the heart, thinning out.
+            r = math.hypot(u, v)
+            if r < 1:
+                image.putpixel((half + x, y), (20, 16, 12, int(255 * (1 - r) ** 0.7)))
+            # A splash: a disc with lobes.
+            lobes = 0.55 + 0.25 * math.cos(5 * math.atan2(v, u))
+            if r < lobes:
+                image.putpixel((x, half + y), (120, 10, 8, 230))
+            # An ash ring.
+            if 0.55 < r < 0.85:
+                image.putpixel((half + x, half + y), (90, 88, 84, 220))
+    return image
+
+
+marks().save(content / "marks.png")

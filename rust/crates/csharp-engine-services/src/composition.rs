@@ -232,6 +232,10 @@ fn engine_api(
             set_volumetric_fog: crate::camera_view::set_volumetric_fog,
             set_fog_volume: crate::camera_view::set_fog_volume,
             remove_fog_volume: crate::camera_view::remove_fog_volume,
+            set_decal: crate::camera_view::set_decal,
+            remove_decal: crate::camera_view::remove_decal,
+            set_decal_atlas: crate::camera_view::set_decal_atlas,
+            read_decals: crate::camera_view::read_decals,
             set_precipitation: crate::camera_view::set_precipitation,
             set_image_effect: crate::camera_view::set_image_effect,
             set_indirect_light: crate::camera_view::set_indirect_light,
@@ -900,11 +904,17 @@ impl EngineServiceSet {
         )?;
         // Backdrop links resolve into their sessions' current frames every
         // call, so a world-origin rebase re-anchors them with no product call.
-        let backdrops = self.camera_view.backdrop_operations(&calls.camera_view);
-        if !backdrops.is_empty() {
+        let mut scene = self.camera_view.backdrop_operations(&calls.camera_view);
+        // Decals placed this call fade on the presentation timeline from the
+        // time it publishes; those whose fade has ended go.
+        scene.extend(crate::camera_view::decal_operations(
+            &mut calls.camera_view,
+            calls.presentation_world.elapsed_seconds() + self.call_elapsed_seconds,
+        ));
+        if !scene.is_empty() {
             match &mut sky_frame {
-                Some(frame) => frame.ops.extend(backdrops),
-                None => sky_frame = Some(render_model::RenderFrameDiff::from_ops(backdrops)),
+                Some(frame) => frame.ops.extend(scene),
+                None => sky_frame = Some(render_model::RenderFrameDiff::from_ops(scene)),
             }
         }
         // A selection this call builds or drops the sessions' fields now; the
@@ -2725,6 +2735,223 @@ mod tests {
             call.take_output().frames[0].ops,
             [render_model::RenderDiff::SetSnow { snow: None }]
         );
+    }
+
+    fn decal_request(id: u64, life_seconds: f32, fade_seconds: f32) -> NativeDecalRequest {
+        NativeDecalRequest {
+            id,
+            center: NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 2.0,
+            },
+            rotation: NativeQuat::default(),
+            size: NativeVec3 {
+                x: 0.5,
+                y: 0.4,
+                z: 0.5,
+            },
+            region: NativeVec4::default(),
+            color: NativeColor {
+                r: 0.2,
+                g: 0.1,
+                b: 0.1,
+                a: 0.8,
+            },
+            roughness: 0.0,
+            normal_strength: 0.0,
+            angle_falloff: true,
+            on_vegetation: false,
+            on_animated_meshes: false,
+            life_seconds,
+            fade_seconds,
+        }
+    }
+
+    /// Decals publish as retained scene state: a decal with a life fades
+    /// from the presentation time its call publishes at and is removed once
+    /// faded; removing, the readout, the atlas and the refusals.
+    #[test]
+    fn decals_publish_fade_on_the_presentation_timeline_and_go_when_faded() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::from([(
+                "atlas.png".to_owned(),
+                Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
+            )]),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        let update = |services: &mut EngineServiceSet, step: u64, steps: u32| {
+            services.begin_update_call(
+                binding(),
+                NativeProductUpdateFacts {
+                    lifecycle_state: NativeProductLifecycleState::Running,
+                    generation: 1,
+                    control_revision: 1,
+                    observed_host_time_nanoseconds: 0,
+                    simulation_step: step,
+                    fixed_step_hz: 10,
+                    admitted_step_count: steps,
+                    dropped_step_count: 0,
+                    fixed_delta_seconds: 0.1,
+                    gameplay_time_selected: true,
+                    gameplay_rate: 1.0,
+                    gameplay_advance_remaining_steps: 0,
+                    host_elapsed_seconds: 0.1,
+                },
+            );
+        };
+        let calls = |api: &NativeEngineApi| {
+            let api = *api;
+            (
+                move |request: NativeDecalRequest, refusal| unsafe {
+                    (api.camera_view.set_decal)(api.camera_view.context, &request, refusal)
+                },
+                move || unsafe {
+                    let mut readout = NativeDecalReadout::default();
+                    assert_eq!(
+                        (api.camera_view.read_decals)(
+                            api.camera_view.context,
+                            &mut readout,
+                            std::ptr::null_mut()
+                        ),
+                        ABI_OK
+                    );
+                    readout
+                },
+            )
+        };
+        // Ten steps (one second) of presentation time first.
+        update(&mut services, 0, 10);
+        services.finish_call().expect("a second");
+        update(&mut services, 10, 1);
+        let api = services.api();
+        let (set, read) = calls(&api);
+        let mut atlas_info = NativeRenderResourceInfo::default();
+        assert_eq!(
+            unsafe {
+                (api.graphics.open_resource)(
+                    api.graphics.context,
+                    &crate::appearance::tests::resource_request("atlas.png"),
+                    &mut atlas_info,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let atlas = NativeDecalAtlasRequest {
+            color: NativeRenderResourceReference {
+                value: atlas_info.handle.value,
+            },
+            normals: NativeRenderResourceReference::default(),
+        };
+        assert_eq!(
+            unsafe {
+                (api.camera_view.set_decal_atlas)(
+                    api.camera_view.context,
+                    &atlas,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        // In use, the atlas is not released.
+        let mut refusal = empty_receipt();
+        assert_eq!(
+            unsafe {
+                (api.graphics.destroy_resource)(
+                    api.graphics.context,
+                    atlas_info.handle,
+                    &mut refusal,
+                )
+            },
+            0
+        );
+        assert_eq!(receipt_codes(&refusal), ["CSHARP_RENDER_RESOURCE_IN_USE"]);
+        assert_eq!(
+            set(decal_request(1, 0.0, 0.0), std::ptr::null_mut()),
+            ABI_OK
+        );
+        assert_eq!(
+            set(decal_request(2, 0.5, 0.25), std::ptr::null_mut()),
+            ABI_OK
+        );
+        let mut refused = decal_request(3, 0.0, 0.0);
+        for bad in [
+            NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            NativeVec3 {
+                x: f32::NAN,
+                y: 1.0,
+                z: 1.0,
+            },
+        ] {
+            refused.size = bad;
+            let mut refusal = empty_receipt();
+            assert_eq!(set(refused, &mut refusal), 0);
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_DECAL"]);
+        }
+        assert_eq!(read().decals, 2);
+        let mut call = services.finish_call().expect("decal call");
+        let ops = call.take_output().frames[0].ops.clone();
+        let placed = |id: u64| {
+            ops.iter().find_map(|op| match op {
+                render_model::RenderDiff::SetDecal { id: placed, decal } if *placed == id => {
+                    Some(*decal)
+                }
+                _ => None,
+            })
+        };
+        assert!(ops.iter().any(|op| matches!(
+            op,
+            render_model::RenderDiff::SetDecalAtlas {
+                atlas: Some(render_model::DecalAtlasDescriptor { normals: None, .. })
+            }
+        )));
+        let lasting = placed(1).expect("decal 1");
+        assert_eq!(
+            (lasting.rotation, lasting.uv_rect, lasting.fade_end),
+            ([0.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0], 0.0),
+            "no turn and no region take the whole atlas unturned; no life stays"
+        );
+        // Published at 1.1 s: decal 2 fades from 1.6 s to 1.85 s.
+        let fading = placed(2).expect("decal 2");
+        assert!((fading.fade_start - 1.6).abs() < 1e-9 && (fading.fade_end - 1.85).abs() < 1e-9);
+
+        // Past its fade, decal 2 goes; decal 1 is removed by the product.
+        update(&mut services, 11, 8);
+        let api = services.api();
+        let (_, read) = calls(&api);
+        assert_eq!(
+            unsafe {
+                (api.camera_view.remove_decal)(
+                    api.camera_view.context,
+                    &NativeDecalRemoval { id: 1 },
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        assert_eq!(read().decals, 1);
+        let mut call = services.finish_call().expect("removal call");
+        let ops = call.take_output().frames[0].ops.clone();
+        assert_eq!(
+            ops,
+            [
+                render_model::RenderDiff::RemoveDecal { id: 1 },
+                render_model::RenderDiff::RemoveDecal { id: 2 },
+            ]
+        );
+        update(&mut services, 19, 1);
+        let api = services.api();
+        assert_eq!(calls(&api).1().decals, 0);
+        services.finish_call().expect("empty");
     }
 
     #[test]

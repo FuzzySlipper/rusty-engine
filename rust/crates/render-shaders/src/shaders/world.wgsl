@@ -54,6 +54,9 @@
 #import rusty::types::Surface
 #import rusty::shade::standard_shade
 #import rusty::lighting::weathered
+#ifdef DECALS
+#import rusty::decals::decaled
+#endif
 #ifdef PRODUCT_SHADER
 #import rusty::product::shade
 #endif
@@ -597,7 +600,8 @@ fn water_surface(in: VsOut, standard: Surface) -> Surface {
 }
 #endif
 
-fn world_color(in: VsOut, front: bool, masked: bool) -> vec4<f32> {
+// `opaque`: the part draws in an opaque pass, so decals lay over it.
+fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> {
     var surface = standard_surface(in, front);
 #ifdef WATER
     surface = water_surface(in, surface);
@@ -617,6 +621,19 @@ fn world_color(in: VsOut, front: bool, masked: bool) -> vec4<f32> {
     // Rain wets what stands under the open sky (`Frame.weather`), unless
     // the material keeps dry, and snow lies on what faces up there.
     surface = weathered(surface, material.weather.x < 0.5);
+#ifdef DECALS
+    // Decals over the opaque world, after the weather, so tracks show in
+    // the snow. A scatter run's copies are vegetation; an animated mesh's
+    // part has no fade and its fade's x below 0 (render-wgpu
+    // `tables::ANIMATED_PART_FADE`).
+    if opaque {
+#ifdef SCATTER
+        surface = decaled(surface, true, false);
+#else
+        surface = decaled(surface, false, parts[in.part].fade.x < 0.0);
+#endif
+    }
+#endif
 #endif
 #endif
 #ifdef PRODUCT_SHADER
@@ -629,7 +646,7 @@ fn world_color(in: VsOut, front: bool, masked: bool) -> vec4<f32> {
 // Blended passes: the colour and its alpha, blended over the world.
 @fragment
 fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return world_color(in, front, true);
+    return world_color(in, front, true, false);
 }
 
 struct OpaqueOut {
@@ -650,9 +667,9 @@ fn fs_world_opaque(in: VsOut, @builtin(front_facing) front: bool) -> OpaqueOut {
     let selected = 0xffffffffu;
 #endif
 #ifdef MASK
-    let color = world_color(in, front, false);
+    let color = world_color(in, front, false, true);
     return OpaqueOut(vec4<f32>(color.rgb, 1.0), mask_coverage(color.a, material.alpha_cutoff) & selected);
 #else
-    return OpaqueOut(vec4<f32>(world_color(in, front, true).rgb, 1.0), selected);
+    return OpaqueOut(vec4<f32>(world_color(in, front, true, true).rgb, 1.0), selected);
 #endif
 }

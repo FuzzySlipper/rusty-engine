@@ -438,6 +438,12 @@ impl Renderer {
         if self.scatter_copies.upload(&self.gpu) {
             self.rebind_frame();
         }
+        self.decals.prepare(
+            &self.gpu,
+            self.layouts.decals.as_ref(),
+            &self.tables.textures,
+            &self.white,
+        );
         let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
         let moved = std::mem::take(&mut self.tables.parts.moved);
         let former = std::mem::take(&mut self.tables.parts.former_bounds);
@@ -3134,6 +3140,10 @@ impl Renderer {
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             let occlusion_bind_group = self.ambient_occlusion.apply_bind_group(occlusion.as_ref());
             pass.set_bind_group(2, occlusion_bind_group, &[]);
+            // World views lay the decals; nothing else binds group 3.
+            if let Some(decals) = self.decals.bind_group(world_layer) {
+                pass.set_bind_group(3, decals, &[]);
+            }
             let mut encoded = match candidates {
                 Some(candidates) => {
                     let (encoded, runs) = self.draw_batches_indirect(
@@ -3200,6 +3210,9 @@ impl Renderer {
                 in_viewport(&mut pass);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
                 pass.set_bind_group(2, self.ambient_occlusion.apply_bind_group(None), &[]);
+                if let Some(decals) = self.decals.bind_group(world_layer) {
+                    pass.set_bind_group(3, decals, &[]);
+                }
             }
             // A water batch takes the depth copy in group 2; the others the
             // occlusion off.

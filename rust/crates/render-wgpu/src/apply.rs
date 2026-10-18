@@ -102,9 +102,13 @@ impl Renderer {
 
     fn apply_op(&mut self, op: &RenderDiff, resources: &dyn ResourceSource) -> Result<(), String> {
         match op {
-            RenderDiff::DefineTexture { texture } => self.define_texture(texture, resources)?,
+            RenderDiff::DefineTexture { texture } => {
+                self.define_texture(texture, resources)?;
+                self.decals.texture_changed(&texture.id);
+            }
             RenderDiff::ReleaseTexture { id } => {
                 self.tables.textures.remove(id);
+                self.decals.texture_changed(id);
                 if let Some(id) = self.tables.names.get(id) {
                     self.effects.forget_texture(id);
                 }
@@ -221,6 +225,9 @@ impl Renderer {
             RenderDiff::RemoveFogVolume { id } => {
                 self.tables.fog_volumes.remove(id);
             }
+            RenderDiff::SetDecal { id, decal } => self.decals.set(*id, *decal),
+            RenderDiff::RemoveDecal { id } => self.decals.remove(*id),
+            RenderDiff::SetDecalAtlas { atlas } => self.decals.set_atlas(atlas.clone()),
             RenderDiff::SetPrecipitation { precipitation } => {
                 self.tables.precipitation = *precipitation;
             }
@@ -1041,6 +1048,8 @@ impl Renderer {
                         },
                         _ => ([1.0; 4], [0.0; 3]),
                     };
+                    let mut row = PartRow::new(color, emission);
+                    row.fade = crate::tables::ANIMATED_PART_FADE;
                     parts.push((
                         Part {
                             mesh,
@@ -1049,7 +1058,7 @@ impl Renderer {
                             material,
                             wireframe,
                         },
-                        PartRow::new(color, emission),
+                        row,
                     ));
                 }
             }
@@ -2945,6 +2954,9 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetVolumetricFog { .. } => "setVolumetricFog",
         RenderDiff::SetFogVolume { .. } => "setFogVolume",
         RenderDiff::RemoveFogVolume { .. } => "removeFogVolume",
+        RenderDiff::SetDecal { .. } => "setDecal",
+        RenderDiff::RemoveDecal { .. } => "removeDecal",
+        RenderDiff::SetDecalAtlas { .. } => "setDecalAtlas",
         RenderDiff::SetPrecipitation { .. } => "setPrecipitation",
         RenderDiff::SetImageEffect { .. } => "setImageEffect",
         RenderDiff::SetIndirectLight { .. } => "setIndirectLight",

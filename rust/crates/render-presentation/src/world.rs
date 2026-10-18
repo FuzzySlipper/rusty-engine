@@ -138,6 +138,8 @@ struct RetainedGraphics {
     volumetric_fog: Option<VolumetricFogDescriptor>,
     cloud_regions: BTreeMap<u32, CloudRegionDescriptor>,
     fog_volumes: BTreeMap<u32, FogVolumeDescriptor>,
+    decals: BTreeMap<u64, render_model::DecalDescriptor>,
+    decal_atlas: Option<render_model::DecalAtlasDescriptor>,
     precipitation: Option<PrecipitationDescriptor>,
     image_effect: Option<ImageEffectDescriptor>,
     indirect_light: Option<IndirectLightDescriptor>,
@@ -484,6 +486,9 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetVolumetricFog { fog } if self.retained.volumetric_fog.as_ref() == Some(fog))
                 || matches!(&op, RenderDiff::SetFogVolume { id, volume } if self.retained.fog_volumes.get(id) == Some(volume))
                 || matches!(&op, RenderDiff::RemoveFogVolume { id } if !self.retained.fog_volumes.contains_key(id))
+                || matches!(&op, RenderDiff::SetDecal { id, decal } if self.retained.decals.get(id) == Some(decal))
+                || matches!(&op, RenderDiff::RemoveDecal { id } if !self.retained.decals.contains_key(id))
+                || matches!(&op, RenderDiff::SetDecalAtlas { atlas } if &self.retained.decal_atlas == atlas)
                 || matches!(&op, RenderDiff::SetPrecipitation { precipitation } if &self.retained.precipitation == precipitation)
                 || matches!(&op, RenderDiff::SetImageEffect { effect } if &self.retained.image_effect == effect)
                 || matches!(&op, RenderDiff::SetIndirectLight { indirect_light } if &self.retained.indirect_light == indirect_light)
@@ -683,6 +688,8 @@ impl PresentationWorld {
             volumetric_fog,
             cloud_regions,
             fog_volumes,
+            decals,
+            decal_atlas,
             precipitation,
             image_effect,
             indirect_light,
@@ -794,6 +801,10 @@ impl PresentationWorld {
         } else {
             (None, None)
         };
+        if let Some(atlas) = decal_atlas {
+            textures.insert(atlas.color.as_str());
+            textures.extend(atlas.normals.as_deref());
+        }
         if let Some(sky) = &sky {
             textures.insert(sky.texture.as_str());
             if let Some(blend) = &sky.blend {
@@ -833,6 +844,8 @@ impl PresentationWorld {
                 volumetric_fog: *volumetric_fog,
                 cloud_regions: cloud_regions.clone(),
                 fog_volumes: fog_volumes.clone(),
+                decals: decals.clone(),
+                decal_atlas: decal_atlas.clone(),
                 precipitation: *precipitation,
                 image_effect: image_effect.clone(),
                 indirect_light: *indirect_light,
@@ -997,6 +1010,17 @@ impl PresentationWorld {
             ops.push(RenderDiff::SetFogVolume {
                 id: *id,
                 volume: *volume,
+            });
+        }
+        if self.retained.decal_atlas.is_some() {
+            ops.push(RenderDiff::SetDecalAtlas {
+                atlas: self.retained.decal_atlas.clone(),
+            });
+        }
+        for (id, decal) in &self.retained.decals {
+            ops.push(RenderDiff::SetDecal {
+                id: *id,
+                decal: *decal,
             });
         }
         if self.retained.precipitation.is_some() {
@@ -1631,6 +1655,15 @@ impl PresentationWorld {
             }
             RenderDiff::RemoveFogVolume { id } => {
                 self.retained.fog_volumes.remove(id);
+            }
+            RenderDiff::SetDecal { id, decal } => {
+                self.retained.decals.insert(*id, *decal);
+            }
+            RenderDiff::RemoveDecal { id } => {
+                self.retained.decals.remove(id);
+            }
+            RenderDiff::SetDecalAtlas { atlas } => {
+                self.retained.decal_atlas = atlas.clone();
             }
             RenderDiff::SetPrecipitation { precipitation } => {
                 self.retained.precipitation = *precipitation;

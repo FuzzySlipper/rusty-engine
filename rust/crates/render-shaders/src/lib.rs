@@ -2,7 +2,7 @@
 //! naga_oil, the features a material compiles into its variant, and product
 //! shaders that take over its last stage.
 //!
-//! `types`, `view`, `material`, `surface`, `lighting`, `tonemap`, `finish`
+//! `types`, `view`, `material`, `surface`, `lighting`, `decals`, `tonemap`, `finish`
 //! and `shade` are importable modules (`#import rusty::lighting::standard_radiance`);
 //! `world`, `sky`, `shadow`, `effects`, `ghost`, `compose`,
 //! `ambient_occlusion`, `finish_pass`, `post`, `sky_light`, `light_clusters`,
@@ -286,6 +286,9 @@ impl Features {
                 ShaderDefValue::Bool(true),
             );
         }
+        // The world pass lays projected decals (`rusty::decals`), unless
+        // the device cannot bind them (`Shaders::without_decals`).
+        defs.insert("DECALS".to_string(), ShaderDefValue::Bool(true));
         // The shadow pass has a fragment stage only to discard.
         if self.caster_fragment() {
             defs.insert("CASTER_FRAGMENT".to_string(), ShaderDefValue::Bool(true));
@@ -306,7 +309,7 @@ impl BitOr for Features {
 }
 
 /// Importable modules, each after the modules it imports.
-const MODULES: [(&str, &str); 11] = [
+const MODULES: [(&str, &str); 12] = [
     ("shaders/types.wgsl", include_str!("shaders/types.wgsl")),
     ("shaders/view.wgsl", include_str!("shaders/view.wgsl")),
     ("shaders/clouds.wgsl", include_str!("shaders/clouds.wgsl")),
@@ -320,6 +323,7 @@ const MODULES: [(&str, &str); 11] = [
         "shaders/lighting.wgsl",
         include_str!("shaders/lighting.wgsl"),
     ),
+    ("shaders/decals.wgsl", include_str!("shaders/decals.wgsl")),
     ("shaders/tonemap.wgsl", include_str!("shaders/tonemap.wgsl")),
     ("shaders/finish.wgsl", include_str!("shaders/finish.wgsl")),
     ("shaders/shade.wgsl", include_str!("shaders/shade.wgsl")),
@@ -342,7 +346,8 @@ const PRODUCT_DISPLACES_NORMAL: u32 = 1 << 29;
 const PRODUCT_FLAGS: u32 = PRODUCT_CASTS | PRODUCT_DISPLACES | PRODUCT_DISPLACES_NORMAL;
 
 /// Shader defs a product keyword may not take.
-const RESERVED_DEFS: [&str; 5] = [
+const RESERVED_DEFS: [&str; 6] = [
+    "DECALS",
     "PRODUCT_SHADER",
     "PRODUCT_CASTS",
     "PRODUCT_DISPLACES",
@@ -539,6 +544,8 @@ pub fn check_keyword(keyword: &str) -> Result<(), String> {
 
 pub struct Shaders {
     composer: Composer,
+    /// The world pass lays decals (DECALS).
+    decals: bool,
     /// Product shaders by id - 1; the module last added as `rusty::product`.
     products: Vec<ProductShader>,
     current: Option<u32>,
@@ -565,9 +572,17 @@ impl Shaders {
         }
         Self {
             composer,
+            decals: true,
             products: Vec::new(),
             current: None,
         }
+    }
+
+    /// Compose the world pass without decals, for a device that cannot bind
+    /// their textures.
+    pub fn without_decals(mut self) -> Self {
+        self.decals = false;
+        self
     }
 
     /// The id `Features::with_product` takes for `shader`: the same id for
@@ -618,6 +633,9 @@ impl Shaders {
         }
         let (path, source) = entry.source();
         let mut defs = features.defs();
+        if !self.decals {
+            defs.remove("DECALS");
+        }
         if index != 0 {
             for keyword in &self.products[index - 1].keywords {
                 defs.insert(keyword.clone(), ShaderDefValue::Bool(true));
@@ -1048,6 +1066,38 @@ fn shade(surface: Surface) -> vec4<f32> {
     return standard_shade(surface);
 }
 ";
+
+    /// A device that cannot bind the decals' textures composes the world
+    /// pass without them: no binding in group 3.
+    #[test]
+    fn the_world_pass_composes_without_decals() {
+        for decals in [true, false] {
+            let mut shaders = if decals {
+                Shaders::new()
+            } else {
+                Shaders::new().without_decals()
+            };
+            for features in [
+                Features::default(),
+                Features::NORMAL_MAP | Features::MASK,
+                Features::SCATTER,
+                Features::WATER,
+            ] {
+                let module = shaders.compose(Entry::World, features).unwrap();
+                let group_three = module.global_variables.iter().any(|(_, global)| {
+                    global
+                        .binding
+                        .as_ref()
+                        .is_some_and(|binding| binding.group == 3)
+                });
+                assert_eq!(
+                    group_three,
+                    decals && !features.contains(Features::WATER),
+                    "{features:?} with decals {decals}"
+                );
+            }
+        }
+    }
 
     /// A displace stage keeps its product in the caster pass (the shadow
     /// follows the vertices) without a caster fragment stage, composes in

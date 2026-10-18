@@ -30,6 +30,7 @@ mod compose;
 mod composition;
 mod convert;
 mod culling;
+mod decals;
 mod distance_fields;
 mod driver;
 mod effects;
@@ -102,6 +103,7 @@ pub use apply::ApplyIssue;
 pub use camera::CameraSampleReadout;
 pub use composition::{DrawnCamera, TargetReadout, TargetStatus, ViewCompositionReadout};
 pub use culling::GpuCullingReadout;
+pub use decals::DecalReadout;
 pub use distance_fields::DistanceFieldReadout;
 pub use driver::{
     Capture, PresentationLead, PrimaryCamera, SceneChange, SceneDriver, SceneFrame, SceneState,
@@ -214,6 +216,8 @@ pub struct GpuReadout {
     pub backdrop: Option<BackdropReadout>,
     /// The snow lying on the scene's surfaces (`lighting.wgsl` `snowed`).
     pub snow: Option<render_model::SnowDescriptor>,
+    /// The projected decals (`decals.rs`).
+    pub decals: DecalReadout,
 }
 
 /// The backdrop camera a world view drew its backdrop with (`SetBackdrop`):
@@ -544,6 +548,8 @@ pub struct Renderer {
     effects: effects::Effects,
     /// Rain or snow around the camera (`precipitation.rs`).
     precipitation: precipitation::Precipitation,
+    /// Projected decals over the opaque world (`decals.rs`).
+    decals: decals::Decals,
     /// The volumetric fog over each world view (`volumetric_fog.rs`).
     volumetric_fog: volumetric_fog::VolumetricFog,
     /// The product's image effect over each primary view (`image_effect.rs`).
@@ -563,7 +569,7 @@ const INITIAL_INSTANCES_BYTES: u64 = 16 * 1024;
 impl Renderer {
     pub fn new(gpu: &Gpu, options: RendererOptions) -> Self {
         let device = &gpu.device;
-        let mut layouts = Layouts::new(device);
+        let mut layouts = Layouts::new(device, gpu.decals_refusal().is_none());
         let frame_buffer = frame::frame_uniform_buffer(device);
         let cloud_regions_buffer = frame::storage_buffer(
             device,
@@ -639,6 +645,7 @@ impl Renderer {
             scatter_copies.buffer(),
         );
         let white = white_texture(gpu);
+        let decals = decals::Decals::new(gpu, layouts.decals.as_ref(), &white);
         let (unlit_material, lit_fallback_material) =
             apply::builtin_materials(device, &layouts.material, &white);
         let finish = finish::Finish::new(gpu, &mut layouts.shaders);
@@ -768,6 +775,7 @@ impl Renderer {
             composition: Default::default(),
             effects,
             precipitation,
+            decals,
             volumetric_fog,
             image_effect: image_effect::ImageEffect::new(gpu),
             particles: Default::default(),
@@ -1007,6 +1015,7 @@ impl Renderer {
             volumetric_fog: self.volumetric_fog.readout(),
             backdrop: self.backdrop,
             snow: self.tables.snow,
+            decals: self.decals.readout(),
         }
     }
 

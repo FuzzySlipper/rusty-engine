@@ -53,6 +53,13 @@ struct CameraState {
     stars: Option<NativeStarsRequest>,
     /// The snow in force (`ReadSnow`), as the last `SetSnow` left it.
     snow: Option<SnowDescriptor>,
+    /// The decals placed, by id, with the presentation seconds each is gone
+    /// at (0: it stays); a decal placed this call has 0 until it is
+    /// published (`decal_operations`).
+    decals: BTreeMap<u64, f64>,
+    /// The decal atlas's textures, which may not be released while decals
+    /// sample them.
+    decal_atlas: Option<NativeDecalAtlasRequest>,
     next_camera: u64,
     next_target: u64,
     /// The renderer composition `views` and `presentations` describe.
@@ -127,6 +134,10 @@ pub(crate) struct RuntimeCameraViewCall {
     /// The image effect as the product asked for it; its resources are
     /// resolved when the frame is built.
     pub(crate) image_effect: Option<Option<NativeImageEffectRequest>>,
+    /// Decals placed (`Some`) or removed (`None`) in call order; their fade
+    /// is stamped when the call is published.
+    pub(crate) decals: Vec<(u64, Option<PendingDecal>)>,
+    pub(crate) decal_atlas: Option<Option<NativeDecalAtlasRequest>>,
     pub(crate) indirect_light: Option<Option<IndirectLightDescriptor>>,
     pub(crate) sky_light: Option<Option<SkyLightDescriptor>>,
 }
@@ -208,6 +219,8 @@ impl RuntimeCameraViewBridge {
                 background: CameraBackground::Default,
                 stars: None,
                 snow: None,
+                decals: BTreeMap::new(),
+                decal_atlas: None,
                 next_camera: 1,
                 next_target: 1,
                 composition: RetainedComposition::default(),
@@ -330,6 +343,8 @@ impl RuntimeCameraViewBridge {
             fog_volumes: Vec::new(),
             precipitation: None,
             image_effect: None,
+            decals: Vec::new(),
+            decal_atlas: None,
             indirect_light: None,
             sky_light: None,
         });
@@ -361,7 +376,11 @@ impl RuntimeCameraViewBridge {
         let stars = state
             .stars
             .is_some_and(|stars| stars.catalogue.value == resource || stars.band.value == resource);
+        let decals = state
+            .decal_atlas
+            .is_some_and(|atlas| atlas.color.value == resource || atlas.normals.value == resource);
         stars
+            || decals
             || match state.background {
                 CameraBackground::Sky(id) => id == resource,
                 CameraBackground::Blend { first, second, .. } => {
@@ -1304,6 +1323,121 @@ impl RuntimeCameraViewBridge {
         Ok(())
     }
 
+    fn set_decal(&mut self, request: NativeDecalRequest) -> Result<(), CsharpEngineServicesError> {
+        let refused =
+            |message: &'static str| CsharpEngineServicesError::new("CSHARP_DECAL", message);
+        let vec3 = |value: NativeVec3| [value.x, value.y, value.z];
+        let mut rotation = [
+            request.rotation.x,
+            request.rotation.y,
+            request.rotation.z,
+            request.rotation.w,
+        ];
+        if rotation == [0.0; 4] {
+            rotation = [0.0, 0.0, 0.0, 1.0];
+        }
+        let mut uv_rect = [
+            request.region.x,
+            request.region.y,
+            request.region.z,
+            request.region.w,
+        ];
+        if uv_rect == [0.0; 4] {
+            uv_rect = [0.0, 0.0, 1.0, 1.0];
+        }
+        let color = [
+            request.color.r,
+            request.color.g,
+            request.color.b,
+            request.color.a.clamp(0.0, 1.0),
+        ];
+        let center = vec3(request.center);
+        let size = vec3(request.size);
+        let finite = center
+            .iter()
+            .chain(&rotation)
+            .chain(&uv_rect)
+            .chain(&color)
+            .chain([&request.roughness, &request.normal_strength])
+            .all(|value| value.is_finite());
+        let times = [request.life_seconds, request.fade_seconds];
+        if !finite
+            || !size.iter().all(|value| value.is_finite() && *value > 0.0)
+            || !times.iter().all(|value| value.is_finite() && *value >= 0.0)
+        {
+            return Err(refused(
+                "a decal needs finite values: a size above 0 along each axis, and a life and fade of 0 or more seconds",
+            ));
+        }
+        let staged = self.staged_mut()?;
+        if !staged.state.decals.contains_key(&request.id)
+            && staged.state.decals.len() >= render_model::DecalDescriptor::MAX_DECALS
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_DECAL_BUDGET",
+                "a scene holds at most 4096 decals; remove one before placing another",
+            ));
+        }
+        staged.state.decals.insert(request.id, 0.0);
+        staged.decals.push((
+            request.id,
+            Some(PendingDecal {
+                decal: render_model::DecalDescriptor {
+                    center,
+                    rotation,
+                    size,
+                    uv_rect,
+                    color,
+                    roughness: request.roughness.clamp(0.0, 1.0),
+                    normal_strength: request.normal_strength.max(0.0),
+                    angle_falloff: request.angle_falloff,
+                    on_vegetation: request.on_vegetation,
+                    on_animated: request.on_animated_meshes,
+                    fade_start: 0.0,
+                    fade_end: 0.0,
+                },
+                life: f64::from(request.life_seconds),
+                fade: f64::from(request.fade_seconds),
+            }),
+        ));
+        Ok(())
+    }
+
+    fn remove_decal(
+        &mut self,
+        request: NativeDecalRemoval,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        if staged.state.decals.remove(&request.id).is_some() {
+            staged.decals.push((request.id, None));
+        }
+        Ok(())
+    }
+
+    fn set_decal_atlas(
+        &mut self,
+        request: NativeDecalAtlasRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let atlas = (request.color.value != 0).then_some(request);
+        let staged = self.staged_mut()?;
+        staged.decal_atlas = Some(atlas);
+        staged.state.decal_atlas = atlas;
+        Ok(())
+    }
+
+    /// The decals placed as this call leaves them.
+    fn read_decals(&self) -> NativeDecalReadout {
+        let state = self
+            .staged
+            .as_ref()
+            .map(|staged| &staged.state)
+            .unwrap_or(&self.state);
+        NativeDecalReadout {
+            decals: state.decals.len() as u32,
+            budget: render_model::DecalDescriptor::MAX_DECALS as u32,
+        }
+    }
+
     fn remove_fog_volume(
         &mut self,
         request: NativeFogVolumeRemoval,
@@ -1738,6 +1872,59 @@ fn composition_error(
 /// The call's background, fog, tone mapping, bloom, auto exposure, colour
 /// grading, atmosphere, sun shaft and sky light selections as one frame, or
 /// None when the call selected none of them.
+/// A decal as the product placed it: its fade is stamped on the
+/// presentation timeline when the call is published.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PendingDecal {
+    decal: render_model::DecalDescriptor,
+    life: f64,
+    fade: f64,
+}
+
+/// The shortest fade, presentation seconds: a decal with a life and no fade
+/// goes at once, not by a division by zero.
+const DECAL_SHORTEST_FADE: f64 = 1e-3;
+
+/// The decals this call placed and removed, stamped at presentation second
+/// `now` (the call's published time): a decal with a life shows until `now`
+/// plus it, then fades out. Then every decal whose fade has ended by `now`
+/// is removed.
+pub(crate) fn decal_operations(call: &mut RuntimeCameraViewCall, now: f64) -> Vec<RenderDiff> {
+    let mut operations = Vec::new();
+    for (id, change) in call.decals.drain(..) {
+        match change {
+            Some(PendingDecal {
+                mut decal,
+                life,
+                fade,
+            }) => {
+                if life > 0.0 {
+                    decal.fade_start = now + life;
+                    decal.fade_end = decal.fade_start + fade.max(DECAL_SHORTEST_FADE);
+                }
+                // A decal placed and removed in the call is not published.
+                if let Some(end) = call.state.decals.get_mut(&id) {
+                    *end = decal.fade_end;
+                    operations.push(RenderDiff::SetDecal { id, decal });
+                }
+            }
+            None => operations.push(RenderDiff::RemoveDecal { id }),
+        }
+    }
+    let gone: Vec<u64> = call
+        .state
+        .decals
+        .iter()
+        .filter(|(_, end)| **end > 0.0 && **end <= now)
+        .map(|(id, _)| *id)
+        .collect();
+    for id in gone {
+        call.state.decals.remove(&id);
+        operations.push(RenderDiff::RemoveDecal { id });
+    }
+    operations
+}
+
 pub(crate) fn environment_frame(
     call: &RuntimeCameraViewCall,
     appearance: &RuntimeAppearanceCall,
@@ -1816,6 +2003,21 @@ pub(crate) fn environment_frame(
             },
             None => RenderDiff::RemoveFogVolume { id: *id },
         });
+    }
+    if let Some(request) = call.decal_atlas {
+        let atlas = match request {
+            Some(request) => {
+                let (textures, atlas) = appearance.decal_atlas(request)?;
+                operations.extend(
+                    textures
+                        .into_iter()
+                        .map(|texture| RenderDiff::DefineTexture { texture }),
+                );
+                Some(atlas)
+            }
+            None => None,
+        };
+        operations.push(RenderDiff::SetDecalAtlas { atlas });
     }
     if let Some(precipitation) = call.precipitation {
         operations.push(RenderDiff::SetPrecipitation { precipitation });
@@ -2687,6 +2889,85 @@ pub(crate) unsafe extern "C" fn set_volumetric_fog(
             0
         }
     }
+}
+
+pub(crate) unsafe extern "C" fn set_decal(
+    context: *mut c_void,
+    request: *const NativeDecalRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_decal(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn remove_decal(
+    context: *mut c_void,
+    request: *const NativeDecalRemoval,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.remove_decal(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_decal_atlas(
+    context: *mut c_void,
+    request: *const NativeDecalAtlasRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_decal_atlas(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn read_decals(
+    context: *mut c_void,
+    output: *mut NativeDecalReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &*context.cast::<RuntimeCameraViewBridge>() };
+    unsafe { *output = bridge.read_decals() };
+    ABI_OK
 }
 
 pub(crate) unsafe extern "C" fn set_fog_volume(

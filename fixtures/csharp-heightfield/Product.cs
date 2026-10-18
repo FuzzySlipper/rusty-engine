@@ -39,6 +39,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const ulong SkyLightId = 1;
     private const float SkyHalfExtent = 96, SkyIntensity = .05f;
     private static readonly Vector3 SkyColor = new(.6f, .7f, .9f), SnowColor = new(.82f, .86f, .92f);
+    // Decals (#10070): marks from the 2x2 `marks.png` atlas scattered on a spiral about where the camera
+    // looks, each box this many times as tall as it is wide so it reaches over the slopes under it.
+    private const float DecalDepth = 1.5f, DecalOpacity = .9f, DecalSpiralMetres = .9f;
+    private static readonly double GoldenAngle = Math.PI * (3 - Math.Sqrt(5));
     private const double ContinentFlightRadius = 100_000, ContinentFlightSpeed = 300, ContinentFlightHeight = 400;
 
     private readonly IEngineContext engine;
@@ -61,6 +65,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private double eyeHeight = FlightHeight + 100;
     private Vector3 eye;
     private Light? sky;
+    private RenderResource? marks;
+    private ulong decals;
+    private double flightHeight = FlightHeight;
 
     public Product(ProductCreateContext context)
     {
@@ -138,7 +145,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         // Picked in the heightfield's layer: the backdrop's units for the continent.
         HeightfieldPickResult ground = engine.Heightfield.Pick(new(heightfield!,
             new((float)(x * Scale), (float)(PickFrom * 10 * Scale), (float)(z * Scale)), -Vector3.UnitY, 0));
-        if (ground.Hit) eyeHeight = ground.Height + (continent == 0 ? FlightHeight : ContinentFlightHeight);
+        if (ground.Hit) eyeHeight = ground.Height + (continent == 0 ? flightHeight : ContinentFlightHeight);
         eye = new((float)x, (float)eyeHeight, (float)z);
         double heading = flying ? angle + (Math.PI / 2) : angle;
         engine.CameraView.UpdateCamera(new(camera, Descriptor(eye, heading)));
@@ -294,6 +301,38 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             $"amount={snow.Amount:F2} color={snow.Color.X:F2},{snow.Color.Y:F2},{snow.Color.Z:F2} texelsPerMetre={snow.TexelsPerMetre:F0}");
     }
 
+    [DebugCommand("heightfield.height", Description = "Flies this many metres above the ground over the hills (45 by default).")]
+    public string Height(float metres)
+    {
+        flightHeight = Math.Max(metres, 1);
+        Fly();
+        return Inspect();
+    }
+
+    [DebugCommand("decals.scatter", Description = "Scatters this many decals of this size (metres) from the marks atlas on the ground where the camera looks, with the angle falloff (1) or without (0); 0 removes them.")]
+    public string ScatterDecals(float count, float size, float falloff)
+    {
+        for (ulong id = 1; id <= decals; id++) engine.CameraView.RemoveDecal(new(id));
+        marks ??= engine.Graphics.OpenResource(new("marks.png", TextureFilter.NearestMipmapped, TextureWrap.Clamp)).Handle;
+        engine.CameraView.SetDecalAtlas(new(marks, default));
+        double heading = flying ? angle + (Math.PI / 2) : angle;
+        double reach = flightHeight / Math.Tan(LookDown * Math.PI / 180);
+        double centerX = eye.X + Math.Cos(heading) * reach, centerZ = eye.Z + Math.Sin(heading) * reach;
+        decals = (ulong)Math.Max(count, 0);
+        for (ulong id = 1; id <= decals; id++)
+        {
+            double turn = id * GoldenAngle, radius = DecalSpiralMetres * Math.Sqrt(id);
+            float x = (float)(centerX + Math.Cos(turn) * radius), z = (float)(centerZ + Math.Sin(turn) * radius);
+            HeightfieldPickResult ground = engine.Heightfield.Pick(new(heightfield!, new(x, (float)PickFrom, z), -Vector3.UnitY, 0));
+            float cell = id % 4;
+            Vector4 region = new(cell % 2 / 2, MathF.Floor(cell / 2) / 2, cell % 2 / 2 + .5f, MathF.Floor(cell / 2) / 2 + .5f);
+            engine.CameraView.SetDecal(new(id, new(x, (float)ground.Height, z), Quaternion.CreateFromAxisAngle(Vector3.UnitY, (float)turn),
+                new(size, size * DecalDepth, size), region, new Color(1, 1, 1, DecalOpacity), 0, 0, falloff != 0, false, false, 0, 0));
+        }
+        DecalReadout readout = engine.CameraView.ReadDecals();
+        return FormattableString.Invariant($"decals={readout.Decals} budget={readout.Budget} center={centerX:F1},{centerZ:F1}");
+    }
+
     [DebugCommand("heightfield.pick", Description = "Picks the drawn ground along a ray from a point in a direction.")]
     public string Pick(float x, float y, float z, float dx, float dy, float dz)
     {
@@ -311,6 +350,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void Dispose()
     {
         sky?.Dispose();
+        if (marks is not null)
+        {
+            // The atlas may not be released while decals sample it.
+            engine.CameraView.SetDecalAtlas(default);
+            marks.Dispose();
+        }
         vegetation.Dispose();
         streamer?.Dispose();
         heightfield?.Dispose();

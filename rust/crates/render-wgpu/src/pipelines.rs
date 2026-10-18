@@ -113,6 +113,9 @@ pub(crate) struct Layouts {
     pub prepass: PrepassPipelines,
     /// Group 2 of the world pipelines: a view's ambient occlusion.
     pub ambient_occlusion: wgpu::BindGroupLayout,
+    /// Group 3 of the world pipelines: the decals (`decals.rs`); None on a
+    /// device that cannot bind them, whose world pass lays none.
+    pub decals: Option<wgpu::BindGroupLayout>,
     /// Product shaders that did not compose since last taken; their
     /// materials draw with the standard shade stage.
     pub shader_errors: Vec<String>,
@@ -285,7 +288,9 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 }
 
 impl Layouts {
-    pub fn new(device: &wgpu::Device) -> Self {
+    /// `decals`: the device can bind the decals' textures beside the
+    /// world pass's own (`Gpu::decals_refusal`).
+    pub fn new(device: &wgpu::Device, decals: bool) -> Self {
         // The frame is visible to compute passes too, which light from it
         // (`volumetric_fog.rs`).
         let frame_entries = [
@@ -401,9 +406,15 @@ impl Layouts {
             ],
         });
         let ambient_occlusion = crate::ambient_occlusion::apply_layout(device);
+        let decals = decals.then(|| crate::decals::layout(device));
         let world = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("render-wgpu world"),
-            bind_group_layouts: &[Some(&frame), Some(&material), Some(&ambient_occlusion)],
+            bind_group_layouts: &[
+                Some(&frame),
+                Some(&material),
+                Some(&ambient_occlusion),
+                decals.as_ref(),
+            ][..if decals.is_some() { 4 } else { 3 }],
             immediate_size: 0,
         });
         let water_depth = device.create_bind_group_layout(&crate::water::layout_descriptor());
@@ -481,7 +492,11 @@ impl Layouts {
             bind_group_layouts: &[Some(&casters), Some(&material), Some(&shadow_layer)],
             immediate_size: 0,
         });
-        let mut shaders = Shaders::new();
+        let mut shaders = if decals.is_some() {
+            Shaders::new()
+        } else {
+            Shaders::new().without_decals()
+        };
         let sky_shader = standard(shaders.module(device, Entry::Sky, Features::default()));
         let stars_shader = standard(shaders.module(device, Entry::Stars, Features::default()));
         let compose = standard(shaders.module(device, Entry::Compose, Features::default()));
@@ -645,6 +660,7 @@ impl Layouts {
             shadow_restore_layout,
             prepass: PrepassPipelines::default(),
             ambient_occlusion,
+            decals,
             shader_errors: Vec::new(),
             variants: Variants::default(),
         }

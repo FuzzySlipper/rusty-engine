@@ -40,16 +40,16 @@ use csharp_engine_services::{
 use product_host::RuntimePublication;
 use product_host::{
     ProductHostAmbientOcclusionPath, ProductHostAmbientOcclusionStatistics,
-    ProductHostComputeLimits, ProductHostDistanceFieldStatistics, ProductHostDrawingMode,
-    ProductHostDrawnFrame, ProductHostFrameStream, ProductHostGpuCullingStatistics,
-    ProductHostGpuPass, ProductHostGpuStatistics, ProductHostImpostorStatistics,
-    ProductHostIndirectLightStatistics, ProductHostLightClusterStatistics,
-    ProductHostOcclusionStatistics, ProductHostPresentedFrame, ProductHostRendererInspection,
-    ProductHostRendererSettingValues, ProductHostRendererSettings, ProductHostRendererStatistics,
-    ProductHostScatterSelectionStatistics, ProductHostScatterStatistics,
-    ProductHostShadowStatistics, ProductHostSnowStatistics, ProductHostStreamMedians,
-    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostWindowMedians,
-    ProductHostWindowStatistics,
+    ProductHostComputeLimits, ProductHostDecalStatistics, ProductHostDistanceFieldStatistics,
+    ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostFrameStream,
+    ProductHostGpuCullingStatistics, ProductHostGpuPass, ProductHostGpuStatistics,
+    ProductHostImpostorStatistics, ProductHostIndirectLightStatistics,
+    ProductHostLightClusterStatistics, ProductHostOcclusionStatistics, ProductHostPresentedFrame,
+    ProductHostRendererInspection, ProductHostRendererSettingValues, ProductHostRendererSettings,
+    ProductHostRendererStatistics, ProductHostScatterSelectionStatistics,
+    ProductHostScatterStatistics, ProductHostShadowStatistics, ProductHostSnowStatistics,
+    ProductHostStreamMedians, ProductHostStreamStatistics, ProductHostTimedStep,
+    ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -1048,6 +1048,16 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             brick_ms_max: readout.indirect_light.brick_ms_max,
             upload_bytes: readout.indirect_light.upload_bytes,
             last_batch_bricks: readout.indirect_light.last_batch_bricks,
+        },
+        decals: ProductHostDecalStatistics {
+            refused: readout.decals.refused,
+            decals: readout.decals.decals,
+            entries: readout.decals.entries,
+            busiest_bucket: readout.decals.busiest_bucket,
+            bytes: readout.decals.bytes,
+            upload_bytes: readout.decals.upload_bytes,
+            build_micros: readout.decals.build_micros,
+            normals: readout.decals.normals,
         },
         snow: readout.snow.map(|snow| ProductHostSnowStatistics {
             amount: snow.amount,

@@ -1283,6 +1283,26 @@ pub type NativeSetFogVolume = unsafe extern "C" fn(
     *const NativeFogVolumeRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetDecal = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDecalRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeRemoveDecal = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDecalRemoval,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetDecalAtlas = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDecalAtlasRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadDecals = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeDecalReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeRemoveFogVolume = unsafe extern "C" fn(
     *mut c_void,
     *const NativeFogVolumeRemoval,
@@ -1843,6 +1863,10 @@ pub struct NativeCameraViewApi {
     pub set_volumetric_fog: NativeSetVolumetricFog,
     pub set_fog_volume: NativeSetFogVolume,
     pub remove_fog_volume: NativeRemoveFogVolume,
+    pub set_decal: NativeSetDecal,
+    pub remove_decal: NativeRemoveDecal,
+    pub set_decal_atlas: NativeSetDecalAtlas,
+    pub read_decals: NativeReadDecals,
     pub set_precipitation: NativeSetPrecipitation,
     pub set_image_effect: NativeSetImageEffect,
     pub set_indirect_light: NativeSetIndirectLight,

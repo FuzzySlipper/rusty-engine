@@ -533,6 +533,10 @@ impl PartRow {
     }
 }
 
+/// An animated mesh's part's `fade`: none, its x below 0 marking the part
+/// for decals that pass animated meshes by (`rusty::decals::decaled`).
+pub(crate) const ANIMATED_PART_FADE: [f32; 4] = [-1.0, 0.0, 0.0, 0.0];
+
 /// Object-space positions, for meshes without a texture space.
 pub(crate) const OBJECT_TEXTURE_SPACE: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 

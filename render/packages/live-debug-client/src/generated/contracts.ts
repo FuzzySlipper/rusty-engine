@@ -43,6 +43,34 @@ export type ProductHostDebugCommandDescriptor = { name: string, description: str
 export type ProductHostDebugCommandParameterDescriptor = { name: string, type: string, };
 
 /**
+ * The projected decals the world pass lays (`CameraView.SetDecal`): what
+ * they hold and what keeping them costs. Their shading is part of the
+ * `world` pass's time.
+ */
+export type ProductHostDecalStatistics = { 
+/**
+ * Why this device lays no decals; absent while it can.
+ */
+refused?: string, decals: number, 
+/**
+ * Grid entries (a decal counts once in each cell bucket its box
+ * reaches), and the most one bucket lists: what a fragment there tests.
+ */
+entries: number, busiestBucket: number, 
+/**
+ * GPU bytes of their buffer, and the bytes the last change uploaded.
+ */
+bytes: number, uploadBytes: number, 
+/**
+ * CPU microseconds the last rebuild of the grid and rows took.
+ */
+buildMicros: number, 
+/**
+ * A normal atlas bends the surfaces.
+ */
+normals: boolean, };
+
+/**
  * `diagnostics/read`: diagnostics after a cursor, or the retained ones.
  */
 export type ProductHostDiagnosticsReadRequest = { after?: CanonicalU64, };
@@ -139,7 +167,7 @@ passes: Array<ProductHostGpuPass>, ambientOcclusion: ProductHostAmbientOcclusion
 /**
  * The snow in force (`CameraView.SetSnow`); absent without snow.
  */
-snow?: ProductHostSnowStatistics, };
+snow?: ProductHostSnowStatistics, decals: ProductHostDecalStatistics, };
 
 /**
  * The impostor levels' baked views: how many meshes are baked, their
