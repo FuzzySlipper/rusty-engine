@@ -1240,11 +1240,15 @@ SnowReadout snow = engine.CameraView.ReadSnow();
   scatter, scatter patches) drawn with a material that sets
   `SinksUnderSnow` shorten toward their origin, to a fifth of their height
   under a full cover, and pale toward the snow's colour, as much as the snow
-  lies and the sky is open over the copy's origin (one sky-layer tap per
-  vertex), so clumps under a tree keep their height and green. Their shadows
-  and the depth pre-pass sink by the amount alone, since those passes cannot
-  read the sky's layer. Trees and rocks keep materials without it; other
-  parts drawn with such a material do not move. It draws cheaper than
+  lies and the sky is open over the copy, so clumps under a tree keep their
+  height and green. The sky is looked up once per vertex, the same for the
+  whole copy, just above the top of the copy's mesh: a roof or a crown above
+  it shelters it, its own blades (which cast into the sky's layer) do not.
+  Their shadows and the depth pre-pass sink by the amount alone, since those
+  passes cannot read the sky's layer; a change of the snow's amount redraws
+  the shadow layers while any material sinks. Trees and rocks keep
+  materials without it; other parts drawn with such a material do not
+  move. It draws cheaper than
   standing grass under the same snow, since the sunk clumps cover fewer
   pixels: 0.40 ms against 0.43 ms for the world pass under a full cover over
   the same hills.

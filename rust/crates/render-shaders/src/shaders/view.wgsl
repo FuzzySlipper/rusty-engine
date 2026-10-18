@@ -74,6 +74,8 @@ struct SelectedCopy {
     part: u32,
     tint: vec3<f32>,
     fade: f32,
+    // The copy mesh's top (`ScatterCopy.detail.y`).
+    top: f32,
 };
 
 // The largest scale-up a selection entry carries (`scatter_select.rs`).
@@ -90,7 +92,7 @@ fn selected_copy(instance: u32) -> SelectedCopy {
     scattered.tint.w = bitcast<f32>(detail & 0xfffffu);
     scattered.place.w *= 1.0 + f32(detail >> 20u) / 4095.0 * (SELECTED_MAX_SCALE - 1.0);
     let share = f32((word >> 24u) & 0x7fu) / 127.0;
-    return SelectedCopy(copy_row(scattered), detail & 0xfffffu, tint, select(share, -share, (word >> 31u) != 0u));
+    return SelectedCopy(copy_row(scattered), detail & 0xfffffu, tint, select(share, -share, (word >> 31u) != 0u), scattered.detail.y);
 }
 
 // Impostor views (render-wgpu `impostor.rs`): a direction at or above the

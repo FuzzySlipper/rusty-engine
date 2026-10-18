@@ -12,7 +12,8 @@
 
 use crate::Gpu;
 
-/// `ScatterCopy` in types.wgsl: place and scale, turn, tint and part, rank.
+/// `ScatterCopy` in types.wgsl: place and scale, turn, tint and part, rank
+/// and the copy mesh's top.
 pub(crate) const COPY_FLOATS: usize = 16;
 /// Where in a row its part's id is.
 pub(crate) const PART_LANE: usize = 11;
@@ -197,9 +198,14 @@ fn buffer(gpu: &Gpu, rows: u32) -> wgpu::Buffer {
     })
 }
 
-/// A copy's row: where it stands, its turn, its tint, its run's part and its
-/// rank.
-pub(crate) fn copy_row(instance: &render_model::ScatterInstance, part: u32) -> [f32; COPY_FLOATS] {
+/// A copy's row: where it stands, its turn, its tint, its run's part, its
+/// rank and its mesh's `top` (model y, before the copy's scale): where a copy
+/// that sinks under snow looks up the open sky, above itself.
+pub(crate) fn copy_row(
+    instance: &render_model::ScatterInstance,
+    part: u32,
+    top: f32,
+) -> [f32; COPY_FLOATS] {
     let [x, y, z] = instance.translation;
     let [r, g, b] = instance.tint;
     let [qx, qy, qz, qw] = instance.rotation;
@@ -217,7 +223,7 @@ pub(crate) fn copy_row(instance: &render_model::ScatterInstance, part: u32) -> [
         b,
         f32::from_bits(part),
         instance.rank,
-        0.0,
+        top,
         0.0,
         0.0,
     ]

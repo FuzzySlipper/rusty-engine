@@ -661,21 +661,24 @@ fn snow_sunk(world: vec3<f32>, origin: vec3<f32>, open: f32) -> vec3<f32> {
     return vec3<f32>(world.x, origin.y + (world.y - origin.y) * (1.0 - sink), world.z);
 }
 
-// How open the sky is over a scatter copy's `origin`, one tap of the sky
-// layers: the same for every vertex of the copy.
-fn copy_open_sky(origin: vec3<f32>) -> f32 {
+// How far above a copy's top its sky is looked up: clear of the copy's own
+// depth in the sky's layer, which it casts into.
+const SNOW_SKY_CLEARANCE: f32 = 0.1;
+
+// How open the sky is over a scatter copy whose top (its origin raised to
+// its mesh's top) is `top`: one tap of the sky layers just above it, the
+// same for every vertex of the copy. A roof or a crown above the copy
+// shelters it; the copy itself does not.
+fn copy_open_sky(top: vec3<f32>) -> f32 {
     if frame.weather.z <= 0.0 {
         return 0.0;
     }
-    return open_sky_filtered(origin, vec3<f32>(0.0, 1.0, 0.0), 0);
+    return open_sky_filtered(top + vec3<f32>(0.0, SNOW_SKY_CLEARANCE, 0.0), vec3<f32>(0.0, 1.0, 0.0), 0);
 }
 
-// `pale`: the least share the snow's colour takes, for a sinking copy.
-fn snow_under(surface: Surface, at: vec3<f32>, open: f32, pale: bool) -> Surface {
-    var cover = snow_cover(at, surface.normal.y, open);
-    if pale {
-        cover = max(cover, frame.weather.z * open * SNOW_PALING);
-    }
+// `pale`: the least share the snow's colour takes (a sinking copy's).
+fn snow_under(surface: Surface, at: vec3<f32>, open: f32, pale: f32) -> Surface {
+    let cover = max(snow_cover(at, surface.normal.y, open), pale);
     if cover <= 0.0 {
         return surface;
     }
@@ -692,13 +695,14 @@ fn snowed(surface: Surface) -> Surface {
         return surface;
     }
     let at = snow_texel(surface.world_position);
-    return snow_under(surface, at, open_sky(at, surface.normal), false);
+    return snow_under(surface, at, open_sky(at, surface.normal), 0.0);
 }
 
 // The scene's weather over a surface: wetted, then snowed, under one look
 // at the open sky. `pales`: a sinking copy, which pales under snow whichever
-// way it faces.
-fn weathered(surface: Surface, wets: bool, pales: bool) -> Surface {
+// way it faces, as open as `copy_open` (its `copy_open_sky`, not the
+// surface's own, which the copy's upper parts would shelter).
+fn weathered(surface: Surface, wets: bool, pales: bool, copy_open: f32) -> Surface {
     let up = surface.normal.y;
     let wet = wets && frame.weather.x > 0.0 && up >= -0.3;
     let snow = frame.weather.z > 0.0 && (up > SNOW_STEEPEST || pales);
@@ -717,7 +721,8 @@ fn weathered(surface: Surface, wets: bool, pales: bool) -> Surface {
         result = wet_under(result, open);
     }
     if snow {
-        result = snow_under(result, at, open, pales);
+        let pale = select(0.0, frame.weather.z * copy_open * SNOW_PALING, pales);
+        result = snow_under(result, at, open, pale);
     }
     return result;
 }

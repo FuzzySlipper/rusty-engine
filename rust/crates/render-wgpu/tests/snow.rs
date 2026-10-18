@@ -380,8 +380,8 @@ fn a_texel_density_steps_the_covers_edge() {
 }
 
 /// Tall posts scattered in a row of five about (x, 0, z), drawn with
-/// `material`.
-fn post_row(handle: u64, x: f32, z: f32, material: &str) -> Vec<RenderDiff> {
+/// `material`, casting shadows when `casts` (into the sky's layer too).
+fn post_row(handle: u64, x: f32, z: f32, material: &str, casts: bool) -> Vec<RenderDiff> {
     vec![
         group(handle, None, transform([0.0; 3], 0.0, [1.0; 3])),
         RenderDiff::CreateScatterPatch {
@@ -403,7 +403,11 @@ fn post_row(handle: u64, x: f32, z: f32, material: &str) -> Vec<RenderDiff> {
                     })
                     .collect(),
                 fade: ScatterFade::default(),
-                shadow_casting: ShadowCasting::None,
+                shadow_casting: if casts {
+                    ShadowCasting::Cast
+                } else {
+                    ShadowCasting::None
+                },
                 lods: Vec::new(),
                 lod_band: 0.0,
                 thinning: Default::default(),
@@ -431,9 +435,27 @@ fn differing_in(a: &[u8], b: &[u8], x: std::ops::Range<u32>) -> usize {
 /// height and colour, and copies of other materials keep their height.
 #[test]
 fn copies_that_sink_shorten_and_pale_under_the_open_sky_only() {
+    sinking_under_the_open_sky_only(false, 1.0);
+}
+
+/// The same with copies that cast into a fine sky layer, under half a cover
+/// so they stand taller than a lookup's offset clears: a copy's own depth
+/// there does not shelter it (review R10071-2).
+#[test]
+fn copies_that_cast_do_not_shelter_themselves() {
+    sinking_under_the_open_sky_only(true, 0.5);
+}
+
+fn sinking_under_the_open_sky_only(casts: bool, amount: f32) {
     let mut harness = scene();
+    if casts {
+        harness.apply(vec![fine_sky()]);
+    }
     let mut grass = material("material/grass", [0.5, 0.1, 0.1, 1.0], None);
     grass.sinks_under_snow = true;
+    // Two-sided, as grass cards are: its upper faces cast into the sky's
+    // layer above its origin, as a closed mesh's back faces do not.
+    grass.double_sided = casts;
     harness.apply(vec![
         RenderDiff::DefineMaterial { material: grass },
         static_mesh(
@@ -447,14 +469,14 @@ fn copies_that_sink_shorten_and_pale_under_the_open_sky_only() {
     let view = camera([0.0, 0.9, 3.0], 0.0, -4.0);
     let (left, right) = (0..WIDTH / 3, WIDTH / 2..WIDTH);
     let ground_only = render(&mut harness, &view);
-    harness.apply(snow_and(1.0));
+    harness.apply(snow_and(amount));
     let ground_snowed = render(&mut harness, &view);
     harness.apply(vec![RenderDiff::SetSnow { snow: None }]);
-    let mut rows = post_row(40, -5.2, -2.0, "material/grass");
-    rows.extend(post_row(50, 1.5, -2.0, "material/grass"));
+    let mut rows = post_row(40, -5.2, -2.0, "material/grass", casts);
+    rows.extend(post_row(50, 1.5, -2.0, "material/grass", casts));
     harness.apply(rows);
     let bare = render(&mut harness, &view);
-    harness.apply(snow_and(1.0));
+    harness.apply(snow_and(amount));
     let snowed = render(&mut harness, &view);
     let posts =
         |with: &[u8], without: &[u8], x: std::ops::Range<u32>| differing_in(with, without, x);
@@ -464,8 +486,8 @@ fn copies_that_sink_shorten_and_pale_under_the_open_sky_only() {
     );
     assert!(open_bare > 300, "the open posts show: {open_bare}");
     assert!(
-        open_snowed * 2 < open_bare,
-        "the open posts sink under full snow: {open_bare} pixels to {open_snowed}"
+        (open_snowed as f32) < open_bare as f32 * (1.0 - amount * 0.5),
+        "the open posts sink under snow {amount}: {open_bare} pixels to {open_snowed}"
     );
     // The sheltered posts' own pixels draw the same under the snow, but for
     // their anti-aliased edges against snowed ground.
@@ -504,7 +526,8 @@ fn copies_that_sink_shorten_and_pale_under_the_open_sky_only() {
         sum / f64::max(count, 1.0)
     };
     assert!(
-        open_mean(&snowed, &ground_snowed) > open_mean(&bare, &ground_only) * 1.5,
+        open_mean(&snowed, &ground_snowed)
+            > open_mean(&bare, &ground_only) * (1.0 + f64::from(amount) * 0.5),
         "the sunk posts pale toward the snow: {:.1} to {:.1}",
         open_mean(&bare, &ground_only),
         open_mean(&snowed, &ground_snowed)
@@ -520,9 +543,9 @@ fn copies_that_sink_shorten_and_pale_under_the_open_sky_only() {
             handle: RenderHandle::new(51),
         },
     ]);
-    harness.apply(post_row(60, 1.5, -2.0, "material/stone"));
+    harness.apply(post_row(60, 1.5, -2.0, "material/stone", casts));
     let standing_bare = render(&mut harness, &view);
-    harness.apply(snow_and(1.0));
+    harness.apply(snow_and(amount));
     let standing_snowed = render(&mut harness, &view);
     let (before, after) = (
         posts(&standing_bare, &ground_only, right.clone()),
@@ -536,4 +559,94 @@ fn copies_that_sink_shorten_and_pale_under_the_open_sky_only() {
 
 fn snow_and(amount: f32) -> Vec<RenderDiff> {
     vec![snow(amount, 0.0)]
+}
+
+/// A snowfall and a thaw redraw the shadows of copies that sink: with the
+/// shadow layers settled, a change of the snow's amount alone draws as a
+/// renderer built afresh at that amount does (review R10071-1).
+#[test]
+fn a_snowfall_and_a_thaw_redraw_the_shadows_of_sinking_copies() {
+    let mut harness = scene();
+    let mut grass = material("material/grass", [0.5, 0.1, 0.1, 1.0], None);
+    grass.sinks_under_snow = true;
+    harness.apply(vec![
+        RenderDiff::DefineMaterial { material: grass },
+        static_mesh(
+            "mesh/tall-post",
+            box_mesh([-0.15, -0.5, -0.15], [0.15, 1.2, 0.15], |_| 0),
+            "material/grass",
+        ),
+        // The sun casts too, low, so the posts' shadows are long.
+        RenderDiff::UpdateLight {
+            handle: RenderHandle::new(10),
+            light: LightDescriptor::Directional {
+                color: [1.0, 0.97, 0.9],
+                intensity: 1.2,
+                enabled: true,
+                direction: [0.6, -0.4, -0.3],
+                range: None,
+                shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
+            },
+        },
+    ]);
+    harness.apply(post_row(50, 1.5, -2.0, "material/grass", true));
+    let view = camera([2.5, 1.5, 2.0], 0.0, -25.0);
+    // Settle the layers.
+    for _ in 0..3 {
+        render(&mut harness, &view);
+    }
+    let standing = render(&mut harness, &view);
+    harness.apply(snow_and(1.0));
+    let differing = |a: &[u8], b: &[u8]| {
+        a.as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
+            .filter(|(a, b)| a != b)
+            .count()
+    };
+    let snowed = render(&mut harness, &view);
+    let fresh = harness.render_fresh(&view).1;
+    assert_eq!(
+        differing(&snowed, &fresh),
+        0,
+        "a snowfall draws the sunk copies' shadows"
+    );
+    assert!(
+        differing(&snowed, &standing) > 500,
+        "the snow changes the picture"
+    );
+    harness.apply(vec![RenderDiff::SetSnow { snow: None }]);
+    let thawed = render(&mut harness, &view);
+    let fresh = harness.render_fresh(&view).1;
+    assert_eq!(
+        differing(&thawed, &fresh),
+        0,
+        "a thaw draws the standing copies' shadows"
+    );
+    assert_eq!(
+        differing(&thawed, &standing),
+        0,
+        "and is the picture before the snow"
+    );
+}
+
+/// The ambient light's sky layer over a small square at its finest, so a
+/// post 0.3 m across covers many of its texels.
+fn fine_sky() -> RenderDiff {
+    RenderDiff::UpdateLight {
+        handle: RenderHandle::new(12),
+        light: LightDescriptor::Ambient {
+            color: [0.6, 0.7, 0.9],
+            intensity: 0.1,
+            enabled: true,
+            range: Some(8.0),
+            shadow_intent: LightShadowIntent::Requested,
+            shadow: LightShadowSettings {
+                resolution: 2048,
+                ..Default::default()
+            },
+        },
+    }
 }

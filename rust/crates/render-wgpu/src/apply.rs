@@ -184,7 +184,27 @@ impl Renderer {
             }
             RenderDiff::SetWind { wind } => self.tables.wind = *wind,
             RenderDiff::SetWetness { wetness } => self.tables.wetness = *wetness,
-            RenderDiff::SetSnow { snow } => self.tables.snow = *snow,
+            RenderDiff::SetSnow { snow } => {
+                // Copies that sink under snow cast at the snow's amount
+                // (`shadow.wgsl`), so a change of amount redraws every
+                // shadow layer, static caches included.
+                let amount = |snow: &Option<render_model::SnowDescriptor>| {
+                    snow.map_or(0.0, |snow| snow.amount)
+                };
+                if amount(&self.tables.snow) != amount(snow)
+                    && self
+                        .tables
+                        .materials
+                        .values()
+                        .any(|row| row.descriptor.sinks_under_snow)
+                {
+                    for layer in &mut self.shadows.layers {
+                        layer.stale = true;
+                        layer.cached = None;
+                    }
+                }
+                self.tables.snow = *snow;
+            }
             RenderDiff::SetBackdrop { camera, backdrop } => {
                 let linked = !self.tables.backdrops.is_empty();
                 match backdrop {
@@ -1136,10 +1156,11 @@ impl Renderer {
                                 )
                             })
                             .collect();
+                        let top = mesh.bounds.max.y;
                         let rows: Vec<f32> = patch
                             .instances
                             .iter()
-                            .flat_map(|instance| crate::scatter::copy_row(instance, 0))
+                            .flat_map(|instance| crate::scatter::copy_row(instance, 0, top))
                             .collect();
                         scattered = Some((copies, rows));
                     }

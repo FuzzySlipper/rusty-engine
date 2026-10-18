@@ -117,7 +117,8 @@ struct Part {
 // A scatter run's copy (render-wgpu `scatter.rs`): where it stands under its
 // part's model (xyz) and its uniform scale (w), its turn (a unit quaternion
 // x, y, z, w), its linear tint (xyz) with its part's id (w, bits), and its
-// rank among its patch's copies (`detail.x`).
+// rank among its patch's copies (`detail.x`) and its mesh's top (`detail.y`,
+// model y before the copy's scale).
 struct ScatterCopy {
     place: vec4<f32>,
     turn: vec4<f32>,

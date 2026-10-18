@@ -116,6 +116,9 @@ struct VsOut {
     @location(11) @interpolate(flat) turn_x: vec3<f32>,
     @location(12) @interpolate(flat) turn_y: vec3<f32>,
     @location(13) @interpolate(flat) turn_z: vec3<f32>,
+    // How open the sky is over the copy, for one that sinks under snow
+    // (`rusty::lighting::copy_open_sky`).
+    @location(14) @interpolate(flat) snow_open: f32,
 #endif
 };
 
@@ -148,11 +151,13 @@ fn vs_world(
     let selected = selected_copy(instance);
     let part = selected.part;
     let row = selected.row;
+    let top = selected.top;
 #else
 #ifdef SCATTER
     let scattered = copies[instance];
     let part = bitcast<u32>(scattered.tint.w);
     let row = copy_row(scattered);
+    let top = scattered.detail.y;
 #else
     let part = instances[instance];
     let row = parts[part];
@@ -193,8 +198,10 @@ fn vs_world(
 #endif
 #ifdef SCATTER
     // Grass and flowers sink into the snow where the sky is open over them.
+    var snow_open = 0.0;
     if material.weather.y > 0.5 {
-        world = snow_sunk(world, row.model[3].xyz, copy_open_sky(row.model[3].xyz));
+        snow_open = copy_open_sky((row.model * vec4<f32>(0.0, top, 0.0, 1.0)).xyz);
+        world = snow_sunk(world, row.model[3].xyz, snow_open);
     }
 #endif
 #ifdef PRODUCT_SHADER
@@ -224,6 +231,9 @@ fn vs_world(
     out.turn_y = row.normal_y.xyz;
     out.turn_z = row.normal_z.xyz;
 #endif
+#endif
+#ifdef SCATTER
+    out.snow_open = snow_open;
 #endif
 #ifdef WATER
     out.clip_position = out.clip;
@@ -628,10 +638,12 @@ fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> 
     // the material keeps dry, and snow lies on what faces up there.
 #ifdef SCATTER
     let pales = material.weather.y > 0.5;
+    let copy_open = in.snow_open;
 #else
     let pales = false;
+    let copy_open = 0.0;
 #endif
-    surface = weathered(surface, material.weather.x < 0.5, pales);
+    surface = weathered(surface, material.weather.x < 0.5, pales, copy_open);
 #ifdef DECALS
     // Decals over the opaque world, after the weather, so tracks show in
     // the snow. A scatter run's copies are vegetation; an animated mesh's
