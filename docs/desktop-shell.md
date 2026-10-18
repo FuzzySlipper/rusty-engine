@@ -46,20 +46,21 @@ TypeScript UI is composited over it.
   page starts (`draggable`, `dragstart`) to the shell, and takes no other
   input until the shell ends it. The shell carries it inside the window:
   while the left button is held, pointer moves reach the page as
-  `dragenter`/`dragover`, leaving the window sends `dragleave`, releasing
-  over a target whose `dragover` called `preventDefault()` sends `drop`, and
-  the page always gets `dragend` with that `dropEffect`. Escape, focus loss
-  and releasing elsewhere cancel the drag (`dropEffect` `none`); a drag under
-  a pointer lock is cancelled at once. Differences from a browser:
+  `dragenter`/`dragover`, and leaving the window sends `dragleave`. On
+  release the shell waits, normally a few milliseconds, for the page's answer
+  to a `dragover` at that point, which the page shim reads once the event has
+  dispatched. If the target called `preventDefault()` with a `dropEffect`
+  the drag allows, the page gets `drop`; otherwise it gets `dragleave`.
+  `dragend` always follows with the same `dropEffect` (`none` without a drop).
+  Escape, focus loss, releasing outside the window and an answer that has
+  not come within 250 ms cancel the drag; a drag under a pointer lock is
+  cancelled at once. Differences from a browser:
   - The drag stays in the window: nothing drags out to, or in from, other
     applications.
   - Only files, `text/plain`, `text/html` and `text/uri-list` travel with the
     drag. Data under any other type (`setData('application/x-item', …)`)
     reads back empty at the drop, and the page's console warns about it on
     `dragstart`. Put identities in `text/plain`, or keep them in page state.
-  - The shell learns the accepted effect from `dragover` bubbling to
-    `window`; behind a `dragover` handler that stops propagation, `drop`
-    still arrives but `dragend` reports `none`.
   - The drag image is not drawn; the cursor shows the effect instead.
 
   Pointer-event dragging (`pointerdown`, `setPointerCapture`, `pointermove`)
