@@ -214,6 +214,9 @@ pub struct GpuReadout {
     pub volumetric_fog: volumetric_fog::VolumetricFogReadout,
     /// The backdrop the last world view drew, if it drew one.
     pub backdrop: Option<BackdropReadout>,
+    /// How wet the scene's surfaces are, and how frozen their puddles
+    /// (`lighting.wgsl` `wet_under`).
+    pub wetness: Option<render_model::WetnessDescriptor>,
     /// The snow lying on the scene's surfaces (`lighting.wgsl` `snowed`).
     pub snow: Option<render_model::SnowDescriptor>,
     /// The projected decals (`decals.rs`).
@@ -1014,6 +1017,7 @@ impl Renderer {
             indirect_light: self.probes.readout(),
             volumetric_fog: self.volumetric_fog.readout(),
             backdrop: self.backdrop,
+            wetness: self.tables.wetness,
             snow: self.tables.snow,
             decals: self.decals.readout(),
         }

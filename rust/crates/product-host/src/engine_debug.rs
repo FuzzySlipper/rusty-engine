@@ -161,6 +161,10 @@ pub struct ProductHostGpuStatistics {
     pub impostors: ProductHostImpostorStatistics,
     pub occlusion: ProductHostOcclusionStatistics,
     pub indirect_light: ProductHostIndirectLightStatistics,
+    /// The wetness in force (`CameraView.SetWetness`); absent while dry.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub wetness: Option<ProductHostWetnessStatistics>,
     /// The snow in force (`CameraView.SetSnow`); absent without snow.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -192,6 +196,18 @@ pub struct ProductHostDecalStatistics {
     pub build_micros: f64,
     /// A normal atlas bends the surfaces.
     pub normals: bool,
+}
+
+/// How wet the scene's lit surfaces are, as the world pass draws them.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostWetnessStatistics {
+    /// How wet, 0 to 1.
+    pub wetness: f32,
+    /// How much standing water gathers in puddles, 0 to 1.
+    pub puddles: f32,
+    /// How far the puddles are frozen, 0 (water) to 1 (ice).
+    pub frozen: f32,
 }
 
 /// The snow lying on the scene's lit surfaces, as the world pass draws it.

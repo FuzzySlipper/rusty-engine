@@ -506,11 +506,26 @@ pub struct NativeCloudsRequest {
 /// clamped; 0 the default) darkens their diffuse colour and smooths them,
 /// most where they face up and only under the open sky; `puddles` (0 to 1,
 /// clamped) gathers standing water in patches on flat ground as they wet.
+/// `frozen` (0 to 1, clamped; 0 the default) turns the puddles to ice,
+/// growing in from each puddle's edge until 1 freezes it whole, so lowering
+/// it again reads as a thaw: the ice is pale and a little blue, flat, with
+/// blurred reflections. Snow lies over the ice as over the ground.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeWetnessRequest {
     pub wetness: f32,
     pub puddles: f32,
+    pub frozen: f32,
+}
+
+/// The wetness in force from the end of this call: all zero when the
+/// surfaces are dry.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeWetnessReadout {
+    pub wetness: f32,
+    pub puddles: f32,
+    pub frozen: f32,
 }
 
 /// Snow lying on the scene's lit surfaces. `amount` (0 to 1, clamped; 0 the

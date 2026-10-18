@@ -223,6 +223,7 @@ fn engine_api(
             set_wind: crate::camera_view::set_wind,
             set_clouds: crate::camera_view::set_clouds,
             set_wetness: crate::camera_view::set_wetness,
+            read_wetness: crate::camera_view::read_wetness,
             set_snow: crate::camera_view::set_snow,
             read_snow: crate::camera_view::read_snow,
             set_backdrop: crate::camera_view::set_backdrop,
@@ -2667,7 +2668,7 @@ mod tests {
     }
 
     #[test]
-    fn wetness_publishes_as_retained_environment_and_zero_dries() {
+    fn wetness_publishes_as_retained_environment_reads_back_and_zero_dries() {
         use crate::operation_diagnostics::{empty_receipt, receipt_codes};
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).expect("default catalog"),
@@ -2676,21 +2677,40 @@ mod tests {
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
         )
         .expect("service set");
+        let read = |api: &NativeEngineApi| unsafe {
+            let mut readout = NativeWetnessReadout::default();
+            assert_eq!(
+                (api.camera_view.read_wetness)(
+                    api.camera_view.context,
+                    &mut readout,
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+            (readout.wetness, readout.puddles, readout.frozen)
+        };
         services.begin_call(binding());
         let api = services.api();
-        let set = |wetness, puddles, refusal| unsafe {
+        assert_eq!(read(&api), (0.0, 0.0, 0.0));
+        let set = |wetness, puddles, frozen, refusal| unsafe {
             (api.camera_view.set_wetness)(
                 api.camera_view.context,
-                &NativeWetnessRequest { wetness, puddles },
+                &NativeWetnessRequest {
+                    wetness,
+                    puddles,
+                    frozen,
+                },
                 refusal,
             )
         };
-        assert_eq!(set(0.7, 0.4, std::ptr::null_mut()), ABI_OK);
+        assert_eq!(set(0.7, 0.4, 1.5, std::ptr::null_mut()), ABI_OK);
+        assert_eq!(read(&api), (0.7, 0.4, 1.0), "frozen clamps");
         let mut call = services.finish_call().expect("wetness call");
         let selected = render_model::RenderDiff::SetWetness {
             wetness: Some(render_model::WetnessDescriptor {
                 wetness: 0.7,
                 puddles: 0.4,
+                frozen: 1.0,
             }),
         };
         assert_eq!(
@@ -2705,19 +2725,29 @@ mod tests {
 
         services.begin_call(binding());
         let api = services.api();
-        let set = |wetness, puddles, refusal| unsafe {
+        assert_eq!(read(&api), (0.7, 0.4, 1.0), "the wetness stays in force");
+        let set = |wetness, puddles, frozen, refusal| unsafe {
             (api.camera_view.set_wetness)(
                 api.camera_view.context,
-                &NativeWetnessRequest { wetness, puddles },
+                &NativeWetnessRequest {
+                    wetness,
+                    puddles,
+                    frozen,
+                },
                 refusal,
             )
         };
-        for (wetness, puddles) in [(f32::NAN, 0.0), (0.5, f32::NAN)] {
+        for (wetness, puddles, frozen) in [
+            (f32::NAN, 0.0, 0.0),
+            (0.5, f32::NAN, 0.0),
+            (0.5, 0.5, f32::NAN),
+        ] {
             let mut refusal = empty_receipt();
-            assert_eq!(set(wetness, puddles, &mut refusal), 0);
+            assert_eq!(set(wetness, puddles, frozen, &mut refusal), 0);
             assert_eq!(receipt_codes(&refusal), ["CSHARP_WETNESS"]);
         }
-        assert_eq!(set(0.0, 1.0, std::ptr::null_mut()), ABI_OK);
+        assert_eq!(set(0.0, 1.0, 1.0, std::ptr::null_mut()), ABI_OK);
+        assert_eq!(read(&api), (0.0, 0.0, 0.0));
         let mut call = services.finish_call().expect("dry");
         assert_eq!(
             call.take_output().frames[0].ops,

@@ -47,6 +47,15 @@ public readonly partial record struct CloudsRequest
     }
 }
 
+public readonly partial record struct WetnessRequest
+{
+    /// <summary>Wet surfaces whose puddles are water, none frozen.</summary>
+    public WetnessRequest(float Wetness, float Puddles)
+        : this(Wetness, Puddles, 0)
+    {
+    }
+}
+
 public readonly partial record struct CloudRegionRequest
 {
     /// <summary>A region of cumulus as thick as the layer.</summary>

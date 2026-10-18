@@ -49,8 +49,8 @@ const LIGHT_ROW_FLOATS: usize = 16;
 /// light; then
 /// the indirect light volume's origin and grid and the wind; then the cloud
 /// layer, its drift and its shape, the surfaces' wetness and snow, the
-/// snow's colour and the backdrop's link; then the light cluster grid and
-/// depth range.
+/// snow's colour, the puddles' ice and the backdrop's link; then the light
+/// cluster grid and depth range.
 const FRAME_UNIFORM_BYTES: u64 = (16
     + 16
     + 4
@@ -63,6 +63,7 @@ const FRAME_UNIFORM_BYTES: u64 = (16
     + 4
     + 4 * 4
     + 3 * 4
+    + 4
     + 4
     + 4
     + 4
@@ -2649,6 +2650,7 @@ impl Renderer {
             .unwrap_or(render_model::WetnessDescriptor {
                 wetness: 0.0,
                 puddles: 0.0,
+                frozen: 0.0,
             });
         let snow = self.tables.snow.unwrap_or(render_model::SnowDescriptor {
             amount: 0.0,
@@ -2664,6 +2666,9 @@ impl Renderer {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         for value in [snow.color[0], snow.color[1], snow.color[2], 0.0] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in [wetness.frozen, 0.0, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         for value in backdrop.unwrap_or_default() {

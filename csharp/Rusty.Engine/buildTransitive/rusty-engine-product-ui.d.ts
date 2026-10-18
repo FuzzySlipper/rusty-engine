@@ -560,6 +560,10 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         occlusion: ProductHostOcclusionStatistics;
         indirectLight: ProductHostIndirectLightStatistics;
         /**
+         * The wetness in force (`CameraView.SetWetness`); absent while dry.
+         */
+        wetness?: ProductHostWetnessStatistics;
+        /**
          * The snow in force (`CameraView.SetSnow`); absent without snow.
          */
         snow?: ProductHostSnowStatistics;
@@ -1050,6 +1054,23 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         slowest: ProductHostUpdateAttribution;
         slowestAgeMs: CanonicalU64;
+    };
+    /**
+     * How wet the scene's lit surfaces are, as the world pass draws them.
+     */
+    export type ProductHostWetnessStatistics = {
+        /**
+         * How wet, 0 to 1.
+         */
+        wetness: number;
+        /**
+         * How much standing water gathers in puddles, 0 to 1.
+         */
+        puddles: number;
+        /**
+         * How far the puddles are frozen, 0 (water) to 1 (ice).
+         */
+        frozen: number;
     };
     /**
      * Median milliseconds per frame for each stage of presenting it: waiting

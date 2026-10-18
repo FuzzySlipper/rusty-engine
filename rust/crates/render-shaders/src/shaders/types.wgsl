@@ -84,6 +84,9 @@ struct Frame {
     weather: vec4<f32>,
     // rgb: the snow's linear colour.
     snow_color: vec4<f32>,
+    // x: how frozen the puddles are (`lighting.wgsl` `wet_under`; 0 water to
+    // 1 ice).
+    ice: vec4<f32>,
     // A backdrop pass (render-wgpu `frame.rs` `encode_backdrop`) draws in
     // backdrop units: a backdrop point p stands at xyz + p * w in the world
     // (`rusty::view::world_equivalent`). w is 0 in every other pass.

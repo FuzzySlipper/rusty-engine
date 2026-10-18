@@ -73,7 +73,7 @@ pub use engine_debug::{
     ProductHostScatterSelectionStatistics, ProductHostScatterStatistics,
     ProductHostShadowStatistics, ProductHostSnowStatistics, ProductHostStreamMedians,
     ProductHostStreamStatistics, ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep,
-    ProductHostWindowMedians, ProductHostWindowStatistics,
+    ProductHostWetnessStatistics, ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 pub use error::{ProductHostError, ProductHostRuntimeError};
 pub use frames::{

@@ -45,6 +45,9 @@ Live debug commands:
   `marks.png` atlas (a footprint, a scorch, a splash and an ash ring;
   `generate-textures.py` writes it) over the ground where the camera looks,
   without or with the angle falloff, and report `CameraView.ReadDecals`.
+- `weather.wetness <wetness> <puddles> <frozen>`: the hills wet after rain,
+  puddles gathering, frozen from their edges in (1: ice), as
+  `CameraView.ReadWetness` reports it.
 - `weather.snow <amount> <texels per metre>`: snow over the hills, grass and
   trees, clear under the trees (an ambient light's sky layer follows the
   camera), and the snow in force as `CameraView.ReadSnow` reports it.

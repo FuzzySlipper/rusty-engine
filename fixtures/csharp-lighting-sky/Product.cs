@@ -635,6 +635,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.SetWetness(new(Math.Clamp(wetness,0,1),Math.Clamp(puddles,0,1)));
         return Inspect();
     }
+    // How frozen the puddles are (0 water to 1 ice; ice grows in from their edges), keeping the wetness and puddles in force, read back.
+    [DebugCommand("lighting.frozen")]
+    public string Frozen(float frozen)
+    {
+        WetnessReadout wet = engine.CameraView.ReadWetness();
+        engine.CameraView.SetWetness(new(wet.Wetness,wet.Puddles,frozen));
+        WetnessReadout now = engine.CameraView.ReadWetness();
+        return FormattableString.Invariant($"wetness={now.Wetness:F2} puddles={now.Puddles:F2} frozen={now.Frozen:F2}");
+    }
     // Snow over what faces up under the open sky (0 to 1; 0 clears it), its edge stepped at this many texels per metre (0: smooth): the mesa and the ground whiten, the room's floor stays clear.
     [DebugCommand("lighting.snow")]
     public string Snow(float amount, float texelsPerMetre)

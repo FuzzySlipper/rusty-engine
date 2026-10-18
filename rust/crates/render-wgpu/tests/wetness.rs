@@ -62,7 +62,11 @@ fn scene() -> Harness {
 
 fn wet(wetness: f32, puddles: f32) -> RenderDiff {
     RenderDiff::SetWetness {
-        wetness: Some(WetnessDescriptor { wetness, puddles }),
+        wetness: Some(WetnessDescriptor {
+            wetness,
+            puddles,
+            frozen: 0.0,
+        }),
     }
 }
 
@@ -222,6 +226,7 @@ fn wetting_does_not_raise_an_already_smooth_materials_roughness() {
         wetness: Some(WetnessDescriptor {
             wetness: 1.0,
             puddles: 0.0,
+            frozen: 0.0,
         }),
     }]);
     let wet = harness.render(&view).1;
@@ -299,5 +304,165 @@ fn a_material_that_keeps_dry_stays_dry_beside_one_that_wets() {
         "the slab that keeps dry draws exactly as on a dry day: {:.1} vs {:.1}",
         right(&bare).0,
         right(&soaked).0
+    );
+}
+
+fn frozen(puddles: f32, frozen: f32) -> RenderDiff {
+    RenderDiff::SetWetness {
+        wetness: Some(WetnessDescriptor {
+            wetness: 1.0,
+            puddles,
+            frozen,
+        }),
+    }
+}
+
+/// Pixels whose brightness differs between two renders by more than 3.
+fn differing(a: &[u8], b: &[u8]) -> Vec<bool> {
+    (0..(WIDTH * HEIGHT) as usize)
+        .map(|index| {
+            let at = index * 4;
+            (0..3).any(|channel| a[at + channel].abs_diff(b[at + channel]) > 3)
+        })
+        .collect()
+}
+
+/// Each marked pixel's distance in pixels (4-connected steps) to the
+/// nearest unmarked one: how far into a puddle it lies on screen.
+fn depth_inside(mask: &[bool]) -> Vec<u32> {
+    let mut depth: Vec<u32> = mask
+        .iter()
+        .map(|inside| if *inside { u32::MAX } else { 0 })
+        .collect();
+    let mut queue: std::collections::VecDeque<usize> =
+        (0..mask.len()).filter(|index| !mask[*index]).collect();
+    let (width, height) = (WIDTH as usize, HEIGHT as usize);
+    while let Some(index) = queue.pop_front() {
+        let (x, y) = (index % width, index / width);
+        let next = depth[index] + 1;
+        for (dx, dy) in [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
+            let (nx, ny) = (x as i32 + dx, y as i32 + dy);
+            if nx < 0 || ny < 0 || nx >= width as i32 || ny >= height as i32 {
+                continue;
+            }
+            let neighbour = ny as usize * width + nx as usize;
+            if depth[neighbour] > next {
+                depth[neighbour] = next;
+                queue.push_back(neighbour);
+            }
+        }
+    }
+    depth
+}
+
+#[test]
+fn puddles_freeze_from_their_edges_in_and_thaw_back() {
+    let mut harness = scene();
+    harness.apply(vec![wet(1.0, 0.0)]);
+    let plain = look(&mut harness);
+    harness.apply(vec![wet(1.0, 0.6)]);
+    let water = look(&mut harness);
+    harness.apply(vec![frozen(0.6, 0.0)]);
+    assert_eq!(look(&mut harness), water, "frozen 0 is water");
+    harness.apply(vec![frozen(0.6, 0.5)]);
+    let half = look(&mut harness);
+    harness.apply(vec![frozen(0.6, 1.0)]);
+    let ice = look(&mut harness);
+    // The puddles, and where each freeze changed them.
+    let pools = differing(&plain, &water);
+    let half_ice = differing(&water, &half);
+    let whole_ice = differing(&water, &ice);
+    let count = |mask: &[bool]| mask.iter().filter(|marked| **marked).count();
+    assert!(count(&pools) > 1000, "puddles show: {}", count(&pools));
+    assert!(
+        whole_ice
+            .iter()
+            .zip(&pools)
+            .filter(|(iced, pool)| **iced && !**pool)
+            .count()
+            * 10
+            < count(&whole_ice),
+        "ice only where the puddles are (their soft rims aside): {} of {}",
+        whole_ice
+            .iter()
+            .zip(&pools)
+            .filter(|(iced, pool)| **iced && !**pool)
+            .count(),
+        count(&whole_ice)
+    );
+    assert!(
+        count(&whole_ice) * 10 > count(&pools) * 8,
+        "frozen 1 freezes the puddles whole: {} of {}",
+        count(&whole_ice),
+        count(&pools)
+    );
+    assert!(
+        count(&half_ice) * 10 > count(&whole_ice) && count(&half_ice) * 10 < count(&whole_ice) * 9,
+        "frozen 0.5 freezes part: {} of {}",
+        count(&half_ice),
+        count(&whole_ice)
+    );
+    // The half freeze lies along the puddles' edges: nearer them on screen
+    // than the water it leaves in their middles.
+    let depth = depth_inside(&pools);
+    let mean = |select: &dyn Fn(usize) -> bool| {
+        let picked: Vec<u32> = (0..depth.len())
+            .filter(|index| select(*index))
+            .map(|index| depth[index])
+            .collect();
+        f64::from(picked.iter().sum::<u32>()) / picked.len().max(1) as f64
+    };
+    let (edge, middle) = (
+        mean(&|index| half_ice[index] && pools[index]),
+        mean(&|index| whole_ice[index] && !half_ice[index] && pools[index]),
+    );
+    assert!(
+        edge < middle,
+        "ice grows in from the edges: {edge:.2} px in, water left {middle:.2} px in"
+    );
+    // Ice is paler than water.
+    let brightness = |rgba: &[u8], mask: &[bool]| {
+        let picked: Vec<f64> = (0..mask.len())
+            .filter(|index| mask[*index])
+            .map(|index| {
+                f64::from(rgba[index * 4])
+                    + f64::from(rgba[index * 4 + 1])
+                    + f64::from(rgba[index * 4 + 2])
+            })
+            .collect();
+        picked.iter().sum::<f64>() / picked.len().max(1) as f64
+    };
+    assert!(
+        brightness(&ice, &whole_ice) > brightness(&water, &whole_ice) * 1.15,
+        "ice is paler than water: {:.1} to {:.1}",
+        brightness(&water, &whole_ice),
+        brightness(&ice, &whole_ice)
+    );
+    // A thaw back to 0 is water again.
+    harness.apply(vec![frozen(0.6, 0.0)]);
+    assert_eq!(look(&mut harness), water, "thawed");
+}
+
+#[test]
+fn snow_lies_over_ice_as_over_water() {
+    let mut harness = scene();
+    let snow = |amount: f32| RenderDiff::SetSnow {
+        snow: Some(SnowDescriptor {
+            amount,
+            color: [0.82, 0.86, 0.92],
+            texels_per_metre: 0.0,
+        }),
+    };
+    harness.apply(vec![frozen(1.0, 0.0), snow(1.0)]);
+    let over_water = look(&mut harness);
+    harness.apply(vec![frozen(1.0, 1.0)]);
+    let over_ice = look(&mut harness);
+    // Ground the snow covers whole looks the same over ice as over water.
+    let ground = |rgba: &[u8]| region(rgba, 20..WIDTH - 20, HEIGHT - 40..HEIGHT - 4);
+    assert!(
+        (ground(&over_water).0 - ground(&over_ice).0).abs() < 0.5,
+        "snow over ice stays snow: {:?} vs {:?}",
+        ground(&over_water),
+        ground(&over_ice)
     );
 }

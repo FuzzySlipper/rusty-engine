@@ -1167,7 +1167,8 @@ up the slab, so a cloud and its shadow agree.
 After rain, the scene's lit surfaces can read as wet:
 
 ```csharp
-engine.CameraView.SetWetness(new(Wetness: .8f, Puddles: .5f));
+engine.CameraView.SetWetness(new(Wetness: .8f, Puddles: .5f, Frozen: 0));
+WetnessReadout wet = engine.CameraView.ReadWetness();
 ```
 
 - `Wetness` (0 to 1, clamped) darkens a surface's diffuse colour toward 55 %
@@ -1181,6 +1182,16 @@ engine.CameraView.SetWetness(new(Wetness: .8f, Puddles: .5f));
 - `Puddles` (0 to 1, clamped) gathers standing water in patches about 2.5 m
   across on flat ground, as much as the surface is wet: darker still, nearly
   smooth and flat.
+- `Frozen` (0 to 1, clamped; `new WetnessRequest(.8f, .5f, Frozen: .5f)`)
+  turns the puddles to ice: it grows in from each puddle's edge, a thin rim
+  at 0.25, about half at 0.5 and the whole puddle at 1, so lowering it again
+  reads as a thaw, the ice shrinking back to water. Ice is paler and a
+  little blue, flat, with blurred reflections (roughness 0.35); the wet
+  ground around it stays as the wetness leaves it. [Snow](#snow-cover) lies
+  over ice as over the ground. The two-argument `WetnessRequest(Wetness,
+  Puddles)` is unfrozen.
+- `ReadWetness()` returns the wetness in force from the end of the call
+  (all zero while dry); `engine.renderer` reports it as `gpu.wetness`.
 - A material can keep dry: `new MaterialRequest(...) with { KeepDry = true }`
   shades it as on a dry day beside surfaces that wet, such as a sheltered
   sign, an awning's underside or a waxed hull. Its product shader, if any,
@@ -1188,10 +1199,14 @@ engine.CameraView.SetWetness(new(Wetness: .8f, Puddles: .5f));
 - It applies to standard-lit world materials before their shade stage, so
   a product `shade(Surface)` receives the wetted surface. Water and unlit
   materials, sprites and particles are left as they are. Product WGSL reads
-  the values as `frame.weather.x` (wetness) and `.y` (puddles).
+  the values as `frame.weather.x` (wetness), `.y` (puddles) and
+  `frame.ice.x` (frozen).
 - 0 (the default) draws exactly as dry. The setting is retained camera-view
   state like the wind. It costs nothing while 0; while wet, each lit
-  fragment reads the sky layer once more.
+  fragment reads the sky layer once more. Frozen puddles cost no more than
+  liquid ones: on an RX 9070 XT at 1280×720, over hills with grass and
+  trees, the world pass takes 0.47 ms wet with puddles at 0.6, frozen or
+  not (0.34 ms dry).
 
 ## Snow cover
 
@@ -1586,6 +1601,8 @@ the voxels around them, with the camera on the room's far corner), and
 `lighting.precipitation <drops> <shape>` (rain, shape 0, or snow, shape 1,
 around the camera; none in the room under its roof),
 `lighting.wetness <wetness> <puddles>` (the room's surfaces wet after rain),
+`lighting.frozen <frozen>` (their puddles frozen, keeping the wetness in
+force),
 `lighting.snow <amount> <texels per metre>` (snow on the mesa and the open
 ground, none on the room's floor under its roof),
 `lighting.clouds <coverage>` (a drifting cloud layer over the panorama, with

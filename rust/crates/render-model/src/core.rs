@@ -334,12 +334,15 @@ impl WindDescriptor {
 /// How wet the scene's surfaces are, after rain (`CameraView.SetWetness`):
 /// `wetness` (0 to 1) darkens the diffuse colour and lowers roughness of lit
 /// surfaces under the open sky, most on up-facing ones; `puddles` (0 to 1)
-/// gathers standing water in patches on flat ground as the surfaces wet.
+/// gathers standing water in patches on flat ground as the surfaces wet;
+/// `frozen` (0 to 1) turns the puddles to ice from their edges in.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WetnessDescriptor {
     pub wetness: f32,
     pub puddles: f32,
+    #[serde(default)]
+    pub frozen: f32,
 }
 
 /// Snow lying on the scene's surfaces (`CameraView.SetSnow`): `amount`, from
@@ -392,9 +395,11 @@ impl BackdropDescriptor {
 }
 
 impl WetnessDescriptor {
-    /// Wetness and puddles within `0..=1`.
+    /// Wetness, puddles and frozen within `0..=1`.
     pub fn valid(&self) -> bool {
-        (0.0..=1.0).contains(&self.wetness) && (0.0..=1.0).contains(&self.puddles)
+        [self.wetness, self.puddles, self.frozen]
+            .iter()
+            .all(|value| (0.0..=1.0).contains(value))
     }
 }
 

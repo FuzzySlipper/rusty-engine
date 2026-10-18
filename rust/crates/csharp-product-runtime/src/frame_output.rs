@@ -49,7 +49,7 @@ use product_host::{
     ProductHostRendererStatistics, ProductHostScatterSelectionStatistics,
     ProductHostScatterStatistics, ProductHostShadowStatistics, ProductHostSnowStatistics,
     ProductHostStreamMedians, ProductHostStreamStatistics, ProductHostTimedStep,
-    ProductHostWindowMedians, ProductHostWindowStatistics,
+    ProductHostWetnessStatistics, ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -1059,6 +1059,11 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             build_micros: readout.decals.build_micros,
             normals: readout.decals.normals,
         },
+        wetness: readout.wetness.map(|wetness| ProductHostWetnessStatistics {
+            wetness: wetness.wetness,
+            puddles: wetness.puddles,
+            frozen: wetness.frozen,
+        }),
         snow: readout.snow.map(|snow| ProductHostSnowStatistics {
             amount: snow.amount,
             color: snow.color,

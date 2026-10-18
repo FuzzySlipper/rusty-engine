@@ -51,7 +51,9 @@ struct CameraState {
     /// The star field's catalogue and band, which may not be released while
     /// it draws them.
     stars: Option<NativeStarsRequest>,
-    /// The snow in force (`ReadSnow`), as the last `SetSnow` left it.
+    /// The wetness and snow in force (`ReadWetness`, `ReadSnow`), as the
+    /// last `SetWetness` and `SetSnow` left them.
+    wetness: Option<WetnessDescriptor>,
     snow: Option<SnowDescriptor>,
     /// The decals placed, by id, with the presentation seconds each is gone
     /// at (0: it stays); a decal placed this call has 0 until it is
@@ -218,6 +220,7 @@ impl RuntimeCameraViewBridge {
                 active_camera: None,
                 background: CameraBackground::Default,
                 stars: None,
+                wetness: None,
                 snow: None,
                 decals: BTreeMap::new(),
                 decal_atlas: None,
@@ -1113,15 +1116,35 @@ impl RuntimeCameraViewBridge {
         let wetness = WetnessDescriptor {
             wetness: request.wetness.clamp(0.0, 1.0),
             puddles: request.puddles.clamp(0.0, 1.0),
+            frozen: request.frozen.clamp(0.0, 1.0),
         };
         if !wetness.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_WETNESS",
-                "wetness and puddles must each be finite",
+                "wetness, puddles and frozen must each be finite",
             ));
         }
-        self.staged_mut()?.wetness = Some((wetness.wetness > 0.0).then_some(wetness));
+        let wetness = (wetness.wetness > 0.0).then_some(wetness);
+        let staged = self.staged_mut()?;
+        staged.state.wetness = wetness;
+        staged.wetness = Some(wetness);
         Ok(())
+    }
+
+    /// The wetness in force as this call leaves it.
+    fn read_wetness(&self) -> NativeWetnessReadout {
+        let state = self
+            .staged
+            .as_ref()
+            .map(|staged| &staged.state)
+            .unwrap_or(&self.state);
+        state
+            .wetness
+            .map_or_else(Default::default, |wetness| NativeWetnessReadout {
+                wetness: wetness.wetness,
+                puddles: wetness.puddles,
+                frozen: wetness.frozen,
+            })
     }
 
     fn set_snow(&mut self, request: NativeSnowRequest) -> Result<(), CsharpEngineServicesError> {
@@ -2747,6 +2770,22 @@ pub(crate) unsafe extern "C" fn set_wetness(
             0
         }
     }
+}
+
+pub(crate) unsafe extern "C" fn read_wetness(
+    context: *mut c_void,
+    output: *mut NativeWetnessReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &*context.cast::<RuntimeCameraViewBridge>() };
+    unsafe { *output = bridge.read_wetness() };
+    ABI_OK
 }
 
 pub(crate) unsafe extern "C" fn set_snow(

@@ -520,13 +520,21 @@ fn ambient_sky(index: u32, position: vec3<f32>, normal: vec3<f32>, radius: i32) 
 // the full wetness, walls `WET_WALLS` of it and undersides none, and only
 // under the open sky, so ground under a roof or in a cave stays dry.
 // Puddles gather on flat ground in patches about `PUDDLE_METRES` across:
-// darker still, nearly mirror-smooth and flat.
+// darker still, nearly mirror-smooth and flat. Frozen (`Frame.ice.x`, 0 to
+// 1), ice grows in from each puddle's edge toward its middle, reaching it at
+// 1, so a thaw reads as the ice shrinking back to water: paler and a little
+// blue (`ICE_TINT`), flat, with blurred reflections (`ICE_ROUGHNESS`).
 const WET_DARKENING: f32 = 0.55;
 const WET_ROUGHNESS: f32 = 0.15;
 const WET_WALLS: f32 = 0.5;
 const PUDDLE_METRES: f32 = 2.5;
 const PUDDLE_DARKENING: f32 = 0.7;
 const PUDDLE_ROUGHNESS: f32 = 0.03;
+const ICE_TINT: vec3<f32> = vec3<f32>(0.66, 0.76, 0.86);
+const ICE_COVER: f32 = 0.55;
+const ICE_ROUGHNESS: f32 = 0.35;
+// The width of the ice's growing edge, in the puddle's depth.
+const ICE_EDGE: f32 = 0.01;
 fn wetted(surface: Surface) -> Surface {
     if frame.weather.x <= 0.0 || surface.normal.y < -0.3 {
         return surface;
@@ -559,6 +567,21 @@ fn wet_under(surface: Surface, open: f32) -> Surface {
         result.base = vec4<f32>(result.base.rgb * mix(1.0, PUDDLE_DARKENING, pool), result.base.a);
         result.roughness = min(result.roughness, mix(result.roughness, PUDDLE_ROUGHNESS, pool));
         result.normal = normalize(mix(result.normal, vec3<f32>(0.0, 1.0, 0.0), pool));
+        let frozen = frame.ice.x;
+        if frozen > 0.0 && pool > 0.0 {
+            // How far into the puddle this point is, against how far the
+            // ice has reached from its edge (the deepest point is
+            // `1 - level` in). Most of a puddle is shallow, so the reach
+            // grows as the cube: half frozen freezes about half of it.
+            var ice = pool;
+            if frozen < 1.0 {
+                let reach = frozen * frozen * frozen * (1.0 - level);
+                ice *= 1.0 - smoothstep(reach - ICE_EDGE, reach + ICE_EDGE, shape - level);
+            }
+            result.base = vec4<f32>(mix(result.base.rgb, ICE_TINT, ice * ICE_COVER), result.base.a);
+            result.roughness = mix(result.roughness, ICE_ROUGHNESS, ice);
+            result.metalness = mix(result.metalness, 0.0, ice);
+        }
     }
     return result;
 }

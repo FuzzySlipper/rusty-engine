@@ -291,6 +291,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return vegetation.Inspect();
     }
 
+    [DebugCommand("weather.wetness", Description = "How wet the hills are after rain (0 to 1), how much water gathers in puddles (0 to 1) and how frozen the puddles are (0 water to 1 ice). The ground under the trees stays dry.")]
+    public string Wetness(float wetness, float puddles, float frozen)
+    {
+        sky ??= engine.Graphics.CreateLight(Sky(eye));
+        engine.CameraView.SetWetness(new(wetness, puddles, frozen));
+        WetnessReadout wet = engine.CameraView.ReadWetness();
+        return FormattableString.Invariant($"wetness={wet.Wetness:F2} puddles={wet.Puddles:F2} frozen={wet.Frozen:F2}");
+    }
+
     [DebugCommand("weather.snow", Description = "Snow over the hills, grass and trees: how much (0 to 1; 0 clears it) and the texels per metre its edge steps at (0: smooth). The ground under the trees stays clear.")]
     public string Snow(float amount, float texelsPerMetre)
     {

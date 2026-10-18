@@ -312,6 +312,7 @@ fn snow_lies_over_wet_ground() {
         wetness: Some(WetnessDescriptor {
             wetness: 1.0,
             puddles: 0.0,
+            frozen: 0.0,
         }),
     }]);
     let wet = render(&mut harness, &open_ground());
