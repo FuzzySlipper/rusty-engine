@@ -47,10 +47,12 @@ TypeScript UI is composited over it.
   input until the shell ends it. The shell carries it inside the window:
   while the left button is held, pointer moves reach the page as
   `dragenter`/`dragover`, and leaving the window sends `dragleave`. On
-  release the shell waits, normally a few milliseconds, for the page's answer
-  to a `dragover` at that point, which the page shim reads once the event has
-  dispatched. If the target called `preventDefault()` with a `dropEffect`
-  the drag allows, the page gets `drop`; otherwise it gets `dragleave`.
+  release the shell moves the drag to that point once more and waits,
+  normally a few milliseconds, for the page's answer to that move (the
+  `dragover`, or `dragenter` on a new target), which the page shim reads once
+  the event has dispatched. If the target called `preventDefault()` with a
+  `dropEffect` the drag allows, the page gets `drop`; otherwise it gets
+  `dragleave`.
   `dragend` always follows with the same `dropEffect` (`none` without a drop).
   Escape, focus loss, releasing outside the window and an answer that has
   not come within 250 ms cancel the drag; a drag under a pointer lock is

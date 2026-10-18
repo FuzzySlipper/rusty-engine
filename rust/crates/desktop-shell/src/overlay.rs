@@ -26,11 +26,11 @@ const LOCK_REQUEST: &str = "rusty-desktop:pointer-lock";
 const LOCK_EXIT: &str = "rusty-desktop:pointer-unlock";
 const CONFINE_REQUEST: &str = "rusty-desktop:cursor-confine";
 const CONFINE_EXIT: &str = "rusty-desktop:cursor-release";
-/// Followed by `x,y,effect`: a `dragover` at that position in CSS pixels,
-/// and the `dropEffect` it accepted.
+/// Followed by `n,effect`: the page's `n`th `dragenter` or `dragover` of the
+/// drag, and the `dropEffect` it accepted.
 const DRAG_EFFECT: &str = "rusty-desktop:drag-effect:";
-/// How long a release waits for the page to report what the `dragover` at
-/// the release accepted before the drag ends as cancelled. The report
+/// How long a release waits for the page to report what the release's own
+/// `dragover` accepted before the drag ends as cancelled. The report
 /// normally arrives within a pump or two.
 const DROP_SETTLE: Duration = Duration::from_millis(250);
 
@@ -53,10 +53,12 @@ const DROP_SETTLE: Duration = Duration::from_millis(250);
 ///
 /// Chromium hands a native HTML5 drag the page starts to the shell, which
 /// carries it inside the window. The page's drop target answers Chromium, not
-/// the shell, so the shim reports each `dragover`'s position and the effect it
-/// accepted, read once the event has finished dispatching. A release drops
-/// only once the page has accepted the `dragover` at its position, and ends
-/// the drag with that effect. A drag carries files, `text/plain`,
+/// the shell, so the shim numbers each `dragenter` and `dragover` of the drag
+/// and reports the effect it accepted, read once the event has finished
+/// dispatching. Each move over the page the shell sends dispatches one of
+/// them (`dragenter` where the target changes), so the shell knows which
+/// number its release's move gets: the release drops only once that report
+/// accepts, and ends the drag with its effect. A drag carries files, `text/plain`,
 /// `text/html` and `text/uri-list`; the shim warns on `dragstart` about any
 /// other type, which reads back empty at the drop.
 const PAGE_SHIM: &str = r#"(() => {
@@ -121,16 +123,24 @@ const PAGE_SHIM: &str = r#"(() => {
     document.dispatchEvent(new CustomEvent('rusty-desktop-confinement-end', { detail: { refused } }));
   };
   const carried = new Set(['Files', 'text/plain', 'text/html', 'text/uri-list']);
+  let dragUpdates = 0;
+  window.addEventListener('dragstart', () => { dragUpdates = 0; }, true);
   window.addEventListener('dragstart', (event) => {
     const lost = [...(event.dataTransfer?.types ?? [])].filter((type) => !carried.has(type));
     if (lost.length > 0) {
       console.warn(`rusty desktop shell: a drag carries only files, text/plain, text/html and text/uri-list; ${lost.join(', ')} will be empty at the drop`);
     }
   });
-  window.addEventListener('dragover', (event) => setTimeout(() => {
-    const effect = event.defaultPrevented ? event.dataTransfer?.dropEffect ?? 'none' : 'none';
-    console.info(`rusty-desktop:drag-effect:${Math.round(event.clientX)},${Math.round(event.clientY)},${effect}`);
-  }), true);
+  const reportDragUpdate = (event) => {
+    if (!event.isTrusted) return;
+    const n = ++dragUpdates;
+    setTimeout(() => {
+      const effect = event.defaultPrevented ? event.dataTransfer?.dropEffect ?? 'none' : 'none';
+      console.info(`rusty-desktop:drag-effect:${n},${effect}`);
+    });
+  };
+  window.addEventListener('dragenter', reportDragUpdate, true);
+  window.addEventListener('dragover', reportDragUpdate, true);
   window.__rustyDesktopMotion = (x, y) => {
     if (locked === null) return;
     locked.dispatchEvent(new PointerEvent('pointermove', {
@@ -172,13 +182,16 @@ struct PageDrag {
     allowed: DragOperations,
     /// The pointer is over the view, so the page is the drag's target.
     over: bool,
-    /// The page's latest `dragover` report: its position in CSS pixels and
-    /// the effect it accepted.
-    report: Option<([i32; 2], DragOperations)>,
-    /// The button came up at this position (physical, and CSS pixels): the
-    /// drag waits for the report of the `dragover` there before it drops or
+    /// How many moves over the page the shell has sent, each of which
+    /// dispatches one `dragenter` or `dragover` in the page.
+    sent: u32,
+    /// The page's latest `dragover` report: its number and the effect it
+    /// accepted.
+    report: Option<(u32, DragOperations)>,
+    /// The button came up here: the drag waits for the report of the
+    /// release's own `dragover`, numbered `sent` then, before it drops or
     /// cancels.
-    released: Option<(Instant, (i32, i32), [i32; 2])>,
+    released: Option<(Instant, (i32, i32), u32)>,
 }
 
 impl UiOverlay {
@@ -414,6 +427,7 @@ impl UiOverlay {
             payload,
             allowed,
             over: false,
+            sent: 0,
             report: None,
             released: None,
         });
@@ -426,6 +440,16 @@ impl UiOverlay {
 
     /// The pointer moved during a drag: enter the page, or move over it.
     fn move_drag(&mut self, window: &Window) {
+        // A held button keeps reporting moves past the window (X11's
+        // implicit grab). Chromium dispatches nothing there, so the drag has
+        // left the page.
+        let size = window.inner_size();
+        let inside = (0..size.width as i32).contains(&self.cursor.0)
+            && (0..size.height as i32).contains(&self.cursor.1);
+        if !inside {
+            self.leave_drag();
+            return;
+        }
         let Some(drag) = &mut self.drag else { return };
         if drag.released.is_some() {
             return;
@@ -451,7 +475,10 @@ impl UiOverlay {
 
     fn send_drag(&mut self, kind: DragEventKind, (x, y): (i32, i32)) {
         let modifiers = self.event_modifiers();
-        let Some(drag) = &self.drag else { return };
+        let Some(drag) = &mut self.drag else { return };
+        if matches!(kind, DragEventKind::Enter | DragEventKind::Over) {
+            drag.sent += 1;
+        }
         let payload = (kind == DragEventKind::Enter).then(|| drag.payload.clone());
         let allowed_operations = drag.allowed;
         let _ = self.page.send_drag(DragInput {
@@ -467,7 +494,9 @@ impl UiOverlay {
     /// Release the page's drag where the pointer is when `drop`, otherwise
     /// cancel it. Chromium drops only on a target whose `dragover` answer it
     /// has already received, so a release first moves the drag there and
-    /// waits for the page's report of that `dragover` ([`Self::settle_release`]).
+    /// waits for the page's report of that very move
+    /// ([`Self::settle_release`]): an earlier one may have been at another
+    /// target, however close.
     fn end_drag(&mut self, window: &Window, drop: bool) {
         let Some(drag) = &mut self.drag else { return };
         if !(drop && drag.over) || drag.released.is_some() {
@@ -475,29 +504,23 @@ impl UiOverlay {
             self.finish_drag(window, DragOperations::NONE);
             return;
         }
-        let scale = window.scale_factor();
-        let (x, y) = self.cursor;
-        let at = [
-            (f64::from(x) / scale).round() as i32,
-            (f64::from(y) / scale).round() as i32,
-        ];
-        drag.released = Some((Instant::now(), (x, y), at));
-        drag.report = None;
-        self.send_drag(DragEventKind::Over, (x, y));
+        let cursor = self.cursor;
+        drag.released = Some((Instant::now(), cursor, drag.sent + 1));
+        self.send_drag(DragEventKind::Over, cursor);
     }
 
-    /// Drop a released drag once the page has reported the `dragover` at the
-    /// release, when it accepted it, and end the drag with that effect.
+    /// Drop a released drag once the page has reported the release's own
+    /// move, when it accepted it, and end the drag with that effect.
     fn settle_release(&mut self, window: &Window) {
         let Some(PageDrag {
-            released: Some((_, cursor, at)),
-            report: Some((position, effect)),
+            released: Some((_, cursor, last)),
+            report: Some((n, effect)),
             ..
         }) = &self.drag
         else {
             return;
         };
-        if (position[0] - at[0]).abs() > 1 || (position[1] - at[1]).abs() > 1 {
+        if n != last {
             return;
         }
         let (cursor, effect) = (*cursor, *effect);
@@ -718,18 +741,16 @@ fn cursor_icon(shape: &CursorShape) -> CursorIcon {
     }
 }
 
-/// A `dragover` report from the page: `x,y,effect`.
-fn drag_report(report: &str) -> Option<([i32; 2], DragOperations)> {
-    let mut parts = report.splitn(3, ',');
-    let x = parts.next()?.parse().ok()?;
-    let y = parts.next()?.parse().ok()?;
-    let effect = match parts.next()? {
+/// A `dragover` report from the page: `n,effect`.
+fn drag_report(report: &str) -> Option<(u32, DragOperations)> {
+    let (n, effect) = report.split_once(',')?;
+    let effect = match effect {
         "copy" => DragOperations::COPY,
         "link" => DragOperations::LINK,
         "move" => DragOperations::MOVE,
         _ => DragOperations::NONE,
     };
-    Some(([x, y], effect))
+    Some((n.parse().ok()?, effect))
 }
 
 /// The effect a `dragover` reported, if the drag allows it; Chromium drops
