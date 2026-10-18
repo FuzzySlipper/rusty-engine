@@ -1,5 +1,6 @@
 mod artifact_binary;
 mod collision_navigation;
+mod contacts;
 mod inspection;
 
 use std::{
@@ -28,7 +29,7 @@ use engine_spatial::{
     CharacterControllerError, CharacterControllerReceipt, CharacterControllerService,
     CharacterEdgeOutcome, CharacterGroundFact, CharacterJumpOutcome, CharacterJumpPlan,
     CharacterMeshInstance as SpatialCharacterMeshInstance, CharacterObstacle,
-    CharacterStepColliders, CharacterStepSubject, CharacterStepWorld, MaterialVoxel,
+    CharacterStepColliders, CharacterStepSubject, CharacterStepWorld, MaterialVoxel, ShapeContact,
     SpatialOcclusionCollider, SpatialOcclusionQuery, SpatialOcclusionService, StaticMeshAssetId,
     StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
     SurfaceMeshOptions, SurfaceMode, TriggerCollider, TriggerGeometrySource, TriggerOverlapFact,
@@ -5478,6 +5479,8 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         restore_triggers,
         read_trigger,
         query_triggers_at_points,
+        overlap_contacts: contacts::overlap_contacts,
+        sweep_contacts: contacts::sweep_contacts,
     }
 }
 

@@ -409,6 +409,18 @@ pub type NativeSpatialOverlapCapsule = unsafe extern "C" fn(
     *const NativeSpatialCapsuleQueryRequest,
     *mut NativeSpatialHit,
 ) -> i32;
+pub type NativeSpatialOverlapContacts = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpatialContactQueryRequest,
+    *mut NativeSpatialContactResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSpatialSweepContacts = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSpatialContactQueryRequest,
+    *mut NativeSpatialContactResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSpatialPickVoxel = unsafe extern "C" fn(
     *mut c_void,
     NativeSpatialPickRequest,
@@ -1515,6 +1527,8 @@ pub struct NativeSpatialApi {
     pub sweep_aabb: NativeSpatialSweepAabb,
     pub cast_capsule: NativeSpatialCastCapsule,
     pub overlap_capsule: NativeSpatialOverlapCapsule,
+    pub overlap_contacts: NativeSpatialOverlapContacts,
+    pub sweep_contacts: NativeSpatialSweepContacts,
     pub pick_voxel: NativeSpatialPickVoxel,
     pub register_trigger: NativeSpatialRegisterTrigger,
     pub reconcile_triggers: NativeSpatialReconcileTriggers,

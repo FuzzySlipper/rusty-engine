@@ -34,6 +34,7 @@
 
 #![forbid(unsafe_code)]
 
+mod contacts;
 mod dynamics;
 mod joint;
 mod model_surface;
@@ -42,6 +43,9 @@ mod static_mesh;
 mod tether;
 mod water;
 
+pub use contacts::{
+    ContactPose, ContactQueryError, ContactShape, ContactSource, ContactTarget, ShapeContact,
+};
 pub use water::{shape_volume, submerged, DynamicsWaterPlane, DynamicsWaterReadout, Submerged};
 
 pub use tether::{
@@ -572,10 +576,6 @@ pub fn character_capsule_overlap_obstacles_with_stats(
             0.0,
         )
         .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
-        let result = result.map(|mut contact| {
-            contact.point2 += Vector::new(obstacle.center.x, obstacle.center.y, obstacle.center.z);
-            contact
-        });
         keep_deepest_character_overlap(
             &mut best,
             CharacterCollisionSource::ActiveEntity(obstacle.id),
@@ -2569,6 +2569,29 @@ mod tests {
             elapsed < std::time::Duration::from_millis(250),
             "far box queries took {elapsed:?}"
         );
+    }
+
+    /// `contact` answers in world space already: the point is on the
+    /// obstacle where it stands, not offset by its centre again.
+    #[test]
+    fn a_capsule_overlapping_a_far_obstacle_reports_a_point_on_it() {
+        let overlap = character_capsule_overlap_obstacles(
+            CharacterCapsule {
+                center: WorldPos::new(10.0, 0.0, 0.0),
+                half_height: 0.5,
+                radius: 0.5,
+            },
+            &[CharacterObstacle {
+                id: 1,
+                center: WorldPos::new(10.8, 0.0, 0.0),
+                half_extents: WorldVec::new(0.5, 0.5, 0.5),
+                linear_velocity: WorldVec::ZERO,
+                angular_velocity: WorldVec::ZERO,
+            }],
+        )
+        .unwrap()
+        .unwrap();
+        assert!((overlap.point.x - 10.3).abs() < 1e-6, "{:?}", overlap.point);
     }
 
     #[test]

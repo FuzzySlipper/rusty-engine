@@ -179,6 +179,28 @@ internal static class EngineTestHostChecks
                 ReadOnlyMemory<SpatialEntityCollider>.Empty, ReadOnlyMemory<ulong>.Empty,
                 ReadOnlyMemory<SpatialEntityCollider>.Empty));
             Require(hit.Present && hit.Instance == 1, "Admitted collision was not resident.");
+
+            // Contacts: every actor a volume overlaps with the floor, and a
+            // blade turning through a held shield before its holder.
+            SpatialEntityCollider Body(ulong entity, float x) =>
+                new(entity, new(x - .25f, 0, -.25f), new(x + .25f, 2, .25f), 0, 0, true, false, false);
+            var bodies = new[] { Body(7, .5f), Body(3, -.5f), Body(9, 0), Body(5, 4) };
+            SpatialContactResult overlap = engine.Spatial.OverlapContacts(SpatialContactQueryRequest.Overlap(session,
+                SpatialShape.Sphere(1), SpatialPose.At(new(0.5f, 0, 0.5f)), bodies, ignoredEntities: new ulong[] { 9 }));
+            SpatialContact[] overlapped = overlap.Contacts.ToArray();
+            Require(overlap.WorldContact && overlapped.Length == 3 && overlapped[0].Kind == SpatialHitKind.StaticMesh
+                && overlapped[1].Entity == 3 && overlapped[2].Entity == 7,
+                $"An overlap did not list the floor then every actor in it: {string.Join(", ", overlapped)}");
+            var shield = new SpatialEntityPart(21, 0, SpatialShape.Box(new(.05f, .4f, .4f)), SpatialPose.At(new(.9f, 1, -.9f)), holder: 20);
+            var holder = new SpatialEntityPart(20, 2, SpatialShape.Capsule(new(0, .5f, 0), new(0, 1.5f, 0), .3f), SpatialPose.At(new(.9f, 0, -1.6f)));
+            SpatialContactResult swept = engine.Spatial.SweepContacts(SpatialContactQueryRequest.Sweep(session,
+                SpatialShape.Capsule(Vector3.Zero, new(2, 0, 0), .05f),
+                new(new(0, 1, 0), Quaternion.Identity), new(new(0, 1, 0), Quaternion.CreateFromAxisAngle(Vector3.UnitY, 1.5f)),
+                parts: new[] { holder, shield }, excludeWorld: true));
+            SpatialContact[] met = swept.Contacts.ToArray();
+            Require(met.Length == 2 && met[0].Entity == 21 && met[0].Holder == 20 && met[1].Entity == 20 && met[1].Part == 2
+                && met[0].Fraction < met[1].Fraction,
+                $"A turning blade did not meet the shield before its holder: {string.Join(", ", met)}");
         });
 
         host.Call(engine =>

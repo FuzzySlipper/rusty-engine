@@ -798,6 +798,8 @@ sealed class SpatialServiceFake : ISpatialService
     public SpatialQueryReceipt SweepAabb(SpatialAabbQueryRequest arg0) => throw new NotSupportedException();
     public SpatialHit CastCapsule(SpatialCapsuleQueryRequest arg0) => throw new NotSupportedException();
     public SpatialHit OverlapCapsule(SpatialCapsuleQueryRequest arg0) => throw new NotSupportedException();
+    public SpatialContactResult OverlapContacts(SpatialContactQueryRequest arg0) => throw new NotSupportedException();
+    public SpatialContactResult SweepContacts(SpatialContactQueryRequest arg0) => throw new NotSupportedException();
     public SpatialHit PickVoxel(SpatialPickRequest arg0) => throw new NotSupportedException();
     public void RegisterTrigger(SpatialTriggerRegisterRequest arg0) => throw new NotSupportedException();
 

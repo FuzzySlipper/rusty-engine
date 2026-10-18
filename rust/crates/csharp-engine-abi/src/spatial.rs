@@ -424,6 +424,129 @@ pub struct NativeSpatialTriggerPointQueryResult {
     pub points: u32,
 }
 
+/// The kind of a contact query shape or a posed entity part.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeSpatialShapeKind {
+    #[default]
+    Box = 0,
+    Capsule = 1,
+    Sphere = 2,
+    Segment = 3,
+}
+
+/// A shape in its own frame. A `Box` is centred on `center` with
+/// `half_extents`; a `Capsule` runs from `a` to `b` with `radius`; a
+/// `Sphere` is centred on `center` with `radius`; a `Segment` runs from `a`
+/// to `b`. Fields another kind reads are ignored.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpatialShape {
+    pub kind: NativeSpatialShapeKind,
+    pub center: NativeVec3,
+    pub half_extents: NativeVec3,
+    pub a: NativeVec3,
+    pub b: NativeVec3,
+    pub radius: f64,
+}
+
+/// Where a shape's frame stands in the world. An all-zero rotation is the
+/// identity.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpatialPose {
+    pub translation: NativeVec3,
+    pub rotation: NativeQuat,
+}
+
+/// One caller-posed part of an entity for contact queries: an oriented box,
+/// capsule, sphere or segment in the world, the caller's `part` id (a bone or
+/// hit group) and the entity `holder` holding it (zero when none: a weapon or
+/// shield names the character holding it). Group/mask filter as an entity
+/// collider's do; a disabled part is left out. An ignored entity also
+/// ignores the parts it holds.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpatialEntityPart {
+    pub entity: u64,
+    pub part: u32,
+    pub holder: u64,
+    pub shape: NativeSpatialShape,
+    pub pose: NativeSpatialPose,
+    pub collision_group: u32,
+    pub collision_mask: u32,
+    pub enabled: bool,
+}
+
+/// A contact query: `shape` placed at `start` (an overlap) or moving from
+/// `start` to `end` (a sweep), its `pivot` (in the shape's frame) travelling
+/// in a straight line while the shape turns about it by the shortest
+/// rotation between the two poses. Entity colliders answer as boxes with
+/// part 0; trigger colliders are left out unless `include_triggers`, and
+/// disabled ones always. The world (voxels and static meshes) answers
+/// unless `exclude_world`. `max_contacts` keeps that many contacts, in
+/// order; zero keeps every one. Borrowed inputs live only for the call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialContactQueryRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub shape: NativeSpatialShape,
+    pub start: NativeSpatialPose,
+    pub end: NativeSpatialPose,
+    pub pivot: NativeVec3,
+    pub filter: NativeSpatialQueryFilter,
+    pub entities: *const NativeSpatialEntityCollider,
+    pub entities_len: usize,
+    pub parts: *const NativeSpatialEntityPart,
+    pub parts_len: usize,
+    pub ignored_entities: *const u64,
+    pub ignored_entities_len: usize,
+    pub include_triggers: bool,
+    pub exclude_world: bool,
+    pub max_contacts: u32,
+}
+
+/// One contact: what was touched (`kind`; entity, part and holder for an
+/// entity, instance/asset/geometry hash for a static mesh), the point on its
+/// surface and that surface's outward normal in world space, where along a
+/// sweep it begins (`fraction`, 0 for an overlap), how deep an overlap (or a
+/// sweep's starting overlap) is, and whether the sweep started inside it.
+/// The normal is zero for an overlap too deep to measure one.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSpatialContact {
+    pub kind: NativeSpatialHitKind,
+    pub entity: u64,
+    pub part: u32,
+    pub holder: u64,
+    pub instance: u64,
+    pub asset: u64,
+    pub geometry_hash: u64,
+    pub point: NativeVec3,
+    pub normal: NativeVec3,
+    pub fraction: f64,
+    pub penetration_depth: f64,
+    pub start_solid: bool,
+}
+
+/// Borrowed contacts of one query, ordered by fraction, then the world
+/// (voxels, then static meshes by instance) before entities, then entity and
+/// part. Each target answers once: voxels as one contact (the deepest, or
+/// earliest), each static-mesh instance and entity part as one.
+/// `world_contact` is true when the world answered, before any truncation;
+/// `truncated` when `max_contacts` left contacts out. `contacts` points into
+/// Spatial bridge storage until the next call on the same context.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpatialContactResult {
+    pub contacts: *const NativeSpatialContact,
+    pub contacts_len: usize,
+    pub world_contact: bool,
+    pub truncated: bool,
+    pub projection_version: u64,
+    pub source_revision: u64,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMeshResourceReference {

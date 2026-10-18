@@ -91,7 +91,8 @@ pub use svc_collision::{
     cast_character_capsule_against_obstacles, character_capsule_overlap_obstacles,
     CharacterCapsule, CharacterCapsuleCastHit, CharacterCapsuleOverlap,
     CharacterCollisionQueryError, CharacterCollisionQueryStats, CharacterCollisionSource,
-    CharacterObstacle, ModelSurface, ModelSurfaceHit, ModelSurfacePoint, PlacedModelSurface,
+    CharacterObstacle, ContactPose, ContactQueryError, ContactShape, ContactSource, ContactTarget,
+    ModelSurface, ModelSurfaceHit, ModelSurfacePoint, PlacedModelSurface, ShapeContact,
     StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
     StaticMeshCollisionError, StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId,
     StaticMeshTransform,
@@ -1580,6 +1581,34 @@ impl VoxelCollisionScene {
         capsule: CharacterCapsule,
     ) -> Result<bool, CharacterCollisionQueryError> {
         self.projection.character_capsule_intersects(capsule)
+    }
+
+    /// Every caller-posed target, and the voxel/static-mesh world, that a
+    /// shape placed at `at` overlaps.
+    pub fn overlap_contacts(
+        &self,
+        shape: ContactShape,
+        at: ContactPose,
+        targets: &[ContactTarget],
+        world: bool,
+    ) -> Result<Vec<ShapeContact>, ContactQueryError> {
+        self.projection.overlap_contacts(shape, at, targets, world)
+    }
+
+    /// Every caller-posed target, and the voxel/static-mesh world, that a
+    /// shape moving and turning from `start` to `end` meets, by time of
+    /// impact.
+    pub fn sweep_contacts(
+        &self,
+        shape: ContactShape,
+        start: ContactPose,
+        end: ContactPose,
+        pivot: [f64; 3],
+        targets: &[ContactTarget],
+        world: bool,
+    ) -> Result<Vec<ShapeContact>, ContactQueryError> {
+        self.projection
+            .sweep_contacts(shape, start, end, pivot, targets, world)
     }
 }
 
