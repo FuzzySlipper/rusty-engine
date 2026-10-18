@@ -48,7 +48,6 @@ mod occlusion;
 mod overlays;
 mod particles;
 mod pipelines;
-mod pose;
 mod post;
 mod precipitation;
 mod primitives;

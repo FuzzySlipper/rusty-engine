@@ -44,6 +44,7 @@ RENDER_PRESENTATION_FORBIDDEN = (
 # host and its publications never enter it.
 RENDER_WGPU_WORKSPACE_DEPENDENCIES = frozenset(
     {
+        "animation-pose",
         "render-host-contracts",
         "render-model",
         "render-presentation",
@@ -60,7 +61,8 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     "opus-decoder": frozenset({"render-audio"}),
     "symphonia": frozenset({"render-audio"}),
     "fontdue": frozenset({"render-wgpu"}),
-    "glam": frozenset({"render-wgpu"}),
+    # The renderer's math, and the pose evaluator it shares with simulation.
+    "glam": frozenset({"render-wgpu", "animation-pose"}),
     # Shader composition and checking (render-shaders); wgpu's own naga.
     "naga": frozenset({"render-shaders", "render-wgpu"}),
     "naga_oil": frozenset({"render-shaders"}),

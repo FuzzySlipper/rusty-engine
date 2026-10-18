@@ -1176,3 +1176,75 @@ fn a_redefined_asset_keeps_its_instances_drawing() {
     assert_eq!(again.draws, shown.draws);
     assert_eq!(before, after);
 }
+
+/// A pose sampled without a renderer (`animation_pose::PoseModel`, as the
+/// Engine services sample at simulation time) is the pose the renderer draws
+/// and reports for the same clip time, controls and placement.
+#[test]
+fn a_pose_sampled_without_the_renderer_matches_the_drawn_report() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let finger = rig_joint(&body, "RightHandIndex1");
+    let controls = AnimatedMeshPose {
+        two_bone_ik: Vec::new(),
+        overrides: vec![JointOverride {
+            joint: finger,
+            space: PoseSpace::Local,
+            additive: true,
+            rotation: Some([0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2]),
+            translation: None,
+            weight: 0.5,
+        }],
+        layers: Vec::new(),
+        report_joints: true,
+    };
+    let model = animation_pose::PoseModel::decode(
+        &body,
+        &fixture("csharp-joint-attachments/content/body.glb"),
+        |_| None::<Vec<u8>>,
+    )
+    .expect("the body poses");
+    let view = character_view();
+    for (x, time) in [(2.0, 0.5), (-1.0, 0.8)] {
+        harness.apply(vec![
+            move_body(x),
+            RenderDiff::SetAnimatedMeshPlayback {
+                handle: RenderHandle::new(BODY),
+                playback: sample("run", time),
+            },
+            RenderDiff::SetAnimatedMeshPose {
+                handle: RenderHandle::new(BODY),
+                pose: controls.clone(),
+            },
+        ]);
+        harness.render(&view);
+        let reports = joint_poses(&mut harness);
+        let (_, world, drawn, _) = reports.last().expect("a report");
+        let sampled = model
+            .sample(
+                &[animation_pose::ClipSample {
+                    clip: "run",
+                    time,
+                    normalized: true,
+                    weight: 1.0,
+                }],
+                &controls,
+                world,
+            )
+            .unwrap();
+        assert_eq!(sampled.len(), drawn.len());
+        for (index, (sampled, drawn)) in sampled.iter().zip(drawn).enumerate() {
+            for (a, b) in [
+                (sampled.model.translation, drawn.model.translation),
+                (sampled.world.translation, drawn.world.translation),
+            ] {
+                assert!(distance(a, b) < 1e-5, "joint {index}: {a:?} {b:?}");
+            }
+            let dot: f32 = (0..4)
+                .map(|i| sampled.world.rotation[i] * drawn.world.rotation[i])
+                .sum();
+            assert!(dot.abs() > 1.0 - 1e-5, "joint {index} rotation");
+        }
+    }
+}

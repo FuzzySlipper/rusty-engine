@@ -63,6 +63,13 @@ internal static class EngineTestHostChecks
                 $"a ray meets the grip: {hits[0]}");
             Require(hits[1].Hit && Near(hits[1].Point, new(10, 2, -1.5f)), $"and the barrel: {hits[1]}");
             Require(hits[2].Hit && hits[2].BackFace && Near(hits[2].Point, new(10, 3, 2)), $"a ray from inside meets a back face: {hits[2]}");
+
+            // Pose sampling needs no renderer: the unrigged prop has no joints
+            // at rest, and names no clip.
+            Require(engine.Animation.SampleModelJointPose(AnimationModelPoseSampleRequest.OfClip(prop, "", 0, placement)).Length == 0,
+                "an unrigged model samples no joints");
+            ExpectRefusal(() => engine.Animation.SampleModelJointPose(AnimationModelPoseSampleRequest.OfClip(prop, "swing", .5f, placement)),
+                "CSHARP_ANIMATION_POSE");
         });
 
         host.Call(engine =>

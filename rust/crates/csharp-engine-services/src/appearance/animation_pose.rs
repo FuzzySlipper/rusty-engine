@@ -1,11 +1,14 @@
 //! Product pose controls on animation instances (`SetPose`), the admitted
-//! rig's joints (`ReadJoints`), and the joints the renderer reports back
-//! (`ReadJointPose`).
+//! rig's joints (`ReadJoints`), the joints the renderer reports back
+//! (`ReadJointPose`), and joints sampled at simulation time
+//! (`SampleJointPose`).
 //!
 //! A pose is retained on its instance and reaches the renderer when the call
-//! settles, as one `SetAnimatedMeshPose` per changed instance or target. The
-//! renderer stays the only pose evaluator: a reporting instance is posed
-//! when each call is applied and its joints arrive before the next call.
+//! settles, as one `SetAnimatedMeshPose` per changed instance or target. A
+//! reporting instance is posed when each call is applied and its joints
+//! arrive before the next call. A sample poses the mesh here, through the
+//! evaluator the renderer draws with (`animation-pose`), so it needs no
+//! renderer and answers within the call.
 
 use super::*;
 
@@ -45,6 +48,11 @@ pub(crate) struct RagdollSource {
 }
 
 const NO_PARENT: u32 = u32::MAX;
+
+/// Animated meshes decoded for pose sampling, by resource handle, each with
+/// the identity (body and clip packs) it was decoded from.
+#[derive(Default)]
+pub(crate) struct PoseModels(BTreeMap<u64, (Vec<String>, Arc<::animation_pose::PoseModel>)>);
 
 /// The admitted rig of the mesh an instance plays.
 fn instance_rig<'a>(
@@ -326,6 +334,155 @@ impl RuntimeAppearanceBridge {
         Ok(result)
     }
 
+    /// The decoded pose model of an animated mesh resource, decoded once
+    /// per body and clip-pack set.
+    fn pose_model(
+        &mut self,
+        resource: u64,
+    ) -> Result<Arc<::animation_pose::PoseModel>, CsharpEngineServicesError> {
+        let state = &self.staged_ref()?.state;
+        let body = state.render_resources.resource(resource)?;
+        let mesh = body.animated_mesh().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_RESOURCE",
+                "resource is not an animated mesh",
+            )
+        })?;
+        let identity: Vec<String> = std::iter::once(body.content_hash().to_owned())
+            .chain(mesh.clip_packs.iter().map(|pack| pack.content_hash.clone()))
+            .collect();
+        if let Some((known, model)) = self.pose_models.0.get(&resource) {
+            if *known == identity {
+                return Ok(Arc::clone(model));
+            }
+        }
+        let resources = &state.render_resources;
+        let model = ::animation_pose::PoseModel::decode(mesh, body.bytes(), |identity| {
+            resources
+                .by_identity(identity)
+                .map(|pack| pack.shared_bytes())
+        })
+        .map_err(|error| pose_error(format!("the mesh could not be posed: {error}")))?;
+        let model = Arc::new(model);
+        self.pose_models
+            .0
+            .insert(resource, (identity, Arc::clone(&model)));
+        Ok(model)
+    }
+
+    fn sample_animation_joint_pose(
+        &mut self,
+        request: &NativeAnimationPoseSampleRequest,
+    ) -> Result<NativeAnimationPoseSampleResult, CsharpEngineServicesError> {
+        let state = &self.staged_ref()?.state;
+        let instance = state
+            .animation_instances
+            .get(&request.instance.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_INSTANCE",
+                    "animation instance is not live",
+                )
+            })?;
+        let resource = *state
+            .animated_appearances
+            .get(&instance.appearance)
+            .ok_or_else(|| pose_error("the instance's appearance is not animated"))?;
+        let mut controls = AnimatedMeshPose::default();
+        if request.apply_pose_controls {
+            controls = instance.pose.clone();
+            controls.layers.extend(instance.ragdoll.iter().cloned());
+        }
+        self.sample_joints(
+            resource,
+            &NativeAnimationModelPoseSampleRequest {
+                resource: NativeRenderResourceHandle { value: resource },
+                clip: request.clip,
+                time: request.time,
+                blend_clip: request.blend_clip,
+                blend_time: request.blend_time,
+                blend_weight: request.blend_weight,
+                normalized: request.normalized,
+                placement: request.placement,
+            },
+            &controls,
+        )
+    }
+
+    fn sample_animation_model_joint_pose(
+        &mut self,
+        request: &NativeAnimationModelPoseSampleRequest,
+    ) -> Result<NativeAnimationPoseSampleResult, CsharpEngineServicesError> {
+        self.sample_joints(
+            request.resource.value,
+            request,
+            &AnimatedMeshPose::default(),
+        )
+    }
+
+    /// The joints of `resource`'s mesh sampled as `request` says, under
+    /// `controls`.
+    fn sample_joints(
+        &mut self,
+        resource: u64,
+        request: &NativeAnimationModelPoseSampleRequest,
+        controls: &AnimatedMeshPose,
+    ) -> Result<NativeAnimationPoseSampleResult, CsharpEngineServicesError> {
+        let clip = unsafe { borrowed_utf8(request.clip.bytes, request.clip.len, "sample clip")? };
+        let blend_clip = unsafe {
+            borrowed_utf8(
+                request.blend_clip.bytes,
+                request.blend_clip.len,
+                "sample blend clip",
+            )?
+        };
+        let model = self.pose_model(resource)?;
+        let blend = if blend_clip.is_empty() {
+            0.0
+        } else {
+            request.blend_weight.clamp(0.0, 1.0)
+        };
+        let sample = |clip, time, weight| ::animation_pose::ClipSample {
+            clip,
+            time,
+            normalized: request.normalized,
+            weight,
+        };
+        let samples: Vec<_> = [
+            (!clip.is_empty()).then(|| sample(clip, request.time, 1.0 - blend)),
+            (!blend_clip.is_empty()).then(|| sample(blend_clip, request.blend_time, blend)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let placement = request.placement;
+        let world = Transform {
+            translation: vec3(placement.translation),
+            rotation: [
+                placement.rotation.x,
+                placement.rotation.y,
+                placement.rotation.z,
+                placement.rotation.w,
+            ],
+            scale: vec3(placement.scale),
+        };
+        let joints = model
+            .sample(&samples, controls, &world)
+            .map_err(pose_error)?
+            .iter()
+            .map(|joint| NativeJointPose {
+                model: native_transform_of(&joint.model),
+                world: native_transform_of(&joint.world),
+            })
+            .collect::<Box<[_]>>();
+        let result = NativeAnimationPoseSampleResult {
+            joints: joints.as_ptr(),
+            joints_len: joints.len(),
+        };
+        self.borrowed.hold(joints);
+        Ok(result)
+    }
+
     /// The reports a ragdoll of `instance` spawns from, during a call.
     pub(crate) fn ragdoll_source(
         &self,
@@ -488,6 +645,38 @@ pub(crate) unsafe extern "C" fn read_animation_joint_pose(
     })
 }
 
+pub(crate) unsafe extern "C" fn sample_animation_joint_pose(
+    context: *mut c_void,
+    request: *const NativeAnimationPoseSampleRequest,
+    result: *mut NativeAnimationPoseSampleResult,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.sample_animation_joint_pose(unsafe { &*request })
+        })
+    })
+}
+
+pub(crate) unsafe extern "C" fn sample_animation_model_joint_pose(
+    context: *mut c_void,
+    request: *const NativeAnimationModelPoseSampleRequest,
+    result: *mut NativeAnimationPoseSampleResult,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_result(context, result, |bridge| {
+            bridge.sample_animation_model_joint_pose(unsafe { &*request })
+        })
+    })
+}
+
 /// The joint attachment fixture's character as object 7, published in the
 /// open call, with its rig joint indices by name.
 #[cfg(test)]
@@ -579,6 +768,155 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn utf8(value: &str) -> NativeUtf8Slice {
+        NativeUtf8Slice {
+            bytes: value.as_ptr(),
+            len: value.len(),
+        }
+    }
+
+    fn placed_at(x: f32) -> NativeTransform {
+        NativeTransform {
+            translation: NativeVec3 { x, y: 0.0, z: 0.0 },
+            rotation: NativeQuat {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                w: 1.0,
+            },
+            scale: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+        }
+    }
+
+    /// Samples and copies the joints before the next call on the bridge.
+    fn sampled(
+        bridge: &mut RuntimeAppearanceBridge,
+        request: &NativeAnimationPoseSampleRequest,
+    ) -> Result<Vec<NativeJointPose>, CsharpEngineServicesError> {
+        let result = bridge.sample_animation_joint_pose(request)?;
+        Ok(unsafe { std::slice::from_raw_parts(result.joints, result.joints_len) }.to_vec())
+    }
+
+    fn hand_x(joints: &[NativeJointPose], hand: u32) -> (f32, f32) {
+        let joint = joints[hand as usize];
+        (joint.model.translation.x, joint.world.translation.x)
+    }
+
+    #[test]
+    fn a_sampled_pose_needs_no_renderer_and_follows_the_clip_controls_and_placement() {
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), {
+            let mut content = BTreeMap::new();
+            content.insert("body.glb".to_owned(), Arc::from(CHARACTER_GLB));
+            content
+        });
+        bridge.begin_call();
+        let (instance, joints) = character_for_test(&mut bridge);
+        let hand = joints["RightHand"];
+        let resource = NativeRenderResourceHandle {
+            value: bridge.staged_ref().unwrap().state.animated_appearances[&bridge
+                .staged_ref()
+                .unwrap()
+                .state
+                .animation_instances[&instance.value]
+                .appearance],
+        };
+        let request = |clip: &'static str, time: f32| NativeAnimationPoseSampleRequest {
+            instance,
+            clip: utf8(clip),
+            time,
+            blend_clip: utf8(""),
+            blend_time: 0.0,
+            blend_weight: 0.0,
+            normalized: true,
+            placement: placed_at(2.0),
+            apply_pose_controls: true,
+        };
+        let early = sampled(&mut bridge, &request("run", 0.1)).unwrap();
+        let late = sampled(&mut bridge, &request("run", 0.6)).unwrap();
+        assert_eq!(early.len(), joints.len(), "one per rig joint");
+        assert_ne!(hand_x(&early, hand), hand_x(&late, hand), "the clip moves");
+        let (model, world) = hand_x(&late, hand);
+        assert!((world - (model + 2.0)).abs() < 1e-5, "{model} {world}");
+        // Sampling twice is the same pose: nothing is retained.
+        let again = sampled(&mut bridge, &request("run", 0.6)).unwrap();
+        assert_eq!(hand_x(&again, hand), hand_x(&late, hand));
+        // A blend with weight 0 is the first clip; weight 1 the second.
+        let blended = |weight| NativeAnimationPoseSampleRequest {
+            blend_clip: utf8("run"),
+            blend_time: 0.1,
+            blend_weight: weight,
+            ..request("run", 0.6)
+        };
+        let none = sampled(&mut bridge, &blended(0.0)).unwrap();
+        let full = sampled(&mut bridge, &blended(1.0)).unwrap();
+        assert_eq!(hand_x(&none, hand), hand_x(&late, hand));
+        assert_eq!(hand_x(&full, hand), hand_x(&early, hand));
+        // The rest pose, by resource without an instance.
+        let rest = bridge
+            .sample_animation_model_joint_pose(&NativeAnimationModelPoseSampleRequest {
+                resource,
+                clip: utf8(""),
+                time: 0.0,
+                blend_clip: utf8(""),
+                blend_time: 0.0,
+                blend_weight: 0.0,
+                normalized: true,
+                placement: placed_at(2.0),
+            })
+            .unwrap();
+        let rest = unsafe { std::slice::from_raw_parts(rest.joints, rest.joints_len) }.to_vec();
+        assert_ne!(hand_x(&rest, hand), hand_x(&early, hand));
+
+        // The instance's controls apply on request: a hand placed in the
+        // scene lands there.
+        let target = NativeVec3 {
+            x: 5.0,
+            y: 1.0,
+            z: 0.5,
+        };
+        bridge
+            .set_animation_pose(&NativeAnimationPoseRequest {
+                instance,
+                two_bone_ik: std::ptr::null(),
+                two_bone_ik_len: 0,
+                overrides: &NativeJointOverride {
+                    joint: hand,
+                    space: NativePoseSpace::World,
+                    additive: false,
+                    override_rotation: false,
+                    rotation: NativeQuat::default(),
+                    override_translation: true,
+                    translation: target,
+                    weight: 1.0,
+                },
+                overrides_len: 1,
+                report_joints: false,
+            })
+            .unwrap();
+        let controlled = sampled(&mut bridge, &request("run", 0.6)).unwrap();
+        let placed = controlled[hand as usize].world.translation;
+        assert!(
+            (placed.x - target.x).abs() < 1e-4 && (placed.y - target.y).abs() < 1e-4,
+            "{placed:?}"
+        );
+        let uncontrolled = sampled(
+            &mut bridge,
+            &NativeAnimationPoseSampleRequest {
+                apply_pose_controls: false,
+                ..request("run", 0.6)
+            },
+        )
+        .unwrap();
+        assert_eq!(hand_x(&uncontrolled, hand), hand_x(&late, hand));
+
+        let refused = sampled(&mut bridge, &request("fly", 0.5)).unwrap_err();
+        assert!(refused.to_string().contains("fly"), "{refused}");
     }
 
     #[test]

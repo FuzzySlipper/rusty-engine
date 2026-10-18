@@ -790,6 +790,17 @@ pub struct NativeDynamicsRagdollBlendRequest {
     pub blend: f32,
 }
 
+/// An impulse (N·s) at a world point of one body, as from a hit or a
+/// contact: it changes the body's linear and angular velocity at once and
+/// wakes it; the next step moves it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsPointImpulseRequest {
+    pub body: NativeDynamicsBodyHandle,
+    pub point: NativeVec3,
+    pub impulse: NativeVec3,
+}
+
 /// An impulse (N·s) at a world point of one bone's body, as from a hit.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

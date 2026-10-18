@@ -1,0 +1,15 @@
+[package]
+name = "animation-pose"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+render-model.workspace = true
+# The pose evaluator's math (scripts/dependency_boundary_check.py); values
+# leave this crate as Engine arrays and transforms.
+glam.workspace = true
+# Animated mesh and clip-pack GLBs (the runtime admits them; this reads them).
+gltf = { workspace = true, features = ["extensions"] }

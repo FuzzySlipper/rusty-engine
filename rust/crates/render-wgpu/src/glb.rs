@@ -3,9 +3,9 @@
 //! and materials. The runtime admitted the bytes (`asset-import`); this reads
 //! them and does not re-validate.
 
-use glam::{Mat4, Quat, Vec3};
-use gltf::animation::util::ReadOutputs;
-use gltf::animation::{Interpolation, Property};
+use glam::Mat4;
+
+pub use animation_pose::{Channel, Clip as GlbClip, Interp, Path, Trs};
 
 use crate::convert;
 use crate::resources::{decode_jpeg, decode_png, decode_webp, DecodedImage};
@@ -16,32 +16,6 @@ pub struct GlbNode {
     pub rest: Trs,
     pub mesh: Option<usize>,
     pub skin: Option<usize>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Trs {
-    pub(crate) translation: Vec3,
-    pub(crate) rotation: Quat,
-    pub(crate) scale: Vec3,
-}
-
-impl Trs {
-    pub(crate) fn matrix(&self) -> Mat4 {
-        Mat4::from_scale_rotation_translation(self.scale, self.rotation, self.translation)
-    }
-
-    pub fn translation(&self) -> [f32; 3] {
-        convert::array(self.translation)
-    }
-
-    /// `[x, y, z, w]`.
-    pub fn rotation(&self) -> [f32; 4] {
-        convert::quat_array(self.rotation)
-    }
-
-    pub fn scale(&self) -> [f32; 3] {
-        convert::array(self.scale)
-    }
 }
 
 pub struct GlbPrimitive {
@@ -74,36 +48,6 @@ impl GlbSkin {
             .map(convert::matrix_columns)
             .collect()
     }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Path {
-    Translation,
-    Rotation,
-    Scale,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Interp {
-    Step,
-    Linear,
-    CubicSpline,
-}
-
-pub struct Channel {
-    pub node: usize,
-    pub path: Path,
-    pub interpolation: Interp,
-    pub times: Vec<f32>,
-    /// Flattened values: 3 or 4 per key, times 3 for cubic splines
-    /// (in-tangent, value, out-tangent).
-    pub values: Vec<f32>,
-}
-
-pub struct GlbClip {
-    pub name: Option<String>,
-    pub duration: f32,
-    pub channels: Vec<Channel>,
 }
 
 pub struct GlbMaterial {
@@ -209,6 +153,35 @@ pub struct GlbModel {
     pub textures: Vec<GlbTexture>,
 }
 
+impl animation_pose::Hierarchy for GlbModel {
+    fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    fn parent(&self, node: usize) -> Option<usize> {
+        self.nodes[node].parent
+    }
+
+    fn rest(&self, node: usize) -> Trs {
+        self.nodes[node].rest
+    }
+
+    fn name(&self, node: usize) -> Option<&str> {
+        self.nodes[node].name.as_deref()
+    }
+
+    fn order(&self) -> &[usize] {
+        &self.order
+    }
+
+    fn skin_joints(&self) -> Vec<usize> {
+        self.skins
+            .iter()
+            .flat_map(|skin| skin.joints.iter().copied())
+            .collect()
+    }
+}
+
 pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
     let gltf = gltf::Gltf::from_slice(bytes).map_err(|error| format!("glb: {error}"))?;
     let blob = gltf.blob.as_deref();
@@ -218,43 +191,18 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
     };
     let document = &gltf.document;
 
-    let mut nodes: Vec<GlbNode> = document
-        .nodes()
-        .map(|node| {
-            let (translation, rotation, scale) = node.transform().decomposed();
-            GlbNode {
-                name: node.name().map(str::to_owned),
-                parent: None,
-                rest: Trs {
-                    translation: Vec3::from(translation),
-                    rotation: Quat::from_array(rotation),
-                    scale: Vec3::from(scale),
-                },
-                mesh: node.mesh().map(|mesh| mesh.index()),
-                skin: node.skin().map(|skin| skin.index()),
-            }
+    let (rig_nodes, order) = animation_pose::decode_nodes(document)?;
+    let nodes: Vec<GlbNode> = rig_nodes
+        .into_iter()
+        .zip(document.nodes())
+        .map(|(node, source)| GlbNode {
+            name: node.name,
+            parent: node.parent,
+            rest: node.rest,
+            mesh: source.mesh().map(|mesh| mesh.index()),
+            skin: source.skin().map(|skin| skin.index()),
         })
         .collect();
-    for node in document.nodes() {
-        for child in node.children() {
-            nodes[child.index()].parent = Some(node.index());
-        }
-    }
-    // The default scene's hierarchy, parents first.
-    let scene = document
-        .default_scene()
-        .or_else(|| document.scenes().next())
-        .ok_or("glb: no scene")?;
-    let mut order = Vec::new();
-    let mut stack: Vec<usize> = scene.nodes().map(|node| node.index()).collect();
-    stack.reverse();
-    while let Some(index) = stack.pop() {
-        order.push(index);
-        let node = document.nodes().nth(index).expect("node index");
-        let mut children: Vec<usize> = node.children().map(|child| child.index()).collect();
-        children.reverse();
-        stack.extend(children);
-    }
 
     let mut meshes = Vec::new();
     for mesh in document.meshes() {
@@ -328,49 +276,7 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
         })
         .collect();
 
-    let mut clips = Vec::new();
-    for animation in document.animations() {
-        let mut channels = Vec::new();
-        let mut duration = 0.0f32;
-        for channel in animation.channels() {
-            let reader = channel.reader(data);
-            let Some(times) = reader.read_inputs() else {
-                continue;
-            };
-            let times: Vec<f32> = times.collect();
-            let (path, values): (Path, Vec<f32>) = match reader.read_outputs() {
-                Some(ReadOutputs::Translations(values)) => {
-                    (Path::Translation, values.flatten().collect())
-                }
-                Some(ReadOutputs::Rotations(values)) => {
-                    (Path::Rotation, values.into_f32().flatten().collect())
-                }
-                Some(ReadOutputs::Scales(values)) => (Path::Scale, values.flatten().collect()),
-                // Morph target weights are not realized.
-                Some(ReadOutputs::MorphTargetWeights(_)) | None => continue,
-            };
-            if channel.target().property() == Property::MorphTargetWeights {
-                continue;
-            }
-            duration = duration.max(times.last().copied().unwrap_or(0.0));
-            channels.push(Channel {
-                node: channel.target().node().index(),
-                path,
-                interpolation: match channel.sampler().interpolation() {
-                    Interpolation::Step => Interp::Step,
-                    Interpolation::Linear => Interp::Linear,
-                    Interpolation::CubicSpline => Interp::CubicSpline,
-                },
-                times,
-                values,
-            });
-        }
-        clips.push(GlbClip {
-            name: animation.name().map(str::to_owned),
-            duration,
-            channels,
-        });
-    }
+    let clips = animation_pose::decode_clips(document, data);
 
     let materials: Vec<GlbMaterial> = document
         .materials()
@@ -506,88 +412,6 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
         materials,
         textures,
     })
-}
-
-impl Channel {
-    fn width(&self) -> usize {
-        match self.path {
-            Path::Rotation => 4,
-            _ => 3,
-        }
-    }
-
-    /// The key segment for `time` (clamped to the end keys) and the fraction
-    /// into it.
-    fn segment(&self, time: f32) -> (usize, usize, f32, f32) {
-        let last = self.times.len() - 1;
-        if time <= self.times[0] {
-            return (0, 0, 0.0, 0.0);
-        }
-        if time >= self.times[last] {
-            return (last, last, 0.0, 0.0);
-        }
-        let right = self.times.partition_point(|key| *key <= time);
-        let left = right - 1;
-        let span = self.times[right] - self.times[left];
-        (left, right, (time - self.times[left]) / span, span)
-    }
-
-    fn key(&self, index: usize) -> &[f32] {
-        let width = self.width();
-        match self.interpolation {
-            Interp::CubicSpline => &self.values[(index * 3 + 1) * width..(index * 3 + 2) * width],
-            _ => &self.values[index * width..(index + 1) * width],
-        }
-    }
-
-    /// Cubic Hermite with glTF tangents (scaled by the segment span).
-    fn cubic(&self, left: usize, right: usize, t: f32, span: f32) -> Vec<f32> {
-        let width = self.width();
-        let value = |key: usize, part: usize| {
-            &self.values[(key * 3 + part) * width..(key * 3 + part + 1) * width]
-        };
-        let (p0, m0, p1, m1) = (
-            value(left, 1),
-            value(left, 2),
-            value(right, 1),
-            value(right, 0),
-        );
-        let (t2, t3) = (t * t, t * t * t);
-        (0..width)
-            .map(|i| {
-                (2.0 * t3 - 3.0 * t2 + 1.0) * p0[i]
-                    + (t3 - 2.0 * t2 + t) * span * m0[i]
-                    + (-2.0 * t3 + 3.0 * t2) * p1[i]
-                    + (t3 - t2) * span * m1[i]
-            })
-            .collect()
-    }
-
-    pub(crate) fn sample_vec3(&self, time: f32) -> Vec3 {
-        let (left, right, t, span) = self.segment(time);
-        let a = Vec3::from_slice(self.key(left));
-        if left == right {
-            return a;
-        }
-        match self.interpolation {
-            Interp::Step => a,
-            Interp::Linear => a.lerp(Vec3::from_slice(self.key(right)), t),
-            Interp::CubicSpline => Vec3::from_slice(&self.cubic(left, right, t, span)),
-        }
-    }
-
-    pub(crate) fn sample_quat(&self, time: f32) -> Quat {
-        let (left, right, t, span) = self.segment(time);
-        let a = Quat::from_slice(self.key(left)).normalize();
-        if left == right {
-            return a;
-        }
-        match self.interpolation {
-            Interp::Step => a,
-            Interp::Linear => a.slerp(Quat::from_slice(self.key(right)).normalize(), t),
-            Interp::CubicSpline => Quat::from_slice(&self.cubic(left, right, t, span)).normalize(),
-        }
-    }
 }
 
 /// MikkTSpace tangents over uv set `set`, or None without that set (or for
@@ -812,33 +636,5 @@ mod tests {
             UvTransform::of([0.0, 0.0], 0.0, [1.0, 1.0]),
             UvTransform::IDENTITY
         );
-    }
-
-    fn channel(interpolation: Interp, values: Vec<f32>) -> Channel {
-        Channel {
-            node: 0,
-            path: Path::Translation,
-            interpolation,
-            times: vec![0.0, 1.0, 3.0],
-            values,
-        }
-    }
-
-    #[test]
-    fn channels_clamp_to_end_keys_and_interpolate_by_mode() {
-        let values = vec![0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 2.0, 4.0, 0.0];
-        let linear = channel(Interp::Linear, values.clone());
-        assert_eq!(linear.sample_vec3(-1.0), Vec3::ZERO);
-        assert_eq!(linear.sample_vec3(0.5), Vec3::new(1.0, 0.0, 0.0));
-        assert_eq!(linear.sample_vec3(2.0), Vec3::new(2.0, 2.0, 0.0));
-        assert_eq!(linear.sample_vec3(9.0), Vec3::new(2.0, 4.0, 0.0));
-        let step = channel(Interp::Step, values);
-        assert_eq!(step.sample_vec3(0.99), Vec3::ZERO);
-        // Cubic with zero tangents passes through its keys.
-        let mut cubic = vec![0.0; 27];
-        cubic[12..15].copy_from_slice(&[2.0, 0.0, 0.0]);
-        let cubic = channel(Interp::CubicSpline, cubic);
-        assert_eq!(cubic.sample_vec3(1.0), Vec3::new(2.0, 0.0, 0.0));
-        assert!((cubic.sample_vec3(0.5).x - 1.0).abs() < 1e-6);
     }
 }

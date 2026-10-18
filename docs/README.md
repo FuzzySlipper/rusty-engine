@@ -72,6 +72,9 @@ The root [README](../README.md) is the repository landing page and
   bodies floating in water.
 - [Limited joints and ragdolls](ragdolls.md): hinges and cones between
   Dynamics bodies, and animated characters that fall as ragdolls.
+- [Contact queries and melee](contact-queries.md): every actor a volume
+  overlaps, ordered per-part contacts of a turning swing, and poses sampled
+  at simulation time.
 - [Implicit topology on ambiguous faces](implicit-topology-diagnosis.md): how
   implicit meshing resolves ambiguous faces.
 

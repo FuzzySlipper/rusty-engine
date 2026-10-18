@@ -1650,6 +1650,7 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         destroy_ragdoll: ragdoll::destroy_ragdoll,
         set_ragdoll_blend: ragdoll::set_ragdoll_blend,
         apply_ragdoll_impulse: ragdoll::apply_ragdoll_impulse,
+        apply_point_impulse: ragdoll::apply_point_impulse,
         read_ragdoll: ragdoll::read_ragdoll,
         create_world,
         destroy_world,
@@ -2786,6 +2787,61 @@ mod tests {
                 .code(),
             "CSHARP_DYNAMICS_TRANSFORM"
         );
+    }
+
+    #[test]
+    fn an_impulse_at_a_point_off_centre_pushes_and_spins_a_body() {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3::default(),
+            })
+            .unwrap();
+        let body = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: body_config(NativeVec3 {
+                    x: 0.0,
+                    y: 2.0,
+                    z: 0.0,
+                }),
+            })
+            .unwrap();
+        // Struck along +X above its centre: it moves along +X and turns
+        // about -Z.
+        let request = NativeDynamicsPointImpulseRequest {
+            body,
+            point: NativeVec3 {
+                x: 0.0,
+                y: 2.5,
+                z: 0.0,
+            },
+            impulse: NativeVec3 {
+                x: 1.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        };
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        let context = (&mut bridge as *mut RuntimeDynamicsBridge).cast();
+        assert_eq!(
+            unsafe { ragdoll::apply_point_impulse(context, request, &mut receipt) },
+            ABI_OK
+        );
+        let struck = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        assert!(
+            struck.linear_velocity.x > 0.0,
+            "{:?}",
+            struck.linear_velocity
+        );
+        assert!(
+            struck.angular_velocity.z < 0.0,
+            "{:?}",
+            struck.angular_velocity
+        );
+        bridge.destroy_body(body).unwrap();
+        assert!(bridge.apply_point_impulse(request).is_err());
     }
 
     #[test]

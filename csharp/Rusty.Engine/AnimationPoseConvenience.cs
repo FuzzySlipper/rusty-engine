@@ -45,3 +45,51 @@ public static class AnimationJoints
         throw new ArgumentException($"the rig has no joint '{id}'", nameof(id));
     }
 }
+
+public readonly partial record struct AnimationPoseSampleRequest
+{
+    /// <summary>
+    /// <paramref name="instance"/>'s joints with <paramref name="clip"/> at
+    /// <paramref name="time"/> (a fraction of the clip when
+    /// <paramref name="normalized"/>, otherwise seconds), its pose controls
+    /// applied, the instance placed at <paramref name="placement"/>: hit
+    /// shapes and held items where the clip puts them at simulation time.
+    /// </summary>
+    public static AnimationPoseSampleRequest OfClip(
+        AnimationInstance instance,
+        string clip,
+        float time,
+        Transform placement,
+        bool normalized = true,
+        bool applyPoseControls = true) =>
+        new(instance, clip, time, string.Empty, 0, 0, normalized, placement, applyPoseControls);
+
+    /// <summary>
+    /// <paramref name="clip"/> at <paramref name="time"/> blended toward
+    /// <paramref name="blendClip"/> at <paramref name="blendTime"/> by
+    /// <paramref name="blendWeight"/>, as a two-clip graph state blends them.
+    /// </summary>
+    public static AnimationPoseSampleRequest OfBlend(
+        AnimationInstance instance,
+        string clip,
+        float time,
+        string blendClip,
+        float blendTime,
+        float blendWeight,
+        Transform placement,
+        bool normalized = true,
+        bool applyPoseControls = true) =>
+        new(instance, clip, time, blendClip, blendTime, blendWeight, normalized, placement, applyPoseControls);
+}
+
+public readonly partial record struct AnimationModelPoseSampleRequest
+{
+    /// <summary>A mesh resource's joints with <paramref name="clip"/> at <paramref name="time"/>, without an instance or controls: an empty clip samples the rest pose.</summary>
+    public static AnimationModelPoseSampleRequest OfClip(
+        RenderResource resource,
+        string clip,
+        float time,
+        Transform placement,
+        bool normalized = true) =>
+        new(resource, clip, time, string.Empty, 0, 0, normalized, placement);
+}

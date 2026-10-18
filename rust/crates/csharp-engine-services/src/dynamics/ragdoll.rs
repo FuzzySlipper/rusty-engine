@@ -353,6 +353,21 @@ impl RuntimeDynamicsBridge {
             .map_err(solver_error("CSHARP_RAGDOLL"))
     }
 
+    pub(super) fn apply_point_impulse(
+        &mut self,
+        request: NativeDynamicsPointImpulseRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let world = self.active_body(request.body.value)?;
+        self.active_world_mut(world)?
+            .solver
+            .apply_impulse_at_point(
+                DynamicsBodyId(request.body.value),
+                vec3_f64(native_vec3_value(request.point)),
+                vec3_f64(native_vec3_value(request.impulse)),
+            )
+            .map_err(solver_error("CSHARP_DYNAMICS_IMPULSE"))
+    }
+
     fn read_ragdoll(
         &mut self,
         handle: NativeDynamicsRagdollHandle,
@@ -485,6 +500,17 @@ pub(super) unsafe extern "C" fn apply_ragdoll_impulse(
     let mut done = ();
     ragdoll_call(context, receipt, &mut done, |bridge| {
         bridge.apply_ragdoll_impulse(request)
+    })
+}
+
+pub(super) unsafe extern "C" fn apply_point_impulse(
+    context: *mut c_void,
+    request: NativeDynamicsPointImpulseRequest,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    let mut done = ();
+    ragdoll_call(context, receipt, &mut done, |bridge| {
+        bridge.apply_point_impulse(request)
     })
 }
 

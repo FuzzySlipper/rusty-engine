@@ -21,6 +21,7 @@ members = [
     "rust/crates/authored-scene",
     "rust/crates/asset-catalog",
     "rust/crates/render-model",
+    "rust/crates/animation-pose",
     "rust/crates/render-presentation",
     "rust/crates/render-audio",
     "rust/crates/render-projection",
@@ -74,6 +75,7 @@ authored-scene = { path = "rust/crates/authored-scene" }
 asset-catalog = { path = "rust/crates/asset-catalog" }
 engine-spatial = { path = "rust/crates/engine-spatial" }
 render-model = { path = "rust/crates/render-model" }
+animation-pose = { path = "rust/crates/animation-pose" }
 render-presentation = { path = "rust/crates/render-presentation" }
 render-audio = { path = "rust/crates/render-audio" }
 render-projection = { path = "rust/crates/render-projection" }

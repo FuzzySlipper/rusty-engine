@@ -26,7 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Vec3};
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshClipPose, AnimatedMeshInspection,
     AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, AnimatedMeshPlaybackTimeline,
@@ -39,7 +39,7 @@ use render_presentation::{AnimationControllerProjectionState, AnimationProjectio
 
 use crate::apply::{MapSlot, MaterialMaps, MaterialParams};
 use crate::convert;
-use crate::glb::{self, GlbAlpha, GlbClip, GlbModel, Path, Trs};
+use crate::glb::{self, GlbAlpha, GlbClip, GlbModel, Trs};
 use crate::pipelines::{EXTRA_VERTEX_FLOATS, VERTEX_FLOATS};
 use crate::resources::ResourceSource;
 use crate::tables::{Aabb, GpuMesh, MaterialRef, NodeKind, Topology};
@@ -242,7 +242,7 @@ pub(crate) struct AnimatedInstance {
     /// The rest pose has been reported since reporting started.
     rest_reported: bool,
     /// The IK chains of the evaluated pose, when it reports its joints.
-    ik: Vec<crate::pose::IkSolve>,
+    ik: Vec<animation_pose::IkSolve>,
     /// Per-instance skinned vertex buffers, by (node, primitive).
     skinned: HashMap<(u32, u32), GpuMesh>,
     /// The GLB node each of the node row's parts draws, in part order.
@@ -252,14 +252,7 @@ pub(crate) struct AnimatedInstance {
     pub(crate) parameters: BTreeMap<u16, MaterialInstanceParameters>,
 }
 
-/// Resource identity of an admitted GLB (`sha256:<hex>` names `<kind>/<hex>`).
-pub(crate) fn resource_identity(kind: &str, content_hash: Option<&str>) -> Option<String> {
-    let hash = content_hash?;
-    Some(format!(
-        "{kind}/{}",
-        hash.strip_prefix("sha256:").unwrap_or(hash)
-    ))
-}
+pub(crate) use animation_pose::resource_identity;
 
 /// Decode an animated asset's GLB and resolve its clips by descriptor id:
 /// its own clips by name, then clip packs, whose channels bind to the rig by
@@ -274,58 +267,9 @@ pub fn decode_animated_asset(
         .bytes(&identity)
         .ok_or_else(|| format!("resource {identity} is not available"))?;
     let model = glb::decode(&bytes)?;
-    let mut clips = HashMap::new();
-    let names = |model: &GlbModel| -> HashMap<String, usize> {
-        model
-            .clips
-            .iter()
-            .enumerate()
-            .filter_map(|(index, clip)| clip.name.clone().map(|name| (name, index)))
-            .collect()
-    };
-    let mut own = decode_clips(&model);
-    let own_names = names(&model);
-    for descriptor in &asset.clips {
-        let name = descriptor.name.as_deref().unwrap_or(&descriptor.id);
-        if let Some(clip) = own_names.get(name).and_then(|index| own[*index].take()) {
-            clips.insert(descriptor.id.clone(), clip);
-        }
-    }
-    // Clip packs share the rig; their channels bind by node name.
-    let by_name = channel_targets(&model);
-    for pack in &asset.clip_packs {
-        let identity = resource_identity("clip-pack-resource", Some(pack.content_hash.as_str()))
-            .ok_or_else(|| format!("clip pack {} has no content hash", pack.asset))?;
-        let bytes = resources
-            .bytes(&identity)
-            .ok_or_else(|| format!("resource {identity} is not available"))?;
-        let pack_model = glb::decode(&bytes)?;
-        let pack_names = names(&pack_model);
-        let mut pack_clips = decode_clips(&pack_model);
-        for descriptor in &pack.clips {
-            let name = descriptor.name.as_deref().unwrap_or(&descriptor.id);
-            let Some(mut clip) = pack_names
-                .get(name)
-                .and_then(|index| pack_clips[*index].take())
-            else {
-                continue;
-            };
-            clip.channels.retain_mut(|channel| {
-                let target = pack_model.nodes[channel.node]
-                    .name
-                    .as_deref()
-                    .and_then(|name| by_name.get(name));
-                match target {
-                    Some(node) => {
-                        channel.node = *node;
-                        true
-                    }
-                    None => false,
-                }
-            });
-            clips.insert(descriptor.id.clone(), clip);
-        }
-    }
+    let clips = animation_pose::asset_clips(asset, &model, model.clips.clone(), |identity| {
+        resources.bytes(identity)
+    })?;
     Ok((model, clips))
 }
 
@@ -633,12 +577,7 @@ impl Renderer {
             }
         }
         let joints = joint_nodes(&model);
-        let rig = asset
-            .rig
-            .iter()
-            .flat_map(|rig| &rig.joints)
-            .map(|joint| joints.get(&joint.id).copied())
-            .collect();
+        let rig = animation_pose::rig_nodes(asset, &model);
         let slots = asset
             .embedded_material_slots
             .iter()
@@ -1064,24 +1003,10 @@ impl Renderer {
             ) else {
                 continue;
             };
-            let joints = |pose: &[Mat4]| {
-                asset
-                    .rig
-                    .iter()
-                    .map(|node| {
-                        let model = node
-                            .and_then(|node| pose.get(node).copied())
-                            .unwrap_or(Mat4::IDENTITY);
-                        PosedJoint {
-                            model: convert::transform_of(model),
-                            world: convert::transform_of(world * model),
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            };
+            let joints = |pose: &[Mat4]| animation_pose::posed_joints(&asset.rig, pose, world);
             let rest = (!instance.rest_reported).then(|| {
                 let locals: Vec<Trs> = asset.model.nodes.iter().map(|node| node.rest).collect();
-                joints(&crate::pose::compose(&asset.model, &locals))
+                joints(&animation_pose::compose(&asset.model, &locals))
             });
             instance.rest_reported = true;
             let ik_chains = instance
@@ -1193,10 +1118,10 @@ impl Renderer {
         if !record {
             instance.ik.clear();
         }
-        let pose = crate::pose::controlled(
+        let pose = animation_pose::controlled(
             &asset.model,
             &asset.rig,
-            sample_locals(&asset.model, &asset.clips, &actions),
+            animation_pose::sample_locals(&asset.model, &asset.clips, &actions),
             &instance.controls,
             world,
             record.then_some(&mut instance.ik),
@@ -1888,106 +1813,6 @@ fn wrap(time: f64, duration: f32, mode: AnimationLoopMode) -> f32 {
     wrapped as f32
 }
 
-/// Local TRS per node after blending the weighted clips over the rest pose.
-fn sample_locals(model: &GlbModel, clips: &[GlbClip], actions: &[(usize, f32, f32)]) -> Vec<Trs> {
-    #[derive(Clone, Copy)]
-    struct Mix<T> {
-        value: T,
-        weight: f32,
-    }
-    let count = model.nodes.len();
-    let mut translation: Vec<Option<Mix<Vec3>>> = vec![None; count];
-    let mut rotation: Vec<Option<Mix<Quat>>> = vec![None; count];
-    let mut scale: Vec<Option<Mix<Vec3>>> = vec![None; count];
-    for (clip, time, weight) in actions {
-        if *weight <= 0.0 {
-            continue;
-        }
-        let Some(clip) = clips.get(*clip) else {
-            continue;
-        };
-        for channel in &clip.channels {
-            match channel.path {
-                Path::Translation | Path::Scale => {
-                    let value = channel.sample_vec3(*time);
-                    let slot = if channel.path == Path::Translation {
-                        &mut translation[channel.node]
-                    } else {
-                        &mut scale[channel.node]
-                    };
-                    *slot = Some(match *slot {
-                        None => Mix {
-                            value,
-                            weight: *weight,
-                        },
-                        Some(mix) => Mix {
-                            value: mix.value.lerp(value, weight / (mix.weight + weight)),
-                            weight: mix.weight + weight,
-                        },
-                    });
-                }
-                Path::Rotation => {
-                    let value = channel.sample_quat(*time);
-                    let slot = &mut rotation[channel.node];
-                    *slot = Some(match *slot {
-                        None => Mix {
-                            value,
-                            weight: *weight,
-                        },
-                        Some(mix) => Mix {
-                            value: mix.value.slerp(value, weight / (mix.weight + weight)),
-                            weight: mix.weight + weight,
-                        },
-                    });
-                }
-            }
-        }
-    }
-    let settle_vec = |rest: Vec3, mix: Option<Mix<Vec3>>| match mix {
-        None => rest,
-        Some(mix) if mix.weight < 1.0 => rest.lerp(mix.value, mix.weight),
-        Some(mix) => mix.value,
-    };
-    model
-        .nodes
-        .iter()
-        .enumerate()
-        .map(|(index, node)| Trs {
-            translation: settle_vec(node.rest.translation, translation[index]),
-            rotation: match rotation[index] {
-                None => node.rest.rotation,
-                Some(mix) if mix.weight < 1.0 => node.rest.rotation.slerp(mix.value, mix.weight),
-                Some(mix) => mix.value,
-            },
-            scale: settle_vec(node.rest.scale, scale[index]),
-        })
-        .collect()
-}
-
-fn decode_clips(model: &GlbModel) -> Vec<Option<GlbClip>> {
-    model
-        .clips
-        .iter()
-        .map(|clip| {
-            Some(GlbClip {
-                name: clip.name.clone(),
-                duration: clip.duration,
-                channels: clip
-                    .channels
-                    .iter()
-                    .map(|channel| glb::Channel {
-                        node: channel.node,
-                        path: channel.path,
-                        interpolation: channel.interpolation,
-                        times: channel.times.clone(),
-                        values: channel.values.clone(),
-                    })
-                    .collect(),
-            })
-        })
-        .collect()
-}
-
 /// The second vertex stream a primitive draws with, when its material reads
 /// tangents (a normal map) or `TEXCOORD_1`: tangent (xyz, handedness) and
 /// uv1 per vertex. Without TANGENT a normal-mapped primitive has MikkTSpace
@@ -2069,89 +1894,15 @@ fn vertex_bounds(vertices: &[f32]) -> Aabb {
     bounds
 }
 
-/// Where a clip pack's channels bind in the primary model, by node name.
-/// `asset-import` approved the pack against the primary's rig, whose joint
-/// identities are skin joint node names (unique among joints, never
-/// synthesized). A skin joint therefore takes its name over any other node
-/// that shares it; other named nodes bind by name as well.
-/// The skin joints retained children attach to, by name: a name shared by
-/// two different joints names neither. Nodes that are not skin joints never
-/// take a joint's name. Rendering and GLB export attach by this rule.
+/// The skin joints retained children attach to, by name
+/// ([`animation_pose::joint_nodes`]).
 pub fn joint_nodes(model: &GlbModel) -> HashMap<String, usize> {
-    let mut joint_counts: HashMap<String, Vec<usize>> = HashMap::new();
-    for skin in &model.skins {
-        for joint in &skin.joints {
-            if let Some(name) = &model.nodes[*joint].name {
-                let entry = joint_counts.entry(name.clone()).or_default();
-                if !entry.contains(joint) {
-                    entry.push(*joint);
-                }
-            }
-        }
-    }
-    joint_counts
-        .into_iter()
-        .filter_map(|(name, nodes)| (nodes.len() == 1).then(|| (name, nodes[0])))
-        .collect()
-}
-
-fn channel_targets(model: &GlbModel) -> HashMap<&str, usize> {
-    let mut targets: HashMap<&str, usize> = model
-        .nodes
-        .iter()
-        .enumerate()
-        .filter_map(|(index, node)| node.name.as_deref().map(|name| (name, index)))
-        .collect();
-    for &joint in model.skins.iter().flat_map(|skin| skin.joints.iter()) {
-        if let Some(name) = model.nodes[joint].name.as_deref() {
-            targets.insert(name, joint);
-        }
-    }
-    targets
+    animation_pose::joint_nodes(model)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn node(name: &str, mesh: Option<usize>) -> glb::GlbNode {
-        glb::GlbNode {
-            name: Some(name.to_owned()),
-            parent: None,
-            rest: Trs {
-                translation: Vec3::ZERO,
-                rotation: Quat::IDENTITY,
-                scale: Vec3::ONE,
-            },
-            mesh,
-            skin: None,
-        }
-    }
-
-    #[test]
-    fn clip_pack_channels_bind_to_the_skin_joint_that_shares_a_name() {
-        // The joint comes first and a mesh node reuses its name; binding by
-        // "last named node wins" would move the joint's channels to the mesh.
-        let model = GlbModel {
-            nodes: vec![
-                node("RightHand", None),
-                node("RightHand", Some(0)),
-                node("Hips", None),
-            ],
-            order: vec![0, 1, 2],
-            meshes: Vec::new(),
-            skins: vec![glb::GlbSkin {
-                joints: vec![0, 2],
-                inverse_binds: vec![Mat4::IDENTITY; 2],
-            }],
-            clips: Vec::new(),
-            materials: Vec::new(),
-            textures: Vec::new(),
-        };
-        let targets = channel_targets(&model);
-        assert_eq!(targets["RightHand"], 0);
-        assert_eq!(targets["Hips"], 2);
-    }
 
     #[test]
     fn loop_modes_wrap_clip_time() {

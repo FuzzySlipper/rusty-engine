@@ -124,6 +124,15 @@ is drawn. `ReadJointPose` returns the latest report:
 `Reported` stays false until the first report. Reports need the renderer, so
 the headless test host (`EngineTestHost`) has none.
 
+## Sampling at simulation time
+
+`SampleJointPose` poses a clip time now, without the renderer and without
+waiting a call. It uses the evaluator the renderer draws with, so the same
+clip time, controls and placement give the joints `ReadJointPose` would
+report. Hit shapes and held items can then follow the bones during the update
+that decides them, in the test host as well. See
+[contact queries](contact-queries.md#pose-sampling).
+
 A reporting instance is evaluated, and its CPU skinning runs, on every call
 instead of only on frames that show a change. Turn reporting off when nothing
 reads the pose.

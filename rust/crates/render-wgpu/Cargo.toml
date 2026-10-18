@@ -8,6 +8,8 @@ workspace = true
 
 [dependencies]
 render-model.workspace = true
+# The pose evaluator, shared with simulation-time sampling.
+animation-pose.workspace = true
 render-host-contracts.workspace = true
 render-presentation.workspace = true
 render-video.workspace = true

@@ -9,8 +9,24 @@ use render_model::{
     AnimatedMeshPose, JointOverride, PlacedJoint, PlacedPoseLayer, PoseSpace, TwoBoneIkConstraint,
 };
 
-use crate::convert;
-use crate::glb::{GlbModel, Trs};
+use crate::{Hierarchy, Trs};
+
+/// A presentation position or direction.
+fn vec3(value: [f32; 3]) -> Vec3 {
+    Vec3::from_array(value)
+}
+
+/// A presentation rotation as `[x, y, z, w]`, normalized. A zero or
+/// non-finite one is the identity.
+pub(crate) fn rotation_of(value: [f32; 4]) -> Quat {
+    let rotation = Quat::from_array(value);
+    let length_squared = rotation.length_squared();
+    if length_squared.is_finite() && length_squared > f32::MIN_POSITIVE {
+        rotation.normalize()
+    } else {
+        Quat::IDENTITY
+    }
+}
 
 /// Lengths below this are degenerate (metres, or the rig's units).
 const DEGENERATE: f32 = 1e-6;
@@ -20,11 +36,11 @@ const REACH_MARGIN: f32 = 1e-4;
 
 /// Instance-space transforms of `locals`, parents first. Nodes outside the
 /// scene keep the identity.
-pub(crate) fn compose(model: &GlbModel, locals: &[Trs]) -> Vec<Mat4> {
-    let mut posed = vec![Mat4::IDENTITY; model.nodes.len()];
-    for &index in &model.order {
+pub fn compose<H: Hierarchy + ?Sized>(model: &H, locals: &[Trs]) -> Vec<Mat4> {
+    let mut posed = vec![Mat4::IDENTITY; model.node_count()];
+    for &index in model.order() {
         let local = locals[index].matrix();
-        posed[index] = match model.nodes[index].parent {
+        posed[index] = match model.parent(index) {
             Some(parent) => posed[parent] * local,
             None => local,
         };
@@ -34,22 +50,22 @@ pub(crate) fn compose(model: &GlbModel, locals: &[Trs]) -> Vec<Mat4> {
 
 /// One two-bone IK chain as its solve saw it, for the joint report.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) struct IkSolve {
+pub struct IkSolve {
     /// The target in instance space.
-    pub(crate) target: Vec3,
+    pub target: Vec3,
     /// The chain's end node, when the rig names it.
-    pub(crate) end: Option<usize>,
+    pub end: Option<usize>,
     /// The target lay beyond the chain's reach and the solve straightened
     /// the chain toward it.
-    pub(crate) straightened: bool,
+    pub straightened: bool,
 }
 
 /// The sampled `locals` under `pose`: IK in order, then overrides, then
 /// layers, composed. `rig` maps rig joint indices to nodes; `world` places the
 /// instance, for `World` values. A joint the rig does not name is skipped.
 /// `solves`, when given, receives each IK chain in order.
-pub(crate) fn controlled(
-    model: &GlbModel,
+pub fn controlled<H: Hierarchy + ?Sized>(
+    model: &H,
     rig: &[Option<usize>],
     mut locals: Vec<Trs>,
     pose: &AnimatedMeshPose,
@@ -67,10 +83,10 @@ pub(crate) fn controlled(
     for ik in &pose.two_bone_ik {
         let (target, pole) = match ik.space {
             PoseSpace::World => (
-                to_model.transform_point3(convert::vec3(ik.target)),
-                to_model.transform_point3(convert::vec3(ik.pole)),
+                to_model.transform_point3(vec3(ik.target)),
+                to_model.transform_point3(vec3(ik.pole)),
             ),
-            _ => (convert::vec3(ik.target), convert::vec3(ik.pole)),
+            _ => (vec3(ik.target), vec3(ik.pole)),
         };
         let end = node(ik.end);
         let straightened = match (node(ik.root), node(ik.mid), end) {
@@ -103,16 +119,16 @@ pub(crate) fn controlled(
 /// Each node's overrides in list order, parents first, each at its own
 /// weight. A placing value moves the joint from where the pose below puts it
 /// toward its placement.
-fn evaluate(
-    model: &GlbModel,
+fn evaluate<H: Hierarchy + ?Sized>(
+    model: &H,
     locals: &[Trs],
     by_node: &HashMap<usize, Vec<&JointOverride>>,
     world: Mat4,
     to_model: Mat4,
 ) -> Vec<Mat4> {
-    let mut posed = vec![Mat4::IDENTITY; model.nodes.len()];
-    for &index in &model.order {
-        let parent = model.nodes[index].parent.map(|parent| posed[parent]);
+    let mut posed = vec![Mat4::IDENTITY; model.node_count()];
+    for &index in model.order() {
+        let parent = model.parent(index).map(|parent| posed[parent]);
         let compose = |local: &Trs| parent.map_or(local.matrix(), |parent| parent * local.matrix());
         let mut local = locals[index];
         let mut placed = compose(&local);
@@ -133,8 +149,8 @@ fn evaluate(
 /// `posed` with `layer`'s joints placed, mixed in by the layer's weight as
 /// one pose: each placed joint's transform relative to its parent moves from
 /// its value in `posed` toward its value with every layer joint placed.
-fn blend_layer(
-    model: &GlbModel,
+fn blend_layer<H: Hierarchy + ?Sized>(
+    model: &H,
     posed: &[Mat4],
     layer: &PlacedPoseLayer,
     node: &impl Fn(u32) -> Option<usize>,
@@ -146,27 +162,27 @@ fn blend_layer(
         .filter_map(|joint| Some((node(joint.joint)?, joint)))
         .collect();
     let relative = |posed: &[Mat4], index: usize| {
-        trs(match model.nodes[index].parent {
+        trs(match model.parent(index) {
             Some(parent) => posed[parent].inverse() * posed[index],
             None => posed[index],
         })
     };
     // The pose below, as transforms relative to each parent.
-    let below: Vec<Trs> = (0..model.nodes.len())
+    let below: Vec<Trs> = (0..model.node_count())
         .map(|index| relative(posed, index))
         .collect();
     // The same pose with every layer joint placed.
-    let mut placed = vec![Mat4::IDENTITY; model.nodes.len()];
-    for &index in &model.order {
-        let parent = model.nodes[index].parent.map(|parent| placed[parent]);
+    let mut placed = vec![Mat4::IDENTITY; model.node_count()];
+    for &index in model.order() {
+        let parent = model.parent(index).map(|parent| placed[parent]);
         let local = below[index].matrix();
         placed[index] = match placements.get(&index) {
             Some(joint) => {
                 let (scale, _, _) = posed[index].to_scale_rotation_translation();
                 let (_, rotation, translation) = (to_model
                     * Mat4::from_rotation_translation(
-                        convert::rotation(joint.rotation),
-                        convert::vec3(joint.translation),
+                        rotation_of(joint.rotation),
+                        vec3(joint.translation),
                     ))
                 .to_scale_rotation_translation();
                 Mat4::from_scale_rotation_translation(scale, rotation, translation)
@@ -175,7 +191,7 @@ fn blend_layer(
         };
     }
     let weight = layer.weight;
-    let blended: Vec<Trs> = (0..model.nodes.len())
+    let blended: Vec<Trs> = (0..model.node_count())
         .map(|index| {
             if !placements.contains_key(&index) {
                 return below[index];
@@ -203,7 +219,7 @@ fn trs(matrix: Mat4) -> Trs {
 
 fn override_local(local: &mut Trs, joint: &JointOverride) {
     if let Some(rotation) = joint.rotation {
-        let rotation = convert::rotation(rotation);
+        let rotation = rotation_of(rotation);
         let target = if joint.additive {
             local.rotation * rotation
         } else {
@@ -212,7 +228,7 @@ fn override_local(local: &mut Trs, joint: &JointOverride) {
         local.rotation = local.rotation.slerp(target, joint.weight).normalize();
     }
     if let Some(translation) = joint.translation {
-        let translation = convert::vec3(translation);
+        let translation = vec3(translation);
         let target = if joint.additive {
             local.translation + translation
         } else {
@@ -237,15 +253,15 @@ fn override_placed(
             let (_, world_rotation, world_translation) =
                 (world * placed).to_scale_rotation_translation();
             let target = Mat4::from_rotation_translation(
-                joint.rotation.map_or(world_rotation, convert::rotation),
-                joint.translation.map_or(world_translation, convert::vec3),
+                joint.rotation.map_or(world_rotation, rotation_of),
+                joint.translation.map_or(world_translation, vec3),
             );
             let (_, rotation, translation) = (to_model * target).to_scale_rotation_translation();
             (rotation, translation)
         }
         _ => (
-            joint.rotation.map_or(rotation, convert::rotation),
-            joint.translation.map_or(translation, convert::vec3),
+            joint.rotation.map_or(rotation, rotation_of),
+            joint.translation.map_or(translation, vec3),
         ),
     };
     let rotation = if joint.rotation.is_some() {
@@ -265,8 +281,8 @@ fn override_placed(
 /// `end` reaches `target`, each by the constraint's weight. `target` and
 /// `pole` are in instance space. Answers whether the target lay beyond
 /// reach, so the chain was straightened toward it.
-fn solve_two_bone(
-    model: &GlbModel,
+fn solve_two_bone<H: Hierarchy + ?Sized>(
+    model: &H,
     locals: &mut [Trs],
     [root, mid, end]: [usize; 3],
     ik: &TwoBoneIkConstraint,
@@ -335,14 +351,20 @@ fn solve_two_bone(
 
 /// Turn `node` by the instance-space rotation `turn` about its own origin,
 /// rewriting its local transform; its descendants follow.
-fn rotate_about(model: &GlbModel, locals: &mut [Trs], posed: &[Mat4], node: usize, turn: Quat) {
+fn rotate_about<H: Hierarchy + ?Sized>(
+    model: &H,
+    locals: &mut [Trs],
+    posed: &[Mat4],
+    node: usize,
+    turn: Quat,
+) {
     let placed = posed[node];
     let pivot = placed.w_axis.truncate();
     let turned = Mat4::from_translation(pivot)
         * Mat4::from_quat(turn)
         * Mat4::from_translation(-pivot)
         * placed;
-    let local = match model.nodes[node].parent {
+    let local = match model.parent(node) {
         Some(parent) => posed[parent].inverse() * turned,
         None => turned,
     };
@@ -357,11 +379,11 @@ fn rotate_about(model: &GlbModel, locals: &mut [Trs], posed: &[Mat4], node: usiz
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::glb::GlbNode;
+    use crate::{Rig, RigNode};
 
     /// A three-joint arm along +X, one unit per bone, with a hand at x = 2.
-    fn arm() -> GlbModel {
-        let node = |name: &str, parent: Option<usize>, x: f32| GlbNode {
+    fn arm() -> Rig {
+        let node = |name: &str, parent: Option<usize>, x: f32| RigNode {
             name: Some(name.to_owned()),
             parent,
             rest: Trs {
@@ -369,25 +391,20 @@ mod tests {
                 rotation: Quat::IDENTITY,
                 scale: Vec3::ONE,
             },
-            mesh: None,
-            skin: None,
         };
-        GlbModel {
+        Rig {
             nodes: vec![
                 node("shoulder", None, 0.0),
                 node("elbow", Some(0), 1.0),
                 node("hand", Some(1), 1.0),
             ],
             order: vec![0, 1, 2],
-            meshes: Vec::new(),
             skins: Vec::new(),
             clips: Vec::new(),
-            materials: Vec::new(),
-            textures: Vec::new(),
         }
     }
 
-    fn rest(model: &GlbModel) -> Vec<Trs> {
+    fn rest(model: &Rig) -> Vec<Trs> {
         model.nodes.iter().map(|node| node.rest).collect()
     }
 
@@ -412,7 +429,7 @@ mod tests {
 
     /// The evaluator without its IK report.
     fn controlled(
-        model: &GlbModel,
+        model: &Rig,
         rig: &[Option<usize>],
         locals: Vec<Trs>,
         pose: &AnimatedMeshPose,

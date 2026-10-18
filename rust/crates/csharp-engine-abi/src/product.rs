@@ -59,6 +59,11 @@ pub type NativeApplyDynamicsRagdollImpulse = unsafe extern "C" fn(
     NativeDynamicsRagdollImpulseRequest,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeApplyDynamicsPointImpulse = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsPointImpulseRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadDynamicsRagdoll = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsRagdollHandle,
@@ -1453,6 +1458,7 @@ pub struct NativeDynamicsApi {
     pub destroy_ragdoll: NativeDestroyDynamicsRagdoll,
     pub set_ragdoll_blend: NativeSetDynamicsRagdollBlend,
     pub apply_ragdoll_impulse: NativeApplyDynamicsRagdollImpulse,
+    pub apply_point_impulse: NativeApplyDynamicsPointImpulse,
     pub read_ragdoll: NativeReadDynamicsRagdoll,
     pub create_world: NativeCreateDynamicsWorld,
     pub destroy_world: NativeDestroyDynamicsWorld,
@@ -1745,6 +1751,8 @@ pub struct NativeAnimationApi {
     pub read: NativeReadAnimation,
     pub read_realization: NativeReadAnimationRealization,
     pub read_joint_pose: NativeReadAnimationJointPose,
+    pub sample_joint_pose: NativeSampleAnimationJointPose,
+    pub sample_model_joint_pose: NativeSampleAnimationModelJointPose,
     pub query_model_surface: NativeQueryModelSurface,
     pub cast_model_rays: NativeCastModelRays,
 }

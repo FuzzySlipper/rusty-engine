@@ -392,6 +392,57 @@ pub struct NativeAnimationJointPoseResult {
     pub reported: bool,
 }
 
+/// Samples an animation instance's joints now, at simulation time and
+/// without a renderer, through the evaluator the renderer draws with: `clip`
+/// at `time`, blended toward `blend_clip` at `blend_time` by `blend_weight`
+/// (0 to 1; ignored without a `blend_clip`), over the rest pose. Clips are
+/// descriptor ids as playback names them; an empty `clip` with no
+/// `blend_clip` samples the rest pose. `normalized` reads both times as
+/// fractions of their clip's duration (as `Sample` playback does), otherwise
+/// as seconds, clamped to the clip. With `apply_pose_controls` the
+/// instance's `SetPose` controls (IK, overrides) and ragdoll layer apply
+/// after the clips. `placement` places the instance in the scene for `World`
+/// controls and the world joints. Nothing is retained or drawn.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationPoseSampleRequest {
+    pub instance: NativeAnimationInstanceHandle,
+    pub clip: NativeUtf8Slice,
+    pub time: f32,
+    pub blend_clip: NativeUtf8Slice,
+    pub blend_time: f32,
+    pub blend_weight: f32,
+    pub normalized: bool,
+    pub placement: NativeTransform,
+    pub apply_pose_controls: bool,
+}
+
+/// Samples an animated mesh resource's joints (an `OpenAnimatedMesh`
+/// resource) as `NativeAnimationPoseSampleRequest` samples an instance's,
+/// without an instance or pose controls.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationModelPoseSampleRequest {
+    pub resource: NativeRenderResourceHandle,
+    pub clip: NativeUtf8Slice,
+    pub time: f32,
+    pub blend_clip: NativeUtf8Slice,
+    pub blend_time: f32,
+    pub blend_weight: f32,
+    pub normalized: bool,
+    pub placement: NativeTransform,
+}
+
+/// The sampled joints in `ReadJoints` order, in the instance's space and in
+/// the scene, as `ReadJointPose` reports a drawn pose. `joints` points into
+/// Animation bridge storage until the next call on the same context.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationPoseSampleResult {
+    pub joints: *const NativeJointPose,
+    pub joints_len: usize,
+}
+
 /// Starts a retained, explicitly assembled non-legacy animation graph.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -663,5 +714,17 @@ pub type NativeReadAnimationJointPose = unsafe extern "C" fn(
     *mut std::ffi::c_void,
     NativeAnimationInstanceHandle,
     *mut NativeAnimationJointPoseResult,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSampleAnimationJointPose = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeAnimationPoseSampleRequest,
+    *mut NativeAnimationPoseSampleResult,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSampleAnimationModelJointPose = unsafe extern "C" fn(
+    *mut std::ffi::c_void,
+    *const NativeAnimationModelPoseSampleRequest,
+    *mut NativeAnimationPoseSampleResult,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
