@@ -96,6 +96,8 @@ may use any of this and runs fully in a browser.
 | `<select>`, date picker | Work: the popup is drawn over the page. |
 | `<dialog>` with `showModal()` | Works. |
 | `title` tooltips | Not shown. |
+| Image cursors (`cursor: url(...) x y, auto`) | Shown with their hotspot, scaled to the window's display scale. A held pointer lock hides them, as it hides any cursor. |
+| `cursor: none` | Hides the native cursor while the pointer is over that element. |
 | Context menu | `contextmenu` fires; no native menu appears. |
 | Download links | Nothing downloads. |
 | Clipboard | `navigator.clipboard.writeText` works; `readText` is denied. |

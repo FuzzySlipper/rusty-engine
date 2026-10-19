@@ -142,4 +142,5 @@ debug = "line-tables-only"
 
 [patch.crates-io]
 fidget-mesh = { path = "rust/vendor/fidget-mesh" }
+welding = { path = "rust/vendor/welding" }
 winit = { path = "rust/vendor/winit" }

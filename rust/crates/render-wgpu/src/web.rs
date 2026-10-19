@@ -19,8 +19,8 @@ use std::time::Instant;
 
 use welding::{CefSurfaceProducer, HostWgpuContext, ImportedTexture, PopupRect};
 pub use welding::{
-    CursorShape, DragOperations, EventModifiers, KeyEvent, KeyEventKind, MouseAction, MouseButton,
-    MouseEvent, NavigationEvent,
+    CursorImage, CursorShape, DragOperations, EventModifiers, KeyEvent, KeyEventKind, MouseAction,
+    MouseButton, MouseEvent, NavigationEvent,
 };
 
 use crate::{FrameStats, Gpu, Renderer, SurfaceFrame, WindowSurface};

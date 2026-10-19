@@ -255,14 +255,15 @@ impl Shell {
         Ok(())
     }
 
-    fn frame(&mut self) {
+    fn frame(&mut self, event_loop: &ActiveEventLoop) {
         let Some(open) = &mut self.window else { return };
         #[cfg(feature = "web-overlay")]
         if let Some(ui) = &mut open.ui {
-            ui.pump(&open.window);
+            ui.pump(&open.window, event_loop);
             ui.flush_motion();
             open.last_pump = Instant::now();
         }
+        let _ = event_loop;
         // The vsync wait happens here, before the scene is taken, so a product
         // call applying its changes never waits for the display.
         let acquiring = Instant::now();
@@ -385,7 +386,7 @@ impl ApplicationHandler for Shell {
                     | WindowEvent::MouseInput { .. }
                     | WindowEvent::MouseWheel { .. }
             ) {
-                ui.pump(&open.window);
+                ui.pump(&open.window, event_loop);
                 open.last_pump = Instant::now();
             }
         }
@@ -408,12 +409,12 @@ impl ApplicationHandler for Shell {
         }
         let Some(open) = &mut self.window else { return };
         if Instant::now() >= open.next_frame {
-            self.frame();
+            self.frame(event_loop);
         } else {
             #[cfg(feature = "web-overlay")]
             if let Some(ui) = &mut open.ui {
                 if open.last_pump.elapsed() >= UI_PUMP_INTERVAL {
-                    ui.pump(&open.window);
+                    ui.pump(&open.window, event_loop);
                     open.last_pump = Instant::now();
                 }
             }

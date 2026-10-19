@@ -7987,8 +7987,6 @@ dependencies = [
 [[package]]
 name = "welding"
 version = "0.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6fc43b8b7f4f09b452ef9699a0dd23c9c6cc1cf874374c39a9faa1f6e0bff085"
 dependencies = [
  "base64 0.22.1",
  "cef",

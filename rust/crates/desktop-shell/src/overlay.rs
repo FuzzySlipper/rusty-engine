@@ -1,19 +1,21 @@
 //! The UI page over the scene: Chromium, window input into the page, and the
 //! shell-provided pointer lock.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use render_wgpu::web::{
-    CursorShape, EventModifiers, KeyEvent, KeyEventKind, MouseAction, MouseButton, MouseEvent,
-    NavigationEvent, WebOverlay, WebOverlayStats, WebRuntime, WebRuntimeConfig,
+    CursorImage, CursorShape, EventModifiers, KeyEvent, KeyEventKind, MouseAction, MouseButton,
+    MouseEvent, NavigationEvent, WebOverlay, WebOverlayStats, WebRuntime, WebRuntimeConfig,
 };
 use render_wgpu::Gpu;
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, MouseScrollDelta, WindowEvent},
+    event_loop::ActiveEventLoop,
     keyboard::{KeyCode, ModifiersState, PhysicalKey},
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
-    window::{CursorGrabMode, CursorIcon, Window},
+    window::{Cursor, CursorGrabMode, CursorIcon, CustomCursor, Window},
 };
 
 use crate::keys;
@@ -144,6 +146,9 @@ const PAGE_SHIM: &str = r#"(() => {
 /// Physical pixels per wheel line, as Chromium scrolls on Linux.
 const WHEEL_PIXELS_PER_LINE: f64 = 53.0;
 
+/// Image cursors kept built; a page that cycles through more starts over.
+const IMAGE_CURSOR_CACHE: usize = 32;
+
 pub(crate) struct UiOverlay {
     // The page goes before the runtime that hosts it.
     page: WebOverlay,
@@ -162,6 +167,11 @@ pub(crate) struct UiOverlay {
     /// once it exists.
     focus_pending: bool,
     motion: (f64, f64),
+    /// What the page asks the native cursor to show; `None` hides it. A lock
+    /// hides the cursor over this and shows it again on release.
+    page_cursor: Option<Cursor>,
+    /// Image cursors built so far, by content and window scale.
+    image_cursors: HashMap<(CursorImage, u64), CustomCursor>,
 }
 
 impl UiOverlay {
@@ -194,6 +204,8 @@ impl UiOverlay {
             focused: window.has_focus(),
             focus_pending,
             motion: (0.0, 0.0),
+            page_cursor: Some(CursorIcon::Default.into()),
+            image_cursors: HashMap::new(),
         })
     }
 
@@ -210,7 +222,7 @@ impl UiOverlay {
     }
 
     /// Chromium's work and the page's requests.
-    pub(crate) fn pump(&mut self, window: &Window) {
+    pub(crate) fn pump(&mut self, window: &Window, event_loop: &ActiveEventLoop) {
         self.runtime.pump();
         if self.focus_pending {
             self.focus_pending = self.page.focus().is_err();
@@ -260,10 +272,74 @@ impl UiOverlay {
             }
         }
         while let Some(shape) = self.page.poll_cursor() {
+            self.page_cursor = match shape {
+                CursorShape::Custom(name) if name == "none" => None,
+                CursorShape::Image(image) => Some(
+                    self.image_cursor(image, window.scale_factor(), event_loop)
+                        .map_or(CursorIcon::Default.into(), Cursor::Custom),
+                ),
+                shape => Some(cursor_icon(&shape).into()),
+            };
             if !self.grabbed {
-                window.set_cursor(cursor_icon(&shape));
+                self.show_page_cursor(window);
             }
         }
+    }
+
+    fn show_page_cursor(&self, window: &Window) {
+        match &self.page_cursor {
+            Some(cursor) => {
+                window.set_cursor(cursor.clone());
+                window.set_cursor_visible(true);
+            }
+            None => window.set_cursor_visible(false),
+        }
+    }
+
+    /// Chromium draws an image cursor at its CSS size; the window shows it at
+    /// the window's scale. `None` if the platform refuses the image.
+    fn image_cursor(
+        &mut self,
+        image: CursorImage,
+        window_scale: f64,
+        event_loop: &ActiveEventLoop,
+    ) -> Option<CustomCursor> {
+        let key = (image, window_scale.to_bits());
+        if let Some(cursor) = self.image_cursors.get(&key) {
+            return Some(cursor.clone());
+        }
+        let image = &key.0;
+        let factor = window_scale / f64::from(image.scale);
+        let source = if (factor - 1.0).abs() < 0.01 {
+            CustomCursor::from_rgba(
+                image.rgba.to_vec(),
+                u16::try_from(image.width).ok()?,
+                u16::try_from(image.height).ok()?,
+                u16::try_from(image.hotspot_x).ok()?,
+                u16::try_from(image.hotspot_y).ok()?,
+            )
+        } else {
+            let scaled = |n: u32| ((f64::from(n) * factor).round() as u32).max(1);
+            let (width, height) = (scaled(image.width), scaled(image.height));
+            CustomCursor::from_rgba(
+                resample(image, width, height),
+                u16::try_from(width).ok()?,
+                u16::try_from(height).ok()?,
+                u16::try_from((f64::from(image.hotspot_x) * factor) as u32)
+                    .ok()?
+                    .min(width as u16 - 1),
+                u16::try_from((f64::from(image.hotspot_y) * factor) as u32)
+                    .ok()?
+                    .min(height as u16 - 1),
+            )
+        }
+        .ok()?;
+        let cursor = event_loop.create_custom_cursor(source);
+        if self.image_cursors.len() >= IMAGE_CURSOR_CACHE {
+            self.image_cursors.clear();
+        }
+        self.image_cursors.insert(key, cursor.clone());
+        Some(cursor)
     }
 
     /// Hand the page this frame's locked mouse motion, once per frame.
@@ -327,7 +403,7 @@ impl UiOverlay {
             return;
         }
         let _ = window.set_cursor_grab(CursorGrabMode::None);
-        window.set_cursor_visible(true);
+        self.show_page_cursor(window);
         self.grabbed = false;
         self.recentring = false;
         // The page asked for confinement before the lock's end arrived: the
@@ -549,6 +625,20 @@ fn cursor_icon(shape: &CursorShape) -> CursorIcon {
         CursorShape::ZoomOut => CursorIcon::ZoomOut,
         _ => CursorIcon::Default,
     }
+}
+
+/// Nearest-neighbour scaling of an image cursor's RGBA pixels.
+fn resample(image: &CursorImage, width: u32, height: u32) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    for y in 0..height {
+        let source_y = (y * image.height / height) as usize;
+        for x in 0..width {
+            let source_x = (x * image.width / width) as usize;
+            let at = (source_y * image.width as usize + source_x) * 4;
+            rgba.extend_from_slice(&image.rgba[at..at + 4]);
+        }
+    }
+    rgba
 }
 
 fn is_x11(window: &Window) -> bool {
