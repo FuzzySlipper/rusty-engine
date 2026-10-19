@@ -7,6 +7,11 @@
 //!
 //! A spinning cube stands in for a product's scene; the page is any URL,
 //! normally a UI probe. The shell report prints on exit.
+//!
+//! Linux only. On Windows libcef stops at a breakpoint on one of its own
+//! threads shortly after the browser starts, whatever the build profile,
+//! page, GPU mode or CEF copy, while the packaged desktop host runs; use
+//! `rusty dev --output window` there.
 
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -145,6 +150,11 @@ fn composition() -> RendererViewComposition {
 }
 
 fn main() -> Result<(), String> {
+    if cfg!(windows) {
+        return Err(
+            "shell_demo is Linux-only; on Windows use rusty dev --output window".to_owned(),
+        );
+    }
     let mut args = std::env::args().skip(1);
     let cef_dir = std::path::PathBuf::from(args.next().ok_or("usage: <cef dir> <url> [seconds]")?);
     if let Some(code) = desktop_shell::run_web_subprocess(&cef_dir)? {
