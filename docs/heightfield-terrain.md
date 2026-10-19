@@ -124,6 +124,12 @@ and `SampleMilliseconds` report its work.
   0.001; fog and shadows treat it as the backdrop does.
 - **Shadows.** It casts unless made with `ShadowCasting.None`; it always
   receives.
+- **Hiding.** `SetVisible(new(heightfield, false))` stops drawing it, its
+  shadows included, for instance while the player is away in a separate
+  space whose world should not show. A hidden heightfield keeps its tiles and
+  a camera focus holds where it was, so `SetVisible(new(heightfield, true))`
+  draws it again at once. It is still picked. The readout's `Visible` says
+  which.
 
 ## Focus
 

@@ -22,6 +22,9 @@
 //! which stands at the world's origin in its scene; tiles nearest the focus
 //! take a layer's instance budget first.
 //!
+//! A hidden field draws nothing, shadows included, and holds still: its
+//! tiles and patches stay for when it is shown again.
+//!
 //! Placing is the costly step: it runs on worker threads, at most
 //! `placements_per_settle` tile layers a settle, and what waits is counted.
 
@@ -243,6 +246,8 @@ pub struct VegetationRequest {
 /// A field's state and the work of its last settle.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct VegetationReadout {
+    /// Whether the field is drawn.
+    pub visible: bool,
     /// Tiles holding samples, and tiles in reach waiting for current ones.
     pub tiles: u32,
     pub pending_tiles: u32,
@@ -331,6 +336,8 @@ struct Field {
     focus: Option<[f64; 3]>,
     placement: Option<[f32; 3]>,
     root: Option<RenderHandle>,
+    /// Whether its root, and so everything it grows, is drawn.
+    visible: bool,
     next_revision: u32,
     next_generation: u64,
     readout: VegetationReadout,
@@ -438,6 +445,7 @@ impl VegetationFields {
                 focus: None,
                 placement: None,
                 root: None,
+                visible: true,
                 next_revision: 0,
                 next_generation: 0,
                 readout: VegetationReadout::default(),
@@ -470,6 +478,31 @@ impl VegetationFields {
 
     pub fn layout(&self, field: u64) -> Option<VegetationLayout> {
         self.fields.get(&field).map(|field| field.layout)
+    }
+
+    /// Draw the field or not, from its root down, shadows included. Its
+    /// tiles and patches stay as they are.
+    pub fn set_visible(
+        &mut self,
+        field: u64,
+        visible: bool,
+    ) -> Result<Vec<RenderDiff>, VegetationError> {
+        let field = self.field(field)?;
+        if field.visible == visible {
+            return Ok(Vec::new());
+        }
+        field.visible = visible;
+        Ok(field
+            .root
+            .map(|handle| RenderDiff::Update {
+                handle,
+                transform: None,
+                material: None,
+                visible: Some(visible),
+                metadata: None,
+            })
+            .into_iter()
+            .collect())
     }
 
     /// Set (or change) a layer; its copies are placed again as the settle's
@@ -628,7 +661,10 @@ impl VegetationFields {
     }
 
     pub fn readout(&self, field: u64) -> Option<VegetationReadout> {
-        self.fields.get(&field).map(|field| field.readout)
+        self.fields.get(&field).map(|field| VegetationReadout {
+            visible: field.visible,
+            ..field.readout
+        })
     }
 
     /// The handle of a tile's patch for a layer, for tests and inspection.
@@ -680,6 +716,7 @@ impl VegetationFields {
                 let handle = self.registry.allocate(NodeKey::Root(field))?;
                 let mut node = RenderNode::new(Geometry::Group);
                 node.transform = transform;
+                node.visible = retained.visible;
                 operations.push(RenderDiff::Create {
                     handle,
                     parent: None,
@@ -699,7 +736,8 @@ impl VegetationFields {
             Some(_) => {}
         }
         retained.placement = Some(placement);
-        if focus.is_some() {
+        // A hidden field holds still, so its tiles are there when it shows.
+        if focus.is_some() && retained.visible {
             retained.focus = focus;
         }
         let readout = &mut retained.readout;

@@ -571,6 +571,50 @@ fn a_rebase_moves_the_root_and_nothing_else() {
     ));
 }
 
+#[test]
+fn a_hidden_field_hides_its_root_and_holds_its_tiles() {
+    let mut fields = fields(1_000);
+    fill(&mut fields, [8.0, 2.0, 8.0], |_, _| 2.0);
+    let root = fields.fields[&FIELD].root.unwrap();
+    let held = held(&fields);
+    let hidden = fields.set_visible(FIELD, false).unwrap();
+    assert!(matches!(
+        hidden[..],
+        [RenderDiff::Update { handle, visible: Some(false), transform: None, .. }] if handle == root
+    ));
+    assert!(fields.set_visible(FIELD, false).unwrap().is_empty());
+    assert!(!fields.readout(FIELD).unwrap().visible);
+    // Its focus 2 km below the ground: hidden, it holds still.
+    let operations = fields
+        .settle(FIELD, [0.0; 3], Some([8.0, -2048.0, 8.0]))
+        .unwrap();
+    assert!(operations.is_empty(), "{operations:?}");
+    assert!(fields.requests(FIELD, 0).is_empty());
+    assert_eq!(self::held(&fields), held);
+    // Shown again, it draws what it held.
+    let shown = fields.set_visible(FIELD, true).unwrap();
+    assert!(matches!(
+        shown[..],
+        [RenderDiff::Update { handle, visible: Some(true), .. }] if handle == root
+    ));
+    let operations = fields
+        .settle(FIELD, [0.0; 3], Some([8.0, 2.0, 8.0]))
+        .unwrap();
+    assert!(operations.is_empty(), "{operations:?}");
+    assert!(fields.readout(FIELD).unwrap().visible);
+}
+
+#[test]
+fn a_field_hidden_before_it_settles_creates_its_root_hidden() {
+    let mut fields = fields(1_000);
+    assert!(fields.set_visible(FIELD, false).unwrap().is_empty());
+    let operations = fields.settle(FIELD, [0.0; 3], None).unwrap();
+    assert!(matches!(
+        &operations[..],
+        [RenderDiff::Create { node, .. }] if !node.visible
+    ));
+}
+
 /// Fill every waiting tile flat and settle at `focus`, returning the field's
 /// patches by tile after.
 fn walk_to(fields: &mut VegetationFields, focus: [f64; 3]) -> Vec<RenderDiff> {

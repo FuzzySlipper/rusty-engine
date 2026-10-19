@@ -43,6 +43,16 @@ pub struct NativeVegetationFocusRequest {
     pub focus: NativeVegetationFocus,
 }
 
+/// Draw a field or not, its copies' shadows included. A hidden field keeps
+/// its tiles and holds its focus where it was, asking for and placing
+/// nothing new as its camera moves, so showing it again draws at once.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeVegetationVisibilityRequest {
+    pub field: NativeVegetationFieldHandle,
+    pub visible: bool,
+}
+
 /// One kind of thing that grows, named `layer` within the field: setting
 /// it again replaces it, and its copies are placed again as calls allow,
 /// drawing as they were until then. Copies stand `density` to the square
@@ -229,6 +239,8 @@ pub struct NativeVegetationInvalidateRequest {
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct NativeVegetationReadout {
+    /// Whether it is drawn (`set_visible`).
+    pub visible: bool,
     /// Tiles holding samples, and tiles in reach waiting for current ones.
     pub tiles: u32,
     pub pending_tiles: u32,
@@ -277,6 +289,13 @@ pub type NativeDestroyVegetationField = unsafe extern "C" fn(
 pub type NativeSetVegetationFocus = unsafe extern "C" fn(
     context: *mut c_void,
     request: NativeVegetationFocusRequest,
+    readout: *mut NativeVegetationReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeSetVegetationVisible = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: NativeVegetationVisibilityRequest,
     readout: *mut NativeVegetationReadout,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32;
@@ -341,6 +360,7 @@ pub struct NativeVegetationApi {
     pub create: NativeCreateVegetationField,
     pub destroy: NativeDestroyVegetationField,
     pub set_focus: NativeSetVegetationFocus,
+    pub set_visible: NativeSetVegetationVisible,
     pub set_layer: NativeSetVegetationLayer,
     pub set_layer_detail: NativeSetVegetationLayerDetail,
     pub remove_layer: NativeRemoveVegetationLayer,

@@ -49,6 +49,8 @@ struct RetainedHeightfield {
     origin: [f64; 3],
     scale: f64,
     focus: Focus,
+    /// Drawn (`SetVisible`); hidden, a camera focus holds where it was.
+    visible: bool,
 }
 
 impl RetainedHeightfield {
@@ -277,6 +279,7 @@ impl RuntimeHeightfieldBridge {
             origin,
             scale,
             focus,
+            visible: true,
         };
         let spatial = self.spatial.clone();
         let placement = retained.placement(&spatial);
@@ -325,6 +328,16 @@ impl RuntimeHeightfieldBridge {
         if let Focus::Point(point) = focus {
             retained.tiles.set_focus(Some(point));
         }
+        Ok(readout(retained))
+    }
+
+    fn set_visible(
+        &mut self,
+        request: NativeHeightfieldVisibilityRequest,
+    ) -> Result<NativeHeightfieldReadout, CsharpEngineServicesError> {
+        let retained = self.retained(request.heightfield)?;
+        // The node shows or hides as the call settles.
+        retained.visible = request.visible;
         Ok(readout(retained))
     }
 
@@ -523,7 +536,7 @@ impl RuntimeHeightfieldBridge {
         let early = &mut call.early;
         for (handle, retained) in &mut state.heightfields {
             let placement = retained.placement(&self.spatial);
-            if let Focus::Camera(camera_handle) = retained.focus {
+            if let (Focus::Camera(camera_handle), true) = (retained.focus, retained.visible) {
                 let eye = camera(camera_handle, retained.layer == RenderLayer::Backdrop);
                 let point = eye.map(|eye| retained.heightfield_point(placement, eye));
                 retained.tiles.set_focus(point);
@@ -580,6 +593,7 @@ fn render_placement(retained: &RetainedHeightfield, placement: [f64; 3]) -> Heig
         scale: retained.scale as f32,
         layer: retained.layer,
         shadow_casting: retained.shadow_casting,
+        visible: retained.visible,
     }
 }
 
@@ -598,6 +612,7 @@ fn readout(retained: &RetainedHeightfield) -> NativeHeightfieldReadout {
     let footprint = tiles.footprint();
     let focus = tiles.focus();
     NativeHeightfieldReadout {
+        visible: retained.visible,
         focused: focus.is_some(),
         focus_x: focus.map_or(0.0, |focus| focus[0]),
         focus_z: focus.map_or(0.0, |focus| focus[1]),
@@ -670,6 +685,7 @@ pub(crate) fn api(
         create,
         destroy,
         set_focus,
+        set_visible,
         read_requests,
         commit_tile,
         invalidate,
@@ -738,6 +754,19 @@ unsafe extern "C" fn set_focus(
     error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     unsafe { operate(context, readout, error, |bridge| bridge.set_focus(request)) }
+}
+
+unsafe extern "C" fn set_visible(
+    context: *mut c_void,
+    request: NativeHeightfieldVisibilityRequest,
+    readout: *mut NativeHeightfieldReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    unsafe {
+        operate(context, readout, error, |bridge| {
+            bridge.set_visible(request)
+        })
+    }
 }
 
 unsafe extern "C" fn read_requests(

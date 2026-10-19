@@ -89,6 +89,7 @@ impl Terrain {
                     scale: 1.0,
                     layer: RenderLayer::Scene,
                     shadow_casting: ShadowCasting::Cast,
+                    visible: true,
                 },
             )
             .unwrap();

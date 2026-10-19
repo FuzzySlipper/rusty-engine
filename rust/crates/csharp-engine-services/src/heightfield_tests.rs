@@ -213,6 +213,30 @@ fn read(api: &NativeEngineApi, heightfield: NativeHeightfieldHandle) -> NativeHe
     readout
 }
 
+fn set_visible(
+    api: &NativeEngineApi,
+    heightfield: NativeHeightfieldHandle,
+    visible: bool,
+) -> NativeHeightfieldReadout {
+    let mut readout = NativeHeightfieldReadout::default();
+    let terrain = &api.heightfield;
+    assert_eq!(
+        unsafe {
+            (terrain.set_visible)(
+                terrain.context,
+                NativeHeightfieldVisibilityRequest {
+                    heightfield,
+                    visible,
+                },
+                &mut readout,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    readout
+}
+
 /// The call's renderer work in order: Graphics' frames, then the services'.
 fn ops(services: &mut EngineServiceSet) -> Vec<RenderDiff> {
     let mut call = services.finish_call().expect("call finishes");
@@ -513,7 +537,89 @@ fn a_camera_focus_measures_from_where_the_camera_stands_in_the_backdrop() {
         readout.focus_z
     );
     assert!(!requests(&api, heightfield).is_empty());
+
+    // Hidden, the focus holds where it was as the camera moves on.
+    set_visible(&api, heightfield, false);
+    let walk = |api: &NativeEngineApi, z: f32| unsafe {
+        let view = &api.camera_view;
+        assert_eq!(
+            (view.update_camera)(
+                view.context,
+                &NativeCameraUpdateRequest {
+                    camera,
+                    descriptor: descriptor(z),
+                },
+                std::ptr::null_mut()
+            ),
+            ABI_OK
+        );
+    };
+    walk(&api, -500.0);
+    services.finish_call().expect("hidden call");
+    services.begin_call(binding());
+    let api = services.api();
+    assert!((read(&api, heightfield).focus_z + 250.0).abs() < 1e-3);
+    set_visible(&api, heightfield, true);
+    services.finish_call().expect("shown call");
+    services.begin_call(binding());
+    let api = services.api();
+    assert!((read(&api, heightfield).focus_z + 500.0).abs() < 1e-3);
     services.finish_call().unwrap();
+}
+
+#[test]
+fn a_hidden_heightfield_hides_its_node_and_keeps_its_tiles() {
+    let mut services = services();
+    services.begin_call(binding());
+    let api = services.api();
+    let materials = [NativeHeightfieldMaterial {
+        index: 0,
+        material: material(&api),
+    }];
+    let mut heightfield = NativeHeightfieldHandle::default();
+    let terrain = &api.heightfield;
+    assert_eq!(
+        unsafe {
+            (terrain.create)(
+                terrain.context,
+                &create_request(&materials, point(3.0, -2.0)),
+                &mut heightfield,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    for request in requests(&api, heightfield) {
+        assert!(commit(&api, heightfield, &request));
+    }
+    let created = ops(&mut services);
+    let root = created
+        .iter()
+        .find_map(|op| match op {
+            RenderDiff::Create { handle, node, .. } => {
+                assert!(node.visible);
+                Some(*handle)
+            }
+            _ => None,
+        })
+        .unwrap();
+
+    for visible in [false, true] {
+        services.begin_call(binding());
+        let api = services.api();
+        let drawn = read(&api, heightfield).drawn_tiles;
+        let readout = set_visible(&api, heightfield, visible);
+        assert_eq!(readout.visible, visible);
+        assert_eq!(readout.drawn_tiles, drawn);
+        // Only the root's visibility changes: no tile is made, meshed or
+        // removed.
+        let changed = ops(&mut services);
+        assert_eq!(changed.len(), 1, "{changed:?}");
+        assert!(matches!(
+            changed[0],
+            RenderDiff::Update { handle, visible: Some(shown), .. } if handle == root && shown == visible
+        ));
+    }
 }
 
 #[test]

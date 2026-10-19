@@ -1,7 +1,8 @@
 //! Heightfield terrain tiles as renderer nodes (#9842): a group node per
 //! heightfield, placed in its layer and focused for the tiles' geomorph
 //! (`RenderDiff::SetMorphFocus`), and beneath it one static mesh instance
-//! per meshed tile, shown while the tile is drawn.
+//! per meshed tile, shown while the tile is drawn. Hiding the heightfield
+//! hides its node, and with it every tile and their shadows; the tiles stay.
 //!
 //! Removals come back as [`HeightfieldRemovals`]: a node or mesh made before
 //! this call is removed `early`, ahead of the call's Graphics work (a
@@ -22,13 +23,14 @@ use svc_mesh::heightfield::{TileKey, TileMesh};
 use crate::{HandleAllocationError, RenderHandleNamespace, StableHandleRegistry};
 
 /// Where a heightfield stands: its point (0, 0, 0) and the layer units one
-/// of its units spans.
+/// of its units spans, and whether it is drawn.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct HeightfieldPlacement {
     pub origin: [f32; 3],
     pub scale: f32,
     pub layer: RenderLayer,
     pub shadow_casting: ShadowCasting,
+    pub visible: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -100,7 +102,7 @@ impl HeightfieldProjector {
         self.fresh.clear();
     }
 
-    /// Create the heightfield's node, or move it.
+    /// Create the heightfield's node, or move, show or hide it.
     pub fn place(
         &mut self,
         heightfield: u64,
@@ -116,6 +118,8 @@ impl HeightfieldProjector {
                 if projected.placement == placement {
                     return Ok(Vec::new());
                 }
+                let visible =
+                    (projected.placement.visible != placement.visible).then_some(placement.visible);
                 projected.placement = placement;
                 let handle = self.registry.handle_of(&NodeKey::Root(heightfield));
                 Ok(handle
@@ -123,7 +127,7 @@ impl HeightfieldProjector {
                         handle,
                         transform: Some(transform),
                         material: None,
-                        visible: None,
+                        visible,
                         metadata: None,
                     })
                     .into_iter()
@@ -143,6 +147,7 @@ impl HeightfieldProjector {
                 let mut node = RenderNode::new(Geometry::Group);
                 node.transform = transform;
                 node.layer = placement.layer;
+                node.visible = placement.visible;
                 Ok(vec![RenderDiff::Create {
                     handle,
                     parent: None,

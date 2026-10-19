@@ -74,6 +74,16 @@ pub struct NativeHeightfieldFocusRequest {
     pub focus: NativeHeightfieldFocus,
 }
 
+/// Draw a heightfield or not, its tiles' shadows included. A hidden
+/// heightfield keeps its tiles, and a camera focus holds where it was, so
+/// showing it again draws at once. It is still picked.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeHeightfieldVisibilityRequest {
+    pub heightfield: NativeHeightfieldHandle,
+    pub visible: bool,
+}
+
 /// The tiles waiting for samples, at most `max_requests` (0: all).
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -192,6 +202,8 @@ pub struct NativeHeightfieldReadout {
     pub drawn_tiles: u32,
     /// Tiles the rings call for that wait for samples.
     pub pending_tiles: u32,
+    /// Whether it is drawn (`set_visible`).
+    pub visible: bool,
     /// Every tile the rings call for is drawn or covered by finer ones.
     pub settled: bool,
     pub vertices: u64,
@@ -221,6 +233,13 @@ pub type NativeDestroyHeightfield = unsafe extern "C" fn(
 pub type NativeSetHeightfieldFocus = unsafe extern "C" fn(
     context: *mut c_void,
     request: NativeHeightfieldFocusRequest,
+    readout: *mut NativeHeightfieldReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeSetHeightfieldVisible = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: NativeHeightfieldVisibilityRequest,
     readout: *mut NativeHeightfieldReadout,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32;
@@ -270,6 +289,7 @@ pub struct NativeHeightfieldApi {
     pub create: NativeCreateHeightfield,
     pub destroy: NativeDestroyHeightfield,
     pub set_focus: NativeSetHeightfieldFocus,
+    pub set_visible: NativeSetHeightfieldVisible,
     pub read_requests: NativeReadHeightfieldRequests,
     pub commit_tile: NativeCommitHeightfieldTile,
     pub invalidate: NativeInvalidateHeightfield,

@@ -44,6 +44,13 @@ A product may make several fields. One lattice rarely suits every distance:
 a fine one near the walking ground and a coarse one matching a distant
 heightfield ring are two fields, and their layers hand over (below).
 
+`SetVisible(new(field, false))` stops drawing a field, shadows included,
+for instance while the player is away in a separate space whose world
+should not show. A hidden field keeps its tiles and patches and holds its
+focus where it was, asking for and placing nothing new as its camera moves;
+`SetVisible(new(field, true))` draws them again at once. The readout's
+`Visible` says which.
+
 ## Sampling
 
 `ReadRequests` lists the wanted tiles without current samples, nearest the

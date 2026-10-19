@@ -257,6 +257,23 @@ impl RuntimeVegetationBridge {
         self.readout(request.field)
     }
 
+    fn set_visible(
+        &mut self,
+        request: NativeVegetationVisibilityRequest,
+    ) -> Result<NativeVegetationReadout, CsharpEngineServicesError> {
+        let operations = self
+            .retained(request.field)?
+            .1
+            .set_visible(request.field.value, request.visible)
+            .map_err(vegetation_refusal)?;
+        if !operations.is_empty() {
+            self.staged_mut()?
+                .frames
+                .push(RenderFrameDiff::from_ops(operations));
+        }
+        self.readout(request.field)
+    }
+
     /// A mesh appearance's static mesh, and the overrides that draw every
     /// slot with `material` (defined as `id`), or with the mesh's own
     /// bindings for a default material; the operations defining it.
@@ -624,6 +641,7 @@ fn focus_of(focus: NativeVegetationFocus) -> Result<Focus, CsharpEngineServicesE
 
 fn native_readout(readout: VegetationReadout) -> NativeVegetationReadout {
     NativeVegetationReadout {
+        visible: readout.visible,
         tiles: readout.tiles,
         pending_tiles: readout.pending_tiles,
         patches: readout.patches,
@@ -671,6 +689,7 @@ pub(crate) fn api(
         create,
         destroy,
         set_focus,
+        set_visible,
         set_layer,
         set_layer_detail,
         remove_layer,
@@ -738,6 +757,19 @@ unsafe extern "C" fn set_focus(
     error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     unsafe { operate(context, readout, error, |bridge| bridge.set_focus(request)) }
+}
+
+unsafe extern "C" fn set_visible(
+    context: *mut c_void,
+    request: NativeVegetationVisibilityRequest,
+    readout: *mut NativeVegetationReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    unsafe {
+        operate(context, readout, error, |bridge| {
+            bridge.set_visible(request)
+        })
+    }
 }
 
 unsafe extern "C" fn set_layer(
