@@ -535,7 +535,10 @@ and index counts are stored as `u32`; there is no other size cap.
 mesh resources use `u32` byte lengths and offsets.
 
 Create one or more appearances with `Graphics.CreateMeshAppearance(mesh)` and
-publish ordinary `AppearanceFact` values. Existing static-mesh material
+publish ordinary `AppearanceFact` values. An appearance that no published fact
+names defines its mesh but draws nothing, and nothing reports it: whichever
+code creates an appearance, the code that publishes the facts must include it.
+Existing static-mesh material
 updates can override instance slots. Geometry is visual-only; C# still selects
 any separate spatial mechanism its gameplay needs. To change geometry, admit a
 new immutable resource and publish the replacement appearance. Product arrays

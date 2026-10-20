@@ -1622,6 +1622,8 @@ pub struct NativeGraphicsApi {
     pub replace_primitive: NativeReplacePrimitiveAppearance,
     pub create_mesh_resource: NativeCreateMeshResource,
     pub destroy_mesh_resource: NativeDestroyMeshResource,
+    /// An appearance draws nothing by itself: an object shows it once a
+    /// published `AppearanceFact` names it, as with every `Appearance`.
     pub create_mesh_appearance: NativeCreateMeshAppearance,
     pub partition_mesh: NativePartitionMesh,
     pub read_mesh_partition: NativeReadMeshPartition,
