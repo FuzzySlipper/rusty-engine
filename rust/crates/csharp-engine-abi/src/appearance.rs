@@ -684,8 +684,12 @@ pub struct NativeSpritePlaybackAdvanceResult {
 /// ripple the surface (procedural ripples without either), read over the
 /// ground every `wave_scale` metres and scaled by the material's
 /// `normal_scale`, with or without a normal map (0: a flat surface).
-/// `depth_scale` 0 (the default) is no water surface; the textures are 0
-/// for none.
+/// With `absorption_distance` or `refraction` above 0 the water reads a copy
+/// of the opaque scene behind it: what shows through keeps
+/// `absorption_color` of its light every `absorption_distance` metres of
+/// water along the view ray, and shifts along the ripples' tilt by
+/// `refraction` metres per metre of water. `depth_scale` 0 (the default) is
+/// no water surface; the textures are 0 for none.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMaterialWater {
@@ -702,6 +706,13 @@ pub struct NativeMaterialWater {
     pub wave_scale: f32,
     pub foam_texture: NativeRenderResourceReference,
     pub ripple_texture: NativeRenderResourceReference,
+    /// Linear RGB, 0 to 1 (alpha unused): the share of each channel of the
+    /// scene behind that survives `absorption_distance` metres of water.
+    pub absorption_color: NativeColor,
+    /// Metres; 0 (the default) absorbs nothing.
+    pub absorption_distance: f32,
+    /// 0 to 1; 0 (the default) does not refract.
+    pub refraction: f32,
 }
 
 /// Renderer-neutral PBR-like material values. Texture handle zero means an

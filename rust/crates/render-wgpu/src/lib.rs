@@ -290,6 +290,11 @@ pub struct RendererOptions {
     /// `fs_clouds_volumetric`). Off by default; a software adapter draws the
     /// flat layer.
     pub volumetric_clouds: render_model::VolumetricCloudsQuality,
+    /// Water reflects what the view shows (`world.wgsl`
+    /// `water_reflection_of`), from the opaque scene's colour copy
+    /// (`water.rs`). Off by default; a software adapter, or a device that
+    /// cannot bind the copy, reflects the sky's light and the probes alone.
+    pub water_reflections: render_model::WaterReflectionsQuality,
 }
 
 impl Default for RendererOptions {
@@ -309,6 +314,7 @@ impl Default for RendererOptions {
             render_scale: RendererSettingsDescriptor::DEFAULT.render_scale,
             volumetric_fog: render_model::VolumetricFogQuality::Off,
             volumetric_clouds: render_model::VolumetricCloudsQuality::Off,
+            water_reflections: render_model::WaterReflectionsQuality::Off,
         }
     }
 }
@@ -346,6 +352,7 @@ impl RendererOptions {
         self.occlusion_culling = settings.occlusion_culling;
         self.volumetric_fog = settings.volumetric_fog;
         self.volumetric_clouds = settings.volumetric_clouds;
+        self.water_reflections = settings.water_reflections;
         self
     }
 
@@ -374,6 +381,7 @@ impl RendererOptions {
             occlusion_culling: self.occlusion_culling,
             volumetric_fog: self.volumetric_fog,
             volumetric_clouds: self.volumetric_clouds,
+            water_reflections: self.water_reflections,
         }
     }
 }
@@ -393,6 +401,8 @@ pub enum SettingRefusal {
     /// A software adapter draws without the feature (a GPU-only feature,
     /// docs/verification.md#gpu-verification).
     SoftwareAdapter,
+    /// The device binds too few textures per shader stage for the feature.
+    TooFewTextureBindings,
 }
 
 /// The settings in effect and what the device refused: what a product
@@ -417,6 +427,7 @@ pub struct RendererSettingsReadout {
     pub occlusion_culling: Option<SettingRefusal>,
     pub volumetric_fog: Option<SettingRefusal>,
     pub volumetric_clouds: Option<SettingRefusal>,
+    pub water_reflections: Option<SettingRefusal>,
 }
 
 pub struct Renderer {
@@ -492,8 +503,8 @@ pub struct Renderer {
     frame_bind_group: wgpu::BindGroup,
     caster_bind_group: wgpu::BindGroup,
     sky_bind_group: Option<wgpu::BindGroup>,
-    /// The opaque depth the blend pass's water surfaces read.
-    water: water::WaterDepth,
+    /// The opaque depth (and colour) the blend pass's water surfaces read.
+    water: water::WaterScene,
     /// The Engine presentation timeline animated poses advance on.
     animation_time: f64,
     /// The presentation time frames draw at (`frame.time`, clouds, wind,
@@ -564,6 +575,10 @@ pub struct Renderer {
     surface_size: Option<(u32, u32)>,
 }
 
+/// The water reflection's march at low and high quality: its steps and its
+/// reach in metres.
+const WATER_REFLECTION_MARCH: [(u32, f32); 2] = [(16, 24.0), (40, 48.0)];
+
 /// Initial storage sizes; both grow by doubling.
 const INITIAL_PARTS_BYTES: u64 = 64 * 1024;
 const INITIAL_LIGHTS_BYTES: u64 = 4 * 1024;
@@ -572,7 +587,11 @@ const INITIAL_INSTANCES_BYTES: u64 = 16 * 1024;
 impl Renderer {
     pub fn new(gpu: &Gpu, options: RendererOptions) -> Self {
         let device = &gpu.device;
-        let mut layouts = Layouts::new(device, gpu.decals_refusal().is_none());
+        let mut layouts = Layouts::new(
+            device,
+            gpu.decals_refusal().is_none(),
+            gpu.scene_color_refusal().is_none(),
+        );
         let frame_buffer = frame::frame_uniform_buffer(device);
         let cloud_regions_buffer = frame::storage_buffer(
             device,
@@ -652,7 +671,11 @@ impl Renderer {
         let (unlit_material, lit_fallback_material) =
             apply::builtin_materials(device, &layouts.material, &white);
         let finish = finish::Finish::new(gpu, &mut layouts.shaders);
-        let water = water::WaterDepth::new(device, &mut layouts.shaders);
+        let water = water::WaterScene::new(
+            gpu,
+            &mut layouts.shaders,
+            gpu.scene_color_refusal().is_none(),
+        );
         let effects = effects::Effects::new(
             device,
             &layouts.frame,
@@ -952,6 +975,13 @@ impl Renderer {
             effective.volumetric_clouds = render_model::VolumetricCloudsQuality::Off;
             SettingRefusal::SoftwareAdapter
         });
+        let water_reflections = (requested.water_reflections
+            != render_model::WaterReflectionsQuality::Off)
+            .then(|| self.water_reflections_refusal())
+            .flatten()
+            .inspect(|_| {
+                effective.water_reflections = render_model::WaterReflectionsQuality::Off;
+            });
         RendererSettingsReadout {
             requested,
             product: self.product_settings,
@@ -965,6 +995,30 @@ impl Renderer {
             occlusion_culling,
             volumetric_fog,
             volumetric_clouds,
+            water_reflections,
+        }
+    }
+
+    /// Why water cannot reflect the view on this device, if it cannot: a
+    /// software adapter, or a device that cannot bind the scene's colour.
+    fn water_reflections_refusal(&self) -> Option<SettingRefusal> {
+        if self.gpu.is_software() {
+            Some(SettingRefusal::SoftwareAdapter)
+        } else if !self.water.scene_color() {
+            Some(SettingRefusal::TooFewTextureBindings)
+        } else {
+            None
+        }
+    }
+
+    /// The water reflection's march, steps and reach in metres, as it
+    /// draws: none when off or refused.
+    pub(crate) fn water_reflection_march(&self) -> Option<(u32, f32)> {
+        match self.options.water_reflections {
+            render_model::WaterReflectionsQuality::Off => None,
+            _ if self.water_reflections_refusal().is_some() => None,
+            render_model::WaterReflectionsQuality::Low => Some(WATER_REFLECTION_MARCH[0]),
+            render_model::WaterReflectionsQuality::High => Some(WATER_REFLECTION_MARCH[1]),
         }
     }
 
@@ -1005,6 +1059,7 @@ impl Renderer {
                     self.scatter_select.timing(),
                     self.sky_light.timing(),
                     self.image_effect.timing(),
+                    self.water.timing(),
                 ])
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),

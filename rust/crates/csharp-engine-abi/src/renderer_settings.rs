@@ -48,6 +48,18 @@ pub enum NativeVolumetricCloudsQuality {
     High = 2,
 }
 
+/// How water reflects the scene: the sky's light and the probes alone, or
+/// also what the view shows, marched across the view's depth at low or high
+/// quality. A software adapter, or a device that binds too few textures,
+/// reflects the sky and probes alone.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeWaterReflectionsQuality {
+    Off = 0,
+    Low = 1,
+    High = 2,
+}
+
 /// The renderer's settings: which pipeline features draw and at what
 /// quality. The product manifest supplies the initial values
 /// (`RustyEngineProduct*` properties); `Set` replaces them all from the next
@@ -91,6 +103,8 @@ pub struct NativeRendererSettingsRequest {
     pub volumetric_fog: NativeVolumetricFogQuality,
     /// Draw the cloud layer raymarched, with thickness.
     pub volumetric_clouds: NativeVolumetricCloudsQuality,
+    /// Water materials reflect what the view shows, in screen space.
+    pub water_reflections: NativeWaterReflectionsQuality,
 }
 
 /// Why the device draws a setting differently from the request.
@@ -108,6 +122,8 @@ pub enum NativeRendererSettingRefusal {
     VsyncOnly = 5,
     /// A software adapter draws without this GPU-only feature.
     SoftwareAdapter = 6,
+    /// The device binds too few textures per shader stage for the feature.
+    TooFewTextureBindings = 7,
 }
 
 /// What the renderer draws with: the last request (the manifest's values
@@ -126,6 +142,7 @@ pub struct NativeRendererSettingsReadout {
     pub occlusion_culling_refusal: NativeRendererSettingRefusal,
     pub volumetric_fog_refusal: NativeRendererSettingRefusal,
     pub volumetric_clouds_refusal: NativeRendererSettingRefusal,
+    pub water_reflections_refusal: NativeRendererSettingRefusal,
 }
 
 /// How a renderer setting is chosen.

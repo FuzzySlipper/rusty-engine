@@ -1041,6 +1041,15 @@ with thickness instead of as a sheet
 ([volumetric clouds](lighting-and-sky.md#volumetric-clouds)). A software
 adapter draws the flat layer and says so in the `RendererSettings` readout.
 
+### Water reflections
+
+`RustyEngineProductWaterReflections` is `off` (the default), `low` or `high`
+(`renderer.lighting.waterReflections`): water materials reflect what the
+view shows, marched in screen space
+([water reflections](lighting-and-sky.md#water-reflections)). A software
+adapter, or a device without the scene's colour copy, reflects the sky and
+probes alone and says so in the `RendererSettings` readout.
+
 ### Screen-space ambient occlusion
 
 `RustyEngineProductAmbientOcclusion` turns ambient occlusion on world views

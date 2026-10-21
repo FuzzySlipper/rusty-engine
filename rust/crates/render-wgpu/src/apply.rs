@@ -50,8 +50,8 @@ pub struct ApplyIssue {
 /// each slot's uv set; a
 /// product shader's 16 parameters; terrain layers 1 to 3's tilings, sample
 /// rects and normal scales, and the layer contrast; the wind; the water
-/// feature's four rows; whether the surface keeps dry.
-const MATERIAL_UNIFORM_BYTES: usize = 480;
+/// feature's six rows; whether the surface keeps dry.
+const MATERIAL_UNIFORM_BYTES: usize = 512;
 /// Anisotropic filtering of mipmapped material textures.
 const MATERIAL_ANISOTROPY: u16 = 16;
 /// Payload groups without a voxel material are fully rough.
@@ -2375,7 +2375,13 @@ impl MaterialParams {
                 self.stochastic_tiling.is_some(),
             )
             .with(Features::WIND, self.wind.is_some())
-            .with(Features::WATER, self.water.is_some());
+            .with(Features::WATER, self.water.is_some())
+            .with(
+                Features::WATER_SCENE,
+                self.water
+                    .as_ref()
+                    .is_some_and(render_model::MaterialWaterDescriptor::reads_scene),
+            );
         if self.unlit {
             return base | Features::UNLIT;
         }
@@ -2536,9 +2542,12 @@ pub(crate) fn material_bind_group(
         floats[115] = water.wave_scale;
         // The ripples' scale, with or without a normal map.
         floats[3] = water.ripple_scale;
+        floats[116..119].copy_from_slice(&water.absorption_color);
+        floats[119] = water.absorption_distance;
+        floats[120] = water.refraction;
     }
-    floats[116] = if params.keep_dry { 1.0 } else { 0.0 };
-    floats[117] = if params.sinks_under_snow { 1.0 } else { 0.0 };
+    floats[124] = if params.keep_dry { 1.0 } else { 0.0 };
+    floats[125] = if params.sinks_under_snow { 1.0 } else { 0.0 };
     let uniform: &[u8] = bytemuck::cast_slice(&floats);
     let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(label),

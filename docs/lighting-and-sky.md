@@ -310,7 +310,9 @@ lighting fall back to the screen-space pass and the light loop),
 (the adapter cannot multisample at that count, so the default 4 draws) and
 `NoDisplay` (streamed output has no display, so vsync is moot) and
 `VsyncOnly` (the window's display has no immediate or mailbox present mode,
-so frames wait for its refresh with vsync off). A refused
+so frames wait for its refresh with vsync off), `SoftwareAdapter` (a
+GPU-only feature on a software adapter) and `TooFewTextureBindings` (water
+reflections on a device without the colour copy). A refused
 setting is not an error: `Set` accepts any finite, non-negative strength, positive
 radius and render scale from 0.5 to 1, and refuses only values outside
 those ranges.
@@ -348,13 +350,14 @@ renderer setting, is reported and ignored.
 | `ambientOcclusionRadius` | Lighting | 0.25 to 2 m |
 | `volumetricFog` | Lighting | `off`, `low`, `high` |
 | `volumetricClouds` | Lighting | `off`, `low`, `high` |
+| `waterReflections` | Lighting | `off`, `low`, `high` |
 | `clusteredLighting` | Advanced | on or off |
 | `gpuCulling` | Advanced | on or off |
 | `occlusionCulling` | Advanced | on or off |
 
 The presets Low, Medium, High and Ultra set render scale, antialiasing,
-shadows, their budget, the occlusion mode, and volumetric fog and clouds
-(off, off, low, high), over the player's other choices. A setting the device refuses is shown with the reason, from the
+shadows, their budget, the occlusion mode, and volumetric fog, clouds and
+water reflections (off, off, low, high), over the player's other choices. A setting the device refuses is shown with the reason, from the
 same refusals the readout carries. The panel's route,
 `/__rusty/product/runtime/video-options`, answers `GET` with the catalogue
 (each option's `value` drawn, `requested`, `gameDefault`, `chosen` and
@@ -667,12 +670,39 @@ pixel knows what lies behind it along its view ray:
   sky's light; with the sky's light on, the prefiltered sky takes over as
   for every surface.
 
+With `AbsorptionDistance` or `Refraction` above 0, the water reads a copy of
+the opaque scene's colour, taken with the depth copy, and draws what shows
+through it itself:
+
+- **Absorption.** Every `AbsorptionDistance` metres of water along the view
+  ray keeps `AbsorptionColor` (linear RGB, 0 to 1) of the light from the
+  scene behind, channel by channel, so a bed fades toward blue-green with
+  depth while the shallows keep their colour. 0 (the default) absorbs
+  nothing. It acts on what shows through; the depth tint above still
+  colours the water's own surface and its opacity.
+- **Refraction.** The scene behind shifts along the ripples' tilt by
+  `Refraction` (0 to 1) metres per metre of water there (up to 2 m deep),
+  at most a twentieth of the view, so a bed wavers under the ripples. A
+  flat surface does not shift it. Where the shift would land on something
+  in front of the water, or on the background, the water shows the scene
+  straight behind it.
+- **Limits.** The copy holds the opaque scene only: blended parts and
+  particles behind such water do not show through it. Where nothing opaque
+  lies behind (the background), the water blends as water without these.
+
 The water needs no vertex motion; a product that wants waves gives the
 material a [displace stage](#product-shaders) or a wind bend. A water view
 costs one depth copy per view that draws water, and the blended parts and
 particles draw in a second pass after it; views without water draw as
-before. Blended materials cast no shadow unless `TranslucentShadow` is
-set, so a lake does not shadow its own bed.
+before. The copy is timed as the `water-copy` pass: about 0.02 ms for the
+depth alone and 0.06 ms with the colour at 1920×1080 with 4× multisampling
+on an RX 9070 XT. Blended materials cast no shadow unless
+`TranslucentShadow` is set, so a lake does not shadow its own bed.
+
+A device that binds fewer than 17 sampled textures per shader stage (WebGPU
+guarantees 16) has no colour copy: its water draws without absorption,
+refraction or [reflections](#water-reflections), and the `WaterReflections`
+readout says `TooFewTextureBindings`.
 
 ```csharp
 Material lake = engine.Graphics.CreateMaterial(new MaterialRequest(new Color(1, 1, 1, 0.35f), default, 0.08f, white, Vector3.Zero, 0, true, MaterialAlphaMode.Blend, 0) with
@@ -680,9 +710,42 @@ Material lake = engine.Graphics.CreateMaterial(new MaterialRequest(new Color(1, 
     NormalMap = ripples, NormalScale = 0.6f,
     Water = new MaterialWater(new Color(0.18f, 0.55f, 0.5f, 1), new Color(0.01f, 0.08f, 0.2f, 1), DepthScale: 1.8f, ShorelineWidth: 0.35f, FoamThreshold: 0.55f,
         FoamScroll: new Vector2(0.03f, 0.02f), NormalScrollA: new Vector2(0.04f, 0.03f), NormalScrollB: new Vector2(-0.02f, 0.035f), WaveScale: 3f,
-        FoamTexture: foam, RippleTexture: ripples),
+        FoamTexture: foam, RippleTexture: ripples) with
+        {
+            AbsorptionColor = new Color(0.25f, 0.7f, 0.65f, 1), AbsorptionDistance = 2f, Refraction = 0.3f,
+        },
 });
 ```
+
+### Water reflections
+
+With the renderer's `WaterReflections` setting `Low` or `High`
+(`RustyEngineProductWaterReflections`, `RendererSettings`, the player's
+[video options](#video-options)), water reflects what the view shows: each
+water pixel follows its reflected ray across the view's depth copy, and
+where the ray passes behind the opaque scene, the colour there takes the
+place of the standard reflection, by the same Fresnel weight. It suits many
+small pools at different heights as well as one lake: there is no view per
+plane. Every water material reflects this way; the setting draws through the
+same copy as absorption.
+
+- `Low` marches 16 steps out to 24 m, `High` 40 steps out to 48 m, spread
+  evenly over the ray's length on screen and offset per pixel, then refined
+  by halving where the ray first passes behind the scene.
+- Where the ray leaves the view, passes behind something thicker than its
+  step, or reaches its end, the probes and the sky's light reflect as
+  without the setting, faded in over about a twelfth of the view at its edges
+  and the last quarter of the reach, so the reflection has no seam.
+- Only what the view shows reflects: the far side of a pillar, or a lamp
+  above the top of the view, does not. Blended parts and particles do not
+  reflect.
+- Ripples bend the reflection with the surface. The reflection is sharp
+  whatever the material's roughness, which weights it as it weights the
+  standard reflection.
+- A software adapter draws without it (`SoftwareAdapter`). With still water
+  filling the lower view at 1920×1080 and 4× multisampling, `Low` costs
+  about 0.17 ms and `High` about 0.30 ms of the `world` pass on an RX 9070
+  XT, 0.04 ms of it the colour copy. Views without water pay nothing.
 
 ## Wind
 
@@ -1621,10 +1684,13 @@ and `lighting.wind <strength>` (the tree under a material with a wind bend,
 a clump of grass cards whose vertex alpha weights their flutter, and a
 banner a product displace stage (`content/wave.wgsl`) waves, with the
 camera on them; 0 stills the wind, below 0 clears the scene),
-`lighting.water 1|0|-1` (a dual-contoured sand bank sloping into a water
+`lighting.water 2|1|0|-1` (a dual-contoured sand bank sloping into a water
 slab with a cube pier, seen from the bank under the sun: 1 the water
-feature with the fixture's foam and ripple textures, 0 the same slab as a
-plain blended material, below 0 clears the scene), and
+feature with the fixture's foam and ripple textures, 2 the same water
+absorbing and refracting the sand behind it, 0 the same slab as a plain
+blended material, below 0 clears the scene),
+`lighting.water.reflections off|low|high` (the renderer's water
+reflections: the bank and the pier in the water), and
 `lighting.vertexocclusion <strength>` (the room's cube vertices darkened by
 the voxels around them, with the camera on the room's far corner), and
 `lighting.flash <strength> <shimmer>` (an image effect from

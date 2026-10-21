@@ -74,7 +74,7 @@ pub(crate) struct Layouts {
     pub shadow_layer: wgpu::BindGroupLayout,
     world: wgpu::PipelineLayout,
     /// The world layout for a water material: its group 2 is the opaque
-    /// depth copy (`water.rs`) rather than the view's occlusion.
+    /// scene's copy (`water.rs`) rather than the view's occlusion.
     water: wgpu::PipelineLayout,
     sky_pipeline: wgpu::PipelineLayout,
     /// The volumetric clouds' reduced march (`cloud_march.rs`): its group 2
@@ -290,7 +290,7 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 impl Layouts {
     /// `decals`: the device can bind the decals' textures beside the
     /// world pass's own (`Gpu::decals_refusal`).
-    pub fn new(device: &wgpu::Device, decals: bool) -> Self {
+    pub fn new(device: &wgpu::Device, decals: bool, scene_color: bool) -> Self {
         // The frame is visible to compute passes too, which light from it
         // (`volumetric_fog.rs`).
         let frame_entries = [
@@ -423,7 +423,8 @@ impl Layouts {
             ][..if decals.is_some() { 4 } else { 3 }],
             immediate_size: 0,
         });
-        let water_depth = device.create_bind_group_layout(&crate::water::layout_descriptor());
+        let water_depth =
+            device.create_bind_group_layout(&crate::water::layout_descriptor(scene_color));
         let water = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("render-wgpu water"),
             bind_group_layouts: &[Some(&frame), Some(&material), Some(&water_depth)],
@@ -503,6 +504,9 @@ impl Layouts {
         } else {
             Shaders::new().without_decals()
         };
+        if !scene_color {
+            shaders = shaders.without_scene_color();
+        }
         let sky_shader = standard(shaders.module(device, Entry::Sky, Features::default()));
         let stars_shader = standard(shaders.module(device, Entry::Stars, Features::default()));
         let compose = standard(shaders.module(device, Entry::Compose, Features::default()));

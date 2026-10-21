@@ -115,6 +115,8 @@ pub struct ProductHostRendererSettingValues {
     pub volumetric_fog: String,
     /// `off`, `low` or `high`.
     pub volumetric_clouds: String,
+    /// `off`, `low` or `high`.
+    pub water_reflections: String,
 }
 
 /// The scene's shadow layers and which requesting lights cast.

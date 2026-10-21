@@ -14,6 +14,12 @@ impl Shaders {
         Self(self.0.without_decals())
     }
 
+    /// Water without the scene's colour
+    /// (`render_shaders::Shaders::without_scene_color`).
+    pub fn without_scene_color(self) -> Self {
+        Self(self.0.without_scene_color())
+    }
+
     /// The id a material shaded by `shader` adds to its features.
     pub fn product(&mut self, shader: ProductShader) -> u32 {
         self.0.product(shader)

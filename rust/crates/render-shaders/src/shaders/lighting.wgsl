@@ -396,6 +396,14 @@ fn sky_irradiance_along(normal: vec3<f32>) -> vec3<f32> {
         + sky_irradiance[8].rgb * (0.546274 * (d.x * d.x - d.y * d.y));
 }
 
+#ifdef SCENE_COLOR
+// The water's screen-space reflection of the opaque scene (`world.wgsl`
+// `water_surface` sets it before shading): rgb the radiance the reflected
+// ray meets, a the share of the reflection it stands for (0 where the
+// march found nothing), the standard reflection taking the rest.
+var<private> water_reflection: vec4<f32>;
+#endif
+
 // Whether a dielectric reflects the ambient and hemisphere environment as
 // metals do: water (WATER) mirrors its surroundings by Fresnel even where no
 // sky cube is lit.
@@ -469,6 +477,10 @@ fn standard_radiance(
         reflection = (prefiltered * sky + probe.reflected / PI * occlusion * probe.coverage)
             * environment_brdf(f0, roughness, n_dot_v);
     }
+#ifdef SCENE_COLOR
+    reflection = mix(reflection, water_reflection.rgb * environment_brdf(f0, roughness, n_dot_v),
+        water_reflection.a);
+#endif
     return albedo * (1.0 - metalness) * irradiance / PI + specular + reflection;
 }
 
@@ -520,7 +532,7 @@ fn ambient_sky(index: u32, position: vec3<f32>, normal: vec3<f32>, radius: i32) 
 // the full wetness, walls `WET_WALLS` of it and undersides none, and only
 // under the open sky, so ground under a roof or in a cave stays dry.
 // Puddles gather on flat ground in patches about `PUDDLE_METRES` across:
-// darker still, nearly mirror-smooth and flat. Frozen (`Frame.ice.x`, 0 to
+// darker still, nearly mirror-smooth and flat. Frozen (`Frame.water.x`, 0 to
 // 1), ice grows in from each puddle's edge toward its middle, reaching it at
 // 1, so a thaw reads as the ice shrinking back to water: paler and a little
 // blue (`ICE_TINT`), flat, with blurred reflections (`ICE_ROUGHNESS`).
@@ -567,7 +579,7 @@ fn wet_under(surface: Surface, open: f32) -> Surface {
         result.base = vec4<f32>(result.base.rgb * mix(1.0, PUDDLE_DARKENING, pool), result.base.a);
         result.roughness = min(result.roughness, mix(result.roughness, PUDDLE_ROUGHNESS, pool));
         result.normal = normalize(mix(result.normal, vec3<f32>(0.0, 1.0, 0.0), pool));
-        let frozen = frame.ice.x;
+        let frozen = frame.water.x;
         if frozen > 0.0 && pool > 0.0 {
             // How far into the puddle this point is, against how far the
             // ice has reached from its edge (the deepest point is

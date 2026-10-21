@@ -545,7 +545,10 @@ pub fn markdown(report: &GalleryReport) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use render_model::{AmbientOcclusionMode, VolumetricCloudsQuality, VolumetricFogQuality};
+    use render_model::{
+        AmbientOcclusionMode, VolumetricCloudsQuality, VolumetricFogQuality,
+        WaterReflectionsQuality,
+    };
 
     #[test]
     fn a_plain_scene_offers_every_feature_it_leaves_off_then_everything() {
@@ -568,6 +571,7 @@ mod tests {
                 "ambientOcclusion-distanceField",
                 "volumetricFog-low",
                 "volumetricClouds-low",
+                "waterReflections-low",
                 "clusteredLighting-true",
                 "gpuCulling-true",
                 "occlusionCulling-true",
@@ -593,6 +597,7 @@ mod tests {
                 occlusion_culling: true,
                 volumetric_fog: VolumetricFogQuality::High,
                 volumetric_clouds: VolumetricCloudsQuality::High,
+                water_reflections: WaterReflectionsQuality::High,
                 ..RendererSettingsDescriptor::DEFAULT
             };
             settings.ambient_occlusion.mode = mode;

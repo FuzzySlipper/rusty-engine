@@ -102,6 +102,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const int PierPosts = 3;
     private static readonly Color SandColor = new(.78f,.7f,.5f,1), PierColor = new(.45f,.32f,.2f,1), WaterTint = new(1,1,1,.35f);
     private static MaterialWater ShoreWater(RenderResource foam, RenderResource ripples) => new(new(.18f,.55f,.5f,1), new(.01f,.08f,.2f,1), 1.8f, .35f, .55f, new(.03f,.02f), new(.04f,.03f), new(-.02f,.035f), 3f, foam, ripples);
+    // The shore water absorbing the sand behind it toward blue-green every metre and a half, and wavering it under the ripples.
+    private static readonly Color ShoreAbsorption = new(.3f,.75f,.7f,1);
+    private const float ShoreAbsorptionDistance = 1.5f, ShoreRefraction = .3f;
     private static readonly Vector3 ShoreEye = new(22, 5.5f, 3), ShoreTarget = new(28, 1.6f, 15);
     private SpatialSession? shore;
     private VoxelScenePresentation? shorePresentation;
@@ -303,7 +306,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.SetWind(new(WindDirection,strength,WindGust));
         return Inspect();
     }
-    // Show (or clear) the shore: the sand bank, the water slab (depth tint, foam at the bank and the pier, scrolling ripples, Fresnel) and the pier; 0 builds the slab without the water feature, so the plain blended material shows for comparison; below 0 clears the scene.
+    // Show (or clear) the shore: the sand bank, the water slab (depth tint, foam at the bank and the pier, scrolling ripples, Fresnel) and the pier; 2 the same water absorbing and refracting the sand behind it; 0 builds the slab without the water feature, so the plain blended material shows for comparison; below 0 clears the scene.
     [DebugCommand("lighting.water")]
     public string Water(float mode)
     {
@@ -325,7 +328,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         {
             NormalMap = ripplesMap,
             NormalScale = .6f,
-            Water = mode > 0 ? ShoreWater(foamSprite,ripplesMap) : default,
+            Water = mode switch
+            {
+                > 1 => ShoreWater(foamSprite,ripplesMap) with { AbsorptionColor = ShoreAbsorption, AbsorptionDistance = ShoreAbsorptionDistance, Refraction = ShoreRefraction },
+                > 0 => ShoreWater(foamSprite,ripplesMap),
+                _ => default,
+            },
         };
         {
             sand = engine.Graphics.CreateMaterial(new(SandColor,default(RenderResourceReference),.95f,white,Vector3.Zero,0,false));
@@ -686,6 +694,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string FogVolume(long id, float x, float y, float z, float radius, float density, float glow)
     {
         engine.CameraView.SetFogVolume(new((uint)id,FogVolumeShape.Ellipsoid,new(x,y,z),new(radius,radius*.6f,radius),0,Math.Clamp(density,0,4),FogAlbedo,FogGlow*Math.Clamp(glow,0,4),FogEdge,FogNoiseCell,FogNoiseStrength,FogDrift));
+        return Inspect();
+    }
+    // How water reflects the view (off, low, high), as a player's video option sets it.
+    [DebugCommand("lighting.water.reflections")]
+    public string WaterReflections(string quality)
+    {
+        var level = quality switch { "low" => WaterReflectionsQuality.Low, "high" => WaterReflectionsQuality.High, _ => WaterReflectionsQuality.Off };
+        engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { WaterReflections = level });
         return Inspect();
     }
     // How the sky's clouds draw (off, low, high), as a player's video option sets it.

@@ -186,6 +186,19 @@ impl Gpu {
         self.device.limits().max_buffer_size
     }
 
+    /// Why water on this device cannot read the opaque scene's colour
+    /// (`water.rs`), if it cannot: the water pass binds one more texture
+    /// than WebGPU guarantees.
+    pub(crate) fn scene_color_refusal(&self) -> Option<String> {
+        let granted = self.device.limits().max_sampled_textures_per_shader_stage;
+        (granted < crate::water::SCENE_SAMPLED_TEXTURES).then(|| {
+            format!(
+                "the device binds {granted} sampled textures per shader stage; water with the scene's colour binds {}",
+                crate::water::SCENE_SAMPLED_TEXTURES
+            )
+        })
+    }
+
     /// Why this device cannot lay decals, if it cannot: the world pass binds
     /// two more textures with them than WebGPU guarantees.
     pub(crate) fn decals_refusal(&self) -> Option<String> {

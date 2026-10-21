@@ -425,6 +425,12 @@ impl MaterialWindDescriptor {
 /// either), read over the ground every `wave_scale` metres and scaled by
 /// `ripple_scale`. The foam and ripple textures take a product shader's two
 /// texture slots (`product_map_a`, `product_map_b`).
+///
+/// With `absorption_distance` or `refraction` above 0 the water reads a copy
+/// of the opaque scene's colour (render-wgpu `water.rs`): what it shows
+/// through itself keeps `absorption_color` of its light every
+/// `absorption_distance` metres of water along the view ray, and shifts
+/// along the ripples' tilt by `refraction` metres per metre of water.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaterialWaterDescriptor {
@@ -445,12 +451,26 @@ pub struct MaterialWaterDescriptor {
     /// a flat surface. The material request's normal scale.
     #[serde(default = "one")]
     pub ripple_scale: f32,
+    /// Linear RGB, 0 to 1: the share of each channel of the scene behind
+    /// that survives `absorption_distance` metres of water.
+    #[serde(default = "white")]
+    pub absorption_color: [f32; 3],
+    /// Metres; 0 absorbs nothing.
+    #[serde(default)]
+    pub absorption_distance: f32,
+    /// 0 to 1; 0 does not refract.
+    #[serde(default)]
+    pub refraction: f32,
 }
 
 impl MaterialWaterDescriptor {
+    /// The most `refraction` takes.
+    pub const MAX_REFRACTION: f32 = 1.0;
+
     /// Finite values: non-negative colours, a positive depth and wave scale,
-    /// a non-negative shoreline width, a threshold within 0 to 1 and a finite
-    /// ripple scale.
+    /// a non-negative shoreline width, a threshold within 0 to 1, an
+    /// absorption colour within 0 to 1, a non-negative absorption distance
+    /// and a refraction within 0 to `MAX_REFRACTION`.
     pub fn valid(&self) -> bool {
         let non_negative = |value: f32| value.is_finite() && value >= 0.0;
         let positive = |value: f32| value.is_finite() && value > 0.0;
@@ -464,7 +484,23 @@ impl MaterialWaterDescriptor {
                 .iter()
                 .all(|scroll| scroll.iter().all(|value| value.is_finite()))
             && self.ripple_scale.is_finite()
+            && self
+                .absorption_color
+                .iter()
+                .all(|value| (0.0..=1.0).contains(value))
+            && non_negative(self.absorption_distance)
+            && (0.0..=Self::MAX_REFRACTION).contains(&self.refraction)
     }
+
+    /// Whether the water reads the opaque scene's colour behind it: it
+    /// absorbs or refracts.
+    pub fn reads_scene(&self) -> bool {
+        self.absorption_distance > 0.0 || self.refraction > 0.0
+    }
+}
+
+fn white() -> [f32; 3] {
+    [1.0; 3]
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

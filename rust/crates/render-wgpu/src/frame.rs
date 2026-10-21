@@ -392,6 +392,7 @@ impl Renderer {
         self.sky_captured = false;
         self.shadows_rendered = (0, 0);
         self.finish.begin_frame(&self.gpu);
+        self.water.begin_frame(&self.gpu);
         for timer in [&mut self.shadow_timer, &mut self.backdrop_shadow_timer]
             .into_iter()
             .flatten()
@@ -2674,7 +2675,10 @@ impl Renderer {
         for value in [snow.color[0], snow.color[1], snow.color[2], 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        for value in [wetness.frozen, 0.0, 0.0, 0.0] {
+        // The puddles' ice, and the water's reflection march (`world.wgsl`
+        // `water_reflection_of`).
+        let (steps, reach) = self.water_reflection_march().unwrap_or((0, 0.0));
+        for value in [wetness.frozen, steps as f32, reach, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         for value in backdrop.unwrap_or_default() {
@@ -3094,11 +3098,14 @@ impl Renderer {
             .unwrap_or(batches.len());
         // A water surface among the blended parts reads the opaque depth:
         // the pass splits there, the depth copied between its halves.
-        let water = water::WaterDepth::wanted(
+        let (water, reads_scene) = water::WaterScene::wanted(
             batches[blend_start..]
                 .iter()
                 .map(|batch| self.tables.parts.state[batch.part as usize].class.features),
         );
+        // The opaque colour too where a water reads it or the view reflects
+        // in its water.
+        let scene_color = water && (reads_scene || self.water_reflection_march().is_some());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(match view.layer {
@@ -3194,7 +3201,12 @@ impl Renderer {
                 .draw_solid_sprites(&mut pass, hdr_format, &effects);
             if water {
                 drop(pass);
-                self.water.capture(&self.gpu, &mut encoder, &view.target);
+                self.water.capture(
+                    &self.gpu,
+                    &mut encoder,
+                    &view.target,
+                    scene_color.then_some(&hdr.color),
+                );
                 pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("render-wgpu world blended"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -3424,6 +3436,9 @@ impl Renderer {
         self.gpu.queue.submit([encoder.finish()]);
         if fog.is_some() {
             self.volumetric_fog.submitted();
+        }
+        if water {
+            self.water.submitted();
         }
         if occlusion.is_some() {
             self.ambient_occlusion.submitted();

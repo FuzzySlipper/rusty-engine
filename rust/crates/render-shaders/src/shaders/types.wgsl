@@ -87,8 +87,10 @@ struct Frame {
     // rgb: the snow's linear colour.
     snow_color: vec4<f32>,
     // x: how frozen the puddles are (`lighting.wgsl` `wet_under`; 0 water to
-    // 1 ice).
-    ice: vec4<f32>,
+    // 1 ice). The water's screen-space reflection (`world.wgsl`
+    // `water_reflection`, SCENE_COLOR): y its march's steps (0: off), z how
+    // far it reaches, metres.
+    water: vec4<f32>,
     // A backdrop pass (render-wgpu `frame.rs` `encode_backdrop`) draws in
     // backdrop units: a backdrop point p stands at xyz + p * w in the world
     // (`rusty::view::world_equivalent`). w is 0 in every other pass.
@@ -219,6 +221,11 @@ struct MaterialUniform {
     water_deep: vec4<f32>,
     water_scroll: vec4<f32>,
     water_params: vec4<f32>,
+    // WATER_SCENE: rgb the share of the scene's light kept every w metres
+    // of water (w 0: none absorbed); x the refraction, metres of shift per
+    // metre of water at a tilt of one.
+    water_absorption: vec4<f32>,
+    water_refraction: vec4<f32>,
     // x: 1 when the material keeps dry under the scene's wetness
     // (`rusty::lighting::wetted` passes it by); y: 1 when its scatter
     // copies sink and pale under snow (`world.wgsl` `snow_sunk`).

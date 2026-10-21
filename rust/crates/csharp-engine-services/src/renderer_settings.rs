@@ -11,12 +11,12 @@ use csharp_engine_abi::{
     NativeRendererSettingOptionReadout, NativeRendererSettingRefusal, NativeRendererSettingsApi,
     NativeRendererSettingsCatalogueResult, NativeRendererSettingsReadout,
     NativeRendererSettingsRequest, NativeUtf8Slice, NativeVolumetricCloudsQuality,
-    NativeVolumetricFogQuality,
+    NativeVolumetricFogQuality, NativeWaterReflectionsQuality,
 };
 use render_model::{
     renderer_setting_value, AmbientOcclusionMode, AmbientOcclusionSettings, RendererSettingKind,
     RendererSettingsDescriptor, VolumetricCloudsQuality, VolumetricFogQuality,
-    RENDERER_SETTING_OPTIONS,
+    WaterReflectionsQuality, RENDERER_SETTING_OPTIONS,
 };
 
 use crate::composition::ABI_OK;
@@ -79,6 +79,7 @@ impl RuntimeRendererSettingsBridge {
                 occlusion_culling_refusal: NativeRendererSettingRefusal::None,
                 volumetric_fog_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
                 volumetric_clouds_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
+                water_reflections_refusal: NativeRendererSettingRefusal::None,
             },
             catalogue: DescribedCatalogue::default(),
             operation_diagnostics: Default::default(),
@@ -100,6 +101,7 @@ impl RuntimeRendererSettingsBridge {
             "occlusionCulling" => readout.occlusion_culling_refusal,
             "volumetricFog" => readout.volumetric_fog_refusal,
             "volumetricClouds" => readout.volumetric_clouds_refusal,
+            "waterReflections" => readout.water_reflections_refusal,
             _ => NativeRendererSettingRefusal::None,
         };
         // The value texts first, then rows pointing into them: the strings'
@@ -249,6 +251,11 @@ pub(crate) fn renderer_settings_descriptor(
             NativeVolumetricCloudsQuality::Low => VolumetricCloudsQuality::Low,
             NativeVolumetricCloudsQuality::High => VolumetricCloudsQuality::High,
         },
+        water_reflections: match request.water_reflections {
+            NativeWaterReflectionsQuality::Off => WaterReflectionsQuality::Off,
+            NativeWaterReflectionsQuality::Low => WaterReflectionsQuality::Low,
+            NativeWaterReflectionsQuality::High => WaterReflectionsQuality::High,
+        },
     }
 }
 
@@ -287,6 +294,11 @@ pub fn renderer_settings_request(
             VolumetricCloudsQuality::Off => NativeVolumetricCloudsQuality::Off,
             VolumetricCloudsQuality::Low => NativeVolumetricCloudsQuality::Low,
             VolumetricCloudsQuality::High => NativeVolumetricCloudsQuality::High,
+        },
+        water_reflections: match settings.water_reflections {
+            WaterReflectionsQuality::Off => NativeWaterReflectionsQuality::Off,
+            WaterReflectionsQuality::Low => NativeWaterReflectionsQuality::Low,
+            WaterReflectionsQuality::High => NativeWaterReflectionsQuality::High,
         },
     }
 }

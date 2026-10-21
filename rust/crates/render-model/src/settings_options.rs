@@ -11,7 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    AmbientOcclusionMode, RendererSettingsDescriptor, VolumetricCloudsQuality, VolumetricFogQuality,
+    AmbientOcclusionMode, RendererSettingsDescriptor, VolumetricCloudsQuality,
+    VolumetricFogQuality, WaterReflectionsQuality,
 };
 
 /// One choice of a [`RendererSettingKind::Choice`] option.
@@ -204,6 +205,9 @@ const VOLUMETRIC_FOG_CHOICES: &[RendererSettingChoice] = &[
 ];
 
 /// Every renderer setting, in the order a menu shows them.
+/// Measured on `render-wgpu` `tests/water.rs`'s still water before a wall.
+const WATER_REFLECTIONS_COST: &str = "With still water filling the lower view at 1920×1080 and 4× multisampling, Low about 0.17 ms and High about 0.30 ms on an RX 9070 XT, 0.04 ms of it the copy of the scene's colour. Nothing in views without water.";
+
 pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
     RendererSettingOption {
         id: "renderScale",
@@ -341,6 +345,18 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         gallery: GalleryExperiment::Try { values: &["low"], alternatives: false, everything: Some("low"), requires: None, setup: Some(GallerySetup::Product("a cloud layer or regions (CameraView.SetClouds)")) },
     },
     RendererSettingOption {
+        id: "waterReflections",
+        label: "Water reflections",
+        group: "Lighting",
+        description: "Water mirrors what is on screen around it, such as banks, lamps and cave walls, instead of only the sky. Costs most where water fills the screen.",
+        kind: RendererSettingKind::Choice {
+            choices: VOLUMETRIC_FOG_CHOICES,
+        },
+        restart: false,
+        cost: WATER_REFLECTIONS_COST,
+        gallery: GalleryExperiment::Try { values: &["low"], alternatives: false, everything: Some("low"), requires: None, setup: Some(GallerySetup::Product("water materials (MaterialRequest.Water)")) },
+    },
+    RendererSettingOption {
         id: "clusteredLighting",
         label: "Clustered lighting",
         group: "Advanced",
@@ -429,6 +445,8 @@ pub struct RendererSettingsOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volumetric_clouds: Option<VolumetricCloudsQuality>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub water_reflections: Option<WaterReflectionsQuality>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub clustered_lighting: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_culling: Option<bool>,
@@ -499,6 +517,9 @@ impl RendererSettingsOverrides {
         if let Some(value) = self.volumetric_clouds {
             settings.volumetric_clouds = value;
         }
+        if let Some(value) = self.water_reflections {
+            settings.water_reflections = value;
+        }
         if let Some(value) = self.clustered_lighting {
             settings.clustered_lighting = value;
         }
@@ -525,6 +546,7 @@ impl RendererSettingsOverrides {
             "ambientOcclusionRadius" => self.ambient_occlusion_radius.is_some(),
             "volumetricFog" => self.volumetric_fog.is_some(),
             "volumetricClouds" => self.volumetric_clouds.is_some(),
+            "waterReflections" => self.water_reflections.is_some(),
             "clusteredLighting" => self.clustered_lighting.is_some(),
             "gpuCulling" => self.gpu_culling.is_some(),
             "occlusionCulling" => self.occlusion_culling.is_some(),
@@ -603,6 +625,13 @@ impl RendererSettingsOverrides {
                     _ => VolumetricCloudsQuality::Off,
                 })
             }
+            "waterReflections" => {
+                self.water_reflections = Some(match choice()? {
+                    "low" => WaterReflectionsQuality::Low,
+                    "high" => WaterReflectionsQuality::High,
+                    _ => WaterReflectionsQuality::Off,
+                })
+            }
             "volumetricFog" => {
                 self.volumetric_fog = Some(match choice()? {
                     "low" => VolumetricFogQuality::Low,
@@ -632,6 +661,7 @@ impl RendererSettingsOverrides {
             "ambientOcclusionRadius" => self.ambient_occlusion_radius = None,
             "volumetricFog" => self.volumetric_fog = None,
             "volumetricClouds" => self.volumetric_clouds = None,
+            "waterReflections" => self.water_reflections = None,
             "clusteredLighting" => self.clustered_lighting = None,
             "gpuCulling" => self.gpu_culling = None,
             "occlusionCulling" => self.occlusion_culling = None,
@@ -685,6 +715,11 @@ impl RendererSettingsOverrides {
                 VolumetricFogQuality::Low => VolumetricCloudsQuality::Low,
                 VolumetricFogQuality::High => VolumetricCloudsQuality::High,
             }),
+            water_reflections: Some(match fog {
+                VolumetricFogQuality::Off => WaterReflectionsQuality::Off,
+                VolumetricFogQuality::Low => WaterReflectionsQuality::Low,
+                VolumetricFogQuality::High => WaterReflectionsQuality::High,
+            }),
             ..Self::default()
         })
     }
@@ -707,6 +742,7 @@ impl RendererSettingsOverrides {
                 .or(self.ambient_occlusion_radius),
             volumetric_fog: preset.volumetric_fog.or(self.volumetric_fog),
             volumetric_clouds: preset.volumetric_clouds.or(self.volumetric_clouds),
+            water_reflections: preset.water_reflections.or(self.water_reflections),
             clustered_lighting: preset.clustered_lighting.or(self.clustered_lighting),
             gpu_culling: preset.gpu_culling.or(self.gpu_culling),
             occlusion_culling: preset.occlusion_culling.or(self.occlusion_culling),
@@ -746,6 +782,11 @@ pub fn renderer_setting_value(settings: &RendererSettingsDescriptor, id: &str) -
             VolumetricCloudsQuality::Off => "off",
             VolumetricCloudsQuality::Low => "low",
             VolumetricCloudsQuality::High => "high",
+        }),
+        "waterReflections" => Value::from(match settings.water_reflections {
+            WaterReflectionsQuality::Off => "off",
+            WaterReflectionsQuality::Low => "low",
+            WaterReflectionsQuality::High => "high",
         }),
         "volumetricFog" => Value::from(match settings.volumetric_fog {
             VolumetricFogQuality::Off => "off",

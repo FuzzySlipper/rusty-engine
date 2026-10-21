@@ -104,11 +104,16 @@ impl Features {
     /// mesh's bounding sphere and the views a side), and lights by the
     /// baked normals in the normal map's slot.
     pub const IMPOSTOR: Self = Self::bit(524288);
+    /// A WATER surface that reads the opaque scene's colour behind it
+    /// (render-wgpu `water.rs`): it absorbs and refracts what shows through
+    /// it, and draws it over what lies behind in place of blending. Only
+    /// with WATER, on a device that binds the copy (`SCENE_COLOR`).
+    pub const WATER_SCENE: Self = Self::bit(1048576);
     /// Every standard feature's bit.
     #[cfg(test)]
-    const ALL_BITS: u32 = 1048575;
+    const ALL_BITS: u32 = 2097151;
 
-    const DEFS: [(Self, &'static str); 20] = [
+    const DEFS: [(Self, &'static str); 21] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -129,6 +134,7 @@ impl Features {
         (Self::SCATTER, "SCATTER"),
         (Self::SCATTER_SELECTED, "SCATTER_SELECTED"),
         (Self::IMPOSTOR, "IMPOSTOR"),
+        (Self::WATER_SCENE, "WATER_SCENE"),
     ];
 
     const fn bit(bits: u32) -> Self {
@@ -211,7 +217,7 @@ impl Features {
     /// map and shades neither flat nor layered; a material has an occlusion
     /// map or an ORM map; flat shading drops the normal map; terrain layers
     /// need a voxel surface; water is blended (never masked) and reads its
-    /// normal maps itself; a morphing mesh (a heightfield tile) has neither
+    /// normal maps itself, and only water reads the scene; a morphing mesh (a heightfield tile) has neither
     /// tangents nor vertex occlusion.
     #[cfg(test)]
     fn occurs(self) -> bool {
@@ -232,6 +238,7 @@ impl Features {
             excluded(Self::FLAT_SHADING, Self::NORMAL_MAP),
             layers_without_surface,
             excluded(Self::WATER, Self::MASK | Self::NORMAL_MAP),
+            self.contains(Self::WATER_SCENE) && !self.contains(Self::WATER),
             excluded(Self::MORPH, Self::VERTEX_TANGENTS | Self::VERTEX_OCCLUSION),
             // A scatter run copies a static mesh: never a heightfield tile,
             // a water surface or layered voxel ground.
@@ -289,6 +296,11 @@ impl Features {
         // The world pass lays projected decals (`rusty::decals`), unless
         // the device cannot bind them (`Shaders::without_decals`).
         defs.insert("DECALS".to_string(), ShaderDefValue::Bool(true));
+        // Water binds the opaque scene's colour copy, unless the device
+        // cannot (`Shaders::without_scene_color`).
+        if self.contains(Self::WATER) {
+            defs.insert("SCENE_COLOR".to_string(), ShaderDefValue::Bool(true));
+        }
         // The shadow pass has a fragment stage only to discard.
         if self.caster_fragment() {
             defs.insert("CASTER_FRAGMENT".to_string(), ShaderDefValue::Bool(true));
@@ -346,8 +358,9 @@ const PRODUCT_DISPLACES_NORMAL: u32 = 1 << 29;
 const PRODUCT_FLAGS: u32 = PRODUCT_CASTS | PRODUCT_DISPLACES | PRODUCT_DISPLACES_NORMAL;
 
 /// Shader defs a product keyword may not take.
-const RESERVED_DEFS: [&str; 6] = [
+const RESERVED_DEFS: [&str; 7] = [
     "DECALS",
+    "SCENE_COLOR",
     "PRODUCT_SHADER",
     "PRODUCT_CASTS",
     "PRODUCT_DISPLACES",
@@ -546,6 +559,8 @@ pub struct Shaders {
     composer: Composer,
     /// The world pass lays decals (DECALS).
     decals: bool,
+    /// Water binds the opaque scene's colour copy (SCENE_COLOR).
+    scene_color: bool,
     /// Product shaders by id - 1; the module last added as `rusty::product`.
     products: Vec<ProductShader>,
     current: Option<u32>,
@@ -573,6 +588,7 @@ impl Shaders {
         Self {
             composer,
             decals: true,
+            scene_color: true,
             products: Vec::new(),
             current: None,
         }
@@ -582,6 +598,14 @@ impl Shaders {
     /// their textures.
     pub fn without_decals(mut self) -> Self {
         self.decals = false;
+        self
+    }
+
+    /// Compose water without the opaque scene's colour copy (no
+    /// SCENE_COLOR, and WATER_SCENE drawn as WATER), for a device that
+    /// cannot bind it.
+    pub fn without_scene_color(mut self) -> Self {
+        self.scene_color = false;
         self
     }
 
@@ -635,6 +659,12 @@ impl Shaders {
         let mut defs = features.defs();
         if !self.decals {
             defs.remove("DECALS");
+        }
+        // Without the colour copy a water that reads the scene draws as
+        // water that does not.
+        if !self.scene_color {
+            defs.remove("SCENE_COLOR");
+            defs.remove("WATER_SCENE");
         }
         if index != 0 {
             for keyword in &self.products[index - 1].keywords {
@@ -1094,6 +1124,38 @@ fn shade(surface: Surface) -> vec4<f32> {
                     group_three,
                     decals && !features.contains(Features::WATER),
                     "{features:?} with decals {decals}"
+                );
+            }
+        }
+    }
+
+    /// A device that cannot bind the scene's colour composes water without
+    /// it: group 2 holds the depth copy alone, and water that reads the
+    /// scene composes as water that does not.
+    #[test]
+    fn water_composes_without_the_scene_color() {
+        for scene_color in [true, false] {
+            let mut shaders = if scene_color {
+                Shaders::new()
+            } else {
+                Shaders::new().without_scene_color()
+            };
+            for features in [Features::WATER, Features::WATER | Features::WATER_SCENE] {
+                let module = shaders.compose(Entry::World, features).unwrap();
+                let group_two = module
+                    .global_variables
+                    .iter()
+                    .filter(|(_, global)| {
+                        global
+                            .binding
+                            .as_ref()
+                            .is_some_and(|binding| binding.group == 2)
+                    })
+                    .count();
+                assert_eq!(
+                    group_two,
+                    if scene_color { 3 } else { 1 },
+                    "{features:?} with the scene's colour {scene_color}"
                 );
             }
         }

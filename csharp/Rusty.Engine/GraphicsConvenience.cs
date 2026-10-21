@@ -308,6 +308,24 @@ public readonly partial record struct MaterialShader
         : this(Shader, Parameter0, Parameter1, Parameter2, Parameter3, TextureA, TextureB, 0f) { }
 }
 
+public readonly partial record struct MaterialWater
+{
+    /// <summary>Water that shows the scene behind it without absorbing or refracting it.</summary>
+    public MaterialWater(
+        Color ShallowColor,
+        Color DeepColor,
+        float DepthScale,
+        float ShorelineWidth,
+        float FoamThreshold,
+        Vector2 FoamScroll,
+        Vector2 NormalScrollA,
+        Vector2 NormalScrollB,
+        float WaveScale,
+        RenderResourceReference FoamTexture,
+        RenderResourceReference RippleTexture)
+        : this(ShallowColor, DeepColor, DepthScale, ShorelineWidth, FoamThreshold, FoamScroll, NormalScrollA, NormalScrollB, WaveScale, FoamTexture, RippleTexture, new Color(1, 1, 1, 1), 0f, 0f) { }
+}
+
 public readonly partial record struct MeshResourceCreateRequest
 {
     public MeshResourceCreateRequest(

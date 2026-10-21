@@ -547,6 +547,9 @@ struct ManifestRendererLighting {
     /// `off`, `low` or `high`; absent is off.
     #[serde(default)]
     volumetric_clouds: Option<String>,
+    /// `off`, `low` or `high`; absent is off.
+    #[serde(default)]
+    water_reflections: Option<String>,
     #[serde(default)]
     default_lights: ManifestDefaultLights,
 }
@@ -703,6 +706,17 @@ impl ProductRendererSettings {
                 ))
             }
         };
+        let water_reflections = match value.lighting.water_reflections.as_deref() {
+            None | Some("off") => render_model::WaterReflectionsQuality::Off,
+            Some("low") => render_model::WaterReflectionsQuality::Low,
+            Some("high") => render_model::WaterReflectionsQuality::High,
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.lighting.waterReflections",
+                    "must be off, low or high",
+                ))
+            }
+        };
         let render_scale = value.render_scale.unwrap_or(1.0);
         if !render_scale.is_finite()
             || !(RendererSettingsDescriptor::MIN_RENDER_SCALE..=1.0).contains(&render_scale)
@@ -730,6 +744,7 @@ impl ProductRendererSettings {
                 occlusion_culling: false,
                 volumetric_fog,
                 volumetric_clouds,
+                water_reflections,
             },
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,

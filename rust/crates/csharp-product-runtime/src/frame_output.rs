@@ -665,6 +665,9 @@ impl FrameOutput {
             }
             Some(SettingRefusal::VsyncOnly) => NativeRendererSettingRefusal::VsyncOnly,
             Some(SettingRefusal::SoftwareAdapter) => NativeRendererSettingRefusal::SoftwareAdapter,
+            Some(SettingRefusal::TooFewTextureBindings) => {
+                NativeRendererSettingRefusal::TooFewTextureBindings
+            }
         };
         let mut effective = readout.effective;
         let vsync_refusal = if self.stream.is_some() && readout.requested.vsync {
@@ -684,6 +687,7 @@ impl FrameOutput {
             occlusion_culling_refusal: refusal(readout.occlusion_culling),
             volumetric_fog_refusal: refusal(readout.volumetric_fog),
             volumetric_clouds_refusal: refusal(readout.volumetric_clouds),
+            water_reflections_refusal: refusal(readout.water_reflections),
         }
     }
 
@@ -904,6 +908,12 @@ fn settings_statistics(
                 render_model::VolumetricCloudsQuality::High => "high",
             }
             .to_owned(),
+            water_reflections: match settings.water_reflections {
+                render_model::WaterReflectionsQuality::Off => "off",
+                render_model::WaterReflectionsQuality::Low => "low",
+                render_model::WaterReflectionsQuality::High => "high",
+            }
+            .to_owned(),
         };
     let reason = |refusal: SettingRefusal| match refusal {
         SettingRefusal::NoComputeShaders => "the adapter has no compute shaders",
@@ -913,6 +923,9 @@ fn settings_statistics(
         SettingRefusal::UnsupportedSampleCount => "the adapter cannot multisample at that count",
         SettingRefusal::VsyncOnly => "the display presents only in step with its refresh",
         SettingRefusal::SoftwareAdapter => "a software adapter draws without it",
+        SettingRefusal::TooFewTextureBindings => {
+            "the adapter binds too few textures per shader stage"
+        }
     };
     let mut effective = readout.effective;
     let mut refused = std::collections::BTreeMap::new();
@@ -925,6 +938,7 @@ fn settings_statistics(
         ("occlusionCulling", readout.occlusion_culling),
         ("volumetricFog", readout.volumetric_fog),
         ("volumetricClouds", readout.volumetric_clouds),
+        ("waterReflections", readout.water_reflections),
     ] {
         if let Some(refusal) = refusal {
             refused.insert(setting.to_owned(), reason(refusal).to_owned());

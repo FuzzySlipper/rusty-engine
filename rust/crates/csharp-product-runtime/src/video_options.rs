@@ -150,6 +150,7 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         "occlusionCulling" => readout.occlusion_culling,
         "volumetricFog" => readout.volumetric_fog,
         "volumetricClouds" => readout.volumetric_clouds,
+        "waterReflections" => readout.water_reflections,
         _ => None,
     }?;
     Some(match refused {
@@ -163,6 +164,9 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         SettingRefusal::VsyncOnly => "This display only presents in step with its refresh.",
         SettingRefusal::SoftwareAdapter => {
             "This is a software graphics adapter, which draws without it."
+        }
+        SettingRefusal::TooFewTextureBindings => {
+            "This graphics device binds too few textures at once for it."
         }
     })
 }
@@ -346,6 +350,7 @@ mod tests {
             occlusion_culling: None,
             volumetric_fog: None,
             volumetric_clouds: None,
+            water_reflections: None,
         };
         let catalogue = options.catalogue(&readout);
         assert_eq!(catalogue["stored"], false);

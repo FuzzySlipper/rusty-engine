@@ -326,7 +326,11 @@ volumetricFog: string,
 /**
  * `off`, `low` or `high`.
  */
-volumetricClouds: string, };
+volumetricClouds: string, 
+/**
+ * `off`, `low` or `high`.
+ */
+waterReflections: string, };
 
 /**
  * The renderer settings (`RendererSettings`): what the product or its

@@ -3,7 +3,7 @@
 // finishes (`rusty::finish`). Each material compiles the features it uses
 // (`lib.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
 // EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR, TERRAIN_LAYERS, STOCHASTIC_TILING,
-// FLAT_SHADING, WIND, WATER; and the mesh's
+// FLAT_SHADING, WIND, WATER, WATER_SCENE; and the mesh's
 // streams: VERTEX_TANGENTS, LAYER_WEIGHTS, VERTEX_OCCLUSION. A product shader (PRODUCT_SHADER)
 // shades the surface in place of `rusty::shade`, and may place its vertices
 // (PRODUCT_DISPLACES) and give their normals (PRODUCT_DISPLACES_NORMAL).
@@ -54,6 +54,9 @@
 #import rusty::types::Surface
 #import rusty::shade::standard_shade
 #import rusty::lighting::{weathered, snow_sunk, copy_open_sky}
+#ifdef SCENE_COLOR
+#import rusty::lighting::water_reflection
+#endif
 #ifdef DECALS
 #import rusty::decals::decaled
 #endif
@@ -79,6 +82,13 @@ struct AmbientOcclusion {
 // is the opaque pass's depth instead (render-wgpu `water.rs`), by target
 // pixel: what lies behind the water's surface.
 @group(2) @binding(0) var scene_depth: texture_depth_2d;
+#ifdef SCENE_COLOR
+// The opaque pass's colour (linear HDR; alpha its coverage), copied with
+// the depth when a water reads the scene or the view reflects in its water;
+// a 1×1 stand-in otherwise, which nothing reads.
+@group(2) @binding(1) var scene_color: texture_2d<f32>;
+@group(2) @binding(2) var scene_sampler: sampler;
+#endif
 #else
 @group(2) @binding(0) var ambient_occlusion_map: texture_2d<f32>;
 @group(2) @binding(1) var ambient_occlusion_sampler: sampler;
@@ -559,11 +569,157 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
 }
 
 #ifdef WATER
+#ifdef SCENE_COLOR
+// The view's viewport in its target, pixels (xy origin, zw size), from a
+// fragment's place in it: `ndc` its normalized device xy, `pixel` its
+// target position. Called in uniform control flow (screen derivatives).
+fn viewport_of(ndc: vec2<f32>, pixel: vec2<f32>) -> vec4<f32> {
+    let size = 2.0 / vec2<f32>(dpdx(ndc.x), -dpdy(ndc.y));
+    return vec4<f32>(pixel - (ndc * vec2<f32>(0.5, -0.5) + 0.5) * size, size);
+}
+
+// Where world point `point` falls in the target, pixels, under the view's
+// viewport; w below 0 behind the camera.
+fn target_pixel(point: vec3<f32>, viewport: vec4<f32>) -> vec4<f32> {
+    let clip = projected(point);
+    let ndc = clip.xyz / clip.w;
+    return vec4<f32>(viewport.xy + (ndc.xy * vec2<f32>(0.5, -0.5) + 0.5) * viewport.zw, ndc.z, clip.w);
+}
+
+// The world point the depth copy holds at target pixel `pixel`.
+fn scene_point(pixel: vec2<f32>, viewport: vec4<f32>) -> vec3<f32> {
+    let z = textureLoad(scene_depth, vec2<i32>(pixel), 0);
+    let ndc = ((pixel - viewport.xy) / viewport.zw - 0.5) * vec2<f32>(2.0, -2.0);
+    let behind = frame.inv_view_proj * vec4<f32>(ndc, z, 1.0);
+    return behind.xyz / behind.w;
+}
+
+// The opaque scene seen along the ray from `origin` in `direction`
+// (`Frame.water`): the ray out to the march's reach, cut at the camera's
+// plane and where it leaves the viewport, is marched across the depth copy
+// in the march's steps, spread evenly over the screen and offset per pixel.
+// Where it first passes behind the scene, by less than its step, the hit is
+// refined by halving and the colour there taken, its weight fading toward
+// the viewport's edges, the march's reach and what the copy does not
+// cover. 0 where the ray leaves the viewport first or passes behind
+// something thicker than its step.
+fn water_reflection_of(origin: vec3<f32>, direction: vec3<f32>, viewport: vec4<f32>, pixel: vec2<f32>) -> vec4<f32> {
+    let steps = u32(frame.water.y);
+    let reach = frame.water.z;
+    let start = projected(origin);
+    var end = projected(origin + direction * reach);
+    var length = reach;
+    if end.w < WATER_REFLECTION_NEAR {
+        let cut = (start.w - WATER_REFLECTION_NEAR) / (start.w - end.w);
+        end = mix(start, end, cut);
+        length = reach * cut;
+    }
+    // Where the line leaves the viewport, as a share of it.
+    let first = clip_pixel(start, viewport);
+    let span = clip_pixel(end, viewport) - first;
+    let low = viewport.xy + 0.5;
+    let high = viewport.xy + viewport.zw - 0.5;
+    var leave = 1.0;
+    for (var axis = 0u; axis < 2u; axis = axis + 1u) {
+        if span[axis] > 1e-4 {
+            leave = min(leave, (high[axis] - first[axis]) / span[axis]);
+        } else if span[axis] < -1e-4 {
+            leave = min(leave, (low[axis] - first[axis]) / span[axis]);
+        }
+    }
+    leave = clamp(leave, 0.0, 1.0);
+    // Interleaved gradient noise: neighbouring pixels start their steps
+    // apart, trading banding for fine noise.
+    let jitter = fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+    var previous = 0.0;
+    var previous_along = 0.0;
+    for (var index = 0u; index < steps; index = index + 1u) {
+        let share = leave * (f32(index) + jitter) / f32(steps);
+        let at = ray_at(start, end, share, length, viewport);
+        if at.z > textureLoad(scene_depth, vec2<i32>(at.xy), 0) {
+            // Behind the scene: a hit if within this step of its surface;
+            // otherwise the ray went behind something whose far side the
+            // view does not show.
+            let gap = distance(origin + direction * at.w, frame.camera.xyz)
+                - distance(scene_point(at.xy, viewport), frame.camera.xyz);
+            if gap > max(at.w - previous_along, WATER_REFLECTION_THICKNESS) {
+                return vec4<f32>(0.0);
+            }
+            var below = previous;
+            var above = share;
+            for (var refine = 0u; refine < 4u; refine = refine + 1u) {
+                let middle = 0.5 * (below + above);
+                let probe = ray_at(start, end, middle, length, viewport);
+                if probe.z > textureLoad(scene_depth, vec2<i32>(probe.xy), 0) {
+                    above = middle;
+                } else {
+                    below = middle;
+                }
+            }
+            let hit = ray_at(start, end, above, length, viewport);
+            let colour = textureSampleLevel(scene_color, scene_sampler,
+                hit.xy / vec2<f32>(textureDimensions(scene_color)), 0.0);
+            let edge = min(min(hit.x - viewport.x, viewport.x + viewport.z - hit.x),
+                min(hit.y - viewport.y, viewport.y + viewport.w - hit.y));
+            let fade = smoothstep(0.0, WATER_REFLECTION_EDGE * min(viewport.z, viewport.w), edge)
+                * (1.0 - smoothstep(0.75, 1.0, hit.w / reach)) * colour.a;
+            return vec4<f32>(colour.rgb / max(colour.a, 1e-4), fade);
+        }
+        previous = share;
+        previous_along = at.w;
+    }
+    return vec4<f32>(0.0);
+}
+
+// Clip-space point `clip`'s target pixel under `viewport`.
+fn clip_pixel(clip: vec4<f32>, viewport: vec4<f32>) -> vec2<f32> {
+    return viewport.xy + (clip.xy / clip.w * vec2<f32>(0.5, -0.5) + 0.5) * viewport.zw;
+}
+
+// The point a share `share` of the way across the screen from the ray's
+// clip-space `start` to `end`, `length` metres apart in the world: xy its
+// target pixel under `viewport`, z its depth, w its distance along the ray
+// (perspective-correct: 1 / w is linear across the screen).
+fn ray_at(start: vec4<f32>, end: vec4<f32>, share: f32, length: f32, viewport: vec4<f32>) -> vec4<f32> {
+    let along = share / end.w / mix(1.0 / start.w, 1.0 / end.w, share);
+    let clip = mix(start, end, along);
+    return vec4<f32>(clip_pixel(clip, viewport), clip.z / clip.w, along * length);
+}
+
+// The share of the viewport's smaller side over which a reflection fades
+// into the standard one at its edges.
+const WATER_REFLECTION_EDGE: f32 = 0.08;
+// How far above the surface plane (the cosine to its normal) a reflected
+// ray turns fully into the reflection.
+const WATER_REFLECTION_ABOVE: f32 = 0.05;
+// The least depth, metres, the reflected scene is taken to have behind its
+// surface.
+const WATER_REFLECTION_THICKNESS: f32 = 0.3;
+// The nearest a reflected ray is followed toward the camera's plane, in
+// clip w.
+const WATER_REFLECTION_NEAR: f32 = 1e-3;
+#endif
+
+#ifdef WATER_SCENE
+// The most the refraction shifts the scene, as a share of the viewport's
+// smaller side, and the deepest water whose depth adds to it, metres.
+const WATER_REFRACTION_LIMIT: f32 = 0.05;
+const WATER_REFRACTION_DEPTH: f32 = 2.0;
+
+// What shows through the water (WATER_SCENE): the opaque scene's colour,
+// refracted and absorbed, its alpha the copy's coverage there; the shade
+// stage's colour goes over it (`world_color`).
+var<private> water_behind: vec4<f32>;
+#endif
+
 // The water surface (WATER): the standard surface tinted by the depth of
 // the scene behind it along the view ray, foam where that scene lies within
 // the shoreline width below the surface, the normal rippled by two
 // scrolling normal maps (or procedural ripples when the material has none),
 // and the alpha raised toward the Fresnel reflectance at grazing angles.
+// With the scene's colour (SCENE_COLOR) the view may reflect the opaque
+// scene in it; reading it (WATER_SCENE) the water absorbs and refracts what
+// shows through.
 fn water_surface(in: VsOut, standard: Surface) -> Surface {
     var surface = standard;
     let flags = u32(material.factors.w + 0.5);
@@ -585,7 +741,9 @@ fn water_surface(in: VsOut, standard: Surface) -> Surface {
             cos(phase.y * 1.1 + time * 1.7) * 0.5 + cos(phase.x * 0.3 - phase.y * 0.8 + time * 0.7) * 0.3,
         ) * 0.25;
     }
-    surface.normal = normalize(surface.normal + vec3<f32>(slope.x, 0.0, slope.y) * material.normal_scale);
+    let tilt = vec3<f32>(slope.x, 0.0, slope.y) * material.normal_scale;
+    let flat = surface.normal;
+    surface.normal = normalize(surface.normal + tilt);
     // What lies behind the surface along this pixel's ray.
     let ndc = in.clip_position.xy / in.clip_position.w;
     let scene_z = textureLoad(scene_depth, vec2<i32>(in.clip.xy), 0);
@@ -612,8 +770,59 @@ fn water_surface(in: VsOut, standard: Surface) -> Surface {
     let view = normalize(frame.camera.xyz - in.world_position);
     let fresnel = 0.02 + 0.98 * pow(1.0 - max(dot(surface.normal, view), 0.0), 5.0);
     surface.base = vec4<f32>(base.rgb, max(base.a, fresnel));
+#ifdef SCENE_COLOR
+    let viewport = viewport_of(ndc, in.clip.xy);
+    if frame.water.y > 0.0 {
+        // A ripple tilted far enough reflects the ray under the surface,
+        // where it would find the bed: only rays above it reflect.
+        let reflected = reflect(-view, surface.normal);
+        water_reflection = water_reflection_of(in.world_position, reflected, viewport, in.clip.xy)
+            * smoothstep(0.0, WATER_REFLECTION_ABOVE, dot(reflected, flat));
+    }
+#endif
+#ifdef WATER_SCENE
+    // The scene shifted along the ripples' tilt by the water's depth there,
+    // within the limit; the unshifted pixel where the shift lands on
+    // something in front of the water.
+    var seen = in.clip.xy;
+    if material.water_refraction.x > 0.0 {
+        let shift = tilt * material.water_refraction.x * min(through, WATER_REFRACTION_DEPTH);
+        let at = target_pixel(scene_world + shift, viewport);
+        var offset = at.xy - in.clip.xy;
+        let limit = WATER_REFRACTION_LIMIT * min(viewport.z, viewport.w);
+        offset = offset * min(1.0, limit / max(length(offset), 1e-4));
+        let shifted = clamp(in.clip.xy + offset, viewport.xy, viewport.xy + viewport.zw - 1.0);
+        // Kept where it lands behind the water, on the scene unless the
+        // pixel itself shows none.
+        let shifted_z = textureLoad(scene_depth, vec2<i32>(shifted), 0);
+        if at.w > 0.0 && shifted_z > in.clip.z && (shifted_z < 1.0 || scene_z >= 1.0) {
+            seen = shifted;
+        }
+    }
+    let seen_world = scene_point(seen, viewport);
+    var shown = textureSampleLevel(scene_color, scene_sampler, seen / vec2<f32>(textureDimensions(scene_color)), 0.0);
+    // Each metre of water along the ray keeps its share of the light.
+    if material.water_absorption.w > 0.0 {
+        let depth = distance(seen_world, in.world_position);
+        shown = vec4<f32>(shown.rgb * pow(max(material.water_absorption.rgb, vec3<f32>(1e-4)),
+            vec3<f32>(depth / material.water_absorption.w)), shown.a);
+    }
+    water_behind = shown;
+#endif
     return surface;
 }
+
+#ifdef WATER_SCENE
+// The shaded water over what shows through it: where the copy covers, the
+// water draws the scene behind (absorbed, refracted) itself and covers the
+// pixel; where it does not (the background), it blends as plain water.
+fn water_over_scene(color: vec4<f32>) -> vec4<f32> {
+    let covered = water_behind.a;
+    let alpha = color.a + (1.0 - color.a) * covered;
+    let rgb = (color.rgb * color.a + (1.0 - color.a) * water_behind.rgb) / max(alpha, 1e-4);
+    return vec4<f32>(rgb, alpha);
+}
+#endif
 #endif
 
 // `opaque`: the part draws in an opaque pass, so decals lay over it.
@@ -660,9 +869,14 @@ fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> 
 #endif
 #endif
 #ifdef PRODUCT_SHADER
-    return shade(surface);
+    let shaded = shade(surface);
 #else
-    return standard_shade(surface);
+    let shaded = standard_shade(surface);
+#endif
+#ifdef WATER_SCENE
+    return water_over_scene(shaded);
+#else
+    return shaded;
 #endif
 }
 

@@ -1,6 +1,9 @@
 //! The water feature (#9540): a blended material tinted by the depth of the
 //! scene behind it, foam along the shore, ripples that move with
-//! presentation time at the material's scale, and blended parts that cast no shadow unless asked.
+//! presentation time at the material's scale, and blended parts that cast
+//! no shadow unless asked; reading the opaque scene's colour, water that
+//! absorbs and refracts what shows through it, and the view's reflection in
+//! still water.
 
 mod common;
 
@@ -43,6 +46,9 @@ fn water(shoreline_width: f32, foam_threshold: f32) -> MaterialWaterDescriptor {
         foam_texture: None,
         ripple_texture: None,
         ripple_scale: 1.0,
+        absorption_color: [1.0; 3],
+        absorption_distance: 0.0,
+        refraction: 0.0,
     }
 }
 
@@ -405,5 +411,284 @@ fn ripples_scale_by_the_ripple_scale_without_a_normal_map() {
     assert!(
         half > full * 0.3 && half < full * 0.7,
         "half ripples stray about half as far: {half} against {full}"
+    );
+}
+
+/// Water that keeps a share of each channel per metre (#10183): a bed seen
+/// through it loses its red far more through the deep water than through
+/// the shallows, and keeps more blue than red there; the same water without
+/// absorption shows both floors alike.
+#[test]
+fn absorbing_water_tints_the_bed_more_with_depth() {
+    // Dark, nearly clear water, so the bed shows through both sides.
+    let clear = MaterialWaterDescriptor {
+        shallow_color: [0.05; 3],
+        deep_color: [0.05; 3],
+        depth_scale: 100.0,
+        ..water(0.01, 1.0)
+    };
+    let plain = shore(Some(clear.clone())).single(&view());
+    let absorbed = shore(Some(MaterialWaterDescriptor {
+        absorption_color: [0.2, 0.6, 0.9],
+        absorption_distance: 1.0,
+        ..clear
+    }))
+    .single(&view());
+    let (plain_shallow, plain_deep) = (
+        mean(&plain, SHALLOW.0, SHALLOW.1),
+        mean(&plain, DEEP.0, DEEP.1),
+    );
+    let (shallow, deep) = (
+        mean(&absorbed, SHALLOW.0, SHALLOW.1),
+        mean(&absorbed, DEEP.0, DEEP.1),
+    );
+    assert!(
+        deep[0] < plain_deep[0] - 40.0,
+        "the deep water absorbs the bed's red: {deep:?} against {plain_deep:?}"
+    );
+    assert!(
+        shallow[0] > deep[0] + 30.0,
+        "the shallows keep more of it: {shallow:?} against {deep:?}"
+    );
+    assert!(
+        deep[2] > deep[0] + 20.0,
+        "blue survives the depth better than red: {deep:?}"
+    );
+    assert!(
+        (plain_shallow[0] - plain_deep[0]).abs() < 25.0,
+        "without absorption both floors show alike: {plain_shallow:?} {plain_deep:?}"
+    );
+}
+
+/// A striped bed under refracting water (#10183): the ripples shift the
+/// stripes, and a flat surface (ripple scale 0) does not shift them, drawing
+/// as the water that reads the scene without refracting does. Reading the
+/// scene draws what the blend would: water that only reads it matches plain
+/// water.
+#[test]
+fn refracting_water_shifts_the_bed_by_its_ripples() {
+    let render = |water: MaterialWaterDescriptor| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            ..RendererOptions::default()
+        });
+        let mut ops = vec![RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        }];
+        // A dark bed studded with a grid of white blocks, their edges a
+        // quarter metre apart.
+        ops.extend(coloured_mesh("floor", floor(8.0), [0.05, 0.05, 0.05, 1.0]));
+        ops.extend(coloured_mesh("block", cube(), [0.9, 0.9, 0.9, 1.0]));
+        ops.push(instance(
+            1,
+            None,
+            "floor",
+            transform([0.0, -1.0, -4.0], 0.0, 1.0),
+        ));
+        for row in 0..16 {
+            for column in 0..16 {
+                let at = |index: i32| -4.0 + 0.5 * index as f32 + 0.25;
+                ops.push(instance(
+                    100 + (row * 16 + column) as u64,
+                    None,
+                    "block",
+                    transform([at(column), -1.0, at(row) - 4.0], 0.0, 0.25),
+                ));
+            }
+        }
+        ops.extend(sheet(Some(water), 0.3, None));
+        ops.push(instance(
+            3,
+            None,
+            "sheet",
+            transform([0.0, 0.0, -4.0], 0.0, 1.0),
+        ));
+        ops.push(directional([0.1, -1.0, -0.2], false));
+        harness.apply(ops);
+        harness.single(&view())
+    };
+    let clear = MaterialWaterDescriptor {
+        shallow_color: [0.05; 3],
+        deep_color: [0.05; 3],
+        depth_scale: 100.0,
+        ..water(0.01, 1.0)
+    };
+    let refracting = |ripple_scale: f32, refraction: f32| {
+        render(MaterialWaterDescriptor {
+            ripple_scale,
+            refraction,
+            // Reading the scene without refracting: absorption that keeps all.
+            absorption_distance: 1.0,
+            ..clear.clone()
+        })
+    };
+    let still = refracting(1.0, 0.0);
+    let shifted = refracting(1.0, 1.0);
+    let flat_still = refracting(0.0, 0.0);
+    let flat = refracting(0.0, 1.0);
+    let moved = difference(&shifted, &still, SHEET.0, SHEET.1);
+    assert!(moved > 4.0, "the ripples shift the stripes: {moved}");
+    let unmoved = difference(&flat, &flat_still, SHEET.0, SHEET.1);
+    assert!(
+        unmoved < 0.5,
+        "a flat surface does not shift them: {unmoved}"
+    );
+    let blended = render(clear);
+    let composed = difference(&still, &blended, SHEET.0, SHEET.1);
+    assert!(
+        composed < 1.5,
+        "water reading the scene draws as the blend does: {composed}"
+    );
+}
+
+/// Still black water before a glowing red wall, in a scene with no light
+/// but the wall's (#10184), seen from `eye` pitched by `pitch`.
+fn wall_over_water(reflections: WaterReflectionsQuality) -> Harness {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        water_reflections: reflections,
+        ..RendererOptions::default()
+    });
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.extend(coloured_mesh("floor", floor(12.0), [0.2, 0.2, 0.2, 1.0]));
+    let mut wall = coloured_mesh("wall", cube(), [1.0, 0.1, 0.1, 1.0]);
+    if let RenderDiff::DefineMaterial { material } = &mut wall[0] {
+        material.emission_color = [1.0, 0.1, 0.1];
+        material.emission_intensity = 3.0;
+    }
+    ops.extend(wall);
+    let black = MaterialWaterDescriptor {
+        shallow_color: [0.0; 3],
+        deep_color: [0.0; 3],
+        ripple_scale: 0.0,
+        foam_threshold: 2.0,
+        ..water(0.01, 2.0)
+    };
+    let mut still = sheet(Some(black), 1.0, None);
+    if let RenderDiff::DefineMaterial { material } = &mut still[0] {
+        material.roughness = 0.05;
+    }
+    ops.extend(still);
+    ops.push(instance(
+        1,
+        None,
+        "floor",
+        transform([0.0, -1.0, -6.0], 0.0, 1.0),
+    ));
+    ops.push(instance(
+        2,
+        None,
+        "wall",
+        transform([0.0, 1.0, -9.0], 0.0, 2.0),
+    ));
+    ops.push(instance(
+        3,
+        None,
+        "sheet",
+        transform([0.0, 0.0, -4.0], 0.0, 1.0),
+    ));
+    harness.apply(ops);
+    harness
+}
+
+/// The red in a region of the frame, less its green.
+fn redness(frame: &[u8], x: std::ops::Range<u32>, y: std::ops::Range<u32>) -> f32 {
+    let [red, green, _] = mean(frame, x, y);
+    red - green
+}
+
+/// Water mirrors the lit wall beyond it in screen space (#10184), below
+/// the wall's foot where the water shows; off, the black water there stays
+/// dark. Where the wall is above the view, the reflected rays leave it and
+/// the water draws as without reflections. A software adapter refuses the
+/// feature and draws as off.
+#[test]
+fn still_water_reflects_what_the_view_shows() {
+    let eye = camera("eye", [0.0, 1.0, 0.0], 0.0, -8.0);
+    let off = wall_over_water(WaterReflectionsQuality::Off).single(&eye);
+    let mut harness = wall_over_water(WaterReflectionsQuality::Low);
+    let on = harness.single(&eye);
+    // The water between the eye and the wall's foot, the lower middle.
+    let water = (WIDTH * 2 / 5..WIDTH * 3 / 5, HEIGHT * 3 / 5..HEIGHT * 4 / 5);
+    if harness.gpu.is_software() {
+        let readout = harness.renderer.settings_readout();
+        assert_eq!(
+            readout.water_reflections,
+            Some(render_wgpu::SettingRefusal::SoftwareAdapter)
+        );
+        assert_eq!(on, off, "a refused reflection draws as off");
+        return;
+    }
+    let (dark, mirrored) = (
+        redness(&off, water.0.clone(), water.1.clone()),
+        redness(&on, water.0, water.1),
+    );
+    assert!(dark < 10.0, "without reflections the water is dark: {dark}");
+    assert!(
+        mirrored > dark + 25.0,
+        "the wall shows in the water: {mirrored} against {dark}"
+    );
+    // Looking down, the wall is above the view: nothing to reflect but
+    // the standard reflection, so the frames match.
+    let down = camera("eye", [0.0, 1.0, -1.0], 0.0, -70.0);
+    let off_down = wall_over_water(WaterReflectionsQuality::Off).single(&down);
+    let on_down = harness.single(&down);
+    let all = (0..WIDTH, 0..HEIGHT);
+    let stray = difference(&on_down, &off_down, all.0, all.1);
+    assert!(
+        stray < 0.5,
+        "rays leaving the view fall back cleanly: {stray}"
+    );
+}
+
+/// Rippled water seen at a grazing angle over a bright bed, with nothing
+/// above it (#10184): ripples that tilt the reflected ray under the surface
+/// must not find the bed, so reflections draw what they draw off.
+#[test]
+fn reflections_never_find_what_lies_under_the_surface() {
+    let render = |reflections: WaterReflectionsQuality| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            water_reflections: reflections,
+            ..RendererOptions::default()
+        });
+        let mut ops = vec![RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        }];
+        ops.extend(coloured_mesh("floor", floor(12.0), [0.9, 0.9, 0.9, 1.0]));
+        ops.extend(sheet(
+            Some(MaterialWaterDescriptor {
+                ripple_scale: 2.0,
+                ..water(0.01, 2.0)
+            }),
+            0.3,
+            None,
+        ));
+        ops.push(instance(
+            1,
+            None,
+            "floor",
+            transform([0.0, -0.3, -4.0], 0.0, 1.0),
+        ));
+        ops.push(instance(
+            3,
+            None,
+            "sheet",
+            transform([0.0, 0.0, -4.0], 0.0, 1.0),
+        ));
+        ops.push(directional([0.1, -1.0, -0.2], false));
+        harness.apply(ops);
+        let frame = harness.single(&camera("eye", [0.0, 0.4, 0.0], 0.0, -8.0));
+        (frame, harness.gpu.is_software())
+    };
+    let (off, _) = render(WaterReflectionsQuality::Off);
+    let (on, software) = render(WaterReflectionsQuality::High);
+    let all = (0..WIDTH, 0..HEIGHT);
+    let stray = difference(&on, &off, all.0, all.1);
+    assert!(
+        software || stray < 0.5,
+        "the bed under the water does not reflect: {stray}"
     );
 }

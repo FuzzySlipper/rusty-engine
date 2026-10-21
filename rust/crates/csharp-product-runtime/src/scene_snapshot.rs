@@ -133,6 +133,9 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before volumetric clouds draw the flat layer.
     #[serde(default)]
     pub volumetric_clouds: render_model::VolumetricCloudsQuality,
+    /// Snapshots written before water reflections draw without them.
+    #[serde(default)]
+    pub water_reflections: render_model::WaterReflectionsQuality,
 }
 
 fn default_render_scale() -> f32 {
@@ -236,6 +239,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             render_scale: options.render_scale,
             volumetric_fog: options.volumetric_fog,
             volumetric_clouds: options.volumetric_clouds,
+            water_reflections: options.water_reflections,
         }
     }
 }
@@ -257,6 +261,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             render_scale: options.render_scale,
             volumetric_fog: options.volumetric_fog,
             volumetric_clouds: options.volumetric_clouds,
+            water_reflections: options.water_reflections,
         }
     }
 }

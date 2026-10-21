@@ -10177,6 +10177,13 @@ fn water_descriptor(
         foam_texture,
         ripple_texture,
         ripple_scale,
+        absorption_color: [
+            water.absorption_color.r,
+            water.absorption_color.g,
+            water.absorption_color.b,
+        ],
+        absorption_distance: water.absorption_distance,
+        refraction: water.refraction,
     }))
 }
 

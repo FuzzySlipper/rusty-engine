@@ -19,7 +19,9 @@ repository's `content/map-models.sources.json`), the flat-shading pair's prop
 `content/wave.wgsl` is the banner's product shader: a displace stage that
 waves the card from its pole edge by the scene's wind. `generate-water.py`
 regenerates `content/foam.png` and `content/ripples.png`, the shore's foam
-mask and ripple normal map (`lighting.water`).
+mask and ripple normal map (`lighting.water`; `lighting.water 2` absorbs and
+refracts the sand, and `lighting.water.reflections off|low|high` mirrors the
+bank and pier in it).
 `lighting.volumetric off|low|high` sets the volumetric fog setting,
 `lighting.fog.medium <density> <anisotropy>` the fog medium, and
 `lighting.fog.volume <id> <x> <y> <z> <radius> <density> <glow>` and

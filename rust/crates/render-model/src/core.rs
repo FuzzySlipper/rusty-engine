@@ -881,6 +881,19 @@ pub enum VolumetricCloudsQuality {
     High,
 }
 
+/// How water reflects the scene (`RendererSettingsDescriptor`): the sky's
+/// light and the probes alone, or also what the view shows, found by
+/// marching the reflected ray across the view's depth at low or high
+/// quality, the sky and probes taking over where the ray leaves the view.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WaterReflectionsQuality {
+    #[default]
+    Off,
+    Low,
+    High,
+}
+
 /// Ambient occlusion as a product selects it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -961,6 +974,10 @@ pub struct RendererSettingsDescriptor {
     /// it existed have it off.
     #[serde(default)]
     pub volumetric_clouds: VolumetricCloudsQuality,
+    /// Water materials reflect what the view shows, in screen space.
+    /// Settings written before it existed have it off.
+    #[serde(default)]
+    pub water_reflections: WaterReflectionsQuality,
 }
 
 fn enabled() -> bool {
@@ -986,6 +1003,7 @@ impl RendererSettingsDescriptor {
         occlusion_culling: false,
         volumetric_fog: VolumetricFogQuality::Off,
         volumetric_clouds: VolumetricCloudsQuality::Off,
+        water_reflections: WaterReflectionsQuality::Off,
     };
 
     /// Valid occlusion values, a supported sample count and a render scale
