@@ -40,6 +40,44 @@ window.ready = true;
 </script>
 </body></html>`;
 
+// A menu of form controls driven by a controller in the interface: each
+// d-pad press moves focus one control on. The stubbed gamepad is held down.
+const MENU_PAGE = `<!doctype html>
+<html><head><style>html,body{margin:0;height:100%}</style></head>
+<body><div id="root" style="height:100%"></div>
+<script type="module">
+const pad = { index: 0, connected: true, axes: [0, 0, 0, 0],
+  buttons: Array.from({ length: 16 }, () => ({ value: 0, pressed: false })) };
+window.pad = pad;
+navigator.getGamepads = () => [pad];
+window.presses = [];
+import { mountRustyApplication } from '/application-host.js';
+window.host = await mountRustyApplication({
+  root: document.getElementById('root'),
+  output: 'window',
+  initialInteractionMode: 'interface',
+  runtimeInput: {
+    binding: { runtime: { instanceId: '1', generation: '1', controlRevision: '1' }, context: 'gameplay' },
+    selectedController: { index: 0 },
+  },
+  mountUi: (root, context) => {
+    const controls = [document.createElement('button'), document.createElement('select'),
+      document.createElement('select'), document.createElement('input')];
+    controls.forEach((control, index) => { control.id = 'control-' + index; root.append(control); });
+    controls[0].focus();
+    context.input.subscribe(({ fact }) => {
+      if (fact.kind !== 'controller-button' || fact.edge !== 'pressed') return;
+      window.presses.push(fact.button);
+      const at = controls.indexOf(document.activeElement);
+      controls[Math.min(at + 1, controls.length - 1)].focus();
+    });
+    return { dispose() {} };
+  },
+});
+window.ready = true;
+</script>
+</body></html>`;
+
 let server: Server;
 let origin: string;
 let browser: Browser;
@@ -47,8 +85,8 @@ let browser: Browser;
 before(async () => {
   server = createServer(async (request, response) => {
     const path = request.url === '/' ? null : request.url!.replace(/^\//, '');
-    if (path === null) {
-      response.writeHead(200, { 'content-type': 'text/html' }).end(PAGE);
+    if (path === null || path === 'menu') {
+      response.writeHead(200, { 'content-type': 'text/html' }).end(path === null ? PAGE : MENU_PAGE);
       return;
     }
     try {
@@ -167,6 +205,33 @@ test('Backspace and F1-F12 deliver both edges, consume gameplay shortcuts, and r
     assert.deepEqual(await drain(), []);
     await page.keyboard.press('F12');
     assert.equal((await drain()).filter(entry => entry.fact?.kind === 'key').length, 2);
+  } finally {
+    await page.close();
+  }
+});
+
+test('a d-pad press held while focus moves onto a select is one press to the interface', async () => {
+  const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
+  try {
+    await page.goto(`${origin}/menu`);
+    await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
+    type Menu = { pad: { buttons: Array<{ value: number; pressed: boolean }> }; presses: string[];
+      host: { input: { sampleController: () => number } } };
+    const sample = (down: boolean): Promise<void> => page.evaluate((down) => {
+      const menu = window as unknown as Menu;
+      menu.pad.buttons[13] = { value: down ? 1 : 0, pressed: down };
+      menu.host.input.sampleController();
+    }, down);
+    // Held over several polls, as a real pad is for 80 to 150 ms.
+    for (let poll = 0; poll < 6; poll += 1) await sample(true);
+    const state = (): Promise<{ presses: string[]; focused: string }> => page.evaluate(() => ({
+      presses: (window as unknown as Menu).presses,
+      focused: document.activeElement?.id ?? '',
+    }));
+    assert.deepEqual(await state(), { presses: ['button-13'], focused: 'control-1' });
+    await sample(false);
+    for (let poll = 0; poll < 3; poll += 1) await sample(true);
+    assert.deepEqual(await state(), { presses: ['button-13', 'button-13'], focused: 'control-2' });
   } finally {
     await page.close();
   }

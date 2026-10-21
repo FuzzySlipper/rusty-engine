@@ -883,3 +883,53 @@ function createListenerTarget(): {
     emit: (type, event) => { listeners.get(type)?.(event); },
   };
 }
+
+void test('a held controller button stays one press when a form control in the interface takes focus', () => {
+  const eventTarget = createListenerTarget();
+  const windowTarget = createListenerTarget();
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
+  const buttons = Array.from({ length: 16 }, () => ({ value: 0, pressed: false }));
+  const gamepad = { index: 0, connected: true, axes: [0.5, 0, 0, 0], buttons } as unknown as Gamepad;
+  const document = {
+    ...createListenerTarget(),
+    activeElement: null,
+    pointerLockElement: null,
+    defaultView: windowTarget,
+    hasFocus: () => true,
+  } as unknown as Document;
+  const observed: unknown[] = [];
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL, selectedController: { index: 0 } }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => false,
+    interactionMode: () => 'interface',
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [gamepad],
+    observeInterfaceInput: (observation) => { observed.push(observation.fact); },
+  });
+  const presses = (): number => observed.filter((fact) =>
+    (fact as { kind: string; edge?: string }).kind === 'controller-button'
+    && (fact as { edge?: string }).edge === 'pressed').length;
+
+  buttons[13] = { value: 1, pressed: true };
+  ingress.sampleController();
+  assert.equal(presses(), 1);
+  // The UI moved focus onto a <select>: its focusin clears for focus loss.
+  ingress.clear('focus-loss');
+  observed.length = 0;
+  ingress.sampleController();
+  ingress.sampleController();
+  assert.deepEqual(observed, [], 'the still-held button and stick are no new facts');
+  buttons[13] = { value: 0, pressed: false };
+  ingress.sampleController();
+  buttons[13] = { value: 1, pressed: true };
+  ingress.sampleController();
+  assert.equal(presses(), 1, JSON.stringify(observed));
+  assert.deepEqual(observed.filter((fact) => (fact as { kind: string }).kind === 'controller-button'), [
+    { kind: 'controller-button', button: 'button-13', edge: 'released' },
+    { kind: 'controller-button', button: 'button-13', edge: 'pressed' },
+  ]);
+  ingress.dispose();
+});

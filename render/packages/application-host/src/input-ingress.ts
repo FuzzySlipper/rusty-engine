@@ -172,8 +172,9 @@ export function createRustyApplicationInputIngress(
   const clear = (reason: RuntimeInputWireClearReason): void => {
     clearLocal();
     // A held menu button must not become a new press when ownership changes,
-    // including the asynchronous pointer-lock loss caused by opening a menu.
-    if ((reason === 'pointer-lock-loss' || reason === 'interaction-mode-loss')
+    // including the asynchronous pointer-lock loss caused by opening a menu
+    // and a form control in the interface taking focus.
+    if ((reason === 'pointer-lock-loss' || reason === 'interaction-mode-loss' || reason === 'focus-loss')
       && environment.interactionMode() === 'interface'
       && environment.active() && environment.document.hasFocus?.() !== false) refreshControllerBaseline();
     queue.clear(reason);
