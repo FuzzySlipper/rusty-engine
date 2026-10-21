@@ -470,6 +470,19 @@ for the common case), as `Animation.UpdateAnimatedMeshMaterialFactors` does
 for a GLB's slots; an empty set restores the materials' own. Appearances of
 one mesh each carry their own factors, and the instances still batch.
 
+### Surfaces close together
+
+The world pass projects each vertex from its offset from the camera, so depth
+resolves as finely kilometres from the world origin as beside it. A surface
+drawn just in front of another (a kit wall over a voxel wall, a panel on a
+wall) shows whole while it stands clear by more than the depth buffer
+resolves: about z² / near × 6·10⁻⁸ m at distance z, which with a 0.05 m near
+plane is 0.4 mm at 18 m and 3 mm at 50 m. Closer than that, or behind, the
+other surface shows through in crisp patches that change as the view turns.
+A reconstructed voxel surface can stand millimetres off its cell boundary, so
+a piece meant to cover a voxel wall keeps a centimetre or more in front of
+that boundary. Marks laid on a surface are [projected decals](#projected-decals).
+
 ## Product shaders
 
 Grow the standard shader through an Engine request when a look is common. For

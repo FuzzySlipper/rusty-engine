@@ -9,7 +9,7 @@
 // (PRODUCT_DISPLACES) and give their normals (PRODUCT_DISPLACES_NORMAL).
 
 #import rusty::types::{texture_space_position, Vertex}
-#import rusty::view::{frame, parts, instances, copies, copy_row, selected_copy, impostor_card, fade_mask, mask_coverage, fade_toward_origin, morph_share, morph_normal}
+#import rusty::view::{frame, parts, instances, copies, copy_row, selected_copy, impostor_card, fade_mask, mask_coverage, fade_toward_origin, morph_share, morph_normal, projected}
 #ifdef WIND
 #import rusty::wind::wind_displace
 #endif
@@ -216,7 +216,7 @@ fn vs_world(
     world_normal = normalize(displace_normal(vertex));
 #endif
     var out: VsOut;
-    out.clip = frame.view_proj * vec4<f32>(world, 1.0);
+    out.clip = projected(world);
     out.world_position = world;
     out.normal = world_normal;
 #ifdef IMPOSTOR

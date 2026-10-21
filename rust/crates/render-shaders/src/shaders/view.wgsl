@@ -166,6 +166,16 @@ fn fade_mask(fade: f32, pixel: vec2<f32>) -> u32 {
     return all ^ ((1u << (samples - covered)) - 1u);
 }
 
+// The clip position of world point `p`, projected from its offset from the
+// camera (`Frame.relative_view_proj`). Projected whole, a point kilometres
+// from the origin rounds its clip depth and its w apart by about 1e-4 each,
+// and the division of one by the other turns that into centimetres of depth
+// at 20 m: a surface millimetres behind another shows through it in bands.
+// The offset is small where depth needs its precision, near the camera.
+fn projected(p: vec3<f32>) -> vec4<f32> {
+    return frame.relative_view_proj * vec4<f32>(p - frame.camera.xyz, 1.0);
+}
+
 // Where `p` stands in the world: itself, or in a backdrop pass
 // (`Frame.backdrop`) the world point the backdrop's `p` stands for, so fog
 // and the cloud layer's shade reach the backdrop at its world-equivalent

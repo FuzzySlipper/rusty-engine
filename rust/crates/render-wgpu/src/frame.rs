@@ -12,7 +12,7 @@
 use std::collections::HashSet;
 use std::ops::{Add, AddAssign};
 
-use glam::{Mat4, Vec3};
+use glam::{DMat4, Mat4, Vec3};
 use render_host_contracts::RendererCompositionCamera;
 use render_model::{
     AtmosphereDescriptor, ColorGradingDescriptor, FogDescriptor, LightDescriptor, RenderHandle,
@@ -43,10 +43,10 @@ use crate::{
 
 const LIGHT_ROW_FLOATS: usize = 16;
 /// Frame uniform (`rusty::types` `Frame`): two matrices, camera position,
-/// light count and first light; then exposure and fog distances, fog colour,
-/// and the tone mapping and fog modes; then the presentation time and the
-/// colour grading; then the sun, the atmosphere, the moon and the sky's
-/// light; then
+/// the camera-relative matrix, light count and first light; then exposure
+/// and fog distances, fog colour, and the tone mapping and fog modes; then
+/// the presentation time and the colour grading; then the sun, the
+/// atmosphere, the moon and the sky's light; then
 /// the indirect light volume's origin and grid and the wind; then the cloud
 /// layer, its drift and its shape, the surfaces' wetness and snow, the
 /// snow's colour, the puddles' ice and the backdrop's link; then the light
@@ -54,6 +54,7 @@ const LIGHT_ROW_FLOATS: usize = 16;
 const FRAME_UNIFORM_BYTES: u64 = (16
     + 16
     + 4
+    + 16
     + 4
     + 4
     + 4
@@ -2552,6 +2553,11 @@ impl Renderer {
         uniform.extend_from_slice(&view_proj.to_cols_array());
         uniform.extend_from_slice(&view_proj.inverse().to_cols_array());
         uniform.extend_from_slice(&[eye.x, eye.y, eye.z, 1.0]);
+        // `view_proj` after a move by the eye, so the world shader projects
+        // a vertex's offset from the camera (`rusty::view::projected`);
+        // in f64, so the eye's own large coordinates cancel.
+        let relative = view_proj.as_dmat4() * DMat4::from_translation(eye.as_dvec3());
+        uniform.extend_from_slice(&relative.as_mat4().to_cols_array());
         let mut bytes: Vec<u8> = bytemuck::cast_slice(&uniform).to_vec();
         for count in [lights.count, lights.first, samples, 0] {
             bytes.extend_from_slice(&count.to_le_bytes());

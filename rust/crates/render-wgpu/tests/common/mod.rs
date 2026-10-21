@@ -370,18 +370,7 @@ pub fn assert_screenshot(name: &str, width: u32, height: u32, rgba: &[u8]) {
         (width, height),
         "{name}: reference size"
     );
-    let differing = expected
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .zip(rgba.as_chunks::<4>().0)
-        .filter(|(a, b)| {
-            a.iter()
-                .zip(b.iter())
-                .any(|(a, b)| a.abs_diff(*b) > CHANNEL_TOLERANCE)
-        })
-        .count();
-    let fraction = differing as f64 / f64::from(width * height);
+    let fraction = differing_pixels(&expected, rgba) as f64 / f64::from(width * height);
     if fraction > DIFFERING_PIXEL_FRACTION {
         let out = root.join("../../../target/render-wgpu-screenshots");
         std::fs::create_dir_all(&out).unwrap();
@@ -393,6 +382,21 @@ pub fn assert_screenshot(name: &str, width: u32, height: u32, rgba: &[u8]) {
             out.display()
         );
     }
+}
+
+/// Pixels of two RGBA8 frames that differ by more than `CHANNEL_TOLERANCE`
+/// in some channel.
+pub fn differing_pixels(a: &[u8], b: &[u8]) -> usize {
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .filter(|(a, b)| {
+            a.iter()
+                .zip(b.iter())
+                .any(|(a, b)| a.abs_diff(*b) > CHANNEL_TOLERANCE)
+        })
+        .count()
 }
 
 pub fn pixel(rgba: &[u8], width: u32, x: u32, y: u32) -> [u8; 4] {

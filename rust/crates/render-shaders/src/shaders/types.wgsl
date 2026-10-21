@@ -7,6 +7,8 @@ struct Frame {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
     camera: vec4<f32>,
+    // view_proj taking a point's offset from the camera (`rusty::view::projected`).
+    relative_view_proj: mat4x4<f32>,
     // x: light count, y: first light row (world lights, then viewmodel
     // lights); z: the view's samples per pixel.
     counts: vec4<u32>,

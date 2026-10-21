@@ -323,13 +323,14 @@ fn drawn_cameras_report_the_sampled_and_observer_poses_each_view_drew_from() {
     assert!((drawn[0].pose.yaw_degrees - 20.0).abs() < 1e-3);
     assert!((drawn[0].pose.pitch_degrees + 6.0).abs() < 1e-3);
     assert!(close(&drawn[1].pose.position, [0.0, 7.0, -4.3]));
-    // The pixels are that viewpoint's.
+    // The pixels are that viewpoint's; the interpolated pose matches it
+    // only to its last bits, which can turn an edge pixel by a level.
     let mut expected = sample(0.5, "3", 0.0);
     expected.cameras[0].motion = None;
     let mut reference = Harness::new(RendererOptions::default());
     reference.apply(room());
     reference.renderer.set_view_composition(&expected, 0.0);
-    assert_eq!(reference.composition(0.0).1, halfway);
+    assert_eq!(differing_pixels(&reference.composition(0.0).1, &halfway), 0);
 
     // An observer replaces "moving" in the primary view only: the report
     // says so, and keeps the sampled pose its offscreen view still drew.
