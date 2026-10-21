@@ -48,7 +48,7 @@ to force a rerun.
 | `Content` | Read product content admitted by the host, open content bundles and [portable assets](portable-assets.md), and admit product-owned content snapshots. |
 | `ContentSource` | Under `rusty dev`, read the product's source content and save format-preserving JSON pointer edits into it ([content source](csharp-product-project.md#content-source)). |
 | `AuthoredContent` | Admit and resolve authored catalogs, scenes, prefabs, and related resources. |
-| `Graphics` | Create and update renderer-owned materials, meshes, atlas sprites, sprite batches, synchronized sprite playback, lights, and retained appearance state. |
+| `Graphics` | Create and update renderer-owned materials, meshes, atlas sprites, sprite batches, synchronized sprite playback, lights, and retained appearance state. Water materials (`MaterialRequest.Water`) tint by depth, foam at the shore and ripple by `NormalScale` with or without a normal map ([water](lighting-and-sky.md#water)). |
 | `Presentation` | Publish presentation effects and diagnostic facts without creating another renderer, including retained ghost-plate captures. |
 | `Tween` | Play eased presentation offsets (timelines of hops, squash and stretch, punches, shakes, splines and tints) over published appearance objects, started part way, sought, and sampled or eased without an object, with completion and marker events ([appearance tweens](appearance-tweens.md)). |
 | `RenderOutput` | Capture offline images and export GLB from the retained appearance snapshot ([offline images](csharp-offline-images.md)). |

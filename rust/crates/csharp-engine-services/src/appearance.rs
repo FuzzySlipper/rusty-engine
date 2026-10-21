@@ -3828,7 +3828,11 @@ impl RuntimeAppearanceBridge {
             request.normal_scale,
         )?;
         material.triplanar = triplanar_descriptor(request.triplanar_sharpness);
-        material.water = water_descriptor(&staged.state.render_resources, request.water)?;
+        material.water = water_descriptor(
+            &staged.state.render_resources,
+            request.water,
+            request.normal_scale,
+        )?;
         let shader = material_shader(&staged.state.render_resources, request.shader)?;
         material.shader = shader.as_ref().map(|(used, _)| used.clone());
         // The shader's own textures, beside the selected and normal ones.
@@ -10108,7 +10112,7 @@ fn material_descriptor(
                 flutter: request.wind_flutter,
             },
         ),
-        water: water_descriptor(resources, request.water)?,
+        water: water_descriptor(resources, request.water, request.normal_scale)?,
         translucent_shadow: request.translucent_shadow,
         emission_map,
         occlusion_map,
@@ -10127,6 +10131,7 @@ fn material_descriptor(
 fn water_descriptor(
     resources: &RenderResourceRegistry,
     water: NativeMaterialWater,
+    ripple_scale: f32,
 ) -> Result<Option<render_model::MaterialWaterDescriptor>, CsharpEngineServicesError> {
     if water.depth_scale == 0.0 {
         return Ok(None);
@@ -10171,6 +10176,7 @@ fn water_descriptor(
         wave_scale: water.wave_scale,
         foam_texture,
         ripple_texture,
+        ripple_scale,
     }))
 }
 

@@ -2534,6 +2534,8 @@ pub(crate) fn material_bind_group(
         floats[112..114].copy_from_slice(&water.normal_scroll_b);
         floats[114] = water.foam_threshold;
         floats[115] = water.wave_scale;
+        // The ripples' scale, with or without a normal map.
+        floats[3] = water.ripple_scale;
     }
     floats[116] = if params.keep_dry { 1.0 } else { 0.0 };
     floats[117] = if params.sinks_under_snow { 1.0 } else { 0.0 };

@@ -570,7 +570,7 @@ fn water_surface(in: VsOut, standard: Surface) -> Surface {
     let time = frame.time.x;
     let wave_uv = in.world_position.xz / max(material.water_params.w, 1e-3);
     // The normal: the maps' slopes added in the water's own frame (its
-    // surface lies along the ground), scaled by the normal scale.
+    // surface lies along the ground), scaled by the ripple scale.
     var slope = vec2<f32>(0.0);
     if (flags & 4u) != 0u {
         slope += (textureSample(normal_map, normal_sampler, wave_uv + material.water_scroll.zw * time).xy * 2.0 - 1.0);

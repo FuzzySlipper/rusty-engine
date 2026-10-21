@@ -653,8 +653,10 @@ pixel knows what lies behind it along its view ray:
 - **Ripples.** The material's normal map, scrolled by `NormalScrollA`, and
   `RippleTexture` as a second normal map (opened with
   `TextureColorSpace.Linear`) scrolled by `NormalScrollB`, both read over the
-  ground every `WaveScale` metres and scaled by the normal map's
-  `NormalScale`, ripple the surface; without either it ripples procedurally.
+  ground every `WaveScale` metres, ripple the surface; without either it
+  ripples procedurally. The material's `NormalScale` scales the ripples
+  either way, with or without a normal map: 0 draws a flat surface, 0.5
+  half the tilt.
   The two water textures take a product shader's two texture slots. The sun's specular and, with [the sky's light](#the-skys-light),
   the sky's reflection follow the ripples.
 - **Fresnel.** The alpha rises toward the reflectance at grazing angles, so

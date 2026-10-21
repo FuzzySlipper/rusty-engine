@@ -1,6 +1,6 @@
 //! The water feature (#9540): a blended material tinted by the depth of the
 //! scene behind it, foam along the shore, ripples that move with
-//! presentation time, and blended parts that cast no shadow unless asked.
+//! presentation time at the material's scale, and blended parts that cast no shadow unless asked.
 
 mod common;
 
@@ -42,6 +42,7 @@ fn water(shoreline_width: f32, foam_threshold: f32) -> MaterialWaterDescriptor {
         wave_scale: 4.0,
         foam_texture: None,
         ripple_texture: None,
+        ripple_scale: 1.0,
     }
 }
 
@@ -360,4 +361,49 @@ fn water_reflects_ambient_and_hemisphere_light_by_fresnel() {
             "{name}: straight down {steep}, grazing {grazing}"
         );
     }
+}
+
+/// The mean absolute difference between two frames over a region, per
+/// channel value.
+fn difference(a: &[u8], b: &[u8], x: std::ops::Range<u32>, y: std::ops::Range<u32>) -> f64 {
+    let mut sum = 0.0;
+    let mut count = 0.0;
+    for y in y {
+        for x in x.clone() {
+            let (a, b) = (pixel(a, WIDTH, x, y), pixel(b, WIDTH, x, y));
+            for channel in 0..3 {
+                sum += f64::from(a[channel].abs_diff(b[channel]));
+            }
+            count += 3.0;
+        }
+    }
+    sum / count
+}
+
+/// The whole sheet: both floors' regions.
+const SHEET: (std::ops::Range<u32>, std::ops::Range<u32>) =
+    (WIDTH / 16..WIDTH * 4 / 5, HEIGHT * 3 / 10..HEIGHT * 17 / 20);
+
+/// The ripples follow the material's normal scale without a normal map
+/// (#10182): at 0 the surface draws flat, the same at every time; at 0.5 it
+/// strays from the flat surface about half as far as at 1.
+#[test]
+fn ripples_scale_by_the_ripple_scale_without_a_normal_map() {
+    let at = |scale: f32, time: f64| {
+        let mut harness = shore(Some(MaterialWaterDescriptor {
+            ripple_scale: scale,
+            ..water(0.01, 1.0)
+        }));
+        harness.renderer.set_animation_time(time);
+        harness.single(&view())
+    };
+    let flat = at(0.0, 0.0);
+    assert_eq!(flat, at(0.0, 0.4), "a flat surface does not move");
+    let full = difference(&at(1.0, 0.0), &flat, SHEET.0, SHEET.1);
+    let half = difference(&at(0.5, 0.0), &flat, SHEET.0, SHEET.1);
+    assert!(full > 0.5, "full ripples stray from flat: {full}");
+    assert!(
+        half > full * 0.3 && half < full * 0.7,
+        "half ripples stray about half as far: {half} against {full}"
+    );
 }

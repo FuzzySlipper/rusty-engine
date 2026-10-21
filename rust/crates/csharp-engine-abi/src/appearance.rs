@@ -682,7 +682,8 @@ pub struct NativeSpritePlaybackAdvanceResult {
 /// by `normal_scroll_a`, and `ripple_texture` as a second normal map
 /// (opened with a linear colour space) scrolled by `normal_scroll_b`,
 /// ripple the surface (procedural ripples without either), read over the
-/// ground every `wave_scale` metres and scaled by the normal map's scale.
+/// ground every `wave_scale` metres and scaled by the material's
+/// `normal_scale`, with or without a normal map (0: a flat surface).
 /// `depth_scale` 0 (the default) is no water surface; the textures are 0
 /// for none.
 #[repr(C)]

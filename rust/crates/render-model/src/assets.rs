@@ -423,8 +423,8 @@ impl MaterialWindDescriptor {
 /// `normal_scroll_a`, and `ripple_texture` as a second normal map scrolled
 /// by `normal_scroll_b`, ripple the surface (procedural ripples without
 /// either), read over the ground every `wave_scale` metres and scaled by
-/// the normal map's scale. The foam and ripple textures take a product
-/// shader's two texture slots (`product_map_a`, `product_map_b`).
+/// `ripple_scale`. The foam and ripple textures take a product shader's two
+/// texture slots (`product_map_a`, `product_map_b`).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaterialWaterDescriptor {
@@ -441,11 +441,16 @@ pub struct MaterialWaterDescriptor {
     pub foam_texture: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ripple_texture: Option<String>,
+    /// Scales the ripples' slopes, the maps' or the procedural ones: 0 draws
+    /// a flat surface. The material request's normal scale.
+    #[serde(default = "one")]
+    pub ripple_scale: f32,
 }
 
 impl MaterialWaterDescriptor {
     /// Finite values: non-negative colours, a positive depth and wave scale,
-    /// a non-negative shoreline width, a threshold within 0 to 1.
+    /// a non-negative shoreline width, a threshold within 0 to 1 and a finite
+    /// ripple scale.
     pub fn valid(&self) -> bool {
         let non_negative = |value: f32| value.is_finite() && value >= 0.0;
         let positive = |value: f32| value.is_finite() && value > 0.0;
@@ -458,6 +463,7 @@ impl MaterialWaterDescriptor {
             && [self.foam_scroll, self.normal_scroll_a, self.normal_scroll_b]
                 .iter()
                 .all(|scroll| scroll.iter().all(|value| value.is_finite()))
+            && self.ripple_scale.is_finite()
     }
 }
 
