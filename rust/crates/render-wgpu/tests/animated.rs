@@ -1726,6 +1726,57 @@ fn differing_pixels(a: &[u8], b: &[u8]) -> usize {
 /// posed as it was at the cut and placed where the cut says; the weapon on a
 /// cut hand goes with its piece, the skeleton keeps its own pose, a fresh
 /// renderer draws the same, and clearing the cuts draws the whole character.
+/// Two adjacent pieces (R10176-1): the forearm cut first, then the upper
+/// arm. Upper-arm vertices partly weighted to the forearm stay rigid with
+/// the upper-arm piece wherever the forearm's piece goes: sending the
+/// forearm far away draws the upper arm in place as it draws without its
+/// own cut, not stretched toward the forearm.
+#[test]
+fn adjacent_pieces_move_apart_without_stretching_each_other() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let (forearm, arm) = (rig_joint(&body, "LeftForeArm"), rig_joint(&body, "LeftArm"));
+    let view = character_view();
+    let reporting = |cuts: Vec<JointCut>| RenderDiff::SetAnimatedMeshPose {
+        handle: RenderHandle::new(BODY),
+        pose: AnimatedMeshPose {
+            report_joints: true,
+            cuts,
+            ..AnimatedMeshPose::default()
+        },
+    };
+    harness.apply(vec![reporting(Vec::new())]);
+    harness.render(&view);
+    let (_, _, joints, _) = joint_poses(&mut harness).pop().expect("a report");
+    let pose: Vec<Transform> = joints.iter().map(|joint| joint.model).collect();
+    let cut = |joint: u32, offset: [f32; 3]| {
+        let mut placement = joints[joint as usize].world;
+        for (axis, delta) in offset.iter().enumerate() {
+            placement.translation[axis] += delta;
+        }
+        JointCut {
+            joint,
+            pose: pose.clone(),
+            placement,
+        }
+    };
+    // Far behind the camera: the forearm's piece leaves the view.
+    const GONE: [f32; 3] = [0.0, 0.0, 50.0];
+    harness.apply(vec![reporting(vec![cut(forearm, GONE)])]);
+    let (_, forearm_only) = harness.render(&view);
+    harness.apply(vec![reporting(vec![
+        cut(forearm, GONE),
+        cut(arm, [0.0; 3]),
+    ])]);
+    let (_, both) = harness.render(&view);
+    let changed = differing_pixels(&forearm_only, &both);
+    assert!(
+        changed * 1000 < both.len() / 4,
+        "the upper arm's piece in place draws as the uncut upper arm: {changed} pixels changed"
+    );
+}
+
 #[test]
 fn a_cut_joint_draws_its_subtree_as_a_piece_where_it_is_placed() {
     let mut harness = Harness::new(RendererOptions::default());

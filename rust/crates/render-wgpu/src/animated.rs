@@ -1286,7 +1286,9 @@ impl Renderer {
                 .zip(&skin.inverse_binds)
                 .map(|(joint, inverse)| instance.pose[*joint] * *inverse)
                 .collect();
-            // Each piece's palette: its joints where the piece is.
+            // Each piece's palette: every joint in the piece's own frozen
+            // pose where the piece is, so a vertex weighted partly to a
+            // joint another cut owns stays rigid with this piece.
             let pieces: Vec<Vec<Mat4>> = instance
                 .controls
                 .cuts
@@ -1296,16 +1298,14 @@ impl Renderer {
                         .iter()
                         .zip(&skin.inverse_binds)
                         .map(|(joint, inverse)| {
-                            instance.piece_nodes.get(joint).copied().unwrap_or_else(|| {
-                                piece_matrix(
-                                    asset,
-                                    &instance.pose,
-                                    &rig_index,
-                                    cut,
-                                    world_inverse,
-                                    *joint,
-                                )
-                            }) * *inverse
+                            piece_matrix(
+                                asset,
+                                &instance.pose,
+                                &rig_index,
+                                cut,
+                                world_inverse,
+                                *joint,
+                            ) * *inverse
                         })
                         .collect()
                 })
