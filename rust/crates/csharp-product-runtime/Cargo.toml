@@ -10,7 +10,7 @@ name = "rusty-product-host"
 path = "src/main.rs"
 
 [dependencies]
-libloading = "0.8.9"
+libloading = "0.9"
 netcorehost = { version = "=0.22.0", default-features = false, features = ["nethost-download", "net10_0"] }
 serde_json.workspace = true
 serde.workspace = true
@@ -39,7 +39,7 @@ desktop-shell = { workspace = true, optional = true }
 desktop = ["dep:desktop-shell", "desktop-shell/web-overlay"]
 
 [target.'cfg(unix)'.dependencies]
-signal-hook = "0.3"
+signal-hook = "0.4"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]

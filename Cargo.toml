@@ -111,7 +111,6 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 serde_path_to_error = "0.1"
 # Emits the Rust-to-TypeScript wire contracts (#8793).
 ts-rs = { version = "11.1", features = ["serde-json-impl", "no-serde-warnings"] }
-toml = "0.8"
 sha2 = "0.10"
 base64 = "0.22"
 wry = "0.56"
@@ -124,7 +123,7 @@ bytemuck = "1"
 # Private to render-wgpu (scripts/dependency_boundary_check.py, #8846).
 glam = "0.33"
 png = "0.18"
-pollster = "0.4"
+pollster = "1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
