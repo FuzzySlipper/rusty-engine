@@ -899,15 +899,17 @@ impl DynamicsSolver {
             let Some(normal) = normal.try_normalize() else {
                 continue;
             };
+            let locks = body.locked_axes();
+            let locked = [
+                locks.contains(LockedAxes::ROTATION_LOCKED_X),
+                locks.contains(LockedAxes::ROTATION_LOCKED_Y),
+                locks.contains(LockedAxes::ROTATION_LOCKED_Z),
+            ];
             let spin = body.angvel();
-            let about_normal = normal * spin.dot(normal);
-            let rolling = spin - about_normal;
-            let speed = rolling.length();
-            if speed <= 0.0 {
-                continue;
+            let resisted = resisted_spin(spin, normal, deceleration * dt / radius, locked);
+            if resisted != spin {
+                body.set_angvel(resisted, false);
             }
-            let slowed = (speed - deceleration * dt / radius).max(0.0);
-            body.set_angvel(about_normal + rolling * (slowed / speed), false);
         }
     }
 
@@ -1040,6 +1042,21 @@ pub(crate) fn unit_rotation(value: [f64; 4]) -> Option<[f64; 4]> {
 
 fn norm_squared(value: [f64; 4]) -> f64 {
     value.into_iter().map(|value| value * value).sum()
+}
+
+/// `spin` with its rolling part (about axes along a contact of unit `normal`)
+/// slowed by `loss` rad/s, and with the body's `locked` world rotation axes
+/// kept still: on a sloped contact, slowing only the rolling part would
+/// otherwise leave a component along a locked axis.
+fn resisted_spin(spin: Vector, normal: Vector, loss: f64, locked: [bool; 3]) -> Vector {
+    let about_normal = normal * spin.dot(normal);
+    let rolling = spin - about_normal;
+    let speed = rolling.length();
+    if speed <= 0.0 {
+        return spin;
+    }
+    let slowed = about_normal + rolling * ((speed - loss).max(0.0) / speed);
+    mask_locked_axes(slowed.to_array(), locked)
 }
 
 fn mask_locked_axes(value: [f64; 3], locked_axes: [bool; 3]) -> Vector {
@@ -1798,6 +1815,53 @@ mod tests {
 
     /// A ball rolling across the floor slows steadily under rolling
     /// resistance and comes to rest, rather than rolling for ever.
+    /// Rolling resistance keeps a body's locked rotation axes still
+    /// (R10203-1): on a contact sloped across a locked axis, slowing only the
+    /// rolling part of the spin would leave a component along that axis.
+    #[test]
+    fn rolling_resistance_keeps_locked_rotation_axes_still() {
+        let normal = Vector::new(1.0, 1.0, 0.0).normalize();
+        let loss = ROLLING_RESISTANCE * 9.81 * TICK / 0.5;
+        let spin = Vector::new(0.0, 1.0, 0.0);
+        let unlocked = resisted_spin(spin, normal, loss, [false; 3]);
+        assert!(
+            unlocked.x > 1e-3,
+            "slowing alone turns about x: {unlocked:?}"
+        );
+        let resisted = resisted_spin(spin, normal, loss, [true, false, false]);
+        assert_eq!(resisted.x, 0.0, "{resisted:?}");
+        assert_eq!(resisted.z, 0.0, "{resisted:?}");
+        assert!(
+            resisted.y > 0.99 && resisted.y < 1.0,
+            "the rolling slows: {resisted:?}"
+        );
+
+        // A sphere locked about x, spinning about y on a 45° slope.
+        let mut solver = DynamicsSolver::new(GRAVITY);
+        let slope = ColliderBuilder::cuboid(4.0, 0.5, 4.0).rotation(Vector::new(
+            0.0,
+            0.0,
+            std::f64::consts::FRAC_PI_4,
+        ));
+        solver.world.insert_collider(slope, None);
+        let mut ball = body();
+        ball.shape = DynamicsShape::Sphere { radius: 0.5 };
+        ball.gravity_scale = 1.0;
+        ball.locked_rotation_axes = [true, false, false];
+        let up = Vector::new(-1.0, 1.0, 0.0).normalize();
+        ball.translation = (up * 1.0).to_array();
+        ball.angular_velocity = [0.0, 1.0, 0.0];
+        solver.insert_body(ball).unwrap();
+        let mut touched = false;
+        for _ in 0..60 {
+            solver.step(TICK, 1, &[]).unwrap();
+            touched |= !solver.contacts().is_empty();
+            let spin = output(&solver, 1).angular_velocity;
+            assert_eq!(spin[0], 0.0, "the locked x axis turned: {spin:?}");
+        }
+        assert!(touched, "the ball rests on the slope");
+    }
+
     #[test]
     fn rolling_resistance_brings_a_rolling_ball_to_rest() {
         let world = floor_world(&[0, 1, 2, 3, 4, 5]);
