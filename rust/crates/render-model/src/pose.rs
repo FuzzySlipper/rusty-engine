@@ -27,6 +27,27 @@ pub struct AnimatedMeshPose {
     /// Report the evaluated joints after each committed call.
     #[serde(default)]
     pub report_joints: bool,
+    /// Joints whose subtree is cut off the instance and drawn apart as a
+    /// severed piece. The skeleton is evaluated as without them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cuts: Vec<JointCut>,
+}
+
+/// A joint's subtree cut off its instance: the triangles weighted to the
+/// joint and its descendants leave the skinned mesh and are drawn as one
+/// rigid piece, posed as they were at the cut and placed by `placement`.
+/// A triangle goes with the piece when two of its corners have most of their
+/// weight there; the nearest cut above a joint takes it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JointCut {
+    pub joint: u32,
+    /// Every rig joint at the moment of the cut, in the instance's space, in
+    /// rig order.
+    pub pose: Vec<crate::Transform>,
+    /// Where the cut joint is now, in the scene: its rotation, translation
+    /// and the scale it was drawn with at the cut.
+    pub placement: crate::Transform,
 }
 
 /// One clip sampled at a time the product gives and laid over the pose
@@ -257,6 +278,7 @@ impl AnimatedMeshPose {
     /// Whether evaluating this pose reads the instance's world placement.
     pub fn reads_world(&self) -> bool {
         !self.layers.is_empty()
+            || !self.cuts.is_empty()
             || self
                 .two_bone_ik
                 .iter()
@@ -296,6 +318,7 @@ mod tests {
             overrides,
             layers: Vec::new(),
             report_joints: false,
+            cuts: Vec::new(),
         };
         assert_eq!(
             pose(vec![joint(PoseSpace::Local, true)], vec![]).validate(),

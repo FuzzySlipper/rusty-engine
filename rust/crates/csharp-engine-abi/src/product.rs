@@ -70,6 +70,23 @@ pub type NativeReadDynamicsRagdoll = unsafe extern "C" fn(
     *mut NativeDynamicsRagdollResult,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeCreateDynamicsSeveredPart = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSeveredPartRequest,
+    *mut NativeDynamicsSeveredPartHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyDynamicsSeveredPart = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSeveredPartHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadDynamicsSeveredPart = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSeveredPartHandle,
+    *mut NativeDynamicsSeveredPartReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateDynamicsWorld = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsWorldConfig,
@@ -1495,6 +1512,9 @@ pub struct NativeDynamicsApi {
     pub apply_ragdoll_impulse: NativeApplyDynamicsRagdollImpulse,
     pub apply_point_impulse: NativeApplyDynamicsPointImpulse,
     pub read_ragdoll: NativeReadDynamicsRagdoll,
+    pub create_severed_part: NativeCreateDynamicsSeveredPart,
+    pub destroy_severed_part: NativeDestroyDynamicsSeveredPart,
+    pub read_severed_part: NativeReadDynamicsSeveredPart,
     pub create_world: NativeCreateDynamicsWorld,
     pub destroy_world: NativeDestroyDynamicsWorld,
     pub create_body: NativeCreateDynamicsBody,

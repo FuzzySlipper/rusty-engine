@@ -33,7 +33,7 @@ to force a rerun.
 
 | Family | Product-facing purpose |
 | --- | --- |
-| `Dynamics` | Own native dynamics worlds, bodies, contacts, stepping, collision binding, ropes, limited joints and ragdolls, impulses at a point of a body, and bodies floating in water planes or water fields with buoyancy and drag ([floating bodies](rope-physics.md#floating-bodies)). |
+| `Dynamics` | Own native dynamics worlds, bodies, contacts, stepping, collision binding, ropes, limited joints and ragdolls, parts severed off animated characters ([severed parts](#severed-parts)), impulses at a point of a body, and bodies floating in water planes or water fields with buoyancy and drag ([floating bodies](rope-physics.md#floating-bodies)). |
 | `Motion` | Resolve reusable motion requests. |
 | `Kinematic` | Integrate kinematic movement and run bounded motion operations. |
 | `Spatial` | Own collision, navigation, character movement proposals, voxel picking, spatial queries, contact readouts of every collider, posed entity part and world source a volume overlaps or a turning shape meets in order ([contact queries](contact-queries.md)), and session-owned triggers. It can atomically admit collision plus planar navigation from an immutable Engine `ContentReference`, or derive a bounded planar projection from the session's retained voxel/static-mesh collision scene under a `CollisionNavigationConfig` and explain why a column or edge is refused; navigation also includes distinct planar and volumetric traversal overlays plus bounded weighted queries. Planar path queries run A* over the published cells for the fewest steps, or the least cost when weighted; between equally good cells they prefer the one nearer the goal, then the canonical neighbour order, so a query's path is deterministic. `MaxVisited` bounds the cells a query expands. `EvaluateNavigationStep` returns bounded one-step navigation facts and its path without changing session state; path requests return their cells directly. Registered triggers support activation/retirement and fact-free restore rebasing through generated APIs. |
@@ -87,6 +87,57 @@ solver. There is no per-step motion limit: a fast discrete body can pass through
 thin geometry, and CCD is the remedy. `UpdateBody` keeps the body's handle,
 pose and attached ropes.
 
+
+### Severed parts
+
+`Dynamics.CreateSeveredPart` cuts a joint and everything below it off an
+animated character and drops it as its own body: a beheading, a lost arm.
+The product chooses the joint, when and the push; the Engine splits the
+mesh, owns the body and the piece's drawing, and cleans them up.
+
+```csharp
+// A call before the cut: the instance reports its joints.
+engine.Animation.SetPose(AnimationPoseRequest.ReportOnly(orc));
+
+uint head = AnimationJoints.IndexOf(rig, "Head");
+DynamicsSeveredPart part = engine.Dynamics.CreateSeveredPart(new(world, orc,
+    DynamicsRagdollBone.CapsuleAlong(head, 0.5f, 0.24f, 6),
+    LinearVelocity: new(0.8f, 2, 0.5f), AngularVelocity: new(3, 0, 4),
+    CollisionGroups: 2, CollisionMask: uint.MaxValue, Friction: 0.8f,
+    Restitution: 0.1f, LinearDamping: 0.2f, AngularDamping: 3));
+
+DynamicsSeveredPartReadout piece = engine.Dynamics.ReadSeveredPart(part);
+part.Dispose(); // the character is whole again
+```
+
+- **The cut.** The request names the cut joint and the piece's shape and
+  mass as a [ragdoll bone](ragdolls.md#describing-a-ragdoll). The piece
+  spawns at the pose drawn for the previous call, moving as it moved plus
+  the given velocities. Without a joint report it is refused with
+  `CSHARP_SEVERED_PART_POSE`; a joint that is cut off already, itself or
+  under another cut, with `CSHARP_SEVERED_PART`.
+- **The split.** A vertex goes with the piece when the larger part of its
+  skin weight is on the cut joint and its descendants, and a triangle when
+  two of its corners do. The cut follows the mesh's triangles: there is no
+  cap or seam on the stump. The nearest cut above a joint takes it, so a
+  forearm cut first stays its own piece when the upper arm goes later.
+- **The piece** is drawn from the same mesh and materials, frozen in its pose
+  at the cut, wherever its body is after each `Step`, `StepAndRead` or
+  `StepWithReactions`. Rigid GLB nodes and objects attached to joints in the
+  subtree (a helmet, a held sword) go with it.
+- **The character** keeps its whole skeleton. It plays on, reports its
+  joints and can [fall as a ragdoll](ragdolls.md); leave the cut bones out
+  of the ragdoll. `ReadSeveredPart` returns where the cut joint is now and
+  whether the body sleeps.
+- **Lifetime.** Disposing the part removes its body and draws the character
+  whole again. Disposing the character's animation instance, or destroying
+  the world, releases the part: its body leaves the world before the next
+  step and later reads are refused.
+- **Limits.** One rigid body per part: the piece does not bend, and gets no
+  impulses or joints of its own. `RenderOutput` GLB export draws the
+  character whole. Arbitrary slicing planes, stump caps, decals and blood
+  are not provided. `fixtures/csharp-dismemberment` cuts the head and an arm
+  off a running character.
 
 ### Sprite viewport placement
 

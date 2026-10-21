@@ -53,7 +53,42 @@ fn limit(limits: NativeDynamicsJointLimits) -> DynamicsJointLimit {
     }
 }
 
-fn placement(joint: &render_model::PosedJoint) -> DynamicsPlacement {
+/// A bone's tip from its joint at rest, its shape and its mass.
+pub(super) fn bone_spec(
+    source: &crate::appearance::RagdollSource,
+    bone: &NativeDynamicsRagdollBone,
+    code: &'static str,
+) -> Result<([f64; 3], RagdollShape, f64), CsharpEngineServicesError> {
+    let joint = |index: u32| {
+        source.rest.get(index as usize).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                code,
+                format!(
+                    "joint {index} is outside the rig's {} joints",
+                    source.joints
+                ),
+            )
+        })
+    };
+    let rest = placement(joint(bone.joint)?);
+    let tip = if bone.end_joint == NO_END_JOINT {
+        [0.0, f64::from(bone.length), 0.0]
+    } else {
+        rest.local_point(placement(joint(bone.end_joint)?).translation)
+    };
+    let shape = match bone.shape {
+        NativeDynamicsRagdollShape::Capsule => RagdollShape::Capsule {
+            radius: f64::from(bone.radius),
+        },
+        NativeDynamicsRagdollShape::Box => RagdollShape::Box {
+            half_width: f64::from(bone.radius),
+            half_depth: f64::from(bone.half_depth),
+        },
+    };
+    Ok((tip, shape, f64::from(bone.mass)))
+}
+
+pub(super) fn placement(joint: &render_model::PosedJoint) -> DynamicsPlacement {
     DynamicsPlacement {
         translation: joint.world.translation.map(f64::from),
         rotation: joint.world.rotation.map(f64::from),
@@ -70,7 +105,7 @@ impl RuntimeDynamicsBridge {
         self.appearance = Some(appearance as *mut crate::appearance::RuntimeAppearanceBridge);
     }
 
-    fn appearance(
+    pub(super) fn appearance(
         &mut self,
     ) -> Result<&mut crate::appearance::RuntimeAppearanceBridge, CsharpEngineServicesError> {
         let appearance = self
@@ -127,15 +162,9 @@ impl RuntimeDynamicsBridge {
         let links = unsafe { borrowed_slice(request.links, request.links_len, "ragdoll links") }?;
         let blend = blend(request.blend);
         self.active_world(request.world.value)?;
-        let source = self.appearance()?.ragdoll_source(request.instance.value)?;
-        let joint = |index: u32| {
-            source.rest.get(index as usize).ok_or_else(|| {
-                ragdoll_error(format!(
-                    "joint {index} is outside the rig's {} joints",
-                    source.joints
-                ))
-            })
-        };
+        let source = self
+            .appearance()?
+            .ragdoll_source(request.instance.value, "CSHARP_RAGDOLL_POSE")?;
         if bones.is_empty() {
             return Err(ragdoll_error("a ragdoll needs a bone"));
         }
@@ -149,22 +178,7 @@ impl RuntimeDynamicsBridge {
         }
         let mut specs = Vec::with_capacity(bones.len());
         for bone in bones {
-            let rest = placement(joint(bone.joint)?);
-            let tip = if bone.end_joint == NO_END_JOINT {
-                [0.0, f64::from(bone.length), 0.0]
-            } else {
-                rest.local_point(placement(joint(bone.end_joint)?).translation)
-            };
-            let shape = match bone.shape {
-                NativeDynamicsRagdollShape::Capsule => RagdollShape::Capsule {
-                    radius: f64::from(bone.radius),
-                },
-                NativeDynamicsRagdollShape::Box => RagdollShape::Box {
-                    half_width: f64::from(bone.radius),
-                    half_depth: f64::from(bone.half_depth),
-                },
-            };
-            specs.push((tip, shape, f64::from(bone.mass)));
+            specs.push(bone_spec(&source, bone, "CSHARP_RAGDOLL")?);
         }
         let placements = |joints: &[render_model::PosedJoint]| {
             bones
@@ -414,7 +428,7 @@ impl RuntimeDynamicsBridge {
     }
 }
 
-fn ragdoll_call<T>(
+pub(super) fn ragdoll_call<T>(
     context: *mut c_void,
     receipt: *mut NativeOperationErrorReceipt,
     output: *mut T,

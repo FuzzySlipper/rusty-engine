@@ -811,6 +811,42 @@ pub struct NativeDynamicsRagdollImpulseRequest {
     pub impulse: NativeVec3,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeDynamicsSeveredPartHandle {
+    pub value: u64,
+}
+
+/// Cuts `bone.joint` and its descendants off `instance` and spawns them in
+/// `world` as one body shaped by `bone`, at the pose drawn for the previous
+/// call. The instance must report its joints (`Animation.SetPose` with
+/// `ReportJoints`). The piece moves as that pose moved, plus
+/// `linear_velocity` (m/s) and `angular_velocity` (rad/s, world axes).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSeveredPartRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub instance: NativeAnimationInstanceHandle,
+    pub bone: NativeDynamicsRagdollBone,
+    pub linear_velocity: NativeVec3,
+    pub angular_velocity: NativeVec3,
+    pub collision_groups: u32,
+    pub collision_mask: u32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub linear_damping: f32,
+    pub angular_damping: f32,
+}
+
+/// Where a severed part's cut joint is in the world, from its body, and
+/// whether the body sleeps.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSeveredPartReadout {
+    pub placement: NativeTransform,
+    pub resting: bool,
+}
+
 /// Each bone's joint placement in the world, from its body, in bone order.
 /// `resting` is true once every body sleeps. `bones` points into Dynamics
 /// bridge storage until the next call on the same context.

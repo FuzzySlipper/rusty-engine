@@ -423,6 +423,7 @@ mod tests {
             overrides: Vec::new(),
             layers: Vec::new(),
             report_joints: false,
+            cuts: Vec::new(),
         }
     }
 

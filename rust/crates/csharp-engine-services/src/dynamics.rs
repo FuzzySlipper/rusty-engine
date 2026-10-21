@@ -2,6 +2,7 @@ mod anchor;
 mod chain;
 mod errors;
 mod ragdoll;
+mod severed;
 use errors::{clear_receipt, refuse};
 
 use std::{
@@ -46,6 +47,8 @@ pub(crate) struct RuntimeDynamicsBridge {
     next_internal_joint: u64,
     /// Backing for the latest borrowed ragdoll result.
     ragdoll_bones: Box<[NativeTransform]>,
+    severed_parts: BTreeMap<u64, severed::SeveredSlot>,
+    next_severed_part: u64,
     /// The sibling Animation bridge ragdolls pose (`bind_appearance`).
     appearance: Option<*mut crate::appearance::RuntimeAppearanceBridge>,
     /// The sibling WaterField bridge water field entries sample
@@ -220,6 +223,8 @@ impl RuntimeDynamicsBridge {
             next_ragdoll: 1,
             next_internal_joint: u64::MAX,
             ragdoll_bones: Box::new([]),
+            severed_parts: BTreeMap::new(),
+            next_severed_part: 1,
             appearance: None,
             water_fields: None,
         }
@@ -282,6 +287,9 @@ impl RuntimeDynamicsBridge {
             .collect();
         for ragdoll in ragdolls {
             self.release_ragdoll(ragdoll)?;
+        }
+        for part in self.severed_parts_of(handle.value) {
+            self.release_severed_part(part)?;
         }
         self.worlds.insert(handle.value, WorldSlot::Tombstoned);
         for body in bodies {
@@ -655,6 +663,7 @@ impl RuntimeDynamicsBridge {
         actions: &[DynamicsAction],
     ) -> Result<NativeDynamicsStepReceipt, CsharpEngineServicesError> {
         self.sample_water_fields(world_handle)?;
+        self.release_orphaned_parts_of(world_handle)?;
         let world = self.active_world_mut(world_handle)?;
         let receipt = world
             .solver
@@ -662,6 +671,7 @@ impl RuntimeDynamicsBridge {
             .map_err(solver_error("CSHARP_DYNAMICS_STEP"))?;
         world.contacts = contacts_by_body(world.solver.contacts());
         self.place_ragdolls_of(world_handle)?;
+        self.place_severed_parts_of(world_handle)?;
         let links = receipt.rope_link_count as u32;
         let substeps = receipt.rope_substeps as u32;
         let iterations = receipt.rope_iterations as u32;
@@ -1652,6 +1662,9 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         apply_ragdoll_impulse: ragdoll::apply_ragdoll_impulse,
         apply_point_impulse: ragdoll::apply_point_impulse,
         read_ragdoll: ragdoll::read_ragdoll,
+        create_severed_part: severed::create_severed_part,
+        destroy_severed_part: severed::destroy_severed_part,
+        read_severed_part: severed::read_severed_part,
         create_world,
         destroy_world,
         create_body,

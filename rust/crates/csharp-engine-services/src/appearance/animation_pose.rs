@@ -314,6 +314,7 @@ impl RuntimeAppearanceBridge {
                 .collect(),
             layers: Vec::new(),
             report_joints: request.report_joints,
+            cuts: Vec::new(),
         };
         pose.validate()
             .map_err(|error| pose_error(format!("invalid pose: {error:?}")))?;
@@ -697,10 +698,12 @@ impl RuntimeAppearanceBridge {
         result
     }
 
-    /// The reports a ragdoll of `instance` spawns from, during a call.
+    /// The reports a ragdoll or a severed part of `instance` spawns from,
+    /// during a call; without them, refused with `unreported`.
     pub(crate) fn ragdoll_source(
         &self,
         instance: u64,
+        unreported: &'static str,
     ) -> Result<RagdollSource, CsharpEngineServicesError> {
         let state = &self.staged_ref()?.state;
         let instance = state.animation_instances.get(&instance).ok_or_else(|| {
@@ -712,7 +715,7 @@ impl RuntimeAppearanceBridge {
         let joints = instance_rig(state, instance).map_or(0, |rig| rig.joints.len());
         let unreported = || {
             CsharpEngineServicesError::new(
-                "CSHARP_RAGDOLL_POSE",
+                unreported,
                 "the instance has no reported pose: set ReportJoints on it a call before",
             )
         };
@@ -744,6 +747,56 @@ impl RuntimeAppearanceBridge {
             instance.ragdoll = layer;
         }
         Ok(())
+    }
+
+    /// Whether `joint` of `instance` is cut off already: it or a joint
+    /// above it is cut.
+    pub(crate) fn joint_cut_off(
+        &self,
+        instance: u64,
+        joint: u32,
+    ) -> Result<bool, CsharpEngineServicesError> {
+        let state = &self.staged_ref()?.state;
+        let Some(instance) = state.animation_instances.get(&instance) else {
+            return Ok(false);
+        };
+        let parents =
+            instance_rig(state, instance).map_or_else(Vec::new, |rig| rig_parents(&rig.joints));
+        Ok(instance.cuts.values().any(|cut| {
+            cut.joint == joint
+                || ((joint as usize) < parents.len() && descends(&parents, joint, cut.joint))
+        }))
+    }
+
+    /// The joint a severed part cuts off `instance`; `None` releases it.
+    /// Returns whether the instance lives.
+    pub(crate) fn set_joint_cut(
+        &mut self,
+        instance: u64,
+        part: u64,
+        cut: Option<JointCut>,
+    ) -> Result<bool, CsharpEngineServicesError> {
+        let state = &mut *self.staged_mut()?.state;
+        let Some(instance) = state.animation_instances.get_mut(&instance) else {
+            return Ok(false);
+        };
+        match cut {
+            Some(cut) => instance.cuts.insert(part, cut),
+            None => instance.cuts.remove(&part),
+        };
+        Ok(true)
+    }
+
+    /// Whether an animation instance lives, during a call.
+    pub(crate) fn animation_instance_lives(
+        &self,
+        instance: u64,
+    ) -> Result<bool, CsharpEngineServicesError> {
+        Ok(self
+            .staged_ref()?
+            .state
+            .animation_instances
+            .contains_key(&instance))
     }
 
     /// Joint poses the renderer reported since the last call, oldest first.
@@ -793,6 +846,7 @@ pub(super) fn settle_poses(
         let mut pose = instance.pose.clone();
         pose.clip_layers.clone_from(&instance.clip_layers);
         pose.layers.extend(instance.ragdoll.iter().cloned());
+        pose.cuts.extend(instance.cuts.values().cloned());
         let changed = match &instance.pose_sent {
             Some((sent, sent_pose)) if *sent == target => *sent_pose != pose,
             // A new target starts without controls.
@@ -960,6 +1014,22 @@ pub(crate) fn ragdoll_layer_for_test(
         .animation_instances[&instance.value]
         .ragdoll
         .clone()
+}
+
+/// The joints the open call cuts off `instance`, by part.
+#[cfg(test)]
+pub(crate) fn cuts_for_test(
+    bridge: &RuntimeAppearanceBridge,
+    instance: NativeAnimationInstanceHandle,
+) -> Option<Vec<JointCut>> {
+    bridge
+        .staged
+        .as_ref()
+        .expect("an open call")
+        .state
+        .animation_instances
+        .get(&instance.value)
+        .map(|instance| instance.cuts.values().cloned().collect())
 }
 
 #[cfg(test)]

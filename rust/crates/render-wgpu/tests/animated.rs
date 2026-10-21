@@ -881,6 +881,7 @@ fn pose_controls_reach_a_world_target_and_report_the_drawn_joints() {
             }],
             layers: Vec::new(),
             report_joints: true,
+            cuts: Vec::new(),
         },
     };
 
@@ -962,6 +963,7 @@ fn a_reported_pose_carries_each_ik_chains_target_and_shortfall() {
             overrides: Vec::new(),
             layers: Vec::new(),
             report_joints: true,
+            cuts: Vec::new(),
         },
     };
     let chains = |harness: &mut Harness| {
@@ -1031,6 +1033,7 @@ fn inspection_draws_the_joint_chain_and_ik_reach_of_an_instance() {
                 overrides: Vec::new(),
                 layers: Vec::new(),
                 report_joints: false,
+                cuts: Vec::new(),
             },
         },
     ]);
@@ -1205,6 +1208,7 @@ fn a_pose_sampled_without_the_renderer_matches_the_drawn_report() {
         }],
         layers: Vec::new(),
         report_joints: true,
+        cuts: Vec::new(),
     };
     let model = animation_pose::PoseModel::decode(
         &body,
@@ -1706,4 +1710,117 @@ fn a_renderer_rebuilt_from_the_retained_world_poses_as_the_live_one() {
         &baseline,
         "a controller updated before the rebuild",
     );
+}
+
+/// Pixels that differ between two frames.
+fn differing_pixels(a: &[u8], b: &[u8]) -> usize {
+    a.as_chunks::<4>()
+        .0
+        .iter()
+        .zip(b.as_chunks::<4>().0)
+        .filter(|(a, b)| a != b)
+        .count()
+}
+
+/// A cut joint's subtree leaves the skinned body and is drawn as a piece
+/// posed as it was at the cut and placed where the cut says; the weapon on a
+/// cut hand goes with its piece, the skeleton keeps its own pose, a fresh
+/// renderer draws the same, and clearing the cuts draws the whole character.
+#[test]
+fn a_cut_joint_draws_its_subtree_as_a_piece_where_it_is_placed() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let (head, arm) = (rig_joint(&body, "Head"), rig_joint(&body, "RightArm"));
+    let view = character_view();
+    let reporting = |cuts: Vec<JointCut>| RenderDiff::SetAnimatedMeshPose {
+        handle: RenderHandle::new(BODY),
+        pose: AnimatedMeshPose {
+            report_joints: true,
+            cuts,
+            ..AnimatedMeshPose::default()
+        },
+    };
+    harness.apply(vec![reporting(Vec::new())]);
+    let (_, whole) = harness.render(&view);
+    let (_, _, joints, _) = joint_poses(&mut harness).pop().expect("a report");
+    let pose: Vec<Transform> = joints.iter().map(|joint| joint.model).collect();
+    let cut = |joint: u32, offset: [f32; 3]| {
+        let mut placement = joints[joint as usize].world;
+        for (axis, delta) in offset.iter().enumerate() {
+            placement.translation[axis] += delta;
+        }
+        JointCut {
+            joint,
+            pose: pose.clone(),
+            placement,
+        }
+    };
+    harness.apply(vec![inspect(BODY, 1), inspect(WEAPON, 1)]);
+    harness.render(&view);
+    let facts = harness.renderer.take_animation_facts();
+    let bounds_of = |facts: &[AnimationFact], handle: u64| {
+        facts
+            .iter()
+            .find_map(|fact| match fact {
+                AnimationFact::MeshInspection {
+                    object_id,
+                    bounds: Some(bounds),
+                    ..
+                } if *object_id == handle => Some(*bounds),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("bounds of {handle}: {facts:?}"))
+    };
+    let (body_whole, weapon_whole) = (bounds_of(&facts, BODY), bounds_of(&facts, WEAPON));
+
+    // Cut where they are, the pieces draw the character as it was.
+    harness.apply(vec![reporting(vec![
+        cut(head, [0.0; 3]),
+        cut(arm, [0.0; 3]),
+    ])]);
+    let (_, in_place) = harness.render(&view);
+    let seam = differing_pixels(&whole, &in_place);
+    assert!(
+        seam * 1000 < whole.len() / 4,
+        "a piece in place draws as before: {seam} pixels changed"
+    );
+    let (_, _, reported, _) = joint_poses(&mut harness).pop().expect("a report");
+    assert_eq!(
+        reported[head as usize].world, joints[head as usize].world,
+        "the skeleton keeps its own pose"
+    );
+
+    // Moved away, the head leaves its place and the weapon goes with the arm.
+    const AWAY: [f32; 3] = [1.5, -0.5, 0.0];
+    harness.apply(vec![
+        reporting(vec![cut(head, AWAY), cut(arm, [0.0, 0.0, 1.0])]),
+        inspect(BODY, 2),
+        inspect(WEAPON, 2),
+    ]);
+    let (_, moved) = harness.render(&view);
+    assert!(
+        differing_pixels(&whole, &moved) > 50 * seam.max(1),
+        "the pieces moved"
+    );
+    let facts = harness.renderer.take_animation_facts();
+    let (body_cut, weapon_cut) = (bounds_of(&facts, BODY), bounds_of(&facts, WEAPON));
+    assert!(
+        body_cut.1[0] > body_whole.1[0] + 1.0,
+        "the drawn bounds reach the head: {body_cut:?} from {body_whole:?}"
+    );
+    for axis in 0..3 {
+        let shift = [0.0, 0.0, 1.0][axis];
+        assert!(
+            (weapon_cut.0[axis] - weapon_whole.0[axis] - shift).abs() < 1e-3,
+            "the weapon follows its hand's piece: {weapon_cut:?} from {weapon_whole:?}"
+        );
+    }
+    let (_, fresh) = harness.render_fresh(&view);
+    assert_eq!(fresh, moved, "a fresh renderer draws the same pieces");
+
+    // Without cuts the character is whole again.
+    harness.apply(vec![reporting(Vec::new())]);
+    let (_, restored) = harness.render(&view);
+    assert_eq!(restored, whole);
 }

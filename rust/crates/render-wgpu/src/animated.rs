@@ -140,9 +140,187 @@ pub(crate) struct AnimatedInstance {
     skinned: HashMap<(u32, u32), GpuMesh>,
     /// The GLB node each of the node row's parts draws, in part order.
     part_nodes: Vec<usize>,
+    /// The skinned triangles split between the instance and its severed
+    /// pieces, for the cut joints it was made for.
+    split: Option<CutSplit>,
+    /// Each GLB node of a severed piece placed in the instance's space:
+    /// what its rigid parts and joint-attached children follow.
+    piece_nodes: HashMap<usize, Mat4>,
     /// Per material slot values over the slot's material
     /// (`SetMaterialInstanceParameters`).
     pub(crate) parameters: BTreeMap<u16, MaterialInstanceParameters>,
+}
+
+/// The triangles of each skinned primitive split by an instance's cuts
+/// ([`render_model::JointCut`]): the instance keeps its own vertices and the
+/// triangles left to it, and each piece draws copies of its triangles'
+/// vertices, skinned at the piece's placement.
+struct CutSplit {
+    /// The cut joints, in the order of the pose's cuts.
+    joints: Vec<u32>,
+    /// By (node, primitive); a primitive no cut reaches is absent.
+    primitives: HashMap<(u32, u32), SplitPrimitive>,
+}
+
+struct SplitPrimitive {
+    /// The vertices drawn after the primitive's own: each one's source
+    /// vertex and the cut whose piece draws it.
+    copies: Vec<(u32, usize)>,
+    /// The instance's triangles, then each piece's.
+    indices: Vec<u32>,
+}
+
+/// Each node's cut: the nearest cut joint at or above it.
+fn node_cuts(model: &GlbModel, rig: &[Option<usize>], joints: &[u32]) -> Vec<Option<usize>> {
+    let mut cut_at: HashMap<usize, usize> = HashMap::new();
+    for (cut, joint) in joints.iter().enumerate() {
+        if let Some(node) = rig.get(*joint as usize).copied().flatten() {
+            cut_at.entry(node).or_insert(cut);
+        }
+    }
+    let mut owners = vec![None; model.nodes.len()];
+    for &node in &model.order {
+        owners[node] = cut_at
+            .get(&node)
+            .copied()
+            .or_else(|| model.nodes[node].parent.and_then(|parent| owners[parent]));
+    }
+    owners
+}
+
+impl CutSplit {
+    fn new(model: &GlbModel, rig: &[Option<usize>], joints: Vec<u32>) -> Self {
+        let owners = node_cuts(model, rig, &joints);
+        let mut primitives = HashMap::new();
+        for &node_index in &model.order {
+            let node = &model.nodes[node_index];
+            let (Some(mesh), Some(skin)) = (node.mesh, node.skin) else {
+                continue;
+            };
+            let skin = &model.skins[skin];
+            for (primitive_index, primitive) in model.meshes[mesh].iter().enumerate() {
+                let (Some(influences), Some(weights)) = (&primitive.joints, &primitive.weights)
+                else {
+                    continue;
+                };
+                // Each vertex goes where the larger part of its weight is;
+                // a tie stays with the instance.
+                let vertex_cuts: Vec<Option<usize>> = influences
+                    .iter()
+                    .zip(weights)
+                    .map(|(joints, weights)| {
+                        let mut shares: [(Option<usize>, f32); 4] = [(None, 0.0); 4];
+                        let mut kept = 0.0;
+                        for (joint, weight) in joints.iter().zip(weights) {
+                            let owner = skin
+                                .joints
+                                .get(usize::from(*joint))
+                                .and_then(|node| owners[*node]);
+                            match owner {
+                                None => kept += weight,
+                                Some(cut) => {
+                                    if let Some(share) =
+                                        shares.iter_mut().find(|(owner, _)| *owner == Some(cut))
+                                    {
+                                        share.1 += weight;
+                                    } else if let Some(share) =
+                                        shares.iter_mut().find(|(owner, _)| owner.is_none())
+                                    {
+                                        *share = (Some(cut), *weight);
+                                    }
+                                }
+                            }
+                        }
+                        let (cut, weight) =
+                            shares.iter().copied().fold((None, 0.0), |best, share| {
+                                if share.1 > best.1 {
+                                    share
+                                } else {
+                                    best
+                                }
+                            });
+                        (weight > kept).then_some(cut).flatten()
+                    })
+                    .collect();
+                let mut kept = Vec::with_capacity(primitive.indices.len());
+                let mut severed: Vec<(usize, [u32; 3])> = Vec::new();
+                for triangle in primitive.indices.as_chunks::<3>().0 {
+                    let [a, b, c] = [0, 1, 2].map(|corner| vertex_cuts[triangle[corner] as usize]);
+                    let cut = if a == b || a == c {
+                        a
+                    } else if b == c {
+                        b
+                    } else {
+                        None
+                    };
+                    match cut {
+                        Some(cut) => severed.push((cut, *triangle)),
+                        None => kept.extend_from_slice(triangle),
+                    }
+                }
+                if severed.is_empty() {
+                    continue;
+                }
+                let own = primitive.positions.len() as u32;
+                let mut copies = Vec::new();
+                let mut copied: HashMap<(u32, usize), u32> = HashMap::new();
+                severed.sort_by_key(|(cut, _)| *cut);
+                for (cut, triangle) in severed {
+                    for vertex in triangle {
+                        let index = *copied.entry((vertex, cut)).or_insert_with(|| {
+                            copies.push((vertex, cut));
+                            own + copies.len() as u32 - 1
+                        });
+                        kept.push(index);
+                    }
+                }
+                primitives.insert(
+                    (node_index as u32, primitive_index as u32),
+                    SplitPrimitive {
+                        copies,
+                        indices: kept,
+                    },
+                );
+            }
+        }
+        Self { joints, primitives }
+    }
+}
+
+/// Where each node of a severed piece is drawn, in the instance's space
+/// (`world` is the instance's placement): its nearest rig joint as it was at
+/// the cut, relative to the cut joint and placed where that joint is now,
+/// and the node as it is now relative to that joint.
+fn piece_matrix(
+    asset: &AnimatedAssetRow,
+    pose: &[Mat4],
+    rig_index: &HashMap<usize, usize>,
+    cut: &render_model::JointCut,
+    world_inverse: Mat4,
+    node: usize,
+) -> Mat4 {
+    let frozen = |rig: usize| cut.pose.get(rig).map(convert::transform_matrix);
+    let mut joint = node;
+    while !rig_index.contains_key(&joint) {
+        match asset.model.nodes[joint].parent {
+            Some(parent) => joint = parent,
+            None => break,
+        }
+    }
+    let base = world_inverse
+        * convert::transform_matrix(&cut.placement)
+        * frozen(cut.joint as usize)
+            .unwrap_or(Mat4::IDENTITY)
+            .inverse();
+    let at_cut = rig_index
+        .get(&joint)
+        .and_then(|rig| frozen(*rig))
+        .unwrap_or(Mat4::IDENTITY);
+    let relative = match (pose.get(joint), pose.get(node)) {
+        (Some(above), Some(posed)) if joint != node => above.inverse() * *posed,
+        _ => Mat4::IDENTITY,
+    };
+    base * at_cut * relative
 }
 
 pub(crate) use animation_pose::resource_identity;
@@ -432,7 +610,12 @@ impl Renderer {
                 if primitive.joints.is_some() {
                     continue;
                 }
-                let vertices = interleave(primitive, &primitive.positions, &primitive.normals);
+                let vertices = interleave(
+                    primitive,
+                    &primitive.positions,
+                    &primitive.normals,
+                    &|vertex| vertex,
+                );
                 let mut mesh = self.upload_vertices(
                     &format!("{label} mesh {mesh_index}/{primitive_index}"),
                     &vertices,
@@ -441,8 +624,14 @@ impl Renderer {
                     vec![(0, 0, primitive.indices.len() as u32)],
                     BTreeMap::new(),
                 );
-                mesh.extra = extra_stream(&model, primitive, primitive.tangents.as_deref())
-                    .map(|extra| self.vertex_buffer(&format!("{label} tangents"), &extra, false));
+                mesh.extra = extra_stream(
+                    &model,
+                    primitive,
+                    primitive.positions.len(),
+                    &|vertex| vertex,
+                    primitive.tangents.as_deref(),
+                )
+                .map(|extra| self.vertex_buffer(&format!("{label} tangents"), &extra, false));
                 rigid.insert((mesh_index as u32, primitive_index as u32), mesh);
             }
         }
@@ -452,7 +641,9 @@ impl Renderer {
             .meshes
             .iter()
             .flatten()
-            .filter(|primitive| extra_stream(&model, primitive, None).is_some())
+            .filter(|primitive| {
+                extra_stream(&model, primitive, 0, &|vertex| vertex, None).is_some()
+            })
             .filter_map(|primitive| primitive.material)
             .collect();
         for index in streamed {
@@ -588,6 +779,8 @@ impl Renderer {
                 ik: Vec::new(),
                 skinned: HashMap::new(),
                 part_nodes: Vec::new(),
+                split: None,
+                piece_nodes: HashMap::new(),
                 parameters: BTreeMap::new(),
             },
         );
@@ -984,10 +1177,37 @@ impl Renderer {
                 });
             }
         }
+        // A severed piece's nodes, placed where the piece is.
+        instance.piece_nodes.clear();
+        if !instance.controls.cuts.is_empty() {
+            let joints: Vec<u32> = instance.controls.cuts.iter().map(|cut| cut.joint).collect();
+            let owners = node_cuts(&asset.model, &asset.rig, &joints);
+            let rig_index = rig_indices(asset);
+            let world_inverse = world.inverse();
+            for (node, owner) in owners.iter().enumerate() {
+                if let Some(cut) = owner {
+                    instance.piece_nodes.insert(
+                        node,
+                        piece_matrix(
+                            asset,
+                            &instance.pose,
+                            &rig_index,
+                            &instance.controls.cuts[*cut],
+                            world_inverse,
+                            node,
+                        ),
+                    );
+                }
+            }
+        }
         if moved {
             self.scene_generation += 1;
         }
-        self.skin_animated_instance(handle);
+        if self.skin_animated_instance(handle) {
+            // The cuts changed the skinned triangles, so the parts' index
+            // counts.
+            self.rebuild_parts(handle);
+        }
         self.write_animated_parts(handle);
         // Children attached to joints follow the new pose.
         if let Some(node) = self.tables.nodes.get(&handle) {
@@ -1020,13 +1240,38 @@ impl Renderer {
         }
     }
 
-    /// CPU-skin every skinned primitive into the instance's vertex buffers.
-    fn skin_animated_instance(&mut self, handle: RenderHandle) {
-        let Some(instance) = self.tables.animated.get(&handle) else {
-            return;
+    /// CPU-skin every skinned primitive into the instance's vertex buffers,
+    /// with its severed pieces' triangles skinned where each piece is.
+    /// Returns whether the cuts changed which triangles each draws: the
+    /// buffers are then made again and the parts must be.
+    fn skin_animated_instance(&mut self, handle: RenderHandle) -> bool {
+        let Some(instance) = self.tables.animated.get_mut(&handle) else {
+            return false;
         };
         let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
-            return;
+            return false;
+        };
+        let joints: Vec<u32> = instance.controls.cuts.iter().map(|cut| cut.joint).collect();
+        let resplit = instance
+            .split
+            .as_ref()
+            .map_or(!joints.is_empty(), |split| split.joints != joints);
+        if resplit {
+            instance.split =
+                (!joints.is_empty()).then(|| CutSplit::new(&asset.model, &asset.rig, joints));
+            instance.skinned.clear();
+        }
+        let instance = &self.tables.animated[&handle];
+        let world = self
+            .tables
+            .nodes
+            .get(&handle)
+            .map_or(Mat4::IDENTITY, |node| node.world);
+        let world_inverse = world.inverse();
+        let rig_index = if instance.controls.cuts.is_empty() {
+            HashMap::new()
+        } else {
+            rig_indices(asset)
         };
         let mut updates = Vec::new();
         for &node_index in &asset.model.order {
@@ -1041,15 +1286,55 @@ impl Renderer {
                 .zip(&skin.inverse_binds)
                 .map(|(joint, inverse)| instance.pose[*joint] * *inverse)
                 .collect();
+            // Each piece's palette: its joints where the piece is.
+            let pieces: Vec<Vec<Mat4>> = instance
+                .controls
+                .cuts
+                .iter()
+                .map(|cut| {
+                    skin.joints
+                        .iter()
+                        .zip(&skin.inverse_binds)
+                        .map(|(joint, inverse)| {
+                            instance.piece_nodes.get(joint).copied().unwrap_or_else(|| {
+                                piece_matrix(
+                                    asset,
+                                    &instance.pose,
+                                    &rig_index,
+                                    cut,
+                                    world_inverse,
+                                    *joint,
+                                )
+                            }) * *inverse
+                        })
+                        .collect()
+                })
+                .collect();
             for (primitive_index, primitive) in asset.model.meshes[mesh].iter().enumerate() {
                 let (Some(joints), Some(weights)) = (&primitive.joints, &primitive.weights) else {
                     continue;
                 };
-                let mut positions = Vec::with_capacity(primitive.positions.len());
-                let mut normals = Vec::with_capacity(primitive.positions.len());
+                let split = instance.split.as_ref().and_then(|split| {
+                    split
+                        .primitives
+                        .get(&(node_index as u32, primitive_index as u32))
+                });
+                let copies = split.map_or(&[][..], |split| split.copies.as_slice());
+                let own = primitive.positions.len();
+                let count = own + copies.len();
+                let mut positions = Vec::with_capacity(count);
+                let mut normals = Vec::with_capacity(count);
                 let mut tangents =
-                    Vec::with_capacity(primitive.tangents.as_ref().map_or(0, Vec::len));
-                for (vertex, position) in primitive.positions.iter().enumerate() {
+                    Vec::with_capacity(primitive.tangents.as_ref().map_or(0, |_| count));
+                for output in 0..count {
+                    let (vertex, palette) = match output.checked_sub(own) {
+                        None => (output, &palette),
+                        Some(copy) => {
+                            let (vertex, cut) = copies[copy];
+                            (vertex as usize, &pieces[cut])
+                        }
+                    };
+                    let position = &primitive.positions[vertex];
                     let mut matrix = Mat4::ZERO;
                     for influence in 0..4 {
                         let weight = weights[vertex][influence];
@@ -1079,10 +1364,16 @@ impl Renderer {
                         tangents.push([x, y, z, w]);
                     }
                 }
-                let vertices = interleave(primitive, &positions, &normals);
+                let source = |output: usize| match output.checked_sub(own) {
+                    None => output,
+                    Some(copy) => copies[copy].0 as usize,
+                };
+                let vertices = interleave(primitive, &positions, &normals, &source);
                 let extra = extra_stream(
                     &asset.model,
                     primitive,
+                    count,
+                    &source,
                     (!tangents.is_empty()).then_some(tangents.as_slice()),
                 );
                 updates.push(((node_index as u32, primitive_index as u32), vertices, extra));
@@ -1128,7 +1419,11 @@ impl Renderer {
                 let node = &asset.model.nodes[key.0 as usize];
                 let primitive = &asset.model.meshes[node.mesh.expect("skinned node has a mesh")]
                     [key.1 as usize];
-                let indices = primitive.indices.clone();
+                let indices = self.tables.animated[&handle]
+                    .split
+                    .as_ref()
+                    .and_then(|split| split.primitives.get(&key))
+                    .map_or_else(|| primitive.indices.clone(), |split| split.indices.clone());
                 let label = format!("animated {} skin {}/{}", handle.raw(), key.0, key.1);
                 let mut mesh = self.upload_dynamic_vertices(&label, &vertices, &indices);
                 mesh.extra = extra.map(|extra| self.vertex_buffer(&label, &extra, true));
@@ -1137,6 +1432,7 @@ impl Renderer {
                 }
             }
         }
+        resplit
     }
 
     /// Re-write the instance's part rows with their node poses (rigid parts)
@@ -1157,8 +1453,9 @@ impl Renderer {
                 Mat4::IDENTITY
             } else {
                 instance
-                    .pose
-                    .get(*glb_node)
+                    .piece_nodes
+                    .get(glb_node)
+                    .or_else(|| instance.pose.get(*glb_node))
                     .copied()
                     .unwrap_or(Mat4::IDENTITY)
             };
@@ -1260,7 +1557,12 @@ impl Renderer {
     /// The posed transform of a node of `handle`'s asset, by index: what a
     /// joint-attached child hangs from each frame.
     pub(crate) fn joint_pose_at(&self, handle: RenderHandle, node: usize) -> Option<Mat4> {
-        self.tables.animated.get(&handle)?.pose.get(node).copied()
+        let instance = self.tables.animated.get(&handle)?;
+        instance
+            .piece_nodes
+            .get(&node)
+            .or_else(|| instance.pose.get(node))
+            .copied()
     }
 
     /// The node of an animated instance's rig joint.
@@ -1410,7 +1712,14 @@ impl Renderer {
                     }
                     None => MaterialRef::LitFallback,
                 };
-                parts.push((mesh_ref, primitive.indices.len() as u32, material, slot));
+                let index_count = match &mesh_ref {
+                    crate::tables::MeshRef::AnimatedSkinned(_, node, primitive) => instance
+                        .skinned
+                        .get(&(*node, *primitive))
+                        .map_or(0, |mesh| mesh.cpu.indices.len()),
+                    _ => primitive.indices.len(),
+                };
+                parts.push((mesh_ref, index_count as u32, material, slot));
                 part_nodes.push(node_index);
             }
         }
@@ -1547,6 +1856,16 @@ impl AnimatedInstance {
     }
 }
 
+/// Each rig joint's index, by its node.
+fn rig_indices(asset: &AnimatedAssetRow) -> HashMap<usize, usize> {
+    asset
+        .rig
+        .iter()
+        .enumerate()
+        .filter_map(|(index, node)| Some(((*node)?, index)))
+        .collect()
+}
+
 /// An asset's clip index by descriptor id; no asset resolves nothing.
 fn clip_index(asset: Option<&AnimatedAssetRow>) -> impl Fn(&str) -> Option<usize> + '_ {
     move |name| asset.and_then(|asset| asset.clip_ids.get(name).copied())
@@ -1559,6 +1878,8 @@ fn clip_index(asset: Option<&AnimatedAssetRow>) -> impl Fn(&str) -> Option<usize
 fn extra_stream(
     model: &GlbModel,
     primitive: &glb::GlbPrimitive,
+    count: usize,
+    source: &dyn Fn(usize) -> usize,
     tangents: Option<&[[f32; 4]]>,
 ) -> Option<Vec<f32>> {
     let material = model.materials.get(primitive.material?)?;
@@ -1572,17 +1893,17 @@ fn extra_stream(
     if material.normal_texture.is_none() && !second_set {
         return None;
     }
-    let mut extra = Vec::with_capacity(primitive.positions.len() * EXTRA_VERTEX_FLOATS);
-    for vertex in 0..primitive.positions.len() {
+    let mut extra = Vec::with_capacity(count * EXTRA_VERTEX_FLOATS);
+    for output in 0..count {
         let tangent = tangents
-            .and_then(|tangents| tangents.get(vertex))
+            .and_then(|tangents| tangents.get(output))
             .copied()
             .unwrap_or([1.0, 0.0, 0.0, 1.0]);
         extra.extend_from_slice(&tangent);
         let uv = primitive
             .uvs1
             .as_ref()
-            .and_then(|uvs| uvs.get(vertex))
+            .and_then(|uvs| uvs.get(source(output)))
             .copied()
             .unwrap_or([0.0, 0.0]);
         extra.extend_from_slice(&uv);
@@ -1590,16 +1911,19 @@ fn extra_stream(
     Some(extra)
 }
 
-/// Interleave a primitive's streams into the renderer's vertex layout.
+/// Interleave a primitive's streams into the renderer's vertex layout; each
+/// output vertex takes the other streams of its `source` vertex.
 fn interleave(
     primitive: &glb::GlbPrimitive,
     positions: &[[f32; 3]],
     normals: &[[f32; 3]],
+    source: &dyn Fn(usize) -> usize,
 ) -> Vec<f32> {
     let mut vertices = Vec::with_capacity(positions.len() * VERTEX_FLOATS);
-    for (vertex, position) in positions.iter().enumerate() {
+    for (output, position) in positions.iter().enumerate() {
+        let vertex = source(output);
         vertices.extend_from_slice(position);
-        vertices.extend_from_slice(&normals[vertex]);
+        vertices.extend_from_slice(&normals[output]);
         match primitive.uvs.as_ref().and_then(|uvs| uvs.get(vertex)) {
             Some(uv) => vertices.extend_from_slice(uv),
             None => vertices.extend_from_slice(&[0.0, 0.0]),

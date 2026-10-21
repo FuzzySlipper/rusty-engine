@@ -3,8 +3,9 @@ use crate::composition::{borrowed_slice, borrowed_utf8, CsharpEngineServicesErro
 mod animation_pose;
 mod model_surface;
 pub use animation_pose::JointPoseReport;
+pub(crate) use animation_pose::RagdollSource;
 #[cfg(test)]
-pub(crate) use animation_pose::{character_for_test, ragdoll_layer_for_test};
+pub(crate) use animation_pose::{character_for_test, cuts_for_test, ragdoll_layer_for_test};
 
 use crate::render_resources::{
     CsharpRenderResource, CsharpRenderResourceKind, GeneratedMeshes, RenderResourceImports,
@@ -1556,6 +1557,8 @@ struct AnimationInstance {
     clip_layers: Vec<ClipLayer>,
     /// The layer a Dynamics ragdoll places its bones with.
     ragdoll: Option<PlacedPoseLayer>,
+    /// The joints Dynamics severed parts cut off, by part handle.
+    cuts: BTreeMap<u64, JointCut>,
     /// The target and pose (the product's controls, then the ragdoll's layer)
     /// last sent to the renderer.
     pose_sent: Option<(RenderHandle, AnimatedMeshPose)>,
@@ -6010,6 +6013,7 @@ impl RuntimeAppearanceBridge {
                 pose: AnimatedMeshPose::default(),
                 clip_layers: Vec::new(),
                 ragdoll: None,
+                cuts: BTreeMap::new(),
                 pose_sent: None,
             },
         );

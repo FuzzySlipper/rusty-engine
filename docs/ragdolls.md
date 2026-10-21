@@ -148,6 +148,10 @@ pose and the bodies, so the skeleton blends as one pose:
 - Move the character's appearance to where the ragdoll lies before it stands:
   the clips draw it at its own placement.
 
+**Severing.** `Dynamics.CreateSeveredPart` cuts one bone's subtree off the
+character as its own body ([severed parts](csharp-capabilities.md#severed-parts)).
+A ragdoll created after the cut should leave those bones out.
+
 **Disposing.** Disposing the ragdoll removes its bodies and joints and releases
 the bones to the clips. Destroying its world ends it too. Destroying its
 instance leaves the bodies simulating until the ragdoll is disposed.

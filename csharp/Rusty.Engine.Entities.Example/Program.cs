@@ -1148,6 +1148,8 @@ sealed class DynamicsServiceFake : IDynamicsService
     public void ApplyRagdollImpulse(DynamicsRagdollImpulseRequest request) => throw new NotSupportedException();
     public void ApplyPointImpulse(DynamicsPointImpulseRequest request) => throw new NotSupportedException();
     public DynamicsRagdollResult ReadRagdoll(DynamicsRagdoll ragdoll) => throw new NotSupportedException();
+    public DynamicsSeveredPart CreateSeveredPart(DynamicsSeveredPartRequest request) => throw new NotSupportedException();
+    public DynamicsSeveredPartReadout ReadSeveredPart(DynamicsSeveredPart part) => throw new NotSupportedException();
     public DynamicsBody CreateSphereBodyWithProperties(DynamicsCreateSphereBodyPropertiesRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateCapsuleBody(DynamicsCreateCapsuleBodyRequest request) => throw new NotSupportedException();
     public void BindWorldCollision(DynamicsWorldCollisionBindingRequest request) => throw new NotSupportedException();
