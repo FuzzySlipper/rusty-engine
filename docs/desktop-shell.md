@@ -147,8 +147,7 @@ rusty dev --project <product.csproj> --output window
   --cef-dir <directory>` overrides the location for the browser process
   (Linux subprocesses load `libcef.so` through the dynamic linker).
   - `libcef.so`, stripped;
-  - its paks, ICU data and V8 snapshot;
-  - ANGLE's `libEGL.so` and `libGLESv2.so`;
+  - its paks, ICU data and V8 snapshot (ANGLE is inside `libcef.so`);
   - one locale.
 
   SwiftShader and the bundled Vulkan loader are left out. The overlay imports

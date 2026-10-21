@@ -32,9 +32,34 @@ How far each row has been taken:
 | `wgpu-29` | compiles on all three hosts; DX12 and Metal retain their live receipts, while content-preserving CEF DMABUF import now returns a typed version error |
 | `wgpu-28` | compiles on all three hosts; **not** exercised on hardware, and CEF DMABUF import returns the same typed version error |
 
-## State, 2026-09-04
+Version 0.15.0 targets CEF 154 (`154.5.0+154.0.34`, Chromium
+`154.0.8037.98`) through `cef` 154.5.0, and needs those CEF binaries at
+runtime; CEF 151 binaries are not supported. The migration was qualified on
+Windows (receipts under `../docs/receipts/cef154_windows_20261007/`). The
+historical tables below continue to describe CEF 151, with fresh Mac and Linux
+runtime gates still open.
 
-Version 0.14.1 is the current patch candidate. It refuses CEF 151's unsafe
+## 0.15.0 (2026-10-17)
+
+Breaking changes, which justify the minor bump:
+
+- The minimum supported Rust version is 1.97.1 (was 1.92).
+- `cef` moves from 151 to 154.5.0, with the `sandbox` feature enabled.
+- `ScriptResult` is removed; script completions now arrive as
+  `CefSurfaceEvent::ScriptCompleted` events (the new non-exhaustive
+  `CefSurfaceEvent`) carrying the caller's request ID (`WebRequestId`).
+
+Additions: an enforcing `CefSandboxMode` variant for Linux, macOS and Windows
+(Windows uses CEF's `bootstrap.exe` plus `CefWindowsSandboxContext`; the
+Windows import was qualified on CEF 154), `CefRuntime::try_run_subprocess`
+and `WeldError::SandboxSetup` for surfacing sandbox setup failures, owned
+native frames from every CEF producer, and neutral native frame pixel metadata
+(`NativeFramePixelFormat`). `CefSandboxMode::UnsandboxedTrustedContent` keeps
+the previous behaviour.
+
+## State at 0.14.1, 2026-09-04
+
+Version 0.14.1 was the previous published release. It refuses CEF 151's unsafe
 native DevTools window on every platform while preserving the supported CDP
 path. Version 0.14.0 made retained Metal frames move-only, and each platform
 demo has an embedded dodger-blue pixel fixture that exits unsuccessfully on a
@@ -499,23 +524,35 @@ producer.ime_commit_text("weldime")?;               // committed
 // compositionend, and the field ends up holding the text.
 ```
 
-Cookies and script results are request-then-poll, because CEF answers both
+Cookies and script results are request-then-event, because CEF answers both
 asynchronously and on Linux and macOS the calling thread *is* CEF's UI thread,
 so blocking would wait on the loop carrying the answer:
 
 ```rust,ignore
 producer.set_cookie("https://example.com/", &cookie)?;
-producer.request_cookies(Some("https://example.com/"))?;
-
-let id = producer.request_script_result("({title: document.title, n: 2+2})")?;
+producer.request_cookies(WebRequestId::new(41), Some("https://example.com/"))?;
+producer.request_script_result(
+    WebRequestId::new(42),
+    "({title: document.title, n: 2+2})",
+)?;
 
 // later, on ordinary ticks:
-if let Some(cookies) = producer.poll_cookies() { /* Some(vec![]) means none */ }
-if let Some(result) = producer.poll_script_result() {
-    // result.value is Ok(json) or Err(exception message)
-    // => {"title":"Example Domain","n":4}
+while let Some(event) = producer.poll_web_event() {
+    match event {
+        CefSurfaceEvent::CookiesCompleted { id, result } => { /* ... */ }
+        CefSurfaceEvent::ScriptCompleted { id, result } => {
+            // Ok => {"title":"Example Domain","n":4}
+        }
+        CefSurfaceEvent::Navigation(event) => { /* ... */ }
+        CefSurfaceEvent::WebMessage(message) => { /* ... */ }
+        _ => {}
+    }
 }
 ```
+
+The ID belongs to the caller and preserves the full `u64` range. Successful
+submission means exactly one matching completion will be emitted. Immediate
+failure emits none.
 
 When the renderer dies, the browser survives and the host gets told what
 happened. Recovering takes two steps, and the second one is easy to miss:
@@ -578,20 +615,35 @@ fn main() {
 
 macOS is different: it launches separate helper executables from inside the
 `.app` bundle instead. Those helpers must call
-`CefRuntime::run_subprocess(args, sandbox)`, not `cef_execute_process`
+`CefRuntime::try_run_subprocess(args, sandbox)`, not `cef_execute_process`
 directly, or the renderer comes up with no handlers and anything needing it
-(script results) never answers. See `demo-weld-mac` for a working bundle,
-helper, and bundler.
+(script results) never answers. In sandboxed mode this entry point also loads,
+initializes, retains, and destroys the framework's `libcef_sandbox.dylib`
+context. See `demo-weld-mac` for a working bundle, helper, and bundler.
 
 ### 2. Sandbox policy
 
-The current runtime mode is `CefSandboxMode::UnsandboxedTrustedContent`.
-It passes null `sandbox_info` to CEF subprocess entry points and sets
-`CefSettings.no_sandbox = 1`, so it is a trusted-content embedding mode rather
-than a hardened boundary for arbitrary web content. It is accepted by both
-`CefRuntime::execute_process_from` and `CefRuntimeConfig::new`; pass the same
-local value to both. Future sandboxed variants need matching subprocess
-helpers before they can be added honestly.
+Sandbox policy is explicit and has no default. Pass the same local value to
+the subprocess entry point and `CefRuntimeConfig::new`.
+
+`CefSandboxMode::Sandboxed` sets `CefSettings.no_sandbox = 0`. Linux then uses
+CEF's native Chromium sandbox selection. macOS additionally initializes
+`libcef_sandbox.dylib` in every helper through
+`CefRuntime::try_run_subprocess`. Both require platform packaging and headed
+hardware proof before an application treats the sandbox as part of its
+security boundary.
+
+Windows CEF 151 uses a different shape: `bootstrap.exe` creates the sandbox
+context and calls an exported `RunWinMain` entry point in the application's
+client DLL. That entry point borrows the supplied instance and context with
+`CefWindowsSandboxContext::from_raw`, then calls its `execute_process` and
+`initialize` methods. `CefRuntime::execute_process_from` cannot manufacture
+the context and therefore rejects `Sandboxed` on Windows. See
+`demo-weld-win/src/lib.rs` and its bundler for the complete packaging shape.
+
+`CefSandboxMode::UnsandboxedTrustedContent` passes null `sandbox_info` and sets
+`CefSettings.no_sandbox = 1`. It is intended only for trusted content and
+demos, not arbitrary web content.
 
 ### 3. Handle lifetime
 

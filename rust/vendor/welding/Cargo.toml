@@ -11,9 +11,9 @@
 
 [package]
 edition = "2024"
-rust-version = "1.92"
+rust-version = "1.97.1"
 name = "welding"
-version = "0.14.1"
+version = "0.15.0"
 build = "build.rs"
 autolib = false
 autobins = false
@@ -72,8 +72,11 @@ version = "0.22"
 optional = true
 
 [dependencies.cef]
-version = "151"
-features = ["accelerated_osr"]
+version = "154.5.0"
+features = [
+    "accelerated_osr",
+    "sandbox",
+]
 optional = true
 
 [dependencies.dpi]
@@ -132,6 +135,9 @@ version = "0.2"
 [target.'cfg(target_os = "macos")'.dependencies.foreign-types-shared]
 version = "0.3.1"
 optional = true
+
+[target.'cfg(target_os = "macos")'.dependencies.libloading]
+version = "0.9"
 
 [target.'cfg(target_os = "macos")'.dependencies.metal]
 version = "0.33.0"

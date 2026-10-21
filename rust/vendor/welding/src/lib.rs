@@ -114,7 +114,6 @@ pub use linux_cef::{LinuxCefConfig as PlatformCefConfig, LinuxCefProducer as Pla
 
 // ── Flat re-exports ───────────────────────────────────────────────────────────
 
-pub use app::ScriptResult;
 pub use auth::AuthId;
 pub use downloads::DownloadId;
 pub use error::WeldError;
@@ -122,16 +121,17 @@ pub use error::WeldError;
 pub use native_frame::build_dmabuf_capable_device;
 pub use native_frame::{
     HostWgpuContext, ImportError, ImportedTexture, InteropBackend, NativeFrame, NativeFrameKind,
-    WgpuTextureImporter,
+    NativeFramePixelFormat, WgpuTextureImporter,
 };
 pub use permissions::{PermissionId, PermissionKind};
+#[cfg(all(feature = "cef-runtime", target_os = "windows"))]
+pub use runtime::CefWindowsSandboxContext;
 pub use runtime::{CefLogSeverity, CefRuntime, CefRuntimeConfig, CefSandboxMode};
 pub use surface::{
-    BrowserFeatureStatus, CefSurfaceCapabilities, CefSurfaceConfig, CefSurfaceMode,
-    CefSurfaceProducer, ContactDevice, ContextMenuTarget, Cookie, CursorImage, CursorShape,
-    DragEventKind,
-    DragFile, DragInput, DragOperations, DragPayload, EventModifiers, FocusDirection,
-    ImeComposition, KeyEvent, KeyEventKind, MouseAction, MouseButton, MouseEvent, NavigationEvent,
-    PopupRect, PopupSurface, ProcessTerminationStatus, SameSite, SnapshotPngCompletion,
-    SnapshotRequestId, TouchInput, TouchPhase, ZoomCommand,
+    BrowserFeatureStatus, CefSurfaceCapabilities, CefSurfaceConfig, CefSurfaceEvent,
+    CefSurfaceMode, CefSurfaceProducer, ContactDevice, ContextMenuTarget, Cookie, CursorImage,
+    CursorShape, DragEventKind, DragFile, DragInput, DragOperations, DragPayload, EventModifiers,
+    FocusDirection, ImeComposition, KeyEvent, KeyEventKind, MouseAction, MouseButton, MouseEvent,
+    NavigationEvent, PopupRect, PopupSurface, ProcessTerminationStatus, SameSite,
+    SnapshotPngCompletion, SnapshotRequestId, TouchInput, TouchPhase, WebRequestId, ZoomCommand,
 };

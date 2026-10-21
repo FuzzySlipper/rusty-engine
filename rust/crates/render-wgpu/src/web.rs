@@ -17,7 +17,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use welding::{CefSurfaceProducer, HostWgpuContext, ImportedTexture, PopupRect};
+use welding::{CefSurfaceEvent, CefSurfaceProducer, HostWgpuContext, ImportedTexture, PopupRect};
 pub use welding::{
     CursorImage, CursorShape, DragOperations, EventModifiers, KeyEvent, KeyEventKind, MouseAction,
     MouseButton, MouseEvent, NavigationEvent,
@@ -263,9 +263,16 @@ impl WebOverlay {
             .map_err(|e| e.to_string())
     }
 
-    /// Navigation, title and console events, oldest first.
+    /// Navigation, title and console events, oldest first. The shell asks
+    /// for no script values or cookies and posts no web messages, so the
+    /// page's other callbacks are dropped.
     pub fn poll_event(&mut self) -> Option<NavigationEvent> {
-        self.producer.poll_navigation_event()
+        while let Some(event) = self.producer.poll_web_event() {
+            if let CefSurfaceEvent::Navigation(event) = event {
+                return Some(event);
+            }
+        }
+        None
     }
 
     /// The next cursor shape the page asks for.

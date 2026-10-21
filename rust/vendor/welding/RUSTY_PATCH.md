@@ -1,10 +1,10 @@
 # welding patch
 
-Source: crates.io `welding` 0.14.1, https://github.com/merely-made/wgpu-weld
+Source: crates.io `welding` 0.15.0, https://github.com/merely-made/wgpu-weld
 License: MPL-2.0 (each source file carries the notice). The crate's own
 `Cargo.lock` is left out.
 
-Engine #10123 carries a page's image cursor to the host. 0.14.1 drops CEF's
+Engine #10123 carries a page's image cursor to the host. 0.15.0 drops CEF's
 custom cursor info and reports `CT_CUSTOM` as `CursorShape::Custom("cef-other")`,
 so the desktop window showed the default arrow for a CSS `cursor: url(...)`.
 

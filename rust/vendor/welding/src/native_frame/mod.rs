@@ -114,6 +114,12 @@ impl NativeFrame {
         }
     }
 
+    /// Pixel format metadata without exposing the selected wgpu major in the
+    /// caller's type surface.
+    pub fn pixel_format(&self) -> NativeFramePixelFormat {
+        NativeFramePixelFormat::from_wgpu(self.format())
+    }
+
     pub fn generation(&self) -> u64 {
         match self {
             NativeFrame::Dx12SharedTexture(frame) => frame.generation(),
@@ -139,6 +145,31 @@ pub struct Dx12SharedTexture {
     size: PhysicalSize<u32>,
     format: wgpu::TextureFormat,
     generation: u64,
+}
+
+/// Pixel format metadata that does not require a host to name welding's wgpu
+/// feature row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum NativeFramePixelFormat {
+    Rgba8Unorm,
+    Rgba8UnormSrgb,
+    Bgra8Unorm,
+    Bgra8UnormSrgb,
+    /// The frame uses a format this neutral metadata vocabulary cannot name.
+    Unsupported,
+}
+
+impl NativeFramePixelFormat {
+    fn from_wgpu(format: wgpu::TextureFormat) -> Self {
+        match format {
+            wgpu::TextureFormat::Rgba8Unorm => Self::Rgba8Unorm,
+            wgpu::TextureFormat::Rgba8UnormSrgb => Self::Rgba8UnormSrgb,
+            wgpu::TextureFormat::Bgra8Unorm => Self::Bgra8Unorm,
+            wgpu::TextureFormat::Bgra8UnormSrgb => Self::Bgra8UnormSrgb,
+            _ => Self::Unsupported,
+        }
+    }
 }
 
 impl Dx12SharedTexture {
@@ -201,6 +232,11 @@ impl Dx12SharedTexture {
         self.format
     }
 
+    /// Pixel format without exposing the selected wgpu major in the type.
+    pub fn pixel_format(&self) -> NativeFramePixelFormat {
+        NativeFramePixelFormat::from_wgpu(self.format())
+    }
+
     pub fn generation(&self) -> u64 {
         self.generation
     }
@@ -229,6 +265,35 @@ impl Dx12SharedTexture {
         use std::os::windows::io::IntoRawHandle;
 
         self.handle.into_raw_handle()
+    }
+}
+
+#[cfg(test)]
+mod pixel_format_tests {
+    use super::*;
+
+    #[test]
+    fn neutral_format_names_every_cef_frame_format() {
+        assert_eq!(
+            NativeFramePixelFormat::from_wgpu(wgpu::TextureFormat::Rgba8Unorm),
+            NativeFramePixelFormat::Rgba8Unorm
+        );
+        assert_eq!(
+            NativeFramePixelFormat::from_wgpu(wgpu::TextureFormat::Rgba8UnormSrgb),
+            NativeFramePixelFormat::Rgba8UnormSrgb
+        );
+        assert_eq!(
+            NativeFramePixelFormat::from_wgpu(wgpu::TextureFormat::Bgra8Unorm),
+            NativeFramePixelFormat::Bgra8Unorm
+        );
+        assert_eq!(
+            NativeFramePixelFormat::from_wgpu(wgpu::TextureFormat::Bgra8UnormSrgb),
+            NativeFramePixelFormat::Bgra8UnormSrgb
+        );
+        assert_eq!(
+            NativeFramePixelFormat::from_wgpu(wgpu::TextureFormat::Depth32Float),
+            NativeFramePixelFormat::Unsupported
+        );
     }
 }
 

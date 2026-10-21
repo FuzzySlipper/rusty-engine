@@ -105,8 +105,9 @@ cp -a render/artifacts/live-debug-panel/. "$STAGE/share/live-debug-panel/"
 
 if ((DESKTOP)); then
   # Only what Chromium loads at run time: the library (stripped of its
-  # 1.2 GB of debug info), its resources, ICU data, V8 snapshot, ANGLE's GL
-  # libraries, and one locale. SwiftShader (Chromium's software GPU) and the
+  # 1.2 GB of debug info), its resources, ICU data, V8 snapshot, and one
+  # locale; on Windows also ANGLE's GL libraries, which Linux CEF links into
+  # libcef.so. SwiftShader (Chromium's software GPU) and the
   # bundled Vulkan loader are left out (#8860): the overlay imports Chromium's
   # frames as GPU textures, which needs the same system GPU driver and Vulkan
   # loader the world renderer uses, so neither is ever loaded.
@@ -125,7 +126,6 @@ if ((DESKTOP)); then
     CEF_DIST="$(dirname "$(find "$CEF_PATH" -path '*cef_linux_x86_64/libcef.so' -print -quit)")"
     [[ -f "$CEF_DIST/libcef.so" ]] || { echo "CEF distribution not found under $CEF_PATH" >&2; exit 1; }
     strip -o "$STAGE/lib/cef/libcef.so" "$CEF_DIST/libcef.so"
-    CEF_RESOURCES+=(libEGL.so libGLESv2.so)
   fi
   for file in "${CEF_RESOURCES[@]}"; do
     install -m 644 "$CEF_DIST/$file" "$STAGE/lib/cef/$file"
