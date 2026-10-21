@@ -113,6 +113,7 @@ pub use frame::FrameStats;
 pub use impostor::ImpostorReadout;
 pub use occlusion::OcclusionReadout;
 pub use scatter_select::ScatterSelectionReadout;
+pub use water::WaterReadout;
 
 /// Scatter patches taken in since the renderer was made (cumulative: read
 /// twice and subtract): the patches and copies created, the CPU time
@@ -221,6 +222,8 @@ pub struct GpuReadout {
     pub snow: Option<render_model::SnowDescriptor>,
     /// The projected decals (`decals.rs`).
     pub decals: DecalReadout,
+    /// Whether water reads the opaque scene's colour on this device.
+    pub water: water::WaterReadout,
 }
 
 /// The backdrop camera a world view drew its backdrop with (`SetBackdrop`):
@@ -671,11 +674,7 @@ impl Renderer {
         let (unlit_material, lit_fallback_material) =
             apply::builtin_materials(device, &layouts.material, &white);
         let finish = finish::Finish::new(gpu, &mut layouts.shaders);
-        let water = water::WaterScene::new(
-            gpu,
-            &mut layouts.shaders,
-            gpu.scene_color_refusal().is_none(),
-        );
+        let water = water::WaterScene::new(gpu, &mut layouts.shaders, gpu.scene_color_refusal());
         let effects = effects::Effects::new(
             device,
             &layouts.frame,
@@ -1075,6 +1074,7 @@ impl Renderer {
             wetness: self.tables.wetness,
             snow: self.tables.snow,
             decals: self.decals.readout(),
+            water: self.water.readout(),
         }
     }
 

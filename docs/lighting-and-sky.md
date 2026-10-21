@@ -700,9 +700,12 @@ on an RX 9070 XT. Blended materials cast no shadow unless
 `TranslucentShadow` is set, so a lake does not shadow its own bed.
 
 A device that binds fewer than 17 sampled textures per shader stage (WebGPU
-guarantees 16) has no colour copy: its water draws without absorption,
-refraction or [reflections](#water-reflections), and the `WaterReflections`
-readout says `TooFewTextureBindings`.
+guarantees 16) has no colour copy: its water draws as water that does not
+read the scene, without absorption, refraction or
+[reflections](#water-reflections). The renderer statistics say why under
+`gpu.water.refused` (`engine.renderer`, `Diagnostics.ReadRenderer`) whatever
+the settings, and the `WaterReflections` readout says
+`TooFewTextureBindings`.
 
 ```csharp
 Material lake = engine.Graphics.CreateMaterial(new MaterialRequest(new Color(1, 1, 1, 0.35f), default, 0.08f, white, Vector3.Zero, 0, true, MaterialAlphaMode.Blend, 0) with

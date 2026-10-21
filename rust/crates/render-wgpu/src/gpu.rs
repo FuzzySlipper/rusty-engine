@@ -57,7 +57,16 @@ impl Gpu {
     pub fn headless_with_binding_limit(bytes: u64) -> Result<Self, GpuError> {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        Self::from_instance_limited(instance, None, Some(bytes))
+        Self::from_instance_with(instance, None, Some(bytes), None)
+    }
+
+    /// A headless device that binds at most `textures` sampled textures per
+    /// shader stage: for tests of what a device at WebGPU's guarantee (16)
+    /// refuses.
+    pub fn headless_with_sampled_texture_limit(textures: u32) -> Result<Self, GpuError> {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        Self::from_instance_with(instance, None, None, Some(textures))
     }
 
     /// A device and a presentation surface for one window, compatible with
@@ -115,13 +124,14 @@ impl Gpu {
         instance: wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
     ) -> Result<Self, GpuError> {
-        Self::from_instance_limited(instance, surface, None)
+        Self::from_instance_with(instance, surface, None, None)
     }
 
-    fn from_instance_limited(
+    fn from_instance_with(
         instance: wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
         binding_limit: Option<u64>,
+        texture_limit: Option<u32>,
     ) -> Result<Self, GpuError> {
         let adapter = pollster::block_on(wgpu::util::initialize_adapter_from_env_or_default(
             &instance, surface,
@@ -141,7 +151,7 @@ impl Gpu {
                 & (wgpu::Features::TIMESTAMP_QUERY
                     | wgpu::Features::INDIRECT_FIRST_INSTANCE
                     | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
-            required_limits: limits(&adapter.limits(), binding_limit),
+            required_limits: limits(&adapter.limits(), binding_limit, texture_limit),
             ..Default::default()
         };
         let (device, queue) = request_device(&adapter, descriptor)?;
@@ -285,8 +295,12 @@ impl Gpu {
 /// largest storage binding and buffer, so dense scatter holds as many
 /// copies as the device can bind (at most `binding_limit` bytes), and the
 /// sampled textures a world pass with decals binds, when the adapter has
-/// them.
-fn limits(adapter: &wgpu::Limits, binding_limit: Option<u64>) -> wgpu::Limits {
+/// them (at most `texture_limit`).
+fn limits(
+    adapter: &wgpu::Limits,
+    binding_limit: Option<u64>,
+    texture_limit: Option<u32>,
+) -> wgpu::Limits {
     let cap = binding_limit.unwrap_or(u64::MAX);
     let defaults = wgpu::Limits::default();
     wgpu::Limits {
@@ -295,7 +309,8 @@ fn limits(adapter: &wgpu::Limits, binding_limit: Option<u64>) -> wgpu::Limits {
         max_sampled_textures_per_shader_stage: adapter
             .max_sampled_textures_per_shader_stage
             .min(crate::decals::WORLD_SAMPLED_TEXTURES)
-            .max(defaults.max_sampled_textures_per_shader_stage),
+            .max(defaults.max_sampled_textures_per_shader_stage)
+            .min(texture_limit.unwrap_or(u32::MAX)),
         ..defaults.using_resolution(adapter.clone())
     }
 }

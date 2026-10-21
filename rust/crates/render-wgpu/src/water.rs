@@ -52,6 +52,17 @@ pub(crate) struct WaterScene {
     timer: Option<PassTimer>,
     /// The last capture was timed and waits for its submit.
     timed: bool,
+    /// Why this device has no colour copy, if it has none.
+    refused: Option<String>,
+}
+
+/// The water pass's view of the scene, as the GPU readout reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct WaterReadout {
+    /// Why this device has no copy of the opaque scene's colour, so water
+    /// draws without absorption, refraction and reflections; None while it
+    /// has one.
+    pub refused: Option<String>,
 }
 
 struct Copy {
@@ -66,7 +77,10 @@ struct Copy {
 }
 
 impl WaterScene {
-    pub fn new(gpu: &Gpu, shaders: &mut Shaders, scene_color: bool) -> Self {
+    /// Water with the opaque scene's colour copy unless `refused` says why
+    /// the device cannot bind it.
+    pub fn new(gpu: &Gpu, shaders: &mut Shaders, refused: Option<String>) -> Self {
+        let scene_color = refused.is_none();
         let device = &gpu.device;
         let shader = standard(shaders.module(device, Entry::WaterDepth, Features::default()));
         let stand_in = device
@@ -98,6 +112,13 @@ impl WaterScene {
             colored: false,
             timer: PassTimer::new(gpu, PASS),
             timed: false,
+            refused,
+        }
+    }
+
+    pub fn readout(&self) -> WaterReadout {
+        WaterReadout {
+            refused: self.refused.clone(),
         }
     }
 

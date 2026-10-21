@@ -428,12 +428,17 @@ fn absorbing_water_tints_the_bed_more_with_depth() {
         ..water(0.01, 1.0)
     };
     let plain = shore(Some(clear.clone())).single(&view());
-    let absorbed = shore(Some(MaterialWaterDescriptor {
+    let mut absorbing = shore(Some(MaterialWaterDescriptor {
         absorption_color: [0.2, 0.6, 0.9],
         absorption_distance: 1.0,
         ..clear
-    }))
-    .single(&view());
+    }));
+    let absorbed = absorbing.single(&view());
+    assert_eq!(
+        absorbing.renderer.gpu_readout().water.refused,
+        None,
+        "this device copies the scene's colour"
+    );
     let (plain_shallow, plain_deep) = (
         mean(&plain, SHALLOW.0, SHALLOW.1),
         mean(&plain, DEEP.0, DEEP.1),

@@ -568,6 +568,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         snow?: ProductHostSnowStatistics;
         decals: ProductHostDecalStatistics;
+        water: ProductHostWaterStatistics;
     };
     /**
      * The impostor levels' baked views: how many meshes are baked, their
@@ -1058,6 +1059,18 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         slowest: ProductHostUpdateAttribution;
         slowestAgeMs: CanonicalU64;
+    };
+    /**
+     * The water pass's view of the scene: whether water materials can absorb,
+     * refract and reflect what lies behind them on this device.
+     */
+    export type ProductHostWaterStatistics = {
+        /**
+         * Why this device has no copy of the opaque scene's colour (it binds
+         * too few textures), so water draws without absorption, refraction and
+         * reflections; absent while it has one.
+         */
+        refused?: string;
     };
     /**
      * How wet the scene's lit surfaces are, as the world pass draws them.

@@ -172,6 +172,7 @@ pub struct ProductHostGpuStatistics {
     #[ts(optional)]
     pub snow: Option<ProductHostSnowStatistics>,
     pub decals: ProductHostDecalStatistics,
+    pub water: ProductHostWaterStatistics,
 }
 
 /// The projected decals the world pass lays (`CameraView.SetDecal`): what
@@ -198,6 +199,19 @@ pub struct ProductHostDecalStatistics {
     pub build_micros: f64,
     /// A normal atlas bends the surfaces.
     pub normals: bool,
+}
+
+/// The water pass's view of the scene: whether water materials can absorb,
+/// refract and reflect what lies behind them on this device.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostWaterStatistics {
+    /// Why this device has no copy of the opaque scene's colour (it binds
+    /// too few textures), so water draws without absorption, refraction and
+    /// reflections; absent while it has one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub refused: Option<String>,
 }
 
 /// How wet the scene's lit surfaces are, as the world pass draws them.
