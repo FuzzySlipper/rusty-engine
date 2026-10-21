@@ -844,6 +844,8 @@ sealed class GraphicsServiceFake : IGraphicsService
     public ReadOnlyMemory<AppearanceFact> LastSnapshot => _lastSnapshot;
 
     public TextureResourceInfo ReadTextureInfo(RenderResource resource) => throw new NotSupportedException();
+    public void PublishOverlaySet(OverlaySetRequest request) => throw new NotSupportedException();
+    public LandmarkReadResult ReadLandmarks(LandmarkReadRequest request) => throw new NotSupportedException();
     public void PublishChanges(AppearanceChangesRequest request) => throw new NotSupportedException();
     public RenderResourceInfo OpenResource(RenderResourceRequest arg0) => throw new NotSupportedException();
     public RenderResourceInfo OpenResourceFromContent(RenderResourceContentRequest arg0) => throw new NotSupportedException();
