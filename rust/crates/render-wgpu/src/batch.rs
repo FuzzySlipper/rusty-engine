@@ -346,6 +346,7 @@ fn group(parts: &Parts, mut entries: Vec<Entry>, base: u32) -> DrawList {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::camera::rh::{proj::directx, view::look_to_mat4};
 
     fn aabb(min: [f32; 3], max: [f32; 3]) -> Aabb {
         Aabb {
@@ -356,8 +357,8 @@ mod tests {
 
     #[test]
     fn frustum_keeps_boxes_in_front_and_drops_boxes_behind_or_aside() {
-        let view = Mat4::look_to_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
-        let projection = Mat4::perspective_rh(60f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
+        let view = look_to_mat4(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+        let projection = directx::perspective(60f32.to_radians(), 16.0 / 9.0, 0.1, 100.0);
         let frustum = Frustum::new(&(projection * view));
         assert!(frustum.intersects(&aabb([-0.5, -0.5, -5.5], [0.5, 0.5, -4.5])));
         assert!(!frustum.intersects(&aabb([-0.5, -0.5, 4.5], [0.5, 0.5, 5.5])));

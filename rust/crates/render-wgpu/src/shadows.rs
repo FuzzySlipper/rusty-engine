@@ -46,6 +46,7 @@
 
 use std::collections::HashSet;
 
+use glam::camera::rh::{proj::directx, view::look_to_mat4};
 use glam::{Mat4, Vec3};
 use render_model::{LightDescriptor, LightShadowIntent, RenderHandle};
 use wgpu::util::DeviceExt;
@@ -185,7 +186,7 @@ pub(crate) fn light_layers(light: &LightDescriptor, world: &Mat4, row: u32) -> V
             let height = SKY_HEIGHT * half_extent / SKY_HALF_EXTENT;
             let texel = 2.0 * half_extent / settings.size as f32;
             let centre = (world.transform_point3(Vec3::ZERO) / texel).round() * texel;
-            let projection = Mat4::orthographic_rh(
+            let projection = directx::orthographic(
                 -half_extent,
                 half_extent,
                 -half_extent,
@@ -228,7 +229,7 @@ pub(crate) fn light_layers(light: &LightDescriptor, world: &Mat4, row: u32) -> V
             let eye = world.transform_point3(position_local);
             let target = world
                 .transform_point3(position_local + crate::convert::vec3(*direction).normalize());
-            let projection = Mat4::perspective_rh(
+            let projection = directx::perspective(
                 (outer_angle_radians * 2.0).min(std::f32::consts::PI - 1e-3),
                 1.0,
                 SHADOW_NEAR,
@@ -245,11 +246,11 @@ pub(crate) fn light_layers(light: &LightDescriptor, world: &Mat4, row: u32) -> V
         } => {
             let eye = world.transform_point3(crate::convert::vec3(*position));
             let projection =
-                Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, SHADOW_NEAR, far(range));
+                directx::perspective(std::f32::consts::FRAC_PI_2, 1.0, SHADOW_NEAR, far(range));
             CUBE_FACES
                 .iter()
                 .map(|(forward, up)| LayerSource::Fixed {
-                    view_proj: projection * Mat4::look_to_rh(eye, *forward, *up),
+                    view_proj: projection * look_to_mat4(eye, *forward, *up),
                     reach: reach(position, range),
                     settings,
                 })
@@ -350,7 +351,7 @@ pub(crate) fn cascade_view(
         (at.x / texel).round() * texel,
         (at.y / texel).round() * texel,
     );
-    let projection = Mat4::orthographic_rh(
+    let projection = directx::orthographic(
         x - radius,
         x + radius,
         y - radius,
@@ -440,7 +441,7 @@ fn look_at(eye: Vec3, target: Vec3) -> Mat4 {
     } else {
         Vec3::Y
     };
-    Mat4::look_to_rh(eye, forward, up)
+    look_to_mat4(eye, forward, up)
 }
 
 /// Where a layer lives in the shadow atlas: a square of `size` texels at
@@ -1185,8 +1186,13 @@ mod tests {
         assert!((splits[3] - 100.0).abs() < 1e-3);
         // The first cascade covers the near field closely.
         assert!(splits[0] < 10.0, "{splits:?}");
+        // An f32 projection holds its far plane only to about
+        // far² / near × f32::EPSILON (0.2 here).
         let (near, far) = view_depths(&camera(Vec3::ZERO, 0.0).projection);
-        assert!((near - 0.1).abs() < 1e-4 && (far - 400.0).abs() < 0.1);
+        assert!(
+            (near - 0.1).abs() < 1e-4 && (far - 400.0).abs() < 0.5,
+            "{near} {far}"
+        );
     }
 
     #[test]

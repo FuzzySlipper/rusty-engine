@@ -12,6 +12,7 @@
 use std::collections::HashSet;
 use std::ops::{Add, AddAssign};
 
+use glam::camera::rh::{proj::directx, view::look_to_mat4};
 use glam::{DMat4, Mat4, Vec3};
 use render_host_contracts::RendererCompositionCamera;
 use render_model::{
@@ -2315,10 +2316,10 @@ impl Renderer {
         }
         self.sky_light.begin_capture(&self.gpu);
         let (near, far) = shadows::view_depths(&camera.projection);
-        let projection = Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, near, far);
+        let projection = directx::perspective(std::f32::consts::FRAC_PI_2, 1.0, near, far);
         for face in faces.clone() {
             let (forward, up) = CAPTURE_FACES[face as usize];
-            let look = Mat4::look_to_rh(eye, forward, up);
+            let look = look_to_mat4(eye, forward, up);
             let face_camera = CameraMatrices {
                 view_proj: projection * look,
                 view: look,

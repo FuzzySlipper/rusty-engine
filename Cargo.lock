@@ -164,7 +164,7 @@ dependencies = [
 name = "animation-pose"
 version = "0.1.0"
 dependencies = [
- "glam 0.30.10",
+ "glam 0.33.12",
  "gltf",
  "render-model",
  "render-presentation",
@@ -5833,7 +5833,7 @@ dependencies = [
  "dpi",
  "engine-spatial",
  "fontdue",
- "glam 0.30.10",
+ "glam 0.33.12",
  "gltf",
  "image-webp",
  "jpeg-decoder",

@@ -10,6 +10,7 @@
 
 use std::collections::VecDeque;
 
+use glam::camera::rh::{proj::directx, view::look_to_mat4};
 use glam::{Mat3, Mat4, Quat, Vec3};
 
 use crate::convert::{world_array, world_vec3};
@@ -89,7 +90,7 @@ pub(crate) fn projection_matrix(projection: &RendererCameraProjection, aspect: f
             fov_y_degrees,
             near,
             far,
-        } => Mat4::perspective_rh(
+        } => directx::perspective(
             (fov_y_degrees as f32).to_radians(),
             aspect,
             near as f32,
@@ -102,7 +103,7 @@ pub(crate) fn projection_matrix(projection: &RendererCameraProjection, aspect: f
         } => {
             let half_height = vertical_size as f32 * 0.5;
             let half_width = half_height * aspect;
-            Mat4::orthographic_rh(
+            directx::orthographic(
                 -half_width,
                 half_width,
                 -half_height,
@@ -119,7 +120,7 @@ pub(crate) fn camera_matrices(
     projection: &RendererCameraProjection,
     aspect: f32,
 ) -> CameraMatrices {
-    let view = Mat4::look_to_rh(
+    let view = look_to_mat4(
         pose.position,
         pose.orientation * Vec3::NEG_Z,
         pose.orientation * Vec3::Y,

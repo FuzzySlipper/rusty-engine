@@ -2932,9 +2932,12 @@ fn a_sun_shadows_the_view_from_near_to_its_range_wherever_its_node_is() {
     // The ground beside each post, where the sun (travelling -X and down)
     // throws its shadow.
     let forward = glam::Vec3::new(0.0, pitch.to_radians().sin(), -pitch.to_radians().cos());
-    let view_proj =
-        glam::Mat4::perspective_rh(60f32.to_radians(), WIDTH as f32 / HEIGHT as f32, 0.1, 500.0)
-            * glam::Mat4::look_to_rh(eye, forward, glam::Vec3::Y);
+    let view_proj = glam::camera::rh::proj::directx::perspective(
+        60f32.to_radians(),
+        WIDTH as f32 / HEIGHT as f32,
+        0.1,
+        500.0,
+    ) * glam::camera::rh::view::look_to_mat4(eye, forward, glam::Vec3::Y);
     let brightness = |pixels: &[u8], point: glam::Vec3| {
         let ndc = view_proj.project_point3(point);
         let x = ((ndc.x * 0.5 + 0.5) * WIDTH as f32) as usize;

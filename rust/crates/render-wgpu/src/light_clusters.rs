@@ -100,11 +100,11 @@ fn near_far(projection: &Mat4) -> (f32, f32, bool) {
     // nearly zero.
     let (m22, m32) = (f64::from(cols[2][2]), f64::from(cols[3][2]));
     if cols[3][3] == 1.0 {
-        // glam orthographic_rh: m22 = 1 / (near - far), m32 = near * m22.
+        // glam directx::orthographic: m22 = 1 / (near - far), m32 = near * m22.
         let near = m32 / m22;
         (near as f32, (near - 1.0 / m22) as f32, true)
     } else {
-        // glam perspective_rh: m22 = far / (near - far), m32 = near * m22.
+        // glam directx::perspective: m22 = far / (near - far), m32 = near * m22.
         let near = m32 / m22;
         (near as f32, (m22 * near / (m22 + 1.0)) as f32, false)
     }
@@ -374,17 +374,18 @@ impl LightClusters {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use glam::camera::rh::proj::directx;
 
     #[test]
     fn near_and_far_come_back_from_either_projection() {
-        let (near, far, orthographic) = near_far(&Mat4::perspective_rh(1.0, 1.5, 0.25, 300.0));
+        let (near, far, orthographic) = near_far(&directx::perspective(1.0, 1.5, 0.25, 300.0));
         assert!((near - 0.25).abs() < 1e-4, "{near}");
         // The far plane comes back through a near-cancelling term: a tenth of
         // a percent is more than the depth slices need.
         assert!((far - 300.0).abs() < 0.3, "{far}");
         assert!(!orthographic);
         let (near, far, orthographic) =
-            near_far(&Mat4::orthographic_rh(-2.0, 2.0, -1.0, 1.0, 0.5, 40.0));
+            near_far(&directx::orthographic(-2.0, 2.0, -1.0, 1.0, 0.5, 40.0));
         assert!((near - 0.5).abs() < 1e-4 && (far - 40.0).abs() < 1e-3);
         assert!(orthographic);
     }

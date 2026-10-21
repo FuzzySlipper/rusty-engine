@@ -16,7 +16,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use glam::{Mat4, Vec2, Vec3};
+use glam::camera::rh::{proj::directx, view::look_at_mat4};
+use glam::{Vec2, Vec3};
 use render_model::{
     MaterialAlphaModeDescriptor, MaterialNormalMapDescriptor, RenderMaterialDescriptor,
 };
@@ -250,8 +251,8 @@ impl Renderer {
             let direction = hemi_octahedral_direction((cell + 0.5) / VIEWS as f32);
             let eye = center + direction * radius * 2.0;
             let view_proj =
-                Mat4::orthographic_rh(-radius, radius, -radius, radius, 0.0, radius * 4.0)
-                    * Mat4::look_at_rh(eye, center, view_up(direction));
+                directx::orthographic(-radius, radius, -radius, radius, 0.0, radius * 4.0)
+                    * look_at_mat4(eye, center, view_up(direction));
             for group in &groups {
                 let mut bytes = Vec::with_capacity(BAKE_BYTES as usize);
                 bytes.extend_from_slice(bytemuck::cast_slice(&view_proj.to_cols_array()));
