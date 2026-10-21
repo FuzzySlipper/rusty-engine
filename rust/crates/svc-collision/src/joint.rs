@@ -2,8 +2,8 @@
 //! twist, each with optional damping. Ragdolls link their bones with them.
 
 use rapier3d_f64::prelude::{
-    GenericJointBuilder, ImpulseJointHandle, JointAxesMask, JointAxis, PhysicsWorld, Pose,
-    RigidBodyHandle, Rotation, Vector,
+    GenericJointBuilder, ImpulseJointHandle, JointAxesMask, JointAxis, MotorModel, PhysicsWorld,
+    Pose, RigidBodyHandle, Rotation, Vector,
 };
 
 use crate::dynamics::DynamicsBodyId;
@@ -148,7 +148,9 @@ impl SolverJoint {
             .local_frame2(definition.second_frame.pose())
             .contacts_enabled(definition.contacts_enabled);
         let builder = if definition.damping > 0.0 {
-            builder.motor_velocity(JointAxis::AngX, 0.0, definition.damping)
+            builder
+                .motor_velocity(JointAxis::AngX, 0.0, definition.damping)
+                .motor_model(JointAxis::AngX, MotorModel::ForceBased)
         } else {
             builder
         };

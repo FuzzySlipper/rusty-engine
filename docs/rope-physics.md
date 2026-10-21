@@ -11,7 +11,11 @@ keeps one live Rapier world holding its bodies, its static collision
 environment, a maximum-distance `RopeJoint` per tether and the
 [limited joints](ragdolls.md) between bodies. These persist between
 steps, so contacts, sleeping and solver warm starts carry over. Changes apply
-directly to that world.
+directly to that world. Rapier has no rolling resistance, so after each
+substep the solver slows the rolling spin of a sphere or capsule touching
+anything: its surface speed loses 0.02 × gravity each second (a solid ball
+rolling at 2 m/s stops after about 30 m), and a capsule lying on its side
+comes to rest and sleeps.
 The Dynamics bridge in `csharp-engine-services` maps generated handles onto
 solver bodies, owns chains, and binds the Spatial collision scene.
 
@@ -51,7 +55,7 @@ so a direct edit cannot snap a loaded rope. New endpoints make a new attachment.
 Reeling performs physical work; energy is not conserved while shortening.
 
 Readouts give endpoint positions, distance, effective/target length, slack,
-taut/caught state and a force proxy. Rapier 0.34 keeps only the last internal
+taut/caught state and a force proxy. Rapier keeps only the last internal
 substep's limit impulse. The proxy divides it by the solver substep duration and
 takes the maximum over a step's substeps. It matches a hanging mass's weight but
 can miss catch peaks, so it is not a breaking tension. A catch is a

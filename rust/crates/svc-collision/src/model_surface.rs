@@ -6,7 +6,7 @@
 
 use parry3d_f64::math::Vector;
 use parry3d_f64::query::{PointQueryWithLocation, Ray as ParryRay, RayCast};
-use parry3d_f64::shape::{FeatureId, TriMesh, TriMeshFlags};
+use parry3d_f64::shape::{TriMesh, TriMeshFlags};
 
 use crate::static_mesh::{transform_position, validate_transform};
 use crate::{StaticMeshCollisionError, StaticMeshTransform};
@@ -156,15 +156,11 @@ impl ModelSurface {
             max_distance,
             false,
         )?;
-        let count = self.mesh.indices().len() as u32;
-        let FeatureId::Face(face) = hit.feature else {
-            return None;
-        };
         Some(ModelSurfaceHit {
             point: (origin + direction * hit.time_of_impact).to_array(),
-            normal: self.normal(face % count),
+            normal: self.normal(hit.subshape),
             distance: hit.time_of_impact,
-            back_face: face >= count,
+            back_face: self.mesh.is_backface(hit.feature),
         })
     }
 

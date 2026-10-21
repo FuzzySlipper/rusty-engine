@@ -16,6 +16,11 @@ use crate::water::{shape_volume, submerged, DynamicsWaterPlane, DynamicsWaterRea
 use crate::CollisionProjection;
 
 const MASS_PROPERTIES_FRAME_NORMALIZATION_TOLERANCE: f64 = 1.0e-3;
+/// Rolling resistance as a share of gravity (`DynamicsSolver::resist_rolling`):
+/// under Earth's gravity a rolling sphere or capsule's surface speed loses
+/// 0.2 m/s every second, which brings a 2 m/s solid ball to rest in about
+/// 30 m.
+const ROLLING_RESISTANCE: f64 = 0.02;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct DynamicsBodyId(pub u64);
@@ -788,6 +793,7 @@ impl DynamicsSolver {
                 self.apply_water(dt, &mut water);
             }
             self.world.step();
+            self.resist_rolling(dt);
             for tether in self.tethers.values_mut() {
                 tether.accumulate(&self.world);
             }
@@ -846,6 +852,63 @@ impl DynamicsSolver {
                 0
             },
         })
+    }
+
+    /// Rolling resistance, which Rapier has none of: a sphere or capsule
+    /// touching anything loses rolling speed (its spin about axes along the
+    /// contact) at `ROLLING_RESISTANCE` times gravity, as on hard ground.
+    /// Without it a capsule lying on its side keeps rolling on the solver's
+    /// contact corrections and never sleeps (#10203).
+    fn resist_rolling(&mut self, dt: f64) {
+        let deceleration = ROLLING_RESISTANCE * self.world.gravity.length();
+        if deceleration <= 0.0 {
+            return;
+        }
+        let mut touching: BTreeMap<DynamicsBodyId, Vector> = BTreeMap::new();
+        for pair in self
+            .world
+            .contact_pairs()
+            .filter(|pair| pair.has_any_active_contact())
+        {
+            let Some(manifold) = pair
+                .solver_manifolds()
+                .iter()
+                .find(|manifold| !manifold.data.solver_contacts.is_empty())
+            else {
+                continue;
+            };
+            for collider in [pair.collider1, pair.collider2] {
+                if let Some(id) = dynamic_id(self.world.colliders[collider].user_data) {
+                    touching.entry(id).or_insert(manifold.data.normal);
+                }
+            }
+        }
+        for (id, normal) in touching {
+            let radius = match self.shapes.get(&id) {
+                Some(DynamicsShape::Sphere { radius }) => *radius,
+                Some(DynamicsShape::CapsuleY { radius, .. }) => *radius,
+                _ => continue,
+            };
+            let Some(&handle) = self.bodies.get(&id) else {
+                continue;
+            };
+            let body = &mut self.world.bodies[handle];
+            if body.is_sleeping() {
+                continue;
+            }
+            let Some(normal) = normal.try_normalize() else {
+                continue;
+            };
+            let spin = body.angvel();
+            let about_normal = normal * spin.dot(normal);
+            let rolling = spin - about_normal;
+            let speed = rolling.length();
+            if speed <= 0.0 {
+                continue;
+            }
+            let slowed = (speed - deceleration * dt / radius).max(0.0);
+            body.set_angvel(about_normal + rolling * (slowed / speed), false);
+        }
     }
 
     fn handle(&self, id: DynamicsBodyId) -> Result<RigidBodyHandle, DynamicsError> {
@@ -1485,6 +1548,48 @@ mod tests {
         assert!((output(&solver, 1).linear_velocity[0] - pushed).abs() < 1e-12);
     }
 
+    /// A capsule dropped on its side onto the voxel floor comes to rest and
+    /// sleeps (#10203). Lying exactly balanced, it either settles or, under
+    /// parry 0.29's contacts, rolled on forever; most of these drops did.
+    #[test]
+    fn a_capsule_dropped_on_its_side_sleeps() {
+        const DROPS: [(f64, f64); 8] = [
+            (0.13, 0.0),
+            (0.16, 0.002),
+            (0.19, 0.004),
+            (0.22, 0.0),
+            (0.25, 0.006),
+            (0.28, 0.002),
+            (0.31, 0.008),
+            (0.34, 0.004),
+        ];
+        for (height, tilt) in DROPS {
+            let world = floor_world(&[0]);
+            let mut solver = DynamicsSolver::new(GRAVITY);
+            solver.bind_environment(&CollisionProjection::build(&world));
+            let mut capsule = body();
+            capsule.shape = DynamicsShape::CapsuleY {
+                half_height: 0.3,
+                radius: 0.12,
+            };
+            // Turned a quarter about z onto its side, after a small tip
+            // about x.
+            let side = std::f64::consts::FRAC_PI_4.sin();
+            let (sin, cos) = (tilt * 0.5).sin_cos();
+            capsule.rotation = [side * sin, side * sin, side * cos, side * cos];
+            capsule.translation = [4.0, height, 4.0];
+            capsule.gravity_scale = 1.0;
+            solver.insert_body(capsule).unwrap();
+            settle(&mut solver, 240);
+            let rested = output(&solver, 1);
+            assert!(
+                rested.sleeping,
+                "dropped from {height} m: still moving at {:?} rad/s",
+                rested.angular_velocity
+            );
+        }
+    }
+
     #[test]
     fn a_retained_stack_settles_sleeps_and_keeps_its_contacts() {
         let world = floor_world(&[0]);
@@ -1640,5 +1745,85 @@ mod tests {
             )
             .unwrap();
         assert!(!output(&solver, 1).sleeping);
+    }
+
+    /// A small, dense capsule rolling on its side (a severed arm, #10203)
+    /// comes to rest: without rolling resistance it crept on at a few cm/s
+    /// under angular damping 3, and even 10.
+    #[test]
+    fn a_capsule_rolling_on_its_side_comes_to_rest() {
+        // On voxel ground (a compound of boxes) and on a two-triangle mesh,
+        // whose contacts the solver clusters.
+        for voxel in [true, false] {
+            let mut solver = DynamicsSolver::new(GRAVITY);
+            if voxel {
+                solver.bind_environment(&CollisionProjection::build(&floor_world(&[-1, 0])));
+            } else {
+                let corners = [[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]]
+                    .map(|[x, z]| Vector::new(x, 0.0, z));
+                let floor =
+                    ColliderBuilder::trimesh(corners.to_vec(), vec![[0, 2, 1], [0, 3, 2]]).unwrap();
+                solver.world.insert_collider(floor, None);
+            }
+            rolls_to_rest(solver);
+        }
+    }
+
+    fn rolls_to_rest(mut solver: DynamicsSolver) {
+        let mut arm = body();
+        arm.shape = DynamicsShape::CapsuleY {
+            half_height: 0.22,
+            radius: 0.07,
+        };
+        arm.mass = 4.0;
+        arm.friction = 0.8;
+        arm.restitution = 0.1;
+        arm.linear_damping = 0.2;
+        arm.angular_damping = 3.0;
+        arm.gravity_scale = 1.0;
+        arm.translation = [0.5, 1.5, 0.4];
+        let side = std::f64::consts::FRAC_PI_4.sin();
+        arm.rotation = [0.0, 0.0, side, side];
+        arm.linear_velocity = [1.2, 1.0, -0.3];
+        arm.angular_velocity = [0.0, 3.0, 2.0];
+        solver.insert_body(arm).unwrap();
+        settle(&mut solver, 240);
+        let rested = output(&solver, 1);
+        assert!(
+            rested.sleeping,
+            "still rolling at {:?} m/s",
+            rested.linear_velocity
+        );
+    }
+
+    /// A ball rolling across the floor slows steadily under rolling
+    /// resistance and comes to rest, rather than rolling for ever.
+    #[test]
+    fn rolling_resistance_brings_a_rolling_ball_to_rest() {
+        let world = floor_world(&[0, 1, 2, 3, 4, 5]);
+        let mut solver = DynamicsSolver::new(GRAVITY);
+        solver.bind_environment(&CollisionProjection::build(&world));
+        let mut ball = body();
+        ball.shape = DynamicsShape::Sphere { radius: 0.11 };
+        ball.mass = 0.45;
+        ball.gravity_scale = 1.0;
+        ball.translation = [1.0, 0.11, 4.0];
+        ball.linear_velocity = [2.0, 0.0, 0.0];
+        ball.angular_velocity = [0.0, 0.0, -2.0 / 0.11];
+        solver.insert_body(ball).unwrap();
+        settle(&mut solver, 240);
+        let rolling = output(&solver, 1).linear_velocity[0];
+        assert!(
+            rolling > 1.5 && rolling < 1.9,
+            "after 4 s it rolls at {rolling} m/s"
+        );
+        settle(&mut solver, 60 * 40);
+        let rested = output(&solver, 1);
+        assert!(rested.sleeping, "{rested:?}");
+        assert!(
+            rested.translation[0] > 20.0 && rested.translation[0] < 45.0,
+            "it rolled to {:?}",
+            rested.translation
+        );
     }
 }

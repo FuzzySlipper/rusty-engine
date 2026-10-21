@@ -791,6 +791,7 @@ impl CollisionProjection {
         let query_bounds = swept_capsule_bounds(capsule, WorldVec::ZERO, 0.0);
         let intersects = |shape: &dyn Shape| {
             intersection_test(&capsule_pose, &capsule_shape, &obstacle_pose, shape)
+                .map(|hit| hit.intersecting)
                 .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)
         };
         for (_, collider) in self.character_candidates(query_bounds) {
@@ -1557,9 +1558,9 @@ impl CollisionProjection {
         let mut surfaces = false;
         let mut overlaps = |collider: &ChunkCollider| {
             surfaces |= collider.surface.is_some();
-            collider
-                .shapes()
-                .any(|shape| intersection_test(pose, cuboid, &id, shape) == Ok(true))
+            collider.shapes().any(|shape| {
+                intersection_test(pose, cuboid, &id, shape).is_ok_and(|hit| hit.intersecting)
+            })
         };
         // A span covering more chunk cells than there are colliders is
         // cheaper to answer by scanning the colliders inside it, as character
@@ -1801,10 +1802,25 @@ fn keep_nearest_character_hit(
         time_of_impact: hit.time_of_impact.clamp(0.0, 1.0),
         point: WorldPos::new(hit.witness2.x, hit.witness2.y, hit.witness2.z),
         normal: WorldVec::new(hit.normal2.x, hit.normal2.y, hit.normal2.z),
-        start_solid: hit.status == ShapeCastStatus::PenetratingOrWithinTargetDist,
+        start_solid: starts_solid(&hit),
         converged: hit.status == ShapeCastStatus::Converged,
     });
 }
+
+/// Whether a cast starts in contact: overlapping, or within (or exactly at)
+/// its target distance, which is where a character rests on a surface. A
+/// cast whose time of impact is below parry's own start-of-contact
+/// threshold counts, whatever its status: parry 0.31 reports a start
+/// exactly at the target distance as converged, and the controller must not
+/// sink by its contact skin or stop there.
+pub(crate) fn starts_solid(hit: &ShapeCastHit) -> bool {
+    hit.status == ShapeCastStatus::PenetratingOrWithinTargetDist
+        || hit.time_of_impact < START_CONTACT_TIME
+}
+
+/// parry's shape casts take a time of impact below this (a share of the
+/// cast) as starting in contact.
+const START_CONTACT_TIME: f64 = 1.0e-4;
 
 /// The overlap of a capsule with the axis-aligned boxes of a cube collider:
 /// the contact parry's penetration solver does not find when the capsule

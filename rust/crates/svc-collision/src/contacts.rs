@@ -15,7 +15,7 @@
 use parry3d_f64::math::{Pose, Rotation, Vector};
 use parry3d_f64::query::{
     cast_shapes, cast_shapes_nonlinear, contact, intersection_test, NonlinearRigidMotion,
-    ShapeCastHit, ShapeCastOptions, ShapeCastStatus,
+    ShapeCastHit, ShapeCastOptions,
 };
 use parry3d_f64::shape::{Ball, Capsule, Cuboid, Segment, Shape};
 
@@ -318,7 +318,10 @@ fn overlap(
         // Deep inside a composite (a closed mesh) parry measures no contact
         // at all; the shapes still overlap. A contact at a distance of zero
         // or more is touching, not overlapping.
-        None if intersection_test(query, shape, target, target_shape).map_err(unsupported)? => {
+        None if intersection_test(query, shape, target, target_shape)
+            .map_err(unsupported)?
+            .intersecting =>
+        {
             ShapeContact {
                 source,
                 fraction: 0.0,
@@ -443,7 +446,7 @@ impl CollisionProjection {
             let Some(hit) = cast(target, target_shape)? else {
                 return Ok(());
             };
-            let start_solid = hit.status == ShapeCastStatus::PenetratingOrWithinTargetDist;
+            let start_solid = crate::starts_solid(&hit);
             let found = if start_solid {
                 // The overlap the sweep starts in, measured where it starts.
                 overlap(source, &initial, built.shape.as_ref(), target, target_shape)?.map(

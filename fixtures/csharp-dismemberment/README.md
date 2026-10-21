@@ -4,7 +4,7 @@ Package-consumer fixture for
 [severed parts](../../docs/csharp-capabilities.md#severed-parts). It reuses the joint
 attachment fixture's character (`../csharp-joint-attachments/content`),
 running in place on a floor, and cuts its head and its left arm off mid-run.
-Each piece falls as its own body (a capsule for the head, a box for the arm) and settles on the floor while the
+Each piece falls as its own body (a capsule for the head and one for the arm) and settles on the floor while the
 character runs on.
 
 ```bash

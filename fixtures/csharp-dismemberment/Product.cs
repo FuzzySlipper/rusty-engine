@@ -25,12 +25,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     /// <summary>One cut: the joint, the piece's shape and the push it leaves with.</summary>
     private sealed record Cut(string Name, Func<Func<string, uint>, DynamicsRagdollBone> Shape, Vector3 Push, Vector3 Spin);
 
-    // A lone capsule lying on flat ground can roll on indefinitely, so the
-    // long arm is a box.
     private static readonly Cut[] Cuts =
     [
         new("head", joint => DynamicsRagdollBone.CapsuleAlong(joint("Head"), 0.5f, 0.24f, 6), new(0.8f, 2, 0.5f), new(3, 0, 4)),
-        new("arm", joint => DynamicsRagdollBone.Box(joint("LeftArm"), joint("LeftHand"), 0.07f, 0.07f, 4), new(1.2f, 1, -0.3f), new(0, 3, 2)),
+        new("arm", joint => DynamicsRagdollBone.Capsule(joint("LeftArm"), joint("LeftHand"), 0.07f, 4), new(1.2f, 1, -0.3f), new(0, 3, 2)),
     ];
 
     private sealed class Piece(Cut cut, DynamicsSeveredPart part, long cutAt)

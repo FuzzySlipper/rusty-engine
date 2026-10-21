@@ -478,7 +478,8 @@ impl StaticMeshCollisionProjection {
         let (pose, cuboid) = query_cuboid(min, max);
         let collider_pose = identity();
         self.instances.values().any(|instance| {
-            intersection_test(&pose, &cuboid, &collider_pose, instance.shape.as_ref()) == Ok(true)
+            intersection_test(&pose, &cuboid, &collider_pose, instance.shape.as_ref())
+                .is_ok_and(|hit| hit.intersecting)
         })
     }
 

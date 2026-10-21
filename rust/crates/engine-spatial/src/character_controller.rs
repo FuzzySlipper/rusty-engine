@@ -2033,7 +2033,9 @@ impl CharacterControllerService {
                             obstacles,
                             bounded_support_probe(capsule(center), config),
                             WorldVec::new(0.0, -f64::from(config.surface.floor_snap_distance), 0.0),
-                            0.0,
+                            // The support rests a contact skin above the
+                            // floor, as the broad probe leaves it.
+                            f64::from(config.shape.contact_skin),
                             &mut query_stats,
                         )? {
                             let support_normal = vec3_from_world(support.normal)?;
