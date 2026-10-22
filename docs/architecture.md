@@ -166,7 +166,9 @@ descriptor. Animation baselines carry playback cursors and per-clip controller
 phases, suppressing historical completion callbacks, and each animated
 instance's evaluated pose. A ghost plate
 retains its capture-time graphics subtree, resource definitions, lights, and
-evaluated animation pose; the renderer rebuilds its capture bank from that
+evaluated animation pose (the poses the capturing call evaluated, so a source
+published in that call is captured as it draws after it); the renderer
+rebuilds its capture bank from that
 immutable input, and only explicit recapture replaces the source pose.
 
 ### Runtime outputs to the browser shell

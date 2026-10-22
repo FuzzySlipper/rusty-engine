@@ -12534,7 +12534,9 @@ pub(super) mod tests {
         ));
     }
 
-    fn ghost_plate_request(source_object_id: u64) -> NativeCreateGhostPlatePresentationRequest {
+    pub(crate) fn ghost_plate_request(
+        source_object_id: u64,
+    ) -> NativeCreateGhostPlatePresentationRequest {
         NativeCreateGhostPlatePresentationRequest {
             source_object_id,
             placement: NativeGhostPlatePlacement {

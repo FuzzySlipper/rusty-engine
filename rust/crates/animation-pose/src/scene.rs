@@ -17,7 +17,8 @@
 //! **Cost.** A pose is evaluated only when it can change: while a clip
 //! plays or fades, while a controller drives it, after a command, or when
 //! the instance moves and its controls read its placement. An unchanged
-//! pose is not sent again.
+//! pose is not sent again; a held one is only observed again at each call's
+//! time and placement, so joint reads and spawns see the last call's motion.
 //!
 //! **Controllers** (`PresentationOp::Animation`) publish the controller's
 //! state with per-clip phases each update; a controlled instance samples
@@ -595,8 +596,15 @@ impl Instance {
             || (moved && self.controls.reads_world())
             || ((controller.is_some() || self.varies()) && self.posed_at != now);
         if !needed {
-            // Its joints read in the scene follow its placement.
-            if moved {
+            // A held pose is observed again at this call's time and where the
+            // instance now is, with the same pose: its joints read in the
+            // scene follow its placement, and what spawns from it moves as
+            // the last call moved it, not as an earlier one did.
+            let observed = self
+                .latest
+                .as_ref()
+                .is_some_and(|latest| moved || latest.seconds < now);
+            if observed {
                 if let Some(latest) = self.latest.clone() {
                     self.record(Evaluation {
                         seconds: now,
@@ -604,8 +612,8 @@ impl Instance {
                         pose: latest.pose,
                     });
                 }
-                self.posed_world = world;
             }
+            self.posed_world = world;
             return None;
         }
         let (actions, finished) = self.playback.actions(

@@ -666,6 +666,85 @@ impl PresentationWorld {
         Ok(output)
     }
 
+    /// Gives the ghost plates `frame` captured the poses retained now. A
+    /// capture is taken as its op applies, before the call that applies it
+    /// has its poses evaluated; settling it here, after, draws each animated
+    /// node of the plate in the pose its source draws in after that call, a
+    /// source published in the same call included. Only a plate's current
+    /// capture changes: a later op of the call that replaced it keeps its own.
+    pub fn pose_captures(&mut self, frame: &mut PresentationFrameDiff) {
+        for operation in &mut frame.ops {
+            let (handle, captured) = match operation {
+                crate::PresentationOp::GhostPlate {
+                    op: crate::GhostPlateProjectionOp::Create { handle, descriptor },
+                    ..
+                } => (*handle, &mut descriptor.captured_scene),
+                crate::PresentationOp::GhostPlate {
+                    op:
+                        crate::GhostPlateProjectionOp::Recapture {
+                            handle,
+                            captured_scene,
+                            ..
+                        },
+                    ..
+                } => (*handle, captured_scene),
+                _ => continue,
+            };
+            let Some(capture) = captured.as_ref() else {
+                continue;
+            };
+            let current = self
+                .retained
+                .ghost_captures
+                .get(&handle)
+                .is_some_and(|retained| Arc::ptr_eq(retained, capture));
+            if !current {
+                continue;
+            }
+            if let Some(posed) = self.posed_capture(capture) {
+                let posed = Arc::new(posed);
+                *captured = Some(posed.clone());
+                self.retain_capture(handle, posed);
+            }
+        }
+    }
+
+    /// `capture` with each animated node in the pose retained for it now;
+    /// `None` when it holds no animated node.
+    fn posed_capture(&self, capture: &RenderFrameDiff) -> Option<RenderFrameDiff> {
+        let animated: Vec<RenderHandle> = capture
+            .ops
+            .iter()
+            .filter_map(|op| match op {
+                RenderDiff::CreateAnimatedMeshInstance { handle, .. } => Some(*handle),
+                _ => None,
+            })
+            .collect();
+        if animated.is_empty() {
+            return None;
+        }
+        let mut ops: Vec<RenderDiff> = capture
+            .ops
+            .iter()
+            .filter(|op| !matches!(op, RenderDiff::SetEvaluatedPose { .. }))
+            .cloned()
+            .collect();
+        for handle in animated {
+            if let Some(pose) = self
+                .retained
+                .nodes
+                .get(&handle)
+                .and_then(|node| node.evaluated.clone())
+            {
+                ops.push(RenderDiff::SetEvaluatedPose { handle, pose });
+            }
+        }
+        Some(RenderFrameDiff {
+            publication: capture.publication.clone(),
+            ops,
+        })
+    }
+
     /// Keep a ghost plate's capture, in place of any it held before.
     fn retain_capture(&mut self, handle: crate::GhostPlateHandle, capture: Arc<RenderFrameDiff>) {
         let retained = &mut *self.retained;

@@ -1000,7 +1000,8 @@ impl EngineServiceSet {
             .presentation_world
             .advance_elapsed(self.call_elapsed_seconds);
         // Every realizer draws the poses evaluated here, once, after the
-        // call's other changes; captures and output jobs below take them.
+        // call's other changes; output jobs below take them, and the ghost
+        // plates this call captured take them too.
         let settled =
             crate::appearance::evaluate_poses(&mut calls.appearance, &calls.presentation_world);
         if !settled.poses.is_empty() {
@@ -1009,6 +1010,17 @@ impl EngineServiceSet {
                 .apply(settled.poses)
                 .map_err(presentation_world_error)?;
             output.frames.push(poses);
+        }
+        let presentation = output
+            .appearance
+            .iter_mut()
+            .filter_map(|item| match item {
+                CsharpAppearanceCallOutput::Presentation(frame) => Some(frame),
+                CsharpAppearanceCallOutput::Frame(_) => None,
+            })
+            .chain(&mut output.presentation);
+        for frame in presentation {
+            calls.presentation_world.pose_captures(frame);
         }
         self.appearance.ingest_animation_realization_feedback(
             false,
@@ -1468,6 +1480,112 @@ mod tests {
             update(&mut services, 60 + batch * 4, 4);
         }
         assert!((services.presentation_elapsed_seconds() - 2.0).abs() < 1e-9);
+    }
+
+    /// A ghost plate created in the call that publishes its animated source
+    /// captures the source in the pose that call evaluated, as the live
+    /// source draws it after the call, not at rest (R10222-2).
+    #[test]
+    fn a_ghost_plate_of_a_source_published_in_its_call_takes_the_calls_pose() {
+        let mut content = BTreeMap::new();
+        content.insert(
+            "body.glb".to_owned(),
+            Arc::from(
+                &include_bytes!("../../../../fixtures/csharp-joint-attachments/content/body.glb")[..],
+            ),
+        );
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            content,
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        services.begin_update_call(
+            binding(),
+            NativeProductUpdateFacts {
+                lifecycle_state: NativeProductLifecycleState::Running,
+                generation: 1,
+                control_revision: 1,
+                observed_host_time_nanoseconds: 0,
+                simulation_step: 1,
+                fixed_step_hz: 60,
+                admitted_step_count: 6,
+                dropped_step_count: 0,
+                fixed_delta_seconds: 1.0 / 60.0,
+                gameplay_time_selected: true,
+                gameplay_rate: 1.0,
+                gameplay_advance_remaining_steps: 0,
+                host_elapsed_seconds: 0.1,
+            },
+        );
+        let (instance, _) = crate::appearance::character_for_test(&mut services.appearance);
+        let api = services.api();
+        let clip = b"run";
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        let status = unsafe {
+            (api.animation.set_playback)(
+                api.animation.context,
+                &NativeAnimationPlaybackRequest {
+                    instance,
+                    kind: NativeAnimationPlaybackKind::Sample,
+                    clip: NativeUtf8Slice {
+                        bytes: clip.as_ptr(),
+                        len: clip.len(),
+                    },
+                    loop_mode: NativeAnimationLoopMode::Repeat,
+                    speed: 1.0,
+                    weight: 1.0,
+                    restart: true,
+                    fade_seconds: 0.0,
+                    has_fade: false,
+                    normalized_time: 0.5,
+                },
+                &mut error,
+            )
+        };
+        assert_eq!(status, ABI_OK);
+        services
+            .appearance
+            .presentation_create_ghost_plate(crate::appearance::tests::ghost_plate_request(7))
+            .expect("a ghost plate of the character");
+        let mut call = services.finish_call().unwrap();
+        let output = call.take_output();
+        let posed = |ops: &[render_model::RenderDiff]| {
+            ops.iter()
+                .filter_map(|op| match op {
+                    render_model::RenderDiff::SetEvaluatedPose { handle, pose } => {
+                        Some((*handle, pose.clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let drawn = posed(output.frames.last().map_or(&[], |frame| &frame.ops));
+        assert_eq!(drawn.len(), 1, "the character is posed");
+        let captured_of = |frames: &mut dyn Iterator<
+            Item = &render_presentation::PresentationFrameDiff,
+        >| {
+            frames
+                .flat_map(|frame| &frame.ops)
+                .find_map(|op| match op {
+                    render_presentation::PresentationOp::GhostPlate {
+                        op: render_presentation::GhostPlateProjectionOp::Create { descriptor, .. },
+                        ..
+                    } => descriptor.captured_scene.clone(),
+                    _ => None,
+                })
+                .expect("a captured scene")
+        };
+        let sent = captured_of(&mut output.appearance.iter().filter_map(|item| match item {
+            CsharpAppearanceCallOutput::Presentation(frame) => Some(frame),
+            CsharpAppearanceCallOutput::Frame(_) => None,
+        }));
+        assert_eq!(posed(&sent.ops), drawn, "the plate takes the call's pose");
+        // A renderer built anew takes the same capture.
+        let baseline = services.snapshot_outputs(binding());
+        let retained = captured_of(&mut baseline.presentation.iter());
+        assert_eq!(posed(&retained.ops), drawn);
     }
 
     /// A call's playback takes effect at the call's start, and its poses are

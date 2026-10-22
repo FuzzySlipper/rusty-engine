@@ -621,10 +621,16 @@ fn a_held_pose_is_sent_once_and_a_moved_instance_reads_where_it_is() {
     assert!(first.previous.is_none());
     scene.call(Vec::new(), 0.25);
     assert_eq!(scene.sent.len(), 1, "a sampled pose holds");
+    let held = scene.joints(BODY);
+    assert_eq!(
+        held.latest.seconds, 0.5,
+        "observed again at the call's time"
+    );
+    assert_eq!(held.latest.joints, first.latest.joints, "the same pose");
 
     // Moving the instance, then its parent: the pose is unchanged and not
     // sent, but its joints read where it now is.
-    let mut placed = first;
+    let mut placed = held;
     for (handle, x, world_x) in [(BODY, 3.0, 3.0), (10, 5.0, 8.0)] {
         scene.call(vec![move_to(handle, x)], 0.25);
         assert_eq!(scene.sent.len(), 1, "moving handle {handle} sends nothing");
@@ -655,6 +661,79 @@ fn a_held_pose_is_sent_once_and_a_moved_instance_reads_where_it_is() {
         .unzip();
     assert!(seconds[1] > seconds[0]);
     assert_ne!(poses[0].nodes, poses[1].nodes, "the running pose moved");
+}
+
+/// The largest joint speed in the scene between an instance's two latest
+/// observations: what a ragdoll or severed part spawned from it moves with.
+fn joint_speed(reading: &JointReading) -> f32 {
+    let previous = reading.previous.as_ref().expect("an observation before");
+    let seconds = (reading.latest.seconds - previous.seconds) as f32;
+    reading
+        .latest
+        .joints
+        .iter()
+        .zip(&previous.joints)
+        .map(|(now, before)| distance(now.world.translation, before.world.translation) / seconds)
+        .fold(0.0, f32::max)
+}
+
+/// A character moved and then held still spawns at rest: its last call is
+/// what its joints moved by, not the move before (R10222-3).
+#[test]
+fn a_character_held_still_after_moving_reads_no_motion() {
+    let mut scene = Scene::new();
+    let body = scene.admit(BODY_GLB);
+    scene.call(
+        vec![
+            RenderDiff::DefineAnimatedMesh {
+                asset: body.clone(),
+            },
+            animated(BODY, None, &body, Some(sample("run", 0.5))),
+        ],
+        0.25,
+    );
+    scene.call(vec![move_to(BODY, 3.0)], 0.25);
+    let moving = joint_speed(&scene.joints(BODY));
+    assert!((moving - 12.0).abs() < 1e-3, "3 m in 0.25 s: {moving}");
+    let sent = scene.sent.len();
+    scene.call(Vec::new(), 0.25);
+    let reading = scene.joints(BODY);
+    assert_eq!(reading.latest.seconds, 0.75);
+    assert!(joint_speed(&reading) < 1e-5, "{}", joint_speed(&reading));
+    assert_eq!(scene.sent.len(), sent, "held, so not sent again");
+}
+
+/// A `once` clip that played to its end and holds its last pose reads no
+/// motion from the call after it ended.
+#[test]
+fn a_finished_once_clip_reads_no_motion_while_it_holds() {
+    let mut scene = Scene::new();
+    let body = scene.admit(BODY_GLB);
+    scene.call(
+        vec![
+            RenderDiff::DefineAnimatedMesh {
+                asset: body.clone(),
+            },
+            animated(
+                BODY,
+                None,
+                &body,
+                Some(play("run", AnimationLoopMode::Once, None)),
+            ),
+        ],
+        0.25,
+    );
+    scene.call(Vec::new(), 0.25);
+    assert!(joint_speed(&scene.joints(BODY)) > 0.0, "running");
+    // `run` lasts 0.667 s: it ends in this call.
+    scene.call(Vec::new(), 0.5);
+    assert_eq!(scene.completions.len(), 1);
+    let sent = scene.sent.len();
+    scene.call(Vec::new(), 0.25);
+    let reading = scene.joints(BODY);
+    assert_eq!(reading.latest.seconds, 1.25);
+    assert!(joint_speed(&reading) < 1e-5, "{}", joint_speed(&reading));
+    assert_eq!(scene.sent.len(), sent, "a finished clip holds its pose");
 }
 
 /// A child on a joint is placed at its animated parent's joint as this
