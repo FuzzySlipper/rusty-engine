@@ -18,6 +18,8 @@ bytemuck.workspace = true
 
 [dev-dependencies]
 render-presentation.workspace = true
+# The renderer harness poses animated meshes as the Engine does.
+animation-pose.workspace = true
 # Exports are reopened as the runtime admits GLBs, and read back by gltf.
 asset-import.workspace = true
 gltf.workspace = true

@@ -277,7 +277,7 @@ pub fn asset_clips<H: Hierarchy + ?Sized, B: AsRef<[u8]>>(
 }
 
 /// The node of each rig joint, in rig order (`AnimationRigSignature`): what
-/// pose controls and joint reports index.
+/// pose controls and joint reads index.
 pub fn rig_nodes<H: Hierarchy + ?Sized>(
     asset: &AnimatedMeshAsset,
     model: &H,

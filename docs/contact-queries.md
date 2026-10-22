@@ -69,7 +69,7 @@ chained from a few sweeps whose ends meet.
 ## Pose sampling
 
 `SampleJointPose` poses an animated mesh through the same evaluator the
-renderer draws with:
+drawn pose comes from:
 
 - `clip` at `time`, optionally blended toward `blendClip`;
 - then, with `ApplyPoseControls`, the instance's `SetPose` controls and its
@@ -77,8 +77,8 @@ renderer draws with:
 - placed at `Placement`.
 
 It returns each rig joint in `ReadJoints` order, in the instance's space and
-in the scene, as `ReadJointPose` reports a drawn pose. The same clip time,
-controls and placement give the same joints the renderer reports. The pose is
+in the scene, as `ReadJointPose` reads a drawn pose. The same clip time,
+controls and placement give the same joints the drawn pose has. The pose is
 not drawn and nothing is retained. It works in the headless `EngineTestHost`,
 so a recorded fight replays identically in a test.
 

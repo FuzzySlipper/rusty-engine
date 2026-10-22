@@ -801,21 +801,11 @@ impl EngineServiceSet {
         );
     }
 
-    /// The joints the renderer evaluated for reporting animation instances
-    /// since the last call, oldest first. Generated C# reads the latest with
-    /// `ReadJointPose`.
     /// Replaces the overlay sets' landmark measures with the renderer's
     /// latest, measured on a scene showing simulation `step`
     /// (`IGraphicsService.ReadLandmarks`).
     pub fn ingest_landmarks(&mut self, step: u64, sets: Vec<crate::appearance::LandmarkSetReport>) {
         self.appearance.ingest_landmarks(step, sets);
-    }
-
-    pub fn ingest_joint_poses(
-        &mut self,
-        reports: impl IntoIterator<Item = crate::appearance::JointPoseReport>,
-    ) {
-        self.appearance.ingest_joint_poses(reports);
     }
 
     /// Replaces the renderer's latest ghost-plate realization
@@ -1003,13 +993,34 @@ impl EngineServiceSet {
                 .apply_presentation(std::mem::take(frame))
                 .map_err(presentation_world_error)?;
         }
-        // The renderer applies a call's outputs at the time the call starts
-        // and then advances to its end, so playback the call starts is
-        // anchored at its start here too: a renderer rebuilt from the
-        // retained world plays where the live one does.
+        // A call's outputs take effect at the time the call starts and its
+        // poses are evaluated at its end, so playback the call starts is
+        // anchored at its start here too.
         calls
             .presentation_world
             .advance_elapsed(self.call_elapsed_seconds);
+        // Every realizer draws the poses evaluated here, once, after the
+        // call's other changes; captures and output jobs below take them.
+        let settled =
+            crate::appearance::evaluate_poses(&mut calls.appearance, &calls.presentation_world);
+        if !settled.poses.is_empty() {
+            let poses = calls
+                .presentation_world
+                .apply(settled.poses)
+                .map_err(presentation_world_error)?;
+            output.frames.push(poses);
+        }
+        self.appearance.ingest_animation_realization_feedback(
+            false,
+            0,
+            settled.completions.into_iter().map(|completion| {
+                crate::appearance::AnimationRealizationFact::NaturalCompletion {
+                    object_id: completion.object_id,
+                    generation: completion.generation,
+                    clip: completion.clip,
+                }
+            }),
+        );
         output.render_output = self.render_output.settle(
             &mut calls.render_output,
             &calls.presentation_world,
@@ -1459,11 +1470,11 @@ mod tests {
         assert!((services.presentation_elapsed_seconds() - 2.0).abs() < 1e-9);
     }
 
-    /// The renderer applies a call's outputs at the call's start and poses
-    /// them at its end; the retained world anchors playback the same way, so
-    /// a renderer rebuilt from it plays where the live one does.
+    /// A call's playback takes effect at the call's start, and its poses are
+    /// evaluated once at its end, retained with the world and handed to
+    /// realizers with the call's changes.
     #[test]
-    fn retained_playback_is_anchored_where_the_renderer_anchors_it() {
+    fn playback_takes_effect_at_the_calls_start_and_is_posed_at_its_end() {
         let mut content = BTreeMap::new();
         content.insert(
             "body.glb".to_owned(),
@@ -1522,8 +1533,22 @@ mod tests {
             )
         };
         assert_eq!(status, ABI_OK);
-        services.finish_call().unwrap();
+        let mut call = services.finish_call().unwrap();
         assert!((services.presentation_elapsed_seconds() - 0.1).abs() < 1e-9);
+        let evaluated = |ops: &[render_model::RenderDiff]| {
+            ops.iter()
+                .filter_map(|op| match op {
+                    render_model::RenderDiff::SetEvaluatedPose { pose, .. } => Some(pose.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        let output = call.take_output();
+        let sent = evaluated(output.frames.last().map_or(&[], |frame| &frame.ops));
+        assert_eq!(sent.len(), 1, "the call's pose goes last");
+        assert_eq!(sent[0].seconds, 0.1);
+        let retained = evaluated(&services.presentation_world().snapshot().frame.ops);
+        assert_eq!(retained, sent, "the world retains the pose");
         let offset = services
             .presentation_world()
             .snapshot()

@@ -1,6 +1,6 @@
 //! Decoding an admitted animated-mesh GLB (`animated-mesh-resource/…`) into
-//! CPU-side data: the node hierarchy with rest TRS, primitives, skins, clips
-//! and materials. The runtime admitted the bytes (`asset-import`); this reads
+//! CPU-side data: the node hierarchy with rest TRS, primitives, skins,
+//! materials and, for GLB export, clips. The runtime admitted the bytes (`asset-import`); this reads
 //! them and does not re-validate.
 
 use glam::Mat4;
@@ -148,6 +148,8 @@ pub struct GlbModel {
     /// Mesh index to its primitives.
     pub meshes: Vec<Vec<GlbPrimitive>>,
     pub skins: Vec<GlbSkin>,
+    /// Empty unless decoded `with_clips`: the renderer draws evaluated poses
+    /// and never samples a clip.
     pub clips: Vec<GlbClip>,
     pub materials: Vec<GlbMaterial>,
     pub textures: Vec<GlbTexture>,
@@ -182,7 +184,7 @@ impl animation_pose::Hierarchy for GlbModel {
     }
 }
 
-pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
+pub(crate) fn decode(bytes: &[u8], with_clips: bool) -> Result<GlbModel, String> {
     let gltf = gltf::Gltf::from_slice(bytes).map_err(|error| format!("glb: {error}"))?;
     let blob = gltf.blob.as_deref();
     let data = |buffer: gltf::Buffer<'_>| match buffer.source() {
@@ -276,7 +278,11 @@ pub(crate) fn decode(bytes: &[u8]) -> Result<GlbModel, String> {
         })
         .collect();
 
-    let clips = animation_pose::decode_clips(document, data);
+    let clips = if with_clips {
+        animation_pose::decode_clips(document, data)
+    } else {
+        Vec::new()
+    };
 
     let materials: Vec<GlbMaterial> = document
         .materials()
@@ -576,7 +582,7 @@ mod tests {
             // A core source whose image is WebP.
             r#"{"source":0}"#,
         ] {
-            let model = decode(&glb_with_texture(&webp, "image/webp", texture)).unwrap();
+            let model = decode(&glb_with_texture(&webp, "image/webp", texture), false).unwrap();
             let image = model.textures[0]
                 .image
                 .as_ref()
@@ -596,7 +602,7 @@ mod tests {
         let rgba = [240, 20, 10, 255].repeat(64);
         let png = crate::resources::encode_png(8, 8, &rgba).unwrap();
         for (bytes, mime) in [(&jpeg, "image/jpeg"), (&png, "image/png")] {
-            let model = decode(&textured_glb(bytes, mime)).unwrap();
+            let model = decode(&textured_glb(bytes, mime), false).unwrap();
             assert_eq!(
                 model.materials[0].base_color_texture,
                 Some(GlbTextureSlot {

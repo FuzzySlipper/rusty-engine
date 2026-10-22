@@ -363,8 +363,6 @@ pub struct NativeTwoBoneIk {
 
 /// Replaces one instance's pose controls: two-bone IK then joint overrides,
 /// applied after its clips and before skinning. Empty lists clear them.
-/// `report_joints` reports the evaluated joints after each call for
-/// `ReadJointPose`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationPoseRequest {
@@ -373,7 +371,6 @@ pub struct NativeAnimationPoseRequest {
     pub two_bone_ik_len: usize,
     pub overrides: *const NativeJointOverride,
     pub overrides_len: usize,
-    pub report_joints: bool,
 }
 
 /// One rig joint. Its position in `ReadJoints` is the index pose controls
@@ -417,12 +414,13 @@ pub struct NativeIkChainReach {
     pub straightened: bool,
 }
 
-/// The pose the renderer evaluated for the previous call, per joint in
-/// `ReadJoints` order and per two-bone IK chain in the order the pose gave
+/// The pose the Engine evaluated and drew for the previous call, per joint
+/// in `ReadJoints` order and per two-bone IK chain in the order the pose gave
 /// them, with the instance's world placement and the Engine time it was
-/// evaluated at. `reported` is false until a reporting instance was first
-/// evaluated. `joints` and `ik_chains` point into Animation bridge storage
-/// until the next call on the same context.
+/// evaluated at. `reported` is false until the instance was first posed in
+/// the published scene (the call after it was published). `joints` and
+/// `ik_chains` point into Animation bridge storage until the next call on
+/// the same context.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationJointPoseResult {
@@ -436,7 +434,7 @@ pub struct NativeAnimationJointPoseResult {
 }
 
 /// Samples an animation instance's joints now, at simulation time and
-/// without a renderer, through the evaluator the renderer draws with: `clip`
+/// without a renderer, through the evaluator the drawn pose comes from: `clip`
 /// at `time`, blended toward `blend_clip` at `blend_time` by `blend_weight`
 /// (0 to 1; ignored without a `blend_clip`), over the rest pose. Clips are
 /// descriptor ids as playback names them; an empty `clip` with no
@@ -482,7 +480,7 @@ pub struct NativeAnimationModelPoseSampleRequest {
 }
 
 /// The sampled joints in `ReadJoints` order, in the instance's space and in
-/// the scene, as `ReadJointPose` reports a drawn pose. `joints` points into
+/// the scene, as `ReadJointPose` reads a drawn pose. `joints` points into
 /// Animation bridge storage until the next call on the same context.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

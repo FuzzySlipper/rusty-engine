@@ -22,13 +22,6 @@ public readonly partial record struct JointOverride
         new(joint, space, false, true, rotation, false, Vector3.Zero, weight);
 }
 
-public readonly partial record struct AnimationPoseRequest
-{
-    /// <summary>Reports the instance's evaluated joints for <see cref="IAnimationService.ReadJointPose"/>, without pose controls.</summary>
-    public static AnimationPoseRequest ReportOnly(AnimationInstance instance) =>
-        new(instance, ReadOnlyMemory<TwoBoneIk>.Empty, ReadOnlyMemory<JointOverride>.Empty, true);
-}
-
 public static class AnimationJoints
 {
     /// <summary>The index pose controls use for the rig joint named <paramref name="id"/>, from <see cref="IAnimationService.ReadJoints"/>.</summary>

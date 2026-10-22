@@ -5,16 +5,18 @@
 
 #![allow(dead_code, reason = "each test binary uses a subset")]
 
-use std::{borrow::Cow, collections::HashMap, path::PathBuf};
+use std::{borrow::Cow, collections::HashMap, path::PathBuf, sync::Arc};
+
+use animation_pose::{AnimatedScene, Completion, PoseModel};
 
 use render_host_contracts::{
     RendererCameraPose, RendererCameraProjection, RendererCompositionCamera,
 };
 use render_model::*;
-use render_presentation::PresentationWorld;
+use render_presentation::{PresentationFrameDiff, PresentationWorld};
 use render_wgpu::{
-    decode_png_rgba, encode_png, FrameStats, Gpu, OffscreenTarget, Renderer, RendererOptions,
-    ResourceSource,
+    decode_png_rgba, encode_png, ApplyIssue, FrameStats, Gpu, OffscreenTarget, Renderer,
+    RendererOptions, ResourceSource,
 };
 
 pub const WIDTH: u32 = 320;
@@ -72,6 +74,11 @@ pub struct Harness {
     pub renderer: Renderer,
     pub target: OffscreenTarget,
     pub resources: Resources,
+    /// The Engine's one evaluation of the scene's poses, as the services
+    /// keep it: each applied change is followed by the poses it changed.
+    pub poses: AnimatedScene,
+    /// `once` clips that played to their end, as the Engine learned of them.
+    pub completions: Vec<Completion>,
 }
 
 /// One device per test binary, as `common::gpu` does: the Vulkan loader can
@@ -91,6 +98,8 @@ impl Harness {
             target: OffscreenTarget::new(&gpu, WIDTH, HEIGHT, 4),
             world: PresentationWorld::default(),
             resources: Resources::default(),
+            poses: AnimatedScene::default(),
+            completions: Vec::new(),
             gpu,
         }
     }
@@ -98,19 +107,70 @@ impl Harness {
     /// Apply ops through the retained model and hand the renderer its delta.
     /// Returns the delta the renderer received.
     pub fn apply(&mut self, ops: Vec<RenderDiff>) -> RenderFrameDiff {
+        let frame = RenderFrameDiff {
+            publication: None,
+            ops,
+        };
+        self.poses
+            .observe_frame(&frame, self.world.elapsed_seconds());
         let delta = self
             .world
-            .apply(RenderFrameDiff {
-                publication: None,
-                ops,
-            })
+            .apply(frame)
             .expect("retained model admits the fixture");
         let issues = self.renderer.apply(&delta, &self.resources);
         assert!(
             issues.is_empty(),
             "renderer skipped fixture ops: {issues:?}"
         );
+        self.settle_poses();
         delta
+    }
+
+    /// Apply a presentation frame through the retained model, as `apply`.
+    pub fn apply_presentation(&mut self, frame: PresentationFrameDiff) -> Vec<ApplyIssue> {
+        self.poses
+            .observe_presentation(&frame, self.world.elapsed_seconds());
+        let delta = self
+            .world
+            .apply_presentation(frame)
+            .expect("retained model admits the fixture");
+        let issues = self
+            .renderer
+            .apply_presentation(&delta, &self.resources, &|_| None);
+        self.settle_poses();
+        issues
+    }
+
+    /// Engine time reaches `seconds`, as a committed call that admitted it:
+    /// the retained world and the renderer move there, and the poses that
+    /// can change are evaluated there.
+    pub fn at(&mut self, seconds: f64) {
+        let ahead = seconds - self.world.elapsed_seconds();
+        assert!(ahead >= 0.0, "Engine time runs forward: {seconds}");
+        self.world.advance_elapsed(ahead);
+        self.renderer.set_animation_time(seconds);
+        self.settle_poses();
+    }
+
+    /// The poses the last change can have changed, evaluated as the Engine
+    /// evaluates them when a call settles, applied like any change.
+    fn settle_poses(&mut self) {
+        let resources = &self.resources;
+        let settled = self
+            .poses
+            .settle(self.world.elapsed_seconds(), &self.world, &|asset| {
+                decoded(resources, asset)
+            });
+        self.completions.extend(settled.completions);
+        if settled.poses.is_empty() {
+            return;
+        }
+        let delta = self
+            .world
+            .apply(settled.poses)
+            .expect("retained model admits the poses");
+        let issues = self.renderer.apply(&delta, &self.resources);
+        assert!(issues.is_empty(), "renderer skipped poses: {issues:?}");
     }
 
     pub fn render(&mut self, camera: &RendererCompositionCamera) -> (FrameStats, Vec<u8>) {
@@ -128,6 +188,19 @@ impl Harness {
         let stats = renderer.render_offscreen(camera, &self.target);
         (stats, self.target.read_rgba(&self.gpu))
     }
+}
+
+/// An animated mesh asset decoded from the resources it names, as the Engine
+/// decodes one to pose it.
+pub fn decoded(resources: &Resources, asset: &AnimatedMeshAsset) -> Option<Arc<PoseModel>> {
+    let hash = asset.content_hash.as_deref()?;
+    let bytes = resources.bytes(&format!(
+        "animated-mesh-resource/{}",
+        hash.trim_start_matches("sha256:")
+    ))?;
+    PoseModel::decode(asset, &bytes, |identity| resources.bytes(identity))
+        .ok()
+        .map(Arc::new)
 }
 
 pub fn camera(

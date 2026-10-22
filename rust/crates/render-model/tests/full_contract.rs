@@ -298,6 +298,22 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
             handle: RenderHandle::new(4),
             playback,
         },
+        RenderDiff::SetEvaluatedPose {
+            handle: RenderHandle::new(4),
+            pose: EvaluatedPose {
+                seconds: 1.5,
+                nodes: vec![[0.5; 16], [1.0; 16]].into(),
+                pieces: vec![EvaluatedPiece {
+                    joint: 1,
+                    nodes: vec![[2.0; 16], [3.0; 16]].into(),
+                }],
+                ik: vec![EvaluatedIkChain {
+                    target: [1.0, 2.0, 3.0],
+                    end: Some(1),
+                    straightened: true,
+                }],
+            },
+        },
         RenderDiff::CreateSprite {
             handle: RenderHandle::new(5),
             parent: Some(RenderHandle::new(1)),
@@ -319,7 +335,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
 #[test]
 fn every_retained_operation_round_trips_in_one_frame() {
     let frame = every_retained_operation_frame();
-    assert_eq!(frame.len(), 18);
+    assert_eq!(frame.len(), 19);
     let json = serde_json::to_string(&frame).unwrap();
     assert_eq!(
         serde_json::from_str::<RenderFrameDiff>(&json).unwrap(),

@@ -2,10 +2,13 @@ use crate::composition::{borrowed_slice, borrowed_utf8, CsharpEngineServicesErro
 
 mod animation_pose;
 mod model_surface;
-pub use animation_pose::JointPoseReport;
+pub(crate) use animation_pose::evaluate_poses;
 pub(crate) use animation_pose::RagdollSource;
 #[cfg(test)]
-pub(crate) use animation_pose::{character_for_test, cuts_for_test, ragdoll_layer_for_test};
+pub(crate) use animation_pose::{
+    character_for_test, cuts_for_test, end_call_posed, place_character_for_test,
+    ragdoll_layer_for_test,
+};
 
 use crate::render_resources::{
     CsharpRenderResource, CsharpRenderResourceKind, GeneratedMeshes, RenderResourceImports,
@@ -70,7 +73,6 @@ pub struct GhostPlateRealizationFact {
 #[derive(Clone)]
 pub enum AnimationRealizationFact {
     MeshInspection {
-        fact_id: u64,
         object_id: u64,
         generation: u64,
         request: u32,
@@ -80,7 +82,6 @@ pub enum AnimationRealizationFact {
         voxel_normal_meshes: u32,
     },
     Playback {
-        fact_id: u64,
         object_id: u64,
         generation: u64,
         sequence: u32,
@@ -89,20 +90,17 @@ pub enum AnimationRealizationFact {
         sampled_millis: Option<u64>,
     },
     NaturalCompletion {
-        fact_id: u64,
         object_id: u64,
         generation: u64,
         clip: String,
     },
     Diagnostic {
-        fact_id: u64,
         object_id: Option<u64>,
         generation: Option<u64>,
         code: String,
         sequence: u32,
     },
     Stopped {
-        fact_id: u64,
         object_id: u64,
         generation: u64,
         sequence: u32,
@@ -1421,8 +1419,9 @@ pub(crate) struct RuntimeAppearanceData {
     next_sprite_playback: u64,
     animated_appearances: BTreeMap<u64, u64>,
     animation_instances: BTreeMap<u64, AnimationInstance>,
-    /// What each animated render node plays, as the renderer holds it.
-    pub(crate) playback_mirror: animation_pose::PlaybackMirror,
+    /// What each animated render node plays, and its pose as the Engine
+    /// last evaluated it for every realizer.
+    pub(crate) poses: ::animation_pose::AnimatedScene,
     /// The animation instance on each product object.
     animation_objects: BTreeMap<u64, u64>,
     /// Animation instances on each appearance, with how many.
@@ -1522,8 +1521,8 @@ pub(crate) struct RuntimeAppearanceCall {
     pub(crate) outputs: Vec<RuntimeAppearanceCallOutput>,
     /// Presentation frames emitted in this call; their sequence numbers.
     presentation_frames: u32,
-    /// The presentation timeline at the call's start, which the renderer
-    /// applies its outputs at, and at its end, which it poses them at.
+    /// The presentation timeline at the call's start, which its outputs
+    /// take effect at, and at its end, which its poses are evaluated at.
     clock: (f64, f64),
 }
 
@@ -1799,10 +1798,10 @@ pub(crate) struct RuntimeAppearanceBridge {
     operation_error: Option<CsharpEngineServicesError>,
     presentation_diagnostics: Vec<StoredPresentationDiagnostic>,
     ghost_plate_realization: BTreeMap<u64, GhostPlateRealizationFact>,
-    animation_realization_facts: VecDeque<AnimationRealizationFact>,
+    /// Each fact with the id it was given when it arrived.
+    animation_realization_facts: VecDeque<(u64, AnimationRealizationFact)>,
+    next_animation_fact_id: u64,
     animation_realization_evicted: u64,
-    /// The latest joints reported per animated object.
-    joint_poses: BTreeMap<u64, animation_pose::ReportedJointPose>,
     /// The overlay sets' landmark pairs as the renderer last measured them,
     /// and the step the measured scene showed.
     landmarks: (u64, BTreeMap<String, LandmarkSetReport>),
@@ -1857,7 +1856,7 @@ impl RuntimeAppearanceBridge {
             next_sprite_playback: 1,
             animated_appearances: BTreeMap::new(),
             animation_instances: BTreeMap::new(),
-            playback_mirror: Default::default(),
+            poses: Default::default(),
             animation_objects: BTreeMap::new(),
             appearance_animation_instances: BTreeMap::new(),
             animation_graphs: BTreeMap::new(),
@@ -1891,8 +1890,8 @@ impl RuntimeAppearanceBridge {
             presentation_diagnostics: Vec::new(),
             ghost_plate_realization: BTreeMap::new(),
             animation_realization_facts: VecDeque::new(),
+            next_animation_fact_id: 1,
             animation_realization_evicted: 0,
-            joint_poses: BTreeMap::new(),
             landmarks: (0, BTreeMap::new()),
             authored_content: None,
             diagnostics_sink: None,
@@ -2044,7 +2043,9 @@ impl RuntimeAppearanceBridge {
                 self.animation_realization_evicted =
                     self.animation_realization_evicted.saturating_add(1);
             }
-            self.animation_realization_facts.push_back(fact);
+            let id = self.next_animation_fact_id;
+            self.next_animation_fact_id += 1;
+            self.animation_realization_facts.push_back((id, fact));
         }
     }
 
@@ -2060,7 +2061,7 @@ impl RuntimeAppearanceBridge {
         let facts = self
             .animation_realization_facts
             .iter()
-            .map(animation_realization_receipt)
+            .map(|(id, fact)| animation_realization_receipt(*id, fact))
             .collect::<Box<[_]>>();
         let result = NativeAnimationRealizationResult {
             facts: facts.as_ptr(),
@@ -6068,9 +6069,7 @@ impl RuntimeAppearanceBridge {
         &mut self,
         handle: NativeAnimationInstanceHandle,
     ) -> Result<(), CsharpEngineServicesError> {
-        let object = self.release_animation_instance(handle)?;
-        // Reports of the object's joints go with its instance.
-        self.joint_poses.remove(&object);
+        self.release_animation_instance(handle)?;
         Ok(())
     }
 
@@ -6148,11 +6147,7 @@ impl RuntimeAppearanceBridge {
     ) -> Result<NativeAnimationInstanceHandle, CsharpEngineServicesError> {
         // Refuse an unusable replacement before the prior instance is released.
         self.animation_instance_mesh(request, Some(prior.value))?;
-        let object = self.release_animation_instance(prior)?;
-        // A replacement on the same object keeps the object's joint reports.
-        if object != request.object_id {
-            self.joint_poses.remove(&object);
-        }
+        self.release_animation_instance(prior)?;
         self.create_animation_instance(request)
     }
 
@@ -7821,7 +7816,7 @@ pub(crate) fn push_extra_frame(
     frame: render_model::RenderFrameDiff,
 ) {
     let now = staged.clock.0;
-    staged.state.playback_mirror.observe_frame(&frame, now);
+    staged.state.poses.observe_frame(&frame, now);
     staged
         .outputs
         .push(RuntimeAppearanceCallOutput::Frame(frame));
@@ -7829,10 +7824,7 @@ pub(crate) fn push_extra_frame(
 
 fn push_presentation_frame(staged: &mut RuntimeAppearanceCall, frame: PresentationFrameDiff) {
     let now = staged.clock.0;
-    staged
-        .state
-        .playback_mirror
-        .observe_presentation(&frame, now);
+    staged.state.poses.observe_presentation(&frame, now);
     staged.presentation_frames = staged.presentation_frames.saturating_add(1);
     staged
         .outputs
@@ -9430,12 +9422,15 @@ fn animation_feedback_text(value: &str) -> NativeAnimationFeedbackText {
     out
 }
 fn animation_realization_receipt(
+    fact_id: u64,
     fact: &AnimationRealizationFact,
 ) -> NativeAnimationRealizationFact {
-    let mut out = NativeAnimationRealizationFact::default();
+    let mut out = NativeAnimationRealizationFact {
+        fact_id,
+        ..Default::default()
+    };
     match fact {
         AnimationRealizationFact::Playback {
-            fact_id,
             object_id,
             generation,
             sequence,
@@ -9444,7 +9439,6 @@ fn animation_realization_receipt(
             sampled_millis,
         } => {
             out.kind = NativeAnimationRealizationFactKind::PlaybackObservation;
-            out.fact_id = *fact_id;
             out.object_id = *object_id;
             out.generation = *generation;
             out.has_object_id = true;
@@ -9456,7 +9450,6 @@ fn animation_realization_receipt(
             out.sampled_millis = sampled_millis.unwrap_or(0);
         }
         AnimationRealizationFact::MeshInspection {
-            fact_id,
             object_id,
             generation,
             request,
@@ -9466,7 +9459,6 @@ fn animation_realization_receipt(
             voxel_normal_meshes,
         } => {
             out.kind = NativeAnimationRealizationFactKind::MeshInspection;
-            out.fact_id = *fact_id;
             out.object_id = *object_id;
             out.generation = *generation;
             out.has_object_id = true;
@@ -9486,13 +9478,11 @@ fn animation_realization_receipt(
             out.voxel_normal_meshes = *voxel_normal_meshes;
         }
         AnimationRealizationFact::NaturalCompletion {
-            fact_id,
             object_id,
             generation,
             clip,
         } => {
             out.kind = NativeAnimationRealizationFactKind::NaturalCompletion;
-            out.fact_id = *fact_id;
             out.object_id = *object_id;
             out.generation = *generation;
             out.has_object_id = true;
@@ -9500,14 +9490,12 @@ fn animation_realization_receipt(
             out.clip = animation_feedback_text(clip);
         }
         AnimationRealizationFact::Diagnostic {
-            fact_id,
             object_id,
             generation,
             code,
             sequence,
         } => {
             out.kind = NativeAnimationRealizationFactKind::Diagnostic;
-            out.fact_id = *fact_id;
             out.object_id = object_id.unwrap_or(0);
             out.generation = generation.unwrap_or(0);
             out.has_object_id = object_id.is_some();
@@ -9516,14 +9504,12 @@ fn animation_realization_receipt(
             out.diagnostic_code = animation_feedback_text(code);
         }
         AnimationRealizationFact::Stopped {
-            fact_id,
             object_id,
             generation,
             sequence,
             reason,
         } => {
             out.kind = NativeAnimationRealizationFactKind::Stopped;
-            out.fact_id = *fact_id;
             out.object_id = *object_id;
             out.generation = *generation;
             out.has_object_id = true;
@@ -15053,24 +15039,27 @@ fn shade(surface: Surface) -> vec4<f32> {
 
     #[test]
     fn animation_realization_marks_present_object_and_generation() {
-        let receipt = animation_realization_receipt(&AnimationRealizationFact::Playback {
-            fact_id: 1,
-            object_id: 42,
-            generation: 3,
-            sequence: 1,
-            status: "playing".into(),
-            clip: Some("walk".into()),
-            sampled_millis: Some(500),
-        });
+        let receipt = animation_realization_receipt(
+            1,
+            &AnimationRealizationFact::Playback {
+                object_id: 42,
+                generation: 3,
+                sequence: 1,
+                status: "playing".into(),
+                clip: Some("walk".into()),
+                sampled_millis: Some(500),
+            },
+        );
         assert!(receipt.has_object_id && receipt.has_generation);
         assert_eq!(receipt.object_id, 42);
-        let completion =
-            animation_realization_receipt(&AnimationRealizationFact::NaturalCompletion {
-                fact_id: 2,
+        let completion = animation_realization_receipt(
+            2,
+            &AnimationRealizationFact::NaturalCompletion {
                 object_id: 42,
                 generation: 3,
                 clip: "walk".into(),
-            });
+            },
+        );
         assert!(completion.has_object_id && completion.has_generation);
     }
 

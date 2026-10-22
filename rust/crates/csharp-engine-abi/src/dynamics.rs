@@ -761,8 +761,8 @@ pub struct NativeDynamicsRagdollLink {
 }
 
 /// Spawns a ragdoll of `instance` in `world` at the pose drawn for the
-/// previous call, moving as that pose moved. The instance must report its
-/// joints (`Animation.SetPose` with `ReportJoints`). Linked bones never
+/// previous call, moving as that pose moved. The instance must have been
+/// published a call before, so it has a pose. Linked bones never
 /// collide with each other; other bones follow `collision_groups` and
 /// `collision_mask`. `blend` (0 to 1) mixes the bodies over the clips.
 #[repr(C)]
@@ -819,8 +819,8 @@ pub struct NativeDynamicsSeveredPartHandle {
 
 /// Cuts `bone.joint` and its descendants off `instance` and spawns them in
 /// `world` as one body shaped by `bone`, at the pose drawn for the previous
-/// call. The instance must report its joints (`Animation.SetPose` with
-/// `ReportJoints`). The piece moves as that pose moved, plus
+/// call. The instance must have been published a call before, so it has a
+/// pose. The piece moves as that pose moved, plus
 /// `linear_velocity` (m/s) and `angular_velocity` (rad/s, world axes).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

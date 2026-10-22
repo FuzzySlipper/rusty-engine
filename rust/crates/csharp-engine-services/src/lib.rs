@@ -39,8 +39,8 @@ mod water_field;
 mod world_origin;
 
 pub use appearance::{
-    AnimationRealizationFact, GhostPlateRealizationFact, JointPoseReport, LandmarkPairDrawn,
-    LandmarkPairReport, LandmarkSetReport,
+    AnimationRealizationFact, GhostPlateRealizationFact, LandmarkPairDrawn, LandmarkPairReport,
+    LandmarkSetReport,
 };
 pub use audio::AudioRealizationFact;
 pub use composition::{

@@ -367,31 +367,25 @@ impl Renderer {
         Ok(stats)
     }
 
-    /// Advance what Engine time changes, without drawing: animation poses,
-    /// with their completions and bounds inspections, and the end of a
-    /// playing clip. A stream renderer that nobody watches calls this, so the
-    /// Engine still learns of completions; the next draw catches the picture
-    /// up.
+    /// Advance what Engine time changes, without drawing: bounds
+    /// inspections and the end of a playing video clip. A stream renderer
+    /// that nobody watches calls this, so the Engine still learns of them;
+    /// the next draw catches the picture up.
     pub fn advance_undrawn(&mut self) {
         self.propagate_transforms();
-        self.advance_animations();
         self.end_finished_video();
-        self.propagate_transforms();
         self.report_pending_bounds();
-        self.report_joint_poses();
-        // Posing writes skinned vertices. Submit so those staged writes do
-        // not pile up while nothing draws.
+        // A bounds inspection skins its instance's pose. Submit so those
+        // staged writes do not pile up while nothing draws.
         self.gpu.queue.submit(std::iter::empty());
     }
 
     /// Bring GPU rows up to date with the tables. Returns rows uploaded.
     pub(crate) fn prepare(&mut self) -> u32 {
         self.propagate_transforms();
-        self.advance_animations();
+        self.realize_poses();
         self.advance_video();
-        self.propagate_transforms();
         self.report_pending_bounds();
-        self.report_joint_poses();
         self.shadows_chosen = false;
         self.sky_captured = false;
         self.shadows_rendered = (0, 0);

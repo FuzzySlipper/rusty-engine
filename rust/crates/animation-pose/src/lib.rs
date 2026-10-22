@@ -2,19 +2,24 @@
 //! pose controls (two-bone IK, joint overrides, placed layers) and
 //! composition into instance-space node transforms.
 //!
-//! This is the one pose evaluator. The renderer poses what it draws through
-//! it, and the Engine services sample poses at simulation time through it
-//! ([`PoseModel`]) without a renderer, so a sampled pose and a drawn one of
-//! the same clip time are the same pose. glam is this crate's private math;
-//! callers outside the renderer read Engine transforms.
+//! This is the one pose evaluator. [`AnimatedScene`] keeps what each
+//! animated instance of the committed scene plays and evaluates its pose
+//! once per settled call, for every realizer to draw
+//! ([`render_model::EvaluatedPose`]) and for the Engine services to read.
+//! The services also sample poses at simulation time through
+//! [`PoseModel`], so a sampled pose and a drawn one of the same clip time
+//! are the same pose. glam is this crate's private math; callers outside
+//! the renderer read Engine transforms and arrays.
 
 mod clip;
 mod playback;
 mod pose;
 mod rig;
+mod scene;
 
 use std::collections::HashMap;
 
+use glam::Mat4;
 use render_model::{AnimatedMeshAsset, AnimatedMeshPose, PosedJoint, Transform};
 
 pub use clip::{layer_clips, sample_locals, Channel, Clip, Interp, Path, Trs};
@@ -25,6 +30,7 @@ pub use rig::{
     asset_clips, decode_clips, decode_nodes, joint_nodes, posed_joints, resource_identity,
     rig_nodes, transform_matrix, transform_of, Rig, RigNode,
 };
+pub use scene::{node_cuts, AnimatedScene, Completion, JointReading, PosedJoints, Settled};
 
 /// A node hierarchy pose evaluation walks: each node's parent and rest
 /// transform, and an order visiting parents before children.
@@ -56,6 +62,8 @@ pub struct PoseModel {
     clips: Vec<Clip>,
     clip_ids: HashMap<String, usize>,
     joints: Vec<Option<usize>>,
+    /// The skin joints children attach to, by name ([`joint_nodes`]).
+    attach: HashMap<String, usize>,
 }
 
 impl PoseModel {
@@ -70,6 +78,7 @@ impl PoseModel {
         let own = std::mem::take(&mut rig.clips);
         let by_id = asset_clips(asset, &rig, own, pack_bytes)?;
         let joints = rig_nodes(asset, &rig);
+        let attach = joint_nodes(&rig);
         let mut clip_ids = HashMap::with_capacity(by_id.len());
         let clips = by_id
             .into_iter()
@@ -84,6 +93,7 @@ impl PoseModel {
             clips,
             clip_ids,
             joints,
+            attach,
         })
     }
 
@@ -134,6 +144,25 @@ impl PoseModel {
         world: &Transform,
     ) -> Vec<PosedJoint> {
         let world = transform_matrix(world);
+        let pose = self.evaluate(actions, controls, world, None);
+        posed_joints(&self.joints, &pose, world)
+    }
+
+    /// The rig joints at rest, placed by `world`.
+    pub fn rest(&self, world: &Transform) -> Vec<PosedJoint> {
+        posed_joints(&self.joints, &self.rest_nodes(), transform_matrix(world))
+    }
+
+    /// Every node posed by clip actions, then the clip layers and the other
+    /// `controls`, with the instance placed by `world`: instance-space node
+    /// transforms. `solves`, when given, receives the IK chains.
+    pub(crate) fn evaluate(
+        &self,
+        actions: &[ClipAction],
+        controls: &AnimatedMeshPose,
+        world: Mat4,
+        solves: Option<&mut Vec<IkSolve>>,
+    ) -> Vec<Mat4> {
         let mut locals = sample_locals(&self.rig, &self.clips, actions);
         layer_clips(
             &self.rig,
@@ -143,17 +172,12 @@ impl PoseModel {
             &self.joints,
             &|clip| self.clip_index(clip),
         );
-        let pose = controlled(&self.rig, &self.joints, locals, controls, world, None);
-        posed_joints(&self.joints, &pose, world)
+        controlled(&self.rig, &self.joints, locals, controls, world, solves)
     }
 
-    /// The rig joints at rest, placed by `world`.
-    pub fn rest(&self, world: &Transform) -> Vec<PosedJoint> {
+    /// Every node at rest, in the instance's space.
+    pub(crate) fn rest_nodes(&self) -> Vec<Mat4> {
         let locals: Vec<Trs> = self.rig.nodes.iter().map(|node| node.rest).collect();
-        posed_joints(
-            &self.joints,
-            &compose(&self.rig, &locals),
-            transform_matrix(world),
-        )
+        compose(&self.rig, &locals)
     }
 }

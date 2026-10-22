@@ -96,9 +96,7 @@ The product chooses the joint, when and the push; the Engine splits the
 mesh, owns the body and the piece's drawing, and cleans them up.
 
 ```csharp
-// A call before the cut: the instance reports its joints.
-engine.Animation.SetPose(AnimationPoseRequest.ReportOnly(orc));
-
+// The orc was published a call before, so the Engine has posed it.
 uint head = AnimationJoints.IndexOf(rig, "Head");
 DynamicsSeveredPart part = engine.Dynamics.CreateSeveredPart(new(world, orc,
     DynamicsRagdollBone.CapsuleAlong(head, 0.5f, 0.24f, 6),
@@ -113,8 +111,8 @@ part.Dispose(); // the character is whole again
 - **The cut.** The request names the cut joint and the piece's shape and
   mass as a [ragdoll bone](ragdolls.md#describing-a-ragdoll). The piece
   spawns at the pose drawn for the previous call, moving as it moved plus
-  the given velocities. Without a joint report it is refused with
-  `CSHARP_SEVERED_PART_POSE`; a joint that is cut off already, itself or
+  the given velocities. An instance published in the same call has no pose
+  yet and is refused with `CSHARP_SEVERED_PART_POSE`; a joint that is cut off already, itself or
   under another cut, with `CSHARP_SEVERED_PART`.
 - **The split.** A vertex goes with the piece when the larger part of its
   skin weight is on the cut joint and its descendants, and a triangle when

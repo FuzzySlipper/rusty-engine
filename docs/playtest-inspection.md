@@ -202,8 +202,8 @@ Limits of a reading:
 
 - A world transform is composed when asked, through the parents' transforms,
   as the presentation world places an entity for audio and particles.
-  A node that hangs from a joint (`parentJoint`) leaves out the joint's pose,
-  which only the renderer evaluates; read the joint with
+  A node that hangs from a joint (`parentJoint`) leaves out the joint's pose;
+  read the joint with
   [`ReadJointPose`](skeleton-poses.md#writing-and-reading).
 - Bounds are in the node's own space and as the world box around them:
   primitives' unit shapes, a static mesh's payload bounds, and an animated

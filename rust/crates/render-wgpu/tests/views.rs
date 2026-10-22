@@ -12,11 +12,11 @@ mod common;
 
 use common::*;
 use render_host_contracts::{
-    RenderOutputJob, RenderOutputOperation, RenderOutputPose, RendererCameraInterpolation,
-    RendererCameraMotion, RendererCameraProjection, RendererCompositionPresentation,
-    RendererCompositionTarget, RendererCompositionView, RendererPrimaryDestination,
-    RendererPrimaryDestinationKind, RendererTargetColor, RendererTargetDepth,
-    RendererTargetSampling, RendererViewComposition, RendererViewTarget, RendererViewport,
+    RenderOutputJob, RenderOutputOperation, RendererCameraInterpolation, RendererCameraMotion,
+    RendererCameraProjection, RendererCompositionPresentation, RendererCompositionTarget,
+    RendererCompositionView, RendererPrimaryDestination, RendererPrimaryDestinationKind,
+    RendererTargetColor, RendererTargetDepth, RendererTargetSampling, RendererViewComposition,
+    RendererViewTarget, RendererViewport,
 };
 use render_model::*;
 use render_presentation::PresentationWorld;
@@ -434,7 +434,7 @@ fn capture_job(world: &PresentationWorld, operation: RenderOutputOperation) -> R
     }
 }
 
-fn image(samples: u32, pose: Option<RenderOutputPose>) -> RenderOutputOperation {
+fn image(samples: u32) -> RenderOutputOperation {
     let mut eye = camera("capture", [-0.2, 0.9, -1.6], -25.0, -18.0);
     eye.projection = RendererCameraProjection::Perspective {
         fov_y_degrees: 45.0,
@@ -450,7 +450,6 @@ fn image(samples: u32, pose: Option<RenderOutputPose>) -> RenderOutputOperation 
         exposure: 1.0,
         aces_filmic: false,
         samples,
-        pose,
     }
 }
 
@@ -461,7 +460,7 @@ fn capture_image_writes_a_straight_alpha_png_of_the_frozen_subtree() {
     let before = harness.renderer.table_counts();
     let png = harness
         .renderer
-        .capture_image(&capture_job(&harness.world, image(4, None)), &NoResources)
+        .capture_image(&capture_job(&harness.world, image(4)), &NoResources)
         .expect("capture the red box");
     let (width, height, rgba) = decode_png_rgba(&png).expect("a PNG");
     assert_eq!((width, height), (160, 120));
@@ -478,23 +477,11 @@ fn capture_image_writes_a_straight_alpha_png_of_the_frozen_subtree() {
     // The capture ran on its own tables; the live ones are untouched.
     assert_eq!(harness.renderer.table_counts(), before);
 
-    let pose = RenderOutputPose {
-        handle: RenderHandle::new(10),
-        clip: "run".to_owned(),
-        normalized_time: 0.5,
-    };
-    // A pose names an animated instance; this box is not one (pose captures
-    // of animated meshes: tests/animated.rs).
-    let refused = harness.renderer.capture_image(
-        &capture_job(&harness.world, image(1, Some(pose))),
-        &NoResources,
-    );
-    assert!(refused.unwrap_err().contains("unknown animated mesh"));
     // An image is its stated size: one the device cannot draw or read back
     // whole is refused, never encoded from a smaller target.
     let side = harness.gpu.max_texture_dimension();
     let sized = |width: u32, height: u32| {
-        let mut operation = image(1, None);
+        let mut operation = image(1);
         if let RenderOutputOperation::Image {
             width: w,
             height: h,
@@ -534,7 +521,7 @@ fn a_partly_transparent_capture_background_keeps_its_colour() {
     let mut harness = Harness::new(RendererOptions::default());
     harness.apply(room());
     let corner = |alpha: f32, harness: &Harness| {
-        let mut operation = image(1, None);
+        let mut operation = image(1);
         if let RenderOutputOperation::Image { background, .. } = &mut operation {
             *background = [0.25, 0.1, 0.05, alpha];
         }
@@ -565,7 +552,7 @@ fn a_capture_keeps_the_scene_bloom_and_sky_light_but_its_own_exposure() {
     let capture = |harness: &Harness| {
         let png = harness
             .renderer
-            .capture_image(&capture_job(&harness.world, image(1, None)), &NoResources)
+            .capture_image(&capture_job(&harness.world, image(1)), &NoResources)
             .expect("capture");
         decode_png_rgba(&png).expect("a PNG").2
     };

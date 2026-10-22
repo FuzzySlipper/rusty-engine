@@ -8,10 +8,7 @@ it lives, the skeleton follows the bodies as a layer over its
 [pose](skeleton-poses.md), mixed in by a blend weight.
 
 ```csharp
-// A call before the fall: the instance reports its joints.
-engine.Animation.SetPose(AnimationPoseRequest.ReportOnly(resident));
-
-// The fall, and the hit that causes it.
+// The fall, and the hit that causes it, of a resident published before.
 DynamicsRagdoll ragdoll = engine.Dynamics.CreateRagdoll(new(world, resident, bones, links,
     CollisionGroups: 1, CollisionMask: uint.MaxValue, Friction: 0.8f, Restitution: 0,
     LinearDamping: 0.05f, AngularDamping: 0.3f, Blend: 1));
@@ -112,10 +109,12 @@ spine and the neck, fingers) follow their parent.
 ## Lifecycle
 
 **Creating.** `CreateRagdoll` refuses with `CSHARP_RAGDOLL_POSE` until the
-instance has reported its joints (`ReportJoints` on its pose, a call before).
+Engine has posed the instance: in any call after the one that published it.
+It needs no renderer, so it works in the headless test host too.
 
 - It spawns the bodies at the joints drawn for the previous call.
-- With two reports, it gives them the velocities that pose was moving with.
+- After two evaluations of the pose, it gives them the velocities that pose
+  was moving with.
 - It links them, and places the bones at `Blend`.
 - A refused ragdoll leaves no bodies or joints behind.
 

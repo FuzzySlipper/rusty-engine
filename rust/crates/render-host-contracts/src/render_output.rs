@@ -3,7 +3,8 @@ use render_model::{RenderFrameDiff, RenderHandle};
 use serde::{Deserialize, Serialize};
 
 /// Immutable Engine renderer job. Resource bytes remain owned by the runtime
-/// until this job is terminal; the frame describes current authored facts.
+/// until this job is terminal; the frame describes current authored facts,
+/// animated instances in the poses the Engine evaluated for the job.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RenderOutputJob {
@@ -26,16 +27,7 @@ pub enum RenderOutputOperation {
         exposure: f32,
         aces_filmic: bool,
         samples: u32,
-        pose: Option<RenderOutputPose>,
     },
     #[serde(rename_all = "camelCase")]
     Glb { include_animations: bool },
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RenderOutputPose {
-    pub handle: RenderHandle,
-    pub clip: String,
-    pub normalized_time: f64,
 }

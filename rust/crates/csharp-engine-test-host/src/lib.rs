@@ -3,7 +3,9 @@
 //! `EngineServiceSet` a running product receives, without a renderer, browser,
 //! window or audio device. A test runs each group of Engine calls inside a
 //! product call, so ownership, admission and handle rules refuse exactly as
-//! they do at run time. The renderer work a call produces is dropped.
+//! they do at run time. The renderer work a call produces is dropped; the
+//! poses the Engine evaluates as each call settles are kept, so joint reads,
+//! ragdolls and severed parts work as they do in a running product.
 
 use std::{collections::BTreeMap, ffi::c_void, path::PathBuf, ptr, sync::Arc};
 
@@ -517,6 +519,291 @@ mod tests {
             ABI_OK
         );
         assert!(root.path().join("first").is_dir() && root.path().join("second").is_dir());
+        unsafe { (api.destroy)(api.context) };
+    }
+
+    const BODY_GLB: &[u8] =
+        include_bytes!("../../../../fixtures/csharp-joint-attachments/content/body.glb");
+
+    /// Nothing is rendered, yet a character published in one call has a
+    /// pose in the next: a ragdoll spawns from it, falls as its world steps,
+    /// and reads back (#10223).
+    #[test]
+    fn a_ragdoll_spawns_from_a_published_character_and_falls_headless() {
+        let api = host_with(&[("body.glb", BODY_GLB)]).expect("a host");
+        let mut receipt = NativeOperationErrorReceipt {
+            diagnostics: ptr::null(),
+            diagnostics_len: 0,
+        };
+        let (animation, graphics, dynamics) = (
+            api.engine.animation,
+            api.engine.graphics,
+            api.engine.dynamics,
+        );
+        let ok = |status: i32, receipt: &NativeOperationErrorReceipt| {
+            assert_eq!(status, ABI_OK, "{:?}", codes(receipt));
+        };
+
+        // The first call publishes the character.
+        let mut resource = NativeRenderResourceHandle::default();
+        ok(
+            unsafe {
+                (animation.open_animated_mesh)(
+                    animation.context,
+                    &NativeAnimatedMeshResourceRequest {
+                        path: slice("body.glb"),
+                    },
+                    &mut resource,
+                    &mut receipt,
+                )
+            },
+            &receipt,
+        );
+        let mut rig = NativeAnimationJointInfoResult {
+            joints: ptr::null(),
+            joints_len: 0,
+        };
+        ok(
+            unsafe { (animation.read_joints)(animation.context, resource, &mut rig, &mut receipt) },
+            &receipt,
+        );
+        // Copied before the next call on the bridge.
+        let joints: BTreeMap<String, u32> =
+            unsafe { std::slice::from_raw_parts(rig.joints, rig.joints_len) }
+                .iter()
+                .enumerate()
+                .map(|(index, joint)| {
+                    let id = unsafe { std::slice::from_raw_parts(joint.id.bytes, joint.id.len) };
+                    (String::from_utf8(id.to_vec()).unwrap(), index as u32)
+                })
+                .collect();
+        let mut appearance = NativeAppearanceHandle::default();
+        ok(
+            unsafe {
+                (animation.create_animated_mesh_appearance)(
+                    animation.context,
+                    &NativeAnimatedMeshAppearanceRequest { resource },
+                    &mut appearance,
+                    &mut receipt,
+                )
+            },
+            &receipt,
+        );
+        let fact = NativeAppearanceFact {
+            object_id: 7,
+            has_parent_object: false,
+            parent_object_id: 0,
+            transform: NativeTransform {
+                translation: NativeVec3::default(),
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            },
+            appearance,
+            visible: true,
+            layer: NativeRenderLayer::Scene,
+            shadow_casting: Default::default(),
+        };
+        ok(
+            unsafe { (graphics.publish_snapshot)(graphics.context, &fact, 1, &mut receipt) },
+            &receipt,
+        );
+        let mut instance = NativeAnimationInstanceHandle::default();
+        ok(
+            unsafe {
+                (animation.create_instance)(
+                    animation.context,
+                    &NativeAnimationInstanceRequest {
+                        appearance,
+                        object_id: 7,
+                    },
+                    &mut instance,
+                    &mut receipt,
+                )
+            },
+            &receipt,
+        );
+        ok(
+            unsafe { (api.finish_call)(api.context, &mut receipt) },
+            &receipt,
+        );
+
+        // The next call reads its pose and drops it as a ragdoll.
+        assert_eq!(unsafe { (api.begin_call)(api.context) }, ABI_OK);
+        let mut pose = NativeAnimationJointPoseResult {
+            joints: ptr::null(),
+            joints_len: 0,
+            ik_chains: ptr::null(),
+            ik_chains_len: 0,
+            world: fact.transform,
+            seconds: 0.0,
+            reported: false,
+        };
+        ok(
+            unsafe {
+                (animation.read_joint_pose)(animation.context, instance, &mut pose, &mut receipt)
+            },
+            &receipt,
+        );
+        assert!(pose.reported, "posed with no renderer");
+        assert_eq!(pose.joints_len, joints.len());
+        let mut world = NativeDynamicsWorldHandle::default();
+        ok(
+            unsafe {
+                (dynamics.create_world)(
+                    dynamics.context,
+                    NativeDynamicsWorldConfig {
+                        gravity: NativeVec3 {
+                            x: 0.0,
+                            y: -9.81,
+                            z: 0.0,
+                        },
+                    },
+                    &mut world,
+                    &mut receipt,
+                )
+            },
+            &receipt,
+        );
+        let bone = |joint: &str, end: Option<&str>, shape, radius, half_depth, mass| {
+            NativeDynamicsRagdollBone {
+                joint: joints[joint],
+                end_joint: end.map_or(u32::MAX, |end| joints[end]),
+                length: if end.is_some() { 0.0 } else { 0.5 },
+                shape,
+                radius,
+                half_depth,
+                mass,
+            }
+        };
+        let bones = [
+            bone(
+                "Hips",
+                Some("Spine"),
+                NativeDynamicsRagdollShape::Box,
+                0.26,
+                0.16,
+                12.0,
+            ),
+            bone(
+                "Spine",
+                Some("Neck"),
+                NativeDynamicsRagdollShape::Box,
+                0.3,
+                0.18,
+                24.0,
+            ),
+            bone(
+                "Head",
+                None,
+                NativeDynamicsRagdollShape::Capsule,
+                0.24,
+                0.0,
+                6.0,
+            ),
+        ];
+        let cone = |child: u32, swing: f32, twist: f32| NativeDynamicsRagdollLink {
+            parent: child - 1,
+            child,
+            axis: NativeVec3 {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            limits: NativeDynamicsJointLimits {
+                kind: NativeDynamicsJointKind::Cone,
+                min_angle: -twist,
+                max_angle: twist,
+                swing_angle: swing,
+                damping: 2.0,
+            },
+        };
+        let links = [cone(1, 0.5, 0.3), cone(2, 0.6, 0.6)];
+        let mut ragdoll = NativeDynamicsRagdollHandle::default();
+        ok(
+            unsafe {
+                (dynamics.create_ragdoll)(
+                    dynamics.context,
+                    &NativeDynamicsRagdollRequest {
+                        world,
+                        instance,
+                        bones: bones.as_ptr(),
+                        bones_len: bones.len(),
+                        links: links.as_ptr(),
+                        links_len: links.len(),
+                        collision_groups: 1,
+                        collision_mask: u32::MAX,
+                        friction: 0.8,
+                        restitution: 0.0,
+                        linear_damping: 0.05,
+                        angular_damping: 0.3,
+                        blend: 1.0,
+                    },
+                    &mut ragdoll,
+                    &mut receipt,
+                )
+            },
+            &receipt,
+        );
+        let hips = |receipt: &mut NativeOperationErrorReceipt| {
+            let mut read = NativeDynamicsRagdollResult {
+                bones: ptr::null(),
+                bones_len: 0,
+                resting: false,
+                blend: 0.0,
+            };
+            let status =
+                unsafe { (dynamics.read_ragdoll)(dynamics.context, ragdoll, &mut read, receipt) };
+            assert_eq!(status, ABI_OK);
+            assert_eq!(read.bones_len, bones.len());
+            unsafe { (*read.bones).translation.y }
+        };
+        let spawned = hips(&mut receipt);
+        let drawn = unsafe {
+            (*pose.joints.add(joints["Hips"] as usize))
+                .world
+                .translation
+                .y
+        };
+        assert!(
+            (spawned - drawn).abs() < 0.05,
+            "spawned at the drawn hips: {spawned} {drawn}"
+        );
+        let mut stepped = NativeDynamicsStepReceipt::default();
+        ok(
+            unsafe {
+                (dynamics.step)(
+                    dynamics.context,
+                    &NativeDynamicsStepRequest {
+                        world,
+                        step_seconds: 1.0 / 60.0,
+                        steps: 60,
+                        actions: ptr::null(),
+                        actions_len: 0,
+                    },
+                    &mut stepped,
+                    &mut receipt,
+                )
+            },
+            &receipt,
+        );
+        let fallen = hips(&mut receipt);
+        assert!(
+            fallen < spawned - 3.0,
+            "a second's fall: {spawned} to {fallen}"
+        );
+        ok(
+            unsafe { (api.finish_call)(api.context, &mut receipt) },
+            &receipt,
+        );
         unsafe { (api.destroy)(api.context) };
     }
 

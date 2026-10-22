@@ -102,7 +102,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         ]);
         instance = engine.Animation.CreateInstance(new(body, BodyId));
         engine.Animation.SetPlayback(new(instance, AnimationPlaybackKind.Sample, Idle, AnimationLoopMode.Repeat, 1, 1, true, 0, false, IdleSample));
-        engine.Animation.SetPose(AnimationPoseRequest.ReportOnly(instance));
 
         spatial = engine.Spatial.CreateSession(new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
         engine.Spatial.ReplaceCollision(new CollisionReplaceRequest(

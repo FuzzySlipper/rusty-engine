@@ -1,6 +1,6 @@
 //! Product pose controls on one animated instance: two-bone IK constraints
-//! and joint overrides, applied by the renderer after clip sampling and
-//! before skinning, and whether the evaluated joints are reported back.
+//! and joint overrides, applied after clip sampling, and the pose the Engine
+//! evaluated from them for realizers to draw ([`EvaluatedPose`]).
 //!
 //! Joints are indices into the admitted rig's joint list
 //! ([`crate::AnimationRigSignature::joints`], sorted by joint id).
@@ -24,9 +24,6 @@ pub struct AnimatedMeshPose {
     /// it as one pose.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<PlacedPoseLayer>,
-    /// Report the evaluated joints after each committed call.
-    #[serde(default)]
-    pub report_joints: bool,
     /// Joints whose subtree is cut off the instance and drawn apart as a
     /// severed piece. The skeleton is evaluated as without them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -141,6 +138,48 @@ pub struct TwoBoneIkConstraint {
     pub weight: f32,
 }
 
+/// An animated instance's pose as the Engine evaluated it once for every
+/// realizer: each GLB node's transform in the instance's space, column-major,
+/// in the mesh's node order. A realizer skins from it, places rigid parts
+/// and joint-attached children by it, and never evaluates the pose again.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvaluatedPose {
+    /// The Engine presentation time the pose was evaluated at.
+    pub seconds: f64,
+    pub nodes: std::sync::Arc<[[f32; 16]]>,
+    /// One per cut ([`JointCut`]), in the pose controls' order: the piece
+    /// the cut severs, every node placed as that piece draws it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pieces: Vec<EvaluatedPiece>,
+    /// Each two-bone IK chain as its solve saw it, in the controls' order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ik: Vec<EvaluatedIkChain>,
+}
+
+/// A severed piece of an [`EvaluatedPose`]: the cut joint, and every node of
+/// the mesh placed where the piece is (in the instance's space). A realizer
+/// draws the nodes the cut owns, and the skinned triangles weighted to them,
+/// by these.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvaluatedPiece {
+    pub joint: u32,
+    pub nodes: std::sync::Arc<[[f32; 16]]>,
+}
+
+/// One two-bone IK chain of an [`EvaluatedPose`]: the target in the
+/// instance's space, the chain's end node, and whether the target lay out of
+/// reach so the solve straightened the chain toward it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EvaluatedIkChain {
+    pub target: [f32; 3],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<u32>,
+    pub straightened: bool,
+}
+
 /// One evaluated joint, in its instance's space and in the scene.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PosedJoint {
@@ -148,7 +187,7 @@ pub struct PosedJoint {
     pub world: crate::Transform,
 }
 
-/// One two-bone IK chain of a reported pose, from the solve that ran: its
+/// One two-bone IK chain of an evaluated pose, from the solve that ran: its
 /// target, the end joint as drawn (after overrides and layers), and how far
 /// the end is from the target in the scene.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -317,7 +356,6 @@ mod tests {
             two_bone_ik,
             overrides,
             layers: Vec::new(),
-            report_joints: false,
             cuts: Vec::new(),
         };
         assert_eq!(

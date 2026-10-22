@@ -1,167 +1,60 @@
 //! Product pose controls on animation instances (`SetPose`), the admitted
-//! rig's joints (`ReadJoints`), the joints the renderer reports back
+//! rig's joints (`ReadJoints`), the joints the Engine evaluated
 //! (`ReadJointPose`), and joints sampled at simulation time
 //! (`SampleJointPose`).
 //!
-//! A pose is retained on its instance and reaches the renderer when the call
-//! settles, as one `SetAnimatedMeshPose` per changed instance or target. A
-//! reporting instance is posed when each call is applied and its joints
-//! arrive before the next call. A sample poses the mesh here, through the
-//! evaluator the renderer draws with (`animation-pose`), so it needs no
-//! renderer and answers within the call.
+//! A pose is retained on its instance and reaches the scene when the call
+//! settles, as one `SetAnimatedMeshPose` per changed instance or target.
+//! The scene's poses are evaluated once as each call settles
+//! ([`::animation_pose::AnimatedScene`], kept with the appearance state),
+//! for realizers to draw and for joint reads, ragdolls and severed parts to
+//! read. A sample poses the mesh here through the same evaluator, so it
+//! answers within the call.
 
 use super::*;
 
-/// The joints a renderer evaluated for one animated object.
-#[derive(Debug, Clone, PartialEq)]
-pub struct JointPoseReport {
-    pub object_id: u64,
-    pub generation: u64,
-    /// The Engine time the pose was evaluated at.
-    pub seconds: f64,
-    pub world: Transform,
-    /// Rig order (`ReadJoints`).
-    pub joints: Vec<PosedJoint>,
-    /// The rest pose, when the report carries it.
-    pub rest: Option<Vec<PosedJoint>>,
-    /// Each two-bone IK chain of the pose, in the order it gave them.
-    pub ik_chains: Vec<IkChainReach>,
-}
-
-/// The latest report of one object, with the rest pose its renderer last
-/// reported.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct ReportedJointPose {
-    pub(crate) latest: JointPoseReport,
-    /// The report before `latest`, of the same realization.
-    pub(crate) previous: Option<JointPoseReport>,
-    pub(crate) rest: Option<Vec<PosedJoint>>,
-}
-
-/// What a ragdoll spawns from: an instance's rig size and its latest
-/// reports.
+/// What a ragdoll or a severed part spawns from: an instance's rig size and
+/// its evaluated joints.
 pub(crate) struct RagdollSource {
     pub(crate) joints: usize,
     pub(crate) rest: Vec<PosedJoint>,
-    pub(crate) latest: JointPoseReport,
-    pub(crate) previous: Option<JointPoseReport>,
+    pub(crate) latest: ::animation_pose::PosedJoints,
+    pub(crate) previous: Option<::animation_pose::PosedJoints>,
 }
 
 const NO_PARENT: u32 = u32::MAX;
 
-/// What each animated render node plays, kept as the renderer keeps it:
-/// every appearance output is observed in order at the presentation time the
-/// renderer applies it (its call's start), so `SampleJointPose` can sample an
-/// instance's current playback at the time its call is drawn at. Clips stay
-/// named by id; a sample resolves them against its pose model.
-#[derive(Clone, Default)]
-pub(crate) struct PlaybackMirror {
-    /// Each animated node's direct playback, and its parent node.
-    instances: BTreeMap<RenderHandle, (Option<RenderHandle>, ::animation_pose::PlaybackState)>,
-    /// Each animation controller's target and projected state.
-    controllers: BTreeMap<u64, (RenderHandle, ::animation_pose::ControllerPlayback)>,
+/// Evaluates the poses a settled call can have changed, at the time it
+/// reached, with its instances placed in `world` (the committed world with
+/// the call's changes). Returns the changed poses and the `once` clips that
+/// ended.
+pub(crate) fn evaluate_poses(
+    call: &mut RuntimeAppearanceCall,
+    world: &render_presentation::PresentationWorld,
+) -> ::animation_pose::Settled {
+    let state = &mut *call.state;
+    let (poses, resources) = (&mut state.poses, &state.render_resources);
+    poses.settle(world.elapsed_seconds(), world, &|asset| {
+        decoded_model(resources, asset)
+    })
 }
 
-impl PlaybackMirror {
-    pub(crate) fn observe_frame(&mut self, frame: &RenderFrameDiff, now: f64) {
-        for op in &frame.ops {
-            match op {
-                RenderDiff::CreateAnimatedMeshInstance {
-                    handle,
-                    parent,
-                    instance,
-                } => {
-                    let mut state = ::animation_pose::PlaybackState::default();
-                    if let Some(playback) = &instance.playback {
-                        // A refused command leaves the playback unset, as the
-                        // renderer does.
-                        let _ = state.apply(playback, now);
-                    }
-                    self.instances.insert(*handle, (*parent, state));
-                }
-                RenderDiff::SetAnimatedMeshPlayback { handle, playback } => {
-                    if let Some((_, state)) = self.instances.get_mut(handle) {
-                        let _ = state.apply(playback, now);
-                    }
-                }
-                RenderDiff::Destroy { handle } => self.forget(*handle),
-                _ => {}
-            }
-        }
-    }
-
-    pub(crate) fn observe_presentation(&mut self, frame: &PresentationFrameDiff, now: f64) {
-        for op in &frame.ops {
-            let PresentationOp::Animation { op, .. } = op else {
-                continue;
-            };
-            match op {
-                render_presentation::AnimationProjectionOp::Create { handle, descriptor } => {
-                    self.controllers.insert(
-                        handle.raw(),
-                        (
-                            descriptor.target,
-                            ::animation_pose::ControllerPlayback::new(
-                                descriptor.controller.clone(),
-                                now,
-                            ),
-                        ),
-                    );
-                }
-                render_presentation::AnimationProjectionOp::Update { handle, controller } => {
-                    if let Some((_, playback)) = self.controllers.get_mut(&handle.raw()) {
-                        *playback =
-                            ::animation_pose::ControllerPlayback::new(controller.clone(), now);
-                    }
-                }
-                render_presentation::AnimationProjectionOp::Destroy { handle } => {
-                    self.controllers.remove(&handle.raw());
-                }
-            }
-        }
-    }
-
-    /// Drops a destroyed node, and the animated nodes it parented.
-    fn forget(&mut self, handle: RenderHandle) {
-        let mut gone = vec![handle];
-        while let Some(handle) = gone.pop() {
-            self.instances.remove(&handle);
-            gone.extend(
-                self.instances
-                    .iter()
-                    .filter(|(_, (parent, _))| *parent == Some(handle))
-                    .map(|(child, _)| *child),
-            );
-        }
-    }
-
-    /// The clip actions `target` plays at `now`, resolved against `model`:
-    /// the first controller driving it, or its direct playback, under any
-    /// fade. A node that is not animated plays nothing.
-    fn actions(
-        &self,
-        target: RenderHandle,
-        model: &::animation_pose::PoseModel,
-        now: f64,
-    ) -> Vec<::animation_pose::ClipAction> {
-        let index = |clip: &str| model.clip_index(clip);
-        let duration = |clip: usize| model.clip_duration(clip);
-        let controller = self
-            .controllers
-            .values()
-            .find(|(driven, _)| *driven == target)
-            .map(|(_, playback)| {
-                let mut playback = playback.clone();
-                playback.resolve(&index);
-                playback.actions(now, &duration)
-            });
-        let Some((_, state)) = self.instances.get(&target) else {
-            return controller.unwrap_or_default();
-        };
-        let mut state = state.clone();
-        state.resolve(&index);
-        state.actions(now, &duration, controller).0
-    }
+/// The decoded mesh of an animated mesh asset a renderer change defines.
+fn decoded_model(
+    resources: &RenderResourceRegistry,
+    asset: &AnimatedMeshAsset,
+) -> Option<Arc<::animation_pose::PoseModel>> {
+    let identity = ::animation_pose::resource_identity(
+        "animated-mesh-resource",
+        asset.content_hash.as_deref(),
+    )?;
+    let body = resources.by_identity(&identity).or_else(|| {
+        resources
+            .recently_released()
+            .find(|resource| resource.identity() == identity)
+    })?;
+    body.pose_model(|pack| resources.by_identity(pack).map(|pack| pack.shared_bytes()))
+        .ok()
 }
 
 /// The admitted rig of the mesh an instance plays.
@@ -313,7 +206,6 @@ impl RuntimeAppearanceBridge {
                 })
                 .collect(),
             layers: Vec::new(),
-            report_joints: request.report_joints,
             cuts: Vec::new(),
         };
         pose.validate()
@@ -488,19 +380,8 @@ impl RuntimeAppearanceBridge {
         &mut self,
         instance: NativeAnimationInstanceHandle,
     ) -> Result<NativeAnimationJointPoseResult, CsharpEngineServicesError> {
-        let object = self
-            .staged_ref()?
-            .state
-            .animation_instances
-            .get(&instance.value)
-            .map(|instance| instance.object_id)
-            .ok_or_else(|| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_ANIMATION_INSTANCE",
-                    "animation instance is not live",
-                )
-            })?;
-        let Some(reported) = self.joint_poses.get(&object) else {
+        let reading = self.joint_reading(instance.value)?;
+        let Some(reading) = reading else {
             return Ok(NativeAnimationJointPoseResult {
                 joints: std::ptr::null(),
                 joints_len: 0,
@@ -511,7 +392,7 @@ impl RuntimeAppearanceBridge {
                 reported: false,
             });
         };
-        let joints = reported
+        let joints = reading
             .latest
             .joints
             .iter()
@@ -520,8 +401,7 @@ impl RuntimeAppearanceBridge {
                 world: native_transform_of(&joint.world),
             })
             .collect::<Box<[_]>>();
-        let ik_chains = reported
-            .latest
+        let ik_chains = reading
             .ik_chains
             .iter()
             .map(|chain| NativeIkChainReach {
@@ -538,12 +418,32 @@ impl RuntimeAppearanceBridge {
             joints_len: joints.len(),
             ik_chains: ik_chains.as_ptr(),
             ik_chains_len: ik_chains.len(),
-            world: native_transform_of(&reported.latest.world),
-            seconds: reported.latest.seconds,
+            world: native_transform_of(&reading.latest.world),
+            seconds: reading.latest.seconds,
             reported: true,
         };
         self.borrowed.hold((joints, ik_chains));
         Ok(result)
+    }
+
+    /// The joints the Engine last evaluated for a live instance, during a
+    /// call; `None` while its node has no evaluated pose (it is not in the
+    /// published scene, or was published this call).
+    fn joint_reading(
+        &self,
+        instance: u64,
+    ) -> Result<Option<::animation_pose::JointReading>, CsharpEngineServicesError> {
+        let state = &self.staged_ref()?.state;
+        let instance = state.animation_instances.get(&instance).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_INSTANCE",
+                "animation instance is not live",
+            )
+        })?;
+        Ok(
+            instance_target(&state.projector, &state.appearances, instance)
+                .and_then(|target| state.poses.joints(target)),
+        )
     }
 
     /// The decoded pose model of an animated mesh resource, kept with the
@@ -607,7 +507,7 @@ impl RuntimeAppearanceBridge {
             let now = staged.clock.1;
             let model = self.pose_model(resource)?;
             let state = &self.staged_ref()?.state;
-            let actions = state.playback_mirror.actions(target, &model, now);
+            let actions = state.poses.actions(target, &model, now);
             let world = transform_value(request.placement);
             let joints = model.sample_actions(&actions, &controls, &world);
             return Ok(self.hold_joints(&joints));
@@ -698,40 +598,32 @@ impl RuntimeAppearanceBridge {
         result
     }
 
-    /// The reports a ragdoll or a severed part of `instance` spawns from,
-    /// during a call; without them, refused with `unreported`.
+    /// The evaluated joints a ragdoll or a severed part of `instance` spawns
+    /// from, during a call; without them, refused with `unposed`.
     pub(crate) fn ragdoll_source(
         &self,
         instance: u64,
-        unreported: &'static str,
+        unposed: &'static str,
     ) -> Result<RagdollSource, CsharpEngineServicesError> {
-        let state = &self.staged_ref()?.state;
-        let instance = state.animation_instances.get(&instance).ok_or_else(|| {
+        let joints = {
+            let state = &self.staged_ref()?.state;
+            state
+                .animation_instances
+                .get(&instance)
+                .and_then(|instance| instance_rig(state, instance))
+                .map_or(0, |rig| rig.joints.len())
+        };
+        let reading = self.joint_reading(instance)?.ok_or_else(|| {
             CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_INSTANCE",
-                "animation instance is not live",
+                unposed,
+                "the instance has no evaluated pose: publish it in a call before",
             )
         })?;
-        let joints = instance_rig(state, instance).map_or(0, |rig| rig.joints.len());
-        let unreported = || {
-            CsharpEngineServicesError::new(
-                unreported,
-                "the instance has no reported pose: set ReportJoints on it a call before",
-            )
-        };
-        let reported = self
-            .joint_poses
-            .get(&instance.object_id)
-            .ok_or_else(unreported)?;
-        let rest = reported.rest.clone().ok_or_else(unreported)?;
-        if reported.latest.joints.len() != joints || rest.len() != joints {
-            return Err(unreported());
-        }
         Ok(RagdollSource {
             joints,
-            rest,
-            latest: reported.latest.clone(),
-            previous: reported.previous.clone(),
+            rest: reading.rest,
+            latest: reading.latest,
+            previous: reading.previous,
         })
     }
 
@@ -797,36 +689,6 @@ impl RuntimeAppearanceBridge {
             .state
             .animation_instances
             .contains_key(&instance))
-    }
-
-    /// Joint poses the renderer reported since the last call, oldest first.
-    /// A report evaluated before its instance was destroyed is dropped;
-    /// destroying an instance drops its object's reports.
-    pub(crate) fn ingest_joint_poses(
-        &mut self,
-        reports: impl IntoIterator<Item = JointPoseReport>,
-    ) {
-        for report in reports {
-            if !self.state.animation_objects.contains_key(&report.object_id) {
-                continue;
-            }
-            let rest = report.rest.clone();
-            let entry =
-                self.joint_poses
-                    .entry(report.object_id)
-                    .or_insert_with(|| ReportedJointPose {
-                        latest: report.clone(),
-                        previous: None,
-                        rest: None,
-                    });
-            if rest.is_some() {
-                entry.rest = rest;
-            }
-            let earlier = std::mem::replace(&mut entry.latest, report);
-            entry.previous = (earlier.generation == entry.latest.generation
-                && earlier.seconds < entry.latest.seconds)
-                .then_some(earlier);
-        }
     }
 }
 
@@ -998,6 +860,62 @@ pub(crate) fn character_for_test(
     let fact = super::tests::appearance_fact(appearance);
     unsafe { bridge.stage_snapshot(&fact, 1) }.expect("snapshot");
     (instance, joints)
+}
+
+/// Ends the open call as the service set ends one: its renderer changes
+/// reach `world`, Engine time moves on by `advance`, and the scene's poses
+/// are evaluated there.
+#[cfg(test)]
+pub(crate) fn end_call_posed(
+    bridge: &mut RuntimeAppearanceBridge,
+    world: &mut render_presentation::PresentationWorld,
+    advance: f64,
+) {
+    let call = bridge.take_staged_call();
+    settle_call_posed(bridge, call, world, advance);
+}
+
+/// [`end_call_posed`] for a call already taken from the bridge.
+#[cfg(test)]
+pub(crate) fn settle_call_posed(
+    bridge: &mut RuntimeAppearanceBridge,
+    mut call: RuntimeAppearanceCall,
+    world: &mut render_presentation::PresentationWorld,
+    advance: f64,
+) {
+    for output in std::mem::take(&mut call.outputs) {
+        match output {
+            RuntimeAppearanceCallOutput::Frame(frame) => {
+                world.apply(frame).expect("the world admits the call");
+            }
+            RuntimeAppearanceCallOutput::Presentation(frame) => {
+                world
+                    .apply_presentation(frame)
+                    .expect("the world admits the call");
+            }
+        }
+    }
+    world.advance_elapsed(advance);
+    let settled = evaluate_poses(&mut call, world);
+    world
+        .apply(settled.poses)
+        .expect("the world retains the poses");
+    bridge.commit(call);
+}
+
+/// Publishes the joint attachment fixture's character (object 7) at
+/// `height` in the open call.
+#[cfg(test)]
+pub(crate) fn place_character_for_test(
+    bridge: &mut RuntimeAppearanceBridge,
+    instance: NativeAnimationInstanceHandle,
+    height: f32,
+) {
+    let appearance =
+        bridge.staged_ref().unwrap().state.animation_instances[&instance.value].appearance;
+    let mut fact = super::tests::appearance_fact(NativeAppearanceHandle { value: appearance });
+    fact.transform.translation.y = height;
+    unsafe { bridge.stage_snapshot(&fact, 1) }.expect("snapshot");
 }
 
 /// The ragdoll layer the open call holds for `instance`.
@@ -1197,7 +1115,6 @@ mod tests {
                     weight: 1.0,
                 },
                 overrides_len: 1,
-                report_joints: false,
             })
             .unwrap();
         let controlled = sampled(&mut bridge, &request("run", 0.6)).unwrap();
@@ -1596,6 +1513,7 @@ mod tests {
         content_resources.insert("body.glb".to_owned(), Arc::from(CHARACTER_GLB));
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let mut world = render_presentation::PresentationWorld::default();
         let path = b"body.glb";
         bridge.begin_call();
         let resource = bridge
@@ -1647,7 +1565,6 @@ mod tests {
             two_bone_ik_len: chain.len(),
             overrides: std::ptr::null(),
             overrides_len: 0,
-            report_joints: true,
         };
         let backwards = [ik(hand, forearm, arm)];
         let refused = bridge
@@ -1665,6 +1582,8 @@ mod tests {
             .set_animation_pose(&request(&chain))
             .expect("written again");
         assert!(pose_ops(&bridge).is_empty(), "sent when the call settles");
+        let unposed = bridge.read_animation_joint_pose(instance).unwrap();
+        assert!(!unposed.reported, "no settle has posed it yet");
         let call = bridge.take_staged_call();
         let sent: Vec<_> = call
             .render_ops()
@@ -1672,7 +1591,7 @@ mod tests {
             .filter(|op| matches!(op, RenderDiff::SetAnimatedMeshPose { .. }))
             .collect();
         assert_eq!(sent.len(), 1);
-        bridge.commit(call);
+        settle_call_posed(&mut bridge, call, &mut world, 0.0);
 
         // Rewritten unchanged each update, it is not sent again.
         bridge.begin_call();
@@ -1682,81 +1601,38 @@ mod tests {
             .render_ops()
             .iter()
             .any(|op| matches!(op, RenderDiff::SetAnimatedMeshPose { .. })));
-        bridge.commit(call);
+        settle_call_posed(&mut bridge, call, &mut world, 0.0);
 
-        // The renderer's report reads back before the next call.
-        let joint = |x: f32| PosedJoint {
-            model: Transform {
-                translation: [x, 0.0, 0.0],
-                ..Transform::IDENTITY
-            },
-            world: Transform {
-                translation: [x + 1.0, 0.0, 0.0],
-                ..Transform::IDENTITY
-            },
-        };
-        bridge.ingest_joint_poses([
-            JointPoseReport {
-                object_id: 7,
-                generation: 1,
-                seconds: 0.5,
-                world: Transform::IDENTITY,
-                joints: vec![joint(1.0); joints.len()],
-                rest: Some(vec![joint(0.0); joints.len()]),
-                ik_chains: vec![IkChainReach {
-                    target_model: [3.0, 0.0, 0.0],
-                    target_world: [4.0, 0.0, 0.0],
-                    end_model: [2.0, 0.0, 0.0],
-                    end_world: [3.0, 0.0, 0.0],
-                    shortfall: 1.0,
-                    straightened: true,
-                }],
-            },
-            JointPoseReport {
-                object_id: 99,
-                generation: 1,
-                seconds: 0.5,
-                world: Transform::IDENTITY,
-                joints: Vec::new(),
-                rest: None,
-                ik_chains: Vec::new(),
-            },
-        ]);
-        assert_eq!(bridge.joint_poses.len(), 1, "only live instances are kept");
+        // The pose the first settle evaluated reads back in later calls, with
+        // the IK chain's target and how far the drawn hand is from it.
         bridge.begin_call();
         let pose = bridge.read_animation_joint_pose(instance).unwrap();
         assert!(pose.reported);
-        assert_eq!((pose.joints_len, pose.seconds), (joints.len(), 0.5));
+        assert_eq!((pose.joints_len, pose.seconds), (joints.len(), 0.0));
         let read = unsafe { *pose.joints.add(hand as usize) };
-        assert_eq!(
-            (read.model.translation.x, read.world.translation.x),
-            (1.0, 2.0)
+        assert!(
+            (read.world.translation.x - read.model.translation.x).abs() < 1e-5,
+            "placed at the origin"
         );
         assert_eq!(pose.ik_chains_len, 1);
         let chain = unsafe { *pose.ik_chains };
         assert_eq!(
-            (chain.target_world.x, chain.end_world.x, chain.shortfall),
-            (4.0, 3.0, 1.0)
+            (
+                chain.target_world.x,
+                chain.target_world.y,
+                chain.target_world.z
+            ),
+            (0.3, 1.4, 0.4)
         );
-        assert!(chain.straightened);
+        let reached = (chain.end_world.x - read.world.translation.x).abs() < 1e-5
+            && (chain.end_world.y - read.world.translation.y).abs() < 1e-5;
+        assert!(reached, "the chain ends at the drawn hand");
 
-        // Destroying the instance clears the controls it left on the target,
-        // and its object's reports.
+        // Destroying the instance clears the controls it left on the target;
+        // its pose goes with it.
         bridge.destroy_animation_instance(instance).unwrap();
         assert_eq!(pose_ops(&bridge), [AnimatedMeshPose::default()]);
-        assert!(bridge.joint_poses.is_empty());
-        let call = bridge.take_staged_call();
-        bridge.commit(call);
-        // A report the renderer evaluated before the destruction arrives late.
-        bridge.ingest_joint_poses([JointPoseReport {
-            object_id: 7,
-            generation: 1,
-            seconds: 0.75,
-            world: Transform::IDENTITY,
-            joints: vec![joint(1.0); joints.len()],
-            rest: None,
-            ik_chains: Vec::new(),
-        }]);
-        assert!(bridge.joint_poses.is_empty());
+        assert!(bridge.read_animation_joint_pose(instance).is_err());
+        end_call_posed(&mut bridge, &mut world, 0.25);
     }
 }

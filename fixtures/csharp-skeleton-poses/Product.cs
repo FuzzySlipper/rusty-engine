@@ -96,7 +96,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         // The character's hand has a thumb and an index finger only, so it has no palm landmark.
         rightHand = HandRig.FromJoints(rig.Span, BodyId, HandSide.Right, "RightHand",
             ["RightHandThumb1", "RightHandThumb2"], Finger, [], [], []);
-        engine.Animation.SetPose(AnimationPoseRequest.ReportOnly(instance));
         // Drawn only while inspection shows it: engine.inspect.overlay show.
         engine.Graphics.PublishOverlaySet(new(GuideSet, [
             OverlayItem.Segment(OverlayPlace.World, new(-1, 0, 0), new(1, 0, 0), GuideColor),
@@ -127,7 +126,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         Vector3 target = rest + (far ? FarOffset : CircleOffset) + CircleRadius * new Vector3(MathF.Cos(turn), MathF.Sin(turn), 0);
         TwoBoneIk[] ik = reaching ? [new(arm, forearm, hand, PoseSpace.World, target, rest + PoleOffset, 1)] : [];
         JointOverride[] overrides = [.. finger.Select(joint => JointOverride.AddLocalRotation(joint, FingerCurl, curl))];
-        engine.Animation.SetPose(new(instance, ik, overrides, true));
+        engine.Animation.SetPose(new(instance, ik, overrides));
         drawnTarget = reaching ? target : null;
         return ProductUpdateResult.None;
     }

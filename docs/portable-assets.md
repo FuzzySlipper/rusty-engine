@@ -102,7 +102,7 @@ directions, and repeated release/reload. `portable.inspect` reports its facts.
 
 An animated GLB can carry any number of clips and channels. Admission
 limits only what decoding the GLB's clips costs, since it decodes them
-whole and the renderer and pose sampling each keep a copy:
+whole and the Engine's pose evaluation keeps them:
 
 - 16 million keyframes in total, counting each channel's timestamps;
 - 32 million output values in total: 3 per translation or scale key, 4 per

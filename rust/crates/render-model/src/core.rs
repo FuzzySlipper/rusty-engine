@@ -1450,6 +1450,12 @@ pub enum RenderDiff {
         handle: RenderHandle,
         pose: crate::AnimatedMeshPose,
     },
+    /// The pose the Engine evaluated for the instance, replacing the last
+    /// one: what realizers draw it in.
+    SetEvaluatedPose {
+        handle: RenderHandle,
+        pose: crate::EvaluatedPose,
+    },
     CreateVoxelObjectInstance {
         handle: RenderHandle,
         parent: Option<RenderHandle>,
@@ -1575,6 +1581,7 @@ impl RenderFrameDiff {
                 | RenderDiff::SetAnimatedMeshInspection { .. }
                 | RenderDiff::SetAnimatedMeshPlayback { .. }
                 | RenderDiff::SetAnimatedMeshPose { .. }
+                | RenderDiff::SetEvaluatedPose { .. }
                 | RenderDiff::CreateVoxelObjectInstance { .. }
                 | RenderDiff::SetVoxelObjectFrame { .. }
                 | RenderDiff::CreateSprite { .. }

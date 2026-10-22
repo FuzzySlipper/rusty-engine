@@ -73,8 +73,21 @@ struct PresentationNode {
     material_parameters: BTreeMap<u16, MaterialInstanceParameters>,
     playback: render_model::PlaybackState,
     pose: render_model::AnimatedMeshPose,
+    /// The pose the Engine last evaluated for an animated node.
+    evaluated: Option<render_model::EvaluatedPose>,
     /// The world revision that last created or changed the node.
     changed: u64,
+}
+
+/// A retained node's place in the hierarchy ([`PresentationWorld::node_link`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct NodeLink<'a> {
+    pub parent: Option<RenderHandle>,
+    pub parent_joint: Option<&'a str>,
+    /// `None` for a node drawn at its parent (a light, a scatter patch).
+    pub transform: Option<&'a Transform>,
+    /// An animated mesh instance.
+    pub animated: bool,
 }
 
 /// A complete graphics baseline and the exact continuation point it represents.
@@ -368,6 +381,7 @@ fn group_node(node: &PresentationNode) -> PresentationNode {
         material_parameters: BTreeMap::new(),
         playback: node.playback.clone(),
         pose: Default::default(),
+        evaluated: None,
         changed: node.changed,
     }
 }
@@ -440,6 +454,19 @@ impl PresentationWorld {
         let node = *self.retained.entity_nodes.get(&entity)?.first()?;
         // The same composition the scene readouts report (`scene_readout.rs`).
         self.scene_world_translation(node)
+    }
+
+    /// How a retained node hangs in the scene: its parent, the parent's
+    /// joint it follows, and its own transform. A pose evaluator composes
+    /// an animated node's placement from these, supplying the joints.
+    pub fn node_link(&self, handle: RenderHandle) -> Option<NodeLink<'_>> {
+        let node = self.retained.nodes.get(&handle)?;
+        Some(NodeLink {
+            parent: node.parent,
+            parent_joint: node.parent_joint.as_deref(),
+            transform: node.kind.transform(),
+            animated: matches!(node.kind, NodeKind::AnimatedMesh(_)),
+        })
     }
 
     /// Apply admitted graphics in order to the caller-owned candidate.
@@ -1191,6 +1218,12 @@ impl PresentationWorld {
                 pose: node.pose.clone(),
             });
         }
+        if let Some(pose) = &node.evaluated {
+            ops.push(RenderDiff::SetEvaluatedPose {
+                handle,
+                pose: pose.clone(),
+            });
+        }
         emitted.insert(handle);
     }
 
@@ -1240,6 +1273,7 @@ impl PresentationWorld {
                 material_override: None,
                 material_parameters: BTreeMap::new(),
                 pose: Default::default(),
+                evaluated: None,
                 changed: self.revision.saturating_add(1),
             }),
         );
@@ -1457,6 +1491,13 @@ impl PresentationWorld {
                     return Err(PresentationWorldError::WrongNodeKind(*handle));
                 }
                 node.pose = pose.clone();
+            }
+            RenderDiff::SetEvaluatedPose { handle, pose } => {
+                let node = self.node_mut(*handle)?;
+                if !matches!(node.kind, NodeKind::AnimatedMesh(_)) {
+                    return Err(PresentationWorldError::WrongNodeKind(*handle));
+                }
+                node.evaluated = Some(pose.clone());
             }
             RenderDiff::SetVoxelObjectFrame { handle, frame } => {
                 match &mut self.node_mut(*handle)?.kind {

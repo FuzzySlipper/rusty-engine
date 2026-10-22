@@ -14,3 +14,7 @@ render-presentation.workspace = true
 glam.workspace = true
 # Animated mesh and clip-pack GLBs (the runtime admits them; this reads them).
 gltf = { workspace = true, features = ["extensions"] }
+
+[dev-dependencies]
+# Fixture GLBs admitted exactly as the runtime admits them.
+asset-import.workspace = true

@@ -18,7 +18,7 @@ pub const ANIMATION_TIMESTAMP_TICKS_PER_SECOND: u64 = 1_000_000;
 /// Keyframe timestamps one GLB's clips hold together (every channel's input
 /// accessor, counted per channel). With the value budget below this bounds
 /// what decoding a GLB's clips costs: admission decodes them as f64, and the
-/// renderer and pose sampling each keep them as f32. Clip and channel counts
+/// pose evaluation keeps them as f32. Clip and channel counts
 /// are not limited: a game character with 50 to 80 joints and several hundred
 /// clips of a few seconds at 30 fps is one GLB (a 60-joint, 715-clip guard is
 /// about 2.6 million keyframes and 9.5 million values). A larger animation set

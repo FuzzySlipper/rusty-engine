@@ -701,11 +701,12 @@ impl Renderer {
                 }
                 self.set_animated_inspection(*handle, inspection)?
             }
-            RenderDiff::SetAnimatedMeshPlayback { handle, playback } => {
-                self.set_animated_playback(*handle, playback)?
+            // What an instance plays and its pose controls are the Engine's
+            // to evaluate; the renderer draws the pose it evaluated.
+            RenderDiff::SetAnimatedMeshPlayback { .. } | RenderDiff::SetAnimatedMeshPose { .. } => {
             }
-            RenderDiff::SetAnimatedMeshPose { handle, pose } => {
-                self.set_animated_pose(*handle, pose)?
+            RenderDiff::SetEvaluatedPose { handle, pose } => {
+                self.set_evaluated_pose(*handle, pose)?
             }
         }
         Ok(())
@@ -3016,6 +3017,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetAnimatedMeshInspection { .. } => "setAnimatedMeshInspection",
         RenderDiff::SetAnimatedMeshPlayback { .. } => "setAnimatedMeshPlayback",
         RenderDiff::SetAnimatedMeshPose { .. } => "setAnimatedMeshPose",
+        RenderDiff::SetEvaluatedPose { .. } => "setEvaluatedPose",
         RenderDiff::CreateVoxelObjectInstance { .. } => "createVoxelObjectInstance",
         RenderDiff::SetVoxelObjectFrame { .. } => "setVoxelObjectFrame",
         RenderDiff::CreateSprite { .. } => "createSprite",

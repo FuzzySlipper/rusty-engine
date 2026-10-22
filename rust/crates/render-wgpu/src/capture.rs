@@ -161,7 +161,6 @@ impl Renderer {
             exposure,
             aces_filmic,
             samples,
-            pose,
         } = &job.operation
         else {
             return Err("capture: a GLB job goes to render-export's `export_glb`".to_owned());
@@ -198,18 +197,6 @@ impl Renderer {
         isolated.tables.tone_mapping = render_model::ToneMappingDescriptor::NONE;
         isolated.tables.auto_exposure = None;
         isolated.tables.color_grading = None;
-        // A pose job samples one animated instance of the frozen scene.
-        if let Some(pose) = pose {
-            isolated
-                .set_animated_playback(
-                    pose.handle,
-                    &render_model::AnimatedMeshPlaybackCommand::Sample {
-                        clip: pose.clip.clone(),
-                        normalized_time: pose.normalized_time as f32,
-                    },
-                )
-                .map_err(|detail| format!("capture: pose sample: {detail}"))?;
-        }
         let use_environment =
             *use_camera_background && !matches!(isolated.tables.environment, Environment::Default);
         let capture = isolated.capture(&CaptureRequest {

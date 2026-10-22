@@ -15,8 +15,7 @@ uint finger = AnimationJoints.IndexOf(rig, "RightHandIndex1");
 // Every update, with the clips still playing underneath:
 engine.Animation.SetPose(new(instance,
     new TwoBoneIk[] { new(arm, forearm, hand, PoseSpace.World, doorHandle, elbowPole, Weight: 1) },
-    new[] { JointOverride.AddLocalRotation(finger, curl, gripWeight) },
-    ReportJoints: true));
+    new[] { JointOverride.AddLocalRotation(finger, curl, gripWeight) }));
 
 // The next update: the pose drawn for this one.
 AnimationJointPoseResult drawn = engine.Animation.ReadJointPose(instance);
@@ -24,7 +23,7 @@ Vector3 handAt = drawn.Joints.Span[(int)hand].World.Translation;
 ```
 
 `fixtures/csharp-skeleton-poses` reaches a circling target with a fixed pole,
-curls a finger over the idle clip, and checks the reported hand against the
+curls a finger over the idle clip, and checks the drawn hand against the
 target it was given (`pose.inspect`, `pose.curl <0..1>`, `pose.reach <bool>`,
 `pose.far <bool>` for a target beyond reach).
 
@@ -99,7 +98,7 @@ engine.Animation.SetLayers(layers.ToRequest(instance));
 
 Times are fractions of the clip by default, or seconds with `normalized:
 false`. Layers are evaluated before IK and joint overrides, by the same code
-in the renderer and in `SampleJointPose` of the current playback. A sample
+for the drawn pose and in `SampleJointPose` of the current playback. A sample
 of an explicit clip time does not include them. `fixtures/csharp-animation-layers`
 lays a waving arm at half weight and an additive nod over a run.
 
@@ -145,14 +144,16 @@ left on its object. A joint index outside the rig, an IK chain that does not
 descend, or a value out of range is refused with `CSHARP_ANIMATION_POSE`, and
 the previous controls stay.
 
-With `ReportJoints`, the renderer evaluates the instance when each call is
-applied and reports its joints before the next call, whether or not a frame
-is drawn. `ReadJointPose` returns the latest report:
+The Engine evaluates each animated instance's pose once, as each call
+settles, at the time the call reached (`animation-pose`'s `AnimatedScene`,
+kept with the services' appearance state). Every realizer draws that pose,
+the renderer included, and nothing evaluates it again. `ReadJointPose`
+returns it, whether or not a frame is drawn:
 
 - the pose drawn for the previous call, which is the clip time and the
   controls of that call;
 - each joint's transform in the instance's space (`Model`) and in the scene
-  (`World`), reported again whenever the instance or a parent moves;
+  (`World`), placed again whenever the instance or a parent moves;
 - the instance's world placement, and the Engine time it was evaluated at;
 - `IkChains`, one per `TwoBoneIk` in the order given, from the solve that ran:
   the target and the end joint as drawn (after overrides and layers), each in
@@ -162,19 +163,23 @@ is drawn. `ReadJointPose` returns the latest report:
   A product that labels a pose out of reach reads these instead of comparing
   joints with the targets it sent.
 
-`Reported` stays false until the first report. Reports need the renderer, so
-the headless test host (`EngineTestHost`) has none.
+`Reported` stays false until a call that published the instance has
+settled. No renderer is needed, so the headless test host (`EngineTestHost`)
+reads poses, spawns ragdolls and cuts severed parts as a running product
+does.
 
 ## Sampling at simulation time
 
-`SampleJointPose` poses an instance now, without the renderer and without
-waiting a call: either a given clip time, or what the instance plays at the
-time the call is drawn at. It uses the evaluator and the playback state the
-renderer draws with, so it gives the joints `ReadJointPose` would report for
-the same controls and placement. Hit shapes and held items can then follow the bones during the update
+`SampleJointPose` poses an instance now, without waiting a call: either a
+given clip time, or what the instance plays at the time the call is drawn
+at. It uses the evaluator and the playback state the drawn pose comes from,
+so it gives the joints `ReadJointPose` will read for the same controls and
+placement. Hit shapes and held items can then follow the bones during the update
 that decides them, in the test host as well. See
 [contact queries](contact-queries.md#pose-sampling).
 
-A reporting instance is evaluated, and its CPU skinning runs, on every call
-instead of only on frames that show a change. Turn reporting off when nothing
-reads the pose.
+A pose is evaluated only when it can change: while a clip plays or fades,
+while a controller drives it, after a command, or when the instance moves and
+its controls read its placement. An unchanged pose is not sent to realizers
+again, and the renderer's CPU skinning runs only on frames that show a new
+pose.

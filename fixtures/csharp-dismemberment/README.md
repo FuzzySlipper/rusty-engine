@@ -24,6 +24,6 @@ Live-debug commands:
   from the scene without disposing the pieces; the Engine releases them.
   `cut.spawn` brings the character back whole.
 - `cut.inspect` reports the Dynamics world's body count after the last step,
-  the character's latest reported pose time and left foot (it keeps
+  the character's latest evaluated pose time and left foot (it keeps
   running), and each piece: where it is, whether it rests and how many steps
   after its cut it came to rest, or `released`.

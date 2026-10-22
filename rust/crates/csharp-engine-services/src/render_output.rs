@@ -10,8 +10,7 @@ use crate::{
     CsharpEngineServicesError,
 };
 use csharp_engine_abi::*;
-use render_host_contracts::{RenderOutputJob, RenderOutputOperation, RenderOutputPose};
-use render_model::RenderHandle;
+use render_host_contracts::{RenderOutputJob, RenderOutputOperation};
 use std::{
     collections::BTreeMap,
     ffi::c_void,
@@ -30,12 +29,20 @@ enum Request {
         exposure: f32,
         aces_filmic: bool,
         samples: u32,
-        pose: Option<RenderOutputPose>,
+        pose: Option<OutputPose>,
     },
     Glb {
         source: u64,
         include_animations: bool,
     },
+}
+/// An image of one animated instance of the source posed by a clip.
+#[derive(Clone)]
+struct OutputPose {
+    object: u64,
+    clip: String,
+    /// A fraction of the clip.
+    normalized_time: f32,
 }
 #[derive(Clone)]
 struct Entry {
@@ -175,14 +182,14 @@ impl RuntimeRenderOutputBridge {
         } else {
             let clip = unsafe { borrowed_utf8(r.pose_clip.bytes, r.pose_clip.len, "pose clip") }?
                 .to_owned();
-            Some(RenderOutputPose {
-                handle: RenderHandle::new(r.pose_object_id),
+            Some(OutputPose {
+                object: r.pose_object_id,
                 clip,
                 // Within the clip; NaN takes its start.
                 normalized_time: if r.pose_time.is_nan() {
                     0.0
                 } else {
-                    r.pose_time.clamp(0.0, 1.0)
+                    r.pose_time.clamp(0.0, 1.0) as f32
                 },
             })
         };
@@ -285,7 +292,7 @@ impl RuntimeRenderOutputBridge {
                 continue;
             };
             let settled = (|| -> Result<RenderOutputJob, CsharpEngineServicesError> {
-                let (source, operation) = match request {
+                let (source, operation, pose) = match request {
                     Request::Image {
                         source,
                         camera,
@@ -308,22 +315,19 @@ impl RuntimeRenderOutputBridge {
                             exposure,
                             aces_filmic,
                             samples,
-                            pose,
                         },
+                        pose,
                     ),
                     Request::Glb {
                         source,
                         include_animations,
-                    } => (source, RenderOutputOperation::Glb { include_animations }),
+                    } => (
+                        source,
+                        RenderOutputOperation::Glb { include_animations },
+                        None,
+                    ),
                 };
                 let source = appearance.output_object_handle(source)?;
-                let mut operation = operation;
-                if let RenderOutputOperation::Image {
-                    pose: Some(pose), ..
-                } = &mut operation
-                {
-                    pose.handle = appearance.output_object_handle(pose.handle.raw())?;
-                }
                 let retain_background = matches!(
                     &operation,
                     RenderOutputOperation::Image {
@@ -331,9 +335,26 @@ impl RuntimeRenderOutputBridge {
                         ..
                     }
                 );
-                let frame = world
+                let mut frame = world
                     .capture_output_scene(source, retain_background)
                     .map_err(|cause| error(format!("capture scene: {cause:?}")))?;
+                // A posed image draws its instance in the clip's pose.
+                if let Some(pose) = pose {
+                    let handle = appearance.output_object_handle(pose.object)?;
+                    let posed = appearance
+                        .poses
+                        .sample_clip(handle, &pose.clip, pose.normalized_time, world)
+                        .ok_or_else(|| {
+                            error(format!(
+                                "capture: pose sample: object {} is not a posed animated mesh",
+                                pose.object
+                            ))
+                        })?;
+                    frame.push(render_model::RenderDiff::SetEvaluatedPose {
+                        handle,
+                        pose: posed,
+                    });
+                }
                 Ok(RenderOutputJob {
                     id,
                     source,
@@ -489,6 +510,8 @@ pub(crate) fn api(b: &mut RuntimeRenderOutputBridge) -> NativeRenderOutputApi {
 
 #[cfg(test)]
 mod tests {
+    use render_model::RenderHandle;
+
     use super::*;
 
     fn work(bridge: &RuntimeRenderOutputBridge, id: u64) -> RenderOutputWork {

@@ -283,41 +283,17 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use render_model::{PosedJoint, RenderDiff};
+    use render_model::RenderDiff;
 
     use super::*;
-    use crate::appearance::{character_for_test, cuts_for_test, JointPoseReport};
+    use crate::appearance::{
+        character_for_test, cuts_for_test, end_call_posed, place_character_for_test,
+    };
 
     const BODY_GLB: &[u8] =
         include_bytes!("../../../../../fixtures/csharp-joint-attachments/content/body.glb");
     const TICK: f32 = 1.0 / 60.0;
     const NO_END_JOINT: u32 = u32::MAX;
-
-    /// Every joint at `height`, moving up at 0.6 m/s between two reports.
-    fn report(joints: usize, seconds: f64, height: f32, rest: bool) -> JointPoseReport {
-        let at = |height: f32| {
-            let transform = Transform {
-                translation: [0.0, height, 0.0],
-                ..Transform::IDENTITY
-            };
-            vec![
-                PosedJoint {
-                    model: transform,
-                    world: transform,
-                };
-                joints
-            ]
-        };
-        JointPoseReport {
-            object_id: 7,
-            generation: 1,
-            seconds,
-            world: Transform::IDENTITY,
-            joints: at(height),
-            rest: rest.then(|| at(1.5)),
-            ik_chains: Vec::new(),
-        }
-    }
 
     fn step(dynamics: &mut RuntimeDynamicsBridge, world: NativeDynamicsWorldHandle, steps: u32) {
         let actions: [NativeDynamicsAction; 0] = [];
@@ -338,6 +314,9 @@ mod tests {
             Default::default(),
             BTreeMap::from([("body.glb".to_owned(), Arc::<[u8]>::from(BODY_GLB))]),
         );
+        let mut scene = render_presentation::PresentationWorld::default();
+        scene.advance_elapsed(1.0);
+        appearance.set_presentation_clock(1.0, 0.0);
         appearance.begin_call();
         let (instance, joints) = character_for_test(&mut appearance);
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
@@ -378,17 +357,24 @@ mod tests {
             linear_damping: 0.0,
             angular_damping: 0.0,
         };
-        let unreported = dynamics.create_severed_part(request("Head")).unwrap_err();
-        assert_eq!(unreported.code(), "CSHARP_SEVERED_PART_POSE");
-        let call = appearance.take_staged_call();
-        appearance.commit(call);
-        appearance.ingest_joint_poses([
-            report(joints.len(), 1.0, 1.5, true),
-            report(joints.len(), 1.0 + 1.0 / 60.0, 1.51, false),
-        ]);
+        // Published this call, the instance has no evaluated pose yet.
+        let unposed = dynamics.create_severed_part(request("Head")).unwrap_err();
+        assert_eq!(unposed.code(), "CSHARP_SEVERED_PART_POSE");
+        end_call_posed(&mut appearance, &mut scene, 0.0);
+        // Evaluated a tick apart, 1 cm higher: the pose rises at 0.6 m/s.
+        appearance.set_presentation_clock(1.0, 1.0 / 60.0);
+        appearance.begin_call();
+        place_character_for_test(&mut appearance, instance, 0.01);
+        end_call_posed(&mut appearance, &mut scene, 1.0 / 60.0);
 
         appearance.begin_call();
         dynamics.bind_appearance(&mut appearance);
+        let drawn = appearance
+            .ragdoll_source(instance.value, "CSHARP_SEVERED_PART_POSE")
+            .unwrap()
+            .latest
+            .joints[joints["Head"] as usize]
+            .world;
         let head = dynamics.create_severed_part(request("Head")).unwrap();
         // Cut where the joint was drawn, moving as the pose moved plus the push.
         let cuts = cuts_for_test(&appearance, instance).unwrap();
@@ -397,7 +383,7 @@ mod tests {
             (cuts[0].joint, cuts[0].pose.len()),
             (joints["Head"], joints.len())
         );
-        assert!((cuts[0].placement.translation[1] - 1.51).abs() < 1e-5);
+        assert!((cuts[0].placement.translation[1] - drawn.translation[1]).abs() < 1e-5);
         let SeveredSlot::Active(part) = &dynamics.severed_parts[&head.value] else {
             unreachable!()
         };

@@ -210,15 +210,17 @@ cat > "$tests/ConsumerTests.csproj" <<'EOF'
 </Project>
 EOF
 cat > "$tests/Program.cs" <<'EOF'
-EngineTestHostChecks.Run(args[0], File.ReadAllBytes(args[1]));
+EngineTestHostChecks.Run(args[0], File.ReadAllBytes(args[1]), File.ReadAllBytes(args[2]));
 Console.WriteLine("engine test host checks passed");
 EOF
 cp "$repo_root/scripts/fixtures/EngineTestHostChecks.cs" "$tests/EngineTestHostChecks.cs"
+# The ragdoll fixture's character, for the headless fall.
+cp "$repo_root/fixtures/csharp-joint-attachments/content/body.glb" "$tests/body.glb"
 (
     cd "$tests"
     DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
         dotnet run --project ConsumerTests.csproj -p:RustyEngineCache="$work/cache" -- \
-        "$work/test-host-persistence" "$consumer/content/Textures/wall_lines.png"
+        "$work/test-host-persistence" "$consumer/content/Textures/wall_lines.png" "$tests/body.glb"
 ) | tee "$work/test-host.log"
 grep -Fx 'engine test host checks passed' "$work/test-host.log" >/dev/null || {
     echo "RUSTY_ENGINE_PAIR_TEST_HOST: the consumer test project did not complete the Engine test host checks" >&2

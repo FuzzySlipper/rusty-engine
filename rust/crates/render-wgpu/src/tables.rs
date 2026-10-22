@@ -12,8 +12,8 @@
 //! | `atlases` | atlas name id (`names`) | retained descriptor and its texture's name id | `DefineSpriteAtlas` / `ReleaseSpriteAtlas` |
 //! | `names` | asset or texture id | dense name id, assigned at apply | any op naming an atlas or sprite texture |
 //! | `voxel_objects` | voxel object asset id | uploaded meshes, frame-to-mesh table, slot materials | `DefineVoxelObject` / `ReleaseVoxelObject` |
-//! | `animated_assets` | animated mesh asset id | decoded GLB (nodes, skins, clips), uploaded unskinned primitives, GLB materials and textures | `DefineAnimatedMesh` / `ReleaseAnimatedMesh` |
-//! | `animated` | `RenderHandle` | playback, pose, skinned vertex buffers | `CreateAnimatedMeshInstance`, `SetAnimatedMeshPlayback`, `SetAnimatedMeshInspection` |
+//! | `animated_assets` | animated mesh asset id | decoded GLB (nodes, skins, rest pose), uploaded unskinned primitives, GLB materials and textures | `DefineAnimatedMesh` / `ReleaseAnimatedMesh` |
+//! | `animated` | `RenderHandle` | the evaluated pose it draws, skinned vertex buffers | `CreateAnimatedMeshInstance`, `SetEvaluatedPose`, `SetAnimatedMeshInspection` |
 //! | `environment` | (single) | background colour or equirectangular sky (with blend) | `SetBackgroundColor` / `SetSkyBackground` |
 //! | `fog`, `tone_mapping` | (single) | distance fog; exposure and tone mapping operator | `SetFog` / `SetToneMapping` |
 //! | `bloom`, `auto_exposure` | (single) | the finish pass's bloom and auto exposure | `SetBloom` / `SetAutoExposure` |
@@ -56,7 +56,7 @@ use render_model::{
     ToneMappingDescriptor, VoxelObjectInstanceDescriptor,
 };
 
-use crate::animated::{AnimatedAssetRow, AnimatedInstance, ControllerRow};
+use crate::animated::{AnimatedAssetRow, AnimatedInstance};
 use crate::voxel::VoxelObjectRow;
 
 pub(crate) struct GpuTexture {
@@ -304,9 +304,6 @@ pub(crate) enum NodeKind {
 /// kind, and the node's parts. Gameplay-facing facts, entity or product
 /// identities and anything read back by another crate do not belong here and
 /// are refused at review.
-/// World matrices are propagated here each frame (dirty subtrees only)
-/// because joint attachments follow poses only this crate evaluates; other
-/// consumers ask `PresentationWorld` for positions instead (#8848).
 /// Dense ids for atlas and texture names, assigned at apply time so frame
 /// paths index and compare integers instead of hashing strings. An id stays
 /// bound to its name; the table grows with the distinct names seen.
@@ -811,11 +808,6 @@ pub(crate) struct Tables {
     pub voxel_objects: Slots<VoxelObjectRow>,
     pub animated_assets: Slots<AnimatedAssetRow>,
     pub animated: HashMap<RenderHandle, AnimatedInstance>,
-    /// Animation controllers by projection handle.
-    pub controllers: HashMap<u64, ControllerRow>,
-    /// The controllers driving each animated instance, by target; the first
-    /// poses it.
-    pub controlled: HashMap<RenderHandle, BTreeSet<u64>>,
     /// The nodes whose parts name each asset or material (`names` id),
     /// whether it is defined or not: defining, redefining or releasing it
     /// re-derives these nodes and no others.
@@ -913,8 +905,6 @@ impl Tables {
             voxel_objects: Slots::default(),
             animated_assets: Slots::default(),
             animated: HashMap::new(),
-            controllers: HashMap::new(),
-            controlled: HashMap::new(),
             users: HashMap::new(),
             environment: Environment::Default,
             fog: None,

@@ -12,9 +12,9 @@
 //! receives them: it shows the frames, or lets the window show through, under
 //! the product UI. Video plays in these frames, above the UI.
 //!
-//! Animation, video and ghost plate facts reach the Engine from this
-//! renderer, drawn or not: an unwatched stream advances clips and video on
-//! Engine time without drawing (#8871).
+//! Animation bounds, video and ghost plate facts reach the Engine from this
+//! renderer, drawn or not: an unwatched stream advances video on Engine time
+//! without drawing (#8871). Poses are evaluated by the Engine, not here.
 //!
 //! Playtest inspection reaches the streamed renderer through Engine debug
 //! commands (the window takes only the observer camera):
@@ -35,7 +35,7 @@ use csharp_engine_abi::{
 };
 use csharp_engine_services::{
     renderer_settings_request, AnimationRealizationFact, EngineServiceSet,
-    GhostPlateRealizationFact, JointPoseReport, VideoRealizationFact,
+    GhostPlateRealizationFact, VideoRealizationFact,
 };
 use product_host::RuntimePublication;
 use product_host::{
@@ -85,7 +85,6 @@ pub(crate) struct FrameOutput {
     driver: Arc<SceneDriver>,
     /// The stream's render thread and frame route, when frames are streamed.
     stream: Option<(Arc<FrameStreamer>, Arc<ProductHostFrameStream>)>,
-    next_fact_id: u64,
     next_video_fact_id: u64,
     /// When the renderer statistics C# reads (`Diagnostics.ReadRenderer`)
     /// were last refreshed.
@@ -219,7 +218,6 @@ impl FrameOutput {
             window: stream.is_none().then(Arc::default),
             driver,
             stream,
-            next_fact_id: 1,
             next_video_fact_id: 1,
             statistics_reported: None,
             input_steps: VecDeque::with_capacity(RECENT_INPUTS),
@@ -366,31 +364,12 @@ impl FrameOutput {
     /// Call between product calls.
     pub(crate) fn report(&mut self, services: &mut EngineServiceSet) {
         services.ingest_renderer_settings(self.settings_readout());
-        let mut poses = Vec::new();
-        let mut facts = Vec::new();
-        for fact in self.driver.take_animation_facts() {
-            match fact {
-                AnimationFact::JointPose {
-                    object_id,
-                    generation,
-                    seconds,
-                    world,
-                    joints,
-                    rest,
-                    ik_chains,
-                } => poses.push(JointPoseReport {
-                    object_id,
-                    generation,
-                    seconds,
-                    world,
-                    joints,
-                    rest,
-                    ik_chains,
-                }),
-                fact => facts.extend(self.engine_fact(fact)),
-            }
-        }
-        services.ingest_joint_poses(poses);
+        let facts: Vec<_> = self
+            .driver
+            .take_animation_facts()
+            .into_iter()
+            .map(engine_fact)
+            .collect();
         let (step, sets) = self.driver.landmark_sets();
         services.ingest_landmarks(step, sets.into_iter().map(landmark_report).collect());
         for chunk in facts.chunks(MAX_FACTS_PER_REPORT) {
@@ -764,42 +743,25 @@ impl FrameOutput {
             .map(|(at, step)| timed_step(*at, *step))
             .collect()
     }
+}
 
-    /// A realization fact; joint poses are reported apart (`report`).
-    fn engine_fact(&mut self, fact: AnimationFact) -> Option<AnimationRealizationFact> {
-        if matches!(fact, AnimationFact::JointPose { .. }) {
-            return None;
-        }
-        let fact_id = self.next_fact_id;
-        self.next_fact_id += 1;
-        Some(match fact {
-            AnimationFact::NaturalCompletion {
-                object_id,
-                generation,
-                clip,
-            } => AnimationRealizationFact::NaturalCompletion {
-                fact_id,
-                object_id,
-                generation,
-                clip,
-            },
-            AnimationFact::MeshInspection {
-                object_id,
-                generation,
-                request,
-                bounds,
-            } => AnimationRealizationFact::MeshInspection {
-                fact_id,
-                object_id,
-                generation,
-                request,
-                bounds_min: bounds.map_or([0.0; 3], |(min, _)| min),
-                bounds_max: bounds.map_or([0.0; 3], |(_, max)| max),
-                has_bounds: bounds.is_some(),
-                voxel_normal_meshes: 0,
-            },
-            AnimationFact::JointPose { .. } => return None,
-        })
+/// A renderer's animation fact as the Engine reports it.
+fn engine_fact(fact: AnimationFact) -> AnimationRealizationFact {
+    match fact {
+        AnimationFact::MeshInspection {
+            object_id,
+            generation,
+            request,
+            bounds,
+        } => AnimationRealizationFact::MeshInspection {
+            object_id,
+            generation,
+            request,
+            bounds_min: bounds.map_or([0.0; 3], |(min, _)| min),
+            bounds_max: bounds.map_or([0.0; 3], |(_, max)| max),
+            has_bounds: bounds.is_some(),
+            voxel_normal_meshes: 0,
+        },
     }
 }
 

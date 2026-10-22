@@ -166,7 +166,7 @@ public sealed class FirstPersonArms : IDisposable
             overrides.Add(JointOverride.Orient(side.Hand, PoseSpace.Model, Quaternion.Normalize(unturn * turn * side.Frame)));
             overrides.AddRange(side.Close(rig, arms.Hands, hand.Shape, hand.Closure).Select(t => JointOverride.AddLocalRotation(t.Joint, t.Turn)));
         }
-        engine.Animation.SetPose(new(instance, chains.ToArray(), overrides.ToArray(), true));
+        engine.Animation.SetPose(new(instance, chains.ToArray(), overrides.ToArray()));
     }
 
     /// <summary>

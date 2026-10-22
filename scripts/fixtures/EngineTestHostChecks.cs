@@ -8,7 +8,7 @@ using Rusty.Engine.Testing;
 // refuse what a running product would have refused.
 internal static class EngineTestHostChecks
 {
-    public static void Run(string persistenceRoot, ReadOnlyMemory<byte> png, string? library = null)
+    public static void Run(string persistenceRoot, ReadOnlyMemory<byte> png, ReadOnlyMemory<byte> body, string? library = null)
     {
         using var host = EngineTestHost.Create(new EngineTestHostOptions
         {
@@ -21,6 +21,7 @@ internal static class EngineTestHostChecks
                 ["shaders/broken.wgsl"] = System.Text.Encoding.UTF8.GetBytes(TintShader.Replace("surface.base", "missing")),
                 ["meshes/triangle.json"] = System.Text.Encoding.UTF8.GetBytes(TriangleMesh),
                 ["models/prop.glb"] = TwoCubeProp(),
+                ["models/body.glb"] = body,
             },
             LibraryPath = library,
         });
@@ -271,7 +272,112 @@ internal static class EngineTestHostChecks
             ExpectRefusal(() => engine.Host.RequestExit(), "ENGINE_HOST_EXIT_UNAVAILABLE");
         });
 
+        RagdollFall(host);
         Bundles(library);
+    }
+
+    // Nothing is drawn, yet a character published in one call has a pose in
+    // the next: the csharp-ragdoll fixture's fall (its bones, links and hit)
+    // runs headless, falls, rests on the floor and reads back (#10223).
+    private static void RagdollFall(EngineTestHost host)
+    {
+        const float FloorHalfSize = 10, TickSeconds = 1f / 60;
+        const int Ticks = 480, HitBone = 1;
+        RenderResource? resource = null;
+        AnimationInstance? instance = null;
+        host.Call(engine =>
+        {
+            resource = engine.Animation.OpenAnimatedMesh(new("models/body.glb"));
+            Appearance body = engine.Animation.CreateAnimatedMeshAppearance(new(resource));
+            engine.Graphics.PublishSnapshot(new AppearanceFact[]
+            {
+                new(9785, false, 0, new(Vector3.Zero, Quaternion.Identity, Vector3.One), body, true, RenderLayer.Scene),
+            });
+            instance = engine.Animation.CreateInstance(new(body, 9785));
+            engine.Animation.SetPlayback(new(instance, AnimationPlaybackKind.Sample, "idle", AnimationLoopMode.Repeat, 1, 1, true, 0, false, 0.3f));
+        });
+        host.Call(engine =>
+        {
+            AnimationJointPoseResult drawn = engine.Animation.ReadJointPose(instance!);
+            Require(drawn.Reported, "A published character had no pose without a renderer.");
+            ReadOnlySpan<AnimationJointInfo> rig = engine.Animation.ReadJoints(resource!).Span;
+            uint Joint(ReadOnlySpan<AnimationJointInfo> joints, string? id) =>
+                id is null ? DynamicsRagdollBone.NoEndJoint : AnimationJoints.IndexOf(joints, id);
+            (string Joint, string? End, float Length, DynamicsRagdollShape Shape, float Radius, float HalfDepth, float Mass)[] described =
+            [
+                ("Hips", "Spine", 0, DynamicsRagdollShape.Box, 0.26f, 0.16f, 12),
+                ("Spine", "Neck", 0, DynamicsRagdollShape.Box, 0.3f, 0.18f, 24),
+                ("Head", null, 0.5f, DynamicsRagdollShape.Capsule, 0.24f, 0, 6),
+                ("LeftArm", "LeftForeArm", 0, DynamicsRagdollShape.Capsule, 0.09f, 0, 3),
+                ("LeftForeArm", "LeftHand", 0, DynamicsRagdollShape.Capsule, 0.08f, 0, 2),
+                ("RightArm", "RightForeArm", 0, DynamicsRagdollShape.Capsule, 0.09f, 0, 3),
+                ("RightForeArm", "RightHand", 0, DynamicsRagdollShape.Capsule, 0.08f, 0, 2),
+                ("LeftUpLeg", "LeftLeg", 0, DynamicsRagdollShape.Capsule, 0.11f, 0, 8),
+                ("LeftLeg", "LeftFoot", 0, DynamicsRagdollShape.Capsule, 0.09f, 0, 4),
+                ("RightUpLeg", "RightLeg", 0, DynamicsRagdollShape.Capsule, 0.11f, 0, 8),
+                ("RightLeg", "RightFoot", 0, DynamicsRagdollShape.Capsule, 0.09f, 0, 4),
+            ];
+            var bones = new DynamicsRagdollBone[described.Length];
+            for (int index = 0; index < bones.Length; index++)
+            {
+                var bone = described[index];
+                bones[index] = new(Joint(rig, bone.Joint), Joint(rig, bone.End), bone.Length, bone.Shape, bone.Radius, bone.HalfDepth, bone.Mass);
+            }
+            DynamicsJointLimits elbow = DynamicsJointLimits.Hinge(0, 2.5f, 2), knee = DynamicsJointLimits.Hinge(0, 2.4f, 2);
+            DynamicsRagdollLink[] links =
+            [
+                new(0, 1, Vector3.UnitY, DynamicsJointLimits.Cone(0.5f, -0.3f, 0.3f, 2)),
+                new(1, 2, Vector3.UnitY, DynamicsJointLimits.Cone(0.6f, -0.6f, 0.6f, 2)),
+                new(1, 3, Vector3.UnitY, DynamicsJointLimits.Cone(1.4f, -0.8f, 0.8f, 2)),
+                new(3, 4, Vector3.UnitX, elbow),
+                new(1, 5, Vector3.UnitY, DynamicsJointLimits.Cone(1.4f, -0.8f, 0.8f, 2)),
+                new(5, 6, Vector3.UnitZ, elbow),
+                new(0, 7, Vector3.UnitY, DynamicsJointLimits.Cone(1.2f, -0.4f, 0.4f, 2)),
+                new(7, 8, Vector3.UnitX, knee),
+                new(0, 9, Vector3.UnitY, DynamicsJointLimits.Cone(1.2f, -0.4f, 0.4f, 2)),
+                new(9, 10, Vector3.UnitX, knee),
+            ];
+            SpatialSession spatial = engine.Spatial.CreateSession(new SpatialSessionConfig(1.0, 16, VoxelSurfaceMode.GreedyCubes));
+            engine.Spatial.ReplaceCollision(new CollisionReplaceRequest(
+                spatial,
+                new[] { new StaticMeshAsset(1, 0, 4, 0, 2) },
+                new[]
+                {
+                    new Vector3(-FloorHalfSize, 0, -FloorHalfSize),
+                    new Vector3(FloorHalfSize, 0, -FloorHalfSize),
+                    new Vector3(FloorHalfSize, 0, FloorHalfSize),
+                    new Vector3(-FloorHalfSize, 0, FloorHalfSize),
+                },
+                new[] { new Triangle(0, 2, 1), new Triangle(0, 3, 2) },
+                new[] { new StaticMeshInstance(1, 1, new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One)) }));
+            DynamicsWorld world = engine.Dynamics.CreateWorld(new DynamicsWorldConfig(new Vector3(0, -9.81f, 0)));
+            engine.Dynamics.BindWorldCollision(new DynamicsWorldCollisionBindingRequest(world, spatial));
+            DynamicsRagdoll ragdoll = engine.Dynamics.CreateRagdoll(new(world, instance!, bones, links, 1, uint.MaxValue, 0.8f, 0, 0.05f, 0.3f, 1));
+            Transform[] spawned = engine.Dynamics.ReadRagdoll(ragdoll).Bones.ToArray();
+            Vector3 hips = drawn.Joints.Span[(int)Joint(rig, "Hips")].World.Translation;
+            Require(Vector3.Distance(spawned[0].Translation, hips) < 1e-3f,
+                $"The hips spawned at {spawned[0].Translation}, not where they were drawn ({hips}).");
+            Transform chest = spawned[HitBone];
+            engine.Dynamics.ApplyRagdollImpulse(new(ragdoll, HitBone,
+                chest.Translation + Vector3.Transform(new Vector3(0.05f, 0.4f, 0.1f), chest.Rotation), new Vector3(0, 0, -110)));
+            int? restedAt = null;
+            float lowest = float.MaxValue;
+            for (int tick = 1; tick <= Ticks; tick++)
+            {
+                engine.Dynamics.Step(new(world, TickSeconds, 1, ReadOnlyMemory<DynamicsAction>.Empty));
+                DynamicsRagdollResult read = engine.Dynamics.ReadRagdoll(ragdoll);
+                if (read.Resting) restedAt ??= tick;
+                foreach (Transform bone in read.Bones.Span) lowest = MathF.Min(lowest, bone.Translation.Y);
+            }
+            Transform[] fallen = engine.Dynamics.ReadRagdoll(ragdoll).Bones.ToArray();
+            Require(restedAt is not null, $"The ragdoll did not rest within {Ticks} steps.");
+            Require(fallen[0].Translation.Y < spawned[0].Translation.Y - 0.4f,
+                $"The hips did not fall: {spawned[0].Translation} to {fallen[0].Translation}.");
+            Require(lowest > -0.05f, $"A bone's joint went through the floor: {lowest}.");
+            ragdoll.Dispose();
+            world.Dispose();
+            spatial.Dispose();
+        });
     }
 
     // One triangle: a content static mesh the Engine stages as an internal

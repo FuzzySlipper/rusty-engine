@@ -1,8 +1,8 @@
 //! What an animated instance plays at a time through direct playback: the
 //! current playback and a prior one fading out under it, as weighted clip
-//! times. The renderer poses from this, the retained presentation world
-//! keeps it for a renderer built anew, and the Engine services sample an
-//! instance's current playback from it.
+//! times. The Engine's pose evaluation (`animation-pose`) poses from this,
+//! the retained presentation world keeps it, and the Engine services sample
+//! an instance's current playback from it.
 //!
 //! Clips are named by descriptor id; [`DirectPlayback::resolve`] binds them
 //! to a clip table's indices, which [`PlaybackState::actions`] reads.

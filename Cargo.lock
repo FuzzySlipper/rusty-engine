@@ -164,6 +164,7 @@ dependencies = [
 name = "animation-pose"
 version = "0.1.0"
 dependencies = [
+ "asset-import",
  "glam 0.33.12",
  "gltf",
  "render-model",
@@ -5733,6 +5734,7 @@ dependencies = [
 name = "render-export"
 version = "0.1.0"
 dependencies = [
+ "animation-pose",
  "asset-import",
  "bytemuck",
  "gltf",

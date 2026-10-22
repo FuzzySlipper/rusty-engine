@@ -83,7 +83,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         SpawnCharacter();
     }
 
-    /// <summary>Publish the character running in place, reporting its joints so it can be cut.</summary>
+    /// <summary>Publish the character running in place; it can be cut once the Engine has posed it.</summary>
     private void SpawnCharacter()
     {
         var facts = new List<AppearanceFact>
@@ -95,7 +95,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.Graphics.PublishSnapshot(facts.ToArray());
         instance = engine.Animation.CreateInstance(new(body, BodyId));
         engine.Animation.SetPlayback(new(instance, AnimationPlaybackKind.Play, Run, AnimationLoopMode.Repeat, 1, 1, true, 0, false, 0));
-        engine.Animation.SetPose(AnimationPoseRequest.ReportOnly(instance));
     }
 
     public ProductUpdateResult Update(ProductUpdate update)

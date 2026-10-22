@@ -188,7 +188,7 @@ impl CsharpProductRuntime {
     ) -> Result<ProductHostRuntimeReceipt<ProductHostDebugResult>, ProductHostRuntimeError> {
         let (execute, release) = (self.api.execute_debug, self.api.release_debug_result);
         // A debug command reads what the renderer observed up to now, as an
-        // update does (landmark measures, joint reports).
+        // update does (landmark measures, bounds inspections).
         if let Some(frames) = &mut self.frame_output {
             frames.report(&mut self.services);
         }

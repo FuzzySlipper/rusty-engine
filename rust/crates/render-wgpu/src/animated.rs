@@ -1,61 +1,40 @@
-//! Animated meshes: GLB assets, instances, playback on the Engine timeline,
-//! skinning, joint attachments, and the facts the runtime reads back.
+//! Animated meshes: GLB assets, instances drawn in the poses the Engine
+//! evaluated for them, skinning, joint attachments, and the bounds facts
+//! the runtime reads back.
 //!
-//! **Time.** Poses advance on the Engine presentation timeline the host sets
-//! with [`Renderer::set_animation_time`] (`PresentationWorld`'s elapsed
-//! seconds), never on a display clock. Direct playback is the retained
-//! [`AnimatedMeshPlaybackTimeline`], so a fresh renderer given the baseline's
-//! snapshot command lands on the same pose. Fades are a renderer-local ramp
-//! over the same timeline.
+//! **Poses.** This renderer never evaluates a pose. The Engine evaluates
+//! each instance's pose once per settled call (`animation_pose::AnimatedScene`)
+//! and publishes it as `SetEvaluatedPose`: each GLB node's transform in the
+//! instance's space, a severed piece's nodes, and the IK chains for
+//! inspection. An instance without a pose that fits its mesh draws at rest.
 //!
-//! **Cost.** A pose is evaluated only when it can change: while a clip plays
-//! or fades, or after a command. Rigid (unskinned) GLB nodes upload their
-//! geometry once per asset and move by their part's local matrix; skinned
-//! primitives are skinned on the CPU into the instance's own vertex buffer.
-//! A held, sampled or stopped pose costs nothing per frame.
-//!
-//! **Controllers** (`PresentationOp::Animation`) publish the Engine's
-//! controller state with per-clip phases each update; a controlled instance
-//! samples `frozen_pose` of that state, each clip advanced by its speed over
-//! the Engine time since the update. A controller replaces direct playback on
-//! its target until destroyed (the first by handle, if several target it).
-//!
-//! **Blending**: each property takes its first
-//! contributing clip, later clips mix in by `w / (Σw + w)` (slerp for
-//! rotations), and a total weight below 1 mixes toward the rest pose.
+//! **Cost.** A pose is realized when a new one arrives and a frame draws:
+//! rigid (unskinned) GLB nodes upload their geometry once per asset and move
+//! by their part's local matrix; skinned primitives are skinned on the CPU
+//! into the instance's own vertex buffer. A held pose costs nothing per
+//! frame.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use glam::{Mat4, Vec3};
 use render_model::{
-    AnimatedMeshAsset, AnimatedMeshInspection, AnimatedMeshInstanceDescriptor,
-    AnimatedMeshPlaybackCommand, AnimatedMeshPlaybackTimeline, AnimatedMeshPose, AnimationLoopMode,
-    IkChainReach, MaterialAlphaModeDescriptor, MaterialInstanceParameters, MaterialUvStrategy,
-    PosedJoint, RenderHandle, RenderMaterialDescriptor, Transform,
+    AnimatedMeshAsset, AnimatedMeshInspection, AnimatedMeshInstanceDescriptor, EvaluatedPose,
+    MaterialAlphaModeDescriptor, MaterialInstanceParameters, MaterialUvStrategy, RenderHandle,
+    RenderMaterialDescriptor,
 };
 
-use render_presentation::AnimationProjectionOp;
-
 use crate::apply::{MapSlot, MaterialMaps, MaterialParams};
-use crate::convert;
 use crate::glb::{self, GlbAlpha, GlbClip, GlbModel, Trs};
 use crate::pipelines::{EXTRA_VERTEX_FLOATS, VERTEX_FLOATS};
 use crate::resources::ResourceSource;
 use crate::tables::{Aabb, GpuMesh, MaterialRef, NodeKind, Topology};
 use crate::Renderer;
-use animation_pose::{ControllerPlayback, PlaybackState};
 
 /// What the runtime reads back from animated meshes (animation feedback
 /// facts), keyed by the instance's source entity and its
 /// per-entity realization generation.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnimationFact {
-    /// A `loop: once` clip played to its end.
-    NaturalCompletion {
-        object_id: u64,
-        generation: u64,
-        clip: String,
-    },
     /// Posed world bounds for a changed `bounds_request`; `None` when the
     /// instance draws nothing.
     MeshInspection {
@@ -64,37 +43,14 @@ pub enum AnimationFact {
         request: u32,
         bounds: Option<([f32; 3], [f32; 3])>,
     },
-    /// The evaluated joints of an instance that reports them
-    /// (`AnimatedMeshPose::report_joints`), each time it is posed.
-    JointPose {
-        object_id: u64,
-        generation: u64,
-        /// The Engine time the pose was evaluated at.
-        seconds: f64,
-        /// The instance's world placement.
-        world: Transform,
-        /// Each rig joint, in rig order.
-        joints: Vec<PosedJoint>,
-        /// The rest pose, in the same form: in the first report after
-        /// reporting starts.
-        rest: Option<Vec<PosedJoint>>,
-        /// Each two-bone IK chain, in the order the pose gave them.
-        ik_chains: Vec<IkChainReach>,
-    },
-}
-
-/// An animation controller projected onto an animated instance.
-pub(crate) struct ControllerRow {
-    target: RenderHandle,
-    playback: ControllerPlayback,
 }
 
 /// One admitted animated-mesh asset.
 pub(crate) struct AnimatedAssetRow {
     model: GlbModel,
-    /// Clips by index; `clip_ids` maps descriptor clip ids to them.
-    clips: Vec<GlbClip>,
-    clip_ids: HashMap<String, usize>,
+    /// Each node at rest, in the instance's space: what an instance without
+    /// a fitting evaluated pose draws.
+    rest: Vec<Mat4>,
     /// Uploaded unskinned primitives, by (mesh, primitive).
     rigid: HashMap<(u32, u32), GpuMesh>,
     /// Retained material id per GLB material.
@@ -107,7 +63,7 @@ pub(crate) struct AnimatedAssetRow {
     /// Joint (bone) names that resolve to exactly one node.
     joints: HashMap<String, usize>,
     /// The node of each rig joint, in rig order (`AnimationRigSignature`):
-    /// what pose controls and joint reports index.
+    /// what cuts and the joint overlay index.
     rig: Vec<Option<usize>>,
 }
 
@@ -116,26 +72,15 @@ pub(crate) struct AnimatedInstance {
     slot: u32,
     object_id: Option<u64>,
     generation: u64,
-    playback: PlaybackState,
-    /// The `once` clip whose end is reported, until any new command.
-    completion: Option<String>,
     pub(crate) inspection: AnimatedMeshInspection,
     bounds_pending: bool,
-    /// Node transforms in instance space, per GLB node.
-    pose: Vec<Mat4>,
-    pose_dirty: bool,
-    /// The Engine time the pose was evaluated at.
-    posed_at: f64,
-    /// The product's IK and joint overrides, and whether joints report.
-    controls: AnimatedMeshPose,
-    /// The instance's world placement the pose was evaluated with.
-    posed_world: Mat4,
-    /// Posed since its joints were last reported.
-    joints_pending: bool,
-    /// The rest pose has been reported since reporting started.
-    rest_reported: bool,
-    /// The IK chains of the evaluated pose, when it reports its joints.
-    ik: Vec<animation_pose::IkSolve>,
+    /// The pose the Engine evaluated for it last.
+    pose: Option<EvaluatedPose>,
+    /// A pose arrived that its skinned buffers and parts do not show yet.
+    pose_pending: bool,
+    /// Each node's severed piece, by the pose's pieces: the piece whose
+    /// nodes place it.
+    owners: Vec<Option<usize>>,
     /// Per-instance skinned vertex buffers, by (node, primitive).
     skinned: HashMap<(u32, u32), GpuMesh>,
     /// The GLB node each of the node row's parts draws, in part order.
@@ -143,9 +88,6 @@ pub(crate) struct AnimatedInstance {
     /// The skinned triangles split between the instance and its severed
     /// pieces, for the cut joints it was made for.
     split: Option<CutSplit>,
-    /// Each GLB node of a severed piece placed in the instance's space:
-    /// what its rigid parts and joint-attached children follow.
-    piece_nodes: HashMap<usize, Mat4>,
     /// Per material slot values over the slot's material
     /// (`SetMaterialInstanceParameters`).
     pub(crate) parameters: BTreeMap<u16, MaterialInstanceParameters>,
@@ -156,7 +98,7 @@ pub(crate) struct AnimatedInstance {
 /// triangles left to it, and each piece draws copies of its triangles'
 /// vertices, skinned at the piece's placement.
 struct CutSplit {
-    /// The cut joints, in the order of the pose's cuts.
+    /// The cut joints, in the order of the pose's pieces.
     joints: Vec<u32>,
     /// By (node, primitive); a primitive no cut reaches is absent.
     primitives: HashMap<(u32, u32), SplitPrimitive>,
@@ -170,27 +112,9 @@ struct SplitPrimitive {
     indices: Vec<u32>,
 }
 
-/// Each node's cut: the nearest cut joint at or above it.
-fn node_cuts(model: &GlbModel, rig: &[Option<usize>], joints: &[u32]) -> Vec<Option<usize>> {
-    let mut cut_at: HashMap<usize, usize> = HashMap::new();
-    for (cut, joint) in joints.iter().enumerate() {
-        if let Some(node) = rig.get(*joint as usize).copied().flatten() {
-            cut_at.entry(node).or_insert(cut);
-        }
-    }
-    let mut owners = vec![None; model.nodes.len()];
-    for &node in &model.order {
-        owners[node] = cut_at
-            .get(&node)
-            .copied()
-            .or_else(|| model.nodes[node].parent.and_then(|parent| owners[parent]));
-    }
-    owners
-}
-
 impl CutSplit {
     fn new(model: &GlbModel, rig: &[Option<usize>], joints: Vec<u32>) -> Self {
-        let owners = node_cuts(model, rig, &joints);
+        let owners = animation_pose::node_cuts(model, rig, &joints);
         let mut primitives = HashMap::new();
         for &node_index in &model.order {
             let node = &model.nodes[node_index];
@@ -287,42 +211,6 @@ impl CutSplit {
     }
 }
 
-/// Where each node of a severed piece is drawn, in the instance's space
-/// (`world` is the instance's placement): its nearest rig joint as it was at
-/// the cut, relative to the cut joint and placed where that joint is now,
-/// and the node as it is now relative to that joint.
-fn piece_matrix(
-    asset: &AnimatedAssetRow,
-    pose: &[Mat4],
-    rig_index: &HashMap<usize, usize>,
-    cut: &render_model::JointCut,
-    world_inverse: Mat4,
-    node: usize,
-) -> Mat4 {
-    let frozen = |rig: usize| cut.pose.get(rig).map(convert::transform_matrix);
-    let mut joint = node;
-    while !rig_index.contains_key(&joint) {
-        match asset.model.nodes[joint].parent {
-            Some(parent) => joint = parent,
-            None => break,
-        }
-    }
-    let base = world_inverse
-        * convert::transform_matrix(&cut.placement)
-        * frozen(cut.joint as usize)
-            .unwrap_or(Mat4::IDENTITY)
-            .inverse();
-    let at_cut = rig_index
-        .get(&joint)
-        .and_then(|rig| frozen(*rig))
-        .unwrap_or(Mat4::IDENTITY);
-    let relative = match (pose.get(joint), pose.get(node)) {
-        (Some(above), Some(posed)) if joint != node => above.inverse() * *posed,
-        _ => Mat4::IDENTITY,
-    };
-    base * at_cut * relative
-}
-
 pub(crate) use animation_pose::resource_identity;
 
 /// Decode an animated asset's GLB and resolve its clips by descriptor id:
@@ -337,7 +225,7 @@ pub fn decode_animated_asset(
     let bytes = resources
         .bytes(&identity)
         .ok_or_else(|| format!("resource {identity} is not available"))?;
-    let model = glb::decode(&bytes)?;
+    let model = glb::decode(&bytes, true)?;
     let clips = animation_pose::asset_clips(asset, &model, model.clips.clone(), |identity| {
         resources.bytes(identity)
     })?;
@@ -346,9 +234,9 @@ pub fn decode_animated_asset(
 
 impl Renderer {
     /// The Engine presentation timeline in seconds (`PresentationWorld`'s
-    /// elapsed time). Animated poses advance on it, not on display time.
-    /// Frames draw at it too, until [`Self::set_presentation_time`] moves
-    /// them on.
+    /// elapsed time) the committed call reached: video and its facts advance
+    /// on it, not on display time. Frames draw at it too, until
+    /// [`Self::set_presentation_time`] moves them on.
     pub fn set_animation_time(&mut self, seconds: f64) {
         debug_assert!(seconds.is_finite() && seconds >= 0.0, "{seconds}");
         self.animation_time = seconds;
@@ -358,94 +246,12 @@ impl Renderer {
     /// The presentation time the next frames draw at: their `frame.time`,
     /// cloud drift, wind sway, precipitation and fog. A host whose world
     /// runs on between committed steps gives the time it has reached, so
-    /// what moves with time moves every frame; poses, video and their facts
-    /// stay on the committed time ([`Self::set_animation_time`]).
+    /// what moves with time moves every frame; video and its facts stay on
+    /// the committed time ([`Self::set_animation_time`]), and poses are the
+    /// ones the Engine evaluated at it.
     pub fn set_presentation_time(&mut self, seconds: f64) {
         debug_assert!(seconds.is_finite() && seconds >= 0.0, "{seconds}");
         self.presentation_time = seconds;
-    }
-
-    /// Apply one animation controller op (`PresentationOp::Animation`).
-    pub(crate) fn apply_animation_op(&mut self, op: &AnimationProjectionOp) -> Result<(), String> {
-        let now = self.animation_time;
-        let target = match op {
-            AnimationProjectionOp::Create { handle, descriptor } => {
-                let replaced = self.tables.controllers.insert(
-                    handle.raw(),
-                    ControllerRow {
-                        target: descriptor.target,
-                        // A baseline's state took effect before this renderer
-                        // existed; a live one takes effect now.
-                        playback: ControllerPlayback::new(
-                            descriptor.controller.clone(),
-                            descriptor.received_seconds.unwrap_or(now),
-                        ),
-                    },
-                );
-                // A replaced controller's former target poses without it.
-                if let Some(replaced) = replaced {
-                    self.unlink_controller(handle.raw(), replaced.target);
-                    if let Some(instance) = self.tables.animated.get_mut(&replaced.target) {
-                        instance.pose_dirty = true;
-                    }
-                }
-                self.tables
-                    .controlled
-                    .entry(descriptor.target)
-                    .or_default()
-                    .insert(handle.raw());
-                self.resolve_controllers_of(descriptor.target);
-                descriptor.target
-            }
-            AnimationProjectionOp::Update { handle, controller } => {
-                let row = self
-                    .tables
-                    .controllers
-                    .get_mut(&handle.raw())
-                    .ok_or_else(|| format!("unknown animation controller {}", handle.raw()))?;
-                row.playback = ControllerPlayback::new(controller.clone(), now);
-                let target = row.target;
-                self.resolve_controllers_of(target);
-                target
-            }
-            AnimationProjectionOp::Destroy { handle } => {
-                let row = self
-                    .tables
-                    .controllers
-                    .remove(&handle.raw())
-                    .ok_or_else(|| format!("unknown animation controller {}", handle.raw()))?;
-                self.unlink_controller(handle.raw(), row.target);
-                row.target
-            }
-        };
-        if let Some(instance) = self.tables.animated.get_mut(&target) {
-            instance.pose_dirty = true;
-        }
-        Ok(())
-    }
-
-    fn unlink_controller(&mut self, controller: u64, target: RenderHandle) {
-        if let Some(controllers) = self.tables.controlled.get_mut(&target) {
-            controllers.remove(&controller);
-            if controllers.is_empty() {
-                self.tables.controlled.remove(&target);
-            }
-        }
-    }
-
-    /// Resolve the clip tables of every controller driving `target` against
-    /// its current asset: when a controller's state or the asset changes.
-    fn resolve_controllers_of(&mut self, target: RenderHandle) {
-        let asset = self
-            .tables
-            .animated
-            .get(&target)
-            .and_then(|instance| self.tables.animated_assets.get(instance.slot));
-        for controller in self.tables.controlled.get(&target).into_iter().flatten() {
-            if let Some(row) = self.tables.controllers.get_mut(controller) {
-                row.playback.resolve(&clip_index(asset));
-            }
-        }
     }
 
     /// Facts gathered since the last call, oldest first.
@@ -458,7 +264,12 @@ impl Renderer {
         asset: &AnimatedMeshAsset,
         resources: &dyn ResourceSource,
     ) -> Result<(), String> {
-        let (model, clips) = decode_animated_asset(asset, resources)?;
+        let identity = resource_identity("animated-mesh-resource", asset.content_hash.as_deref())
+            .ok_or_else(|| format!("{} has no content hash", asset.asset))?;
+        let bytes = resources
+            .bytes(&identity)
+            .ok_or_else(|| format!("resource {identity} is not available"))?;
+        let model = glb::decode(&bytes, false)?;
 
         // Decoding is done and nothing below fails: retire the previous
         // definition now, before its asset-derived texture and material ids
@@ -665,27 +476,21 @@ impl Renderer {
         }
         let joints = joint_nodes(&model);
         let rig = animation_pose::rig_nodes(asset, &model);
+        let rest = {
+            let locals: Vec<Trs> = model.nodes.iter().map(|node| node.rest).collect();
+            animation_pose::compose(&model, &locals)
+        };
         let slots = asset
             .embedded_material_slots
             .iter()
             .map(|slot| (slot.slot, usize::from(slot.source_material_slot)))
-            .collect();
-        let mut clip_ids = HashMap::with_capacity(clips.len());
-        let clips: Vec<GlbClip> = clips
-            .into_iter()
-            .enumerate()
-            .map(|(index, (id, clip))| {
-                clip_ids.insert(id, index);
-                clip
-            })
             .collect();
         let slot = self.tables.names.id(&asset.asset);
         self.tables.animated_assets.insert(
             slot,
             AnimatedAssetRow {
                 model,
-                clips,
-                clip_ids,
+                rest,
                 rigid,
                 materials,
                 textures,
@@ -695,7 +500,7 @@ impl Renderer {
                 rig,
             },
         );
-        // Live instances (a redefinition keeps them) re-pose on the new asset.
+        // Live instances (a redefinition keeps them) draw on the new asset.
         for handle in self.instances_of(slot) {
             self.reset_animated_instance(handle);
         }
@@ -741,7 +546,8 @@ impl Renderer {
     }
 
     /// Start (or restart) an instance's realization after its node row
-    /// exists: a new generation, the descriptor's playback, then its parts.
+    /// exists: a new generation, then its parts, at rest until its pose
+    /// arrives.
     pub(crate) fn create_animated_instance(&mut self, handle: RenderHandle) {
         let Some(NodeKind::AnimatedMesh(descriptor)) =
             self.tables.nodes.get(&handle).map(|node| &node.kind)
@@ -765,55 +571,33 @@ impl Renderer {
                 slot,
                 object_id,
                 generation,
-                playback: PlaybackState::default(),
-                completion: None,
                 inspection: AnimatedMeshInspection::default(),
                 bounds_pending: false,
-                pose: Vec::new(),
-                pose_dirty: true,
-                posed_at: f64::NAN,
-                controls: AnimatedMeshPose::default(),
-                posed_world: Mat4::IDENTITY,
-                joints_pending: false,
-                rest_reported: false,
-                ik: Vec::new(),
+                pose: None,
+                pose_pending: false,
+                owners: Vec::new(),
                 skinned: HashMap::new(),
                 part_nodes: Vec::new(),
                 split: None,
-                piece_nodes: HashMap::new(),
                 parameters: BTreeMap::new(),
             },
         );
-        if let Some(playback) = &descriptor.playback {
-            let _ = self.set_animated_playback(handle, playback);
-        }
-        // A fade a retained baseline carries keeps its own start.
-        if let (Some(fade), Some(instance)) = (
-            &descriptor.playback_fade,
-            self.tables.animated.get_mut(&handle),
-        ) {
-            instance.playback.fade = Some(fade.clone());
-        }
         let _ = self.set_animated_inspection(handle, &descriptor.inspection);
         self.reset_animated_instance(handle);
     }
 
-    /// Re-derive an instance's pose buffers and parts from its asset.
+    /// Re-derive an instance's skinned buffers and parts from its asset.
     /// The instance's asset may have changed (created, redefined, released):
-    /// its playback clips, its controllers' clips and its joint-attached
-    /// children's joints are resolved again against it.
+    /// its joint-attached children's joints are resolved again against it.
     fn reset_animated_instance(&mut self, handle: RenderHandle) {
         let Some(instance) = self.tables.animated.get_mut(&handle) else {
             return;
         };
-        let asset = self.tables.animated_assets.get(instance.slot);
-        instance.playback.resolve(&clip_index(asset));
         instance.skinned.clear();
-        instance.pose.clear();
-        instance.pose_dirty = true;
-        self.resolve_controllers_of(handle);
+        instance.split = None;
+        instance.pose_pending = false;
         self.resolve_attached_joints(handle);
-        self.pose_animated_instance(handle);
+        self.skin_animated_instance(handle);
         self.rebuild_parts(handle);
     }
 
@@ -848,53 +632,6 @@ impl Renderer {
         asset.joints.get(joint).copied()
     }
 
-    pub(crate) fn set_animated_playback(
-        &mut self,
-        handle: RenderHandle,
-        command: &AnimatedMeshPlaybackCommand,
-    ) -> Result<(), String> {
-        let now = self.animation_time;
-        let durations = self.clip_durations(handle);
-        let instance = self
-            .tables
-            .animated
-            .get_mut(&handle)
-            .ok_or_else(|| format!("unknown animated mesh {}", handle.raw()))?;
-        instance.completion = None;
-        instance.playback.apply(command, now)?;
-        match command {
-            AnimatedMeshPlaybackCommand::Play {
-                clip,
-                r#loop,
-                start_offset_seconds,
-                start_paused,
-                ..
-            } => {
-                let duration = durations.get(clip).copied().unwrap_or(0.0);
-                let started_at_end =
-                    start_offset_seconds.is_some_and(|offset| offset >= f64::from(duration));
-                if *r#loop == AnimationLoopMode::Once && !start_paused && !started_at_end {
-                    instance.completion = Some(clip.clone());
-                }
-            }
-            AnimatedMeshPlaybackCommand::Resume => {
-                if let AnimatedMeshPlaybackTimeline::Playing {
-                    clip,
-                    r#loop: AnimationLoopMode::Once,
-                    ..
-                } = &instance.playback.playback.timeline
-                {
-                    instance.completion = Some(clip.clone());
-                }
-            }
-            _ => {}
-        }
-        let asset = self.tables.animated_assets.get(instance.slot);
-        instance.playback.resolve(&clip_index(asset));
-        instance.pose_dirty = true;
-        Ok(())
-    }
-
     pub(crate) fn set_animated_inspection(
         &mut self,
         handle: RenderHandle,
@@ -909,7 +646,6 @@ impl Renderer {
             && inspection.bounds_request != instance.inspection.bounds_request
         {
             instance.bounds_pending = true;
-            instance.pose_dirty = true;
         }
         let restyled = inspection.matte != instance.inspection.matte
             || inspection.wireframe != instance.inspection.wireframe;
@@ -931,285 +667,39 @@ impl Renderer {
         }
     }
 
-    fn clip_durations(&self, handle: RenderHandle) -> HashMap<String, f32> {
-        self.tables
-            .animated
-            .get(&handle)
-            .and_then(|instance| self.tables.animated_assets.get(instance.slot))
-            .map(|asset| {
-                asset
-                    .clip_ids
-                    .iter()
-                    .map(|(id, index)| (id.clone(), asset.clips[*index].duration))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Advance every instance whose pose can change to the current Engine
-    /// time: by time, or for world-space pose controls by its placement.
-    /// Called between two transform propagations: the first places the
-    /// instances, the second their joint-attached children.
-    pub(crate) fn advance_animations(&mut self) {
-        self.advance_animations_where(|_| true);
-    }
-
-    fn advance_animations_where(&mut self, selected: impl Fn(&AnimatedInstance) -> bool) {
-        let handles: Vec<RenderHandle> = self
-            .tables
-            .animated
-            .iter()
-            .filter(|(handle, instance)| {
-                if !selected(instance) {
-                    return false;
-                }
-                let controlled = self.tables.controlled.contains_key(*handle);
-                let moved = instance.controls.reads_world()
-                    && self
-                        .tables
-                        .nodes
-                        .get(handle)
-                        .is_some_and(|node| node.world != instance.posed_world);
-                instance.pose_dirty
-                    || moved
-                    || ((controlled || instance.varies() || instance.controls.report_joints)
-                        && instance.posed_at != self.animation_time)
-            })
-            .map(|(handle, _)| *handle)
-            .collect();
-        for handle in handles {
-            self.pose_animated_instance(handle);
-        }
-        // A reporting instance that moved without a new pose reports again:
-        // its world joints follow its placement.
-        for (handle, instance) in self.tables.animated.iter_mut() {
-            if !selected(instance) || !instance.controls.report_joints {
-                continue;
-            }
-            if let Some(node) = self.tables.nodes.get(handle) {
-                if node.world != instance.posed_world {
-                    instance.posed_world = node.world;
-                    instance.joints_pending = true;
-                }
-            }
-        }
-    }
-
-    /// Pose and report every instance that reports its joints, at the
-    /// time of the call just applied, so the Engine reads each call's pose
-    /// before the next call whether or not a frame draws.
-    pub(crate) fn pose_reporting_instances(&mut self) {
-        if !self
-            .tables
-            .animated
-            .values()
-            .any(|instance| instance.controls.report_joints)
-        {
-            return;
-        }
-        self.propagate_transforms();
-        self.advance_animations_where(|instance| instance.controls.report_joints);
-        self.propagate_transforms();
-        self.report_joint_poses();
-    }
-
-    /// Replace an instance's pose controls.
-    pub(crate) fn set_animated_pose(
+    /// Draw an instance in the pose the Engine evaluated for it: its
+    /// skinned buffers and parts follow at the next frame, its
+    /// joint-attached children at the next propagation.
+    pub(crate) fn set_evaluated_pose(
         &mut self,
         handle: RenderHandle,
-        pose: &AnimatedMeshPose,
+        pose: &EvaluatedPose,
     ) -> Result<(), String> {
         let instance = self
             .tables
             .animated
             .get_mut(&handle)
             .ok_or_else(|| format!("unknown animated mesh {}", handle.raw()))?;
-        if &instance.controls == pose {
-            return Ok(());
-        }
-        if pose.report_joints && !instance.controls.report_joints {
-            instance.rest_reported = false;
-        }
-        instance.controls = pose.clone();
-        instance.pose_dirty = true;
-        Ok(())
-    }
-
-    /// Report the joints of every reporting instance posed since its last
-    /// report. Runs after transforms propagate, so the instance's world
-    /// placement is current.
-    pub(crate) fn report_joint_poses(&mut self) {
-        let now = self.animation_time;
-        let pending: Vec<RenderHandle> = self
-            .tables
-            .animated
-            .iter()
-            .filter(|(_, instance)| instance.joints_pending)
-            .map(|(handle, _)| *handle)
-            .collect();
-        for handle in pending {
-            let world = self
-                .tables
-                .nodes
-                .get(&handle)
-                .map_or(Mat4::IDENTITY, |node| node.world);
-            let Some(instance) = self.tables.animated.get_mut(&handle) else {
-                continue;
-            };
-            instance.joints_pending = false;
-            let (Some(object_id), Some(asset)) = (
-                instance.object_id,
-                self.tables.animated_assets.get(instance.slot),
-            ) else {
-                continue;
-            };
-            let joints = |pose: &[Mat4]| animation_pose::posed_joints(&asset.rig, pose, world);
-            let rest = (!instance.rest_reported).then(|| {
-                let locals: Vec<Trs> = asset.model.nodes.iter().map(|node| node.rest).collect();
-                joints(&animation_pose::compose(&asset.model, &locals))
-            });
-            instance.rest_reported = true;
-            let ik_chains = instance
-                .ik
-                .iter()
-                .map(|solve| {
-                    let end = solve
-                        .end
-                        .and_then(|node| instance.pose.get(node))
-                        .map_or(Vec3::ZERO, |end| end.w_axis.truncate());
-                    let (target_world, end_world) = (
-                        world.transform_point3(solve.target),
-                        world.transform_point3(end),
-                    );
-                    IkChainReach {
-                        target_model: solve.target.to_array(),
-                        target_world: target_world.to_array(),
-                        end_model: end.to_array(),
-                        end_world: end_world.to_array(),
-                        shortfall: end_world.distance(target_world),
-                        straightened: solve.straightened,
-                    }
-                })
-                .collect();
-            self.animation_facts.push(AnimationFact::JointPose {
-                object_id,
-                generation: instance.generation,
-                seconds: now,
-                world: convert::transform_of(world),
-                joints: joints(&instance.pose),
-                rest,
-                ik_chains,
-            });
-        }
-    }
-
-    /// Evaluate one instance's pose at the current time and push it to its
-    /// parts, skinned buffers, joint-attached children and facts.
-    fn pose_animated_instance(&mut self, handle: RenderHandle) {
-        let now = self.animation_time;
-        let Some(instance) = self.tables.animated.get_mut(&handle) else {
-            return;
+        let joints = |pose: Option<&EvaluatedPose>| -> Vec<u32> {
+            pose.iter()
+                .flat_map(|pose| &pose.pieces)
+                .map(|piece| piece.joint)
+                .collect()
         };
-        let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
-            instance.pose_dirty = false;
-            return;
-        };
-        // The first of the controllers driving it, if any.
-        let controller = self
-            .tables
-            .controlled
-            .get(&handle)
-            .and_then(|controllers| controllers.first())
-            .and_then(|controller| self.tables.controllers.get(controller));
-        let duration = |clip: usize| asset.clips[clip].duration;
-        let (actions, finished) = instance.playback.actions(
-            now,
-            &duration,
-            controller.map(|controller| controller.playback.actions(now, &duration)),
-        );
-        let world = self
-            .tables
-            .nodes
-            .get(&handle)
-            .map_or(Mat4::IDENTITY, |node| node.world);
-        // Recorded for the joint report and for an IK overlay.
-        let record =
-            instance.controls.report_joints || self.overlays.shown.ik.contains(&handle.raw());
-        if !record {
-            instance.ik.clear();
-        }
-        let mut locals = animation_pose::sample_locals(&asset.model, &asset.clips, &actions);
-        animation_pose::layer_clips(
-            &asset.model,
-            &asset.clips,
-            &mut locals,
-            &instance.controls.clip_layers,
-            &asset.rig,
-            &clip_index(Some(asset)),
-        );
-        let pose = animation_pose::controlled(
-            &asset.model,
-            &asset.rig,
-            locals,
-            &instance.controls,
-            world,
-            record.then_some(&mut instance.ik),
-        );
-        instance.posed_world = world;
-        instance.joints_pending = instance.controls.report_joints;
-        // A changed pose is a scene change: cached composition targets must
-        // redraw it. An unchanged pose (held, sampled, finished) keeps them.
-        let moved = pose != instance.pose;
-        instance.pose = pose;
-        instance.pose_dirty = false;
-        instance.posed_at = now;
-        let completed = if finished {
-            instance.completion.take()
-        } else {
-            None
-        };
-        if let Some(clip) = completed {
-            if let Some(object_id) = instance.object_id {
-                self.animation_facts.push(AnimationFact::NaturalCompletion {
-                    object_id,
-                    generation: instance.generation,
-                    clip,
-                });
-            }
-        }
-        // A severed piece's nodes, placed where the piece is.
-        instance.piece_nodes.clear();
-        if !instance.controls.cuts.is_empty() {
-            let joints: Vec<u32> = instance.controls.cuts.iter().map(|cut| cut.joint).collect();
-            let owners = node_cuts(&asset.model, &asset.rig, &joints);
-            let rig_index = rig_indices(asset);
-            let world_inverse = world.inverse();
-            for (node, owner) in owners.iter().enumerate() {
-                if let Some(cut) = owner {
-                    instance.piece_nodes.insert(
-                        node,
-                        piece_matrix(
-                            asset,
-                            &instance.pose,
-                            &rig_index,
-                            &instance.controls.cuts[*cut],
-                            world_inverse,
-                            node,
-                        ),
-                    );
+        let cuts = joints(Some(pose));
+        if cuts != joints(instance.pose.as_ref()) {
+            instance.owners = match self.tables.animated_assets.get(instance.slot) {
+                Some(asset) if !cuts.is_empty() => {
+                    animation_pose::node_cuts(&asset.model, &asset.rig, &cuts)
                 }
-            }
+                _ => Vec::new(),
+            };
         }
-        if moved {
-            self.scene_generation += 1;
-        }
-        if self.skin_animated_instance(handle) {
-            // The cuts changed the skinned triangles, so the parts' index
-            // counts.
-            self.rebuild_parts(handle);
-        }
-        self.write_animated_parts(handle);
-        // Children attached to joints follow the new pose.
+        instance.pose = Some(pose.clone());
+        instance.pose_pending = true;
+        // A changed pose is a scene change: cached composition targets must
+        // redraw it.
+        self.scene_generation += 1;
         if let Some(node) = self.tables.nodes.get(&handle) {
             for child in &node.children {
                 if self
@@ -1222,6 +712,34 @@ impl Renderer {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Skin every instance whose pose arrived since it was last drawn, and
+    /// write its parts. Runs after transforms propagate.
+    pub(crate) fn realize_poses(&mut self) {
+        let pending: Vec<RenderHandle> = self
+            .tables
+            .animated
+            .iter()
+            .filter(|(_, instance)| instance.pose_pending)
+            .map(|(handle, _)| *handle)
+            .collect();
+        for handle in pending {
+            self.realize_pose(handle);
+        }
+    }
+
+    fn realize_pose(&mut self, handle: RenderHandle) {
+        if let Some(instance) = self.tables.animated.get_mut(&handle) {
+            instance.pose_pending = false;
+        }
+        if self.skin_animated_instance(handle) {
+            // The cuts changed the skinned triangles, so the parts' index
+            // counts.
+            self.rebuild_parts(handle);
+        }
+        self.write_animated_parts(handle);
     }
 
     /// Answer pending bounds requests from the posed, propagated world
@@ -1236,6 +754,14 @@ impl Renderer {
             .map(|(handle, _)| *handle)
             .collect();
         for handle in pending {
+            if self
+                .tables
+                .animated
+                .get(&handle)
+                .is_some_and(|instance| instance.pose_pending)
+            {
+                self.realize_pose(handle);
+            }
             self.report_animated_bounds(handle);
         }
     }
@@ -1251,7 +777,12 @@ impl Renderer {
         let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
             return false;
         };
-        let joints: Vec<u32> = instance.controls.cuts.iter().map(|cut| cut.joint).collect();
+        let joints: Vec<u32> = instance
+            .pose
+            .iter()
+            .flat_map(|pose| &pose.pieces)
+            .map(|piece| piece.joint)
+            .collect();
         let resplit = instance
             .split
             .as_ref()
@@ -1262,17 +793,10 @@ impl Renderer {
             instance.skinned.clear();
         }
         let instance = &self.tables.animated[&handle];
-        let world = self
-            .tables
-            .nodes
-            .get(&handle)
-            .map_or(Mat4::IDENTITY, |node| node.world);
-        let world_inverse = world.inverse();
-        let rig_index = if instance.controls.cuts.is_empty() {
-            HashMap::new()
-        } else {
-            rig_indices(asset)
-        };
+        let pieces = instance
+            .pose
+            .as_ref()
+            .map_or(&[][..], |pose| pose.pieces.as_slice());
         let mut updates = Vec::new();
         for &node_index in &asset.model.order {
             let node = &asset.model.nodes[node_index];
@@ -1284,28 +808,23 @@ impl Renderer {
                 .joints
                 .iter()
                 .zip(&skin.inverse_binds)
-                .map(|(joint, inverse)| instance.pose[*joint] * *inverse)
+                .map(|(joint, inverse)| node_matrix(instance, asset, *joint) * *inverse)
                 .collect();
             // Each piece's palette: every joint in the piece's own frozen
             // pose where the piece is, so a vertex weighted partly to a
             // joint another cut owns stays rigid with this piece.
-            let pieces: Vec<Vec<Mat4>> = instance
-                .controls
-                .cuts
+            let pieces: Vec<Vec<Mat4>> = pieces
                 .iter()
-                .map(|cut| {
+                .map(|piece| {
                     skin.joints
                         .iter()
                         .zip(&skin.inverse_binds)
                         .map(|(joint, inverse)| {
-                            piece_matrix(
-                                asset,
-                                &instance.pose,
-                                &rig_index,
-                                cut,
-                                world_inverse,
-                                *joint,
-                            ) * *inverse
+                            piece
+                                .nodes
+                                .get(*joint)
+                                .map_or(Mat4::IDENTITY, Mat4::from_cols_array)
+                                * *inverse
                         })
                         .collect()
                 })
@@ -1449,15 +968,9 @@ impl Renderer {
         let asset = self.tables.animated_assets.get(instance.slot);
         for (part, glb_node) in node.parts.iter().zip(&instance.part_nodes) {
             let skinned = asset.is_some_and(|asset| asset.model.nodes[*glb_node].skin.is_some());
-            let local = if skinned {
-                Mat4::IDENTITY
-            } else {
-                instance
-                    .piece_nodes
-                    .get(glb_node)
-                    .or_else(|| instance.pose.get(*glb_node))
-                    .copied()
-                    .unwrap_or(Mat4::IDENTITY)
+            let local = match asset {
+                Some(asset) if !skinned => placed_node(instance, asset, *glb_node),
+                _ => Mat4::IDENTITY,
             };
             let bounds = self
                 .tables
@@ -1532,7 +1045,7 @@ impl Renderer {
                     }
                     continue;
                 }
-                let matrix = world * instance.pose.get(node_index).copied().unwrap_or_default();
+                let matrix = world * node_matrix(instance, asset, node_index);
                 for position in &primitive.positions {
                     bounds.include(matrix.transform_point3(crate::convert::vec3(*position)));
                 }
@@ -1555,14 +1068,11 @@ impl Renderer {
     }
 
     /// The posed transform of a node of `handle`'s asset, by index: what a
-    /// joint-attached child hangs from each frame.
+    /// joint-attached child hangs from.
     pub(crate) fn joint_pose_at(&self, handle: RenderHandle, node: usize) -> Option<Mat4> {
         let instance = self.tables.animated.get(&handle)?;
-        instance
-            .piece_nodes
-            .get(&node)
-            .or_else(|| instance.pose.get(node))
-            .copied()
+        let asset = self.tables.animated_assets.get(instance.slot)?;
+        (node < asset.rest.len()).then(|| placed_node(instance, asset, node))
     }
 
     /// The node of an animated instance's rig joint.
@@ -1583,7 +1093,7 @@ impl Renderer {
         };
         let in_rig: std::collections::HashSet<usize> =
             asset.rig.iter().flatten().copied().collect();
-        let at = |node: usize| instance.pose.get(node).map(|pose| pose.w_axis.truncate());
+        let at = |node: usize| node_matrix(instance, asset, node).w_axis.truncate();
         asset
             .rig
             .iter()
@@ -1593,35 +1103,34 @@ impl Renderer {
                 while let Some(above) = parent.filter(|above| !in_rig.contains(above)) {
                     parent = asset.model.nodes[above].parent;
                 }
-                Some((at(node)?, at(parent?)?))
+                Some((at(node), at(parent?)))
             })
             .collect()
     }
 
-    /// An animated instance's IK chains from its last posing, in its space:
-    /// each target, the drawn end joint, and whether the chain straightened.
+    /// An animated instance's IK chains as its pose was evaluated, in its
+    /// space: each target, the drawn end joint, and whether the chain
+    /// straightened.
     pub(crate) fn ik_reaches(&self, handle: RenderHandle) -> Vec<(Vec3, Option<Vec3>, bool)> {
         let Some(instance) = self.tables.animated.get(&handle) else {
             return Vec::new();
         };
+        let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
+            return Vec::new();
+        };
         instance
-            .ik
+            .pose
             .iter()
-            .map(|solve| {
-                let end = solve
+            .flat_map(|pose| &pose.ik)
+            .map(|chain| {
+                let end = chain
                     .end
-                    .and_then(|node| instance.pose.get(node))
-                    .map(|pose| pose.w_axis.truncate());
-                (solve.target, end, solve.straightened)
+                    .map(|node| node as usize)
+                    .filter(|node| *node < asset.rest.len())
+                    .map(|node| node_matrix(instance, asset, node).w_axis.truncate());
+                (Vec3::from_array(chain.target), end, chain.straightened)
             })
             .collect()
-    }
-
-    /// Poses an animated instance again at the next frame.
-    pub(crate) fn repose_animated(&mut self, handle: RenderHandle) {
-        if let Some(instance) = self.tables.animated.get_mut(&handle) {
-            instance.pose_dirty = true;
-        }
     }
 
     /// The parts of an animated instance's node, in draw order: each GLB node
@@ -1840,35 +1349,32 @@ impl Renderer {
     }
 }
 
-impl AnimatedInstance {
-    /// Whether the pose moves with time.
-    fn varies(&self) -> bool {
-        if self.playback.fade.is_some() {
-            return true;
-        }
-        match &self.playback.playback.timeline {
-            // A `once` clip settles once its completion is reported.
-            AnimatedMeshPlaybackTimeline::Playing { r#loop, .. } => {
-                *r#loop != AnimationLoopMode::Once || self.completion.is_some()
-            }
-            _ => false,
-        }
+/// A node of an instance's mesh in the pose it draws, in the instance's
+/// space: its evaluated pose, or the mesh at rest while no pose fits it.
+fn node_matrix(instance: &AnimatedInstance, asset: &AnimatedAssetRow, node: usize) -> Mat4 {
+    match instance
+        .pose
+        .as_ref()
+        .filter(|pose| pose.nodes.len() == asset.rest.len())
+    {
+        Some(pose) => Mat4::from_cols_array(&pose.nodes[node]),
+        None => asset.rest[node],
     }
 }
 
-/// Each rig joint's index, by its node.
-fn rig_indices(asset: &AnimatedAssetRow) -> HashMap<usize, usize> {
-    asset
-        .rig
-        .iter()
-        .enumerate()
-        .filter_map(|(index, node)| Some(((*node)?, index)))
-        .collect()
-}
-
-/// An asset's clip index by descriptor id; no asset resolves nothing.
-fn clip_index(asset: Option<&AnimatedAssetRow>) -> impl Fn(&str) -> Option<usize> + '_ {
-    move |name| asset.and_then(|asset| asset.clip_ids.get(name).copied())
+/// A node as drawn: placed by the severed piece that owns it, if any.
+fn placed_node(instance: &AnimatedInstance, asset: &AnimatedAssetRow, node: usize) -> Mat4 {
+    let piece = instance
+        .owners
+        .get(node)
+        .copied()
+        .flatten()
+        .zip(instance.pose.as_ref())
+        .and_then(|(cut, pose)| pose.pieces.get(cut)?.nodes.get(node));
+    match piece {
+        Some(placed) => Mat4::from_cols_array(placed),
+        None => node_matrix(instance, asset, node),
+    }
 }
 
 /// The second vertex stream a primitive draws with, when its material reads

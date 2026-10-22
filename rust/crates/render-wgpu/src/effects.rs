@@ -1205,10 +1205,9 @@ impl Renderer {
                     .apply(op, resources, entities)
                     .err()
                     .map(|detail| ("billboard", detail)),
-                PresentationOp::Animation { op, .. } => self
-                    .apply_animation_op(op)
-                    .err()
-                    .map(|detail| ("animation", detail)),
+                // Controllers drive the poses the Engine evaluates; the
+                // renderer draws those.
+                PresentationOp::Animation { .. } => None,
                 PresentationOp::GhostPlate { op, .. } => self
                     .apply_ghost_op(op, resources)
                     .err()

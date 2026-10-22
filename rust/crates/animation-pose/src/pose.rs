@@ -48,7 +48,8 @@ pub fn compose<H: Hierarchy + ?Sized>(model: &H, locals: &[Trs]) -> Vec<Mat4> {
     posed
 }
 
-/// One two-bone IK chain as its solve saw it, for the joint report.
+/// One two-bone IK chain as its solve saw it, for joint reads and the IK
+/// overlay.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct IkSolve {
     /// The target in instance space.
@@ -422,7 +423,6 @@ mod tests {
             }],
             overrides: Vec::new(),
             layers: Vec::new(),
-            report_joints: false,
             cuts: Vec::new(),
         }
     }

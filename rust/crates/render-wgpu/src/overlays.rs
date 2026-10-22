@@ -627,11 +627,6 @@ impl Renderer {
     /// Shows or hides what inspection draws. The Debug layer's parts follow.
     pub fn set_overlay_shown(&mut self, shown: OverlayShown) {
         let debug_changed = shown.debug_layer != self.overlays.shown.debug_layer;
-        let ik_added: Vec<u64> = shown
-            .ik
-            .difference(&self.overlays.shown.ik)
-            .copied()
-            .collect();
         self.overlays.shown = shown;
         if debug_changed {
             self.tables
@@ -645,10 +640,6 @@ impl Renderer {
                 .map(|(handle, _)| *handle)
                 .collect();
             self.tables.dirty_nodes.extend(debug);
-        }
-        // An instance newly drawing its IK is posed again to record it.
-        for handle in ik_added {
-            self.repose_animated(RenderHandle::new(handle));
         }
     }
 

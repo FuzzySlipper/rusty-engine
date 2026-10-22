@@ -1,5 +1,5 @@
 //! Limited joints between Dynamics bodies, and ragdolls: bodies per bone of
-//! an animation instance, spawned at its reported pose and placing its bones
+//! an animation instance, spawned at its evaluated pose and placing its bones
 //! as a world-space pose layer after every step.
 
 use engine_spatial::{
@@ -544,45 +544,14 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Arc;
 
-    use render_model::{PosedJoint, Transform};
-
     use super::*;
-    use crate::appearance::{character_for_test, ragdoll_layer_for_test, JointPoseReport};
+    use crate::appearance::{
+        character_for_test, end_call_posed, place_character_for_test, ragdoll_layer_for_test,
+    };
 
     const BODY_GLB: &[u8] =
         include_bytes!("../../../../../fixtures/csharp-joint-attachments/content/body.glb");
     const TICK: f32 = 1.0 / 60.0;
-
-    fn joint(translation: [f32; 3], rotation: [f32; 4]) -> PosedJoint {
-        let transform = Transform {
-            translation,
-            rotation,
-            scale: [1.0; 3],
-        };
-        PosedJoint {
-            model: transform,
-            world: transform,
-        }
-    }
-
-    /// A standing pose: hips at 1 m, the left leg down, everything else at
-    /// the origin; `drop` lowers the whole pose.
-    fn pose(joints: &BTreeMap<String, u32>, drop: f32) -> Vec<PosedJoint> {
-        let down = [0.0, 0.0, 1.0, 0.0];
-        let mut pose = vec![joint([0.0; 3], [0.0, 0.0, 0.0, 1.0]); joints.len()];
-        for (name, translation, rotation) in [
-            ("Hips", [0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]),
-            ("Spine", [0.0, 1.25, 0.0], [0.0, 0.0, 0.0, 1.0]),
-            ("LeftUpLeg", [-0.1, 1.0, 0.0], down),
-            ("LeftLeg", [-0.1, 0.55, 0.0], down),
-        ] {
-            pose[joints[name] as usize] = joint(
-                [translation[0], translation[1] - drop, translation[2]],
-                rotation,
-            );
-        }
-        pose
-    }
 
     fn limits(kind: NativeDynamicsJointKind, min: f32, max: f32) -> NativeDynamicsJointLimits {
         NativeDynamicsJointLimits {
@@ -595,29 +564,22 @@ mod tests {
     }
 
     #[test]
-    fn a_ragdoll_spawns_from_the_reported_pose_and_places_its_bones_until_released() {
+    fn a_ragdoll_spawns_from_the_evaluated_pose_and_places_its_bones_until_released() {
         let mut appearance = crate::appearance::create(
             Default::default(),
             BTreeMap::from([("body.glb".to_owned(), Arc::<[u8]>::from(BODY_GLB))]),
         );
+        let mut scene = render_presentation::PresentationWorld::default();
+        scene.advance_elapsed(1.0);
+        appearance.set_presentation_clock(1.0, 0.0);
         appearance.begin_call();
         let (instance, joints) = character_for_test(&mut appearance);
-        let call = appearance.take_staged_call();
-        appearance.commit(call);
-        // Two reports a tick apart: the pose falls at 1.2 m/s.
-        let report = |seconds: f64, drop: f32, rest: bool| JointPoseReport {
-            object_id: 7,
-            generation: 1,
-            seconds,
-            world: Transform::IDENTITY,
-            joints: pose(&joints, drop),
-            rest: rest.then(|| pose(&joints, 0.0)),
-            ik_chains: Vec::new(),
-        };
-        appearance.ingest_joint_poses([
-            report(1.0, 0.0, true),
-            report(1.0 + 1.0 / 60.0, 0.02, false),
-        ]);
+        end_call_posed(&mut appearance, &mut scene, 0.0);
+        // Evaluated a tick apart, 2 cm lower: the pose falls at 1.2 m/s.
+        appearance.set_presentation_clock(1.0, 1.0 / 60.0);
+        appearance.begin_call();
+        place_character_for_test(&mut appearance, instance, -0.02);
+        end_call_posed(&mut appearance, &mut scene, 1.0 / 60.0);
 
         let spatial = crate::spatial::RuntimeSpatialBridge::new();
         let mut dynamics = RuntimeDynamicsBridge::new(spatial.collision_source());
@@ -685,13 +647,23 @@ mod tests {
         };
         let ragdoll = dynamics.create_ragdoll(&request(instance)).unwrap();
 
-        // Spawned where the latest report was, falling as it fell.
+        // Spawned where the latest evaluation drew it, falling as it fell.
+        let source = appearance
+            .ragdoll_source(instance.value, "CSHARP_RAGDOLL_POSE")
+            .unwrap();
+        let drawn = source.latest.joints[joints["Hips"] as usize]
+            .world
+            .translation;
+        assert!((source.latest.world.translation[1] + 0.02).abs() < 1e-6);
         let layer = ragdoll_layer_for_test(&appearance, instance).expect("a layer");
         assert_eq!((layer.joints.len(), layer.weight), (3, 1.0));
         let placed = layer.joints;
         assert_eq!(placed[0].joint, joints["Hips"]);
         let hips = placed[0].translation;
-        assert!((hips[1] - 0.98).abs() < 1e-5, "{hips:?}");
+        assert!(
+            (0..3).all(|axis| (hips[axis] - drawn[axis]).abs() < 1e-5),
+            "{hips:?} {drawn:?}"
+        );
         let solver = &dynamics.active_world(world.value).unwrap().solver;
         let RagdollSlot::Active(spawned) = &dynamics.ragdolls[&ragdoll.value] else {
             unreachable!()
@@ -767,8 +739,10 @@ mod tests {
         assert!(dynamics.read_ragdoll(ragdoll).is_err());
     }
 
+    /// An instance published in the call that spawns the ragdoll has no
+    /// evaluated pose yet.
     #[test]
-    fn a_ragdoll_needs_a_reported_pose() {
+    fn a_ragdoll_needs_an_evaluated_pose() {
         let mut appearance = crate::appearance::create(
             Default::default(),
             BTreeMap::from([("body.glb".to_owned(), Arc::<[u8]>::from(BODY_GLB))]),
