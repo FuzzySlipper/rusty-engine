@@ -32,7 +32,8 @@ use render_host_contracts::{
 use crate::camera::{self, CameraMatrices, CameraMotion, CameraPose, CameraSampleReadout};
 use crate::frame::{PassStart, PixelRect, ViewLayer, ViewPass, ViewStats};
 use crate::labels::LabelPass;
-use crate::target::{self, TargetView, OFFSCREEN_FORMAT};
+use crate::target::{self, RenderPicture, TargetView, OFFSCREEN_FORMAT};
+use crate::upscale::{FrameResolution, UpscaleMethod};
 use crate::{FrameStats, OffscreenTarget, Renderer, SurfaceFrame, WindowSurface};
 
 struct CompositionTarget {
@@ -366,42 +367,38 @@ impl Renderer {
         stats
     }
 
-    /// Draw the primary output through `draw`: into `primary` itself at a
-    /// render scale of 1, else into the internal target at the scaled size
-    /// (`RendererOptions::render_scale`), then upscaled bilinearly over the
-    /// whole of `primary`. The world, viewmodel, labels and effects all draw
-    /// at the scale; a video and the hosts' UI draw at full size after.
+    /// Draw the primary output through `draw` at render resolution, then
+    /// bring it to output resolution (`upscale.rs`). With no upscale stage
+    /// selected and no image effect, `draw` draws into `output` itself.
+    /// Otherwise it draws into the render picture, and the stage, or the
+    /// image effect in its place, draws that over the whole of `output`. A
+    /// video and the hosts' UI draw at output resolution after.
     pub(crate) fn draw_primary(
         &mut self,
-        primary: TargetView<'_>,
+        output: TargetView<'_>,
         draw: impl FnOnce(&mut Self, TargetView<'_>) -> FrameStats,
     ) -> FrameStats {
-        let scale = self.options.render_scale;
-        let scaled_down = scale < 1.0;
-        // An image effect reads the whole picture, so the view draws into a
-        // picture of its own first, as a render scale's does.
+        let stage = UpscaleMethod::selected(&self.options);
+        // An image effect reads the whole picture, so the views draw into a
+        // picture of their own first, as an upscale stage's do.
         let effect = self.image_effect.active();
-        if !scaled_down && !effect {
-            self.scaled = None;
-            let mut stats = draw(self, primary);
+        let scale = stage.map_or(1.0, |_| self.options.render_scale);
+        let resolution = FrameResolution::scaled((output.width, output.height), scale);
+        if stage.is_none() && !effect {
+            self.picture = None;
+            let mut stats = draw(self, output);
             stats.cpu_batch_us = self.batch_time.as_micros() as u32;
+            stats.resolution = resolution;
             return stats;
         }
-        let scale = if scaled_down { scale } else { 1.0 };
-        let width = ((primary.width as f32 * scale).round() as u32).max(1);
-        let height = ((primary.height as f32 * scale).round() as u32).max(1);
-        let scaled = match self.scaled.take() {
-            Some(scaled) if scaled.matches(width, height, primary.samples) => scaled,
-            _ => crate::target::ScaledPrimary::new(
-                &self.gpu,
-                &self.compose,
-                width,
-                height,
-                primary.samples,
-            ),
+        let (width, height) = resolution.render;
+        let picture = match self.picture.take() {
+            Some(picture) if picture.matches(width, height, output.samples) => picture,
+            _ => RenderPicture::new(&self.gpu, width, height, output.samples),
         };
-        let mut stats = draw(self, scaled.view());
+        let mut stats = draw(self, picture.view());
         stats.cpu_batch_us = self.batch_time.as_micros() as u32;
+        stats.resolution = resolution;
         if effect {
             let white = &self.white;
             let texture = |slot: usize| {
@@ -419,49 +416,18 @@ impl Renderer {
                 .map_or([[0.0; 4]; 4], |effect| effect.parameters);
             self.image_effect.apply(
                 &self.gpu,
-                &scaled,
-                &primary,
+                &picture,
+                &output,
                 &parameters,
                 [texture(0), texture(1)],
                 self.presentation_time,
             );
-        } else {
-            self.upscale(&scaled, &primary);
+        } else if let Some(stage) = stage {
+            self.upscale
+                .run(&self.gpu, &mut self.compose, stage, &picture, &output);
         }
-        self.scaled = Some(scaled);
+        self.picture = Some(picture);
         stats
-    }
-
-    /// Present the scaled primary over the whole of `primary`.
-    fn upscale(&mut self, scaled: &crate::target::ScaledPrimary, primary: &TargetView<'_>) {
-        self.compose.prepare_blit(&self.gpu.device, primary.format);
-        let mut encoder = self
-            .gpu
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render-wgpu upscale"),
-            });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("render-wgpu upscale"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: primary.color,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            self.compose
-                .blit(&mut pass, primary.format, &scaled.present);
-        }
-        self.gpu.queue.submit([encoder.finish()]);
     }
 
     /// Render the installed composition into an acquired window frame.

@@ -1,14 +1,15 @@
-//! Render scale: below 1, the primary passes draw into an internal target at
-//! that fraction of the output size and are upscaled bilinearly into the
-//! output, so the picture is the full-size picture resampled, the screen-space
-//! passes shrink with it, and scale 1 draws directly again. Needs a wgpu
+//! Render scale: below 1, the primary views draw at that fraction of the
+//! output size (the render resolution) and the upscale stage samples them
+//! bilinearly into the output, so the picture is the full-size picture
+//! resampled, the screen-space passes shrink with it, and scale 1 draws
+//! directly again. Needs a wgpu
 //! adapter: CI uses `WGPU_BACKEND=vulkan` with llvmpipe.
 
 mod support;
 
 use render_host_contracts::RendererCompositionCamera;
 use render_model::*;
-use render_wgpu::{FrameStats, RendererOptions};
+use render_wgpu::{FrameResolution, FrameStats, RendererOptions};
 use support::*;
 
 const MATERIAL: &str = "material/scale-plaster";
@@ -99,6 +100,13 @@ fn downsample(rgba: &[u8], factor: u32) -> Vec<f64> {
 fn a_half_scale_frame_is_the_full_frame_resampled() {
     let mut harness = scene();
     let (full_stats, full) = render_at(&mut harness, 1.0);
+    assert_eq!(
+        full_stats.resolution,
+        FrameResolution {
+            render: (WIDTH, HEIGHT),
+            output: (WIDTH, HEIGHT)
+        }
+    );
     let full_occlusion = harness.renderer.gpu_readout().ambient_occlusion.texture;
     assert_eq!(
         full_occlusion,
@@ -110,6 +118,13 @@ fn a_half_scale_frame_is_the_full_frame_resampled() {
     let readout = harness.renderer.settings_readout();
     assert_eq!(readout.effective.render_scale, 0.5);
     assert_eq!(half.len(), full.len(), "the output keeps its size");
+    assert_eq!(
+        half_stats.resolution,
+        FrameResolution {
+            render: (WIDTH / 2, HEIGHT / 2),
+            output: (WIDTH, HEIGHT)
+        }
+    );
     // The screen-space passes draw at the scaled size.
     assert_eq!(
         harness.renderer.gpu_readout().ambient_occlusion.texture,

@@ -12,7 +12,7 @@ use render_shaders::{Entry, Features};
 use crate::gpu::Gpu;
 use crate::shaders::Shaders;
 use crate::tables::GpuTexture;
-use crate::target::{ScaledPrimary, TargetView};
+use crate::target::{RenderPicture, TargetView};
 use crate::timing::{untimed, GpuPassTiming, PassTimer};
 
 /// Bytes of `ImageEffectParams` in `image.wgsl`: four parameter rows and
@@ -166,7 +166,7 @@ impl ImageEffect {
     pub fn apply(
         &mut self,
         gpu: &Gpu,
-        picture: &ScaledPrimary,
+        picture: &RenderPicture,
         output: &TargetView<'_>,
         parameters: &[[f32; 4]; 4],
         textures: [&GpuTexture; 2],

@@ -64,6 +64,7 @@ mod surface;
 mod tables;
 mod target;
 mod timing;
+mod upscale;
 mod video;
 mod volumetric_fog;
 mod voxel;
@@ -140,6 +141,7 @@ pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
 pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
 pub use target::OffscreenTarget;
 pub use timing::GpuPassTiming;
+pub use upscale::FrameResolution;
 pub use video::{VideoFact, VideoFailure};
 pub use volumetric_fog::VolumetricFogReadout;
 
@@ -282,8 +284,8 @@ pub struct RendererOptions {
     /// off presents as soon as a frame is drawn. Streamed output has no
     /// display.
     pub vsync: bool,
-    /// The fraction of the primary destination's size the primary passes
-    /// draw at (`Renderer::draw_primary`): 0.5 to 1.
+    /// The fraction of the primary destination's size the primary views
+    /// draw at, the render resolution (`upscale.rs`): 0.5 to 1.
     pub render_scale: f32,
     /// Light the volumetric fog's medium and volumes in a froxel grid
     /// (`volumetric_fog.rs`). Off by default; a device without compute
@@ -529,9 +531,12 @@ pub struct Renderer {
     /// it moves past the value they were drawn at.
     scene_generation: u64,
     compose: compose::Compose,
-    /// The internal target the primary passes draw into at a render scale
-    /// below 1, kept while its size and sample count hold.
-    scaled: Option<target::ScaledPrimary>,
+    /// The picture the primary views draw into at render resolution while
+    /// an upscale stage or an image effect runs, kept while its size and
+    /// sample count hold.
+    picture: Option<target::RenderPicture>,
+    /// The step from that picture to output resolution (`upscale.rs`).
+    upscale: upscale::Upscale,
     /// Whether the window the renderer last drew to can present only in step
     /// with its refresh (`WindowSurface::vsync_only`); `None` before a window
     /// frame.
@@ -782,7 +787,8 @@ impl Renderer {
             drawn_inspection: Vec::new(),
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
-            scaled: None,
+            picture: None,
+            upscale: upscale::Upscale::new(gpu),
             display_vsync_only: None,
             batch_time: std::time::Duration::ZERO,
             scatter_upload: ScatterUploadReadout::default(),
@@ -1058,6 +1064,7 @@ impl Renderer {
                     self.scatter_select.timing(),
                     self.sky_light.timing(),
                     self.image_effect.timing(),
+                    self.upscale.timing(),
                     self.water.timing(),
                 ])
                 .collect(),

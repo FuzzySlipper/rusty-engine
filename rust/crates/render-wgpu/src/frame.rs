@@ -132,6 +132,9 @@ pub struct FrameStats {
     /// Overlay lines drawn across view passes; 0 while inspection shows
     /// nothing (`overlays.rs`).
     pub overlay_lines: u32,
+    /// The output's size and the render resolution the primary views drew
+    /// at (`upscale.rs`).
+    pub resolution: crate::upscale::FrameResolution,
 }
 
 /// What one view pass drew.

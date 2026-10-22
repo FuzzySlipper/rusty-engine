@@ -291,7 +291,8 @@ The request holds shadows on or off and their budget (0 for no limit),
 ambient occlusion (`Disabled`, `ScreenSpace` or `DistanceField`, with its
 strength and radius), antialiasing (`Off`, `Msaa2` or `Msaa4`), the render
 scale (0.5 to 1: the world, viewmodel, labels and effects draw at that
-fraction of the frame's size and are upscaled bilinearly into it, while a
+fraction of the frame's size and are upscaled bilinearly into it (the
+`upscale` pass), while a
 playing video and the browser or window UI keep their full size), vsync,
 and the clustered lighting and GPU culling switches. The product manifest's
 `RustyEngineProduct*` properties are the initial values
