@@ -1,10 +1,9 @@
 # Agent review workflow
 
-Status: active convention, 2026-09-19. The files here are the packets
-handed to reviewers; this directory owns them. The `drift` agent preset
-owns route pinning (`subagent_review` pinned fresh-context route,
-`subagent_audit` inherits the parent route). Where this directory
-disagrees with a Den project document, Den wins.
+The files here are the packets handed to reviewers; this directory owns
+them. The `drift` agent preset owns route pinning (`subagent_review` pinned
+fresh-context route, `subagent_audit` inherits the parent route). Where this
+directory disagrees with a Den project document, Den wins.
 
 Reviewers are persistent agents, not one-shot checks. An identified issue is
 re-checked by the same reviewer in the same session, so round two verifies the

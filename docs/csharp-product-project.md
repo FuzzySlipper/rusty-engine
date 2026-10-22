@@ -286,7 +286,7 @@ applies it (Read, Decide, Apply, Publish). Held time, the camera, the runtime
 binding and the step count are untouched. A product whose time is held, by
 `GameplayTime` or by `engine.time.mode manual`, gets the change in an `Update`
 that admits no step. Deleting a declared file, and editing undeclared loose
-content, restage the whole Product as before. `fixtures/csharp-live-tuning`
+content, restage the whole Product. `fixtures/csharp-live-tuning`
 is the example.
 
 ### Content source
@@ -617,9 +617,7 @@ index names a vertex (`CSHARP_STATIC_MESH_PACK` otherwise); it does not read the
 other streams. The Engine names the resource by the
 file's own content identity, so the descriptor's `resource` and `contentHash`
 must be present but their values are ignored: a stale hash from a tool cannot
-make two different files share a resource. A town-sized mesh of 100,000
-vertices is 3.8 MB instead of 6.0 MB of JSON, and imports in about 3.5 ms
-instead of 41 ms.
+make two different files share a resource.
 [`triangle.rstatmsh`](../fixtures/csharp-static-mesh/triangle.rstatmsh) is
 `triangle.static-mesh.json` in this form.
 
@@ -1095,7 +1093,7 @@ GPU time, and why a view looped (`lightClusters.fallback`).
 
 `RustyEngineProductGpuCulling` set to `enabled` makes each view test its
 opaque parts against the frustum in a compute pass and draw the visible ones
-through indirect draw arguments, so a camera move no longer rebuilds the
+through indirect draw arguments, so a camera move does not rebuild the
 draw list on the CPU; blended parts still sort on the CPU. Scatter copies
 are selected by their own GPU pass whatever this setting
 ([levels of detail and thinning](vegetation-fields.md#levels-of-detail-and-thinning)).

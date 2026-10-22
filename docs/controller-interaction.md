@@ -23,7 +23,8 @@ distance/reach, visibility, availability, focus, route evidence, rejection
 reasons and an exact `useCommand`. It includes off-reticle candidates, so looking
 a few pixels away does not make an object undiscoverable. The product supplies
 a relevant local collection; `truncated` and `totalCandidates` report the
-module's output limit (64 by default, configurable up to 256).
+module's output limit (64 by default; the module's `maximumCandidates`
+sets another).
 
 `use` is an **explicit assisted action**, not a query. It removes only the need
 to place a reticle/pointer precisely. The command reads fresh product facts,

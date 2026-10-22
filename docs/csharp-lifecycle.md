@@ -63,9 +63,11 @@ for what a rebuild keeps and what it does not replay.
 `IEngineContext` has one property per named service family in the ABI's
 `NativeEngineApi`: `Input`, `GameplayTime`, `ImplicitSurfaces`, `Diagnostics`, `Dynamics`,
 `Motion`, `Kinematic`, `Spatial`, `Perception`, `WorldOrigin`, `Voxel`,
-`VoxelContent`, `VoxelScenePresentation`, `Content`, `AuthoredContent`,
-`Graphics`, `Presentation`, `Animation`, `Audio`, `Video`, `RenderOutput`,
-`CameraView`, `Random`, `Persistence`, `Ui`, and `Host`. The exact method set is the
+`VoxelContent`, `VoxelScenePresentation`, `Heightfield`, `Vegetation`,
+`WaterField`, `Content`, `ContentSource`, `AuthoredContent`, `Graphics`,
+`Presentation`, `Tween`, `Animation`, `Audio`, `Video`, `RenderOutput`,
+`CameraView`, `RendererSettings`, `Random`, `Persistence`, `Http`, `Session`,
+`Ui`, and `Host`. The exact method set is the
 generated `Rusty.Engine` output. Mechanics, resolution, and state machines are
 ordinary managed helpers, not native context services. See the
 [capability map](csharp-capabilities.md) and do not assume a Rust API is
@@ -307,7 +309,7 @@ world behind it, over that many metres, so a flame sheet meets the floor and a
 smoke puff meets a wall without a hard intersection line; 0 (the default) keeps
 the hard depth edge. Soft billboards draw after the world in a pass of their
 own that reads the view's depth, so they cost one more pass per view that has
-any; hard ones draw in the world pass as before. The
+any; hard ones draw in the world pass. The
 [lighting fixture](../fixtures/csharp-lighting-sky/Product.cs)'s
 `lighting.torch.flame true` lights a torch of a soft additive flame flipbook,
 soft additive embers and soft alpha smoke against a wall.
@@ -608,8 +610,10 @@ change, so Update notices a resize by comparing it. `Reported` is false until a
 page reports. The UI sets the UI scale with `context.ui.setScale(scale)` (0.25
 to 4) and reads it with `context.ui.scale()`; the document root's font size and
 its `--rusty-ui-scale` property follow it, so rem-sized UI scales while layout
-units keep their meaning. Streamed frames render at device pixels, made
-smaller at the same aspect only when the GPU cannot draw or read back that size.
+units keep their meaning. Streamed frames are output at device pixels (the
+primary views draw at the render scale's fraction of that and are upscaled),
+made smaller at the same aspect only when the GPU cannot draw or read back
+that size.
 `Watching` on the same readout says whether anyone watches the product now. It
 is false only in stream output while no page pulls frames. It turns false
 within 1.25 seconds of the last page leaving (a watching page starts a frame
@@ -1187,8 +1191,7 @@ the same refusals, so a binary file and the JSON file of the
 same facts install the same collision and navigation: the receipt's counts and
 navigation projection hash match. Its collision projection hash differs,
 because the collider asset is named by the artifact's content digest. Use it for large
-navigation sets: a town of 544,563 cells is about 12 MB instead of 43 MB of
-JSON, and parses in about 12 ms instead of 66 ms. Write
+navigation sets: it is smaller than the JSON and parses faster. Write
 little-endian, with no padding:
 
 | Field | Encoding |

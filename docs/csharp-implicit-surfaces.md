@@ -142,8 +142,8 @@ winding edges on extracted geometry before normal, UV, and material splitting.
 An entrance into a carved solid can still have a closed rock surface around its
 rim. These report-only counts diagnose index topology, not self-intersections,
 feature survival, or final attributed-mesh watertightness. The adaptive path
-[preserves distinct contour arcs on ambiguous faces](implicit-topology-diagnosis.md)
-(Engine #7879). Zero boundary edges alone still does not establish manifold output;
+[preserves distinct contour arcs on ambiguous faces](implicit-topology-diagnosis.md).
+Zero boundary edges alone still does not establish manifold output;
 vertex links and self-intersections are separate properties.
 
 
@@ -474,8 +474,7 @@ version. Storage owns only its file layout marker and revision; specialized code
 
 A stored file the Engine cannot read or write is an expected refusal, not a fault.
 `ProductStateStore<T>` throws `PersistenceStorageException`, whose `Failure` is
-`UnrecognizedContainer` (not the current RSP2 layout, for example a retired RSP1
-file), `MalformedContainer` (an RSP2 header that disagrees with its payload) or
+`UnrecognizedContainer` (not the RSP2 layout), `MalformedContainer` (an RSP2 header that disagrees with its payload) or
 `Io`. Catch it to report the save or load; the file, its revision and the store
 are unchanged, and other keys keep working. The Engine never migrates an old
 layout: discard the file or convert it with a product tool. The direct Persistence

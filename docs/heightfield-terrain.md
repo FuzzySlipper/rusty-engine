@@ -89,7 +89,7 @@ by default), then starts sampling new requests on the thread pool, at most
 twice the processors at once. Its `IHeightfieldSampler.Sample` runs on
 workers, several at a time: it reads only product data the product does not
 change under it and calls no Engine service ([call
-affinity](world-streaming-contract.md#engine-call-affinity-8611)). Every
+affinity](world-streaming-contract.md#engine-call-affinity)). Every
 Engine call stays in `Update`. A sampler that throws rethrows from the next
 `Update`, and its tile is asked for again. `Committed`, `Ignored`, `InFlight`
 and `SampleMilliseconds` report its work.

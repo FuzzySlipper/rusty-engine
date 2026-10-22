@@ -142,7 +142,8 @@ accepted. Other machines copy the new scenes and accept the same pair on
 their own GPUs.
 
 On Windows, run the two `cargo build` lines of the script and then
-`rusty-gpu-lane run` directly, or the script from Git Bash.
+`rusty-gpu-lane run` directly, or the script from Git Bash. The lane renders
+with Vulkan there, as the desktop window does.
 
 NativeAOT is a separate fidelity path: `scripts/verify-csharp.sh --aot`, the
 C# workflow dispatch option, and `scripts/test-csharp-release-pair.sh PAIR --aot`.

@@ -171,7 +171,7 @@ or noise); the Engine only blends what it chose:
   with no palette.
 - **What stays.** Geometry, groups, material slots, collision, navigation and
   voxel readouts are unchanged: blending is drawn only. A slot outside the layers, bound to an
-  ordinary material, draws as before.
+  ordinary material, draws as it would without layers.
 - **Cost.** Meshing reads up to (2 × `TransitionCells`)³ voxels per vertex
   and looks each voxel's slot up in the set; past four layers it keeps a
   weight per layer for each vertex until it narrows them.
@@ -214,7 +214,8 @@ dual contoured on the `smooth_chunk_meshing` example (0.31 to 0.47 ms),
 
 A density is signed, negative inside, in voxel units. A voxel without one
 reads -0.5 when solid and 0.5 when empty, which puts the surface on the cube
-face between them, so a session without densities draws exactly as before.
+face between them, so a session that writes no densities draws as its surface mode does on
+plain solidity.
 Solidity is authoritative: a density's magnitude places the surface, and its
 sign follows whether the voxel is solid.
 
@@ -248,12 +249,10 @@ The bounds must enclose the shape; anything outside them is untouched. The
 field stays owned by ImplicitSurfaces and is only read during the call, so a
 recipe can be disposed right after. On `fixtures/csharp-voxel-stamp`, carving
 a smooth union of three capsules (42,369 voxels changed, 32 chunks rebuilt)
-takes about 37 ms, 12 of them meshing; in a CraftSurvive dungeon a rounded
-chamber took 5.8 ms by stamp against 10.5 ms for the same cut read, computed
-and written back as a region from C#.
+takes about 37 ms, 12 of them meshing.
 
 Brushes and stamps also keep the exact shape of what they cut (Hermite
-crossings, #9504). On every edge between two voxels where an Add or Subtract
+crossings). On every edge between two voxels where an Add or Subtract
 brush, or a stamp, made the voxel on its own side of the surface (the empty
 one it carved or the solid one it added), the chunk stores where the shape
 crosses the edge and the shape's normal there: a brush finds them on its own
@@ -264,8 +263,7 @@ shape puts them rather than rounded at the cell scale (on a box cut into rock,
 edge vertices about 0.02 voxels off the true surface instead of 0.11 to 0.16,
 at most 0.1 instead of 0.24 to 0.6). A cell where the edit's surface meets
 ground it did not make mixes stored and estimated crossings, and is placed from
-the densities alone as before, so a crater's rim against existing rock looks as
-it did. Smooth placement keeps its mass point but shades from the stored
+the densities alone, as a cell no brush cut is. Smooth placement keeps its mass point but shades from the stored
 normals. Anything else that changes a voxel (a voxel edit, a region write, a
 smoothing brush, another brush over it) clears the crossings of its six edges,
 and residency payloads do not carry them: an evicted, replaced or re-admitted
@@ -465,6 +463,5 @@ of the chunks the last change rebuilt, summed over chunks.
 `VoxelSceneReadout.MultiLoopCells` counts the dual-contoured cells of the
 resident meshes that the surface passes through more than once (a sheet thinner
 than a voxel, two surfaces meeting in one cell): each has one vertex, which
-pinches its sheets together. On CraftSurvive's content (#9507) the overworld
-has none and a 180-chunk dungeon 9 to 96, about one surface cell in a thousand;
-blasting it adds a couple. Counting costs nothing measurable.
+pinches its sheets together. A 180-chunk dungeon has about one such cell in a
+thousand surface cells. Counting costs nothing measurable.

@@ -89,7 +89,7 @@ are the same. A static caster that moves, joins or leaves renders the static
 depth once more. The cache is a depth array the size of the atlas, built
 the first time a layer has a dynamic caster (`staticCacheBytes`). A
 directional light's cascades, which follow the camera, and casters a
-product shader moves with time redraw whole as before.
+product shader moves with time redraw whole.
 
 ## Dark caves: an ambient light's sky
 
@@ -233,7 +233,7 @@ engine.CameraView.SetSkyLight(new(Intensity: 1));
   dielectric reflects a few percent, more at grazing angles, so wet rock,
   water and glossy paint show the sky. This reflection replaces a metal's
   uniform reflection of ambient and hemisphere light. Those lights still
-  light as before.
+  light diffusely.
 - An ambient light's [sky layer](#dark-caves-an-ambient-lights-sky), occlusion
   maps and screen-space ambient occlusion shade the sky's light as they shade
   ambient light, so a cave stays dark.
@@ -261,7 +261,7 @@ engine.CameraView.SetSkyLight(new(Intensity: 1));
   scene changed, or (with clouds, which drift, or backdrop particles)
   presentation time moved since the last began; a still scene with a
   backdrop and no clouds settles and costs nothing more. With neither, the
-  light is built from the background as before. On an RX 9070 XT a
+  light is built from the background alone. On an RX 9070 XT a
   capture frame costs about 0.09 ms with the flat clouds, 0.15 ms with a
   64×64 heightfield of backdrop ranges, 0.18 ms with both and 0.28 ms with
   low volumetric clouds; a build frame about 0.12 ms; together about 0.1
@@ -345,12 +345,15 @@ and falling rain or snow back along its fall. An animated mesh's skinned
 vertices also move by their previous pose, ragdolls and severed pieces
 included, and what hangs from a joint moves with it; projected decals take the
 motion of the surface under them, and blended parts and particles cover
-it with theirs where they are at least half opaque. The sky and its clouds, and water surfaces,
-have no motion of their own yet: they write a value that says so, which the
-inspection shows blue and the temporal stage treats as still and leans on
-the current frame for. Sprites and ghost plates show the motion of what lies
-under them. A product shader's displacement moves with its part, not on its
-own.
+it with theirs where they are at least half opaque. A product shader's
+displacement moves with its part, not on its own.
+
+The sky and its clouds, and water surfaces, have no motion of their own: they
+write a value that says so, which the inspection shows blue, and a temporal
+stage takes them as still and leans on the current frame there. A turning
+camera can ghost the sky, drifting clouds show the stage no drift, and
+water's ripples and reflections no motion. Sprites, ghost plates, labels and
+overlay lines show the motion of what lies under them.
 
 The stage is told its history no longer holds on the first frame with
 motion, which a new renderer (a world replacement or rebaseline) starts
@@ -360,6 +363,13 @@ goes, the render resolution changes or a renderer setting does.
 the picture ([inspection](playtest-inspection.md#overlays)), and
 `rusty-scene-render --frames N --motion OUT.png` writes a snapshot's; the
 motion is then drawn for the inspection alone, without a stage or jitter.
+
+Labels and overlay lines draw unjittered at render resolution into the
+picture a temporal stage reads, so a moving camera smears them with what
+lies behind. A tool's [capture](presentation-capture.md#captures) is a
+primary frame too: at a size other than the output's it starts the history
+again, and at the same size it takes a jitter point and becomes the frame
+the next output frame's motion is measured from.
 
 ### Temporal upscaling (TAAU)
 
@@ -396,11 +406,11 @@ antialiasing off). The history starts again on a camera cut and whenever the
 temporal inputs reset, the output's size changes or a frame draws without
 the stage.
 
-On an RTX 3080 the stage itself costs about 0.3 ms at 2560×1440 and
-0.15–0.18 ms at 1920×1080, whatever the mode. A CraftSurvive forest at
-2560×1440 draws its still GPU frame in 19.4 ms with 4× MSAA at full size,
-16.9 ms with native TAA, 10.0 ms in quality, 8.5 ms in balanced, 7.2 ms in
-performance and 5.0 ms in ultra performance.
+Thin vegetation (grass blades, leaf edges) reads softer and lower in
+contrast than under 4× MSAA, natively and in the upscaled modes. On an RTX
+3080 the stage itself costs about 0.3 ms at 2560×1440 and 0.15–0.18 ms at
+1920×1080, whatever the mode; the setting's catalogue `cost` gives a whole
+frame's saving.
 
 `engine.renderer` reports the stage's GPU time as `upscale` among
 `gpu.passes`, and the last frame's render and output resolutions and its
@@ -1004,8 +1014,8 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
     the clouds cover, and bloom adds it where the world leaves the sky open.
     No other pass sees it. Opaque surfaces and the
     [backdrop](#the-backdrop) in front of the sun hide it and its bloom, and
-    a translucent surface dims it by its opacity. Shafts stream past them as
-    before. It costs one half-resolution pass, timed with `bloom-exposure`,
+    a translucent surface dims it by its opacity. Shafts still stream past
+    them. It costs one half-resolution pass, timed with `bloom-exposure`,
     plus the flat layer's noise near the sun under flat clouds or one read
     of the volumetric clouds under those. That is about 0.01 ms at
     1920×1080 with 4× multisampling on an RX 9070 XT, flat clouds included.
@@ -1373,8 +1383,7 @@ up the slab, so a cloud and its shadow agree.
   | RX 9070 XT | 0.7 / 1.2–1.3 ms (0.38) | 1.1–1.2 / 2.1–2.2 ms (0.66) |
   | RTX 3080 | 0.35 / 0.6–0.65 ms (0.19) | 0.65–0.7 / 1.1 ms (0.35) |
 
-  Marching every pixel cost 2.2 and 4.0 ms at 1920×1080 on the RX 9070 XT.
-- Off draws the flat layer exactly as before; a software adapter refuses
+- Off draws the flat layer; a software adapter refuses
   it (`SoftwareAdapter`) and draws the flat layer.
 - Seen low across the sky, rays cross many clouds, so a given coverage looks
   fuller than the flat layer's. The sky's light and reflections see them
@@ -1791,12 +1800,14 @@ imports what it needs from `rusty::image`:
 The result replaces the pixel. The picture is finished first (fog, grade,
 tone mapping, bloom), so the effect works in display values, and the
 product UI draws over it. The picture is the render scale's when there is
-one, and the effect upscales it.
+one, and the effect upscales it: while an effect is set no temporal stage
+draws and the views do not jitter, and the settings readout refuses
+`temporal` or `dlss` antialiasing with `ImageEffect`.
 
 While an effect is set, each primary view draws into a picture of its own,
 and one full-screen pass runs the effect into the view, timed as
 `image-effect`. `Shader` handle 0 removes the effect, and the views draw
-straight into the target as before. A shader that does not compose is
+straight into the target again. A shader that does not compose is
 refused when it is opened, with its file and line. A shader may define both
 `shade` and `image_effect`.
 

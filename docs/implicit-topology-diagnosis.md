@@ -3,8 +3,8 @@
 The adaptive implicit mesher keeps index topology manifold where a cell face is
 ambiguous (a checkerboard face, with filled corners diagonally opposite). The
 mesh builder is the vendored
-[`fidget-mesh`](../rust/vendor/fidget-mesh/RUSTY_PATCH.md), patched for Engine
-#7879; `svc-implicit` converts its output to Engine polygons.
+[`fidget-mesh`](../rust/vendor/fidget-mesh/RUSTY_PATCH.md), patched for the
+Engine; `svc-implicit` converts its output to Engine polygons.
 
 - Cell vertices follow each cell's boundary contour loops. Crossings on a
   checkerboard face pair up around the filled corners the same way on both
@@ -13,8 +13,8 @@ mesh builder is the vendored
   crossings. Two distinct arcs between the same cell vertices therefore never
   become one four-incident edge.
 - Octree collapse keeps any parent or child cell with an ambiguous face, so
-  both sides keep the shared face. Sampling depth is unchanged; collapse still
-  runs elsewhere.
+  both sides keep the shared face. Sampling depth is not affected; collapse
+  runs everywhere else.
 - The mesh's `face_arc_vertices` mark the fans around those arcs.
   `svc-implicit`'s polygon conversion (`src/triangulate.rs`) keeps them as local
   fans instead of adding a diagonal that would join the arcs again.

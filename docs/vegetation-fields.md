@@ -83,7 +83,7 @@ tiles with an `IVegetationSampler` on the thread pool, at most twice the
 processors at once, and commits at most `commitsPerUpdate` (16) finished ones
 an update. The sampler runs on workers: it reads only product data nothing
 changes under it and calls no Engine service ([call
-affinity](world-streaming-contract.md#engine-call-affinity-8611)). The
+affinity](world-streaming-contract.md#engine-call-affinity)). The
 optional `beforeCommit` runs on the update's thread just before each commit,
 where the product may read state its workers may not, such as player edits:
 zero `Cover` where a pit was dug, set a class where a floor was built.
@@ -193,11 +193,7 @@ The depth pass and pyramid cost about 0.14 ms of GPU at 1280×720 with 4×
 antialiasing on an RX 9070 XT, in the `occlusion` pass, and the renderer
 CPU that encodes every opaque part once more: 0.6 to 0.85 ms in a
 CraftSurvive forest. It pays where
-opaque surfaces hide many copies at once. In CraftSurvive, looking past a
-near crown hid 75% of the drawn copies and the world pass fell from 3.65 to
-3.31 ms; inside a dense forest (25% hidden), up a long slope with forest
-beyond it (19%) and from a raised vista (3%) the change stayed within the
-run-to-run spread. The picture was the same in every case. A copy hidden
+opaque surfaces hide many copies at once. A copy hidden
 behind terrain mostly costs vertex work only, since the depth test already
 discards its pixels, so the gain follows the number of hidden copies more
 than their area.

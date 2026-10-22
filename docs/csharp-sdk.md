@@ -124,7 +124,7 @@ A session unused for 30 minutes stops itself:
 - **Use** is input, a control or lifecycle call, a live-debug command, a page
   attaching (the host marks these), or a restage.
 - **Not use:** a page or headless browser that only watches the stream. So a
-  forgotten `--headless` or playtest browser no longer keeps a host running.
+  forgotten `--headless` or playtest browser does not keep a host running.
 - **Change the limit** with `--idle-timeout <minutes>` or
   `{"devIdleMinutes": <minutes>}` in the cache's `config.json`; 0 means never.
 - **Keep a session** with `--keep` or `rusty dev keep <id>`, for an owner's

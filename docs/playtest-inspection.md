@@ -32,7 +32,7 @@ Native live-debug commands (require the ordinary live-debug opt-in):
   ([inspection targets](#inspection-targets)).
 
 The scene readouts, overlays, inspection views and targets are readings of the
-one committed scene and the poses the renderer drew, hosted beside the game:
+one committed scene, its evaluated poses included, hosted beside the game:
 none of them is a second description of the scene, and none changes what the
 product committed.
 
@@ -90,7 +90,7 @@ look limits and optional `navigation.targets` / `navigation.route` guidance.
 The fixed module commands are `playtest.help`, `playtest.observe`,
 `playtest.action ID`, and `playtest.look YAW PITCH`. Queries are read-only;
 look updates the owning product camera without advancing gameplay.
-Doom is the first provider. No ABI or handwritten product bridge is required.
+No ABI or handwritten product bridge is required.
 
 ## Tunables panel
 
@@ -244,7 +244,7 @@ colour, and `onTop` draws it over the scene instead of depth-tested against
 it. Labels use the Engine's billboard text; a label in viewmodel or camera
 space draws on top, placed by each view's own camera as its lines are. An item whose entity or joint draws nothing is not drawn.
 
-The renderer draws its own inspection from what it already evaluated:
+The renderer draws its own inspection from what it already draws:
 
 - `joints HANDLE`: an animated instance's joint chain, each joint with a
   cross, from the pose it drew;
@@ -341,7 +341,7 @@ releases nothing but its entry.
 
 Hold time with `engine.time.mode manual` to capture the player view and each
 view at the same step: every view reads the one committed simulation and
-the poses the renderer evaluated.
+the poses the Engine evaluated with it.
 
 The scene tree's selected object has **Frame in view**, which frames the
 selected view (else the first) on it from the side, and **Bounds**, which
@@ -501,8 +501,8 @@ receive it, and it selects its view on press. Closing the pane gives the
 input back. Panes hold no product state; a product mounts them in its own
 developer UI, as `fixtures/csharp-skeleton-poses` does under the player view.
 
-What stays approximate: overlays draw what a product publishes and what the
-renderer evaluated. A probe marker shows where the product measured, at the
+What stays approximate: overlays draw what a product publishes and the poses
+the Engine evaluated. A probe marker shows where the product measured, at the
 radius it gave; a nearest-triangle "inside" depends on the model's winding.
 Neither proves exact contact with a skinned surface, and the Engine makes no
 skinned-surface guarantee. A joint's place is the drawn pose, not physics.
@@ -617,7 +617,7 @@ no second controller, teleport, rewind or successful-arrival promise.
 `InteractionDebugModule` includes signed yaw/pitch deltas to each candidate point.
 These support look adjustment while retaining reach, visibility and availability
 checks. The browser assist surface names this query `interaction`; the native
-debug command remains `interaction.inspect`.
+debug command is `interaction.inspect`.
 
 ## Player-sized clearance
 

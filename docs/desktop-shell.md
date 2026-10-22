@@ -176,20 +176,20 @@ An installer is chosen when a product asks for one.
 
 ## Platforms
 
-- **Linux:** X11 and Wayland, measured. The device is created with the
+- **Linux:** X11 and Wayland, on Vulkan. The device is created with the
   DMA-BUF extensions Chromium's frames need. Pointer lock turns at the
   browser's rate on both.
   Wayland locks the pointer. X11 hides the cursor and recentres it rather than
   grabbing it, because during a grab XInput delivers every raw motion twice.
-- **Windows:** measured on an RTX 3080 with Windows 11. That machine is the
-  shared Windows test box: agents playtest on it through crew-services
+- **Windows:** Windows 11, on Vulkan. The shared Windows test box has an
+  RTX 3080: agents playtest on it through crew-services
   (`environment: "windows-desktop"`), and its access, agent and build setup are
   in crew-services `docs/playtest-windows.md`.
-  - The window draws with Vulkan; the Engine builds no DX12 backend. Each
-    Chromium repaint, a D3D11 texture, is copied on the GPU Vulkan draws with
-    (matched by its LUID) into a texture with an NT handle. The device imports
-    that texture (`VK_KHR_external_memory_win32`) and takes it from the
-    external queue family, about 0.1 ms per repaint on the render thread.
+  - The Engine builds no DX12 backend. Each Chromium repaint, a D3D11
+    texture, is copied on the GPU Vulkan draws with (matched by its LUID)
+    into a texture with an NT handle. The device imports that texture
+    (`VK_KHR_external_memory_win32`) and takes it from the external queue
+    family, on the render thread.
   - Without a Vulkan GPU with that extension, or on a software adapter, the
     window refuses to open and the host's error names the reason. The
     renderer readout names the adapter and its backend.

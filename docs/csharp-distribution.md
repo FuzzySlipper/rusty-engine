@@ -142,7 +142,7 @@ holds the same SDK package as the Linux one and a runtime pack built at the
 same source revision.
 
 - **Where they are built:** on the Windows playtest machine over SSH, not in
-  CI. CI publishes the Linux pair as before; nothing waits on Windows.
+  CI. CI publishes the Linux pair; nothing waits on Windows.
   `scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <path>`
   then builds and uploads the Windows archives for the Latest pair (or
   `--version`), and adds `targets."win-x64"` to its `pair-release.json`.
@@ -150,8 +150,8 @@ same source revision.
   new Latest pair gains Windows archives without anyone asking (crew-services
   `docs/playtest-windows.md`). A pair that is never Latest, because a newer
   one followed within the interval, gets them only by `--version`.
-- **Which pairs:** only pairs whose revision has the Windows support, from
-  0.1.0-dev.73f9e99ece2e on. Older pairs have no Windows archives.
+- **Which pairs:** a pair whose `pair-release.json` has no
+  `targets."win-x64"` has no Windows archives.
 - **Running the build there:** the machine needs the MSVC build tools, Git Bash,
   Rust, .NET, Node and pnpm, cmake and ninja (crew-services
   `docs/playtest-windows.md` sets one up).

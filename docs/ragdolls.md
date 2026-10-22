@@ -156,7 +156,6 @@ the bones to the clips. Destroying its world ends it too. Destroying its
 instance leaves the bodies simulating until the ragdoll is disposed.
 
 **Determinism.** A world steps deterministically: the same world history and
-inputs give the same fall. The fixture's falls repeat to five decimals on the
-Kenney rig and on a Tripo-rigged resident. A world that has held other bodies
-carries their history in Rapier's arena and pair order. The fixture therefore
-starts each fall in a fresh world.
+inputs give the same fall. A world that has held other bodies carries their
+history in Rapier's arena and pair order, so the fixture starts each fall in
+a fresh world.

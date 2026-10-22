@@ -74,24 +74,31 @@ light loop's; below ten the loop is as fast or faster, and cheaper on
 llvmpipe), and GPU culling buys nothing while the CPU draw list is tens of
 microseconds a frame, which it is up to a few thousand parts in view.
 Where the adapter has timestamp queries, `gpu.passes` gives the median GPU
-milliseconds of each renderer pass that is timed, with the adapter's
-compute limits beside them: the ambient occlusion passes (`ao-prepass`,
-`ao-occlusion`, `ao-blur`), then the first world view of a frame's `world`
-pass, its `particles` pass (soft sprites and billboards, timed in the frames
-that draw it), the frame's shadow-layer passes together (`shadows`, timed in
-the frames that render layers), its `bloom-exposure` passes (with sun shafts) together and its
-`finish` pass
-([exposure, tone mapping and fog](lighting-and-sky.md#exposure-tone-mapping-and-fog)),
-a frame's share of building [the sky's
-light](lighting-and-sky.md#the-skys-light) (`sky-light`), and the
-[water](lighting-and-sky.md#water)'s copy of the opaque scene (`water-copy`,
-timed in the views that draw water; part of the `world` pass), and the
-`upscale` stage, which brings a frame drawn at a render scale below 1, or
-with [temporal anti-aliasing](lighting-and-sky.md#temporal-upscaling-taau)
-or [DLSS](lighting-and-sky.md#dlss), to the output's size; `gpu.upscale`
-names that stage and the last frame's render and output resolutions, and
-why DLSS is refused while asked for. `gpu.water.refused` says why a device has no copy of the scene's colour
-for water, if it has none. `gpu.decals` is the [projected decals](lighting-and-sky.md#projected-decals)
+milliseconds of each renderer pass that is timed, in the frames that draw it,
+with the adapter's compute limits beside them:
+- the compute passes: `gpu-cull`, `occlusion`, `scatter-select`,
+  `light-clusters`, `volumetric-fog`, the ambient occlusion passes
+  (`ao-prepass`, `ao-occlusion`, `ao-blur`) and a frame's share of building
+  [the sky's light](lighting-and-sky.md#the-skys-light) (`sky-light`);
+- the frame's shadow-layer passes together (`shadows`, and `backdrop-shadows`
+  for [the backdrop](lighting-and-sky.md#the-backdrop)'s cascades);
+- the first world view's `world` pass, with the
+  [water](lighting-and-sky.md#water)'s copy of the opaque scene inside it
+  (`water-copy`), and its `clouds`, `backdrop`, `particles` (soft sprites and
+  billboards) and `precipitation` passes;
+- its `bloom-exposure` passes (with sun shafts) together and its `finish`
+  pass
+  ([exposure, tone mapping and fog](lighting-and-sky.md#exposure-tone-mapping-and-fog));
+- a product [image effect](lighting-and-sky.md#image-effects)
+  (`image-effect`), or the `upscale` stage, which brings a frame drawn at a
+  render scale below 1, or with
+  [temporal anti-aliasing](lighting-and-sky.md#temporal-upscaling-taau) or
+  [DLSS](lighting-and-sky.md#dlss), to the output's size.
+
+`gpu.upscale` names that stage and the last frame's render and output
+resolutions, and why DLSS is refused while asked for. `gpu.water.refused`
+says why a device has no copy of the scene's colour for water, if it has
+none. `gpu.decals` is the [projected decals](lighting-and-sky.md#projected-decals)
 (their count, grid entries, busiest cell, bytes and last rebuild),
 `gpu.wetness` the [wetness](lighting-and-sky.md#wet-surfaces) and
 `gpu.snow` the [snow cover](lighting-and-sky.md#snow-cover) in force, whose
@@ -142,9 +149,6 @@ frame. A still snapshot also renders its shadow layers only once:
 `--rerender-shadows` renders them all in every extra frame, so `shadows` and
 the frame times show the uncached cost. The report's `shadows` gives the
 layers, pages, atlas bytes and the layers and casters the last frame rendered.
-On an RX 9070 XT at 1280×720, a Hotel floor's 138 layers (23 shadowed
-lights, 2,053 caster draws) take 1.24 ms of GPU time re-rendered; the
-atlas is 64 MiB.
 
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`
 in `product-host`) as UTF-8 JSON bytes through
@@ -160,9 +164,11 @@ snapshot as it is, then once per renderer feature it leaves off or below its
 top quality, each turned on at its Engine default:
 
 - the [video options](lighting-and-sky.md#video-options) catalogue's
-  features: render scale 1, 4× antialiasing, shadows, no shadow budget, each
-  ambient occlusion mode not drawn, clustered lighting and GPU culling (vsync
-  and occlusion strength and radius are tuning, not features);
+  features: render scale 1, 4× antialiasing, shadows, backdrop shadows, no
+  shadow budget, each ambient occlusion mode not drawn, low volumetric fog,
+  clouds and water reflections, clustered lighting, GPU culling and
+  vegetation occlusion (vsync and occlusion strength and radius are tuning,
+  not features);
 - indirect light, when the scene has no probe volume: one 48×24×48 m around
   the camera, labelled as a stand-in, since a game places its own;
 - everything on together.
@@ -182,8 +188,7 @@ frame-time change and the share of pixels it changed by more than 2 levels,
 or "no visible change"), and `gallery.md` and `gallery.json` with the frame
 times, the GPU passes that rose most, refusals and notes. A feature with no
 visible change in a scene (GPU culling, clustered lighting, distance-field
-occlusion in a mesh room) shows only its cost. A CraftSurvive meadow on an RX
-9070 XT draws seven variants in about 6 seconds.
+occlusion in a mesh room) shows only its cost.
 
 Live, `engine.renderer.gallery <directory> [width height]` snapshots the
 current view into `<directory>/scene.rscene` and starts the same gallery with

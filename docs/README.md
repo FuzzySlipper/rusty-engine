@@ -56,7 +56,9 @@ The root [README](../README.md) is the repository landing page and
   product's ground, advanced on an Engine worker through admitted time,
   sampled and drawn.
 - [Lighting and skies](lighting-and-sky.md): retained torch lighting, voxel
-  irradiance queries, persistence and product-clock panorama blending.
+  irradiance queries, persistence and product-clock panorama blending, and
+  the renderer settings: render scale, temporal upscaling (TAAU and DLSS)
+  and the player's video options.
 - [Portable assets](portable-assets.md): Engine-owned sprite/model semantics
   over loose files and bundles.
 - [Appearance tweens](appearance-tweens.md): Engine-played hops, squash and
@@ -65,7 +67,8 @@ The root [README](../README.md) is the repository landing page and
   motion played as tweens, sway and head bob, and arms that reach and hold
   by rig profile.
 - [Skeleton poses](skeleton-poses.md): two-bone IK and joint overrides over
-  animated meshes, and reading back the drawn joints.
+  animated meshes, evaluated once by the Engine, and reading the evaluated
+  joints.
 - [Recorded audio](recorded-audio.md): clip containers and device playback.
 - [HTTP downloads](http-downloads.md): outbound HTTPS fetches, library
   downloads and update checks.

@@ -4,7 +4,7 @@ These capabilities are part of the ordinary generated C# SDK. The packaged
 [`csharp-world-streaming`](../fixtures/csharp-world-streaming/README.md)
 fixture exercises them.
 
-## Movement modes (#8609)
+## Movement modes
 
 Set `CharacterControllerCommand.Movement` when calling
 `Spatial.ProposeCharacterStep`. Walking (the default) is the ordinary
@@ -39,7 +39,7 @@ Engine keeps no environment registry and no second simulation clock.
 See [movement source](../rust/crates/engine-spatial/src/character_modes.rs) and
 [solver tests](../rust/crates/engine-spatial/tests/character_modes.rs).
 
-## Per-cell state (#8610)
+## Per-cell state
 
 A solid cell stores a material slot and fifteen state bits: two low bits encode
 quarter turns about +Y; thirteen upper bits encode a product-defined variant or
@@ -72,7 +72,7 @@ merging, so state diversity affects geometry cost even for a solid volume.
 Rich inventories, articulated doors and behavior belong to product objects;
 an ordinary block keeps its orientation and stage without an entity.
 
-## Engine call affinity (#8611)
+## Engine call affinity
 
 All `IEngineContext` services and their native handles are **callback-confined**:
 call them synchronously within the Engine-invoked product construction,
@@ -127,7 +127,7 @@ are unchanged. See
 [distance level of detail](smooth-voxel-surfaces.md#distance-level-of-detail)
 and `fixtures/csharp-voxel-lod`.
 
-## Residency and remesh budgets (#8612)
+## Residency and remesh budgets
 
 See [voxel residency and edit costs](voxel-budgets.md) for limits, CPU and
 memory measurements, and geometry diversity.
