@@ -128,8 +128,7 @@ fn triplanar_normal(n: vec3<f32>, samples: array<vec3<f32>, 3>, weights: vec3<f3
 // hexagonal neighbourhood shows a different patch, and a point blends its
 // triangle's three vertices' patches. `turn` (the cosine and sine of each
 // patch's rotation) takes uv to its texture; derivatives follow it, so
-// filtering does not jump at tile edges. A turn is a vector, not a mat2x2:
-// FXC (DX12) rejects a 2-row matrix inside a struct or array.
+// filtering does not jump at tile edges.
 struct HexTiles {
     uv: array<vec2<f32>, 3>,
     turn: array<vec2<f32>, 3>,

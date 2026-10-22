@@ -757,73 +757,18 @@ mod tests {
         });
     }
 
-    /// The struct members and array elements of `module` that are 2-row
-    /// matrices. naga's HLSL backend wraps those in a struct, which FXC (the
-    /// DX12 compiler) will not convert to and from the matrix (#9674), so a
-    /// shader that compiles on Vulkan fails on Windows.
-    fn fxc_wrapped_matrices(module: &naga::Module) -> Vec<String> {
-        let two_rows = |ty: naga::Handle<naga::Type>| {
-            matches!(
-                module.types[ty].inner,
-                naga::TypeInner::Matrix {
-                    rows: naga::VectorSize::Bi,
-                    ..
-                }
-            )
-        };
-        let mut found = Vec::new();
-        for (_, ty) in module.types.iter() {
-            let name = ty.name.clone().unwrap_or_default();
-            match &ty.inner {
-                naga::TypeInner::Struct { members, .. } => {
-                    for member in members.iter().filter(|member| two_rows(member.ty)) {
-                        found.push(format!(
-                            "{name}.{}",
-                            member.name.clone().unwrap_or_default()
-                        ));
-                    }
-                }
-                naga::TypeInner::Array { base, .. } if two_rows(*base) => {
-                    found.push(format!("an array of 2-row matrices {name}"));
-                }
-                _ => {}
-            }
-        }
-        found
-    }
-
-    /// `module` written through naga's HLSL backend, as wgpu's DX12 backend
-    /// writes it before FXC compiles it.
-    fn write_hlsl(module: &naga::Module) -> Result<(), String> {
-        let info = naga::valid::Validator::new(
+    fn validate(module: &naga::Module) -> Result<(), String> {
+        naga::valid::Validator::new(
             naga::valid::ValidationFlags::all(),
             naga::valid::Capabilities::all(),
         )
         .validate(module)
-        .map_err(|error| format!("{error:?}"))?;
-        // Overridable constants take their defaults, as a pipeline that
-        // sets none of them gets.
-        let (module, info) = naga::back::pipeline_constants::process_overrides(
-            module,
-            &info,
-            None,
-            &Default::default(),
-        )
-        .map_err(|error| error.to_string())?;
-        let mut hlsl = String::new();
-        naga::back::hlsl::Writer::new(
-            &mut hlsl,
-            &naga::back::hlsl::Options::default(),
-            &naga::back::hlsl::PipelineOptions::default(),
-        )
-        .write(&module, &info, None)
         .map(|_| ())
-        .map_err(|error| error.to_string())
+        .map_err(|error| format!("{error:?}"))
     }
 
     /// Every entry composes and validates under every feature set it can be
-    /// compiled with, without a device, writes as HLSL (the DX12 path), and
-    /// holds no type FXC rejects.
+    /// compiled with, without a device.
     #[test]
     fn every_entry_composes_under_every_feature_set() {
         let compose = |shaders: &mut Shaders, entry: Entry, features: Features| {
@@ -835,15 +780,8 @@ mod tests {
                 shader_defs: features.defs(),
                 ..Default::default()
             }) {
-                Ok(module) => {
-                    let wrapped = fxc_wrapped_matrices(&module);
-                    assert!(
-                        wrapped.is_empty(),
-                        "{entry:?} {features:?}: FXC cannot compile {wrapped:?}"
-                    );
-                    write_hlsl(&module)
-                        .unwrap_or_else(|error| panic!("{entry:?} {features:?}: HLSL: {error}"));
-                }
+                Ok(module) => validate(&module)
+                    .unwrap_or_else(|error| panic!("{entry:?} {features:?}: {error}")),
                 Err(error) => panic!(
                     "{entry:?} {features:?}: {}",
                     error.emit_to_string(&shaders.composer)

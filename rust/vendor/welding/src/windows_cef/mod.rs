@@ -473,7 +473,7 @@ impl CefSurfaceProducer for WindowsCefProducer {
             .lock()
             .unwrap()
             .take()
-            .map(|frame| WgpuTextureImporter::import_owned_dx12_callback_frame(frame, ctx))
+            .map(|frame| WgpuTextureImporter::import(NativeFrame::Dx12SharedTexture(frame), ctx))
             .transpose()
             .map_err(Into::into)
     }
@@ -492,7 +492,8 @@ impl CefSurfaceProducer for WindowsCefProducer {
             let Some(frame) = self.popup_slot.lock().unwrap().take() else {
                 return Ok(None);
             };
-            let texture = WgpuTextureImporter::import_owned_dx12_callback_frame(frame, ctx)?;
+            let texture =
+                WgpuTextureImporter::import(NativeFrame::Dx12SharedTexture(frame), ctx)?;
             return Ok(Some(crate::surface::PopupSurface { texture, rect }));
         }
         #[cfg(not(feature = "cef-runtime"))]

@@ -73,18 +73,11 @@ optional = true
 
 [dependencies.cef]
 version = "154.5.0"
-features = [
-    "accelerated_osr",
-    "sandbox",
-]
+features = ["sandbox"]
 optional = true
 
 [dependencies.dpi]
 version = "0.1.2"
-
-[dependencies.grafting]
-version = "0.6.0"
-default-features = false
 
 [dependencies.log]
 version = "0.4"
@@ -110,8 +103,13 @@ package = "wgpu"
 
 [dependencies.wgpu_30]
 version = "30.0.1"
-features = ["metal"]
+features = [
+    "std",
+    "metal",
+    "vulkan",
+]
 optional = true
+default-features = false
 package = "wgpu"
 
 [dependencies.wgpu_hal_28]
@@ -128,6 +126,10 @@ package = "wgpu-hal"
 version = "30.0.1"
 optional = true
 package = "wgpu-hal"
+
+[target.'cfg(not(windows))'.dependencies.grafting]
+version = "0.6.0"
+default-features = false
 
 [target.'cfg(target_os = "linux")'.dependencies.libc]
 version = "0.2"
@@ -163,15 +165,18 @@ features = [
     "objc2-io-surface",
 ]
 
+[target."cfg(windows)".dependencies.ash]
+version = "0.38.0"
+
 [target."cfg(windows)".dependencies.windows]
 version = "0.62"
 features = [
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
-    "Win32_Graphics_Direct3D12",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Win32_Security",
     "Win32_System_Memory",
     "Win32_System_Threading",
 ]

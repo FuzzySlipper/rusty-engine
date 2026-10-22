@@ -14,7 +14,8 @@ render-host-contracts.workspace = true
 render-presentation.workspace = true
 render-video.workspace = true
 # Only this crate may depend on wgpu (scripts/dependency_boundary_check.py).
-wgpu = { version = "30.0.1", features = ["naga-ir"] }
+# No DX12: Windows draws with Vulkan (docs/desktop-shell.md).
+wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "gles", "wgsl", "naga-ir"] }
 # The standard shader family, composed into the modules pipelines take.
 render-shaders.workspace = true
 glam.workspace = true

@@ -184,9 +184,15 @@ An installer is chosen when a product asks for one.
 - **Windows:** measured on an RTX 3080 with Windows 11. That machine is the
   shared Windows test box: agents playtest on it through crew-services
   (`environment: "windows-desktop"`), and its access, agent and build setup are
-  in crew-services `docs/playtest-windows.md`. The device is DX12,
-  which Chromium's shared textures require; Chromium's D3D11 frames are copied
-  into textures shared with it.
+  in crew-services `docs/playtest-windows.md`.
+  - The window draws with Vulkan; the Engine builds no DX12 backend. Each
+    Chromium repaint, a D3D11 texture, is copied on the GPU Vulkan draws with
+    (matched by its LUID) into a texture with an NT handle. The device imports
+    that texture (`VK_KHR_external_memory_win32`) and takes it from the
+    external queue family, about 0.1 ms per repaint on the render thread.
+  - Without a Vulkan GPU with that extension, or on a software adapter, the
+    window refuses to open and the host's error names the reason. The
+    renderer readout names the adapter and its backend.
   - `libcef.dll` is delay-loaded, so the pack keeps the Linux layout: the host
     points the DLL search at `lib/cef` before Chromium's first use.
   - The browser is created asynchronously; the page takes keyboard focus once

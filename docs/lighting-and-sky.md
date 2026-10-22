@@ -1414,7 +1414,7 @@ DecalReadout decals = engine.CameraView.ReadDecals();
   without the angle falloff; a world view with none placed pays one read.
   Rebuilding 2,000 takes about 0.25 ms of CPU time and uploads 0.3 MB.
 - They need 18 sampled textures per shader stage, two more than WebGPU
-  guarantees; the Vulkan and DX12 adapters this renderer targets have them.
+  guarantees; the Vulkan adapters this renderer targets have them.
   A device without them lays none, and `gpu.decals.refused` says why.
 
 ## Precipitation

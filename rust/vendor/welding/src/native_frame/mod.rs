@@ -21,7 +21,6 @@ use dpi::PhysicalSize;
 pub enum InteropBackend {
     Vulkan,
     Metal,
-    Dx12,
     Unknown,
 }
 
@@ -36,11 +35,6 @@ impl InteropBackend {
             #[cfg(target_vendor = "apple")]
             if device.as_hal::<wgpu::wgc::api::Metal>().is_some() {
                 return InteropBackend::Metal;
-            }
-
-            #[cfg(target_os = "windows")]
-            if device.as_hal::<wgpu::wgc::api::Dx12>().is_some() {
-                return InteropBackend::Dx12;
             }
         }
 
@@ -57,7 +51,7 @@ impl InteropBackend {
 pub enum NativeFrame {
     /// Windows: shared handle to a weld-owned D3D11 texture copied from CEF's
     /// pooled resource inside `OnAcceleratedPaint`.
-    /// Imported via the D3D12 open-shared path.
+    /// Imported into Vulkan (`VK_KHR_external_memory_win32`).
     ///
     /// # Handle lifetime
     /// CEF's source `HANDLE` and pooled resource are used only inside
@@ -139,7 +133,7 @@ pub struct Dx12SharedTexture {
     /// CEF's callback-scoped handle is never stored directly. The Windows
     /// callback copier produces an application-owned shared texture, and the
     /// importer converts it into an `OwnedHandle` exactly once before handing
-    /// it to Graft's owned shared-resource wrapper.
+    /// it to the Vulkan import.
     #[cfg(windows)]
     handle: std::os::windows::io::OwnedHandle,
     size: PhysicalSize<u32>,
@@ -546,8 +540,6 @@ pub enum ImportError {
     Unsupported(NativeFrameKind),
     #[error("D3D11 open-shared-resource failed: {0}")]
     D3d11OpenShared(String),
-    #[error("D3D12 open-shared-handle failed: {0}")]
-    D3d12OpenShared(String),
     #[error("Metal IOSurface import failed: {0}")]
     MetalImport(String),
     #[error("Vulkan external memory import failed: {0}")]
@@ -559,7 +551,7 @@ pub enum ImportError {
 // ── Platform import paths ─────────────────────────────────────────────────────
 
 #[cfg(windows)]
-mod dx12;
+mod d3d11;
 #[cfg(target_vendor = "apple")]
 mod metal;
 #[cfg(target_os = "linux")]
@@ -569,7 +561,7 @@ mod vulkan_dmabuf;
 pub use vulkan_dmabuf::build_dmabuf_capable_device;
 
 #[cfg(windows)]
-pub use dx12::D3d11CallbackFrameCopier;
+pub use d3d11::D3d11CallbackFrameCopier;
 
 // ── Importer ─────────────────────────────────────────────────────────────────
 
@@ -589,7 +581,7 @@ impl WgpuTextureImporter {
         ctx: &HostWgpuContext,
     ) -> Result<ImportedTexture, ImportError> {
         match frame {
-            NativeFrame::Dx12SharedTexture(f) => Self::import_dx12(f, ctx),
+            NativeFrame::Dx12SharedTexture(f) => Self::import_d3d11(f, ctx),
             NativeFrame::MetalTextureRef(f) => Self::import_metal(f, ctx),
             NativeFrame::DmaBufImage(f) => Self::import_vulkan(f, ctx),
             #[cfg(feature = "cpu-paint-fallback")]
@@ -597,13 +589,13 @@ impl WgpuTextureImporter {
         }
     }
 
-    fn import_dx12(
+    fn import_d3d11(
         frame: Dx12SharedTexture,
         ctx: &HostWgpuContext,
     ) -> Result<ImportedTexture, ImportError> {
         #[cfg(windows)]
         {
-            return dx12::import_dx12(frame, ctx);
+            return d3d11::import_d3d11(frame, ctx);
         }
 
         #[cfg(not(windows))]

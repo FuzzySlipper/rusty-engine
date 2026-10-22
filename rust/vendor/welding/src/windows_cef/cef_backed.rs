@@ -120,7 +120,7 @@ cef::wrap_render_handler! {
                     return;
                 }
             };
-            match WgpuTextureImporter::copy_dx12_callback_frame_to_owned(
+            match WgpuTextureImporter::copy_d3d11_callback_frame_to_owned(
                 frame,
                 &self.handler.callback_copier,
             ) {

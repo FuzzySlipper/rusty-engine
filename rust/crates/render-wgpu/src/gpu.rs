@@ -35,7 +35,8 @@ pub struct AdapterSummary {
 ///
 /// `WGPU_BACKEND`, `WGPU_ADAPTER_NAME` and `WGPU_POWER_PREF` select the adapter
 /// as wgpu documents them. CI selects software Vulkan with
-/// `WGPU_BACKEND=vulkan` and the llvmpipe (lvp) ICD.
+/// `WGPU_BACKEND=vulkan` and the llvmpipe (lvp) ICD. A window with the web
+/// overlay on Windows always draws with Vulkan (`Gpu::window_refusal`).
 #[derive(Clone)]
 pub struct Gpu {
     pub(crate) instance: wgpu::Instance,
@@ -88,17 +89,17 @@ impl Gpu {
         #[allow(unused_mut)]
         let mut descriptor =
             wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()));
-        // Chromium hands the web overlay's frames over as D3D shared textures,
-        // which only a DX12 device can import.
         #[cfg(all(feature = "web-overlay", windows))]
-        if std::env::var_os("WGPU_BACKEND").is_none() {
-            descriptor.backends = wgpu::Backends::DX12;
+        {
+            descriptor.backends = wgpu::Backends::VULKAN;
         }
         let instance = wgpu::Instance::new(descriptor);
         let surface = instance
             .create_surface(window)
             .map_err(|error| GpuError::Surface(error.to_string()))?;
         let gpu = Self::from_instance(instance, Some(&surface))?;
+        #[cfg(all(feature = "web-overlay", windows))]
+        gpu.window_refusal()?;
         let surface = crate::WindowSurface::new(&gpu, surface, width, height)?;
         Ok((gpu, surface))
     }
@@ -114,10 +115,39 @@ impl Gpu {
         let mut descriptor =
             wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display));
         #[cfg(all(feature = "web-overlay", windows))]
-        if std::env::var_os("WGPU_BACKEND").is_none() {
-            descriptor.backends = wgpu::Backends::DX12;
+        {
+            descriptor.backends = wgpu::Backends::VULKAN;
         }
-        Self::from_instance(wgpu::Instance::new(descriptor), None)
+        let gpu = Self::from_instance(wgpu::Instance::new(descriptor), None)?;
+        #[cfg(all(feature = "web-overlay", windows))]
+        gpu.window_refusal()?;
+        Ok(gpu)
+    }
+
+    /// Refuses, naming the reason, a device that cannot draw a window with
+    /// the web overlay on Windows. The overlay imports Chromium's frames,
+    /// D3D11 textures, into Vulkan with `VK_KHR_external_memory_win32`
+    /// (`welding`); a software adapter is refused too.
+    #[cfg(all(feature = "web-overlay", windows))]
+    fn window_refusal(&self) -> Result<(), GpuError> {
+        let info = self.adapter.get_info();
+        if info.device_type == wgpu::DeviceType::Cpu {
+            return Err(GpuError::NoAdapter(format!(
+                "{} is a software adapter; the desktop window needs a Vulkan GPU",
+                info.name
+            )));
+        }
+        if !self
+            .device
+            .features()
+            .contains(wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32)
+        {
+            return Err(GpuError::NoAdapter(format!(
+                "{} ({}) cannot import the UI's D3D11 textures: the desktop window needs VK_KHR_external_memory_win32",
+                info.name, info.driver
+            )));
+        }
+        Ok(())
     }
 
     fn from_instance(
@@ -344,8 +374,15 @@ impl ComputeLimits {
 #[cfg(not(all(feature = "web-overlay", target_os = "linux")))]
 fn request_device(
     adapter: &wgpu::Adapter,
-    descriptor: wgpu::DeviceDescriptor<'_>,
+    #[allow(unused_mut)] mut descriptor: wgpu::DeviceDescriptor<'_>,
 ) -> Result<(wgpu::Device, wgpu::Queue), GpuError> {
+    // The web overlay imports Chromium's frames, D3D11 textures, with
+    // `VK_KHR_external_memory_win32` (`Gpu::window_refusal`).
+    #[cfg(all(feature = "web-overlay", windows))]
+    {
+        descriptor.required_features |=
+            adapter.features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32;
+    }
     pollster::block_on(adapter.request_device(&descriptor))
         .map_err(|error| GpuError::Device(error.to_string()))
 }
