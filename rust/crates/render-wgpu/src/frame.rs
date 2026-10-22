@@ -3068,6 +3068,15 @@ impl Renderer {
         if world_layer && backdrop.is_none() {
             self.encode_background(&mut encoder, &view, sky_index);
         }
+        // Under a motion target the world pass writes the sky's motion
+        // where it leaves the sky (or its backdrop) open (`motion.rs`).
+        let sky_motion = world_layer && view.sky && view.motion.is_some();
+        if sky_motion {
+            pipelines_created += u32::from(
+                self.layouts
+                    .prepare_sky_motion(&self.gpu.device, &mut self.pipelines[format_index]),
+            );
+        }
         // Bloom spreads the world's light; auto exposure adapts at the first
         // world view of a frame. Both read the world resolved.
         let bloom = self
@@ -3255,6 +3264,12 @@ impl Renderer {
             if world_layer {
                 encoded.draws += self.draw_ghost_plates(&mut pass, hdr_format);
                 pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            }
+            // The sky's motion at the far plane, after the opaque world and
+            // before what blends over it.
+            if let Some(pipeline) = pipelines.sky_motion().filter(|_| sky_motion) {
+                pass.set_pipeline(pipeline);
+                pass.draw(0..3, 0..1);
             }
             // Blended parts are not in the pre-pass's depth, so the occlusion
             // under them belongs to what they cover: they draw without it.

@@ -40,10 +40,10 @@
 //!   previous history reprojected by the motion target (dilated to the
 //!   nearest depth), clipped to this frame's neighbourhood in YCoCg, and
 //!   blended by how many frames it holds and how near this frame's samples
-//!   fall. Pixels with no motion of their own (the sky, clouds and water,
-//!   `motion.rs`) lean on the current frame. Below render scale 1 the
-//!   history is lightly sharpened into the output. The stage reads the
-//!   finished picture, after tone mapping, so it needs no exposure.
+//!   fall. Pixels with no motion of their own (water, `motion.rs`) lean
+//!   on the current frame. Below render scale 1 the history is lightly
+//!   sharpened into the output. The stage reads the finished picture,
+//!   after tone mapping, so it needs no exposure.
 //!
 //!   A software adapter refuses it (`Renderer::temporal_refusal`) and
 //!   draws bilinear at the render scale, without anti-aliasing. A product

@@ -14,8 +14,8 @@
 //   to the neighbourhood's colour box in YCoCg, so what the history holds
 //   that this frame no longer shows does not linger;
 // - blends the two by how much history the pixel has gathered and how well
-//   this frame sampled it. Pixels with no motion of their own (the sky, its
-//   clouds, water; `rusty::types::NO_MOTION`) take the history where they
+//   this frame sampled it. Pixels with no motion of their own (water;
+//   `rusty::types::NO_MOTION`) take the history where they
 //   are and a large share of this frame: they cannot ghost far.
 //
 // Colour works in the finished picture's linear values (it was already tone

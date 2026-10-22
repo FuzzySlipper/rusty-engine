@@ -4,11 +4,14 @@
 // (`Frame.moon`, `fs_moon`); and the cloud layer
 // over both, flat (`fs_clouds`) or raymarched (`fs_clouds_march`, drawn by
 // `fs_clouds_composite`). With a disc radiance the sun's light, and the
-// moon's, also go to bloom (`fs_sun_glow`).
+// moon's, also go to bloom (`fs_sun_glow`). Under a motion target the world
+// pass writes the sky's motion where it leaves the sky open
+// (`fs_sky_motion`).
 
 #import rusty::types::PI
 #import rusty::view::{frame, world_equivalent}
 #import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, cloud_kind_detail, cloud_moonlight, cloud_sunlight, CLOUD_OCTAVES}
+#import rusty::motion::{motion_at, previous_pixel_toward}
 
 struct SkyUniform {
     // x: blend amount toward the second panorama
@@ -468,4 +471,18 @@ fn fs_sun_glow_marched(in: SkyOut) -> @location(0) vec4<f32> {
     let uv = vec2<f32>(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
     let clouds = textureSampleLevel(cloud_current, cloud_sampler, uv, 0.0).a;
     return vec4<f32>(glow * (1.0 - clouds), 0.0);
+}
+
+// The sky's motion (render-wgpu `motion.rs`), drawn by the world pass at the
+// far plane over its motion target, so it writes only where the world left
+// the sky open. The sky, the backdrop behind the world, the sun and the
+// moon stand at infinity: they move as the camera turns, not as it moves.
+struct SkyMotionOut {
+    @location(1) motion: vec4<f32>,
+};
+
+@fragment
+fn fs_sky_motion(in: SkyOut) -> SkyMotionOut {
+    let previous = previous_pixel_toward(view_direction(in.ndc));
+    return SkyMotionOut(vec4<f32>(motion_at(in.clip, previous), 0.0, 1.0));
 }

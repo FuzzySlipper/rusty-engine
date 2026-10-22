@@ -73,8 +73,8 @@ fn fs_convert(in: FullscreenOut) -> @location(0) vec4<f32> {
 // The motion target as inspection shows it (render-wgpu `motion.rs`): red
 // and green are the motion's x and y, render pixels to the right and down,
 // as 0.5 + motion / (2 MOTION_VIEW_RANGE), clamped; blue is 0.5. A still
-// pixel is grey; one with no motion of its own (`NO_MOTION`: the sky,
-// water) is blue. `fs_motion_srgb` writes to an sRGB target the value that
+// pixel is grey; one with no motion of its own (`NO_MOTION`: water) is
+// blue. `fs_motion_srgb` writes to an sRGB target the value that
 // encodes as those fractions.
 const MOTION_VIEW_RANGE: f32 = 16.0;
 

@@ -34,6 +34,12 @@ fn previous_clip(p: vec3<f32>) -> vec4<f32> {
     return motion.previous_view_proj * vec4<f32>(p - motion.previous_camera.xyz, 1.0);
 }
 
+// Where a point at infinity along `direction` stood in the previous frame,
+// as homogeneous target pixels: it moves only as the camera turns.
+fn previous_pixel_toward(direction: vec3<f32>) -> vec4<f32> {
+    return target_pixel_of(motion.previous_view_proj * vec4<f32>(direction, 0.0));
+}
+
 // A previous clip position as homogeneous target pixels: what a vertex
 // stage passes on for `motion_at`.
 fn target_pixel_of(clip: vec4<f32>) -> vec4<f32> {

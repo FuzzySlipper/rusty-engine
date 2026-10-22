@@ -164,6 +164,10 @@ pub(crate) struct Pipelines {
     /// The raymarched clouds' reduced target over the background
     /// (`fs_clouds_composite`).
     pub clouds_composite: wgpu::RenderPipeline,
+    /// On a world target with a motion target: the sky's motion where the
+    /// world leaves it open (`sky.wgsl` `fs_sky_motion`), made as a view
+    /// first draws it (`Layouts::prepare_sky_motion`).
+    sky_motion: Option<wgpu::RenderPipeline>,
     world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
     /// The world draws into this target: it holds every known variant.
     pub draws_world: bool,
@@ -173,6 +177,11 @@ impl Pipelines {
     /// A pipeline `Layouts::prepare` made before the pass was encoded.
     pub fn get(&self, pass: Pass, features: Features) -> &wgpu::RenderPipeline {
         &self.world[&(features, pass)]
+    }
+
+    /// The sky's motion, once `Layouts::prepare_sky_motion` made it.
+    pub fn sky_motion(&self) -> Option<&wgpu::RenderPipeline> {
+        self.sky_motion.as_ref()
     }
 }
 
@@ -344,7 +353,8 @@ impl Layouts {
             // read.
             storage_entry(14),
             // The motion uniform and the previous models (`motion.rs`),
-            // which only vertex stages read.
+            // which only vertex stages read, but for the sky's motion
+            // (`sky.wgsl` `fs_sky_motion`), which reads the uniform.
             uniform_entry(15),
             storage_entry(16),
         ]
@@ -352,6 +362,9 @@ impl Layouts {
             entry.visibility |= wgpu::ShaderStages::COMPUTE;
             if entry.binding >= 14 {
                 entry.visibility = wgpu::ShaderStages::VERTEX;
+            }
+            if entry.binding == 15 {
+                entry.visibility |= wgpu::ShaderStages::FRAGMENT;
             }
             // The sky's irradiance lights fragments and the fog's froxels:
             // its storage leaves the vertex stage room for the previous
@@ -864,9 +877,58 @@ impl Layouts {
                     },
                 }),
             ),
+            sky_motion: None,
             world: HashMap::new(),
             draws_world: false,
         }
+    }
+
+    /// Make the sky's motion pipeline on a world target with a motion
+    /// target (`Pipelines::sky_motion`): a far-plane triangle that passes
+    /// the depth test only where the world drew nothing, writing the motion
+    /// alone. Returns whether it was made now.
+    pub fn prepare_sky_motion(&self, device: &wgpu::Device, pipelines: &mut Pipelines) -> bool {
+        if pipelines.sky_motion.is_some() {
+            return false;
+        }
+        let target = pipelines.target;
+        pipelines.sky_motion = Some(device.create_render_pipeline(
+            &wgpu::RenderPipelineDescriptor {
+                label: Some("render-wgpu sky motion"),
+                layout: Some(&self.sun_pipeline),
+                vertex: wgpu::VertexState {
+                    module: &self.sky_shader,
+                    entry_point: Some("vs_sky"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: target.multisample(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.sky_shader,
+                    entry_point: Some("fs_sky_motion"),
+                    compilation_options: Default::default(),
+                    targets: &target.targets(
+                        wgpu::ColorTargetState {
+                            format: target.format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::empty(),
+                        },
+                        MotionWrite::Cover,
+                    ),
+                }),
+                multiview_mask: None,
+                cache: None,
+            },
+        ));
+        true
     }
 
     /// A part draws `features` in `pass`: make its pipelines on each world

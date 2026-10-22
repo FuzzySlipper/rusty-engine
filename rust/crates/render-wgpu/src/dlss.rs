@@ -25,7 +25,7 @@
 //! depth with the viewmodel's over it, scaled before every world surface
 //! (`dlss_depth.wgsl`). The motion target holds how far each point moved in
 //! render pixels; DLSS takes the way back, so its scale is -1. `NO_MOTION`
-//! (the sky, clouds and water) reads to DLSS as a point come from far off
+//! (water) reads to DLSS as a point come from far off
 //! screen, so there it takes the current frame, as TAAU leans on it. The
 //! picture is finished and tone-mapped, so DLSS runs on low dynamic range
 //! with no exposure. It writes a storage texture at output size (a surface

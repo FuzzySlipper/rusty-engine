@@ -129,7 +129,7 @@ fn the_world_moves_against_a_turning_camera_and_holds_still_with_it() {
     let (second, _) = draw(&mut harness, &eye(0.0));
     assert!(!second.motion.unwrap().history_reset);
     // Turning 2° right moves the cube at the centre left by the focal
-    // length times tan 2°; the background has no motion of its own.
+    // length times tan 2°, and the open background with it.
     let (_, turned) = draw(&mut harness, &eye(2.0));
     let expected = -FOCAL_PIXELS * 2.0_f32.to_radians().tan();
     assert_close(
@@ -138,7 +138,12 @@ fn the_world_moves_against_a_turning_camera_and_holds_still_with_it() {
         0.4,
         "the cube against the turn",
     );
-    assert!(no_motion(&turned, 4, 4), "the background");
+    assert_close(
+        motion(&turned, 4, 4),
+        turned_sky(4, 4, 2.0),
+        0.4,
+        "the background",
+    );
     let (_, held) = draw(&mut harness, &eye(2.0));
     assert_close(
         motion(&held, CENTRE.0, CENTRE.1),
@@ -146,6 +151,66 @@ fn the_world_moves_against_a_turning_camera_and_holds_still_with_it() {
         0.2,
         "a camera that holds",
     );
+}
+
+/// The motion of the open sky at pixel (x, y) as the camera turns `yaw`
+/// degrees right: the direction seen there stood `yaw` further right.
+fn turned_sky(x: u32, y: u32, yaw: f32) -> [f32; 2] {
+    let across = x as f32 + 0.5 - CENTRE.0 as f32;
+    let down = y as f32 + 0.5 - CENTRE.1 as f32;
+    let angle = (across / FOCAL_PIXELS).atan();
+    let before = angle + yaw.to_radians();
+    [
+        across - FOCAL_PIXELS * before.tan(),
+        down - down * angle.cos() / before.cos(),
+    ]
+}
+
+#[test]
+fn the_open_sky_moves_with_a_turning_camera_and_holds_under_a_walk() {
+    let mut harness = harness();
+    harness.apply(cube_ahead(3.0));
+    let walker = |z: f64, yaw: f64, pitch: f64| camera("eye", [0.0, 0.0, z], yaw, pitch);
+    draw(&mut harness, &walker(0.0, 0.0, 0.0));
+    // A walk toward the cube: the cube grows, the sky holds.
+    let (_, walked) = draw(&mut harness, &walker(-0.3, 0.0, 0.0));
+    let (left, _) = moving(&walked, 0, 1.0);
+    let (_, right) = moving(&walked, 0, 1.0);
+    assert!(
+        left > 0 && right > 0,
+        "the cube's edges spread: {left}, {right}"
+    );
+    for (x, y) in [(4, 4), (315, 175), (40, 90), (160, 10)] {
+        assert_close(motion(&walked, x, y), [0.0, 0.0], 0.2, "the walked sky");
+    }
+    // A turn moves every open pixel by the turn alone.
+    let (_, turned) = draw(&mut harness, &walker(-0.3, 2.0, 0.0));
+    for (x, y) in [(4, 4), (315, 175), (40, 90), (160, 10)] {
+        assert_close(
+            motion(&turned, x, y),
+            turned_sky(x, y, 2.0),
+            0.4,
+            &format!("the turned sky at {x}, {y}"),
+        );
+    }
+    // Looking 2° up moves it down: what is seen above the centre stood 2°
+    // higher.
+    let (_, raised) = draw(&mut harness, &walker(-0.3, 2.0, 2.0));
+    let above = CENTRE.1 as f32 - 10.5;
+    let seen = (above / FOCAL_PIXELS).atan();
+    let expected = FOCAL_PIXELS * (seen + 2.0_f32.to_radians()).tan() - above;
+    assert_close(
+        motion(&raised, 160, 10),
+        [0.0, expected],
+        0.4,
+        "the raised sky",
+    );
+    // Nothing is left without motion of its own.
+    let blue = (0..HEIGHT)
+        .flat_map(|y| (0..WIDTH).map(move |x| (x, y)))
+        .filter(|&(x, y)| no_motion(&turned, x, y))
+        .count();
+    assert_eq!(blue, 0, "pixels without motion");
 }
 
 #[test]
@@ -163,7 +228,7 @@ fn a_moved_part_moves_once_and_then_holds() {
         0.5,
         "the moved cube",
     );
-    assert!(no_motion(&moved, 4, 4), "the background");
+    assert_close(motion(&moved, 4, 4), [0.0, 0.0], 0.2, "the background");
     // Not moved again: its previous transform catches up.
     let (_, held) = draw(&mut harness, &eye(0.0));
     assert_eq!(moving(&held, 0, 0.2), (0, 0), "nothing moves");

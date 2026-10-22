@@ -1473,7 +1473,7 @@ fn motions(rgba: &[u8]) -> Vec<[f32; 2]> {
         .0
         .iter()
         .map(|[red, green, blue, _]| {
-            // Blue: no motion of its own (the background), still here.
+            // Blue: no motion of its own (`NO_MOTION`), still here.
             if [*red, *green, *blue] == [0, 0, 255] {
                 return [0.0; 2];
             }

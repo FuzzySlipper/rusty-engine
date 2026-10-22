@@ -578,8 +578,18 @@ fn a_viewmodel_leaves_the_worlds_depth_aware_dilation_alone() {
                 }
             }
         }
+        // DLSS's network reads the whole picture: since the open
+        // background has motion of its own (it once read as come from off
+        // screen, which took the current frame), a viewmodel anywhere moves
+        // a few edges of the sliding stripes over it by a few levels (6
+        // pixels on an RTX 3080).
+        let allowed = if antialiasing == Antialiasing::Dlss {
+            16
+        } else {
+            4
+        };
         assert!(
-            differing <= 4,
+            differing <= allowed,
             "{antialiasing:?}: {differing} pixels away from the viewmodel differ with it drawn"
         );
     }

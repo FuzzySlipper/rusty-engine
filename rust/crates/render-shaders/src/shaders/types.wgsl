@@ -283,8 +283,8 @@ struct Caster {
 const PI: f32 = 3.141592653589793;
 
 // What the motion target holds where nothing drew motion of its own
-// (render-wgpu `motion.rs`): the clear behind the sky and its clouds, and
-// what water surfaces write. A temporal stage takes such a pixel as still
+// (render-wgpu `motion.rs`): the world pass's clear, before the sky's
+// motion covers what the world leaves open, and what water surfaces write. A temporal stage takes such a pixel as still
 // and leans on its current frame. Blended over by a translucent pass, or
 // resolved with a moving sample at a multisampled edge, the value stays
 // above `NO_MOTION_AT_LEAST` (no motion in render pixels comes near it) or

@@ -24,13 +24,19 @@
 //!   previous frame's projection of its camera. Blended parts and particles
 //!   cover what lies behind with their motion where they are at least half
 //!   opaque (`rusty::motion::motion_output`), and leave it otherwise.
-//! - **No motion of their own:** the sky and its clouds, which the
-//!   background draws, keep the world pass's clear, and water surfaces
-//!   write it: `rusty::types::NO_MOTION`, which a temporal stage takes as
-//!   still and leans on the current frame for. Sprites, ghost plates and
-//!   overlay lines show the motion of what lies under them. A product
-//!   shader's displacement keeps its offset, so it moves with its part but
-//!   not on its own.
+//! - **The sky.** Where the world leaves the sky (or its backdrop) open,
+//!   the world pass writes the camera's turn: after the opaque world, a
+//!   far-plane triangle passes the depth test only where nothing drew, and
+//!   reprojects each pixel's view direction, a point at infinity, by the
+//!   previous camera without its translation (`sky.wgsl` `fs_sky_motion`).
+//!   The sun, the moon, the stars and a backdrop stand at infinity with it.
+//! - **No motion of their own:** the clouds keep the sky's, and water
+//!   surfaces write `rusty::types::NO_MOTION`, which a temporal stage takes
+//!   as still and leans on the current frame for; so does a viewport's
+//!   clear before anything draws. Sprites, ghost plates and overlay lines
+//!   show the motion of what lies under them. A product shader's
+//!   displacement keeps its offset, so it moves with its part but not on
+//!   its own.
 //! - **History reset.** The history no longer holds on the first frame with
 //!   motion (a new renderer: a world replacement or baseline), and when a
 //!   primary camera cuts or first draws, the observer comes or goes, the
@@ -53,8 +59,8 @@ use crate::{Gpu, RendererOptions};
 pub(crate) const MOTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 
 /// What the motion target holds where nothing drew motion of its own: the
-/// world pass's clear, behind the sky and its clouds, and what water
-/// writes (`rusty::types::NO_MOTION`).
+/// world pass's clear, before the sky's motion covers what the world
+/// leaves open, and what water writes (`rusty::types::NO_MOTION`).
 const NO_MOTION: f64 = 32768.0;
 
 /// `Motion` in `motion.wgsl`: two matrices and the previous camera.
