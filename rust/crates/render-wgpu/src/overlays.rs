@@ -466,16 +466,21 @@ impl Overlays {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: shader,
-                    entry_point: Some("fs_line"),
+                    entry_point: Some(if target.motion {
+                        "fs_line_reactive"
+                    } else {
+                        "fs_line"
+                    }),
                     compilation_options: Default::default(),
-                    // Lines have no motion of their own (`motion.rs`).
+                    // Lines have no motion of their own and keep what lies
+                    // under them, marking the reactive mask (`motion.rs`).
                     targets: &target.targets(
                         wgpu::ColorTargetState {
                             format: target.format,
                             blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                             write_mask: wgpu::ColorWrites::ALL,
                         },
-                        crate::motion::MotionWrite::None,
+                        crate::motion::MotionWrite::Reactive,
                     ),
                 }),
                 primitive: wgpu::PrimitiveState {

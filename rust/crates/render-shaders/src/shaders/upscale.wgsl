@@ -18,7 +18,9 @@
 //   this frame (`rusty::motion`: water's ripples and reflections, labels
 //   and overlay lines), and half where a pixel has no motion of its own
 //   (`rusty::types::NO_MOTION`). Such pixels keep that little history: they
-//   cannot ghost far.
+//   cannot ghost far. Where the mask says the pixel was drawn without the
+//   jitter (labels, overlay lines), this frame's colour is the picture
+//   where it stands.
 //
 // Colour works in the finished picture's linear values (it was already tone
 // mapped by the finish pass), averaged as a multisample resolve averages
@@ -26,7 +28,7 @@
 // `fs_sharpen` then lightly sharpens the history into the output, limited
 // by each pixel's neighbours so it never rings.
 
-#import rusty::types::NO_MOTION_AT_LEAST
+#import rusty::types::{NO_MOTION_AT_LEAST, REACTIVE_JITTERED}
 
 struct Params {
     // xy: the render resolution; zw: the output resolution, in pixels.
@@ -200,6 +202,15 @@ fn resolve(in: FullscreenOut) -> vec4<f32> {
     // came from.
     let own = textureLoad(motion, nearest_texel, 0);
     let reactive = select(clamp(own.z, 0.0, 1.0), NO_MOTION_SHARE, no_motion(own.xy));
+    // Above `REACTIVE_JITTERED` the mask says the pixel was drawn without
+    // the jitter (labels, overlay lines): this frame's colour is the
+    // picture where it stands, which the jittered reconstruction would
+    // soften and make shimmer.
+    let unjittered = clamp((reactive - REACTIVE_JITTERED) / (1.0 - REACTIVE_JITTERED), 0.0, 1.0);
+    if unjittered > 0.0 {
+        let standing = ycocg(textureSampleLevel(picture, history_sampler, in.uv, 0.0).rgb);
+        current = mix(current, standing, unjittered);
+    }
     if no_motion(moved) {
         moved = vec2<f32>(0.0);
     }

@@ -25,3 +25,18 @@ fn vs_line(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>) -> L
 fn fs_line(in: LineVarying) -> @location(0) vec4<f32> {
     return in.color;
 }
+
+// Under a motion target (render-wgpu `motion.rs`): the line also marks the
+// reactive mask by its alpha, as `rusty::types::REACTIVE_OVERLAY`, so a
+// temporal stage keeps none of its history there.
+struct ReactiveLine {
+    @location(0) color: vec4<f32>,
+    @location(1) mask: vec4<f32>,
+}
+
+const REACTIVE_OVERLAY: f32 = 1.0;
+
+@fragment
+fn fs_line_reactive(in: LineVarying) -> ReactiveLine {
+    return ReactiveLine(in.color, vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, in.color.a));
+}

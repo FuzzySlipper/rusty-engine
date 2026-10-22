@@ -350,9 +350,12 @@ bed under it, however clear it is.
 Beside the motion, each pixel carries a reactive mask: how much of the
 current frame a temporal stage must take there, for detail whose motion is
 no use to it. Water's ripples, foam and reflections move on their own, so
-water marks half. TAAU takes at least that share of the current frame, and
-DLSS takes the mask as its bias toward the current colour. Sprites, ghost plates, labels and overlay lines show the motion of
-what lies under them.
+water marks half. Labels and overlay lines, drawn unjittered into the
+picture, mark it whole and keep the motion of what lies under them. TAAU
+takes at least the mask's share of the current frame, and where a label or
+line marks it takes the picture as it stands, so they neither smear nor
+shimmer. DLSS takes the mask as its bias toward the current colour.
+Sprites and ghost plates show the motion of what lies under them.
 
 The stage is told its history no longer holds on the first frame with
 motion, which a new renderer (a world replacement or rebaseline) starts
@@ -364,12 +367,12 @@ the picture, the mask raising its blue
 `rusty-scene-render --frames N --motion OUT.png` writes a snapshot's; the
 motion is then drawn for the inspection alone, without a stage or jitter.
 
-Labels and overlay lines draw unjittered at render resolution into the
-picture a temporal stage reads, so a moving camera smears them with what
-lies behind. A tool's [capture](presentation-capture.md#captures) is a
-primary frame too: at a size other than the output's it starts the history
-again, and at the same size it takes a jitter point and becomes the frame
-the next output frame's motion is measured from.
+Labels and overlay lines draw at render resolution, so below render scale 1
+they are as soft as the scale makes them. A tool's
+[capture](presentation-capture.md#captures) is a primary frame too: at a
+size other than the output's it starts the history again, and at the same
+size it takes a jitter point and becomes the frame the next output frame's
+motion is measured from.
 
 ### Temporal upscaling (TAAU)
 

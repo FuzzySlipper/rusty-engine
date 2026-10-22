@@ -296,5 +296,10 @@ const NO_MOTION_AT_LEAST: f32 = 4096.0;
 // the least share of the current frame a temporal stage takes there.
 // Water's ripples, foam and reflections move on their own: half. Labels
 // and overlay lines drawn into the picture keep none of their history.
+// What draws with the jitter marks at most `REACTIVE_JITTERED`; above it
+// the mask also says how much of the pixel was drawn without the jitter,
+// as labels and overlay lines are (render-wgpu `labels.wgsl`,
+// `overlays.wgsl` write `REACTIVE_OVERLAY` themselves).
 const REACTIVE_WATER: f32 = 0.5;
+const REACTIVE_JITTERED: f32 = 0.5;
 const REACTIVE_OVERLAY: f32 = 1.0;

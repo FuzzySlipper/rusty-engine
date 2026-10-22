@@ -817,3 +817,168 @@ fn labels_keep_their_css_size_at_device_pixel_ratio_two() {
         "raising the ratio after creation must rasterize again"
     );
 }
+
+/// Under a temporal stage, a camera moving past labels in all three layers,
+/// with a viewmodel in front, draws each label as the current frame alone
+/// would: labels mark the reactive mask, so the stage keeps none of their
+/// history and they leave no trail over the world moving behind them.
+/// Overlay lines stay as readable.
+#[test]
+fn labels_and_overlay_lines_leave_no_trail_under_a_temporal_stage() {
+    let mut harness = harness();
+    if harness.gpu.is_software() {
+        return;
+    }
+    let magenta = |layer, position, words| BillboardDescriptor {
+        background: [1.0, 0.0, 1.0, 1.0],
+        ..label(position, text(words), layer)
+    };
+    let issues = apply(
+        &mut harness,
+        vec![
+            create(
+                1,
+                magenta(BillboardLayer::DepthTested, [-1.3, 0.7, -4.0], "Tested"),
+            ),
+            create(
+                2,
+                magenta(BillboardLayer::Occluded, [1.3, 0.7, -3.6], "Kept"),
+            ),
+            create(
+                3,
+                magenta(BillboardLayer::AlwaysOnTop, [0.0, 1.3, -5.2], "On top"),
+            ),
+        ],
+    );
+    assert!(issues.is_empty(), "{issues:?}");
+    harness.apply(vec![
+        RenderDiff::CreateStaticMeshInstance {
+            handle: RenderHandle::new(20),
+            parent: None,
+            instance: StaticMeshInstanceDescriptor {
+                asset: "mesh/blue".to_owned(),
+                transform: transform([0.35, -0.3, -1.0], 20.0, 0.2),
+                visible: true,
+                material_overrides: Vec::new(),
+                metadata: RenderMetadata::default(),
+                layer: RenderLayer::Viewmodel,
+                shadow_casting: Default::default(),
+            },
+        },
+        RenderDiff::SetOverlaySet {
+            name: "guide".to_owned(),
+            set: OverlaySetDescriptor {
+                items: vec![OverlayItem {
+                    shape: OverlayShape::Segment {
+                        from: [-3.0, 2.2, -6.0],
+                        to: [3.0, 2.6, -6.0],
+                    },
+                    space: OverlaySpace::World,
+                    color: [0.0, 1.0, 1.0, 1.0],
+                    on_top: true,
+                }],
+                pairs: Vec::new(),
+            },
+        },
+    ]);
+    harness
+        .renderer
+        .set_overlay_shown(render_wgpu::OverlayShown {
+            all_sets: true,
+            ..Default::default()
+        });
+    let settings = |harness: &mut Harness, antialiasing| {
+        harness.apply(vec![RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                antialiasing,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        }]);
+        let samples = harness.renderer.samples();
+        harness.target = OffscreenTarget::new(&harness.gpu, LABEL_WIDTH, LABEL_HEIGHT, samples);
+    };
+    // Strafing right 6 cm a frame: the near labels cross the far world.
+    // Overlay lines draw in a composition's primary views.
+    let draw = |harness: &mut Harness, frame: u32| {
+        let eye = camera("eye", [0.06 * f64::from(frame), 0.6, 1.0], 0.0, -6.0);
+        let whole = viewport(0.0, 0.0, 1.0, 1.0);
+        harness.renderer.set_view_composition(
+            &composition(vec![eye], vec![primary_view("main", "eye", whole, 0)]),
+            0.0,
+        );
+        harness.composition(0.0).1
+    };
+    settings(&mut harness, Antialiasing::Temporal);
+    let mut temporal = Vec::new();
+    for frame in 0..16 {
+        temporal = draw(&mut harness, frame);
+    }
+    settings(&mut harness, Antialiasing::Off);
+    let current = draw(&mut harness, 15);
+    let is_magenta = |rgba: &[u8], index: usize| {
+        let pixel = &rgba[index * 4..index * 4 + 3];
+        pixel[0] > 200 && pixel[1] < 60 && pixel[2] > 200
+    };
+    // The stage's reconstruction softens the text's edges a little.
+    let is_pinkish = |rgba: &[u8], index: usize| {
+        let pixel = &rgba[index * 4..index * 4 + 3];
+        pixel[0] > 150 && pixel[1] < 110 && pixel[2] > 150
+    };
+    let is_cyan = |rgba: &[u8], index: usize| {
+        let pixel = &rgba[index * 4..index * 4 + 3];
+        pixel[0] < 90 && pixel[1] > 140 && pixel[2] > 140
+    };
+    let near = |rgba: &[u8], index: usize, test: &dyn Fn(&[u8], usize) -> bool| {
+        let (x, y) = (
+            (index as u32 % LABEL_WIDTH) as i32,
+            (index as u32 / LABEL_WIDTH) as i32,
+        );
+        (-1..=1).any(|dy| {
+            (-1..=1).any(|dx| {
+                let (x, y) = (x + dx, y + dy);
+                (0..LABEL_WIDTH as i32).contains(&x)
+                    && (0..LABEL_HEIGHT as i32).contains(&y)
+                    && test(rgba, (y as u32 * LABEL_WIDTH + x as u32) as usize)
+            })
+        })
+    };
+    let pixels = (LABEL_WIDTH * LABEL_HEIGHT) as usize;
+    let labelled = (0..pixels).filter(|&i| is_magenta(&current, i)).count();
+    let kept = (0..pixels)
+        .filter(|&i| is_magenta(&current, i) && is_pinkish(&temporal, i))
+        .count();
+    let trail = (0..pixels)
+        .filter(|&i| is_magenta(&temporal, i) && !near(&current, i, &is_magenta))
+        .count();
+    // In and around them, the levels they differ by from the current
+    // frame's: the stage's history blended in would show here.
+    let error = (0..pixels)
+        .filter(|&i| near(&current, i, &is_magenta))
+        .map(|i| {
+            (0..3)
+                .map(|c| f64::from(current[i * 4 + c].abs_diff(temporal[i * 4 + c])))
+                .sum::<f64>()
+                / 3.0
+        })
+        .sum::<f64>()
+        / labelled as f64;
+    assert!(labelled > 600, "the three labels draw: {labelled}");
+    assert!(
+        kept * 100 >= labelled * 97,
+        "the labels draw as the current frame does: {kept} of {labelled}"
+    );
+    assert!(trail * 100 <= labelled, "no trail: {trail} of {labelled}");
+    assert!(
+        error < 10.0,
+        "the labels hold their colour: {error:.1} levels off"
+    );
+    let line = (0..pixels).filter(|&i| is_cyan(&current, i)).count();
+    let line_kept = (0..pixels)
+        .filter(|&i| is_cyan(&current, i) && near(&temporal, i, &is_cyan))
+        .count();
+    assert!(line > 100, "the line draws: {line}");
+    assert!(
+        line_kept * 100 >= line * 90,
+        "the line stays readable: {line_kept} of {line}"
+    );
+}

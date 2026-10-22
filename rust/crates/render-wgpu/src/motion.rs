@@ -41,16 +41,23 @@
 //!   surface's detail moves as its motion says. A water surface writes its
 //!   own motion over the bed's wherever it draws, however clear, and
 //!   `REACTIVE_WATER` there, since its ripples, foam and reflections move
-//!   without it. TAAU takes
-//!   at least that share of the current frame (`upscale.wgsl`); DLSS takes
-//!   the mask as its bias toward the current colour (`dlss.rs`). Whatever
-//!   covers a pixel later writes its own.
+//!   without it. Labels and overlay lines draw unjittered at render
+//!   resolution into the picture, over what lies under them: they keep its
+//!   motion and raise the mask by their opacity to `REACTIVE_OVERLAY`
+//!   (`MotionWrite::Reactive`), labels in their own pass while the target
+//!   is single-sample, as a temporal stage draws it. TAAU takes at least
+//!   the mask's share of the current frame, and above `REACTIVE_JITTERED`
+//!   takes the picture where it stands as the current frame
+//!   (`upscale.wgsl`), so labels neither smear nor shimmer; DLSS takes the
+//!   mask as its bias toward the current colour (`dlss.rs`). Whatever covers
+//!   a pixel later writes its own: the viewmodel over a depth-layer label,
+//!   an on-top label over the viewmodel.
 //! - **No motion of their own:** a viewport's clear writes
 //!   `rusty::types::NO_MOTION` before anything draws, which a temporal
-//!   stage takes as still and leans on the current frame for. Sprites,
-//!   ghost plates and overlay lines show the motion of what lies under
-//!   them. A product shader's displacement keeps its offset, so it moves
-//!   with its part but not on its own.
+//!   stage takes as still and leans on the current frame for. Sprites and
+//!   ghost plates show the motion of what lies under them. A product
+//!   shader's displacement keeps its offset, so it moves with its part but
+//!   not on its own.
 //! - **History reset.** The history no longer holds on the first frame with
 //!   motion (a new renderer: a world replacement or baseline), and when a
 //!   primary camera cuts or first draws, the observer comes or goes, the
@@ -99,6 +106,9 @@ pub(crate) enum MotionWrite {
     /// Its own motion over what lies under it where the fragment is at
     /// least half opaque (the shader's motion alpha is 0 or 1).
     Blend,
+    /// The reactive mask alone, blended over what lies under it by the
+    /// fragment's alpha, which keeps its motion: labels and overlay lines.
+    Reactive,
 }
 
 impl MotionWrite {
@@ -110,14 +120,14 @@ impl MotionWrite {
         };
         wgpu::ColorTargetState {
             format: MOTION_FORMAT,
-            blend: (self == Self::Blend).then_some(wgpu::BlendState {
+            blend: matches!(self, Self::Blend | Self::Reactive).then_some(wgpu::BlendState {
                 color: blend,
                 alpha: blend,
             }),
-            write_mask: if self == Self::None {
-                wgpu::ColorWrites::empty()
-            } else {
-                wgpu::ColorWrites::ALL
+            write_mask: match self {
+                Self::None => wgpu::ColorWrites::empty(),
+                Self::Cover | Self::Blend => wgpu::ColorWrites::ALL,
+                Self::Reactive => wgpu::ColorWrites::BLUE,
             },
         }
     }
@@ -636,6 +646,18 @@ impl Temporal {
         ]);
         pass.uniform.copy_from_slice(&uniform);
         Some(pass)
+    }
+
+    /// The frame's motion target while it is single-sample, as a temporal
+    /// stage draws it, for a pass into the picture that marks the reactive
+    /// mask (labels, `labels.rs`).
+    pub fn single_sample_target(&self) -> Option<&wgpu::TextureView> {
+        let frame = self.frame.as_ref()?;
+        frame
+            .target
+            .resolve
+            .is_none()
+            .then_some(&frame.target.attachment)
     }
 
     /// Write a view pass's motion uniform, before it is encoded.

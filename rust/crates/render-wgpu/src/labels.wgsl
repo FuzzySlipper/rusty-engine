@@ -92,16 +92,45 @@ fn coverage(in: LabelVarying, depth_tested: bool) -> f32 {
     return f32(covered) / f32(SCENE_SAMPLES);
 }
 
-@fragment
-fn fs_label(in: LabelVarying) -> @location(0) vec4<f32> {
+// The label's premultiplied colour over the samples it covers. A
+// depth-tested label (`tested`) also covers only the samples it is no
+// farther than the scene at (its quad is at its anchor's depth).
+fn label_color(in: LabelVarying, tested: bool) -> vec4<f32> {
     let texel = textureSample(label_image, label_sampler, in.uv);
-    return vec4<f32>(texel.rgb * texel.a, texel.a) * coverage(in, false);
+    return vec4<f32>(texel.rgb * texel.a, texel.a) * coverage(in, tested);
 }
 
-// A depth-tested label also covers only the samples it is no farther than
-// the scene at (its quad is at its anchor's depth).
+@fragment
+fn fs_label(in: LabelVarying) -> @location(0) vec4<f32> {
+    return label_color(in, false);
+}
+
 @fragment
 fn fs_label_tested(in: LabelVarying) -> @location(0) vec4<f32> {
-    let texel = textureSample(label_image, label_sampler, in.uv);
-    return vec4<f32>(texel.rgb * texel.a, texel.a) * coverage(in, true);
+    return label_color(in, true);
+}
+
+// Under a temporal stage's motion target (render-wgpu `motion.rs`): the
+// label also marks the reactive mask by its opacity, as
+// `rusty::types::REACTIVE_OVERLAY`, so the stage keeps none of its history
+// there and it never smears with what moves behind it.
+struct ReactiveLabel {
+    @location(0) color: vec4<f32>,
+    @location(1) mask: vec4<f32>,
+}
+
+const REACTIVE_OVERLAY: f32 = 1.0;
+
+fn reactive(color: vec4<f32>) -> ReactiveLabel {
+    return ReactiveLabel(color, vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, color.a));
+}
+
+@fragment
+fn fs_label_reactive(in: LabelVarying) -> ReactiveLabel {
+    return reactive(label_color(in, false));
+}
+
+@fragment
+fn fs_label_tested_reactive(in: LabelVarying) -> ReactiveLabel {
+    return reactive(label_color(in, true));
 }

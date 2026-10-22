@@ -1175,20 +1175,26 @@ impl LabelGpu {
                 multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &variant.shader,
-                    entry_point: Some(if depth_tested {
-                        "fs_label_tested"
-                    } else {
-                        "fs_label"
+                    entry_point: Some(match (depth_tested, target.motion) {
+                        (true, false) => "fs_label_tested",
+                        (false, false) => "fs_label",
+                        (true, true) => "fs_label_tested_reactive",
+                        (false, true) => "fs_label_reactive",
                     }),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target.format,
-                        blend: Some(wgpu::BlendState {
-                            color: blend,
-                            alpha: blend,
-                        }),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    // Beside a motion target, the reactive mask
+                    // (`motion.rs`).
+                    targets: &target.targets(
+                        wgpu::ColorTargetState {
+                            format: target.format,
+                            blend: Some(wgpu::BlendState {
+                                color: blend,
+                                alpha: blend,
+                            }),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        },
+                        crate::motion::MotionWrite::Reactive,
+                    ),
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -1309,8 +1315,14 @@ impl Renderer {
             gpu_labels.instances = instance_buffer(device, drawn.len().next_power_of_two());
         }
         self.gpu.queue.write_buffer(&gpu_labels.instances, 0, bytes);
-        // The image's format and the scene depth's samples.
-        let key = ColorTarget::new(target.format, target.samples);
+        // The image's format and the scene depth's samples, and the motion
+        // target while a temporal stage draws one into the picture: labels
+        // mark its reactive mask (`motion.rs`).
+        let motion = self.temporal.single_sample_target();
+        let key = ColorTarget {
+            motion: motion.is_some(),
+            ..ColorTarget::new(target.format, target.samples)
+        };
         gpu_labels.pipeline(device, key, true);
         gpu_labels.pipeline(device, key, false);
         let variant = gpu_labels.variant(device, key.samples);
@@ -1327,17 +1339,21 @@ impl Renderer {
         });
         let mut draws = 0;
         {
-            let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("render-wgpu labels"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target.color,
+            let kept = |view| {
+                Some(wgpu::RenderPassColorAttachment {
+                    view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
-                })],
+                })
+            };
+            let attachments = [kept(target.color), motion.and_then(kept)];
+            let mut render = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-wgpu labels"),
+                color_attachments: &attachments[..1 + usize::from(motion.is_some())],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
