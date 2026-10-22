@@ -12,10 +12,12 @@ set -euo pipefail
 # ninja, and a clone of this repository (see crew-services
 # docs/playtest-windows.md). Run from a machine with `gh` access to the repo.
 #
-# usage: scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <C:/path> [--version <pair>] [--if-missing]
+# usage: scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <C:/path> [--version <pair>] [--if-missing] [--dlss <C:/path>]
 #
 # Without --version it takes the Latest pair. --if-missing succeeds without
 # building when the pair already has win-x64 archives, for a recurring job.
+# --dlss builds both packs with NVIDIA DLSS from the DLSS SDK checkout at
+# that path on the build machine (scripts/build-runtime-pack.sh --dlss).
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=FuzzySlipper/rusty-engine
@@ -23,13 +25,15 @@ host=""
 checkout=""
 version=""
 if_missing=false
-usage() { echo "usage: scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <C:/path> [--version <pair>] [--if-missing]" >&2; }
+dlss=""
+usage() { echo "usage: scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <C:/path> [--version <pair>] [--if-missing] [--dlss <C:/path>]" >&2; }
 while (($#)); do
     case "$1" in
         --host) host=${2:?}; shift 2 ;;
         --checkout) checkout=${2:?}; shift 2 ;;
         --version) version=${2:?}; shift 2 ;;
         --if-missing) if_missing=true; shift ;;
+        --dlss) dlss=${2:?}; shift 2 ;;
         *) usage; exit 2 ;;
     esac
 done
@@ -61,6 +65,11 @@ remote="C:/Users/$(ssh "$host" '$env:USERNAME' | tr -d '\r')/rusty-windows-pair/
 # Git Bash paths: the pair scripts take a path not starting with / as relative.
 drive=${remote%%:*}
 posix="/${drive,,}${remote#*:}"
+dlss_args=""
+if [[ -n "$dlss" ]]; then
+    dlss_drive=${dlss%%:*}
+    dlss_args="--dlss \"/${dlss_drive,,}${dlss#*:}\""
+fi
 cat > "$work/build.sh" <<EOF
 set -euo pipefail
 export PATH="\$(dirname "\$(command -v cl)"):\$HOME/AppData/Local/Microsoft/WinGet/Links:/c/Program Files/nodejs:\$HOME/AppData/Local/pnpm:\$PATH"
@@ -70,14 +79,14 @@ git checkout -q --force "$revision"
 git clean -q -fd
 pnpm install --frozen-lockfile --reporter=silent
 rm -rf "$posix/out"
-scripts/build-csharp-release-pair.sh --sdk-feed "$posix/sdk-feed" --output "$posix/out/pair"
+scripts/build-csharp-release-pair.sh --sdk-feed "$posix/sdk-feed" $dlss_args --output "$posix/out/pair"
 # The pair's bundled verifier, as a Windows consumer runs it, is this job's one
 # payload verification.
 mkdir "$posix/out/verify"
 tar -xzf "$posix/out/pair/$pair-win-x64.tar.gz" -C "$posix/out/verify"
 "$posix/out/verify/$pair-win-x64/verify-pair.sh" --directory "$posix/out/verify/$pair-win-x64"
 rm -rf "$posix/out/verify"
-scripts/build-desktop-runtime-pack-archive.sh --output "$posix/out/desktop"
+scripts/build-desktop-runtime-pack-archive.sh $dlss_args --output "$posix/out/desktop"
 EOF
 cat > "$work/build.ps1" <<'EOF'
 # A .cmd file keeps cmd's quote stripping away from the paths with spaces.

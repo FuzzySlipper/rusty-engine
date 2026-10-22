@@ -155,6 +155,12 @@ same source revision.
 - **Running the build there:** the machine needs the MSVC build tools, Git Bash,
   Rust, .NET, Node and pnpm, cmake and ninja (crew-services
   `docs/playtest-windows.md` sets one up).
+- **DLSS:** with `--dlss <C:/path>`, the win-x64 runtime and desktop packs are
+  built with NVIDIA DLSS from the DLSS SDK at that path on the build machine
+  ([DLSS](lighting-and-sky.md#dlss)); the timer passes den-win11's. The SDK
+  is not redistributable and never leaves that machine: the packs carry only
+  NVIDIA's signed library and its licence text. Linux pairs, built in CI,
+  have no DLSS.
 
 Latest only makes an update available. A product keeps its explicit pin until
 someone runs `rusty update`. To use another copy of this releases layout,

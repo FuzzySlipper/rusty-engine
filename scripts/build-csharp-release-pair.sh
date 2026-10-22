@@ -7,6 +7,8 @@ set -euo pipefail
 # version string, so it cannot silently relabel uncommitted or mismatched bits.
 # --sdk-feed reuses the SDK package another target's pair already published
 # for this revision: the package is the same on every target.
+# --dlss builds the runtime pack with NVIDIA DLSS from that SDK checkout
+# (scripts/build-runtime-pack.sh --dlss).
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
@@ -14,9 +16,10 @@ source "$script_dir/pair-platform.sh"
 output=""
 print_version=0
 reuse_feed=""
+dlss=()
 
 usage() {
-    echo "usage: scripts/build-csharp-release-pair.sh (--output <new-directory> [--sdk-feed <pair-sdk-feed>] | --print-version)" >&2
+    echo "usage: scripts/build-csharp-release-pair.sh (--output <new-directory> [--sdk-feed <pair-sdk-feed>] [--dlss <dlss-sdk>] | --print-version)" >&2
 }
 
 while (($#)); do
@@ -33,6 +36,11 @@ while (($#)); do
         --sdk-feed)
             (($# >= 2)) || { usage; exit 2; }
             reuse_feed=$2
+            shift 2
+            ;;
+        --dlss)
+            (($# >= 2)) || { usage; exit 2; }
+            dlss=(--dlss "$2")
             shift 2
             ;;
         --help)
@@ -92,7 +100,7 @@ fi
     echo "RUSTY_ENGINE_PAIR_SDK_BUILD: SDK pack builder did not produce its declared package" >&2
     exit 1
 }
-"$script_dir/build-runtime-pack.sh" --output "$runtime_pack" >/dev/null
+"$script_dir/build-runtime-pack.sh" "${dlss[@]}" --output "$runtime_pack" >/dev/null
 install -m 755 "$script_dir/verify-csharp-release-pair.sh" "$pair_root/verify-pair.sh"
 
 runtime_manifest="$runtime_pack/runtime-manifest.json"

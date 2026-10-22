@@ -420,7 +420,8 @@ takes exactly a third of the output), and the readout's render resolution
 is the one drawn.
 
 Where DLSS cannot draw, the readout refuses it and TAAU draws in its place:
-`NotBuilt` (an Engine built without it, as published pairs are),
+`NotBuilt` (an Engine built without it, as linux-x64 published pairs and
+every CI build are; win-x64 published pairs carry it),
 `UnsupportedAdapter` (not Vulkan, not NVIDIA, or a card NGX says cannot run
 it, as before RTX) and `InitializationFailed` (NGX failed to start, or to
 make or evaluate the feature). A software adapter refuses it as it refuses
