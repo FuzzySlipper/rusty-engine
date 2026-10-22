@@ -292,6 +292,10 @@ pub(crate) struct Overlays {
     vertices: Vec<LineVertex>,
     buffer: Option<wgpu::Buffer>,
     shader: Option<(wgpu::ShaderModule, wgpu::PipelineLayout)>,
+    /// The pass's camera the lines draw with (`write_camera`), and its
+    /// binding: the frame uniform's projection is jittered under a temporal
+    /// stage (`motion.rs`), and lines are not.
+    camera: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     /// Per target: depth-tested and on-top pipelines.
     pipelines: Vec<(ColorTarget, [wgpu::RenderPipeline; 2])>,
     /// The frame's labels, by reserved handle offset, for aiming them per
@@ -327,6 +331,7 @@ impl Overlays {
             vertices: Vec::new(),
             buffer: None,
             shader: None,
+            camera: None,
             pipelines: Vec::new(),
             labels: Vec::new(),
             drawn_camera: None,
@@ -392,12 +397,7 @@ impl Overlays {
     }
 
     /// Makes the pipelines a pass into `target` draws lines with.
-    pub fn ensure_pipelines(
-        &mut self,
-        device: &wgpu::Device,
-        frame_layout: &wgpu::BindGroupLayout,
-        target: ColorTarget,
-    ) {
+    pub fn ensure_pipelines(&mut self, device: &wgpu::Device, target: ColorTarget) {
         if self
             .pipelines
             .iter()
@@ -405,14 +405,43 @@ impl Overlays {
         {
             return;
         }
+        let camera = &mut self.camera;
         let (shader, layout) = self.shader.get_or_insert_with(|| {
             let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("render-wgpu overlay lines"),
                 source: wgpu::ShaderSource::Wgsl(include_str!("overlays.wgsl").into()),
             });
+            let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("render-wgpu overlay camera"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("render-wgpu overlay camera"),
+                size: std::mem::size_of::<Mat4>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("render-wgpu overlay camera"),
+                layout: &camera_layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            *camera = Some((buffer, group));
             let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("render-wgpu overlay lines"),
-                bind_group_layouts: &[Some(frame_layout)],
+                bind_group_layouts: &[Some(&camera_layout)],
                 immediate_size: 0,
             });
             (shader, layout)
@@ -473,8 +502,16 @@ impl Overlays {
         self.pipelines.push((target, pipelines));
     }
 
-    /// Draws this frame's lines for a pass of `layer` into `target`, whose
-    /// frame bind group is bound. Returns the draws.
+    /// Set the camera the next pass's lines draw with: its unjittered
+    /// view-projection, before the pass is submitted.
+    pub fn write_camera(&self, queue: &wgpu::Queue, view_proj: &Mat4) {
+        if let Some((buffer, _)) = &self.camera {
+            queue.write_buffer(buffer, 0, bytemuck::cast_slice(&view_proj.to_cols_array()));
+        }
+    }
+
+    /// Draws this frame's lines for a pass of `layer` into `target`, with
+    /// the camera `write_camera` set. Returns the draws.
     pub fn draw(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -482,14 +519,16 @@ impl Overlays {
         target: ColorTarget,
         view: &str,
     ) -> u32 {
-        let (Some(buffer), Some((_, pipelines))) = (
+        let (Some(buffer), Some((_, camera)), Some((_, pipelines))) = (
             &self.buffer,
+            &self.camera,
             self.pipelines
                 .iter()
                 .find(|(existing, _)| *existing == target),
         ) else {
             return 0;
         };
+        pass.set_bind_group(0, camera, &[]);
         let mut draws = 0;
         for ranges in self.view_buckets(view) {
             for (on_top, pipeline) in [false, true].into_iter().zip(pipelines) {

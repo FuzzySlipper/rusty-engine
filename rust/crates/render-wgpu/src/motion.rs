@@ -706,6 +706,149 @@ mod tests {
         assert!(frame(&mut temporal, &scaled, 0.0, false).0.history_reset);
     }
 
+    /// Overlay lines keep the unjittered camera while a temporal stage
+    /// jitters the world under them. No upscale method is temporal yet, so
+    /// the frames begin their jitter here as `draw_primary` will for one.
+    #[test]
+    fn overlay_lines_hold_still_while_the_world_jitters() {
+        use render_host_contracts::{
+            RendererCameraPose, RendererCompositionCamera, RendererCompositionView,
+            RendererViewComposition, RendererViewTarget, RendererViewport,
+        };
+        use render_model::*;
+
+        let gpu = Gpu::headless().expect("a wgpu adapter");
+        let mut renderer = crate::Renderer::new(&gpu, RendererOptions::default());
+        let mut world = render_presentation::PresentationWorld::default();
+        let magenta = [1.0, 0.0, 1.0, 1.0];
+        let delta = world
+            .apply(RenderFrameDiff {
+                publication: None,
+                ops: vec![
+                    RenderDiff::SetBackgroundColor {
+                        color: [0.0, 0.0, 0.0, 1.0],
+                    },
+                    RenderDiff::Create {
+                        handle: RenderHandle::new(1),
+                        parent: None,
+                        node: RenderNode {
+                            transform: Transform {
+                                translation: [0.4, 0.0, -3.0],
+                                rotation: [0.0, 0.38, 0.0, 0.925],
+                                scale: [1.0; 3],
+                            },
+                            ..RenderNode::new(Geometry::Cube)
+                        },
+                    },
+                    RenderDiff::SetOverlaySet {
+                        name: "guide".to_owned(),
+                        set: OverlaySetDescriptor {
+                            items: vec![OverlayItem {
+                                shape: OverlayShape::Segment {
+                                    from: [-1.2, -0.7, -3.0],
+                                    to: [-0.2, 0.7, -3.0],
+                                },
+                                space: OverlaySpace::World,
+                                color: magenta,
+                                on_top: true,
+                            }],
+                            pairs: Vec::new(),
+                        },
+                    },
+                ],
+            })
+            .expect("the world admits the scene");
+        assert!(renderer.apply(&delta, &crate::NoResources).is_empty());
+        renderer.set_overlay_shown(crate::OverlayShown {
+            all_sets: true,
+            ..crate::OverlayShown::default()
+        });
+        renderer.set_view_composition(
+            &RendererViewComposition {
+                cameras: vec![RendererCompositionCamera {
+                    id: "eye".to_owned(),
+                    pose: RendererCameraPose {
+                        position: [0.0; 3],
+                        pitch_degrees: 0.0,
+                        yaw_degrees: 0.0,
+                    },
+                    basis: None,
+                    projection: render_host_contracts::RendererCameraProjection::Perspective {
+                        fov_y_degrees: 60.0,
+                        near: 0.1,
+                        far: 100.0,
+                    },
+                    motion: None,
+                    viewmodel_fov_y_degrees: 0.0,
+                }],
+                targets: Vec::new(),
+                views: vec![RendererCompositionView {
+                    id: "main".to_owned(),
+                    camera_id: "eye".to_owned(),
+                    target: RendererViewTarget::Primary,
+                    viewport: RendererViewport {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 1.0,
+                        height: 1.0,
+                    },
+                    order: 0,
+                    viewport_anchor: None,
+                }],
+                presentations: Vec::new(),
+            },
+            0.0,
+        );
+        let target = crate::OffscreenTarget::new(&gpu, 160, 90, 1);
+        let resolution = FrameResolution::scaled(target.size(), 1.0);
+        let frames: Vec<(Option<u32>, Vec<u8>)> = (0..4)
+            .map(|_| {
+                renderer.prepare();
+                let options = renderer.options;
+                if renderer.temporal.begin_frame(
+                    &gpu,
+                    &renderer.tables.parts,
+                    true,
+                    true,
+                    resolution,
+                    1,
+                    &options,
+                    false,
+                    false,
+                    0.0,
+                ) {
+                    renderer.rebind_frame();
+                }
+                renderer.render_composition(target.view(), 0.0);
+                let phase = renderer
+                    .temporal
+                    .end_frame()
+                    .and_then(|frame| frame.jitter_phase);
+                (phase, target.read_rgba(&gpu))
+            })
+            .collect();
+        assert_eq!(
+            frames.iter().map(|(phase, _)| *phase).collect::<Vec<_>>(),
+            [Some(0), Some(1), Some(2), Some(3)]
+        );
+        let line = |rgba: &[u8], index: usize| {
+            let pixel = &rgba[index * 4..index * 4 + 4];
+            pixel[0] > 200 && pixel[1] < 60 && pixel[2] > 200
+        };
+        let first = &frames[0].1;
+        let drawn: Vec<usize> = (0..first.len() / 4)
+            .filter(|index| line(first, *index))
+            .collect();
+        assert!(drawn.len() > 20, "the line draws: {} pixels", drawn.len());
+        for (phase, rgba) in &frames[1..] {
+            let moved = (0..rgba.len() / 4)
+                .filter(|index| line(rgba, *index) != line(first, *index))
+                .count();
+            assert_eq!(moved, 0, "phase {phase:?}: the line moved");
+            assert_ne!(rgba, first, "phase {phase:?}: the world jitters");
+        }
+    }
+
     #[test]
     fn a_jittered_projection_moves_every_point_by_the_jitter_and_to_pixels_undoes_it() {
         let projection = glam::camera::rh::proj::directx::perspective(1.0, 1.5, 0.1, 100.0);

@@ -253,8 +253,8 @@ fn vs_world(
 #ifdef MOTION
     // Where the vertex stood: moved as its model moved since (a card by its
     // origin) and a skinned one as its pose did, and swayed as the wind
-    // swayed it then. A distance fade, the
-    // snow and a product's displacement keep their offsets.
+    // swayed it then, there. A distance fade, the snow and a product's
+    // displacement keep their offsets.
 #ifdef SCATTER_SELECTED
     let earlier = previous_copy_model(part, selected.copy);
 #else
@@ -275,10 +275,14 @@ fn vs_world(
 #else
     let earlier_anchor = anchor;
 #endif
-    var previous = world + (earlier * earlier_anchor).xyz - (row.model * anchor).xyz;
+    let moved = (earlier * earlier_anchor).xyz - (row.model * anchor).xyz;
+    var previous = world + moved;
 #ifdef WIND
-    previous += wind_displace_at(unswayed, row.model[3].xyz, wind_weight, previous_time())
-        - wind_displace(unswayed, row.model[3].xyz, wind_weight);
+    // The wind swayed the point where it stood then, about its part's
+    // origin then, at the previous time: the sway is position-dependent.
+    let unswayed_then = unswayed + moved;
+    previous += (wind_displace_at(unswayed_then, earlier[3].xyz, wind_weight, previous_time()) - unswayed_then)
+        - (wind_displace(unswayed, row.model[3].xyz, wind_weight) - unswayed);
 #endif
     out.previous = previous_pixel(previous);
 #endif

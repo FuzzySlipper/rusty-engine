@@ -1,11 +1,12 @@
 // Overlay lines: positions already in the pass's world (or viewmodel)
-// coordinates, drawn with the view's projection from the frame uniform.
+// coordinates, drawn with the view's camera, never jittered (render-wgpu
+// `overlays.rs` `Overlays::write_camera`).
 
-struct Frame {
+struct Camera {
     view_proj: mat4x4<f32>,
 }
 
-@group(0) @binding(0) var<uniform> frame: Frame;
+@group(0) @binding(0) var<uniform> camera: Camera;
 
 struct LineVarying {
     @builtin(position) position: vec4<f32>,
@@ -15,7 +16,7 @@ struct LineVarying {
 @vertex
 fn vs_line(@location(0) position: vec3<f32>, @location(1) color: vec4<f32>) -> LineVarying {
     var out: LineVarying;
-    out.position = frame.view_proj * vec4<f32>(position, 1.0);
+    out.position = camera.view_proj * vec4<f32>(position, 1.0);
     out.color = color;
     return out;
 }

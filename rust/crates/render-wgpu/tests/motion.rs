@@ -255,6 +255,96 @@ fn swaying_vegetation_moves_by_the_wind_between_frames() {
     assert_eq!(moving(&held, 0, 0.3), (0, 0), "a held time holds");
 }
 
+/// A swaying post `width` across and `height` tall standing on its origin,
+/// unlit white, bending `bend` per metre in a gusting wind along +x, as
+/// node 6 at `at`.
+fn swaying_post(width: f32, height: f32, bend: f32, at: [f32; 3]) -> Vec<RenderDiff> {
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    let mut post = cube();
+    let MeshPayloadSource::Inline { positions, .. } = &mut post.source else {
+        unreachable!()
+    };
+    for point in positions.as_chunks_mut::<3>().0 {
+        point[0] *= width;
+        point[1] = (point[1] + 0.5) * height;
+        point[2] *= width;
+    }
+    post.bounds = MeshBoundsDescriptor {
+        min: [-width / 2.0, 0.0, -width / 2.0],
+        max: [width / 2.0, height, width / 2.0],
+    };
+    let mut swaying = coloured_mesh("post", post, [1.0, 1.0, 1.0, 1.0]);
+    if let RenderDiff::DefineMaterial { material } = &mut swaying[0] {
+        material.unlit = true;
+        material.wind = Some(MaterialWindDescriptor { bend, flutter: 0.0 });
+    }
+    ops.extend(swaying);
+    ops.push(instance(6, None, "post", transform(at, 0.0, 1.0)));
+    ops.push(RenderDiff::SetWind {
+        wind: Some(WindDescriptor {
+            direction: [1.0, 0.0],
+            strength: 2.0,
+            gust: 1.0,
+        }),
+    });
+    ops
+}
+
+/// The coverage-weighted mean x of row `y` of a picture of a white shape
+/// on black.
+fn centroid(rgba: &[u8], y: u32) -> f32 {
+    let (mut sum, mut weight) = (0.0, 0.0);
+    for x in 0..WIDTH {
+        let value = f32::from(pixel(rgba, WIDTH, x, y)[0]) / 255.0;
+        sum += value * x as f32;
+        weight += value;
+    }
+    assert!(weight > 1.0, "row {y} shows the post");
+    sum / weight
+}
+
+#[test]
+fn a_moved_swaying_post_moves_from_where_the_wind_swayed_it() {
+    // The post moves 1.5 m across while the gust changes: the motion near
+    // its top is what the two pictures show, the sway the previous frame
+    // drew at the post's previous place.
+    let (from, to) = ([0.0, -3.0, -20.0], [1.5, -3.0, -20.0]);
+    let mut pictures = Harness::new(RendererOptions::default());
+    let mut motions = harness();
+    let view = eye(0.0);
+    let mut frames = Vec::new();
+    for harness in [&mut pictures, &mut motions] {
+        harness.apply(swaying_post(0.6, 6.0, 0.1, from));
+        harness.renderer.set_animation_time(3.0);
+        let before = draw(harness, &view).1;
+        harness.apply(vec![RenderDiff::Update {
+            handle: RenderHandle::new(6),
+            transform: Some(transform(to, 0.0, 1.0)),
+            material: None,
+            visible: None,
+            metadata: None,
+        }]);
+        harness.renderer.set_animation_time(3.05);
+        let after = draw(harness, &view).1;
+        frames.push((before, after));
+    }
+    let (before, after) = &frames[0];
+    let moved = &frames[1].1;
+    // Rows from just under the post's top (3 m up at 20 m) to its middle.
+    let top = (CENTRE.1 as f32 - FOCAL_PIXELS * 3.0 / 20.0).ceil() as u32 + 2;
+    for y in [top, top + 6, top + 12] {
+        let now = centroid(after, y);
+        let expected = now - centroid(before, y);
+        let found = motion(moved, now.round() as u32, y)[0];
+        assert!(
+            (found - expected).abs() < 0.5,
+            "row {y}: motion {found}, the pictures moved {expected}"
+        );
+    }
+}
+
 #[test]
 fn scatter_copies_move_under_their_patch() {
     let mut harness = harness();

@@ -2777,8 +2777,10 @@ impl Renderer {
             .overlays
             .map_or(0, |key| self.overlays.lines(view.layer, key));
         if overlay_lines > 0 {
+            self.overlays.ensure_pipelines(&self.gpu.device, hdr_format);
+            // Lines draw with the unjittered camera (`motion.rs`).
             self.overlays
-                .ensure_pipelines(&self.gpu.device, &self.layouts.frame, hdr_format);
+                .write_camera(&self.gpu.queue, &view.camera.view_proj);
         }
         // With GPU culling the opaque parts are candidates, not in the list.
         if !world_layer
@@ -3319,7 +3321,6 @@ impl Renderer {
                 self.builtins.get(&Builtin::Cube),
             );
             if overlay_lines > 0 {
-                pass.set_bind_group(0, &self.frame_bind_group, &[]);
                 encoded.draws += self.overlays.draw(
                     &mut pass,
                     view.layer,
