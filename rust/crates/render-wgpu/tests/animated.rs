@@ -1585,6 +1585,74 @@ fn a_new_pose_moves_skinned_vertices_as_moving_the_instance_does_then_holds() {
     );
 }
 
+/// A cut made as the pose moves keeps the motion: every node, and the cut
+/// head's piece placed with them, 0.1 m over draws the motion that moving
+/// the instance 0.1 m draws, though the cut lays the vertices out again;
+/// and so does clearing the cut as the pose moves back.
+#[test]
+fn a_cut_made_or_cleared_as_the_pose_moves_keeps_the_motion() {
+    let expected = moved_by_node();
+    let mut harness = motion_harness();
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let head = rig_joint(&body, "Head");
+    let view = character_view();
+    harness.render(&view);
+    harness.render(&view);
+    let RenderDiff::SetEvaluatedPose { handle, pose: rest } = shifted_pose(&harness, 0.0) else {
+        unreachable!("a pose")
+    };
+    let RenderDiff::SetEvaluatedPose { pose: moved, .. } = shifted_pose(&harness, 0.1) else {
+        unreachable!("a pose")
+    };
+    let set = |harness: &mut Harness, pose: &EvaluatedPose, cut: bool| {
+        let mut pose = pose.clone();
+        pose.pieces = if cut {
+            vec![EvaluatedPiece {
+                joint: head,
+                nodes: pose.nodes.clone(),
+            }]
+        } else {
+            Vec::new()
+        };
+        let issues = harness.renderer.apply(
+            &RenderFrameDiff::from_ops(vec![RenderDiff::SetEvaluatedPose { handle, pose }]),
+            &harness.resources,
+        );
+        assert!(issues.is_empty(), "{issues:?}");
+        motions(&harness.render(&view).1)
+    };
+    let cut = set(&mut harness, &moved, true);
+    let (difference, at) = largest_difference(&cut, &expected);
+    assert!(
+        difference <= 0.25,
+        "cut: pixel {at}: {:?}, {:?} by the node",
+        cut[at],
+        expected[at]
+    );
+    let held = set(&mut harness, &moved, true);
+    assert!(held.iter().all(|motion| !moving(motion)), "a held cut");
+    // Back as it was, without the cut: as moving back draws without cuts.
+    let cleared = set(&mut harness, &rest, false);
+    let mut uncut = motion_harness();
+    character_scene(&mut uncut);
+    uncut.render(&view);
+    set(&mut uncut, &moved, false);
+    set(&mut uncut, &moved, false);
+    let back = set(&mut uncut, &rest, false);
+    assert!(
+        back.iter().filter(|motion| moving(motion)).count() > 1000,
+        "the character moves back"
+    );
+    let (difference, at) = largest_difference(&cleared, &back);
+    assert!(
+        difference <= 0.25,
+        "cleared: pixel {at}: {:?}, {:?} without cuts",
+        cleared[at],
+        back[at]
+    );
+}
+
 /// A severed piece moves by its placement: the head cut in place
 /// and then placed 0.1 m over draws, where the head is, the motion the whole
 /// character draws moved 0.1 m, and the body stays still.

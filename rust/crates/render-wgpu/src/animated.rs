@@ -105,6 +105,13 @@ pub(crate) struct AnimatedInstance {
     pub(crate) parameters: BTreeMap<u16, MaterialInstanceParameters>,
 }
 
+/// A skinned mesh's vertices as the last frame with motion drew them: their
+/// positions, and the index of each copy by its source vertex and cut joint.
+struct DrawnVertices {
+    positions: std::sync::Arc<crate::tables::CpuGeometry>,
+    copies: HashMap<(u32, u32), usize>,
+}
+
 /// The triangles of each skinned primitive split by an instance's cuts
 /// ([`render_model::JointCut`]): the instance keeps its own vertices and the
 /// triangles left to it, and each piece draws copies of its triangles'
@@ -790,9 +797,15 @@ impl Renderer {
     /// Returns whether the cuts changed which triangles each draws: the
     /// buffers are then made again and the parts must be.
     fn skin_animated_instance(&mut self, handle: RenderHandle) -> bool {
+        // While frames draw motion, vertices a frame has drawn stay as they
+        // were for the next frame's motion, and the new pose goes into the
+        // other buffer.
+        let keep = self.temporal.keeps_history();
+        let frames = self.temporal.motion_frames();
         let Some(instance) = self.tables.animated.get_mut(&handle) else {
             return false;
         };
+        let drawn = keep && instance.skinned_at < frames;
         let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
             return false;
         };
@@ -806,7 +819,39 @@ impl Renderer {
             .split
             .as_ref()
             .map_or(!joints.is_empty(), |split| split.joints != joints);
+        // The vertices as the last frame with motion drew them, by the
+        // vertex and cut joint each drew, for the meshes the new cuts make.
+        let mut drawn_before: HashMap<(u32, u32), DrawnVertices> = HashMap::new();
         if resplit {
+            if keep {
+                for (key, mesh) in &instance.skinned {
+                    let positions = if drawn {
+                        Some(mesh.cpu.clone())
+                    } else {
+                        mesh.skinned
+                            .as_ref()
+                            .and_then(|history| history.previous_positions.clone())
+                    };
+                    let Some(positions) = positions else { continue };
+                    let copies = instance
+                        .split
+                        .as_ref()
+                        .and_then(|split| Some((split, split.primitives.get(key)?)))
+                        .map(|(split, primitive)| {
+                            let own = positions.positions.len() - primitive.copies.len();
+                            primitive
+                                .copies
+                                .iter()
+                                .enumerate()
+                                .map(|(index, (vertex, cut))| {
+                                    ((*vertex, split.joints[*cut]), own + index)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    drawn_before.insert(*key, DrawnVertices { positions, copies });
+                }
+            }
             instance.split =
                 (!joints.is_empty()).then(|| CutSplit::new(&asset.model, &asset.rig, joints));
             instance.skinned.clear();
@@ -917,12 +962,7 @@ impl Renderer {
                 updates.push(((node_index as u32, primitive_index as u32), vertices, extra));
             }
         }
-        // While frames draw motion, vertices a frame has drawn stay as they
-        // were for the next frame's motion, and the new pose goes into the
-        // other buffer.
-        let keep = self.temporal.keeps_history();
-        let frames = self.temporal.motion_frames();
-        let drawn = keep && self.tables.animated[&handle].skinned_at < frames;
+        let mut kept = drawn;
         for (key, vertices, extra) in updates {
             let gpu = &self.gpu;
             let instance = self
@@ -948,6 +988,7 @@ impl Renderer {
                             })
                         });
                     history.previous = Some(std::mem::replace(&mut mesh.vertices, next));
+                    history.previous_positions = Some(mesh.cpu.clone());
                 }
                 gpu.queue
                     .write_buffer(&mesh.vertices, 0, bytemuck::cast_slice(&vertices));
@@ -978,6 +1019,63 @@ impl Renderer {
                 let label = format!("animated {} skin {}/{}", handle.raw(), key.0, key.1);
                 let mut mesh = self.upload_dynamic_vertices(&label, &vertices, &indices);
                 mesh.extra = extra.map(|extra| self.vertex_buffer(&label, &extra, true));
+                // Made for new cuts: each vertex's previous position is where
+                // the last frame drew it, a copy's where its source vertex
+                // was, in its cut's piece or in the body.
+                if let Some(before) = drawn_before.get(&key) {
+                    let instance = &self.tables.animated[&handle];
+                    let own = primitive.positions.len();
+                    let copies = instance
+                        .split
+                        .as_ref()
+                        .and_then(|split| Some((split, split.primitives.get(&key)?)))
+                        .map_or(Vec::new(), |(split, primitive)| {
+                            primitive
+                                .copies
+                                .iter()
+                                .map(|(vertex, cut)| (*vertex, split.joints[*cut]))
+                                .collect()
+                        });
+                    let current = vertex_positions(&vertices);
+                    let positions: Vec<Vec3> = (0..current.len())
+                        .map(|output| {
+                            let index = match output.checked_sub(own) {
+                                None => output,
+                                Some(copy) => {
+                                    let (vertex, joint) = copies[copy];
+                                    before
+                                        .copies
+                                        .get(&(vertex, joint))
+                                        .copied()
+                                        .unwrap_or(vertex as usize)
+                                }
+                            };
+                            before
+                                .positions
+                                .positions
+                                .get(index)
+                                .copied()
+                                .unwrap_or(current[output])
+                        })
+                        .collect();
+                    let mut previous = vec![0.0; positions.len() * VERTEX_FLOATS];
+                    for (vertex, position) in previous
+                        .as_chunks_mut::<VERTEX_FLOATS>()
+                        .0
+                        .iter_mut()
+                        .zip(&positions)
+                    {
+                        vertex[..3].copy_from_slice(&position.to_array());
+                    }
+                    let history = mesh.skinned.get_or_insert_default();
+                    history.previous = Some(self.vertex_buffer(&label, &previous, true));
+                    history.previous_positions =
+                        Some(std::sync::Arc::new(crate::tables::CpuGeometry {
+                            positions,
+                            indices: Vec::new(),
+                        }));
+                    kept = true;
+                }
                 if let Some(instance) = self.tables.animated.get_mut(&handle) {
                     instance.skinned.insert(key, mesh);
                 }
@@ -986,7 +1084,7 @@ impl Renderer {
         if let Some(instance) = self.tables.animated.get_mut(&handle) {
             instance.skinned_at = frames;
         }
-        if drawn && !self.skinned_settling.contains(&handle) {
+        if kept && !self.skinned_settling.contains(&handle) {
             self.skinned_settling.push(handle);
         }
         resplit
@@ -1014,6 +1112,7 @@ impl Renderer {
                 if let Some(previous) = history.previous.take() {
                     history.spare = Some(previous);
                 }
+                history.previous_positions = None;
             }
             false
         });

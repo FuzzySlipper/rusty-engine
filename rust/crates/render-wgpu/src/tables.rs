@@ -156,6 +156,9 @@ pub(crate) struct SkinnedHistory {
     /// The vertices the last frame with motion drew, while a newer pose is
     /// in `GpuMesh::vertices`; none once that one has been drawn.
     pub previous: Option<wgpu::Buffer>,
+    /// `previous`'s positions, for laying them out again when the cuts
+    /// change which vertices the mesh holds.
+    pub previous_positions: Option<std::sync::Arc<CpuGeometry>>,
     /// The other buffer, kept for the next pose while `previous` is none.
     pub spare: Option<wgpu::Buffer>,
 }
