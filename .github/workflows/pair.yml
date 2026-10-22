@@ -106,13 +106,19 @@ jobs:
 
       # The desktop runtime pack is the same host built with the desktop shell
       # and Chromium's runtime; `rusty dev` fetches it for window mode (#8860).
+      # Keyed on the CEF version cef-dll-sys builds against, so an older
+      # distribution is never restored beside it.
+      - name: Read the CEF version
+        id: cef
+        if: steps.published.outputs.skip != 'true'
+        run: echo "version=$(sed -n '/^name = "cef-dll-sys"$/{n;s/^version = "\(.*\)"$/\1/p}' Cargo.lock)" >> "$GITHUB_OUTPUT"
+
       - name: Restore the Chromium distribution
         if: steps.published.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
           path: target/cef
-          key: cef-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cef-${{ runner.os }}-
+          key: cef-${{ runner.os }}-${{ steps.cef.outputs.version }}
 
       - name: Build the desktop runtime pack
         if: steps.published.outputs.skip != 'true'

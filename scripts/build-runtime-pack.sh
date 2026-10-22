@@ -106,25 +106,35 @@ cp -a render/artifacts/live-debug-panel/. "$STAGE/share/live-debug-panel/"
 if ((DESKTOP)); then
   # Only what Chromium loads at run time: the library (stripped of its
   # 1.2 GB of debug info), its resources, ICU data, V8 snapshot, and one
-  # locale; on Windows also ANGLE's GL libraries, which Linux CEF links into
-  # libcef.so. SwiftShader (Chromium's software GPU) and the
+  # locale. SwiftShader (Chromium's software GPU) and the
   # bundled Vulkan loader are left out (#8860): the overlay imports Chromium's
   # frames as GPU textures, which needs the same system GPU driver and Vulkan
   # loader the world renderer uses, so neither is ever loaded.
   install -d "$STAGE/lib/cef/locales" "$STAGE/share/third-party/cef"
   CEF_RESOURCES=(chrome_100_percent.pak chrome_200_percent.pak resources.pak icudtl.dat v8_context_snapshot.bin)
+  metadata=$(cargo metadata --format-version 1 --locked --all-features)
+  # The distribution cef-dll-sys built the host against: CEF_PATH/<CEF
+  # version>/<platform> when it downloaded one, else CEF_PATH itself. CEF_PATH
+  # can hold other versions beside it, and libcef refuses a host built for a
+  # different CEF API, so the packaged one must be that exact version.
+  cef_version=$(jq -r '.packages[] | select(.name == "cef-dll-sys") | .version' <<<"$metadata" | head -n 1 | tr -d '\r')
+  cef_version=${cef_version#*+}
+  if [[ $TARGET == win-x64 ]]; then CEF_PLATFORM=cef_windows_x86_64; else CEF_PLATFORM=cef_linux_x86_64; fi
+  CEF_DIST="$CEF_PATH/$cef_version/$CEF_PLATFORM"
+  [[ -d "$CEF_DIST" ]] || CEF_DIST="$CEF_PATH"
+  dist_version=$(sed -n 's/^#define CEF_VERSION "\([^+"]*\).*/\1/p' "$CEF_DIST/include/cef_version.h" 2>/dev/null | tr -d '\r')
+  if [[ $dist_version != "$cef_version" ]]; then
+    echo "CEF distribution $CEF_DIST is CEF ${dist_version:-(none found)}; the host was built against CEF $cef_version (cef-dll-sys)" >&2
+    exit 1
+  fi
   if [[ $TARGET == win-x64 ]]; then
     # Windows CEF carries no debug info in libcef.dll. chrome_elf is loaded
-    # with it; ANGLE (libEGL, libGLESv2) draws through D3D11 with
-    # d3dcompiler_47, and dxcompiler/dxil compile Dawn's D3D12 shaders.
-    CEF_DIST="$(dirname "$(find "$CEF_PATH" -path '*cef_windows_x86_64/libcef.dll' -print -quit)")"
-    [[ -f "$CEF_DIST/libcef.dll" ]] || { echo "CEF distribution not found under $CEF_PATH" >&2; exit 1; }
-    for file in libcef.dll chrome_elf.dll libEGL.dll libGLESv2.dll d3dcompiler_47.dll dxcompiler.dll dxil.dll; do
+    # with it; d3dcompiler_47 compiles ANGLE's D3D11 shaders, and
+    # dxcompiler/dxil compile Dawn's D3D12 shaders.
+    for file in libcef.dll chrome_elf.dll d3dcompiler_47.dll dxcompiler.dll dxil.dll; do
       install -m 755 "$CEF_DIST/$file" "$STAGE/lib/cef/$file"
     done
   else
-    CEF_DIST="$(dirname "$(find "$CEF_PATH" -path '*cef_linux_x86_64/libcef.so' -print -quit)")"
-    [[ -f "$CEF_DIST/libcef.so" ]] || { echo "CEF distribution not found under $CEF_PATH" >&2; exit 1; }
     strip -o "$STAGE/lib/cef/libcef.so" "$CEF_DIST/libcef.so"
   fi
   for file in "${CEF_RESOURCES[@]}"; do
@@ -135,7 +145,6 @@ if ((DESKTOP)); then
   install -m 644 "$CEF_DIST/CREDITS.html" "$STAGE/share/third-party/cef/CREDITS.html"
   # welding and grafting are MPL-2.0: their source ships with the binary, as
   # fidget-mesh's does.
-  metadata=$(cargo metadata --format-version 1 --locked --all-features)
   for crate in welding grafting; do
     manifest=$(jq -r --arg name "$crate" '.packages[] | select(.name == $name) | .manifest_path' <<<"$metadata" | head -n 1 | tr -d '\r')
     [[ $TARGET != win-x64 ]] || manifest=$(cygpath -u "$manifest")

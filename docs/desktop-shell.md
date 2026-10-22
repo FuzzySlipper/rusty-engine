@@ -141,6 +141,8 @@ rusty dev --project <product.csproj> --output window
     (`vcvars64.bat`), with MSVC's directory ahead of Git's own `link` on
     `PATH`, and builds `target/runtime-pack/win-x64`.
   - The CEF build script downloads CEF into `CEF_PATH` (default `target/cef`).
+    The pack takes the distribution of the CEF version cef-dll-sys builds
+    against and refuses to build when that one is missing.
   - Default workspace builds and the verify workflow never enable the
     feature.
 - **What `lib/cef` holds.** About 292 MB installed; `rusty-product-host
@@ -148,6 +150,8 @@ rusty dev --project <product.csproj> --output window
   (Linux subprocesses load `libcef.so` through the dynamic linker).
   - `libcef.so`, stripped;
   - its paks, ICU data and V8 snapshot (ANGLE is inside `libcef.so`);
+  - on Windows `libcef.dll` (ANGLE inside it too), `chrome_elf.dll` and the
+    D3D shader compilers instead of `libcef.so`;
   - one locale.
 
   SwiftShader and the bundled Vulkan loader are left out. The overlay imports
