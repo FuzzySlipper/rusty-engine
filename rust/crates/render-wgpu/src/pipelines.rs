@@ -31,10 +31,14 @@ const MESH_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
 const EXTRA_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x2];
 const MORPH_ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![6 => Float32x3];
+/// The previous frame's skinned vertices (`GpuMesh::previous_stream`):
+/// interleaved as the first stream, of which only the position is read.
+const PREVIOUS_ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![7 => Float32x3];
 
 /// The vertex streams a mesh with `features` binds: the interleaved one,
-/// then its tangents (VERTEX_TANGENTS) or its morph targets (MORPH). The
-/// shadow and pre-pass pipelines take tangents never.
+/// then its tangents (VERTEX_TANGENTS) or its morph targets (MORPH), then,
+/// writing motion (MOTION), a skinned mesh's previous vertices (SKINNED).
+/// The shadow and pre-pass pipelines take tangents never.
 pub(crate) fn mesh_buffers(
     features: Features,
     tangents: bool,
@@ -55,6 +59,13 @@ pub(crate) fn mesh_buffers(
             array_stride: (MORPH_VERTEX_FLOATS * 4) as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &MORPH_ATTRIBUTES,
+        }));
+    }
+    if features.contains(Features::SKINNED | Features::MOTION) {
+        buffers.push(Some(wgpu::VertexBufferLayout {
+            array_stride: (VERTEX_FLOATS * 4) as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &PREVIOUS_ATTRIBUTES,
         }));
     }
     buffers
@@ -937,8 +948,13 @@ impl Layouts {
         if pipelines.world.contains_key(&(features, pass)) {
             return false;
         }
-        // Beside a motion target the variant writes motion too.
-        let compiled = features | pipelines.target.features();
+        // Beside a motion target the variant writes motion too; without
+        // one, skinned vertices compile as any others.
+        let compiled = if pipelines.target.motion {
+            features | Features::MOTION
+        } else {
+            features.without(Features::SKINNED)
+        };
         self.world_shader(device, compiled);
         let shader = &self.world_shaders[&compiled];
         let (topology, cull_mode, front_face, blend) = match pass {
@@ -950,7 +966,7 @@ impl Layouts {
             Pass::BlendMirrored => (TRIANGLES, BACK, CW, true),
             Pass::BlendDoubleSided => (TRIANGLES, None, CCW, true),
         };
-        let buffers = mesh_buffers(features, true);
+        let buffers = mesh_buffers(compiled, true);
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu world"),
             layout: Some(if features.contains(Features::WATER) {

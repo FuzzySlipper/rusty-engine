@@ -521,6 +521,9 @@ pub struct Renderer {
     animation_facts: Vec<animated::AnimationFact>,
     /// Realization generation per source entity, as the runtime reads it.
     animation_generations: HashMap<u64, u64>,
+    /// Animated instances whose skinned vertices hold a previous pose for
+    /// the motion (`animated.rs` `settle_skinned_history`).
+    skinned_settling: Vec<render_model::RenderHandle>,
     ghosts: HashMap<render_presentation::GhostPlateHandle, ghost::GhostPlate>,
     ghost_pipelines: ghost::GhostPipelines,
     /// Overlay sets and what inspection shows (`overlays.rs`).
@@ -787,6 +790,7 @@ impl Renderer {
             presentation_time: 0.0,
             animation_facts: Vec::new(),
             animation_generations: HashMap::new(),
+            skinned_settling: Vec::new(),
             ghosts: HashMap::new(),
             ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
             overlays: overlays::Overlays::new(),

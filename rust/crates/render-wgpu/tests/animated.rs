@@ -1450,3 +1450,195 @@ fn a_cut_joint_draws_its_subtree_as_a_piece_where_it_is_placed() {
     let (_, restored) = harness.render(&view);
     assert_eq!(restored, whole);
 }
+
+/// The motion view's range (`compose.wgsl` `MOTION_VIEW_RANGE`): it draws x
+/// and y as red and green, `0.5 + pixels / 32`.
+const MOTION_RANGE: f32 = 16.0;
+
+/// A harness drawing the motion target in place of the picture.
+fn motion_harness() -> Harness {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness
+        .renderer
+        .set_overlay_shown(render_wgpu::OverlayShown {
+            motion: true,
+            ..Default::default()
+        });
+    harness
+}
+
+/// Each pixel's motion in render pixels, right and down.
+fn motions(rgba: &[u8]) -> Vec<[f32; 2]> {
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|[red, green, ..]| {
+            [red, green].map(|value| (f32::from(*value) / 255.0 - 0.5) * 2.0 * MOTION_RANGE)
+        })
+        .collect()
+}
+
+fn moving(motion: &[f32; 2]) -> bool {
+    motion[0].abs().max(motion[1].abs()) > 0.5
+}
+
+/// The pose last evaluated for the body, every node moved `x` along its
+/// instance's x.
+fn shifted_pose(harness: &Harness, x: f32) -> RenderDiff {
+    let pose = harness
+        .world
+        .snapshot()
+        .frame
+        .ops
+        .into_iter()
+        .find_map(|op| match op {
+            RenderDiff::SetEvaluatedPose { handle, pose } if handle == RenderHandle::new(BODY) => {
+                Some(pose)
+            }
+            _ => None,
+        })
+        .expect("the body is posed");
+    let shift = |nodes: &[[f32; 16]]| -> std::sync::Arc<[[f32; 16]]> {
+        nodes
+            .iter()
+            .map(|node| {
+                let mut node = *node;
+                node[12] += x;
+                node
+            })
+            .collect()
+    };
+    RenderDiff::SetEvaluatedPose {
+        handle: RenderHandle::new(BODY),
+        pose: EvaluatedPose {
+            nodes: shift(&pose.nodes),
+            ..pose
+        },
+    }
+}
+
+/// The character's motion after it moves 0.1 m along x by its node: what
+/// the same move by its pose must draw.
+fn moved_by_node() -> Vec<[f32; 2]> {
+    let mut harness = motion_harness();
+    character_scene(&mut harness);
+    let view = character_view();
+    harness.render(&view);
+    harness.render(&view);
+    harness.apply(vec![move_body(0.1)]);
+    let (_, moved) = harness.render(&view);
+    let moved = motions(&moved);
+    assert!(
+        moved.iter().filter(|motion| moving(motion)).count() > 200,
+        "the character moves"
+    );
+    moved
+}
+
+/// The largest difference between two motion views, in render pixels, and
+/// where it is.
+fn largest_difference(a: &[[f32; 2]], b: &[[f32; 2]]) -> (f32, usize) {
+    a.iter()
+        .zip(b)
+        .map(|(a, b)| (a[0] - b[0]).abs().max((a[1] - b[1]).abs()))
+        .enumerate()
+        .fold((0.0, 0), |largest, (index, difference)| {
+            if difference > largest.0 {
+                (difference, index)
+            } else {
+                largest
+            }
+        })
+}
+
+/// Skinned vertices move by their pose: a new evaluated pose that
+/// puts every node 0.1 m over draws the motion that moving the instance
+/// 0.1 m draws, the weapon on its hand with it, and the next frame, the
+/// pose held, draws none.
+#[test]
+fn a_new_pose_moves_skinned_vertices_as_moving_the_instance_does_then_holds() {
+    let expected = moved_by_node();
+    let mut harness = motion_harness();
+    character_scene(&mut harness);
+    let view = character_view();
+    harness.render(&view);
+    harness.render(&view);
+    let shifted = shifted_pose(&harness, 0.1);
+    let issues = harness.renderer.apply(
+        &RenderFrameDiff::from_ops(vec![shifted]),
+        &harness.resources,
+    );
+    assert!(issues.is_empty(), "{issues:?}");
+    let (_, posed) = harness.render(&view);
+    let posed = motions(&posed);
+    let (difference, at) = largest_difference(&posed, &expected);
+    assert!(
+        difference <= 0.25,
+        "pixel {at}: {:?} by the pose, {:?} by the node",
+        posed[at],
+        expected[at]
+    );
+    let (_, held) = harness.render(&view);
+    assert!(
+        motions(&held).iter().all(|motion| !moving(motion)),
+        "a held pose has no motion"
+    );
+}
+
+/// A severed piece moves by its placement: the head cut in place
+/// and then placed 0.1 m over draws, where the head is, the motion the whole
+/// character draws moved 0.1 m, and the body stays still.
+#[test]
+fn a_moved_severed_piece_moves_by_its_placement() {
+    let expected = moved_by_node();
+    let mut harness = motion_harness();
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let head = rig_joint(&body, "Head");
+    let view = character_view();
+    harness.render(&view);
+    let joints = drawn(&harness).latest.joints;
+    let pose: Vec<Transform> = joints.iter().map(|joint| joint.model).collect();
+    let cutting = |x: f32| {
+        let mut placement = joints[head as usize].world;
+        placement.translation[0] += x;
+        RenderDiff::SetAnimatedMeshPose {
+            handle: RenderHandle::new(BODY),
+            pose: AnimatedMeshPose {
+                cuts: vec![JointCut {
+                    joint: head,
+                    pose: pose.clone(),
+                    placement,
+                }],
+                ..AnimatedMeshPose::default()
+            },
+        }
+    };
+    harness.apply(vec![cutting(0.0)]);
+    harness.render(&view);
+    harness.render(&view);
+    harness.apply(vec![cutting(0.1)]);
+    let (_, moved) = harness.render(&view);
+    let moved = motions(&moved);
+    let pieces = moved.iter().filter(|motion| moving(motion)).count();
+    let whole = expected.iter().filter(|motion| moving(motion)).count();
+    assert!(
+        pieces > 100 && pieces + 500 < whole,
+        "the head moves, the body does not: {pieces} of {whole} pixels"
+    );
+    // Where the head covers the whole pixel it moves as the whole
+    // character does; along the neck, its samples share the pixel with the
+    // still body's.
+    let matching = moved
+        .iter()
+        .zip(&expected)
+        .filter(|(motion, _)| moving(motion))
+        .filter(|(motion, expected)| {
+            (motion[0] - expected[0]).abs() <= 0.25 && (motion[1] - expected[1]).abs() <= 0.25
+        })
+        .count();
+    assert!(
+        matching * 10 >= pieces * 9,
+        "{matching} of {pieces} moving pixels move as the whole character does"
+    );
+}

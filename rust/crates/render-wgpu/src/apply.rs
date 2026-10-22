@@ -2019,6 +2019,7 @@ impl Renderer {
             layer_palette: Vec::new(),
             vertex_occlusion: false,
             morph: None,
+            skinned: None,
             // Copied from too: the selected scatter copies draw from a pool
             // of their meshes (`mesh_pool.rs`).
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

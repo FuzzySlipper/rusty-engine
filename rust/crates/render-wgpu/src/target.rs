@@ -53,12 +53,6 @@ impl ColorTarget {
         }
         targets
     }
-
-    /// The shader features every pipeline drawing here compiles with: the
-    /// motion output with a motion target.
-    pub fn features(self) -> crate::shaders::Features {
-        crate::shaders::Features::default().with(crate::shaders::Features::MOTION, self.motion)
-    }
 }
 
 /// What one render call draws into: the single-sample image every pass

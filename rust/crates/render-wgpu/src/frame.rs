@@ -1522,6 +1522,9 @@ impl Renderer {
             if let Some(second) = mesh.second_stream() {
                 pass.set_vertex_buffer(1, second.slice(..));
             }
+            if let Some(previous) = mesh.previous_stream() {
+                pass.set_vertex_buffer(mesh.previous_slot(), previous.slice(..));
+            }
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             // Following batches with the same pipeline, material and mesh
             // draw in the same call.
@@ -1912,6 +1915,9 @@ impl Renderer {
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             if let Some(second) = mesh.second_stream() {
                 pass.set_vertex_buffer(1, second.slice(..));
+            }
+            if let Some(previous) = mesh.previous_stream() {
+                pass.set_vertex_buffer(mesh.previous_slot(), previous.slice(..));
             }
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(

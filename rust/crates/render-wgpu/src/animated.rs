@@ -13,6 +13,15 @@
 //! by their part's local matrix; skinned primitives are skinned on the CPU
 //! into the instance's own vertex buffer. A held pose costs nothing per
 //! frame.
+//!
+//! **Motion.** While frames draw motion (`motion.rs`), a new pose is skinned
+//! into a second buffer, so the one the last frame drew stays as it was and
+//! the motion reads each vertex's previous position from it
+//! (`SkinnedHistory`). Once the new pose has drawn, the motion reads the
+//! current vertices again: a held pose has no skinning motion. Nodes drawn
+//! rigid, severed pieces and children on joints are parts that move, so
+//! their previous models (`motion.rs`) are the previous pose's; a ragdoll is
+//! a pose like any other.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -27,7 +36,7 @@ use crate::apply::{MapSlot, MaterialMaps, MaterialParams};
 use crate::glb::{self, GlbAlpha, GlbClip, GlbModel, Trs};
 use crate::pipelines::{EXTRA_VERTEX_FLOATS, VERTEX_FLOATS};
 use crate::resources::ResourceSource;
-use crate::tables::{Aabb, GpuMesh, MaterialRef, NodeKind, Topology};
+use crate::tables::{Aabb, GpuMesh, MaterialRef, NodeKind, SkinnedHistory, Topology};
 use crate::Renderer;
 
 /// What the runtime reads back from animated meshes (animation feedback
@@ -83,6 +92,9 @@ pub(crate) struct AnimatedInstance {
     owners: Vec<Option<usize>>,
     /// Per-instance skinned vertex buffers, by (node, primitive).
     skinned: HashMap<(u32, u32), GpuMesh>,
+    /// The frames with motion drawn when `skinned` was last written
+    /// (`Temporal::motion_frames`): a later frame has drawn it.
+    skinned_at: u64,
     /// The GLB node each of the node row's parts draws, in part order.
     part_nodes: Vec<usize>,
     /// The skinned triangles split between the instance and its severed
@@ -446,18 +458,24 @@ impl Renderer {
                 rigid.insert((mesh_index as u32, primitive_index as u32), mesh);
             }
         }
-        // A material drawn with the second stream needs its own pipelines:
-        // make them now rather than at its first draw.
-        let streamed: BTreeSet<usize> = model
+        // A material drawn with the second stream or skinned needs its own
+        // pipelines: make them now rather than at its first draw.
+        let streamed: BTreeSet<(usize, crate::shaders::Features)> = model
             .meshes
             .iter()
             .flatten()
-            .filter(|primitive| {
-                extra_stream(&model, primitive, 0, &|vertex| vertex, None).is_some()
+            .filter_map(|primitive| {
+                let tangents = extra_stream(&model, primitive, 0, &|vertex| vertex, None).is_some();
+                let streams = crate::shaders::Features::default()
+                    .with(crate::shaders::Features::VERTEX_TANGENTS, tangents)
+                    .with(
+                        crate::shaders::Features::SKINNED,
+                        primitive.joints.is_some(),
+                    );
+                (streams != Default::default()).then_some((primitive.material?, streams))
             })
-            .filter_map(|primitive| primitive.material)
             .collect();
-        for index in streamed {
+        for (index, streams) in streamed {
             let prepared = crate::tables::named(
                 &self.tables.names,
                 &self.tables.materials,
@@ -465,7 +483,7 @@ impl Renderer {
             )
             .map(|(_, row)| {
                 (
-                    row.features | crate::shaders::Features::VERTEX_TANGENTS,
+                    row.features | streams,
                     crate::apply::blends(&row.descriptor),
                     row.descriptor.double_sided,
                 )
@@ -577,6 +595,7 @@ impl Renderer {
                 pose_pending: false,
                 owners: Vec::new(),
                 skinned: HashMap::new(),
+                skinned_at: 0,
                 part_nodes: Vec::new(),
                 split: None,
                 parameters: BTreeMap::new(),
@@ -898,38 +917,51 @@ impl Renderer {
                 updates.push(((node_index as u32, primitive_index as u32), vertices, extra));
             }
         }
+        // While frames draw motion, vertices a frame has drawn stay as they
+        // were for the next frame's motion, and the new pose goes into the
+        // other buffer.
+        let keep = self.temporal.keeps_history();
+        let frames = self.temporal.motion_frames();
+        let drawn = keep && self.tables.animated[&handle].skinned_at < frames;
         for (key, vertices, extra) in updates {
-            let exists = self
+            let gpu = &self.gpu;
+            let instance = self
                 .tables
                 .animated
-                .get(&handle)
-                .is_some_and(|instance| instance.skinned.contains_key(&key));
-            if exists {
-                let instance = &self.tables.animated[&handle];
-                let mesh = &instance.skinned[&key];
-                self.gpu
-                    .queue
+                .get_mut(&handle)
+                .expect("the instance skinned above");
+            if let Some(mesh) = instance.skinned.get_mut(&key) {
+                let history = mesh.skinned.get_or_insert_default();
+                if !keep {
+                    *history = SkinnedHistory::default();
+                } else if drawn {
+                    let next = history
+                        .previous
+                        .take()
+                        .or_else(|| history.spare.take())
+                        .unwrap_or_else(|| {
+                            gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                                label: Some("render-wgpu skinned vertices"),
+                                size: mesh.vertices.size(),
+                                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                                mapped_at_creation: false,
+                            })
+                        });
+                    history.previous = Some(std::mem::replace(&mut mesh.vertices, next));
+                }
+                gpu.queue
                     .write_buffer(&mesh.vertices, 0, bytemuck::cast_slice(&vertices));
                 if let (Some(buffer), Some(extra)) = (&mesh.extra, &extra) {
-                    self.gpu
-                        .queue
+                    gpu.queue
                         .write_buffer(buffer, 0, bytemuck::cast_slice(extra));
                 }
-                let bounds = vertex_bounds(&vertices);
-                if let Some(mesh) = self
-                    .tables
-                    .animated
-                    .get_mut(&handle)
-                    .and_then(|instance| instance.skinned.get_mut(&key))
-                {
-                    mesh.bounds = bounds;
-                    mesh.cpu = std::sync::Arc::new(crate::tables::CpuGeometry {
-                        positions: vertex_positions(&vertices),
-                        indices: mesh.cpu.indices.clone(),
-                    });
-                }
+                mesh.bounds = vertex_bounds(&vertices);
+                mesh.cpu = std::sync::Arc::new(crate::tables::CpuGeometry {
+                    positions: vertex_positions(&vertices),
+                    indices: mesh.cpu.indices.clone(),
+                });
             } else {
-                let slot = self.tables.animated[&handle].slot;
+                let slot = instance.slot;
                 let asset = self
                     .tables
                     .animated_assets
@@ -951,7 +983,54 @@ impl Renderer {
                 }
             }
         }
+        if let Some(instance) = self.tables.animated.get_mut(&handle) {
+            instance.skinned_at = frames;
+        }
+        if drawn && !self.skinned_settling.contains(&handle) {
+            self.skinned_settling.push(handle);
+        }
         resplit
+    }
+
+    /// At the start of a frame with motion: skinned vertices a frame has
+    /// drawn since their pose changed are their own previous vertices again,
+    /// and the buffer that held the previous ones is kept for the next pose.
+    pub(crate) fn settle_skinned_history(&mut self) {
+        let frames = self.temporal.motion_frames();
+        let animated = &mut self.tables.animated;
+        self.skinned_settling.retain(|handle| {
+            let Some(instance) = animated.get_mut(handle) else {
+                return false;
+            };
+            if instance.skinned_at == frames {
+                // Written for this frame: it draws its pose's motion.
+                return true;
+            }
+            for history in instance
+                .skinned
+                .values_mut()
+                .filter_map(|mesh| mesh.skinned.as_mut())
+            {
+                if let Some(previous) = history.previous.take() {
+                    history.spare = Some(previous);
+                }
+            }
+            false
+        });
+    }
+
+    /// Frames no longer draw motion: no skinned vertices are kept.
+    pub(crate) fn forget_skinned_history(&mut self) {
+        self.skinned_settling.clear();
+        for history in self
+            .tables
+            .animated
+            .values_mut()
+            .flat_map(|instance| instance.skinned.values_mut())
+            .filter_map(|mesh| mesh.skinned.as_mut())
+        {
+            *history = SkinnedHistory::default();
+        }
     }
 
     /// Re-write the instance's part rows with their node poses (rigid parts)
@@ -1257,7 +1336,6 @@ impl Renderer {
         parts
     }
 
-    /// Upload a vertex buffer the CPU rewrites (skinned primitives).
     /// A vertex buffer holding `data`, rewritable when `dynamic`.
     fn vertex_buffer(&self, label: &str, data: &[f32], dynamic: bool) -> wgpu::Buffer {
         use wgpu::util::DeviceExt;
@@ -1275,6 +1353,7 @@ impl Renderer {
             })
     }
 
+    /// Upload a skinned primitive's vertices, which the CPU rewrites.
     fn upload_dynamic_vertices(&self, label: &str, vertices: &[f32], indices: &[u32]) -> GpuMesh {
         use wgpu::util::DeviceExt;
         let device = &self.gpu.device;
@@ -1292,6 +1371,7 @@ impl Renderer {
             layer_palette: Vec::new(),
             vertex_occlusion: false,
             morph: None,
+            skinned: Some(SkinnedHistory::default()),
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(vertices),

@@ -392,6 +392,7 @@ impl Renderer {
         let jittering = stage.is_some_and(UpscaleMethod::temporal);
         let motion = jittering || self.overlays.shown.motion;
         let cut = std::mem::take(&mut self.composition.cut);
+        let kept = self.temporal.keeps_history();
         if self.temporal.begin_frame(
             &self.gpu,
             &self.tables.parts,
@@ -408,6 +409,9 @@ impl Renderer {
         }
         if motion {
             self.particles.drawn();
+            self.settle_skinned_history();
+        } else if kept {
+            self.forget_skinned_history();
         }
         if stage.is_none() && !effect {
             self.picture = None;

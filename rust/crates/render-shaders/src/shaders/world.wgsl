@@ -4,9 +4,10 @@
 // (`lib.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
 // EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR, TERRAIN_LAYERS, STOCHASTIC_TILING,
 // FLAT_SHADING, WIND, WATER, WATER_SCENE; and the mesh's
-// streams: VERTEX_TANGENTS, LAYER_WEIGHTS, VERTEX_OCCLUSION. A product shader (PRODUCT_SHADER)
-// shades the surface in place of `rusty::shade`, and may place its vertices
-// (PRODUCT_DISPLACES) and give their normals (PRODUCT_DISPLACES_NORMAL).
+// streams: VERTEX_TANGENTS, LAYER_WEIGHTS, VERTEX_OCCLUSION, SKINNED. A
+// product shader (PRODUCT_SHADER) shades the surface in place of
+// `rusty::shade`, and may place its vertices (PRODUCT_DISPLACES) and give
+// their normals (PRODUCT_DISPLACES_NORMAL).
 // With MOTION (a temporal stage's inputs, render-wgpu `motion.rs`) it also
 // writes each fragment's motion to location 1 (`rusty::motion`).
 
@@ -168,6 +169,13 @@ fn vs_world(
     // Height change, target normal x and z.
     @location(6) morph: vec3<f32>,
 #endif
+#ifdef MOTION
+#ifdef SKINNED
+    // The skinned vertex in the previous frame's pose (render-wgpu
+    // `animated.rs`): its position while the pose has not changed since.
+    @location(7) previous_position: vec3<f32>,
+#endif
+#endif
     @builtin(instance_index) instance: u32,
 ) -> VsOut {
 #ifdef SCATTER_SELECTED
@@ -244,7 +252,8 @@ fn vs_world(
     out.clip = projected(world);
 #ifdef MOTION
     // Where the vertex stood: moved as its model moved since (a card by its
-    // origin), and swayed as the wind swayed it then. A distance fade, the
+    // origin) and a skinned one as its pose did, and swayed as the wind
+    // swayed it then. A distance fade, the
     // snow and a product's displacement keep their offsets.
 #ifdef SCATTER_SELECTED
     let earlier = previous_copy_model(part, selected.copy);
@@ -260,7 +269,13 @@ fn vs_world(
 #else
     let anchor = vec4<f32>(position, 1.0);
 #endif
-    var previous = world + (earlier * anchor).xyz - (row.model * anchor).xyz;
+#ifdef SKINNED
+    // A skinned vertex also moves by its pose.
+    let earlier_anchor = vec4<f32>(previous_position, 1.0);
+#else
+    let earlier_anchor = anchor;
+#endif
+    var previous = world + (earlier * earlier_anchor).xyz - (row.model * anchor).xyz;
 #ifdef WIND
     previous += wind_displace_at(unswayed, row.model[3].xyz, wind_weight, previous_time())
         - wind_displace(unswayed, row.model[3].xyz, wind_weight);

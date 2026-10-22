@@ -109,16 +109,21 @@ impl Features {
     /// it, and draws it over what lies behind in place of blending. Only
     /// with WATER, on a device that binds the copy (`SCENE_COLOR`).
     pub const WATER_SCENE: Self = Self::bit(1048576);
+    /// The mesh is an animated instance's CPU-skinned vertices (a mesh
+    /// feature, not a material one). With MOTION its vertices also read
+    /// where they stood in the previous frame's pose from a further vertex
+    /// stream (render-wgpu `animated.rs`); without, it changes nothing.
+    pub const SKINNED: Self = Self::bit(2097152);
     /// The pass writes motion vectors to location 1 (`rusty::motion`): a
     /// target's feature, not a material's, set on every pipeline drawing
     /// into a world target that has a motion target (render-wgpu
     /// `motion.rs`). Entries other than the world take it too.
-    pub const MOTION: Self = Self::bit(2097152);
+    pub const MOTION: Self = Self::bit(4194304);
     /// Every material and mesh feature's bit: all but MOTION.
     #[cfg(test)]
-    const ALL_BITS: u32 = 2097151;
+    const ALL_BITS: u32 = 4194303;
 
-    const DEFS: [(Self, &'static str); 22] = [
+    const DEFS: [(Self, &'static str); 23] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -140,6 +145,7 @@ impl Features {
         (Self::SCATTER_SELECTED, "SCATTER_SELECTED"),
         (Self::IMPOSTOR, "IMPOSTOR"),
         (Self::WATER_SCENE, "WATER_SCENE"),
+        (Self::SKINNED, "SKINNED"),
         (Self::MOTION, "MOTION"),
     ];
 
@@ -224,7 +230,8 @@ impl Features {
     /// map or an ORM map; flat shading drops the normal map; terrain layers
     /// need a voxel surface; water is blended (never masked) and reads its
     /// normal maps itself, and only water reads the scene; a morphing mesh (a heightfield tile) has neither
-    /// tangents nor vertex occlusion.
+    /// tangents nor vertex occlusion; skinned vertices are a GLB
+    /// primitive's, with its material's features.
     #[cfg(test)]
     fn occurs(self) -> bool {
         let unlit_never = Self::NORMAL_MAP
@@ -252,6 +259,23 @@ impl Features {
                 Self::SCATTER,
                 Self::MORPH | Self::WATER | Self::LAYER_WEIGHTS | Self::TERRAIN_LAYERS,
             ),
+            // Skinned vertices are a GLB primitive's, drawn with its
+            // material's features. A material override may bring others,
+            // but SKINNED changes only the vertex input and the motion's
+            // anchor, which the wind shares; this keeps the sets composed
+            // few.
+            self.contains(Self::SKINNED)
+                && self.bits
+                    & !(Self::SKINNED
+                        | Self::UNLIT
+                        | Self::MASK
+                        | Self::NORMAL_MAP
+                        | Self::EMISSIVE_MAP
+                        | Self::OCCLUSION_MAP
+                        | Self::VERTEX_TANGENTS
+                        | Self::WIND)
+                        .bits
+                    != 0,
             // Selected copies are a scatter run's, opaque.
             self.contains(Self::SCATTER_SELECTED) && !self.contains(Self::SCATTER),
             // An impostor is a selected copy's card with its baked atlas: a

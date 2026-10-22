@@ -141,6 +141,23 @@ pub(crate) struct GpuMesh {
     /// Its geomorph (`render_model::MeshMorph`): the targets' vertex stream
     /// and the range, in the mesh's own units, over which it morphs.
     pub morph: Option<MorphStream>,
+    /// An animated instance's CPU-skinned vertices (SKINNED,
+    /// `animated.rs`): what a pass writing motion reads as their previous
+    /// frame's pose.
+    pub skinned: Option<SkinnedHistory>,
+}
+
+/// A skinned mesh's vertices as the last frame with motion drew them
+/// (`animated.rs`). A new pose is written into another buffer of their
+/// size, so the drawn one stays as it was: at most one more per varying
+/// mesh, and none while no frame draws motion.
+#[derive(Default)]
+pub(crate) struct SkinnedHistory {
+    /// The vertices the last frame with motion drew, while a newer pose is
+    /// in `GpuMesh::vertices`; none once that one has been drawn.
+    pub previous: Option<wgpu::Buffer>,
+    /// The other buffer, kept for the next pose while `previous` is none.
+    pub spare: Option<wgpu::Buffer>,
 }
 
 /// A mesh's morph targets on the GPU (`MORPH`, the second vertex stream:
@@ -165,6 +182,20 @@ impl GpuMesh {
                 self.vertex_occlusion,
             )
             .with(crate::shaders::Features::MORPH, self.morph.is_some())
+            .with(crate::shaders::Features::SKINNED, self.skinned.is_some())
+    }
+
+    /// What a skinned mesh binds as its previous vertices
+    /// (`pipelines::mesh_buffers`): the last frame's, or its own while its
+    /// pose has not changed since.
+    pub fn previous_stream(&self) -> Option<&wgpu::Buffer> {
+        let skinned = self.skinned.as_ref()?;
+        Some(skinned.previous.as_ref().unwrap_or(&self.vertices))
+    }
+
+    /// The previous vertices' slot: after the mesh's own streams.
+    pub fn previous_slot(&self) -> u32 {
+        1 + u32::from(self.second_stream().is_some())
     }
 
     /// The vertex stream bound after the interleaved one: tangents, or a

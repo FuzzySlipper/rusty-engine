@@ -336,13 +336,14 @@ resolution: per pixel, how far its point moved since the previous frame in
 render pixels, without the jitter. Static and instanced meshes move by their
 part's previous transform, scatter copies under it, swaying vegetation by
 the wind at the previous frame's time, particles from where they were drawn
-and falling rain or snow back along its fall; projected decals take the
+and falling rain or snow back along its fall. An animated mesh's skinned
+vertices also move by their previous pose, ragdolls and severed pieces
+included, and what hangs from a joint moves with it; projected decals take the
 motion of the surface under them, and blended parts and particles blend
 theirs over it by their alpha. The sky and its clouds, water surfaces,
 sprites and ghost plates have no motion of their own yet: the sky reads as
 still, and the others show the motion of what lies under them. A product
-shader's displacement moves with its part, not on its own, and a skinned
-mesh moves with its part, not by its pose.
+shader's displacement moves with its part, not on its own.
 
 The stage is told its history no longer holds on the first frame with
 motion, which a new renderer (a world replacement or rebaseline) starts

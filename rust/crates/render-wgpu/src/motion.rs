@@ -18,14 +18,15 @@
 //!   then: a part by its previous model matrix, kept here by part id and
 //!   rewritten only for parts that moved; a scatter copy under its part's;
 //!   wind sway at the previous presentation time; particles from where they
-//!   were drawn; falling drops back along their fall. Each view takes the
+//!   were drawn; falling drops back along their fall; a skinned vertex
+//!   where the previous frame's pose put it (`animated.rs`), and a node or
+//!   child on a joint by its part's previous model. Each view takes the
 //!   previous frame's projection of its camera. Blended parts and particles
 //!   blend their motion over what lies behind by their alpha.
 //! - **No motion of their own** (they show what lies under them, or none):
 //!   the sky and its clouds, which the background draws; water surfaces;
 //!   sprites; ghost plates; overlay lines. A product shader's displacement
 //!   keeps its offset, so it moves with its part but not on its own.
-//!   Skinned vertices move with their part only, not by their pose.
 //! - **History reset.** The history no longer holds on the first frame with
 //!   motion (a new renderer: a world replacement or baseline), and when a
 //!   primary camera cuts or first draws, the observer comes or goes, the
@@ -376,6 +377,9 @@ pub(crate) struct Temporal {
     last: Option<(f64, FrameResolution, RendererOptions, bool)>,
     /// Frames drawn with a temporal stage: the jitter's place.
     jittered_frames: u32,
+    /// Frames drawn with motion: what a skinned mesh's pose was last
+    /// written after (`animated.rs`).
+    motion_frames: u64,
     /// This frame's history no longer holds.
     reset: bool,
     /// The frame's presentation time, and the previous frame's.
@@ -401,6 +405,7 @@ impl Temporal {
             drawn: HashMap::new(),
             last: None,
             jittered_frames: 0,
+            motion_frames: 0,
             reset: false,
             time: 0.0,
             previous_time: 0.0,
@@ -418,6 +423,17 @@ impl Temporal {
         self.previous
             .as_ref()
             .map_or(&self.placeholder, |previous| &previous.buffer)
+    }
+
+    /// Whether frames draw motion, so what they drew is kept for the next:
+    /// from the first frame with motion until one without.
+    pub fn keeps_history(&self) -> bool {
+        self.previous.is_some()
+    }
+
+    /// The frames with motion drawn so far.
+    pub fn motion_frames(&self) -> u64 {
+        self.motion_frames
     }
 
     /// Note the parts moved and made since `prepare` last ran, while frames
@@ -569,6 +585,7 @@ impl Temporal {
     /// Returns what the frame drew, while it drew motion.
     pub fn end_frame(&mut self) -> Option<MotionFrame> {
         self.frame.as_ref()?;
+        self.motion_frames += 1;
         self.cameras = std::mem::take(&mut self.drawn);
         if let Some(shown) = &mut self.shown {
             shown.history_reset |= self.reset;
