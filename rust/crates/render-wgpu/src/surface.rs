@@ -16,6 +16,10 @@ pub struct WindowSurface {
     /// The sample count and vsync the renderer asked for, applied by the
     /// next acquire (a surface is not reconfigured under an acquired image).
     wanted: Option<(u32, bool)>,
+    /// The swapchain is created by the first acquire, not with the surface:
+    /// a window just created may not have its size yet (Windows applies it
+    /// asynchronously, and its surface allows only the current size).
+    configured: bool,
     /// The present modes the surface supports, which say whether a request
     /// for no vsync is realized ([`WindowSurface::vsync_only`]).
     present_modes: Vec<wgpu::PresentMode>,
@@ -95,7 +99,6 @@ impl WindowSurface {
             },
             color_space: wgpu::SurfaceColorSpace::Auto,
         };
-        surface.configure(&gpu.device, &config);
         let samples = target::PRIMARY_SAMPLES;
         Ok(Self {
             depth_view: target::multisampled_depth(gpu, config.width, config.height, samples),
@@ -103,6 +106,7 @@ impl WindowSurface {
             config,
             samples,
             wanted: None,
+            configured: false,
             present_modes: capabilities.present_modes,
         })
     }
@@ -143,6 +147,11 @@ impl WindowSurface {
         })
     }
 
+    /// Whether an acquire has created the swapchain yet.
+    pub fn configured(&self) -> bool {
+        self.configured
+    }
+
     pub fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
     }
@@ -153,11 +162,14 @@ impl WindowSurface {
         }
         self.config.width = width.max(1);
         self.config.height = height.max(1);
-        self.reconfigure(gpu);
+        if self.configured {
+            self.reconfigure(gpu);
+        }
     }
 
     fn reconfigure(&mut self, gpu: &Gpu) {
         self.surface.configure(&gpu.device, &self.config);
+        self.configured = true;
         let (width, height) = (self.config.width, self.config.height);
         self.depth_view = target::multisampled_depth(gpu, width, height, self.samples);
     }
@@ -173,6 +185,8 @@ impl WindowSurface {
                 wgpu::PresentMode::AutoNoVsync
             };
             self.samples = samples;
+            self.reconfigure(gpu);
+        } else if !self.configured {
             self.reconfigure(gpu);
         }
         let texture = match self.surface.get_current_texture() {

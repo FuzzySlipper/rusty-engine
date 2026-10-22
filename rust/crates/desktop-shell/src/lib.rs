@@ -266,6 +266,12 @@ impl Shell {
         let _ = event_loop;
         // The vsync wait happens here, before the scene is taken, so a product
         // call applying its changes never waits for the display.
+        if !open.surface.configured() {
+            // The size the window had when it was created may not be the one
+            // it settled at (Windows applies it asynchronously).
+            let size = open.window.inner_size();
+            open.surface.resize(&self.gpu, size.width, size.height);
+        }
         let acquiring = Instant::now();
         let frame = match open.surface.acquire(&self.gpu) {
             Ok(frame) => frame,
