@@ -762,8 +762,18 @@ impl Renderer {
         }
         if self.skin_animated_instance(handle) {
             // The cuts changed the skinned triangles, so the parts' index
-            // counts.
+            // counts. The parts are the same primitives in the same order,
+            // so each keeps its predecessor's previous model.
+            let parts = |renderer: &Self| {
+                renderer
+                    .tables
+                    .nodes
+                    .get(&handle)
+                    .map_or(Vec::new(), |node| node.parts.clone())
+            };
+            let before = parts(self);
             self.rebuild_parts(handle);
+            self.temporal.carry(&before, &parts(self));
         }
         self.write_animated_parts(handle);
     }

@@ -270,6 +270,9 @@ struct PreviousModels {
     /// Parts moved or made since the last frame with motion.
     moved: HashSet<PartId>,
     created: HashSet<PartId>,
+    /// Parts made since in place of others (`Temporal::carry`): the model
+    /// the part each replaces was last drawn with.
+    carried: HashMap<PartId, [f32; MODEL_FLOATS]>,
     /// Parts that moved in the last frame with motion: their previous row
     /// catches up with them in the next.
     settling: Vec<PartId>,
@@ -291,6 +294,7 @@ impl PreviousModels {
             drawn,
             moved: HashSet::new(),
             created: HashSet::new(),
+            carried: HashMap::new(),
             settling: Vec::new(),
             buffer,
         }
@@ -308,9 +312,13 @@ impl PreviousModels {
         let mut dirty: Vec<PartId> = Vec::new();
         for id in self.created.drain() {
             if (id as usize) < count {
-                self.drawn[id as usize] = model(parts, id as usize);
+                self.drawn[id as usize] = self
+                    .carried
+                    .remove(&id)
+                    .unwrap_or_else(|| model(parts, id as usize));
             }
         }
+        self.carried.clear();
         let moved: Vec<PartId> = self.moved.drain().collect();
         for &id in moved.iter().chain(&self.settling) {
             let index = id as usize;
@@ -442,6 +450,33 @@ impl Temporal {
         if let Some(previous) = &mut self.previous {
             previous.moved.extend(moved.iter().copied());
             previous.created.extend(created.iter().copied());
+        }
+    }
+
+    /// Parts `to` were made in place of `from`, one for one: each takes the
+    /// model its counterpart was last drawn with as its previous one, so a
+    /// node whose parts are made again keeps its motion. Before the parts
+    /// are noted (`note_parts`).
+    pub fn carry(&mut self, from: &[PartId], to: &[PartId]) {
+        let Some(previous) = &mut self.previous else {
+            return;
+        };
+        if from.len() != to.len() {
+            return;
+        }
+        let drawn: Vec<Option<[f32; MODEL_FLOATS]>> = from
+            .iter()
+            .map(|id| match previous.carried.get(id) {
+                Some(carried) => Some(*carried),
+                // Made since the last frame with motion: none drew it.
+                None if previous.created.contains(id) => None,
+                None => previous.drawn.get(*id as usize).copied(),
+            })
+            .collect();
+        for (id, drawn) in to.iter().zip(drawn) {
+            if let Some(drawn) = drawn {
+                previous.carried.insert(*id, drawn);
+            }
         }
     }
 

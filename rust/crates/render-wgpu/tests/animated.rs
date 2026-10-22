@@ -1653,6 +1653,46 @@ fn a_cut_made_or_cleared_as_the_pose_moves_keeps_the_motion() {
     );
 }
 
+/// A cut made as the instance moves keeps its motion: the head cut in place
+/// in the change that moves the instance 0.1 m draws what that move draws
+/// without the cut, though the cut makes the instance's parts again.
+#[test]
+fn a_cut_made_as_the_instance_moves_keeps_its_motion() {
+    let expected = moved_by_node();
+    let mut harness = motion_harness();
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let head = rig_joint(&body, "Head");
+    let view = character_view();
+    harness.render(&view);
+    harness.render(&view);
+    let RenderDiff::SetEvaluatedPose { handle, mut pose } = shifted_pose(&harness, 0.0) else {
+        unreachable!("a pose")
+    };
+    pose.pieces = vec![EvaluatedPiece {
+        joint: head,
+        nodes: pose.nodes.clone(),
+    }];
+    let issues = harness.renderer.apply(
+        &RenderFrameDiff::from_ops(vec![
+            move_body(0.1),
+            RenderDiff::SetEvaluatedPose { handle, pose },
+        ]),
+        &harness.resources,
+    );
+    assert!(issues.is_empty(), "{issues:?}");
+    let cut = motions(&harness.render(&view).1);
+    let (difference, at) = largest_difference(&cut, &expected);
+    assert!(
+        difference <= 0.25,
+        "pixel {at}: {:?}, {:?} moved without the cut",
+        cut[at],
+        expected[at]
+    );
+    let held = motions(&harness.render(&view).1);
+    assert!(held.iter().all(|motion| !moving(motion)), "then holds");
+}
+
 /// A severed piece moves by its placement: the head cut in place
 /// and then placed 0.1 m over draws, where the head is, the motion the whole
 /// character draws moved 0.1 m, and the body stays still.
