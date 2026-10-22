@@ -40,6 +40,14 @@ fn previous_pixel_toward(direction: vec3<f32>) -> vec4<f32> {
     return target_pixel_of(motion.previous_view_proj * vec4<f32>(direction, 0.0));
 }
 
+// Where the point `offset` from this frame's camera at `eye` stood in the
+// previous frame, as homogeneous target pixels: the cameras' difference
+// first, so their large coordinates cancel.
+fn previous_pixel_from(eye: vec3<f32>, offset: vec3<f32>) -> vec4<f32> {
+    let from_previous = eye - motion.previous_camera.xyz + offset;
+    return target_pixel_of(motion.previous_view_proj * vec4<f32>(from_previous, 1.0));
+}
+
 // A previous clip position as homogeneous target pixels: what a vertex
 // stage passes on for `motion_at`.
 fn target_pixel_of(clip: vec4<f32>) -> vec4<f32> {

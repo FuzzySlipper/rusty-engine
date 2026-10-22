@@ -3,8 +3,8 @@
 //! and nowhere else, is gone when removed, and shades the ground under it;
 //! volumetric clouds draw where the flat layer does, but differently, and
 //! off (or a software adapter, which refuses them) draws the flat layer
-//! exactly; a sun below the horizon lights the side of a cloud facing it.
-//! Same harness as `tests/screenshots.rs`.
+//! exactly; a sun below the horizon lights the side of a cloud facing it;
+//! under a motion target they move with their drift. Same harness as `tests/screenshots.rs`.
 
 mod support;
 
@@ -502,4 +502,43 @@ fn a_turning_camera_leaves_no_trails_and_a_cut_starts_afresh() {
         fresh.render(&camera([100.0, 1.0, 0.0], 12.0, 25.0)).1,
         "no history crosses a cut"
     );
+}
+
+#[test]
+fn drifting_volumetric_clouds_move_on_a_still_camera() {
+    let Some(mut harness) = drifting() else {
+        return;
+    };
+    harness
+        .renderer
+        .set_overlay_shown(render_wgpu::OverlayShown {
+            motion: true,
+            ..Default::default()
+        });
+    // The motion view: x right in render pixels, `0.5 + px / 32` as red.
+    let rightward = |rgba: &[u8], limit: f32| {
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|pixel| (f32::from(pixel[0]) / 255.0 - 0.5) * 32.0 > limit)
+            .count()
+    };
+    up_at(&mut harness, 0.0, 2.0);
+    let held = up_at(&mut harness, 0.0, 2.0);
+    assert_eq!(rightward(&held, 0.2), 0, "a held time holds");
+    // Ten seconds on, the clouds 1.5 km up drift 120 m east: right.
+    let drifted = up_at(&mut harness, 0.0, 12.0);
+    let moved = rightward(&drifted, 1.0);
+    let total = drifted.len() / 4;
+    assert!(
+        moved > total / 20,
+        "the clouds drift right: {moved} of {total}"
+    );
+    let leftward = drifted
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| (f32::from(pixel[0]) / 255.0 - 0.5) * 32.0 < -0.3)
+        .count();
+    assert_eq!(leftward, 0, "nothing drifts left");
 }

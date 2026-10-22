@@ -11,7 +11,7 @@
 #import rusty::types::PI
 #import rusty::view::{frame, world_equivalent}
 #import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, cloud_kind_detail, cloud_moonlight, cloud_sunlight, CLOUD_OCTAVES}
-#import rusty::motion::{motion_at, previous_pixel_toward}
+#import rusty::motion::{motion_at, previous_pixel_from, previous_pixel_toward, previous_time}
 
 struct SkyUniform {
     // x: blend amount toward the second panorama
@@ -477,6 +477,11 @@ fn fs_sun_glow_marched(in: SkyOut) -> @location(0) vec4<f32> {
 // far plane over its motion target, so it writes only where the world left
 // the sky open. The sky, the backdrop behind the world, the sun and the
 // moon stand at infinity: they move as the camera turns, not as it moves.
+// The clouds the view's background drew stand at their layer's distance
+// and drift: where they cover the sky, their motion is the cloud's own,
+// from where it stood a frame ago (drifted back, seen by the previous
+// camera), over the sky's by their coverage (`fs_sky_motion_flat`,
+// `fs_sky_motion_marched`).
 struct SkyMotionOut {
     @location(1) motion: vec4<f32>,
 };
@@ -485,4 +490,41 @@ struct SkyMotionOut {
 fn fs_sky_motion(in: SkyOut) -> SkyMotionOut {
     let previous = previous_pixel_toward(view_direction(in.ndc));
     return SkyMotionOut(vec4<f32>(motion_at(in.clip, previous), 0.0, 1.0));
+}
+
+// The motion at a fragment of the sky seen along `direction` with a cloud
+// `distance` metres along it, drifting `drift` metres per second over the
+// ground, covering `coverage` of the sky there.
+fn sky_and_cloud_motion(clip: vec4<f32>, direction: vec3<f32>, distance: f32, drift: vec2<f32>, coverage: f32) -> vec4<f32> {
+    let turned = motion_at(clip, previous_pixel_toward(direction));
+    if coverage <= 0.0 {
+        return vec4<f32>(turned, 0.0, 1.0);
+    }
+    let drifted = vec3<f32>(drift.x, 0.0, drift.y) * (frame.time.x - previous_time());
+    let cloud = motion_at(clip, previous_pixel_from(frame.camera.xyz, direction * distance - drifted));
+    return vec4<f32>(mix(turned, cloud, coverage), 0.0, 1.0);
+}
+
+@fragment
+fn fs_sky_motion_flat(in: SkyOut) -> SkyMotionOut {
+    let direction = view_direction(in.ndc);
+    let layer = flat_layer(direction);
+    // As `flat_layer` meets the layer: at its altitude above the camera.
+    let above = sky.clouds.y - world_equivalent(frame.camera.xyz).y;
+    let distance = above / max(direction.y, 0.02);
+    return SkyMotionOut(sky_and_cloud_motion(in.clip, direction, distance, sky.cloud_drift.xy, layer.alpha));
+}
+
+@fragment
+fn fs_sky_motion_marched(in: SkyOut) -> SkyMotionOut {
+    let direction = view_direction(in.ndc);
+    let uv = vec2<f32>(in.ndc.x * 0.5 + 0.5, 0.5 - in.ndc.y * 0.5);
+    let coverage = textureSampleLevel(cloud_current, cloud_sampler, uv, 0.0).a;
+    // The slab's middle along the ray, as `march_clouds` takes through
+    // clear air: the reduced target keeps no distance.
+    let base = frame.clouds.y;
+    let start = max((base - frame.camera.y) / max(direction.y, 0.01), 0.0);
+    let end = min(max((base + frame.clouds.w - frame.camera.y) / max(direction.y, 0.01), 0.0), CLOUD_REACH);
+    let distance = max((start + end) * 0.5, start);
+    return SkyMotionOut(sky_and_cloud_motion(in.clip, direction, distance, frame.cloud_drift.xy, select(0.0, coverage, direction.y > 0.01)));
 }

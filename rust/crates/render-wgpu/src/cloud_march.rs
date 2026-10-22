@@ -8,6 +8,14 @@
 //! view's background, upscaled. A view seen for the first time, a new size,
 //! or a camera that jumped starts afresh: that frame marches with no
 //! history.
+//!
+//! Under a temporal upscale stage the two histories run in series: this
+//! one gathers the march's step offsets in the reduced target, and the
+//! stage gathers the jittered picture the composite draws into, following
+//! the clouds' motion (`sky.wgsl` `fs_sky_motion_marched`: the drift and
+//! the camera's move at the slab's middle). Both reproject by the same
+//! drift, so a cloud keeps its place in each; the stage's own reset does
+//! not reach this one, which resets on its own terms above.
 
 use glam::{Mat4, Vec3};
 use render_model::VolumetricCloudsQuality;

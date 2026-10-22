@@ -260,7 +260,7 @@ The renderer draws its own inspection from what it already draws:
   stage reads, [temporal inputs](lighting-and-sky.md#temporal-inputs)) in place of its
   picture. Red and green are each pixel's motion since the previous frame
   to the right and down, `0.5 + pixels / 32`, clamped: grey is still, blue
-  has no motion of its own (clouds, water), and a camera turning right
+  has no motion of its own (water), and a camera turning right
   shows the world in red below 0.5.
 
 Handles are the ones `engine.scene.objects` lists. `engine.inspect.overlay`

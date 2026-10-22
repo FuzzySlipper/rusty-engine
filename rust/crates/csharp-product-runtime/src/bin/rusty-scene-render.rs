@@ -4,7 +4,7 @@
 //!
 //! ```text
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
-//!                    [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R]
+//!                    [--walk M] [--turn D] [--advance S] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R]
 //!                    [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]
 //!                    [--rerender-shadows] [--choose ID=VALUE]...
 //! rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]
@@ -14,7 +14,9 @@
 //! reports their mean and median cost. With `--walk` or `--turn` the camera
 //! moves M metres forward and turns D degrees right before each of those
 //! frames, from the snapshot's first camera, for the cost of a moving view
-//! (culling, shadow cascades). `--ambient-occlusion` overrides the
+//! (culling, shadow cascades). `--advance S` moves presentation time on S
+//! seconds before each of them, which the snapshot otherwise holds (clouds
+//! drift, wind sways). `--ambient-occlusion` overrides the
 //! snapshot's path (at its strength, or 1 when it was off), so the two paths
 //! compare on one scene. `--choose ID=VALUE` sets any video option of the
 //! renderer settings catalogue as a player's choice (`--choose
@@ -39,7 +41,7 @@ use render_wgpu::{
 use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
-     [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
+     [--frames N] [--walk M] [--turn D] [--advance S] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
      [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] \
      [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]] [--choose ID=VALUE]... \
      [--volumetric-fog-medium DENSITY[,ANISOTROPY]] [--motion OUT.png] [--last-frame OUT.png]\n\
@@ -66,6 +68,8 @@ struct Arguments {
     frames: u32,
     walk: f64,
     turn: f64,
+    /// Seconds of presentation time each timed frame moves on.
+    advance: f64,
     ambient_occlusion: Option<AmbientOcclusionPath>,
     ambient_occlusion_strength: Option<f32>,
     ambient_occlusion_radius: Option<f32>,
@@ -97,7 +101,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut arguments = arguments.into_iter();
     let mut positional = Vec::new();
     let (mut width, mut height, mut frames) = (1280_u32, 720_u32, 0_u32);
-    let (mut walk, mut turn) = (0.0_f64, 0.0_f64);
+    let (mut walk, mut turn, mut advance) = (0.0_f64, 0.0_f64, 0.0_f64);
     let mut ambient_occlusion: Option<AmbientOcclusionPath> = None;
     let mut ambient_occlusion_strength: Option<f32> = None;
     let mut ambient_occlusion_radius: Option<f32> = None;
@@ -126,6 +130,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
             "--frames" => frames = number("--frames")? as u32,
             "--walk" => walk = number("--walk")?,
             "--turn" => turn = number("--turn")?,
+            "--advance" => advance = number("--advance")?,
             "--render-scale" => {
                 let scale = number("--render-scale")? as f32;
                 let min = RendererSettingsDescriptor::MIN_RENDER_SCALE;
@@ -291,6 +296,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         frames,
         walk,
         turn,
+        advance,
         ambient_occlusion,
         ambient_occlusion_strength,
         ambient_occlusion_radius,
@@ -316,6 +322,7 @@ fn run() -> Result<(), String> {
         frames,
         walk,
         turn,
+        advance,
         ambient_occlusion,
         ambient_occlusion_strength,
         ambient_occlusion_radius,
@@ -522,8 +529,13 @@ fn run() -> Result<(), String> {
                 driver.draw(|renderer, _| renderer.rerender_shadows());
             }
             let started = Instant::now();
-            let (stats, _) =
-                driver.draw(|renderer, now| renderer.render_view_composition(&target, now));
+            let (stats, _) = driver.draw(|renderer, now| {
+                let at = now + advance * f64::from(frame);
+                if advance != 0.0 {
+                    renderer.set_animation_time(at);
+                }
+                renderer.render_view_composition(&target, at)
+            });
             draw_costs.push(ms(started));
             target.read_rgba_into(driver.gpu(), &mut pixels);
             costs.push(ms(started));
@@ -550,6 +562,7 @@ fn run() -> Result<(), String> {
             "cpuBatchUs": median(&mut batch_us),
             "walkMetres": walk,
             "turnDegrees": turn,
+            "advanceSeconds": advance,
             "rerenderShadows": rerender_shadows,
             "motion": motion.is_some(),
             // The render resolution the views drew at and the stage that

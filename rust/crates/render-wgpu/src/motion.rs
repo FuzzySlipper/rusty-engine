@@ -30,13 +30,18 @@
 //!   reprojects each pixel's view direction, a point at infinity, by the
 //!   previous camera without its translation (`sky.wgsl` `fs_sky_motion`).
 //!   The sun, the moon, the stars and a backdrop stand at infinity with it.
-//! - **No motion of their own:** the clouds keep the sky's, and water
-//!   surfaces write `rusty::types::NO_MOTION`, which a temporal stage takes
-//!   as still and leans on the current frame for; so does a viewport's
-//!   clear before anything draws. Sprites, ghost plates and overlay lines
-//!   show the motion of what lies under them. A product shader's
-//!   displacement keeps its offset, so it moves with its part but not on
-//!   its own.
+//!   The clouds the view's background drew stand at their layer's distance
+//!   (the raymarched clouds' slab's middle) and drift: where they cover the
+//!   sky, the same triangle writes where their cloud stood a frame ago,
+//!   seen by the previous camera, over the sky's turn by their coverage. A
+//!   backdrop that stands before them takes theirs: their drift is small
+//!   at their distance.
+//! - **No motion of their own:** water surfaces write
+//!   `rusty::types::NO_MOTION`, which a temporal stage takes as still and
+//!   leans on the current frame for; so does a viewport's clear before
+//!   anything draws. Sprites, ghost plates and overlay lines show the
+//!   motion of what lies under them. A product shader's displacement keeps
+//!   its offset, so it moves with its part but not on its own.
 //! - **History reset.** The history no longer holds on the first frame with
 //!   motion (a new renderer: a world replacement or baseline), and when a
 //!   primary camera cuts or first draws, the observer comes or goes, the

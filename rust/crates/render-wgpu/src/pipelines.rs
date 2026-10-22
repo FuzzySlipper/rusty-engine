@@ -165,9 +165,10 @@ pub(crate) struct Pipelines {
     /// (`fs_clouds_composite`).
     pub clouds_composite: wgpu::RenderPipeline,
     /// On a world target with a motion target: the sky's motion where the
-    /// world leaves it open (`sky.wgsl` `fs_sky_motion`), made as a view
-    /// first draws it (`Layouts::prepare_sky_motion`).
-    sky_motion: Option<wgpu::RenderPipeline>,
+    /// world leaves it open (`sky.wgsl` `fs_sky_motion`), through no
+    /// clouds, the flat layer or the raymarched clouds (`SkyClouds::index`),
+    /// each made as a view first draws it (`Layouts::prepare_sky_motion`).
+    sky_motion: [Option<wgpu::RenderPipeline>; 3],
     world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
     /// The world draws into this target: it holds every known variant.
     pub draws_world: bool,
@@ -179,9 +180,10 @@ impl Pipelines {
         &self.world[&(features, pass)]
     }
 
-    /// The sky's motion, once `Layouts::prepare_sky_motion` made it.
-    pub fn sky_motion(&self) -> Option<&wgpu::RenderPipeline> {
-        self.sky_motion.as_ref()
+    /// The sky's motion through `clouds` (`SkyClouds::index`), once
+    /// `Layouts::prepare_sky_motion` made it.
+    pub fn sky_motion(&self, clouds: usize) -> Option<&wgpu::RenderPipeline> {
+        self.sky_motion[clouds].as_ref()
     }
 }
 
@@ -877,7 +879,7 @@ impl Layouts {
                     },
                 }),
             ),
-            sky_motion: None,
+            sky_motion: [None, None, None],
             world: HashMap::new(),
             draws_world: false,
         }
@@ -886,16 +888,27 @@ impl Layouts {
     /// Make the sky's motion pipeline on a world target with a motion
     /// target (`Pipelines::sky_motion`): a far-plane triangle that passes
     /// the depth test only where the world drew nothing, writing the motion
-    /// alone. Returns whether it was made now.
-    pub fn prepare_sky_motion(&self, device: &wgpu::Device, pipelines: &mut Pipelines) -> bool {
-        if pipelines.sky_motion.is_some() {
+    /// alone, through `clouds` (`SkyClouds::index`). Returns whether it was
+    /// made now.
+    pub fn prepare_sky_motion(
+        &self,
+        device: &wgpu::Device,
+        pipelines: &mut Pipelines,
+        clouds: usize,
+    ) -> bool {
+        if pipelines.sky_motion[clouds].is_some() {
             return false;
         }
         let target = pipelines.target;
-        pipelines.sky_motion = Some(device.create_render_pipeline(
+        let (layout, fragment) = [
+            (&self.sun_pipeline, "fs_sky_motion"),
+            (&self.sky_pipeline, "fs_sky_motion_flat"),
+            (&self.cloud_composite_pipeline, "fs_sky_motion_marched"),
+        ][clouds];
+        pipelines.sky_motion[clouds] = Some(device.create_render_pipeline(
             &wgpu::RenderPipelineDescriptor {
                 label: Some("render-wgpu sky motion"),
-                layout: Some(&self.sun_pipeline),
+                layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &self.sky_shader,
                     entry_point: Some("vs_sky"),
@@ -913,7 +926,7 @@ impl Layouts {
                 multisample: target.multisample(),
                 fragment: Some(wgpu::FragmentState {
                     module: &self.sky_shader,
-                    entry_point: Some("fs_sky_motion"),
+                    entry_point: Some(fragment),
                     compilation_options: Default::default(),
                     targets: &target.targets(
                         wgpu::ColorTargetState {

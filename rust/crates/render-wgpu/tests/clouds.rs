@@ -2,7 +2,8 @@
 //! panorama with presentation time, takes the sun's colour and direction,
 //! reports its pass, and coverage 0 draws the sky exactly as without it.
 //! Through a twilight the sky's sun lights it from below the horizon,
-//! reddening, flat and volumetric alike. Same harness as
+//! reddening, flat and volumetric alike. Under a motion target the clouds
+//! move with their drift and the camera's turn. Same harness as
 //! `tests/screenshots.rs`.
 
 mod support;
@@ -564,5 +565,106 @@ fn a_cloud_region_under_a_clear_twilight_layer_catches_the_sunset_as_under_a_bro
                 );
             }
         }
+    }
+}
+
+/// The motion view's range (`compose.wgsl` `MOTION_VIEW_RANGE`) and the
+/// fixture camera's focal length in pixels, 90 / tan(30°).
+const MOTION_RANGE: f32 = 16.0;
+const FOCAL_PIXELS: f32 = 155.884_57;
+
+/// Each pixel's motion in the motion view, render pixels right and down.
+fn motions(rgba: &[u8]) -> Vec<[f32; 2]> {
+    rgba.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|[red, green, ..]| {
+            [red, green].map(|value| (f32::from(*value) / 255.0 - 0.5) * 2.0 * MOTION_RANGE)
+        })
+        .collect()
+}
+
+/// The motion up into the sky at `time`, looking `yaw` degrees right.
+fn motion_up(harness: &mut Harness, yaw: f64, time: f64) -> Vec<[f32; 2]> {
+    harness.renderer.set_animation_time(time);
+    motions(&harness.render(&camera([0.0, 1.0, 0.0], yaw, 35.0)).1)
+}
+
+/// A layer 300 m up drifting 12 m/s east (right of a camera looking north).
+fn low_drifting(coverage: f32) -> RenderDiff {
+    RenderDiff::SetClouds {
+        clouds: Some(CloudsDescriptor {
+            coverage,
+            drift: [12.0, 0.0],
+            altitude: 300.0,
+            scale: 200.0,
+            color: [1.0; 3],
+            thickness: 0.0,
+            kind: CloudKind::Cumulus,
+            twilight_degrees: 0.0,
+        }),
+    }
+}
+
+#[test]
+fn drifting_clouds_move_on_a_still_camera_and_turn_with_the_sky() {
+    let mut harness = sky(NOON, NOON_COLOR);
+    harness
+        .renderer
+        .set_overlay_shown(render_wgpu::OverlayShown {
+            motion: true,
+            ..Default::default()
+        });
+    harness.apply(vec![low_drifting(0.0)]);
+    motion_up(&mut harness, 0.0, 2.0);
+    // No cover: the sky holds as the time runs on.
+    let bare = motion_up(&mut harness, 0.0, 4.0);
+    let still = |motion: &[f32; 2]| motion[0].abs() < 0.2 && motion[1].abs() < 0.2;
+    assert!(bare.iter().all(still), "a clear sky holds");
+    harness.apply(vec![low_drifting(0.5)]);
+    motion_up(&mut harness, 0.0, 4.0);
+    let drifted = motion_up(&mut harness, 0.0, 6.0);
+    // At the centre, looking 35° up at a layer 299 m above the eye, the
+    // cloud stands 427 m ahead: 24 m of drift east is that share of the
+    // focal length to the right.
+    let full = FOCAL_PIXELS * 24.0 / (299.0 / 35.0_f32.to_radians().tan());
+    let centre = ((HEIGHT / 2) * WIDTH + WIDTH / 2) as usize;
+    let rightward = drifted.iter().filter(|motion| motion[0] > 1.0).count();
+    let leftward = drifted.iter().filter(|motion| motion[0] < -0.3).count();
+    let clear = drifted.iter().filter(|motion| still(motion)).count();
+    assert!(
+        rightward > drifted.len() / 10 && leftward == 0,
+        "the clouds drift right: {rightward} right, {leftward} left"
+    );
+    assert!(clear > drifted.len() / 20, "the gaps hold: {clear}");
+    assert!(
+        drifted[centre][0] <= full * 1.05,
+        "at most a full cloud's drift at the centre: {:?}, full {full}",
+        drifted[centre]
+    );
+    let densest = drifted
+        .iter()
+        .skip(centre - WIDTH as usize * 5)
+        .take(WIDTH as usize * 10)
+        .map(|motion| motion[0])
+        .fold(0.0, f32::max);
+    assert!(
+        densest > full * 0.6,
+        "a dense cloud near the centre row drifts nearly in full: {densest}, full {full}"
+    );
+    // A turn with the time held: the clouds and the clear sky turn alike.
+    let turned = motion_up(&mut harness, 2.0, 6.0);
+    let spread = turned
+        .iter()
+        .skip(centre - 2)
+        .take(5)
+        .map(|motion| motion[0])
+        .collect::<Vec<_>>();
+    let expected = -FOCAL_PIXELS * 2.0_f32.to_radians().tan() * 35.0_f32.to_radians().cos();
+    for value in spread {
+        assert!(
+            (value - expected).abs() < 1.0,
+            "turned at the centre: {value}, about {expected}"
+        );
     }
 }

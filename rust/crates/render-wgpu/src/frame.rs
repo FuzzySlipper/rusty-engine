@@ -3070,12 +3070,16 @@ impl Renderer {
         }
         // Under a motion target the world pass writes the sky's motion
         // where it leaves the sky (or its backdrop) open (`motion.rs`).
+        // The clouds the view's background drew, by the world's camera
+        // with or without a backdrop.
+        let sky_clouds = self.sky_clouds;
         let sky_motion = world_layer && view.sky && view.motion.is_some();
         if sky_motion {
-            pipelines_created += u32::from(
-                self.layouts
-                    .prepare_sky_motion(&self.gpu.device, &mut self.pipelines[format_index]),
-            );
+            pipelines_created += u32::from(self.layouts.prepare_sky_motion(
+                &self.gpu.device,
+                &mut self.pipelines[format_index],
+                sky_clouds.index(),
+            ));
         }
         // Bloom spreads the world's light; auto exposure adapts at the first
         // world view of a frame. Both read the world resolved.
@@ -3267,9 +3271,22 @@ impl Renderer {
             }
             // The sky's motion at the far plane, after the opaque world and
             // before what blends over it.
-            if let Some(pipeline) = pipelines.sky_motion().filter(|_| sky_motion) {
+            if let Some(pipeline) = pipelines
+                .sky_motion(sky_clouds.index())
+                .filter(|_| sky_motion)
+            {
                 pass.set_pipeline(pipeline);
+                if let (SkyClouds::Flat | SkyClouds::Marched(_), Some(sky)) =
+                    (sky_clouds, &self.sky_bind_group)
+                {
+                    pass.set_bind_group(1, sky, &[]);
+                }
+                if let SkyClouds::Marched(index) = sky_clouds {
+                    let frame = crate::cloud_march::CloudFrame { index };
+                    pass.set_bind_group(2, self.cloud_march.composite_group(&frame), &[]);
+                }
                 pass.draw(0..3, 0..1);
+                pass.set_bind_group(2, self.ambient_occlusion.apply_bind_group(None), &[]);
             }
             // Blended parts are not in the pre-pass's depth, so the occlusion
             // under them belongs to what they cover: they draw without it.
