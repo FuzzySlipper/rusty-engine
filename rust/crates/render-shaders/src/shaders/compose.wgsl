@@ -72,19 +72,20 @@ fn fs_convert(in: FullscreenOut) -> @location(0) vec4<f32> {
 
 // The motion target as inspection shows it (render-wgpu `motion.rs`): red
 // and green are the motion's x and y, render pixels to the right and down,
-// as 0.5 + motion / (2 MOTION_VIEW_RANGE), clamped; blue is 0.5. A still
-// pixel is grey; one with no motion of its own (`NO_MOTION`: water) is
-// blue. `fs_motion_srgb` writes to an sRGB target the value that
-// encodes as those fractions.
+// as 0.5 + motion / (2 MOTION_VIEW_RANGE), clamped; blue is 0.5 plus half
+// the reactive mask. A still pixel is grey, a still reactive one lilac; one
+// with no motion of its own (`NO_MOTION`) is blue. `fs_motion_srgb` writes
+// to an sRGB target the value that encodes as those fractions.
 const MOTION_VIEW_RANGE: f32 = 16.0;
 
 fn motion_shown(uv: vec2<f32>) -> vec3<f32> {
-    let motion = textureSample(source, source_sampler, uv).xy;
+    let value = textureSample(source, source_sampler, uv);
+    let motion = value.xy;
     if max(abs(motion.x), abs(motion.y)) >= NO_MOTION_AT_LEAST {
         return vec3<f32>(0.0, 0.0, 1.0);
     }
     let shown = clamp(0.5 + motion / (2.0 * MOTION_VIEW_RANGE), vec2<f32>(0.0), vec2<f32>(1.0));
-    return vec3<f32>(shown, 0.5);
+    return vec3<f32>(shown, 0.5 + 0.5 * clamp(value.z, 0.0, 1.0));
 }
 
 @fragment

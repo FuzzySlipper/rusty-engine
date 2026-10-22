@@ -14,9 +14,11 @@
 //   to the neighbourhood's colour box in YCoCg, so what the history holds
 //   that this frame no longer shows does not linger;
 // - blends the two by how much history the pixel has gathered and how well
-//   this frame sampled it. Pixels with no motion of their own (water;
-//   `rusty::types::NO_MOTION`) take the history where they
-//   are and a large share of this frame: they cannot ghost far.
+//   this frame sampled it, taking at least the reactive mask's share of
+//   this frame (`rusty::motion`: water's ripples and reflections, labels
+//   and overlay lines), and half where a pixel has no motion of its own
+//   (`rusty::types::NO_MOTION`). Such pixels keep that little history: they
+//   cannot ghost far.
 //
 // Colour works in the finished picture's linear values (it was already tone
 // mapped by the finish pass), averaged as a multisample resolve averages
@@ -53,7 +55,7 @@ const MOVING_HISTORY_FRAMES: f32 = 8.0;
 // Output pixels of motion at which the history holds its moving frames.
 const MOVING_PIXELS: f32 = 4.0;
 // This frame's least share of a pixel with no motion of its own.
-const REACTIVE_SHARE: f32 = 0.5;
+const NO_MOTION_SHARE: f32 = 0.5;
 // How far the clip box reaches beyond the neighbourhood's mean, in its
 // standard deviations.
 const BOX_DEVIATIONS: f32 = 1.25;
@@ -193,10 +195,11 @@ fn resolve(in: FullscreenOut) -> vec4<f32> {
     // How well this frame samples the pixel: 1 for a sample on its centre.
     let sampled = exp(-2.29 * closest);
 
-    // The pixel's own motion says whether it has any; the dilated one says
-    // where it came from.
-    let own = textureLoad(motion, nearest_texel, 0).xy;
-    let reactive = no_motion(own);
+    // The pixel's own motion says whether it has any, and its reactive mask
+    // how much of this frame it takes; the dilated motion says where it
+    // came from.
+    let own = textureLoad(motion, nearest_texel, 0);
+    let reactive = select(clamp(own.z, 0.0, 1.0), NO_MOTION_SHARE, no_motion(own.xy));
     if no_motion(moved) {
         moved = vec2<f32>(0.0);
     }
@@ -220,9 +223,9 @@ fn resolve(in: FullscreenOut) -> vec4<f32> {
     if frames > 0.0 {
         share = sampled / max(gathered, 1e-4);
     }
-    if reactive {
-        share = max(share, REACTIVE_SHARE);
-        gathered = min(gathered, 1.0 / REACTIVE_SHARE);
+    if reactive > 0.0 {
+        share = max(share, reactive);
+        gathered = min(gathered, 1.0 / reactive);
     }
     let color = rgb_of(mix(held, current, share));
     return vec4<f32>(max(color, vec3<f32>(0.0)), gathered);

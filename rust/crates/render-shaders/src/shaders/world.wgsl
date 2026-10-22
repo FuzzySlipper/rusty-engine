@@ -17,8 +17,8 @@
 #import rusty::wind::wind_displace
 #endif
 #ifdef MOTION
-#import rusty::motion::{previous_pixel, previous_model, previous_copy_model, motion_output}
-#import rusty::types::NO_MOTION
+#import rusty::motion::{previous_pixel, previous_model, previous_copy_model, motion_output, reactive_motion_output}
+#import rusty::types::REACTIVE_WATER
 #ifdef WIND
 #import rusty::wind::wind_displace_at
 #import rusty::motion::previous_time
@@ -943,8 +943,7 @@ fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> 
 struct BlendedOut {
     @location(0) color: vec4<f32>,
 #ifdef MOTION
-    // Blended over the opaque motion by the colour's alpha. Water has no
-    // motion of its own yet: it writes `NO_MOTION`.
+    // Blended over the opaque motion by the colour's alpha.
     @location(1) motion: vec4<f32>,
 #endif
 };
@@ -956,7 +955,10 @@ fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> BlendedOut {
     out.color = world_color(in, front, true, false);
 #ifdef MOTION
 #ifdef WATER
-    out.motion = vec4<f32>(NO_MOTION, NO_MOTION, 0.0, step(0.5, out.color.a));
+    // The surface's own motion over the bed's, however clear it is: its
+    // ripples, foam and reflections show at any opacity and move without
+    // it, so it marks the reactive mask.
+    out.motion = reactive_motion_output(in.clip, in.previous, 1.0, REACTIVE_WATER);
 #else
     out.motion = motion_output(in.clip, in.previous, out.color.a);
 #endif

@@ -344,10 +344,14 @@ Where the world leaves the sky open, the sky moves as the camera turns and
 holds as it moves: it, the sun, the moon, the stars and a backdrop stand at
 infinity. Its clouds, flat or volumetric, stand at their layer's distance
 and drift: they move by their drift and the camera's move there, over the
-sky's motion by their coverage. Water surfaces have no motion of their own:
-they write a value that says so, which the inspection shows blue, and a
-temporal stage takes them as still and leans on the current frame there,
-so water's ripples and reflections show it no motion. Sprites, ghost plates, labels and overlay lines show the motion of
+sky's motion by their coverage. A water surface moves as itself, not as the
+bed under it, however clear it is.
+
+Beside the motion, each pixel carries a reactive mask: how much of the
+current frame a temporal stage must take there, for detail whose motion is
+no use to it. Water's ripples, foam and reflections move on their own, so
+water marks half. TAAU takes at least that share of the current frame, and
+DLSS takes the mask as its bias toward the current colour. Sprites, ghost plates, labels and overlay lines show the motion of
 what lies under them.
 
 The stage is told its history no longer holds on the first frame with
@@ -355,7 +359,8 @@ motion, which a new renderer (a world replacement or rebaseline) starts
 with, and when a primary camera cuts or first draws, the observer comes or
 goes, the render resolution changes or a renderer setting does.
 `engine.inspect.overlay show motion` draws the motion target in place of
-the picture ([inspection](playtest-inspection.md#overlays)), and
+the picture, the mask raising its blue
+([inspection](playtest-inspection.md#overlays)), and
 `rusty-scene-render --frames N --motion OUT.png` writes a snapshot's; the
 motion is then drawn for the inspection alone, without a stage or jitter.
 
@@ -376,9 +381,9 @@ output's resolution: each output pixel takes the history where the motion
 says it was (the nearest surface's motion among its neighbours, so a moving
 edge carries its own; the viewmodel draws against a depth of its own while
 the stage draws, so the world's depth still decides), clips it to the colours this frame shows around it,
-and blends in this frame by how near its jittered samples fall. Pixels with
-no motion of their own (water) lean on the current frame,
-so they cannot trail far. Below render scale 1 the result is lightly
+and blends in this frame by how near its jittered samples fall, and by the
+reactive mask where a surface marks it, so water's ripples cannot trail
+far. Below render scale 1 the result is lightly
 sharpened. The stage reads the finished picture after tone mapping, so
 bloom, exposure and the image's grading are already in it.
 

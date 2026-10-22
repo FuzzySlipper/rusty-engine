@@ -1080,8 +1080,8 @@ impl Layouts {
                         blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
                         write_mask: wgpu::ColorWrites::ALL,
                     },
-                    // Water has no motion of its own (`motion.rs`) and
-                    // writes `NO_MOTION` where it is at least half opaque.
+                    // Water writes its own motion and the reactive mask
+                    // wherever it draws (`motion.rs`).
                     if blend {
                         MotionWrite::Blend
                     } else {

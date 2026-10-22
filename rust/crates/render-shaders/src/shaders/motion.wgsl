@@ -5,7 +5,11 @@
 // stage places its vertex where it stood then (`previous_pixel`) and passes
 // that on; the fragment stage writes `motion_at` to the motion target at
 // location 1. Motion is in render pixels, from where the point was to where
-// it is, x right and y down, without this frame's sub-pixel jitter.
+// it is, x right and y down, without this frame's sub-pixel jitter. Its
+// third channel is the reactive mask: how much of the current frame a
+// temporal stage must take there, 0 where the surface's detail moves as its
+// motion says, up to 1 where its history is no use (`REACTIVE_*` in
+// `rusty::types`).
 //
 // Group 0 binds these beside `rusty::view` (render-wgpu `Layouts::frame`);
 // outside MOTION they hold nothing a pass reads.
@@ -87,10 +91,17 @@ fn motion_at(position: vec4<f32>, previous: vec4<f32>) -> vec2<f32> {
     return position.xy - previous.xy / previous.w;
 }
 
-// What a pass writes to the motion target: the motion, and in `w` whether
-// it covers what lies behind, which a blended pass blends it by. A blended
-// fragment's motion covers where it is at least half opaque and leaves what
-// lies behind otherwise, so motion never mixes with the sky's `NO_MOTION`.
+// What a pass writes to the motion target: the motion, no reactive mask,
+// and in `w` whether it covers what lies behind, which a blended pass
+// blends it by. A blended fragment's motion covers where it is at least
+// half opaque and leaves what lies behind otherwise, so motion never mixes
+// with `NO_MOTION`.
 fn motion_output(position: vec4<f32>, previous: vec4<f32>, coverage: f32) -> vec4<f32> {
-    return vec4<f32>(motion_at(position, previous), 0.0, step(0.5, coverage));
+    return reactive_motion_output(position, previous, coverage, 0.0);
+}
+
+// The same with the reactive mask `reactive`: for a surface whose detail
+// moves without motion of its own.
+fn reactive_motion_output(position: vec4<f32>, previous: vec4<f32>, coverage: f32, reactive: f32) -> vec4<f32> {
+    return vec4<f32>(motion_at(position, previous), reactive, step(0.5, coverage));
 }

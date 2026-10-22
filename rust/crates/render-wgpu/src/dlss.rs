@@ -23,10 +23,13 @@
 //! the history reset. The viewmodel draws against a depth of its own, which
 //! TAAU keys as nearest; DLSS takes one depth, so a pass writes the world's
 //! depth with the viewmodel's over it, scaled before every world surface
-//! (`dlss_depth.wgsl`). The motion target holds how far each point moved in
-//! render pixels; DLSS takes the way back, so its scale is -1. `NO_MOTION`
-//! (water) reads to DLSS as a point come from far off
-//! screen, so there it takes the current frame, as TAAU leans on it. The
+//! (`dlss_inputs.wgsl`). The motion target holds how far each point moved
+//! in render pixels; DLSS takes the way back, so its scale is -1, and reads
+//! only its first two channels. Its reactive mask (`motion.rs`) goes to
+//! DLSS as the bias toward the current colour, drawn out into a target of
+//! its own. `NO_MOTION` (a viewport's clear) reads to DLSS as a point come
+//! from far off screen, so there it takes the current frame, as TAAU leans
+//! on it. The
 //! picture is finished and tone-mapped, so DLSS runs on low dynamic range
 //! with no exposure. It writes a storage texture at output size (a surface
 //! cannot be one), which is then drawn into the output; the `upscale` pass
@@ -199,44 +202,80 @@ mod built {
     /// DLSS, or why it refused.
     pub(crate) type Ngx = Arc<OnceLock<Result<Arc<Mutex<DlssSdk>>, Refused>>>;
 
-    /// DLSS's depth: the world's and the viewmodel's in one
-    /// (`dlss_depth.wgsl`), at render resolution.
-    struct Depth {
+    /// One of DLSS's inputs drawn from the stage's own at render resolution
+    /// (`dlss_inputs.wgsl`): the world's and the viewmodel's depth in one,
+    /// or the reactive mask out of the motion target.
+    struct Input {
         layout: wgpu::BindGroupLayout,
         pipeline: wgpu::RenderPipeline,
+        format: wgpu::TextureFormat,
+        /// The textures it reads, at these bindings.
+        first_binding: u32,
         /// The last render size's target.
         target: Option<((u32, u32), wgpu::TextureView)>,
     }
 
-    impl Depth {
-        const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+    impl Input {
+        /// The depth DLSS reads: `fs_depth` over the world's depth (binding
+        /// 0) and the viewmodel's (1).
+        fn depth(device: &wgpu::Device) -> Self {
+            Self::new(
+                device,
+                "fs_depth",
+                wgpu::TextureFormat::R32Float,
+                0,
+                &[wgpu::TextureSampleType::Depth; 2],
+            )
+        }
 
-        fn new(device: &wgpu::Device) -> Self {
+        /// DLSS's bias toward the current colour: `fs_bias` over the motion
+        /// target (binding 2).
+        fn bias(device: &wgpu::Device) -> Self {
+            Self::new(
+                device,
+                "fs_bias",
+                wgpu::TextureFormat::R8Unorm,
+                2,
+                &[wgpu::TextureSampleType::Float { filterable: false }],
+            )
+        }
+
+        fn new(
+            device: &wgpu::Device,
+            entry: &str,
+            format: wgpu::TextureFormat,
+            first_binding: u32,
+            reads: &[wgpu::TextureSampleType],
+        ) -> Self {
             let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("render-wgpu dlss depth"),
-                source: wgpu::ShaderSource::Wgsl(include_str!("dlss_depth.wgsl").into()),
+                label: Some("render-wgpu dlss inputs"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("dlss_inputs.wgsl").into()),
             });
-            let depth = |binding| wgpu::BindGroupLayoutEntry {
-                binding,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Depth,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            };
+            let entries: Vec<wgpu::BindGroupLayoutEntry> = reads
+                .iter()
+                .zip(first_binding..)
+                .map(|(sample_type, binding)| wgpu::BindGroupLayoutEntry {
+                    binding,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: *sample_type,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                })
+                .collect();
             let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("render-wgpu dlss depth"),
-                entries: &[depth(0), depth(1)],
+                label: Some("render-wgpu dlss inputs"),
+                entries: &entries,
             });
             let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("render-wgpu dlss depth"),
+                label: Some("render-wgpu dlss inputs"),
                 bind_group_layouts: &[Some(&layout)],
                 immediate_size: 0,
             });
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("render-wgpu dlss depth"),
+                label: Some("render-wgpu dlss inputs"),
                 layout: Some(&pipeline_layout),
                 vertex: wgpu::VertexState {
                     module: &module,
@@ -249,9 +288,9 @@ mod built {
                 multisample: Default::default(),
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: Some("fs_depth"),
+                    entry_point: Some(entry),
                     compilation_options: Default::default(),
-                    targets: &[Some(Self::FORMAT.into())],
+                    targets: &[Some(format.into())],
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -259,29 +298,29 @@ mod built {
             Self {
                 layout,
                 pipeline,
+                format,
+                first_binding,
                 target: None,
             }
         }
 
-        /// Write `world` with `viewmodel` over it into the target for
-        /// `size`, in `encoder`: the depth DLSS reads.
-        fn combine(
+        /// Draw from `reads` into the target for `size`, in `encoder`.
+        fn draw(
             &mut self,
             device: &wgpu::Device,
             encoder: &mut wgpu::CommandEncoder,
             size: (u32, u32),
-            world: &wgpu::TextureView,
-            viewmodel: &wgpu::TextureView,
+            reads: &[&wgpu::TextureView],
         ) -> &wgpu::TextureView {
             if self.target.as_ref().is_none_or(|(made, _)| *made != size) {
                 let view = device
                     .create_texture(&wgpu::TextureDescriptor {
-                        label: Some("render-wgpu dlss depth"),
+                        label: Some("render-wgpu dlss input"),
                         size: crate::target::extent(size.0, size.1),
                         mip_level_count: 1,
                         sample_count: 1,
                         dimension: wgpu::TextureDimension::D2,
-                        format: Self::FORMAT,
+                        format: self.format,
                         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                             | wgpu::TextureUsages::TEXTURE_BINDING,
                         view_formats: &[],
@@ -290,28 +329,28 @@ mod built {
                 self.target = Some((size, view));
             }
             let target = &self.target.as_ref().expect("made above").1;
+            let entries: Vec<wgpu::BindGroupEntry<'_>> = reads
+                .iter()
+                .zip(self.first_binding..)
+                .map(|(view, binding)| wgpu::BindGroupEntry {
+                    binding,
+                    resource: wgpu::BindingResource::TextureView(view),
+                })
+                .collect();
             let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("render-wgpu dlss depth"),
+                label: Some("render-wgpu dlss inputs"),
                 layout: &self.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(world),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(viewmodel),
-                    },
-                ],
+                entries: &entries,
             });
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("render-wgpu dlss depth"),
+                label: Some("render-wgpu dlss inputs"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: target,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                        // The triangle covers it all.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -343,8 +382,10 @@ mod built {
         /// Why the last feature could not be made or evaluated.
         failed: Option<Refused>,
         feature: Option<Feature>,
-        /// The depth pass, from the first frame with a viewmodel depth.
-        depth: Option<Depth>,
+        /// The depth pass, from the first frame with a viewmodel depth, and
+        /// the reactive mask's, from the first frame.
+        depth: Option<Input>,
+        bias: Option<Input>,
         /// The next frame starts the history again.
         fresh: bool,
     }
@@ -356,6 +397,7 @@ mod built {
                 failed: None,
                 feature: None,
                 depth: None,
+                bias: None,
                 fresh: true,
             }
         }
@@ -525,16 +567,19 @@ mod built {
             let depth = match picture.viewmodel_depth() {
                 Some(viewmodel) => self
                     .depth
-                    .get_or_insert_with(|| Depth::new(&gpu.device))
-                    .combine(
+                    .get_or_insert_with(|| Input::depth(&gpu.device))
+                    .draw(
                         &gpu.device,
                         &mut encoder,
                         render,
-                        picture.depth(),
-                        viewmodel,
+                        &[picture.depth(), viewmodel],
                     ),
                 None => picture.depth(),
             };
+            let bias = self
+                .bias
+                .get_or_insert_with(|| Input::bias(&gpu.device))
+                .draw(&gpu.device, &mut encoder, render, &[inputs.motion]);
             let commands = feature
                 .dlss
                 .render(
@@ -543,7 +588,7 @@ mod built {
                         depth,
                         motion_vectors: inputs.motion,
                         exposure: DlssSuperResolutionExposure::Automatic,
-                        bias: None,
+                        bias: Some(bias),
                         dlss_output: &feature.output,
                         reset: inputs.history_reset || fresh,
                         // In render pixels, x right and y down, as the views

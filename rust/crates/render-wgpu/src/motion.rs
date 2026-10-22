@@ -36,12 +36,21 @@
 //!   seen by the previous camera, over the sky's turn by their coverage. A
 //!   backdrop that stands before them takes theirs: their drift is small
 //!   at their distance.
-//! - **No motion of their own:** water surfaces write
-//!   `rusty::types::NO_MOTION`, which a temporal stage takes as still and
-//!   leans on the current frame for; so does a viewport's clear before
-//!   anything draws. Sprites, ghost plates and overlay lines show the
-//!   motion of what lies under them. A product shader's displacement keeps
-//!   its offset, so it moves with its part but not on its own.
+//! - **The reactive mask.** The target's third channel says how much of the
+//!   current frame a temporal stage must take at each pixel: 0 where the
+//!   surface's detail moves as its motion says. A water surface writes its
+//!   own motion over the bed's wherever it draws, however clear, and
+//!   `REACTIVE_WATER` there, since its ripples, foam and reflections move
+//!   without it. TAAU takes
+//!   at least that share of the current frame (`upscale.wgsl`); DLSS takes
+//!   the mask as its bias toward the current colour (`dlss.rs`). Whatever
+//!   covers a pixel later writes its own.
+//! - **No motion of their own:** a viewport's clear writes
+//!   `rusty::types::NO_MOTION` before anything draws, which a temporal
+//!   stage takes as still and leans on the current frame for. Sprites,
+//!   ghost plates and overlay lines show the motion of what lies under
+//!   them. A product shader's displacement keeps its offset, so it moves
+//!   with its part but not on its own.
 //! - **History reset.** The history no longer holds on the first frame with
 //!   motion (a new renderer: a world replacement or baseline), and when a
 //!   primary camera cuts or first draws, the observer comes or goes, the
@@ -60,12 +69,13 @@ use crate::tables::{PartId, Parts, PART_ROW_FLOATS};
 use crate::upscale::FrameResolution;
 use crate::{Gpu, RendererOptions};
 
-/// The motion target's format: x and y in render pixels.
-pub(crate) const MOTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
+/// The motion target's format: x and y in render pixels, and the reactive
+/// mask (`rusty::motion`).
+pub(crate) const MOTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// What the motion target holds where nothing drew motion of its own: the
 /// world pass's clear, before the sky's motion covers what the world
-/// leaves open, and what water writes (`rusty::types::NO_MOTION`).
+/// leaves open (`rusty::types::NO_MOTION`).
 const NO_MOTION: f64 = 32768.0;
 
 /// `Motion` in `motion.wgsl`: two matrices and the previous camera.

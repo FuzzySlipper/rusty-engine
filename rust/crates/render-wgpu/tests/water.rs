@@ -697,3 +697,72 @@ fn reflections_never_find_what_lies_under_the_surface() {
         "the bed under the water does not reflect: {stray}"
     );
 }
+
+/// The motion view's range (`compose.wgsl` `MOTION_VIEW_RANGE`).
+const MOTION_RANGE: f32 = 16.0;
+
+/// The motion at (x, y) in render pixels, and its reactive mask, as the
+/// motion view shows them: `0.5 + px / 32` in red and green, `0.5 + mask /
+/// 2` in blue.
+fn motion_at(frame: &[u8], x: u32, y: u32) -> ([f32; 2], f32) {
+    let [red, green, blue, _] = pixel(frame, WIDTH, x, y);
+    (
+        [red, green].map(|value| (f32::from(value) / 255.0 - 0.5) * 2.0 * MOTION_RANGE),
+        (f32::from(blue) / 255.0 - 0.5) * 2.0,
+    )
+}
+
+/// The motion view after the eye steps 0.1 m right from `view`.
+fn stepped_motion(harness: &mut Harness) -> Vec<u8> {
+    harness
+        .renderer
+        .set_overlay_shown(render_wgpu::OverlayShown {
+            motion: true,
+            ..Default::default()
+        });
+    harness.renderer.render_offscreen(&view(), &harness.target);
+    let stepped = camera("eye", [0.1, 2.5, 0.5], 0.0, -40.0);
+    harness.renderer.render_offscreen(&stepped, &harness.target);
+    harness.target.read_rgba(&harness.gpu)
+}
+
+/// A water surface over a still bed takes its own motion, not the bed's:
+/// as a plain opaque sheet in its place moves, and nearer than the deep
+/// bed, so faster. It marks the reactive mask; nothing else does.
+#[test]
+fn a_water_surface_moves_as_itself_over_a_still_bed_and_marks_the_reactive_mask() {
+    let water = stepped_motion(&mut shore(Some(water(0.0, 0.0))));
+    let mut opaque = shore(None);
+    if let RenderDiff::DefineMaterial { material } = &mut sheet(None, 1.0, None)[0] {
+        opaque.apply(vec![RenderDiff::DefineMaterial {
+            material: material.clone(),
+        }]);
+    }
+    let surface = stepped_motion(&mut opaque);
+    let mut bare = shore(None);
+    bare.apply(vec![RenderDiff::Destroy {
+        handle: RenderHandle::new(3),
+    }]);
+    let bed = stepped_motion(&mut bare);
+    let mut faster = 0;
+    for (x, y) in [(80, 60), (160, 110), (230, 130), (250, 140), (200, 150)] {
+        let (moved, reactive) = motion_at(&water, x, y);
+        let (sheet, plain) = motion_at(&surface, x, y);
+        let (under, _) = motion_at(&bed, x, y);
+        assert!(
+            (moved[0] - sheet[0]).abs() < 0.3 && (moved[1] - sheet[1]).abs() < 0.3,
+            "at {x}, {y} the water moves as the surface {sheet:?}: {moved:?}"
+        );
+        assert!(moved[0] < -0.5, "the step moves it left: {moved:?}");
+        faster += usize::from(moved[0] < under[0] - 0.3);
+        assert!(
+            (reactive - 0.5).abs() < 0.02,
+            "the water's mask: {reactive}"
+        );
+        assert!(plain.abs() < 0.02, "a plain sheet's mask: {plain}");
+    }
+    assert!(
+        faster >= 3,
+        "over the deep bed the surface moves faster than it"
+    );
+}
