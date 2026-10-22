@@ -45,6 +45,7 @@ mod inspection;
 mod labels;
 mod light_clusters;
 mod mesh_pool;
+mod motion;
 mod occlusion;
 mod overlays;
 mod particles;
@@ -131,6 +132,7 @@ pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
 pub use inspection::InspectionView;
 pub use light_clusters::LightClusterReadout;
+pub use motion::MotionFrame;
 pub use overlays::{
     LandmarkDrawn, LandmarkMeasure, LandmarkSetReadout, OverlaySetReadout, OverlayShown,
     PLAYER_VIEW,
@@ -537,6 +539,9 @@ pub struct Renderer {
     picture: Option<target::RenderPicture>,
     /// The step from that picture to output resolution (`upscale.rs`).
     upscale: upscale::Upscale,
+    /// The jitter, motion target and history a temporal stage reads
+    /// (`motion.rs`).
+    temporal: motion::Temporal,
     /// Whether the window the renderer last drew to can present only in step
     /// with its refresh (`WindowSurface::vsync_only`); `None` before a window
     /// frame.
@@ -649,6 +654,7 @@ impl Renderer {
                     .module(device, Entry::Hiz, Features::default()),
             ),
         );
+        let temporal = motion::Temporal::new(gpu);
         let frame_bind_group = frame::frame_bind_group(
             device,
             &layouts.frame,
@@ -663,6 +669,7 @@ impl Renderer {
                 probes: &probes,
                 cloud_regions: &cloud_regions_buffer,
                 copies: scatter_copies.buffer(),
+                temporal: &temporal,
             },
         );
         let caster_bind_group = frame::caster_bind_group(
@@ -789,6 +796,7 @@ impl Renderer {
             compose: compose::Compose::new(device, compose_shader),
             picture: None,
             upscale: upscale::Upscale::new(gpu),
+            temporal,
             display_vsync_only: None,
             batch_time: std::time::Duration::ZERO,
             scatter_upload: ScatterUploadReadout::default(),

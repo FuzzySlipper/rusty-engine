@@ -121,8 +121,12 @@ compare the paths on one scene. `--choose ID=VALUE` (repeatable) sets any
 `--choose antialiasing=off` or `--choose shadows=true`: choices, like the
 flags above, hold over the snapshot's own settings and over a product's
 `RendererSettings.Set` recorded in it, and a snapshot's recorded player
-choices apply first. The image is the snapshot's own view, drawn before the
-extra frames; the report's `camera` is that view. Compare
+choices apply first. `--motion OUT.png` draws the extra frames with their
+[motion target](lighting-and-sky.md#temporal-inputs), as a temporal upscale
+stage has them drawn, and writes the last frame's motion there; with
+`--walk` or `--turn` it shows the camera's motion, and its `world` median
+against a run without it is the target's cost. The image is the snapshot's
+own view, drawn before the extra frames; the report's `camera` is that view. Compare
 snapshots drawn on the same adapter; `WGPU_BACKEND` selects it as for any
 wgpu program. A still camera reuses work a moving one repeats (culled lists,
 a directional light's shadow cascades): add `--walk M` or `--turn D` to move

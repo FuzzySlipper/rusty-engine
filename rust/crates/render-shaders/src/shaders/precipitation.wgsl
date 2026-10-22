@@ -11,6 +11,9 @@
 
 #import rusty::view::frame
 #import rusty::lighting::open_sky_filtered
+#ifdef MOTION
+#import rusty::motion::{previous_pixel, previous_time, motion_output}
+#endif
 
 struct Precipitation {
     // xyz: the box's size (twice the radius across, twice the height up);
@@ -48,6 +51,11 @@ struct DropOut {
     @location(0) local: vec2<f32>,
     @location(1) world_position: vec3<f32>,
     @location(2) fade: f32,
+#ifdef MOTION
+    // Where the drop's corner stood in the previous frame: back along its
+    // fall (`rusty::motion`).
+    @location(3) previous: vec4<f32>,
+#endif
 };
 
 // Three uniform values in [0, 1) for a drop's index (pcg3d).
@@ -104,6 +112,9 @@ fn vs_drop(@builtin(vertex_index) corner: u32, @builtin(instance_index) index: u
     }
     var out: DropOut;
     out.clip = frame.view_proj * vec4<f32>(world, 1.0);
+#ifdef MOTION
+    out.previous = previous_pixel(world - precipitation.velocity.xyz * (frame.time.x - previous_time()));
+#endif
     out.local = vec2<f32>(uv.x * 2.0 - 1.0, uv.y);
     out.world_position = position;
     out.fade = side_fade * height_fade * smoothstep(NEAREST_METRES, NEAR_FULL_METRES, length(from_camera));
@@ -148,8 +159,16 @@ fn sheltered(in: DropOut) -> bool {
     return open_sky_filtered(in.world_position, vec3<f32>(0.0, 1.0, 0.0), 0) < 0.5;
 }
 
+struct DropColor {
+    @location(0) color: vec4<f32>,
+#ifdef MOTION
+    // Blended over what lies behind by the drop's alpha.
+    @location(1) motion: vec4<f32>,
+#endif
+};
+
 @fragment
-fn fs_drop(in: DropOut) -> @location(0) vec4<f32> {
+fn fs_drop(in: DropOut) -> DropColor {
     let fade = world_fade(in.clip.z, textureLoad(scene_depth, vec2<i32>(in.clip.xy), 0));
     if fade <= 0.0 || in.fade <= 0.0 || sheltered(in) {
         discard;
@@ -158,11 +177,19 @@ fn fs_drop(in: DropOut) -> @location(0) vec4<f32> {
     if color.a <= 0.001 {
         discard;
     }
-    return color;
+    var out: DropColor;
+    out.color = color;
+#ifdef MOTION
+    out.motion = motion_output(in.clip, in.previous, color.a);
+#endif
+    return out;
 }
 
 struct DropMultisampledOut {
     @location(0) color: vec4<f32>,
+#ifdef MOTION
+    @location(1) motion: vec4<f32>,
+#endif
     @builtin(sample_mask) mask: u32,
 };
 
@@ -192,6 +219,9 @@ fn fs_drop_multisampled(in: DropOut) -> DropMultisampledOut {
     }
     var out: DropMultisampledOut;
     out.color = color;
+#ifdef MOTION
+    out.motion = motion_output(in.clip, in.previous, color.a);
+#endif
     out.mask = mask;
     return out;
 }

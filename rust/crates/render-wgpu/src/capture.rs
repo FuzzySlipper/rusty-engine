@@ -123,6 +123,8 @@ impl Renderer {
             backdrop: None,
             camera_id: None,
             overlays: None,
+            jitter: None,
+            motion: None,
         });
         if request.viewmodel {
             self.encode_view(ViewPass {
@@ -136,6 +138,8 @@ impl Renderer {
                 backdrop: None,
                 camera_id: None,
                 overlays: None,
+                jitter: None,
+                motion: None,
             });
         }
         Capture { color, depth }

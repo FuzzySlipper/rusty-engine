@@ -70,6 +70,8 @@ pub(crate) struct ViewComposition {
     frame: u64,
     /// Inspection camera that replaces the primary views' poses.
     observer: Option<CameraPose>,
+    /// A camera cut since the last primary frame (`motion.rs`).
+    pub(crate) cut: bool,
     /// What the last composition frame drew from, for
     /// [`Renderer::drawn_cameras`]: each camera's sampled pose, the
     /// observer then, and each camera's primary/offscreen use.
@@ -316,7 +318,8 @@ impl Renderer {
             .iter()
             .map(|camera| {
                 let mut motion = previous_motions.remove(&camera.id).unwrap_or_default();
-                motion.receive(camera, time_seconds);
+                let sampled = motion.receive(camera, time_seconds);
+                state.cut |= sampled && camera.motion.as_ref().is_some_and(|motion| motion.cut);
                 motion
             })
             .collect();
@@ -384,11 +387,35 @@ impl Renderer {
         let effect = self.image_effect.active();
         let scale = stage.map_or(1.0, |_| self.options.render_scale);
         let resolution = FrameResolution::scaled((output.width, output.height), scale);
+        // A temporal stage's jitter and motion, or the motion alone while
+        // inspection shows it (`motion.rs`).
+        let jittering = stage.is_some_and(UpscaleMethod::temporal);
+        let motion = jittering || self.overlays.shown.motion;
+        let cut = std::mem::take(&mut self.composition.cut);
+        if self.temporal.begin_frame(
+            &self.gpu,
+            &self.tables.parts,
+            motion,
+            jittering,
+            resolution,
+            output.samples,
+            &self.options,
+            self.composition.observer.is_some(),
+            cut,
+            self.presentation_time,
+        ) {
+            self.rebind_frame();
+        }
+        if motion {
+            self.particles.drawn();
+        }
         if stage.is_none() && !effect {
             self.picture = None;
             let mut stats = draw(self, output);
             stats.cpu_batch_us = self.batch_time.as_micros() as u32;
             stats.resolution = resolution;
+            stats.motion = self.temporal.end_frame();
+            self.show_motion(&output);
             return stats;
         }
         let (width, height) = resolution.render;
@@ -399,6 +426,7 @@ impl Renderer {
         let mut stats = draw(self, picture.view());
         stats.cpu_batch_us = self.batch_time.as_micros() as u32;
         stats.resolution = resolution;
+        stats.motion = self.temporal.end_frame();
         if effect {
             let white = &self.white;
             let texture = |slot: usize| {
@@ -423,11 +451,29 @@ impl Renderer {
                 self.presentation_time,
             );
         } else if let Some(stage) = stage {
-            self.upscale
-                .run(&self.gpu, &mut self.compose, stage, &picture, &output);
+            self.upscale.run(
+                &self.gpu,
+                &mut self.compose,
+                stage,
+                &picture,
+                self.temporal.inputs(),
+                &output,
+            );
         }
         self.picture = Some(picture);
+        self.show_motion(&output);
         stats
+    }
+
+    /// The motion target over the whole of `output`, while inspection shows
+    /// it (`OverlayShown::motion`).
+    fn show_motion(&mut self, output: &TargetView<'_>) {
+        if !self.overlays.shown.motion {
+            return;
+        }
+        if let Some(inputs) = self.temporal.inputs() {
+            self.compose.show_motion(&self.gpu, output, inputs.motion);
+        }
     }
 
     /// Render the installed composition into an acquired window frame.
@@ -534,6 +580,15 @@ impl Renderer {
         let viewmodel_to_world = world_camera.view_proj.inverse() * viewmodel_camera.view_proj;
         self.aim_overlay_labels(crate::overlays::PLAYER_VIEW, Some(viewmodel_to_world));
         let labels = self.place_labels(&world_camera, area);
+        // A temporal stage's jitter and motion (`motion.rs`): labels keep
+        // the unjittered camera.
+        let jitter = self.temporal.frame().and_then(|frame| frame.jitter);
+        let world_motion =
+            self.temporal
+                .view_pass(&camera.id, ViewLayer::World, &world_camera, area);
+        let viewmodel_motion =
+            self.temporal
+                .view_pass(&camera.id, ViewLayer::Viewmodel, &viewmodel_camera, area);
         let world = self.encode_view(ViewPass {
             target: *target,
             viewport: area,
@@ -545,6 +600,8 @@ impl Renderer {
             backdrop: None,
             camera_id: Some(camera.id.as_str()),
             overlays: overlays.then_some(crate::overlays::PLAYER_VIEW),
+            jitter,
+            motion: world_motion,
         });
         self.capture_sky(&world_camera, Some(camera.id.as_str()), clear);
         // Depth-layer labels test the world's depth before the viewmodel
@@ -563,6 +620,8 @@ impl Renderer {
             backdrop: None,
             camera_id: None,
             overlays: overlays.then_some(crate::overlays::PLAYER_VIEW),
+            jitter,
+            motion: viewmodel_motion,
         });
         let top_labels = self.draw_labels(target, area, &labels, LabelPass::OnTop);
         let mut stats = world + viewmodel;
@@ -656,6 +715,8 @@ impl Renderer {
                     backdrop: None,
                     camera_id: Some(composition.cameras[*camera].id.as_str()),
                     overlays: None,
+                    jitter: None,
+                    motion: None,
                 });
                 stats.offscreen_views += 1;
             }

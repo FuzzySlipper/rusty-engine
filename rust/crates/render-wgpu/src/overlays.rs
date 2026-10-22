@@ -90,6 +90,9 @@ pub struct OverlayShown {
     /// Sets hidden by name from [`all_sets`](Self::all_sets) and
     /// [`sets_in`](Self::sets_in).
     pub hidden: BTreeSet<String>,
+    /// The primary frame's motion target in place of its picture
+    /// (`motion.rs`): the primary views draw their motion while it shows.
+    pub motion: bool,
 }
 
 /// The view key of the primary views, for [`OverlayShown::only_in`].
@@ -105,6 +108,7 @@ impl OverlayShown {
             || !self.bounds.is_empty()
             || !self.ik.is_empty()
             || !self.sets_in.is_empty()
+            || self.motion
     }
 
     fn shows_set(&self, name: &str) -> bool {
@@ -435,11 +439,15 @@ impl Overlays {
                     module: shader,
                     entry_point: Some("fs_line"),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target.format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    // Lines have no motion of their own (`motion.rs`).
+                    targets: &target.targets(
+                        wgpu::ColorTargetState {
+                            format: target.format,
+                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        },
+                        crate::motion::MotionWrite::None,
+                    ),
                 }),
                 primitive: wgpu::PrimitiveState {
                     topology: wgpu::PrimitiveTopology::LineList,

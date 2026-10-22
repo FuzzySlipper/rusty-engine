@@ -2,7 +2,7 @@
 //! target, presenting an offscreen target into the primary output, and the
 //! capture conversion to an encoded image. One pipeline set per colour format.
 
-use crate::target::OFFSCREEN_FORMAT;
+use crate::target::{TargetView, OFFSCREEN_FORMAT};
 use crate::Gpu;
 
 /// How a linear capture becomes its encoded image.
@@ -21,6 +21,9 @@ struct FormatPipelines {
     format: wgpu::TextureFormat,
     clear: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
+    /// The motion target for inspection (`show_motion`), made when first
+    /// shown.
+    motion: Option<wgpu::RenderPipeline>,
 }
 
 pub(crate) struct Compose {
@@ -34,6 +37,8 @@ pub(crate) struct Compose {
     clear_bind_group: wgpu::BindGroup,
     formats: Vec<FormatPipelines>,
     convert: Option<wgpu::RenderPipeline>,
+    /// Nearest texels of the motion target, for `show_motion`.
+    nearest: wgpu::Sampler,
 }
 
 fn entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
@@ -128,6 +133,10 @@ impl Compose {
             clear_bind_group,
             formats: Vec::new(),
             convert: None,
+            nearest: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("render-wgpu motion view"),
+                ..Default::default()
+            }),
         }
     }
 
@@ -182,6 +191,7 @@ impl Compose {
                 "fs_blit",
                 format.into(),
             ),
+            motion: None,
         };
         self.formats.push(set);
         self.formats.len() - 1
@@ -246,6 +256,58 @@ impl Compose {
         pass.set_pipeline(&set.blit);
         pass.set_bind_group(0, source, &[]);
         pass.draw(0..3, 0..1);
+    }
+
+    /// Draw `motion` (the motion target, `motion.rs`) over the whole of
+    /// `output` as inspection shows it: x and y as red and green about
+    /// grey (`compose.wgsl` `fs_motion`).
+    pub fn show_motion(&mut self, gpu: &Gpu, output: &TargetView<'_>, motion: &wgpu::TextureView) {
+        let index = self.format_index(&gpu.device, output.format);
+        if self.formats[index].motion.is_none() {
+            let fragment = if output.format.is_srgb() {
+                "fs_motion_srgb"
+            } else {
+                "fs_motion"
+            };
+            let pipeline = self.pipeline(
+                &gpu.device,
+                "render-wgpu motion view",
+                &self.blit_pipeline_layout,
+                fragment,
+                output.format.into(),
+            );
+            self.formats[index].motion = Some(pipeline);
+        }
+        let group = self.blit_bind_group(&gpu.device, motion, &self.nearest);
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-wgpu motion view"),
+            });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-wgpu motion view"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output.color,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            if let Some(pipeline) = &self.formats[index].motion {
+                pass.set_pipeline(pipeline);
+            }
+            pass.set_bind_group(0, &group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        gpu.queue.submit([encoder.finish()]);
     }
 
     /// Convert a linear capture of `factor`× the output size into `output`

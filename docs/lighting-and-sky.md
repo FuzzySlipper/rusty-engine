@@ -323,6 +323,36 @@ those ranges.
 `lighting.occlusion`, `lighting.shadows` and `lighting.pipeline` commands
 exercise it.
 
+### Temporal inputs
+
+A temporal upscale stage reads more than the picture and its depth: the
+renderer draws its inputs whenever such a stage is selected, and draws
+nothing extra otherwise. Each primary frame then offsets its primary views'
+projection by the next point of a Halton(2, 3) sequence, within half a
+render pixel (8 points at render scale 1, more as the scale falls); labels,
+inspection and offscreen views keep the unjittered camera. The world and
+viewmodel passes write a motion target beside their colour, at render
+resolution: per pixel, how far its point moved since the previous frame in
+render pixels, without the jitter. Static and instanced meshes move by their
+part's previous transform, scatter copies under it, swaying vegetation by
+the wind at the previous frame's time, particles from where they were drawn
+and falling rain or snow back along its fall; projected decals take the
+motion of the surface under them, and blended parts and particles blend
+theirs over it by their alpha. The sky and its clouds, water surfaces,
+sprites and ghost plates have no motion of their own yet: the sky reads as
+still, and the others show the motion of what lies under them. A product
+shader's displacement moves with its part, not on its own, and a skinned
+mesh moves with its part, not by its pose.
+
+The stage is told its history no longer holds on the first frame with
+motion, which a new renderer (a world replacement or rebaseline) starts
+with, and when a primary camera cuts or first draws, the observer comes or
+goes, the render resolution changes or a renderer setting does.
+`engine.inspect.overlay show motion` draws the motion target in place of
+the picture ([inspection](playtest-inspection.md#overlays)), and
+`rusty-scene-render --frames N --motion OUT.png` writes a snapshot's; the
+motion is then drawn for the inspection alone, without a stage or jitter.
+
 ## Video options
 
 A player chooses renderer settings in the game's options menu: the Engine's

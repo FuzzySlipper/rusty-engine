@@ -108,8 +108,9 @@ struct History {
     used: u64,
 }
 
-/// The `n`th point of the Halton sequence in `base`, in [0, 1).
-fn halton(mut n: u32, base: u32) -> f32 {
+/// The `n`th point of the Halton sequence in `base`, in [0, 1): the fog's
+/// froxel offsets, and the primary views' jitter (`motion.rs`).
+pub(crate) fn halton(mut n: u32, base: u32) -> f32 {
     let (mut result, mut fraction) = (0.0, 1.0);
     while n > 0 {
         fraction /= base as f32;

@@ -2,7 +2,7 @@
 //! naga_oil, the features a material compiles into its variant, and product
 //! shaders that take over its last stage.
 //!
-//! `types`, `view`, `material`, `surface`, `lighting`, `decals`, `tonemap`, `finish`
+//! `types`, `view`, `motion`, `material`, `surface`, `lighting`, `decals`, `tonemap`, `finish`
 //! and `shade` are importable modules (`#import rusty::lighting::standard_radiance`);
 //! `world`, `sky`, `shadow`, `effects`, `ghost`, `compose`,
 //! `ambient_occlusion`, `finish_pass`, `post`, `sky_light`, `light_clusters`,
@@ -109,11 +109,16 @@ impl Features {
     /// it, and draws it over what lies behind in place of blending. Only
     /// with WATER, on a device that binds the copy (`SCENE_COLOR`).
     pub const WATER_SCENE: Self = Self::bit(1048576);
-    /// Every standard feature's bit.
+    /// The pass writes motion vectors to location 1 (`rusty::motion`): a
+    /// target's feature, not a material's, set on every pipeline drawing
+    /// into a world target that has a motion target (render-wgpu
+    /// `motion.rs`). Entries other than the world take it too.
+    pub const MOTION: Self = Self::bit(2097152);
+    /// Every material and mesh feature's bit: all but MOTION.
     #[cfg(test)]
     const ALL_BITS: u32 = 2097151;
 
-    const DEFS: [(Self, &'static str); 21] = [
+    const DEFS: [(Self, &'static str); 22] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -135,6 +140,7 @@ impl Features {
         (Self::SCATTER_SELECTED, "SCATTER_SELECTED"),
         (Self::IMPOSTOR, "IMPOSTOR"),
         (Self::WATER_SCENE, "WATER_SCENE"),
+        (Self::MOTION, "MOTION"),
     ];
 
     const fn bit(bits: u32) -> Self {
@@ -321,9 +327,10 @@ impl BitOr for Features {
 }
 
 /// Importable modules, each after the modules it imports.
-const MODULES: [(&str, &str); 12] = [
+const MODULES: [(&str, &str); 13] = [
     ("shaders/types.wgsl", include_str!("shaders/types.wgsl")),
     ("shaders/view.wgsl", include_str!("shaders/view.wgsl")),
+    ("shaders/motion.wgsl", include_str!("shaders/motion.wgsl")),
     ("shaders/clouds.wgsl", include_str!("shaders/clouds.wgsl")),
     (
         "shaders/material.wgsl",
@@ -768,7 +775,8 @@ mod tests {
     }
 
     /// Every entry composes and validates under every feature set it can be
-    /// compiled with, without a device.
+    /// compiled with, the world pass with and without MOTION, without a
+    /// device.
     #[test]
     fn every_entry_composes_under_every_feature_set() {
         let compose = |shaders: &mut Shaders, entry: Entry, features: Features| {
@@ -792,6 +800,7 @@ mod tests {
             |_| (),
             |shaders, (), features| {
                 compose(shaders, Entry::World, features);
+                compose(shaders, Entry::World, features | Features::MOTION);
                 compose(shaders, Entry::Shadow, features.caster());
             },
         );
@@ -819,6 +828,11 @@ mod tests {
         ] {
             compose(&mut shaders, entry, Features::default());
         }
+        // The passes that draw into a world target with its motion target.
+        for entry in [Entry::Effects, Entry::Ghost, Entry::Precipitation] {
+            compose(&mut shaders, entry, Features::MOTION);
+        }
+        assert_eq!(Features::MOTION.caster(), Features::default());
         assert!(Features::WATER.occurs() && Features::default().occurs());
         assert!(!(Features::WATER | Features::MASK).occurs());
         assert!(!(Features::UNLIT | Features::NORMAL_MAP).occurs());

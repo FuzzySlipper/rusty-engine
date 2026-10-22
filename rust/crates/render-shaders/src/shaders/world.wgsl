@@ -7,11 +7,20 @@
 // streams: VERTEX_TANGENTS, LAYER_WEIGHTS, VERTEX_OCCLUSION. A product shader (PRODUCT_SHADER)
 // shades the surface in place of `rusty::shade`, and may place its vertices
 // (PRODUCT_DISPLACES) and give their normals (PRODUCT_DISPLACES_NORMAL).
+// With MOTION (a temporal stage's inputs, render-wgpu `motion.rs`) it also
+// writes each fragment's motion to location 1 (`rusty::motion`).
 
 #import rusty::types::{texture_space_position, Vertex}
 #import rusty::view::{frame, parts, instances, copies, copy_row, selected_copy, impostor_card, fade_mask, mask_coverage, fade_toward_origin, morph_share, morph_normal, projected}
 #ifdef WIND
 #import rusty::wind::wind_displace
+#endif
+#ifdef MOTION
+#import rusty::motion::{previous_pixel, previous_model, previous_copy_model, motion_output}
+#ifdef WIND
+#import rusty::wind::wind_displace_at
+#import rusty::motion::previous_time
+#endif
 #endif
 #import rusty::material::{
     material,
@@ -130,6 +139,10 @@ struct VsOut {
     // (`rusty::lighting::copy_open_sky`).
     @location(14) @interpolate(flat) snow_open: f32,
 #endif
+#ifdef MOTION
+    // Where the point stood in the previous frame (`rusty::motion`).
+    @location(15) previous: vec4<f32>,
+#endif
 };
 
 // The uv set (0 or 1) a slot reads; without the second stream, set 0.
@@ -197,14 +210,16 @@ fn vs_world(
 #endif
 #ifdef WIND
 #ifdef LAYER_WEIGHTS
-    world = wind_displace(world, row.model[3].xyz, 1.0);
+    let wind_weight = 1.0;
 #else
 #ifdef VERTEX_OCCLUSION
-    world = wind_displace(world, row.model[3].xyz, 1.0);
+    let wind_weight = 1.0;
 #else
-    world = wind_displace(world, row.model[3].xyz, color.a);
+    let wind_weight = color.a;
 #endif
 #endif
+    let unswayed = world;
+    world = wind_displace(world, row.model[3].xyz, wind_weight);
 #endif
 #ifdef SCATTER
     // Grass and flowers sink into the snow where the sky is open over them.
@@ -227,6 +242,31 @@ fn vs_world(
 #endif
     var out: VsOut;
     out.clip = projected(world);
+#ifdef MOTION
+    // Where the vertex stood: moved as its model moved since (a card by its
+    // origin), and swayed as the wind swayed it then. A distance fade, the
+    // snow and a product's displacement keep their offsets.
+#ifdef SCATTER_SELECTED
+    let earlier = previous_copy_model(part, selected.copy);
+#else
+#ifdef SCATTER
+    let earlier = previous_copy_model(part, scattered);
+#else
+    let earlier = previous_model(part);
+#endif
+#endif
+#ifdef IMPOSTOR
+    let anchor = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+#else
+    let anchor = vec4<f32>(position, 1.0);
+#endif
+    var previous = world + (earlier * anchor).xyz - (row.model * anchor).xyz;
+#ifdef WIND
+    previous += wind_displace_at(unswayed, row.model[3].xyz, wind_weight, previous_time())
+        - wind_displace(unswayed, row.model[3].xyz, wind_weight);
+#endif
+    out.previous = previous_pixel(previous);
+#endif
     out.world_position = world;
     out.normal = world_normal;
 #ifdef IMPOSTOR
@@ -880,14 +920,31 @@ fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> 
 #endif
 }
 
+struct BlendedOut {
+    @location(0) color: vec4<f32>,
+#ifdef MOTION
+    // Blended over the opaque motion by the colour's alpha (water keeps
+    // what lies under it: its target writes nothing).
+    @location(1) motion: vec4<f32>,
+#endif
+};
+
 // Blended passes: the colour and its alpha, blended over the world.
 @fragment
-fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return world_color(in, front, true, false);
+fn fs_world(in: VsOut, @builtin(front_facing) front: bool) -> BlendedOut {
+    var out: BlendedOut;
+    out.color = world_color(in, front, true, false);
+#ifdef MOTION
+    out.motion = motion_output(in.clip, in.previous, out.color.a);
+#endif
+    return out;
 }
 
 struct OpaqueOut {
     @location(0) color: vec4<f32>,
+#ifdef MOTION
+    @location(1) motion: vec4<f32>,
+#endif
     @builtin(sample_mask) mask: u32,
 };
 
@@ -903,10 +960,17 @@ fn fs_world_opaque(in: VsOut, @builtin(front_facing) front: bool) -> OpaqueOut {
 #else
     let selected = 0xffffffffu;
 #endif
+    var out: OpaqueOut;
 #ifdef MASK
     let color = world_color(in, front, false, true);
-    return OpaqueOut(vec4<f32>(color.rgb, 1.0), mask_coverage(color.a, material.alpha_cutoff) & selected);
+    out.color = vec4<f32>(color.rgb, 1.0);
+    out.mask = mask_coverage(color.a, material.alpha_cutoff) & selected;
 #else
-    return OpaqueOut(vec4<f32>(world_color(in, front, true, true).rgb, 1.0), selected);
+    out.color = vec4<f32>(world_color(in, front, true, true).rgb, 1.0);
+    out.mask = selected;
 #endif
+#ifdef MOTION
+    out.motion = motion_output(in.clip, in.previous, 1.0);
+#endif
+    return out;
 }

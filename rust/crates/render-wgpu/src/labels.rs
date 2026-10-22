@@ -1310,10 +1310,7 @@ impl Renderer {
         }
         self.gpu.queue.write_buffer(&gpu_labels.instances, 0, bytes);
         // The image's format and the scene depth's samples.
-        let key = ColorTarget {
-            format: target.format,
-            samples: target.samples,
-        };
+        let key = ColorTarget::new(target.format, target.samples);
         gpu_labels.pipeline(device, key, true);
         gpu_labels.pipeline(device, key, false);
         let variant = gpu_labels.variant(device, key.samples);

@@ -198,12 +198,12 @@ pub struct CameraSampleReadout {
 
 impl CameraMotion {
     /// Take a published descriptor that arrived at `arrival_seconds`
-    /// (presentation time).
-    pub fn receive(&mut self, camera: &RendererCompositionCamera, arrival_seconds: f64) {
+    /// (presentation time). Returns whether it brought a new sample.
+    pub fn receive(&mut self, camera: &RendererCompositionCamera, arrival_seconds: f64) -> bool {
         let motion = camera.motion.as_ref();
         if let (Some(motion), Some(current)) = (motion, &self.motion) {
             if motion.sample_id == current.sample_id {
-                return;
+                return false;
             }
         }
         let next = Sample {
@@ -244,6 +244,7 @@ impl CameraMotion {
                 self.samples.pop_front();
             }
         }
+        true
     }
 
     /// The pose to present at `now_seconds`. Without motion this is the

@@ -6,6 +6,9 @@
 #import rusty::view::{frame, mask_coverage}
 #import rusty::lighting::standard_radiance
 #import rusty::finish::finish
+#ifdef MOTION
+#import rusty::motion::{previous_clip, target_pixel_of, previous_pixel, motion_output}
+#endif
 
 // Sprite: one instanced quad. Rows are built per view pass (billboard
 // orientation, pixel size and viewport placement depend on the camera).
@@ -276,6 +279,10 @@ struct ParticleIn {
     // world behind it (0: a hard depth edge); y: 1 when its colour adds to
     // the frame (premultiplied by its alpha here), 0 when it blends by alpha.
     @location(4) params: vec4<f32>,
+#ifdef MOTION
+    // xyz: where the particle was drawn in the previous frame.
+    @location(5) previous: vec4<f32>,
+#endif
 };
 
 struct ParticleOut {
@@ -285,6 +292,9 @@ struct ParticleOut {
     // The billboard's centre, for fog.
     @location(2) world_position: vec3<f32>,
     @location(3) params: vec4<f32>,
+#ifdef MOTION
+    @location(4) previous: vec4<f32>,
+#endif
 };
 
 @group(1) @binding(20) var particle_texture: texture_2d<f32>;
@@ -302,6 +312,13 @@ fn vs_particle(in: ParticleIn) -> ParticleOut {
     clip = vec4<f32>(clip.xy + offset * depth_scale, clip.zw);
     var out: ParticleOut;
     out.clip = clip;
+#ifdef MOTION
+    // The corner about where the particle was, as it is placed about where
+    // it is.
+    var earlier = previous_clip(in.previous.xyz);
+    earlier = vec4<f32>(earlier.xy + offset * select(earlier.w, 1.0, in.flipbook.w > 0.5), earlier.zw);
+    out.previous = target_pixel_of(earlier);
+#endif
     let count = max(in.flipbook.z, 1.0);
     let frame_index = clamp(floor(in.flipbook.y + 0.5), 0.0, count - 1.0);
     out.uv = vec2<f32>((frame_index + in.corner.x) / count, 1.0 - in.corner.y);
@@ -322,13 +339,27 @@ fn particle_color(in: ParticleOut, fade: f32) -> vec4<f32> {
     return color;
 }
 
+// A billboard's or cube's colour, and with MOTION its motion blended by
+// the colour's alpha.
+struct ParticleColor {
+    @location(0) color: vec4<f32>,
+#ifdef MOTION
+    @location(1) motion: vec4<f32>,
+#endif
+};
+
 @fragment
-fn fs_particle(in: ParticleOut) -> @location(0) vec4<f32> {
+fn fs_particle(in: ParticleOut) -> ParticleColor {
     let color = particle_color(in, 1.0);
     if color.a <= 0.001 {
         discard;
     }
-    return finish(color, in.world_position);
+    var out: ParticleColor;
+    out.color = finish(color, in.world_position);
+#ifdef MOTION
+    out.motion = motion_output(in.clip, in.previous, color.a);
+#endif
+    return out;
 }
 
 // The world point at `depth` on the view's centre ray: the gap between two
@@ -352,13 +383,18 @@ fn soft_fade(depth: f32, scene: f32, softness: f32) -> f32 {
 // world is in front of it, faded out over `params.x` metres as it nears the
 // world behind it.
 @fragment
-fn fs_particle_soft(in: ParticleOut) -> @location(0) vec4<f32> {
+fn fs_particle_soft(in: ParticleOut) -> ParticleColor {
     let fade = soft_fade(in.clip.z, textureLoad(scene_depth, vec2<i32>(in.clip.xy), 0), in.params.x);
     let color = particle_color(in, fade);
     if fade <= 0.0 || color.a <= 0.001 {
         discard;
     }
-    return finish(color, in.world_position);
+    var out: ParticleColor;
+    out.color = finish(color, in.world_position);
+#ifdef MOTION
+    out.motion = motion_output(in.clip, in.previous, color.a);
+#endif
+    return out;
 }
 
 struct SoftMultisampledOut {
@@ -368,11 +404,19 @@ struct SoftMultisampledOut {
     @builtin(sample_mask) mask: u32,
 };
 
+struct SoftParticleMultisampledOut {
+    @location(0) color: vec4<f32>,
+#ifdef MOTION
+    @location(1) motion: vec4<f32>,
+#endif
+    @builtin(sample_mask) mask: u32,
+};
+
 // The multisampled soft billboard: each of the world's samples at the pixel
 // is tested and faded on its own, the fragment covers the samples the world
 // is behind, and its colour fades by their mean gap.
 @fragment
-fn fs_particle_soft_multisampled(in: ParticleOut) -> SoftMultisampledOut {
+fn fs_particle_soft_multisampled(in: ParticleOut) -> SoftParticleMultisampledOut {
     let samples = i32(textureNumSamples(scene_depth_multisampled));
     var mask = 0u;
     var fade = 0.0;
@@ -393,8 +437,11 @@ fn fs_particle_soft_multisampled(in: ParticleOut) -> SoftMultisampledOut {
     if color.a <= 0.001 {
         discard;
     }
-    var out: SoftMultisampledOut;
+    var out: SoftParticleMultisampledOut;
     out.color = finish(color, in.world_position);
+#ifdef MOTION
+    out.motion = motion_output(in.clip, in.previous, color.a);
+#endif
     out.mask = mask;
     return out;
 }
@@ -445,12 +492,19 @@ struct CubeParticleIn {
     // xyz: world position; w: edge length.
     @location(3) center: vec4<f32>,
     @location(4) color: vec4<f32>,
+#ifdef MOTION
+    // xyz: where the particle was drawn in the previous frame.
+    @location(5) previous: vec4<f32>,
+#endif
 };
 
 struct CubeParticleOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) color: vec4<f32>,
     @location(1) world_position: vec3<f32>,
+#ifdef MOTION
+    @location(2) previous: vec4<f32>,
+#endif
 };
 
 @vertex
@@ -459,13 +513,21 @@ fn vs_particle_cube(in: CubeParticleIn) -> CubeParticleOut {
     out.world_position = in.center.xyz + in.position * in.center.w;
     out.clip = frame.view_proj * vec4<f32>(out.world_position, 1.0);
     out.color = in.color;
+#ifdef MOTION
+    out.previous = previous_pixel(in.previous.xyz + in.position * in.center.w);
+#endif
     return out;
 }
 
 @fragment
-fn fs_particle_cube(in: CubeParticleOut) -> @location(0) vec4<f32> {
+fn fs_particle_cube(in: CubeParticleOut) -> ParticleColor {
     if in.color.a <= 0.001 {
         discard;
     }
-    return finish(in.color, in.world_position);
+    var out: ParticleColor;
+    out.color = finish(in.color, in.world_position);
+#ifdef MOTION
+    out.motion = motion_output(in.clip, in.previous, in.color.a);
+#endif
+    return out;
 }

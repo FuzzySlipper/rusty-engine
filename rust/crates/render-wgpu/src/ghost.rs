@@ -30,6 +30,7 @@ use render_presentation::{
 use crate::camera::{self, CameraPose};
 use crate::capture::{CaptureBackground, CaptureRequest};
 use crate::convert;
+use crate::motion::MotionWrite;
 use crate::pipelines::VERTEX_FLOATS;
 use crate::tables::Aabb;
 use crate::target::{ColorTarget, DEPTH_FORMAT};
@@ -206,7 +207,8 @@ impl GhostPipelines {
                 module: &self.shader,
                 entry_point: Some("fs_ghost"),
                 compilation_options: Default::default(),
-                targets: &[Some(format.format.into())],
+                // Ghost plates have no motion of their own (`motion.rs`).
+                targets: &format.targets(format.format.into(), MotionWrite::None),
             }),
             multiview_mask: None,
             cache: None,

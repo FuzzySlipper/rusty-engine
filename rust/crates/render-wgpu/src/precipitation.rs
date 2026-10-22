@@ -10,6 +10,7 @@ use render_model::{PrecipitationDescriptor, PrecipitationShape};
 use render_shaders::{Entry, Features};
 
 use crate::gpu::Gpu;
+use crate::motion::MotionWrite;
 use crate::pipelines::standard;
 use crate::shaders::Shaders;
 use crate::target::ColorTarget;
@@ -19,6 +20,9 @@ const UNIFORM_BYTES: u64 = 5 * 16;
 
 pub(crate) struct Precipitation {
     shader: wgpu::ShaderModule,
+    /// The same with MOTION, beside a motion target (`motion.rs`), made
+    /// when one first draws (`prepare_motion`).
+    motion_shader: Option<wgpu::ShaderModule>,
     uniform: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     /// Single-sample and multisampled depth: the pipeline layout.
@@ -71,6 +75,7 @@ impl Precipitation {
         });
         Self {
             shader,
+            motion_shader: None,
             uniform,
             bind_group,
             layouts,
@@ -121,6 +126,18 @@ impl Precipitation {
             .write_buffer(&self.uniform, 0, bytemuck::cast_slice(&values));
     }
 
+    /// Compile the variant drawing beside a motion target, before the first
+    /// pass that has one.
+    pub fn prepare_motion(&mut self, device: &wgpu::Device, shaders: &mut Shaders) {
+        if self.motion_shader.is_none() {
+            self.motion_shader = Some(standard(shaders.module(
+                device,
+                Entry::Precipitation,
+                Features::MOTION,
+            )));
+        }
+    }
+
     /// Draw `drops` drops into a pass over the world's HDR target, with the
     /// frame in group 0 and the world's depth in group 2.
     pub fn draw(
@@ -151,6 +168,10 @@ impl Precipitation {
         additive: bool,
     ) -> wgpu::RenderPipeline {
         let multisampled = format.samples > 1;
+        let shader = match &self.motion_shader {
+            Some(shader) if format.motion => shader,
+            _ => &self.shader,
+        };
         let blend = if additive {
             wgpu::BlendState {
                 color: wgpu::BlendComponent {
@@ -167,7 +188,7 @@ impl Precipitation {
             label: Some("render-wgpu precipitation"),
             layout: Some(&self.layouts[usize::from(multisampled)]),
             vertex: wgpu::VertexState {
-                module: &self.shader,
+                module: shader,
                 entry_point: Some("vs_drop"),
                 compilation_options: Default::default(),
                 buffers: &[],
@@ -179,18 +200,22 @@ impl Precipitation {
             depth_stencil: None,
             multisample: format.multisample(),
             fragment: Some(wgpu::FragmentState {
-                module: &self.shader,
+                module: shader,
                 entry_point: Some(if multisampled {
                     "fs_drop_multisampled"
                 } else {
                     "fs_drop"
                 }),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: format.format,
-                    blend: Some(blend),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                // A drop's motion blends by its alpha, as its colour does.
+                targets: &format.targets(
+                    wgpu::ColorTargetState {
+                        format: format.format,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    },
+                    MotionWrite::Blend,
+                ),
             }),
             multiview_mask: None,
             cache: None,

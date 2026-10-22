@@ -255,12 +255,17 @@ The renderer draws its own inspection from what it already evaluated:
   straightened short of it (the solve [`IkChains`](skeleton-poses.md#writing-and-reading)
   reports);
 - `camera`: the primary camera's frustum and axes, to see from an
-  [observer](#time-drawing-and-camera).
+  [observer](#time-drawing-and-camera);
+- `motion`: the primary frame's motion vectors (what a temporal upscale
+  stage reads, [temporal inputs](lighting-and-sky.md#temporal-inputs)) in place of its
+  picture. Red and green are each pixel's motion since the previous frame
+  to the right and down, `0.5 + pixels / 32`, clamped: grey is still, and
+  a camera turning right shows the world in red below 0.5.
 
 Handles are the ones `engine.scene.objects` lists. `engine.inspect.overlay`
 reads what is shown and the product's sets (items, revision, shown);
 `engine.inspect.overlay show|hide` with `sets`, `sets in VIEW` (every set,
-in that view only), `set NAME`, `debug-layer`, `camera`, `joints H`,
+in that view only), `set NAME`, `debug-layer`, `camera`, `motion`, `joints H`,
 `bounds H` or `ik H` changes one thing. `hide set NAME` also keeps that set
 out of `sets` and every `sets in VIEW` (the answer's `hidden`) until it is
 shown by name or with `show sets`. A bare `show`

@@ -135,6 +135,8 @@ impl Renderer {
             backdrop: None,
             camera_id: None,
             overlays: Some(view.id.as_str()),
+            jitter: None,
+            motion: None,
         });
         let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth);
         let viewmodel = match primary_world {
@@ -156,6 +158,8 @@ impl Renderer {
                     backdrop: None,
                     camera_id: None,
                     overlays: Some(view.id.as_str()),
+                    jitter: None,
+                    motion: None,
                 })
             }
             None => ViewStats::default(),

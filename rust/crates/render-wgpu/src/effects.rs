@@ -17,6 +17,9 @@
 //! the world's depth as a texture, so soft billboards draw last in their own
 //! pass over the world's HDR target (`frame.rs`, "render-wgpu particles"),
 //! testing and fading against that depth in their fragment shader.
+//!
+//! Beside a motion target (`motion.rs`), particles write their motion from
+//! where they were drawn in the previous frame; sprites write none.
 
 use std::collections::HashMap;
 
@@ -32,6 +35,7 @@ use render_presentation::{
 
 use crate::camera::CameraMatrices;
 use crate::frame::{PixelRect, ViewLayer, ViewPass};
+use crate::motion::MotionWrite;
 use crate::particles::{EntityPositions, ParticleIssue};
 use crate::pipelines::VERTEX_FLOATS;
 use crate::resources::{self, ResourceSource};
@@ -44,6 +48,9 @@ const PARTICLE_PIXELS_PER_UNIT: f32 = 24.0;
 const SPRITE_ROW_FLOATS: usize = 36;
 const PARTICLE_ROW_FLOATS: usize = 16;
 const CUBE_ROW_FLOATS: usize = 8;
+/// Beside a motion target, each particle row and cube row also holds where
+/// the particle was drawn in the previous frame (`motion.rs`).
+const PREVIOUS_FLOATS: usize = 4;
 /// A sprite batch instance's row: world centre, atlas frame, quad.
 const BATCH_ROW_FLOATS: usize = 12;
 /// A sprite batch's corner vertex: corner, then what every instance shares
@@ -236,6 +243,9 @@ fn soft_index(samples: u32) -> usize {
 
 pub(crate) struct Effects {
     shader: wgpu::ShaderModule,
+    /// The same with MOTION, for particles beside a motion target, made
+    /// when one first draws (`prepare_effects`).
+    motion_shader: Option<wgpu::ShaderModule>,
     sprite_layout: wgpu::BindGroupLayout,
     particle_layout: wgpu::BindGroupLayout,
     sprite_pipeline_layout: wgpu::PipelineLayout,
@@ -352,6 +362,7 @@ impl Effects {
         let corners: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         Self {
             shader,
+            motion_shader: None,
             sprite_pipeline_layout: pipeline_layout(
                 "render-wgpu sprite",
                 &[Some(frame_layout), Some(&sprite_layout)],
@@ -417,7 +428,8 @@ impl Effects {
         let billboard = [ParticleBlendMode::Alpha, ParticleBlendMode::Additive]
             .map(|blend| self.billboard_pipeline(device, format, blend, None));
         let cube_vertex = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x2];
-        let cube_instance = wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4];
+        let cube_instance =
+            wgpu::vertex_attr_array![3 => Float32x4, 4 => Float32x4, 5 => Float32x4];
         let cube = self.pipeline(
             device,
             "render-wgpu particle cube",
@@ -430,9 +442,9 @@ impl Effects {
                     attributes: &cube_vertex,
                 }),
                 Some(wgpu::VertexBufferLayout {
-                    array_stride: (CUBE_ROW_FLOATS * 4) as u64,
+                    array_stride: (cube_row_floats(format) * 4) as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &cube_instance,
+                    attributes: &cube_instance[..2 + usize::from(format.motion)],
                 }),
             ],
             wgpu::PrimitiveTopology::TriangleList,
@@ -441,6 +453,7 @@ impl Effects {
             // Cube particles are transparent but write depth.
             Some(depth_state(true, true)),
             Some(wgpu::BlendState::ALPHA_BLENDING),
+            MotionWrite::Blend,
         );
         self.formats.push(FormatPipelines {
             format,
@@ -467,7 +480,7 @@ impl Effects {
             attributes: &wgpu::vertex_attr_array![0 => Float32x2],
         };
         let particle_attributes = wgpu::vertex_attr_array![
-            1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4
+            1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4
         ];
         let (layout, fragment, depth) = match soft {
             None => (
@@ -490,9 +503,9 @@ impl Effects {
             &[
                 Some(corner),
                 Some(wgpu::VertexBufferLayout {
-                    array_stride: (PARTICLE_ROW_FLOATS * 4) as u64,
+                    array_stride: (particle_row_floats(format) * 4) as u64,
                     step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &particle_attributes,
+                    attributes: &particle_attributes[..4 + usize::from(format.motion)],
                 }),
             ],
             wgpu::PrimitiveTopology::TriangleStrip,
@@ -500,6 +513,7 @@ impl Effects {
             format,
             depth,
             Some(blend_state(blend)),
+            MotionWrite::Blend,
         )
     }
 
@@ -641,6 +655,7 @@ impl Effects {
             format,
             depth,
             blend,
+            MotionWrite::None,
         );
         self.formats[index].sprites.insert(state, pipeline);
     }
@@ -658,12 +673,18 @@ impl Effects {
         format: ColorTarget,
         depth_stencil: Option<wgpu::DepthStencilState>,
         blend: Option<wgpu::BlendState>,
+        motion: MotionWrite,
     ) -> wgpu::RenderPipeline {
+        // Only a pipeline writing motion needs the shader that writes it.
+        let shader = match &self.motion_shader {
+            Some(shader) if format.motion && motion != MotionWrite::None => shader,
+            _ => &self.shader,
+        };
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(layout),
             vertex: wgpu::VertexState {
-                module: &self.shader,
+                module: shader,
                 entry_point: Some(vertex),
                 compilation_options: Default::default(),
                 buffers,
@@ -676,14 +697,17 @@ impl Effects {
             depth_stencil,
             multisample: format.multisample(),
             fragment: Some(wgpu::FragmentState {
-                module: &self.shader,
+                module: shader,
                 entry_point: Some(fragment),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: format.format,
-                    blend,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &format.targets(
+                    wgpu::ColorTargetState {
+                        format: format.format,
+                        blend,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    },
+                    motion,
+                ),
             }),
             multiview_mask: None,
             cache: None,
@@ -835,6 +859,15 @@ impl Effects {
             pass.draw(0..4, run.first..run.first + run.count);
         }
     }
+}
+
+/// Floats in one particle row, and one cube row, drawn into `format`.
+fn particle_row_floats(format: ColorTarget) -> usize {
+    PARTICLE_ROW_FLOATS + if format.motion { PREVIOUS_FLOATS } else { 0 }
+}
+
+fn cube_row_floats(format: ColorTarget) -> usize {
+    CUBE_ROW_FLOATS + if format.motion { PREVIOUS_FLOATS } else { 0 }
 }
 
 fn depth_state(test: bool, write: bool) -> wgpu::DepthStencilState {
@@ -1401,6 +1434,14 @@ impl Renderer {
         format: ColorTarget,
     ) -> EffectsPass {
         let mut pass = EffectsPass::default();
+        if format.motion && self.effects.motion_shader.is_none() {
+            self.effects.motion_shader =
+                Some(crate::pipelines::standard(self.layouts.shaders.module(
+                    &self.gpu.device,
+                    crate::shaders::Entry::Effects,
+                    crate::shaders::Features::MOTION,
+                )));
+        }
         // Sprites draw in their own layer; particles in the world, or in the
         // backdrop when their emitter says so (none in the viewmodel).
         let backdrop = view.layer == ViewLayer::Backdrop;
@@ -1668,17 +1709,23 @@ impl Renderer {
             rows.clear();
             let mut cubes = std::mem::take(&mut self.effects.cube_scratch);
             cubes.clear();
+            let row_floats = particle_row_floats(format);
             for (group, texture, index) in &order {
-                let particle = self.particles.particles[*index as usize].view();
+                let live = &self.particles.particles[*index as usize];
+                let particle = live.view();
                 // Linear, as every other world colour is.
                 let color = particle.color;
                 let p = particle.position;
+                let previous = live.previous;
                 if *group == 0 {
                     cubes.extend_from_slice(&[p.x, p.y, p.z, particle.size.max(0.0)]);
                     cubes.extend_from_slice(&color);
+                    if format.motion {
+                        cubes.extend_from_slice(&[previous.x, previous.y, previous.z, 0.0]);
+                    }
                 } else {
-                    let descriptor = &self.particles.particles[*index as usize].descriptor;
-                    let first = (rows.len() / PARTICLE_ROW_FLOATS) as u32;
+                    let descriptor = &live.descriptor;
+                    let first = (rows.len() / row_floats) as u32;
                     match pass.billboards.last_mut() {
                         Some(run)
                             if run.texture == *texture
@@ -1725,9 +1772,12 @@ impl Renderer {
                         0.0,
                         0.0,
                     ]);
+                    if format.motion {
+                        rows.extend_from_slice(&[previous.x, previous.y, previous.z, 0.0]);
+                    }
                 }
             }
-            pass.cubes = (cubes.len() / CUBE_ROW_FLOATS) as u32;
+            pass.cubes = (cubes.len() / cube_row_floats(format)) as u32;
             self.effects.particle_rows.write(&self.gpu, &rows);
             self.effects.cube_rows.write(&self.gpu, &cubes);
             self.effects.cube_scratch = cubes;

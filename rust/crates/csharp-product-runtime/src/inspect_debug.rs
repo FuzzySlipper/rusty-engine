@@ -8,7 +8,7 @@ use super::*;
 pub(super) const OVERLAY_COMMAND: &str = "engine.inspect.overlay";
 pub(super) const LANDMARKS_COMMAND: &str = "engine.inspect.landmarks";
 
-const OVERLAY_USAGE: &str = "usage: engine.inspect.overlay [list] | show|hide [sets [in VIEW] | set NAME [in VIEW] | debug-layer | camera | joints HANDLE | bounds HANDLE | ik HANDLE]";
+const OVERLAY_USAGE: &str = "usage: engine.inspect.overlay [list] | show|hide [sets [in VIEW] | set NAME [in VIEW] | debug-layer | camera | motion | joints HANDLE | bounds HANDLE | ik HANDLE]";
 
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -18,6 +18,8 @@ struct OverlayAnswer {
     all_sets: bool,
     debug_layer: bool,
     camera: bool,
+    /// The primary frame's motion target in place of its picture.
+    motion: bool,
     /// Sets shown only in one view, by set.
     only_in: std::collections::BTreeMap<String, String>,
     /// Views that show every set.
@@ -163,6 +165,7 @@ fn change(
         }
         ["debug-layer"] => shown.debug_layer = show,
         ["camera"] => shown.camera = show,
+        ["motion"] => shown.motion = show,
         ["joints", value] => toggle(&mut shown.joints, handle(value)?),
         ["bounds", value] => toggle(&mut shown.bounds, handle(value)?),
         ["ik", value] => toggle(&mut shown.ik, handle(value)?),
@@ -233,6 +236,7 @@ impl CsharpProductRuntime {
             all_sets: shown.all_sets,
             debug_layer: shown.debug_layer,
             camera: shown.camera,
+            motion: shown.motion,
             only_in: shown.only_in.clone(),
             sets_in: shown.sets_in.iter().cloned().collect(),
             hidden: shown.hidden.iter().cloned().collect(),
@@ -294,6 +298,11 @@ mod tests {
             .hidden
             .is_empty());
         assert!(change(hidden, true, &[]).unwrap().hidden.is_empty());
+        // The motion target shows on its own, and a bare show leaves it.
+        let motion = change(none.clone(), true, &["motion"]).unwrap();
+        assert!(motion.motion && motion.any());
+        assert!(!change(motion, false, &[]).unwrap().motion);
+        assert!(!all.motion);
         assert!(change(none.clone(), true, &["joints", "x"]).is_err());
         assert!(change(none, true, &["floor"]).is_err());
     }

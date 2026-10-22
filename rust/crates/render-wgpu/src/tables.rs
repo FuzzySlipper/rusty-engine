@@ -568,6 +568,9 @@ pub(crate) struct Parts {
     /// frame, for the indirect light volume's dirty bricks (`probes`): a
     /// part that left a brick is a change there too.
     pub former_bounds: Vec<Aabb>,
+    /// Parts made since the last frame, whose previous model is their first
+    /// (`motion.rs`).
+    pub created: Vec<PartId>,
     /// Batch keys in use: key, reference count.
     keys: HashMap<BatchKey, (u32, u32)>,
     free_keys: Vec<u32>,
@@ -620,6 +623,7 @@ impl Parts {
             (self.meta.len() - 1) as PartId
         };
         self.dirty.insert(id);
+        self.created.push(id);
         self.regrouped = true;
         id
     }

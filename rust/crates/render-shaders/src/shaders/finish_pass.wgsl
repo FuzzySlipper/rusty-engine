@@ -212,3 +212,15 @@ fn vs_clear(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
 fn fs_clear() -> @location(0) vec4<f32> {
     return vec4<f32>(0.0);
 }
+
+// The same over a world target with its motion target (render-wgpu
+// `motion.rs`): no motion either.
+struct ClearedMotion {
+    @location(0) color: vec4<f32>,
+    @location(1) motion: vec4<f32>,
+};
+
+@fragment
+fn fs_clear_motion() -> ClearedMotion {
+    return ClearedMotion(vec4<f32>(0.0), vec4<f32>(0.0));
+}

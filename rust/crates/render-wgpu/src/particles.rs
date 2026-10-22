@@ -48,6 +48,10 @@ pub(crate) struct Particle {
     pub age: f32,
     pub lifetime: f32,
     pub position: Vec3,
+    /// Where it was drawn in the previous frame with motion, and in the
+    /// last (`Particles::drawn`): its motion.
+    pub previous: Vec3,
+    drawn: Vec3,
     velocity: Vec3,
     origin: Vec3,
     impacts: u16,
@@ -147,6 +151,15 @@ impl Particles {
         self.texture_users
             .get(slot as usize)
             .is_some_and(|count| *count > 0)
+    }
+
+    /// A frame with motion draws the particles where they are now: their
+    /// previous places are where the last such frame drew them.
+    pub fn drawn(&mut self) {
+        for particle in &mut self.particles {
+            particle.previous = particle.drawn;
+            particle.drawn = particle.position;
+        }
     }
 
     /// Texture slots whose last holder has left since the previous call.
@@ -332,6 +345,8 @@ impl Particles {
                 age: 0.0,
                 lifetime,
                 position: anchor,
+                previous: anchor,
+                drawn: anchor,
                 velocity,
                 origin: anchor,
                 impacts: 0,

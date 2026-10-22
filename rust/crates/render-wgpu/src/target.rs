@@ -13,20 +13,51 @@ pub(crate) const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg
 /// captures are single-sample.
 pub(crate) const PRIMARY_SAMPLES: u32 = 4;
 
-/// What a pipeline must match to draw into a target: colour format and
-/// sample count. Pipeline caches are keyed by it.
+/// What a pipeline must match to draw into a target: colour format, sample
+/// count, and whether a motion target follows the colour (`motion.rs`).
+/// Pipeline caches are keyed by it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ColorTarget {
     pub format: wgpu::TextureFormat,
     pub samples: u32,
+    pub motion: bool,
 }
 
 impl ColorTarget {
+    /// A target of `format` at `samples`, without a motion target.
+    pub fn new(format: wgpu::TextureFormat, samples: u32) -> Self {
+        Self {
+            format,
+            samples,
+            motion: false,
+        }
+    }
+
     pub fn multisample(self) -> wgpu::MultisampleState {
         wgpu::MultisampleState {
             count: self.samples,
             ..Default::default()
         }
+    }
+
+    /// The colour targets a pipeline drawing here declares: `color`, then
+    /// the motion target written as `motion` says, when there is one.
+    pub fn targets(
+        self,
+        color: wgpu::ColorTargetState,
+        motion: crate::motion::MotionWrite,
+    ) -> Vec<Option<wgpu::ColorTargetState>> {
+        let mut targets = vec![Some(color)];
+        if self.motion {
+            targets.push(Some(motion.target_state()));
+        }
+        targets
+    }
+
+    /// The shader features every pipeline drawing here compiles with: the
+    /// motion output with a motion target.
+    pub fn features(self) -> crate::shaders::Features {
+        crate::shaders::Features::default().with(crate::shaders::Features::MOTION, self.motion)
     }
 }
 
@@ -47,10 +78,7 @@ pub(crate) struct TargetView<'a> {
 impl TargetView<'_> {
     /// What a pipeline drawing into `color` must match.
     pub fn key(&self) -> ColorTarget {
-        ColorTarget {
-            format: self.format,
-            samples: 1,
-        }
+        ColorTarget::new(self.format, 1)
     }
 }
 

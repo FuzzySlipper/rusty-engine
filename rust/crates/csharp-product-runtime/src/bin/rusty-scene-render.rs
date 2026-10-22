@@ -42,7 +42,7 @@ const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] 
      [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
      [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] \
      [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]] [--choose ID=VALUE]... \
-     [--volumetric-fog-medium DENSITY[,ANISOTROPY]]\n\
+     [--volumetric-fog-medium DENSITY[,ANISOTROPY]] [--motion OUT.png]\n\
        rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]";
 
 /// Frames each gallery variant draws for its timings when `--frames` is not
@@ -79,6 +79,10 @@ struct Arguments {
     /// A volumetric fog medium in place of the snapshot's: density and
     /// anisotropy.
     fog_medium: Option<(f32, f32)>,
+    /// Draw the timed frames with their motion target, as a temporal
+    /// upscale stage has them drawn, and write the last frame's motion
+    /// (`engine.inspect.overlay show motion`) here.
+    motion: Option<PathBuf>,
     /// Draw the feature gallery into this directory instead.
     gallery: Option<PathBuf>,
 }
@@ -103,6 +107,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut indirect_light: Option<IndirectLightDescriptor> = None;
     let mut choices = Vec::new();
     let mut gallery = None;
+    let mut motion = None;
     let mut fog_medium = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
@@ -197,6 +202,13 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                     ));
                 }
             }
+            "--motion" => {
+                motion = Some(PathBuf::from(
+                    arguments
+                        .next()
+                        .ok_or_else(|| format!("--motion needs a path\n{USAGE}"))?,
+                ));
+            }
             "--gallery" => {
                 gallery =
                     Some(PathBuf::from(arguments.next().ok_or_else(|| {
@@ -278,6 +290,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         indirect_light,
         rerender_shadows,
         choices,
+        motion,
         gallery,
         fog_medium,
     }))
@@ -301,6 +314,7 @@ fn run() -> Result<(), String> {
         indirect_light,
         rerender_shadows,
         choices,
+        motion,
         gallery,
         fog_medium,
     }) = parse(std::env::args().skip(1))?
@@ -448,6 +462,15 @@ fn run() -> Result<(), String> {
             _ => None,
         });
     let mut timing = serde_json::Value::Null;
+    if motion.is_some() && frames == 0 {
+        return Err("--motion needs --frames: motion is drawn between frames".to_owned());
+    }
+    if motion.is_some() {
+        driver.set_overlay_shown(render_wgpu::OverlayShown {
+            motion: true,
+            ..render_wgpu::OverlayShown::default()
+        });
+    }
     if frames > 0 {
         let moving = walk != 0.0 || turn != 0.0;
         if moving && start.is_none() {
@@ -506,7 +529,12 @@ fn run() -> Result<(), String> {
             "walkMetres": walk,
             "turnDegrees": turn,
             "rerenderShadows": rerender_shadows,
+            "motion": motion.is_some(),
         });
+        if let Some(path) = &motion {
+            std::fs::write(path, encode_png(width, height, &pixels)?)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+        }
     }
     let (tables, memory, has_fog) = driver
         .draw(|renderer, _| {

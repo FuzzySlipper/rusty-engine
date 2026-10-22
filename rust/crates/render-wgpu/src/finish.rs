@@ -18,6 +18,7 @@ use render_model::{AutoExposureDescriptor, BloomDescriptor};
 
 use crate::frame::ViewLayer;
 use crate::gpu::Gpu;
+use crate::motion::MotionWrite;
 use crate::pipelines::standard;
 use crate::post::{Chain, Post, ShaftTargets};
 use crate::shaders::{Entry, Features, Shaders};
@@ -40,6 +41,10 @@ const PARTICLES: &str = "particles";
 const CLOUDS: &str = "clouds";
 const BACKDROP: &str = "backdrop";
 const PRECIPITATION: &str = "precipitation";
+
+/// A viewport clear's samples, whether it clears depth, and beside a motion
+/// target whether it clears the motion (`Finish::clear_viewport`).
+type ClearKey = (u32, bool, Option<bool>);
 
 /// One size and sample count of HDR target: the colour the world draws
 /// into and the finish pass reads, and what bloom and auto exposure need of
@@ -101,8 +106,9 @@ pub(crate) struct Finish {
     bloom_sampler: wgpu::Sampler,
     /// Finish pipelines by the image's format and the world's samples.
     pipelines: Vec<(ColorTarget, wgpu::RenderPipeline)>,
-    /// Transparent viewport clears by HDR target sample count.
-    clears: Vec<((u32, bool), wgpu::RenderPipeline)>,
+    /// Transparent viewport clears by HDR target samples, depth and motion
+    /// (`clear_viewport`).
+    clears: Vec<(ClearKey, wgpu::RenderPipeline)>,
     targets: Vec<HdrTarget>,
     pub post: Post,
     frame: u64,
@@ -672,18 +678,21 @@ impl Finish {
     }
 
     /// Clear the viewport of a multisampled or single-sample HDR target to
-    /// transparent and, with `depth`, its depth to the far plane.
+    /// transparent and, with `depth`, its depth to the far plane. Beside a
+    /// motion target (`motion`), clear its motion too with `Some(true)` and
+    /// keep it with `Some(false)`.
     pub fn clear_viewport(
         &mut self,
         device: &wgpu::Device,
         pass: &mut wgpu::RenderPass<'_>,
         samples: u32,
         depth: bool,
+        motion: Option<bool>,
     ) {
         let index = match self
             .clears
             .iter()
-            .position(|(key, _)| *key == (samples, depth))
+            .position(|(key, _)| *key == (samples, depth, motion))
         {
             Some(index) => index,
             None => {
@@ -716,14 +725,30 @@ impl Finish {
                     },
                     fragment: Some(wgpu::FragmentState {
                         module: &self.shader,
-                        entry_point: Some("fs_clear"),
+                        entry_point: Some(if motion == Some(true) {
+                            "fs_clear_motion"
+                        } else {
+                            "fs_clear"
+                        }),
                         compilation_options: Default::default(),
-                        targets: &[Some(HDR_FORMAT.into())],
+                        targets: &ColorTarget {
+                            format: HDR_FORMAT,
+                            samples,
+                            motion: motion.is_some(),
+                        }
+                        .targets(
+                            HDR_FORMAT.into(),
+                            if motion == Some(true) {
+                                MotionWrite::Cover
+                            } else {
+                                MotionWrite::None
+                            },
+                        ),
                     }),
                     multiview_mask: None,
                     cache: None,
                 });
-                self.clears.push(((samples, depth), pipeline));
+                self.clears.push(((samples, depth, motion), pipeline));
                 self.clears.len() - 1
             }
         };
@@ -750,10 +775,7 @@ impl Finish {
     ) {
         // The pipeline draws the image single-sample, averaging every sample
         // of a multisampled world.
-        let key = ColorTarget {
-            format: target.format,
-            samples: target.samples,
-        };
+        let key = ColorTarget::new(target.format, target.samples);
         let multisampled = key.samples > 1;
         if !self.pipelines.iter().any(|(format, _)| *format == key) {
             let pipeline = gpu

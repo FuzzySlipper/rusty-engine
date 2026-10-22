@@ -1,6 +1,7 @@
 // Composition passes over whole-viewport triangles: clearing one viewport of
 // a shared target, presenting an offscreen target into the primary output,
-// and converting a linear capture into its encoded image.
+// converting a linear capture into its encoded image, and showing the
+// motion target for inspection.
 
 #import rusty::tonemap::aces_filmic
 
@@ -66,4 +67,32 @@ fn fs_convert(in: FullscreenOut) -> @location(0) vec4<f32> {
         linear = linear * params.tone.x;
     }
     return vec4<f32>(max(linear, vec3<f32>(0.0)), alpha);
+}
+
+// The motion target as inspection shows it (render-wgpu `motion.rs`): red
+// and green are the motion's x and y, render pixels to the right and down,
+// as 0.5 + motion / (2 MOTION_VIEW_RANGE), clamped; blue is 0.5. A still
+// pixel is grey. `fs_motion_srgb` writes to an sRGB target the value that
+// encodes as those fractions.
+const MOTION_VIEW_RANGE: f32 = 16.0;
+
+fn motion_shown(uv: vec2<f32>) -> vec3<f32> {
+    let motion = textureSample(source, source_sampler, uv).xy;
+    let shown = clamp(0.5 + motion / (2.0 * MOTION_VIEW_RANGE), vec2<f32>(0.0), vec2<f32>(1.0));
+    return vec3<f32>(shown, 0.5);
+}
+
+@fragment
+fn fs_motion(in: FullscreenOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(motion_shown(in.uv), 1.0);
+}
+
+// The sRGB transfer function's inverse, as an sRGB target decodes.
+fn srgb_decoded(value: vec3<f32>) -> vec3<f32> {
+    return select(pow((value + 0.055) / 1.055, vec3<f32>(2.4)), value / 12.92, value <= vec3<f32>(0.04045));
+}
+
+@fragment
+fn fs_motion_srgb(in: FullscreenOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(srgb_decoded(motion_shown(in.uv)), 1.0);
 }

@@ -135,6 +135,9 @@ pub struct FrameStats {
     /// The output's size and the render resolution the primary views drew
     /// at (`upscale.rs`).
     pub resolution: crate::upscale::FrameResolution,
+    /// What the frame drew for a temporal stage, while it drew motion
+    /// (`motion.rs`).
+    pub motion: Option<crate::motion::MotionFrame>,
 }
 
 /// What one view pass drew.
@@ -239,7 +242,7 @@ pub(crate) struct BackdropCamera {
 }
 
 /// Which retained layers a view pass draws.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum ViewLayer {
     /// Every layer but the viewmodel and the backdrop.
     World,
@@ -332,6 +335,28 @@ pub(crate) struct ViewPass<'a> {
     /// Draw the frame's overlay lines for this pass's layer, as this view
     /// (`PLAYER_VIEW` or an inspection view's id) shows them.
     pub overlays: Option<&'a str>,
+    /// The primary frame's jitter in render pixels, which the projection
+    /// the pass draws with takes (`motion.rs`); `camera` stays unjittered
+    /// for culling, draw lists and shadow fitting.
+    pub jitter: Option<glam::Vec2>,
+    /// The motion target a primary view's world or viewmodel pass writes.
+    pub motion: Option<crate::motion::MotionPass>,
+}
+
+impl ViewPass<'_> {
+    /// The camera the pass draws with: `camera`, jittered.
+    pub fn drawn_camera(&self) -> CameraMatrices {
+        let Some(jitter) = self.jitter else {
+            return self.camera;
+        };
+        let size = glam::Vec2::new(self.viewport.width as f32, self.viewport.height as f32);
+        let projection = crate::motion::jittered(self.camera.projection, jitter, size);
+        CameraMatrices {
+            view_proj: projection * self.camera.view,
+            projection,
+            ..self.camera
+        }
+    }
 }
 
 impl Renderer {
@@ -343,6 +368,7 @@ impl Renderer {
         camera: &RendererCompositionCamera,
         target: &OffscreenTarget,
     ) -> FrameStats {
+        self.composition.cut |= camera.motion.as_ref().is_some_and(|motion| motion.cut);
         let uploaded = self.prepare();
         let mut stats = self.draw_primary(target.view(), |renderer, view| {
             renderer.render_camera(camera, view)
@@ -357,6 +383,7 @@ impl Renderer {
         camera: &RendererCompositionCamera,
         surface: &mut WindowSurface,
     ) -> Result<FrameStats, PresentSkip> {
+        self.composition.cut |= camera.motion.as_ref().is_some_and(|motion| motion.cut);
         let uploaded = self.prepare();
         let gpu = self.gpu.clone();
         let mut stats = FrameStats::default();
@@ -447,6 +474,8 @@ impl Renderer {
         );
         let regrouped = std::mem::take(&mut self.tables.parts.regrouped);
         let moved = std::mem::take(&mut self.tables.parts.moved);
+        let created = std::mem::take(&mut self.tables.parts.created);
+        self.temporal.note_parts(&moved, &created);
         let former = std::mem::take(&mut self.tables.parts.former_bounds);
         if self.tables.parts.selecting {
             // The selection gathers its runs again when they or their parts
@@ -1345,6 +1374,7 @@ impl Renderer {
                 probes: &self.probes,
                 cloud_regions: &self.cloud_regions_buffer,
                 copies: self.scatter_copies.buffer(),
+                temporal: &self.temporal,
             },
         );
         self.caster_bind_group = caster_bind_group(
@@ -2239,7 +2269,12 @@ impl Renderer {
                 self.pipelines.len() - 1
             }
         };
-        let bytes = self.frame_uniform(&view.camera, self.lights.world, view.target.samples, None);
+        let bytes = self.frame_uniform(
+            &view.drawn_camera(),
+            self.lights.world,
+            view.target.samples,
+            None,
+        );
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
         let mut encoder = self
             .gpu
@@ -2266,6 +2301,8 @@ impl Renderer {
             backdrop: Some(backdrop.link),
             camera_id: view.camera_id,
             overlays: None,
+            jitter: view.jitter,
+            motion: None,
         })
     }
 
@@ -2342,6 +2379,8 @@ impl Renderer {
                 backdrop: None,
                 camera_id: Some(CAPTURE_VIEWS[face as usize]),
                 overlays: None,
+                jitter: None,
+                motion: None,
             };
             self.submit_background(&face_view);
             if let Some(backdrop) = self.backdrop_camera(&face_camera, camera_id) {
@@ -2724,6 +2763,7 @@ impl Renderer {
         let hdr_format = ColorTarget {
             format: HDR_FORMAT,
             samples: view.target.samples,
+            motion: view.motion.is_some(),
         };
         let effects = self.prepare_effects(&view, hdr_format);
         let slot = view.layer as usize;
@@ -2752,10 +2792,18 @@ impl Renderer {
                 ..ViewStats::default()
             };
         }
-        let bytes = self.frame_uniform(&view.camera, lights, view.target.samples, view.backdrop);
+        let bytes = self.frame_uniform(
+            &view.drawn_camera(),
+            lights,
+            view.target.samples,
+            view.backdrop,
+        );
         // The cluster fields follow once the view's clusters are encoded.
         let cluster_offset = bytes.len() as u64;
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
+        if let Some(motion) = &view.motion {
+            self.temporal.write(&self.gpu, motion);
+        }
 
         // Format and sample count: every pipeline drawing here must match.
         let pipeline_set = |pipelines: &mut Vec<Pipelines>, layouts: &Layouts, key| match pipelines
@@ -3104,14 +3152,11 @@ impl Renderer {
         // The opaque colour too where a water reads it or the view reflects
         // in its water.
         let scene_color = water && (reads_scene || self.water_reflection_march().is_some());
+        // The HDR colour, and the motion target beside it when there is one.
+        let attached = 1 + usize::from(view.motion.is_some());
         {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(match view.layer {
-                    ViewLayer::World => "render-wgpu world",
-                    ViewLayer::Viewmodel => "render-wgpu viewmodel",
-                    ViewLayer::Backdrop => "render-wgpu backdrop",
-                }),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            let attachments = [
+                Some(wgpu::RenderPassColorAttachment {
                     view: &hdr.color,
                     depth_slice: None,
                     resolve_target: hdr.resolve.as_ref(),
@@ -3123,7 +3168,16 @@ impl Renderer {
                         },
                         store: wgpu::StoreOp::Store,
                     },
-                })],
+                }),
+                view.motion.as_ref().map(|motion| motion.attachment(whole)),
+            ];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(match view.layer {
+                    ViewLayer::World => "render-wgpu world",
+                    ViewLayer::Viewmodel => "render-wgpu viewmodel",
+                    ViewLayer::Backdrop => "render-wgpu backdrop",
+                }),
+                color_attachments: &attachments[..attached],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: view.target.depth,
                     depth_ops: Some(wgpu::Operations {
@@ -3151,6 +3205,7 @@ impl Renderer {
                     &mut pass,
                     view.target.samples,
                     view.start != PassStart::KeepDepth,
+                    view.motion.as_ref().map(|motion| motion.clear),
                 );
             }
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
@@ -3207,15 +3262,7 @@ impl Renderer {
                 );
                 pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("render-wgpu world blended"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &hdr.color,
-                        depth_slice: None,
-                        resolve_target: hdr.resolve.as_ref(),
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Load,
-                            store: wgpu::StoreOp::Store,
-                        },
-                    })],
+                    color_attachments: &kept(&hdr, view.motion.as_ref())[..attached],
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: view.target.depth,
                         depth_ops: Some(wgpu::Operations {
@@ -3288,15 +3335,7 @@ impl Renderer {
             );
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu particles"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &hdr.color,
-                    depth_slice: None,
-                    resolve_target: hdr.resolve.as_ref(),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &kept(&hdr, view.motion.as_ref())[..attached],
                 depth_stencil_attachment: None,
                 timestamp_writes: self.finish.particles_writes(world_layer),
                 occlusion_query_set: None,
@@ -3323,6 +3362,10 @@ impl Renderer {
         if let Some(precipitation) = raining {
             self.precipitation
                 .write(&self.gpu, &precipitation, self.presentation_time);
+            if view.motion.is_some() {
+                self.precipitation
+                    .prepare_motion(&self.gpu.device, &mut self.layouts.shaders);
+            }
             let scene_depth = self.effects.scene_depth_bind_group(
                 &self.gpu.device,
                 view.target.samples,
@@ -3330,15 +3373,7 @@ impl Renderer {
             );
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu precipitation"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &hdr.color,
-                    depth_slice: None,
-                    resolve_target: hdr.resolve.as_ref(),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &kept(&hdr, view.motion.as_ref())[..attached],
                 depth_stencil_attachment: None,
                 timestamp_writes: self.finish.precipitation_writes(),
                 occlusion_query_set: None,
@@ -3480,6 +3515,26 @@ impl Renderer {
     }
 }
 
+/// The attachments of a later pass of a view: its HDR colour kept, and its
+/// motion target beside it when it has one.
+fn kept<'a>(
+    hdr: &'a crate::finish::HdrViews,
+    motion: Option<&'a crate::motion::MotionPass>,
+) -> [Option<wgpu::RenderPassColorAttachment<'a>>; 2] {
+    [
+        Some(wgpu::RenderPassColorAttachment {
+            view: &hdr.color,
+            depth_slice: None,
+            resolve_target: hdr.resolve.as_ref(),
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Load,
+                store: wgpu::StoreOp::Store,
+            },
+        }),
+        motion.map(crate::motion::MotionPass::kept),
+    ]
+}
+
 pub(crate) fn storage_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
@@ -3509,6 +3564,7 @@ pub(crate) struct FrameBindings<'a> {
     pub probes: &'a crate::probes::ProbeVolume,
     pub cloud_regions: &'a wgpu::Buffer,
     pub copies: &'a wgpu::Buffer,
+    pub temporal: &'a crate::motion::Temporal,
 }
 
 pub(crate) fn frame_bind_group(
@@ -3579,6 +3635,14 @@ pub(crate) fn frame_bind_group(
             wgpu::BindGroupEntry {
                 binding: 14,
                 resource: bindings.copies.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 15,
+                resource: bindings.temporal.uniform().as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 16,
+                resource: bindings.temporal.previous_models().as_entire_binding(),
             },
         ],
     })

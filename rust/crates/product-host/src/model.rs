@@ -578,7 +578,7 @@ impl ProductHostDebugCatalog {
             ),
             (
                 "engine.inspect.overlay",
-                "Read or change what inspection draws: engine.inspect.overlay [list] | show|hide [sets [in VIEW] | set NAME [in VIEW] | debug-layer | camera | joints HANDLE | bounds HANDLE | ik HANDLE]; bare show shows every set and the Debug layer, bare hide hides everything; in VIEW shows a set only in that inspection view (or player)",
+                "Read or change what inspection draws: engine.inspect.overlay [list] | show|hide [sets [in VIEW] | set NAME [in VIEW] | debug-layer | camera | motion | joints HANDLE | bounds HANDLE | ik HANDLE]; bare show shows every set and the Debug layer, bare hide hides everything; motion shows the primary frame's motion vectors in place of its picture; in VIEW shows a set only in that inspection view (or player)",
             ),
         ] {
             if self.commands.iter().any(|command| command.name == name) {

@@ -20,12 +20,17 @@ const FLUTTER_RATE_2: f32 = 11.0;
 // `origin` the part's origin in the world, `weight` the vertex colour's
 // alpha (1 without vertex colours).
 fn wind_displace(world: vec3<f32>, origin: vec3<f32>, weight: f32) -> vec3<f32> {
+    return wind_displace_at(world, origin, weight, frame.time.x);
+}
+
+// `wind_displace` at presentation time `time`: a motion vector's previous
+// frame (`rusty::motion::previous_time`) sways where it swayed then.
+fn wind_displace_at(world: vec3<f32>, origin: vec3<f32>, weight: f32, time: f32) -> vec3<f32> {
     let strength = frame.wind.z;
     if strength <= 0.0 {
         return world;
     }
     let direction = vec3<f32>(frame.wind.x, 0.0, frame.wind.y);
-    let time = frame.time.x;
     // The lean: a steady share and a gusting share that rises and falls
     // with two slow waves, phased by the part's place in the world.
     let place = dot(origin.xz, vec2<f32>(0.37, 0.61));

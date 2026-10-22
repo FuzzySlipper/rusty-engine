@@ -39,23 +39,35 @@
 // The shadow caster pass binds them at the same number.
 @group(0) @binding(14) var<storage, read> copies: array<ScatterCopy>;
 
-// The part row a SCATTER instance draws with: its run's part, with the
-// copy placed, turned and scaled under the part's model.
-fn copy_row(scattered: ScatterCopy) -> Part {
-    var row = parts[bitcast<u32>(scattered.tint.w)];
+// A copy's turn, the rotation of its unit quaternion.
+fn copy_turn(scattered: ScatterCopy) -> mat3x3<f32> {
     let q = scattered.turn;
-    let turn = mat3x3<f32>(
+    return mat3x3<f32>(
         vec3<f32>(1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.w * q.z), 2.0 * (q.x * q.z - q.w * q.y)),
         vec3<f32>(2.0 * (q.x * q.y - q.w * q.z), 1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z + q.w * q.x)),
         vec3<f32>(2.0 * (q.x * q.z + q.w * q.y), 2.0 * (q.y * q.z - q.w * q.x), 1.0 - 2.0 * (q.x * q.x + q.y * q.y)),
     );
+}
+
+// A copy placed, turned and scaled in its part's model space.
+fn copy_place(scattered: ScatterCopy) -> mat4x4<f32> {
+    let turn = copy_turn(scattered);
     let scale = scattered.place.w;
-    row.model = row.model * mat4x4<f32>(
+    return mat4x4<f32>(
         vec4<f32>(turn[0] * scale, 0.0),
         vec4<f32>(turn[1] * scale, 0.0),
         vec4<f32>(turn[2] * scale, 0.0),
         vec4<f32>(scattered.place.xyz, 1.0),
     );
+}
+
+// The part row a SCATTER instance draws with: its run's part, with the
+// copy placed, turned and scaled under the part's model.
+fn copy_row(scattered: ScatterCopy) -> Part {
+    var row = parts[bitcast<u32>(scattered.tint.w)];
+    let turn = copy_turn(scattered);
+    let scale = scattered.place.w;
+    row.model = row.model * copy_place(scattered);
     // The inverse transpose of a turn and a uniform scale: the turn over
     // the scale.
     let normal = mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * turn * (1.0 / scale);
@@ -76,6 +88,8 @@ struct SelectedCopy {
     fade: f32,
     // The copy mesh's top (`ScatterCopy.detail.y`).
     top: f32,
+    // The copy as drawn: its part and scale-up applied.
+    copy: ScatterCopy,
 };
 
 // The largest scale-up a selection entry carries (`scatter_select.rs`).
@@ -92,7 +106,7 @@ fn selected_copy(instance: u32) -> SelectedCopy {
     scattered.tint.w = bitcast<f32>(detail & 0xfffffu);
     scattered.place.w *= 1.0 + f32(detail >> 20u) / 4095.0 * (SELECTED_MAX_SCALE - 1.0);
     let share = f32((word >> 24u) & 0x7fu) / 127.0;
-    return SelectedCopy(copy_row(scattered), detail & 0xfffffu, tint, select(share, -share, (word >> 31u) != 0u), scattered.detail.y);
+    return SelectedCopy(copy_row(scattered), detail & 0xfffffu, tint, select(share, -share, (word >> 31u) != 0u), scattered.detail.y, scattered);
 }
 
 // Impostor views (render-wgpu `impostor.rs`): a direction at or above the

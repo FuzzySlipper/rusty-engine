@@ -11,6 +11,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use crate::batch::Pass;
+use crate::motion::MotionWrite;
 use crate::shaders::{Entry, Features, Shaders};
 use crate::target::{ColorTarget, DEPTH_FORMAT};
 
@@ -331,11 +332,21 @@ impl Layouts {
             // Scatter runs' copies (`scatter.rs`), which only vertex stages
             // read.
             storage_entry(14),
+            // The motion uniform and the previous models (`motion.rs`),
+            // which only vertex stages read.
+            uniform_entry(15),
+            storage_entry(16),
         ]
         .map(|mut entry| {
             entry.visibility |= wgpu::ShaderStages::COMPUTE;
-            if entry.binding == 14 {
+            if entry.binding >= 14 {
                 entry.visibility = wgpu::ShaderStages::VERTEX;
+            }
+            // The sky's irradiance lights fragments and the fog's froxels:
+            // its storage leaves the vertex stage room for the previous
+            // models within WebGPU's eight.
+            if entry.binding == 10 {
+                entry.visibility = wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE;
             }
             // The shadow atlas and its sampler: a scatter copy that sinks
             // under snow looks up the sky's layer over its origin in the
@@ -926,8 +937,10 @@ impl Layouts {
         if pipelines.world.contains_key(&(features, pass)) {
             return false;
         }
-        self.world_shader(device, features);
-        let shader = &self.world_shaders[&features];
+        // Beside a motion target the variant writes motion too.
+        let compiled = features | pipelines.target.features();
+        self.world_shader(device, compiled);
+        let shader = &self.world_shaders[&compiled];
         let (topology, cull_mode, front_face, blend) = match pass {
             Pass::Opaque => (TRIANGLES, BACK, CCW, false),
             Pass::OpaqueMirrored => (TRIANGLES, BACK, CW, false),
@@ -970,11 +983,21 @@ impl Layouts {
                 // Opaque passes cover their pixel (`finish.rs`).
                 entry_point: Some(if blend { "fs_world" } else { "fs_world_opaque" }),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: pipelines.target.format,
-                    blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &pipelines.target.targets(
+                    wgpu::ColorTargetState {
+                        format: pipelines.target.format,
+                        blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    },
+                    // Water has no motion of its own (`motion.rs`).
+                    if features.contains(Features::WATER) {
+                        MotionWrite::None
+                    } else if blend {
+                        MotionWrite::Blend
+                    } else {
+                        MotionWrite::Cover
+                    },
+                ),
             }),
             multiview_mask: None,
             cache: None,

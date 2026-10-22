@@ -23,12 +23,15 @@
 //! view also covers an earlier view's labels, which drawing them over the
 //! output after a whole-picture stage would undo.
 //!
-//! The stage reads the picture's colour and depth at render resolution. One
-//! method draws today, bilinear. At render scale 1 with no method selected
-//! and no image effect, there is no picture and no stage: the views draw
-//! straight into the output.
+//! The stage reads the picture's colour and depth at render resolution, and
+//! a temporal method also its motion target, jitter and history reset
+//! (`motion.rs`), which the frame draws whenever such a method is selected.
+//! One method draws today, bilinear, which is not temporal. At render scale
+//! 1 with no method selected and no image effect, there is no picture and
+//! no stage: the views draw straight into the output.
 
 use crate::compose::Compose;
+use crate::motion::TemporalInputs;
 use crate::target::{RenderPicture, TargetView};
 use crate::timing::{untimed, GpuPassTiming, PassTimer};
 use crate::{Gpu, RendererOptions};
@@ -73,6 +76,14 @@ impl UpscaleMethod {
     pub fn selected(options: &RendererOptions) -> Option<Self> {
         (options.render_scale < 1.0).then_some(Self::Bilinear)
     }
+
+    /// Whether the method accumulates frames: the primary views then jitter
+    /// and draw their motion for it (`motion.rs`).
+    pub fn temporal(self) -> bool {
+        match self {
+            Self::Bilinear => false,
+        }
+    }
 }
 
 pub(crate) struct Upscale {
@@ -94,17 +105,20 @@ impl Upscale {
         }
     }
 
-    /// Bring `picture` to `output` by `method`, over the whole output.
+    /// Bring `picture` to `output` by `method`, over the whole output. A
+    /// temporal method reads `temporal`, which the frame drew for it.
     pub fn run(
         &mut self,
         gpu: &Gpu,
         compose: &mut Compose,
         method: UpscaleMethod,
         picture: &RenderPicture,
+        temporal: Option<TemporalInputs<'_>>,
         output: &TargetView<'_>,
     ) {
-        // Bilinear is the only method so far.
+        // Bilinear is the only method so far, and reads no history.
         let UpscaleMethod::Bilinear = method;
+        let _ = temporal;
         compose.prepare_blit(&gpu.device, output.format);
         let group = compose.blit_bind_group(&gpu.device, picture.image(), &self.sampler);
         if let Some(timer) = &mut self.timer {
