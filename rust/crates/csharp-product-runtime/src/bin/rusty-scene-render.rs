@@ -42,7 +42,7 @@ const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] 
      [--frames N] [--walk M] [--turn D] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
      [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] \
      [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]] [--choose ID=VALUE]... \
-     [--volumetric-fog-medium DENSITY[,ANISOTROPY]] [--motion OUT.png]\n\
+     [--volumetric-fog-medium DENSITY[,ANISOTROPY]] [--motion OUT.png] [--last-frame OUT.png]\n\
        rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]";
 
 /// Frames each gallery variant draws for its timings when `--frames` is not
@@ -83,6 +83,9 @@ struct Arguments {
     /// upscale stage has them drawn, and write the last frame's motion
     /// (`engine.inspect.overlay show motion`) here.
     motion: Option<PathBuf>,
+    /// Write the last timed frame's picture here: what a temporal stage
+    /// shows once it has gathered the frames before it.
+    last_frame: Option<PathBuf>,
     /// Draw the feature gallery into this directory instead.
     gallery: Option<PathBuf>,
 }
@@ -108,6 +111,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut choices = Vec::new();
     let mut gallery = None;
     let mut motion = None;
+    let mut last_frame = None;
     let mut fog_medium = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
@@ -209,6 +213,12 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                         .ok_or_else(|| format!("--motion needs a path\n{USAGE}"))?,
                 ));
             }
+            "--last-frame" => {
+                last_frame =
+                    Some(PathBuf::from(arguments.next().ok_or_else(|| {
+                        format!("--last-frame needs a path\n{USAGE}")
+                    })?));
+            }
             "--gallery" => {
                 gallery =
                     Some(PathBuf::from(arguments.next().ok_or_else(|| {
@@ -291,6 +301,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         rerender_shadows,
         choices,
         motion,
+        last_frame,
         gallery,
         fog_medium,
     }))
@@ -315,6 +326,7 @@ fn run() -> Result<(), String> {
         rerender_shadows,
         choices,
         motion,
+        last_frame,
         gallery,
         fog_medium,
     }) = parse(std::env::args().skip(1))?
@@ -465,6 +477,12 @@ fn run() -> Result<(), String> {
     if motion.is_some() && frames == 0 {
         return Err("--motion needs --frames: motion is drawn between frames".to_owned());
     }
+    if motion.is_some() && last_frame.is_some() {
+        return Err("--motion draws the motion in place of the last frame".to_owned());
+    }
+    if last_frame.is_some() && frames == 0 {
+        return Err("--last-frame needs --frames".to_owned());
+    }
     if motion.is_some() {
         driver.set_overlay_shown(render_wgpu::OverlayShown {
             motion: true,
@@ -481,6 +499,8 @@ fn run() -> Result<(), String> {
         let mut costs = Vec::with_capacity(frames as usize);
         let mut draw_costs = Vec::with_capacity(frames as usize);
         let (mut draws, mut instances, mut batch_us) = (Vec::new(), Vec::new(), Vec::new());
+        let mut history_resets = 0u32;
+        let mut last_stats = render_wgpu::FrameStats::default();
         for frame in 1..=frames {
             if let (true, Some(start)) = (moving, start) {
                 // Engine yaw zero faces -Z; positive yaw turns toward +X.
@@ -510,6 +530,8 @@ fn run() -> Result<(), String> {
             draws.push(stats.draws);
             instances.push(stats.instances);
             batch_us.push(stats.cpu_batch_us);
+            history_resets += u32::from(stats.motion.is_some_and(|motion| motion.history_reset));
+            last_stats = stats;
         }
         costs.sort_by(f64::total_cmp);
         draw_costs.sort_by(f64::total_cmp);
@@ -530,7 +552,20 @@ fn run() -> Result<(), String> {
             "turnDegrees": turn,
             "rerenderShadows": rerender_shadows,
             "motion": motion.is_some(),
+            // The render resolution the views drew at and the stage that
+            // brought it to the output, in the last frame; and how often a
+            // temporal stage's history started again.
+            "resolution": {
+                "render": last_stats.resolution.render,
+                "output": last_stats.resolution.output,
+            },
+            "upscale": last_stats.upscale.map(render_wgpu::UpscaleMethod::name),
+            "historyResets": history_resets,
         });
+        if let Some(path) = &last_frame {
+            std::fs::write(path, encode_png(width, height, &pixels)?)
+                .map_err(|error| format!("{}: {error}", path.display()))?;
+        }
         if let Some(path) = &motion {
             std::fs::write(path, encode_png(width, height, &pixels)?)
                 .map_err(|error| format!("{}: {error}", path.display()))?;
@@ -716,14 +751,14 @@ mod tests {
 
     #[test]
     fn a_render_scale_is_held_to_the_setting_range() {
-        for accepted in ["0.5", "0.75", "1"] {
+        for accepted in ["0.33", "0.5", "0.75", "1"] {
             let arguments = parsed(&["--render-scale", accepted]).unwrap().unwrap();
             assert_eq!(arguments.render_scale, Some(accepted.parse().unwrap()));
         }
-        for refused in ["0.25", "1.5", "0", "-0.5", "nan", "inf"] {
+        for refused in ["0.25", "0.3", "1.5", "0", "-0.5", "nan", "inf"] {
             let error = parsed(&["--render-scale", refused]).unwrap_err();
             assert!(
-                error.starts_with("--render-scale needs a value from 0.5 to 1"),
+                error.starts_with("--render-scale needs a value from 0.33 to 1"),
                 "{refused}: {error}"
             );
         }

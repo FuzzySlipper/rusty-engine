@@ -15,13 +15,18 @@ pub enum NativeAmbientOcclusionMode {
     DistanceField = 2,
 }
 
-/// Samples per pixel of the primary destination (the streamed frame or the
-/// window). Offscreen camera targets and image captures are single-sample.
+/// How the primary destination (the streamed frame or the window) smooths
+/// its edges: samples per pixel, or the temporal stage, which gathers
+/// jittered frames drawn at the render scale into the output and excludes
+/// MSAA. Offscreen camera targets and image captures are single-sample and
+/// never temporal. A software adapter refuses the temporal stage and draws
+/// without anti-aliasing.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAntialiasing {
     Off = 0,
     Msaa2 = 2,
+    Temporal = 3,
     Msaa4 = 4,
 }
 
@@ -85,7 +90,9 @@ pub struct NativeRendererSettingsRequest {
     pub antialiasing: NativeAntialiasing,
     /// The fraction of the streamed frame's or window's size the world,
     /// viewmodel, labels and effects draw at before being upscaled into it:
-    /// 0.5 to 1.
+    /// 0.33 to 1. Under `Temporal`, 1 is native-resolution anti-aliasing
+    /// and 0.67, 0.58, 0.5 and 0.33 are the quality, balanced, performance
+    /// and ultra performance modes.
     pub render_scale: f32,
     /// Window output waits for the display's refresh before presenting.
     pub vsync: bool,

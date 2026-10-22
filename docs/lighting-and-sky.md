@@ -289,11 +289,12 @@ same one the Engine's [video options](#video-options) panel draws. Each
 `Choices` lists each choice setting's values and labels by option id.
 The request holds shadows on or off and their budget (0 for no limit),
 ambient occlusion (`Disabled`, `ScreenSpace` or `DistanceField`, with its
-strength and radius), antialiasing (`Off`, `Msaa2` or `Msaa4`), the render
-scale (0.5 to 1: the world, viewmodel, labels and effects draw at that
-fraction of the frame's size and are upscaled bilinearly into it (the
-`upscale` pass), while a
-playing video and the browser or window UI keep their full size), vsync,
+strength and radius), antialiasing (`Off`, `Msaa2`, `Msaa4` or `Temporal`,
+[the temporal stage](#temporal-upscaling-taau)), the render scale (0.33 to
+1: the world, viewmodel, labels and effects draw at that fraction of the
+frame's size and are upscaled into it by the `upscale` pass, bilinearly
+unless the temporal stage draws, while a playing video and the browser or
+window UI keep their full size), vsync,
 and the clustered lighting and GPU culling switches. The product manifest's
 `RustyEngineProduct*` properties are the initial values
 ([the product project](csharp-product-project.md#renderer-settings)), so a
@@ -312,10 +313,10 @@ lighting fall back to the screen-space pass and the light loop),
 `NoDisplay` (streamed output has no display, so vsync is moot) and
 `VsyncOnly` (the window's display has no immediate or mailbox present mode,
 so frames wait for its refresh with vsync off), `SoftwareAdapter` (a
-GPU-only feature on a software adapter) and `TooFewTextureBindings` (water
+GPU-only feature on a software adapter, the temporal stage among them) and `TooFewTextureBindings` (water
 reflections on a device without the colour copy). A refused
 setting is not an error: `Set` accepts any finite, non-negative strength, positive
-radius and render scale from 0.5 to 1, and refuses only values outside
+radius and render scale from 0.33 to 1, and refuses only values outside
 those ranges.
 `engine.renderer` reports the same under `settings`
 ([renderer statistics](performance.md#renderer-statistics)). The
@@ -339,11 +340,13 @@ the wind at the previous frame's time, particles from where they were drawn
 and falling rain or snow back along its fall. An animated mesh's skinned
 vertices also move by their previous pose, ragdolls and severed pieces
 included, and what hangs from a joint moves with it; projected decals take the
-motion of the surface under them, and blended parts and particles blend
-theirs over it by their alpha. The sky and its clouds, water surfaces,
-sprites and ghost plates have no motion of their own yet: the sky reads as
-still, and the others show the motion of what lies under them. A product
-shader's displacement moves with its part, not on its own.
+motion of the surface under them, and blended parts and particles cover
+it with theirs where they are at least half opaque. The sky and its clouds, and water surfaces,
+have no motion of their own yet: they write a value that says so, which the
+inspection shows blue and the temporal stage treats as still and leans on
+the current frame for. Sprites and ghost plates show the motion of what lies
+under them. A product shader's displacement moves with its part, not on its
+own.
 
 The stage is told its history no longer holds on the first frame with
 motion, which a new renderer (a world replacement or rebaseline) starts
@@ -353,6 +356,51 @@ goes, the render resolution changes or a renderer setting does.
 the picture ([inspection](playtest-inspection.md#overlays)), and
 `rusty-scene-render --frames N --motion OUT.png` writes a snapshot's; the
 motion is then drawn for the inspection alone, without a stage or jitter.
+
+### Temporal upscaling (TAAU)
+
+`antialiasing` `temporal` selects the Engine's temporal anti-aliasing and
+upscaling stage, on every GPU and backend. The primary views draw jittered
+at the render scale with their [temporal inputs](#temporal-inputs), single
+sample, and the `upscale` pass gathers their frames into a history at the
+output's resolution: each output pixel takes the history where the motion
+says it was (the nearest surface's motion among its neighbours, so a moving
+edge carries its own), clips it to the colours this frame shows around it,
+and blends in this frame by how near its jittered samples fall. Pixels with
+no motion of their own (the sky, clouds, water) lean on the current frame,
+so they cannot trail far. Below render scale 1 the result is lightly
+sharpened. The stage reads the finished picture after tone mapping, so
+bloom, exposure and the image's grading are already in it.
+
+The render scale picks the mode:
+
+| Mode | Render scale |
+| --- | --- |
+| Native TAA | 1 |
+| Quality | 0.67 |
+| Balanced | 0.58 |
+| Performance | 0.5 |
+| Ultra performance | 0.33 |
+
+Any scale between draws too; MSAA is off while the stage draws (one setting
+holds both). A software adapter refuses the stage (`SoftwareAdapter`) and
+draws without anti-aliasing, bilinear at the render scale. A product image
+effect takes the stage's place: while one is set, frames draw without the
+temporal stage. The history starts again on a camera cut and whenever the
+temporal inputs reset, the output's size changes or a frame draws without
+the stage.
+
+On an RTX 3080 the stage itself costs about 0.3 ms at 2560×1440 and
+0.15–0.18 ms at 1920×1080, whatever the mode. A CraftSurvive forest at
+2560×1440 draws its still GPU frame in 19.4 ms with 4× MSAA at full size,
+16.9 ms with native TAA, 10.0 ms in quality, 8.5 ms in balanced, 7.2 ms in
+performance and 5.0 ms in ultra performance.
+
+`engine.renderer` reports the stage's GPU time as `upscale` among
+`gpu.passes`, and the last frame's render and output resolutions and its
+stage (`bilinear` or `taau`) under `gpu.upscale`; `rusty-scene-render`
+reports them under `timing`, and `--last-frame OUT.png` writes the last timed
+frame, as the stage shows it after the frames before it.
 
 ## Video options
 
@@ -371,8 +419,8 @@ renderer setting, is reported and ignored.
 
 | Option | Group | Values |
 | --- | --- | --- |
-| `renderScale` | Display | 0.5 to 1 in steps of 0.05 |
-| `antialiasing` | Display | `off`, `2x`, `4x` |
+| `renderScale` | Display | 0.33 to 1 in steps of 0.01 |
+| `antialiasing` | Display | `off`, `2x`, `4x`, `temporal` |
 | `vsync` | Display | on or off |
 | `shadows` | Quality | on or off |
 | `backdropShadows` | Quality | on or off |

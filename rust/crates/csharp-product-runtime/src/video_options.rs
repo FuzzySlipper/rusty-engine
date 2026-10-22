@@ -280,7 +280,7 @@ mod tests {
         .unwrap();
         apply_change(&mut choices, &json!({"preset": "low"})).unwrap();
         assert_eq!(choices.vsync, Some(false));
-        assert_eq!(choices.antialiasing, Some(1));
+        assert_eq!(choices.antialiasing, Some(render_model::Antialiasing::Off));
         apply_change(&mut choices, &json!({"forget": "vsync"})).unwrap();
         assert_eq!(choices.vsync, None);
         apply_change(&mut choices, &json!({"forget": null})).unwrap();
@@ -317,7 +317,6 @@ mod tests {
             "{\"renderScale\":0.25,\"vsync\":false}",
             "{\"ambientOcclusionStrength\":-1e39}",
             "{\"ambientOcclusionRadius\":0}",
-            "{\"antialiasing\":3}",
         ] {
             fs::write(&path, format!("{{\"version\":1,\"choices\":{choices}}}")).unwrap();
             let error = read_store(&path).unwrap_err();
@@ -327,6 +326,10 @@ mod tests {
             );
             assert!(VideoOptions::open(Some(&root), false).choices().is_empty());
         }
+        // A sample count antialiasing does not name is refused as it reads.
+        fs::write(&path, "{\"version\":1,\"choices\":{\"antialiasing\":3}}").unwrap();
+        assert!(read_store(&path).unwrap_err().contains("antialiasing 3"));
+        assert!(VideoOptions::open(Some(&root), false).choices().is_empty());
         let _ = fs::remove_dir_all(&root);
     }
 

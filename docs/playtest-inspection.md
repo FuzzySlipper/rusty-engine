@@ -259,8 +259,9 @@ The renderer draws its own inspection from what it already evaluated:
 - `motion`: the primary frame's motion vectors (what a temporal upscale
   stage reads, [temporal inputs](lighting-and-sky.md#temporal-inputs)) in place of its
   picture. Red and green are each pixel's motion since the previous frame
-  to the right and down, `0.5 + pixels / 32`, clamped: grey is still, and
-  a camera turning right shows the world in red below 0.5.
+  to the right and down, `0.5 + pixels / 32`, clamped: grey is still, blue
+  has no motion of its own (the sky, water), and a camera turning right
+  shows the world in red below 0.5.
 
 Handles are the ones `engine.scene.objects` lists. `engine.inspect.overlay`
 reads what is shown and the product's sets (items, revision, shown);

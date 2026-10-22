@@ -569,6 +569,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         snow?: ProductHostSnowStatistics;
         decals: ProductHostDecalStatistics;
         water: ProductHostWaterStatistics;
+        upscale: ProductHostUpscaleStatistics;
     };
     /**
      * The impostor levels' baked views: how many meshes are baked, their
@@ -724,9 +725,10 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         ambientOcclusionStrength: number;
         ambientOcclusionRadius: number;
         /**
-         * Samples per pixel of the primary destination.
+         * `off`, `2x`, `4x` (samples per pixel of the primary destination) or
+         * `temporal` (the temporal upscale stage).
          */
-        antialiasing: number;
+        antialiasing: string;
         /**
          * The fraction of the primary destination's size the world draws at.
          */
@@ -1059,6 +1061,25 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         slowest: ProductHostUpdateAttribution;
         slowestAgeMs: CanonicalU64;
+    };
+    /**
+     * The last primary frame's render resolution, the output it was brought
+     * to, and the upscale stage that did it.
+     */
+    export type ProductHostUpscaleStatistics = {
+        /**
+         * `bilinear` or `taau`; absent while the views draw straight into the
+         * output.
+         */
+        method?: string;
+        /**
+         * The render resolution the primary views drew at, in pixels.
+         */
+        render: [number, number];
+        /**
+         * The output's size, in pixels.
+         */
+        output: [number, number];
     };
     /**
      * The water pass's view of the scene: whether water materials can absorb,

@@ -121,6 +121,10 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before the sample count was a setting drew with 4.
     #[serde(default = "default_samples")]
     pub samples: u32,
+    /// The temporal upscale stage; snapshots written before it draw
+    /// without it.
+    #[serde(default)]
+    pub temporal: bool,
     /// Snapshots written before vsync was a setting waited for the display.
     #[serde(default = "default_vsync")]
     pub vsync: bool,
@@ -143,7 +147,9 @@ fn default_render_scale() -> f32 {
 }
 
 fn default_samples() -> u32 {
-    render_model::RendererSettingsDescriptor::DEFAULT.antialiasing
+    render_model::RendererSettingsDescriptor::DEFAULT
+        .antialiasing
+        .samples()
 }
 
 fn default_vsync() -> bool {
@@ -235,6 +241,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             gpu_culling: options.gpu_culling,
             occlusion_culling: options.occlusion_culling,
             samples: options.samples,
+            temporal: options.temporal,
             vsync: options.vsync,
             render_scale: options.render_scale,
             volumetric_fog: options.volumetric_fog,
@@ -257,6 +264,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             gpu_culling: options.gpu_culling,
             occlusion_culling: options.occlusion_culling,
             samples: options.samples,
+            temporal: options.temporal,
             vsync: options.vsync,
             render_scale: options.render_scale,
             volumetric_fog: options.volumetric_fog,

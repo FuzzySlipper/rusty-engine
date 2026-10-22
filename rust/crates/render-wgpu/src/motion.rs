@@ -22,11 +22,15 @@
 //!   where the previous frame's pose put it (`animated.rs`), and a node or
 //!   child on a joint by its part's previous model. Each view takes the
 //!   previous frame's projection of its camera. Blended parts and particles
-//!   blend their motion over what lies behind by their alpha.
-//! - **No motion of their own** (they show what lies under them, or none):
-//!   the sky and its clouds, which the background draws; water surfaces;
-//!   sprites; ghost plates; overlay lines. A product shader's displacement
-//!   keeps its offset, so it moves with its part but not on its own.
+//!   cover what lies behind with their motion where they are at least half
+//!   opaque (`rusty::motion::motion_output`), and leave it otherwise.
+//! - **No motion of their own:** the sky and its clouds, which the
+//!   background draws, keep the world pass's clear, and water surfaces
+//!   write it: `rusty::types::NO_MOTION`, which a temporal stage takes as
+//!   still and leans on the current frame for. Sprites, ghost plates and
+//!   overlay lines show the motion of what lies under them. A product
+//!   shader's displacement keeps its offset, so it moves with its part but
+//!   not on its own.
 //! - **History reset.** The history no longer holds on the first frame with
 //!   motion (a new renderer: a world replacement or baseline), and when a
 //!   primary camera cuts or first draws, the observer comes or goes, the
@@ -48,6 +52,11 @@ use crate::{Gpu, RendererOptions};
 /// The motion target's format: x and y in render pixels.
 pub(crate) const MOTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 
+/// What the motion target holds where nothing drew motion of its own: the
+/// world pass's clear, behind the sky and its clouds, and what water
+/// writes (`rusty::types::NO_MOTION`).
+const NO_MOTION: f64 = 32768.0;
+
 /// `Motion` in `motion.wgsl`: two matrices and the previous camera.
 const UNIFORM_FLOATS: usize = 16 + 16 + 4;
 
@@ -66,7 +75,8 @@ pub(crate) enum MotionWrite {
     None,
     /// Its own motion over what lies under it.
     Cover,
-    /// Its own motion blended over what lies under it by its alpha.
+    /// Its own motion over what lies under it where the fragment is at
+    /// least half opaque (the shader's motion alpha is 0 or 1).
     Blend,
 }
 
@@ -201,7 +211,12 @@ impl MotionPass {
             resolve_target: self.resolve.as_ref(),
             ops: wgpu::Operations {
                 load: if self.clear && whole {
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+                    wgpu::LoadOp::Clear(wgpu::Color {
+                        r: NO_MOTION,
+                        g: NO_MOTION,
+                        b: 0.0,
+                        a: 0.0,
+                    })
                 } else {
                     wgpu::LoadOp::Load
                 },
@@ -242,15 +257,7 @@ pub(crate) struct TemporalInputs<'a> {
     /// The motion target, single-sample.
     pub motion: &'a wgpu::TextureView,
     /// The frame's jitter, render pixels.
-    #[expect(
-        dead_code,
-        reason = "a temporal upscale method reads it; bilinear does not"
-    )]
     pub jitter: Vec2,
-    #[expect(
-        dead_code,
-        reason = "a temporal upscale method reads it; bilinear does not"
-    )]
     pub history_reset: bool,
 }
 

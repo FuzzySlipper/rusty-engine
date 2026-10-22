@@ -86,8 +86,10 @@ a frame's share of building [the sky's
 light](lighting-and-sky.md#the-skys-light) (`sky-light`), and the
 [water](lighting-and-sky.md#water)'s copy of the opaque scene (`water-copy`,
 timed in the views that draw water; part of the `world` pass), and the
-`upscale` stage, which brings a frame drawn at a render scale below 1 to
-the output's size. `gpu.water.refused` says why a device has no copy of the scene's colour
+`upscale` stage, which brings a frame drawn at a render scale below 1, or
+with [temporal anti-aliasing](lighting-and-sky.md#temporal-upscaling-taau),
+to the output's size; `gpu.upscale` names that stage and the last frame's
+render and output resolutions. `gpu.water.refused` says why a device has no copy of the scene's colour
 for water, if it has none. `gpu.decals` is the [projected decals](lighting-and-sky.md#projected-decals)
 (their count, grid entries, busiest cell, bytes and last rebuild),
 `gpu.wetness` the [wetness](lighting-and-sky.md#wet-surfaces) and
@@ -125,7 +127,11 @@ choices apply first. `--motion OUT.png` draws the extra frames with their
 [motion target](lighting-and-sky.md#temporal-inputs), as a temporal upscale
 stage has them drawn, and writes the last frame's motion there; with
 `--walk` or `--turn` it shows the camera's motion, and its `world` median
-against a run without it is the target's cost. The image is the snapshot's
+against a run without it is the target's cost. `--last-frame OUT.png`
+writes the last extra frame instead, as a temporal stage shows it once it
+has gathered the frames before it, and `timing` reports the frames' render
+and output resolutions, their `upscale` stage and how often its history
+started again. The image is the snapshot's
 own view, drawn before the extra frames; the report's `camera` is that view. Compare
 snapshots drawn on the same adapter; `WGPU_BACKEND` selects it as for any
 wgpu program. A still camera reuses work a moving one repeats (culled lists,

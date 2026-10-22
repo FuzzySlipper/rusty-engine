@@ -49,8 +49,8 @@ use product_host::{
     ProductHostRendererStatistics, ProductHostScatterSelectionStatistics,
     ProductHostScatterStatistics, ProductHostShadowStatistics, ProductHostSnowStatistics,
     ProductHostStreamMedians, ProductHostStreamStatistics, ProductHostTimedStep,
-    ProductHostWaterStatistics, ProductHostWetnessStatistics, ProductHostWindowMedians,
-    ProductHostWindowStatistics,
+    ProductHostUpscaleStatistics, ProductHostWaterStatistics, ProductHostWetnessStatistics,
+    ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -853,7 +853,7 @@ fn settings_statistics(
             .to_owned(),
             ambient_occlusion_strength: settings.ambient_occlusion.strength,
             ambient_occlusion_radius: settings.ambient_occlusion.radius,
-            antialiasing: settings.antialiasing,
+            antialiasing: settings.antialiasing.name().to_owned(),
             render_scale: settings.render_scale,
             vsync: settings.vsync,
             clustered_lighting: settings.clustered_lighting,
@@ -1038,6 +1038,14 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
         },
         water: ProductHostWaterStatistics {
             refused: readout.water.refused,
+        },
+        upscale: ProductHostUpscaleStatistics {
+            method: readout
+                .upscale
+                .method
+                .map(|method| method.name().to_owned()),
+            render: readout.upscale.resolution.render.into(),
+            output: readout.upscale.resolution.output.into(),
         },
         wetness: readout.wetness.map(|wetness| ProductHostWetnessStatistics {
             wetness: wetness.wetness,

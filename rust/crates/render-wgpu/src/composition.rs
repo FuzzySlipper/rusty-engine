@@ -381,16 +381,24 @@ impl Renderer {
         output: TargetView<'_>,
         draw: impl FnOnce(&mut Self, TargetView<'_>) -> FrameStats,
     ) -> FrameStats {
-        let stage = UpscaleMethod::selected(&self.options);
         // An image effect reads the whole picture, so the views draw into a
-        // picture of their own first, as an upscale stage's do.
+        // picture of their own first, as an upscale stage's do. It takes
+        // the stage's place, so the temporal stage is not selected with it.
         let effect = self.image_effect.active();
+        let stage =
+            UpscaleMethod::selected(&self.options, !effect && self.temporal_refusal().is_none());
+        if stage != Some(UpscaleMethod::Taau) {
+            self.upscale.forget_history();
+        }
         let scale = stage.map_or(1.0, |_| self.options.render_scale);
         let resolution = FrameResolution::scaled((output.width, output.height), scale);
         // A temporal stage's jitter and motion, or the motion alone while
         // inspection shows it (`motion.rs`).
         let jittering = stage.is_some_and(UpscaleMethod::temporal);
         let motion = jittering || self.overlays.shown.motion;
+        // A temporal stage's picture is single-sample whatever the output's
+        // samples: it anti-aliases in MSAA's place.
+        let samples = if jittering { 1 } else { output.samples };
         let cut = std::mem::take(&mut self.composition.cut);
         let kept = self.temporal.keeps_history();
         if self.temporal.begin_frame(
@@ -399,7 +407,7 @@ impl Renderer {
             motion,
             jittering,
             resolution,
-            output.samples,
+            samples,
             &self.options,
             self.composition.observer.is_some(),
             cut,
@@ -419,18 +427,27 @@ impl Renderer {
             stats.cpu_batch_us = self.batch_time.as_micros() as u32;
             stats.resolution = resolution;
             stats.motion = self.temporal.end_frame();
+            self.upscaled = crate::UpscaleReadout {
+                resolution,
+                method: None,
+            };
             self.show_motion(&output);
             return stats;
         }
         let (width, height) = resolution.render;
         let picture = match self.picture.take() {
-            Some(picture) if picture.matches(width, height, output.samples) => picture,
-            _ => RenderPicture::new(&self.gpu, width, height, output.samples),
+            Some(picture) if picture.matches(width, height, samples) => picture,
+            _ => RenderPicture::new(&self.gpu, width, height, samples),
         };
         let mut stats = draw(self, picture.view());
         stats.cpu_batch_us = self.batch_time.as_micros() as u32;
         stats.resolution = resolution;
         stats.motion = self.temporal.end_frame();
+        stats.upscale = stage.filter(|_| !effect);
+        self.upscaled = crate::UpscaleReadout {
+            resolution,
+            method: stats.upscale,
+        };
         if effect {
             let white = &self.white;
             let texture = |slot: usize| {
@@ -457,10 +474,12 @@ impl Renderer {
         } else if let Some(stage) = stage {
             self.upscale.run(
                 &self.gpu,
+                &mut self.layouts.shaders,
                 &mut self.compose,
                 stage,
                 &picture,
                 self.temporal.inputs(),
+                self.options.render_scale,
                 &output,
             );
         }

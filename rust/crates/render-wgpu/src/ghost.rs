@@ -331,6 +331,7 @@ impl Renderer {
                 gpu_culling: false,
                 occlusion_culling: false,
                 samples: 1,
+                temporal: false,
                 vsync: false,
                 render_scale: 1.0,
                 volumetric_fog: render_model::VolumetricFogQuality::Off,

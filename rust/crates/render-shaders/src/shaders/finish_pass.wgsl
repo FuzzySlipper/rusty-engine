@@ -16,6 +16,7 @@
 
 #import rusty::view::{frame, world_equivalent}
 #import rusty::finish::finish_linear
+#import rusty::types::NO_MOTION
 
 struct FinishParams {
     // The view's viewport in target pixels: x, y, width, height.
@@ -214,7 +215,7 @@ fn fs_clear() -> @location(0) vec4<f32> {
 }
 
 // The same over a world target with its motion target (render-wgpu
-// `motion.rs`): no motion either.
+// `motion.rs`): no motion of its own, as the world pass clears it.
 struct ClearedMotion {
     @location(0) color: vec4<f32>,
     @location(1) motion: vec4<f32>,
@@ -222,5 +223,5 @@ struct ClearedMotion {
 
 @fragment
 fn fs_clear_motion() -> ClearedMotion {
-    return ClearedMotion(vec4<f32>(0.0), vec4<f32>(0.0));
+    return ClearedMotion(vec4<f32>(0.0), vec4<f32>(NO_MOTION, NO_MOTION, 0.0, 0.0));
 }

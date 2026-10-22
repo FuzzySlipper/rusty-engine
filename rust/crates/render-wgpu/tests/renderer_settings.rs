@@ -5,8 +5,8 @@
 mod support;
 
 use render_model::{
-    AmbientOcclusionMode, AmbientOcclusionSettings, RenderDiff, RendererSettingsDescriptor,
-    RendererSettingsOverrides,
+    AmbientOcclusionMode, AmbientOcclusionSettings, Antialiasing, RenderDiff,
+    RendererSettingsDescriptor, RendererSettingsOverrides,
 };
 use render_wgpu::{OffscreenTarget, RendererOptions, SettingRefusal};
 use support::{camera, Harness, HEIGHT, WIDTH};
@@ -21,7 +21,7 @@ fn settings() -> RendererSettingsDescriptor {
             strength: 0.5,
             radius: 2.0,
         },
-        antialiasing: 1,
+        antialiasing: Antialiasing::Off,
         render_scale: 1.0,
         vsync: false,
         clustered_lighting: false,
@@ -64,18 +64,6 @@ fn settings_change_the_options_the_renderer_draws_with() {
     );
     assert_eq!(readout.antialiasing, None);
     assert_eq!(readout.ambient_occlusion, None);
-
-    // A sample count no adapter multisamples at is refused back to 4; only
-    // a host tool can ask for one, since the model admits 1, 2 and 4.
-    harness.renderer.set_options(RendererOptions {
-        samples: 3,
-        ..harness.renderer.options()
-    });
-    assert_eq!(harness.renderer.samples(), 4);
-    assert_eq!(
-        harness.renderer.settings_readout().antialiasing,
-        Some(SettingRefusal::UnsupportedSampleCount)
-    );
 }
 
 #[test]
@@ -95,13 +83,13 @@ fn the_players_choices_hold_over_every_product_request() {
     // choices stay, the rest of the request is taken.
     harness.apply(vec![RenderDiff::SetRendererSettings {
         settings: RendererSettingsDescriptor {
-            antialiasing: 4,
+            antialiasing: Antialiasing::Msaa4,
             ..settings()
         },
     }]);
     let readout = harness.renderer.settings_readout();
-    assert_eq!(readout.product.antialiasing, 4);
-    assert_eq!(readout.requested.antialiasing, 1);
+    assert_eq!(readout.product.antialiasing, Antialiasing::Msaa4);
+    assert_eq!(readout.requested.antialiasing, Antialiasing::Off);
     assert_eq!(
         readout.requested.ambient_occlusion.mode,
         AmbientOcclusionMode::Disabled
@@ -130,10 +118,11 @@ fn every_admitted_sample_count_draws_or_is_refused_to_four() {
         color: [0.2, 0.4, 0.6, 1.0],
     }]);
     let view = camera([0.0, 1.0, 4.0], 0.0, 0.0);
-    for count in RendererSettingsDescriptor::SAMPLE_COUNTS {
+    for antialiasing in [Antialiasing::Off, Antialiasing::Msaa2, Antialiasing::Msaa4] {
+        let count = antialiasing.samples();
         harness.apply(vec![RenderDiff::SetRendererSettings {
             settings: RendererSettingsDescriptor {
-                antialiasing: count,
+                antialiasing,
                 ..RendererSettingsDescriptor::DEFAULT
             },
         }]);
@@ -144,7 +133,7 @@ fn every_admitted_sample_count_draws_or_is_refused_to_four() {
         let center = ((HEIGHT / 2) * WIDTH + WIDTH / 2) as usize * 4;
         assert!(pixels[center + 2] > pixels[center], "{count} samples drew");
         let readout = harness.renderer.settings_readout();
-        assert_eq!(readout.effective.antialiasing, samples);
+        assert_eq!(readout.effective.antialiasing.samples(), samples);
         assert_eq!(
             readout.antialiasing.is_some(),
             samples != count,

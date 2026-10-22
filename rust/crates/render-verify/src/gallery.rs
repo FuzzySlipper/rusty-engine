@@ -553,7 +553,7 @@ mod tests {
     #[test]
     fn a_plain_scene_offers_every_feature_it_leaves_off_then_everything() {
         let settings = RendererSettingsDescriptor {
-            antialiasing: 2,
+            antialiasing: render_model::Antialiasing::Msaa2,
             render_scale: 0.75,
             ..RendererSettingsDescriptor::DEFAULT
         };
@@ -633,7 +633,7 @@ mod tests {
         // Antialiasing's values are levels: a scene at 4x shows no 4x and
         // nothing below it.
         let settings = RendererSettingsDescriptor {
-            antialiasing: 4,
+            antialiasing: render_model::Antialiasing::Msaa4,
             ..RendererSettingsDescriptor::DEFAULT
         };
         let variants = plan(&settings, None, false, false);

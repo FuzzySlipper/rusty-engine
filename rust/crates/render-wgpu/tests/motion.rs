@@ -42,12 +42,21 @@ fn motion(rgba: &[u8], x: u32, y: u32) -> [f32; 2] {
     [red, green].map(|value| (f32::from(value) / 255.0 - 0.5) * 2.0 * RANGE)
 }
 
+/// Whether a pixel has no motion of its own (`NO_MOTION`, shown blue): the
+/// sky behind everything, and water.
+fn no_motion(rgba: &[u8], x: u32, y: u32) -> bool {
+    pixel(rgba, WIDTH, x, y)[..3] == [0, 0, 255]
+}
+
 /// Pixels whose motion along `axis` is beyond `limit` (positive) or below
 /// `-limit` (negative): (beyond, below).
 fn moving(rgba: &[u8], axis: usize, limit: f32) -> (usize, usize) {
     let mut counts = (0, 0);
     for y in 0..HEIGHT {
         for x in 0..WIDTH {
+            if no_motion(rgba, x, y) {
+                continue;
+            }
             let value = motion(rgba, x, y)[axis];
             if value > limit {
                 counts.0 += 1;
@@ -129,7 +138,7 @@ fn the_world_moves_against_a_turning_camera_and_holds_still_with_it() {
         0.4,
         "the cube against the turn",
     );
-    assert_close(motion(&turned, 4, 4), [0.0, 0.0], 0.2, "the background");
+    assert!(no_motion(&turned, 4, 4), "the background");
     let (_, held) = draw(&mut harness, &eye(2.0));
     assert_close(
         motion(&held, CENTRE.0, CENTRE.1),
@@ -154,7 +163,7 @@ fn a_moved_part_moves_once_and_then_holds() {
         0.5,
         "the moved cube",
     );
-    assert_close(motion(&moved, 4, 4), [0.0, 0.0], 0.2, "the background");
+    assert!(no_motion(&moved, 4, 4), "the background");
     // Not moved again: its previous transform catches up.
     let (_, held) = draw(&mut harness, &eye(0.0));
     assert_eq!(moving(&held, 0, 0.2), (0, 0), "nothing moves");

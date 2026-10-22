@@ -995,11 +995,13 @@ product reads and changes the same settings at runtime through
 `RendererSettings` ([renderer settings](lighting-and-sky.md#renderer-settings)),
 so a graphics menu starts from them. Invalid values reject staging.
 
-`RustyEngineProductAntialiasing` sets the samples per pixel of the streamed
-frame or the window: `off`, `2x` or `4x` (the default). Offscreen camera
-targets and image captures are single-sample. `RustyEngineProductRenderScale`
-(`1`, the default, down to `0.5`) is the fraction of the frame's size the
-world, viewmodel, labels and effects draw at before being upscaled into it.
+`RustyEngineProductAntialiasing` sets how the streamed frame or the window
+smooths its edges: `off`, `2x` or `4x` (the default) samples per pixel, or
+`temporal`, the [temporal upscale stage](lighting-and-sky.md#temporal-upscaling-taau).
+Offscreen camera targets and image captures are single-sample.
+`RustyEngineProductRenderScale` (`1`, the default, down to `0.33`) is the
+fraction of the frame's size the world, viewmodel, labels and effects draw at
+before being upscaled into it.
 `RustyEngineProductVsync`, `enabled` (the default) or `disabled`, says
 whether window output waits for the display's refresh before presenting;
 streamed output has no display. These write `renderer.antialiasing`,

@@ -669,15 +669,10 @@ impl ProductRendererSettings {
             }
         };
         let antialiasing = match value.antialiasing.as_deref() {
-            None | Some("4x") => 4,
-            Some("2x") => 2,
-            Some("off") => 1,
-            Some(_) => {
-                return Err(field_error(
-                    "renderer.antialiasing",
-                    "must be off, 2x or 4x",
-                ))
-            }
+            None => render_model::Antialiasing::Msaa4,
+            Some(name) => render_model::Antialiasing::from_name(name).ok_or_else(|| {
+                field_error("renderer.antialiasing", "must be off, 2x, 4x or temporal")
+            })?,
         };
         let vsync = match value.vsync.as_deref() {
             None | Some("enabled") => true,
@@ -723,7 +718,7 @@ impl ProductRendererSettings {
         {
             return Err(field_error(
                 "renderer.renderScale",
-                "must be a number from 0.5 to 1",
+                "must be a number from 0.33 to 1",
             ));
         }
         Ok(Self {
@@ -1352,7 +1347,7 @@ mod tests {
         let defaults = read(&root).unwrap().renderer_settings();
         assert_eq!(
             (defaults.antialiasing, defaults.vsync),
-            (4, true),
+            (render_model::Antialiasing::Msaa4, true),
             "absent: 4x, vsync"
         );
         let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
@@ -1365,7 +1360,23 @@ mod tests {
         )
         .unwrap();
         let settings = read(&root).unwrap().renderer_settings();
-        assert_eq!((settings.antialiasing, settings.vsync), (2, false));
+        assert_eq!(
+            (settings.antialiasing, settings.vsync),
+            (render_model::Antialiasing::Msaa2, false)
+        );
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"antialiasing\":\"temporal\",\"renderScale\":0.33}",
+            ),
+        )
+        .unwrap();
+        let settings = read(&root).unwrap().renderer_settings();
+        assert_eq!(
+            (settings.antialiasing, settings.render_scale),
+            (render_model::Antialiasing::Temporal, 0.33)
+        );
         fs::write(
             &path,
             original.replace(marker, "\"renderer\":{\"antialiasing\":\"8x\"}"),

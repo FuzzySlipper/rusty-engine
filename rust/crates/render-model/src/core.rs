@@ -894,6 +894,101 @@ pub enum WaterReflectionsQuality {
     High,
 }
 
+/// How the primary destination smooths its edges
+/// (`RendererSettingsDescriptor::antialiasing`): several samples a pixel
+/// (MSAA), or a temporal upscale stage that gathers jittered frames at the
+/// render scale into the output (`temporal`, render-wgpu `upscale.rs`). One
+/// setting holds both, so the temporal stage and MSAA exclude each other.
+/// Written as its text form (`off`, `2x`, `4x`, `temporal`); settings
+/// written when it was a sample count read as that count.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum Antialiasing {
+    Off,
+    Msaa2,
+    #[default]
+    Msaa4,
+    Temporal,
+}
+
+impl Antialiasing {
+    /// Every value, in a menu's order.
+    pub const ALL: [Self; 4] = [Self::Off, Self::Msaa2, Self::Msaa4, Self::Temporal];
+
+    /// Samples per pixel of the primary destination: one under the
+    /// temporal stage.
+    pub const fn samples(self) -> u32 {
+        match self {
+            Self::Off | Self::Temporal => 1,
+            Self::Msaa2 => 2,
+            Self::Msaa4 => 4,
+        }
+    }
+
+    /// The text form: `off`, `2x`, `4x` or `temporal`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Msaa2 => "2x",
+            Self::Msaa4 => "4x",
+            Self::Temporal => "temporal",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|value| value.name() == name)
+    }
+
+    /// The MSAA value drawing `samples` a pixel.
+    pub fn from_samples(samples: u32) -> Option<Self> {
+        match samples {
+            1 => Some(Self::Off),
+            2 => Some(Self::Msaa2),
+            4 => Some(Self::Msaa4),
+            _ => None,
+        }
+    }
+}
+
+impl Serialize for Antialiasing {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
+
+impl<'de> Deserialize<'de> for Antialiasing {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Written {
+            Name(String),
+            Samples(u32),
+        }
+        match Written::deserialize(deserializer)? {
+            Written::Name(name) => Self::from_name(&name).ok_or_else(|| {
+                serde::de::Error::custom(format!(
+                    "antialiasing {name}: expected off, 2x, 4x or temporal"
+                ))
+            }),
+            Written::Samples(samples) => Self::from_samples(samples).ok_or_else(|| {
+                serde::de::Error::custom(format!("antialiasing {samples}: expected 1, 2 or 4"))
+            }),
+        }
+    }
+}
+
+/// The temporal stage's named render scales
+/// (`RendererSettingsDescriptor::render_scale` under
+/// `Antialiasing::Temporal`): native-resolution anti-aliasing, then the
+/// usual upscaling quality modes. Any scale within range draws; these are
+/// the ones a menu names.
+pub const TEMPORAL_MODES: [(&str, f32); 5] = [
+    ("native", 1.0),
+    ("quality", 0.67),
+    ("balanced", 0.58),
+    ("performance", 0.5),
+    ("ultraPerformance", 0.33),
+];
+
 /// Ambient occlusion as a product selects it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -946,10 +1041,12 @@ pub struct RendererSettingsDescriptor {
     /// limit.
     pub shadow_budget: Option<u32>,
     pub ambient_occlusion: AmbientOcclusionSettings,
-    /// Samples per pixel of the primary destination: 1, 2 or 4.
-    pub antialiasing: u32,
+    /// How the primary destination smooths its edges: 1, 2 or 4 samples a
+    /// pixel, or the temporal stage.
+    pub antialiasing: Antialiasing,
     /// The fraction of the primary destination's size the world, viewmodel,
-    /// labels and effects draw at before being upscaled into it: 0.5 to 1.
+    /// labels and effects draw at before being upscaled into it: 0.33 to 1
+    /// (`TEMPORAL_MODES` names the temporal stage's).
     pub render_scale: f32,
     /// Window output waits for the display's refresh before presenting.
     pub vsync: bool,
@@ -985,17 +1082,16 @@ fn enabled() -> bool {
 }
 
 impl RendererSettingsDescriptor {
-    /// The sample counts a primary destination may have.
-    pub const SAMPLE_COUNTS: [u32; 3] = [1, 2, 4];
-    /// The smallest render scale.
-    pub const MIN_RENDER_SCALE: f32 = 0.5;
+    /// The smallest render scale: the temporal stage's ultra-performance
+    /// mode.
+    pub const MIN_RENDER_SCALE: f32 = 0.33;
 
     pub const DEFAULT: Self = Self {
         shadows: false,
         backdrop_shadows: true,
         shadow_budget: None,
         ambient_occlusion: AmbientOcclusionSettings::DEFAULT,
-        antialiasing: 4,
+        antialiasing: Antialiasing::Msaa4,
         render_scale: 1.0,
         vsync: true,
         clustered_lighting: false,
@@ -1006,11 +1102,9 @@ impl RendererSettingsDescriptor {
         water_reflections: WaterReflectionsQuality::Off,
     };
 
-    /// Valid occlusion values, a supported sample count and a render scale
-    /// within range.
+    /// Valid occlusion values and a render scale within range.
     pub fn valid(&self) -> bool {
         self.ambient_occlusion.valid()
-            && Self::SAMPLE_COUNTS.contains(&self.antialiasing)
             && self.render_scale.is_finite()
             && (Self::MIN_RENDER_SCALE..=1.0).contains(&self.render_scale)
     }

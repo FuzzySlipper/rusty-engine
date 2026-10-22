@@ -73,8 +73,8 @@ pub use engine_debug::{
     ProductHostScatterSelectionStatistics, ProductHostScatterStatistics,
     ProductHostShadowStatistics, ProductHostSnowStatistics, ProductHostStreamMedians,
     ProductHostStreamStatistics, ProductHostTimeAnswer, ProductHostTimeMode, ProductHostTimedStep,
-    ProductHostWaterStatistics, ProductHostWetnessStatistics, ProductHostWindowMedians,
-    ProductHostWindowStatistics,
+    ProductHostUpscaleStatistics, ProductHostWaterStatistics, ProductHostWetnessStatistics,
+    ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 pub use error::{ProductHostError, ProductHostRuntimeError};
 pub use frames::{

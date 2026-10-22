@@ -157,7 +157,10 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
     scene.rebaseline([], &NoResources, &|_| None, state(4, true));
     let readout = scene.settings_readout();
     assert_eq!(readout.player, player);
-    assert_eq!(readout.requested.antialiasing, 1);
+    assert_eq!(
+        readout.requested.antialiasing,
+        render_model::Antialiasing::Off
+    );
     drop(scene);
 
     // A running world's frames draw on past its committed time between

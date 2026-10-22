@@ -6,7 +6,7 @@
 //! and `shade` are importable modules (`#import rusty::lighting::standard_radiance`);
 //! `world`, `sky`, `shadow`, `effects`, `ghost`, `compose`,
 //! `ambient_occlusion`, `finish_pass`, `post`, `sky_light`, `light_clusters`,
-//! `cull`, `distance_field` and `volumetric_fog` are the entry shaders built
+//! `cull`, `distance_field`, `volumetric_fog` and `upscale` are the entry shaders built
 //! from them.
 //! A material's features are shader defs, so a variant only carries the
 //! samples and branches its material uses.
@@ -449,6 +449,10 @@ pub enum Entry {
     /// A view's occluder depth reduced to a farthest-depth pyramid
     /// (`hiz.wgsl`, compute).
     Hiz,
+    /// The temporal upscale stage, TAAU (`upscale.wgsl`): the jittered
+    /// picture gathered into a history at output resolution, and the
+    /// history sharpened into the output.
+    Upscale,
 }
 
 impl Entry {
@@ -512,6 +516,7 @@ impl Entry {
                 include_str!("shaders/impostor_bake.wgsl"),
             ),
             Self::Hiz => ("shaders/hiz.wgsl", include_str!("shaders/hiz.wgsl")),
+            Self::Upscale => ("shaders/upscale.wgsl", include_str!("shaders/upscale.wgsl")),
         }
     }
 }
@@ -849,6 +854,7 @@ mod tests {
             Entry::ScatterSelect,
             Entry::ImpostorBake,
             Entry::Hiz,
+            Entry::Upscale,
         ] {
             compose(&mut shaders, entry, Features::default());
         }

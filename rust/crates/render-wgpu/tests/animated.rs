@@ -1472,7 +1472,11 @@ fn motions(rgba: &[u8]) -> Vec<[f32; 2]> {
     rgba.as_chunks::<4>()
         .0
         .iter()
-        .map(|[red, green, ..]| {
+        .map(|[red, green, blue, _]| {
+            // Blue: no motion of its own (the background), still here.
+            if [*red, *green, *blue] == [0, 0, 255] {
+                return [0.0; 2];
+            }
             [red, green].map(|value| (f32::from(*value) / 255.0 - 0.5) * 2.0 * MOTION_RANGE)
         })
         .collect()

@@ -1994,7 +1994,7 @@ mod tests {
                     strength: 0.8,
                     radius: 1.5,
                 },
-                antialiasing: 2,
+                antialiasing: render_model::Antialiasing::Msaa2,
                 render_scale: 0.75,
                 vsync: false,
                 clustered_lighting: true,

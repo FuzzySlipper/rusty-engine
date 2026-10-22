@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    AmbientOcclusionMode, RendererSettingsDescriptor, VolumetricCloudsQuality,
+    AmbientOcclusionMode, Antialiasing, RendererSettingsDescriptor, VolumetricCloudsQuality,
     VolumetricFogQuality, WaterReflectionsQuality,
 };
 
@@ -149,6 +149,10 @@ const ANTIALIASING_CHOICES: &[RendererSettingChoice] = &[
         value: "4x",
         label: "4× MSAA",
     },
+    RendererSettingChoice {
+        value: "temporal",
+        label: "Temporal (TAA)",
+    },
 ];
 
 const SHADOW_BUDGET_CHOICES: &[RendererSettingChoice] = &[
@@ -213,11 +217,13 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         id: "renderScale",
         label: "Render scale",
         group: "Display",
-        description: "Draws the world at a fraction of the screen's resolution and scales it up: lower is faster and softer.",
+        description: "Draws the world at a fraction of the screen's resolution and scales it up: lower is faster and softer. With temporal anti-aliasing, 1 is native TAA and 0.67, 0.58, 0.5 and 0.33 are the quality, balanced, performance and ultra performance modes.",
         kind: RendererSettingKind::Range {
-            min: RendererSettingsDescriptor::MIN_RENDER_SCALE as f64,
+            // `RendererSettingsDescriptor::MIN_RENDER_SCALE`, written as the
+            // decimal a player chooses rather than the f32 widened.
+            min: 0.33,
             max: 1.0,
-            step: 0.05,
+            step: 0.01,
             unit: "×",
         },
         restart: false,
@@ -228,12 +234,12 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         id: "antialiasing",
         label: "Anti-aliasing",
         group: "Display",
-        description: "Smooths jagged edges by taking several samples a pixel.",
+        description: "Smooths jagged edges by taking several samples a pixel (MSAA), or by gathering slightly offset frames over time (temporal), which also upscales from a lower render scale.",
         kind: RendererSettingKind::Choice {
             choices: ANTIALIASING_CHOICES,
         },
         restart: false,
-        cost: "4x costs about 0.3 ms over off in a CraftSurvive meadow at 1920×1080 on an RX 9070 XT (world and finish passes).",
+        cost: "4x costs about 0.3 ms over off in a CraftSurvive meadow at 1920×1080 on an RX 9070 XT (world and finish passes). Temporal costs 0.3 ms of its own at 2560×1440 on an RTX 3080 (0.15 to 0.18 ms at 1920×1080); at render scale 0.67 a CraftSurvive forest draws in 10.0 ms against 19.4 ms with 4x at full size.",
         gallery: GalleryExperiment::Try { values: &["4x"], alternatives: false, everything: Some("4x"), requires: None, setup: None },
     },
     RendererSettingOption {
@@ -424,7 +430,7 @@ pub struct RendererSettingsOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub render_scale: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub antialiasing: Option<u32>,
+    pub antialiasing: Option<Antialiasing>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vsync: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -590,11 +596,7 @@ impl RendererSettingsOverrides {
         match id {
             "renderScale" => self.render_scale = Some(number()?),
             "antialiasing" => {
-                self.antialiasing = Some(match choice()? {
-                    "off" => 1,
-                    "2x" => 2,
-                    _ => 4,
-                })
+                self.antialiasing = Antialiasing::from_name(choice()?);
             }
             "vsync" => self.vsync = Some(toggle()?),
             "shadows" => self.shadows = Some(toggle()?),
@@ -675,28 +677,28 @@ impl RendererSettingsOverrides {
         let (scale, antialiasing, budget, occlusion, fog) = match id {
             "low" => (
                 0.75,
-                1,
+                Antialiasing::Off,
                 Some(4),
                 AmbientOcclusionMode::Disabled,
                 VolumetricFogQuality::Off,
             ),
             "medium" => (
                 1.0,
-                2,
+                Antialiasing::Msaa2,
                 Some(8),
                 AmbientOcclusionMode::ScreenSpace,
                 VolumetricFogQuality::Off,
             ),
             "high" => (
                 1.0,
-                4,
+                Antialiasing::Msaa4,
                 Some(16),
                 AmbientOcclusionMode::ScreenSpace,
                 VolumetricFogQuality::Low,
             ),
             "ultra" => (
                 1.0,
-                4,
+                Antialiasing::Msaa4,
                 None,
                 AmbientOcclusionMode::ScreenSpace,
                 VolumetricFogQuality::High,
@@ -754,11 +756,7 @@ impl RendererSettingsOverrides {
 pub fn renderer_setting_value(settings: &RendererSettingsDescriptor, id: &str) -> Option<Value> {
     Some(match id {
         "renderScale" => Value::from(round_to(settings.render_scale as f64, 0.01)),
-        "antialiasing" => Value::from(match settings.antialiasing {
-            1 => "off",
-            2 => "2x",
-            _ => "4x",
-        }),
+        "antialiasing" => Value::from(settings.antialiasing.name()),
         "vsync" => Value::from(settings.vsync),
         "shadows" => Value::from(settings.shadows),
         "backdropShadows" => Value::from(settings.backdrop_shadows),
@@ -840,7 +838,7 @@ mod tests {
             ..RendererSettingsDescriptor::DEFAULT
         };
         let applied = overrides.apply(base);
-        assert_eq!(applied.antialiasing, 1);
+        assert_eq!(applied.antialiasing, Antialiasing::Off);
         assert_eq!(
             applied.ambient_occlusion.mode,
             AmbientOcclusionMode::ScreenSpace
@@ -859,6 +857,28 @@ mod tests {
         assert!(overrides.choose("vsync", &json!("yes")).is_err());
         assert!(overrides.choose("bloom", &json!(true)).is_err());
         assert!(overrides.is_empty());
+    }
+
+    #[test]
+    fn antialiasing_is_stored_by_name_and_reads_a_stored_sample_count() {
+        let mut overrides = RendererSettingsOverrides::default();
+        overrides
+            .choose("antialiasing", &json!("temporal"))
+            .unwrap();
+        overrides.choose("renderScale", &json!(0.33)).unwrap();
+        let text = serde_json::to_string(&overrides).unwrap();
+        assert_eq!(text, r#"{"renderScale":0.33,"antialiasing":"temporal"}"#);
+        assert_eq!(
+            serde_json::from_str::<RendererSettingsOverrides>(&text).unwrap(),
+            overrides
+        );
+        let stored: RendererSettingsOverrides =
+            serde_json::from_str(r#"{"antialiasing":2}"#).unwrap();
+        assert_eq!(stored.antialiasing, Some(Antialiasing::Msaa2));
+        assert!(
+            serde_json::from_str::<RendererSettingsOverrides>(r#"{"antialiasing":3}"#).is_err()
+        );
+        assert!(overrides.apply(RendererSettingsDescriptor::DEFAULT).valid());
     }
 
     #[test]
@@ -883,7 +903,7 @@ mod tests {
         let low = RendererSettingsOverrides::preset("low").unwrap();
         let chosen = overrides.with(&low);
         assert_eq!(chosen.vsync, Some(false));
-        assert_eq!(chosen.antialiasing, Some(1));
+        assert_eq!(chosen.antialiasing, Some(Antialiasing::Off));
         for preset in RENDERER_SETTING_PRESETS {
             let applied = RendererSettingsOverrides::preset(preset.id)
                 .unwrap()

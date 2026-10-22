@@ -76,7 +76,7 @@ pub mod web;
 use std::collections::HashMap;
 
 use render_model::{
-    AmbientOcclusionMode, IndirectLightDescriptor, RendererSettingsDescriptor,
+    AmbientOcclusionMode, Antialiasing, IndirectLightDescriptor, RendererSettingsDescriptor,
     RendererSettingsOverrides,
 };
 
@@ -143,7 +143,7 @@ pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
 pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
 pub use target::OffscreenTarget;
 pub use timing::GpuPassTiming;
-pub use upscale::FrameResolution;
+pub use upscale::{FrameResolution, UpscaleMethod};
 pub use video::{VideoFact, VideoFailure};
 pub use volumetric_fog::VolumetricFogReadout;
 
@@ -228,6 +228,17 @@ pub struct GpuReadout {
     pub decals: DecalReadout,
     /// Whether water reads the opaque scene's colour on this device.
     pub water: water::WaterReadout,
+    /// The last primary frame's resolutions and the upscale stage that
+    /// brought its picture to the output, if one ran (`upscale.rs`).
+    pub upscale: UpscaleReadout,
+}
+
+/// The last primary frame's render and output resolutions, and its upscale
+/// stage (`GpuReadout::upscale`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct UpscaleReadout {
+    pub resolution: FrameResolution,
+    pub method: Option<UpscaleMethod>,
 }
 
 /// The backdrop camera a world view drew its backdrop with (`SetBackdrop`):
@@ -282,12 +293,16 @@ pub struct RendererOptions {
     /// target and the window surface): 1, 2 or 4. Offscreen render targets
     /// and captures stay single-sample.
     pub samples: u32,
+    /// The temporal upscale stage (`upscale.rs`) brings the primary picture
+    /// to the output, at any render scale; its primary destination is
+    /// single-sample. A software adapter draws without it.
+    pub temporal: bool,
     /// Window output waits for the display's refresh before presenting;
     /// off presents as soon as a frame is drawn. Streamed output has no
     /// display.
     pub vsync: bool,
     /// The fraction of the primary destination's size the primary views
-    /// draw at, the render resolution (`upscale.rs`): 0.5 to 1.
+    /// draw at, the render resolution (`upscale.rs`): 0.33 to 1.
     pub render_scale: f32,
     /// Light the volumetric fog's medium and volumes in a froxel grid
     /// (`volumetric_fog.rs`). Off by default; a device without compute
@@ -316,7 +331,8 @@ impl Default for RendererOptions {
             clustered_lighting: false,
             gpu_culling: false,
             occlusion_culling: false,
-            samples: RendererSettingsDescriptor::DEFAULT.antialiasing,
+            samples: RendererSettingsDescriptor::DEFAULT.antialiasing.samples(),
+            temporal: false,
             vsync: RendererSettingsDescriptor::DEFAULT.vsync,
             render_scale: RendererSettingsDescriptor::DEFAULT.render_scale,
             volumetric_fog: render_model::VolumetricFogQuality::Off,
@@ -351,7 +367,8 @@ impl RendererOptions {
             strength: settings.ambient_occlusion.strength,
             radius: settings.ambient_occlusion.radius,
         };
-        self.samples = settings.antialiasing;
+        self.samples = settings.antialiasing.samples();
+        self.temporal = settings.antialiasing == Antialiasing::Temporal;
         self.vsync = settings.vsync;
         self.render_scale = settings.render_scale;
         self.clustered_lighting = settings.clustered_lighting;
@@ -380,7 +397,11 @@ impl RendererOptions {
                 strength: self.ambient_occlusion.strength,
                 radius: self.ambient_occlusion.radius,
             },
-            antialiasing: self.samples,
+            antialiasing: if self.temporal {
+                Antialiasing::Temporal
+            } else {
+                Antialiasing::from_samples(self.samples).unwrap_or_default()
+            },
             render_scale: self.render_scale,
             vsync: self.vsync,
             clustered_lighting: self.clustered_lighting,
@@ -540,6 +561,9 @@ pub struct Renderer {
     /// an upscale stage or an image effect runs, kept while its size and
     /// sample count hold.
     picture: Option<target::RenderPicture>,
+    /// The last primary frame's resolutions and upscale stage, for the
+    /// readout.
+    upscaled: UpscaleReadout,
     /// The step from that picture to output resolution (`upscale.rs`).
     upscale: upscale::Upscale,
     /// The jitter, motion target and history a temporal stage reads
@@ -799,6 +823,7 @@ impl Renderer {
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             picture: None,
+            upscaled: UpscaleReadout::default(),
             upscale: upscale::Upscale::new(gpu),
             temporal,
             display_vsync_only: None,
@@ -919,8 +944,18 @@ impl Renderer {
         if self.gpu.samples_supported(self.options.samples) {
             self.options.samples
         } else {
-            RendererSettingsDescriptor::DEFAULT.antialiasing
+            RendererSettingsDescriptor::DEFAULT.antialiasing.samples()
         }
+    }
+
+    /// Why the device draws without the temporal upscale stage: a software
+    /// adapter refuses it (a GPU-only feature,
+    /// docs/verification.md#gpu-verification) and draws without
+    /// anti-aliasing, the render scale's bilinear stage in its place.
+    pub(crate) fn temporal_refusal(&self) -> Option<SettingRefusal> {
+        self.gpu
+            .is_software()
+            .then_some(SettingRefusal::SoftwareAdapter)
     }
 
     /// Whether window output should wait for the display's refresh.
@@ -940,10 +975,17 @@ impl Renderer {
     pub fn settings_readout(&self) -> RendererSettingsReadout {
         let requested = self.options.settings();
         let mut effective = requested;
-        let antialiasing = (!self.gpu.samples_supported(requested.antialiasing)).then(|| {
-            effective.antialiasing = self.samples();
-            SettingRefusal::UnsupportedSampleCount
-        });
+        let antialiasing = if self.options.temporal {
+            self.temporal_refusal().inspect(|_| {
+                effective.antialiasing = Antialiasing::Off;
+            })
+        } else {
+            (!self.gpu.samples_supported(self.options.samples)).then(|| {
+                effective.antialiasing =
+                    Antialiasing::from_samples(self.samples()).unwrap_or_default();
+                SettingRefusal::UnsupportedSampleCount
+            })
+        };
         let ambient_occlusion = (requested.ambient_occlusion.mode
             == AmbientOcclusionMode::DistanceField
             && !self.distance_fields.available())
@@ -1094,6 +1136,7 @@ impl Renderer {
             snow: self.tables.snow,
             decals: self.decals.readout(),
             water: self.water.readout(),
+            upscale: self.upscaled,
         }
     }
 

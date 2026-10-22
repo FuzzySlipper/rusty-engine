@@ -171,7 +171,7 @@ wetness?: ProductHostWetnessStatistics,
 /**
  * The snow in force (`CameraView.SetSnow`); absent without snow.
  */
-snow?: ProductHostSnowStatistics, decals: ProductHostDecalStatistics, water: ProductHostWaterStatistics, };
+snow?: ProductHostSnowStatistics, decals: ProductHostDecalStatistics, water: ProductHostWaterStatistics, upscale: ProductHostUpscaleStatistics, };
 
 /**
  * The impostor levels' baked views: how many meshes are baked, their
@@ -312,9 +312,10 @@ export type ProductHostRendererSettingValues = { shadows: boolean, backdropShado
  */
 ambientOcclusion: string, ambientOcclusionStrength: number, ambientOcclusionRadius: number, 
 /**
- * Samples per pixel of the primary destination.
+ * `off`, `2x`, `4x` (samples per pixel of the primary destination) or
+ * `temporal` (the temporal upscale stage).
  */
-antialiasing: number, 
+antialiasing: string, 
 /**
  * The fraction of the primary destination's size the world draws at.
  */
@@ -571,6 +572,25 @@ rollingSlowest: ProductHostUpdateAttribution, rollingSlowestAgeMs: CanonicalU64,
  * Slowest complete callback observed for this host lifetime.
  */
 slowest: ProductHostUpdateAttribution, slowestAgeMs: CanonicalU64, };
+
+/**
+ * The last primary frame's render resolution, the output it was brought
+ * to, and the upscale stage that did it.
+ */
+export type ProductHostUpscaleStatistics = { 
+/**
+ * `bilinear` or `taau`; absent while the views draw straight into the
+ * output.
+ */
+method?: string, 
+/**
+ * The render resolution the primary views drew at, in pixels.
+ */
+render: [number, number], 
+/**
+ * The output's size, in pixels.
+ */
+output: [number, number], };
 
 /**
  * The water pass's view of the scene: whether water materials can absorb,

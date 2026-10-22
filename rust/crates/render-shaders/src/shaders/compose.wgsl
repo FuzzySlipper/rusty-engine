@@ -4,6 +4,7 @@
 // motion target for inspection.
 
 #import rusty::tonemap::aces_filmic
+#import rusty::types::NO_MOTION_AT_LEAST
 
 struct Params {
     // Clear colour, linear RGBA.
@@ -72,12 +73,16 @@ fn fs_convert(in: FullscreenOut) -> @location(0) vec4<f32> {
 // The motion target as inspection shows it (render-wgpu `motion.rs`): red
 // and green are the motion's x and y, render pixels to the right and down,
 // as 0.5 + motion / (2 MOTION_VIEW_RANGE), clamped; blue is 0.5. A still
-// pixel is grey. `fs_motion_srgb` writes to an sRGB target the value that
+// pixel is grey; one with no motion of its own (`NO_MOTION`: the sky,
+// water) is blue. `fs_motion_srgb` writes to an sRGB target the value that
 // encodes as those fractions.
 const MOTION_VIEW_RANGE: f32 = 16.0;
 
 fn motion_shown(uv: vec2<f32>) -> vec3<f32> {
     let motion = textureSample(source, source_sampler, uv).xy;
+    if max(abs(motion.x), abs(motion.y)) >= NO_MOTION_AT_LEAST {
+        return vec3<f32>(0.0, 0.0, 1.0);
+    }
     let shown = clamp(0.5 + motion / (2.0 * MOTION_VIEW_RANGE), vec2<f32>(0.0), vec2<f32>(1.0));
     return vec3<f32>(shown, 0.5);
 }

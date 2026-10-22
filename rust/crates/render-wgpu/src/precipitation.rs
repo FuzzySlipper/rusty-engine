@@ -207,7 +207,7 @@ impl Precipitation {
                     "fs_drop"
                 }),
                 compilation_options: Default::default(),
-                // A drop's motion blends by its alpha, as its colour does.
+                // A drop's motion covers where it is at least half opaque.
                 targets: &format.targets(
                     wgpu::ColorTargetState {
                         format: format.format,

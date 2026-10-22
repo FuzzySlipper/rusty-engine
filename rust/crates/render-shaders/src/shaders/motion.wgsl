@@ -73,8 +73,10 @@ fn motion_at(position: vec4<f32>, previous: vec4<f32>) -> vec2<f32> {
     return position.xy - previous.xy / previous.w;
 }
 
-// What a pass writes to the motion target: the motion, and in `w` the
-// fragment's coverage, which a blended pass blends it by.
+// What a pass writes to the motion target: the motion, and in `w` whether
+// it covers what lies behind, which a blended pass blends it by. A blended
+// fragment's motion covers where it is at least half opaque and leaves what
+// lies behind otherwise, so motion never mixes with the sky's `NO_MOTION`.
 fn motion_output(position: vec4<f32>, previous: vec4<f32>, coverage: f32) -> vec4<f32> {
-    return vec4<f32>(motion_at(position, previous), 0.0, coverage);
+    return vec4<f32>(motion_at(position, previous), 0.0, step(0.5, coverage));
 }

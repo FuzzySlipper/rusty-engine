@@ -138,6 +138,9 @@ pub struct FrameStats {
     /// What the frame drew for a temporal stage, while it drew motion
     /// (`motion.rs`).
     pub motion: Option<crate::motion::MotionFrame>,
+    /// The upscale stage that brought the picture to the output, if one
+    /// ran (`upscale.rs`).
+    pub upscale: Option<crate::upscale::UpscaleMethod>,
 }
 
 /// What one view pass drew.

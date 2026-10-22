@@ -14,8 +14,8 @@ use csharp_engine_abi::{
     NativeVolumetricFogQuality, NativeWaterReflectionsQuality,
 };
 use render_model::{
-    renderer_setting_value, AmbientOcclusionMode, AmbientOcclusionSettings, RendererSettingKind,
-    RendererSettingsDescriptor, VolumetricCloudsQuality, VolumetricFogQuality,
+    renderer_setting_value, AmbientOcclusionMode, AmbientOcclusionSettings, Antialiasing,
+    RendererSettingKind, RendererSettingsDescriptor, VolumetricCloudsQuality, VolumetricFogQuality,
     WaterReflectionsQuality, RENDERER_SETTING_OPTIONS,
 };
 
@@ -200,7 +200,7 @@ impl RuntimeRendererSettingsBridge {
         if !settings.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_RENDERER_SETTINGS",
-                "ambient occlusion strength must be finite and at least 0, its radius finite and above 0, and the render scale from 0.5 to 1",
+                "ambient occlusion strength must be finite and at least 0, its radius finite and above 0, and the render scale from 0.33 to 1",
             ));
         }
         let staged = self.staged.as_mut().ok_or_else(|| {
@@ -232,9 +232,10 @@ pub(crate) fn renderer_settings_descriptor(
             radius: request.ambient_occlusion_radius,
         },
         antialiasing: match request.antialiasing {
-            NativeAntialiasing::Off => 1,
-            NativeAntialiasing::Msaa2 => 2,
-            NativeAntialiasing::Msaa4 => 4,
+            NativeAntialiasing::Off => Antialiasing::Off,
+            NativeAntialiasing::Msaa2 => Antialiasing::Msaa2,
+            NativeAntialiasing::Msaa4 => Antialiasing::Msaa4,
+            NativeAntialiasing::Temporal => Antialiasing::Temporal,
         },
         render_scale: request.render_scale,
         vsync: request.vsync,
@@ -259,8 +260,7 @@ pub(crate) fn renderer_settings_descriptor(
     }
 }
 
-/// Retained settings as a product reads them. A sample count the model
-/// does not name reads as 4.
+/// Retained settings as a product reads them.
 pub fn renderer_settings_request(
     settings: &RendererSettingsDescriptor,
 ) -> NativeRendererSettingsRequest {
@@ -276,9 +276,10 @@ pub fn renderer_settings_request(
         ambient_occlusion_strength: settings.ambient_occlusion.strength,
         ambient_occlusion_radius: settings.ambient_occlusion.radius,
         antialiasing: match settings.antialiasing {
-            1 => NativeAntialiasing::Off,
-            2 => NativeAntialiasing::Msaa2,
-            _ => NativeAntialiasing::Msaa4,
+            Antialiasing::Off => NativeAntialiasing::Off,
+            Antialiasing::Msaa2 => NativeAntialiasing::Msaa2,
+            Antialiasing::Msaa4 => NativeAntialiasing::Msaa4,
+            Antialiasing::Temporal => NativeAntialiasing::Temporal,
         },
         render_scale: settings.render_scale,
         vsync: settings.vsync,
@@ -380,19 +381,20 @@ mod tests {
     }
 
     #[test]
-    fn antialiasing_keeps_its_sample_count_and_a_default_request_draws_without_msaa() {
+    fn antialiasing_keeps_its_value_and_a_default_request_draws_without_msaa() {
         // SAFETY: a C# request left at `default` is all zeros, and every
         // field of this one, its enums included, declares zero.
         let mut request: NativeRendererSettingsRequest = unsafe { std::mem::zeroed() };
         assert_eq!(request.antialiasing, NativeAntialiasing::Off);
-        for (antialiasing, samples) in [
-            (NativeAntialiasing::Off, 1),
-            (NativeAntialiasing::Msaa2, 2),
-            (NativeAntialiasing::Msaa4, 4),
+        for (antialiasing, value) in [
+            (NativeAntialiasing::Off, Antialiasing::Off),
+            (NativeAntialiasing::Msaa2, Antialiasing::Msaa2),
+            (NativeAntialiasing::Msaa4, Antialiasing::Msaa4),
+            (NativeAntialiasing::Temporal, Antialiasing::Temporal),
         ] {
             request.antialiasing = antialiasing;
             let descriptor = renderer_settings_descriptor(&request);
-            assert_eq!(descriptor.antialiasing, samples);
+            assert_eq!(descriptor.antialiasing, value);
             assert_eq!(
                 renderer_settings_request(&descriptor).antialiasing,
                 antialiasing
@@ -439,7 +441,7 @@ mod tests {
             .find(|option| read(option.id) == "renderScale")
             .expect("render scale");
         assert_eq!(scale.kind, NativeRendererSettingKind::Range);
-        assert_eq!((scale.min, scale.max), (0.5, 1.0));
+        assert_eq!((scale.min, scale.max), (0.33, 1.0));
         assert_eq!(read(scale.value), "1.0");
     }
 }

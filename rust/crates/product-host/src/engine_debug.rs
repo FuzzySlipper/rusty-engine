@@ -103,8 +103,9 @@ pub struct ProductHostRendererSettingValues {
     pub ambient_occlusion: String,
     pub ambient_occlusion_strength: f32,
     pub ambient_occlusion_radius: f32,
-    /// Samples per pixel of the primary destination.
-    pub antialiasing: u32,
+    /// `off`, `2x`, `4x` (samples per pixel of the primary destination) or
+    /// `temporal` (the temporal upscale stage).
+    pub antialiasing: String,
     /// The fraction of the primary destination's size the world draws at.
     pub render_scale: f32,
     pub vsync: bool,
@@ -173,6 +174,23 @@ pub struct ProductHostGpuStatistics {
     pub snow: Option<ProductHostSnowStatistics>,
     pub decals: ProductHostDecalStatistics,
     pub water: ProductHostWaterStatistics,
+    pub upscale: ProductHostUpscaleStatistics,
+}
+
+/// The last primary frame's render resolution, the output it was brought
+/// to, and the upscale stage that did it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostUpscaleStatistics {
+    /// `bilinear` or `taau`; absent while the views draw straight into the
+    /// output.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub method: Option<String>,
+    /// The render resolution the primary views drew at, in pixels.
+    pub render: [u32; 2],
+    /// The output's size, in pixels.
+    pub output: [u32; 2],
 }
 
 /// The projected decals the world pass lays (`CameraView.SetDecal`): what
