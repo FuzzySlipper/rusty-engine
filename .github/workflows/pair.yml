@@ -106,8 +106,11 @@ jobs:
 
       # The desktop runtime pack is the same host built with the desktop shell
       # and Chromium's runtime; `rusty dev` fetches it for window mode (#8860).
-      # Keyed on the CEF version cef-dll-sys builds against, so an older
-      # distribution is never restored beside it.
+      # CEF lives outside target/: rust-cache keeps target/'s directories but
+      # deletes their files, and cef-dll-sys takes an existing, emptied
+      # distribution directory as downloaded. The cache is keyed on the CEF
+      # version cef-dll-sys builds against, so an older one is never restored
+      # beside it.
       - name: Read the CEF version
         id: cef
         if: steps.published.outputs.skip != 'true'
@@ -117,11 +120,13 @@ jobs:
         if: steps.published.outputs.skip != 'true'
         uses: actions/cache@v4
         with:
-          path: target/cef
+          path: ${{ runner.temp }}/cef
           key: cef-${{ runner.os }}-${{ steps.cef.outputs.version }}
 
       - name: Build the desktop runtime pack
         if: steps.published.outputs.skip != 'true'
+        env:
+          CEF_PATH: ${{ runner.temp }}/cef
         run: |
           ./scripts/build-desktop-runtime-pack-archive.sh --output "$RUNNER_TEMP/desktop"
           pair_abi=$(tar -xzOf "$RUNNER_TEMP"/pair/*.tar.gz --wildcards '*/pair-manifest.json' | jq -c .runtime.abi)
