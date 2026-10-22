@@ -263,6 +263,19 @@ impl Dx12SharedTexture {
 }
 
 #[cfg(test)]
+mod d3d11_event_tests {
+    use super::*;
+
+    #[test]
+    fn an_unsignalled_poll_does_not_release_the_frame() {
+        // S_FALSE: the copy is still running and GetData wrote nothing.
+        assert!(!d3d11_event_reached(Ok::<(), String>(()), 0).unwrap());
+        assert!(d3d11_event_reached(Ok::<(), String>(()), 1).unwrap());
+        assert!(d3d11_event_reached(Err("device removed"), 0).is_err());
+    }
+}
+
+#[cfg(test)]
 mod pixel_format_tests {
     use super::*;
 
@@ -546,6 +559,19 @@ pub enum ImportError {
     VulkanImport(String),
     #[error("wgpu-hal error: {0}")]
     Hal(String),
+}
+
+/// Whether one `GetData` poll of a D3D11 event query found the event reached.
+/// The windows crate maps both S_OK and S_FALSE (not ready, data unwritten)
+/// to `Ok`; only the event's BOOL, written TRUE once reached, tells them
+/// apart. A failed poll (a removed device) is an error.
+#[cfg(any(windows, test))]
+fn d3d11_event_reached<E: std::fmt::Display>(
+    poll: Result<(), E>,
+    signalled: u32,
+) -> Result<bool, ImportError> {
+    poll.map(|()| signalled != 0)
+        .map_err(|err| ImportError::Hal(format!("D3D11 GetData failed: {err}")))
 }
 
 // ── Platform import paths ─────────────────────────────────────────────────────

@@ -41,3 +41,8 @@ backend. 0.15.0 imports Chromium's Windows frames into D3D12 only.
 The frame type keeps its upstream name, `Dx12SharedTexture`. Upstream, this
 fits as an `InteropBackend::Vulkan` arm beside DX12, with the generic import
 in grafting.
+
+With no keyed mutex, the copier's flush-and-wait is the only thing ordering
+the copy before the import, so it waits for the event query's data to read
+TRUE. The windows crate's `GetData` returns `Ok` for S_FALSE (not ready) as
+well; 0.15.0 returned on the first poll (`d3d11_event_reached`).

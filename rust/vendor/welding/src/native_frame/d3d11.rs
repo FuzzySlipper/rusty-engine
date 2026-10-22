@@ -187,7 +187,7 @@ impl D3d11CallbackFrameCopier {
                     0,
                 )
             };
-            if result.is_ok() {
+            if d3d11_event_reached(result, data)? {
                 return Ok(());
             }
             if std::time::Instant::now() > deadline {
