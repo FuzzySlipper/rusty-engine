@@ -36,9 +36,15 @@ wuff = "0.2.9"
 # into this crate's device. Off by default: its build downloads CEF.
 welding = { version = "=0.15.0", default-features = false, features = ["wgpu-30", "cef-runtime"], optional = true }
 dpi = { version = "0.1.2", optional = true }
+# NVIDIA DLSS as a temporal upscale stage (`dlss.rs`). Off by default: its
+# build needs NVIDIA's DLSS SDK, the Vulkan headers and clang
+# (docs/lighting-and-sky.md#dlss).
+dlss_wgpu = { version = "=6.0.0", optional = true }
+uuid = { version = "1", default-features = false, optional = true }
 
 [features]
 web-overlay = ["dep:welding", "dep:dpi"]
+dlss = ["dep:dlss_wgpu", "dep:uuid"]
 
 [dev-dependencies]
 jpeg-encoder = { version = "0.7", features = ["simd"] }

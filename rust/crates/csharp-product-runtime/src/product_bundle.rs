@@ -671,7 +671,10 @@ impl ProductRendererSettings {
         let antialiasing = match value.antialiasing.as_deref() {
             None => render_model::Antialiasing::Msaa4,
             Some(name) => render_model::Antialiasing::from_name(name).ok_or_else(|| {
-                field_error("renderer.antialiasing", "must be off, 2x, 4x or temporal")
+                field_error(
+                    "renderer.antialiasing",
+                    "must be off, 2x, 4x, temporal or dlss",
+                )
             })?,
         };
         let vsync = match value.vsync.as_deref() {

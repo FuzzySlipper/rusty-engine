@@ -656,6 +656,8 @@ fn run() -> Result<(), String> {
             "refused": refused.iter().filter_map(|(name, refusal)| {
                 refusal.map(|refusal| json!({ "setting": name, "refusal": format!("{refusal:?}") }))
             }).collect::<Vec<_>>(),
+            // Why DLSS does not draw while asked for, in NGX's words.
+            "dlssRefused": gpu_readout.dlss.as_ref().map(|refused| refused.detail.clone()),
         },
         // The GPU passes over the frames drawn: each timed pass's median
         // cost and the ambient occlusion path, as `engine.renderer` reports

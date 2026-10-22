@@ -16,11 +16,13 @@ pub enum NativeAmbientOcclusionMode {
 }
 
 /// How the primary destination (the streamed frame or the window) smooths
-/// its edges: samples per pixel, or the temporal stage, which gathers
+/// its edges: samples per pixel, or a temporal stage, which gathers
 /// jittered frames drawn at the render scale into the output and excludes
-/// MSAA. Offscreen camera targets and image captures are single-sample and
-/// never temporal. A software adapter refuses the temporal stage and draws
-/// without anti-aliasing.
+/// MSAA: the Engine's TAAU (`Temporal`), or NVIDIA DLSS (`Dlss`) on RTX
+/// GPUs in builds with it, which draws TAAU where refused. Offscreen camera
+/// targets and image captures are single-sample and never temporal. A
+/// software adapter refuses a temporal stage and draws without
+/// anti-aliasing.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAntialiasing {
@@ -28,6 +30,7 @@ pub enum NativeAntialiasing {
     Msaa2 = 2,
     Temporal = 3,
     Msaa4 = 4,
+    Dlss = 5,
 }
 
 /// How finely volumetric fog is computed: off (the analytic distance fog
@@ -90,9 +93,9 @@ pub struct NativeRendererSettingsRequest {
     pub antialiasing: NativeAntialiasing,
     /// The fraction of the streamed frame's or window's size the world,
     /// viewmodel, labels and effects draw at before being upscaled into it:
-    /// 0.33 to 1. Under `Temporal`, 1 is native-resolution anti-aliasing
-    /// and 0.67, 0.58, 0.5 and 0.33 are the quality, balanced, performance
-    /// and ultra performance modes.
+    /// 0.33 to 1. Under `Temporal` or `Dlss`, 1 is native-resolution
+    /// anti-aliasing (DLAA under `Dlss`) and 0.67, 0.58, 0.5 and 0.33 are
+    /// the quality, balanced, performance and ultra performance modes.
     pub render_scale: f32,
     /// Window output waits for the display's refresh before presenting.
     pub vsync: bool,
@@ -134,6 +137,12 @@ pub enum NativeRendererSettingRefusal {
     /// A product image effect takes the temporal stage's place: frames draw
     /// without temporal anti-aliasing while one is set.
     ImageEffect = 8,
+    /// This build of the Engine does not have the feature (DLSS).
+    NotBuilt = 9,
+    /// The adapter cannot run the feature (DLSS off NVIDIA RTX GPUs).
+    UnsupportedAdapter = 10,
+    /// The feature's library failed to start on this device (DLSS).
+    InitializationFailed = 11,
 }
 
 /// What the renderer draws with: the last request (the manifest's values

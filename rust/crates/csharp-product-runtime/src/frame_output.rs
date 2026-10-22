@@ -649,6 +649,13 @@ impl FrameOutput {
                 NativeRendererSettingRefusal::TooFewTextureBindings
             }
             Some(SettingRefusal::ImageEffect) => NativeRendererSettingRefusal::ImageEffect,
+            Some(SettingRefusal::NotBuilt) => NativeRendererSettingRefusal::NotBuilt,
+            Some(SettingRefusal::UnsupportedAdapter) => {
+                NativeRendererSettingRefusal::UnsupportedAdapter
+            }
+            Some(SettingRefusal::InitializationFailed) => {
+                NativeRendererSettingRefusal::InitializationFailed
+            }
         };
         let mut effective = readout.effective;
         let vsync_refusal = if self.stream.is_some() && readout.requested.vsync {
@@ -891,6 +898,9 @@ fn settings_statistics(
             "the adapter binds too few textures per shader stage"
         }
         SettingRefusal::ImageEffect => "a product image effect draws in the temporal stage's place",
+        SettingRefusal::NotBuilt => "this build of the Engine does not have it",
+        SettingRefusal::UnsupportedAdapter => "the adapter cannot run it",
+        SettingRefusal::InitializationFailed => "it failed to start on this device",
     };
     let mut effective = readout.effective;
     let mut refused = std::collections::BTreeMap::new();
@@ -1048,6 +1058,7 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
                 .map(|method| method.name().to_owned()),
             render: readout.upscale.resolution.render.into(),
             output: readout.upscale.resolution.output.into(),
+            dlss_refused: readout.dlss.map(|refused| refused.detail),
         },
         wetness: readout.wetness.map(|wetness| ProductHostWetnessStatistics {
             wetness: wetness.wetness,

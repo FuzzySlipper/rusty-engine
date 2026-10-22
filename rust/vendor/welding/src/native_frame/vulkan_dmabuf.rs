@@ -90,6 +90,71 @@ pub fn build_dmabuf_capable_device(
     Ok((host.device, host.queue))
 }
 
+/// Graft's Linux DMA-BUF device extensions
+/// (`grafting::vulkan_dmabuf::required_device_extensions`, which is private).
+#[cfg(feature = "wgpu-30")]
+const DMABUF_DEVICE_EXTENSIONS: [&std::ffi::CStr; 4] = [
+    c"VK_EXT_external_memory_dma_buf",
+    c"VK_EXT_image_drm_format_modifier",
+    c"VK_EXT_queue_family_foreign",
+    c"VK_KHR_external_memory_fd",
+];
+
+/// [`build_dmabuf_capable_device`], with `extend` adding the host's own
+/// device extensions in the same device-creation callback (the Engine's
+/// DLSS asks for NGX's). `extend` may only add.
+#[cfg(feature = "wgpu-30")]
+pub fn build_dmabuf_capable_device_with(
+    adapter: &wgpu::Adapter,
+    desc: &wgpu::DeviceDescriptor<'_>,
+    extend: impl FnOnce(
+        &mut wgpu_hal::vulkan::CreateDeviceCallbackArgs<'_, '_, '_>,
+        &wgpu_hal::vulkan::Adapter,
+    ),
+) -> Result<(wgpu::Device, wgpu::Queue), ImportError> {
+    let vulkan = |detail: String| ImportError::VulkanImport(detail);
+    // SAFETY: the guard is dropped before the device is created from it.
+    let hal_adapter = unsafe { adapter.as_hal::<wgpu::wgc::api::Vulkan>() }
+        .ok_or_else(|| vulkan("the adapter is not Vulkan".to_owned()))?;
+    let capabilities = hal_adapter.physical_device_capabilities();
+    let missing: Vec<_> = DMABUF_DEVICE_EXTENSIONS
+        .into_iter()
+        .filter(|extension| !capabilities.supports_extension(extension))
+        .map(|extension| extension.to_string_lossy().into_owned())
+        .collect();
+    if !missing.is_empty() {
+        return Err(vulkan(format!(
+            "physical device does not advertise required DMABUF extensions: {missing:?}"
+        )));
+    }
+    let raw_adapter = &*hal_adapter;
+    let callback = Box::new(
+        move |mut args: wgpu_hal::vulkan::CreateDeviceCallbackArgs<'_, '_, '_>| {
+            for extension in DMABUF_DEVICE_EXTENSIONS {
+                if !args.extensions.contains(&extension) {
+                    args.extensions.push(extension);
+                }
+            }
+            extend(&mut args, raw_adapter);
+        },
+    );
+    // SAFETY: the callback only adds extensions, as `open_with_callback`
+    // requires.
+    let open = unsafe {
+        hal_adapter.open_with_callback(
+            desc.required_features,
+            &desc.required_limits,
+            &desc.memory_hints,
+            Some(callback),
+        )
+    }
+    .map_err(|err| vulkan(format!("open_with_callback: {err}")))?;
+    drop(hal_adapter);
+    // SAFETY: `open` came from this adapter with `desc`'s features and limits.
+    unsafe { adapter.create_device_from_hal::<wgpu::wgc::api::Vulkan>(open, desc) }
+        .map_err(|err| vulkan(format!("create_device_from_hal: {err}")))
+}
+
 /// Can the host import a buffer whose modifier CEF left implicit?
 #[cfg(feature = "wgpu-30")]
 fn host_can_import_implicit_modifier(device: &wgpu::Device) -> bool {

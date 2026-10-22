@@ -105,14 +105,15 @@
     <RustyEngineProductWaterReflections Condition="'$(RustyEngineProductWaterReflections)' == ''">off</RustyEngineProductWaterReflections>
     <!-- How the streamed frame or the window smooths its edges: off, 2x or
          4x samples per pixel, or temporal (TAA, upscaling from a render
-         scale below 1). Offscreen camera targets and image captures are
-         single-sample. -->
+         scale below 1), or dlss (NVIDIA DLSS on RTX GPUs in an Engine built
+         with it; temporal draws where it is refused). Offscreen camera
+         targets and image captures are single-sample. -->
     <RustyEngineProductAntialiasing Condition="'$(RustyEngineProductAntialiasing)' == ''">4x</RustyEngineProductAntialiasing>
     <!-- Window output waits for the display's refresh before presenting. -->
     <RustyEngineProductVsync Condition="'$(RustyEngineProductVsync)' == ''">enabled</RustyEngineProductVsync>
     <!-- The fraction of the frame's size the world draws at before being
-         upscaled: 0.33 to 1. Under temporal anti-aliasing 0.67, 0.58, 0.5
-         and 0.33 are the quality, balanced, performance and ultra
+         upscaled: 0.33 to 1. Under temporal anti-aliasing or DLSS 0.67, 0.58,
+         0.5 and 0.33 are the quality, balanced, performance and ultra
          performance modes. -->
     <RustyEngineProductRenderScale Condition="'$(RustyEngineProductRenderScale)' == ''">1</RustyEngineProductRenderScale>
     <!-- Clustered forward shading: world views bin their
@@ -160,7 +161,7 @@
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductVolumetricFog)', '\A(off|low|high)\z'))" Text="RustyEngineProductVolumetricFog must be off, low or high." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductVolumetricClouds)', '\A(off|low|high)\z'))" Text="RustyEngineProductVolumetricClouds must be off, low or high." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductWaterReflections)', '\A(off|low|high)\z'))" Text="RustyEngineProductWaterReflections must be off, low or high." />
-    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAntialiasing)', '\A(off|2x|4x|temporal)\z'))" Text="RustyEngineProductAntialiasing must be off, 2x, 4x or temporal." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductAntialiasing)', '\A(off|2x|4x|temporal|dlss)\z'))" Text="RustyEngineProductAntialiasing must be off, 2x, 4x, temporal or dlss." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductVsync)', '\A(enabled|disabled)\z'))" Text="RustyEngineProductVsync must be enabled or disabled." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductRenderScale)', '\A(0\.(3[3-9]|[4-9])[0-9]*|1(\.0*)?)\z'))" Text="RustyEngineProductRenderScale must be a number from 0.33 to 1." />
     <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(RustyEngineProductClusteredLighting)', '\A(enabled|disabled)\z'))" Text="RustyEngineProductClusteredLighting must be enabled or disabled." />

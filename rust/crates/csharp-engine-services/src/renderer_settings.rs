@@ -236,6 +236,7 @@ pub(crate) fn renderer_settings_descriptor(
             NativeAntialiasing::Msaa2 => Antialiasing::Msaa2,
             NativeAntialiasing::Msaa4 => Antialiasing::Msaa4,
             NativeAntialiasing::Temporal => Antialiasing::Temporal,
+            NativeAntialiasing::Dlss => Antialiasing::Dlss,
         },
         render_scale: request.render_scale,
         vsync: request.vsync,
@@ -280,6 +281,7 @@ pub fn renderer_settings_request(
             Antialiasing::Msaa2 => NativeAntialiasing::Msaa2,
             Antialiasing::Msaa4 => NativeAntialiasing::Msaa4,
             Antialiasing::Temporal => NativeAntialiasing::Temporal,
+            Antialiasing::Dlss => NativeAntialiasing::Dlss,
         },
         render_scale: settings.render_scale,
         vsync: settings.vsync,
@@ -391,6 +393,7 @@ mod tests {
             (NativeAntialiasing::Msaa2, Antialiasing::Msaa2),
             (NativeAntialiasing::Msaa4, Antialiasing::Msaa4),
             (NativeAntialiasing::Temporal, Antialiasing::Temporal),
+            (NativeAntialiasing::Dlss, Antialiasing::Dlss),
         ] {
             request.antialiasing = antialiasing;
             let descriptor = renderer_settings_descriptor(&request);

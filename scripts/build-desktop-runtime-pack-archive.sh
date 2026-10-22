@@ -8,12 +8,16 @@ set -euo pipefail
 # default pack stays free of Chromium. `rusty dev` fetches it on the first
 # window-output run of a pinned product (#8860).
 #
-# usage: scripts/build-desktop-runtime-pack-archive.sh --output <new-directory>
+# usage: scripts/build-desktop-runtime-pack-archive.sh --output <new-directory> [--dlss <dlss-sdk>]
+#
+# --dlss builds it with NVIDIA DLSS from that SDK checkout
+# (scripts/build-runtime-pack.sh --dlss).
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd "$script_dir/.." && pwd)
 source "$script_dir/pair-platform.sh"
 
 output=""
+dlss=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --output)
@@ -21,13 +25,18 @@ while [[ $# -gt 0 ]]; do
             output=$2
             shift 2
             ;;
+        --dlss)
+            [[ $# -ge 2 ]] || { echo "--dlss needs the DLSS SDK directory" >&2; exit 2; }
+            dlss=(--dlss "$2")
+            shift 2
+            ;;
         *)
-            echo "usage: scripts/build-desktop-runtime-pack-archive.sh --output <new-directory>" >&2
+            echo "usage: scripts/build-desktop-runtime-pack-archive.sh --output <new-directory> [--dlss <dlss-sdk>]" >&2
             exit 2
             ;;
     esac
 done
-[[ -n "$output" ]] || { echo "usage: scripts/build-desktop-runtime-pack-archive.sh --output <new-directory>" >&2; exit 2; }
+[[ -n "$output" ]] || { echo "usage: scripts/build-desktop-runtime-pack-archive.sh --output <new-directory> [--dlss <dlss-sdk>]" >&2; exit 2; }
 [[ "$output" == /* ]] || output="$repo_root/$output"
 
 cd "$repo_root"
@@ -49,7 +58,7 @@ mkdir -p "$(dirname "$output")"
 stage=$(mktemp -d "$(dirname "$output")/.desktop-pack.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 
-"$script_dir/build-runtime-pack.sh" --desktop --output "$stage/$name" >/dev/null
+"$script_dir/build-runtime-pack.sh" --desktop "${dlss[@]}" --output "$stage/$name" >/dev/null
 manifest="$stage/$name/runtime-manifest.json"
 if [[ "$(jq -r '.sourceRevision' "$manifest")" != "$revision" ]] || [[ ! -f "$stage/$name/lib/cef/$libcef" ]]; then
     echo "RUSTY_ENGINE_DESKTOP_PACK_BUILD: the desktop pack is not this revision's, or has no Chromium runtime" >&2

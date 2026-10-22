@@ -135,7 +135,7 @@ function renderSummary(root: HTMLElement, summary: ProductHostRendererStatus): v
     `Ambient occlusion: ${occlusion.path}${occlusion.computeRefused === undefined ? '' : ` (compute refused: ${occlusion.computeRefused})`}`,
     `Distance fields: ${String(fields.residentFields)} resident in ${String(fields.atlasBricks)} bricks | ${String(fields.lookupEntries)} around the camera${fields.refused === undefined ? '' : ` (refused: ${fields.refused})`}`,
     `GPU passes: ${gpu.timestamps ? passes.join(' | ') : 'untimed (no timestamp queries)'}`,
-    `Resolution: render ${gpu.upscale.render.join('×')} to output ${gpu.upscale.output.join('×')} | upscale ${gpu.upscale.method ?? 'none'}`,
+    `Resolution: render ${gpu.upscale.render.join('×')} to output ${gpu.upscale.output.join('×')} | upscale ${gpu.upscale.method ?? 'none'}${gpu.upscale.dlssRefused === undefined ? '' : ` (DLSS refused: ${gpu.upscale.dlssRefused})`}`,
   );
   const settings = renderer.settings.effective;
   const refused = Object.entries(renderer.settings.refused).map(([setting, reason]) => `${setting}: ${reason}`);
@@ -153,6 +153,8 @@ function antialiasingText(antialiasing: string): string {
       return 'no antialiasing';
     case 'temporal':
       return 'temporal antialiasing';
+    case 'dlss':
+      return 'DLSS';
     default:
       return `MSAA ${antialiasing}`;
   }

@@ -831,7 +831,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     [DebugCommand("lighting.antialiasing")]
     public string Antialiasing(string samples)
     {
-        Antialiasing level = samples switch { "off" => Rusty.Engine.Antialiasing.Off, "2x" => Rusty.Engine.Antialiasing.Msaa2, "temporal" => Rusty.Engine.Antialiasing.Temporal, _ => Rusty.Engine.Antialiasing.Msaa4 };
+        Antialiasing level = samples switch { "off" => Rusty.Engine.Antialiasing.Off, "2x" => Rusty.Engine.Antialiasing.Msaa2, "temporal" => Rusty.Engine.Antialiasing.Temporal, "dlss" => Rusty.Engine.Antialiasing.Dlss, _ => Rusty.Engine.Antialiasing.Msaa4 };
         engine.RendererSettings.Set(engine.RendererSettings.Read().Requested with { Antialiasing = level });
         return Settings();
     }

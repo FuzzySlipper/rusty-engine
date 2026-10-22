@@ -585,6 +585,8 @@ mod vulkan_dmabuf;
 
 #[cfg(target_os = "linux")]
 pub use vulkan_dmabuf::build_dmabuf_capable_device;
+#[cfg(all(target_os = "linux", feature = "wgpu-30"))]
+pub use vulkan_dmabuf::build_dmabuf_capable_device_with;
 
 #[cfg(windows)]
 pub use d3d11::D3d11CallbackFrameCopier;

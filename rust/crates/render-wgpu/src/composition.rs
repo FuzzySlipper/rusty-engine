@@ -386,12 +386,27 @@ impl Renderer {
         // the stage's place, so the temporal stage is refused with it
         // (`Renderer::temporal_refusal`).
         let effect = self.image_effect.active();
-        let stage = UpscaleMethod::selected(&self.options, self.temporal_refusal().is_none());
-        if stage != Some(UpscaleMethod::Taau) {
+        let mut stage = UpscaleMethod::selected(
+            &self.options,
+            self.temporal_refusal().is_none(),
+            self.dlss_refusal().is_none(),
+        );
+        if !stage.is_some_and(UpscaleMethod::temporal) {
             self.upscale.forget_history();
         }
         let scale = stage.map_or(1.0, |_| self.options.render_scale);
-        let resolution = FrameResolution::scaled((output.width, output.height), scale);
+        let mut resolution = FrameResolution::scaled((output.width, output.height), scale);
+        // DLSS draws from the input sizes its mode takes; refused as it
+        // starts, TAAU draws.
+        if stage == Some(UpscaleMethod::Dlss) {
+            match self
+                .upscale
+                .dlss_render_size(&self.gpu, resolution, self.options.render_scale)
+            {
+                Some(render) => resolution.render = render,
+                None => stage = Some(UpscaleMethod::Taau),
+            }
+        }
         // A temporal stage's jitter and motion, or the motion alone while
         // inspection shows it (`motion.rs`).
         let jittering = stage.is_some_and(UpscaleMethod::temporal);

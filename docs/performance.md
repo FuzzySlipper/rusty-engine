@@ -87,9 +87,10 @@ light](lighting-and-sky.md#the-skys-light) (`sky-light`), and the
 [water](lighting-and-sky.md#water)'s copy of the opaque scene (`water-copy`,
 timed in the views that draw water; part of the `world` pass), and the
 `upscale` stage, which brings a frame drawn at a render scale below 1, or
-with [temporal anti-aliasing](lighting-and-sky.md#temporal-upscaling-taau),
-to the output's size; `gpu.upscale` names that stage and the last frame's
-render and output resolutions. `gpu.water.refused` says why a device has no copy of the scene's colour
+with [temporal anti-aliasing](lighting-and-sky.md#temporal-upscaling-taau)
+or [DLSS](lighting-and-sky.md#dlss), to the output's size; `gpu.upscale`
+names that stage and the last frame's render and output resolutions, and
+why DLSS is refused while asked for. `gpu.water.refused` says why a device has no copy of the scene's colour
 for water, if it has none. `gpu.decals` is the [projected decals](lighting-and-sky.md#projected-decals)
 (their count, grid entries, busiest cell, bytes and last rebuild),
 `gpu.wetness` the [wetness](lighting-and-sky.md#wet-surfaces) and

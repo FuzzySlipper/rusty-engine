@@ -725,8 +725,9 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         ambientOcclusionStrength: number;
         ambientOcclusionRadius: number;
         /**
-         * `off`, `2x`, `4x` (samples per pixel of the primary destination) or
-         * `temporal` (the temporal upscale stage).
+         * `off`, `2x`, `4x` (samples per pixel of the primary destination),
+         * `temporal` (the Engine's temporal upscale stage) or `dlss` (NVIDIA
+         * DLSS as that stage).
          */
         antialiasing: string;
         /**
@@ -1068,10 +1069,15 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      */
     export type ProductHostUpscaleStatistics = {
         /**
-         * `bilinear` or `taau`; absent while the views draw straight into the
-         * output.
+         * `bilinear`, `taau` or `dlss`; absent while the views draw straight
+         * into the output.
          */
         method?: string;
+        /**
+         * Why DLSS does not draw while the settings ask for it, in NGX's words
+         * where it has them; TAAU draws in its place.
+         */
+        dlssRefused?: string;
         /**
          * The render resolution the primary views drew at, in pixels.
          */

@@ -37,27 +37,36 @@ pub struct AdapterSummary {
 /// as wgpu documents them. CI selects software Vulkan with
 /// `WGPU_BACKEND=vulkan` and the llvmpipe (lvp) ICD. A window with the web
 /// overlay on Windows always draws with Vulkan (`Gpu::window_refusal`).
+///
+/// Built with `dlss`, a Vulkan instance and an NVIDIA adapter's device also
+/// take NGX's Vulkan extensions (`dlss.rs`); where NGX cannot name them,
+/// the device is made without them and DLSS is refused.
 #[derive(Clone)]
 pub struct Gpu {
     pub(crate) instance: wgpu::Instance,
     pub(crate) adapter: wgpu::Adapter,
     pub(crate) device: wgpu::Device,
     pub(crate) queue: wgpu::Queue,
+    /// The device has NGX's Vulkan extensions for DLSS.
+    #[cfg(feature = "dlss")]
+    pub(crate) dlss: bool,
+    /// NGX on this device, shared by every renderer on it: NGX starts and
+    /// shuts down once per device (`dlss.rs`).
+    #[cfg(feature = "dlss")]
+    pub(crate) ngx: crate::dlss::Ngx,
 }
 
 impl Gpu {
     /// A device with no presentation surface, for offscreen rendering.
     pub fn headless() -> Result<Self, GpuError> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         Self::from_instance(instance, None)
     }
 
     /// A headless device whose storage bindings and buffers hold at most
     /// `bytes`: for tests of what passes a device's binding limit.
     pub fn headless_with_binding_limit(bytes: u64) -> Result<Self, GpuError> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         Self::from_instance_with(instance, None, Some(bytes), None)
     }
 
@@ -65,8 +74,7 @@ impl Gpu {
     /// shader stage: for tests of what a device at WebGPU's guarantee (16)
     /// refuses.
     pub fn headless_with_sampled_texture_limit(textures: u32) -> Result<Self, GpuError> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         Self::from_instance_with(instance, None, None, Some(textures))
     }
 
@@ -93,7 +101,7 @@ impl Gpu {
         {
             descriptor.backends = wgpu::Backends::VULKAN;
         }
-        let instance = wgpu::Instance::new(descriptor);
+        let instance = instance(descriptor);
         let surface = instance
             .create_surface(window)
             .map_err(|error| GpuError::Surface(error.to_string()))?;
@@ -118,7 +126,7 @@ impl Gpu {
         {
             descriptor.backends = wgpu::Backends::VULKAN;
         }
-        let gpu = Self::from_instance(wgpu::Instance::new(descriptor), None)?;
+        let gpu = Self::from_instance(instance(descriptor), None)?;
         #[cfg(all(feature = "web-overlay", windows))]
         gpu.window_refusal()?;
         Ok(gpu)
@@ -184,12 +192,17 @@ impl Gpu {
             required_limits: limits(&adapter.limits(), binding_limit, texture_limit),
             ..Default::default()
         };
-        let (device, queue) = request_device(&adapter, descriptor)?;
+        #[cfg_attr(not(feature = "dlss"), allow(unused_variables))]
+        let (device, queue, dlss) = request_device(&adapter, descriptor)?;
         Ok(Self {
             instance,
             adapter,
             device,
             queue,
+            #[cfg(feature = "dlss")]
+            dlss,
+            #[cfg(feature = "dlss")]
+            ngx: Default::default(),
         })
     }
 
@@ -371,11 +384,29 @@ impl ComputeLimits {
     }
 }
 
-#[cfg(not(all(feature = "web-overlay", target_os = "linux")))]
+/// The instance `descriptor` describes. Built with `dlss`, a Vulkan
+/// instance also takes NGX's instance extensions, and is Vulkan alone; if
+/// NGX cannot name them, it is made without them.
+fn instance(descriptor: wgpu::InstanceDescriptor) -> wgpu::Instance {
+    #[cfg(feature = "dlss")]
+    if descriptor.backends.contains(wgpu::Backends::VULKAN) {
+        let mut support = dlss_wgpu::FeatureSupport::default();
+        if let Ok(instance) =
+            dlss_wgpu::create_instance(crate::dlss::PROJECT_ID, &descriptor, &mut support)
+        {
+            return instance;
+        }
+    }
+    wgpu::Instance::new(descriptor)
+}
+
+/// A device and queue on `adapter`, and whether it has NGX's Vulkan
+/// extensions for DLSS. The web overlay adds what importing Chromium's
+/// frames needs.
 fn request_device(
     adapter: &wgpu::Adapter,
     #[allow(unused_mut)] mut descriptor: wgpu::DeviceDescriptor<'_>,
-) -> Result<(wgpu::Device, wgpu::Queue), GpuError> {
+) -> Result<(wgpu::Device, wgpu::Queue, bool), GpuError> {
     // The web overlay imports Chromium's frames, D3D11 textures, with
     // `VK_KHR_external_memory_win32` (`Gpu::window_refusal`).
     #[cfg(all(feature = "web-overlay", windows))]
@@ -383,24 +414,60 @@ fn request_device(
         descriptor.required_features |=
             adapter.features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32;
     }
-    pollster::block_on(adapter.request_device(&descriptor))
-        .map_err(|error| GpuError::Device(error.to_string()))
-}
-
-/// The web overlay imports Chromium's frames as DMA-BUFs. Chromium may leave
-/// the modifier implicit (it does under X11), which only a device created with
-/// the DMA-BUF extensions and `VULKAN_EXTERNAL_MEMORY_DMA_BUF` can import.
-#[cfg(all(feature = "web-overlay", target_os = "linux"))]
-fn request_device(
-    adapter: &wgpu::Adapter,
-    mut descriptor: wgpu::DeviceDescriptor<'_>,
-) -> Result<(wgpu::Device, wgpu::Queue), GpuError> {
-    if adapter.get_info().backend != wgpu::Backend::Vulkan {
-        return pollster::block_on(adapter.request_device(&descriptor))
+    // On Linux it imports DMA-BUFs. Chromium may leave the modifier
+    // implicit (it does under X11), which only a device created with the
+    // DMA-BUF extensions and `VULKAN_EXTERNAL_MEMORY_DMA_BUF` can import.
+    #[cfg(all(feature = "web-overlay", target_os = "linux"))]
+    let dmabuf = adapter.get_info().backend == wgpu::Backend::Vulkan;
+    #[cfg(all(feature = "web-overlay", target_os = "linux"))]
+    if dmabuf {
+        descriptor.required_features |=
+            adapter.features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
+    }
+    #[cfg(feature = "dlss")]
+    {
+        let info = adapter.get_info();
+        if info.backend == wgpu::Backend::Vulkan && info.vendor == crate::dlss::NVIDIA {
+            let mut support = dlss_wgpu::FeatureSupport::default();
+            #[cfg(all(feature = "web-overlay", target_os = "linux"))]
+            let made = welding::build_dmabuf_capable_device_with(
+                adapter,
+                &descriptor,
+                |args, raw_adapter| {
+                    let registered = dlss_wgpu::register_device_extensions(
+                        crate::dlss::PROJECT_ID,
+                        args,
+                        raw_adapter,
+                        &mut support,
+                    );
+                    if registered.is_err() {
+                        support.super_resolution_supported = false;
+                    }
+                },
+            )
+            .map_err(|error| error.to_string());
+            #[cfg(not(all(feature = "web-overlay", target_os = "linux")))]
+            let made = dlss_wgpu::request_device(
+                crate::dlss::PROJECT_ID,
+                adapter,
+                &descriptor,
+                &mut support,
+                Some(descriptor.required_limits.clone()),
+            )
+            .map_err(|error| error.to_string());
+            // Without DLSS's extensions the device is made as usual.
+            if let Ok((device, queue)) = made {
+                return Ok((device, queue, support.super_resolution_supported));
+            }
+        }
+    }
+    #[cfg(all(feature = "web-overlay", target_os = "linux"))]
+    if dmabuf {
+        return welding::build_dmabuf_capable_device(adapter, &descriptor)
+            .map(|(device, queue)| (device, queue, false))
             .map_err(|error| GpuError::Device(error.to_string()));
     }
-    descriptor.required_features |=
-        adapter.features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
-    welding::build_dmabuf_capable_device(adapter, &descriptor)
+    pollster::block_on(adapter.request_device(&descriptor))
+        .map(|(device, queue)| (device, queue, false))
         .map_err(|error| GpuError::Device(error.to_string()))
 }

@@ -289,8 +289,9 @@ same one the Engine's [video options](#video-options) panel draws. Each
 `Choices` lists each choice setting's values and labels by option id.
 The request holds shadows on or off and their budget (0 for no limit),
 ambient occlusion (`Disabled`, `ScreenSpace` or `DistanceField`, with its
-strength and radius), antialiasing (`Off`, `Msaa2`, `Msaa4` or `Temporal`,
-[the temporal stage](#temporal-upscaling-taau)), the render scale (0.33 to
+strength and radius), antialiasing (`Off`, `Msaa2`, `Msaa4`, `Temporal`
+([the temporal stage](#temporal-upscaling-taau)) or `Dlss`
+([NVIDIA DLSS](#dlss))), the render scale (0.33 to
 1: the world, viewmodel, labels and effects draw at that fraction of the
 frame's size and are upscaled into it by the `upscale` pass, bilinearly
 unless the temporal stage draws, while a playing video and the browser or
@@ -315,8 +316,9 @@ lighting fall back to the screen-space pass and the light loop),
 so frames wait for its refresh with vsync off), `SoftwareAdapter` (a
 GPU-only feature on a software adapter, the temporal stage among them),
 `TooFewTextureBindings` (water reflections on a device without the colour
-copy) and `ImageEffect` (a product image effect draws in the temporal
-stage's place). A refused
+copy), `ImageEffect` (a product image effect draws in the temporal
+stage's place), and for DLSS `NotBuilt`, `UnsupportedAdapter` and
+`InitializationFailed` ([DLSS](#dlss)). A refused
 setting is not an error: `Set` accepts any finite, non-negative strength, positive
 radius and render scale from 0.33 to 1, and refuses only values outside
 those ranges.
@@ -406,6 +408,57 @@ stage (`bilinear` or `taau`) under `gpu.upscale`; `rusty-scene-render`
 reports them under `timing`, and `--last-frame OUT.png` writes the last timed
 frame, as the stage shows it after the frames before it.
 
+### DLSS
+
+`antialiasing` `dlss` selects NVIDIA DLSS super resolution as the temporal
+stage, on NVIDIA RTX GPUs with Vulkan (Windows and Linux), in an Engine
+built with it. It reads the same [temporal inputs](#temporal-inputs) as
+TAAU, and the render scale picks its mode as it does TAAU's; at 1 it is
+DLAA. DLSS draws with the named mode nearest the render scale, at the
+render scale held within the input sizes that mode takes (ultra performance
+takes exactly a third of the output), and the readout's render resolution
+is the one drawn.
+
+Where DLSS cannot draw, the readout refuses it and TAAU draws in its place:
+`NotBuilt` (an Engine built without it, as published pairs are),
+`UnsupportedAdapter` (not Vulkan, not NVIDIA, or a card NGX says cannot run
+it, as before RTX) and `InitializationFailed` (NGX failed to start, or to
+make or evaluate the feature). A software adapter refuses it as it refuses
+TAAU (`SoftwareAdapter`), and draws bilinear. `engine.renderer` names the
+stage `dlss` under `gpu.upscale`, with NGX's own words for a refusal as
+`gpu.upscale.dlssRefused`; its GPU time is the `upscale` pass, DLSS and the
+copy of its output into the frame.
+
+DLSS comes from `dlss_wgpu` behind render-wgpu's `dlss` cargo feature
+(`csharp-product-runtime`'s `dlss` forwards it), off by default: CI and
+ordinary builds never need what it builds from. Building it needs:
+- NVIDIA's DLSS SDK, v310.9.1 for `dlss_wgpu` 6.0.0
+  (https://github.com/NVIDIA/DLSS), which is not redistributable: each
+  contributor obtains it under NVIDIA's licence;
+- the Vulkan headers and clang (libclang), for its bindings.
+
+The SDK's location is build configuration for `dlss_wgpu`'s build script,
+`DLSS_SDK`, and the headers' is `VULKAN_SDK` (with `LIBCLANG_PATH` where
+clang is not on the path): set them in your own `~/.cargo/config.toml`
+`[env]` for a contributor build, or pass the SDK to
+`scripts/build-runtime-pack.sh --dlss <sdk>` (and
+`build-desktop-runtime-pack-archive.sh --dlss <sdk>`). Nothing reads them at
+run time. On Windows a build with DLSS links the C runtime statically
+(`RUSTFLAGS=-C target-feature=+crt-static`, which the pack script sets):
+NGX's library for the dynamic runtime cannot link beside the host's static
+nethost. On the shared machines the SDK lives outside any repository at
+`~/sdk/nvidia-dlss-310.9.1` (den-agents, with `VULKAN_SDK=/usr`) and
+`C:\Users\agent\sdk\nvidia-dlss-310.9.1` (den-win11, with the Vulkan SDK
+in `C:\VulkanSDK\1.4.363.0` and LLVM in `C:\Program Files\LLVM`).
+
+A pack built with it carries NVIDIA's DLSS library beside the host in
+`bin/` (`nvngx_dlss.dll` on win-x64, `libnvidia-ngx-dlss.so.310.9.1` on
+linux-x64), where NGX loads it, and in `share/third-party/nvidia-dlss/` the
+SDK's licence and the copyright and licence notices of the code inside the
+library (`rust/crates/render-wgpu/dlss/NOTICES.txt`, from the programming
+guide's notices), which NVIDIA asks every product shipping it to include.
+The library keeps NVIDIA's signature: NGX loads nothing unsigned.
+
 ## Video options
 
 A player chooses renderer settings in the game's options menu: the Engine's
@@ -424,7 +477,7 @@ renderer setting, is reported and ignored.
 | Option | Group | Values |
 | --- | --- | --- |
 | `renderScale` | Display | 0.33 to 1 in steps of 0.01 |
-| `antialiasing` | Display | `off`, `2x`, `4x`, `temporal` |
+| `antialiasing` | Display | `off`, `2x`, `4x`, `temporal`, `dlss` |
 | `vsync` | Display | on or off |
 | `shadows` | Quality | on or off |
 | `backdropShadows` | Quality | on or off |

@@ -29,7 +29,7 @@
 //! At render scale 1 with no method selected and no image effect, there is
 //! no picture and no stage: the views draw straight into the output.
 //!
-//! Two methods draw:
+//! Three methods draw:
 //! - **Bilinear:** each output pixel samples the picture. A render scale
 //!   below 1 selects it.
 //! - **TAAU** (`upscale.wgsl`): the temporal anti-aliasing and upscaling
@@ -51,6 +51,9 @@
 //!   (`ImageEffect`) and the views do not jitter. Its history starts again
 //!   whenever the frame says it no longer holds (`TemporalInputs`), the
 //!   output's size changes, or a frame draws without it.
+//! - **DLSS** (`dlss.rs`): NVIDIA's temporal upscaler, from the same inputs.
+//!   `Antialiasing::Dlss` selects it, in builds with it, on adapters that
+//!   run it; where it is refused, TAAU draws.
 
 use render_shaders::{Entry, Features};
 
@@ -106,20 +109,27 @@ pub enum UpscaleMethod {
     /// Temporal anti-aliasing and upscaling: jittered frames gathered into
     /// a history at output resolution.
     Taau,
+    /// NVIDIA DLSS super resolution, from the same jittered frames.
+    Dlss,
 }
 
 impl UpscaleMethod {
     /// The method `options` select, or `None` to draw straight into the
-    /// output. `temporal` is whether the device and frame can run the
-    /// temporal stage (no refusal and no image effect).
+    /// output. `temporal` is whether the device and frame can run a
+    /// temporal stage (no refusal and no image effect), and `dlss` whether
+    /// DLSS can (no refusal).
     ///
-    /// `Antialiasing::Temporal` selects TAAU at any render scale; otherwise
+    /// `Antialiasing::Temporal` selects TAAU at any render scale, and
+    /// `Antialiasing::Dlss` DLSS, or TAAU where DLSS is refused; otherwise
     /// a render scale below 1 selects bilinear. One setting holds MSAA and
-    /// the temporal stage, so they exclude each other by its shape; a
-    /// further temporal backend (DLSS) is chosen here in TAAU's place.
-    pub(crate) fn selected(options: &RendererOptions, temporal: bool) -> Option<Self> {
+    /// the temporal stages, so they exclude each other by its shape.
+    pub(crate) fn selected(options: &RendererOptions, temporal: bool, dlss: bool) -> Option<Self> {
         if options.temporal && temporal {
-            Some(Self::Taau)
+            Some(if options.dlss && dlss {
+                Self::Dlss
+            } else {
+                Self::Taau
+            })
         } else {
             (options.render_scale < 1.0).then_some(Self::Bilinear)
         }
@@ -130,15 +140,16 @@ impl UpscaleMethod {
     pub fn temporal(self) -> bool {
         match self {
             Self::Bilinear => false,
-            Self::Taau => true,
+            Self::Taau | Self::Dlss => true,
         }
     }
 
-    /// Its name in readouts: `bilinear` or `taau`.
+    /// Its name in readouts: `bilinear`, `taau` or `dlss`.
     pub fn name(self) -> &'static str {
         match self {
             Self::Bilinear => "bilinear",
             Self::Taau => "taau",
+            Self::Dlss => "dlss",
         }
     }
 }
@@ -330,6 +341,11 @@ pub(crate) struct Upscale {
     sampler: wgpu::Sampler,
     /// TAAU, from the first frame it runs.
     taau: Option<Taau>,
+    /// DLSS, which starts the first time it is asked for.
+    dlss: crate::dlss::Dlss,
+    /// The temporal method the last frame ran: each keeps its own
+    /// history, which a frame of the other breaks.
+    last_temporal: Option<UpscaleMethod>,
     timer: Option<PassTimer>,
 }
 
@@ -343,16 +359,46 @@ impl Upscale {
                 ..Default::default()
             }),
             taau: None,
+            dlss: crate::dlss::Dlss::new(),
+            last_temporal: None,
             timer: PassTimer::new(gpu, PASS),
         }
     }
 
-    /// A primary frame drew without TAAU: its history no longer holds, and
-    /// goes.
+    /// A primary frame drew without a temporal stage: their histories no
+    /// longer hold, and go.
     pub fn forget_history(&mut self) {
         if let Some(taau) = &mut self.taau {
             taau.history = None;
         }
+        self.dlss.forget_history();
+        self.last_temporal = None;
+    }
+
+    /// Start DLSS on this device, once: the settings ask for it.
+    pub fn prepare_dlss(&mut self, gpu: &Gpu) {
+        self.dlss.prepare(gpu);
+    }
+
+    /// The render resolution DLSS draws from in a frame of `resolution`
+    /// at `render_scale` (`dlss.rs`), or None if it refused as it started.
+    pub fn dlss_render_size(
+        &mut self,
+        gpu: &Gpu,
+        resolution: FrameResolution,
+        render_scale: f32,
+    ) -> Option<(u32, u32)> {
+        self.dlss
+            .render_size(gpu, resolution.output, resolution.render, render_scale)
+            .ok()
+    }
+
+    /// Why DLSS does not draw, if it cannot.
+    pub fn dlss_refusal(&self) -> Option<crate::DlssRefusal> {
+        self.dlss.refusal().map(|refused| crate::DlssRefusal {
+            refusal: refused.refusal,
+            detail: refused.detail,
+        })
     }
 
     /// Bring `picture` to `output` by `method`, over the whole output. A
@@ -373,9 +419,31 @@ impl Upscale {
         if let Some(timer) = &mut self.timer {
             timer.collect(gpu);
         }
+        if method.temporal() && self.last_temporal != Some(method) {
+            self.forget_history();
+        }
+        self.last_temporal = method.temporal().then_some(method);
         match (method, temporal) {
             (UpscaleMethod::Taau, Some(inputs)) => {
                 self.taau(gpu, shaders, picture, &inputs, render_scale, output);
+            }
+            (UpscaleMethod::Dlss, Some(inputs)) => {
+                let drawn = self.dlss.run(
+                    gpu,
+                    compose,
+                    &self.sampler,
+                    self.timer.as_mut(),
+                    picture,
+                    &inputs,
+                    render_scale,
+                    output,
+                );
+                // Refused as it ran: TAAU draws this frame, and the next
+                // selects it.
+                if drawn.is_err() {
+                    self.last_temporal = Some(UpscaleMethod::Taau);
+                    self.taau(gpu, shaders, picture, &inputs, render_scale, output);
+                }
             }
             _ => {
                 self.forget_history();

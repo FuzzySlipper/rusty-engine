@@ -997,7 +997,9 @@ so a graphics menu starts from them. Invalid values reject staging.
 
 `RustyEngineProductAntialiasing` sets how the streamed frame or the window
 smooths its edges: `off`, `2x` or `4x` (the default) samples per pixel, or
-`temporal`, the [temporal upscale stage](lighting-and-sky.md#temporal-upscaling-taau).
+`temporal`, the [temporal upscale stage](lighting-and-sky.md#temporal-upscaling-taau),
+or `dlss`, [NVIDIA DLSS](lighting-and-sky.md#dlss) on RTX GPUs in an Engine
+built with it (`temporal` draws where it is refused).
 Offscreen camera targets and image captures are single-sample.
 `RustyEngineProductRenderScale` (`1`, the default, down to `0.33`) is the
 fraction of the frame's size the world, viewmodel, labels and effects draw at

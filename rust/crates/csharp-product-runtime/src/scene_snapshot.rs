@@ -125,6 +125,10 @@ pub struct SceneSnapshotOptions {
     /// without it.
     #[serde(default)]
     pub temporal: bool,
+    /// With `temporal`, DLSS draws the stage; snapshots written before it
+    /// draw TAAU.
+    #[serde(default)]
+    pub dlss: bool,
     /// Snapshots written before vsync was a setting waited for the display.
     #[serde(default = "default_vsync")]
     pub vsync: bool,
@@ -242,6 +246,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             occlusion_culling: options.occlusion_culling,
             samples: options.samples,
             temporal: options.temporal,
+            dlss: options.dlss,
             vsync: options.vsync,
             render_scale: options.render_scale,
             volumetric_fog: options.volumetric_fog,
@@ -265,6 +270,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             occlusion_culling: options.occlusion_culling,
             samples: options.samples,
             temporal: options.temporal,
+            dlss: options.dlss,
             vsync: options.vsync,
             render_scale: options.render_scale,
             volumetric_fog: options.volumetric_fog,

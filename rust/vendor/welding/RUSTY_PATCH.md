@@ -46,3 +46,13 @@ With no keyed mutex, the copier's flush-and-wait is the only thing ordering
 the copy before the import, so it waits for the event query's data to read
 TRUE. The windows crate's `GetData` returns `Ok` for S_FALSE (not ready) as
 well; 0.15.0 returned on the first poll (`d3d11_event_reached`).
+
+Engine #9947 builds the desktop window's device with DLSS's Vulkan device
+extensions beside the DMA-BUF ones. 0.15.0's `build_dmabuf_capable_device`
+fixes its device-creation callback.
+
+- `src/native_frame/vulkan_dmabuf.rs` adds `build_dmabuf_capable_device_with`,
+  which opens the device itself with Graft's DMA-BUF extension list
+  (`DMABUF_DEVICE_EXTENSIONS`, a copy of Graft's private list) and then lets
+  the host's `extend` add to the callback's arguments. `src/lib.rs` exports
+  it on Linux with `wgpu-30`.

@@ -3,8 +3,9 @@
 //! output resolution. Its edges come close to 4× MSAA's at native scale,
 //! and closer to the native picture than bilinear at half scale; a still
 //! view settles; a moved part leaves no trail; a software adapter refuses
-//! it and draws without it. Needs a wgpu adapter: CI uses
-//! `WGPU_BACKEND=vulkan` with llvmpipe.
+//! it and draws without it. `Antialiasing::Dlss` draws DLSS (`dlss.rs`) on
+//! an RTX GPU in a build with it, and TAAU where it is refused. Needs a wgpu
+//! adapter: CI uses `WGPU_BACKEND=vulkan` with llvmpipe.
 
 mod support;
 
@@ -179,6 +180,33 @@ fn half_scale_taau_is_nearer_the_native_picture_than_bilinear() {
     );
 }
 
+/// Where DLSS draws (an RTX GPU in a build with it).
+#[test]
+fn dlss_quality_is_nearer_the_native_picture_than_bilinear() {
+    let mut harness = scene();
+    if harness.gpu.is_software() {
+        return;
+    }
+    let (_, native) = settle(&mut harness, Antialiasing::Msaa4, 1.0, 2);
+    let (_, bilinear) = settle(&mut harness, Antialiasing::Msaa4, 0.67, 2);
+    let (stats, dlss) = settle(&mut harness, Antialiasing::Dlss, 0.67, 64);
+    if stats.upscale != Some(UpscaleMethod::Dlss) {
+        return;
+    }
+    let (spatial, temporal) = (
+        edge_difference(&native, &bilinear),
+        edge_difference(&native, &dlss),
+    );
+    assert!(
+        temporal < spatial * 0.85,
+        "DLSS's edges ({temporal:.2}) nearer native than bilinear's ({spatial:.2})"
+    );
+    // A still view settles: the next frame barely differs.
+    let (_, next) = harness.render(&view());
+    let shimmer = mean_difference(&dlss, &next);
+    assert!(shimmer < 0.75, "a still view settles: {shimmer:.3}");
+}
+
 #[test]
 fn a_moved_part_leaves_no_trail() {
     let mut harness = scene();
@@ -225,6 +253,41 @@ fn a_software_adapter_refuses_the_temporal_stage_and_still_draws() {
         assert_eq!(readout.antialiasing, None);
         assert_eq!(readout.effective.antialiasing, Antialiasing::Temporal);
         assert_eq!(stats.upscale, Some(UpscaleMethod::Taau));
+    }
+}
+
+#[test]
+fn dlss_is_refused_with_its_reason_where_it_cannot_draw() {
+    let mut harness = scene();
+    let (stats, picture) = settle(&mut harness, Antialiasing::Dlss, 0.67, 2);
+    let readout = harness.renderer.settings_readout();
+    let refused = harness.renderer.gpu_readout().dlss;
+    assert_eq!(readout.requested.antialiasing, Antialiasing::Dlss);
+    assert!(picture.chunks(4).any(|p| p[0] > 100), "the crates drew");
+    if harness.gpu.is_software() {
+        // TAAU refuses too: bilinear at the render scale.
+        assert_eq!(readout.antialiasing, Some(SettingRefusal::SoftwareAdapter));
+        assert_eq!(readout.effective.antialiasing, Antialiasing::Off);
+        assert_eq!(stats.upscale, Some(UpscaleMethod::Bilinear));
+    } else if cfg!(feature = "dlss") && stats.upscale == Some(UpscaleMethod::Dlss) {
+        assert_eq!(readout.antialiasing, None);
+        assert_eq!(readout.effective.antialiasing, Antialiasing::Dlss);
+        assert_eq!(refused, None);
+    } else {
+        let refusal = readout.antialiasing.expect("DLSS refused");
+        if cfg!(feature = "dlss") {
+            assert!(matches!(
+                refusal,
+                SettingRefusal::UnsupportedAdapter | SettingRefusal::InitializationFailed
+            ));
+        } else {
+            assert_eq!(refusal, SettingRefusal::NotBuilt);
+        }
+        assert_eq!(readout.effective.antialiasing, Antialiasing::Temporal);
+        assert_eq!(stats.upscale, Some(UpscaleMethod::Taau));
+        let refused = refused.expect("the refusal's detail");
+        assert_eq!(refused.refusal, refusal);
+        assert!(!refused.detail.is_empty());
     }
 }
 
@@ -282,9 +345,37 @@ fn runner_view() -> RendererCompositionCamera {
 
 #[test]
 fn a_running_skinned_character_leaves_no_trail() {
+    if let Some((_, difference)) = runner_against_a_fresh_frame(Antialiasing::Temporal) {
+        assert!(
+            difference < 3.0,
+            "the runner against a fresh frame: {difference:.3}"
+        );
+    }
+}
+
+/// Where DLSS draws (an RTX GPU in a build with it).
+#[test]
+fn a_running_skinned_character_leaves_no_trail_under_dlss() {
+    if let Some((Some(UpscaleMethod::Dlss), difference)) =
+        runner_against_a_fresh_frame(Antialiasing::Dlss)
+    {
+        assert!(
+            difference < 3.0,
+            "the runner against a fresh frame: {difference:.3}"
+        );
+    }
+}
+
+/// The body running for 48 frames at render scale 0.67 under
+/// `antialiasing`: the stage that drew the last frame, and its mean
+/// difference from the same moment drawn afresh with 4x MSAA. None on a
+/// software adapter.
+fn runner_against_a_fresh_frame(
+    antialiasing: Antialiasing,
+) -> Option<(Option<UpscaleMethod>, f64)> {
     let mut harness = scene();
     if harness.gpu.is_software() {
-        return;
+        return None;
     }
     let body = admit_body(&mut harness);
     harness.apply(vec![
@@ -321,17 +412,18 @@ fn a_running_skinned_character_leaves_no_trail() {
     const SPEED: f32 = 1.5;
     harness.apply(vec![RenderDiff::SetRendererSettings {
         settings: RendererSettingsDescriptor {
-            antialiasing: Antialiasing::Temporal,
+            antialiasing,
             render_scale: 0.67,
             ..RendererSettingsDescriptor::DEFAULT
         },
     }]);
     harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, harness.renderer.samples());
     let view = runner_view();
-    let mut last = Vec::new();
+    let (mut stage, mut last) = (None, Vec::new());
     for frame in 1..=48 {
         place_runner(&mut harness, f64::from(frame) * STEP, SPEED);
-        last = harness.render(&view).1;
+        let (stats, picture) = harness.render(&view);
+        (stage, last) = (stats.upscale, picture);
     }
     // The same moment drawn afresh, with 4x MSAA and no history.
     let reference = {
@@ -349,11 +441,7 @@ fn a_running_skinned_character_leaves_no_trail() {
         renderer.render_offscreen(&view, &target);
         target.read_rgba(&harness.gpu)
     };
-    let difference = mean_difference(&last, &reference);
-    assert!(
-        difference < 3.0,
-        "the runner against a fresh frame: {difference:.3}"
-    );
+    Some((stage, mean_difference(&last, &reference)))
 }
 
 /// A still crate before a striped wall sliding across the view, and a

@@ -14,13 +14,18 @@ esac
 OUTPUT="$REPO_ROOT/target/runtime-pack/$TARGET"
 
 usage() {
-  echo "usage: scripts/build-runtime-pack.sh [--output <new-directory>] [--desktop]" >&2
+  echo "usage: scripts/build-runtime-pack.sh [--output <new-directory>] [--desktop] [--dlss <dlss-sdk>]" >&2
 }
 
 # --desktop builds the host with the desktop shell and ships Chromium's
 # runtime in lib/cef. CEF's build downloads it into CEF_PATH (default
 # target/cef); building it needs cmake and ninja.
 DESKTOP=0
+# --dlss builds the renderer with NVIDIA DLSS from the DLSS SDK checkout
+# given, and ships its library beside the host with NVIDIA's licence text
+# (docs/lighting-and-sky.md#dlss). The build also needs clang and the Vulkan
+# headers under VULKAN_SDK (default /usr on Linux).
+DLSS_SDK_DIR=
 
 while (($#)); do
   case "$1" in
@@ -32,6 +37,11 @@ while (($#)); do
     --desktop)
       DESKTOP=1
       shift
+      ;;
+    --dlss)
+      (($# >= 2)) || { usage; exit 2; }
+      DLSS_SDK_DIR="$(cd "$2" && pwd)"
+      shift 2
       ;;
     --help)
       usage
@@ -68,7 +78,25 @@ pnpm --dir render run build
 HOST_FEATURES=()
 if ((DESKTOP)); then
   export CEF_PATH="${CEF_PATH:-$REPO_ROOT/target/cef}"
-  HOST_FEATURES=(--features desktop)
+  HOST_FEATURES+=(desktop)
+fi
+if [[ -n $DLSS_SDK_DIR ]]; then
+  # dlss_wgpu's build reads both; nothing reads them at run time.
+  export DLSS_SDK="$DLSS_SDK_DIR"
+  export VULKAN_SDK="${VULKAN_SDK:-/usr}"
+  if [[ $TARGET == win-x64 ]]; then
+    # The build script is a Windows program: give it Windows paths.
+    DLSS_SDK=$(cygpath -m "$DLSS_SDK")
+    VULKAN_SDK=$(cygpath -m "$VULKAN_SDK")
+    # NGX's dynamic-CRT library clashes with nethost's static one
+    # (LNK2038); with a static C runtime dlss_wgpu links NGX's static-CRT
+    # library.
+    export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static"
+  fi
+  HOST_FEATURES+=(dlss)
+fi
+if ((${#HOST_FEATURES[@]})); then
+  HOST_FEATURES=(--features "$(IFS=,; echo "${HOST_FEATURES[*]}")")
 fi
 cargo build --locked --release -p csharp-product-runtime "${HOST_FEATURES[@]}" \
   --bin rusty-product-host --bin rusty-live-debug --bin rusty-scene-render
@@ -151,6 +179,23 @@ if ((DESKTOP)); then
     [[ -f "$manifest" ]] || { echo "source of $crate not found" >&2; exit 1; }
     cp -a "$(dirname "$manifest")" "$STAGE/share/third-party/$crate"
   done
+fi
+
+if [[ -n $DLSS_SDK_DIR ]]; then
+  # NGX loads DLSS from the host's own directory. Its licence asks for the
+  # SDK's licence and the notices of the programming guide's section 9.5.
+  if [[ $TARGET == win-x64 ]]; then
+    dlss_library=("$DLSS_SDK_DIR/lib/Windows_x86_64/rel/nvngx_dlss.dll")
+  else
+    dlss_library=("$DLSS_SDK_DIR"/lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.*)
+  fi
+  [[ ${#dlss_library[@]} == 1 && -f ${dlss_library[0]} ]] || {
+    echo "no single DLSS library in $DLSS_SDK_DIR for $TARGET: ${dlss_library[*]}" >&2
+    exit 1
+  }
+  install -m 755 "${dlss_library[0]}" "$STAGE/bin/$(basename "${dlss_library[0]}")"
+  install -D -m 644 "$DLSS_SDK_DIR/LICENSE.txt" "$STAGE/share/third-party/nvidia-dlss/LICENSE.txt"
+  install -D -m 644 rust/crates/render-wgpu/dlss/NOTICES.txt "$STAGE/share/third-party/nvidia-dlss/NOTICES.txt"
 fi
 
 # Include the corresponding source and license for our modified MPL component.

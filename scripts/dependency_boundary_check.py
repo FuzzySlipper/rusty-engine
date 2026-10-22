@@ -74,6 +74,8 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     # The desktop shell's UI overlay (Chromium off-screen rendering).
     "cef": frozenset({"render-wgpu"}),
     "welding": frozenset({"render-wgpu"}),
+    # NVIDIA DLSS through the renderer's Vulkan device (#9947).
+    "dlss_wgpu": frozenset({"render-wgpu"}),
     "winit": frozenset({"desktop-shell"}),
     # Video clips: WebM demux and VP9 decode (#8791).
     "matroska-demuxer": frozenset({"render-video"}),

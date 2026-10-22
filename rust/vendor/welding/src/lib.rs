@@ -119,6 +119,8 @@ pub use downloads::DownloadId;
 pub use error::WeldError;
 #[cfg(target_os = "linux")]
 pub use native_frame::build_dmabuf_capable_device;
+#[cfg(all(target_os = "linux", feature = "wgpu-30"))]
+pub use native_frame::build_dmabuf_capable_device_with;
 pub use native_frame::{
     HostWgpuContext, ImportError, ImportedTexture, InteropBackend, NativeFrame, NativeFrameKind,
     NativeFramePixelFormat, WgpuTextureImporter,

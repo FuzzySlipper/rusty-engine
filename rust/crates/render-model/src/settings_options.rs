@@ -153,6 +153,10 @@ const ANTIALIASING_CHOICES: &[RendererSettingChoice] = &[
         value: "temporal",
         label: "Temporal (TAA)",
     },
+    RendererSettingChoice {
+        value: "dlss",
+        label: "NVIDIA DLSS",
+    },
 ];
 
 const SHADOW_BUDGET_CHOICES: &[RendererSettingChoice] = &[
@@ -217,7 +221,7 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         id: "renderScale",
         label: "Render scale",
         group: "Display",
-        description: "Draws the world at a fraction of the screen's resolution and scales it up: lower is faster and softer. With temporal anti-aliasing, 1 is native TAA and 0.67, 0.58, 0.5 and 0.33 are the quality, balanced, performance and ultra performance modes.",
+        description: "Draws the world at a fraction of the screen's resolution and scales it up: lower is faster and softer. With temporal anti-aliasing or DLSS, 1 is native anti-aliasing (TAA or DLAA) and 0.67, 0.58, 0.5 and 0.33 are the quality, balanced, performance and ultra performance modes.",
         kind: RendererSettingKind::Range {
             // `RendererSettingsDescriptor::MIN_RENDER_SCALE`, written as the
             // decimal a player chooses rather than the f32 widened.
@@ -234,7 +238,7 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         id: "antialiasing",
         label: "Anti-aliasing",
         group: "Display",
-        description: "Smooths jagged edges by taking several samples a pixel (MSAA), or by gathering slightly offset frames over time (temporal), which also upscales from a lower render scale.",
+        description: "Smooths jagged edges by taking several samples a pixel (MSAA), or by gathering slightly offset frames over time (temporal), which also upscales from a lower render scale. DLSS does the same with NVIDIA's upscaler on RTX graphics cards, and temporal draws where it is unavailable.",
         kind: RendererSettingKind::Choice {
             choices: ANTIALIASING_CHOICES,
         },

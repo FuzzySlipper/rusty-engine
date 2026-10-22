@@ -32,6 +32,7 @@ mod convert;
 mod culling;
 mod decals;
 mod distance_fields;
+mod dlss;
 mod driver;
 mod effects;
 mod finish;
@@ -231,6 +232,8 @@ pub struct GpuReadout {
     /// The last primary frame's resolutions and the upscale stage that
     /// brought its picture to the output, if one ran (`upscale.rs`).
     pub upscale: UpscaleReadout,
+    /// Why DLSS does not draw, while the settings ask for it.
+    pub dlss: Option<DlssRefusal>,
 }
 
 /// The last primary frame's render and output resolutions, and its upscale
@@ -239,6 +242,15 @@ pub struct GpuReadout {
 pub struct UpscaleReadout {
     pub resolution: FrameResolution,
     pub method: Option<UpscaleMethod>,
+}
+
+/// Why DLSS draws no frame while asked for (`Antialiasing::Dlss`), as the
+/// readout's refusal names it and in NGX's words where it has them
+/// (`dlss.rs`); TAAU draws in its place.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DlssRefusal {
+    pub refusal: SettingRefusal,
+    pub detail: String,
 }
 
 /// The backdrop camera a world view drew its backdrop with (`SetBackdrop`):
@@ -297,6 +309,9 @@ pub struct RendererOptions {
     /// to the output, at any render scale; its primary destination is
     /// single-sample. A software adapter draws without it.
     pub temporal: bool,
+    /// With `temporal`, NVIDIA DLSS draws the stage in TAAU's place
+    /// (`dlss.rs`); where it is refused, TAAU draws.
+    pub dlss: bool,
     /// Window output waits for the display's refresh before presenting;
     /// off presents as soon as a frame is drawn. Streamed output has no
     /// display.
@@ -333,6 +348,7 @@ impl Default for RendererOptions {
             occlusion_culling: false,
             samples: RendererSettingsDescriptor::DEFAULT.antialiasing.samples(),
             temporal: false,
+            dlss: false,
             vsync: RendererSettingsDescriptor::DEFAULT.vsync,
             render_scale: RendererSettingsDescriptor::DEFAULT.render_scale,
             volumetric_fog: render_model::VolumetricFogQuality::Off,
@@ -368,7 +384,8 @@ impl RendererOptions {
             radius: settings.ambient_occlusion.radius,
         };
         self.samples = settings.antialiasing.samples();
-        self.temporal = settings.antialiasing == Antialiasing::Temporal;
+        self.temporal = settings.antialiasing.temporal();
+        self.dlss = settings.antialiasing == Antialiasing::Dlss;
         self.vsync = settings.vsync;
         self.render_scale = settings.render_scale;
         self.clustered_lighting = settings.clustered_lighting;
@@ -397,7 +414,9 @@ impl RendererOptions {
                 strength: self.ambient_occlusion.strength,
                 radius: self.ambient_occlusion.radius,
             },
-            antialiasing: if self.temporal {
+            antialiasing: if self.temporal && self.dlss {
+                Antialiasing::Dlss
+            } else if self.temporal {
                 Antialiasing::Temporal
             } else {
                 Antialiasing::from_samples(self.samples).unwrap_or_default()
@@ -435,6 +454,13 @@ pub enum SettingRefusal {
     /// (`image_effect.rs`): frames draw without temporal anti-aliasing while
     /// one is set.
     ImageEffect,
+    /// This build of the Engine does not have the feature (DLSS, built only
+    /// with render-wgpu's `dlss` feature).
+    NotBuilt,
+    /// The adapter cannot run the feature (DLSS off NVIDIA RTX GPUs).
+    UnsupportedAdapter,
+    /// The feature's library failed to start on this device (DLSS's NGX).
+    InitializationFailed,
 }
 
 /// The settings in effect and what the device refused: what a product
@@ -878,6 +904,9 @@ impl Renderer {
             renderer.builtins.insert(kind, mesh);
         }
         renderer.tables.parts.selecting = renderer.scatter_select.available();
+        if renderer.options.dlss {
+            renderer.upscale.prepare_dlss(&renderer.gpu);
+        }
         renderer
     }
 
@@ -922,6 +951,9 @@ impl Renderer {
             options.ambient_occlusion.path == AmbientOcclusionPath::DistanceField
         };
         let (was, now) = (traced(&self.options), traced(&options));
+        if options.dlss {
+            self.upscale.prepare_dlss(&self.gpu);
+        }
         self.options = options;
         self.tables.lights_dirty = true;
         if was != now {
@@ -972,6 +1004,12 @@ impl Renderer {
         }
     }
 
+    /// Why DLSS does not draw the temporal stage, if it cannot
+    /// (`dlss.rs`): TAAU draws in its place.
+    pub(crate) fn dlss_refusal(&self) -> Option<DlssRefusal> {
+        self.upscale.dlss_refusal()
+    }
+
     /// Whether window output should wait for the display's refresh.
     pub fn vsync(&self) -> bool {
         self.options.vsync
@@ -990,9 +1028,20 @@ impl Renderer {
         let requested = self.options.settings();
         let mut effective = requested;
         let antialiasing = if self.options.temporal {
-            self.temporal_refusal().inspect(|_| {
-                effective.antialiasing = Antialiasing::Off;
-            })
+            self.temporal_refusal()
+                .inspect(|_| {
+                    effective.antialiasing = Antialiasing::Off;
+                })
+                .or_else(|| {
+                    self.options
+                        .dlss
+                        .then(|| self.dlss_refusal())
+                        .flatten()
+                        .map(|refused| {
+                            effective.antialiasing = Antialiasing::Temporal;
+                            refused.refusal
+                        })
+                })
         } else {
             (!self.gpu.samples_supported(self.options.samples)).then(|| {
                 effective.antialiasing =
@@ -1151,6 +1200,7 @@ impl Renderer {
             decals: self.decals.readout(),
             water: self.water.readout(),
             upscale: self.upscaled,
+            dlss: self.options.dlss.then(|| self.dlss_refusal()).flatten(),
         }
     }
 

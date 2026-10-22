@@ -897,10 +897,12 @@ pub enum WaterReflectionsQuality {
 /// How the primary destination smooths its edges
 /// (`RendererSettingsDescriptor::antialiasing`): several samples a pixel
 /// (MSAA), or a temporal upscale stage that gathers jittered frames at the
-/// render scale into the output (`temporal`, render-wgpu `upscale.rs`). One
-/// setting holds both, so the temporal stage and MSAA exclude each other.
-/// Written as its text form (`off`, `2x`, `4x`, `temporal`); settings
-/// written when it was a sample count read as that count.
+/// render scale into the output (render-wgpu `upscale.rs`): the Engine's
+/// TAAU (`temporal`) on every GPU, or NVIDIA DLSS (`dlss`) on RTX cards in
+/// builds with it, which draws TAAU where refused. One setting holds them
+/// all, so a temporal stage and MSAA exclude each other. Written as its
+/// text form (`off`, `2x`, `4x`, `temporal`, `dlss`); settings written when
+/// it was a sample count read as that count.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum Antialiasing {
     Off,
@@ -908,29 +910,43 @@ pub enum Antialiasing {
     #[default]
     Msaa4,
     Temporal,
+    Dlss,
 }
 
 impl Antialiasing {
     /// Every value, in a menu's order.
-    pub const ALL: [Self; 4] = [Self::Off, Self::Msaa2, Self::Msaa4, Self::Temporal];
+    pub const ALL: [Self; 5] = [
+        Self::Off,
+        Self::Msaa2,
+        Self::Msaa4,
+        Self::Temporal,
+        Self::Dlss,
+    ];
 
-    /// Samples per pixel of the primary destination: one under the
-    /// temporal stage.
+    /// Samples per pixel of the primary destination: one under a temporal
+    /// stage.
     pub const fn samples(self) -> u32 {
         match self {
-            Self::Off | Self::Temporal => 1,
+            Self::Off | Self::Temporal | Self::Dlss => 1,
             Self::Msaa2 => 2,
             Self::Msaa4 => 4,
         }
     }
 
-    /// The text form: `off`, `2x`, `4x` or `temporal`.
+    /// Whether a temporal stage draws it (`temporal` or `dlss`); the render
+    /// scale then picks its mode (`TEMPORAL_MODES`).
+    pub const fn temporal(self) -> bool {
+        matches!(self, Self::Temporal | Self::Dlss)
+    }
+
+    /// The text form: `off`, `2x`, `4x`, `temporal` or `dlss`.
     pub const fn name(self) -> &'static str {
         match self {
             Self::Off => "off",
             Self::Msaa2 => "2x",
             Self::Msaa4 => "4x",
             Self::Temporal => "temporal",
+            Self::Dlss => "dlss",
         }
     }
 
@@ -966,7 +982,7 @@ impl<'de> Deserialize<'de> for Antialiasing {
         match Written::deserialize(deserializer)? {
             Written::Name(name) => Self::from_name(&name).ok_or_else(|| {
                 serde::de::Error::custom(format!(
-                    "antialiasing {name}: expected off, 2x, 4x or temporal"
+                    "antialiasing {name}: expected off, 2x, 4x, temporal or dlss"
                 ))
             }),
             Written::Samples(samples) => Self::from_samples(samples).ok_or_else(|| {
@@ -976,11 +992,11 @@ impl<'de> Deserialize<'de> for Antialiasing {
     }
 }
 
-/// The temporal stage's named render scales
-/// (`RendererSettingsDescriptor::render_scale` under
-/// `Antialiasing::Temporal`): native-resolution anti-aliasing, then the
-/// usual upscaling quality modes. Any scale within range draws; these are
-/// the ones a menu names.
+/// The temporal stages' named render scales
+/// (`RendererSettingsDescriptor::render_scale` under `Antialiasing::Temporal`
+/// or `Antialiasing::Dlss`): native-resolution anti-aliasing (DLAA under
+/// DLSS), then the usual upscaling quality modes. Any scale within range
+/// draws; these are the ones a menu names.
 pub const TEMPORAL_MODES: [(&str, f32); 5] = [
     ("native", 1.0),
     ("quality", 0.67),
@@ -1042,11 +1058,11 @@ pub struct RendererSettingsDescriptor {
     pub shadow_budget: Option<u32>,
     pub ambient_occlusion: AmbientOcclusionSettings,
     /// How the primary destination smooths its edges: 1, 2 or 4 samples a
-    /// pixel, or the temporal stage.
+    /// pixel, or a temporal stage (TAAU or DLSS).
     pub antialiasing: Antialiasing,
     /// The fraction of the primary destination's size the world, viewmodel,
     /// labels and effects draw at before being upscaled into it: 0.33 to 1
-    /// (`TEMPORAL_MODES` names the temporal stage's).
+    /// (`TEMPORAL_MODES` names the temporal stages').
     pub render_scale: f32,
     /// Window output waits for the display's refresh before presenting.
     pub vsync: bool,
