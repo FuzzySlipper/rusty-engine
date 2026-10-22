@@ -355,3 +355,101 @@ fn a_running_skinned_character_leaves_no_trail() {
         "the runner against a fresh frame: {difference:.3}"
     );
 }
+
+/// A still crate before a striped wall sliding across the view, and a
+/// viewmodel cube in the lower right corner, `shown` or not, drawn with TAAU
+/// for `frames` frames: the last frame.
+fn crate_before_a_sliding_wall(shown: bool, frames: u32) -> Vec<u8> {
+    const WALL: u64 = 700;
+    let mut harness = scene();
+    let mut ops = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/taau-stripe", [0.95, 0.9, 0.2, 1.0], None),
+        },
+        static_mesh(
+            "static-mesh/taau-stripe",
+            box_mesh([-0.1, 0.0, -0.1], [0.1, 4.0, 0.1], |_| 0),
+            "material/taau-stripe",
+        ),
+        group(WALL, None, transform([0.0, 0.0, -6.0], 0.0, [1.0; 3])),
+        instance(
+            600,
+            None,
+            CRATE,
+            transform([-0.6, 1.0, 1.5], 20.0, [1.0; 3]),
+        ),
+        RenderDiff::CreateStaticMeshInstance {
+            handle: RenderHandle::new(601),
+            parent: None,
+            instance: StaticMeshInstanceDescriptor {
+                asset: CRATE.to_owned(),
+                transform: transform([0.35, -0.3, -1.0], 30.0, [0.15; 3]),
+                visible: shown,
+                material_overrides: Vec::new(),
+                metadata: RenderMetadata::default(),
+                layer: RenderLayer::Viewmodel,
+                shadow_casting: Default::default(),
+            },
+        },
+        RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                antialiasing: Antialiasing::Temporal,
+                render_scale: 0.67,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        },
+    ];
+    for stripe in 0..24_u64 {
+        ops.push(instance(
+            610 + stripe,
+            Some(WALL),
+            "static-mesh/taau-stripe",
+            transform([stripe as f32 * 0.5 - 6.0, 0.0, 0.0], 0.0, [1.0; 3]),
+        ));
+    }
+    harness.apply(ops);
+    harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, harness.renderer.samples());
+    let view = camera([0.0, 1.5, 5.0], 0.0, 0.0);
+    let mut last = Vec::new();
+    for frame in 0..frames {
+        harness.apply(vec![RenderDiff::Update {
+            handle: RenderHandle::new(WALL),
+            transform: Some(transform([frame as f32 * 0.4, 0.0, -6.0], 0.0, [1.0; 3])),
+            material: None,
+            visible: None,
+            metadata: None,
+        }]);
+        last = harness.render(&view).1;
+    }
+    last
+}
+
+/// The viewmodel draws against a depth of its own, so the world's depth
+/// still dilates the world's motion: a still crate's edges keep their own
+/// (no) motion over the wall sliding behind them whether a viewmodel draws
+/// or not, and the picture away from the viewmodel is the same.
+#[test]
+fn a_viewmodel_leaves_the_worlds_depth_aware_dilation_alone() {
+    if scene().gpu.is_software() {
+        return;
+    }
+    let without = crate_before_a_sliding_wall(false, 24);
+    let with = crate_before_a_sliding_wall(true, 24);
+    // Away from the viewmodel, in the lower right quarter.
+    let mut differing = 0;
+    for y in 0..HEIGHT {
+        for x in 0..WIDTH {
+            if x >= WIDTH / 2 && y >= HEIGHT / 2 {
+                continue;
+            }
+            let at = ((y * WIDTH + x) * 4) as usize;
+            if (0..3).any(|c| without[at + c].abs_diff(with[at + c]) > 6) {
+                differing += 1;
+            }
+        }
+    }
+    assert!(
+        differing <= 4,
+        "{differing} pixels away from the viewmodel differ with it drawn"
+    );
+}

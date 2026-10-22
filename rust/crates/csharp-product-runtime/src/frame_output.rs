@@ -648,6 +648,7 @@ impl FrameOutput {
             Some(SettingRefusal::TooFewTextureBindings) => {
                 NativeRendererSettingRefusal::TooFewTextureBindings
             }
+            Some(SettingRefusal::ImageEffect) => NativeRendererSettingRefusal::ImageEffect,
         };
         let mut effective = readout.effective;
         let vsync_refusal = if self.stream.is_some() && readout.requested.vsync {
@@ -889,6 +890,7 @@ fn settings_statistics(
         SettingRefusal::TooFewTextureBindings => {
             "the adapter binds too few textures per shader stage"
         }
+        SettingRefusal::ImageEffect => "a product image effect draws in the temporal stage's place",
     };
     let mut effective = readout.effective;
     let mut refused = std::collections::BTreeMap::new();

@@ -290,17 +290,20 @@ impl OffscreenTarget {
 /// The primary picture at render resolution (`upscale.rs`), which the
 /// primary views draw into while an upscale stage or an image effect runs:
 /// the single-sample image every pass writes and the depth at the primary's
-/// sample count.
+/// sample count. Under a temporal stage the viewmodel passes draw against a
+/// depth of their own, so the world's depth survives the frame for the
+/// stage's motion dilation.
 pub(crate) struct RenderPicture {
     image: wgpu::TextureView,
     depth: wgpu::TextureView,
+    viewmodel_depth: Option<wgpu::TextureView>,
     width: u32,
     height: u32,
     samples: u32,
 }
 
 impl RenderPicture {
-    pub fn new(gpu: &Gpu, width: u32, height: u32, samples: u32) -> Self {
+    pub fn new(gpu: &Gpu, width: u32, height: u32, samples: u32, temporal: bool) -> Self {
         let (width, height) = (width.max(1), height.max(1));
         let image = gpu
             .device
@@ -318,6 +321,7 @@ impl RenderPicture {
             .create_view(&Default::default());
         Self {
             depth: multisampled_depth(gpu, width, height, samples),
+            viewmodel_depth: temporal.then(|| multisampled_depth(gpu, width, height, samples)),
             image,
             width,
             height,
@@ -325,8 +329,9 @@ impl RenderPicture {
         }
     }
 
-    pub fn matches(&self, width: u32, height: u32, samples: u32) -> bool {
+    pub fn matches(&self, width: u32, height: u32, samples: u32, temporal: bool) -> bool {
         (self.width, self.height, self.samples) == (width.max(1), height.max(1), samples)
+            && self.viewmodel_depth.is_some() == temporal
     }
 
     /// The picture and its depth, for the upscale stage or an image effect.
@@ -336,6 +341,11 @@ impl RenderPicture {
 
     pub fn depth(&self) -> &wgpu::TextureView {
         &self.depth
+    }
+
+    /// The viewmodel passes' own depth, under a temporal stage.
+    pub fn viewmodel_depth(&self) -> Option<&wgpu::TextureView> {
+        self.viewmodel_depth.as_ref()
     }
 
     pub fn samples(&self) -> u32 {

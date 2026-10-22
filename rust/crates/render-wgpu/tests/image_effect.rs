@@ -200,3 +200,51 @@ fn the_effect_reads_the_worlds_depth() {
         "the ground has a depth"
     );
 }
+
+/// An image effect takes the temporal stage's place: while one is set the
+/// readout refuses `temporal` for it (effective off) and the frame draws
+/// neither jitter nor motion; removed, the stage draws again.
+#[test]
+fn an_image_effect_refuses_the_temporal_stage_in_the_readout() {
+    let mut harness = scene();
+    let software = harness.gpu.is_software();
+    harness.apply(vec![
+        RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                antialiasing: Antialiasing::Temporal,
+                render_scale: 0.67,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        },
+        effect("shader/flash", 0.0, 0.0),
+    ]);
+    harness.target =
+        render_wgpu::OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, harness.renderer.samples());
+    let view = camera([0.0, 1.5, 2.0], 0.0, -5.0);
+    let (stats, _) = harness.render(&view);
+    let readout = harness.renderer.settings_readout();
+    assert_eq!(readout.requested.antialiasing, Antialiasing::Temporal);
+    assert_eq!(readout.effective.antialiasing, Antialiasing::Off);
+    let refusal = if software {
+        render_wgpu::SettingRefusal::SoftwareAdapter
+    } else {
+        render_wgpu::SettingRefusal::ImageEffect
+    };
+    assert_eq!(readout.antialiasing, Some(refusal));
+    assert_eq!(stats.motion, None, "no jitter or motion drawn");
+    assert_eq!(stats.upscale, None, "the effect draws in the stage's place");
+
+    harness.apply(vec![RenderDiff::SetImageEffect { effect: None }]);
+    let (stats, _) = harness.render(&view);
+    let readout = harness.renderer.settings_readout();
+    if software {
+        assert_eq!(stats.upscale, Some(render_wgpu::UpscaleMethod::Bilinear));
+    } else {
+        assert_eq!(readout.antialiasing, None);
+        assert_eq!(readout.effective.antialiasing, Antialiasing::Temporal);
+        assert_eq!(stats.upscale, Some(render_wgpu::UpscaleMethod::Taau));
+        assert!(stats
+            .motion
+            .is_some_and(|motion| motion.jitter_phase.is_some()));
+    }
+}

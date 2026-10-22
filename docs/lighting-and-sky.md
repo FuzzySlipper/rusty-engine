@@ -313,8 +313,10 @@ lighting fall back to the screen-space pass and the light loop),
 `NoDisplay` (streamed output has no display, so vsync is moot) and
 `VsyncOnly` (the window's display has no immediate or mailbox present mode,
 so frames wait for its refresh with vsync off), `SoftwareAdapter` (a
-GPU-only feature on a software adapter, the temporal stage among them) and `TooFewTextureBindings` (water
-reflections on a device without the colour copy). A refused
+GPU-only feature on a software adapter, the temporal stage among them),
+`TooFewTextureBindings` (water reflections on a device without the colour
+copy) and `ImageEffect` (a product image effect draws in the temporal
+stage's place). A refused
 setting is not an error: `Set` accepts any finite, non-negative strength, positive
 radius and render scale from 0.33 to 1, and refuses only values outside
 those ranges.
@@ -365,7 +367,8 @@ at the render scale with their [temporal inputs](#temporal-inputs), single
 sample, and the `upscale` pass gathers their frames into a history at the
 output's resolution: each output pixel takes the history where the motion
 says it was (the nearest surface's motion among its neighbours, so a moving
-edge carries its own), clips it to the colours this frame shows around it,
+edge carries its own; the viewmodel draws against a depth of its own while
+the stage draws, so the world's depth still decides), clips it to the colours this frame shows around it,
 and blends in this frame by how near its jittered samples fall. Pixels with
 no motion of their own (the sky, clouds, water) lean on the current frame,
 so they cannot trail far. Below render scale 1 the result is lightly
@@ -386,7 +389,8 @@ Any scale between draws too; MSAA is off while the stage draws (one setting
 holds both). A software adapter refuses the stage (`SoftwareAdapter`) and
 draws without anti-aliasing, bilinear at the render scale. A product image
 effect takes the stage's place: while one is set, frames draw without the
-temporal stage. The history starts again on a camera cut and whenever the
+temporal stage, and the readout says so (`ImageEffect`, effective
+antialiasing off). The history starts again on a camera cut and whenever the
 temporal inputs reset, the output's size changes or a frame draws without
 the stage.
 

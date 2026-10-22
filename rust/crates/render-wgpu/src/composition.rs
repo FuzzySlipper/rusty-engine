@@ -383,10 +383,10 @@ impl Renderer {
     ) -> FrameStats {
         // An image effect reads the whole picture, so the views draw into a
         // picture of their own first, as an upscale stage's do. It takes
-        // the stage's place, so the temporal stage is not selected with it.
+        // the stage's place, so the temporal stage is refused with it
+        // (`Renderer::temporal_refusal`).
         let effect = self.image_effect.active();
-        let stage =
-            UpscaleMethod::selected(&self.options, !effect && self.temporal_refusal().is_none());
+        let stage = UpscaleMethod::selected(&self.options, self.temporal_refusal().is_none());
         if stage != Some(UpscaleMethod::Taau) {
             self.upscale.forget_history();
         }
@@ -436,10 +436,17 @@ impl Renderer {
         }
         let (width, height) = resolution.render;
         let picture = match self.picture.take() {
-            Some(picture) if picture.matches(width, height, samples) => picture,
-            _ => RenderPicture::new(&self.gpu, width, height, samples),
+            Some(picture) if picture.matches(width, height, samples, jittering) => picture,
+            _ => RenderPicture::new(&self.gpu, width, height, samples, jittering),
         };
+        // The viewmodel passes draw against a depth of their own, cleared
+        // here since a pass with nothing to draw leaves it untouched.
+        self.viewmodel_depth = picture.viewmodel_depth().cloned();
+        if let Some(depth) = &self.viewmodel_depth {
+            self.clear_depth(depth);
+        }
         let mut stats = draw(self, picture.view());
+        self.viewmodel_depth = None;
         stats.cpu_batch_us = self.batch_time.as_micros() as u32;
         stats.resolution = resolution;
         stats.motion = self.temporal.end_frame();
@@ -486,6 +493,32 @@ impl Renderer {
         self.picture = Some(picture);
         self.show_motion(&output);
         stats
+    }
+
+    /// Clear `depth` to the far plane.
+    fn clear_depth(&self, depth: &wgpu::TextureView) {
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-wgpu viewmodel depth"),
+            });
+        encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("render-wgpu viewmodel depth"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.gpu.queue.submit([encoder.finish()]);
     }
 
     /// The motion target over the whole of `output`, while inspection shows
@@ -632,8 +665,15 @@ impl Renderer {
         let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth);
         // Every view pass clears its own viewport's depth first, so the
         // viewmodel's depth break may clear the whole target.
+        // Under a temporal stage the viewmodel keeps its own depth, so the
+        // world's stays for the stage (`RenderPicture::viewmodel_depth`).
+        let viewmodel_depth = self.viewmodel_depth.clone();
+        let viewmodel_target = match &viewmodel_depth {
+            Some(depth) => TargetView { depth, ..*target },
+            None => *target,
+        };
         let viewmodel = self.encode_view(ViewPass {
-            target: *target,
+            target: viewmodel_target,
             viewport: area,
             camera: viewmodel_camera,
             layer: ViewLayer::Viewmodel,

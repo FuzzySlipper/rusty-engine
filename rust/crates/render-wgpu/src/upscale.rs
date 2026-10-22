@@ -47,8 +47,8 @@
 //!
 //!   A software adapter refuses it (`Renderer::temporal_refusal`) and
 //!   draws bilinear at the render scale, without anti-aliasing. A product
-//!   image effect replaces the stage: while one is set, TAAU is not
-//!   selected and the views do not jitter. Its history starts again
+//!   image effect replaces the stage: while one is set, TAAU is refused
+//!   (`ImageEffect`) and the views do not jitter. Its history starts again
 //!   whenever the frame says it no longer holds (`TemporalInputs`), the
 //!   output's size changes, or a frame draws without it.
 
@@ -232,6 +232,7 @@ impl Taau {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                texture(6, wgpu::TextureSampleType::Depth),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -451,6 +452,12 @@ impl Upscale {
                     wgpu::BindGroupEntry {
                         binding: 5,
                         resource: wgpu::BindingResource::Sampler(&taau.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::TextureView(
+                            picture.viewmodel_depth().unwrap_or(picture.depth()),
+                        ),
                     },
                 ],
             })

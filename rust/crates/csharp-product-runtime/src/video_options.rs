@@ -168,6 +168,7 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         SettingRefusal::TooFewTextureBindings => {
             "This graphics device binds too few textures at once for it."
         }
+        SettingRefusal::ImageEffect => "The game's screen effect draws in its place.",
     })
 }
 

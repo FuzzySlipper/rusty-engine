@@ -8,7 +8,8 @@
 //   centre, and takes their mean and spread;
 // - follows the motion back to where the pixel stood in the previous frame:
 //   the motion of the nearest surface among those 3×3 (dilated by depth, so
-//   a moving edge carries its own motion over the background it uncovers);
+//   a moving edge carries its own motion over the background it uncovers;
+//   the viewmodel, drawn against a depth of its own, is nearest of all);
 // - samples the history there (Catmull-Rom), and clips it towards the mean
 //   to the neighbourhood's colour box in YCoCg, so what the history holds
 //   that this frame no longer shows does not linger;
@@ -39,6 +40,9 @@ struct Params {
 @group(0) @binding(3) var motion: texture_2d<f32>;
 @group(0) @binding(4) var history: texture_2d<f32>;
 @group(0) @binding(5) var history_sampler: sampler;
+// The viewmodel passes' own depth (far where they drew nothing): the world's
+// depth survives them in `picture_depth`.
+@group(0) @binding(6) var viewmodel_depth: texture_depth_2d;
 
 // The most frames' worth of samples the history holds: its share of a still
 // pixel is at least 1 - 1/16.
@@ -164,9 +168,10 @@ fn resolve(in: FullscreenOut) -> vec4<f32> {
             let weight = exp(-4.58 * distance / widening);
             sum += color * weight;
             weights += weight;
-            // Nearest depth first; among equal depths (a cleared depth
-            // behind a viewmodel), the longest motion.
-            let at = textureLoad(picture_depth, texel, 0);
+            // Nearest depth first, a viewmodel nearer than any world;
+            // among equal depths (the sky), the longest motion.
+            let viewmodel = textureLoad(viewmodel_depth, texel, 0);
+            let at = select(textureLoad(picture_depth, texel, 0), viewmodel - 1.0, viewmodel < 1.0);
             let value = textureLoad(motion, texel, 0).xy;
             let length = select(dot(value, value), -1.0, no_motion(value));
             if at < depth - 1e-6 || (at <= depth + 1e-6 && length > moved_length) {

@@ -431,6 +431,10 @@ pub enum SettingRefusal {
     SoftwareAdapter,
     /// The device binds too few textures per shader stage for the feature.
     TooFewTextureBindings,
+    /// A product image effect takes the temporal upscale stage's place
+    /// (`image_effect.rs`): frames draw without temporal anti-aliasing while
+    /// one is set.
+    ImageEffect,
 }
 
 /// The settings in effect and what the device refused: what a product
@@ -561,6 +565,10 @@ pub struct Renderer {
     /// an upscale stage or an image effect runs, kept while its size and
     /// sample count hold.
     picture: Option<target::RenderPicture>,
+    /// While a primary frame draws under a temporal stage, its picture's
+    /// viewmodel depth, which the viewmodel passes draw against
+    /// (`RenderPicture::viewmodel_depth`).
+    viewmodel_depth: Option<wgpu::TextureView>,
     /// The last primary frame's resolutions and upscale stage, for the
     /// readout.
     upscaled: UpscaleReadout,
@@ -823,6 +831,7 @@ impl Renderer {
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             picture: None,
+            viewmodel_depth: None,
             upscaled: UpscaleReadout::default(),
             upscale: upscale::Upscale::new(gpu),
             temporal,
@@ -948,14 +957,19 @@ impl Renderer {
         }
     }
 
-    /// Why the device draws without the temporal upscale stage: a software
+    /// Why frames draw without the temporal upscale stage: a software
     /// adapter refuses it (a GPU-only feature,
-    /// docs/verification.md#gpu-verification) and draws without
-    /// anti-aliasing, the render scale's bilinear stage in its place.
+    /// docs/verification.md#gpu-verification), and a product image effect
+    /// takes its place. They then draw without anti-aliasing, at the render
+    /// scale through the bilinear stage or the effect.
     pub(crate) fn temporal_refusal(&self) -> Option<SettingRefusal> {
-        self.gpu
-            .is_software()
-            .then_some(SettingRefusal::SoftwareAdapter)
+        if self.gpu.is_software() {
+            Some(SettingRefusal::SoftwareAdapter)
+        } else if self.image_effect.active() {
+            Some(SettingRefusal::ImageEffect)
+        } else {
+            None
+        }
     }
 
     /// Whether window output should wait for the display's refresh.
