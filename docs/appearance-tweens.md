@@ -171,6 +171,4 @@ plays. While any tween
 runs, the end of each call also passes
 over the render updates that call made, to find tweened objects the product
 republished. Objects without tweens are not examined. A call with no tweens
-does nothing. Measured in a release build of the services bridge, an update with
-hopping objects costs about 25 µs for 100 tweens and 0.5 ms for 1,000, and
-nothing measurable with none.
+does nothing, so the cost follows the number of running tweens.

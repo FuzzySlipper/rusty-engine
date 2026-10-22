@@ -32,8 +32,7 @@ the compute features do without compute shaders. Look and cost are verified
 on machines with GPUs, against that machine's own accepted images and
 timings. `rusty-scene-render` says on stderr and in its report
 (`softwareAdapter`) when it ran on a software adapter, so such numbers are not
-mistaken for GPU evidence. llvmpipe timings in the docs describe what a
-software adapter costs; they are not acceptance gates.
+mistaken for GPU evidence; they are never acceptance gates.
 
 ### The GPU lane
 

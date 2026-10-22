@@ -703,8 +703,8 @@ available. A fourth argument,
 `TextureColorSpace.Linear`, opens a PNG as data rather than sRGB colour; normal
 maps need it. The same PNG opened both ways is two retained textures. A linear texture gets a mip chain
 at upload, built in linear light, and materials sample it trilinearly with
-16× anisotropic filtering, so tiled surfaces do not speckle at distance. That
-costs about 40 ms and a third more memory for a 2048² colour texture.
+16× anisotropic filtering, so tiled surfaces do not speckle at distance. The
+mip chain takes a third more memory and adds to the upload.
 Voxel-surface tiling picks its level from the unwrapped tile coordinate,
 clamped so an atlas region keeps at least 4×4 texels. Nearest textures stay
 single-level, for pixel art seen up close. A `NearestMipmapped` texture gets

@@ -1,10 +1,10 @@
 # Voxel residency and edit costs
 
-These are CPU scene costs from the
+How voxel changes apply, their limits, and how to measure their CPU cost
+with the
 [`voxel_budget`](../rust/crates/engine-spatial/examples/voxel_budget.rs) and
 [`voxel_edit_scaling`](../rust/crates/engine-spatial/examples/voxel_edit_scaling.rs)
-probes, measured on 2026-10-06. They exclude GPU
-and whole-product costs.
+probes. GPU and whole-product costs are measured separately.
 
 ## How a change is applied
 
@@ -41,7 +41,7 @@ when it enters, so meshing never meets one.
 
 Edit, residency, scene-building and primitive calls have no count caps.
 
-## Reproduction
+## Measuring
 
 ```sh
 cargo build --release -p engine-spatial --example voxel_budget --example voxel_edit_scaling
@@ -60,29 +60,14 @@ Each run builds the scene, then:
 - toggles one corner cell seven times through `VoxelEditService`;
 - replaces that chunk seven times through `VoxelChunkResidencyService`.
 
-The host is an Intel Core i7-12700K shared with other sessions (load about 10),
-running a release build, one process at a time, with no CPU pinning; each
-figure is the median of three runs.
-
-## Observed costs
-
-Milliseconds, as median / maximum of seven calls.
-
-| Shape / chunks | Cell edit | Chunk replace | Peak RSS |
-| --- | --- | --- | --- |
-| Solid / 16 | 0.24 / 0.30 | 0.40 / 0.43 | 8 MiB |
-| Solid / 64 | 0.25 / 0.31 | 0.40 / 0.42 | 25 MiB |
-| Checker / 16 | 2.56 / 3.58 | 2.24 / 2.45 | 62 MiB |
-| Sparse / 256 | 0.05 / 0.10 | 0.10 / 0.13 | 11 MiB |
-| Stateful / 1 | 0.47 / 0.73 | 0.64 / 0.67 | 4 MiB |
-
-Cost follows the chunk that changed, not the resident world. What remains is
-that chunk's work: a solid 16³ chunk's mesh and collider, or a checker chunk's
+Each prints the median and maximum milliseconds of the seven calls and the
+process's peak RSS. Compare runs on the same machine and build. A call's cost
+follows the chunk that changed, not the resident world or the number of cells
+changed inside it: a solid 16³ chunk's mesh and collider, or a checker chunk's
 12,288-quad mesh.
 
 `voxel_edit_scaling` clears 1–123 cells inside one chunk of a 16- or 64-chunk
-world. Each call takes 0.12–0.15 ms with 16 resident chunks or with 64. The
-number of cells changed inside one chunk barely matters.
+world.
 
 ## Memory
 
@@ -95,5 +80,5 @@ six quads; a checker chunk makes 12,288 (about 1.87 MB of vertex capacity). The
 stateful sample makes 1,536 quads, because orientation and variant diversity
 stops greedy merging.
 
-Peak RSS above is Engine probe memory only. It excludes the product's own chunk
+The probes' peak RSS is Engine probe memory only. It excludes the product's own chunk
 data, renderer realizations and GPU memory; measure those separately.

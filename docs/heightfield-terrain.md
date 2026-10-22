@@ -155,9 +155,9 @@ and waiting, whether every tile the rings want is drawn (`Settled`), the
 drawn geometry, the samples and meshes held in bytes, and the last call's
 meshing time and tiles.
 
-- **Meshing** a 16-cell tile takes about 0.04 ms of one core (release build,
-  RX 9070 XT machine); tiles mesh in parallel as a call finishes. Sampling is
-  the product's own cost, on its workers.
+- **Meshing.** Tiles mesh in parallel as a call finishes, and `Read`
+  reports the last call's meshing time. Sampling is the product's own cost,
+  on its workers.
 - **Memory.** A vertex costs 48 bytes on the GPU plus 12 for its morph target
   (rings with a coarser one), an index 4. The Engine also keeps each tile's
   samples (4 bytes a height, 16 a colour or weight set) and its mesh on the
@@ -166,15 +166,7 @@ meshing time and tiles.
 - **Tile size.** Rings are counted in their coarser ring's tiles, so a ring
   holds more than its reach where the coarser tile is large. Larger tiles
   mean fewer draws and fewer skirts but coarser rounding of every ring.
-- **Measured** with the fixture's continent (390 km sampled in metres at
-  1:1000 in the backdrop) on an RX 9070 XT at 1280 × 577, sampled by
-  `HeightfieldStreamer` on a 20-thread processor:
-
-  | rings | tile cells | tiles | vertices | backdrop pass | settled after a 130 km jump |
-  | --- | --- | --- | --- | --- | --- |
-  | 31.25 m to 4 km, 250 m to 32 km, 1 km to 195 km | 16 | 1,705 | 711,000 | 0.13 ms | 1.8 s |
-  | the same | 32 | 945 | 1,271,000 | 0.22 ms | 1.2 s |
-  | 31.25 m halving to 1 km, reach doubling from 4 km | 32 | 725 | 975,000 | 0.13 ms | 0.8 s |
-
-  The settle time is the fixture's synthetic ground; a product's sampler
-  sets its own.
+- **Measuring.** `Read`'s tiles, vertices and bytes, the passes that draw
+  the tiles in `engine.renderer`'s `gpu.passes`, and the time until
+  `Settled` after a jump give a ring layout's cost on a product's own ground
+  and sampler.

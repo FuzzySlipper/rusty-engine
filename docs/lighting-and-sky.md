@@ -175,14 +175,11 @@ draws exactly as before.
   neighbours, triangles in the trees, bricks and bricks pending, the last
   brick's and the slowest brick's milliseconds, the last batch's
   milliseconds and brick count, the bakes so far, the last frame's upload
-  bytes, and the volume's GPU bytes. A 16 m brick at 2 m spacing (8³
-  probes, 64 rays, two bounces) bakes in about 14 ms on one core in the
-  lighting exploration's cave and dungeon, the slowest in 26 to 28 ms, and
-  in 3 to 4 ms with half the machine's cores; at 1 m spacing a brick holds
-  eight times the probes and takes about eight times as long. The first
-  bake of a whole volume costs its bricks together plus their trees (the
-  cave's 40 bricks in 118 ms on 10 threads, the dungeon's 32 in 229 ms with
-  200 k triangles). Starting a bake while the sky's light is on reads its
+  bytes, and the volume's GPU bytes. A brick's bake grows with its probes
+  (halving the spacing gives a brick eight times the probes), its rays'
+  bounces and the triangles in its cell, and bricks bake in parallel. The
+  first bake of a whole volume costs its bricks together plus their trees.
+  Starting a bake while the sky's light is on reads its
   irradiance back from the device (144 bytes, a short wait on the render
   thread).
 - Walls thinner than the spacing keep the light beyond them out. Each
@@ -203,15 +200,13 @@ draws exactly as before.
   ambient the same so the move scrolls instead of starting over.
 - Per lit fragment the shader adds three trilinear reads of one small 3D
   texture (RGBA16F, 32 bytes a probe with its cell's walls), six for metals
-  and under the sky's light, plus one unfiltered read of the cell's walls:
-  0.01 to 0.05 ms of world pass at 1080p on an RX 9070 XT, the walls about
-  0.02 ms of it. The walls cost each probe three short rays in the bake. On a
-  software adapter (llvmpipe) each filtered read costs about a twentieth of
-  a cheap world pass, so there the Engine uploads a one-texel encoding
-  instead, the ambient coefficient in colour and the vertical coefficient's
-  luminance (sky above, torch-lit floor below; no horizontal direction), and
-  the shader reads it once: 4 to 5 percent of llvmpipe's world pass on the
-  lighting exploration's cave and dungeon. `rusty-scene-render
+  and under the sky's light, plus one unfiltered read of the cell's walls,
+  all part of the `world` pass. The walls cost each probe three short rays
+  in the bake. On a software adapter filtered reads are expensive, so there
+  the Engine uploads a one-texel encoding instead, the ambient coefficient
+  in colour and the vertical coefficient's luminance (sky above, torch-lit
+  floor below; no horizontal direction), and the shader reads it once.
+  `rusty-scene-render
   --indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]` bakes a volume
   before its frames and reports it under `gpu.indirectLight`.
 
@@ -241,10 +236,9 @@ engine.CameraView.SetSkyLight(new(Intensity: 1));
   are read as linear light, so at 1 a white surface under a white sky is
   white.
 - The Engine builds it on the GPU whenever the background changes (its
-  selection, blend amount or colour). A whole build takes about 0.6 ms on an
-  RX 9070 XT and 30 ms on llvmpipe. The first build lands in its frame. A
+  selection, blend amount or colour). The first build lands in its frame. A
   blend that moves every frame is built over the next three frames while the
-  last light holds, about 0.2 ms (6 ms on llvmpipe) a frame. A still sky
+  last light holds, a third of a build a frame. A still sky
   costs a cube sample and nine coefficients per shaded fragment.
   `engine.renderer` times the build as `sky-light`.
 - While the [cloud layer](#clouds) (flat or volumetric, with its regions)
@@ -261,11 +255,9 @@ engine.CameraView.SetSkyLight(new(Intensity: 1));
   scene changed, or (with clouds, which drift, or backdrop particles)
   presentation time moved since the last began; a still scene with a
   backdrop and no clouds settles and costs nothing more. With neither, the
-  light is built from the background alone. On an RX 9070 XT a
-  capture frame costs about 0.09 ms with the flat clouds, 0.15 ms with a
-  64×64 heightfield of backdrop ranges, 0.18 ms with both and 0.28 ms with
-  low volumetric clouds; a build frame about 0.12 ms; together about 0.1
-  to 0.2 ms a frame while it follows. Both are timed as `sky-light`.
+  light is built from the background alone. A capture frame costs what
+  drawing the background, clouds and backdrop into those faces costs. Capture
+  and build frames are both timed as `sky-light`.
 - Product shaders that call `standard_shade` get it with the rest of the
   standard lighting.
 
@@ -407,10 +399,8 @@ temporal inputs reset, the output's size changes or a frame draws without
 the stage.
 
 Thin vegetation (grass blades, leaf edges) reads softer and lower in
-contrast than under 4× MSAA, natively and in the upscaled modes. On an RTX
-3080 the stage itself costs about 0.3 ms at 2560×1440 and 0.15–0.18 ms at
-1920×1080, whatever the mode; the setting's catalogue `cost` gives a whole
-frame's saving.
+contrast than under 4× MSAA, natively and in the upscaled modes. The
+stage's own cost follows the output's size, not the mode.
 
 `engine.renderer` reports the stage's GPU time as `upscale` among
 `gpu.passes`, and the last frame's render and output resolutions and its
@@ -536,11 +526,9 @@ turns it on with `RustyEngineProductAmbientOcclusion` (see
 and `engine.renderer` reports its passes' GPU time.
 
 `RustyEngineProductAmbientOcclusionRadius` (0.75 m by default) is how far
-it looks; the pass costs the same at any radius (about 0.24 ms at 720p on an
-RX 9070 XT). A wider radius reaches past contact into the creases a world is
-built from: in an overcast CraftSurvive meadow, 0.75 m darkens about 8% of
-pixels by more than 8 levels, 1.25 m about 12% and 2 m about 14%, with no
-halos. The default suits props and rooms; a world built on 1 m voxels or
+it looks; the pass costs the same at any radius. A wider radius reaches past
+contact into the creases a world is built from, darkening more of the
+picture without halos. The default suits props and rooms; a world built on 1 m voxels or
 pieces reads its corners better at 1 to 1.25 m.
 
 A voxel session can instead, or as well, bake occlusion into its surfaces
@@ -604,11 +592,9 @@ material compiles only the features its contents use:
 Materials with the same features share pipelines and batch together. A new
 feature set compiles once, when its first material is defined, or for a
 mesh's own streams (terrain layer weights, vertex occlusion) when the first
-part drawing it is created: about 8 ms on an RX 9070 XT, then about 0.4 ms
-for each further pass it draws in. A target the world first draws into, and
-the first shadow or ambient occlusion pass, make every feature set already in
-use. Doom's E1M1
-uses two. The shader is composed from importable WGSL modules in
+part drawing it is created, then once more for each further pass it draws
+in. A target the world first draws into, and the first shadow or ambient
+occlusion pass, make every feature set already in use. The shader is composed from importable WGSL modules in
 `render-shaders/src/shaders/` (`types`, `view`, `material`, `surface`,
 `lighting`, `tonemap`, `finish`, `shade`).
 
@@ -840,10 +826,8 @@ through it itself:
 The water needs no vertex motion; a product that wants waves gives the
 material a [displace stage](#product-shaders) or a wind bend. A water view
 costs one depth copy per view that draws water, and the blended parts and
-particles draw in a second pass after it; views without water draw as
-before. The copy is timed as the `water-copy` pass: about 0.02 ms for the
-depth alone and 0.06 ms with the colour at 1920×1080 with 4× multisampling
-on an RX 9070 XT. Blended materials cast no shadow unless
+particles draw in a second pass after it; views without water draw no copy.
+The copy is timed as the `water-copy` pass. Blended materials cast no shadow unless
 `TranslucentShadow` is set, so a lake does not shadow its own bed.
 
 A device that binds fewer than 17 sampled textures per shader stage (WebGPU
@@ -892,10 +876,9 @@ same copy as absorption.
 - Ripples bend the reflection with the surface. The reflection is sharp
   whatever the material's roughness, which weights it as it weights the
   standard reflection.
-- A software adapter draws without it (`SoftwareAdapter`). With still water
-  filling the lower view at 1920×1080 and 4× multisampling, `Low` costs
-  about 0.17 ms and `High` about 0.30 ms of the `world` pass on an RX 9070
-  XT, 0.04 ms of it the colour copy. Views without water pay nothing.
+- A software adapter draws without it (`SoftwareAdapter`). It is part of
+  the `world` pass, `High` costing more than `Low`. Views without water pay
+  nothing.
 
 ## Wind
 
@@ -1017,8 +1000,7 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
     a translucent surface dims it by its opacity. Shafts still stream past
     them. It costs one half-resolution pass, timed with `bloom-exposure`,
     plus the flat layer's noise near the sun under flat clouds or one read
-    of the volumetric clouds under those. That is about 0.01 ms at
-    1920×1080 with 4× multisampling on an RX 9070 XT, flat clouds included.
+    of the volumetric clouds under those.
   - `SkySunDirection` (world space, toward the sun, any length) places the
     sky's sun apart from the ground's light, in `SkySunColor` (linear RGB)
     at `SkySunIntensity`. Its disc and halo,
@@ -1055,11 +1037,8 @@ The world's target costs 8 bytes a sample (66 MB at 1920×1080 with 4×
 multisampling), plus a single-sample copy (17 MB) and bloom's mips (6 MB)
 while bloom or auto exposure is on. `engine.renderer` times the frame's first
 world view's `world`, `particles` (soft sprites and billboards, in the frames that draw them), `bloom-exposure` and `finish` passes
-([performance](performance.md)). On an RX 9070 XT the finish pass takes about
-0.04 to 0.06 ms at 1280×720 and 0.07 to 0.13 ms at 1920×1080 (colour grading
-adds about 0.005 ms), and bloom with auto exposure about 0.15 ms. On llvmpipe
-the finish pass takes 3 to 8 ms at 1280×720 and 7 to 17 ms at 1920×1080, and
-bloom with auto exposure 4 to 10 ms, a large share of a light scene's frame.
+([performance](performance.md)). On a software adapter the finish pass and
+bloom with auto exposure are a large share of a light scene's frame.
 
 ## Read light at a voxel location
 
@@ -1310,12 +1289,10 @@ the clouds only while the sun is up.
   runtime restart.
 - `engine.renderer` times it as the `clouds` pass, in the frames that draw
   it. It is one pass over the screen: two four-octave noise samples and two
-  panorama reads a pixel. At 1920×1080 it takes about 0.36 ms on an RX 9070
-  XT and 15 to 18 ms on llvmpipe.
+  panorama reads a pixel.
   The shade on the ground is drawn in the world pass instead: a two-octave
   sample per lit fragment facing a directional light, only while the layer
-  has coverage. On a CraftSurvive meadow at 1920×1080 it added about 0.2 ms
-  to the world pass on an RX 9070 XT.
+  has coverage.
 
 ### Cloud regions
 
@@ -1375,13 +1352,7 @@ up the slab, so a cloud and its shadow agree.
   - A view seen for the first time, a new size, or a camera that jumps
     more than 50 m starts afresh with no history.
 - It is timed as the `clouds` pass, the march and the composite together.
-  In the lighting fixture's noon and dusk skies (`Low` / `High`; the flat
-  layer alone in brackets):
-
-  | GPU | 1920×1080 | 2560×1440 |
-  | --- | --- | --- |
-  | RX 9070 XT | 0.7 / 1.2–1.3 ms (0.38) | 1.1–1.2 / 2.1–2.2 ms (0.66) |
-  | RTX 3080 | 0.35 / 0.6–0.65 ms (0.19) | 0.65–0.7 / 1.1 ms (0.35) |
+  `High` marches twice `Low`'s steps, and both follow the view's resolution.
 
 - Off draws the flat layer; a software adapter refuses
   it (`SoftwareAdapter`) and draws the flat layer.
@@ -1431,9 +1402,7 @@ WetnessReadout wet = engine.CameraView.ReadWetness();
 - 0 (the default) draws exactly as dry. The setting is retained camera-view
   state like the wind. It costs nothing while 0; while wet, each lit
   fragment reads the sky layer once more. Frozen puddles cost no more than
-  liquid ones: on an RX 9070 XT at 1280×720, over hills with grass and
-  trees, the world pass takes 0.47 ms wet with puddles at 0.6, frozen or
-  not (0.34 ms dry).
+  liquid ones.
 
 ## Snow cover
 
@@ -1477,8 +1446,7 @@ SnowReadout snow = engine.CameraView.ReadSnow();
   materials without it; other parts drawn with such a material do not
   move. It draws cheaper than
   standing grass under the same snow, since the sunk clumps cover fewer
-  pixels: 0.40 ms against 0.43 ms for the world pass under a full cover over
-  the same hills.
+  pixels.
 - Snow lies over wetness: covered ground is the snow's colour and
   roughness, and the ground between patches stays as wet as the rain left it.
   `KeepDry` keeps a material dry, not clear of snow.
@@ -1493,10 +1461,8 @@ SnowReadout snow = engine.CameraView.ReadSnow();
 - 0 (the default) draws exactly as none. The setting is retained camera-view
   state like the wetness, and costs nothing while 0. With snow, each lit
   fragment that faces up reads the sky layer once (shared with the wetness)
-  and, where the cover is not decided outright, two octaves of noise. On an
-  RX 9070 XT at 1280×720, over hills with grass and trees, the world pass
-  takes 0.10 ms more under a full cover and 0.15 ms more under a half one
-  (0.34 ms without), stepped or smooth alike.
+  and, where the cover is not decided outright, two octaves of noise, so a
+  partial cover costs more than a full one.
 
 ## Projected decals
 
@@ -1553,11 +1519,9 @@ DecalReadout decals = engine.CameraView.ReadDecals();
   renderer rebuilds when they change; a still set costs no upload. A
   fragment tests only the decals whose box reaches its cell. `engine.renderer`
   reports `gpu.decals`: the count, grid entries, the busiest cell's count,
-  the buffer's bytes, the last upload and its CPU time. On an RX 9070 XT at
-  1280×720, over hills with grass and trees, 500 decals of 0.6 m add 0.04 ms
-  to the world pass and 2,000 add 0.09 ms (0.34 ms without), with or
-  without the angle falloff; a world view with none placed pays one read.
-  Rebuilding 2,000 takes about 0.25 ms of CPU time and uploads 0.3 MB.
+  the buffer's bytes, the last upload and its CPU time. Their shading is
+  part of the `world` pass and grows with the decals per cell; a world view
+  with none placed pays one read.
 - They need 18 sampled textures per shader stage, two more than WebGPU
   guarantees; the Vulkan adapters this renderer targets have them.
   A device without them lays none, and `gpu.decals.refused` says why.
@@ -1651,17 +1615,9 @@ engine.CameraView.RemoveFogVolume(new(1));
     grid would, so a still capture draws the same.
   - The history adds one grid-sized copy a frame.
 - It is timed as the `volumetric-fog` pass. The grid does not follow the
-  resolution, so it costs the same at 1920×1080 and 2560×1440; more lights
-  in reach cost more (`Low` / `High`, under a 0.02 to 0.03 haze):
-
-  | Scene | RX 9070 XT | RTX 3080 |
-  | --- | --- | --- |
-  | CraftSurvive meadow (sun) | 0.13 / 0.29 ms | 0.12 / 0.26 ms |
-  | CraftSurvive canyon | 0.05 / 0.08 ms | 0.06 / 0.10 ms |
-  | Lighting fixture room (torch) | 0.05 / 0.09 ms | 0.05 / 0.10 ms |
-  | Hotel corridor (23 shadowed lamps) | 0.16 / 0.37 ms | 0.11 / 0.29 ms |
-
-  The finish pass reads the grid at no measurable cost.
+  resolution, so it costs the same at any output size; more lights in reach
+  cost more, and `High` more than `Low`. The finish pass reads the grid once
+  a pixel.
 - It needs compute shaders on a GPU: a device without them, or a software
   adapter, refuses the setting (`NoComputeShaders`, `SoftwareAdapter`) and
   draws the analytic fog alone. Off, or on with no medium and no volumes, it
@@ -1759,13 +1715,11 @@ engine.Presentation.CreateEmitter(smoke with { Backdrop = true });
   nothing changes.
 - With one it is a pass of its own, timed as `backdrop`: the backdrop's
   parts listed on the CPU, drawn and finished. The world view's background
-  is submitted before it. On an RX 9070 XT at 1280×720 the fixture's ranges
-  (a 64×64 heightfield) and its dual-contoured mesa cost about 0.05 ms.
+  is submitted before it.
 - Its cascades render in a pass of their own, timed as `backdrop-shadows`,
-  when the backdrop camera's fit moves them or a caster in them changes:
-  about 0.025 ms a frame for a 64×64 heightfield of ranges on an RX 9070 XT
-  while the camera walks, nothing while it stands. Sampling them adds about
-  0.03 ms to the `backdrop` pass at 1280×720. They take four more 1024²
+  when the backdrop camera's fit moves them or a caster in them changes,
+  and not while the camera stands. Sampling them is part of the `backdrop`
+  pass. They take four more 1024²
   atlas layers while a backdrop is linked.
 - Perspective views only: an orthographic view draws no backdrop.
 - With the sky's light on, the light and reflections see the backdrop as

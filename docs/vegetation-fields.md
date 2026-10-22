@@ -189,11 +189,9 @@ frame late, and camera motion, origin rebases and edits need nothing more.
 Scattered copies never hide each other, and the shadows' list is not
 tested.
 
-The depth pass and pyramid cost about 0.14 ms of GPU at 1280×720 with 4×
-antialiasing on an RX 9070 XT, in the `occlusion` pass, and the renderer
-CPU that encodes every opaque part once more: 0.6 to 0.85 ms in a
-CraftSurvive forest. It pays where
-opaque surfaces hide many copies at once. A copy hidden
+The depth pass and pyramid cost GPU time in the `occlusion` pass, and the
+renderer CPU that encodes every opaque part once more. It pays where opaque
+surfaces hide many copies at once. A copy hidden
 behind terrain mostly costs vertex work only, since the depth test already
 discards its pixels, so the gain follows the number of hidden copies more
 than their area.

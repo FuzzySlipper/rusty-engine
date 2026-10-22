@@ -206,9 +206,9 @@ none; an edit within three voxels of a neighbouring chunk remeshes it, as a
 terrain transition does. Geometry, material slots and collision are
 unchanged. With terrain layers, the fourth layer's weight becomes the
 remainder of the first three, so the alpha can carry the occlusion. Coarse
-(distant) chunks draw without it. Cost: about 0.15 ms more per 16³ chunk
-dual contoured on the `smooth_chunk_meshing` example (0.31 to 0.47 ms),
-0.07 ms marched; cube chunks mesh into more quads where corners differ.
+(distant) chunks draw without it. It adds meshing time to dual contoured
+and marched chunks (`MeshMicroseconds` reports it), and cube chunks mesh into
+more quads where corners differ.
 
 ## Densities
 
@@ -247,9 +247,8 @@ clamps it to four voxels either side of the surface, and applies it as a brush
 of that shape: an implicit sphere stamps exactly what the sphere brush does.
 The bounds must enclose the shape; anything outside them is untouched. The
 field stays owned by ImplicitSurfaces and is only read during the call, so a
-recipe can be disposed right after. On `fixtures/csharp-voxel-stamp`, carving
-a smooth union of three capsules (42,369 voxels changed, 32 chunks rebuilt)
-takes about 37 ms, 12 of them meshing.
+recipe can be disposed right after. `fixtures/csharp-voxel-stamp` carves a
+smooth union of three capsules.
 
 Brushes and stamps also keep the exact shape of what they cut (Hermite
 crossings). On every edge between two voxels where an Add or Subtract
@@ -259,19 +258,16 @@ crosses the edge and the shape's normal there: a brush finds them on its own
 analytic shape, a stamp from its field's gradient. Sharp placement solves each
 cell's vertex from the stored crossings when every crossing of that cell has
 one, so a box cut's edges and corners and a sphere's facets land where the
-shape puts them rather than rounded at the cell scale (on a box cut into rock,
-edge vertices about 0.02 voxels off the true surface instead of 0.11 to 0.16,
-at most 0.1 instead of 0.24 to 0.6). A cell where the edit's surface meets
+shape puts them rather than rounded at the cell scale. A cell where the edit's surface meets
 ground it did not make mixes stored and estimated crossings, and is placed from
-the densities alone, as a cell no brush cut is. Smooth placement keeps its mass point but shades from the stored
-normals. Anything else that changes a voxel (a voxel edit, a region write, a
+the densities alone, as a cell no brush cut is. Smooth placement keeps its
+mass point but shades from the stored normals. Anything else that changes a voxel (a voxel edit, a region write, a
 smoothing brush, another brush over it) clears the crossings of its six edges,
 and residency payloads do not carry them: an evicted, replaced or re-admitted
 chunk draws its cuts from estimated normals until an edit cuts them again. The
 density receipt's `HermiteNormals` counts the crossings a batch stored and the
 residency receipt's `DroppedHermiteNormals` those an eviction or replacement
-dropped. They cost about 20 bytes per crossing (some 3 KB per chunk a box cut
-crosses) and nothing to mesh. `fixtures/csharp-voxel-sharp` cuts a box and adds
+dropped. They cost about 20 bytes per crossing and nothing to mesh. `fixtures/csharp-voxel-sharp` cuts a box and adds
 a sphere at Sharp placement with the brushes alone.
 
 Only the touched chunks' meshes and colliders are rebuilt; a failed rebuild
@@ -424,44 +420,35 @@ the rest:
 
 `VoxelScenePresentationReadout.ScatterPatchCount`, `ScatterInstanceCount` and
 `ScatterOverBudgetCount` report the patches, the copies they hold and the
-chunks a budget left bare. Sampling costs about 0.012 ms per 16³ dual
-contoured chunk at 4 spots per square metre on the `smooth_chunk_meshing`
-example (meshing the chunk costs 0.17 ms), and runs only for chunks coming
-into reach, not at mesh time: the samples are not stored with the chunk, so
+chunks a budget left bare. Sampling runs only for chunks coming into reach,
+not at mesh time: the samples are not stored with the chunk, so
 ground that leaves reach and comes back is sampled again, into the same
 copies.
-Drawing is the cost that matters: masked grass cards are overdraw. On
-`fixtures/csharp-voxel-scatter`, which grows grass clumps and bushes on a dual
-contoured hill, 8,725 visible copies in 35 patch draws take a 1280 × 720 frame
-from 0.68 to 0.96 ms on an RX 9070 XT and from 13 to 64 ms on llvmpipe.
+Drawing is the cost that matters: masked grass cards are overdraw.
+`fixtures/csharp-voxel-scatter` grows grass clumps and bushes on a dual
+contoured hill.
 
 ## Cost
 
 Reconstructed chunks mesh from the chunk and a one-voxel halo of its
 neighbours. A change builds each rebuilt chunk's mesh and collider together, in
-parallel when it rebuilds several chunks. On a 180-chunk dungeon of 16³
-one-metre chunks (`svc-mesh` example `smooth_chunk_meshing`, release build)
-dual contouring costs about 0.18 ms per chunk, marching cubes 0.25 ms and cubes
-0.14 ms: a cube chunk's face tests read its 26 neighbours through references
-resolved once per chunk. One residency, edit or density call meshes each chunk
-it touches once, after all its writes. A chunk's surface depends on all 26
-neighbours, though, so each later call remeshes the resident neighbours of what
-it changes. Admitting that dungeon in one call (`engine-spatial` example
-`smooth_residency_load`) takes about 27 ms with dual contouring, 39 ms with
-marching cubes and 22 ms with cubes, collision included. In slices of six
-chunks it builds 714 chunk meshes (474 with cubes) and takes about 0.12 s, 0.18
-s and 0.04 s in all, at most about 7, 9 and 2 ms per slice. A product filling a
+parallel when it rebuilds several chunks. A cube chunk's face tests read its
+26 neighbours through references resolved once per chunk. One residency, edit
+or density call meshes each chunk it touches once, after all its writes. A
+chunk's surface depends on all 26 neighbours, though, so each later call
+remeshes the resident neighbours of what it changes. A product filling a
 space behind a loading wait trades the longest call against the total through
 its slice size; larger, contiguous slices leave fewer resident neighbours to
 remesh. Reconstructed vertices are split per texture face and crease, so a
 smooth chunk draws more vertices than its cell count suggests. A coarse mesh
-takes about 0.15 ms per chunk with dual contouring and 0.2 ms with marching
-cubes, and draws about a third of the triangles (35% and 30% on that dungeon,
-skirts included; a quarter without). `VoxelSceneReadout.MeshMicroseconds`, and
-the same field on edit, residency and density receipts, report the meshing time
-of the chunks the last change rebuilt, summed over chunks.
+draws a fraction of its fine mesh's triangles, skirts included.
+`VoxelSceneReadout.MeshMicroseconds`, and the same field on edit, residency
+and density receipts, report the meshing time of the chunks the last change
+rebuilt, summed over chunks. The `svc-mesh` example `smooth_chunk_meshing`
+times each mode per chunk on a 180-chunk dungeon of 16³ one-metre chunks, and
+the `engine-spatial` example `smooth_residency_load` admits that dungeon in
+one call and in slices, collision included (release builds).
 `VoxelSceneReadout.MultiLoopCells` counts the dual-contoured cells of the
 resident meshes that the surface passes through more than once (a sheet thinner
 than a voxel, two surfaces meeting in one cell): each has one vertex, which
-pinches its sheets together. A 180-chunk dungeon has about one such cell in a
-thousand surface cells. Counting costs nothing measurable.
+pinches its sheets together.

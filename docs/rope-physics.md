@@ -127,7 +127,7 @@ few seconds).
 their Archimedes drafts, tips the raft under a load, and holds a raft in a
 river current on a tether.
 
-## Evidence
+## Tests
 
 - `svc-collision` solver tests cover:
   - hanging weight and a single catch;

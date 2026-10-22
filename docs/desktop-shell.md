@@ -131,8 +131,8 @@ rusty dev --project <product.csproj> --output window
     `RUSTY_DESKTOP_NOT_PUBLISHED`; `rusty update` moves to a pair that has one.
 - **Publication.** The pair workflow builds the pack from the pair's revision
   (`scripts/build-desktop-runtime-pack-archive.sh`) and publishes
-  `rusty-engine-desktop-pack-<version>-linux-x64.tar.xz` with the pair,
-  about 166 MB. `pair-release.json` names it under `desktopPack`. The default
+  `rusty-engine-desktop-pack-<version>-linux-x64.tar.xz` with the pair.
+  `pair-release.json` names it under `desktopPack`. The default
   pack stays free of Chromium.
 - **Contributors.** `scripts/build-runtime-pack.sh --desktop` builds a pack
   from a checkout; pass it with `--runtime`.
@@ -145,7 +145,7 @@ rusty dev --project <product.csproj> --output window
     against and refuses to build when that one is missing.
   - Default workspace builds and the verify workflow never enable the
     feature.
-- **What `lib/cef` holds.** About 292 MB installed; `rusty-product-host
+- **What `lib/cef` holds.** `rusty-product-host
   --cef-dir <directory>` overrides the location for the browser process
   (Linux subprocesses load `libcef.so` through the dynamic linker).
   - `libcef.so`, stripped;
@@ -156,7 +156,7 @@ rusty dev --project <product.csproj> --output window
 
   SwiftShader and the bundled Vulkan loader are left out. The overlay imports
   Chromium's frames as GPU textures, so it needs the system GPU driver and
-  Vulkan loader the world renderer already uses. Measured on RADV only.
+  Vulkan loader the world renderer already uses.
 
 ## Shipping a product
 

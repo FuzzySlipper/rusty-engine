@@ -44,7 +44,7 @@ The root [README](../README.md) is the repository landing page and
 - [World streaming and state contract](world-streaming-contract.md): movement
   support, sparse block state and Engine call affinity.
 - [Voxel residency and edit costs](voxel-budgets.md): how voxel changes apply,
-  limits and measured costs.
+  limits and how to measure their cost.
 - [Smooth voxel surfaces and densities](smooth-voxel-surfaces.md): surface
   modes and characters per material, densities and brush edits, and collision
   that follows the drawn surface.
