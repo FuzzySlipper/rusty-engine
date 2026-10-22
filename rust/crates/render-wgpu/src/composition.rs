@@ -494,7 +494,7 @@ impl Renderer {
                 self.presentation_time,
             );
         } else if let Some(stage) = stage {
-            self.upscale.run(
+            let drawn = self.upscale.run(
                 &self.gpu,
                 &mut self.layouts.shaders,
                 &mut self.compose,
@@ -504,6 +504,10 @@ impl Renderer {
                 self.options.render_scale,
                 &output,
             );
+            // The stage that drew, which a DLSS frame refused as it ran
+            // hands to TAAU.
+            stats.upscale = Some(drawn);
+            self.upscaled.method = Some(drawn);
         }
         self.picture = Some(picture);
         self.show_motion(&output);

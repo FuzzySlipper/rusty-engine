@@ -425,30 +425,51 @@ fn runner_against_a_fresh_frame(
         let (stats, picture) = harness.render(&view);
         (stage, last) = (stats.upscale, picture);
     }
-    // The same moment drawn afresh, with 4x MSAA and no history.
-    let reference = {
-        let mut renderer = render_wgpu::Renderer::new(&harness.gpu, RendererOptions::default());
-        let issues = renderer.apply(&harness.world.snapshot().frame, &harness.resources);
-        assert!(issues.is_empty(), "{issues:?}");
-        let msaa = RenderFrameDiff {
-            publication: None,
-            ops: vec![RenderDiff::SetRendererSettings {
-                settings: RendererSettingsDescriptor::DEFAULT,
-            }],
-        };
-        assert!(renderer.apply(&msaa, &harness.resources).is_empty());
-        let target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, 4);
-        renderer.render_offscreen(&view, &target);
-        target.read_rgba(&harness.gpu)
-    };
+    let reference = fresh_msaa_frame(&harness, &view);
     Some((stage, mean_difference(&last, &reference)))
 }
 
+/// The harness's world at this moment drawn afresh, with 4x MSAA and no
+/// history.
+fn fresh_msaa_frame(harness: &Harness, view: &RendererCompositionCamera) -> Vec<u8> {
+    let mut renderer = render_wgpu::Renderer::new(&harness.gpu, RendererOptions::default());
+    let issues = renderer.apply(&harness.world.snapshot().frame, &harness.resources);
+    assert!(issues.is_empty(), "{issues:?}");
+    let msaa = RenderFrameDiff {
+        publication: None,
+        ops: vec![RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor::DEFAULT,
+        }],
+    };
+    assert!(renderer.apply(&msaa, &harness.resources).is_empty());
+    let target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, 4);
+    renderer.render_offscreen(view, &target);
+    target.read_rgba(&harness.gpu)
+}
+
+/// The viewmodel cube in the lower right corner.
+const VIEWMODEL_CUBE: u64 = 601;
+
 /// A still crate before a striped wall sliding across the view, and a
-/// viewmodel cube in the lower right corner, `shown` or not, drawn with TAAU
-/// for `frames` frames: the last frame.
-fn crate_before_a_sliding_wall(shown: bool, frames: u32) -> Vec<u8> {
+/// viewmodel cube in the lower right corner, `shown` or not and sliding the
+/// other way if `moving`, drawn under `antialiasing` at render scale 0.67 for
+/// `frames` frames: the harness, the stage that drew the last frame, and the
+/// last frame.
+fn crate_before_a_sliding_wall(
+    antialiasing: Antialiasing,
+    shown: bool,
+    moving: bool,
+    frames: u32,
+) -> (Harness, Option<UpscaleMethod>, Vec<u8>) {
     const WALL: u64 = 700;
+    let viewmodel_at = |frame: u32| {
+        let x = if moving {
+            0.35 - frame as f32 * 0.01
+        } else {
+            0.35
+        };
+        transform([x, -0.3, -1.0], 30.0, [0.15; 3])
+    };
     let mut harness = scene();
     let mut ops = vec![
         RenderDiff::DefineMaterial {
@@ -467,11 +488,11 @@ fn crate_before_a_sliding_wall(shown: bool, frames: u32) -> Vec<u8> {
             transform([-0.6, 1.0, 1.5], 20.0, [1.0; 3]),
         ),
         RenderDiff::CreateStaticMeshInstance {
-            handle: RenderHandle::new(601),
+            handle: RenderHandle::new(VIEWMODEL_CUBE),
             parent: None,
             instance: StaticMeshInstanceDescriptor {
                 asset: CRATE.to_owned(),
-                transform: transform([0.35, -0.3, -1.0], 30.0, [0.15; 3]),
+                transform: viewmodel_at(0),
                 visible: shown,
                 material_overrides: Vec::new(),
                 metadata: RenderMetadata::default(),
@@ -481,7 +502,7 @@ fn crate_before_a_sliding_wall(shown: bool, frames: u32) -> Vec<u8> {
         },
         RenderDiff::SetRendererSettings {
             settings: RendererSettingsDescriptor {
-                antialiasing: Antialiasing::Temporal,
+                antialiasing,
                 render_scale: 0.67,
                 ..RendererSettingsDescriptor::DEFAULT
             },
@@ -497,47 +518,111 @@ fn crate_before_a_sliding_wall(shown: bool, frames: u32) -> Vec<u8> {
     }
     harness.apply(ops);
     harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, harness.renderer.samples());
-    let view = camera([0.0, 1.5, 5.0], 0.0, 0.0);
-    let mut last = Vec::new();
+    let view = wall_view();
+    let (mut stage, mut last) = (None, Vec::new());
     for frame in 0..frames {
-        harness.apply(vec![RenderDiff::Update {
+        let mut ops = vec![RenderDiff::Update {
             handle: RenderHandle::new(WALL),
             transform: Some(transform([frame as f32 * 0.4, 0.0, -6.0], 0.0, [1.0; 3])),
             material: None,
             visible: None,
             metadata: None,
-        }]);
-        last = harness.render(&view).1;
+        }];
+        if moving {
+            ops.push(RenderDiff::Update {
+                handle: RenderHandle::new(VIEWMODEL_CUBE),
+                transform: Some(viewmodel_at(frame)),
+                material: None,
+                visible: None,
+                metadata: None,
+            });
+        }
+        harness.apply(ops);
+        let (stats, picture) = harness.render(&view);
+        (stage, last) = (stats.upscale, picture);
     }
-    last
+    (harness, stage, last)
+}
+
+/// The view of the crate and the sliding wall.
+fn wall_view() -> RendererCompositionCamera {
+    camera([0.0, 1.5, 5.0], 0.0, 0.0)
 }
 
 /// The viewmodel draws against a depth of its own, so the world's depth
 /// still dilates the world's motion: a still crate's edges keep their own
 /// (no) motion over the wall sliding behind them whether a viewmodel draws
-/// or not, and the picture away from the viewmodel is the same.
+/// or not, and the picture away from the viewmodel is the same. Under TAAU,
+/// and under DLSS where it draws.
 #[test]
 fn a_viewmodel_leaves_the_worlds_depth_aware_dilation_alone() {
     if scene().gpu.is_software() {
         return;
     }
-    let without = crate_before_a_sliding_wall(false, 24);
-    let with = crate_before_a_sliding_wall(true, 24);
-    // Away from the viewmodel, in the lower right quarter.
-    let mut differing = 0;
-    for y in 0..HEIGHT {
-        for x in 0..WIDTH {
-            if x >= WIDTH / 2 && y >= HEIGHT / 2 {
-                continue;
-            }
-            let at = ((y * WIDTH + x) * 4) as usize;
-            if (0..3).any(|c| without[at + c].abs_diff(with[at + c]) > 6) {
-                differing += 1;
+    for antialiasing in [Antialiasing::Temporal, Antialiasing::Dlss] {
+        let (_, stage, without) = crate_before_a_sliding_wall(antialiasing, false, false, 24);
+        let (_, _, with) = crate_before_a_sliding_wall(antialiasing, true, false, 24);
+        if antialiasing == Antialiasing::Dlss && stage != Some(UpscaleMethod::Dlss) {
+            continue;
+        }
+        // Away from the viewmodel, in the lower right quarter.
+        let mut differing = 0;
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                if x >= WIDTH / 2 && y >= HEIGHT / 2 {
+                    continue;
+                }
+                let at = ((y * WIDTH + x) * 4) as usize;
+                if (0..3).any(|c| without[at + c].abs_diff(with[at + c]) > 6) {
+                    differing += 1;
+                }
             }
         }
+        assert!(
+            differing <= 4,
+            "{antialiasing:?}: {differing} pixels away from the viewmodel differ with it drawn"
+        );
     }
-    assert!(
-        differing <= 4,
-        "{differing} pixels away from the viewmodel differ with it drawn"
-    );
+}
+
+/// A viewmodel cube sliding one way before a world sliding the other keeps
+/// its own motion at its edges: the lower right quarter, where it draws,
+/// differs from the same moment drawn afresh with 4x MSAA by little more
+/// than with the cube still (the sliding stripes behind it differ either
+/// way). Under TAAU, and under DLSS where it draws, which takes the
+/// viewmodel's depth over the world's.
+#[test]
+fn a_moving_viewmodel_before_a_sliding_world_leaves_no_trail() {
+    /// How much more the corner may differ with the cube moving.
+    const MARGIN: f64 = 1.5;
+    if scene().gpu.is_software() {
+        return;
+    }
+    for antialiasing in [Antialiasing::Temporal, Antialiasing::Dlss] {
+        let corner = |moving: bool| {
+            let (harness, stage, last) =
+                crate_before_a_sliding_wall(antialiasing, true, moving, 24);
+            let reference = fresh_msaa_frame(&harness, &wall_view());
+            let (mut sum, mut count) = (0.0, 0usize);
+            for y in HEIGHT / 2..HEIGHT {
+                for x in WIDTH / 2..WIDTH {
+                    let at = ((y * WIDTH + x) * 4) as usize;
+                    for c in 0..3 {
+                        sum += f64::from(last[at + c].abs_diff(reference[at + c]));
+                    }
+                    count += 3;
+                }
+            }
+            (stage, sum / count as f64)
+        };
+        let (stage, still) = corner(false);
+        if antialiasing == Antialiasing::Dlss && stage != Some(UpscaleMethod::Dlss) {
+            continue;
+        }
+        let (_, moving) = corner(true);
+        assert!(
+            moving < still + MARGIN,
+            "{antialiasing:?}: the viewmodel's corner against a fresh frame: {moving:.3} moving, {still:.3} still"
+        );
+    }
 }

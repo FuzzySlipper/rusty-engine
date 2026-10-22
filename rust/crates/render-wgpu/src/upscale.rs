@@ -342,7 +342,7 @@ pub(crate) struct Upscale {
     /// TAAU, from the first frame it runs.
     taau: Option<Taau>,
     /// DLSS, which starts the first time it is asked for.
-    dlss: crate::dlss::Dlss,
+    pub(crate) dlss: crate::dlss::Dlss,
     /// The temporal method the last frame ran: each keeps its own
     /// history, which a frame of the other breaks.
     last_temporal: Option<UpscaleMethod>,
@@ -401,9 +401,11 @@ impl Upscale {
         })
     }
 
-    /// Bring `picture` to `output` by `method`, over the whole output. A
-    /// temporal method reads `temporal`, which the frame drew for it, over
-    /// a single-sample picture.
+    /// Bring `picture` to `output` by `method`, over the whole output, and
+    /// say which method drew: TAAU where DLSS fails as it runs, bilinear
+    /// where a temporal method has no inputs. A temporal method reads
+    /// `temporal`, which the frame drew for it, over a single-sample
+    /// picture.
     #[allow(clippy::too_many_arguments, reason = "one stage's inputs")]
     pub fn run(
         &mut self,
@@ -415,7 +417,7 @@ impl Upscale {
         temporal: Option<TemporalInputs<'_>>,
         render_scale: f32,
         output: &TargetView<'_>,
-    ) {
+    ) -> UpscaleMethod {
         if let Some(timer) = &mut self.timer {
             timer.collect(gpu);
         }
@@ -423,9 +425,10 @@ impl Upscale {
             self.forget_history();
         }
         self.last_temporal = method.temporal().then_some(method);
-        match (method, temporal) {
+        let drawn = match (method, temporal) {
             (UpscaleMethod::Taau, Some(inputs)) => {
                 self.taau(gpu, shaders, picture, &inputs, render_scale, output);
+                UpscaleMethod::Taau
             }
             (UpscaleMethod::Dlss, Some(inputs)) => {
                 let drawn = self.dlss.run(
@@ -440,19 +443,24 @@ impl Upscale {
                 );
                 // Refused as it ran: TAAU draws this frame, and the next
                 // selects it.
-                if drawn.is_err() {
+                if drawn.is_ok() {
+                    UpscaleMethod::Dlss
+                } else {
                     self.last_temporal = Some(UpscaleMethod::Taau);
                     self.taau(gpu, shaders, picture, &inputs, render_scale, output);
+                    UpscaleMethod::Taau
                 }
             }
             _ => {
                 self.forget_history();
                 self.bilinear(gpu, compose, picture, output);
+                UpscaleMethod::Bilinear
             }
-        }
+        };
         if let Some(timer) = &mut self.timer {
             timer.submitted();
         }
+        drawn
     }
 
     fn taau(
