@@ -51,10 +51,12 @@ Three captures are available, and they show different things:
   - **Its own target.** It draws at the requested size, or else at the
     output's (the stream's last frame, or the window's surface). It never
     counts as a viewer and is not published to the stream, so no page or
-    window changes size. Under a temporal anti-aliasing stage it is a
-    primary frame: at a size other than the output's it starts the stage's
-    history again, and at the same size it advances it
-    ([temporal inputs](lighting-and-sky.md#temporal-inputs)).
+    window changes size. It leaves the output's frames alone: under a
+    temporal anti-aliasing stage it draws without the stage (no jitter, no
+    temporal anti-aliasing, bilinear at the render scale), and the output's
+    history goes on from the output's last frame
+    ([temporal inputs](lighting-and-sky.md#temporal-inputs)). The motion
+    view shows in the output's frames only.
   - **The answer.** An `RSF1` frame with a lossless PNG (format `3`, the
     default) or raw RGBA (`2`), with the simulation step and the held and
     video flags. Its sequence counts captures, apart from the stream's.

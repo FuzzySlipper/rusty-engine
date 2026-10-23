@@ -23,6 +23,7 @@ use render_model::{
 use crate::apply::light_row;
 use crate::batch::{self, DrawList, Frustum};
 use crate::camera::CameraMatrices;
+use crate::composition::PrimaryDraw;
 use crate::culling::CandidateList;
 use crate::distance_fields::{world_box, FieldEntry};
 use crate::effects::EffectsPass;
@@ -373,7 +374,7 @@ impl Renderer {
     ) -> FrameStats {
         self.composition.cut |= camera.motion.as_ref().is_some_and(|motion| motion.cut);
         let uploaded = self.prepare();
-        let mut stats = self.draw_primary(target.view(), |renderer, view| {
+        let mut stats = self.draw_primary(target.view(), PrimaryDraw::Output, |renderer, view| {
             renderer.render_camera(camera, view)
         });
         stats.parts_uploaded = uploaded;
@@ -391,7 +392,9 @@ impl Renderer {
         let gpu = self.gpu.clone();
         let mut stats = FrameStats::default();
         surface.present_with(&gpu, |view| {
-            stats = self.draw_primary(view, |renderer, view| renderer.render_camera(camera, view));
+            stats = self.draw_primary(view, PrimaryDraw::Output, |renderer, view| {
+                renderer.render_camera(camera, view)
+            });
         })?;
         stats.parts_uploaded = uploaded;
         Ok(stats)

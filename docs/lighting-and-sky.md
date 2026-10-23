@@ -369,10 +369,11 @@ motion is then drawn for the inspection alone, without a stage or jitter.
 
 Labels and overlay lines draw at render resolution, so below render scale 1
 they are as soft as the scale makes them. A tool's
-[capture](presentation-capture.md#captures) is a primary frame too: at a
-size other than the output's it starts the history again, and at the same
-size it takes a jitter point and becomes the frame the next output frame's
-motion is measured from.
+[capture](presentation-capture.md#captures) is a reading beside the
+output's frames: it draws without the stage, jitter or motion, at the render
+scale through the bilinear stage, and leaves every temporal input to the
+output, so the output's frames before and after it measure their motion
+against each other and its history holds.
 
 ### Temporal upscaling (TAAU)
 

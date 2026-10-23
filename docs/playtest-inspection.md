@@ -262,7 +262,8 @@ The renderer draws its own inspection from what it already draws:
   to the right and down, `0.5 + pixels / 32`, clamped, and blue is `0.5 +
   mask / 2` for its reactive mask: grey is still, lilac is still and
   reactive (water, labels, overlay lines), pure blue has no motion of its own, and a camera turning
-  right shows the world in red below 0.5.
+  right shows the world in red below 0.5. It shows in the output's frames
+  (the stream or the window), not in a tool's capture.
 
 Handles are the ones `engine.scene.objects` lists. `engine.inspect.overlay`
 reads what is shown and the product's sets (items, revision, shown);

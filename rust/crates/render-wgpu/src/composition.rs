@@ -48,6 +48,15 @@ struct CompositionTarget {
     last_refreshed_frame: Option<u64>,
 }
 
+/// What a primary draw is for (`Renderer::draw_primary`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PrimaryDraw {
+    /// The output's frame: the stream's, the window's or a host's.
+    Output,
+    /// A reading beside the output's frames, such as a tool's capture.
+    Reading,
+}
+
 #[derive(Default)]
 pub(crate) struct ViewComposition {
     /// The installed composition with anchored views at their anchors'
@@ -362,7 +371,28 @@ impl Renderer {
         time_seconds: f64,
     ) -> FrameStats {
         let uploaded = self.prepare();
-        let mut stats = self.draw_primary(target.view(), |renderer, view| {
+        let mut stats = self.draw_primary(target.view(), PrimaryDraw::Output, |renderer, view| {
+            renderer.render_composition(view, time_seconds)
+        });
+        stats.video = self.draw_video(&target.view());
+        stats.parts_uploaded = uploaded;
+        stats
+    }
+
+    /// Render the installed composition into `target` for a tool's capture
+    /// (`SceneDriver::capture`), a reading beside the output's frames. It
+    /// draws as an output frame does, except that it leaves the temporal
+    /// state to the output: under a temporal stage it draws without one
+    /// (no jitter or motion, bilinear at the render scale), and the output
+    /// frames before and after it measure their motion against each other
+    /// (`PrimaryDraw::Reading`).
+    pub fn capture_view_composition(
+        &mut self,
+        target: &OffscreenTarget,
+        time_seconds: f64,
+    ) -> FrameStats {
+        let uploaded = self.prepare();
+        let mut stats = self.draw_primary(target.view(), PrimaryDraw::Reading, |renderer, view| {
             renderer.render_composition(view, time_seconds)
         });
         stats.video = self.draw_video(&target.view());
@@ -376,11 +406,19 @@ impl Renderer {
     /// Otherwise it draws into the render picture, and the stage, or the
     /// image effect in its place, draws that over the whole of `output`. A
     /// video and the hosts' UI draw at output resolution after.
+    ///
+    /// A reading (`PrimaryDraw::Reading`) draws without a temporal stage and
+    /// touches no temporal state: no jitter phase, motion, previous camera,
+    /// part, particle or skinned vertex, camera cut or stage history, and
+    /// neither the output's picture nor its readout. The output's next
+    /// frame measures its motion against the output's last.
     pub(crate) fn draw_primary(
         &mut self,
         output: TargetView<'_>,
+        kind: PrimaryDraw,
         draw: impl FnOnce(&mut Self, TargetView<'_>) -> FrameStats,
     ) -> FrameStats {
+        let reading = kind == PrimaryDraw::Reading;
         // An image effect reads the whole picture, so the views draw into a
         // picture of their own first, as an upscale stage's do. It takes
         // the stage's place, so the temporal stage is refused with it
@@ -388,10 +426,10 @@ impl Renderer {
         let effect = self.image_effect.active();
         let mut stage = UpscaleMethod::selected(
             &self.options,
-            self.temporal_refusal().is_none(),
+            !reading && self.temporal_refusal().is_none(),
             self.dlss_refusal().is_none(),
         );
-        if !stage.is_some_and(UpscaleMethod::temporal) {
+        if !reading && !stage.is_some_and(UpscaleMethod::temporal) {
             self.upscale.forget_history();
         }
         let scale = stage.map_or(1.0, |_| self.options.render_scale);
@@ -414,45 +452,57 @@ impl Renderer {
         // A temporal stage's picture is single-sample whatever the output's
         // samples: it anti-aliases in MSAA's place.
         let samples = if jittering { 1 } else { output.samples };
-        let cut = std::mem::take(&mut self.composition.cut);
-        let kept = self.temporal.keeps_history();
-        if self.temporal.begin_frame(
-            &self.gpu,
-            &self.tables.parts,
-            motion,
-            jittering,
-            resolution,
-            samples,
-            &self.options,
-            self.composition.observer.is_some(),
-            cut,
-            self.presentation_time,
-        ) {
-            self.rebind_frame();
-        }
-        if motion {
-            self.particles.drawn();
-            self.settle_skinned_history();
-        } else if kept {
-            self.forget_skinned_history();
+        if reading {
+            self.temporal.begin_reading();
+        } else {
+            let cut = std::mem::take(&mut self.composition.cut);
+            let kept = self.temporal.keeps_history();
+            if self.temporal.begin_frame(
+                &self.gpu,
+                &self.tables.parts,
+                motion,
+                jittering,
+                resolution,
+                samples,
+                &self.options,
+                self.composition.observer.is_some(),
+                cut,
+                self.presentation_time,
+            ) {
+                self.rebind_frame();
+            }
+            if motion {
+                self.particles.drawn();
+                self.settle_skinned_history();
+            } else if kept {
+                self.forget_skinned_history();
+            }
         }
         if stage.is_none() && !effect {
-            self.picture = None;
+            if !reading {
+                self.picture = None;
+            }
             let mut stats = draw(self, output);
             stats.cpu_batch_us = self.batch_time.as_micros() as u32;
             stats.resolution = resolution;
             stats.motion = self.temporal.end_frame();
-            self.upscaled = crate::UpscaleReadout {
-                resolution,
-                method: None,
-            };
-            self.show_motion(&output);
+            if !reading {
+                self.upscaled = crate::UpscaleReadout {
+                    resolution,
+                    method: None,
+                };
+                self.show_motion(&output);
+            }
             return stats;
         }
         let (width, height) = resolution.render;
-        let picture = match self.picture.take() {
-            Some(picture) if picture.matches(width, height, samples, jittering) => picture,
-            _ => RenderPicture::new(&self.gpu, width, height, samples, jittering),
+        // A reading leaves the output's picture for the output's next frame.
+        let (picture, output_picture) = match self.picture.take() {
+            Some(picture) if picture.matches(width, height, samples, jittering) => (picture, None),
+            other => (
+                RenderPicture::new(&self.gpu, width, height, samples, jittering),
+                other.filter(|_| reading),
+            ),
         };
         // The viewmodel passes draw against a depth of their own, cleared
         // here since a pass with nothing to draw leaves it untouched.
@@ -466,10 +516,12 @@ impl Renderer {
         stats.resolution = resolution;
         stats.motion = self.temporal.end_frame();
         stats.upscale = stage.filter(|_| !effect);
-        self.upscaled = crate::UpscaleReadout {
-            resolution,
-            method: stats.upscale,
-        };
+        if !reading {
+            self.upscaled = crate::UpscaleReadout {
+                resolution,
+                method: stats.upscale,
+            };
+        }
         if effect {
             let white = &self.white;
             let texture = |slot: usize| {
@@ -507,10 +559,14 @@ impl Renderer {
             // The stage that drew, which a DLSS frame refused as it ran
             // hands to TAAU.
             stats.upscale = Some(drawn);
-            self.upscaled.method = Some(drawn);
+            if !reading {
+                self.upscaled.method = Some(drawn);
+            }
         }
-        self.picture = Some(picture);
-        self.show_motion(&output);
+        self.picture = output_picture.or(Some(picture));
+        if !reading {
+            self.show_motion(&output);
+        }
         stats
     }
 
@@ -564,7 +620,7 @@ impl Renderer {
         self.display_vsync_only = Some(surface.vsync_only());
         self.surface_size = Some(surface.size());
         let (view, _) = surface.views(frame);
-        let mut stats = self.draw_primary(view, |renderer, view| {
+        let mut stats = self.draw_primary(view, PrimaryDraw::Output, |renderer, view| {
             renderer.render_composition(view, time_seconds)
         });
         stats.video = self.draw_video(&view);

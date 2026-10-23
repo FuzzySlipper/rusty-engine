@@ -594,7 +594,9 @@ impl SceneDriver {
     /// back, at `size`, else the window's surface size, else 1280x720, at
     /// the pixel ratio the last output drew with. A capture changes no
     /// output's frame size or pixel ratio and draws into no output; its
-    /// facts are reported like a drawn frame's.
+    /// facts are reported like a drawn frame's. It is a reading
+    /// ([`Renderer::capture_view_composition`]): under a temporal stage it
+    /// draws without one, and leaves the outputs' history alone.
     pub fn capture(&self, size: Option<(u32, u32)>, overlays: bool) -> Capture {
         let now = self.now();
         let mut scene = self.scene();
@@ -614,7 +616,7 @@ impl SceneDriver {
         let (width, height) = target.size();
         scene.present_at(now);
         scene.renderer.set_pixel_ratio(fitted_ratio);
-        let video = scene.renderer.render_view_composition(&target, now).video;
+        let video = scene.renderer.capture_view_composition(&target, now).video;
         scene.renderer.set_pixel_ratio(ratio);
         // The sets the player view and the inspection views it drew show.
         let drawn_overlays = (overlays && shown.any()).then(|| {

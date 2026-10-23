@@ -27,7 +27,9 @@
 //! a temporal method also its motion target, jitter and history reset
 //! (`motion.rs`), which the frame draws whenever such a method is selected.
 //! At render scale 1 with no method selected and no image effect, there is
-//! no picture and no stage: the views draw straight into the output.
+//! no picture and no stage: the views draw straight into the output. A
+//! tool's capture draws without a temporal method, and leaves its history
+//! to the output's frames (`PrimaryDraw::Reading`).
 //!
 //! Three methods draw:
 //! - **Bilinear:** each output pixel samples the picture. A render scale
@@ -421,10 +423,12 @@ impl Upscale {
         if let Some(timer) = &mut self.timer {
             timer.collect(gpu);
         }
-        if method.temporal() && self.last_temporal != Some(method) {
-            self.forget_history();
+        if method.temporal() {
+            if self.last_temporal != Some(method) {
+                self.forget_history();
+            }
+            self.last_temporal = Some(method);
         }
-        self.last_temporal = method.temporal().then_some(method);
         let drawn = match (method, temporal) {
             (UpscaleMethod::Taau, Some(inputs)) => {
                 self.taau(gpu, shaders, picture, &inputs, render_scale, output);
@@ -451,8 +455,13 @@ impl Upscale {
                     UpscaleMethod::Taau
                 }
             }
-            _ => {
-                self.forget_history();
+            // A temporal method without its inputs breaks its history; a
+            // frame that chose bilinear has none (`Renderer::draw_primary`),
+            // or is a reading that leaves the output's alone.
+            (method, _) => {
+                if method.temporal() {
+                    self.forget_history();
+                }
                 self.bilinear(gpu, compose, picture, output);
                 UpscaleMethod::Bilinear
             }

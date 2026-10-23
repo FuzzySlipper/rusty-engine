@@ -534,9 +534,11 @@ impl Renderer {
         self.display_vsync_only = Some(surface.vsync_only());
         self.surface_size = Some(surface.size());
         let (view, finished) = surface.views(frame);
-        let mut stats = self.draw_primary(view, |renderer, view| {
-            renderer.render_composition(view, time_seconds)
-        });
+        let mut stats = self.draw_primary(
+            view,
+            crate::composition::PrimaryDraw::Output,
+            |renderer, view| renderer.render_composition(view, time_seconds),
+        );
         overlay.draw(finished.color, finished.format, surface.size());
         stats.video = self.draw_video(&finished);
         stats.parts_uploaded = uploaded;

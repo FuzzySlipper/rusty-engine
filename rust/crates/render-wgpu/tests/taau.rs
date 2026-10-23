@@ -3,7 +3,8 @@
 //! output resolution. Its edges come close to 4× MSAA's at native scale,
 //! and closer to the native picture than bilinear at half scale; a still
 //! view settles; a moved part leaves no trail; a software adapter refuses
-//! it and draws without it. `Antialiasing::Dlss` draws DLSS (`dlss.rs`) on
+//! it and draws without it; a tool's capture between output frames leaves
+//! their history alone. `Antialiasing::Dlss` draws DLSS (`dlss.rs`) on
 //! an RTX GPU in a build with it, and TAAU where it is refused. Needs a wgpu
 //! adapter: CI uses `WGPU_BACKEND=vulkan` with llvmpipe.
 
@@ -12,10 +13,14 @@ mod support;
 use std::path::PathBuf;
 
 use asset_import::{import_animated_glb_asset, ImportContext, SourceUri};
-use render_host_contracts::RendererCompositionCamera;
+use render_host_contracts::{
+    RendererCompositionCamera, RendererCompositionView, RendererViewComposition,
+    RendererViewTarget, RendererViewport,
+};
 use render_model::*;
 use render_wgpu::{
-    FrameResolution, FrameStats, OffscreenTarget, RendererOptions, SettingRefusal, UpscaleMethod,
+    FrameResolution, FrameStats, OffscreenTarget, OverlayShown, RendererOptions, SettingRefusal,
+    UpscaleMethod,
 };
 use support::*;
 
@@ -634,5 +639,149 @@ fn a_moving_viewmodel_before_a_sliding_world_leaves_no_trail() {
             moving < still + MARGIN,
             "{antialiasing:?}: the viewmodel's corner against a fresh frame: {moving:.3} moving, {still:.3} still"
         );
+    }
+}
+
+/// One primary view of `camera` over the whole output.
+fn composition_of(camera: RendererCompositionCamera) -> RendererViewComposition {
+    RendererViewComposition {
+        views: vec![RendererCompositionView {
+            id: "main".to_owned(),
+            camera_id: camera.id.clone(),
+            target: RendererViewTarget::Primary,
+            viewport: RendererViewport {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            order: 0,
+            viewport_anchor: None,
+        }],
+        cameras: vec![camera],
+        targets: Vec::new(),
+        presentations: Vec::new(),
+    }
+}
+
+/// Output frames of a turning camera and a moving crate under
+/// `antialiasing` at `render_scale`, with the motion inspection `shown` or
+/// not, and with a tool's capture at its own size between each two frames
+/// if `captured` (after the crate moved): each output frame's stats and
+/// picture, and each capture's stats.
+fn output_frames_around_captures(
+    antialiasing: Antialiasing,
+    render_scale: f32,
+    shown: bool,
+    captured: bool,
+) -> (Vec<(FrameStats, Vec<u8>)>, Vec<FrameStats>) {
+    let mut harness = scene();
+    harness.apply(vec![RenderDiff::SetRendererSettings {
+        settings: RendererSettingsDescriptor {
+            antialiasing,
+            render_scale,
+            ..RendererSettingsDescriptor::DEFAULT
+        },
+    }]);
+    harness.renderer.set_overlay_shown(OverlayShown {
+        motion: shown,
+        ..OverlayShown::default()
+    });
+    let samples = harness.renderer.samples();
+    harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, samples);
+    let capture = OffscreenTarget::new(&harness.gpu, 200, 120, samples);
+    let (mut frames, mut captures) = (Vec::new(), Vec::new());
+    for frame in 0..6 {
+        harness.apply(vec![RenderDiff::Update {
+            handle: RenderHandle::new(MOVED),
+            transform: Some(transform(
+                [-0.8 + frame as f32 * 0.1, 0.0, -2.0],
+                35.0,
+                [1.0; 3],
+            )),
+            material: None,
+            visible: None,
+            metadata: None,
+        }]);
+        let composition = composition_of(camera([0.0, 2.0, 5.0], frame as f64, -15.0));
+        harness.renderer.set_view_composition(&composition, 0.0);
+        if captured && frame > 0 {
+            captures.push(harness.renderer.capture_view_composition(&capture, 0.0));
+            assert!(
+                capture
+                    .read_rgba(&harness.gpu)
+                    .chunks(4)
+                    .any(|p| p[0] > 100),
+                "the capture drew the crates"
+            );
+        }
+        let stats = harness
+            .renderer
+            .render_view_composition(&harness.target, 0.0);
+        frames.push((stats, harness.target.read_rgba(&harness.gpu)));
+    }
+    (frames, captures)
+}
+
+/// A tool's capture between output frames (`SceneDriver::capture`), at its
+/// own size, leaves the output's temporal history alone: the output frames
+/// around it draw exactly what they draw without it, with the same jitter
+/// phases and no reset, so they measure their motion against each other.
+/// The capture draws without the temporal stage: no jitter or motion, and
+/// bilinear below render scale 1. With the motion inspection alone, and
+/// under TAAU and DLSS (TAAU where it is refused) on a GPU.
+#[test]
+fn a_capture_between_output_frames_leaves_their_history_alone() {
+    let gpu = scene().gpu;
+    let mut cases = vec![(Antialiasing::Off, 1.0, true)];
+    if !gpu.is_software() {
+        cases.extend([
+            (Antialiasing::Temporal, 1.0, false),
+            (Antialiasing::Temporal, 0.67, false),
+            (Antialiasing::Temporal, 0.67, true),
+            (Antialiasing::Dlss, 0.67, false),
+        ]);
+    }
+    for (antialiasing, scale, shown) in cases {
+        let case = format!("{antialiasing:?} at {scale}, motion shown {shown}");
+        let (alone, _) = output_frames_around_captures(antialiasing, scale, shown, false);
+        let (around, captures) = output_frames_around_captures(antialiasing, scale, shown, true);
+        let motion: Vec<_> = around.iter().map(|(stats, _)| stats.motion).collect();
+        assert_eq!(
+            motion,
+            alone
+                .iter()
+                .map(|(stats, _)| stats.motion)
+                .collect::<Vec<_>>(),
+            "{case}: the output's jitter and resets"
+        );
+        for (index, frame) in motion.iter().enumerate() {
+            let frame = frame.expect("the output draws motion");
+            assert_eq!(frame.history_reset, index == 0, "{case}: frame {index}");
+            let temporal = antialiasing != Antialiasing::Off;
+            assert_eq!(
+                frame.jitter_phase,
+                temporal.then_some(index as u32),
+                "{case}: frame {index}"
+            );
+        }
+        for (index, ((stats, picture), (_, expected))) in around.iter().zip(&alone).enumerate() {
+            assert_eq!(
+                stats.upscale, alone[index].0.upscale,
+                "{case}: frame {index}"
+            );
+            assert!(
+                picture == expected,
+                "{case}: output frame {index} differs with captures between frames"
+            );
+        }
+        for stats in &captures {
+            assert_eq!(stats.motion, None, "{case}: the capture draws no motion");
+            assert_eq!(
+                stats.upscale,
+                (scale < 1.0).then_some(UpscaleMethod::Bilinear),
+                "{case}: the capture's stage"
+            );
+        }
     }
 }

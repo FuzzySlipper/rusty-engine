@@ -64,7 +64,9 @@
 //!   render resolution changes or the renderer's options do.
 //!
 //! With neither a temporal stage nor the inspection, nothing here runs:
-//! no attachment, no jitter, no previous rows.
+//! no attachment, no jitter, no previous rows. A reading beside the
+//! output's frames, a tool's capture, runs none of it either and leaves
+//! what the output's last frame drew for its next (`Temporal::begin_reading`).
 
 use std::collections::{HashMap, HashSet};
 
@@ -599,6 +601,14 @@ impl Temporal {
             jitter_phase: phase,
         });
         rebind
+    }
+
+    /// Begin a reading beside the output's frames (`PrimaryDraw::Reading`):
+    /// it draws no motion, and what the output's last frame drew stays the
+    /// next one's previous frame.
+    pub fn begin_reading(&mut self) {
+        self.frame = None;
+        self.shown = None;
     }
 
     /// The frame's motion, while it draws motion.
