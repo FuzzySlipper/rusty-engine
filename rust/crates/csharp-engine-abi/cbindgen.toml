@@ -190,6 +190,8 @@ include = [
     "NativeStaticMeshInstance",
     "NativeCollisionReplaceRequest",
     "NativeCollisionReplaceReceipt",
+    "NativeCollisionResidencyReadRequest",
+    "NativeCollisionResidencyReadout",
     "NativePlanarNavConfig",
     "NativePlanarNavCell",
     "NativeNavigationReplaceRequest",

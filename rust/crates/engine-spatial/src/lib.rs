@@ -93,9 +93,10 @@ pub use svc_collision::{
     CharacterCollisionQueryError, CharacterCollisionQueryStats, CharacterCollisionSource,
     CharacterObstacle, ContactPose, ContactQueryError, ContactShape, ContactSource, ContactTarget,
     InspectedCollider, InspectedColliderSource, ModelSurface, ModelSurfaceHit, ModelSurfacePoint,
-    PlacedModelSurface, ShapeContact, StaticMeshAssetId, StaticMeshColliderAsset,
-    StaticMeshColliderInstance, StaticMeshCollisionError, StaticMeshCollisionReceipt,
-    StaticMeshHit, StaticMeshInstanceId, StaticMeshTransform, CUBOID_LINES, TRIANGLE_LINES,
+    PlacedModelSurface, ShapeContact, StaticMeshAssetId, StaticMeshBaked, StaticMeshColliderAsset,
+    StaticMeshColliderInstance, StaticMeshCollisionError, StaticMeshCollisionProjection,
+    StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId, StaticMeshResidencyPlan,
+    StaticMeshTransform, CUBOID_LINES, TRIANGLE_LINES,
 };
 pub use svc_mesh::distance_field;
 pub use svc_mesh::{
@@ -1179,6 +1180,23 @@ impl VoxelCollisionScene {
             removed_assets,
             removed_instances,
         )
+    }
+
+    /// The static-mesh colliders, to plan a residency delta against off
+    /// this scene ([`StaticMeshCollisionProjection::plan_residency`]).
+    pub fn static_mesh_projection(&self) -> &StaticMeshCollisionProjection {
+        self.projection.static_meshes()
+    }
+
+    /// Install a static-mesh delta planned against [`Self::static_mesh_projection`]
+    /// and baked away from the scene; one planned before a later change is
+    /// refused (`StaticMeshCollisionError::Superseded`).
+    pub fn install_static_mesh_residency(
+        &mut self,
+        plan: StaticMeshResidencyPlan,
+        baked: StaticMeshBaked,
+    ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
+        self.projection.install_static_mesh_residency(plan, baked)
     }
 
     /// Select collision participation independently of retained visual voxels.

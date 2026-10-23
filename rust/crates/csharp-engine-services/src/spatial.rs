@@ -3,6 +3,7 @@ mod collision_inspection;
 mod collision_navigation;
 mod contacts;
 mod inspection;
+mod static_deferred;
 
 use std::{
     cell::RefCell,
@@ -475,6 +476,8 @@ pub(crate) struct SpatialSession {
     /// Deferred residency changes' meshes and colliders, oldest first,
     /// building on worker threads until they install.
     pub(crate) deferred: std::collections::VecDeque<engine_spatial::DeferredChunkRebuild>,
+    /// Deferred static collision batches, baking one at a time.
+    static_deferred: static_deferred::StaticDeferred,
 }
 
 impl SpatialSession {
@@ -486,6 +489,51 @@ impl SpatialSession {
         while let Some(rebuild) = self.deferred.pop_front() {
             self.install(rebuild);
         }
+        while !self.static_deferred.is_empty() {
+            self.static_deferred
+                .start(self.scene.static_mesh_projection());
+            if let Some((number, baked)) = self.static_deferred.take() {
+                self.install_static(number, baked);
+            }
+        }
+    }
+
+    /// Install the deferred static collision batch baked so far and start
+    /// the next. Returns whether any installed.
+    pub(crate) fn install_built_collision(&mut self) -> bool {
+        let mut installed = false;
+        while self.static_deferred.is_baked() {
+            let (number, baked) = self.static_deferred.take().expect("checked above");
+            self.install_static(number, baked);
+            self.static_deferred
+                .start(self.scene.static_mesh_projection());
+            installed = true;
+        }
+        installed
+    }
+
+    fn install_static(
+        &mut self,
+        number: u64,
+        baked: Result<
+            (
+                engine_spatial::StaticMeshResidencyPlan,
+                engine_spatial::StaticMeshBaked,
+            ),
+            String,
+        >,
+    ) {
+        let installed = baked.and_then(|(plan, baked)| {
+            Arc::make_mut(&mut self.scene)
+                .install_static_mesh_residency(plan, baked)
+                .map_err(|error| format!("{error:?}"))
+        });
+        if let Err(error) = &installed {
+            // Nobody is waiting on a receipt: the batch changes nothing, and
+            // the readout counts it refused.
+            eprintln!("CSHARP_COLLISION_RESIDENCY_DEFERRED: batch {number}: {error}");
+        }
+        self.static_deferred.finish(number, installed.is_err());
     }
 
     /// Install the deferred residency changes built so far, oldest first,
@@ -1169,6 +1217,7 @@ impl RuntimeSpatialBridge {
                     .deferred
                     .front()
                     .is_some_and(|rebuild| rebuild.is_built())
+                    || session.static_deferred.is_baked()
             })
             .map(|(value, _)| NativeSpatialSessionHandle { value: *value })
             .collect();
@@ -1176,6 +1225,7 @@ impl RuntimeSpatialBridge {
             let started = std::time::Instant::now();
             let _ = self.edit_scene_deferring(handle, |session| {
                 session.install_built();
+                session.install_built_collision();
             });
             let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
             self.update_attribution.voxel_residency_duration_us = self
@@ -1191,7 +1241,8 @@ impl RuntimeSpatialBridge {
         &mut self,
         handle: NativeSpatialSessionHandle,
     ) -> Result<(), CsharpEngineServicesError> {
-        if !self.session_mut(handle)?.deferred.is_empty() {
+        let session = self.session_mut(handle)?;
+        if !session.deferred.is_empty() || !session.static_deferred.is_empty() {
             self.edit_scene(handle, |_| ())?;
         }
         Ok(())
@@ -1338,6 +1389,7 @@ impl RuntimeSpatialBridge {
                 last_character_obstacles: Vec::new(),
                 triggers: TriggerVolumeSystem::default(),
                 deferred: Default::default(),
+                static_deferred: Default::default(),
             },
         );
         self.publish_scene(NativeSpatialSessionHandle { value }, scene);
@@ -1449,28 +1501,34 @@ impl RuntimeSpatialBridge {
                 "removed collision instances",
             )
         }?;
-        self.mutate_collision(
-            &NativeCollisionReplaceRequest {
-                session: request.session,
-                assets: request.assets,
-                assets_len: request.assets_len,
-                vertices: request.vertices,
-                vertices_len: request.vertices_len,
-                triangles: request.triangles,
-                triangles_len: request.triangles_len,
-                instances: request.instances,
-                instances_len: request.instances_len,
-            },
-            Some((removed_assets, removed_instances)),
-        )
+        let replace = NativeCollisionReplaceRequest {
+            session: request.session,
+            assets: request.assets,
+            assets_len: request.assets_len,
+            vertices: request.vertices,
+            vertices_len: request.vertices_len,
+            triangles: request.triangles,
+            triangles_len: request.triangles_len,
+            instances: request.instances,
+            instances_len: request.instances_len,
+        };
+        if request.deferred {
+            return self.defer_collision_residency(&replace, removed_assets, removed_instances);
+        }
+        self.mutate_collision(&replace, Some((removed_assets, removed_instances)))
     }
 
-    fn mutate_collision(
+    /// A collision request's assets' geometry, copied, and its instances.
+    fn copy_collision_request(
         &mut self,
         request: &NativeCollisionReplaceRequest,
-        removed: Option<(&[u64], &[u64])>,
-    ) -> Result<NativeCollisionReplaceReceipt, CsharpEngineServicesError> {
-        self.settle_deferred(request.session)?;
+    ) -> Result<
+        (
+            Vec<static_deferred::CopiedAsset>,
+            Vec<StaticMeshColliderInstance>,
+        ),
+        CsharpEngineServicesError,
+    > {
         let assets =
             unsafe { borrowed_slice(request.assets, request.assets_len, "collision assets") }?;
         let vertices = unsafe {
@@ -1490,7 +1548,7 @@ impl RuntimeSpatialBridge {
                 "collision instances",
             )
         }?;
-        let mut admitted = Vec::with_capacity(assets.len());
+        let mut geometry = Vec::with_capacity(assets.len());
         for asset in assets {
             let (positions, triangles) = if asset.mesh_resource.value == 0 {
                 let positions = range_slice(
@@ -1515,15 +1573,7 @@ impl RuntimeSpatialBridge {
             } else {
                 self.copy_inline_mesh_collision(asset.mesh_resource)?
             };
-            admitted.push(
-                StaticMeshColliderAsset::new(StaticMeshAssetId(asset.id), positions, triangles)
-                    .map_err(|error| {
-                        CsharpEngineServicesError::new(
-                            "CSHARP_COLLISION_ASSET",
-                            format!("{error:?}"),
-                        )
-                    })?,
-            );
+            geometry.push((asset.id, positions, triangles));
         }
         let instances = instances
             .iter()
@@ -1532,7 +1582,95 @@ impl RuntimeSpatialBridge {
                 asset: StaticMeshAssetId(instance.asset),
                 transform: static_mesh_transform(instance.transform),
             })
-            .collect::<Vec<_>>();
+            .collect();
+        Ok((geometry, instances))
+    }
+
+    /// Queue a deferred residency batch (`NativeCollisionResidencyRequest::deferred`).
+    fn defer_collision_residency(
+        &mut self,
+        request: &NativeCollisionReplaceRequest,
+        removed_assets: &[u64],
+        removed_instances: &[u64],
+    ) -> Result<NativeCollisionReplaceReceipt, CsharpEngineServicesError> {
+        let (assets, instances) = self.copy_collision_request(request)?;
+        let session = self.session_mut(request.session)?;
+        // Composed spatial content leaving the composition changes
+        // navigation with the collision: that change is not deferred.
+        let base_asset = session
+            .content
+            .base
+            .as_ref()
+            .map(|(identity, _)| spatial_content_asset_id(identity.content_sha256));
+        let composed = removed_instances
+            .iter()
+            .copied()
+            .chain(instances.iter().map(|instance| instance.id.0))
+            .any(|id| session.content.placed.contains_key(&id) || base_asset == Some(id));
+        if composed {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_COLLISION_DEFERRED_CONTENT",
+                "a deferred collision batch cannot remove or replace composed spatial content's instances",
+            ));
+        }
+        let batch = session.static_deferred.push(static_deferred::StaticBatch {
+            assets,
+            instances,
+            removed_assets: removed_assets
+                .iter()
+                .copied()
+                .map(StaticMeshAssetId)
+                .collect(),
+            removed_instances: removed_instances
+                .iter()
+                .copied()
+                .map(StaticMeshInstanceId)
+                .collect(),
+        });
+        session
+            .static_deferred
+            .start(session.scene.static_mesh_projection());
+        let live = session.scene.static_mesh_projection();
+        Ok(NativeCollisionReplaceReceipt {
+            revision_before: live.revision(),
+            revision_after: live.revision(),
+            asset_count: live.asset_count() as u64,
+            instance_count: live.instance_count() as u64,
+            projection_hash: live.projection_hash(),
+            deferred_batch: batch,
+        })
+    }
+
+    fn read_collision_residency(
+        &mut self,
+        request: NativeCollisionResidencyReadRequest,
+    ) -> Result<NativeCollisionResidencyReadout, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        Ok(session
+            .static_deferred
+            .readout(session.scene.static_mesh_collision_revision()))
+    }
+
+    fn mutate_collision(
+        &mut self,
+        request: &NativeCollisionReplaceRequest,
+        removed: Option<(&[u64], &[u64])>,
+    ) -> Result<NativeCollisionReplaceReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
+        let (geometry, instances) = self.copy_collision_request(request)?;
+        let mut admitted = Vec::with_capacity(geometry.len());
+        for (id, positions, triangles) in geometry {
+            admitted.push(
+                StaticMeshColliderAsset::new(StaticMeshAssetId(id), positions, triangles).map_err(
+                    |error| {
+                        CsharpEngineServicesError::new(
+                            "CSHARP_COLLISION_ASSET",
+                            format!("{error:?}"),
+                        )
+                    },
+                )?,
+            );
+        }
         let source = self.collision_source.clone();
         let session = self.session_mut(request.session)?;
         // An artifact, placed or the base, whose instance the product
@@ -1654,6 +1792,7 @@ impl RuntimeSpatialBridge {
             asset_count: receipt.asset_count as u64,
             instance_count: receipt.instance_count as u64,
             projection_hash: receipt.projection_hash,
+            deferred_batch: 0,
         })
     }
 
@@ -4772,6 +4911,29 @@ unsafe extern "C" fn apply_collision_residency(
     }
 }
 
+unsafe extern "C" fn read_collision_residency(
+    context: *mut c_void,
+    request: NativeCollisionResidencyReadRequest,
+    output: *mut NativeCollisionResidencyReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    crate::operation_diagnostics::clear_receipt(error);
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeSpatialBridge>() };
+    match bridge.read_collision_residency(request) {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(refusal) => {
+            bridge.operation_diagnostics.retain(&refusal, error);
+            0
+        }
+    }
+}
+
 unsafe extern "C" fn replace_spatial_content_artifact(
     context: *mut c_void,
     request: *const NativeSpatialContentArtifactReplaceRequest,
@@ -5555,6 +5717,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         destroy_session: destroy_spatial_session,
         replace_collision: replace_spatial_collision,
         apply_collision_residency,
+        read_collision_residency,
         replace_content_artifact: replace_spatial_content_artifact,
         read_content_artifact: read_spatial_content_artifact,
         apply_content_artifact_residency: apply_spatial_content_artifact_residency,
@@ -10175,6 +10338,7 @@ mod tests {
                     removed_assets_len: 0,
                     removed_instances: removed.as_ptr(),
                     removed_instances_len: removed.len(),
+                    deferred: false,
                 })
                 .expect("collision residency applies");
         };
@@ -10463,6 +10627,7 @@ mod tests {
                 removed_assets_len: 0,
                 removed_instances: [3u64].as_ptr(),
                 removed_instances_len: 1,
+                deferred: false,
             })
             .is_err());
         assert_eq!(
@@ -11524,5 +11689,279 @@ mod tests {
             [2.5, 1.5, 1.5],
             None,
         );
+    }
+
+    /// Square floor tiles of `n` × `n` quads, one asset a tile, as a terrain
+    /// window admits them: the tile's id, its vertices and its triangles.
+    fn floor_tiles(
+        ids: &[u64],
+        n: u32,
+        lift: f32,
+    ) -> (
+        Vec<NativeStaticMeshAsset>,
+        Vec<NativeVec3>,
+        Vec<NativeTriangle>,
+    ) {
+        let (mut assets, mut vertices, mut triangles) = (Vec::new(), Vec::new(), Vec::new());
+        for &id in ids {
+            let (first_vertex, first_triangle) = (vertices.len() as u32, triangles.len() as u32);
+            for z in 0..=n {
+                for x in 0..=n {
+                    vertices.push(NativeVec3 {
+                        x: x as f32 + id as f32 * n as f32,
+                        y: id as f32 * 0.01 + lift,
+                        z: z as f32,
+                    });
+                }
+            }
+            for z in 0..n {
+                for x in 0..n {
+                    let corner = z * (n + 1) + x;
+                    triangles.push(NativeTriangle {
+                        a: corner,
+                        b: corner + n + 1,
+                        c: corner + 1,
+                    });
+                    triangles.push(NativeTriangle {
+                        a: corner + 1,
+                        b: corner + n + 1,
+                        c: corner + n + 2,
+                    });
+                }
+            }
+            assets.push(NativeStaticMeshAsset {
+                id,
+                mesh_resource: NativeMeshResourceReference { value: 0 },
+                first_vertex,
+                vertex_count: (n + 1) * (n + 1),
+                first_triangle,
+                triangle_count: 2 * n * n,
+            });
+        }
+        (assets, vertices, triangles)
+    }
+
+    fn placed(id: u64, asset: u64) -> NativeStaticMeshInstance {
+        NativeStaticMeshInstance {
+            id,
+            asset,
+            transform: NativeTransform {
+                translation: NativeVec3::default(),
+                rotation: NativeQuat {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                    w: 1.0,
+                },
+                scale: NativeVec3 {
+                    x: 1.0,
+                    y: 1.0,
+                    z: 1.0,
+                },
+            },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn collision_residency(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+        tiles: &[u64],
+        instances: &[NativeStaticMeshInstance],
+        removed_assets: &[u64],
+        removed_instances: &[u64],
+        lift: f32,
+        deferred: bool,
+    ) -> Result<NativeCollisionReplaceReceipt, CsharpEngineServicesError> {
+        let (assets, vertices, triangles) = floor_tiles(tiles, 16, lift);
+        bridge.apply_collision_residency(&NativeCollisionResidencyRequest {
+            session,
+            assets: assets.as_ptr(),
+            assets_len: assets.len(),
+            vertices: vertices.as_ptr(),
+            vertices_len: vertices.len(),
+            triangles: triangles.as_ptr(),
+            triangles_len: triangles.len(),
+            instances: instances.as_ptr(),
+            instances_len: instances.len(),
+            removed_assets: removed_assets.as_ptr(),
+            removed_assets_len: removed_assets.len(),
+            removed_instances: removed_instances.as_ptr(),
+            removed_instances_len: removed_instances.len(),
+            deferred,
+        })
+    }
+
+    /// Where rays down over the tiles meet the static colliders.
+    fn floor_hits(
+        bridge: &RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+    ) -> Vec<Option<f64>> {
+        let scene = &bridge.sessions[&session.value].scene;
+        (0..6 * 16)
+            .map(|x| {
+                scene
+                    .raycast_world([x as f64 + 0.5, 10.0, 8.5], [0.0, -1.0, 0.0], 20.0)
+                    .map(|hit| match hit {
+                        engine_spatial::SpatialCollisionHit::StaticMesh(hit) => hit.distance,
+                        engine_spatial::SpatialCollisionHit::Voxel(hit) => -hit.distance,
+                    })
+            })
+            .collect()
+    }
+
+    /// Begin calls until the session's deferred batches are done.
+    fn settle_collision(bridge: &mut RuntimeSpatialBridge, session: NativeSpatialSessionHandle) {
+        while bridge
+            .read_collision_residency(NativeCollisionResidencyReadRequest { session })
+            .unwrap()
+            .pending_batches
+            > 0
+        {
+            bridge.settle_deferred_residency();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn deferred_collision_residency_installs_once_baked_as_a_synchronous_batch_applies() {
+        let (mut sync, mut deferred) = (RuntimeSpatialBridge::new(), RuntimeSpatialBridge::new());
+        let (sync_session, session) = (
+            create_session(&api(&mut sync)),
+            create_session(&api(&mut deferred)),
+        );
+        let read = |bridge: &mut RuntimeSpatialBridge| {
+            bridge
+                .read_collision_residency(NativeCollisionResidencyReadRequest { session })
+                .unwrap()
+        };
+        let window: Vec<_> = (1..=4).map(|tile| placed(tile, tile)).collect();
+        let tiles = [1, 2, 3, 4];
+        collision_residency(
+            &mut sync,
+            sync_session,
+            &tiles,
+            &window,
+            &[],
+            &[],
+            0.0,
+            false,
+        )
+        .unwrap();
+        let receipt =
+            collision_residency(&mut deferred, session, &tiles, &window, &[], &[], 0.0, true)
+                .unwrap();
+        // Nothing changes in the call: the receipt names the batch, and the
+        // readout says how far it is.
+        assert_eq!(receipt.deferred_batch, 1);
+        assert_eq!(
+            (
+                receipt.revision_before,
+                receipt.revision_after,
+                receipt.instance_count
+            ),
+            (0, 0, 0)
+        );
+        assert!(floor_hits(&deferred, session).iter().all(Option::is_none));
+        let reading = read(&mut deferred);
+        assert_eq!((reading.completed_batch, reading.pending_batches), (0, 1));
+        assert!(reading.baked_instances <= reading.planned_instances);
+        settle_collision(&mut deferred, session);
+        let reading = read(&mut deferred);
+        assert_eq!((reading.completed_batch, reading.refused_batches), (1, 0));
+        assert_eq!(reading.static_collision_revision, 1);
+        assert_eq!(
+            floor_hits(&deferred, session),
+            floor_hits(&sync, sync_session)
+        );
+        assert!(floor_hits(&deferred, session)[16..80]
+            .iter()
+            .all(Option::is_some));
+
+        // While batches are in flight: one raises tile 2's geometry by a
+        // metre and removes tile 3, the next moves tile 4 onto a new asset
+        // and removes tile 2. They bake one after another and end as the
+        // same batches applied in turn.
+        // Admitted tiles, placed instances, removed assets and instances.
+        type Batch<'a> = (
+            &'a [u64],
+            Vec<NativeStaticMeshInstance>,
+            &'a [u64],
+            &'a [u64],
+        );
+        let batches: [Batch; 2] = [
+            (&[2], vec![], &[3], &[3]),
+            (&[5], vec![placed(4, 5)], &[2, 4], &[2]),
+        ];
+        for (tiles, instances, removed_assets, removed_instances) in &batches {
+            for (bridge, session, deferred) in [
+                (&mut sync, sync_session, false),
+                (&mut deferred, session, true),
+            ] {
+                collision_residency(
+                    bridge,
+                    session,
+                    tiles,
+                    instances,
+                    removed_assets,
+                    removed_instances,
+                    1.0,
+                    deferred,
+                )
+                .unwrap();
+            }
+            deferred.settle_deferred_residency();
+        }
+        settle_collision(&mut deferred, session);
+        assert_eq!(
+            floor_hits(&deferred, session),
+            floor_hits(&sync, sync_session)
+        );
+        let scene = |bridge: &RuntimeSpatialBridge, session: NativeSpatialSessionHandle| {
+            let scene = &bridge.sessions[&session.value].scene;
+            (
+                scene.projection_static_mesh_instance_count(),
+                scene.static_mesh_projection().projection_hash(),
+            )
+        };
+        assert_eq!(scene(&deferred, session), scene(&sync, sync_session));
+
+        // A batch whose instance names no asset is refused when it is
+        // planned, changing nothing; a synchronous change after a deferred
+        // one installs it first.
+        let before = floor_hits(&deferred, session);
+        collision_residency(
+            &mut deferred,
+            session,
+            &[],
+            &[placed(9, 99)],
+            &[],
+            &[],
+            0.0,
+            true,
+        )
+        .unwrap();
+        collision_residency(
+            &mut deferred,
+            session,
+            &[6],
+            &[placed(6, 6)],
+            &[],
+            &[],
+            0.0,
+            true,
+        )
+        .unwrap();
+        collision_residency(&mut deferred, session, &[], &[], &[], &[6], 0.0, false).unwrap();
+        let reading = read(&mut deferred);
+        assert_eq!(
+            (
+                reading.pending_batches,
+                reading.completed_batch,
+                reading.refused_batches
+            ),
+            (0, 5, 1)
+        );
+        assert_eq!(floor_hits(&deferred, session), before);
     }
 }

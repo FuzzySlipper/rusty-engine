@@ -615,6 +615,13 @@ pub struct NativeCollisionResidencyRequest {
     pub removed_assets_len: usize,
     pub removed_instances: *const u64,
     pub removed_instances_len: usize,
+    /// Copy the batch now and validate, bake and install it off the update:
+    /// batches bake in the order they were made, one at a time, and each
+    /// installs at the start of the first Engine call into the product after
+    /// it is baked. A change to the session that is not deferred installs
+    /// them first, waiting. The receipt names the batch;
+    /// `ReadCollisionResidency` says when it is live and how far it is.
+    pub deferred: bool,
 }
 
 #[repr(C)]
@@ -625,6 +632,36 @@ pub struct NativeCollisionReplaceReceipt {
     pub asset_count: u64,
     pub instance_count: u64,
     pub projection_hash: u64,
+    /// A deferred batch's number, live once the session's readout reaches it
+    /// (`NativeCollisionResidencyReadout::completed_batch`); 0 when the
+    /// change applied before the call returned, as the counts above show.
+    pub deferred_batch: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeCollisionResidencyReadRequest {
+    pub session: NativeSpatialSessionHandle,
+}
+
+/// How far a session's deferred static collision batches are.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeCollisionResidencyReadout {
+    /// The last deferred batch installed or refused: every batch numbered up
+    /// to it is done.
+    pub completed_batch: u64,
+    /// Batches made and not yet done.
+    pub pending_batches: u32,
+    /// Instances the batch now baking has baked, of those it bakes (0 of 0
+    /// while it validates its assets).
+    pub baked_instances: u64,
+    pub planned_instances: u64,
+    /// Deferred batches refused when they were validated or installed; the
+    /// host log names why. A refused batch changes nothing.
+    pub refused_batches: u64,
+    /// The static collision revision live now.
+    pub static_collision_revision: u64,
 }
 
 /// One spatial content artifact placed beside the session's others, under a

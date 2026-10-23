@@ -67,9 +67,9 @@ pub use ragdoll::{
 };
 
 pub use static_mesh::{
-    StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
+    StaticMeshAssetId, StaticMeshBaked, StaticMeshColliderAsset, StaticMeshColliderInstance,
     StaticMeshCollisionError, StaticMeshCollisionProjection, StaticMeshCollisionReceipt,
-    StaticMeshHit, StaticMeshInstanceId, StaticMeshTransform,
+    StaticMeshHit, StaticMeshInstanceId, StaticMeshResidencyPlan, StaticMeshTransform,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -970,6 +970,21 @@ impl CollisionProjection {
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
         self.static_meshes
             .apply_residency(assets, instances, removed_assets, removed_instances)
+    }
+
+    /// The static-mesh colliders, to plan a residency delta against
+    /// ([`StaticMeshCollisionProjection::plan_residency`]).
+    pub fn static_meshes(&self) -> &StaticMeshCollisionProjection {
+        &self.static_meshes
+    }
+
+    /// Install a planned static-mesh delta and its baked instances.
+    pub fn install_static_mesh_residency(
+        &mut self,
+        plan: StaticMeshResidencyPlan,
+        baked: StaticMeshBaked,
+    ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
+        self.static_meshes.install_residency(plan, baked)
     }
 
     /// Preserve the caller-owned derived static-mesh projection while voxel

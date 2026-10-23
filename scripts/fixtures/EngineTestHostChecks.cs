@@ -274,7 +274,89 @@ internal static class EngineTestHostChecks
 
         RagdollFall(host);
         DeferredResidency(host);
+        DeferredCollisionResidency(host);
         Bundles(library);
+    }
+
+    // A deferred static collision batch, a terrain window of about 1.6 M
+    // triangles, returns from its call without baking it, reports how far
+    // it is while it bakes, and is live once the readout says so; a batch
+    // removing tiles while it bakes follows it (#10328).
+    private static void DeferredCollisionResidency(EngineTestHost host)
+    {
+        const int Tiles = 49, Quads = 128;
+        int tileVertices = (Quads + 1) * (Quads + 1), tileTriangles = 2 * Quads * Quads;
+        var vertices = new Vector3[Tiles * tileVertices];
+        var triangles = new Triangle[Tiles * tileTriangles];
+        var assets = new StaticMeshAsset[Tiles];
+        var instances = new StaticMeshInstance[Tiles];
+        for (int tile = 0; tile < Tiles; tile++)
+        {
+            int firstVertex = tile * tileVertices, firstTriangle = tile * tileTriangles;
+            for (int z = 0; z <= Quads; z++)
+                for (int x = 0; x <= Quads; x++)
+                    vertices[firstVertex + z * (Quads + 1) + x] = new(tile % 7 * Quads + x, 0, tile / 7 * Quads + z);
+            for (int z = 0, next = firstTriangle; z < Quads; z++)
+                for (int x = 0; x < Quads; x++)
+                {
+                    uint corner = (uint)(z * (Quads + 1) + x), row = Quads + 1;
+                    triangles[next++] = new(corner, corner + row, corner + 1);
+                    triangles[next++] = new(corner + 1, corner + row, corner + row + 1);
+                }
+            assets[tile] = new((ulong)tile + 1, default, (uint)firstVertex, (uint)tileVertices, (uint)firstTriangle, (uint)tileTriangles);
+            instances[tile] = new((ulong)tile + 1, (ulong)tile + 1, new(Vector3.Zero, Quaternion.Identity, Vector3.One));
+        }
+        SpatialSession? sync = null, deferred = null;
+        bool Hit(IEngineContext engine, SpatialSession session, int tile) => engine.Spatial.CastRay(new(session,
+            new(tile % 7 * Quads + Quads / 2, 5, tile / 7 * Quads + Quads / 2), -Vector3.UnitY, 10, new(uint.MaxValue, uint.MaxValue),
+            ReadOnlyMemory<SpatialEntityCollider>.Empty, ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<SpatialEntityCollider>.Empty)).Present;
+        TimeSpan synchronous = default, deferredCall = default;
+        ulong batch = 0, removal = 0;
+        host.Call(engine =>
+        {
+            sync = engine.Spatial.CreateSession(new(1, 16, VoxelSurfaceMode.GreedyCubes));
+            deferred = engine.Spatial.CreateSession(new(1, 16, VoxelSurfaceMode.GreedyCubes));
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            engine.Spatial.ApplyCollisionResidency(new(sync, assets, vertices, triangles, instances,
+                ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<ulong>.Empty));
+            synchronous = started.Elapsed;
+            started.Restart();
+            CollisionReplaceReceipt receipt = engine.Spatial.ApplyCollisionResidency(new(deferred, assets, vertices, triangles,
+                instances, ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<ulong>.Empty, true));
+            deferredCall = started.Elapsed;
+            batch = receipt.DeferredBatch;
+            Require(batch == 1 && receipt.InstanceCount == 0 && !Hit(engine, deferred, 0),
+                $"A deferred collision batch was live in its own call: {receipt}.");
+            // Tiles 0 and 48 leave while the window bakes.
+            removal = engine.Spatial.ApplyCollisionResidency(new(deferred, ReadOnlyMemory<StaticMeshAsset>.Empty,
+                ReadOnlyMemory<Vector3>.Empty, ReadOnlyMemory<Triangle>.Empty, ReadOnlyMemory<StaticMeshInstance>.Empty,
+                new ulong[] { 1, 49 }, new ulong[] { 1, 49 }, true)).DeferredBatch;
+            CollisionResidencyReadout reading = engine.Spatial.ReadCollisionResidency(new(deferred));
+            Require(reading.PendingBatches == 2 && reading.CompletedBatch == 0 && reading.BakedInstances <= reading.PlannedInstances,
+                $"The batches in flight read {reading}.");
+        });
+        Require(deferredCall < synchronous / 2,
+            $"A deferred batch's call took {deferredCall.TotalMilliseconds:0} ms, a synchronous one {synchronous.TotalMilliseconds:0} ms.");
+        for (int call = 0; ; call++)
+        {
+            CollisionResidencyReadout reading = default;
+            host.Call(engine => reading = engine.Spatial.ReadCollisionResidency(new(deferred!)));
+            if (reading.CompletedBatch >= removal)
+            {
+                Require(reading.RefusedBatches == 0 && reading.PendingBatches == 0, $"The batches ended as {reading}.");
+                break;
+            }
+            Require(reading.BakedInstances <= reading.PlannedInstances && call < 20_000, $"The batches never finished: {reading}.");
+            System.Threading.Thread.Sleep(1);
+        }
+        host.Call(engine =>
+        {
+            for (int tile = 0; tile < Tiles; tile++)
+                Require(Hit(engine, deferred!, tile) == (tile != 0 && tile != 48) && Hit(engine, sync!, tile),
+                    $"Tile {tile}'s collision is not as its batches left it.");
+            sync!.Dispose();
+            deferred!.Dispose();
+        });
     }
 
     // A deferred residency change writes its voxels at once and installs its

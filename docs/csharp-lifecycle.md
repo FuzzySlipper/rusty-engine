@@ -1296,6 +1296,34 @@ collision ray hits, navigation, named geometry rejection, unchanged residency an
 successful admission after a refusal via `scripts/test-csharp-sdk-package.sh
 --coreclr-smoke`.
 
+### Deferred collision residency
+
+`ApplyCollisionResidency` with `Deferred` set copies the batch's geometry
+before it returns and does the rest off the update: an Engine worker validates
+and hashes the assets, plans the delta and bakes each instance's collider.
+Batches bake one at a time, in the order they were made, each planned against
+the collision the batches before it left; each installs at the start of the
+first Engine call into the product after it is baked. The same additive,
+replace and removal rules as a synchronous call apply, batch by batch.
+
+- **Readiness.** The receipt's `DeferredBatch` names the batch, and its counts
+  and revisions are the collision live now. `ReadCollisionResidency` reports
+  `CompletedBatch` (every batch numbered up to it is done), `PendingBatches`,
+  the baking batch's `BakedInstances` of `PlannedInstances` (0 of 0 while it
+  validates), and the live `StaticCollisionRevision`. Collision, rays and
+  character steps use a batch's colliders once `CompletedBatch` reaches it.
+- **Refusals.** A batch refused when it is validated, planned or installed (a
+  missing asset, malformed geometry) changes nothing; `RefusedBatches` counts
+  it and the host log names why.
+- **Other changes wait.** A change to the session that is not deferred —
+  synchronous residency, `ReplaceCollision`, content, voxel edits or a
+  world-origin commit — installs the pending batches first and waits for
+  them.
+- **Limits.** A deferred batch cannot remove or replace a composed spatial
+  content artifact's instance (`CSHARP_COLLISION_DEFERRED_CONTENT`): that
+  recomposes navigation in the same call. Copying the geometry is the part
+  the call itself pays.
+
 ### Character steps
 
 `CharacterStepRequest.Obstacles` is a borrowed, call-local list of active

@@ -233,6 +233,12 @@ pub type NativeApplyCollisionResidency = unsafe extern "C" fn(
     *mut NativeCollisionReplaceReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeReadCollisionResidency = unsafe extern "C" fn(
+    *mut c_void,
+    NativeCollisionResidencyReadRequest,
+    *mut NativeCollisionResidencyReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReplaceSpatialContentArtifact = unsafe extern "C" fn(
     *mut c_void,
     *const NativeSpatialContentArtifactReplaceRequest,
@@ -1553,6 +1559,7 @@ pub struct NativeSpatialApi {
     pub destroy_session: NativeDestroySpatialSession,
     pub replace_collision: NativeReplaceCollision,
     pub apply_collision_residency: NativeApplyCollisionResidency,
+    pub read_collision_residency: NativeReadCollisionResidency,
     pub replace_content_artifact: NativeReplaceSpatialContentArtifact,
     pub read_content_artifact: NativeReadSpatialContentArtifact,
     pub apply_content_artifact_residency: NativeApplySpatialContentArtifactResidency,

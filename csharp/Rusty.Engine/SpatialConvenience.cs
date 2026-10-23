@@ -136,3 +136,15 @@ public readonly partial record struct WorldOriginPrepareRequest
     {
     }
 }
+
+public readonly partial record struct CollisionResidencyRequest
+{
+    /// <summary>A batch applied before the call returns.</summary>
+    public CollisionResidencyRequest(SpatialSession Session, System.ReadOnlyMemory<StaticMeshAsset> Assets,
+        System.ReadOnlyMemory<Vector3> Vertices, System.ReadOnlyMemory<Triangle> Triangles,
+        System.ReadOnlyMemory<StaticMeshInstance> Instances, System.ReadOnlyMemory<ulong> RemovedAssets,
+        System.ReadOnlyMemory<ulong> RemovedInstances)
+        : this(Session, Assets, Vertices, Triangles, Instances, RemovedAssets, RemovedInstances, false)
+    {
+    }
+}

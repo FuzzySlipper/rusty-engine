@@ -1,6 +1,9 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
 };
 
 use core_space::{WorldPos, WorldVec};
@@ -92,12 +95,19 @@ pub struct StaticMeshHit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StaticMeshCollisionError {
     RevisionExhausted,
-    MissingAsset { id: StaticMeshAssetId },
+    MissingAsset {
+        id: StaticMeshAssetId,
+    },
     EmptyGeometry,
     NonFiniteVertex,
-    InvalidTriangleIndex { index: u32, vertex_count: usize },
+    InvalidTriangleIndex {
+        index: u32,
+        vertex_count: usize,
+    },
     InvalidTransform,
     InvalidTriangleMesh,
+    /// The projection changed after the delta was planned.
+    Superseded,
 }
 
 #[derive(Clone)]
@@ -142,6 +152,92 @@ impl PreparedInstance {
             moving_topology: instance_topology(id, asset, transform, false),
         })
     }
+}
+
+/// A residency delta checked against a projection, with the instances it
+/// bakes ([`StaticMeshCollisionProjection::plan_residency`]).
+pub struct StaticMeshResidencyPlan {
+    /// The projection's revision the plan was checked against.
+    revision_before: u64,
+    admitted: BTreeMap<StaticMeshAssetId, Arc<StaticMeshColliderAsset>>,
+    removed_assets: BTreeSet<StaticMeshAssetId>,
+    removed_instances: BTreeSet<StaticMeshInstanceId>,
+    bakes: Vec<(
+        StaticMeshInstanceId,
+        Arc<StaticMeshColliderAsset>,
+        StaticMeshTransform,
+    )>,
+}
+
+impl StaticMeshResidencyPlan {
+    /// The instances the plan bakes.
+    pub fn instance_count(&self) -> usize {
+        self.bakes.len()
+    }
+
+    /// Bake the plan's instances on the threads available, counting each
+    /// one baked in `progress`. Changes no projection, so it can run away
+    /// from the one it installs into.
+    pub fn bake(
+        &self,
+        progress: &AtomicUsize,
+    ) -> Result<StaticMeshBaked, StaticMeshCollisionError> {
+        bake_all(&self.bakes, progress).map(StaticMeshBaked)
+    }
+}
+
+/// The instances a plan baked, for [`StaticMeshCollisionProjection::install_residency`].
+pub struct StaticMeshBaked(Vec<(StaticMeshInstanceId, PreparedInstance)>);
+
+/// Bake each instance, in parallel when there are several, in input order.
+fn bake_all(
+    bakes: &[(
+        StaticMeshInstanceId,
+        Arc<StaticMeshColliderAsset>,
+        StaticMeshTransform,
+    )],
+    progress: &AtomicUsize,
+) -> Result<Vec<(StaticMeshInstanceId, PreparedInstance)>, StaticMeshCollisionError> {
+    let bake = |(id, asset, transform): &(
+        StaticMeshInstanceId,
+        Arc<StaticMeshColliderAsset>,
+        StaticMeshTransform,
+    )| {
+        let baked = PreparedInstance::bake(*id, asset, *transform);
+        progress.fetch_add(1, Ordering::Relaxed);
+        baked.map(|baked| (*id, baked))
+    };
+    let threads = std::thread::available_parallelism()
+        .map_or(1, |threads| threads.get())
+        .min(bakes.len());
+    if threads <= 1 {
+        return bakes.iter().map(bake).collect();
+    }
+    // Instances differ widely in size: threads take the next one as they
+    // finish rather than a fixed share.
+    let next = AtomicUsize::new(0);
+    let mut results: Vec<_> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = bakes.get(index) else {
+                            break done;
+                        };
+                        done.push((index, bake(item)));
+                    }
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("baking does not panic"))
+            .collect()
+    });
+    results.sort_by_key(|(index, _)| *index);
+    results.into_iter().map(|(_, baked)| baked).collect()
 }
 
 #[derive(Clone)]
@@ -242,24 +338,39 @@ impl StaticMeshCollisionProjection {
             revision: self.revision,
             topology: self.topology,
         };
-        for (id, instance) in &self.instances {
-            let mut transform = instance.transform;
-            transform.translation[0] += delta.x;
-            transform.translation[1] += delta.y;
-            transform.translation[2] += delta.z;
-            let moved =
-                PreparedInstance::bake(*id, &self.assets[&instance.asset].asset, transform)?;
+        let bakes: Vec<_> = self
+            .instances
+            .iter()
+            .map(|(id, instance)| {
+                let mut transform = instance.transform;
+                transform.translation[0] += delta.x;
+                transform.translation[1] += delta.y;
+                transform.translation[2] += delta.z;
+                (
+                    *id,
+                    Arc::clone(&self.assets[&instance.asset].asset),
+                    transform,
+                )
+            })
+            .collect();
+        for (id, moved) in bake_all(&bakes, &AtomicUsize::new(0))? {
             candidate.topology = candidate
                 .topology
-                .wrapping_sub(instance.posed_topology)
+                .wrapping_sub(self.instances[&id].posed_topology)
                 .wrapping_add(moved.posed_topology);
-            candidate.instances.insert(*id, moved);
+            candidate.instances.insert(id, moved);
         }
         Ok(candidate)
     }
 
     pub fn asset_count(&self) -> usize {
         self.assets.len()
+    }
+
+    /// The order-independent hash of the resident assets and placed
+    /// instances, as receipts report it.
+    pub fn projection_hash(&self) -> u64 {
+        self.topology
     }
 
     /// The instances baked from one resident asset.
@@ -316,8 +427,21 @@ impl StaticMeshCollisionProjection {
         removed_assets: impl IntoIterator<Item = StaticMeshAssetId>,
         removed_instances: impl IntoIterator<Item = StaticMeshInstanceId>,
     ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
-        let revision_after = self
-            .revision
+        let plan = self.plan_residency(assets, instances, removed_assets, removed_instances)?;
+        let baked = plan.bake(&AtomicUsize::new(0))?;
+        self.install_residency(plan, baked)
+    }
+
+    /// Check a residency delta as [`Self::apply_residency`] does, without
+    /// baking or changing anything: the plan names the instances to bake.
+    pub fn plan_residency(
+        &self,
+        assets: impl IntoIterator<Item = StaticMeshColliderAsset>,
+        instances: impl IntoIterator<Item = StaticMeshColliderInstance>,
+        removed_assets: impl IntoIterator<Item = StaticMeshAssetId>,
+        removed_instances: impl IntoIterator<Item = StaticMeshInstanceId>,
+    ) -> Result<StaticMeshResidencyPlan, StaticMeshCollisionError> {
+        self.revision
             .checked_add(1)
             .ok_or(StaticMeshCollisionError::RevisionExhausted)?;
         // Assets were validated and hashed when constructed.
@@ -351,8 +475,7 @@ impl StaticMeshCollisionProjection {
             })
         };
 
-        // Build everything that can fail before changing anything.
-        let mut baked = Vec::new();
+        let mut bakes = Vec::new();
         for (id, instance) in &upserts {
             let asset = asset_after(instance.asset)
                 .ok_or(StaticMeshCollisionError::MissingAsset { id: instance.asset })?;
@@ -362,7 +485,8 @@ impl StaticMeshCollisionProjection {
                     && previous.transform == instance.transform
             });
             if !unchanged {
-                baked.push((*id, PreparedInstance::bake(*id, asset, instance.transform)?));
+                validate_transform(instance.transform)?;
+                bakes.push((*id, Arc::clone(asset), instance.transform));
             }
         }
         for (asset_id, asset) in &admitted {
@@ -371,8 +495,7 @@ impl StaticMeshCollisionProjection {
             };
             for id in &resident.users {
                 if !removed_instances.contains(id) && !upserts.contains_key(id) {
-                    let transform = self.instances[id].transform;
-                    baked.push((*id, PreparedInstance::bake(*id, asset, transform)?));
+                    bakes.push((*id, Arc::clone(asset), self.instances[id].transform));
                 }
             }
         }
@@ -385,19 +508,41 @@ impl StaticMeshCollisionProjection {
                 return Err(StaticMeshCollisionError::MissingAsset { id: *asset_id });
             }
         }
+        Ok(StaticMeshResidencyPlan {
+            revision_before: self.revision,
+            admitted,
+            removed_assets,
+            removed_instances,
+            bakes,
+        })
+    }
 
+    /// Install a planned delta and the instances baked for it. A projection
+    /// changed since the plan refuses it, changing nothing.
+    pub fn install_residency(
+        &mut self,
+        plan: StaticMeshResidencyPlan,
+        baked: StaticMeshBaked,
+    ) -> Result<StaticMeshCollisionReceipt, StaticMeshCollisionError> {
+        if plan.revision_before != self.revision {
+            return Err(StaticMeshCollisionError::Superseded);
+        }
         let revision_before = self.revision;
-        for id in removed_instances
+        let revision_after = revision_before
+            .checked_add(1)
+            .ok_or(StaticMeshCollisionError::RevisionExhausted)?;
+        for id in plan
+            .removed_instances
             .iter()
-            .chain(baked.iter().map(|(id, _)| id))
+            .chain(baked.0.iter().map(|(id, _)| id))
         {
             self.detach(*id);
         }
-        for id in removed_assets {
+        for id in plan.removed_assets {
             let resident = self.assets.remove(&id).expect("removed asset is resident");
             self.topology = self.topology.wrapping_sub(asset_topology(&resident.asset));
         }
-        for (id, asset) in admitted {
+        for (id, asset) in plan.admitted {
             self.topology = self.topology.wrapping_add(asset_topology(&asset));
             let users = match self.assets.remove(&id) {
                 Some(previous) => {
@@ -408,7 +553,7 @@ impl StaticMeshCollisionProjection {
             };
             self.assets.insert(id, ResidentAsset { asset, users });
         }
-        for (id, instance) in baked {
+        for (id, instance) in baked.0 {
             self.topology = self.topology.wrapping_add(instance.posed_topology);
             self.assets
                 .get_mut(&instance.asset)
