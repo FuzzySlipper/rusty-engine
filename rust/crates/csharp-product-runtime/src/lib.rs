@@ -1771,9 +1771,11 @@ impl CsharpProductRuntime {
             ),
         };
         self.services.ingest_camera_surface(surface, anchors);
+        // From before the call begins: beginning installs deferred residency
+        // rebuilds, which the update's residency time counts.
+        let callback_started = Instant::now();
         self.services
             .begin_update_call_with_clock(ui_binding(&self.lifecycle), facts, tween_time);
-        let callback_started = Instant::now();
         let callback_result = call_update(
             &self.api,
             self.handle,

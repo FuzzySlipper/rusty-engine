@@ -24,13 +24,19 @@ public readonly partial record struct VoxelResidencyTransaction
     public VoxelResidencyTransaction(SpatialSession Session,
         System.ReadOnlyMemory<VoxelResidencyOperation> Operations,
         System.ReadOnlyMemory<uint> MaterialSlots)
-        : this(default, Session, Operations, MaterialSlots, default) { }
+        : this(default, Session, Operations, MaterialSlots, default, false) { }
 
     /// <summary>Admits chunks with cell states and no densities.</summary>
     public VoxelResidencyTransaction(System.ReadOnlyMemory<uint> States, SpatialSession Session,
         System.ReadOnlyMemory<VoxelResidencyOperation> Operations,
         System.ReadOnlyMemory<uint> MaterialSlots)
-        : this(States, Session, Operations, MaterialSlots, default) { }
+        : this(States, Session, Operations, MaterialSlots, default, false) { }
+
+    /// <summary>A transaction whose meshes and colliders rebuild before it returns.</summary>
+    public VoxelResidencyTransaction(System.ReadOnlyMemory<uint> States, SpatialSession Session,
+        System.ReadOnlyMemory<VoxelResidencyOperation> Operations,
+        System.ReadOnlyMemory<uint> MaterialSlots, System.ReadOnlyMemory<float> Densities)
+        : this(States, Session, Operations, MaterialSlots, Densities, false) { }
 }
 public readonly partial record struct VoxelResidencyOperation
 {

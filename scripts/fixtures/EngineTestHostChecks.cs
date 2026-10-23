@@ -273,7 +273,83 @@ internal static class EngineTestHostChecks
         });
 
         RagdollFall(host);
+        DeferredResidency(host);
         Bundles(library);
+    }
+
+    // A deferred residency change writes its voxels at once and installs its
+    // meshes and colliders when the next call begins: a stream's chunks,
+    // one evicted and one admitted, evicted and admitted again within a call
+    // while its rebuild is in flight, end as a synchronous session's (#10327).
+    private static void DeferredResidency(EngineTestHost host)
+    {
+        const uint Edge = 8;
+        SpatialSession? sync = null, deferred = null;
+        VoxelResidencyReceipt Apply(IEngineContext engine, SpatialSession session, bool defer,
+            (long X, long Z, uint Seed)[] admitted, (long X, long Z)[] evicted)
+        {
+            int volume = (int)(Edge * Edge * Edge);
+            var slots = new uint[admitted.Length * volume];
+            var operations = new List<VoxelResidencyOperation>();
+            for (int index = 0; index < admitted.Length; index++)
+            {
+                for (int cell = 0; cell < volume; cell++)
+                    slots[index * volume + cell] = (cell * 7 + admitted[index].Seed * 13) % 5 == 0 ? 0u : 1u;
+                operations.Add(new(VoxelResidencyOperationKind.Admit, new(admitted[index].X, 0, admitted[index].Z),
+                    (uint)(index * volume), (uint)volume));
+            }
+            foreach ((long x, long z) in evicted)
+                operations.Add(new(VoxelResidencyOperationKind.Evict, new(x, 0, z), 0, 0));
+            return engine.Voxel.ApplyResidency(new(default, session, operations.ToArray(), slots, default, defer));
+        }
+        string Shown(IEngineContext engine, SpatialSession session)
+        {
+            var hits = new System.Text.StringBuilder();
+            for (int x = 0; x < 3 * (int)Edge; x++)
+                for (int z = 0; z < 2 * (int)Edge; z++)
+                {
+                    SpatialHit hit = engine.Spatial.CastRay(new(session, new(x + .5f, 20, z + .5f), -Vector3.UnitY, 30,
+                        new(uint.MaxValue, uint.MaxValue), ReadOnlyMemory<SpatialEntityCollider>.Empty,
+                        ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<SpatialEntityCollider>.Empty));
+                    hits.Append(hit.Present ? hit.VoxelY : -1).Append(',');
+                }
+            VoxelSceneReadout scene = engine.Voxel.ReadScene(new(session));
+            return $"{scene.AuthorityHash}:{scene.ColliderChunkCount}:{hits}";
+        }
+        (long, long, uint)[] block = [(0, 0, 1), (0, 1, 2), (1, 0, 3), (1, 1, 4)];
+        host.Call(engine =>
+        {
+            sync = engine.Spatial.CreateSession(new(1, Edge, VoxelSurfaceMode.GreedyCubes));
+            deferred = engine.Spatial.CreateSession(new(1, Edge, VoxelSurfaceMode.GreedyCubes));
+            Apply(engine, sync, false, block, []);
+            VoxelResidencyReceipt receipt = Apply(engine, deferred, true, block, []);
+            VoxelSceneReadout scene = engine.Voxel.ReadScene(new(deferred));
+            Require(receipt.CollisionRevision == receipt.RevisionBefore && scene.SourceRevision == receipt.AcceptedRevision
+                && scene.CollisionRevision == receipt.RevisionBefore && scene.ColliderChunkCount == 0,
+                $"A deferred admission collided in its own call: {receipt}, {scene}.");
+            Require(!engine.Spatial.CastRay(new(deferred, new(.5f, 20, .5f), -Vector3.UnitY, 30, new(uint.MaxValue, uint.MaxValue),
+                    ReadOnlyMemory<SpatialEntityCollider>.Empty, ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<SpatialEntityCollider>.Empty)).Present,
+                "A ray met rock whose collider was still building.");
+        });
+        host.Call(engine =>
+        {
+            VoxelSceneReadout scene = engine.Voxel.ReadScene(new(deferred!));
+            Require(scene.CollisionRevision == scene.SourceRevision, $"The next call's collision lagged: {scene}.");
+            Require(Shown(engine, deferred!) == Shown(engine, sync!), "Deferred admission differs from a synchronous one.");
+            foreach (SpatialSession session in new[] { sync!, deferred! })
+            {
+                bool defer = session == deferred;
+                Apply(engine, session, defer, [(2, 0, 10)], [(0, 0)]);
+                Apply(engine, session, defer, [], [(2, 0)]);
+                Apply(engine, session, defer, [(2, 0, 11), (2, 1, 12)], []);
+            }
+        });
+        host.Call(engine =>
+        {
+            Require(Shown(engine, deferred!) == Shown(engine, sync!), "A chunk admitted again while it rebuilt differs.");
+            sync!.Dispose();
+            deferred!.Dispose();
+        });
     }
 
     // Nothing is drawn, yet a character published in one call has a pose in

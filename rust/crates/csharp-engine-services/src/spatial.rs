@@ -472,9 +472,37 @@ pub(crate) struct SpatialSession {
     /// none an admitted mesh instance represents.
     last_character_obstacles: Vec<CharacterObstacle>,
     triggers: TriggerVolumeSystem,
+    /// A deferred residency change's meshes and colliders, building on a
+    /// worker thread until [`Self::settle`] installs them.
+    pub(crate) deferred: Option<engine_spatial::DeferredChunkRebuild>,
 }
 
 impl SpatialSession {
+    /// Install the deferred residency change's meshes and colliders,
+    /// waiting for them if they are still building. Callers republish the
+    /// scene, as [`RuntimeSpatialBridge::edit_scene`] does.
+    pub(crate) fn settle(&mut self) {
+        let Some(rebuild) = self.deferred.take() else {
+            return;
+        };
+        let changed: Vec<_> = rebuild.changed_chunks().collect();
+        let installed = self.change_collision(|scene| {
+            let installed = rebuild.install(scene);
+            let regions = changed
+                .iter()
+                .map(|chunk| {
+                    crate::voxel::collision_reach(scene, crate::voxel::chunk_box(scene, *chunk))
+                })
+                .collect();
+            (installed, regions)
+        });
+        if let Err(error) = installed {
+            // The change's chunks are back as they were, as a synchronous
+            // change that fails leaves them; nobody is waiting on a receipt.
+            eprintln!("CSHARP_VOXEL_RESIDENCY_DEFERRED: {error}; the change was undone");
+        }
+    }
+
     /// Applies a collision change confined to the world boxes `change`
     /// returns, so the next collision-derived navigation publication
     /// re-derives only the columns near them.
@@ -1108,6 +1136,39 @@ impl RuntimeSpatialBridge {
         self.update_attribution = RuntimeUpdateAttribution::default();
     }
 
+    /// Install every session's deferred residency rebuild: a call begins,
+    /// and its collision and meshes show the voxels of the calls before. In
+    /// an update, the wait, when there is one, counts as residency time.
+    pub(crate) fn settle_deferred_residency(&mut self) {
+        let handles: Vec<_> = self
+            .sessions
+            .iter()
+            .filter(|(_, session)| session.deferred.is_some())
+            .map(|(value, _)| NativeSpatialSessionHandle { value: *value })
+            .collect();
+        for handle in handles {
+            let started = std::time::Instant::now();
+            let _ = self.edit_scene(handle, |_| ());
+            let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+            self.update_attribution.voxel_residency_duration_us = self
+                .update_attribution
+                .voxel_residency_duration_us
+                .saturating_add(duration_us);
+        }
+    }
+
+    /// Install a session's deferred residency rebuild before a change that
+    /// does not pass through [`Self::edit_scene`].
+    pub(crate) fn settle_deferred(
+        &mut self,
+        handle: NativeSpatialSessionHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if self.session_mut(handle)?.deferred.is_some() {
+            self.edit_scene(handle, |_| ())?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn update_attribution(&self) -> RuntimeUpdateAttribution {
         self.update_attribution
     }
@@ -1180,6 +1241,7 @@ impl RuntimeSpatialBridge {
         self.session_mut(handle)?;
         self.collision_source.detach(handle);
         let session = self.session_mut(handle)?;
+        session.settle();
         let result = edit(session);
         let scene = Arc::clone(&session.scene);
         self.publish_scene(handle, scene);
@@ -1233,6 +1295,7 @@ impl RuntimeSpatialBridge {
                 last_character_mesh_entities: BTreeMap::new(),
                 last_character_obstacles: Vec::new(),
                 triggers: TriggerVolumeSystem::default(),
+                deferred: None,
             },
         );
         self.publish_scene(NativeSpatialSessionHandle { value }, scene);
@@ -1365,6 +1428,7 @@ impl RuntimeSpatialBridge {
         request: &NativeCollisionReplaceRequest,
         removed: Option<(&[u64], &[u64])>,
     ) -> Result<NativeCollisionReplaceReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let assets =
             unsafe { borrowed_slice(request.assets, request.assets_len, "collision assets") }?;
         let vertices = unsafe {
@@ -1616,6 +1680,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeSpatialContentArtifactReplaceRequest,
     ) -> Result<NativeSpatialContentArtifactReplaceReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let content_owner = self.content.ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_SPATIAL_CONTENT_OWNER",
@@ -1728,6 +1793,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeSpatialContentArtifactResidencyRequest,
     ) -> Result<NativeSpatialContentArtifactResidencyReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let admitted = unsafe {
             borrowed_slice(
                 request.admitted,

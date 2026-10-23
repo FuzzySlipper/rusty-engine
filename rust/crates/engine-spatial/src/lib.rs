@@ -121,9 +121,9 @@ pub use voxel_primitive::{
     VoxelPrimitiveMaterial, VoxelPrimitiveRequest,
 };
 pub use voxel_residency::{
-    ResidentVoxelChunk, VoxelChunkContentHash, VoxelChunkIdentity, VoxelChunkPayload,
-    VoxelChunkResidencyApplyError, VoxelChunkResidencyOperation, VoxelChunkResidencyReceipt,
-    VoxelChunkResidencyRejection, VoxelChunkResidencyService,
+    DeferredChunkRebuild, ResidentVoxelChunk, VoxelChunkContentHash, VoxelChunkIdentity,
+    VoxelChunkPayload, VoxelChunkResidencyApplyError, VoxelChunkResidencyOperation,
+    VoxelChunkResidencyReceipt, VoxelChunkResidencyRejection, VoxelChunkResidencyService,
 };
 pub use voxel_template::{
     VoxelTemplate, VoxelTemplateEditService, VoxelTemplateError, VoxelTemplateRequest,
@@ -290,6 +290,10 @@ pub struct VoxelCollisionScene {
     /// one; a clone shares it until either copy changes.
     mesh_state: u64,
     source_revision: VoxelSourceRevision,
+    /// The source revision the meshes and colliders show while a deferred
+    /// residency change rebuilds them (`DeferredChunkRebuild`); `None` when
+    /// they show the voxels as they are.
+    projected_revision: Option<VoxelSourceRevision>,
     /// Order-independent sum of every solid voxel's hash, maintained by each
     /// local change.
     authority_hash: u64,
@@ -631,6 +635,7 @@ impl VoxelCollisionScene {
             mesh_options,
             mesh_state: next_mesh_state(),
             source_revision: revisions.source,
+            projected_revision: None,
             authority_hash,
             world_origin: revisions.world_origin,
             rebase_revision: revisions.rebase,
@@ -881,10 +886,13 @@ impl VoxelCollisionScene {
         self.source_revision
     }
 
-    /// Every projection is updated with its voxel change, so all share the
-    /// source revision.
+    /// The revision the meshes and colliders show: the source revision,
+    /// or the one before a deferred residency change still rebuilding them.
     pub const fn projection_revisions(&self) -> VoxelProjectionRevisions {
-        VoxelProjectionRevisions::coherent(self.source_revision)
+        VoxelProjectionRevisions::coherent(match self.projected_revision {
+            Some(revision) => revision,
+            None => self.source_revision,
+        })
     }
 
     pub const fn authority_hash(&self) -> u64 {
@@ -1183,113 +1191,73 @@ impl VoxelCollisionScene {
         self.projection.touch();
     }
 
-    /// Rebuild `dirty` chunks from the current voxels: each one's mesh
-    /// (`None` removes one) and the collider of each one whose collider
-    /// changes, built together on the meshing threads. A cube chunk's
-    /// collider follows its own voxels, so only `changed` chunks rebuild it;
-    /// a reconstructed chunk's collider is its drawn mesh, which its
-    /// neighbours shape.
-    /// `field_dirty` chunks outside `dirty` keep their meshes and rebuild
-    /// only their distance fields.
+    /// What rebuilding chunks reads, lent from this scene.
+    fn rebuild_source(&self) -> RebuildSource<'_> {
+        RebuildSource {
+            world: &self.voxel_world,
+            options: &self.mesh_options,
+            noncollidable: &self.noncollidable_materials,
+            projection: &self.projection,
+            mesh_chunks: &self.mesh_chunks,
+        }
+    }
+
+    /// Copies of what rebuilding `dirty` and `field_dirty` reads, for a
+    /// worker thread: those chunks and their resident neighbours, the
+    /// colliders `dirty` may keep, and the meshes `field_dirty` refreshes.
+    pub(crate) fn rebuild_snapshot(
+        &self,
+        dirty: &BTreeSet<ChunkCoord>,
+        field_dirty: &BTreeSet<ChunkCoord>,
+    ) -> RebuildSnapshot {
+        let mut world = VoxelWorld::new(self.voxel_world.grid());
+        let reached: BTreeSet<ChunkCoord> = dirty
+            .union(field_dirty)
+            .flat_map(|owner| {
+                (-1..=1).flat_map(move |x| {
+                    (-1..=1).flat_map(move |y| {
+                        (-1..=1)
+                            .map(move |z| ChunkCoord::new(owner.x + x, owner.y + y, owner.z + z))
+                    })
+                })
+            })
+            .collect();
+        for coordinate in reached {
+            if let Some(chunk) = self.voxel_world.get(coordinate) {
+                world.insert(coordinate, chunk.clone());
+            }
+        }
+        RebuildSnapshot {
+            world,
+            options: self.mesh_options.clone(),
+            noncollidable: self.noncollidable_materials.clone(),
+            projection: self.projection.chunk_subset(dirty.iter().copied()),
+            mesh_chunks: field_dirty
+                .difference(dirty)
+                .filter_map(|coordinate| {
+                    Some((*coordinate, self.mesh_chunks.get(coordinate)?.clone()))
+                })
+                .collect(),
+        }
+    }
+
+    /// Rebuild `dirty` chunks from the current voxels
+    /// ([`RebuildSource::rebuild`]).
     pub(crate) fn rebuild_chunks(
         &self,
         changed: &BTreeSet<ChunkCoord>,
         dirty: &BTreeSet<ChunkCoord>,
         field_dirty: &BTreeSet<ChunkCoord>,
     ) -> Result<ChunkRebuild, CollisionSceneError> {
-        let greedy = self.mesh_options.all_greedy();
-        let coordinates: Vec<_> = dirty.iter().copied().collect();
-        let built = surface_collision::in_parallel(&coordinates, |coordinate| {
-            let mesh = match self.voxel_world.get(coordinate) {
-                Some(chunk) if !chunk.is_empty() => {
-                    let started = Instant::now();
-                    let mesh = build_mesh_chunk(&self.voxel_world, coordinate, &self.mesh_options)?;
-                    Some((Arc::new(mesh), started.elapsed().as_micros() as u64))
-                }
-                _ => None,
-            };
-            let collider = (!greedy || changed.contains(&coordinate)).then(|| {
-                self.prepare_collider(coordinate, mesh.as_ref().map(|(mesh, _)| mesh.as_ref()))
-            });
-            Ok::<_, CollisionSceneError>((mesh, collider))
-        });
-        let mut rebuild = ChunkRebuild {
-            meshes: BTreeMap::new(),
-            colliders: Vec::new(),
-            microseconds: 0,
-        };
-        for (coordinate, built) in coordinates.into_iter().zip(built) {
-            let (mesh, collider) = built?;
-            if let Some((_, microseconds)) = &mesh {
-                rebuild.microseconds = rebuild.microseconds.saturating_add(*microseconds);
-            }
-            rebuild
-                .meshes
-                .insert(coordinate, mesh.map(|(mesh, _)| mesh));
-            if let Some(collider) = collider {
-                rebuild.colliders.push((coordinate, collider));
-            }
-        }
-        // A neighbour's edit reached these chunks' fields without touching
-        // their meshes: refresh the field alone.
-        for coordinate in field_dirty.difference(dirty) {
-            if let Some(refreshed) = self.mesh_chunks.get(coordinate).and_then(|retained| {
-                refresh_distance_field(
-                    &self.voxel_world,
-                    *coordinate,
-                    retained,
-                    self.mesh_options.distance_fields,
-                )
-            }) {
-                rebuild
-                    .meshes
-                    .insert(*coordinate, Some(Arc::new(refreshed)));
-            }
-        }
-        Ok(rebuild)
+        self.rebuild_source().rebuild(changed, dirty, field_dirty)
     }
 
-    /// The collider of `coordinate` from its current voxels and `mesh`, its
-    /// drawn mesh; `None` when the chunk is not resident. A cube session
-    /// collides with every collidable voxel; a reconstructed one with its
-    /// drawn surfaces and the voxels no surface passes through.
     fn prepare_collider(
         &self,
         coordinate: ChunkCoord,
         mesh: Option<&VoxelMeshChunk>,
     ) -> Option<PreparedChunkParts> {
-        if self.mesh_options.all_greedy() {
-            let collided =
-                collision_chunk(&self.voxel_world, &self.noncollidable_materials, coordinate)?;
-            return Some(self.projection.prepare_chunk(coordinate, &collided));
-        }
-        // A chunk that is not resident has no collider.
-        self.voxel_world.get(coordinate)?;
-        let participation = surface_collision::noncollidable_key(&self.noncollidable_materials);
-        let cubes = surface_collision::collider_cubes(
-            &self.voxel_world,
-            &self.noncollidable_materials,
-            &self.mesh_options,
-            coordinate,
-        );
-        let parts = self.projection.prepare_chunk_parts(
-            coordinate,
-            &cubes,
-            // The triangles depend on which materials collide as well as on
-            // the drawn mesh.
-            mesh.map_or(0, |mesh| mesh.content_hash) ^ participation,
-            || {
-                mesh.and_then(|mesh| {
-                    surface_collision::collider_surface(
-                        &self.voxel_world,
-                        &self.noncollidable_materials,
-                        coordinate,
-                        mesh,
-                    )
-                })
-            },
-        );
-        Some(parts)
+        self.rebuild_source().prepare_collider(coordinate, mesh)
     }
 
     /// The colliders of `coordinates`, built in parallel from their current
@@ -1510,6 +1478,13 @@ impl VoxelCollisionScene {
         dirty: &BTreeSet<ChunkCoord>,
         rebuild: ChunkRebuild,
     ) {
+        self.source_revision = self.source_revision.next();
+        self.publish_rebuild(dirty, rebuild);
+    }
+
+    /// Install rebuilt meshes and colliders for voxels already written at
+    /// the current source revision.
+    pub(crate) fn publish_rebuild(&mut self, dirty: &BTreeSet<ChunkCoord>, rebuild: ChunkRebuild) {
         let mut rebuilt_chunks = 0;
         let mut removed_chunks = 0;
         let mut rebuilt = Vec::new();
@@ -1529,7 +1504,6 @@ impl VoxelCollisionScene {
         }
         self.install_prepared(rebuild.colliders);
         self.projection.touch();
-        self.source_revision = self.source_revision.next();
         let previous_mesh_state = std::mem::replace(&mut self.mesh_state, next_mesh_state());
         self.mesh_update = VoxelChunkMeshUpdate {
             source_revision: self.source_revision,
@@ -1625,6 +1599,149 @@ impl VoxelCollisionScene {
     ) -> Result<Vec<ShapeContact>, ContactQueryError> {
         self.projection
             .sweep_contacts(shape, start, end, pivot, targets, world)
+    }
+}
+
+/// What rebuilding chunks reads: the voxels, how they mesh and collide, the
+/// colliders a rebuild may keep, and the meshes whose fields refresh. A scene
+/// lends its own; a deferred rebuild owns copies of the chunks it reaches
+/// ([`RebuildSnapshot`]).
+pub(crate) struct RebuildSource<'a> {
+    world: &'a VoxelWorld,
+    options: &'a SurfaceMeshOptions,
+    noncollidable: &'a BTreeSet<u16>,
+    projection: &'a CollisionProjection,
+    mesh_chunks: &'a BTreeMap<ChunkCoord, Arc<VoxelMeshChunk>>,
+}
+
+impl RebuildSource<'_> {
+    /// Rebuild `dirty` chunks from the current voxels: each one's mesh
+    /// (`None` removes one) and the collider of each one whose collider
+    /// changes, built together on the meshing threads. A cube chunk's
+    /// collider follows its own voxels, so only `changed` chunks rebuild it;
+    /// a reconstructed chunk's collider is its drawn mesh, which its
+    /// neighbours shape.
+    /// `field_dirty` chunks outside `dirty` keep their meshes and rebuild
+    /// only their distance fields.
+    pub(crate) fn rebuild(
+        &self,
+        changed: &BTreeSet<ChunkCoord>,
+        dirty: &BTreeSet<ChunkCoord>,
+        field_dirty: &BTreeSet<ChunkCoord>,
+    ) -> Result<ChunkRebuild, CollisionSceneError> {
+        let greedy = self.options.all_greedy();
+        let coordinates: Vec<_> = dirty.iter().copied().collect();
+        let built = surface_collision::in_parallel(&coordinates, |coordinate| {
+            let mesh = match self.world.get(coordinate) {
+                Some(chunk) if !chunk.is_empty() => {
+                    let started = Instant::now();
+                    let mesh = build_mesh_chunk(self.world, coordinate, self.options)?;
+                    Some((Arc::new(mesh), started.elapsed().as_micros() as u64))
+                }
+                _ => None,
+            };
+            let collider = (!greedy || changed.contains(&coordinate)).then(|| {
+                self.prepare_collider(coordinate, mesh.as_ref().map(|(mesh, _)| mesh.as_ref()))
+            });
+            Ok::<_, CollisionSceneError>((mesh, collider))
+        });
+        let mut rebuild = ChunkRebuild {
+            meshes: BTreeMap::new(),
+            colliders: Vec::new(),
+            microseconds: 0,
+        };
+        for (coordinate, built) in coordinates.into_iter().zip(built) {
+            let (mesh, collider) = built?;
+            if let Some((_, microseconds)) = &mesh {
+                rebuild.microseconds = rebuild.microseconds.saturating_add(*microseconds);
+            }
+            rebuild
+                .meshes
+                .insert(coordinate, mesh.map(|(mesh, _)| mesh));
+            if let Some(collider) = collider {
+                rebuild.colliders.push((coordinate, collider));
+            }
+        }
+        // A neighbour's edit reached these chunks' fields without touching
+        // their meshes: refresh the field alone.
+        for coordinate in field_dirty.difference(dirty) {
+            if let Some(refreshed) = self.mesh_chunks.get(coordinate).and_then(|retained| {
+                refresh_distance_field(
+                    self.world,
+                    *coordinate,
+                    retained,
+                    self.options.distance_fields,
+                )
+            }) {
+                rebuild
+                    .meshes
+                    .insert(*coordinate, Some(Arc::new(refreshed)));
+            }
+        }
+        Ok(rebuild)
+    }
+
+    /// The collider of `coordinate` from its current voxels and `mesh`, its
+    /// drawn mesh; `None` when the chunk is not resident. A cube session
+    /// collides with every collidable voxel; a reconstructed one with its
+    /// drawn surfaces and the voxels no surface passes through.
+    pub(crate) fn prepare_collider(
+        &self,
+        coordinate: ChunkCoord,
+        mesh: Option<&VoxelMeshChunk>,
+    ) -> Option<PreparedChunkParts> {
+        if self.options.all_greedy() {
+            let collided = collision_chunk(self.world, self.noncollidable, coordinate)?;
+            return Some(self.projection.prepare_chunk(coordinate, &collided));
+        }
+        // A chunk that is not resident has no collider.
+        self.world.get(coordinate)?;
+        let participation = surface_collision::noncollidable_key(self.noncollidable);
+        let cubes = surface_collision::collider_cubes(
+            self.world,
+            self.noncollidable,
+            self.options,
+            coordinate,
+        );
+        let parts = self.projection.prepare_chunk_parts(
+            coordinate,
+            &cubes,
+            // The triangles depend on which materials collide as well as on
+            // the drawn mesh.
+            mesh.map_or(0, |mesh| mesh.content_hash) ^ participation,
+            || {
+                mesh.and_then(|mesh| {
+                    surface_collision::collider_surface(
+                        self.world,
+                        self.noncollidable,
+                        coordinate,
+                        mesh,
+                    )
+                })
+            },
+        );
+        Some(parts)
+    }
+}
+
+/// What a deferred rebuild reads, owned by its worker thread.
+pub(crate) struct RebuildSnapshot {
+    world: VoxelWorld,
+    options: SurfaceMeshOptions,
+    noncollidable: BTreeSet<u16>,
+    projection: CollisionProjection,
+    mesh_chunks: BTreeMap<ChunkCoord, Arc<VoxelMeshChunk>>,
+}
+
+impl RebuildSnapshot {
+    pub(crate) fn source(&self) -> RebuildSource<'_> {
+        RebuildSource {
+            world: &self.world,
+            options: &self.options,
+            noncollidable: &self.noncollidable,
+            projection: &self.projection,
+            mesh_chunks: &self.mesh_chunks,
+        }
     }
 }
 

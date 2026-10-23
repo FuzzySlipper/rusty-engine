@@ -758,6 +758,9 @@ impl EngineServiceSet {
             let _ = self.finish_call();
         }
         self.in_call = true;
+        // Deferred residency rebuilds install before the product sees the
+        // scene again (#10327).
+        self.spatial.settle_deferred_residency();
         self.call_elapsed_seconds = update.map_or(0.0, |facts| {
             facts.fixed_delta_seconds * f64::from(facts.admitted_step_count)
         });

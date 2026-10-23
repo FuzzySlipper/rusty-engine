@@ -95,7 +95,8 @@ dispatch.
 `SimulationScheduler.Advance` executes callbacks synchronously on the caller's
 admitted update path. It does not start workers, preempt expensive work or make
 an Engine call asynchronous. Split work into bounded pieces before scheduling
-it. ApplyResidency blocks until it returns; it rebuilds only the changed chunks.
+it. ApplyResidency blocks until it returns; it rebuilds only the changed chunks,
+unless the transaction is deferred (below).
 
 Pure product computation may run on product-owned workers using **copied,
 product-owned values only**, without Engine services, mutable product authority
@@ -113,6 +114,20 @@ clock. Content/persistence service calls still belong on the callback lane.
 only the changed chunks' meshes and colliders. Admitting an identical chunk
 or evicting a non-resident one is a no-op; a batch that changes nothing returns
 a receipt with zero changes, and an edit batch returns `NoChanges`.
+
+A residency transaction with `Deferred` set writes its voxels before it
+returns and rebuilds the changed chunks' meshes and colliders on an Engine
+worker thread. They install when the next Engine call into the product begins,
+normally the next update, which waits for them only if they are still
+building; any other change to that session installs them first. Until then
+`Voxel.Read` shows the new voxels while collision, picking and the scene
+presentation show the chunks as they were, and the receipt's and
+`Voxel.ReadScene`'s `CollisionRevision` and `MeshRevision` name the revision
+before the change. A stream that admits chunks ahead of the player defers them,
+so the update pays for writing voxels only; a chunk the player needs this
+update is admitted without `Deferred`. A deferred change whose mesh fails to
+build is undone when it installs, as a synchronous one is, and the host log
+names the error.
 
 The Engine keeps no undo history. The product owns undo: it applies inverse
 edits. It also owns which chunks stay resident. The costs are in

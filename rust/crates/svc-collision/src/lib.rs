@@ -1006,6 +1006,24 @@ impl CollisionProjection {
         self.install_chunk_parts(coord, prepared);
     }
 
+    /// A projection holding only the colliders of `coords`: everything
+    /// [`Self::prepare_chunk`] and [`Self::prepare_chunk_parts`] read for
+    /// them, so their replacements can be prepared on another thread.
+    pub fn chunk_subset(&self, coords: impl IntoIterator<Item = ChunkCoord>) -> Self {
+        Self {
+            grid: self.grid,
+            world_offset: self.world_offset,
+            chunks: coords
+                .into_iter()
+                .filter_map(|coord| Some((coord, self.chunks.get(&coord)?.clone())))
+                .collect(),
+            has_surfaces: false,
+            unbounded: BTreeSet::new(),
+            static_meshes: StaticMeshCollisionProjection::default(),
+            version: self.version,
+        }
+    }
+
     /// The parts [`Self::set_chunk`] would install for a chunk of cube
     /// voxels, built without changing the projection.
     pub fn prepare_chunk(&self, coord: ChunkCoord, chunk: &VoxelChunk) -> PreparedChunkParts {

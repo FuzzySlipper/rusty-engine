@@ -179,6 +179,12 @@ pub struct NativeVoxelResidencyTransaction {
     pub material_slots_len: usize,
     pub densities: *const f32,
     pub densities_len: usize,
+    /// Write the voxels now and rebuild the changed chunks' meshes and
+    /// colliders on a worker thread. They install when the next Engine call
+    /// into the product begins (normally the next update), or before the
+    /// session changes again. Until then the receipt's and the scene's
+    /// collision and mesh revisions name the revision before.
+    pub deferred: bool,
 }
 
 #[repr(C)]

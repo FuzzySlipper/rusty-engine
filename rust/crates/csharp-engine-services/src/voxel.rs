@@ -505,6 +505,24 @@ impl RuntimeSpatialBridge {
     ) -> Result<NativeVoxelResidencyReceipt, CsharpEngineServicesError> {
         let chunk_size = self.session_mut(request.session)?.scene.chunk_size();
         let operations = translate_residency(request, chunk_size)?;
+        if request.deferred {
+            return self.edit_scene(request.session, |session| {
+                let applied = session.change_collision(|scene| {
+                    // The colliders change when the rebuild installs.
+                    match VoxelChunkResidencyService::apply_deferred(scene, &operations) {
+                        Ok((receipt, rebuild)) => {
+                            let mut native = native_residency_receipt(&receipt);
+                            native.mesh_microseconds = 0;
+                            (Ok((native, Some(rebuild))), Vec::new())
+                        }
+                        Err(error) => (residency_refusal(scene, error), Vec::new()),
+                    }
+                });
+                let (receipt, rebuild) = applied?;
+                session.deferred = rebuild;
+                Ok(receipt)
+            })?;
+        }
         self.edit_scene(request.session, |session| {
             session.change_collision(|scene| {
                 match VoxelChunkResidencyService::apply(scene, &operations) {
@@ -520,31 +538,50 @@ impl RuntimeSpatialBridge {
                         native.mesh_microseconds = scene.mesh_update().mesh_microseconds;
                         (Ok(native), changed)
                     }
-                    // A batch that changes nothing is an ordinary outcome.
-                    Err(VoxelChunkResidencyApplyError::Rejected(
-                        VoxelChunkResidencyRejection::NoChanges { retained },
-                    )) => {
-                        let revision = scene.source_revision().raw();
-                        let receipt = NativeVoxelResidencyReceipt {
-                            revision_before: revision,
-                            accepted_revision: revision,
-                            retained_count: narrow(retained.len()),
-                            resident_chunk_count: scene.resident_chunk_count() as u64,
-                            resident_solid_voxel_count: scene.solid_voxel_count() as u64,
-                            authority_hash: scene.authority_hash(),
-                            collision_revision: revision,
-                            mesh_revision: revision,
-                            ..Default::default()
-                        };
-                        (Ok(receipt), Vec::new())
-                    }
                     Err(error) => (
-                        Err(voxel_error("CSHARP_VOXEL_RESIDENCY", error.to_string())),
+                        residency_refusal(scene, error).map(|(receipt, _)| receipt),
                         Vec::new(),
                     ),
                 }
             })
         })?
+    }
+}
+
+/// A residency batch that changed nothing, an ordinary outcome with an empty
+/// receipt, or the error of one the scene refused.
+fn residency_refusal(
+    scene: &engine_spatial::VoxelCollisionScene,
+    error: VoxelChunkResidencyApplyError,
+) -> Result<
+    (
+        NativeVoxelResidencyReceipt,
+        Option<engine_spatial::DeferredChunkRebuild>,
+    ),
+    CsharpEngineServicesError,
+> {
+    match error {
+        VoxelChunkResidencyApplyError::Rejected(VoxelChunkResidencyRejection::NoChanges {
+            retained,
+        }) => {
+            let revision = scene.source_revision().raw();
+            let projections = scene.projection_revisions();
+            Ok((
+                NativeVoxelResidencyReceipt {
+                    revision_before: revision,
+                    accepted_revision: revision,
+                    retained_count: narrow(retained.len()),
+                    resident_chunk_count: scene.resident_chunk_count() as u64,
+                    resident_solid_voxel_count: scene.solid_voxel_count() as u64,
+                    authority_hash: scene.authority_hash(),
+                    collision_revision: projections.collision().raw(),
+                    mesh_revision: projections.mesh().raw(),
+                    ..Default::default()
+                },
+                None,
+            ))
+        }
+        error => Err(voxel_error("CSHARP_VOXEL_RESIDENCY", error.to_string())),
     }
 }
 
@@ -701,7 +738,7 @@ fn native_density_receipt(
 }
 
 /// World bounds of one voxel chunk.
-fn chunk_box(
+pub(crate) fn chunk_box(
     scene: &engine_spatial::VoxelCollisionScene,
     chunk: engine_spatial::VoxelChunkIdentity,
 ) -> ([f64; 3], [f64; 3]) {
@@ -2253,5 +2290,148 @@ mod tests {
         assert_eq!(invalid_error.diagnostics_len, 1);
         let diagnostic = unsafe { *invalid_error.diagnostics };
         assert_eq!(copied_utf8(diagnostic.code), "CSHARP_VOXEL_EDIT");
+    }
+
+    /// A residency transaction over 8-voxel chunks: one dense rock chunk per
+    /// admitted coordinate (`seed` choosing its hollows) and the evictions.
+    fn residency(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+        admitted: &[([i64; 3], u32)],
+        evicted: &[[i64; 3]],
+        deferred: bool,
+    ) -> NativeVoxelResidencyReceipt {
+        let volume = 8 * 8 * 8;
+        let mut slots = Vec::new();
+        let mut operations = Vec::new();
+        for (chunk, seed) in admitted {
+            let offset = slots.len() as u32;
+            slots.extend(
+                (0..volume).map(|cell: u32| u32::from(!(cell * 7 + seed * 13).is_multiple_of(5))),
+            );
+            operations.push(NativeVoxelResidencyOperation {
+                kind: NativeVoxelResidencyOperationKind::Admit,
+                chunk: NativeVoxelChunkIdentity {
+                    x: chunk[0],
+                    y: chunk[1],
+                    z: chunk[2],
+                },
+                material_offset: offset,
+                material_count: volume,
+                ..Default::default()
+            });
+        }
+        for chunk in evicted {
+            operations.push(NativeVoxelResidencyOperation {
+                kind: NativeVoxelResidencyOperationKind::Evict,
+                chunk: NativeVoxelChunkIdentity {
+                    x: chunk[0],
+                    y: chunk[1],
+                    z: chunk[2],
+                },
+                ..Default::default()
+            });
+        }
+        bridge
+            .apply_voxel_residency(&NativeVoxelResidencyTransaction {
+                states: std::ptr::null(),
+                states_len: 0,
+                session,
+                operations: operations.as_ptr(),
+                operations_len: operations.len(),
+                material_slots: slots.as_ptr(),
+                material_slots_len: slots.len(),
+                densities: std::ptr::null(),
+                densities_len: 0,
+                deferred,
+            })
+            .unwrap()
+    }
+
+    /// What the published scene shows: its voxels, its meshes, and where a
+    /// grid of rays meets its colliders.
+    fn shown(bridge: &RuntimeSpatialBridge, session: NativeSpatialSessionHandle) -> Shown {
+        let scene = bridge.collision_source().scene(session).unwrap();
+        let meshes = scene
+            .mesh_chunks()
+            .map(|chunk| (chunk.chunk, chunk.content_hash))
+            .collect();
+        let rays = (0..24)
+            .flat_map(|x| (0..16).map(move |z| [x as f64 + 0.5, 20.0, z as f64 + 0.5]))
+            .map(|origin| {
+                scene
+                    .raycast(origin, [0.0, -1.0, 0.0], 30.0)
+                    .map(|hit| hit.voxel)
+            })
+            .collect();
+        (scene.authority_hash(), meshes, rays)
+    }
+
+    /// A scene's authority hash, its chunks' mesh hashes, and the voxels
+    /// rays meet.
+    type Shown = (u64, Vec<([i64; 3], u64)>, Vec<Option<[i64; 3]>>);
+
+    /// One update of a stream: the chunks it admits, with their rock, and
+    /// those it evicts.
+    type StreamUpdate = (Vec<([i64; 3], u32)>, Vec<[i64; 3]>);
+
+    #[test]
+    fn deferred_residency_installs_at_the_next_update_as_a_synchronous_change_builds() {
+        let (mut sync, mut deferred) = (RuntimeSpatialBridge::new(), RuntimeSpatialBridge::new());
+        let (sync_session, session) = (create_session(&mut sync), create_session(&mut deferred));
+        let block: Vec<_> = (0..2)
+            .flat_map(|x| (0..2).map(move |z| ([x, 0, z], (x * 2 + z) as u32)))
+            .collect();
+        // Updates of a stream: what each admits and evicts.
+        let updates: Vec<StreamUpdate> = vec![
+            (block, vec![]),
+            (vec![([2, 0, 0], 10)], vec![]),
+            (vec![([2, 0, 1], 11)], vec![[0, 0, 0]]),
+        ];
+        for (admitted, evicted) in &updates {
+            residency(&mut sync, sync_session, admitted, evicted, false);
+            let before = shown(&deferred, session);
+            let receipt = residency(&mut deferred, session, admitted, evicted, true);
+            // Collision and meshes stay as they were until the next update;
+            // the receipt says which revision they show.
+            assert_eq!(receipt.collision_revision, receipt.revision_before);
+            assert_eq!(receipt.mesh_revision, receipt.revision_before);
+            let during = shown(&deferred, session);
+            assert_eq!((&during.1, &during.2), (&before.1, &before.2));
+            deferred.settle_deferred_residency();
+            assert_eq!(shown(&deferred, session), shown(&sync, sync_session));
+        }
+
+        // Within one update: a chunk admitted, evicted and admitted again with
+        // other rock while its rebuild is in flight, then edited.
+        for (admitted, evicted) in [
+            (vec![([0, 0, 0], 20)], vec![]),
+            (vec![], vec![[0, 0, 0]]),
+            (vec![([0, 0, 0], 21)], vec![]),
+        ] {
+            residency(&mut sync, sync_session, &admitted, &evicted, false);
+            residency(&mut deferred, session, &admitted, &evicted, true);
+        }
+        let edits = [NativeVoxelEdit {
+            kind: NativeVoxelEditKind::Clear,
+            address: NativeVoxelAddress { x: 1, y: 7, z: 1 },
+            material_slot: 0,
+            state: 0,
+        }];
+        for (bridge, session) in [(&mut sync, sync_session), (&mut deferred, session)] {
+            let _ = bridge.apply_voxel_edits(&NativeVoxelEditTransaction {
+                session,
+                edits: edits.as_ptr(),
+                edits_len: edits.len(),
+            });
+        }
+        // The edit installed what was building first.
+        assert!(deferred.session_mut(session).unwrap().deferred.is_none());
+        assert_eq!(shown(&deferred, session), shown(&sync, sync_session));
+        let scene = deferred.collision_source().scene(session).unwrap();
+        assert_eq!(
+            scene.projection_revisions().collision(),
+            scene.source_revision()
+        );
     }
 }

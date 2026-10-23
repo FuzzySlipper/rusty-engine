@@ -133,6 +133,8 @@ impl RuntimeSpatialBridge {
     ) -> Result<NativeWorldOriginCommitReceipt, CsharpEngineServicesError> {
         let session_id = self.prepared_world_origin(request.prepared)?.session;
         let handle = NativeSpatialSessionHandle { value: session_id };
+        // The rebase moves the meshes and colliders the session has.
+        self.settle_deferred(handle)?;
         let (scene, receipt) = {
             let (sessions, prepared) = (&mut self.sessions, &self.prepared_world_origins);
             let owner = prepared.get(&request.prepared.value).ok_or_else(|| {

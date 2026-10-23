@@ -372,3 +372,130 @@ fn random_reconstructed_surface_edits_match_a_fresh_build() {
         }
     }
 }
+
+/// A chunk of rock with random hollows, `seed` choosing them.
+fn rock(seed: u64) -> VoxelChunkPayload {
+    let volume = (CHUNK * CHUNK * CHUNK) as usize;
+    let mut random = Lcg(seed);
+    let slots = (0..volume)
+        .map(|_| if random.next(3) == 0 { 0 } else { 1 })
+        .collect();
+    VoxelChunkPayload::new([CHUNK as u32; 3], slots)
+}
+
+/// Whether `deferred` shows the same voxels, meshes and collision as `sync`.
+fn assert_same_scene(deferred: &VoxelCollisionScene, sync: &VoxelCollisionScene, context: &str) {
+    assert_eq!(
+        deferred.authority_hash(),
+        sync.authority_hash(),
+        "{context}"
+    );
+    let meshes = |scene: &VoxelCollisionScene| {
+        scene
+            .mesh_chunks()
+            .map(|chunk| (chunk.chunk, chunk.content_hash, chunk.field_hash))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(meshes(deferred), meshes(sync), "{context}");
+    assert_eq!(
+        deferred.collider_chunk_count(),
+        sync.collider_chunk_count(),
+        "{context}"
+    );
+    for x in (-2..34).step_by(3) {
+        for z in (-2..26).step_by(5) {
+            let origin = [x as f64 + 0.5, 30.0, z as f64 + 0.5];
+            assert_eq!(
+                deferred.raycast(origin, [0.0, -1.0, 0.0], 40.0),
+                sync.raycast(origin, [0.0, -1.0, 0.0], 40.0),
+                "{context}: ray at {origin:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn a_deferred_residency_change_installs_what_a_synchronous_one_builds() {
+    for mode in [SurfaceMode::GreedyCubes, SurfaceMode::DualContouring] {
+        let empty = || {
+            VoxelCollisionScene::from_material_voxels_with_mesh_options(
+                1.0,
+                CHUNK as u32,
+                [],
+                SurfaceMeshOptions {
+                    mode,
+                    ..SurfaceMeshOptions::default()
+                },
+            )
+            .unwrap()
+        };
+        let (mut sync, mut deferred) = (empty(), empty());
+        let admit = |x: i64, y: i64, z: i64, seed: u64| VoxelChunkResidencyOperation::Admit {
+            chunk: VoxelChunkIdentity::new(x, y, z),
+            payload: rock(seed),
+        };
+        let evict = |x: i64, y: i64, z: i64| VoxelChunkResidencyOperation::Evict {
+            chunk: VoxelChunkIdentity::new(x, y, z),
+        };
+        let mut seed = 0;
+        let mut block = Vec::new();
+        for x in 0..3 {
+            for y in 0..2 {
+                for z in 0..2 {
+                    seed += 1;
+                    block.push(admit(x, y, z, seed));
+                }
+            }
+        }
+        // A stream: a block, then a chunk at a time beside it, a chunk
+        // evicted, and the same chunk admitted again with other rock.
+        let steps = [
+            block,
+            vec![admit(3, 0, 0, 100)],
+            vec![admit(3, 1, 0, 101), evict(0, 0, 0)],
+            vec![evict(3, 0, 0)],
+            vec![admit(3, 0, 0, 102)],
+            vec![admit(0, 0, 0, 103), admit(0, 0, 2, 104)],
+        ];
+        for (index, operations) in steps.iter().enumerate() {
+            let context = format!("{mode:?} step {index}");
+            let sync_receipt = VoxelChunkResidencyService::apply(&mut sync, operations).unwrap();
+            let shown = deferred.mesh_state();
+            let colliders = deferred.collider_chunk_count();
+            let (receipt, rebuild) =
+                VoxelChunkResidencyService::apply_deferred(&mut deferred, operations).unwrap();
+            // The voxels are written now; meshes and colliders wait for the
+            // install, and the projection revisions say so.
+            assert_eq!(receipt.accepted_revision, sync_receipt.accepted_revision);
+            assert_eq!(receipt.dirty_chunks, sync_receipt.dirty_chunks, "{context}");
+            assert_eq!(receipt.projections.collision(), receipt.revision_before);
+            assert_eq!(receipt.projections.mesh(), receipt.revision_before);
+            assert_eq!(receipt.rebuilt_mesh_chunks, 0);
+            assert_eq!(deferred.authority_hash(), sync.authority_hash());
+            assert_eq!(deferred.mesh_state(), shown, "{context}");
+            assert_eq!(deferred.collider_chunk_count(), colliders, "{context}");
+            assert!(rebuild.changed_chunks().count() > 0);
+            rebuild.install(&mut deferred).unwrap();
+            assert_ne!(deferred.mesh_state(), shown, "{context}");
+            assert_eq!(
+                deferred.projection_revisions().collision(),
+                deferred.source_revision()
+            );
+            assert_same_scene(&deferred, &sync, &context);
+        }
+
+        // A change made before the install: the install rebuilds its chunks
+        // from the voxels as they are now.
+        let operations = [admit(1, 0, 2, 200)];
+        VoxelChunkResidencyService::apply(&mut sync, &operations).unwrap();
+        let (_, rebuild) =
+            VoxelChunkResidencyService::apply_deferred(&mut deferred, &operations).unwrap();
+        let edit = [VoxelEdit::Clear {
+            address: [CHUNK + 1, 1, 2 * CHUNK + 1],
+        }];
+        let _ = VoxelEditService::apply(&mut sync, &edit);
+        let _ = VoxelEditService::apply(&mut deferred, &edit);
+        rebuild.install(&mut deferred).unwrap();
+        assert_same_scene(&deferred, &sync, &format!("{mode:?} edit before install"));
+    }
+}

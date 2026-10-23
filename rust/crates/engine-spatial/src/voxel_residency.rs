@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use svc_volume::VoxelChunk;
 
 use crate::{
-    CollisionSceneError, SurfaceMode, VoxelCollisionScene, VoxelProjectionRevisions,
+    ChunkRebuild, CollisionSceneError, SurfaceMode, VoxelCollisionScene, VoxelProjectionRevisions,
     VoxelSourceRevision, MAX_VOXEL_COORDINATE_ABS,
 };
 
@@ -260,95 +260,119 @@ impl VoxelChunkResidencyService {
         scene: &mut VoxelCollisionScene,
         operations: &[VoxelChunkResidencyOperation],
     ) -> Result<VoxelChunkResidencyReceipt, VoxelChunkResidencyApplyError> {
-        let chunk_size = scene.chunk_size;
-        let grid_id = scene.voxel_world.grid().id();
-        let options = scene.mesh_options.clone();
-        let reconstructed = |slot: u16| options.surface(slot).mode != SurfaceMode::GreedyCubes;
-        let mut validated = Vec::with_capacity(operations.len());
-        for (operation_index, operation) in operations.iter().enumerate() {
-            let identity = operation.chunk();
-            validate_chunk_identity(identity, chunk_size).map_err(
-                |(axis, voxel_min, voxel_max_inclusive)| {
-                    VoxelChunkResidencyApplyError::Rejected(
-                        VoxelChunkResidencyRejection::ChunkCoordinateOutOfBounds {
-                            operation_index,
-                            chunk: identity,
-                            axis,
-                            voxel_min,
-                            voxel_max_inclusive,
-                            limit: MAX_VOXEL_COORDINATE_ABS,
-                        },
-                    )
-                },
-            )?;
-            let contents = match operation {
-                VoxelChunkResidencyOperation::Admit { payload, .. }
-                | VoxelChunkResidencyOperation::Replace { payload, .. } => Some(validate_payload(
-                    operation_index,
-                    identity,
-                    chunk_size,
-                    grid_id,
-                    &reconstructed,
-                    payload,
-                )?),
-                VoxelChunkResidencyOperation::Evict { .. } => None,
-            };
-            validated.push((identity, contents));
-        }
-
-        let revision_before = scene.source_revision;
-        // The chunks each operation replaced, in order, for accounting and
-        // for putting back if a mesh fails to build.
-        let mut previous: Vec<(ChunkCoord, Option<VoxelChunk>)> = Vec::new();
-        let (mut admitted, mut replaced, mut evicted, mut retained) =
-            (Vec::new(), Vec::new(), Vec::new(), Vec::new());
-        for (identity, contents) in validated {
-            let coordinate = identity.to_chunk_coord();
-            let current = scene.voxel_world.get(coordinate);
-            match contents {
-                Some(chunk) => {
-                    if current.is_some_and(|current| current.same_content(&chunk)) {
-                        retained.push(identity);
-                        continue;
-                    }
-                    if current.is_some() {
-                        replaced.push(identity);
-                    } else {
-                        admitted.push(identity);
-                    }
-                    previous.push((coordinate, scene.voxel_world.insert(coordinate, chunk)));
+        let written = write(scene, operations)?;
+        let rebuild =
+            match scene.rebuild_chunks(&written.changed, &written.dirty, &written.field_dirty) {
+                Ok(rebuild) => rebuild,
+                Err(error) => {
+                    put_back(scene, written.previous);
+                    return Err(VoxelChunkResidencyApplyError::ProjectionBuild(error));
                 }
-                None => match scene.voxel_world.remove(coordinate) {
-                    Some(chunk) => {
-                        evicted.push(identity);
-                        previous.push((coordinate, Some(chunk)));
-                    }
-                    None => retained.push(identity),
-                },
-            }
-        }
-        if previous.is_empty() {
-            return Err(VoxelChunkResidencyApplyError::Rejected(
-                VoxelChunkResidencyRejection::NoChanges { retained },
-            ));
-        }
+            };
+        let dropped_hermite_normals = account(scene, &written.previous);
+        scene.publish_local_change(&written.dirty, rebuild);
+        Ok(receipt(scene, written, dropped_hermite_normals))
+    }
 
-        let changed: BTreeSet<ChunkCoord> =
-            previous.iter().map(|(coordinate, _)| *coordinate).collect();
-        let dirty: BTreeSet<ChunkCoord> = changed
+    /// Apply operations as [`Self::apply`] does, writing the voxels now and
+    /// rebuilding the changed chunks' meshes and colliders on a worker
+    /// thread. Until the returned rebuild is installed, the scene's meshes
+    /// and colliders stay as they were and its projection revisions name
+    /// the revision before; install it before the scene changes again.
+    pub fn apply_deferred(
+        scene: &mut VoxelCollisionScene,
+        operations: &[VoxelChunkResidencyOperation],
+    ) -> Result<(VoxelChunkResidencyReceipt, DeferredChunkRebuild), VoxelChunkResidencyApplyError>
+    {
+        let written = write(scene, operations)?;
+        let dropped_hermite_normals = account(scene, &written.previous);
+        scene
+            .projected_revision
+            .get_or_insert(written.revision_before);
+        scene.source_revision = scene.source_revision.next();
+        let snapshot = scene.rebuild_snapshot(&written.dirty, &written.field_dirty);
+        let (changed, dirty, field_dirty) = (
+            written.changed.clone(),
+            written.dirty.clone(),
+            written.field_dirty.clone(),
+        );
+        let build = move || snapshot.source().rebuild(&changed, &dirty, &field_dirty);
+        let rebuild = DeferredChunkRebuild {
+            accepted: scene.source_revision,
+            changed: written.changed.clone(),
+            dirty: written.dirty.clone(),
+            field_dirty: written.field_dirty.clone(),
+            previous: first_previous(&written.previous),
+            built: match std::thread::Builder::new()
+                .name("rusty-voxel-residency".to_owned())
+                .spawn(build)
+            {
+                Ok(worker) => Built::Building(worker),
+                // No thread to spare: build here, as a synchronous change does.
+                Err(_) => Built::Ready(scene.rebuild_chunks(
+                    &written.changed,
+                    &written.dirty,
+                    &written.field_dirty,
+                )),
+            },
+        };
+        Ok((receipt(scene, written, dropped_hermite_normals), rebuild))
+    }
+}
+
+/// A deferred residency change's meshes and colliders, building on a worker
+/// thread ([`VoxelChunkResidencyService::apply_deferred`]).
+pub struct DeferredChunkRebuild {
+    /// The source revision the change wrote.
+    accepted: VoxelSourceRevision,
+    changed: BTreeSet<ChunkCoord>,
+    dirty: BTreeSet<ChunkCoord>,
+    field_dirty: BTreeSet<ChunkCoord>,
+    /// Each changed chunk as it was before, to put back if a mesh fails.
+    previous: BTreeMap<ChunkCoord, Option<VoxelChunk>>,
+    built: Built,
+}
+
+enum Built {
+    Building(std::thread::JoinHandle<Result<ChunkRebuild, CollisionSceneError>>),
+    Ready(Result<ChunkRebuild, CollisionSceneError>),
+}
+
+impl DeferredChunkRebuild {
+    /// The chunks the change admitted, replaced or evicted.
+    pub fn changed_chunks(&self) -> impl Iterator<Item = VoxelChunkIdentity> + '_ {
+        self.changed
             .iter()
-            .flat_map(|coordinate| scene.mesh_neighbourhood(*coordinate))
-            .collect();
-        let field_dirty: BTreeSet<ChunkCoord> = changed
-            .iter()
-            .flat_map(|coordinate| scene.field_neighbourhood(*coordinate))
-            .collect();
-        let rebuild = match scene.rebuild_chunks(&changed, &dirty, &field_dirty) {
-            Ok(rebuild) => rebuild,
+            .map(|coordinate| VoxelChunkIdentity::from(*coordinate))
+    }
+
+    /// Wait for the meshes and colliders and install them, so the scene's
+    /// projections show its voxels again. A scene changed since the change
+    /// rebuilds those chunks here instead. A chunk whose mesh fails to
+    /// build puts the change's chunks back as they were, as
+    /// [`VoxelChunkResidencyService::apply`] does, and returns the error.
+    pub fn install(self, scene: &mut VoxelCollisionScene) -> Result<(), CollisionSceneError> {
+        let built = match self.built {
+            Built::Building(worker) => worker.join().expect("chunk meshing does not panic"),
+            Built::Ready(built) => built,
+        };
+        scene.projected_revision = None;
+        if scene.source_revision != self.accepted {
+            let rebuild = scene.rebuild_chunks(&self.changed, &self.dirty, &self.field_dirty)?;
+            scene.publish_rebuild(&self.dirty, rebuild);
+            return Ok(());
+        }
+        match built {
+            Ok(rebuild) => {
+                scene.publish_rebuild(&self.dirty, rebuild);
+                Ok(())
+            }
             Err(error) => {
-                for (coordinate, chunk) in previous.into_iter().rev() {
-                    match chunk {
+                for (coordinate, before) in self.previous {
+                    scene.account_chunk(coordinate, None, false);
+                    match before {
                         Some(chunk) => {
+                            scene.account_chunk(coordinate, Some(&chunk), true);
                             scene.voxel_world.insert(coordinate, chunk);
                         }
                         None => {
@@ -356,46 +380,210 @@ impl VoxelChunkResidencyService {
                         }
                     }
                 }
-                return Err(VoxelChunkResidencyApplyError::ProjectionBuild(error));
+                scene.source_revision = scene.source_revision.next();
+                Err(error)
             }
-        };
-        // Account each changed chunk once: out with what was there first, in
-        // with what is there now.
-        let mut first_previous = BTreeMap::new();
-        for (coordinate, chunk) in previous {
-            first_previous.entry(coordinate).or_insert(chunk);
         }
-        let dropped_hermite_normals = first_previous
-            .values()
-            .flatten()
-            .map(VoxelChunk::edge_crossing_count)
-            .sum();
-        for (coordinate, before) in first_previous {
-            if let Some(before) = before {
-                scene.account_chunk(coordinate, Some(&before), false);
-            }
-            scene.account_chunk(coordinate, None, true);
-        }
-        scene.publish_local_change(&dirty, rebuild);
+    }
+}
 
-        let update = &scene.mesh_update;
-        Ok(VoxelChunkResidencyReceipt {
-            revision_before,
-            accepted_revision: scene.source_revision,
-            admitted,
-            replaced,
-            evicted,
-            retained,
-            dirty_chunks: dirty.into_iter().map(VoxelChunkIdentity::from).collect(),
-            resident_chunk_count: scene.resident_chunk_count(),
-            resident_solid_voxel_count: scene.solid_voxel_count,
-            authority_hash: scene.authority_hash,
-            projections: scene.projection_revisions(),
-            rebuilt_mesh_chunks: update.rebuilt_chunks,
-            reused_mesh_chunks: update.reused_chunks,
-            removed_mesh_chunks: update.removed_chunks,
-            dropped_hermite_normals,
-        })
+/// Operations written into a scene's voxels, before their chunks rebuild.
+struct Written {
+    revision_before: VoxelSourceRevision,
+    /// The chunks each operation replaced, in order, for accounting and for
+    /// putting back if a mesh fails to build.
+    previous: Vec<(ChunkCoord, Option<VoxelChunk>)>,
+    admitted: Vec<VoxelChunkIdentity>,
+    replaced: Vec<VoxelChunkIdentity>,
+    evicted: Vec<VoxelChunkIdentity>,
+    retained: Vec<VoxelChunkIdentity>,
+    changed: BTreeSet<ChunkCoord>,
+    dirty: BTreeSet<ChunkCoord>,
+    field_dirty: BTreeSet<ChunkCoord>,
+}
+
+/// Validate every operation, then write them in order. Invalid payloads
+/// reject the batch before anything changes.
+fn write(
+    scene: &mut VoxelCollisionScene,
+    operations: &[VoxelChunkResidencyOperation],
+) -> Result<Written, VoxelChunkResidencyApplyError> {
+    let chunk_size = scene.chunk_size;
+    let grid_id = scene.voxel_world.grid().id();
+    let options = scene.mesh_options.clone();
+    let reconstructed = |slot: u16| options.surface(slot).mode != SurfaceMode::GreedyCubes;
+    let mut validated = Vec::with_capacity(operations.len());
+    for (operation_index, operation) in operations.iter().enumerate() {
+        let identity = operation.chunk();
+        validate_chunk_identity(identity, chunk_size).map_err(
+            |(axis, voxel_min, voxel_max_inclusive)| {
+                VoxelChunkResidencyApplyError::Rejected(
+                    VoxelChunkResidencyRejection::ChunkCoordinateOutOfBounds {
+                        operation_index,
+                        chunk: identity,
+                        axis,
+                        voxel_min,
+                        voxel_max_inclusive,
+                        limit: MAX_VOXEL_COORDINATE_ABS,
+                    },
+                )
+            },
+        )?;
+        let contents = match operation {
+            VoxelChunkResidencyOperation::Admit { payload, .. }
+            | VoxelChunkResidencyOperation::Replace { payload, .. } => Some(validate_payload(
+                operation_index,
+                identity,
+                chunk_size,
+                grid_id,
+                &reconstructed,
+                payload,
+            )?),
+            VoxelChunkResidencyOperation::Evict { .. } => None,
+        };
+        validated.push((identity, contents));
+    }
+
+    let revision_before = scene.source_revision;
+    let mut previous: Vec<(ChunkCoord, Option<VoxelChunk>)> = Vec::new();
+    let (mut admitted, mut replaced, mut evicted, mut retained) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for (identity, contents) in validated {
+        let coordinate = identity.to_chunk_coord();
+        let current = scene.voxel_world.get(coordinate);
+        match contents {
+            Some(chunk) => {
+                if current.is_some_and(|current| current.same_content(&chunk)) {
+                    retained.push(identity);
+                    continue;
+                }
+                if current.is_some() {
+                    replaced.push(identity);
+                } else {
+                    admitted.push(identity);
+                }
+                previous.push((coordinate, scene.voxel_world.insert(coordinate, chunk)));
+            }
+            None => match scene.voxel_world.remove(coordinate) {
+                Some(chunk) => {
+                    evicted.push(identity);
+                    previous.push((coordinate, Some(chunk)));
+                }
+                None => retained.push(identity),
+            },
+        }
+    }
+    if previous.is_empty() {
+        return Err(VoxelChunkResidencyApplyError::Rejected(
+            VoxelChunkResidencyRejection::NoChanges { retained },
+        ));
+    }
+
+    let changed: BTreeSet<ChunkCoord> =
+        previous.iter().map(|(coordinate, _)| *coordinate).collect();
+    let dirty = changed
+        .iter()
+        .flat_map(|coordinate| scene.mesh_neighbourhood(*coordinate))
+        .collect();
+    let field_dirty = changed
+        .iter()
+        .flat_map(|coordinate| scene.field_neighbourhood(*coordinate))
+        .collect();
+    Ok(Written {
+        revision_before,
+        previous,
+        admitted,
+        replaced,
+        evicted,
+        retained,
+        changed,
+        dirty,
+        field_dirty,
+    })
+}
+
+/// Undo a write whose chunks did not rebuild.
+fn put_back(scene: &mut VoxelCollisionScene, previous: Vec<(ChunkCoord, Option<VoxelChunk>)>) {
+    for (coordinate, chunk) in previous.into_iter().rev() {
+        match chunk {
+            Some(chunk) => {
+                scene.voxel_world.insert(coordinate, chunk);
+            }
+            None => {
+                scene.voxel_world.remove(coordinate);
+            }
+        }
+    }
+}
+
+/// Each changed chunk as it was before the first operation on it.
+fn first_previous(
+    previous: &[(ChunkCoord, Option<VoxelChunk>)],
+) -> BTreeMap<ChunkCoord, Option<VoxelChunk>> {
+    let mut first = BTreeMap::new();
+    for (coordinate, chunk) in previous {
+        first.entry(*coordinate).or_insert_with(|| chunk.clone());
+    }
+    first
+}
+
+/// Account each changed chunk once: out with what was there first, in with
+/// what is there now. Returns the crossing normals the old chunks carried.
+fn account(
+    scene: &mut VoxelCollisionScene,
+    previous: &[(ChunkCoord, Option<VoxelChunk>)],
+) -> usize {
+    let mut first = BTreeMap::new();
+    for (coordinate, chunk) in previous {
+        first.entry(*coordinate).or_insert(chunk);
+    }
+    let dropped_hermite_normals = first
+        .values()
+        .copied()
+        .flatten()
+        .map(VoxelChunk::edge_crossing_count)
+        .sum();
+    for (coordinate, before) in first {
+        if let Some(before) = before {
+            scene.account_chunk(coordinate, Some(before), false);
+        }
+        scene.account_chunk(coordinate, None, true);
+    }
+    dropped_hermite_normals
+}
+
+fn receipt(
+    scene: &VoxelCollisionScene,
+    written: Written,
+    dropped_hermite_normals: usize,
+) -> VoxelChunkResidencyReceipt {
+    let update = &scene.mesh_update;
+    // A deferred change has rebuilt nothing yet.
+    let rebuilt = update.source_revision == scene.source_revision;
+    VoxelChunkResidencyReceipt {
+        revision_before: written.revision_before,
+        accepted_revision: scene.source_revision,
+        admitted: written.admitted,
+        replaced: written.replaced,
+        evicted: written.evicted,
+        retained: written.retained,
+        dirty_chunks: written
+            .dirty
+            .into_iter()
+            .map(VoxelChunkIdentity::from)
+            .collect(),
+        resident_chunk_count: scene.resident_chunk_count(),
+        resident_solid_voxel_count: scene.solid_voxel_count,
+        authority_hash: scene.authority_hash,
+        projections: scene.projection_revisions(),
+        rebuilt_mesh_chunks: if rebuilt { update.rebuilt_chunks } else { 0 },
+        reused_mesh_chunks: if rebuilt {
+            update.reused_chunks
+        } else {
+            scene.mesh_chunks.len()
+        },
+        removed_mesh_chunks: if rebuilt { update.removed_chunks } else { 0 },
+        dropped_hermite_normals,
     }
 }
 
