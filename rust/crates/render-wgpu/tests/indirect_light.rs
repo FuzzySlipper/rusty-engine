@@ -379,6 +379,62 @@ fn a_part_moving_between_bricks_rebakes_where_it_left_and_where_it_went() {
     assert_eq!(moved.last_batch_bricks, 16, "{moved:?}");
 }
 
+/// A crate in one corner of the ground, drawn with its own material.
+fn crate_of(harness: &mut Harness, color: [f32; 4]) {
+    let mut paint = material("material/crate", color, None);
+    paint.roughness = 1.0;
+    harness.apply(vec![
+        RenderDiff::DefineMaterial { material: paint },
+        static_mesh(
+            "mesh/crate",
+            box_mesh([19.0, 0.0, 19.0], [21.0, 2.0, 21.0], |_| 0),
+            "material/crate",
+        ),
+        instance(31, None, "mesh/crate", transform([0.0; 3], 0.0, [1.0; 3])),
+    ]);
+}
+
+/// Looking down past the crate at the ground beside it.
+fn beside_the_crate() -> render_host_contracts::RendererCompositionCamera {
+    camera([16.0, 3.0, 16.0], 135.0, -30.0)
+}
+
+#[test]
+fn a_material_rebakes_only_the_bricks_of_the_parts_drawing_it() {
+    let mut harness = own_lights();
+    ground_with_bricks(&mut harness);
+    crate_of(&mut harness, [0.6, 0.6, 0.6, 1.0]);
+    let first = bake(&mut harness);
+    let (_, grey) = harness.render(&beside_the_crate());
+
+    // A material nothing draws yet, as a streamed chunk's new terrain
+    // palette defines one: nothing rebakes.
+    harness.apply(vec![RenderDiff::DefineMaterial {
+        material: material("material/unused", [0.2, 0.4, 0.8, 1.0], None),
+    }]);
+    harness.render(&beside_the_crate());
+    let unused = bake(&mut harness);
+    assert_eq!(unused.bakes, first.bakes, "{unused:?}");
+    assert!(!unused.pending, "{unused:?}");
+
+    // The crate painted red: its cell's BVH rebuilds and the cells around
+    // it rebake, 2 × 2 × 2 of the 4 × 2 × 4, and the light settles as a
+    // volume baked with the red crate from the start does.
+    crate_of(&mut harness, [0.9, 0.1, 0.1, 1.0]);
+    harness.render(&beside_the_crate());
+    let red = bake(&mut harness);
+    assert_eq!(red.bakes, first.bakes + 1, "{red:?}");
+    assert_eq!(red.last_batch_bricks, 8, "{red:?}");
+    let (_, repainted) = harness.render(&beside_the_crate());
+    let mut fresh = own_lights();
+    ground_with_bricks(&mut fresh);
+    crate_of(&mut fresh, [0.9, 0.1, 0.1, 1.0]);
+    bake(&mut fresh);
+    let (_, baked_red) = fresh.render(&beside_the_crate());
+    assert_ne!(repainted, grey);
+    assert_eq!(repainted, baked_red);
+}
+
 #[test]
 fn removing_one_of_two_identical_torches_rebakes_their_bricks() {
     let mut harness = own_lights();

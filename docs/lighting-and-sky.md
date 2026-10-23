@@ -159,12 +159,16 @@ draws exactly as before.
 
 - The volume is kept in 16 m bricks, each with its own tree over the
   triangles in its cell. The bake runs on a worker thread, never the render
-  thread, one brick after another, and each brick uploads alone while the
-  old probes keep drawing. A retained change rebakes only what it reaches:
-  a part's move, mesh, visibility or material rebuilds its cells' trees and
-  rebakes those cells and the ones around them; a point or spot light the
-  cells within its range plus one; the sun, the sky, an ambient or
-  hemisphere light, a material or a texture definition every brick. Bakes
+  thread, which only names the parts a batch reads: the worker places their
+  triangles and builds the trees, then bakes one brick after another, and
+  each brick uploads alone while the old probes keep drawing. A retained
+  change rebakes only what it reaches: a part's move, mesh, visibility or
+  material rebuilds its cells' trees and rebakes those cells and the ones
+  around them, and so does a material or texture definition for the parts
+  drawing it (one nothing draws yet, such as a streamed chunk's new terrain
+  palette variant, rebakes nothing); a point or spot light the cells within
+  its range plus one; the sun, the sky, an ambient or hemisphere light, or a
+  texture the sky shows every brick. Bakes
   start once the scene has been still for a quarter second, so a world
   built over many frames bakes once; while something inside keeps moving
   every frame they start every two seconds instead. Moving the request's

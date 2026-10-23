@@ -1442,7 +1442,16 @@ impl Renderer {
         }
         let uploaded = self.upload_texture(texture, image.as_ref());
         self.tables.textures.insert(texture.id.clone(), uploaded);
-        self.touch_indirect_light();
+        // The materials sampling it are defined again below, which rebakes
+        // their parts' bricks; a sky showing it lights every brick.
+        if let Environment::Sky(sky) = &self.tables.environment {
+            let shown = std::iter::once(&sky.texture)
+                .chain(sky.blend.as_ref().map(|blend| &blend.texture))
+                .any(|shown| *shown == texture.id);
+            if shown {
+                self.touch_indirect_light();
+            }
+        }
         if let Some(id) = self.tables.names.get(&texture.id) {
             self.effects.forget_texture(id);
         }
@@ -1527,7 +1536,9 @@ impl Renderer {
             descriptor.id.clone(),
             crate::probes::material_mean(&descriptor, &self.tables.texture_thumbs),
         );
-        self.touch_indirect_light();
+        // The indirect light needs no mark of its own: `insert_material`
+        // rebuilds the parts naming it, and their removed bounds rebake
+        // the bricks they reach.
         let texture = descriptor
             .texture
             .as_ref()

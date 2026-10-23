@@ -42,9 +42,9 @@ use std::time::{Duration, Instant};
 use glam::{IVec3, Mat4, Vec3};
 use render_model::{IndirectAmbient, IndirectLightDescriptor, RenderHandle, RenderLayer};
 
-use crate::tables::{Aabb, MaterialRef, PartId, Topology};
+use crate::tables::{Aabb, CpuGeometry, MaterialRef, PartId, Topology};
 use crate::{Gpu, Renderer};
-use bake::{bake_brick, cells_in, dilate_region, ms, pack_region, BrickBaked, Field};
+use bake::{bake_brick, cells_in, dilate_region, ms, pack_region, parallel, BrickBaked, Field};
 pub(crate) use thumb::{material_mean, Thumb};
 use trace::{Bvh, Scene, Sky, Triangle};
 
@@ -539,6 +539,67 @@ impl Schedule {
     }
 }
 
+/// A part's triangles as a batch reads them: its mesh, where it is, and
+/// its surface. The worker places them, so the render thread only names
+/// the parts.
+pub(crate) struct Source {
+    cpu: Arc<CpuGeometry>,
+    first: usize,
+    end: usize,
+    model: Mat4,
+    mirrored: bool,
+    albedo: Vec3,
+    emission: Vec3,
+    two_sided: bool,
+    /// Its world bounds; empty when not known, which no box leaves out.
+    bounds: Aabb,
+}
+
+impl Source {
+    /// Whether any of its triangles may overlap `min..=max`.
+    fn touches(&self, min: Vec3, max: Vec3) -> bool {
+        self.bounds.is_empty()
+            || (self.bounds.min.cmple(max).all() && self.bounds.max.cmpge(min).all())
+    }
+
+    /// Whether every triangle lies within `min..=max`.
+    fn within(&self, min: Vec3, max: Vec3) -> bool {
+        !self.bounds.is_empty()
+            && self.bounds.min.cmpge(min).all()
+            && self.bounds.max.cmple(max).all()
+    }
+
+    /// Its triangles in world space that `keep` admits.
+    fn triangles(&self, keep: impl Fn(&Triangle) -> bool, out: &mut Vec<Triangle>) {
+        for corner in self.cpu.indices[self.first..self.end].as_chunks::<3>().0 {
+            let [a, b, c] = [0, 1, 2].map(|k| {
+                self.model
+                    .transform_point3(self.cpu.positions[corner[k] as usize])
+            });
+            // Mirrored parts wind the other way.
+            let (b, c) = if self.mirrored { (c, b) } else { (b, c) };
+            let e1 = b - a;
+            let e2 = c - a;
+            let normal = e1.cross(e2);
+            if normal.length_squared() <= 0.0 {
+                continue;
+            }
+            let triangle = Triangle {
+                v0: a,
+                e1,
+                e2,
+                normal: normal.normalize(),
+                albedo: self.albedo,
+                emission: self.emission,
+                two_sided: self.two_sided,
+            };
+            if keep(&triangle) {
+                out.push(triangle);
+            }
+        }
+    }
+}
+
 /// Everything a batch of bricks needs, collected on the render thread.
 pub(crate) struct Batch {
     /// The renderer's scene generation the batch reads.
@@ -546,13 +607,15 @@ pub(crate) struct Batch {
     grid: Grid,
     bricks: Bricks,
     bounces: u32,
-    /// Bricks whose BVH to rebuild, with their cells' triangles.
-    rebuild: Vec<(usize, Vec<Triangle>)>,
+    /// Bricks whose BVH to rebuild from their cells' triangles.
+    rebuild: Vec<usize>,
     /// Every brick's current BVH.
     blas: Vec<Option<Arc<Bvh>>>,
     outside: Option<Arc<Bvh>>,
-    /// The outside's triangles when it rebuilds.
-    outside_rebuild: Option<Vec<Triangle>>,
+    /// The outside rebuilds from the triangles beyond every brick.
+    outside_rebuild: bool,
+    /// The parts whose triangles the rebuilds may take.
+    sources: Vec<Source>,
     /// Bricks to bake.
     bake: Vec<usize>,
     /// The world's light rows (`frame.rs` `light_row`).
@@ -583,20 +646,48 @@ enum BrickResult {
 }
 
 /// Run a batch: rebuild the BVHs, then bake its bricks one after another.
-fn run_batch(batch: Batch, emit: &mut dyn FnMut(BrickResult)) {
+/// `emit` answers whether the batch is still wanted; once it is not, the
+/// batch stops at the next brick.
+fn run_batch(batch: Batch, emit: &mut dyn FnMut(BrickResult) -> bool) {
     let started = Instant::now();
     let mut blas = batch.blas;
-    for (brick, triangles) in batch.rebuild {
-        let built = (!triangles.is_empty()).then(|| Arc::new(Bvh::build(triangles)));
+    let mut rebuilt: Vec<(usize, Option<Arc<Bvh>>)> =
+        batch.rebuild.iter().map(|brick| (*brick, None)).collect();
+    parallel(&mut rebuilt, |(brick, built)| {
+        let (min, max) = batch.bricks.cell_box(*brick);
+        let mut triangles = Vec::new();
+        for source in batch
+            .sources
+            .iter()
+            .filter(|source| source.touches(min, max))
+        {
+            source.triangles(|t| t.touches(min, max), &mut triangles);
+        }
+        *built = (!triangles.is_empty()).then(|| Arc::new(Bvh::build(triangles)));
+    });
+    for (brick, built) in rebuilt {
         blas[brick] = built.clone();
-        emit(BrickResult::Blas { brick, blas: built });
+        if !emit(BrickResult::Blas { brick, blas: built }) {
+            return;
+        }
     }
     let mut outside = batch.outside;
-    if let Some(triangles) = batch.outside_rebuild {
+    if batch.outside_rebuild {
+        let (min, max) = batch.bricks.world_bounds();
+        let mut triangles = Vec::new();
+        for source in batch
+            .sources
+            .iter()
+            .filter(|source| !source.within(min, max))
+        {
+            source.triangles(|t| !t.touches(min, max), &mut triangles);
+        }
         outside = (!triangles.is_empty()).then(|| Arc::new(Bvh::build(triangles)));
-        emit(BrickResult::Outside {
+        if !emit(BrickResult::Outside {
             blas: outside.clone(),
-        });
+        }) {
+            return;
+        }
     }
     let scene = Scene {
         bricks: batch.bricks,
@@ -613,7 +704,9 @@ fn run_batch(batch: Batch, emit: &mut dyn FnMut(BrickResult)) {
             &batch.sky,
             &batch.snapshot,
         );
-        emit(BrickResult::Baked { brick, baked });
+        if !emit(BrickResult::Baked { brick, baked }) {
+            return;
+        }
     }
     emit(BrickResult::Done {
         ms: batch.collect_ms + ms(started),
@@ -633,7 +726,7 @@ pub(crate) struct ProbeVolume {
     schedule: Schedule,
     /// The scene generation the last batch started from.
     baked_generation: u64,
-    /// A batch running on its worker thread.
+    /// A batch running on its worker thread; dropping it stops the batch.
     job: Option<Receiver<BrickResult>>,
     /// Bricks the running batch has baked so far.
     batch_bricks: u32,
@@ -850,9 +943,7 @@ impl ProbeVolume {
         let spawned = std::thread::Builder::new()
             .name("rusty-probe-bake".to_owned())
             .spawn(move || {
-                run_batch(batch, &mut |result| {
-                    let _ = sender.send(result);
-                });
+                run_batch(batch, &mut |result| sender.send(result).is_ok());
             });
         if spawned.is_err() {
             self.job = None;
@@ -887,7 +978,10 @@ impl ProbeVolume {
         self.job = None;
         self.batch_bricks = 0;
         let mut results = Vec::new();
-        run_batch(batch, &mut |result| results.push(result));
+        run_batch(batch, &mut |result| {
+            results.push(result);
+            true
+        });
         for result in results {
             self.absorb(gpu, result);
         }
@@ -1042,25 +1136,24 @@ fn texture(gpu: &Gpu, dims: [u32; 3], slabs: u32) -> (wgpu::Texture, wgpu::Textu
 
 impl Renderer {
     /// The next batch of probe work from the retained scene as it stands:
-    /// the triangles of the bricks whose BVHs rebuild, the light rows, the
-    /// sky, and the probes as they are; `None` when nothing is dirty.
+    /// the parts the bricks whose BVHs rebuild take their triangles from,
+    /// the light rows, the sky, and the probes as they are; `None` when
+    /// nothing is dirty.
     pub(crate) fn probe_batch(&mut self) -> Option<Batch> {
         let descriptor = self.tables.indirect_light?;
         let started = Instant::now();
         let work = self.probes.volume.as_mut()?.take_work()?;
         let volume = self.probes.volume.as_ref()?;
         let (grid, bricks) = (volume.grid, volume.bricks.clone());
-        let rebuild = work
+        let boxes: Vec<_> = work
             .rebuild
             .iter()
-            .map(|brick| {
-                let (min, max) = bricks.cell_box(*brick);
-                (*brick, self.probe_triangles(|t| t.touches(min, max)))
-            })
+            .map(|brick| bricks.cell_box(*brick))
             .collect();
-        let outside_rebuild = work.outside.then(|| {
-            let (min, max) = bricks.world_bounds();
-            self.probe_triangles(|t| !t.touches(min, max))
+        let (lo, hi) = bricks.world_bounds();
+        let sources = self.probe_sources(|source| {
+            boxes.iter().any(|(min, max)| source.touches(*min, *max))
+                || (work.outside && !source.within(lo, hi))
         });
         let mut rows: Vec<f32> = Vec::new();
         self.world_light_rows(&mut rows);
@@ -1126,14 +1219,15 @@ impl Renderer {
             grid,
             bricks,
             bounces: descriptor.bounces.max(1),
-            rebuild,
+            rebuild: work.rebuild,
             blas: volume
                 .states
                 .iter()
                 .map(|state| state.blas.clone())
                 .collect(),
             outside: volume.outside.clone(),
-            outside_rebuild,
+            outside_rebuild: work.outside,
+            sources,
             bake: work.bake,
             rows,
             sky,
@@ -1142,12 +1236,12 @@ impl Renderer {
         })
     }
 
-    /// The triangles of every shown, opaque, triangle part of the world in
-    /// world space that `keep` admits, with their albedo (the part colour
-    /// times its texture's mean) and emission.
-    fn probe_triangles(&self, keep: impl Fn(&Triangle) -> bool) -> Vec<Triangle> {
+    /// Every shown, opaque, triangle part of the world that `keep` admits,
+    /// with its albedo (the part colour times its texture's mean) and
+    /// emission.
+    fn probe_sources(&self, keep: impl Fn(&Source) -> bool) -> Vec<Source> {
         let parts = &self.tables.parts;
-        let mut triangles = Vec::new();
+        let mut sources = Vec::new();
         for (id, part) in parts.meta.iter().enumerate() {
             let Some(part) = part else { continue };
             let state = &parts.state[id];
@@ -1169,7 +1263,6 @@ impl Renderer {
             }
             let row = crate::tables::PART_ROW_FLOATS * id;
             let gpu = &parts.gpu[row..row + crate::tables::PART_ROW_FLOATS];
-            let model = Mat4::from_cols_slice(&gpu[..16]);
             let color = Vec3::new(gpu[28], gpu[29], gpu[30]);
             let emission = Vec3::new(gpu[32], gpu[33], gpu[34]);
             let (albedo, emission) = match &part.material {
@@ -1186,35 +1279,23 @@ impl Renderer {
                     (color * Vec3::from(mean), emission)
                 }
             };
-            let cpu = &mesh.cpu;
             let first = part.first_index as usize;
-            let end = (first + part.index_count as usize).min(cpu.indices.len());
-            for corner in cpu.indices[first..end].as_chunks::<3>().0 {
-                let [a, b, c] =
-                    [0, 1, 2].map(|k| model.transform_point3(cpu.positions[corner[k] as usize]));
-                // Mirrored parts wind the other way.
-                let (b, c) = if state.mirrored { (c, b) } else { (b, c) };
-                let e1 = b - a;
-                let e2 = c - a;
-                let normal = e1.cross(e2);
-                if normal.length_squared() <= 0.0 {
-                    continue;
-                }
-                let triangle = Triangle {
-                    v0: a,
-                    e1,
-                    e2,
-                    normal: normal.normalize(),
-                    albedo: albedo.min(Vec3::ONE),
-                    emission,
-                    two_sided: state.class.double_sided,
-                };
-                if keep(&triangle) {
-                    triangles.push(triangle);
-                }
+            let source = Source {
+                cpu: mesh.cpu.clone(),
+                first,
+                end: (first + part.index_count as usize).min(mesh.cpu.indices.len()),
+                model: Mat4::from_cols_slice(&gpu[..16]),
+                mirrored: state.mirrored,
+                albedo: albedo.min(Vec3::ONE),
+                emission,
+                two_sided: state.class.double_sided,
+                bounds: state.world_bounds,
+            };
+            if keep(&source) {
+                sources.push(source);
             }
         }
-        triangles
+        sources
     }
 
     /// Whether a part's world bounds are a change to the requested volume.
