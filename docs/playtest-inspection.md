@@ -269,7 +269,8 @@ Handles are the ones `engine.scene.objects` lists. `engine.inspect.overlay`
 reads what is shown and the product's sets (items, revision, shown);
 `engine.inspect.overlay show|hide` with `sets`, `sets in VIEW` (every set,
 in that view only), `set NAME`, `debug-layer`, `camera`, `motion`, `joints H`,
-`bounds H` or `ik H` changes one thing. `hide set NAME` also keeps that set
+`bounds H`, `ik H` or `collision` ([collision](#collision)) changes one
+thing. `hide set NAME` also keeps that set
 out of `sets` and every `sets in VIEW` (the answer's `hidden`) until it is
 shown by name or with `show sets`. A bare `show`
 shows every set and the Debug layer; a bare `hide` hides everything. What is
@@ -282,6 +283,45 @@ one view: an inspection view's id, or `player` for the primary views.
 Captures leave overlays out unless they ask
 ([captures](presentation-capture.md#captures)).
 `fixtures/csharp-skeleton-poses` publishes a set with an item in each space.
+
+### Collision
+
+`engine.inspect.overlay show collision [RADIUS]` draws the Spatial sessions'
+retained collision as wires within `RADIUS` metres (12 by default) along each
+axis of the observer, or of the primary camera without one; `show collision
+at X Y Z [RADIUS]` reads around a fixed point. `hide collision` or a bare
+`hide` stops it. The wires are read again after every product call and
+inspection command while they show, so they follow a step and the observer,
+and stay as they are while time is held; nothing is read while they are
+hidden. They are depth-tested in the world pass, a centimetre off the faces
+and boxes they outline so the drawn surface in the same place does not hide
+them.
+
+| Colour | Collider |
+| --- | --- |
+| orange | voxel chunks: their collision cuboids and reconstructed surface triangles |
+| cyan | static meshes: a spatial content artifact's collision, or a product's `ApplyCollisionResidency`/`ReplaceCollision` instance |
+| magenta | the product obstacle boxes the session's last character step collided with |
+| yellow | dynamics bodies, as posed now |
+| green | the character capsule after the session's last character step |
+| violet | active triggers' geometry from their last reconcile |
+
+A triangle steeper than the session's character slope limit (walls and
+ceilings too) draws at 40% of its colour. Characters, obstacles, triggers and
+bodies draw first, then voxel chunks and static meshes nearest the point,
+until 65,536 lines; what the cap leaves out is counted, not dropped silently.
+Product entity colliders passed only to one query are not retained, so they
+do not draw.
+
+`engine.inspect.collision [RADIUS | X Y Z RADIUS]` lists the colliders the
+wires draw (around the wires' place by default): each one's `kind` (`voxel`,
+`static-mesh`, `obstacle`, `trigger`, `body`, `character`), its session and
+source (`content` path and `instance`, with `base` false for a placement;
+product `instance` and `asset`; `entity`; dynamics `world` and `body`; voxel
+`chunk`), its whole bounds, the `lines` it drew and the parts `omitted` by
+the cap. `fixtures/csharp-collision-inspection` has one collider of each kind,
+including a content platform drawn a metre above its collision and a product
+ramp that is never drawn.
 
 ## Inspection views
 

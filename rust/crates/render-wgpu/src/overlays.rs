@@ -65,7 +65,7 @@ struct LineVertex {
 }
 
 /// What inspection shows; nothing by default.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct OverlayShown {
     /// Every product set, present and future.
     pub all_sets: bool,
@@ -93,6 +93,26 @@ pub struct OverlayShown {
     /// The primary frame's motion target in place of its picture
     /// (`motion.rs`): the primary views draw their motion while it shows.
     pub motion: bool,
+    /// The retained collision scene's wires ([`Renderer::set_collision_lines`]).
+    pub collision: Option<CollisionShown>,
+}
+
+/// Where collision wires are read: within `radius` metres along each axis
+/// of `at`, or of the observer or else the primary camera with none. The
+/// Engine reads the collision and gives the renderer its lines; the
+/// renderer draws them.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CollisionShown {
+    pub at: Option<[f64; 3]>,
+    pub radius: f64,
+}
+
+/// One world-space line the Engine gives inspection to draw.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OverlayLine {
+    pub from: [f32; 3],
+    pub to: [f32; 3],
+    pub color: [f32; 4],
 }
 
 /// The view key of the primary views, for [`OverlayShown::only_in`].
@@ -109,6 +129,7 @@ impl OverlayShown {
             || !self.ik.is_empty()
             || !self.sets_in.is_empty()
             || self.motion
+            || self.collision.is_some()
     }
 
     fn shows_set(&self, name: &str) -> bool {
@@ -305,6 +326,9 @@ pub(crate) struct Overlays {
     /// landmark readouts place viewmodel and camera-space points by, so
     /// they read what was drawn without sampling camera motion again.
     drawn_camera: Option<CameraPose>,
+    /// The collision wires, depth-tested in the world pass while
+    /// [`OverlayShown::collision`] shows them.
+    collision: Vec<LineVertex>,
 }
 
 /// Where one overlay label is, in its pass's coordinates.
@@ -335,6 +359,7 @@ impl Overlays {
             pipelines: Vec::new(),
             labels: Vec::new(),
             drawn_camera: None,
+            collision: Vec::new(),
         }
     }
 
@@ -676,6 +701,20 @@ impl Renderer {
         self.overlays.drawn_revisions(views)
     }
 
+    /// Replaces the collision wires; they draw while
+    /// [`OverlayShown::collision`] shows them.
+    pub fn set_collision_lines(&mut self, lines: &[OverlayLine]) {
+        self.overlays.collision.clear();
+        self.overlays
+            .collision
+            .extend(lines.iter().flat_map(|line| {
+                [line.from, line.to].map(|position| LineVertex {
+                    position,
+                    color: line.color,
+                })
+            }));
+    }
+
     /// Shows or hides what inspection draws. The Debug layer's parts follow.
     pub fn set_overlay_shown(&mut self, shown: OverlayShown) {
         let debug_changed = shown.debug_layer != self.overlays.shown.debug_layer;
@@ -795,6 +834,9 @@ impl Renderer {
         }
         for &handle in &shown.ik {
             self.draw_ik(RenderHandle::new(handle), &mut buckets);
+        }
+        if shown.collision.is_some() {
+            buckets[bucket(ViewLayer::World, false)].extend_from_slice(&self.overlays.collision);
         }
         if let (true, Some(camera)) = (shown.camera, camera) {
             let matrices = camera::camera_matrices(camera.pose, &camera.projection, camera.aspect);

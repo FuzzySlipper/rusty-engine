@@ -408,6 +408,14 @@ impl TriggerVolumeSystem {
             .collect()
     }
 
+    /// Each active trigger's geometry from the last reconcile or restore.
+    pub fn active_geometry(&self) -> impl Iterator<Item = &TriggerCollider> + '_ {
+        self.geometry
+            .iter()
+            .filter(|(trigger, _)| !self.inactive_triggers.contains(trigger))
+            .map(|(_, geometry)| geometry)
+    }
+
     pub fn current_overlaps(
         &self,
         trigger: EntityId,

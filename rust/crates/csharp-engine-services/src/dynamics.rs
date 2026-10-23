@@ -101,6 +101,70 @@ fn solver_error(code: &'static str) -> impl Fn(DynamicsError) -> CsharpEngineSer
 }
 
 impl RuntimeDynamicsBridge {
+    /// Every enabled body of every live world meeting `region`, as it is
+    /// posed now ([`crate::collision_inspection`]).
+    pub(crate) fn inspect_bodies(
+        &self,
+        region: crate::collision_inspection::Region,
+        wires: &mut crate::collision_inspection::Wires,
+    ) {
+        use crate::collision_inspection::{turned_bounds, CollisionLineKind, CollisionSource};
+        for (&world_id, slot) in &self.worlds {
+            let WorldSlot::Active(world) = slot else {
+                continue;
+            };
+            for (&body, component) in &world.bodies {
+                let Some(pose) = world.solver.body(DynamicsBodyId(body)) else {
+                    continue;
+                };
+                if !component.enabled {
+                    continue;
+                }
+                let (rotation, at) = (pose.rotation, pose.translation);
+                let half = match component.shape {
+                    RigidBodyShape::Sphere { radius } => [f64::from(radius); 3],
+                    RigidBodyShape::Cuboid { half_extents } => {
+                        [half_extents.x, half_extents.y, half_extents.z].map(f64::from)
+                    }
+                    RigidBodyShape::CapsuleY {
+                        half_height,
+                        radius,
+                    } => {
+                        let radius = f64::from(radius);
+                        [radius, f64::from(half_height) + radius, radius]
+                    }
+                };
+                let bounds = turned_bounds(rotation, half, at);
+                if !region.meets(bounds.0, bounds.1) {
+                    continue;
+                }
+                wires.primitive(
+                    None,
+                    CollisionSource::Body {
+                        world: world_id,
+                        body,
+                    },
+                    bounds,
+                    CollisionLineKind::Body,
+                    |pen| match component.shape {
+                        RigidBodyShape::Sphere { radius } => {
+                            pen.capsule(0.0, f64::from(radius), rotation, at)
+                        }
+                        RigidBodyShape::Cuboid { .. } => {
+                            pen.oriented_box([0.0; 3], rotation, half, at)
+                        }
+                        RigidBodyShape::CapsuleY {
+                            half_height,
+                            radius,
+                        } => pen.capsule(f64::from(half_height), f64::from(radius), rotation, at),
+                    },
+                );
+            }
+        }
+    }
+}
+
+impl RuntimeDynamicsBridge {
     fn tether_endpoint(
         &self,
         world: u64,

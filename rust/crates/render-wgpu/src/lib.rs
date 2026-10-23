@@ -135,8 +135,8 @@ pub use inspection::InspectionView;
 pub use light_clusters::LightClusterReadout;
 pub use motion::MotionFrame;
 pub use overlays::{
-    LandmarkDrawn, LandmarkMeasure, LandmarkSetReadout, OverlaySetReadout, OverlayShown,
-    PLAYER_VIEW,
+    CollisionShown, LandmarkDrawn, LandmarkMeasure, LandmarkSetReadout, OverlayLine,
+    OverlaySetReadout, OverlayShown, PLAYER_VIEW,
 };
 pub use particles::EntityPositions;
 pub use probes::IndirectLightReadout;

@@ -1,4 +1,5 @@
 mod artifact_binary;
+mod collision_inspection;
 mod collision_navigation;
 mod contacts;
 mod inspection;
@@ -153,6 +154,8 @@ struct ContentNavigationCells {
 /// shared, unchanged, by the base artifact and every placement of those
 /// bytes; other bytes, such as a reloaded file's, have another digest.
 struct AdmittedSpatialContent {
+    /// The content path it was first admitted from, for inspection.
+    path: String,
     collision: Option<StaticMeshColliderAsset>,
     navigation: ContentNavigationCells,
 }
@@ -465,6 +468,8 @@ pub(crate) struct SpatialSession {
     last_character_receipt: Option<CharacterControllerReceipt>,
     last_character_config: Option<NativeCharacterControllerConfig>,
     last_character_mesh_entities: BTreeMap<u64, u64>,
+    /// The product obstacle boxes the last character step collided with.
+    last_character_obstacles: Vec<CharacterObstacle>,
     triggers: TriggerVolumeSystem,
 }
 
@@ -1225,6 +1230,7 @@ impl RuntimeSpatialBridge {
                 last_character_receipt: None,
                 last_character_config: None,
                 last_character_mesh_entities: BTreeMap::new(),
+                last_character_obstacles: Vec::new(),
                 triggers: TriggerVolumeSystem::default(),
             },
         );
@@ -1595,6 +1601,7 @@ impl RuntimeSpatialBridge {
             })
             .transpose()?;
         let admitted = Arc::new(AdmittedSpatialContent {
+            path: content.path.clone(),
             collision,
             navigation,
         });
@@ -3003,6 +3010,7 @@ impl RuntimeSpatialBridge {
         session.last_character_receipt = Some(receipt.clone());
         session.last_character_config = Some(request.config);
         session.last_character_mesh_entities = mesh_entities;
+        session.last_character_obstacles = obstacles;
         let query_stats = receipt.collision_query_stats;
         let mut native_receipt =
             native_character_receipt(&receipt, &session.last_character_mesh_entities);

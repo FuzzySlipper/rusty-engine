@@ -36,6 +36,7 @@
 
 mod contacts;
 mod dynamics;
+mod inspection;
 mod joint;
 mod model_surface;
 mod ragdoll;
@@ -46,6 +47,7 @@ mod water;
 pub use contacts::{
     ContactPose, ContactQueryError, ContactShape, ContactSource, ContactTarget, ShapeContact,
 };
+pub use inspection::{InspectedCollider, InspectedColliderSource, CUBOID_LINES, TRIANGLE_LINES};
 pub use water::{shape_volume, submerged, DynamicsWaterPlane, DynamicsWaterReadout, Submerged};
 
 pub use tether::{

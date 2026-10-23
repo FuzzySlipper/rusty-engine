@@ -10,7 +10,7 @@ mod common;
 use common::*;
 use render_host_contracts::{RendererCameraInterpolation, RendererCameraMotion};
 use render_model::*;
-use render_wgpu::{LandmarkDrawn, OverlayShown, RendererOptions};
+use render_wgpu::{CollisionShown, LandmarkDrawn, OverlayLine, OverlayShown, RendererOptions};
 
 const MARKED: u64 = 77;
 const MAGENTA: [f32; 4] = [1.0, 0.0, 1.0, 1.0];
@@ -177,6 +177,40 @@ fn overlays_and_the_debug_layer_draw_only_while_inspection_shows_them() {
         set: OverlaySetDescriptor::default(),
     }]);
     assert!(harness.renderer.overlay_sets().is_empty());
+}
+
+/// Collision wires (#10288) are lines the Engine gives the renderer: they
+/// draw, depth-tested in the world pass, only while inspection shows them.
+#[test]
+fn collision_lines_draw_only_while_inspection_shows_collision() {
+    let mut harness = harness();
+    let (_, plain) = harness.composition(0.0);
+    harness.renderer.set_collision_lines(&[OverlayLine {
+        // Above the floor: the wire is depth-tested.
+        from: [-1.5, 0.3, -3.0],
+        to: [1.5, 0.3, -3.0],
+        color: MAGENTA,
+    }]);
+    let (stats, hidden) = harness.composition(0.0);
+    assert_eq!(stats.overlay_lines, 0);
+    assert_eq!(hidden, plain);
+
+    let collision = shown(|shown| {
+        shown.collision = Some(CollisionShown {
+            at: None,
+            radius: 8.0,
+        })
+    });
+    assert!(collision.any());
+    harness.renderer.set_overlay_shown(collision);
+    let (stats, drawn) = harness.composition(0.0);
+    assert_eq!(stats.overlay_lines, 1);
+    assert!(find(&drawn, MAGENTA).1 > 60, "the wire draws");
+
+    harness.renderer.set_overlay_shown(OverlayShown::default());
+    let (stats, again) = harness.composition(0.0);
+    assert_eq!(stats.overlay_lines, 0);
+    assert_eq!(again, plain);
 }
 
 #[test]

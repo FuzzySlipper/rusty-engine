@@ -4,6 +4,7 @@ mod appearance;
 mod audio;
 mod authored_content;
 mod camera_view;
+mod collision_inspection;
 mod composition;
 mod content;
 mod content_source;
@@ -54,6 +55,10 @@ pub use renderer_settings::renderer_settings_request;
 pub use tween::TweenTime;
 pub use video::VideoRealizationFact;
 
+pub use collision_inspection::{
+    CollisionInspection, CollisionLine, CollisionLineKind, CollisionSource, InspectedCollision,
+    COLLISION_INSPECTION_LINES,
+};
 pub use content::ProductContentBundles;
 pub use content_source::{
     parse_edits as parse_content_source_edits, ContentSource, ContentSourceRoots, JsonEdit,

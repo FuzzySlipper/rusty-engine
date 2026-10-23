@@ -578,7 +578,11 @@ impl ProductHostDebugCatalog {
             ),
             (
                 "engine.inspect.overlay",
-                "Read or change what inspection draws: engine.inspect.overlay [list] | show|hide [sets [in VIEW] | set NAME [in VIEW] | debug-layer | camera | motion | joints HANDLE | bounds HANDLE | ik HANDLE]; bare show shows every set and the Debug layer, bare hide hides everything; motion shows the primary frame's motion vectors in place of its picture; in VIEW shows a set only in that inspection view (or player)",
+                "Read or change what inspection draws: engine.inspect.overlay [list] | show|hide [sets [in VIEW] | set NAME [in VIEW] | debug-layer | camera | motion | joints HANDLE | bounds HANDLE | ik HANDLE | collision [RADIUS] | collision at X Y Z [RADIUS]]; bare show shows every set and the Debug layer, bare hide hides everything; motion shows the primary frame's motion vectors in place of its picture; in VIEW shows a set only in that inspection view (or player); collision draws the Spatial sessions' colliders within RADIUS metres (12 by default) of the observer, the primary camera or X Y Z",
+            ),
+            (
+                "engine.inspect.collision",
+                "List the colliders collision wires draw: engine.inspect.collision [RADIUS | X Y Z RADIUS], around the wires' place or the camera by default; each collider's kind, source (content artifact, static-mesh instance, entity, dynamics body, voxel chunk), bounds, lines drawn and parts left out",
             ),
         ] {
             if self.commands.iter().any(|command| command.name == name) {

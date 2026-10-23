@@ -321,6 +321,16 @@ impl SceneDriver {
         self.wake.notify_all();
     }
 
+    /// Replaces the collision wires inspection draws while
+    /// [`crate::OverlayShown::collision`] shows them; the next frame follows.
+    pub fn set_collision_lines(&self, lines: &[crate::OverlayLine]) {
+        let mut scene = self.scene();
+        scene.renderer.set_collision_lines(lines);
+        scene.changed |= scene.overlay_shown.collision.is_some();
+        drop(scene);
+        self.wake.notify_all();
+    }
+
     /// Replaces the inspection views; the next frame draws them.
     pub fn set_inspection_views(&self, views: Vec<crate::InspectionView>) {
         let mut scene = self.scene();
@@ -461,6 +471,11 @@ impl SceneDriver {
     pub fn overlays(&self) -> (crate::OverlayShown, Vec<crate::OverlaySetReadout>) {
         let scene = self.scene();
         (scene.overlay_shown.clone(), scene.renderer.overlay_sets())
+    }
+
+    /// Where collision wires are read while they show.
+    pub fn collision_shown(&self) -> Option<crate::CollisionShown> {
+        self.scene().overlay_shown.collision
     }
 
     /// Where the product UI's anchored views draw (see

@@ -544,6 +544,27 @@ impl EngineServiceSet {
     }
 
     /// The images and fonts the product granted its UI, which the product host serves.
+    /// The retained collision within `radius` along each axis of `center`,
+    /// in the cameras' local frame, as at most `lines` wire lines and the
+    /// colliders they draw ([`crate::collision_inspection`]).
+    pub fn inspect_collision(
+        &self,
+        center: [f64; 3],
+        radius: f64,
+        lines: usize,
+    ) -> crate::CollisionInspection {
+        let region = crate::collision_inspection::Region::around(center, radius);
+        let mut inspection = crate::CollisionInspection::default();
+        let mut wires = crate::collision_inspection::Wires {
+            inspection: &mut inspection,
+            budget: lines,
+        };
+        self.spatial.inspect_primitives(region, &mut wires);
+        self.dynamics.inspect_bodies(region, &mut wires);
+        self.spatial.inspect_projections(region, &mut wires);
+        inspection
+    }
+
     pub fn ui_files(&self) -> Arc<crate::UiFiles> {
         self.ui.files()
     }

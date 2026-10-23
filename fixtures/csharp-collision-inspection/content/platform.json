@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "staticMeshArtifactId": "mesh/platform",
+  "bounds": {
+    "min": [
+      0,
+      0,
+      0
+    ],
+    "max": [
+      2,
+      1,
+      2
+    ]
+  },
+  "collision": {
+    "positions": [
+      [
+        0,
+        1,
+        0
+      ],
+      [
+        0,
+        1,
+        2
+      ],
+      [
+        2,
+        1,
+        0
+      ],
+      [
+        2,
+        1,
+        2
+      ],
+      [
+        2,
+        0,
+        0
+      ],
+      [
+        2,
+        0,
+        2
+      ]
+    ],
+    "triangles": [
+      [
+        0,
+        1,
+        2
+      ],
+      [
+        2,
+        1,
+        3
+      ],
+      [
+        2,
+        3,
+        4
+      ],
+      [
+        4,
+        3,
+        5
+      ]
+    ]
+  },
+  "navigation": {
+    "id": "navigation/platform",
+    "config": {
+      "schemaVersion": 1,
+      "cellSize": 1,
+      "levelQuantum": 0.25,
+      "maximumSlopeDegrees": 45,
+      "requiredHeadroom": 1,
+      "supportProbeDrop": 0.1
+    },
+    "cells": [
+      {
+        "column": 0,
+        "row": 0,
+        "level": 4,
+        "supportHeight": 1,
+        "walkable": true
+      },
+      {
+        "column": 0,
+        "row": 1,
+        "level": 4,
+        "supportHeight": 1,
+        "walkable": true
+      },
+      {
+        "column": 1,
+        "row": 0,
+        "level": 4,
+        "supportHeight": 1,
+        "walkable": true
+      },
+      {
+        "column": 1,
+        "row": 1,
+        "level": 4,
+        "supportHeight": 1,
+        "walkable": true
+      }
+    ]
+  }
+}

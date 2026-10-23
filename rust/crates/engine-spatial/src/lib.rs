@@ -92,10 +92,10 @@ pub use svc_collision::{
     CharacterCapsule, CharacterCapsuleCastHit, CharacterCapsuleOverlap,
     CharacterCollisionQueryError, CharacterCollisionQueryStats, CharacterCollisionSource,
     CharacterObstacle, ContactPose, ContactQueryError, ContactShape, ContactSource, ContactTarget,
-    ModelSurface, ModelSurfaceHit, ModelSurfacePoint, PlacedModelSurface, ShapeContact,
-    StaticMeshAssetId, StaticMeshColliderAsset, StaticMeshColliderInstance,
-    StaticMeshCollisionError, StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId,
-    StaticMeshTransform,
+    InspectedCollider, InspectedColliderSource, ModelSurface, ModelSurfaceHit, ModelSurfacePoint,
+    PlacedModelSurface, ShapeContact, StaticMeshAssetId, StaticMeshColliderAsset,
+    StaticMeshColliderInstance, StaticMeshCollisionError, StaticMeshCollisionReceipt,
+    StaticMeshHit, StaticMeshInstanceId, StaticMeshTransform, CUBOID_LINES, TRIANGLE_LINES,
 };
 pub use svc_mesh::distance_field;
 pub use svc_mesh::{
@@ -1078,6 +1078,22 @@ impl VoxelCollisionScene {
                 }),
                 CollisionHit::StaticMesh(hit) => SpatialCollisionHit::StaticMesh(hit),
             })
+    }
+
+    /// The voxel chunk and static-mesh colliders meeting the box
+    /// `min..max`, nearest its centre first, with their parts there, up to
+    /// `budget` wire lines in all ([`svc_collision::CollisionProjection::inspect_region`]).
+    pub fn inspect_collision_region(
+        &self,
+        min: [f64; 3],
+        max: [f64; 3],
+        budget: usize,
+    ) -> Vec<InspectedCollider> {
+        self.projection.inspect_region(
+            WorldPos::new(min[0], min[1], min[2]),
+            WorldPos::new(max[0], max[1], max[2]),
+            budget,
+        )
     }
 
     pub fn static_mesh_collision_revision(&self) -> u64 {

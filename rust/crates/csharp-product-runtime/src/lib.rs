@@ -2059,6 +2059,7 @@ impl CsharpProductRuntime {
                         if let Some(frames) = &self.frame_output {
                             frames.realize(&self.services, &outputs, self.frame_simulation());
                         }
+                        self.refresh_collision_wires();
                         outputs.retain(|output| !is_empty_frame(output));
                         finished.outputs = outputs;
                     }
@@ -2905,6 +2906,92 @@ impl CsharpProductRuntime {
     }
 }
 
+impl CsharpProductRuntime {
+    fn execute_debug_command(
+        &mut self,
+        command: &str,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostDebugResult>, ProductHostRuntimeError> {
+        if command.split_whitespace().next().is_some_and(|name| {
+            matches!(
+                name,
+                "engine.time" | "engine.time.mode" | "engine.time.advance"
+            )
+        }) {
+            return self.execute_time_debug(command);
+        }
+        if let Some(result) = self.execute_content_source_debug(command) {
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
+        if let Some(result) = self.execute_scene_debug(command) {
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
+        if let Some(result) = self.execute_inspect_debug(command) {
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
+        // Inspection targets are the product's: its `inspect.targets` lists
+        // them, and a framing on one reads that list first.
+        let words: Vec<&str> = command.split_whitespace().collect();
+        if matches!(
+            words.as_slice(),
+            ["engine.inspect.target"] | ["engine.inspect.target", "list"]
+        ) {
+            return self.execute_product_debug(inspect_view::TARGETS_COMMAND);
+        }
+        if let ["engine.inspect.view", "frame", _, _, "target", _]
+        | ["engine.inspect.view", "compare", _, _, "target", ..] = words.as_slice()
+        {
+            let listed = self.execute_product_debug(inspect_view::TARGETS_COMMAND)?;
+            let (listing, outputs) = listed.into_parts();
+            let targets = listing.succeeded().then_some(listing.message());
+            let result = self
+                .execute_inspect_view(command, targets)
+                .expect("an engine.inspect.view command");
+            return Ok(ProductHostRuntimeReceipt::new(result, outputs));
+        }
+        if let Some(result) = self.execute_inspect_view(command, None) {
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
+        if let Some(frames) = self
+            .frame_output
+            .as_ref()
+            .filter(|_| frame_output::is_inspection_command(command))
+        {
+            let result = match frames.execute_inspection(command) {
+                Ok(answer) => ProductHostDebugResult::new(true, pretty_json(&answer)?),
+                Err(detail) => ProductHostDebugResult::new(false, detail),
+            };
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
+        if let Some(arguments) = command
+            .trim()
+            .strip_prefix(GALLERY_COMMAND)
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let result = match self.start_gallery(arguments) {
+                Ok(started) => ProductHostDebugResult::new(true, started),
+                Err(detail) => ProductHostDebugResult::new(false, detail),
+            };
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
+        if let Some(path) = command
+            .trim()
+            .strip_prefix(SCENE_SNAPSHOT_COMMAND)
+            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
+        {
+            let result = match self.write_scene_snapshot(path.trim()) {
+                Ok(report) => ProductHostDebugResult::new(true, pretty_json(&report)?),
+                Err(detail) => ProductHostDebugResult::new(false, detail),
+            };
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
+        if let Some(action) = renderer_debug_command(command) {
+            let result = self.execute_renderer_debug(action)?;
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
+        self.execute_product_debug(command)
+    }
+}
+
 impl ProductHostRuntime for CsharpProductRuntime {
     /// Re-admits the staged bundle inventory so the next `OpenBundle` sees
     /// edited, added and deleted bundle files. Open bundles keep their
@@ -3261,88 +3348,15 @@ impl ProductHostRuntime for CsharpProductRuntime {
         self.receipt(ProductHostOperationKind::ReplaceControl, outputs)
     }
 
+    /// Runs a debug command; collision wires then follow whatever it moved
+    /// (an observer, the scene).
     fn execute_debug(
         &mut self,
         command: &str,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostDebugResult>, ProductHostRuntimeError> {
-        if command.split_whitespace().next().is_some_and(|name| {
-            matches!(
-                name,
-                "engine.time" | "engine.time.mode" | "engine.time.advance"
-            )
-        }) {
-            return self.execute_time_debug(command);
-        }
-        if let Some(result) = self.execute_content_source_debug(command) {
-            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
-        }
-        if let Some(result) = self.execute_scene_debug(command) {
-            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
-        }
-        if let Some(result) = self.execute_inspect_debug(command) {
-            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
-        }
-        // Inspection targets are the product's: its `inspect.targets` lists
-        // them, and a framing on one reads that list first.
-        let words: Vec<&str> = command.split_whitespace().collect();
-        if matches!(
-            words.as_slice(),
-            ["engine.inspect.target"] | ["engine.inspect.target", "list"]
-        ) {
-            return self.execute_product_debug(inspect_view::TARGETS_COMMAND);
-        }
-        if let ["engine.inspect.view", "frame", _, _, "target", _]
-        | ["engine.inspect.view", "compare", _, _, "target", ..] = words.as_slice()
-        {
-            let listed = self.execute_product_debug(inspect_view::TARGETS_COMMAND)?;
-            let (listing, outputs) = listed.into_parts();
-            let targets = listing.succeeded().then_some(listing.message());
-            let result = self
-                .execute_inspect_view(command, targets)
-                .expect("an engine.inspect.view command");
-            return Ok(ProductHostRuntimeReceipt::new(result, outputs));
-        }
-        if let Some(result) = self.execute_inspect_view(command, None) {
-            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
-        }
-        if let Some(frames) = self
-            .frame_output
-            .as_ref()
-            .filter(|_| frame_output::is_inspection_command(command))
-        {
-            let result = match frames.execute_inspection(command) {
-                Ok(answer) => ProductHostDebugResult::new(true, pretty_json(&answer)?),
-                Err(detail) => ProductHostDebugResult::new(false, detail),
-            };
-            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
-        }
-        if let Some(arguments) = command
-            .trim()
-            .strip_prefix(GALLERY_COMMAND)
-            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
-        {
-            let result = match self.start_gallery(arguments) {
-                Ok(started) => ProductHostDebugResult::new(true, started),
-                Err(detail) => ProductHostDebugResult::new(false, detail),
-            };
-            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
-        }
-        if let Some(path) = command
-            .trim()
-            .strip_prefix(SCENE_SNAPSHOT_COMMAND)
-            .filter(|rest| rest.is_empty() || rest.starts_with(char::is_whitespace))
-        {
-            let result = match self.write_scene_snapshot(path.trim()) {
-                Ok(report) => ProductHostDebugResult::new(true, pretty_json(&report)?),
-                Err(detail) => ProductHostDebugResult::new(false, detail),
-            };
-            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
-        }
-        if let Some(action) = renderer_debug_command(command) {
-            let result = self.execute_renderer_debug(action)?;
-            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
-        }
-        self.execute_product_debug(command)
+        let result = self.execute_debug_command(command);
+        self.refresh_collision_wires();
+        result
     }
 
     fn describe_debug(

@@ -187,6 +187,11 @@ impl StaticMeshCollisionProjection {
         })
     }
 
+    /// One instance's baked world-space shape.
+    pub(crate) fn instance_shape(&self, id: StaticMeshInstanceId) -> &SharedShape {
+        &self.instances[&id].shape
+    }
+
     /// Return the retained authored identity and pose for one collision
     /// instance. The pose is a copied fact for a caller-owned bridge; the
     /// projection remains the collision authority and retains its own shape.
