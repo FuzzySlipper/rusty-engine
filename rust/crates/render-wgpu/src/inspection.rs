@@ -138,7 +138,7 @@ impl Renderer {
             jitter: None,
             motion: None,
         });
-        let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth);
+        let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth, None);
         let viewmodel = match primary_world {
             Some(primary_world) => {
                 let view_matrix = world_camera.view * primary_world;
@@ -164,7 +164,7 @@ impl Renderer {
             }
             None => ViewStats::default(),
         };
-        let top_labels = self.draw_labels(target, area, &labels, LabelPass::OnTop);
+        let top_labels = self.draw_labels(target, area, &labels, LabelPass::OnTop, None);
         let mut stats = world + viewmodel;
         stats.draws += depth_labels + top_labels;
         stats

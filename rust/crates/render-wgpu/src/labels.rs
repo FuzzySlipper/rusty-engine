@@ -1263,14 +1263,18 @@ impl Renderer {
         self.labels.place(&camera.view_proj, camera.eye, area)
     }
 
-    /// Draw one pass's labels over the target, within the view's area.
-    /// Returns the draws.
+    /// Draw one pass's labels over the target, within the view's area,
+    /// marking the reactive mask in `motion` beside it: the primary frame's
+    /// motion target while a temporal stage reads the picture the labels
+    /// draw into (`Temporal::single_sample_target`), and None for any other
+    /// draw. Returns the draws.
     pub(crate) fn draw_labels(
         &mut self,
         target: &TargetView<'_>,
         area: PixelRect,
         placed: &[Placed],
         pass: LabelPass,
+        motion: Option<&wgpu::TextureView>,
     ) -> u32 {
         let drawn: Vec<&Placed> = placed
             .iter()
@@ -1315,10 +1319,8 @@ impl Renderer {
             gpu_labels.instances = instance_buffer(device, drawn.len().next_power_of_two());
         }
         self.gpu.queue.write_buffer(&gpu_labels.instances, 0, bytes);
-        // The image's format and the scene depth's samples, and the motion
-        // target while a temporal stage draws one into the picture: labels
-        // mark its reactive mask (`motion.rs`).
-        let motion = self.temporal.single_sample_target();
+        // The image's format and the scene depth's samples, and whether the
+        // labels mark a motion target's reactive mask (`motion.rs`).
         let key = ColorTarget {
             motion: motion.is_some(),
             ..ColorTarget::new(target.format, target.samples)

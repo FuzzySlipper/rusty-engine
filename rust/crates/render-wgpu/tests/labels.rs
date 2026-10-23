@@ -982,3 +982,74 @@ fn labels_and_overlay_lines_leave_no_trail_under_a_temporal_stage() {
         "the line stays readable: {line_kept} of {line}"
     );
 }
+
+/// An inspection capture draws its labels into its own target, apart from
+/// the primary frame: they never mark the primary frame's motion target,
+/// whose size need not match (R10271-1).
+#[test]
+fn an_inspection_capture_leaves_the_primary_motion_target_alone() {
+    let mut harness = harness();
+    let issues = apply(
+        &mut harness,
+        vec![create(
+            91,
+            label(
+                [0.0, 0.9, -3.5],
+                text("Capture"),
+                BillboardLayer::AlwaysOnTop,
+            ),
+        )],
+    );
+    assert!(issues.is_empty(), "{issues:?}");
+    harness.apply(vec![RenderDiff::SetRendererSettings {
+        settings: RendererSettingsDescriptor {
+            antialiasing: Antialiasing::Temporal,
+            ..RendererSettingsDescriptor::DEFAULT
+        },
+    }]);
+    // The motion view draws the same single-sample motion target where a
+    // software adapter refuses the temporal stage.
+    harness
+        .renderer
+        .set_overlay_shown(render_wgpu::OverlayShown {
+            motion: true,
+            ..Default::default()
+        });
+    harness.target = OffscreenTarget::new(
+        &harness.gpu,
+        LABEL_WIDTH,
+        LABEL_HEIGHT,
+        harness.renderer.samples(),
+    );
+    harness.renderer.render_offscreen(&eye(), &harness.target);
+    let camera = eye();
+    harness
+        .renderer
+        .set_inspection_views(vec![render_wgpu::InspectionView {
+            id: "capture".to_owned(),
+            pose: camera.pose,
+            projection: camera.projection,
+            anchor: None,
+            focus: [0.0, 0.9, -3.5],
+        }]);
+    for (width, height) in [
+        (LABEL_WIDTH / 2, LABEL_HEIGHT / 2),
+        (LABEL_WIDTH, LABEL_HEIGHT),
+    ] {
+        let target = OffscreenTarget::new(&harness.gpu, width, height, 1);
+        harness
+            .renderer
+            .render_inspection_view(&target, "capture", 0.0)
+            .expect("the capture draws");
+        let pixels = target.read_rgba(&harness.gpu);
+        assert!(
+            pixels
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|pixel| pixel[..3] == [255, 255, 255]
+                    || pixel[0] > 200 && pixel[1] > 200 && pixel[2] > 200),
+            "the label shows in the {width}x{height} capture"
+        );
+    }
+}
