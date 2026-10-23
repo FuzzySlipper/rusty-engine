@@ -62,6 +62,9 @@ impl Renderer {
                 ))
             })
             .collect();
+        // They draw into the output frame's picture: under a temporal stage
+        // their labels mark its reactive mask as the primary views' do.
+        let label_motion = self.temporal.single_sample_target().cloned();
         for (view, area) in views {
             if area.width == 0 || area.height == 0 {
                 continue;
@@ -73,6 +76,7 @@ impl Renderer {
                     &view,
                     primary_camera,
                     PassStart::Viewport,
+                    label_motion.as_ref(),
                 );
             self.drawn_inspection.push(view);
         }
@@ -98,8 +102,16 @@ impl Renderer {
         let target_view = target.view();
         let area = PixelRect::whole(target_view.width, target_view.height);
         let mut stats = FrameStats::default();
-        stats +=
-            self.draw_inspection_view(&target_view, area, &view, primary_camera, PassStart::Target);
+        // A capture's target feeds no temporal stage: its labels mark no
+        // motion target, whatever frame the output last drew.
+        stats += self.draw_inspection_view(
+            &target_view,
+            area,
+            &view,
+            primary_camera,
+            PassStart::Target,
+            None,
+        );
         stats.parts_uploaded = uploaded;
         Some(stats)
     }
@@ -111,6 +123,7 @@ impl Renderer {
         view: &InspectionView,
         primary_camera: Option<OverlayCamera>,
         start: PassStart,
+        label_motion: Option<&wgpu::TextureView>,
     ) -> ViewStats {
         let clear = self.environment_clear();
         let world_camera = camera::camera_matrices(
@@ -138,7 +151,7 @@ impl Renderer {
             jitter: None,
             motion: None,
         });
-        let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth, None);
+        let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth, label_motion);
         let viewmodel = match primary_world {
             Some(primary_world) => {
                 let view_matrix = world_camera.view * primary_world;
@@ -164,7 +177,7 @@ impl Renderer {
             }
             None => ViewStats::default(),
         };
-        let top_labels = self.draw_labels(target, area, &labels, LabelPass::OnTop, None);
+        let top_labels = self.draw_labels(target, area, &labels, LabelPass::OnTop, label_motion);
         let mut stats = world + viewmodel;
         stats.draws += depth_labels + top_labels;
         stats

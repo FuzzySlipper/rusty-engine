@@ -45,15 +45,17 @@
 //!   resolution into the picture, over what lies under them: they keep its
 //!   motion and raise the mask by their opacity to `REACTIVE_OVERLAY`
 //!   (`MotionWrite::Reactive`), labels in their own pass while the target
-//!   is single-sample, as a temporal stage draws it. TAAU takes at least
-//!   the mask's share of the current frame, and above `REACTIVE_JITTERED`
-//!   takes the picture where it stands as the current frame
-//!   (`upscale.wgsl`), so labels neither smear nor shimmer; DLSS takes the
+//!   is single-sample, as a temporal stage draws it. Labels mark it where
+//!   they draw into the output frame's picture (its primary views and
+//!   anchored inspection views); a capture's labels mark nothing. TAAU
+//!   takes at least the mask's share of the current frame, and above
+//!   `REACTIVE_JITTERED` takes the picture where it stands as the current
+//!   frame (`upscale.wgsl`), so labels neither smear nor shimmer; DLSS takes the
 //!   mask as its bias toward the current colour, and its output takes the
 //!   picture where it stands above `REACTIVE_JITTERED` too (`dlss.rs`
-//!   `Output`). Whatever covers
-//!   a pixel later writes its own: the viewmodel over a depth-layer label,
-//!   an on-top label over the viewmodel.
+//!   `Output`). Whatever covers a pixel later writes its own: the
+//!   viewmodel over a depth-layer label, an on-top label over the
+//!   viewmodel.
 //! - **No motion of their own:** a viewport's clear writes
 //!   `rusty::types::NO_MOTION` before anything draws, which a temporal
 //!   stage takes as still and leans on the current frame for. Sprites and

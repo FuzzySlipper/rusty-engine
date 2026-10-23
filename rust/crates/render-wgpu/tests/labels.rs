@@ -1118,3 +1118,106 @@ fn an_inspection_capture_leaves_the_primary_motion_target_alone() {
         );
     }
 }
+
+/// An anchored inspection view draws into the output frame's picture, so
+/// under a temporal stage its labels mark the reactive mask as the primary
+/// views' do: with the primary camera turning under the view's rect, they
+/// draw as the current frame alone would (R10271-2).
+#[test]
+fn an_anchored_inspection_views_labels_hold_under_a_temporal_stage() {
+    if harness().gpu.is_software() {
+        return;
+    }
+    let mut harness = harness();
+    let magenta = |layer, position, words| BillboardDescriptor {
+        background: [1.0, 0.0, 1.0, 1.0],
+        ..label(position, text(words), layer)
+    };
+    let issues = apply(
+        &mut harness,
+        vec![
+            create(
+                1,
+                magenta(BillboardLayer::DepthTested, [-1.3, 0.7, -4.0], "Tested"),
+            ),
+            create(
+                2,
+                magenta(BillboardLayer::AlwaysOnTop, [0.0, 1.3, -5.2], "On top"),
+            ),
+        ],
+    );
+    assert!(issues.is_empty(), "{issues:?}");
+    // The view, still, over the upper right quarter of the output.
+    let inset = eye();
+    harness
+        .renderer
+        .set_inspection_views(vec![render_wgpu::InspectionView {
+            id: "inset".to_owned(),
+            pose: inset.pose,
+            projection: inset.projection,
+            anchor: Some("inset".to_owned()),
+            focus: [0.0, 0.9, -4.0],
+        }]);
+    harness.renderer.set_viewport_anchors(
+        [("inset".to_owned(), viewport(0.5, 0.5, 0.5, 0.5))]
+            .into_iter()
+            .collect(),
+    );
+    let settings = |harness: &mut Harness, antialiasing| {
+        harness.apply(vec![RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                antialiasing,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        }]);
+        let samples = harness.renderer.samples();
+        harness.target = OffscreenTarget::new(&harness.gpu, LABEL_WIDTH, LABEL_HEIGHT, samples);
+    };
+    // The primary camera turns 2° a frame over the room behind it.
+    let draw = |harness: &mut Harness, frame: u32| {
+        let eye = camera("eye", [0.0, 0.6, -2.0], 2.0 * f64::from(frame), -6.0);
+        let whole = viewport(0.0, 0.0, 1.0, 1.0);
+        harness.renderer.set_view_composition(
+            &composition(vec![eye], vec![primary_view("main", "eye", whole, 0)]),
+            0.0,
+        );
+        harness.composition(0.0).1
+    };
+    settings(&mut harness, Antialiasing::Temporal);
+    let mut temporal = Vec::new();
+    for frame in 0..16 {
+        temporal = draw(&mut harness, frame);
+    }
+    settings(&mut harness, Antialiasing::Off);
+    let current = draw(&mut harness, 15);
+    let inset_pixel = |index: usize| {
+        let (x, y) = (index as u32 % LABEL_WIDTH, index as u32 / LABEL_WIDTH);
+        x >= LABEL_WIDTH / 2 && y < LABEL_HEIGHT / 2
+    };
+    let is_magenta = |rgba: &[u8], index: usize| {
+        let pixel = &rgba[index * 4..index * 4 + 3];
+        pixel[0] > 200 && pixel[1] < 60 && pixel[2] > 200
+    };
+    let labelled: Vec<usize> = (0..(LABEL_WIDTH * LABEL_HEIGHT) as usize)
+        .filter(|&i| inset_pixel(i) && is_magenta(&current, i))
+        .collect();
+    assert!(
+        labelled.len() > 150,
+        "the labels draw in the view: {}",
+        labelled.len()
+    );
+    let error = labelled
+        .iter()
+        .map(|&i| {
+            (0..3)
+                .map(|c| f64::from(current[i * 4 + c].abs_diff(temporal[i * 4 + c])))
+                .sum::<f64>()
+                / 3.0
+        })
+        .sum::<f64>()
+        / labelled.len() as f64;
+    assert!(
+        error < 6.0,
+        "the view's labels hold their colour: {error:.1} levels off"
+    );
+}
