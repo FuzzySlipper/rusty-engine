@@ -727,6 +727,7 @@ static void ExerciseAppearanceEntityComposition()
 sealed class SpatialServiceFake : ISpatialService
 {
     public CollisionReplaceReceipt ApplyCollisionResidency(CollisionResidencyRequest request) => throw new NotSupportedException();
+    public CollisionResidencyReadout ReadCollisionResidency(CollisionResidencyReadRequest arg0) => throw new NotSupportedException();
     public int ReconcileCalls { get; private set; }
     public int RestoreCalls { get; private set; }
     public ulong[] RestoreActiveTriggers { get; private set; } = [];
