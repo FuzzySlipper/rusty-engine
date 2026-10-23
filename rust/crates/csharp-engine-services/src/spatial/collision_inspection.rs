@@ -144,8 +144,10 @@ mod tests {
 
     /// A session with a 4x4 voxel floor under y = 1, a wall triangle and a
     /// floor triangle of one static mesh, and a character stepped beside an
-    /// obstacle box.
-    fn session() -> (RuntimeSpatialBridge, NativeSpatialSessionHandle) {
+    /// obstacle box: entity 5, or `meshes` instead when they name it.
+    fn session_with(
+        meshes: &[NativeCharacterMeshInstance],
+    ) -> (RuntimeSpatialBridge, NativeSpatialSessionHandle) {
         let mut bridge = RuntimeSpatialBridge::new();
         let session = bridge
             .create(NativeSpatialSessionConfig {
@@ -218,8 +220,8 @@ mod tests {
                 support: NativeCharacterSupport::default(),
                 obstacles: obstacles.as_ptr(),
                 obstacles_len: obstacles.len(),
-                mesh_instances: std::ptr::null(),
-                mesh_instances_len: 0,
+                mesh_instances: meshes.as_ptr(),
+                mesh_instances_len: meshes.len(),
                 config,
                 command: NativeCharacterControllerCommand {
                     movement: Default::default(),
@@ -236,6 +238,10 @@ mod tests {
             })
             .unwrap();
         (bridge, session)
+    }
+
+    fn session() -> (RuntimeSpatialBridge, NativeSpatialSessionHandle) {
+        session_with(&[])
     }
 
     fn inspect(
@@ -319,5 +325,31 @@ mod tests {
         assert_eq!(cut.colliders[1].omitted, 1);
         assert!(cut.colliders[2].omitted > 0 && cut.colliders[3].omitted == 2);
         assert_eq!(cut.omitted(), 1 + cut.colliders[2].omitted + 2);
+    }
+
+    /// An entity a mesh instance represents collides as the mesh, not its
+    /// box: the box is not drawn or listed.
+    #[test]
+    fn an_obstacle_a_mesh_instance_represents_is_left_out() {
+        let (bridge, _) = session_with(&[NativeCharacterMeshInstance {
+            instance: 9,
+            entity: 5,
+            linear_velocity: NativeVec3::default(),
+            angular_velocity: NativeVec3::default(),
+        }]);
+        let inspection = inspect(&bridge, [1.0, 1.0, 1.0], 4.0, usize::MAX);
+        assert!(!inspection
+            .colliders
+            .iter()
+            .any(|collider| matches!(collider.source, CollisionSource::Obstacle { .. })));
+        assert!(inspection.colliders.iter().any(|collider| collider.source
+            == CollisionSource::StaticMesh {
+                instance: 9,
+                asset: 7
+            }));
+        assert!(!inspection
+            .lines
+            .iter()
+            .any(|line| line.kind == CollisionLineKind::Obstacle));
     }
 }

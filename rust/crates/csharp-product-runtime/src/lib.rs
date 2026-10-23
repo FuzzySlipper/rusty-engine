@@ -2956,7 +2956,8 @@ impl CsharpProductRuntime {
             .as_ref()
             .filter(|_| frame_output::is_inspection_command(command))
         {
-            let result = match frames.execute_inspection(command) {
+            let result = match frames.execute_inspection(command, || self.refresh_collision_wires())
+            {
                 Ok(answer) => ProductHostDebugResult::new(true, pretty_json(&answer)?),
                 Err(detail) => ProductHostDebugResult::new(false, detail),
             };

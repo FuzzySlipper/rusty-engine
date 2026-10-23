@@ -487,6 +487,22 @@ impl<'a> CharacterStepColliders<'a> {
             mesh_instances: &[],
         }
     }
+
+    /// The obstacle boxes a step of `controlled` collides with: these and
+    /// the world's, without the controlled entity's own and without any
+    /// entity a mesh instance represents.
+    pub fn effective_obstacles(
+        &self,
+        entities: &dyn CharacterStepWorld,
+        controlled: EntityId,
+    ) -> Vec<CharacterObstacle> {
+        character_obstacles_with_mesh_instances(
+            entities,
+            controlled,
+            self.obstacles,
+            self.mesh_instances,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1646,12 +1662,7 @@ impl CharacterControllerService {
             });
         }
         let environment = StepEnvironment {
-            obstacles: &character_obstacles_with_mesh_instances(
-                entities,
-                subject.entity,
-                colliders.obstacles,
-                colliders.mesh_instances,
-            ),
+            obstacles: &colliders.effective_obstacles(entities, subject.entity),
             mesh_instances: colliders.mesh_instances,
             world_hash: collision_world_hash(scene, colliders.mesh_instances),
         };

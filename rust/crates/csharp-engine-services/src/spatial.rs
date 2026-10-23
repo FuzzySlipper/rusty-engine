@@ -468,7 +468,8 @@ pub(crate) struct SpatialSession {
     last_character_receipt: Option<CharacterControllerReceipt>,
     last_character_config: Option<NativeCharacterControllerConfig>,
     last_character_mesh_entities: BTreeMap<u64, u64>,
-    /// The product obstacle boxes the last character step collided with.
+    /// The product obstacle boxes the last character step collided with:
+    /// none an admitted mesh instance represents.
     last_character_obstacles: Vec<CharacterObstacle>,
     triggers: TriggerVolumeSystem,
 }
@@ -3010,7 +3011,8 @@ impl RuntimeSpatialBridge {
         session.last_character_receipt = Some(receipt.clone());
         session.last_character_config = Some(request.config);
         session.last_character_mesh_entities = mesh_entities;
-        session.last_character_obstacles = obstacles;
+        session.last_character_obstacles = CharacterStepColliders::new(&obstacles, &mesh_instances)
+            .effective_obstacles(&world, CALL_LOCAL_CHARACTER);
         let query_stats = receipt.collision_query_stats;
         let mut native_receipt =
             native_character_receipt(&receipt, &session.last_character_mesh_entities);

@@ -423,18 +423,22 @@ impl FrameOutput {
 
     /// Runs an inspection command (see [`is_inspection_command`]). A change
     /// draws a frame and waits for it; the answer carries that frame.
+    /// `follow_observer` runs once a new observer is set and before that
+    /// frame draws, so what follows the observer (collision wires) is in it.
     pub(crate) fn execute_inspection(
         &self,
         command: &str,
+        follow_observer: impl FnOnce(),
     ) -> Result<ProductHostRendererInspection, String> {
         let Some((streamer, _)) = &self.stream else {
-            return self.execute_window_inspection(command);
+            return self.execute_window_inspection(command, follow_observer);
         };
         let words: Vec<&str> = command.split_whitespace().collect();
         let drawn = match words.as_slice() {
             ["engine.renderer.camera"] | ["engine.renderer.drawing"] => None,
             ["engine.renderer.camera", "none"] => {
                 self.driver.set_observer(None);
+                follow_observer();
                 self.draw_now()?
             }
             ["engine.renderer.camera", x, y, z, yaw, pitch] => {
@@ -450,6 +454,7 @@ impl FrameOutput {
                     yaw_degrees: number(yaw)?,
                     pitch_degrees: number(pitch)?,
                 }));
+                follow_observer();
                 self.draw_now()?
             }
             ["engine.renderer.drawing", mode @ ("continuous" | "on-demand")] => {
@@ -495,6 +500,7 @@ impl FrameOutput {
     fn execute_window_inspection(
         &self,
         command: &str,
+        follow_observer: impl FnOnce(),
     ) -> Result<ProductHostRendererInspection, String> {
         let words: Vec<&str> = command.split_whitespace().collect();
         let pose = |values: &[&str]| -> Result<RendererCameraPose, String> {
@@ -513,9 +519,13 @@ impl FrameOutput {
         };
         match words.as_slice() {
             ["engine.renderer.camera"] => {}
-            ["engine.renderer.camera", "none"] => self.driver.set_observer(None),
+            ["engine.renderer.camera", "none"] => {
+                self.driver.set_observer(None);
+                follow_observer();
+            }
             ["engine.renderer.camera", values @ ..] if values.len() == 5 => {
                 self.driver.set_observer(Some(pose(values)?));
+                follow_observer();
             }
             _ => {
                 return Err("the desktop window draws every frame; it takes only \
@@ -1203,6 +1213,45 @@ mod tests {
         RendererCompositionCamera, RendererCompositionView, RendererViewComposition,
         RendererViewTarget, RendererViewport,
     };
+
+    /// Collision wires follow the observer (#10288): what follows it runs
+    /// once the new observer is set, and the command's frame draws after
+    /// it, even held and drawing on demand, where nothing else would draw.
+    #[test]
+    fn an_observer_command_draws_its_frame_after_what_follows_the_observer() {
+        let frames = FrameOutput::start(RenderOutput::Stream, RendererOptions::default(), None)
+            .expect("a headless frame output starts");
+        frames.driver().set_simulation(true, 1);
+        frames
+            .execute_inspection("engine.renderer.drawing on-demand", || {})
+            .unwrap();
+        let streamer = &frames.stream.as_ref().expect("a stream").0;
+        let seen = std::cell::Cell::new(None);
+        let answer = frames
+            .execute_inspection("engine.renderer.camera 40 2 0 -90 0", || {
+                seen.set(Some((
+                    frames
+                        .driver()
+                        .view_state()
+                        .observer
+                        .map(|pose| pose.position),
+                    streamer.inspection().last_drawn.map(|frame| frame.sequence),
+                )))
+            })
+            .unwrap();
+        let (observer, drawn_before) = seen.get().expect("the observer was followed");
+        assert_eq!(
+            observer,
+            Some([40.0, 2.0, 0.0]),
+            "the new observer is set first"
+        );
+        let drawn = answer.frame.expect("the command draws a frame").sequence;
+        assert!(
+            drawn_before.is_none_or(|before| drawn > before),
+            "the frame draws after: {drawn_before:?} then {drawn}"
+        );
+        assert!(answer.held && answer.observer);
+    }
 
     #[test]
     fn a_drawn_ghost_plate_reports_its_sector_and_bank_profile() {
