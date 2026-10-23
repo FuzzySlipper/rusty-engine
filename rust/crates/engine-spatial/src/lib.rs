@@ -294,6 +294,10 @@ pub struct VoxelCollisionScene {
     /// residency change rebuilds them (`DeferredChunkRebuild`); `None` when
     /// they show the voxels as they are.
     projected_revision: Option<VoxelSourceRevision>,
+    /// Process-unique identity of the last change that rebuilt meshes or
+    /// colliders while the caller waited: a deferred rebuild prepared before
+    /// one is stale.
+    synchronous_state: u64,
     /// Order-independent sum of every solid voxel's hash, maintained by each
     /// local change.
     authority_hash: u64,
@@ -636,6 +640,7 @@ impl VoxelCollisionScene {
             mesh_state: next_mesh_state(),
             source_revision: revisions.source,
             projected_revision: None,
+            synchronous_state: next_mesh_state(),
             authority_hash,
             world_origin: revisions.world_origin,
             rebase_revision: revisions.rebase,
@@ -754,6 +759,7 @@ impl VoxelCollisionScene {
             dirty_chunks.push(coordinate.to_array());
         }
         let previous_mesh_state = std::mem::replace(&mut self.mesh_state, next_mesh_state());
+        self.synchronous_state = self.mesh_state;
         self.mesh_update = VoxelChunkMeshUpdate {
             source_revision: self.source_revision,
             previous_mesh_state: Some(previous_mesh_state),
@@ -1189,6 +1195,7 @@ impl VoxelCollisionScene {
         let colliders = self.prepare_colliders(&coordinates);
         self.install_prepared(coordinates.into_iter().zip(colliders));
         self.projection.touch();
+        self.synchronous_state = next_mesh_state();
     }
 
     /// What rebuilding chunks reads, lent from this scene.
@@ -1480,6 +1487,7 @@ impl VoxelCollisionScene {
     ) {
         self.source_revision = self.source_revision.next();
         self.publish_rebuild(dirty, rebuild);
+        self.synchronous_state = self.mesh_state;
     }
 
     /// Install rebuilt meshes and colliders for voxels already written at

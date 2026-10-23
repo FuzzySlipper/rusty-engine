@@ -484,6 +484,36 @@ fn a_deferred_residency_change_installs_what_a_synchronous_one_builds() {
             assert_same_scene(&deferred, &sync, &context);
         }
 
+        // Changes made one after another before any installs: each installs
+        // in order, the scene showing the voxels up to it, and the last
+        // leaves the scene as a synchronous one does.
+        let queued = [
+            vec![admit(4, 0, 0, 300), evict(3, 1, 0)],
+            vec![admit(4, 0, 1, 301)],
+            vec![evict(4, 0, 0), admit(3, 1, 0, 302)],
+        ];
+        let mut rebuilds = Vec::new();
+        for operations in &queued {
+            VoxelChunkResidencyService::apply(&mut sync, operations).unwrap();
+            let (receipt, rebuild) =
+                VoxelChunkResidencyService::apply_deferred(&mut deferred, operations).unwrap();
+            rebuilds.push((receipt.accepted_revision, rebuild));
+        }
+        let last = rebuilds.len() - 1;
+        for (index, (accepted, rebuild)) in rebuilds.into_iter().enumerate() {
+            rebuild.install(&mut deferred).unwrap();
+            let shown = deferred.projection_revisions().collision();
+            assert_eq!(
+                shown,
+                if index == last {
+                    deferred.source_revision()
+                } else {
+                    accepted
+                }
+            );
+        }
+        assert_same_scene(&deferred, &sync, &format!("{mode:?} queued"));
+
         // A change made before the install: the install rebuilds its chunks
         // from the voxels as they are now.
         let operations = [admit(1, 0, 2, 200)];

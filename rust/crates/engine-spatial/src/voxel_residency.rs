@@ -278,7 +278,9 @@ impl VoxelChunkResidencyService {
     /// rebuilding the changed chunks' meshes and colliders on a worker
     /// thread. Until the returned rebuild is installed, the scene's meshes
     /// and colliders stay as they were and its projection revisions name
-    /// the revision before; install it before the scene changes again.
+    /// the revision before. Further deferred changes may follow before it
+    /// installs; install the rebuilds in the order they were made, and
+    /// before any other change to the scene.
     pub fn apply_deferred(
         scene: &mut VoxelCollisionScene,
         operations: &[VoxelChunkResidencyOperation],
@@ -299,6 +301,7 @@ impl VoxelChunkResidencyService {
         let build = move || snapshot.source().rebuild(&changed, &dirty, &field_dirty);
         let rebuild = DeferredChunkRebuild {
             accepted: scene.source_revision,
+            synchronous_state: scene.synchronous_state,
             changed: written.changed.clone(),
             dirty: written.dirty.clone(),
             field_dirty: written.field_dirty.clone(),
@@ -325,6 +328,8 @@ impl VoxelChunkResidencyService {
 pub struct DeferredChunkRebuild {
     /// The source revision the change wrote.
     accepted: VoxelSourceRevision,
+    /// The scene's last synchronous rebuild when the change was made.
+    synchronous_state: u64,
     changed: BTreeSet<ChunkCoord>,
     dirty: BTreeSet<ChunkCoord>,
     field_dirty: BTreeSet<ChunkCoord>,
@@ -346,27 +351,42 @@ impl DeferredChunkRebuild {
             .map(|coordinate| VoxelChunkIdentity::from(*coordinate))
     }
 
+    /// Whether the meshes and colliders are built, so [`Self::install`]
+    /// will not wait.
+    pub fn is_built(&self) -> bool {
+        match &self.built {
+            Built::Building(worker) => worker.is_finished(),
+            Built::Ready(_) => true,
+        }
+    }
+
     /// Wait for the meshes and colliders and install them, so the scene's
-    /// projections show its voxels again. A scene changed since the change
-    /// rebuilds those chunks here instead. A chunk whose mesh fails to
-    /// build puts the change's chunks back as they were, as
-    /// [`VoxelChunkResidencyService::apply`] does, and returns the error.
+    /// projections show its voxels up to this change. Deferred changes made
+    /// after it install after it, and theirs replace its chunks they share.
+    /// A scene a synchronous change rebuilt since rebuilds this change's
+    /// chunks here instead. A chunk whose mesh fails to build puts the
+    /// change's chunks back as they were, as
+    /// [`VoxelChunkResidencyService::apply`] does, unless a later change
+    /// wrote over them, and returns the error.
     pub fn install(self, scene: &mut VoxelCollisionScene) -> Result<(), CollisionSceneError> {
         let built = match self.built {
             Built::Building(worker) => worker.join().expect("chunk meshing does not panic"),
             Built::Ready(built) => built,
         };
-        scene.projected_revision = None;
-        if scene.source_revision != self.accepted {
-            let rebuild = scene.rebuild_chunks(&self.changed, &self.dirty, &self.field_dirty)?;
-            scene.publish_rebuild(&self.dirty, rebuild);
-            return Ok(());
-        }
+        // Changes after this one are still building.
+        scene.projected_revision =
+            (scene.source_revision != self.accepted).then_some(self.accepted);
+        let built = if scene.synchronous_state == self.synchronous_state {
+            built
+        } else {
+            scene.rebuild_chunks(&self.changed, &self.dirty, &self.field_dirty)
+        };
         match built {
             Ok(rebuild) => {
                 scene.publish_rebuild(&self.dirty, rebuild);
                 Ok(())
             }
+            Err(error) if scene.source_revision != self.accepted => Err(error),
             Err(error) => {
                 for (coordinate, before) in self.previous {
                     scene.account_chunk(coordinate, None, false);

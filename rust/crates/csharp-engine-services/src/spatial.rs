@@ -472,19 +472,39 @@ pub(crate) struct SpatialSession {
     /// none an admitted mesh instance represents.
     last_character_obstacles: Vec<CharacterObstacle>,
     triggers: TriggerVolumeSystem,
-    /// A deferred residency change's meshes and colliders, building on a
-    /// worker thread until [`Self::settle`] installs them.
-    pub(crate) deferred: Option<engine_spatial::DeferredChunkRebuild>,
+    /// Deferred residency changes' meshes and colliders, oldest first,
+    /// building on worker threads until they install.
+    pub(crate) deferred: std::collections::VecDeque<engine_spatial::DeferredChunkRebuild>,
 }
 
 impl SpatialSession {
-    /// Install the deferred residency change's meshes and colliders,
-    /// waiting for them if they are still building. Callers republish the
-    /// scene, as [`RuntimeSpatialBridge::edit_scene`] does.
+    /// Install every deferred residency change's meshes and colliders,
+    /// waiting for those still building: a change that is not deferred
+    /// follows. Callers republish the scene, as
+    /// [`RuntimeSpatialBridge::edit_scene`] does.
     pub(crate) fn settle(&mut self) {
-        let Some(rebuild) = self.deferred.take() else {
-            return;
-        };
+        while let Some(rebuild) = self.deferred.pop_front() {
+            self.install(rebuild);
+        }
+    }
+
+    /// Install the deferred residency changes built so far, oldest first,
+    /// stopping at the first still building. Returns whether any installed.
+    pub(crate) fn install_built(&mut self) -> bool {
+        let mut installed = false;
+        while self
+            .deferred
+            .front()
+            .is_some_and(|rebuild| rebuild.is_built())
+        {
+            let rebuild = self.deferred.pop_front().expect("checked above");
+            self.install(rebuild);
+            installed = true;
+        }
+        installed
+    }
+
+    fn install(&mut self, rebuild: engine_spatial::DeferredChunkRebuild) {
         let changed: Vec<_> = rebuild.changed_chunks().collect();
         let installed = self.change_collision(|scene| {
             let installed = rebuild.install(scene);
@@ -497,9 +517,10 @@ impl SpatialSession {
             (installed, regions)
         });
         if let Err(error) = installed {
-            // The change's chunks are back as they were, as a synchronous
-            // change that fails leaves them; nobody is waiting on a receipt.
-            eprintln!("CSHARP_VOXEL_RESIDENCY_DEFERRED: {error}; the change was undone");
+            // Nobody is waiting on a receipt: the change's chunks are back as
+            // they were, as a synchronous change that fails leaves them, or
+            // keep their meshes until a later change rebuilds them.
+            eprintln!("CSHARP_VOXEL_RESIDENCY_DEFERRED: {error}");
         }
     }
 
@@ -1136,19 +1157,26 @@ impl RuntimeSpatialBridge {
         self.update_attribution = RuntimeUpdateAttribution::default();
     }
 
-    /// Install every session's deferred residency rebuild: a call begins,
-    /// and its collision and meshes show the voxels of the calls before. In
-    /// an update, the wait, when there is one, counts as residency time.
+    /// Install the deferred residency rebuilds built so far, as a call
+    /// begins; one still building waits for a later call and holds back
+    /// those after it. In an update, installing counts as residency time.
     pub(crate) fn settle_deferred_residency(&mut self) {
         let handles: Vec<_> = self
             .sessions
             .iter()
-            .filter(|(_, session)| session.deferred.is_some())
+            .filter(|(_, session)| {
+                session
+                    .deferred
+                    .front()
+                    .is_some_and(|rebuild| rebuild.is_built())
+            })
             .map(|(value, _)| NativeSpatialSessionHandle { value: *value })
             .collect();
         for handle in handles {
             let started = std::time::Instant::now();
-            let _ = self.edit_scene(handle, |_| ());
+            let _ = self.edit_scene_deferring(handle, |session| {
+                session.install_built();
+            });
             let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
             self.update_attribution.voxel_residency_duration_us = self
                 .update_attribution
@@ -1157,13 +1185,13 @@ impl RuntimeSpatialBridge {
         }
     }
 
-    /// Install a session's deferred residency rebuild before a change that
+    /// Install a session's deferred residency rebuilds before a change that
     /// does not pass through [`Self::edit_scene`].
     pub(crate) fn settle_deferred(
         &mut self,
         handle: NativeSpatialSessionHandle,
     ) -> Result<(), CsharpEngineServicesError> {
-        if self.session_mut(handle)?.deferred.is_some() {
+        if !self.session_mut(handle)?.deferred.is_empty() {
             self.edit_scene(handle, |_| ())?;
         }
         Ok(())
@@ -1230,10 +1258,25 @@ impl RuntimeSpatialBridge {
         self.collision_source.publish_scene(handle, scene);
     }
 
-    /// Change a session's scene in place. Callers mutate it through
-    /// `Arc::make_mut`; with the shared copy detached the session holds the
-    /// only reference, so nothing is cloned. The scene is republished after.
+    /// Change a session's scene in place, after its deferred residency
+    /// rebuilds install (waiting for any still building). Callers mutate it
+    /// through `Arc::make_mut`; with the shared copy detached the session
+    /// holds the only reference, so nothing is cloned. The scene is
+    /// republished after.
     pub(crate) fn edit_scene<R>(
+        &mut self,
+        handle: NativeSpatialSessionHandle,
+        edit: impl FnOnce(&mut SpatialSession) -> R,
+    ) -> Result<R, CsharpEngineServicesError> {
+        self.edit_scene_deferring(handle, |session| {
+            session.settle();
+            edit(session)
+        })
+    }
+
+    /// [`Self::edit_scene`] for a deferred residency change or its install,
+    /// which leave the rebuilds still building to build.
+    pub(crate) fn edit_scene_deferring<R>(
         &mut self,
         handle: NativeSpatialSessionHandle,
         edit: impl FnOnce(&mut SpatialSession) -> R,
@@ -1241,7 +1284,6 @@ impl RuntimeSpatialBridge {
         self.session_mut(handle)?;
         self.collision_source.detach(handle);
         let session = self.session_mut(handle)?;
-        session.settle();
         let result = edit(session);
         let scene = Arc::clone(&session.scene);
         self.publish_scene(handle, scene);
@@ -1295,7 +1337,7 @@ impl RuntimeSpatialBridge {
                 last_character_mesh_entities: BTreeMap::new(),
                 last_character_obstacles: Vec::new(),
                 triggers: TriggerVolumeSystem::default(),
-                deferred: None,
+                deferred: Default::default(),
             },
         );
         self.publish_scene(NativeSpatialSessionHandle { value }, scene);

@@ -18,8 +18,8 @@ place. They then rebuild only:
 Each chunk's mesh and collider are built together, on worker threads when a
 change rebuilds several chunks, and installed in order before the call
 returns. A deferred residency transaction builds them on a worker thread
-instead, from copies of the chunks they read, and installs them when the next
-call begins ([residency and edits](world-streaming-contract.md#residency-and-edits-apply-in-place)). A cube chunk's collider is its collidable voxels merged into boxes.
+instead, from copies of the chunks they read, and installs them at the start
+of a call once built ([residency and edits](world-streaming-contract.md#residency-and-edits-apply-in-place)). A cube chunk's collider is its collidable voxels merged into boxes.
 Unchanged chunks keep their meshes and collider shapes; a bound Dynamics world
 keeps those colliders too. Nothing copies, hashes or rebuilds the whole scene.
 The authority hash is an order-independent sum maintained per voxel.

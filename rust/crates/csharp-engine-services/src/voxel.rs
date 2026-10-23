@@ -506,7 +506,10 @@ impl RuntimeSpatialBridge {
         let chunk_size = self.session_mut(request.session)?.scene.chunk_size();
         let operations = translate_residency(request, chunk_size)?;
         if request.deferred {
-            return self.edit_scene(request.session, |session| {
+            return self.edit_scene_deferring(request.session, |session| {
+                // Earlier deferred changes still building build on; the
+                // rebuilds install in order.
+                session.install_built();
                 let applied = session.change_collision(|scene| {
                     // The colliders change when the rebuild installs.
                     match VoxelChunkResidencyService::apply_deferred(scene, &operations) {
@@ -519,7 +522,7 @@ impl RuntimeSpatialBridge {
                     }
                 });
                 let (receipt, rebuild) = applied?;
-                session.deferred = rebuild;
+                session.deferred.extend(rebuild);
                 Ok(receipt)
             })?;
         }
@@ -2356,8 +2359,8 @@ mod tests {
             .mesh_chunks()
             .map(|chunk| (chunk.chunk, chunk.content_hash))
             .collect();
-        let rays = (0..24)
-            .flat_map(|x| (0..16).map(move |z| [x as f64 + 0.5, 20.0, z as f64 + 0.5]))
+        let rays = (0..32)
+            .flat_map(|x| (0..24).map(move |z| [x as f64 + 0.5, 20.0, z as f64 + 0.5]))
             .map(|origin| {
                 scene
                     .raycast(origin, [0.0, -1.0, 0.0], 30.0)
@@ -2375,8 +2378,16 @@ mod tests {
     /// those it evicts.
     type StreamUpdate = (Vec<([i64; 3], u32)>, Vec<[i64; 3]>);
 
+    /// Begin calls until every deferred rebuild of `session` has installed.
+    fn settle_built(bridge: &mut RuntimeSpatialBridge, session: NativeSpatialSessionHandle) {
+        while !bridge.session_mut(session).unwrap().deferred.is_empty() {
+            bridge.settle_deferred_residency();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
     #[test]
-    fn deferred_residency_installs_at_the_next_update_as_a_synchronous_change_builds() {
+    fn deferred_residency_installs_once_built_as_a_synchronous_change_builds() {
         let (mut sync, mut deferred) = (RuntimeSpatialBridge::new(), RuntimeSpatialBridge::new());
         let (sync_session, session) = (create_session(&mut sync), create_session(&mut deferred));
         let block: Vec<_> = (0..2)
@@ -2392,29 +2403,43 @@ mod tests {
             residency(&mut sync, sync_session, admitted, evicted, false);
             let before = shown(&deferred, session);
             let receipt = residency(&mut deferred, session, admitted, evicted, true);
-            // Collision and meshes stay as they were until the next update;
-            // the receipt says which revision they show.
+            // Collision and meshes stay as they were within the call; the
+            // receipt says which revision they show.
             assert_eq!(receipt.collision_revision, receipt.revision_before);
             assert_eq!(receipt.mesh_revision, receipt.revision_before);
             let during = shown(&deferred, session);
             assert_eq!((&during.1, &during.2), (&before.1, &before.2));
-            deferred.settle_deferred_residency();
+            settle_built(&mut deferred, session);
             assert_eq!(shown(&deferred, session), shown(&sync, sync_session));
         }
+
+        // Updates whose rebuilds queue behind one another, none waited for:
+        // they install in order as they are built.
+        for (admitted, evicted) in [
+            (vec![([3, 0, 0], 30), ([3, 0, 1], 31)], vec![]),
+            (vec![([0, 0, 0], 32)], vec![[2, 0, 0]]),
+            (vec![([2, 0, 0], 33)], vec![[3, 0, 1]]),
+        ] {
+            residency(&mut sync, sync_session, &admitted, &evicted, false);
+            residency(&mut deferred, session, &admitted, &evicted, true);
+            deferred.settle_deferred_residency();
+        }
+        settle_built(&mut deferred, session);
+        assert_eq!(shown(&deferred, session), shown(&sync, sync_session));
 
         // Within one update: a chunk admitted, evicted and admitted again with
         // other rock while its rebuild is in flight, then edited.
         for (admitted, evicted) in [
-            (vec![([0, 0, 0], 20)], vec![]),
-            (vec![], vec![[0, 0, 0]]),
-            (vec![([0, 0, 0], 21)], vec![]),
+            (vec![([1, 0, 2], 20)], vec![]),
+            (vec![], vec![[1, 0, 2]]),
+            (vec![([1, 0, 2], 21)], vec![]),
         ] {
             residency(&mut sync, sync_session, &admitted, &evicted, false);
             residency(&mut deferred, session, &admitted, &evicted, true);
         }
         let edits = [NativeVoxelEdit {
             kind: NativeVoxelEditKind::Clear,
-            address: NativeVoxelAddress { x: 1, y: 7, z: 1 },
+            address: NativeVoxelAddress { x: 9, y: 7, z: 17 },
             material_slot: 0,
             state: 0,
         }];
@@ -2425,8 +2450,8 @@ mod tests {
                 edits_len: edits.len(),
             });
         }
-        // The edit installed what was building first.
-        assert!(deferred.session_mut(session).unwrap().deferred.is_none());
+        // The edit installed what was building first, waiting for it.
+        assert!(deferred.session_mut(session).unwrap().deferred.is_empty());
         assert_eq!(shown(&deferred, session), shown(&sync, sync_session));
         let scene = deferred.collision_source().scene(session).unwrap();
         assert_eq!(

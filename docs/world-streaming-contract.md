@@ -117,17 +117,19 @@ a receipt with zero changes, and an edit batch returns `NoChanges`.
 
 A residency transaction with `Deferred` set writes its voxels before it
 returns and rebuilds the changed chunks' meshes and colliders on an Engine
-worker thread. They install when the next Engine call into the product begins,
-normally the next update, which waits for them only if they are still
-building; any other change to that session installs them first. Until then
-`Voxel.Read` shows the new voxels while collision, picking and the scene
-presentation show the chunks as they were, and the receipt's and
-`Voxel.ReadScene`'s `CollisionRevision` and `MeshRevision` name the revision
-before the change. A stream that admits chunks ahead of the player defers them,
-so the update pays for writing voxels only; a chunk the player needs this
-update is admitted without `Deferred`. A deferred change whose mesh fails to
-build is undone when it installs, as a synchronous one is, and the host log
-names the error.
+worker thread. Nothing waits for them: they install at the start of the first
+Engine call into the product after they are built, usually the next update or
+the one after, in the order the changes were made, so one still building holds
+back those after it. A change to that session that is not deferred installs
+them first and waits for them. Until they install, `Voxel.Read` shows the new
+voxels while collision, picking and the scene presentation show the chunks as
+they were, and the receipt's and `Voxel.ReadScene`'s `CollisionRevision` and
+`MeshRevision` name the revision they show. A stream that admits chunks ahead
+of the player defers them and refreshes its presentation every update, so the
+update pays for writing voxels only; a chunk the player needs now is admitted
+without `Deferred`. A deferred change whose mesh fails to build is undone when
+it installs, as a synchronous one is, unless a later change wrote over it, and
+the host log names the error.
 
 The Engine keeps no undo history. The product owns undo: it applies inverse
 edits. It also owns which chunks stay resident. The costs are in

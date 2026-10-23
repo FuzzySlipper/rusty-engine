@@ -180,10 +180,11 @@ pub struct NativeVoxelResidencyTransaction {
     pub densities: *const f32,
     pub densities_len: usize,
     /// Write the voxels now and rebuild the changed chunks' meshes and
-    /// colliders on a worker thread. They install when the next Engine call
-    /// into the product begins (normally the next update), or before the
-    /// session changes again. Until then the receipt's and the scene's
-    /// collision and mesh revisions name the revision before.
+    /// colliders on a worker thread. They install, in the order they were
+    /// made, at the start of the first Engine call into the product after
+    /// they are built, or before a change to the session that is not
+    /// deferred, which waits for them. Until then the receipt's and the
+    /// scene's collision and mesh revisions name the revision before.
     pub deferred: bool,
 }
 

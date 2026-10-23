@@ -278,9 +278,10 @@ internal static class EngineTestHostChecks
     }
 
     // A deferred residency change writes its voxels at once and installs its
-    // meshes and colliders when the next call begins: a stream's chunks,
-    // one evicted and one admitted, evicted and admitted again within a call
-    // while its rebuild is in flight, end as a synchronous session's (#10327).
+    // meshes and colliders when a call begins after they are built: a
+    // stream's chunks, one evicted and one admitted, evicted and admitted
+    // again within a call while its rebuild is in flight, end as a
+    // synchronous session's (#10327).
     private static void DeferredResidency(EngineTestHost host)
     {
         const uint Edge = 8;
@@ -316,6 +317,22 @@ internal static class EngineTestHostChecks
             VoxelSceneReadout scene = engine.Voxel.ReadScene(new(session));
             return $"{scene.AuthorityHash}:{scene.ColliderChunkCount}:{hits}";
         }
+        // Calls begin until the deferred session's collision shows its voxels.
+        void Built()
+        {
+            for (int call = 0; ; call++)
+            {
+                bool built = false;
+                host.Call(engine =>
+                {
+                    VoxelSceneReadout scene = engine.Voxel.ReadScene(new(deferred!));
+                    built = scene.CollisionRevision == scene.SourceRevision && scene.MeshRevision == scene.SourceRevision;
+                });
+                if (built) return;
+                Require(call < 2000, "Deferred residency never installed.");
+                System.Threading.Thread.Sleep(1);
+            }
+        }
         (long, long, uint)[] block = [(0, 0, 1), (0, 1, 2), (1, 0, 3), (1, 1, 4)];
         host.Call(engine =>
         {
@@ -331,10 +348,9 @@ internal static class EngineTestHostChecks
                     ReadOnlyMemory<SpatialEntityCollider>.Empty, ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<SpatialEntityCollider>.Empty)).Present,
                 "A ray met rock whose collider was still building.");
         });
+        Built();
         host.Call(engine =>
         {
-            VoxelSceneReadout scene = engine.Voxel.ReadScene(new(deferred!));
-            Require(scene.CollisionRevision == scene.SourceRevision, $"The next call's collision lagged: {scene}.");
             Require(Shown(engine, deferred!) == Shown(engine, sync!), "Deferred admission differs from a synchronous one.");
             foreach (SpatialSession session in new[] { sync!, deferred! })
             {
@@ -344,6 +360,7 @@ internal static class EngineTestHostChecks
                 Apply(engine, session, defer, [(2, 0, 11), (2, 1, 12)], []);
             }
         });
+        Built();
         host.Call(engine =>
         {
             Require(Shown(engine, deferred!) == Shown(engine, sync!), "A chunk admitted again while it rebuilt differs.");
