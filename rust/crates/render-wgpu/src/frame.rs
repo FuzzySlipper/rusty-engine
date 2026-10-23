@@ -2524,6 +2524,7 @@ impl Renderer {
                     &view.camera,
                     self.options.volumetric_clouds,
                     self.presentation_time,
+                    self.reading,
                 )
             });
             if let Some(frame) = &reduced {
@@ -2549,8 +2550,10 @@ impl Renderer {
                 pass.set_bind_group(2, self.cloud_march.march_group(frame), &[]);
                 pass.draw(0..3, 0..1);
                 drop(pass);
-                self.cloud_march
-                    .keep(encoder, frame, &view.camera, self.presentation_time);
+                if !self.reading {
+                    self.cloud_march
+                        .keep(encoder, frame, &view.camera, self.presentation_time);
+                }
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu clouds"),
@@ -3094,7 +3097,10 @@ impl Renderer {
         if auto_exposure.is_none() {
             self.finish.post.reset_exposure();
         }
-        let adapting = auto_exposure.filter(|_| world_layer && !self.exposure_adapted);
+        // A reading takes the exposure the output adapted to, and moves it
+        // on no further.
+        let adapting =
+            auto_exposure.filter(|_| world_layer && !self.exposure_adapted && !self.reading);
         // Sun shafts stream from the sun's place in the view: its uv, how
         // far the rays reach and their strength.
         let shafts = self
@@ -3444,6 +3450,7 @@ impl Renderer {
                     camera: view.camera_id,
                     viewport: [area.x, area.y, area.width, area.height],
                     matrices: &view.camera,
+                    reading: self.reading,
                 },
                 self.options.volumetric_fog,
                 &self.tables.volumetric_fog,

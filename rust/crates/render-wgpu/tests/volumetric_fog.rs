@@ -347,6 +347,55 @@ fn look_from(harness: &mut Harness, position: [f64; 3]) -> Vec<u8> {
     harness.render(&camera(position, 0.0, -4.0)).1
 }
 
+/// A tool's capture between output frames, at the output's size (the fog
+/// keys its history by camera and viewport, so it finds the output's) or
+/// its own, keeps none of the output's histories: the output frames of a
+/// moving view through fog under auto exposure draw exactly as they do
+/// without captures.
+#[test]
+fn a_capture_leaves_the_outputs_fog_and_exposure_alone() {
+    let fog = vec![
+        medium(0.08),
+        RenderDiff::SetAutoExposure {
+            auto_exposure: Some(AutoExposureDescriptor {
+                speed: 1.5,
+                min_exposure: 0.25,
+                max_exposure: 4.0,
+            }),
+        },
+    ];
+    let mut alone = scene(VolumetricFogQuality::Low);
+    if refused_on_software(&mut alone, fog.clone()) {
+        return;
+    }
+    alone.apply(fog.clone());
+    let moments: Vec<_> = (0..5)
+        .map(|frame| {
+            (
+                1.0 + f64::from(frame) / 30.0,
+                camera(
+                    [0.1 * f64::from(frame), 1.7, 0.0],
+                    2.0 * f64::from(frame),
+                    -4.0,
+                ),
+            )
+        })
+        .collect();
+    let expected = output_frames_around_captures(&mut alone, &moments, None);
+    for size in [(WIDTH, HEIGHT), (200, 120)] {
+        let mut captured = scene(VolumetricFogQuality::Low);
+        captured.apply(fog.clone());
+        let frames = output_frames_around_captures(&mut captured, &moments, Some(size));
+        for (frame, (expected, drawn)) in expected.iter().zip(&frames).enumerate() {
+            assert!(
+                expected == drawn,
+                "capture {size:?}, frame {frame}: the output's fog or exposure moved {:.4} levels",
+                mean_difference(expected, drawn)
+            );
+        }
+    }
+}
+
 #[test]
 fn a_still_view_gathers_and_holds_and_a_cut_starts_afresh() {
     let mut harness = scene(VolumetricFogQuality::High);

@@ -13,7 +13,9 @@
 //! reprojected into the previous frame's grid, by the quality's weight;
 //! the result becomes the next history. A view seen for the first time, a
 //! grid or reach that changed, or a camera that jumped resets it: that frame
-//! samples cell centres with no history.
+//! samples cell centres with no history. A reading beside the output's
+//! frames (a tool's capture, `FogView::reading`) lights against a matching
+//! view's history but keeps nothing.
 
 use render_model::{
     FogVolumeDescriptor, FogVolumeShape, VolumetricFogDescriptor, VolumetricFogQuality,
@@ -61,6 +63,9 @@ pub(crate) struct FogView<'a> {
     pub camera: Option<&'a str>,
     pub viewport: [u32; 4],
     pub matrices: &'a CameraMatrices,
+    /// A reading (`Renderer::reading`): it reads the view's history and
+    /// leaves it as it was.
+    pub reading: bool,
 }
 
 /// What the finish pass needs to read a view's fog.
@@ -377,8 +382,9 @@ impl VolumetricFog {
     }
 
     /// The history of the view drawn by `camera` in `viewport`, made (empty)
-    /// if new, with whether it holds a frame to reproject: not after a new
-    /// grid or reach, or a camera that jumped.
+    /// if new, and the frames it holds to reproject: none after a new grid
+    /// or reach, or a camera that jumped. A `reading` leaves it as it was.
+    #[allow(clippy::too_many_arguments)]
     fn history_for(
         &mut self,
         gpu: &Gpu,
@@ -387,7 +393,8 @@ impl VolumetricFog {
         size: [u32; 3],
         reach: f32,
         eye: Vec3,
-    ) -> usize {
+        reading: bool,
+    ) -> (usize, u32) {
         self.views_drawn += 1;
         let drawn = self.views_drawn;
         self.histories
@@ -453,11 +460,13 @@ impl VolumetricFog {
         };
         let history = &mut self.histories[index];
         history.used = drawn;
-        if history.reach != reach || history.eye.distance(eye) > reach * CUT_SHARE {
-            history.frames = 0;
+        let cut = history.reach != reach || history.eye.distance(eye) > reach * CUT_SHARE;
+        let frames = if cut { 0 } else { history.frames };
+        if !reading {
+            history.frames = frames;
             history.reach = reach;
         }
-        index
+        (index, frames)
     }
 
     /// Whether a view would draw fog at `quality` with this medium and
@@ -541,21 +550,22 @@ impl VolumetricFog {
         let (light, integrate) = self.pipelines.as_ref().expect("checked above");
         let (light, integrate) = (light.clone(), integrate.clone());
         self.grid_for(gpu, size);
-        let index = self.history_for(
+        let (index, frames) = self.history_for(
             gpu,
             view.camera,
             view.viewport,
             size,
             medium.distance,
             view.matrices.eye,
+            view.reading,
         );
         // The temporal row: the history's weight (0: none to reproject) and
         // the frame's jitter within each cell (the centre without history).
         let history = &self.histories[index];
-        let (weight, jitter) = if history.frames == 0 {
+        let (weight, jitter) = if frames == 0 {
             (0.0, [0.5; 3])
         } else {
-            let point = history.frames % JITTER_PERIOD + 1;
+            let point = frames % JITTER_PERIOD + 1;
             let weight = match quality {
                 VolumetricFogQuality::High => TEMPORAL_WEIGHT_HIGH,
                 _ => TEMPORAL_WEIGHT_LOW,
@@ -622,16 +632,19 @@ impl VolumetricFog {
                 size[2].div_ceil(LIGHT_WORKGROUP[2]),
             );
         }
-        // This frame's filtered grid is the view's next history.
-        encoder.copy_texture_to_texture(
-            grid.scatter.as_image_copy(),
-            self.histories[index].texture.as_image_copy(),
-            wgpu::Extent3d {
-                width: size[0],
-                height: size[1],
-                depth_or_array_layers: size[2],
-            },
-        );
+        // This frame's filtered grid is the view's next history, unless it
+        // is a reading's.
+        if !view.reading {
+            encoder.copy_texture_to_texture(
+                grid.scatter.as_image_copy(),
+                self.histories[index].texture.as_image_copy(),
+                wgpu::Extent3d {
+                    width: size[0],
+                    height: size[1],
+                    depth_or_array_layers: size[2],
+                },
+            );
+        }
         {
             let writes = self
                 .timer
@@ -651,10 +664,12 @@ impl VolumetricFog {
                 1,
             );
         }
-        let history = &mut self.histories[index];
-        history.view_proj = view.matrices.view_proj;
-        history.eye = view.matrices.eye;
-        history.frames = history.frames.saturating_add(1);
+        if !view.reading {
+            let history = &mut self.histories[index];
+            history.view_proj = view.matrices.view_proj;
+            history.eye = view.matrices.eye;
+            history.frames = history.frames.saturating_add(1);
+        }
         if timed {
             if let Some(timer) = &mut self.timer {
                 timer.resolve(encoder);

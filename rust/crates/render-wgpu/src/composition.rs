@@ -412,7 +412,9 @@ impl Renderer {
     /// touches no temporal state: no jitter phase, motion, previous camera,
     /// part, particle or skinned vertex, camera cut or stage history, and
     /// neither the output's picture nor its readout. The output's next
-    /// frame measures its motion against the output's last.
+    /// frame measures its motion against the output's last. Its views read
+    /// the clouds', fog's and auto exposure's histories and keep none
+    /// (`Renderer::reading`).
     pub(crate) fn draw_primary(
         &mut self,
         output: TargetView<'_>,
@@ -420,6 +422,7 @@ impl Renderer {
         draw: impl FnOnce(&mut Self, TargetView<'_>) -> FrameStats,
     ) -> FrameStats {
         let reading = kind == PrimaryDraw::Reading;
+        self.reading = reading;
         // An image effect reads the whole picture, so the views draw into a
         // picture of their own first, as an upscale stage's do.
         let effect = self.image_effect.active();
@@ -492,6 +495,7 @@ impl Renderer {
                 };
                 self.show_motion(&output);
             }
+            self.reading = false;
             return stats;
         }
         let (width, height) = resolution.render;
@@ -600,6 +604,7 @@ impl Renderer {
         if !reading {
             self.show_motion(&output);
         }
+        self.reading = false;
         stats
     }
 

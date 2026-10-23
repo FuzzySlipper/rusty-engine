@@ -13,10 +13,7 @@ mod support;
 use std::path::PathBuf;
 
 use asset_import::{import_animated_glb_asset, ImportContext, SourceUri};
-use render_host_contracts::{
-    RendererCompositionCamera, RendererCompositionView, RendererViewComposition,
-    RendererViewTarget, RendererViewport,
-};
+use render_host_contracts::RendererCompositionCamera;
 use render_model::*;
 use render_wgpu::{
     FrameResolution, FrameStats, OffscreenTarget, OverlayShown, RendererOptions, SettingRefusal,
@@ -642,38 +639,16 @@ fn a_moving_viewmodel_before_a_sliding_world_leaves_no_trail() {
     }
 }
 
-/// One primary view of `camera` over the whole output.
-fn composition_of(camera: RendererCompositionCamera) -> RendererViewComposition {
-    RendererViewComposition {
-        views: vec![RendererCompositionView {
-            id: "main".to_owned(),
-            camera_id: camera.id.clone(),
-            target: RendererViewTarget::Primary,
-            viewport: RendererViewport {
-                x: 0.0,
-                y: 0.0,
-                width: 1.0,
-                height: 1.0,
-            },
-            order: 0,
-            viewport_anchor: None,
-        }],
-        cameras: vec![camera],
-        targets: Vec::new(),
-        presentations: Vec::new(),
-    }
-}
-
 /// Output frames of a turning camera and a moving crate under
 /// `antialiasing` at `render_scale`, with the motion inspection `shown` or
-/// not, and with a tool's capture at its own size between each two frames
-/// if `captured` (after the crate moved): each output frame's stats and
+/// not, and with a tool's capture of `captured` size between each two
+/// frames if given (after the crate moved): each output frame's stats and
 /// picture, and each capture's stats.
-fn output_frames_around_captures(
+fn crate_frames_around_captures(
     antialiasing: Antialiasing,
     render_scale: f32,
     shown: bool,
-    captured: bool,
+    captured: Option<(u32, u32)>,
 ) -> (Vec<(FrameStats, Vec<u8>)>, Vec<FrameStats>) {
     let mut harness = scene();
     harness.apply(vec![RenderDiff::SetRendererSettings {
@@ -689,7 +664,8 @@ fn output_frames_around_captures(
     });
     let samples = harness.renderer.samples();
     harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, samples);
-    let capture = OffscreenTarget::new(&harness.gpu, 200, 120, samples);
+    let capture =
+        captured.map(|(width, height)| OffscreenTarget::new(&harness.gpu, width, height, samples));
     let (mut frames, mut captures) = (Vec::new(), Vec::new());
     for frame in 0..6 {
         harness.apply(vec![RenderDiff::Update {
@@ -705,8 +681,8 @@ fn output_frames_around_captures(
         }]);
         let composition = composition_of(camera([0.0, 2.0, 5.0], frame as f64, -15.0));
         harness.renderer.set_view_composition(&composition, 0.0);
-        if captured && frame > 0 {
-            captures.push(harness.renderer.capture_view_composition(&capture, 0.0));
+        if let (Some(capture), true) = (&capture, frame > 0) {
+            captures.push(harness.renderer.capture_view_composition(capture, 0.0));
             assert!(
                 capture
                     .read_rgba(&harness.gpu)
@@ -724,7 +700,7 @@ fn output_frames_around_captures(
 }
 
 /// A tool's capture between output frames (`SceneDriver::capture`), at its
-/// own size, leaves the output's temporal history alone: the output frames
+/// own size or the output's, leaves the output's temporal history alone: the output frames
 /// around it draw exactly what they draw without it, with the same jitter
 /// phases and no reset, so they measure their motion against each other.
 /// The capture draws without the temporal stage: no jitter or motion, and
@@ -742,10 +718,14 @@ fn a_capture_between_output_frames_leaves_their_history_alone() {
             (Antialiasing::Dlss, 0.67, false),
         ]);
     }
-    for (antialiasing, scale, shown) in cases {
-        let case = format!("{antialiasing:?} at {scale}, motion shown {shown}");
-        let (alone, _) = output_frames_around_captures(antialiasing, scale, shown, false);
-        let (around, captures) = output_frames_around_captures(antialiasing, scale, shown, true);
+    for ((antialiasing, scale, shown), size) in cases
+        .into_iter()
+        .flat_map(|case| [(case, (200, 120)), (case, (WIDTH, HEIGHT))])
+    {
+        let case = format!("{antialiasing:?} at {scale}, motion shown {shown}, capture {size:?}");
+        let (alone, _) = crate_frames_around_captures(antialiasing, scale, shown, None);
+        let (around, captures) =
+            crate_frames_around_captures(antialiasing, scale, shown, Some(size));
         let motion: Vec<_> = around.iter().map(|(stats, _)| stats.motion).collect();
         assert_eq!(
             motion,

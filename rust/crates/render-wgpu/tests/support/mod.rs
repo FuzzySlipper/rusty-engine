@@ -11,6 +11,7 @@ use animation_pose::{AnimatedScene, Completion, PoseModel};
 
 use render_host_contracts::{
     RendererCameraPose, RendererCameraProjection, RendererCompositionCamera,
+    RendererCompositionView, RendererViewComposition, RendererViewTarget, RendererViewport,
 };
 use render_model::*;
 use render_presentation::{PresentationFrameDiff, PresentationWorld};
@@ -223,6 +224,28 @@ pub fn camera(
         },
         motion: None,
         viewmodel_fov_y_degrees: 0.0,
+    }
+}
+
+/// One primary view of `camera` over the whole output.
+pub fn composition_of(camera: RendererCompositionCamera) -> RendererViewComposition {
+    RendererViewComposition {
+        views: vec![RendererCompositionView {
+            id: "main".to_owned(),
+            camera_id: camera.id.clone(),
+            target: RendererViewTarget::Primary,
+            viewport: RendererViewport {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            order: 0,
+            viewport_anchor: None,
+        }],
+        cameras: vec![camera],
+        targets: Vec::new(),
+        presentations: Vec::new(),
     }
 }
 
@@ -470,4 +493,36 @@ pub fn assert_screenshot(name: &str, rgba: &[u8]) {
             out.display()
         );
     }
+}
+
+/// Output frames of `harness` drawn through its composition at each of
+/// `moments` (presentation time, camera), with a tool's capture of `capture`
+/// size between each two frames at the next frame's moment when one is
+/// given: each output frame's picture. A capture is a reading
+/// (`Renderer::capture_view_composition`), so the output frames must not
+/// depend on whether it drew.
+pub fn output_frames_around_captures(
+    harness: &mut Harness,
+    moments: &[(f64, RendererCompositionCamera)],
+    capture: Option<(u32, u32)>,
+) -> Vec<Vec<u8>> {
+    let samples = harness.renderer.samples();
+    harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, samples);
+    let capture =
+        capture.map(|(width, height)| OffscreenTarget::new(&harness.gpu, width, height, samples));
+    let mut frames = Vec::new();
+    for (index, (time, camera)) in moments.iter().enumerate() {
+        harness.renderer.set_animation_time(*time);
+        harness
+            .renderer
+            .set_view_composition(&composition_of(camera.clone()), *time);
+        if let (Some(capture), true) = (&capture, index > 0) {
+            harness.renderer.capture_view_composition(capture, *time);
+        }
+        harness
+            .renderer
+            .render_view_composition(&harness.target, *time);
+        frames.push(harness.target.read_rgba(&harness.gpu));
+    }
+    frames
 }

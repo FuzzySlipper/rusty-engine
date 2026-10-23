@@ -16,6 +16,10 @@
 //! the camera's move at the slab's middle). Both reproject by the same
 //! drift, so a cloud keeps its place in each; the stage's own reset does
 //! not reach this one, which resets on its own terms above.
+//!
+//! A reading beside the output's frames (a tool's capture,
+//! `Renderer::reading`) marches against a matching view's history but keeps
+//! nothing: no history, camera, time or count of its own frames.
 
 use glam::{Mat4, Vec3};
 use render_model::VolumetricCloudsQuality;
@@ -88,7 +92,8 @@ impl CloudMarch {
 
     /// Ready the view's reduced target and write its march parameters;
     /// the march and composite passes then draw with `target_view` and
-    /// the bind groups.
+    /// the bind groups. A `reading` reads the view's history and leaves it
+    /// as it was (and does not `keep`).
     #[allow(clippy::too_many_arguments)]
     pub fn prepare(
         &mut self,
@@ -100,6 +105,7 @@ impl CloudMarch {
         matrices: &CameraMatrices,
         quality: VolumetricCloudsQuality,
         time: f64,
+        reading: bool,
     ) -> CloudFrame {
         self.views_drawn += 1;
         let drawn = self.views_drawn;
@@ -126,18 +132,20 @@ impl CloudMarch {
         };
         let history = &mut self.histories[index];
         history.used = drawn;
-        if history.eye.distance(matrices.eye) > CUT_DISTANCE || time < history.time {
-            history.frames = 0;
+        let cut = history.eye.distance(matrices.eye) > CUT_DISTANCE || time < history.time;
+        let frames = if cut { 0 } else { history.frames };
+        if !reading {
+            history.frames = frames;
         }
-        let weight = match (history.frames, quality) {
+        let weight = match (frames, quality) {
             (0, _) => 0.0,
             (_, VolumetricCloudsQuality::High) => WEIGHT_HIGH,
             _ => WEIGHT_LOW,
         };
-        let phase = if history.frames == 0 {
+        let phase = if frames == 0 {
             0.0
         } else {
-            (history.frames as f32 * PHASE_STEP).fract()
+            (frames as f32 * PHASE_STEP).fract()
         };
         let elapsed = (time - history.time).max(0.0) as f32;
         let values: Vec<f32> = history

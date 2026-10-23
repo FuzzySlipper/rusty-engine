@@ -374,7 +374,8 @@ they are as soft as the scale makes them. A tool's
 output's frames: it draws without the stage, jitter or motion, at the render
 scale through the bilinear stage, and leaves every temporal input to the
 output, so the output's frames before and after it measure their motion
-against each other and its history holds.
+against each other and its history holds. It reads the volumetric clouds',
+the volumetric fog's and auto exposure's histories and keeps none of them.
 
 ### Temporal upscaling (TAAU)
 

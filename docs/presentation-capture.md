@@ -54,7 +54,8 @@ Three captures are available, and they show different things:
     window changes size. It leaves the output's frames alone: under a
     temporal anti-aliasing stage it draws without the stage (no jitter, no
     temporal anti-aliasing, bilinear at the render scale), and the output's
-    history goes on from the output's last frame
+    history goes on from the output's last frame; it reads the volumetric
+    clouds', fog's and auto exposure's histories and moves none of them on
     ([temporal inputs](lighting-and-sky.md#temporal-inputs)). The motion
     view shows in the output's frames only.
   - **The answer.** An `RSF1` frame with a lossless PNG (format `3`, the

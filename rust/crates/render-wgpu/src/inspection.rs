@@ -103,7 +103,10 @@ impl Renderer {
         let area = PixelRect::whole(target_view.width, target_view.height);
         let mut stats = FrameStats::default();
         // A capture's target feeds no temporal stage: its labels mark no
-        // motion target, whatever frame the output last drew.
+        // motion target, whatever frame the output last drew. It is a
+        // reading: the view keeps none of the output's histories
+        // (`Renderer::reading`).
+        self.reading = true;
         stats += self.draw_inspection_view(
             &target_view,
             area,
@@ -112,6 +115,7 @@ impl Renderer {
             PassStart::Target,
             None,
         );
+        self.reading = false;
         stats.parts_uploaded = uploaded;
         Some(stats)
     }

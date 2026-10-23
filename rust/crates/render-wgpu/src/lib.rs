@@ -554,6 +554,10 @@ pub struct Renderer {
     backdrop_shadow_timer: Option<timing::PassTimer>,
     /// Auto exposure adapted in this frame's first world view.
     exposure_adapted: bool,
+    /// A reading draws (`PrimaryDraw::Reading`, an inspection view's
+    /// capture): views read the histories the output's frames keep (the
+    /// volumetric clouds', the fog's, auto exposure's) and keep none.
+    reading: bool,
     frame_bind_group: wgpu::BindGroup,
     caster_bind_group: wgpu::BindGroup,
     sky_bind_group: Option<wgpu::BindGroup>,
@@ -835,6 +839,7 @@ impl Renderer {
             shadow_timer,
             backdrop_shadow_timer,
             exposure_adapted: false,
+            reading: false,
             frame_bind_group,
             caster_bind_group,
             sky_bind_group: None,

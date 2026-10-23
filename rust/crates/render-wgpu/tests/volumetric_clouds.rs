@@ -445,6 +445,47 @@ fn up_at(harness: &mut Harness, yaw: f64, time: f64) -> Vec<u8> {
     harness.render(&camera([0.0, 1.0, 0.0], yaw, 25.0)).1
 }
 
+/// A tool's capture between output frames, at the output's size (the
+/// volumetric clouds key their history by camera and viewport, so it finds
+/// the output's) or its own, leaves the clouds' history to the output: the
+/// output frames of drifting clouds under a turning camera and native TAAU
+/// draw exactly as they do without captures.
+#[test]
+fn a_capture_leaves_the_outputs_cloud_history_alone() {
+    let Some(mut alone) = drifting() else {
+        return;
+    };
+    let temporal = RenderDiff::SetRendererSettings {
+        settings: RendererSettingsDescriptor {
+            antialiasing: Antialiasing::Temporal,
+            volumetric_clouds: VolumetricCloudsQuality::Low,
+            ..RendererSettingsDescriptor::DEFAULT
+        },
+    };
+    alone.apply(vec![temporal.clone()]);
+    let moments: Vec<_> = (0..5)
+        .map(|frame| {
+            (
+                2.0 + f64::from(frame) / 30.0,
+                camera([0.0, 1.0, 0.0], f64::from(frame) * 0.3, 25.0),
+            )
+        })
+        .collect();
+    let expected = output_frames_around_captures(&mut alone, &moments, None);
+    for size in [(WIDTH, HEIGHT), (200, 120)] {
+        let mut captured = drifting().expect("drew above");
+        captured.apply(vec![temporal.clone()]);
+        let frames = output_frames_around_captures(&mut captured, &moments, Some(size));
+        for (frame, (expected, drawn)) in expected.iter().zip(&frames).enumerate() {
+            assert!(
+                expected == drawn,
+                "capture {size:?}, frame {frame}: the output's clouds moved {:.4} levels",
+                mean_difference(expected, drawn)
+            );
+        }
+    }
+}
+
 #[test]
 fn drifting_clouds_hold_steady_from_frame_to_frame() {
     let Some(mut harness) = drifting() else {
