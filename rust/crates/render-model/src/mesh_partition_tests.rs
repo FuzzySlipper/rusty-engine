@@ -76,7 +76,7 @@ fn attributed_mesh() -> MeshPayloadDescriptor {
             max: [7.0, 1.0, 0.0],
         },
         source: MeshPayloadSource::Inline {
-            positions,
+            positions: positions.into(),
             normals,
             uvs,
             colors,

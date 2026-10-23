@@ -4,7 +4,7 @@
 use std::borrow::Cow;
 
 use render_model::{
-    MeshPayloadDescriptor, MeshPayloadSource, TextureDescriptor, TexturePayloadSource,
+    MeshPayloadDescriptor, MeshPayloadSource, MeshStream, TextureDescriptor, TexturePayloadSource,
 };
 
 /// Where the renderer reads resource bytes named by retained descriptors
@@ -206,12 +206,13 @@ pub(crate) fn decode_webp(bytes: &[u8]) -> Result<DecodedImage, String> {
 
 /// Vertex streams ready for upload. Colours (RGBA) are drawn only for static
 /// meshes; the other families clear them before upload.
+/// A payload's streams, shared with an inline payload's.
 pub struct MeshStreams {
-    pub positions: Vec<f32>,
-    pub normals: Vec<f32>,
-    pub uvs: Option<Vec<f32>>,
-    pub colors: Option<Vec<f32>>,
-    pub indices: Vec<u32>,
+    pub positions: MeshStream<f32>,
+    pub normals: MeshStream<f32>,
+    pub uvs: Option<MeshStream<f32>>,
+    pub colors: Option<MeshStream<f32>>,
+    pub indices: MeshStream<u32>,
 }
 
 pub fn mesh_streams(
@@ -246,19 +247,20 @@ pub fn mesh_streams(
                 .ok_or_else(|| format!("resource {resource} is not available"))?;
             let vertices = payload.layout.vertex_count as usize;
             Ok(MeshStreams {
-                positions: f32_stream(&bytes, *positions_byte_offset, vertices * 3)?,
-                normals: f32_stream(&bytes, *normals_byte_offset, vertices * 3)?,
+                positions: f32_stream(&bytes, *positions_byte_offset, vertices * 3)?.into(),
+                normals: f32_stream(&bytes, *normals_byte_offset, vertices * 3)?.into(),
                 uvs: uvs_byte_offset
-                    .map(|offset| f32_stream(&bytes, offset, vertices * 2))
+                    .map(|offset| f32_stream(&bytes, offset, vertices * 2).map(Into::into))
                     .transpose()?,
                 colors: colors_byte_offset
-                    .map(|offset| f32_stream(&bytes, offset, vertices * 4))
+                    .map(|offset| f32_stream(&bytes, offset, vertices * 4).map(Into::into))
                     .transpose()?,
                 indices: u32_stream(
                     &bytes,
                     *indices_byte_offset,
                     payload.layout.index_count as usize,
-                )?,
+                )?
+                .into(),
             })
         }
     }

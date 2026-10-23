@@ -396,11 +396,11 @@ pub fn decode_mesh_resource_payload(
     Ok(with_source(
         payload,
         MeshPayloadSource::Inline {
-            positions,
-            normals,
-            uvs,
-            colors,
-            indices,
+            positions: positions.into(),
+            normals: normals.into(),
+            uvs: uvs.map(Into::into),
+            colors: colors.map(Into::into),
+            indices: indices.into(),
         },
     ))
 }
@@ -606,11 +606,11 @@ mod tests {
                 max: [offset + 1.0, 1.0, 0.0],
             },
             source: MeshPayloadSource::Inline {
-                positions: vec![offset, 0.0, 0.0, offset + 1.0, 0.0, 0.0, offset, 1.0, 0.0],
-                normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                positions: vec![offset, 0.0, 0.0, offset + 1.0, 0.0, 0.0, offset, 1.0, 0.0].into(),
+                normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0].into(),
                 uvs: None,
                 colors: None,
-                indices: vec![0, 1, 2],
+                indices: vec![0, 1, 2].into(),
             },
             provenance: MeshProvenance::VoxelObject,
             layer_weights: false,
@@ -630,7 +630,7 @@ mod tests {
         let MeshPayloadSource::Inline { uvs, .. } = &mut payload.source else {
             unreachable!()
         };
-        *uvs = Some(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+        *uvs = Some(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0].into());
         payload
     }
 
@@ -644,9 +644,7 @@ mod tests {
         let MeshPayloadSource::Inline { colors, .. } = &mut payload.source else {
             unreachable!()
         };
-        *colors = Some(vec![
-            1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.5, 0.0, 0.0, 1.0, 1.0,
-        ]);
+        *colors = Some(vec![1.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.5, 0.0, 0.0, 1.0, 1.0].into());
         payload
     }
 

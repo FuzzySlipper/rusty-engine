@@ -1078,11 +1078,11 @@ fn voxel_mesh_payload_with_material_slots(
             max: chunk.bounds_max,
         },
         source: MeshPayloadSource::Inline {
-            positions: chunk.positions.clone(),
-            normals: chunk.normals.clone(),
-            uvs: Some(chunk.tile_coordinates.clone()),
-            colors,
-            indices: chunk.indices.clone(),
+            positions: chunk.positions.clone().into(),
+            normals: chunk.normals.clone().into(),
+            uvs: Some(chunk.tile_coordinates.clone().into()),
+            colors: colors.map(Into::into),
+            indices: chunk.indices.clone().into(),
         },
         provenance: MeshProvenance::VoxelChunk,
         layer_weights: layered,
@@ -1640,6 +1640,59 @@ mod tests {
         let second = projector.project(&instances, &materials).unwrap();
         assert!(second.frame.is_empty());
         assert_eq!(projector.chunk_handle("room", [0, 0, 0]), Some(handle));
+    }
+
+    #[test]
+    fn a_chunk_payload_shares_the_scene_mesh_streams() {
+        let scene = VoxelCollisionScene::from_material_voxels(
+            1.0,
+            16,
+            [MaterialVoxel {
+                state: 0,
+                address: [0, 0, 0],
+                material_slot: 1,
+            }],
+        )
+        .unwrap();
+        let instances = [VoxelProjectionInstance {
+            instance_id: "room".to_string(),
+            asset_id: "voxel-object/room".to_string(),
+            transform: Transform::IDENTITY,
+            scene: &scene,
+        }];
+        let materials = BTreeMap::from([(1, material(1))]);
+        let projected = VoxelRenderProjector::new()
+            .project(&instances, &materials)
+            .unwrap();
+        let payload = projected
+            .frame
+            .ops
+            .iter()
+            .find_map(|operation| match operation {
+                RenderDiff::ReplaceMeshPayload { payload, .. } => Some(payload),
+                _ => None,
+            })
+            .expect("the chunk's payload");
+        let MeshPayloadSource::Inline {
+            positions,
+            normals,
+            uvs,
+            indices,
+            ..
+        } = &payload.source
+        else {
+            panic!("a voxel chunk's payload is inline");
+        };
+        // A refresh copies no vertex or index values: the payload holds the
+        // scene's own streams.
+        let chunk = scene.mesh_chunk([0, 0, 0]).unwrap();
+        assert_eq!(positions.as_ptr(), chunk.positions.as_ptr());
+        assert_eq!(normals.as_ptr(), chunk.normals.as_ptr());
+        assert_eq!(
+            uvs.as_ref().unwrap().as_ptr(),
+            chunk.tile_coordinates.as_ptr()
+        );
+        assert_eq!(indices.as_ptr(), chunk.indices.as_ptr());
     }
 
     #[test]
@@ -2574,7 +2627,7 @@ mod vertex_occlusion_tests {
             unreachable!()
         };
         assert_eq!(
-            colors.as_ref().map(Vec::len),
+            colors.as_ref().map(|colors| colors.len()),
             Some(chunk.occlusion.len() * 4),
             "the colours carry the occlusion"
         );

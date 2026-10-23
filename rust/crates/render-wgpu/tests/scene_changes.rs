@@ -289,7 +289,7 @@ fn a_new_target_shadows_and_occlusion_draw_the_variants_already_in_use() {
         positions, colors, ..
     } = &mut colored.source
     {
-        *colors = Some(vec![1.0; positions.len() / 3 * 4]);
+        *colors = Some(vec![1.0; positions.len() / 3 * 4].into());
     }
     colored.layout.attributes.push(MeshAttribute {
         name: MeshAttributeName::Color,

@@ -651,7 +651,7 @@ fn tree() -> MeshPayloadDescriptor {
         else {
             unreachable!()
         };
-        (positions, normals, indices)
+        (positions.into_vec(), normals.into_vec(), indices.into_vec())
     };
     let (mut positions, mut normals, mut indices) = unpack(trunk);
     let (crown_positions, crown_normals, crown_indices) = unpack(crown);

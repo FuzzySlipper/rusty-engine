@@ -200,9 +200,11 @@ pub struct VoxelMeshChunk {
     /// Voxels per axis: the chunk's box is `size * voxel_size` from its
     /// origin.
     pub size: [u32; 3],
-    pub positions: Vec<f32>,
-    pub normals: Vec<f32>,
-    pub tile_coordinates: Vec<f32>,
+    /// The vertex and index streams are shared, so a presentation's mesh
+    /// payload holds them without copying.
+    pub positions: Arc<Vec<f32>>,
+    pub normals: Arc<Vec<f32>>,
+    pub tile_coordinates: Arc<Vec<f32>>,
     /// Four terrain layer weights per vertex when the session has terrain
     /// layers (`svc_mesh::MeshPayload::layer_weights`); empty otherwise.
     pub layer_weights: Vec<f32>,
@@ -220,7 +222,7 @@ pub struct VoxelMeshChunk {
     /// reach changes it without `content_hash`, and republishes the field
     /// alone.
     pub field_hash: u64,
-    pub indices: Vec<u32>,
+    pub indices: Arc<Vec<u32>>,
     pub groups: Vec<VoxelMeshGroup>,
     /// The chunk-local storage index (x-fastest) of the voxel owning each
     /// triangle. Collision maps a reconstructed triangle to its voxel.
@@ -1873,14 +1875,14 @@ fn voxel_mesh_chunk(
         origin_voxel,
         voxel_size,
         size: voxels,
-        positions: mesh.positions,
-        normals: mesh.normals,
-        tile_coordinates: mesh.tile_coordinates,
+        positions: Arc::new(mesh.positions),
+        normals: Arc::new(mesh.normals),
+        tile_coordinates: Arc::new(mesh.tile_coordinates),
         layer_weights: mesh.layer_weights,
         layer_palette: mesh.layer_palette,
         occlusion: mesh.occlusion,
         distance_field,
-        indices: mesh.indices,
+        indices: Arc::new(mesh.indices),
         groups: mesh
             .groups
             .into_iter()

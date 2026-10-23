@@ -1660,7 +1660,7 @@ unsafe fn generated_mesh_payload(
                         .collect()
                 })
             },
-            indices: indices.to_vec(),
+            indices: indices.to_vec().into(),
         },
         provenance: MeshProvenance::Generated,
         layer_weights: !weights.is_empty(),
@@ -2412,11 +2412,11 @@ pub(crate) mod tests {
                     max: [202.0, 3.0, 201.0],
                 },
                 source: MeshPayloadSource::Inline {
-                    positions,
-                    normals,
-                    uvs: Some(uvs),
+                    positions: positions.into(),
+                    normals: normals.into(),
+                    uvs: Some(uvs.into()),
                     colors: None,
-                    indices,
+                    indices: indices.into(),
                 },
                 provenance: MeshProvenance::StaticAsset,
                 layer_weights: false,

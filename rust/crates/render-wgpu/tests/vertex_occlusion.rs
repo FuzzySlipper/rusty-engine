@@ -18,8 +18,8 @@ fn card(occlusion: f32) -> MeshPayloadDescriptor {
     let MeshPayloadSource::Inline { colors, uvs, .. } = &mut payload.source else {
         unreachable!()
     };
-    *colors = Some([1.0, 1.0, 1.0, occlusion].repeat(4));
-    *uvs = Some(vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0]);
+    *colors = Some([1.0, 1.0, 1.0, occlusion].repeat(4).into());
+    *uvs = Some(vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0].into());
     payload.layout.attributes.push(MeshAttribute {
         name: MeshAttributeName::Uv,
         components: 2,

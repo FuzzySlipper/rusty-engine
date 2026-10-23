@@ -57,9 +57,12 @@ fn card(height: f32) -> MeshPayloadDescriptor {
     let MeshPayloadSource::Inline { colors, .. } = &mut payload.source else {
         unreachable!()
     };
-    *colors = Some(vec![
-        1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
-    ]);
+    *colors = Some(
+        vec![
+            1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+        ]
+        .into(),
+    );
     payload.layout.attributes.push(MeshAttribute {
         name: MeshAttributeName::Color,
         components: 4,

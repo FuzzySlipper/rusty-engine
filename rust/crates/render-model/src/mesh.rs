@@ -104,6 +104,97 @@ pub enum MeshProvenance {
     Debug,
 }
 
+/// One stream of an inline mesh payload, shared rather than copied: a
+/// payload built from retained streams (a voxel chunk's mesh), cloned, or
+/// read by the renderer copies no values. It serializes as its values.
+#[derive(Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct MeshStream<T>(std::sync::Arc<Vec<T>>);
+
+impl<T> MeshStream<T> {
+    /// The values, to change in place; copied first if another holder shares them.
+    pub fn make_mut(&mut self) -> &mut Vec<T>
+    where
+        T: Clone,
+    {
+        std::sync::Arc::make_mut(&mut self.0)
+    }
+
+    /// The values, copied only if another holder shares them.
+    pub fn into_vec(self) -> Vec<T>
+    where
+        T: Clone,
+    {
+        std::sync::Arc::try_unwrap(self.0).unwrap_or_else(|shared| (*shared).clone())
+    }
+}
+
+impl<T> std::ops::Deref for MeshStream<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        &self.0
+    }
+}
+
+/// Changing the values copies them first if another holder shares them.
+impl<T: Clone> std::ops::DerefMut for MeshStream<T> {
+    fn deref_mut(&mut self) -> &mut [T] {
+        std::sync::Arc::make_mut(&mut self.0).as_mut_slice()
+    }
+}
+
+impl<'a, T> IntoIterator for &'a MeshStream<T> {
+    type Item = &'a T;
+    type IntoIter = std::slice::Iter<'a, T>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<T> From<Vec<T>> for MeshStream<T> {
+    fn from(values: Vec<T>) -> Self {
+        Self(std::sync::Arc::new(values))
+    }
+}
+
+impl<T: PartialEq> PartialEq<[T]> for MeshStream<T> {
+    fn eq(&self, other: &[T]) -> bool {
+        self.0.as_slice() == other
+    }
+}
+
+impl<T: PartialEq, const N: usize> PartialEq<[T; N]> for MeshStream<T> {
+    fn eq(&self, other: &[T; N]) -> bool {
+        self.0.as_slice() == other
+    }
+}
+
+impl<T: PartialEq> PartialEq<Vec<T>> for MeshStream<T> {
+    fn eq(&self, other: &Vec<T>) -> bool {
+        *self.0 == *other
+    }
+}
+
+impl<T> FromIterator<T> for MeshStream<T> {
+    fn from_iter<I: IntoIterator<Item = T>>(values: I) -> Self {
+        Self(std::sync::Arc::new(values.into_iter().collect()))
+    }
+}
+
+impl<T> From<std::sync::Arc<Vec<T>>> for MeshStream<T> {
+    fn from(values: std::sync::Arc<Vec<T>>) -> Self {
+        Self(values)
+    }
+}
+
+impl<T: std::fmt::Debug> std::fmt::Debug for MeshStream<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(
     tag = "kind",
@@ -113,13 +204,13 @@ pub enum MeshProvenance {
 )]
 pub enum MeshPayloadSource {
     Inline {
-        positions: Vec<f32>,
-        normals: Vec<f32>,
+        positions: MeshStream<f32>,
+        normals: MeshStream<f32>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        uvs: Option<Vec<f32>>,
+        uvs: Option<MeshStream<f32>>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        colors: Option<Vec<f32>>,
-        indices: Vec<u32>,
+        colors: Option<MeshStream<f32>>,
+        indices: MeshStream<u32>,
     },
     /// Durable, content-addressed bytes resolved by an explicit renderer host.
     /// The identity names bytes, not a filesystem path or network location.
@@ -1788,11 +1879,11 @@ mod tests {
                 max: [1.0, 1.0, 0.0],
             },
             source: MeshPayloadSource::Inline {
-                positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0],
-                normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0],
+                positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0].into(),
+                normals: vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0].into(),
                 uvs: None,
                 colors: None,
-                indices: vec![0, 1, 2],
+                indices: vec![0, 1, 2].into(),
             },
             provenance: MeshProvenance::StaticAsset,
             layer_weights: false,
@@ -2003,7 +2094,7 @@ mod tests {
         );
 
         if let MeshPayloadSource::Inline { uvs, .. } = &mut payload.source {
-            *uvs = Some(vec![0.0; 5]);
+            *uvs = Some(vec![0.0; 5].into());
         }
         assert!(matches!(
             payload.validate(),
@@ -2013,28 +2104,31 @@ mod tests {
             })
         ));
         if let MeshPayloadSource::Inline { uvs, .. } = &mut payload.source {
-            *uvs = Some(vec![0.0, 0.0, 1.0, 0.0, f32::NAN, 1.0]);
+            *uvs = Some(vec![0.0, 0.0, 1.0, 0.0, f32::NAN, 1.0].into());
         }
         assert_eq!(
             payload.validate(),
             Err(MeshDescriptorError::NonFiniteAttribute)
         );
         if let MeshPayloadSource::Inline { uvs, .. } = &mut payload.source {
-            *uvs = Some(vec![
-                0.0,
-                0.0,
-                1.0,
-                0.0,
-                0.0,
-                MAX_EXACT_VOXEL_TILE_COORDINATE + 2.0,
-            ]);
+            *uvs = Some(
+                vec![
+                    0.0,
+                    0.0,
+                    1.0,
+                    0.0,
+                    0.0,
+                    MAX_EXACT_VOXEL_TILE_COORDINATE + 2.0,
+                ]
+                .into(),
+            );
         }
         assert_eq!(
             payload.validate(),
             Err(MeshDescriptorError::VoxelTileCoordinateOutOfRange)
         );
         if let MeshPayloadSource::Inline { uvs, .. } = &mut payload.source {
-            *uvs = Some(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0]);
+            *uvs = Some(vec![0.0, 0.0, 1.0, 0.0, 0.0, 1.0].into());
         }
         assert_eq!(payload.validate(), Ok(()));
     }

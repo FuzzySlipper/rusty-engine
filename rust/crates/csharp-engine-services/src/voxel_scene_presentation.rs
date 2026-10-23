@@ -45,6 +45,10 @@ struct RetainedVoxelScenePresentation {
     base_material_provenance: BTreeMap<u16, u64>,
     face_material_provenance: BTreeMap<(u16, u16, Direction6), u64>,
     base_material_count: u32,
+    /// Process-unique identity of the materials and renderer slots above,
+    /// taken whenever they are assigned: the renderer materials derived
+    /// from them are kept until it changes (`RendererMaterials`).
+    materials_revision: u64,
     /// Chunks farther than this from the viewer are drawn coarse; zero or
     /// less draws every chunk at full resolution.
     coarse_distance: f64,
@@ -74,6 +78,24 @@ struct VoxelScenePresentationState {
     /// The camera of the lowest-ordered primary view when a call last
     /// settled, which levels of detail are measured from.
     viewer: Option<PresentationViewer>,
+    /// The renderer materials the last projection derived: a refresh
+    /// derives them again only when a presentation's materials or a scene's
+    /// non-occluding slots changed.
+    renderer_materials: Option<RendererMaterials>,
+}
+
+#[derive(Debug, Clone)]
+struct RendererMaterials {
+    /// Each presentation's handle, materials revision and its scene's
+    /// non-occluding slots.
+    key: Vec<(u64, u64, BTreeSet<u16>)>,
+    materials: BTreeMap<u16, RenderMaterialDescriptor>,
+}
+
+/// A process-unique materials revision.
+fn next_materials_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Where levels of detail and scatters are measured from: the camera of the
@@ -112,6 +134,7 @@ impl RuntimeVoxelScenePresentationBridge {
                 projector: VoxelRenderProjector::new(),
                 next_presentation: 1,
                 viewer: None,
+                renderer_materials: None,
             },
             staged: None,
             appearance: None,
@@ -266,6 +289,7 @@ impl RuntimeVoxelScenePresentationBridge {
                 base_material_provenance: resolved.base_material_provenance,
                 face_material_provenance: resolved.face_material_provenance,
                 base_material_count: resolved.base_material_count,
+                materials_revision: next_materials_revision(),
                 coarse_distance: 0.0,
                 scatters: BTreeMap::new(),
                 scatter_exclusions: Arc::default(),
@@ -737,6 +761,7 @@ impl RuntimeVoxelScenePresentationBridge {
         presentation.base_renderer_slots.extend(new_base_slots);
         presentation.face_renderer_slots = retained_face_slots;
         presentation.face_renderer_slots.extend(new_face_slots);
+        presentation.materials_revision = next_materials_revision();
         presentation.base_material_provenance = resolved.base_material_provenance;
         presentation.face_material_provenance = resolved.face_material_provenance;
         presentation.base_material_count = resolved.base_material_count;
@@ -1127,11 +1152,35 @@ fn project_all_presentations(
             )
         })
         .collect::<BTreeMap<_, _>>();
-    let materials = renderer_materials(&state.presentations, &scenes)?;
-    let textures = presentation_textures(&state.presentations);
+    let key: Vec<_> = scenes
+        .iter()
+        .filter_map(|(handle, _, scene)| {
+            let presentation = state.presentations.get(handle)?;
+            Some((
+                *handle,
+                presentation.materials_revision,
+                scene.mesh_options().non_occluding.clone(),
+            ))
+        })
+        .collect();
+    if state
+        .renderer_materials
+        .as_ref()
+        .is_none_or(|derived| derived.key != key)
+    {
+        state.renderer_materials = Some(RendererMaterials {
+            materials: renderer_materials(&state.presentations, &scenes)?,
+            key,
+        });
+    }
+    let materials = &state
+        .renderer_materials
+        .as_ref()
+        .expect("derived above")
+        .materials;
     let result = state
         .projector
-        .project_mapped_directional(&instances, &materials, &material_slots)
+        .project_mapped_directional(&instances, materials, &material_slots)
         .map_err(|error| match error {
             VoxelProjectionError::MissingMaterial { instance, slot } => {
                 CsharpEngineServicesError::new(
@@ -1165,8 +1214,10 @@ fn project_all_presentations(
         let mut operations = used_textures
             .into_iter()
             .map(|identity| {
-                textures
-                    .get(&identity)
+                state
+                    .presentations
+                    .values()
+                    .find_map(|presentation| presentation.textures.get(&identity))
                     .cloned()
                     .map(|texture| RenderDiff::DefineTexture { texture })
                     .ok_or_else(|| {
@@ -1296,16 +1347,6 @@ fn renderer_materials(
             descriptor.double_sided |= both_sides;
             Ok((slot, descriptor))
         })
-        .collect()
-}
-
-fn presentation_textures(
-    presentations: &BTreeMap<u64, RetainedVoxelScenePresentation>,
-) -> BTreeMap<String, TextureDescriptor> {
-    presentations
-        .values()
-        .flat_map(|presentation| presentation.textures.iter())
-        .map(|(identity, texture)| (identity.clone(), texture.clone()))
         .collect()
 }
 

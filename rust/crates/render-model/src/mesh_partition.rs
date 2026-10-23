@@ -134,11 +134,11 @@ pub fn partition_mesh_spatially(
                     end: morph.end,
                 }),
             source: MeshPayloadSource::Inline {
-                positions: out_positions,
-                normals: out_normals,
-                uvs: out_uvs,
-                colors: out_colors,
-                indices: out_indices,
+                positions: out_positions.into(),
+                normals: out_normals.into(),
+                uvs: out_uvs.map(Into::into),
+                colors: out_colors.map(Into::into),
+                indices: out_indices.into(),
             },
         });
     }
