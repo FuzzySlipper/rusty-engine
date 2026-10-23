@@ -388,9 +388,12 @@ edge carries its own; the viewmodel draws against a depth of its own while
 the stage draws, so the world's depth still decides), clips it to the colours this frame shows around it,
 and blends in this frame by how near its jittered samples fall, and by the
 reactive mask where a surface marks it, so water's ripples cannot trail
-far. Below render scale 1 the result is lightly
-sharpened. The stage reads the finished picture after tone mapping, so
-bloom, exposure and the image's grading are already in it.
+far. A moving pixel keeps fewer frames, fewest where its history lands
+between the history's pixels, since each such resampling softens it: grass
+and leaves swaying in the wind would otherwise blur frame after frame. The
+result is lightly sharpened, more below render scale 1. The stage reads
+the finished picture after tone mapping, so bloom, exposure and the image's
+grading are already in it.
 
 The render scale picks the mode:
 
@@ -410,9 +413,10 @@ history starts again on a camera cut and whenever the
 temporal inputs reset, the output's size changes or a frame draws without
 the stage.
 
-Thin vegetation (grass blades, leaf edges) reads softer and lower in
-contrast than under 4× MSAA, natively and in the upscaled modes. The
-stage's own cost follows the output's size, not the mode.
+Thin vegetation (grass blades, leaf edges) still reads softer than under
+4× MSAA, which keeps each pixel's shading where it falls (with its
+jaggies), most while it sways or the camera moves. The stage's own cost
+follows the output's size, not the mode.
 
 `engine.renderer` reports the stage's GPU time as `upscale` among
 `gpu.passes`, and the last frame's render and output resolutions and its

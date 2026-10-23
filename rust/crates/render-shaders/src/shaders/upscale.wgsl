@@ -10,11 +10,14 @@
 //   the motion of the nearest surface among those 3×3 (dilated by depth, so
 //   a moving edge carries its own motion over the background it uncovers;
 //   the viewmodel, drawn against a depth of its own, is nearest of all);
-// - samples the history there (Catmull-Rom), and clips it towards the mean
-//   to the neighbourhood's colour box in YCoCg, so what the history holds
-//   that this frame no longer shows does not linger;
+// - samples the history there (a sharp bicubic), and clips it towards the
+//   mean to the neighbourhood's colour box in YCoCg, so what the history
+//   holds that this frame no longer shows does not linger;
 // - blends the two by how much history the pixel has gathered and how well
-//   this frame sampled it, taking at least the reactive mask's share of
+//   this frame sampled it, keeping fewer frames while it moves and fewest
+//   where it lands between the history's texels (each such resampling
+//   softens it, which swaying grass and leaves pile up frame after frame),
+//   taking at least the reactive mask's share of
 //   this frame (`rusty::motion`: water's ripples and reflections, labels
 //   and overlay lines), and half where a pixel has no motion of its own
 //   (`rusty::types::NO_MOTION`). Such pixels keep that little history: they
@@ -56,6 +59,16 @@ const HISTORY_FRAMES: f32 = 16.0;
 const MOVING_HISTORY_FRAMES: f32 = 8.0;
 // Output pixels of motion at which the history holds its moving frames.
 const MOVING_PIXELS: f32 = 4.0;
+// While it moves and lands halfway between the history's texels, fewer
+// still.
+const BETWEEN_HISTORY_FRAMES: f32 = 4.0;
+// Output pixels of motion from which landing between texels counts: below
+// it the pixel holds still, and its history lands on its texel.
+const LANDING_PIXELS: f32 = 0.05;
+// The history's bicubic (Keys): sharper than Catmull-Rom's -0.5, so the
+// resampling each moving frame softens the history less; the clip box
+// bounds its overshoot.
+const HISTORY_CUBIC: f32 = -0.75;
 // This frame's least share of a pixel with no motion of its own.
 const NO_MOTION_SHARE: f32 = 0.5;
 // How far the clip box reaches beyond the neighbourhood's mean, in its
@@ -88,19 +101,26 @@ fn rgb_of(c: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
 }
 
-// The history at `uv`, Catmull-Rom through five bilinear taps (the four
-// corner taps' weights are small and left out).
+// The Keys cubic's weight at `distance` texels (below 2) from the sample.
+fn cubic(distance: vec2<f32>) -> vec2<f32> {
+    let a = HISTORY_CUBIC;
+    let d = distance;
+    let near = ((a + 2.0) * d - (a + 3.0)) * d * d + 1.0;
+    let far = ((a * d - 5.0 * a) * d + 8.0 * a) * d - 4.0 * a;
+    return select(far, near, d <= vec2<f32>(1.0));
+}
+
+// The history at `uv`, bicubic through five bilinear taps (the four corner
+// taps' weights are small and left out).
 fn history_at(uv: vec2<f32>) -> vec4<f32> {
     let size = params.sizes.zw;
     let position = uv * size;
     let centre = floor(position - 0.5) + 0.5;
     let f = position - centre;
-    let f2 = f * f;
-    let f3 = f2 * f;
-    let w0 = -0.5 * f3 + f2 - 0.5 * f;
-    let w1 = 1.5 * f3 - 2.5 * f2 + 1.0;
-    let w2 = -1.5 * f3 + 2.0 * f2 + 0.5 * f;
-    let w3 = 0.5 * f3 - 0.5 * f2;
+    let w0 = cubic(1.0 + f);
+    let w1 = cubic(f);
+    let w2 = cubic(1.0 - f);
+    let w3 = cubic(2.0 - f);
     let w12 = w1 + w2;
     let at12 = (centre + w2 / w12) / size;
     let at0 = (centre - 1.0) / size;
@@ -228,7 +248,11 @@ fn resolve(in: FullscreenOut) -> vec4<f32> {
         held = clipped(ycocg(previous.rgb), 0.5 * (box_low + box_high), 0.5 * (box_high - box_low));
         frames = previous.a;
     }
-    let most = mix(HISTORY_FRAMES, MOVING_HISTORY_FRAMES, clamp(moved_pixels / MOVING_PIXELS, 0.0, 1.0));
+    let moving = mix(HISTORY_FRAMES, MOVING_HISTORY_FRAMES, clamp(moved_pixels / MOVING_PIXELS, 0.0, 1.0));
+    // How far between the history's texels the pixel lands: 1 halfway.
+    let landed = fract(previous_uv * output_size - 0.5);
+    let between = 4.0 * max(landed.x * (1.0 - landed.x), landed.y * (1.0 - landed.y));
+    let most = mix(moving, BETWEEN_HISTORY_FRAMES, between * clamp(moved_pixels / LANDING_PIXELS, 0.0, 1.0));
     var gathered = min(frames + sampled, most);
     var share = 1.0;
     if frames > 0.0 {
@@ -242,23 +266,10 @@ fn resolve(in: FullscreenOut) -> vec4<f32> {
     return vec4<f32>(max(color, vec3<f32>(0.0)), gathered);
 }
 
-// The history alone, which `fs_sharpen` brings to the output.
+// The history, which `fs_sharpen` brings to the output.
 @fragment
 fn fs_resolve(in: FullscreenOut) -> @location(0) vec4<f32> {
     return resolve(in);
-}
-
-struct Resolved {
-    @location(0) history: vec4<f32>,
-    // The output, unsharpened.
-    @location(1) output: vec4<f32>,
-};
-
-// The history and the output at once, without sharpening.
-@fragment
-fn fs_resolve_output(in: FullscreenOut) -> Resolved {
-    let history = resolve(in);
-    return Resolved(history, vec4<f32>(history.rgb, 1.0));
 }
 
 // The history into the output, sharpened by `params.frame.w` with a lobe

@@ -43,11 +43,12 @@
 //!   pixel gathers their frames into a history at output resolution: the
 //!   previous history reprojected by the motion target (dilated to the
 //!   nearest depth), clipped to this frame's neighbourhood in YCoCg, and
-//!   blended by how many frames it holds and how near this frame's samples
-//!   fall. Pixels with no motion of their own (water, `motion.rs`) lean
-//!   on the current frame. Below render scale 1 the history is lightly
-//!   sharpened into the output. The stage reads the finished picture,
-//!   after tone mapping, so it needs no exposure.
+//!   blended by how many frames it holds (fewer the more it moves and the
+//!   further between the history's texels it lands) and how near this
+//!   frame's samples fall. Pixels with no motion of their own (water,
+//!   `motion.rs`) lean on the current frame. The history is lightly
+//!   sharpened into the output, more below render scale 1. The stage reads
+//!   the finished picture, after tone mapping, so it needs no exposure.
 //!
 //!   A software adapter refuses it (`Renderer::temporal_refusal`) and
 //!   draws bilinear at the render scale, without anti-aliasing. Its history
@@ -75,13 +76,16 @@ const HISTORY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// `Params` in `upscale.wgsl`: sizes, then jitter, reset and sharpening.
 const UNIFORM_FLOATS: usize = 8;
 
-/// TAAU's sharpening at a render scale (`fs_sharpen`, 0 to 1): none at
-/// native resolution, rising to `MOST_SHARPENING` at half resolution and
-/// below, where the history's resampling softens most.
+/// TAAU's sharpening at a render scale (`fs_sharpen`, 0 to 1):
+/// `NATIVE_SHARPENING` at native resolution, where the gathered frames
+/// read a little softer than 4x MSAA's, rising to `MOST_SHARPENING` at half
+/// resolution and below, where the history's resampling softens most.
+const NATIVE_SHARPENING: f32 = 0.25;
 const MOST_SHARPENING: f32 = 0.5;
 
 fn sharpening(render_scale: f32) -> f32 {
-    (MOST_SHARPENING * (1.0 - render_scale) / 0.5).clamp(0.0, MOST_SHARPENING)
+    let rise = (1.0 - render_scale).clamp(0.0, 0.5) / 0.5;
+    NATIVE_SHARPENING + (MOST_SHARPENING - NATIVE_SHARPENING) * rise
 }
 
 /// The two sizes of a primary frame, in pixels: the output's and the render
@@ -196,10 +200,8 @@ struct Taau {
     module: wgpu::ShaderModule,
     layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
-    /// The history alone, for the sharpening pass to read.
+    /// The history, for the sharpening pass to read.
     resolve: wgpu::RenderPipeline,
-    /// The history and the output at once, by output format.
-    resolve_output: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     /// The sharpening pass, by output format.
     sharpen: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
     uniform: wgpu::Buffer,
@@ -266,7 +268,6 @@ impl Taau {
             layout,
             pipeline_layout,
             resolve,
-            resolve_output: Vec::new(),
             sharpen: Vec::new(),
             uniform: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("render-wgpu upscale taau"),
@@ -296,12 +297,8 @@ impl Taau {
         let index = match made.iter().position(|(known, _)| *known == format) {
             Some(index) => index,
             None => {
-                let targets: &[Option<wgpu::ColorTargetState>] = if entry == "fs_resolve_output" {
-                    &[Some(HISTORY_FORMAT.into()), Some(format.into())]
-                } else {
-                    &[Some(format.into())]
-                };
-                made.push((format, pipeline(device, layout, module, entry, targets)));
+                let targets = [Some(format.into())];
+                made.push((format, pipeline(device, layout, module, entry, &targets)));
                 made.len() - 1
             }
         };
@@ -564,49 +561,32 @@ impl Upscale {
                 },
             })
         };
-        let sharpened = sharpening > 0.0;
         {
-            let resolve = if sharpened {
-                &taau.resolve
-            } else {
-                Taau::by_format(
-                    &mut taau.resolve_output,
-                    &gpu.device,
-                    &taau.pipeline_layout,
-                    &taau.module,
-                    "fs_resolve_output",
-                    output.format,
-                )
-            };
-            let attachments = [
-                attachment(&history.textures[write]),
-                attachment(output.color),
-            ];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu upscale taau"),
-                color_attachments: &attachments[..if sharpened { 1 } else { 2 }],
+                color_attachments: &[attachment(&history.textures[write])],
                 depth_stencil_attachment: None,
                 timestamp_writes: self
                     .timer
                     .as_ref()
-                    .and_then(|timer| timer.render_writes_between(true, !sharpened)),
+                    .and_then(|timer| timer.render_writes_between(true, false)),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(resolve);
+            pass.set_pipeline(&taau.resolve);
             pass.set_bind_group(0, &resolving, &[]);
             pass.draw(0..3, 0..1);
         }
-        if sharpened {
-            let sharpening = bind_group(&history.textures[write]);
-            let sharpen = Taau::by_format(
-                &mut taau.sharpen,
-                &gpu.device,
-                &taau.pipeline_layout,
-                &taau.module,
-                "fs_sharpen",
-                output.format,
-            );
+        let sharpening = bind_group(&history.textures[write]);
+        let sharpen = Taau::by_format(
+            &mut taau.sharpen,
+            &gpu.device,
+            &taau.pipeline_layout,
+            &taau.module,
+            "fs_sharpen",
+            output.format,
+        );
+        {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu upscale sharpen"),
                 color_attachments: &[attachment(output.color)],

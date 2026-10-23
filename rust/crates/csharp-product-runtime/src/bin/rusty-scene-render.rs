@@ -15,8 +15,8 @@
 //! moves M metres forward and turns D degrees right before each of those
 //! frames, from the snapshot's first camera, for the cost of a moving view
 //! (culling, shadow cascades). `--advance S` moves presentation time on S
-//! seconds before each of them, which the snapshot otherwise holds (clouds
-//! drift, wind sways). `--ambient-occlusion` overrides the
+//! seconds before each of them from the snapshot's, which it otherwise
+//! holds (clouds drift, wind sways), the same in every run. `--ambient-occlusion` overrides the
 //! snapshot's path (at its strength, or 1 when it was off), so the two paths
 //! compare on one scene. `--choose ID=VALUE` sets any video option of the
 //! renderer settings catalogue as a player's choice (`--choose
@@ -508,6 +508,14 @@ fn run() -> Result<(), String> {
         let (mut draws, mut instances, mut batch_us) = (Vec::new(), Vec::new(), Vec::new());
         let mut history_resets = 0u32;
         let mut last_stats = render_wgpu::FrameStats::default();
+        // With `--advance` the frames' presentation time runs on from the
+        // snapshot's held time, not the wall clock, so every run (and every
+        // machine) draws the same moments.
+        let held = if advance != 0.0 {
+            driver.draw(|_, _| ()).1.presentation_seconds
+        } else {
+            0.0
+        };
         for frame in 1..=frames {
             if let (true, Some(start)) = (moving, start) {
                 // Engine yaw zero faces -Z; positive yaw turns toward +X.
@@ -530,10 +538,13 @@ fn run() -> Result<(), String> {
             }
             let started = Instant::now();
             let (stats, _) = driver.draw(|renderer, now| {
-                let at = now + advance * f64::from(frame);
-                if advance != 0.0 {
+                let at = if advance != 0.0 {
+                    let at = held + advance * f64::from(frame);
                     renderer.set_animation_time(at);
-                }
+                    at
+                } else {
+                    now
+                };
                 renderer.render_view_composition(&target, at)
             });
             draw_costs.push(ms(started));

@@ -145,8 +145,8 @@ wgpu program. A still camera reuses work a moving one repeats (culled lists,
 a directional light's shadow cascades): add `--walk M` or `--turn D` to move
 the snapshot's camera M metres forward or D degrees right before each extra
 frame. The snapshot holds presentation time; `--advance S` moves it on S
-seconds before each extra frame, so clouds drift and wind sways (in the
-motion too). A still snapshot also renders its shadow layers only once:
+seconds before each extra frame, from the snapshot's, so clouds drift and
+wind sways (in the motion too) and every run draws the same moments. A still snapshot also renders its shadow layers only once:
 `--rerender-shadows` renders them all in every extra frame, so `shadows` and
 the frame times show the uncached cost. The report's `shadows` gives the
 layers, pages, atlas bytes and the layers and casters the last frame rendered.
