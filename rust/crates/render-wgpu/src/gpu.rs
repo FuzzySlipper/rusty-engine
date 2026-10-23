@@ -1,7 +1,7 @@
 //! Device and adapter selection. The runtime owns one `Gpu`; the renderer,
 //! offscreen targets and window surfaces borrow it.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GpuError {
@@ -54,6 +54,9 @@ pub struct Gpu {
     /// shuts down once per device (`dlss.rs`).
     #[cfg(feature = "dlss")]
     pub(crate) ngx: crate::dlss::Ngx,
+    /// Why the device was lost, once it has been. wgpu reports a loss only
+    /// through its callback; after it every use of the device fails.
+    lost: Arc<Mutex<Option<String>>>,
 }
 
 impl Gpu {
@@ -194,6 +197,27 @@ impl Gpu {
         };
         #[cfg_attr(not(feature = "dlss"), allow(unused_variables))]
         let (device, queue, dlss) = request_device(&adapter, descriptor)?;
+        let lost = Arc::new(Mutex::new(None));
+        let slot = Arc::clone(&lost);
+        device.set_device_lost_callback(move |reason, message| {
+            let cause = format!("{reason:?}: {message}");
+            eprintln!("render-wgpu: the wgpu device was lost ({cause})");
+            *slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(cause);
+        });
+        // A lost device's resources are all invalid, so every later use of
+        // one raises a validation error: those follow from the loss, which
+        // is reported, and the renderer goes on without drawing. Any other
+        // error is a renderer bug and panics, as wgpu's default handler does.
+        let after_loss = Arc::clone(&lost);
+        device.on_uncaptured_error(Arc::new(move |error| {
+            if after_loss
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .is_none()
+            {
+                panic!("wgpu error: {error}");
+            }
+        }));
         Ok(Self {
             instance,
             adapter,
@@ -203,7 +227,26 @@ impl Gpu {
             dlss,
             #[cfg(feature = "dlss")]
             ngx: Default::default(),
+            lost,
         })
+    }
+
+    /// Destroy the device, as a driver reset loses one: for tests of what a
+    /// lost device leaves running. wgpu reports a destroyed device lost on
+    /// the next poll, where a driver's loss is reported as it is found.
+    #[doc(hidden)]
+    pub fn destroy_device(&self) {
+        self.device.destroy();
+        let _ = self.device.poll(wgpu::PollType::Poll);
+    }
+
+    /// Why the device was lost (its `DeviceLostReason` and the driver's
+    /// message), if it has been. Nothing draws after that.
+    pub fn lost(&self) -> Option<String> {
+        self.lost
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     /// Whether the adapter is a software rasterizer (llvmpipe, WARP): it
@@ -470,4 +513,34 @@ fn request_device(
     pollster::block_on(adapter.request_device(&descriptor))
         .map(|(device, queue)| (device, queue, false))
         .map_err(|error| GpuError::Device(error.to_string()))
+}
+
+/// A buffer holding `contents`, as `DeviceExt::create_buffer_init` makes
+/// it, that does not panic on a lost device. There `create_buffer` returns
+/// an invalid buffer without raising an error, and wgpu's helper panics
+/// mapping it; this one returns it unwritten, as a lost device leaves every
+/// other resource ([`Gpu::lost`] says why).
+pub(crate) fn buffer_init(
+    device: &wgpu::Device,
+    descriptor: &wgpu::util::BufferInitDescriptor<'_>,
+) -> wgpu::Buffer {
+    // `create_buffer_init`'s padding: a mapped buffer's size is a nonzero
+    // multiple of `COPY_BUFFER_ALIGNMENT`.
+    let size = descriptor.contents.len() as u64;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: descriptor.label,
+        size: size
+            .next_multiple_of(wgpu::COPY_BUFFER_ALIGNMENT)
+            .max(wgpu::COPY_BUFFER_ALIGNMENT),
+        usage: descriptor.usage,
+        mapped_at_creation: true,
+    });
+    if let Ok(mut mapped) = buffer.get_mapped_range_mut(..) {
+        mapped
+            .slice(..descriptor.contents.len())
+            .copy_from_slice(descriptor.contents);
+        drop(mapped);
+        buffer.unmap();
+    }
+    buffer
 }

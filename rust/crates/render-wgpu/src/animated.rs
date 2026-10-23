@@ -1447,24 +1447,23 @@ impl Renderer {
 
     /// A vertex buffer holding `data`, rewritable when `dynamic`.
     fn vertex_buffer(&self, label: &str, data: &[f32], dynamic: bool) -> wgpu::Buffer {
-        use wgpu::util::DeviceExt;
         let usage = if dynamic {
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST
         } else {
             wgpu::BufferUsages::VERTEX
         };
-        self.gpu
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        crate::gpu::buffer_init(
+            &self.gpu.device,
+            &wgpu::util::BufferInitDescriptor {
                 label: Some(label),
                 contents: bytemuck::cast_slice(data),
                 usage,
-            })
+            },
+        )
     }
 
     /// Upload a skinned primitive's vertices, which the CPU rewrites.
     fn upload_dynamic_vertices(&self, label: &str, vertices: &[f32], indices: &[u32]) -> GpuMesh {
-        use wgpu::util::DeviceExt;
         let device = &self.gpu.device;
         GpuMesh {
             bounds: vertex_bounds(vertices),
@@ -1481,16 +1480,22 @@ impl Renderer {
             vertex_occlusion: false,
             morph: None,
             skinned: Some(SkinnedHistory::default()),
-            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(vertices),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            }),
-            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(indices),
-                usage: wgpu::BufferUsages::INDEX,
-            }),
+            vertices: crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(vertices),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                },
+            ),
+            indices: crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(indices),
+                    usage: wgpu::BufferUsages::INDEX,
+                },
+            ),
             topology: Topology::Triangles,
             groups: vec![(0, 0, indices.len() as u32)],
             slots: BTreeMap::new(),

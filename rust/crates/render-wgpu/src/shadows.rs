@@ -49,7 +49,6 @@ use std::collections::HashSet;
 use glam::camera::rh::{proj::directx, view::look_to_mat4};
 use glam::{Mat4, Vec3};
 use render_model::{LightDescriptor, LightShadowIntent, RenderHandle};
-use wgpu::util::DeviceExt;
 
 use crate::batch::DrawList;
 use crate::camera::CameraMatrices;
@@ -688,11 +687,14 @@ impl ShadowMaps {
             let at = (u64::from(layer) * LAYER_UNIFORM_STRIDE) as usize;
             indices[at..at + 4].copy_from_slice(&layer.to_le_bytes());
         }
-        let layer_uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("render-wgpu shadow layer"),
-            contents: &indices,
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let layer_uniform = crate::gpu::buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("render-wgpu shadow layer"),
+                contents: &indices,
+                usage: wgpu::BufferUsages::UNIFORM,
+            },
+        );
         let layer_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render-wgpu shadow layer"),
             layout: layer_layout,

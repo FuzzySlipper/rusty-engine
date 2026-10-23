@@ -234,6 +234,8 @@ pub struct GpuReadout {
     pub upscale: UpscaleReadout,
     /// Why DLSS does not draw, while the settings ask for it.
     pub dlss: Option<DlssRefusal>,
+    /// Why the device was lost, once it has been ([`Gpu::lost`]).
+    pub device_lost: Option<String>,
 }
 
 /// The last primary frame's render and output resolutions, and its upscale
@@ -1198,6 +1200,7 @@ impl Renderer {
             water: self.water.readout(),
             upscale: self.upscaled,
             dlss: self.options.dlss.then(|| self.dlss_refusal()).flatten(),
+            device_lost: self.gpu.lost(),
         }
     }
 

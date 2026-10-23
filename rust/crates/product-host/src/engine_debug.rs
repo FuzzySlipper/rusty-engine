@@ -152,6 +152,11 @@ pub struct ProductHostShadowStatistics {
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductHostGpuStatistics {
+    /// Why the wgpu device was lost (wgpu's reason and the driver's
+    /// message), once it has been: nothing draws after that.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub device_lost: Option<String>,
     /// The device has timestamp queries, so the passes are timed.
     pub timestamps: bool,
     pub limits: ProductHostComputeLimits,

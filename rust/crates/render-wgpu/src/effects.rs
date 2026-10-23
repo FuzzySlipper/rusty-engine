@@ -358,7 +358,6 @@ impl Effects {
                 ],
             )
         });
-        use wgpu::util::DeviceExt;
         let corners: [f32; 8] = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0];
         Self {
             shader,
@@ -379,11 +378,14 @@ impl Effects {
             ),
             sprite_layout,
             particle_layout,
-            corners: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("render-wgpu quad corners"),
-                contents: bytemuck::cast_slice(&corners),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
+            corners: crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("render-wgpu quad corners"),
+                    contents: bytemuck::cast_slice(&corners),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ),
             sprite_rows: Rows::new(device, "render-wgpu sprite rows"),
             particle_rows: Rows::new(device, "render-wgpu particle rows"),
             cube_rows: Rows::new(device, "render-wgpu particle cube rows"),
@@ -1480,14 +1482,14 @@ impl Renderer {
                 if stale {
                     let rows_values = batch_rows(sprite, rows, &node.world, atlas);
                     let buffer = |label, contents: &[f32]| {
-                        use wgpu::util::DeviceExt;
-                        self.gpu
-                            .device
-                            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        crate::gpu::buffer_init(
+                            &self.gpu.device,
+                            &wgpu::util::BufferInitDescriptor {
                                 label: Some(label),
                                 contents: bytemuck::cast_slice(contents),
                                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                            })
+                            },
+                        )
                     };
                     // An empty batch still binds a buffer of one row.
                     let rows_buffer = buffer(

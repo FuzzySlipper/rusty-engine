@@ -91,14 +91,14 @@ impl StarField {
                 [x, y, z, star.magnitude, r, g, b]
             })
             .collect();
-        use wgpu::util::DeviceExt;
-        let buffer = gpu
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let buffer = crate::gpu::buffer_init(
+            &gpu.device,
+            &wgpu::util::BufferInitDescriptor {
                 label: Some("render-wgpu star catalogue"),
                 contents: bytemuck::cast_slice(&values),
                 usage: wgpu::BufferUsages::VERTEX,
-            });
+            },
+        );
         self.catalogue = Some((field.catalogue.clone(), buffer, stars.len() as u32));
         Ok(())
     }

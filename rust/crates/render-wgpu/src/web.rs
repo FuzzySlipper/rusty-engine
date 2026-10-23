@@ -350,7 +350,7 @@ impl WebOverlay {
         let mut bytes = [0u8; 16];
         bytes[0..4].copy_from_slice(&origin[0].to_le_bytes());
         bytes[4..8].copy_from_slice(&origin[1].to_le_bytes());
-        let uniform = wgpu::util::DeviceExt::create_buffer_init(
+        let uniform = crate::gpu::buffer_init(
             device,
             &wgpu::util::BufferInitDescriptor {
                 label: Some("render-wgpu web overlay origin"),

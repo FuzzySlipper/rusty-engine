@@ -382,11 +382,14 @@ impl AmbientOcclusionPass {
                 &[255; 4],
             )
             .create_view(&Default::default());
-        let off_params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("render-wgpu ambient occlusion off"),
-            contents: &[0; APPLY_BYTES as usize],
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
+        let off_params = crate::gpu::buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("render-wgpu ambient occlusion off"),
+                contents: &[0; APPLY_BYTES as usize],
+                usage: wgpu::BufferUsages::UNIFORM,
+            },
+        );
         let off = apply_bind_group(device, apply_layout, &white, &sampler, &off_params);
         Self {
             compute,

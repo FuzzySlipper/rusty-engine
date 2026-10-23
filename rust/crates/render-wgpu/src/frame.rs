@@ -2006,15 +2006,14 @@ impl Renderer {
             .iter()
             .flat_map(|value| value.to_le_bytes())
             .collect();
-        use wgpu::util::DeviceExt;
-        let buffer = self
-            .gpu
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let buffer = crate::gpu::buffer_init(
+            &self.gpu.device,
+            &wgpu::util::BufferInitDescriptor {
                 label: Some("render-wgpu sky"),
                 contents: &uniform,
                 usage: wgpu::BufferUsages::UNIFORM,
-            });
+            },
+        );
         self.sky_bind_group = Some(
             self.gpu
                 .device

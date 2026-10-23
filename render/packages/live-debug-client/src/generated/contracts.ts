@@ -157,6 +157,11 @@ medianGpuMs: number, };
  */
 export type ProductHostGpuStatistics = { 
 /**
+ * Why the wgpu device was lost (wgpu's reason and the driver's
+ * message), once it has been: nothing draws after that.
+ */
+deviceLost?: string, 
+/**
  * The device has timestamp queries, so the passes are timed.
  */
 timestamps: boolean, limits: ProductHostComputeLimits, 

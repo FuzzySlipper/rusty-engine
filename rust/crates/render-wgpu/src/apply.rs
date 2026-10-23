@@ -1907,14 +1907,14 @@ impl Renderer {
                 .include(*position + Vec3::new(0.0, target[0], 0.0));
         }
         mesh.morph = Some(crate::tables::MorphStream {
-            targets: self
-                .gpu
-                .device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            targets: crate::gpu::buffer_init(
+                &self.gpu.device,
+                &wgpu::util::BufferInitDescriptor {
                     label: Some(label),
                     contents: bytemuck::cast_slice(&morph.targets),
                     usage: wgpu::BufferUsages::VERTEX,
-                }),
+                },
+            ),
             start: morph.start,
             end: morph.end,
         });
@@ -2033,16 +2033,22 @@ impl Renderer {
             skinned: None,
             // Copied from too: the selected scatter copies draw from a pool
             // of their meshes (`mesh_pool.rs`).
-            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(vertices),
-                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
-            }),
-            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(indices),
-                usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC,
-            }),
+            vertices: crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(vertices),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
+                },
+            ),
+            indices: crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(indices),
+                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC,
+                },
+            ),
             topology,
             groups,
             slots,
@@ -2562,11 +2568,14 @@ pub(crate) fn material_bind_group(
     floats[124] = if params.keep_dry { 1.0 } else { 0.0 };
     floats[125] = if params.sinks_under_snow { 1.0 } else { 0.0 };
     let uniform: &[u8] = bytemuck::cast_slice(&floats);
-    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some(label),
-        contents: uniform,
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let buffer = crate::gpu::buffer_init(
+        device,
+        &wgpu::util::BufferInitDescriptor {
+            label: Some(label),
+            contents: uniform,
+            usage: wgpu::BufferUsages::UNIFORM,
+        },
+    );
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some(label),
         layout,
@@ -2873,11 +2882,14 @@ pub(crate) fn edge_buffer(device: &wgpu::Device, indices: &[u32]) -> wgpu::Buffe
             triangle[0],
         ]);
     }
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("render-wgpu wireframe edges"),
-        contents: bytemuck::cast_slice(&edges),
-        usage: wgpu::BufferUsages::INDEX,
-    })
+    crate::gpu::buffer_init(
+        device,
+        &wgpu::util::BufferInitDescriptor {
+            label: Some("render-wgpu wireframe edges"),
+            contents: bytemuck::cast_slice(&edges),
+            usage: wgpu::BufferUsages::INDEX,
+        },
+    )
 }
 
 fn mul(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {

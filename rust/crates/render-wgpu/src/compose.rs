@@ -328,10 +328,9 @@ impl Compose {
                 OFFSCREEN_FORMAT.into(),
             ));
         }
-        use wgpu::util::DeviceExt;
-        let params = gpu
-            .device
-            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        let params = crate::gpu::buffer_init(
+            &gpu.device,
+            &wgpu::util::BufferInitDescriptor {
                 label: Some("render-wgpu capture convert"),
                 contents: &params_bytes(
                     [0.0; 4],
@@ -340,7 +339,8 @@ impl Compose {
                     conversion.factor,
                 ),
                 usage: wgpu::BufferUsages::UNIFORM,
-            });
+            },
+        );
         let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render-wgpu capture convert"),
             layout: &self.convert_layout,

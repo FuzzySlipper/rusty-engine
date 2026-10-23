@@ -944,6 +944,7 @@ fn settings_statistics(
 fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
     let ambient_occlusion = readout.ambient_occlusion;
     ProductHostGpuStatistics {
+        device_lost: readout.device_lost,
         timestamps: readout.timestamps,
         limits: ProductHostComputeLimits {
             workgroup_size: readout.limits.workgroup_size,
