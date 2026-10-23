@@ -438,7 +438,6 @@ impl Upscale {
             (UpscaleMethod::Dlss, Some(inputs)) => {
                 let drawn = self.dlss.run(
                     gpu,
-                    compose,
                     &self.sampler,
                     self.timer.as_mut(),
                     picture,

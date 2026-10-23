@@ -49,7 +49,9 @@
 //!   the mask's share of the current frame, and above `REACTIVE_JITTERED`
 //!   takes the picture where it stands as the current frame
 //!   (`upscale.wgsl`), so labels neither smear nor shimmer; DLSS takes the
-//!   mask as its bias toward the current colour (`dlss.rs`). Whatever covers
+//!   mask as its bias toward the current colour, and its output takes the
+//!   picture where it stands above `REACTIVE_JITTERED` too (`dlss.rs`
+//!   `Output`). Whatever covers
 //!   a pixel later writes its own: the viewmodel over a depth-layer label,
 //!   an on-top label over the viewmodel.
 //! - **No motion of their own:** a viewport's clear writes

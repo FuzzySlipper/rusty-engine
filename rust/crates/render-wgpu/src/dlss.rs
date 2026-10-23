@@ -27,11 +27,12 @@
 //! in render pixels; DLSS takes the way back, so its scale is -1, and reads
 //! only its first two channels. Its reactive mask (`motion.rs`) goes to
 //! DLSS as the bias toward the current colour, drawn out into a target of
-//! its own. `NO_MOTION` (a viewport's clear) reads to DLSS as a point come
-//! from far off screen, so there it takes the current frame, as TAAU leans
-//! on it. The
-//! picture is finished and tone-mapped, so DLSS runs on low dynamic range
-//! with no exposure. It writes a storage texture at output size (a surface
+//! its own; where it says the picture was drawn unjittered (labels, overlay
+//! lines), the pass that draws DLSS's output into the frame takes the
+//! picture as it stands, as TAAU does. `NO_MOTION` (a viewport's clear)
+//! reads to DLSS as a point come from far off screen, so there it takes the
+//! current frame, as TAAU leans on it. The picture is finished and
+//! tone-mapped, so DLSS runs on low dynamic range with no exposure. It writes a storage texture at output size (a surface
 //! cannot be one), which is then drawn into the output; the `upscale` pass
 //! times both.
 //!
@@ -68,7 +69,6 @@ pub(crate) use unbuilt::Dlss;
 #[cfg(not(feature = "dlss"))]
 mod unbuilt {
     use super::Refused;
-    use crate::compose::Compose;
     use crate::motion::TemporalInputs;
     use crate::target::{RenderPicture, TargetView};
     use crate::timing::PassTimer;
@@ -123,7 +123,6 @@ mod unbuilt {
         pub fn run(
             &mut self,
             _gpu: &Gpu,
-            _compose: &mut Compose,
             _sampler: &wgpu::Sampler,
             _timer: Option<&mut PassTimer>,
             _picture: &RenderPicture,
@@ -154,7 +153,6 @@ mod built {
     use dlss_wgpu::{DlssError, DlssFeatureFlags, DlssPerfQualityMode, DlssSdk};
 
     use super::{Refused, NVIDIA, PROJECT_ID};
-    use crate::compose::Compose;
     use crate::motion::TemporalInputs;
     use crate::target::{RenderPicture, TargetView};
     use crate::timing::PassTimer;
@@ -367,6 +365,125 @@ mod built {
         }
     }
 
+    /// The pass that draws DLSS's output into the frame (`dlss_inputs.wgsl`
+    /// `fs_output`): where the reactive mask says the picture was drawn
+    /// unjittered (labels and overlay lines), the picture as it stands, as
+    /// TAAU takes it; DLSS would reconstruct those pixels as jittered.
+    struct Output {
+        layout: wgpu::BindGroupLayout,
+        pipeline_layout: wgpu::PipelineLayout,
+        module: wgpu::ShaderModule,
+        /// By the frame's format.
+        pipelines: Vec<(wgpu::TextureFormat, wgpu::RenderPipeline)>,
+    }
+
+    impl Output {
+        fn new(device: &wgpu::Device) -> Self {
+            let texture = |binding, filterable| wgpu::BindGroupLayoutEntry {
+                binding,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            };
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("render-wgpu dlss output"),
+                entries: &[
+                    texture(2, false),
+                    texture(3, true),
+                    texture(4, true),
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("render-wgpu dlss output"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            Self {
+                module: device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("render-wgpu dlss output"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("dlss_inputs.wgsl").into()),
+                }),
+                layout,
+                pipeline_layout,
+                pipelines: Vec::new(),
+            }
+        }
+
+        fn bind_group(
+            &self,
+            device: &wgpu::Device,
+            sampler: &wgpu::Sampler,
+            upscaled: &wgpu::TextureView,
+            picture: &wgpu::TextureView,
+            motion: &wgpu::TextureView,
+        ) -> wgpu::BindGroup {
+            let texture = |binding, view| wgpu::BindGroupEntry {
+                binding,
+                resource: wgpu::BindingResource::TextureView(view),
+            };
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("render-wgpu dlss output"),
+                layout: &self.layout,
+                entries: &[
+                    texture(2, motion),
+                    texture(3, upscaled),
+                    texture(4, picture),
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
+        }
+
+        /// The pipeline for a frame of `format`, made once.
+        fn pipeline(
+            &mut self,
+            device: &wgpu::Device,
+            format: wgpu::TextureFormat,
+        ) -> &wgpu::RenderPipeline {
+            let index = match self.pipelines.iter().position(|(made, _)| *made == format) {
+                Some(index) => index,
+                None => {
+                    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("render-wgpu dlss output"),
+                        layout: Some(&self.pipeline_layout),
+                        vertex: wgpu::VertexState {
+                            module: &self.module,
+                            entry_point: Some("vs_fullscreen"),
+                            compilation_options: Default::default(),
+                            buffers: &[],
+                        },
+                        primitive: Default::default(),
+                        depth_stencil: None,
+                        multisample: Default::default(),
+                        fragment: Some(wgpu::FragmentState {
+                            module: &self.module,
+                            entry_point: Some("fs_output"),
+                            compilation_options: Default::default(),
+                            targets: &[Some(format.into())],
+                        }),
+                        multiview_mask: None,
+                        cache: None,
+                    });
+                    self.pipelines.push((format, pipeline));
+                    self.pipelines.len() - 1
+                }
+            };
+            &self.pipelines[index].1
+        }
+    }
+
     /// The feature for one output size and mode, and what it writes.
     struct Feature {
         size: (u32, u32),
@@ -386,6 +503,9 @@ mod built {
         /// the reactive mask's, from the first frame.
         depth: Option<Input>,
         bias: Option<Input>,
+        /// The pass that draws DLSS's output into the frame, from the first
+        /// frame.
+        output: Option<Output>,
         /// The next frame starts the history again.
         fresh: bool,
     }
@@ -398,6 +518,7 @@ mod built {
                 feature: None,
                 depth: None,
                 bias: None,
+                output: None,
                 fresh: true,
             }
         }
@@ -426,7 +547,6 @@ mod built {
         pub fn run(
             &mut self,
             gpu: &Gpu,
-            compose: &mut Compose,
             sampler: &wgpu::Sampler,
             timer: Option<&mut PassTimer>,
             picture: &RenderPicture,
@@ -434,16 +554,7 @@ mod built {
             render_scale: f32,
             output: &TargetView<'_>,
         ) -> Result<(), Refused> {
-            let result = self.evaluate(
-                gpu,
-                compose,
-                sampler,
-                timer,
-                picture,
-                inputs,
-                render_scale,
-                output,
-            );
+            let result = self.evaluate(gpu, sampler, timer, picture, inputs, render_scale, output);
             if let Err(refused) = &result {
                 self.failed = Some(refused.clone());
                 self.feature = None;
@@ -537,7 +648,6 @@ mod built {
         fn evaluate(
             &mut self,
             gpu: &Gpu,
-            compose: &mut Compose,
             sampler: &wgpu::Sampler,
             timer: Option<&mut PassTimer>,
             picture: &RenderPicture,
@@ -601,8 +711,15 @@ mod built {
                     &gpu.adapter,
                 )
                 .map_err(|error| failed("DLSS could not evaluate", error))?;
-            compose.prepare_blit(&gpu.device, output.format);
-            let group = compose.blit_bind_group(&gpu.device, &feature.output, sampler);
+            let drawing = self.output.get_or_insert_with(|| Output::new(&gpu.device));
+            let group = drawing.bind_group(
+                &gpu.device,
+                sampler,
+                &feature.output,
+                picture.image(),
+                inputs.motion,
+            );
+            let pipeline = drawing.pipeline(&gpu.device, output.format);
             let mut drawn = gpu
                 .device
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -627,7 +744,9 @@ mod built {
                     occlusion_query_set: None,
                     multiview_mask: None,
                 });
-                compose.blit(&mut pass, output.format, &group);
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.draw(0..3, 0..1);
             }
             if let Some(timer) = timer {
                 timer.resolve(&mut drawn);

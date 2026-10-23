@@ -353,7 +353,9 @@ water marks half. Labels and overlay lines, drawn unjittered into the
 picture, mark it whole and keep the motion of what lies under them. TAAU
 takes at least the mask's share of the current frame, and where a label or
 line marks it takes the picture as it stands, so they neither smear nor
-shimmer. DLSS takes the mask as its bias toward the current colour.
+shimmer. DLSS takes the mask as its bias toward the current colour, and
+where a label or line marks it the frame takes the picture as it stands
+over DLSS's output, as TAAU does.
 Sprites and ghost plates show the motion of what lies under them.
 
 The stage is told its history no longer holds on the first frame with

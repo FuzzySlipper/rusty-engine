@@ -7,6 +7,7 @@
 // - its bias toward the current colour (`fs_bias`): the motion target's
 //   reactive mask (render-wgpu `motion.rs`), which DLSS reads from a
 //   texture of its own.
+// Then `fs_output` draws DLSS's output into the frame.
 
 @group(0) @binding(0) var world_depth: texture_depth_2d;
 @group(0) @binding(1) var viewmodel_depth: texture_depth_2d;
@@ -34,4 +35,31 @@ fn fs_depth(@builtin(position) at: vec4<f32>) -> @location(0) f32 {
 @fragment
 fn fs_bias(@builtin(position) at: vec4<f32>) -> @location(0) f32 {
     return clamp(textureLoad(motion, vec2<i32>(at.xy), 0).z, 0.0, 1.0);
+}
+
+@group(0) @binding(3) var upscaled: texture_2d<f32>;
+@group(0) @binding(4) var picture: texture_2d<f32>;
+@group(0) @binding(5) var output_sampler: sampler;
+
+// Above it the reactive mask says the pixel was drawn without the jitter
+// (`rusty::types::REACTIVE_JITTERED`).
+const REACTIVE_JITTERED: f32 = 0.5;
+
+// DLSS's output into the frame; where the mask says the picture was drawn
+// unjittered (labels, overlay lines), the picture as it stands, which DLSS
+// would reconstruct as jittered content: `upscale.wgsl` takes it the same
+// way.
+@fragment
+fn fs_output(@builtin(position) at: vec4<f32>) -> @location(0) vec4<f32> {
+    let uv = at.xy / vec2<f32>(textureDimensions(upscaled));
+    let color = textureSampleLevel(upscaled, output_sampler, uv, 0.0);
+    let size = textureDimensions(motion);
+    let texel = vec2<i32>(min(vec2<u32>(uv * vec2<f32>(size)), size - vec2<u32>(1u)));
+    let mask = clamp(textureLoad(motion, texel, 0).z, 0.0, 1.0);
+    let unjittered = clamp((mask - REACTIVE_JITTERED) / (1.0 - REACTIVE_JITTERED), 0.0, 1.0);
+    if unjittered <= 0.0 {
+        return color;
+    }
+    let standing = textureSampleLevel(picture, output_sampler, uv, 0.0);
+    return mix(color, standing, unjittered);
 }

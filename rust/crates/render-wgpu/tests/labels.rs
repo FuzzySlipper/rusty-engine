@@ -818,17 +818,31 @@ fn labels_keep_their_css_size_at_device_pixel_ratio_two() {
     );
 }
 
-/// Under a temporal stage, a camera moving past labels in all three layers,
-/// with a viewmodel in front, draws each label as the current frame alone
-/// would: labels mark the reactive mask, so the stage keeps none of their
-/// history and they leave no trail over the world moving behind them.
-/// Overlay lines stay as readable.
-#[test]
-fn labels_and_overlay_lines_leave_no_trail_under_a_temporal_stage() {
+/// How labels and an overlay line drew under a temporal stage against the
+/// current frame alone: the label pixels in the current frame, those that
+/// stayed near the label colour, those of the label colour away from any
+/// label, the mean levels off in and around them, and the line's pixels
+/// and those that stayed readable.
+struct LabelsDrawn {
+    labelled: usize,
+    kept: usize,
+    trail: usize,
+    error: f64,
+    line: usize,
+    line_kept: usize,
+}
+
+/// Three labels in all three layers, a viewmodel in front and an overlay
+/// line, under `antialiasing` (its stage at default render scale), seen from
+/// a camera strafing right 6 cm a frame for 16 frames and then holding for
+/// `held` more: how the last frame's labels drew against the current frame
+/// alone, how far the last two frames' labels differ (flicker), and the
+/// stage that drew.
+fn labels_under(
+    antialiasing: Antialiasing,
+    held: u32,
+) -> (LabelsDrawn, f64, Option<render_wgpu::UpscaleMethod>) {
     let mut harness = harness();
-    if harness.gpu.is_software() {
-        return;
-    }
     let magenta = |layer, position, words| BillboardDescriptor {
         background: [1.0, 0.0, 1.0, 1.0],
         ..label(position, text(words), layer)
@@ -906,15 +920,17 @@ fn labels_and_overlay_lines_leave_no_trail_under_a_temporal_stage() {
             &composition(vec![eye], vec![primary_view("main", "eye", whole, 0)]),
             0.0,
         );
-        harness.composition(0.0).1
+        harness.composition(0.0)
     };
-    settings(&mut harness, Antialiasing::Temporal);
-    let mut temporal = Vec::new();
-    for frame in 0..16 {
-        temporal = draw(&mut harness, frame);
+    settings(&mut harness, antialiasing);
+    let (mut stage, mut before, mut temporal) = (None, Vec::new(), Vec::new());
+    for frame in 0..16 + held {
+        let (stats, picture) = draw(&mut harness, frame.min(15));
+        before = std::mem::replace(&mut temporal, picture);
+        stage = stats.upscale;
     }
     settings(&mut harness, Antialiasing::Off);
-    let current = draw(&mut harness, 15);
+    let current = draw(&mut harness, 15).1;
     let is_magenta = |rgba: &[u8], index: usize| {
         let pixel = &rgba[index * 4..index * 4 + 3];
         pixel[0] > 200 && pixel[1] < 60 && pixel[2] > 200
@@ -944,43 +960,92 @@ fn labels_and_overlay_lines_leave_no_trail_under_a_temporal_stage() {
     };
     let pixels = (LABEL_WIDTH * LABEL_HEIGHT) as usize;
     let labelled = (0..pixels).filter(|&i| is_magenta(&current, i)).count();
-    let kept = (0..pixels)
-        .filter(|&i| is_magenta(&current, i) && is_pinkish(&temporal, i))
-        .count();
-    let trail = (0..pixels)
-        .filter(|&i| is_magenta(&temporal, i) && !near(&current, i, &is_magenta))
-        .count();
-    // In and around them, the levels they differ by from the current
-    // frame's: the stage's history blended in would show here.
-    let error = (0..pixels)
-        .filter(|&i| near(&current, i, &is_magenta))
-        .map(|i| {
-            (0..3)
-                .map(|c| f64::from(current[i * 4 + c].abs_diff(temporal[i * 4 + c])))
-                .sum::<f64>()
-                / 3.0
-        })
-        .sum::<f64>()
-        / labelled as f64;
-    assert!(labelled > 600, "the three labels draw: {labelled}");
-    assert!(
-        kept * 100 >= labelled * 97,
-        "the labels draw as the current frame does: {kept} of {labelled}"
-    );
-    assert!(trail * 100 <= labelled, "no trail: {trail} of {labelled}");
-    assert!(
-        error < 10.0,
-        "the labels hold their colour: {error:.1} levels off"
-    );
-    let line = (0..pixels).filter(|&i| is_cyan(&current, i)).count();
-    let line_kept = (0..pixels)
-        .filter(|&i| is_cyan(&current, i) && near(&temporal, i, &is_cyan))
-        .count();
-    assert!(line > 100, "the line draws: {line}");
-    assert!(
-        line_kept * 100 >= line * 90,
-        "the line stays readable: {line_kept} of {line}"
-    );
+    // In and around the labels, the levels `picture` differs by from
+    // `reference`'s: the stage's history blended in would show here.
+    let off = |reference: &[u8], picture: &[u8]| {
+        (0..pixels)
+            .filter(|&i| near(&current, i, &is_magenta))
+            .map(|i| {
+                (0..3)
+                    .map(|c| f64::from(reference[i * 4 + c].abs_diff(picture[i * 4 + c])))
+                    .sum::<f64>()
+                    / 3.0
+            })
+            .sum::<f64>()
+            / labelled as f64
+    };
+    let drawn = LabelsDrawn {
+        labelled,
+        kept: (0..pixels)
+            .filter(|&i| is_magenta(&current, i) && is_pinkish(&temporal, i))
+            .count(),
+        trail: (0..pixels)
+            .filter(|&i| is_magenta(&temporal, i) && !near(&current, i, &is_magenta))
+            .count(),
+        error: off(&current, &temporal),
+        line: (0..pixels).filter(|&i| is_cyan(&current, i)).count(),
+        line_kept: (0..pixels)
+            .filter(|&i| is_cyan(&current, i) && near(&temporal, i, &is_cyan))
+            .count(),
+    };
+    (drawn, off(&before, &temporal), stage)
+}
+
+/// Under a temporal stage, a camera moving past labels in all three layers,
+/// with a viewmodel in front, draws each label as the current frame alone
+/// would: labels mark the reactive mask, so the stage keeps none of their
+/// history and they leave no trail over the world moving behind them. Held
+/// still after, they keep their colour and do not flicker. Overlay lines
+/// stay as readable. Under TAAU, and under DLSS where it draws, which takes
+/// the mask as its bias toward the current colour.
+#[test]
+fn labels_and_overlay_lines_leave_no_trail_under_a_temporal_stage() {
+    if harness().gpu.is_software() {
+        return;
+    }
+    for antialiasing in [Antialiasing::Temporal, Antialiasing::Dlss] {
+        let (moving, _, stage) = labels_under(antialiasing, 0);
+        if antialiasing == Antialiasing::Dlss && stage != Some(render_wgpu::UpscaleMethod::Dlss) {
+            continue;
+        }
+        let (still, flicker, _) = labels_under(antialiasing, 8);
+        eprintln!(
+            "{antialiasing:?}: moving {:.1} levels off, held {:.1} off and {flicker:.2} frame to frame",
+            moving.error, still.error
+        );
+        for (camera, drawn) in [("moving", &moving), ("held", &still)] {
+            let LabelsDrawn {
+                labelled,
+                kept,
+                trail,
+                error,
+                line,
+                line_kept,
+            } = *drawn;
+            assert!(labelled > 600, "the three labels draw: {labelled}");
+            assert!(
+                kept * 100 >= labelled * 97,
+                "{antialiasing:?}, {camera}: the labels draw as the current frame does: {kept} of {labelled}"
+            );
+            assert!(
+                trail * 100 <= labelled,
+                "{antialiasing:?}, {camera}: no trail: {trail} of {labelled}"
+            );
+            assert!(
+                error < 10.0,
+                "{antialiasing:?}, {camera}: the labels hold their colour: {error:.1} levels off"
+            );
+            assert!(line > 100, "the line draws: {line}");
+            assert!(
+                line_kept * 100 >= line * 90,
+                "{antialiasing:?}, {camera}: the line stays readable: {line_kept} of {line}"
+            );
+        }
+        assert!(
+            flicker < 1.0,
+            "{antialiasing:?}: held labels do not flicker: {flicker:.2} levels frame to frame"
+        );
+    }
 }
 
 /// An inspection capture draws its labels into its own target, apart from
