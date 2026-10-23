@@ -648,7 +648,6 @@ impl FrameOutput {
             Some(SettingRefusal::TooFewTextureBindings) => {
                 NativeRendererSettingRefusal::TooFewTextureBindings
             }
-            Some(SettingRefusal::ImageEffect) => NativeRendererSettingRefusal::ImageEffect,
             Some(SettingRefusal::NotBuilt) => NativeRendererSettingRefusal::NotBuilt,
             Some(SettingRefusal::UnsupportedAdapter) => {
                 NativeRendererSettingRefusal::UnsupportedAdapter
@@ -897,7 +896,6 @@ fn settings_statistics(
         SettingRefusal::TooFewTextureBindings => {
             "the adapter binds too few textures per shader stage"
         }
-        SettingRefusal::ImageEffect => "a product image effect draws in the temporal stage's place",
         SettingRefusal::NotBuilt => "this build of the Engine does not have it",
         SettingRefusal::UnsupportedAdapter => "the adapter cannot run it",
         SettingRefusal::InitializationFailed => "it failed to start on this device",

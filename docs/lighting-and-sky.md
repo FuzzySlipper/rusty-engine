@@ -308,8 +308,7 @@ lighting fall back to the screen-space pass and the light loop),
 so frames wait for its refresh with vsync off), `SoftwareAdapter` (a
 GPU-only feature on a software adapter, the temporal stage among them),
 `TooFewTextureBindings` (water reflections on a device without the colour
-copy), `ImageEffect` (a product image effect draws in the temporal
-stage's place), and for DLSS `NotBuilt`, `UnsupportedAdapter` and
+copy), and for DLSS `NotBuilt`, `UnsupportedAdapter` and
 `InitializationFailed` ([DLSS](#dlss)). A refused
 setting is not an error: `Set` accepts any finite, non-negative strength, positive
 radius and render scale from 0.33 to 1, and refuses only values outside
@@ -403,10 +402,9 @@ The render scale picks the mode:
 
 Any scale between draws too; MSAA is off while the stage draws (one setting
 holds both). A software adapter refuses the stage (`SoftwareAdapter`) and
-draws without anti-aliasing, bilinear at the render scale. A product image
-effect takes the stage's place: while one is set, frames draw without the
-temporal stage, and the readout says so (`ImageEffect`, effective
-antialiasing off). The history starts again on a camera cut and whenever the
+draws without anti-aliasing, bilinear at the render scale. A product
+[image effect](#image-effects) draws over what the stage resolved. The
+history starts again on a camera cut and whenever the
 temporal inputs reset, the output's size changes or a frame draws without
 the stage.
 
@@ -1766,10 +1764,13 @@ imports what it needs from `rusty::image`:
 
 The result replaces the pixel. The picture is finished first (fog, grade,
 tone mapping, bloom), so the effect works in display values, and the
-product UI draws over it. The picture is the render scale's when there is
-one, and the effect upscales it: while an effect is set no temporal stage
-draws and the views do not jitter, and the settings readout refuses
-`temporal` or `dlss` antialiasing with `ImageEffect`.
+product UI draws over it. Under a temporal stage ([TAAU](#temporal-upscaling-taau)
+or [DLSS](#dlss)) the picture is what the stage resolved at the output's
+resolution, anti-aliased, and `depth` is still the render resolution's
+nearest. Otherwise the picture is the render scale's when there is one, and
+the effect upscales it. Under a temporal stage the effect needs a picture
+of the output's size beside the output, 4 bytes a pixel (14.7 MB at
+2560×1440).
 
 While an effect is set, each primary view draws into a picture of its own,
 and one full-screen pass runs the effect into the view, timed as

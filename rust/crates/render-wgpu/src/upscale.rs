@@ -11,9 +11,11 @@
 //!   lines, drawn inside the world and viewmodel passes against their
 //!   depth; the labels; the viewmodel; offscreen targets presented into the
 //!   primary; and inspection views.
-//! - **Output resolution:** this stage, or a product image effect in its
-//!   place (`image_effect.rs`), which samples the picture into the output
-//!   itself. Then a playing video and the hosts' UI.
+//! - **Output resolution:** this stage, a product image effect
+//!   (`image_effect.rs`) sampling the picture into the output itself, or a
+//!   temporal method resolving into a picture of the effect's at output
+//!   resolution and the effect over that. Then a playing video and the
+//!   hosts' UI.
 //!
 //! Offscreen composition targets draw at their own size either way.
 //!
@@ -48,11 +50,10 @@
 //!   after tone mapping, so it needs no exposure.
 //!
 //!   A software adapter refuses it (`Renderer::temporal_refusal`) and
-//!   draws bilinear at the render scale, without anti-aliasing. A product
-//!   image effect replaces the stage: while one is set, TAAU is refused
-//!   (`ImageEffect`) and the views do not jitter. Its history starts again
-//!   whenever the frame says it no longer holds (`TemporalInputs`), the
-//!   output's size changes, or a frame draws without it.
+//!   draws bilinear at the render scale, without anti-aliasing. Its history
+//!   starts again whenever the frame says it no longer holds
+//!   (`TemporalInputs`), the output's size changes, or a frame draws
+//!   without it.
 //! - **DLSS** (`dlss.rs`): NVIDIA's temporal upscaler, from the same inputs.
 //!   `Antialiasing::Dlss` selects it, in builds with it, on adapters that
 //!   run it; where it is refused, TAAU draws.
@@ -118,7 +119,7 @@ pub enum UpscaleMethod {
 impl UpscaleMethod {
     /// The method `options` select, or `None` to draw straight into the
     /// output. `temporal` is whether the device and frame can run a
-    /// temporal stage (no refusal and no image effect), and `dlss` whether
+    /// temporal stage (no refusal, and not a reading), and `dlss` whether
     /// DLSS can (no refusal).
     ///
     /// `Antialiasing::Temporal` selects TAAU at any render scale, and

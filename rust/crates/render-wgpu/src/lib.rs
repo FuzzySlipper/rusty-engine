@@ -450,10 +450,6 @@ pub enum SettingRefusal {
     SoftwareAdapter,
     /// The device binds too few textures per shader stage for the feature.
     TooFewTextureBindings,
-    /// A product image effect takes the temporal upscale stage's place
-    /// (`image_effect.rs`): frames draw without temporal anti-aliasing while
-    /// one is set.
-    ImageEffect,
     /// This build of the Engine does not have the feature (DLSS, built only
     /// with render-wgpu's `dlss` feature).
     NotBuilt,
@@ -991,17 +987,13 @@ impl Renderer {
 
     /// Why frames draw without the temporal upscale stage: a software
     /// adapter refuses it (a GPU-only feature,
-    /// docs/verification.md#gpu-verification), and a product image effect
-    /// takes its place. They then draw without anti-aliasing, at the render
-    /// scale through the bilinear stage or the effect.
+    /// docs/verification.md#gpu-verification). They then draw without
+    /// anti-aliasing, at the render scale through the bilinear stage or a
+    /// product image effect.
     pub(crate) fn temporal_refusal(&self) -> Option<SettingRefusal> {
-        if self.gpu.is_software() {
-            Some(SettingRefusal::SoftwareAdapter)
-        } else if self.image_effect.active() {
-            Some(SettingRefusal::ImageEffect)
-        } else {
-            None
-        }
+        self.gpu
+            .is_software()
+            .then_some(SettingRefusal::SoftwareAdapter)
     }
 
     /// Why DLSS does not draw the temporal stage, if it cannot

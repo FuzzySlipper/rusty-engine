@@ -6,13 +6,18 @@
 //! may sample the picture anywhere and reads its depth, its own parameters
 //! and textures, and the presentation time. Timed as `image-effect`. With
 //! none set, views draw as before.
+//!
+//! Under a temporal upscale stage (`upscale.rs`) the stage resolves the
+//! picture into an output-size picture of the effect's (`resolved`), and the
+//! effect reads that, with the depth still at render resolution. Below render
+//! scale 1 without one, the effect itself upscales the picture.
 
 use render_shaders::{Entry, Features};
 
 use crate::gpu::Gpu;
 use crate::shaders::Shaders;
 use crate::tables::GpuTexture;
-use crate::target::{RenderPicture, TargetView};
+use crate::target::{RenderPicture, TargetView, OFFSCREEN_FORMAT};
 use crate::timing::{untimed, GpuPassTiming, PassTimer};
 
 /// Bytes of `ImageEffectParams` in `image.wgsl`: four parameter rows and
@@ -34,6 +39,9 @@ pub(crate) struct ImageEffect {
     /// Modules composed and pipelines made so far, for diagnostics.
     builds: (u64, u64),
     pipelines: Vec<((wgpu::TextureFormat, bool), wgpu::RenderPipeline)>,
+    /// The output-size picture a temporal stage resolves into for the
+    /// effect, while frames draw one.
+    resolved: Option<((u32, u32), wgpu::TextureView)>,
     timer: Option<PassTimer>,
 }
 
@@ -119,6 +127,7 @@ impl ImageEffect {
             composed: None,
             builds: (0, 0),
             pipelines: Vec::new(),
+            resolved: None,
             timer: PassTimer::new(gpu, PASS),
         }
     }
@@ -143,6 +152,7 @@ impl ImageEffect {
         self.module = None;
         self.composed = None;
         let Some(product) = product else {
+            self.resolved = None;
             return Ok(());
         };
         let features = Features::default().with_product(product);
@@ -161,12 +171,48 @@ impl ImageEffect {
         self.module.is_some()
     }
 
-    /// Run the effect over `picture` into `output`.
+    /// The output-size picture a temporal stage resolves into for the
+    /// effect, at `size` (`OFFSCREEN_FORMAT`), made again when the size
+    /// changes.
+    pub fn resolved(&mut self, gpu: &Gpu, size: (u32, u32)) -> wgpu::TextureView {
+        if let Some((made, view)) = &self.resolved {
+            if *made == size {
+                return view.clone();
+            }
+        }
+        let view = gpu
+            .device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("render-wgpu image effect resolved"),
+                size: crate::target::extent(size.0, size.1),
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: OFFSCREEN_FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+        self.resolved = Some((size, view.clone()));
+        view
+    }
+
+    /// Frames no longer draw a temporal stage under the effect: its
+    /// resolved picture goes.
+    pub fn forget_resolved(&mut self) {
+        self.resolved = None;
+    }
+
+    /// Run the effect over `picture` into `output`: over its colour, or
+    /// over `resolved` (a temporal stage's output-size picture of it) with
+    /// its depth.
     #[allow(clippy::too_many_arguments, reason = "one pass description")]
     pub fn apply(
         &mut self,
         gpu: &Gpu,
         picture: &RenderPicture,
+        resolved: Option<&wgpu::TextureView>,
         output: &TargetView<'_>,
         parameters: &[[f32; 4]; 4],
         textures: [&GpuTexture; 2],
@@ -216,7 +262,10 @@ impl ImageEffect {
                 self.pipelines.len() - 1
             }
         };
-        let (width, height) = picture.size();
+        let ((width, height), image) = match resolved {
+            Some(resolved) => ((output.width, output.height), resolved),
+            None => (picture.size(), picture.image()),
+        };
         let mut values = [0.0f32; 20];
         for (row, parameter) in parameters.iter().enumerate() {
             values[row * 4..row * 4 + 4].copy_from_slice(parameter);
@@ -237,7 +286,7 @@ impl ImageEffect {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: wgpu::BindingResource::TextureView(picture.image()),
+                    resource: wgpu::BindingResource::TextureView(image),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,

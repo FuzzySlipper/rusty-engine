@@ -134,9 +134,6 @@ pub enum NativeRendererSettingRefusal {
     SoftwareAdapter = 6,
     /// The device binds too few textures per shader stage for the feature.
     TooFewTextureBindings = 7,
-    /// A product image effect takes the temporal stage's place: frames draw
-    /// without temporal anti-aliasing while one is set.
-    ImageEffect = 8,
     /// This build of the Engine does not have the feature (DLSS).
     NotBuilt = 9,
     /// The adapter cannot run the feature (DLSS off NVIDIA RTX GPUs).

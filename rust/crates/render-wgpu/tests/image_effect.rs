@@ -1,8 +1,9 @@
 //! A product image effect over the finished picture (`image_effect.wgsl`,
 //! `RenderDiff::SetImageEffect`): none draws as before, a pass-through
 //! leaves the picture, its parameters reach the product's WGSL, it samples
-//! the picture anywhere, it reads the depth, and its pass is timed. Same
-//! harness as `tests/screenshots.rs`.
+//! the picture anywhere, it reads the depth, its pass is timed, and it draws
+//! over what a temporal stage resolved. Same harness as
+//! `tests/screenshots.rs`.
 
 mod support;
 
@@ -201,50 +202,157 @@ fn the_effect_reads_the_worlds_depth() {
     );
 }
 
-/// An image effect takes the temporal stage's place: while one is set the
-/// readout refuses `temporal` for it (effective off) and the frame draws
-/// neither jitter nor motion; removed, the stage draws again.
-#[test]
-fn an_image_effect_refuses_the_temporal_stage_in_the_readout() {
-    let mut harness = scene();
-    let software = harness.gpu.is_software();
-    harness.apply(vec![
-        RenderDiff::SetRendererSettings {
-            settings: RendererSettingsDescriptor {
-                antialiasing: Antialiasing::Temporal,
-                render_scale: 0.67,
-                ..RendererSettingsDescriptor::DEFAULT
-            },
+/// Draw with `antialiasing` at render scale `scale`, `frames` frames, on a
+/// target sized as a host sizes it: each frame's stats, and the last frame.
+fn frames(
+    harness: &mut Harness,
+    antialiasing: Antialiasing,
+    scale: f32,
+    frames: usize,
+) -> (Vec<render_wgpu::FrameStats>, Vec<u8>) {
+    harness.apply(vec![RenderDiff::SetRendererSettings {
+        settings: RendererSettingsDescriptor {
+            antialiasing,
+            render_scale: scale,
+            ..RendererSettingsDescriptor::DEFAULT
         },
-        effect("shader/flash", 0.0, 0.0),
-    ]);
+    }]);
     harness.target =
         render_wgpu::OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, harness.renderer.samples());
     let view = camera([0.0, 1.5, 2.0], 0.0, -5.0);
-    let (stats, _) = harness.render(&view);
-    let readout = harness.renderer.settings_readout();
-    assert_eq!(readout.requested.antialiasing, Antialiasing::Temporal);
-    assert_eq!(readout.effective.antialiasing, Antialiasing::Off);
-    let refusal = if software {
-        render_wgpu::SettingRefusal::SoftwareAdapter
-    } else {
-        render_wgpu::SettingRefusal::ImageEffect
-    };
-    assert_eq!(readout.antialiasing, Some(refusal));
-    assert_eq!(stats.motion, None, "no jitter or motion drawn");
-    assert_eq!(stats.upscale, None, "the effect draws in the stage's place");
-
-    harness.apply(vec![RenderDiff::SetImageEffect { effect: None }]);
-    let (stats, _) = harness.render(&view);
-    let readout = harness.renderer.settings_readout();
-    if software {
-        assert_eq!(stats.upscale, Some(render_wgpu::UpscaleMethod::Bilinear));
-    } else {
-        assert_eq!(readout.antialiasing, None);
-        assert_eq!(readout.effective.antialiasing, Antialiasing::Temporal);
-        assert_eq!(stats.upscale, Some(render_wgpu::UpscaleMethod::Taau));
-        assert!(stats
-            .motion
-            .is_some_and(|motion| motion.jitter_phase.is_some()));
+    let (mut stats, mut last) = (Vec::new(), Vec::new());
+    for _ in 0..frames {
+        let (frame, picture) = harness.render(&view);
+        stats.push(frame);
+        last = picture;
     }
+    (stats, last)
+}
+
+/// Mean absolute difference per channel from `reference` over the pixels
+/// where it has an edge (a neighbour differs by more than 24 levels).
+fn edge_difference(reference: &[u8], picture: &[u8]) -> f64 {
+    let at =
+        |rgba: &[u8], x: u32, y: u32, c: usize| f64::from(rgba[((y * WIDTH + x) * 4) as usize + c]);
+    let (mut sum, mut count) = (0.0, 0usize);
+    for y in 1..HEIGHT - 1 {
+        for x in 1..WIDTH - 1 {
+            let edge = (0..3).any(|c| {
+                (at(reference, x + 1, y, c) - at(reference, x, y, c)).abs() > 24.0
+                    || (at(reference, x, y + 1, c) - at(reference, x, y, c)).abs() > 24.0
+            });
+            if edge {
+                for c in 0..3 {
+                    sum += (at(reference, x, y, c) - at(picture, x, y, c)).abs();
+                }
+                count += 3;
+            }
+        }
+    }
+    assert!(count > 100, "the scene has edges: {count}");
+    sum / count as f64
+}
+
+fn mean(rgba: &[u8]) -> f64 {
+    rgba.iter().map(|value| f64::from(*value)).sum::<f64>() / rgba.len() as f64
+}
+
+/// An image effect and the temporal stage draw together: the stage resolves
+/// the jittered frames into an output-size picture and the effect runs over
+/// it. A pass-through effect leaves TAAU's anti-aliased picture, a flash
+/// brightens it, the frames jitter with no reset after the first, and the
+/// readout refuses nothing. At native scale and at 0.67, and under DLSS
+/// where it draws. A software adapter refuses the stage and the effect
+/// upscales alone.
+#[test]
+fn an_image_effect_draws_over_the_temporal_stage() {
+    let mut harness = scene();
+    if harness.gpu.is_software() {
+        harness.apply(vec![effect("shader/flash", 0.0, 0.0)]);
+        let (stats, picture) = frames(&mut harness, Antialiasing::Temporal, 0.67, 2);
+        let readout = harness.renderer.settings_readout();
+        assert_eq!(
+            readout.antialiasing,
+            Some(render_wgpu::SettingRefusal::SoftwareAdapter)
+        );
+        assert_eq!(stats[1].upscale, None, "the effect upscales");
+        assert!(picture.chunks(4).any(|p| p[0] > 100), "the box drew");
+        return;
+    }
+    for scale in [1.0, 0.67] {
+        let (_, msaa) = frames(&mut scene(), Antialiasing::Msaa4, 1.0, 2);
+        let (_, plain) = frames(&mut scene(), Antialiasing::Temporal, scale, 32);
+        let mut aliased = scene();
+        aliased.apply(vec![effect("shader/flash", 0.0, 0.0)]);
+        let (_, aliased) = frames(&mut aliased, Antialiasing::Off, scale, 2);
+        let mut harness = scene();
+        harness.apply(vec![effect("shader/flash", 0.0, 0.0)]);
+        let (stats, passed) = frames(&mut harness, Antialiasing::Temporal, scale, 32);
+        let mut phases = Vec::new();
+        for (index, frame) in stats.iter().enumerate() {
+            assert_eq!(
+                frame.upscale,
+                Some(render_wgpu::UpscaleMethod::Taau),
+                "{scale}: frame {index}"
+            );
+            let motion = frame.motion.expect("the stage draws motion");
+            assert_eq!(motion.history_reset, index == 0, "{scale}: frame {index}");
+            phases.push(motion.jitter_phase.expect("the views jitter"));
+        }
+        assert!(
+            phases.windows(2).all(|pair| pair[0] != pair[1]),
+            "{scale}: each frame takes the next jitter phase: {phases:?}"
+        );
+        let readout = harness.renderer.settings_readout();
+        assert_eq!(readout.antialiasing, None, "{scale}: nothing refused");
+        assert_eq!(readout.effective.antialiasing, Antialiasing::Temporal);
+        let passes = harness.renderer.gpu_readout().passes;
+        for pass in ["upscale", "image-effect"] {
+            assert!(
+                passes.iter().any(|timing| timing.pass == pass),
+                "{scale}: {pass} drew"
+            );
+        }
+        assert!(
+            close(&passed, &plain),
+            "{scale}: a pass-through effect leaves TAAU's picture"
+        );
+        let (temporal, off) = (
+            edge_difference(&msaa, &passed),
+            edge_difference(&msaa, &aliased),
+        );
+        assert!(
+            temporal < off * 0.85,
+            "{scale}: edges under the effect ({temporal:.2}) nearer 4x MSAA's than without the stage ({off:.2})"
+        );
+        harness.apply(vec![effect("shader/flash", 0.5, 0.0)]);
+        let (stats, flashed) = frames(&mut harness, Antialiasing::Temporal, scale, 2);
+        assert!(
+            stats
+                .iter()
+                .all(|frame| frame.motion.is_some_and(|motion| !motion.history_reset)),
+            "{scale}: a parameter change keeps the history"
+        );
+        assert!(
+            mean(&flashed) > mean(&passed) + 20.0,
+            "{scale}: the flash brightens the picture: {} to {}",
+            mean(&passed),
+            mean(&flashed)
+        );
+    }
+    let (stats, plain) = frames(&mut scene(), Antialiasing::Dlss, 0.67, 32);
+    if stats.last().unwrap().upscale != Some(render_wgpu::UpscaleMethod::Dlss) {
+        return;
+    }
+    let mut harness = scene();
+    harness.apply(vec![effect("shader/flash", 0.0, 0.0)]);
+    let (stats, passed) = frames(&mut harness, Antialiasing::Dlss, 0.67, 32);
+    assert_eq!(
+        stats.last().unwrap().upscale,
+        Some(render_wgpu::UpscaleMethod::Dlss)
+    );
+    assert!(
+        close(&passed, &plain),
+        "a pass-through effect leaves DLSS's picture"
+    );
 }

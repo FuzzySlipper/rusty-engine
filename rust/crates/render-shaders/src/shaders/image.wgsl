@@ -9,8 +9,9 @@
 struct ImageEffectParams {
     // The product's own values (`ImageEffectRequest.Parameter0..3`).
     parameters: array<vec4<f32>, 4>,
-    // xy: the picture's size in pixels; z: the presentation time in
-    // seconds (it holds while the simulation does).
+    // xy: the picture's size in pixels (the output's under a temporal
+    // stage); z: the presentation time in seconds (it holds while the
+    // simulation does).
     picture: vec4<f32>,
 };
 

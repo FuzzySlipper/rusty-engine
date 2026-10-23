@@ -403,9 +403,10 @@ impl Renderer {
     /// Draw the primary output through `draw` at render resolution, then
     /// bring it to output resolution (`upscale.rs`). With no upscale stage
     /// selected and no image effect, `draw` draws into `output` itself.
-    /// Otherwise it draws into the render picture, and the stage, or the
-    /// image effect in its place, draws that over the whole of `output`. A
-    /// video and the hosts' UI draw at output resolution after.
+    /// Otherwise it draws into the render picture, and the stage, the image
+    /// effect, or a temporal stage and then the effect over what it
+    /// resolved, draw that over the whole of `output`. A video and the
+    /// hosts' UI draw at output resolution after.
     ///
     /// A reading (`PrimaryDraw::Reading`) draws without a temporal stage and
     /// touches no temporal state: no jitter phase, motion, previous camera,
@@ -420,9 +421,7 @@ impl Renderer {
     ) -> FrameStats {
         let reading = kind == PrimaryDraw::Reading;
         // An image effect reads the whole picture, so the views draw into a
-        // picture of their own first, as an upscale stage's do. It takes
-        // the stage's place, so the temporal stage is refused with it
-        // (`Renderer::temporal_refusal`).
+        // picture of their own first, as an upscale stage's do.
         let effect = self.image_effect.active();
         let mut stage = UpscaleMethod::selected(
             &self.options,
@@ -515,12 +514,62 @@ impl Renderer {
         stats.cpu_batch_us = self.batch_time.as_micros() as u32;
         stats.resolution = resolution;
         stats.motion = self.temporal.end_frame();
-        stats.upscale = stage.filter(|_| !effect);
+        // A temporal stage draws under an image effect too, resolving into
+        // an output-size picture the effect reads; below render scale 1
+        // without one, the effect upscales the picture itself.
+        stats.upscale = if effect {
+            stage.filter(|stage| stage.temporal())
+        } else {
+            stage
+        };
         if !reading {
             self.upscaled = crate::UpscaleReadout {
                 resolution,
                 method: stats.upscale,
             };
+        }
+        let resolved = match stats.upscale {
+            Some(_) if effect => Some(
+                self.image_effect
+                    .resolved(&self.gpu, (output.width, output.height)),
+            ),
+            _ => {
+                if effect && !reading {
+                    self.image_effect.forget_resolved();
+                }
+                None
+            }
+        };
+        if let Some(stage) = stats.upscale {
+            // The stage writes colour alone: the picture's depth stands in
+            // for the resolved picture's, which it never reads.
+            let target = match &resolved {
+                Some(color) => TargetView {
+                    color,
+                    depth: picture.depth(),
+                    format: target::OFFSCREEN_FORMAT,
+                    samples: 1,
+                    width: output.width,
+                    height: output.height,
+                },
+                None => output,
+            };
+            let drawn = self.upscale.run(
+                &self.gpu,
+                &mut self.layouts.shaders,
+                &mut self.compose,
+                stage,
+                &picture,
+                self.temporal.inputs(),
+                self.options.render_scale,
+                &target,
+            );
+            // The stage that drew, which a DLSS frame refused as it ran
+            // hands to TAAU.
+            stats.upscale = Some(drawn);
+            if !reading {
+                self.upscaled.method = Some(drawn);
+            }
         }
         if effect {
             let white = &self.white;
@@ -540,28 +589,12 @@ impl Renderer {
             self.image_effect.apply(
                 &self.gpu,
                 &picture,
+                resolved.as_ref(),
                 &output,
                 &parameters,
                 [texture(0), texture(1)],
                 self.presentation_time,
             );
-        } else if let Some(stage) = stage {
-            let drawn = self.upscale.run(
-                &self.gpu,
-                &mut self.layouts.shaders,
-                &mut self.compose,
-                stage,
-                &picture,
-                self.temporal.inputs(),
-                self.options.render_scale,
-                &output,
-            );
-            // The stage that drew, which a DLSS frame refused as it ran
-            // hands to TAAU.
-            stats.upscale = Some(drawn);
-            if !reading {
-                self.upscaled.method = Some(drawn);
-            }
         }
         self.picture = output_picture.or(Some(picture));
         if !reading {
