@@ -529,3 +529,46 @@ fn a_deferred_residency_change_installs_what_a_synchronous_one_builds() {
         assert_same_scene(&deferred, &sync, &format!("{mode:?} edit before install"));
     }
 }
+
+#[test]
+fn a_queued_field_refresh_keeps_the_mesh_an_earlier_queued_change_installed() {
+    // Found in #10327 review: with distance fields, a cube chunk's field
+    // reaches its diagonal neighbour, whose mesh it does not touch. A later
+    // queued change refreshed that neighbour's field on the mesh it was
+    // prepared from and, installed after the earlier change, put the old
+    // geometry back.
+    let one_voxel = |chunk: [i64; 3], x: usize| {
+        let mut cells = vec![0; (CHUNK * CHUNK * CHUNK) as usize];
+        cells[x + CHUNK as usize * (1 + CHUNK as usize)] = 1;
+        VoxelChunkResidencyOperation::Admit {
+            chunk: VoxelChunkIdentity::from_array(chunk),
+            payload: VoxelChunkPayload::new([CHUNK as u32; 3], cells),
+        }
+    };
+    let mut deferred = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        CHUNK as u32,
+        [],
+        SurfaceMeshOptions {
+            mode: SurfaceMode::GreedyCubes,
+            distance_fields: true,
+            ..SurfaceMeshOptions::default()
+        },
+    )
+    .unwrap();
+    VoxelChunkResidencyService::apply(
+        &mut deferred,
+        &[one_voxel([0, 0, 0], 1), one_voxel([1, 0, 1], 1)],
+    )
+    .unwrap();
+    let mut sync = deferred.clone();
+    let first = [one_voxel([0, 0, 0], 2)];
+    let second = [one_voxel([1, 0, 1], 2)];
+    VoxelChunkResidencyService::apply(&mut sync, &first).unwrap();
+    VoxelChunkResidencyService::apply(&mut sync, &second).unwrap();
+    let (_, first) = VoxelChunkResidencyService::apply_deferred(&mut deferred, &first).unwrap();
+    let (_, second) = VoxelChunkResidencyService::apply_deferred(&mut deferred, &second).unwrap();
+    first.install(&mut deferred).unwrap();
+    second.install(&mut deferred).unwrap();
+    assert_same_scene(&deferred, &sync, "queued field refresh");
+}

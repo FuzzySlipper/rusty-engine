@@ -1510,6 +1510,44 @@ impl VoxelCollisionScene {
         self.synchronous_state = self.mesh_state;
     }
 
+    /// A rebuild's field-only refreshes copied the meshes it was prepared
+    /// from; an earlier deferred change may have installed new ones since.
+    /// Refresh those chunks' fields on the mesh each has now, so a field
+    /// never brings back the geometry it was computed beside.
+    pub(crate) fn refresh_fields_on_current<'a>(
+        &self,
+        rebuild: &mut ChunkRebuild,
+        field_only: impl Iterator<Item = &'a ChunkCoord>,
+    ) {
+        for coordinate in field_only {
+            let Some(Some(refreshed)) = rebuild.meshes.get(coordinate) else {
+                continue;
+            };
+            match self.mesh_chunks.get(coordinate) {
+                Some(current) if current.content_hash == refreshed.content_hash => {}
+                Some(current) => {
+                    let field = refresh_distance_field(
+                        &self.voxel_world,
+                        *coordinate,
+                        current,
+                        self.mesh_options.distance_fields,
+                    );
+                    match field {
+                        Some(field) => {
+                            rebuild.meshes.insert(*coordinate, Some(Arc::new(field)));
+                        }
+                        None => {
+                            rebuild.meshes.remove(coordinate);
+                        }
+                    }
+                }
+                None => {
+                    rebuild.meshes.remove(coordinate);
+                }
+            }
+        }
+    }
+
     /// Install rebuilt meshes and colliders for voxels already written at
     /// the current source revision.
     pub(crate) fn publish_rebuild(&mut self, dirty: &BTreeSet<ChunkCoord>, rebuild: ChunkRebuild) {

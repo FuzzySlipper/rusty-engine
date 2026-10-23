@@ -382,7 +382,11 @@ impl DeferredChunkRebuild {
             scene.rebuild_chunks(&self.changed, &self.dirty, &self.field_dirty)
         };
         match built {
-            Ok(rebuild) => {
+            Ok(mut rebuild) => {
+                scene.refresh_fields_on_current(
+                    &mut rebuild,
+                    self.field_dirty.difference(&self.dirty),
+                );
                 scene.publish_rebuild(&self.dirty, rebuild);
                 Ok(())
             }
