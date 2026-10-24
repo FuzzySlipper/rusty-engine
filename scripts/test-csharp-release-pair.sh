@@ -267,6 +267,101 @@ grep -Fx 'engine tool host checks passed' "$work/tool-host.log" >/dev/null || {
     exit 1
 }
 
+# A relative OpenContainer path names a container installed beside the
+# product: under `rusty dev` staging (with the source manifest it stages) in
+# the project's RustyEngineProductInstalledContent, and in a `--pack` release
+# beside product.rpak. Each host starts from an unrelated directory.
+installed="$work/installed-consumer"
+mkdir -p "$installed/local" "$installed/product-ui" "$installed/content" "$work/elsewhere"
+printf 'export function mountProductUi() { return { dispose() {} }; }\n' > "$installed/product-ui/main.js"
+cp "$consumer/NuGet.Config" "$installed/NuGet.Config"
+cat > "$installed/InstalledConsumer.csproj" <<EOF
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <RustyEngineProductEntryType>InstalledConsumer.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>fixture.installed-container</RustyEngineProductId>
+    <RustyEngineProductTitle>Installed container fixture</RustyEngineProductTitle>
+    <RustyEngineProductInstalledContent>local</RustyEngineProductInstalledContent>
+  </PropertyGroup>
+  <ItemGroup><PackageReference Include="Rusty.Engine" Version="$version" /></ItemGroup>
+</Project>
+EOF
+cat > "$installed/Product.cs" <<'EOF'
+using Rusty.Engine;
+
+namespace InstalledConsumer;
+
+public sealed class Product : IEngineProduct
+{
+    public Product(ProductCreateContext context)
+    {
+        using (ProductContentBundle srd = context.Content.OpenContainer("srd.rpak"))
+            System.Console.WriteLine($"installed-container: opened {srd.ReadText("module.json")}");
+        try
+        {
+            context.Content.OpenContainer("missing.rpak").Dispose();
+            System.Console.WriteLine("installed-container: missing opened");
+        }
+        catch (EngineCallException refusal)
+        {
+            var diagnostic = refusal.Diagnostics.Span[0];
+            System.Console.WriteLine($"installed-container: refused {diagnostic.Code} {diagnostic.Message}");
+        }
+    }
+    public void Start() { }
+    public void Attach() { }
+    public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
+    public void Pause() { }
+    public void Resume() { }
+    public void Restart() { }
+    public void Shutdown() { }
+    public void Dispose() { }
+}
+EOF
+# The release first: packing stages the product again without the source
+# manifest, in the same staged directory.
+DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+    "$runtime/bin/rusty" build --project "$installed/InstalledConsumer.csproj" --pack "$work/installed-release"
+cp "$work/module-library/srd.rpak" "$work/installed-release/srd.rpak"
+cp "$work/module-library/srd.rpak" "$installed/local/srd.rpak"
+(cd "$installed" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+    dotnet msbuild InstalledConsumer.csproj -restore -t:StageRustyEngineCoreClrProduct \
+    -p:RustyEngineProductPort=0 -p:RustyEngineProductContentSource=true)
+installed_staged=$(cd "$installed" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+    dotnet msbuild InstalledConsumer.csproj -getProperty:RustyEngineStagedProductDirectory \
+    -p:RustyEngineProductContentSource=true | tail -n 1)
+for run in "dev:$installed_staged:$installed/local" \
+    "release:$work/installed-release/product.rpak:$work/installed-release"; do
+    IFS=: read -r label product expected <<< "$run"
+    log="$work/installed-$label.log"
+    control_fifo="$work/installed-control-$label"
+    mkfifo "$control_fifo"
+    exec 9<>"$control_fifo"
+    control_open=1
+    (cd "$work/elsewhere" && exec env -u CARGO -u CARGO_HOME -u RUSTUP_HOME \
+        "$runtime/bin/rusty-product-host" --supervised --runtime-instance-id "$$" --product "$product" \
+        --loader coreclr --persistence-root "$work/installed-persistence-$label") < "$control_fifo" 9>&- > "$log" 2>&1 &
+    host_pid=$!
+    for _ in $(seq 1 240); do
+        grep -q 'installed-container: refused' "$log" && break
+        kill -0 "$host_pid" 2>/dev/null || break
+        sleep 0.25
+    done
+    exec 9>&-
+    control_open=0
+    wait "$host_pid" || true
+    host_pid=""
+    grep -Fx 'installed-container: opened {"id":"srd","requires":["walls"]}' "$log" >/dev/null \
+        && grep -F "installed-container: refused PRODUCT_SOURCE_IO PRODUCT_SOURCE_IO: \`$expected/missing.rpak\`" "$log" >/dev/null || {
+        cat "$log" >&2
+        echo "RUSTY_ENGINE_PAIR_TEST_INSTALLED_CONTENT: $label did not resolve relative containers in $expected" >&2
+        exit 1
+    }
+done
+echo "Installed containers resolve beside the product under rusty dev staging and in a release"
+
 host_log="$work/runtime-host.log"
 "$runtime/bin/rusty" dev --help > "$work/rusty-dev-help.log" 2>&1 || {
     echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted rusty dev --help failed" >&2
