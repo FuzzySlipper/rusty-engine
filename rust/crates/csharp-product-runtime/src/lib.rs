@@ -806,6 +806,9 @@ pub struct CsharpProductRuntime {
     /// The desktop window delivers gameplay input instead of the page
     /// (`route_window_input`).
     window_input: bool,
+    /// While it does, it reads the controller too; otherwise the page's
+    /// controller facts still count.
+    window_controller: bool,
 }
 
 struct InputClaim {
@@ -1116,6 +1119,7 @@ impl CsharpProductRuntime {
             product: config.product,
             input_claim: None,
             window_input: false,
+            window_controller: false,
         })
     }
 
@@ -3352,10 +3356,14 @@ impl ProductHostRuntime for CsharpProductRuntime {
         &mut self,
         batch: ProductHostInputBatch,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostInputResult>, ProductHostRuntimeError> {
-        // While the desktop window holds the keyboard and mouse, the page
-        // still reads the controller. Its controller facts on the current
-        // binding join the window's in mailbox order; the rest of its batch,
-        // and anything from before the window took input, is stale.
+        // While the desktop window holds the keyboard and mouse and reads no
+        // controller, the page still does. Its controller facts on the
+        // current binding join the window's in mailbox order; the rest of its
+        // batch, and anything from before the window took input, is stale.
+        // A window that reads the controller leaves the page nothing.
+        if self.window_input && self.window_controller {
+            return self.window_input(Vec::new());
+        }
         if self.window_input {
             let binding = input_binding(&self.lifecycle);
             let facts = batch
@@ -3399,6 +3407,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
     fn route_window_input(
         &mut self,
         routed: bool,
+        controller: bool,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
     {
         let (operation, control) = if routed {
@@ -3422,6 +3431,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
             return self.receipt(operation, Vec::new());
         }
         self.window_input = routed;
+        self.window_controller = routed && controller;
         self.lifecycle
             .change_control(control)
             .map_err(|error| self.lifecycle_runtime_error(error))?;
@@ -9423,7 +9433,10 @@ mod tests {
         assert_eq!(runtime.pending_inputs.len(), before);
 
         // Taking input moves the binding, clears held input and says so.
-        let (_, outputs) = runtime.route_window_input(true).unwrap().into_parts();
+        let (_, outputs) = runtime
+            .route_window_input(true, false)
+            .unwrap()
+            .into_parts();
         assert!(window_of(&outputs));
         assert_ne!(runtime.binding(), page);
         let routed = runtime.binding();
@@ -9431,7 +9444,10 @@ mod tests {
             runtime.pending_inputs[0].clear_reason,
             NativeInputClearReason::ControlRevisionChange
         );
-        let (_, again) = runtime.route_window_input(true).unwrap().into_parts();
+        let (_, again) = runtime
+            .route_window_input(true, false)
+            .unwrap()
+            .into_parts();
         assert!(again.is_empty(), "taking it again changes nothing");
         assert_eq!(runtime.binding(), routed);
 
@@ -9474,13 +9490,13 @@ mod tests {
         assert_eq!(runtime.pending_inputs.len(), held);
         let claim = runtime.binding();
         assert!(runtime
-            .route_window_input(false)
+            .route_window_input(false, false)
             .unwrap()
             .into_parts()
             .1
             .is_empty());
         assert!(runtime
-            .route_window_input(true)
+            .route_window_input(true, false)
             .unwrap()
             .into_parts()
             .1
@@ -9491,9 +9507,12 @@ mod tests {
         runtime
             .control(ProductHostControlOperation::Release, claim)
             .unwrap();
-        runtime.route_window_input(true).unwrap();
+        runtime.route_window_input(true, false).unwrap();
         let routed = runtime.binding();
-        let (_, returned) = runtime.route_window_input(false).unwrap().into_parts();
+        let (_, returned) = runtime
+            .route_window_input(false, false)
+            .unwrap()
+            .into_parts();
         assert!(!window_of(&returned));
         assert_ne!(
             runtime.binding(),
@@ -9531,7 +9550,7 @@ mod tests {
             code: runtime_input_model::KeyboardControl::KeyW,
             edge: runtime_input_model::PhysicalEdge::Pressed,
         };
-        runtime.route_window_input(true).unwrap();
+        runtime.route_window_input(true, false).unwrap();
         let routed = input_binding(&runtime.lifecycle);
         let before = runtime.pending_inputs.len();
         // The page's batch carries its own sequences; its controller fact
@@ -9541,7 +9560,7 @@ mod tests {
             .input(ProductHostInputBatch::new(vec![
                 event(routed, 7, key),
                 event(routed, 8, button.clone()),
-                event(page, 1, button),
+                event(page, 1, button.clone()),
             ]))
             .unwrap();
         let kinds: Vec<_> = runtime.pending_inputs[before..]
@@ -9550,6 +9569,25 @@ mod tests {
             .collect();
         assert_eq!(kinds, [NativeInputEventKind::ControllerButton]);
         assert_eq!(runtime.next_input_sequence(), CanonicalU64::new(2));
+
+        // A window that reads the controller itself leaves the page none.
+        runtime.route_window_input(false, false).unwrap();
+        runtime.route_window_input(true, true).unwrap();
+        let reading = input_binding(&runtime.lifecycle);
+        let before = runtime.pending_inputs.len();
+        runtime
+            .input(ProductHostInputBatch::new(vec![event(
+                reading,
+                1,
+                button.clone(),
+            )]))
+            .unwrap();
+        assert!(
+            runtime.pending_inputs[before..]
+                .iter()
+                .all(|input| input.kind != NativeInputEventKind::ControllerButton),
+            "the page's controller does not count"
+        );
         drop(runtime);
         fs::remove_dir_all(root).unwrap();
     }

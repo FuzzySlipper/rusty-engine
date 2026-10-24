@@ -186,6 +186,7 @@ impl UiOverlay {
         url: &str,
         window: &Arc<Window>,
         scene: Arc<dyn DesktopScene>,
+        controller: bool,
     ) -> Result<Self, String> {
         let runtime = WebRuntime::initialize(config.clone())?;
         let size = window.inner_size();
@@ -212,7 +213,7 @@ impl UiOverlay {
             motion: (0.0, 0.0),
             page_cursor: Some(CursorIcon::Default.into()),
             image_cursors: HashMap::new(),
-            gameplay: GameplayRoute::new(scene),
+            gameplay: GameplayRoute::new(scene, controller),
         })
     }
 
@@ -370,6 +371,11 @@ impl UiOverlay {
     /// Hand the runtime the locked motion since the last wake.
     pub(crate) fn flush_gameplay_motion(&mut self) {
         self.gameplay.flush_motion();
+    }
+
+    /// The gamepad's state changed.
+    pub(crate) fn gamepad(&mut self, state: crate::gamepad::PadState) {
+        self.gameplay.pad(state);
     }
 
     fn grab(&mut self, window: &Window) {

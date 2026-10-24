@@ -12,11 +12,14 @@ render-wgpu.workspace = true
 runtime-input.workspace = true
 # Only this crate may depend on winit (scripts/dependency_boundary_check.py).
 winit = "0.30"
+# Gamepads, read by the window while it holds gameplay input. Only this crate
+# may depend on gilrs (scripts/dependency_boundary_check.py).
+gilrs = { version = "0.11", optional = true }
 
 [features]
 # The product UI over the scene, through Chromium off-screen rendering. Off by
 # default: its build downloads CEF (see docs/desktop-shell.md).
-web-overlay = ["render-wgpu/web-overlay"]
+web-overlay = ["render-wgpu/web-overlay", "dep:gilrs"]
 
 [dev-dependencies]
 render-model.workspace = true

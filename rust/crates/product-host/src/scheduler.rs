@@ -89,8 +89,8 @@ where
         let result = match entry {
             ProductHostQueuedInput::Page(batch) => runtime.input(batch),
             ProductHostQueuedInput::WindowFacts(facts) => runtime.window_input(facts),
-            ProductHostQueuedInput::WindowRoute(routed) => {
-                match runtime.route_window_input(routed) {
+            ProductHostQueuedInput::WindowRoute { routed, controller } => {
+                match runtime.route_window_input(routed, controller) {
                     Ok(receipt) => publish(receipt),
                     Err(error) => input_errors.push(error),
                 }

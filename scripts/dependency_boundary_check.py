@@ -77,6 +77,8 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     # NVIDIA DLSS through the renderer's Vulkan device (#9947).
     "dlss_wgpu": frozenset({"render-wgpu"}),
     "winit": frozenset({"desktop-shell"}),
+    # Gamepads the window reads while it holds gameplay input (#10338).
+    "gilrs": frozenset({"desktop-shell"}),
     # Video clips: WebM demux and VP9 decode (#8791).
     "matroska-demuxer": frozenset({"render-video"}),
     "rusty_vp9": frozenset({"render-video"}),

@@ -26,6 +26,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "web-overlay")]
+mod gamepad;
+#[cfg(feature = "web-overlay")]
 mod gameplay;
 #[cfg(any(feature = "web-overlay", test))]
 mod keys;
@@ -72,9 +74,10 @@ pub trait DesktopScene: Send + Sync {
     fn presented(&self, frame: PresentedFrame);
     /// A key or mouse button event reached the window at `at`.
     fn input_received(&self, at: SystemTime);
-    /// The window took the pointer lock and holds gameplay input (`true`),
-    /// or gave it back to the page.
-    fn route_gameplay(&self, _routed: bool) {}
+    /// The window took the pointer lock and holds gameplay input
+    /// (`routed`), reading the gamepad too when `controller`, or gave it
+    /// back to the page.
+    fn route_gameplay(&self, _routed: bool, _controller: bool) {}
     /// Gameplay facts the window observed while it holds input, in order.
     fn gameplay(&self, _facts: Vec<runtime_input::RuntimeInputFact>) {}
     /// The window's monitor shows a frame every `interval`.
@@ -209,6 +212,9 @@ struct Open {
     resized: Option<(u32, u32)>,
     #[cfg(feature = "web-overlay")]
     ui: Option<overlay::UiOverlay>,
+    /// Reads the gamepad for the window's gameplay route, where gilrs can.
+    #[cfg(feature = "web-overlay")]
+    gamepad: Option<gamepad::GamepadReader>,
     #[cfg(feature = "web-overlay")]
     last_pump: Instant,
 }
@@ -325,6 +331,13 @@ impl Shell {
             .map_err(|error| error.to_string())?;
         self.report.adapter = format!("{:?}", self.gpu.adapter_summary());
         #[cfg(feature = "web-overlay")]
+        let gamepad = self.config.ui_url.as_ref().and_then(|_| {
+            let proxy = self.proxy.clone();
+            gamepad::GamepadReader::start(move || {
+                let _ = proxy.send_event(());
+            })
+        });
+        #[cfg(feature = "web-overlay")]
         let ui = match &self.config.ui_url {
             Some(url) => Some(overlay::UiOverlay::open(
                 &self.config.web,
@@ -332,6 +345,7 @@ impl Shell {
                 url,
                 &window,
                 Arc::clone(&self.scene),
+                gamepad.is_some(),
             )?),
             None => None,
         };
@@ -352,6 +366,8 @@ impl Shell {
             resized: None,
             #[cfg(feature = "web-overlay")]
             ui,
+            #[cfg(feature = "web-overlay")]
+            gamepad,
             #[cfg(feature = "web-overlay")]
             last_pump: Instant::now(),
         });
@@ -536,10 +552,14 @@ impl ApplicationHandler for Shell {
             return;
         }
         let Some(open) = &mut self.window else { return };
-        // Held motion goes to the runtime at every wake, not every frame.
+        // Held motion goes to the runtime at every wake, not every frame;
+        // a gamepad change wakes the loop.
         #[cfg(feature = "web-overlay")]
         if let Some(ui) = &mut open.ui {
             ui.flush_gameplay_motion();
+            if let Some(state) = open.gamepad.as_ref().and_then(|pad| pad.latest()) {
+                ui.gamepad(state);
+            }
         }
         if let Some(acquired) = open.presenter.take() {
             self.frame(acquired);

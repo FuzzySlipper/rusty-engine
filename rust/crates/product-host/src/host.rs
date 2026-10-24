@@ -336,10 +336,10 @@ pub struct ProductHostWindowInput {
 }
 
 impl ProductHostWindowInput {
-    /// The window takes gameplay input from the page (`true`) or gives it
-    /// back to it.
-    pub fn route(&self, routed: bool) {
-        self.enqueue(ProductHostQueuedInput::WindowRoute(routed));
+    /// The window takes gameplay input from the page (`routed`) or gives it
+    /// back to it; with `controller` it reads the controller too.
+    pub fn route(&self, routed: bool, controller: bool) {
+        self.enqueue(ProductHostQueuedInput::WindowRoute { routed, controller });
     }
 
     /// Facts the window observed while it holds gameplay input.
@@ -3098,7 +3098,13 @@ mod tests {
         let mailbox = HostInputMailbox::default();
         let page = || ProductHostQueuedInput::Page(ProductHostInputBatch::new(Vec::new()));
         assert!(mailbox.enqueue(page(), Some(0)));
-        assert!(mailbox.enqueue(ProductHostQueuedInput::WindowRoute(true), Some(0)));
+        assert!(mailbox.enqueue(
+            ProductHostQueuedInput::WindowRoute {
+                routed: true,
+                controller: false,
+            },
+            Some(0)
+        ));
         assert!(mailbox.enqueue(
             ProductHostQueuedInput::WindowFacts(vec![delta(1.0)]),
             Some(0)
@@ -3113,7 +3119,13 @@ mod tests {
             }]),
             Some(0)
         ));
-        assert!(mailbox.enqueue(ProductHostQueuedInput::WindowRoute(false), Some(0)));
+        assert!(mailbox.enqueue(
+            ProductHostQueuedInput::WindowRoute {
+                routed: false,
+                controller: false,
+            },
+            Some(0)
+        ));
         assert!(mailbox.enqueue(page(), Some(0)));
         assert_eq!(mailbox.telemetry().events, 3);
 
@@ -3123,7 +3135,7 @@ mod tests {
             .iter()
             .map(|entry| match entry {
                 ProductHostQueuedInput::Page(_) => "page".to_owned(),
-                ProductHostQueuedInput::WindowRoute(routed) => format!("route {routed}"),
+                ProductHostQueuedInput::WindowRoute { routed, .. } => format!("route {routed}"),
                 ProductHostQueuedInput::WindowFacts(facts) => format!("facts {}", facts.len()),
             })
             .collect();

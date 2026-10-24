@@ -870,9 +870,13 @@ pub struct ProductHostInputBatch {
 #[derive(Debug, Clone)]
 pub enum ProductHostQueuedInput {
     Page(ProductHostInputBatch),
-    /// The window takes gameplay input from the page (`true`) or gives it
-    /// back (`false`) ([`ProductHostRuntime::route_window_input`]).
-    WindowRoute(bool),
+    /// The window takes gameplay input from the page (`routed`) or gives it
+    /// back, reading the controller itself or leaving it to the page
+    /// ([`ProductHostRuntime::route_window_input`]).
+    WindowRoute {
+        routed: bool,
+        controller: bool,
+    },
     /// Facts the window observed while it holds gameplay input, in order
     /// ([`ProductHostRuntime::window_input`]).
     WindowFacts(Vec<RuntimeInputFact>),
@@ -883,7 +887,7 @@ impl ProductHostQueuedInput {
     pub fn events(&self) -> usize {
         match self {
             Self::Page(batch) => batch.events().len(),
-            Self::WindowRoute(_) => 0,
+            Self::WindowRoute { .. } => 0,
             Self::WindowFacts(facts) => facts.len(),
         }
     }
@@ -1702,10 +1706,12 @@ pub trait ProductHostRuntime: Send + 'static {
     /// The desktop window takes gameplay input from the page (`routed`) or
     /// gives it back, at a control fence: the published binding says which
     /// of them delivers it, so the page sends none while the window does. A
-    /// harness's claim refuses the window.
+    /// window that reads no `controller` leaves the controller to the page.
+    /// A harness's claim refuses the window.
     fn route_window_input(
         &mut self,
         _routed: bool,
+        _controller: bool,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
     {
         Err(ProductHostRuntimeError::new_not_applied(

@@ -215,8 +215,8 @@ impl DesktopScene for WindowScene {
         self.timing.input_received(at);
     }
 
-    fn route_gameplay(&self, routed: bool) {
-        self.window_input.route(routed);
+    fn route_gameplay(&self, routed: bool, controller: bool) {
+        self.window_input.route(routed, controller);
     }
 
     fn gameplay(&self, facts: Vec<runtime_input::RuntimeInputFact>) {

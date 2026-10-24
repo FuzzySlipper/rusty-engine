@@ -2,7 +2,8 @@
 //! pointer lock, so a busy UI page cannot delay movement and look. The page
 //! still receives every event, for its UI; it sends no gameplay input while
 //! the window holds it. Facts are the ones the page's input capture makes
-//! from the same events.
+//! from the same events. The gamepad, read by the window too
+//! ([`crate::gamepad`]), goes the same way.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -12,6 +13,7 @@ use runtime_input::{
 };
 use winit::keyboard::KeyCode;
 
+use crate::gamepad::{self, PadState};
 use crate::{keys, DesktopScene};
 
 /// The page's input capture's bound on one wheel event's delta.
@@ -28,16 +30,27 @@ pub(crate) struct GameplayRoute {
     /// took the lock is not one, as the page's capture leaves it out.
     pressed: BTreeSet<PointerButton>,
     motion: (f64, f64),
+    /// The window reads the gamepad, so the page's controller facts no
+    /// longer count while it holds input.
+    controller: bool,
+    /// The pad as last read, held input or not, and what the runtime has
+    /// of it from the window.
+    pad: PadState,
+    sent: PadState,
 }
 
 impl GameplayRoute {
-    pub(crate) fn new(scene: Arc<dyn DesktopScene>) -> Self {
+    /// With `controller`, the window reads the gamepad too.
+    pub(crate) fn new(scene: Arc<dyn DesktopScene>, controller: bool) -> Self {
         Self {
             scene,
             routed: false,
             down: BTreeSet::new(),
             pressed: BTreeSet::new(),
             motion: (0.0, 0.0),
+            controller,
+            pad: PadState::default(),
+            sent: PadState::default(),
         }
     }
 
@@ -47,12 +60,17 @@ impl GameplayRoute {
             return;
         }
         self.routed = true;
-        self.scene.route_gameplay(true);
-        let held = self
+        self.scene.route_gameplay(true, self.controller);
+        let mut held: Vec<_> = self
             .down
             .iter()
-            .map(|&code| key(code, PhysicalEdge::Pressed));
-        self.scene.gameplay(held.collect());
+            .map(|&code| key(code, PhysicalEdge::Pressed))
+            .collect();
+        if self.controller {
+            held.extend(gamepad::changes(&PadState::default(), &self.pad));
+            self.sent = self.pad;
+        }
+        self.scene.gameplay(held);
     }
 
     /// The lock ended for `reason`: the page takes input back.
@@ -63,9 +81,23 @@ impl GameplayRoute {
         self.routed = false;
         self.pressed.clear();
         self.motion = (0.0, 0.0);
+        self.sent = PadState::default();
         self.scene
             .gameplay(vec![RuntimeInputFact::Clear { reason }]);
-        self.scene.route_gameplay(false);
+        self.scene.route_gameplay(false, self.controller);
+    }
+
+    /// The gamepad's state changed.
+    pub(crate) fn pad(&mut self, state: PadState) {
+        self.pad = state;
+        if !self.routed || !self.controller {
+            return;
+        }
+        let facts = gamepad::changes(&self.sent, &state);
+        self.sent = state;
+        if !facts.is_empty() {
+            self.scene.gameplay(facts);
+        }
     }
 
     /// Keys the window lost track of (another window has focus).
@@ -175,7 +207,8 @@ mod tests {
     /// What the window handed the runtime, in order.
     #[derive(Debug, Clone, PartialEq)]
     enum Handed {
-        Route(bool),
+        /// Routed, and whether the window reads the controller.
+        Route(bool, bool),
         Facts(Vec<RuntimeInputFact>),
     }
 
@@ -188,8 +221,11 @@ mod tests {
         }
         fn presented(&self, _: crate::PresentedFrame) {}
         fn input_received(&self, _: SystemTime) {}
-        fn route_gameplay(&self, routed: bool) {
-            self.0.lock().unwrap().push(Handed::Route(routed));
+        fn route_gameplay(&self, routed: bool, controller: bool) {
+            self.0
+                .lock()
+                .unwrap()
+                .push(Handed::Route(routed, controller));
         }
         fn gameplay(&self, facts: Vec<RuntimeInputFact>) {
             self.0.lock().unwrap().push(Handed::Facts(facts));
@@ -202,7 +238,10 @@ mod tests {
 
     fn route() -> (GameplayRoute, Arc<Recorder>) {
         let recorder = Arc::new(Recorder::default());
-        (GameplayRoute::new(Arc::clone(&recorder) as _), recorder)
+        (
+            GameplayRoute::new(Arc::clone(&recorder) as _, false),
+            recorder,
+        )
     }
 
     fn taken(recorder: &Recorder) -> Vec<Handed> {
@@ -228,7 +267,7 @@ mod tests {
         assert_eq!(
             taken(&recorder),
             [
-                Handed::Route(true),
+                Handed::Route(true, false),
                 key_fact(KeyboardControl::KeyW, PhysicalEdge::Pressed),
             ]
         );
@@ -246,7 +285,7 @@ mod tests {
                 Handed::Facts(vec![RuntimeInputFact::Clear {
                     reason: InputClearReason::PointerLockLoss,
                 }]),
-                Handed::Route(false),
+                Handed::Route(false, false),
             ]
         );
         // Given back, nothing more goes to the runtime.
@@ -315,6 +354,48 @@ mod tests {
                     y: axis(0.0),
                 }]),
             ]
+        );
+    }
+
+    #[test]
+    fn the_window_hands_over_the_pad_it_reads_while_it_holds_input() {
+        let recorder = Arc::new(Recorder::default());
+        let mut route = GameplayRoute::new(Arc::clone(&recorder) as _, true);
+        let mut held = PadState::default();
+        held.values[0] = 1.0;
+        held.pressed[0] = true;
+        // Before the lock the page has the pad; taking input presses what
+        // is held then, after the keys.
+        route.key(KeyCode::KeyW, true);
+        route.pad(held);
+        assert_eq!(taken(&recorder), []);
+        route.take();
+        let mut facts = vec![key(KeyboardControl::KeyW, PhysicalEdge::Pressed)];
+        facts.extend(gamepad::changes(&PadState::default(), &held));
+        assert_eq!(
+            taken(&recorder),
+            [Handed::Route(true, true), Handed::Facts(facts)]
+        );
+        // Each change goes as it is read; giving back stops it.
+        route.pad(PadState::default());
+        assert_eq!(
+            taken(&recorder),
+            [Handed::Facts(gamepad::changes(&held, &PadState::default()))]
+        );
+        route.give_back(InputClearReason::FocusLoss);
+        taken(&recorder);
+        route.pad(held);
+        assert_eq!(taken(&recorder), []);
+        // Taken again, the window starts from the pad as it is.
+        route.take();
+        let handed = taken(&recorder);
+        assert_eq!(
+            handed.last(),
+            Some(&Handed::Facts(
+                std::iter::once(key(KeyboardControl::KeyW, PhysicalEdge::Pressed))
+                    .chain(gamepad::changes(&PadState::default(), &held))
+                    .collect()
+            ))
         );
     }
 }

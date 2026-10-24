@@ -40,20 +40,25 @@ TypeScript UI is composited over it.
   `movementX`/`movementY`. Escape and focus loss end the lock.
 - **Gameplay input while the lock is held.** The page asks for the lock only
   in gameplay, so while the shell holds it the shell also hands keys, mouse
-  buttons, wheel and motion straight to the runtime's input mailbox, as the
-  same facts the page would make. A UI page running long tasks (layout, GC)
+  buttons, wheel, motion and the gamepad straight to the runtime's input
+  mailbox, as the same facts the page would make. The gamepad is the first
+  connected pad, read through gilrs on a thread of its own in Chromium's
+  standard mapping (buttons 0 to 15, sticks down positive, triggers pressed
+  past 30/255); gilrs's dead zone zeroes a stick at rest. A UI page running long tasks (layout, GC)
   then cannot delay movement and look. Taking and giving back input are
   control fences: the runtime publishes a fresh binding marked
-  `windowInput`, the page sends only its controller facts under it (the
-  window reads no gamepad), and its stale batches drop. Taking presses the keys already held; giving back clears for the
+  `windowInput`, the page's input under it does not count, and its stale
+  batches drop. Where gilrs cannot read gamepads the window says so when it
+  takes input, and the page's controller facts still count. Taking presses
+  the keys and pad buttons already held; giving back clears for the
   reason the lock ended (`pointer-lock-loss` or `focus-loss`). The page
   still receives every event for its UI, so a UI hotkey (an inventory key,
   chat Enter) also reaches gameplay as a press, then the clear when the UI
   ends the lock: a product keeps such keys out of its gameplay mappings.
   Escape ends the lock and is never a gameplay key. A harness's input claim
-  holds input from the window too. Confined and unlocked cursors, gamepads
-  and stream output keep the page's path; a gamepad is sampled on the page's
-  schedule, so long UI tasks still delay it and can miss a short press. A product's
+  holds input from the window too. Confined and unlocked cursors, interface
+  mode and stream output keep the page's path, where the page samples the
+  gamepad on its own schedule. A product's
   `confined` cursor mode asks the shell to confine the visible native cursor
   to the window instead (winit's confining grab), so the page keeps ordinary
   cursor positions and DOM hover. Escape and focus loss end it too. Where the
@@ -193,7 +198,8 @@ An installer is chosen when a product asks for one.
 
 ## Platforms
 
-- **Linux:** X11 and Wayland, on Vulkan. The device is created with the
+- **Linux:** X11 and Wayland, on Vulkan. The desktop host links
+  `libudev.so.1` (gilrs's gamepad discovery). The device is created with the
   DMA-BUF extensions Chromium's frames need. Pointer lock turns at the
   browser's rate on both.
   Wayland locks the pointer. X11 hides the cursor and recentres it rather than
