@@ -399,7 +399,7 @@ test('while a harness holds input the page sends none and shows the claim', asyn
   });
 });
 
-test('while the desktop window holds input the page sends none and shows no claim', async () => {
+test('while the desktop window holds input the page sends only its controller and shows no claim', async () => {
   await withFakeRoot(async (root) => {
     const routed = { ...RUNNING, controlRevision: '3' } as const;
     const returned = { ...RUNNING, controlRevision: '4' } as const;
@@ -443,7 +443,16 @@ test('while the desktop window holds input the page sends none and shows no clai
     assert.deepEqual(fake.appended, [], 'no badge for the window');
     pending = [key(routed)];
     await runCadence(cadence, 1);
-    assert.deepEqual(sent, [], 'no page input while the window holds it');
+    assert.deepEqual(sent, [], 'no page keys while the window holds input');
+    // The window reads no controller: the page's controller facts go on.
+    const button: RuntimeInputWireEvent = {
+      runtime: routed, sequence: '2', context: 'gameplay.default',
+      fact: { kind: 'controller-button', button: 'button-0', edge: 'pressed' },
+    };
+    pending = [key(routed), button];
+    await runCadence(cadence, 1);
+    assert.deepEqual(sent, [[button]], 'only the controller fact is sent');
+    sent.length = 0;
     // The window's input results reach the page too; they keep its hold.
     publish([{
       kind: 'runtime-input-result',

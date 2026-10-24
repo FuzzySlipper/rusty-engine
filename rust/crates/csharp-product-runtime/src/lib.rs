@@ -3000,6 +3000,94 @@ impl CsharpProductRuntime {
     }
 }
 
+impl CsharpProductRuntime {
+    fn admit_input(
+        &mut self,
+        batch: ProductHostInputBatch,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostInputResult>, ProductHostRuntimeError> {
+        // Input under a claim is the harness's: it keeps the lease alive.
+        if let Some(claim) = &mut self.input_claim {
+            claim.renewed = std::time::Instant::now();
+        }
+        // A page keeps sending input while the product is paused (a menu's
+        // clears, say). It is admitted for the page's cursor; physical input
+        // is dropped, and resume rebinds input, so Update never sees the
+        // paused interval. Direct UI claims reach the product once, now.
+        let paused = self.lifecycle.state() == RuntimeState::Paused;
+        if !paused && self.lifecycle.state() != RuntimeState::Running {
+            return Err(ProductHostRuntimeError::new_not_applied(
+                "CSHARP_INPUT_STATE",
+                "input is admitted only while the standard runtime is running or paused",
+            ));
+        }
+        // A batch the lane refuses (a product's undeclared intent, a gap, a
+        // foreign binding) leaves its cursor at the failing event, and its
+        // releases never reach the product. Nothing from it is forwarded: the
+        // control fence clears held input on both sides and gives the page a
+        // fresh binding, and its in-flight batches drop as stale.
+        let receipt = match self.input_lane.ingest_batch(batch.events()) {
+            Ok(receipt) => receipt,
+            Err(error) => return self.fence_refused_input(batch.events().len(), &error),
+        };
+        // A safe drop is a batch a fence made stale or a replay behind the
+        // cursor: expected, and answered in the receipt, so it is recorded as
+        // information. (The sink raises any rejected-recoverable event to a
+        // warning.)
+        if receipt.dropped_count() > 0 {
+            let _ = self.diagnostics.publish(
+                ProductHostLogEvent::new(
+                    ProductHostLogSeverity::Info,
+                    ProductHostLogDisposition::Accepted,
+                    "csharp-runtime",
+                    "CSHARP_INPUT_STALE_DROPPED",
+                    format!(
+                        "dropped {} stale or duplicate input event(s); the current input cursor remains authoritative",
+                        receipt.dropped_count()
+                    ),
+                )
+                .with_runtime(self.binding()),
+            );
+        }
+        // No mapped intent or held key from the paused interval is kept for
+        // a later step.
+        let paused_intents = if paused {
+            self.input_lane.take_paused_direct_intents()
+        } else {
+            Vec::new()
+        };
+        let native = if paused {
+            Vec::new()
+        } else {
+            receipt
+                .accepted_indices()
+                .iter()
+                .filter(|index| matches!(batch.events()[**index], RuntimeInputEvent::Physical(_)))
+                .map(|index| native_event(&batch.events()[*index]))
+                .collect::<Vec<_>>()
+        };
+        self.pending_inputs.extend(native);
+        let (outputs, faulted) = self
+            .deliver_paused_intents(paused_intents)
+            .map_err(|error| self.runtime_error(error))?;
+        // A product failure rebinds input, so the lane's cursor is current.
+        let next_input_sequence = receipt
+            .next_sequence()
+            .filter(|_| !faulted)
+            .map(CanonicalU64::new)
+            .unwrap_or_else(|| self.next_input_sequence());
+        let result = ProductHostInputResult::with_progress(
+            receipt.submitted_count(),
+            receipt.accepted_count(),
+            receipt.dropped_count(),
+            receipt.accepted_through().map(CanonicalU64::new),
+            receipt.consumed_through().map(CanonicalU64::new),
+            next_input_sequence,
+            self.readout(),
+        );
+        Ok(ProductHostRuntimeReceipt::new(result, outputs))
+    }
+}
+
 impl ProductHostRuntime for CsharpProductRuntime {
     /// Re-admits the staged bundle inventory so the next `OpenBundle` sees
     /// edited, added and deleted bundle files. Open bundles keep their
@@ -3264,86 +3352,33 @@ impl ProductHostRuntime for CsharpProductRuntime {
         &mut self,
         batch: ProductHostInputBatch,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostInputResult>, ProductHostRuntimeError> {
-        // Input under a claim is the harness's: it keeps the lease alive.
-        if let Some(claim) = &mut self.input_claim {
-            claim.renewed = std::time::Instant::now();
-        }
-        // A page keeps sending input while the product is paused (a menu's
-        // clears, say). It is admitted for the page's cursor; physical input
-        // is dropped, and resume rebinds input, so Update never sees the
-        // paused interval. Direct UI claims reach the product once, now.
-        let paused = self.lifecycle.state() == RuntimeState::Paused;
-        if !paused && self.lifecycle.state() != RuntimeState::Running {
-            return Err(ProductHostRuntimeError::new_not_applied(
-                "CSHARP_INPUT_STATE",
-                "input is admitted only while the standard runtime is running or paused",
-            ));
-        }
-        // A batch the lane refuses (a product's undeclared intent, a gap, a
-        // foreign binding) leaves its cursor at the failing event, and its
-        // releases never reach the product. Nothing from it is forwarded: the
-        // control fence clears held input on both sides and gives the page a
-        // fresh binding, and its in-flight batches drop as stale.
-        let receipt = match self.input_lane.ingest_batch(batch.events()) {
-            Ok(receipt) => receipt,
-            Err(error) => return self.fence_refused_input(batch.events().len(), &error),
-        };
-        // A safe drop is a batch a fence made stale or a replay behind the
-        // cursor: expected, and answered in the receipt, so it is recorded as
-        // information. (The sink raises any rejected-recoverable event to a
-        // warning.)
-        if receipt.dropped_count() > 0 {
-            let _ = self.diagnostics.publish(
-                ProductHostLogEvent::new(
-                    ProductHostLogSeverity::Info,
-                    ProductHostLogDisposition::Accepted,
-                    "csharp-runtime",
-                    "CSHARP_INPUT_STALE_DROPPED",
-                    format!(
-                        "dropped {} stale or duplicate input event(s); the current input cursor remains authoritative",
-                        receipt.dropped_count()
-                    ),
-                )
-                .with_runtime(self.binding()),
-            );
-        }
-        // No mapped intent or held key from the paused interval is kept for
-        // a later step.
-        let paused_intents = if paused {
-            self.input_lane.take_paused_direct_intents()
-        } else {
-            Vec::new()
-        };
-        let native = if paused {
-            Vec::new()
-        } else {
-            receipt
-                .accepted_indices()
+        // While the desktop window holds the keyboard and mouse, the page
+        // still reads the controller. Its controller facts on the current
+        // binding join the window's in mailbox order; the rest of its batch,
+        // and anything from before the window took input, is stale.
+        if self.window_input {
+            let binding = input_binding(&self.lifecycle);
+            let facts = batch
+                .events()
                 .iter()
-                .filter(|index| matches!(batch.events()[**index], RuntimeInputEvent::Physical(_)))
-                .map(|index| native_event(&batch.events()[*index]))
-                .collect::<Vec<_>>()
-        };
-        self.pending_inputs.extend(native);
-        let (outputs, faulted) = self
-            .deliver_paused_intents(paused_intents)
-            .map_err(|error| self.runtime_error(error))?;
-        // A product failure rebinds input, so the lane's cursor is current.
-        let next_input_sequence = receipt
-            .next_sequence()
-            .filter(|_| !faulted)
-            .map(CanonicalU64::new)
-            .unwrap_or_else(|| self.next_input_sequence());
-        let result = ProductHostInputResult::with_progress(
-            receipt.submitted_count(),
-            receipt.accepted_count(),
-            receipt.dropped_count(),
-            receipt.accepted_through().map(CanonicalU64::new),
-            receipt.consumed_through().map(CanonicalU64::new),
-            next_input_sequence,
-            self.readout(),
-        );
-        Ok(ProductHostRuntimeReceipt::new(result, outputs))
+                .filter_map(|event| match event {
+                    RuntimeInputEvent::Physical(ingress)
+                        if ingress.runtime() == binding
+                            && matches!(
+                                ingress.fact(),
+                                RuntimeInputFact::ControllerAxis { .. }
+                                    | RuntimeInputFact::ControllerButton { .. }
+                                    | RuntimeInputFact::ControllerButtonValue { .. }
+                            ) =>
+                    {
+                        Some(ingress.fact().clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            return self.window_input(facts);
+        }
+        self.admit_input(batch)
     }
 
     /// Advances the input binding fence after the host dropped input it
@@ -3429,7 +3464,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
                 ))
             })
             .collect();
-        self.input(ProductHostInputBatch::new(events))
+        self.admit_input(ProductHostInputBatch::new(events))
     }
 
     /// Runs a debug command; collision wires then follow whatever it moved
@@ -9465,6 +9500,56 @@ mod tests {
             routed,
             "giving input back moves the binding"
         );
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_pages_controller_reaches_the_product_while_the_window_holds_input() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = realtime_drop_fixture_runtime("window-controller");
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .unwrap();
+        let page = input_binding(&runtime.lifecycle);
+        let context = runtime.input_lane.context().clone();
+        let event = |binding, sequence, fact| {
+            RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+                binding,
+                sequence,
+                context.clone(),
+                fact,
+            ))
+        };
+        let button = RuntimeInputFact::ControllerButton {
+            button: runtime_input_model::ControllerButton::Button0,
+            edge: runtime_input_model::PhysicalEdge::Pressed,
+        };
+        let key = RuntimeInputFact::Key {
+            code: runtime_input_model::KeyboardControl::KeyW,
+            edge: runtime_input_model::PhysicalEdge::Pressed,
+        };
+        runtime.route_window_input(true).unwrap();
+        let routed = input_binding(&runtime.lifecycle);
+        let before = runtime.pending_inputs.len();
+        // The page's batch carries its own sequences; its controller fact
+        // takes the lane's next one, its key is the window's to send, and a
+        // fact from before the window took input is stale.
+        runtime
+            .input(ProductHostInputBatch::new(vec![
+                event(routed, 7, key),
+                event(routed, 8, button.clone()),
+                event(page, 1, button),
+            ]))
+            .unwrap();
+        let kinds: Vec<_> = runtime.pending_inputs[before..]
+            .iter()
+            .map(|input| input.kind)
+            .collect();
+        assert_eq!(kinds, [NativeInputEventKind::ControllerButton]);
+        assert_eq!(runtime.next_input_sequence(), CanonicalU64::new(2));
         drop(runtime);
         fs::remove_dir_all(root).unwrap();
     }

@@ -29,6 +29,14 @@ import type {
 import { createProductBrowserCadence, type ProductBrowserCadence } from './realtime-cadence.js';
 
 /** Fixed current artifact identity; compatibility follows actual code changes. */
+
+/** A controller axis, button or button value: what the page reads for the
+ * desktop window while the window holds the keyboard and mouse. */
+const isControllerFact = (event: RuntimeInputWireEvent): boolean =>
+  'fact' in event && (event.fact.kind === 'controller-axis'
+    || event.fact.kind === 'controller-button'
+    || event.fact.kind === 'controller-button-value');
+
 export const PRODUCT_BROWSER_HOST_ARTIFACT = 'rusty.product.browser-host' as const;
 
 /**
@@ -855,11 +863,15 @@ export async function mountProductBrowserHostWithApplication(
     restoreReadyAfterHealthyTransport();
   }
 
-  const sendInput = async (batch: readonly RuntimeInputWireEvent[]): Promise<void> => {
-    // While a harness or the desktop window holds input, the page's own
-    // input is dropped here, so focus changes and page blur cannot clear
-    // what they hold.
-    if (inputClaim !== null || windowInput) return;
+  const sendInput = async (input: readonly RuntimeInputWireEvent[]): Promise<void> => {
+    // While a harness holds input, the page's own input is dropped here, so
+    // focus changes and page blur cannot clear what it holds. The desktop
+    // window holds the keyboard and mouse but reads no controller: the page
+    // still sends its controller facts, which the runtime takes in order
+    // with the window's.
+    if (inputClaim !== null) return;
+    const batch = windowInput ? input.filter(isControllerFact) : input;
+    if (batch.length === 0) return;
     try {
       applyInputResult(await transport.input(batch));
     } catch (cause) {
