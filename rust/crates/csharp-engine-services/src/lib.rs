@@ -59,7 +59,7 @@ pub use collision_inspection::{
     CollisionInspection, CollisionLine, CollisionLineKind, CollisionSource, InspectedCollision,
     COLLISION_INSPECTION_LINES,
 };
-pub use content::ProductContentBundles;
+pub use content::{ContentBytes, ProductContentBundles};
 pub use content_source::{
     parse_edits as parse_content_source_edits, ContentSource, ContentSourceRoots, JsonEdit,
 };

@@ -180,7 +180,7 @@ impl RuntimeUiBridge {
         })?;
         let value = self.grant(UiFile {
             content_type,
-            bytes: content.bytes,
+            bytes: content.bytes.shared(),
         });
         // SAFETY: result pointer was checked above and belongs to the immediate direct call.
         unsafe { *handle = NativeUiImageHandle { value } };
@@ -220,7 +220,7 @@ impl RuntimeUiBridge {
         })?;
         let value = self.grant(UiFile {
             content_type,
-            bytes: content.bytes,
+            bytes: content.bytes.shared(),
         });
         // SAFETY: result pointer was checked above and belongs to the immediate direct call.
         unsafe { *handle = NativeUiFontHandle { value } };
@@ -703,22 +703,31 @@ mod tests {
 
     #[test]
     fn ui_files_serve_granted_images_and_fonts_until_released() {
-        let png: Arc<[u8]> = Arc::from(&b"\x89PNG\r\n\x1a\nportrait"[..]);
-        let woff2: Arc<[u8]> = Arc::from(&b"wOF2body"[..]);
+        let png = crate::ContentBytes::from(&b"\x89PNG\r\n\x1a\nportrait"[..]);
+        let woff2 = crate::ContentBytes::from(&b"wOF2body"[..]);
         let mut content = RuntimeContentBridge::new(BTreeMap::from([
-            ("portrait.png".to_owned(), Arc::clone(&png)),
-            ("skin.woff2".to_owned(), Arc::clone(&woff2)),
-            ("skin.ttf".to_owned(), Arc::from(&b"\0\x01\0\0body"[..])),
-            ("notes.txt".to_owned(), Arc::from(&b"text"[..])),
+            ("portrait.png".to_owned(), png.clone()),
+            ("skin.woff2".to_owned(), woff2.clone()),
+            (
+                "skin.ttf".to_owned(),
+                crate::ContentBytes::from(&b"\0\x01\0\0body"[..]),
+            ),
+            (
+                "notes.txt".to_owned(),
+                crate::ContentBytes::from(&b"text"[..]),
+            ),
             (
                 "photo.jpg".to_owned(),
-                Arc::from(&b"\xff\xd8\xff\xe0body"[..]),
+                crate::ContentBytes::from(&b"\xff\xd8\xff\xe0body"[..]),
             ),
             (
                 "icon.webp".to_owned(),
-                Arc::from(&b"RIFF\0\0\0\0WEBPVP8 "[..]),
+                crate::ContentBytes::from(&b"RIFF\0\0\0\0WEBPVP8 "[..]),
             ),
-            ("icon.svg".to_owned(), Arc::from(&b"<svg/>"[..])),
+            (
+                "icon.svg".to_owned(),
+                crate::ContentBytes::from(&b"<svg/>"[..]),
+            ),
         ]));
         let content_api = crate::content::api(&mut content);
         let open = |path: &str| {
@@ -753,10 +762,7 @@ mod tests {
         };
         image(&mut bridge, open("portrait.png"), &mut handle).unwrap();
         let portrait = handle;
-        assert_eq!(
-            served(portrait.value),
-            Some(("image/png", Arc::clone(&png)))
-        );
+        assert_eq!(served(portrait.value), Some(("image/png", png.shared())));
         for (path, content_type) in [
             ("photo.jpg", "image/jpeg"),
             ("icon.webp", "image/webp"),
@@ -787,7 +793,7 @@ mod tests {
                 .map_err(|error| error.code().to_owned())
         };
         let skin = font(&mut bridge, open("skin.woff2")).unwrap();
-        assert_eq!(served(skin.value), Some(("font/woff2", Arc::clone(&woff2))));
+        assert_eq!(served(skin.value), Some(("font/woff2", woff2.shared())));
         let ttf = font(&mut bridge, open("skin.ttf")).unwrap();
         assert_eq!(served(ttf.value).unwrap().0, "font/ttf");
         assert_eq!(

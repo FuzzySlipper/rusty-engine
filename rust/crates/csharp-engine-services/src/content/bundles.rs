@@ -1,11 +1,11 @@
 //! Build content bundles, loose or packed, and content containers. Discovery
 //! retains metadata only; an open holds its inventory and reads each file when
-//! first used, and references own independent Arc clones.
+//! used, keeping no copy of it; references hold the bytes they read.
 use super::*;
 use crate::composition::CsharpEngineServicesError;
 use product_container::{join, Container, ProductSource};
 use serde::Deserialize;
-use std::{path::Path, sync::Mutex};
+use std::path::Path;
 
 pub const INDEX: &str = ".rusty-bundles.json";
 
@@ -33,15 +33,14 @@ struct AdmittedBundle {
 #[derive(Debug)]
 enum BundleSource {
     Product(ProductSource),
-    Supplied(BTreeMap<String, Arc<[u8]>>),
+    Supplied(BTreeMap<String, ContentBytes>),
 }
 
 impl BundleSource {
-    fn read(&self, path: &str) -> Result<Arc<[u8]>, CsharpEngineServicesError> {
+    fn read(&self, path: &str) -> Result<ContentBytes, CsharpEngineServicesError> {
         match self {
             Self::Product(source) => source
-                .read(path)
-                .map(|bytes| Arc::from(bytes.as_ref()))
+                .content(path)
                 .map_err(|failure| container_error(&failure)),
             Self::Supplied(files) => files.get(path).cloned().ok_or_else(|| {
                 container_error(&product_container::Error::Missing(path.to_owned()))
@@ -95,7 +94,7 @@ impl ProductContentBundles {
     /// The inventory among content files a test supplied, as a loose
     /// Product's content root carries it; none without one. Bundle files are
     /// read from the same files when a bundle opens.
-    pub fn admit_supplied(files: &BTreeMap<String, Arc<[u8]>>) -> Result<Self, String> {
+    pub fn admit_supplied(files: &BTreeMap<String, ContentBytes>) -> Result<Self, String> {
         let Some(index) = files.get(INDEX) else {
             return Ok(Self::default());
         };
@@ -230,7 +229,7 @@ struct Inventoried {
 enum Store {
     /// A container: paths are container-relative. Opening checked its header
     /// and inventory.
-    Container(Container),
+    Container(Arc<Container>),
     /// A build bundle: `files` by content-relative path (`prefix` is the
     /// bundle root and `/`), read from `source` under `content_root`.
     Build {
@@ -241,20 +240,18 @@ enum Store {
     },
 }
 
-/// An open bundle's files: its inventory, with each file's bytes read once,
-/// when first used, and shared from then on. References keep it (and the bytes
-/// it read) alive after its bundle closes.
+/// An open bundle's files: its inventory, each file read when used. A read
+/// keeps nothing: its bytes live as long as whoever holds them (a reference,
+/// a resource made from it). A raw container entry is served from the map.
+/// References keep the inventory (and a container's map) alive after their
+/// bundle closes.
 pub(crate) struct BundleFiles {
     store: Store,
-    read: Mutex<BTreeMap<String, Arc<[u8]>>>,
 }
 
 impl BundleFiles {
     fn new(store: Store) -> Self {
-        Self {
-            store,
-            read: Mutex::default(),
-        }
+        Self { store }
     }
 
     /// The prefix that turns a bundle-relative path into a content path.
@@ -276,17 +273,13 @@ impl BundleFiles {
     /// The file's bytes, or none when the inventory has no such file. A listed
     /// file that cannot be read (missing, or a corrupt compressed entry)
     /// refuses, naming the file.
-    pub(crate) fn bytes(&self, path: &str) -> Result<Option<Arc<[u8]>>, CsharpEngineServicesError> {
-        let mut read = self
-            .read
-            .lock()
-            .unwrap_or_else(|poison| poison.into_inner());
-        if let Some(bytes) = read.get(path) {
-            return Ok(Some(Arc::clone(bytes)));
-        }
-        let bytes: Arc<[u8]> = match &self.store {
-            Store::Container(container) => match container.get(path) {
-                Ok(bytes) => Arc::from(bytes.as_ref()),
+    pub(crate) fn bytes(
+        &self,
+        path: &str,
+    ) -> Result<Option<ContentBytes>, CsharpEngineServicesError> {
+        let bytes = match &self.store {
+            Store::Container(container) => match container.content(path) {
+                Ok(bytes) => bytes,
                 Err(product_container::Error::Missing(_)) => return Ok(None),
                 Err(failure) => return Err(container_error(&failure)),
             },
@@ -305,7 +298,6 @@ impl BundleFiles {
                 source.read(&join(content_root, path))?
             }
         };
-        read.insert(path.to_owned(), Arc::clone(&bytes));
         Ok(Some(bytes))
     }
 
@@ -342,7 +334,7 @@ impl OpenBundle {
             .collect::<Option<Vec<_>>>()?;
         Some(Self {
             identity: collection_identity(identities),
-            files: Arc::new(BundleFiles::new(Store::Container(container))),
+            files: Arc::new(BundleFiles::new(Store::Container(Arc::new(container)))),
         })
     }
 
@@ -715,13 +707,6 @@ mod tests {
             ABI_OK
         );
         assert_eq!(bridge.bundles.open.len(), 1);
-        let weak = Arc::downgrade(
-            &bridge.bundles.open[&bundle.value]
-                .reference("a.json")
-                .unwrap()
-                .unwrap()
-                .bytes,
-        );
         let mut reference = NativeContentReferenceHandle::default();
         assert_eq!(
             unsafe {
@@ -737,6 +722,7 @@ mod tests {
             },
             ABI_OK
         );
+        let weak = bridge.retained_bytes(reference).unwrap().downgrade();
         assert_eq!(unsafe { destroy_bundle(context, bundle) }, ABI_OK);
         assert!(bridge.bundles.open.is_empty());
         assert_eq!(
@@ -825,18 +811,9 @@ mod tests {
             [("a.json", 7), ("gone.bin", 4), ("same.txt", 6)]
                 .map(|(path, length)| (path.to_owned(), length))
         );
-        assert!(
-            open.files.read.lock().unwrap().is_empty(),
-            "opening read a body"
-        );
-
         let a = open.reference("a.json").unwrap().unwrap();
         assert_eq!(a.path, "world/a.json");
         assert_eq!(a.bytes.as_ref(), b"{\"a\":1}");
-        assert_eq!(
-            open.files.read.lock().unwrap().keys().collect::<Vec<_>>(),
-            ["world/a.json"]
-        );
         let same = open.reference("same.txt").unwrap().unwrap();
         assert_eq!(same.bytes.as_ref(), b"after, and longer");
         assert_eq!(same.sha256(), sha256_words(&Sha256::digest(b"before")));
@@ -875,7 +852,14 @@ mod tests {
         let actors = source.load("actors").unwrap();
         let other = source.load("other").unwrap();
         let retained = actors.reference("model.glb").unwrap().unwrap();
-        let dependency = Arc::downgrade(&retained.files.get("actors/skin.png").unwrap().unwrap());
+        // A dependency read keeps nothing once its bytes are dropped.
+        let dependency = retained
+            .files
+            .get("actors/skin.png")
+            .unwrap()
+            .unwrap()
+            .downgrade();
+        assert!(dependency.upgrade().is_none());
         drop(actors);
         drop(other);
         assert_eq!(
@@ -888,9 +872,6 @@ mod tests {
             b"actors"
         );
         assert!(retained.files.get("other/skin.png").unwrap().is_none());
-        assert!(dependency.upgrade().is_some());
-        drop(retained);
-        assert!(dependency.upgrade().is_none());
     }
 
     #[test]
@@ -1293,5 +1274,108 @@ mod tests {
             message.contains(installed.join("music.rpak").to_str().unwrap()),
             "{message}"
         );
+    }
+
+    /// Reading every file of a container through references, as
+    /// `ProductContentBundle.ReadFile` does, keeps nothing once each reference
+    /// is released: raw entries are served from the map and take no heap, a
+    /// decompressed entry is freed with its reference, and closing the
+    /// container unmaps it.
+    #[test]
+    fn container_reads_keep_nothing_after_their_references_are_released() {
+        let directory = tempfile::tempdir().unwrap();
+        let module = directory.path().join("module");
+        fs::create_dir_all(&module).unwrap();
+        for index in 0..8_u32 {
+            // Incompressible bytes stay raw; repeated text is stored as zstd.
+            let mut state = 0x9e37_79b9_7f4a_7c15_u64 ^ u64::from(index);
+            let noise: Vec<u8> = (0..64 * 1024)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    (state >> 32) as u8
+                })
+                .collect();
+            fs::write(module.join(format!("raw-{index}.bin")), noise).unwrap();
+            fs::write(
+                module.join(format!("text-{index}.json")),
+                "[1,2,3],".repeat(8192),
+            )
+            .unwrap();
+        }
+        let out = directory.path().join("module.rpak");
+        product_container::pack_content(&module, &out, true).unwrap();
+
+        let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
+        let context = (&mut bridge as *mut RuntimeContentBridge).cast();
+        let mut bundle = NativeContentBundleHandle::default();
+        let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        let path = out.to_str().unwrap();
+        assert_eq!(
+            unsafe {
+                open_container(
+                    context,
+                    &NativeContentContainerOpenRequest { path: text(path) },
+                    &mut bundle,
+                    &mut receipt,
+                )
+            },
+            ABI_OK
+        );
+        let entries = bridge.bundles.open[&bundle.value].entries();
+        assert_eq!(entries.len(), 16);
+        let mut read = Vec::new();
+        for (file, _, length) in entries {
+            let mut reference = NativeContentReferenceHandle::default();
+            let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+            let status = unsafe {
+                open_bundle_reference(
+                    context,
+                    &NativeContentBundleReferenceRequest {
+                        bundle,
+                        path: text(&file),
+                    },
+                    &mut reference,
+                    &mut receipt,
+                )
+            };
+            assert_eq!(status, ABI_OK);
+            let mut bytes = NativeByteResult {
+                bytes: std::ptr::null(),
+                len: 0,
+            };
+            let request = NativeContentReadBytesRequest {
+                reference,
+                offset: 0,
+                max_bytes: u32::try_from(length).unwrap(),
+            };
+            assert_eq!(
+                unsafe { super::super::read_bytes(context, &request, &mut bytes) },
+                ABI_OK
+            );
+            assert_eq!(bytes.len as u64, length);
+            let retained = bridge.retained_content(reference).unwrap().bytes;
+            read.push((file, format!("{retained:?}"), retained.downgrade()));
+            drop(retained);
+            assert_eq!(
+                unsafe { super::super::destroy_reference(context, reference) },
+                ABI_OK
+            );
+        }
+        for (file, storage, bytes) in &read {
+            if file.starts_with("raw-") {
+                assert!(storage.contains("mapped"), "{file}: {storage}");
+                assert!(
+                    bytes.upgrade().is_some(),
+                    "{file} is the open container's map"
+                );
+            } else {
+                assert!(storage.contains("heap"), "{file}: {storage}");
+                assert!(bytes.upgrade().is_none(), "{file} outlived its reference");
+            }
+        }
+        assert_eq!(unsafe { destroy_bundle(context, bundle) }, ABI_OK);
+        assert!(read.iter().all(|(_, _, bytes)| bytes.upgrade().is_none()));
     }
 }

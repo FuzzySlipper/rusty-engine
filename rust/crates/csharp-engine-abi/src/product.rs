@@ -2029,7 +2029,9 @@ pub struct NativeEngineApi {
     pub host: NativeHostApi,
 }
 
-/// Borrowed creation inputs plus the direct Engine API.
+/// Borrowed creation inputs plus the direct Engine API. The content files stay
+/// valid until the product is destroyed, so the product reads them in place;
+/// the other inputs are borrowed for the call.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeProductCreateArgs {

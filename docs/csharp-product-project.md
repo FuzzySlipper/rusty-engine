@@ -258,9 +258,12 @@ authored ordering/IDs and build its own dictionary without embedding each
 definition's filename in code. Do not depend on an index occupying element zero.
 
 `Files` exposes the whole snapshot as UTF-8 `Path` and `Bytes` pairs. Content
-is an eagerly admitted memory snapshot copied across the generated boundary;
-these helpers add no filesystem reads, streaming, parsing framework or writable
-store. Treat retained path/payload memory as read-only. A loose content edit
+is an eagerly admitted memory snapshot, held once: `Bytes` reads the Engine's
+own copy in place, which stays until the product is gone, so do not keep it
+past `Dispose`. In a release a file stored raw in `product.rpak` is read from
+the container's map and takes no heap. These helpers add no filesystem reads,
+streaming, parsing framework or writable store. Treat retained path/payload
+memory as read-only. A loose content edit
 under `rusty dev` replaces the runtime to supply a new snapshot, unless the
 product declared the file live (below); bundle content (below) reloads without
 one.
@@ -363,14 +366,17 @@ using ContentReference source = bundle.OpenReference("rooms/entrance.json");
 Declared bundle files are excluded from the `ProductContent.Files` snapshot
 and its named reads. Discovery
 reads only the inventory, and so does opening a bundle: each file is read
-once, when first used, and kept for the open bundle and its references, so an
-open costs its inventory and not its bodies. The inventory's SHA-256 is each
+when used, and the bundle keeps no copy of it, so an open costs its inventory
+and not its bodies. The inventory's SHA-256 is each
 file's identity and is not recomputed. A file missing since staging throws
 `EngineCallException` (`PRODUCT_SOURCE_MISSING`) when read; reopen the bundle
 after restaging. `Entries` exposes copied metadata; `ReadFile`, `ReadBytes`,
 `ReadText` and `ReadDirectory` copy the requested bodies. A read borrows the Rust
 source for the call and copies it once into managed storage, with no
-intermediate chunk buffers. Bundle/file inventories already arrive in Engine UTF-8 path
+intermediate chunk buffers; the managed copy is the only one left after the
+call. A `ContentReference` holds its file's bytes until it is disposed, and a
+resource made from it (a texture, mesh, clip or UI image) holds them until the
+resource is released; reading the same file again reads it again. Bundle/file inventories already arrive in Engine UTF-8 path
 order; helpers do not sort them again or list every bundle before an open.
 Directory semantics
 match ProductContent, with **bundle-relative** paths; bundle ordering follows UTF-8 path order.
@@ -455,9 +461,13 @@ using ContentReference wall = module.OpenReference("walls/stone.png");
 Everything in the bundle section above applies: bundle-relative paths, reads,
 `OpenReference`, the typed content consumers, GLB dependencies resolved inside
 the same container, and references that outlive the bundle. Opening maps the
-file and checks its header and inventory; each file's bytes are read when first
-used and kept for that open container, so opening every installed container to
-read its manifest and its `Entries` is cheap. `Identity`, also on build
+file and checks its header and inventory, so opening every installed container
+to read its manifest and its `Entries` is cheap. A file stored raw is served
+from the map, which the container, its references and resources made from
+them share without a heap copy; a compressed file is decompressed on each
+read, and the decompressed bytes go with the reference or resource that holds
+them. Nothing read is kept for the open container itself, so a product can keep
+a large container open for the whole session and hold only what it is using. `Identity`, also on build
 bundles, is the SHA-256 over each file's path and SHA-256 in path order: it
 follows the files, not how they are stored. A missing file, a file that is not
 a container, a truncated one or an inconsistent inventory throws

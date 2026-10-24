@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -250,7 +251,7 @@ public static unsafe class ProductBridge
             ProductInputConfiguration input = CopyInputConfiguration(args->input);
             ProductDebugExecutionContext debugging = new();
             EngineContext engine = new(args->engine);
-            ProductContent content = new(CopyContent(args->content, args->content_len), engine.Content);
+            ProductContent content = new(BorrowContent(args->content, args->content_len), engine.Content);
             Func<ProductCreateContext, IEngineProduct> createProduct = s_createProduct ?? throw new InvalidOperationException("The product was created before it was bound.");
             IEngineProduct product = createProduct(new ProductCreateContext(engine, content, input, debugging));
             lifetime = new ProductLifetime(product, s_createDebugCatalog!(product), debugging, content);
@@ -624,15 +625,24 @@ public static unsafe class ProductBridge
         return changes;
     }
 
-    private static ProductContentFile[] CopyContent(NativeContentFile* source, nuint count)
+    // The Engine keeps creation's content until the product is destroyed, so its bytes are read in
+    // place rather than copied; only the paths are copied.
+    private static ProductContentFile[] BorrowContent(NativeContentFile* source, nuint count)
     {
         ProductContentFile[] files = new ProductContentFile[checked((int)count)];
         for (nuint index = 0; index < count; index++)
         {
             NativeContentFile file = source[index];
-            files[checked((int)index)] = new ProductContentFile(CopyBytes(file.path, file.path_len), CopyBytes(file.bytes, file.bytes_len));
+            files[checked((int)index)] = new ProductContentFile(CopyBytes(file.path, file.path_len), BorrowBytes(file.bytes, file.bytes_len));
         }
         return files;
+    }
+
+    private static ReadOnlyMemory<byte> BorrowBytes(byte* source, nuint length)
+    {
+        if (length == 0) return ReadOnlyMemory<byte>.Empty;
+        if (source is null) throw new ArgumentException("nonempty native byte slice has no storage");
+        return new ProductLifetimeMemory(source, checked((int)length)).Memory;
     }
 
     private static ProductInputEvent[] CopyInput(NativeInputEvent* source, nuint count)
@@ -728,4 +738,17 @@ public static unsafe class ProductBridge
         if (source is null && length == 0) return null;
         return CopyBytes(source, length);
     }
+}
+
+/// <summary>Native bytes the Engine keeps for the product's whole life, as memory without a copy.</summary>
+internal sealed unsafe class ProductLifetimeMemory(byte* pointer, int length) : MemoryManager<byte>
+{
+    public override Span<byte> GetSpan() => new(pointer, length);
+
+    // Native memory does not move.
+    public override MemoryHandle Pin(int elementIndex = 0) => new(pointer + elementIndex);
+
+    public override void Unpin() { }
+
+    protected override void Dispose(bool disposing) { }
 }

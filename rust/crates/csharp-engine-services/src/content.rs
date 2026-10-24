@@ -15,6 +15,7 @@ use crate::{composition::borrowed_utf8, composition::ABI_OK};
 mod bundles;
 mod portable;
 pub use bundles::ProductContentBundles;
+pub use product_container::ContentBytes;
 
 /// A body's SHA-256, computed when first requested and shared by every clone
 /// of the admitted content, so unused files are never hashed and used files
@@ -47,12 +48,12 @@ impl ContentIdentity {
 /// snapshot, or an open bundle whose bodies are read once, when first used.
 #[derive(Clone)]
 pub(crate) enum ContentFiles {
-    Snapshot(Arc<BTreeMap<String, Arc<[u8]>>>),
+    Snapshot(Arc<BTreeMap<String, ContentBytes>>),
     Bundle(Arc<bundles::BundleFiles>),
 }
 
 impl ContentFiles {
-    pub(crate) fn snapshot(files: BTreeMap<String, Arc<[u8]>>) -> Self {
+    pub(crate) fn snapshot(files: BTreeMap<String, ContentBytes>) -> Self {
         Self::Snapshot(Arc::new(files))
     }
 
@@ -61,7 +62,7 @@ impl ContentFiles {
     pub(crate) fn get(
         &self,
         path: &str,
-    ) -> Result<Option<Arc<[u8]>>, crate::composition::CsharpEngineServicesError> {
+    ) -> Result<Option<ContentBytes>, crate::composition::CsharpEngineServicesError> {
         match self {
             Self::Snapshot(files) => Ok(files.get(path).cloned()),
             Self::Bundle(files) => files.bytes(path),
@@ -73,7 +74,7 @@ impl ContentFiles {
 struct AdmittedContent {
     path: String,
     identity: ContentIdentity,
-    bytes: Arc<[u8]>,
+    bytes: ContentBytes,
     transient: bool,
     files: ContentFiles,
 }
@@ -88,7 +89,7 @@ impl AdmittedContent {
 pub(crate) struct RetainedContent {
     pub(crate) path: String,
     pub(crate) identity: ContentIdentity,
-    pub(crate) bytes: Arc<[u8]>,
+    pub(crate) bytes: ContentBytes,
     pub(crate) transient: bool,
     /// Immutable dependency context of this source, never other open bundles.
     pub(crate) files: ContentFiles,
@@ -117,7 +118,7 @@ pub(crate) struct RuntimeContentBridge {
 }
 
 impl RuntimeContentBridge {
-    pub(crate) fn new(content_resources: BTreeMap<String, Arc<[u8]>>) -> Self {
+    pub(crate) fn new(content_resources: BTreeMap<String, ContentBytes>) -> Self {
         let files = ContentFiles::snapshot(content_resources.clone());
         let catalog = content_resources
             .into_iter()
@@ -152,7 +153,7 @@ impl RuntimeContentBridge {
     /// identity and length.
     pub(crate) fn reload(
         &mut self,
-        changed: BTreeMap<String, Arc<[u8]>>,
+        changed: BTreeMap<String, ContentBytes>,
     ) -> Vec<(String, NativeContentSha256, u64)> {
         let ContentFiles::Snapshot(previous) = &self.snapshot else {
             unreachable!("loose content is a snapshot");
@@ -161,7 +162,7 @@ impl RuntimeContentBridge {
         files.extend(
             changed
                 .iter()
-                .map(|(path, bytes)| (path.clone(), Arc::clone(bytes))),
+                .map(|(path, bytes)| (path.clone(), bytes.clone())),
         );
         self.snapshot = ContentFiles::snapshot(files);
         for content in self.catalog.values_mut() {
@@ -197,10 +198,10 @@ impl RuntimeContentBridge {
     pub(crate) fn retained_bytes(
         &self,
         reference: NativeContentReferenceHandle,
-    ) -> Option<Arc<[u8]>> {
+    ) -> Option<ContentBytes> {
         self.references
             .get(&reference.value)
-            .map(|content| Arc::clone(&content.bytes))
+            .map(|content| content.bytes.clone())
     }
 
     pub(crate) fn retained_content(
@@ -212,7 +213,7 @@ impl RuntimeContentBridge {
             .map(|content| RetainedContent {
                 path: content.path.clone(),
                 identity: content.identity.clone(),
-                bytes: Arc::clone(&content.bytes),
+                bytes: content.bytes.clone(),
                 transient: content.transient,
                 files: content.files.clone(),
             })
@@ -225,7 +226,7 @@ impl RuntimeContentBridge {
         Some(RetainedContent {
             path: content.path.clone(),
             identity: content.identity.clone(),
-            bytes: Arc::clone(&content.bytes),
+            bytes: content.bytes.clone(),
             transient: content.transient,
             files: content.files.clone(),
         })
@@ -336,12 +337,12 @@ pub(crate) unsafe extern "C" fn admit_reference(
     let request = unsafe { &*request };
     let read_file = |path: NativeUtf8Slice,
                      bytes: NativeByteSlice|
-     -> Option<(String, Arc<[u8]>)> {
+     -> Option<(String, ContentBytes)> {
         let path = unsafe { borrowed_utf8(path.bytes, path.len, "content path") }.ok()?;
         let bytes =
             unsafe { crate::composition::borrowed_slice(bytes.bytes, bytes.len, "content bytes") }
                 .ok()?;
-        Some((path.to_owned(), Arc::from(bytes)))
+        Some((path.to_owned(), ContentBytes::from(bytes)))
     };
     let Some((path, bytes)) = read_file(request.path, request.bytes) else {
         return 0;
@@ -355,7 +356,7 @@ pub(crate) unsafe extern "C" fn admit_reference(
     }) else {
         return 0;
     };
-    let mut files = BTreeMap::from([(path.clone(), Arc::clone(&bytes))]);
+    let mut files = BTreeMap::from([(path.clone(), bytes.clone())]);
     for dependency in dependencies {
         let Some((path, bytes)) = read_file(dependency.path, dependency.bytes) else {
             return 0;
@@ -518,11 +519,14 @@ pub(crate) mod tests {
             .map(|index| {
                 (
                     format!("unused/{index}.bin"),
-                    Arc::from(vec![index as u8; 64 * 1024]),
+                    crate::ContentBytes::from(vec![index as u8; 64 * 1024]),
                 )
             })
-            .chain([("used.bin".to_owned(), Arc::from(&b"first body"[..]))])
-            .collect::<BTreeMap<String, Arc<[u8]>>>();
+            .chain([(
+                "used.bin".to_owned(),
+                crate::ContentBytes::from(&b"first body"[..]),
+            )])
+            .collect::<BTreeMap<String, crate::ContentBytes>>();
         let before = body_hashes();
         let mut bridge = RuntimeContentBridge::new(files);
         assert_eq!(body_hashes(), before, "startup hashes no bodies");
@@ -545,7 +549,7 @@ pub(crate) mod tests {
         // A changed admitted body is a new catalog with its own identity.
         let changed = RuntimeContentBridge::new(BTreeMap::from([(
             "used.bin".to_owned(),
-            Arc::from(&b"second body"[..]),
+            crate::ContentBytes::from(&b"second body"[..]),
         )]));
         assert_ne!(changed.catalog["used.bin"].sha256(), identity);
     }
@@ -591,7 +595,7 @@ pub(crate) mod tests {
         );
         assert!(retained.transient);
         assert!(bridge.catalog.is_empty());
-        let weak = Arc::downgrade(&retained.bytes);
+        let weak = retained.bytes.downgrade();
         drop(retained);
         assert_eq!(unsafe { destroy_reference(context, handle) }, ABI_OK);
         assert!(weak.upgrade().is_none());
@@ -647,7 +651,7 @@ pub(crate) mod tests {
 
     #[test]
     fn byte_result_borrows_large_and_empty_ranges() {
-        let body: Arc<[u8]> = Arc::from(vec![7; 1024 * 1024 + 13]);
+        let body = crate::ContentBytes::from(vec![7; 1024 * 1024 + 13]);
         let mut bridge =
             RuntimeContentBridge::new(BTreeMap::from([("large".to_owned(), body.clone())]));
         let handle = bridge.retain(bridge.catalog["large"].clone());
@@ -680,7 +684,10 @@ pub(crate) mod tests {
     #[test]
     fn resolves_only_the_exact_persistable_path_and_hash() {
         let mut catalog = BTreeMap::new();
-        catalog.insert("state.bin".to_owned(), Arc::from(&b"persisted content"[..]));
+        catalog.insert(
+            "state.bin".to_owned(),
+            crate::ContentBytes::from(&b"persisted content"[..]),
+        );
         let mut bridge = RuntimeContentBridge::new(catalog);
         let context = (&mut bridge as *mut RuntimeContentBridge).cast();
         let path = b"state.bin";
@@ -782,14 +789,20 @@ pub(crate) mod tests {
     #[test]
     fn a_reloaded_file_opens_with_new_bytes_while_old_references_keep_theirs() {
         let files = BTreeMap::from([
-            ("tuning.json".to_owned(), Arc::from(&b"{\"a\":1}"[..])),
-            ("other.json".to_owned(), Arc::from(&b"[]"[..])),
+            (
+                "tuning.json".to_owned(),
+                crate::ContentBytes::from(&b"{\"a\":1}"[..]),
+            ),
+            (
+                "other.json".to_owned(),
+                crate::ContentBytes::from(&b"[]"[..]),
+            ),
         ]);
         let mut bridge = RuntimeContentBridge::new(files);
         let before = bridge.retain(bridge.catalog["tuning.json"].clone());
         let changed = bridge.reload(BTreeMap::from([(
             "tuning.json".to_owned(),
-            Arc::from(&b"{\"a\":2}"[..]),
+            crate::ContentBytes::from(&b"{\"a\":2}"[..]),
         )]));
         let sha = sha256_words(&Sha256::digest(b"{\"a\":2}"));
         assert_eq!(changed, [("tuning.json".to_owned(), sha, 7)]);

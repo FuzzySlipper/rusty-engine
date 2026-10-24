@@ -1,7 +1,6 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     ffi::c_void,
-    sync::Arc,
 };
 
 use csharp_engine_abi::*;
@@ -59,7 +58,7 @@ impl VideoRealizationFact {
 
 pub(crate) struct RuntimeVideoBridge {
     state: VideoState,
-    content_resources: BTreeMap<String, Arc<[u8]>>,
+    content_resources: BTreeMap<String, crate::ContentBytes>,
     staged: Option<RuntimeVideoCall>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     facts: VecDeque<VideoRealizationFact>,
@@ -72,7 +71,7 @@ pub(crate) struct RuntimeVideoBridge {
 }
 
 impl RuntimeVideoBridge {
-    pub(crate) fn new(content_resources: BTreeMap<String, Arc<[u8]>>) -> Self {
+    pub(crate) fn new(content_resources: BTreeMap<String, crate::ContentBytes>) -> Self {
         Self {
             state: VideoState {
                 projector: VideoProjector::default(),
@@ -168,7 +167,7 @@ impl RuntimeVideoBridge {
     fn play_selected(
         &mut self,
         path: &str,
-        bytes: Arc<[u8]>,
+        bytes: crate::ContentBytes,
         identity: &ContentIdentity,
     ) -> Result<NativeVideoPlaybackHandle, CsharpEngineServicesError> {
         let content_hash = identity.content_hash(&bytes);
@@ -418,7 +417,7 @@ mod tests {
         let mut files = BTreeMap::new();
         files.insert(
             "cinematic.webm".to_owned(),
-            Arc::from(&[0x1a, 0x45, 0xdf, 0xa3, b'w', b'e', b'b', b'm'][..]),
+            crate::ContentBytes::from(&[0x1a, 0x45, 0xdf, 0xa3, b'w', b'e', b'b', b'm'][..]),
         );
         let mut content = RuntimeContentBridge::new(files);
         let content_api = crate::content::api(&mut content);

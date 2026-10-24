@@ -5,7 +5,7 @@ use std::{
     sync::Arc,
 };
 
-use crate::{is_relative_path, join, Container, Error};
+use crate::{is_relative_path, join, Container, ContentBytes, Error};
 
 /// A staged Product: a loose directory (`rusty dev`) or a container with its
 /// native artifacts loose beside it (a release). Every read of the Product's
@@ -74,6 +74,20 @@ impl ProductSource {
                 })
             }
             Self::Container { container, .. } => container.get(path),
+        }
+    }
+
+    /// The file's bytes as [`ContentBytes`]: read from disk onto the heap, or
+    /// served from the container map when stored raw.
+    pub fn content(&self, path: &str) -> Result<ContentBytes, Error> {
+        match self {
+            Self::Directory(_) => self.read(path).map(|bytes| bytes.into_owned().into()),
+            Self::Container { container, .. } => {
+                if !is_relative_path(path) {
+                    return Err(Error::InvalidPath(path.to_owned()));
+                }
+                container.content(path)
+            }
         }
     }
 

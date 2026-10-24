@@ -456,14 +456,14 @@ impl EngineServiceSet {
     /// each file's path, new identity and length.
     pub fn reload_content_files(
         &mut self,
-        changed: BTreeMap<String, Arc<[u8]>>,
+        changed: BTreeMap<String, crate::ContentBytes>,
     ) -> Vec<(String, NativeContentSha256, u64)> {
         self.content.reload(changed)
     }
 
     pub fn new(
         catalog: CsharpAppearanceCatalog,
-        content_resources: BTreeMap<String, Arc<[u8]>>,
+        content_resources: BTreeMap<String, crate::ContentBytes>,
         persistence_root: Option<PathBuf>,
         diagnostics_sink: RuntimeDiagnosticsSink,
     ) -> Result<Self, CsharpEngineServicesError> {
@@ -478,7 +478,7 @@ impl EngineServiceSet {
 
     pub fn with_direct_intents(
         catalog: CsharpAppearanceCatalog,
-        content_resources: BTreeMap<String, Arc<[u8]>>,
+        content_resources: BTreeMap<String, crate::ContentBytes>,
         persistence_root: Option<PathBuf>,
         diagnostics_sink: RuntimeDiagnosticsSink,
         direct_intents: Vec<runtime_input::DirectInputIntentDescriptor>,
@@ -1112,11 +1112,17 @@ impl EngineServiceSet {
         self.camera_view.snapshot_composition()
     }
 
-    /// Encoded bytes of an admitted audio clip, shared without copying.
+    /// Encoded bytes of an admitted audio clip, on the heap: shared without
+    /// copying, or copied once from a container map for the realizer to hold.
     pub fn audio_clip_bytes(&self, content_hash: &str) -> Option<Arc<[u8]>> {
         self.audio
             .clip_by_content_hash(content_hash)
-            .map(CsharpRenderResource::shared_bytes)
+            .map(|clip| clip.shared_bytes().shared())
+    }
+
+    /// Whether an audio clip is still admitted.
+    pub fn has_audio_clip(&self, content_hash: &str) -> bool {
+        self.audio.clip_by_content_hash(content_hash).is_some()
     }
 
     /// A retained renderer resource by identity, borrowed for an in-process
@@ -1319,7 +1325,7 @@ mod tests {
             parse_runtime_appearance_catalog(None).unwrap(),
             BTreeMap::from([(
                 "sky.png".to_owned(),
-                Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
+                crate::ContentBytes::from(crate::appearance::tests::RGBA_PNG),
             )]),
             None,
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
@@ -1521,7 +1527,7 @@ mod tests {
         let mut content = BTreeMap::new();
         content.insert(
             "body.glb".to_owned(),
-            Arc::from(
+            crate::ContentBytes::from(
                 &include_bytes!("../../../../fixtures/csharp-joint-attachments/content/body.glb")[..],
             ),
         );
@@ -1627,7 +1633,7 @@ mod tests {
         let mut content = BTreeMap::new();
         content.insert(
             "body.glb".to_owned(),
-            Arc::from(
+            crate::ContentBytes::from(
                 &include_bytes!("../../../../fixtures/csharp-joint-attachments/content/body.glb")[..],
             ),
         );
@@ -1829,7 +1835,7 @@ mod tests {
         let mut content = BTreeMap::new();
         content.insert(
             "sky.png".to_owned(),
-            Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
+            crate::ContentBytes::from(crate::appearance::tests::RGBA_PNG),
         );
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).expect("default catalog"),
@@ -2461,13 +2467,16 @@ mod tests {
             BTreeMap::from([
                 (
                     "band.png".to_owned(),
-                    Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
+                    crate::ContentBytes::from(crate::appearance::tests::RGBA_PNG),
                 ),
                 (
                     "sky.stars.json".to_owned(),
-                    Arc::<[u8]>::from(&catalogue[..]),
+                    crate::ContentBytes::from(&catalogue[..]),
                 ),
-                ("bad.stars.json".to_owned(), Arc::<[u8]>::from(&b"{}"[..])),
+                (
+                    "bad.stars.json".to_owned(),
+                    crate::ContentBytes::from(&b"{}"[..]),
+                ),
             ]),
             None,
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
@@ -3083,7 +3092,7 @@ mod tests {
             parse_runtime_appearance_catalog(None).expect("default catalog"),
             BTreeMap::from([(
                 "atlas.png".to_owned(),
-                Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
+                crate::ContentBytes::from(crate::appearance::tests::RGBA_PNG),
             )]),
             None,
             RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
@@ -4225,10 +4234,13 @@ mod tests {
             "navigation":{"id":"navigation/invalid","config":{"schemaVersion":1,"cellSize":1.0,"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1},"cells":[]}
         }"#;
         let mut content = BTreeMap::new();
-        content.insert(valid_path.to_owned(), Arc::<[u8]>::from(valid.as_slice()));
+        content.insert(
+            valid_path.to_owned(),
+            crate::ContentBytes::from(valid.as_slice()),
+        );
         content.insert(
             invalid_path.to_owned(),
-            Arc::<[u8]>::from(invalid.as_slice()),
+            crate::ContentBytes::from(invalid.as_slice()),
         );
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).expect("default catalog"),
@@ -4556,7 +4568,10 @@ mod tests {
             "navigation":{"id":"navigation/example","config":{"schemaVersion":1,"cellSize":0.8,"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1},"cells":[{"column":0,"row":0,"level":51,"supportHeight":12.8,"walkable":true},{"column":1,"row":0,"level":51,"supportHeight":12.8,"walkable":true},{"column":2,"row":0,"level":51,"supportHeight":12.8,"walkable":true}]}
         }"#;
         let mut content = BTreeMap::new();
-        content.insert(path.to_owned(), Arc::<[u8]>::from(artifact.as_slice()));
+        content.insert(
+            path.to_owned(),
+            crate::ContentBytes::from(artifact.as_slice()),
+        );
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).expect("default catalog"),
             content,
@@ -4778,7 +4793,7 @@ mod tests {
             ("spatial/east.json", strip("east", 2)),
             ("spatial/broken.json", "{\"schemaVersion\":1}".to_owned()),
         ] {
-            content.insert(path.to_owned(), Arc::<[u8]>::from(bytes.as_bytes()));
+            content.insert(path.to_owned(), crate::ContentBytes::from(bytes.as_bytes()));
         }
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).expect("default catalog"),
@@ -5330,7 +5345,7 @@ mod tests {
         let mut content = BTreeMap::new();
         content.insert(
             "spatial/block.json".to_owned(),
-            Arc::<[u8]>::from(block.as_bytes()),
+            crate::ContentBytes::from(block.as_bytes()),
         );
         let mut services = EngineServiceSet::new(
             parse_runtime_appearance_catalog(None).expect("default catalog"),

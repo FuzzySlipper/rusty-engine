@@ -7,7 +7,7 @@ use crate::appearance::{
     animation_result, appearance_operation, appearance_void, RuntimeAppearanceBridge,
 };
 use crate::composition::{borrowed_slice, CsharpEngineServicesError};
-use crate::content::RetainedContent;
+use crate::content::{ContentBytes, RetainedContent};
 use asset_import::{
     admit_glb_source, import_animated_glb_asset, import_parsed_animated_glb_asset,
     GlbSourceClosure, GltfResource, ImportContext, ParsedGlb, SourceUri,
@@ -20,6 +20,7 @@ use csharp_engine_abi::{
     NativeTextureFilter, NativeTextureWrap, NativeVec3,
 };
 use engine_spatial::ModelSurface;
+use product_container::WeakContentBytes;
 use render_model::{
     pack_mesh_resources, partition_mesh_spatially, validate_mesh_resource_header,
     AnimatedMeshAsset, MeshAttribute, MeshAttributeKind, MeshAttributeName, MeshBoundsDescriptor,
@@ -42,7 +43,7 @@ pub struct CsharpRenderResource {
     identity: String,
     content_hash: String,
     path: String,
-    bytes: Arc<[u8]>,
+    bytes: ContentBytes,
     texture: Option<TextureDescriptor>,
     animated_mesh: Option<AnimatedMeshAsset>,
     model_surface: ModelSurfaceCell,
@@ -108,7 +109,7 @@ impl CsharpRenderResource {
     /// admission read.
     fn admit_texture(
         path: String,
-        bytes: Arc<[u8]>,
+        bytes: ContentBytes,
         content_hash: String,
         dimensions: [u32; 2],
         filter: NativeTextureFilter,
@@ -160,7 +161,7 @@ impl CsharpRenderResource {
 
     fn admit_mesh(
         path: String,
-        bytes: Arc<[u8]>,
+        bytes: ContentBytes,
         content_hash: String,
     ) -> Result<Self, CsharpEngineServicesError> {
         validate_mesh_resource_header(&bytes).map_err(|error| {
@@ -181,7 +182,12 @@ impl CsharpRenderResource {
 
     /// A packed mesh resource: `identity` names `bytes`, whose content
     /// identity is `content_hash`.
-    fn packed_mesh(path: String, identity: String, content_hash: String, bytes: Arc<[u8]>) -> Self {
+    fn packed_mesh(
+        path: String,
+        identity: String,
+        content_hash: String,
+        bytes: ContentBytes,
+    ) -> Self {
         Self {
             kind: CsharpRenderResourceKind::Mesh,
             identity,
@@ -197,7 +203,7 @@ impl CsharpRenderResource {
 
     fn admit_font(
         path: String,
-        bytes: Arc<[u8]>,
+        bytes: ContentBytes,
         content_hash: String,
     ) -> Result<Self, CsharpEngineServicesError> {
         if bytes.get(..4) != Some(b"wOF2") {
@@ -225,7 +231,7 @@ impl CsharpRenderResource {
     fn admit_shader(
         path: String,
         relative_path: &str,
-        bytes: Arc<[u8]>,
+        bytes: ContentBytes,
         content_hash: String,
         keywords: &[String],
     ) -> Result<Self, CsharpEngineServicesError> {
@@ -279,7 +285,7 @@ impl CsharpRenderResource {
             identity: format!("stars/{}", &content_hash["sha256:".len()..]),
             content_hash,
             path,
-            bytes: Arc::from(render_model::pack_star_catalogue(&stars)),
+            bytes: ContentBytes::from(render_model::pack_star_catalogue(&stars)),
             texture: None,
             animated_mesh: None,
             model_surface: ModelSurfaceCell::default(),
@@ -289,7 +295,7 @@ impl CsharpRenderResource {
 
     pub(crate) fn admit_audio(
         path: String,
-        bytes: Arc<[u8]>,
+        bytes: ContentBytes,
         content_hash: String,
     ) -> Result<Self, CsharpEngineServicesError> {
         let container = render_model::AudioContainer::identify(&bytes).ok_or_else(|| {
@@ -314,7 +320,7 @@ impl CsharpRenderResource {
 
     pub(crate) fn admit_video(
         path: String,
-        bytes: Arc<[u8]>,
+        bytes: ContentBytes,
         content_hash: String,
     ) -> Result<Self, CsharpEngineServicesError> {
         require_extension(&path, ".webm")?;
@@ -345,7 +351,7 @@ impl CsharpRenderResource {
     /// when given, is `bytes` decoded.
     fn admit_animated_mesh(
         path: String,
-        bytes: Arc<[u8]>,
+        bytes: ContentBytes,
         parsed: Option<&ParsedGlb<'_>>,
     ) -> Result<Self, CsharpEngineServicesError> {
         require_extension(&path, ".glb")?;
@@ -421,8 +427,8 @@ impl CsharpRenderResource {
         &self.bytes
     }
     /// Shares the immutable body with Engine host delivery without copying it.
-    pub fn shared_bytes(&self) -> Arc<[u8]> {
-        Arc::clone(&self.bytes)
+    pub fn shared_bytes(&self) -> ContentBytes {
+        self.bytes.clone()
     }
     pub(crate) fn texture(&self) -> Option<&TextureDescriptor> {
         self.texture.as_ref()
@@ -486,7 +492,7 @@ impl CsharpRenderResource {
 
     /// A mesh body for tests that only need a large admitted resource.
     #[cfg(test)]
-    pub(crate) fn test_mesh(bytes: Arc<[u8]>) -> Self {
+    pub(crate) fn test_mesh(bytes: ContentBytes) -> Self {
         Self {
             kind: CsharpRenderResourceKind::Mesh,
             identity: "mesh-resource/performance-probe".to_owned(),
@@ -504,7 +510,7 @@ impl CsharpRenderResource {
 /// A live resource body: its bytes and the live handles sharing them.
 #[derive(Clone)]
 struct ResourceBody {
-    bytes: Arc<[u8]>,
+    bytes: ContentBytes,
     handles: Vec<u64>,
 }
 
@@ -880,25 +886,58 @@ fn resource_slot(handle: u64) -> Result<usize, CsharpEngineServicesError> {
     })
 }
 
+/// A resource held without keeping its body alive: the body is gone with the
+/// last resource, appearance or content reference that shares it.
+struct WeakRenderResource {
+    /// The resource with an empty body.
+    resource: CsharpRenderResource,
+    bytes: WeakContentBytes,
+}
+
+impl WeakRenderResource {
+    fn new(resource: &CsharpRenderResource) -> Self {
+        Self {
+            resource: CsharpRenderResource {
+                bytes: ContentBytes::default(),
+                ..resource.clone()
+            },
+            bytes: resource.bytes.downgrade(),
+        }
+    }
+
+    fn upgrade(&self) -> Option<CsharpRenderResource> {
+        Some(CsharpRenderResource {
+            bytes: self.bytes.upgrade()?,
+            ..self.resource.clone()
+        })
+    }
+}
+
 struct ImportedStaticContent {
-    source: Arc<[u8]>,
+    source: WeakContentBytes,
     payload: MeshPayloadDescriptor,
     material_slots: Vec<MeshMaterialSlot>,
-    resource: CsharpRenderResource,
+    resource: WeakRenderResource,
 }
 
 struct ImportedAnimatedContent {
-    source: Arc<[u8]>,
-    dependencies: Vec<(String, Arc<[u8]>)>,
-    resource: CsharpRenderResource,
+    source: WeakContentBytes,
+    dependencies: Vec<(String, WeakContentBytes)>,
+    resource: WeakRenderResource,
 }
 
-/// Derived assets reused for the immutable admitted source lifetime. Separate
-/// from staged state: importing does not mutate product-visible ownership.
+/// Derived assets reused while their source is alive. An import keeps neither
+/// its source nor its resource body: a file opened again with the same bytes
+/// in memory reuses the import as long as a resource made from it lives, and
+/// is imported again otherwise. Separate from staged state: importing does not
+/// mutate product-visible ownership.
 #[derive(Default)]
 pub(crate) struct RenderResourceImports {
     static_content: BTreeMap<String, ImportedStaticContent>,
     animated: BTreeMap<String, ImportedAnimatedContent>,
+    /// The entry count after the last sweep of imports whose source or body
+    /// is gone; the next sweep runs when the count doubles.
+    swept: usize,
 }
 
 impl RenderResourceImports {
@@ -926,7 +965,7 @@ impl RenderResourceImports {
                 })?;
                 Ok(CsharpRenderResource::admit_texture(
                     browser_path,
-                    Arc::clone(&bytes),
+                    bytes.clone(),
                     content_hash(),
                     dimensions,
                     filter,
@@ -935,10 +974,10 @@ impl RenderResourceImports {
                 ))
             }
             _ if relative_path.ends_with(".rmesh") => {
-                CsharpRenderResource::admit_mesh(browser_path, Arc::clone(&bytes), content_hash())
+                CsharpRenderResource::admit_mesh(browser_path, bytes.clone(), content_hash())
             }
             _ if relative_path.ends_with(".woff2") => {
-                CsharpRenderResource::admit_font(browser_path, Arc::clone(&bytes), content_hash())
+                CsharpRenderResource::admit_font(browser_path, bytes.clone(), content_hash())
             }
             _ if relative_path.ends_with(".stars.json") => {
                 CsharpRenderResource::admit_star_catalogue(
@@ -951,7 +990,7 @@ impl RenderResourceImports {
             _ if relative_path.ends_with(".wgsl") => CsharpRenderResource::admit_shader(
                 browser_path,
                 &relative_path,
-                Arc::clone(&bytes),
+                bytes.clone(),
                 content_hash(),
                 shader_keywords,
             ),
@@ -978,14 +1017,24 @@ impl RenderResourceImports {
         ),
         CsharpEngineServicesError,
     > {
-        if !self
-            .static_content
-            .get(&content.path)
-            .is_some_and(|imported| Arc::ptr_eq(&imported.source, &content.bytes))
+        let cached = self.static_content.get(&content.path).and_then(|imported| {
+            let source = imported.source.upgrade()?;
+            let resource = imported.resource.upgrade()?;
+            source.same(&content.bytes).then(|| {
+                (
+                    imported.payload.clone(),
+                    imported.material_slots.clone(),
+                    resource,
+                )
+            })
+        });
+        if let Some(cached) = cached {
+            return Ok(cached);
+        }
         {
             let bytes = content.bytes.as_ref();
             let (asset, payload, resource) = if bytes.starts_with(STATIC_MESH_MAGIC) {
-                decode_static_mesh(bytes, content.identity.content_hash(bytes))?
+                decode_static_mesh(&content.bytes, content.identity.content_hash(bytes))?
             } else {
                 let asset = serde_json::from_slice::<StaticMeshAsset>(bytes).map_err(|error| {
                     CsharpEngineServicesError::new(
@@ -1010,26 +1059,39 @@ impl RenderResourceImports {
                     path,
                     packed.resource,
                     packed.content_hash,
-                    Arc::from(packed.bytes),
+                    ContentBytes::from(packed.bytes),
                 );
                 (asset, payload, resource)
             };
             self.static_content.insert(
                 content.path.clone(),
                 ImportedStaticContent {
-                    source: Arc::clone(&content.bytes),
-                    payload,
-                    material_slots: asset.material_slots,
-                    resource,
+                    source: content.bytes.downgrade(),
+                    payload: payload.clone(),
+                    material_slots: asset.material_slots.clone(),
+                    resource: WeakRenderResource::new(&resource),
                 },
             );
+            self.sweep();
+            Ok((payload, asset.material_slots, resource))
         }
-        let imported = &self.static_content[&content.path];
-        Ok((
-            imported.payload.clone(),
-            imported.material_slots.clone(),
-            imported.resource.clone(),
-        ))
+    }
+
+    /// Drops imports whose source or resource body is gone, once the entry
+    /// count has doubled since the last sweep, so stale entries cost amortized
+    /// constant time per import.
+    fn sweep(&mut self) {
+        let count = self.static_content.len() + self.animated.len();
+        if count < self.swept.saturating_mul(2).max(64) {
+            return;
+        }
+        self.static_content.retain(|_, imported| {
+            imported.source.upgrade().is_some() && imported.resource.upgrade().is_some()
+        });
+        self.animated.retain(|_, imported| {
+            imported.source.upgrade().is_some() && imported.resource.upgrade().is_some()
+        });
+        self.swept = self.static_content.len() + self.animated.len();
     }
 
     /// Imports an animated GLB and its relative dependencies as a primary
@@ -1045,35 +1107,44 @@ impl RenderResourceImports {
             import_animated_glb_closure(&content.path, &content.bytes, &content.files)?.resource
         } else {
             let key = content.path.clone();
-            let matches_source = self.animated.get(&key).is_some_and(|imported| {
-                Arc::ptr_eq(&imported.source, &content.bytes)
+            let cached = self.animated.get(&key).and_then(|imported| {
+                let matches = imported.source.upgrade()?.same(&content.bytes)
                     && imported.dependencies.iter().all(|(path, bytes)| {
-                        content
-                            .files
-                            .get(path)
-                            .ok()
-                            .flatten()
-                            .is_some_and(|current| Arc::ptr_eq(&current, bytes))
-                    })
+                        let current = content.files.get(path).ok().flatten();
+                        bytes
+                            .upgrade()
+                            .zip(current)
+                            .is_some_and(|(cached, current)| cached.same(&current))
+                    });
+                matches.then(|| imported.resource.upgrade()).flatten()
             });
-            if !matches_source {
-                let imported =
-                    import_animated_glb_closure(&content.path, &content.bytes, &content.files)?;
-                self.animated.insert(
-                    key.clone(),
-                    ImportedAnimatedContent {
-                        source: content.bytes,
-                        dependencies: imported.dependencies,
-                        resource: imported.resource,
-                    },
-                );
-            }
+            let resource = match cached {
+                Some(resource) => resource,
+                None => {
+                    let imported =
+                        import_animated_glb_closure(&content.path, &content.bytes, &content.files)?;
+                    self.animated.insert(
+                        key,
+                        ImportedAnimatedContent {
+                            source: content.bytes.downgrade(),
+                            dependencies: imported
+                                .dependencies
+                                .iter()
+                                .map(|(path, bytes)| (path.clone(), bytes.downgrade()))
+                                .collect(),
+                            resource: WeakRenderResource::new(&imported.resource),
+                        },
+                    );
+                    self.sweep();
+                    imported.resource
+                }
+            };
             // The import cache keeps no model surface: each admitted
             // resource builds its own, released with it.
             CsharpRenderResource {
                 model_surface: ModelSurfaceCell::default(),
                 pose_model: PoseModelCell::default(),
-                ..self.animated[&key].resource.clone()
+                ..resource
             }
         };
         if clip_pack {
@@ -1098,13 +1169,14 @@ impl RenderResourceImports {
         Ok(resource)
     }
 
-    /// The cached import of a source path, if any.
+    /// The cached import of a source path, if any and still alive.
     #[cfg(test)]
-    pub(crate) fn cached(&self, path: &str) -> Option<&CsharpRenderResource> {
+    pub(crate) fn cached(&self, path: &str) -> Option<CsharpRenderResource> {
         self.static_content
             .get(path)
             .map(|imported| &imported.resource)
-            .or_else(|| self.animated.get(path).map(|imported| &imported.resource))
+            .or_else(|| self.animated.get(path).map(|imported| &imported.resource))?
+            .upgrade()
     }
 }
 
@@ -1686,7 +1758,7 @@ fn require_extension(path: &str, extension: &str) -> Result<(), CsharpEngineServ
 /// the dependency bodies it read.
 struct ImportedAnimatedClosure {
     resource: CsharpRenderResource,
-    dependencies: Vec<(String, Arc<[u8]>)>,
+    dependencies: Vec<(String, ContentBytes)>,
 }
 
 /// Admits the GLB at `root_path` and its relative dependencies as one
@@ -1695,7 +1767,7 @@ struct ImportedAnimatedClosure {
 /// from that parse; a packed closure is new bytes, which the import parses.
 fn import_animated_glb_closure(
     root_path: &str,
-    root_bytes: &Arc<[u8]>,
+    root_bytes: &ContentBytes,
     content_resources: &crate::content::ContentFiles,
 ) -> Result<ImportedAnimatedClosure, CsharpEngineServicesError> {
     let closure_error = |diagnostic: asset_import::ImportDiagnostic| {
@@ -1744,10 +1816,10 @@ fn import_animated_glb_closure(
     let path = format!("content/{root_path}");
     let resource = match packed {
         Cow::Borrowed(_) => {
-            CsharpRenderResource::admit_animated_mesh(path, Arc::clone(root_bytes), Some(&root))?
+            CsharpRenderResource::admit_animated_mesh(path, root_bytes.clone(), Some(&root))?
         }
         Cow::Owned(packed) => {
-            CsharpRenderResource::admit_animated_mesh(path, Arc::from(packed), None)?
+            CsharpRenderResource::admit_animated_mesh(path, ContentBytes::from(packed), None)?
         }
     };
     Ok(ImportedAnimatedClosure {
@@ -1780,9 +1852,10 @@ type DecodedStaticMesh = (StaticMeshAsset, MeshPayloadDescriptor, CsharpRenderRe
 
 /// `file_hash` is the content identity of the whole file (`sha256:<hex>`).
 fn decode_static_mesh(
-    bytes: &[u8],
+    file: &ContentBytes,
     file_hash: String,
 ) -> Result<DecodedStaticMesh, CsharpEngineServicesError> {
+    let bytes: &[u8] = file;
     let malformed =
         |detail: String| CsharpEngineServicesError::new("CSHARP_STATIC_MESH_CONTENT_JSON", detail);
     let header = STATIC_MESH_MAGIC.len() + 4;
@@ -1837,9 +1910,13 @@ fn decode_static_mesh(
         "content/engine-mesh/{}.rmesh",
         &content_hash["sha256:".len()..]
     );
-    // The one copy of the body the resource retains.
-    let resource =
-        CsharpRenderResource::packed_mesh(path, identity, content_hash, Arc::from(resource));
+    // The resource is the file's own tail, shared rather than copied.
+    let resource = CsharpRenderResource::packed_mesh(
+        path,
+        identity,
+        content_hash,
+        file.slice(header + length..file.len()),
+    );
     Ok((asset, payload, resource))
 }
 
@@ -1997,7 +2074,7 @@ pub(crate) mod tests {
         let texture = |filter| {
             CsharpRenderResource::admit_texture(
                 "content/atlas.png".to_owned(),
-                Arc::from(RGBA_PNG),
+                crate::ContentBytes::from(RGBA_PNG),
                 crate::content::ContentIdentity::default().content_hash(RGBA_PNG),
                 render_model::admit_png_rgba8(RGBA_PNG).expect("png"),
                 filter,
@@ -2033,7 +2110,7 @@ pub(crate) mod tests {
         let animated = || {
             CsharpRenderResource::admit_animated_mesh(
                 "content/character.glb".to_owned(),
-                Arc::from(CHARACTER_GLB),
+                crate::ContentBytes::from(CHARACTER_GLB),
                 None,
             )
             .expect("animated mesh")
@@ -2094,7 +2171,7 @@ pub(crate) mod tests {
         registry.begin_call();
         let texture = open_file(
             &mut RenderResourceImports::default(),
-            content("atlas.png", Arc::from(RGBA_PNG)),
+            content("atlas.png", crate::ContentBytes::from(RGBA_PNG)),
         )
         .expect("texture");
         let handle = registry.admit(texture).expect("admitted texture");
@@ -2141,7 +2218,7 @@ pub(crate) mod tests {
             ("fonts/日本語.woff2", font),
             ("sky/небо.stars.json", stars.to_vec()),
         ] {
-            let retained = content(path, Arc::from(bytes));
+            let retained = content(path, crate::ContentBytes::from(bytes));
             let hashes = crate::content::tests::body_hashes();
             let first = open_file(&mut imports, retained.clone()).expect(path);
             let second = open_file(&mut imports, retained.clone()).unwrap();
@@ -2177,9 +2254,12 @@ pub(crate) mod tests {
         let mut rgb = RGBA_PNG.to_vec();
         rgb[25] = 2;
         assert_eq!(
-            open_file(&mut imports, content("rgb.png", Arc::from(rgb)))
-                .unwrap_err()
-                .code(),
+            open_file(
+                &mut imports,
+                content("rgb.png", crate::ContentBytes::from(rgb))
+            )
+            .unwrap_err()
+            .code(),
             "CSHARP_RENDER_RESOURCE_TEXTURE"
         );
     }
@@ -2190,28 +2270,28 @@ pub(crate) mod tests {
             "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLttAAAAABJRU5ErkJggg==");
         let packed = import_animated_glb_closure(
             "character.glb",
-            &Arc::from(embedded.as_slice()),
+            &ContentBytes::from(embedded.as_slice()),
             &crate::content::ContentFiles::snapshot(BTreeMap::new()),
         )
         .expect("embedded image is packed without companion files");
         assert!(packed.dependencies.is_empty());
         assert_ne!(packed.resource.bytes(), &embedded[..]);
         // A self-contained GLB is retained as the content's own body.
-        let root = Arc::<[u8]>::from(CHARACTER_GLB);
+        let root = ContentBytes::from(CHARACTER_GLB);
         let unchanged = import_animated_glb_closure(
             "character.glb",
             &root,
             &crate::content::ContentFiles::snapshot(BTreeMap::new()),
         )
         .unwrap();
-        assert!(Arc::ptr_eq(&unchanged.resource.shared_bytes(), &root));
+        assert!(unchanged.resource.shared_bytes().same(&root));
         let resource = RenderResourceImports::default()
-            .animated(content("character.glb", Arc::clone(&root)), false)
+            .animated(content("character.glb", root.clone()), false)
             .unwrap();
-        assert!(Arc::ptr_eq(&resource.shared_bytes(), &root));
+        assert!(resource.shared_bytes().same(&root));
     }
 
-    fn content(path: &str, bytes: Arc<[u8]>) -> RetainedContent {
+    fn content(path: &str, bytes: ContentBytes) -> RetainedContent {
         RetainedContent {
             path: path.to_owned(),
             identity: Default::default(),
@@ -2254,7 +2334,7 @@ pub(crate) mod tests {
         String,
     > {
         RenderResourceImports::default()
-            .static_mesh(content("mesh", Arc::from(bytes)))
+            .static_mesh(content("mesh", crate::ContentBytes::from(bytes)))
             .map_err(|error| error.code().to_owned())
     }
 
@@ -2329,7 +2409,7 @@ pub(crate) mod tests {
             ("second.rstatmsh", second, [0, 2, 1]),
         ] {
             let (payload, _, resource) = imports
-                .static_mesh(content(path, Arc::from(bytes)))
+                .static_mesh(content(path, crate::ContentBytes::from(bytes)))
                 .unwrap();
             let decoded =
                 render_model::decode_mesh_resource_payload(&payload, resource.bytes()).unwrap();
@@ -2455,15 +2535,15 @@ pub(crate) mod tests {
 
     #[test]
     fn repeated_animated_opens_reuse_import_but_changed_dependency_reimports() {
-        let root: Arc<[u8]> = Arc::from(external_image_glb(CHARACTER_GLB, "texture.png"));
+        let root = ContentBytes::from(external_image_glb(CHARACTER_GLB, "texture.png"));
         let mut files = BTreeMap::from([
             ("character.glb".to_owned(), root),
-            ("texture.png".to_owned(), Arc::from(RGBA_PNG)),
+            ("texture.png".to_owned(), ContentBytes::from(RGBA_PNG)),
         ]);
-        let content = |files: &BTreeMap<String, Arc<[u8]>>| RetainedContent {
+        let content = |files: &BTreeMap<String, ContentBytes>| RetainedContent {
             path: "character.glb".to_owned(),
             identity: Default::default(),
-            bytes: Arc::clone(&files["character.glb"]),
+            bytes: files["character.glb"].clone(),
             transient: false,
             files: crate::content::ContentFiles::snapshot(files.clone()),
         };
@@ -2474,15 +2554,12 @@ pub(crate) mod tests {
                 .admit(imports.animated(content(&files), clip_pack).unwrap())
                 .unwrap();
             let key = "character.glb";
-            let bytes = imports.animated[key].resource.shared_bytes();
+            let bytes = imports.cached(key).unwrap().shared_bytes();
             let second = registry
                 .admit(imports.animated(content(&files), clip_pack).unwrap())
                 .unwrap();
             assert_eq!(first, second);
-            assert!(Arc::ptr_eq(
-                &bytes,
-                &imports.animated[key].resource.shared_bytes()
-            ));
+            assert!(bytes.same(&imports.cached(key).unwrap().shared_bytes()));
             assert_eq!(registry.open_counts[&first], 2);
             assert!(!registry.release_owner(first).unwrap());
             assert!(registry.get(second).is_some());
@@ -2490,15 +2567,17 @@ pub(crate) mod tests {
             registry.remove(second).unwrap();
             assert!(registry.get(second).is_none());
         }
-        let old = imports.animated["character.glb"].resource.shared_bytes();
+        let kept = imports.animated(content(&files), false).unwrap();
+        assert!(imports
+            .animated(content(&files), false)
+            .unwrap()
+            .shared_bytes()
+            .same(&kept.shared_bytes()));
         // A new admitted dependency must not match by root path alone. Even an
         // identical replacement buffer requires fresh closure admission.
-        files.insert("texture.png".to_owned(), Arc::from(RGBA_PNG));
-        imports.animated(content(&files), false).unwrap();
-        assert!(!Arc::ptr_eq(
-            &old,
-            &imports.animated["character.glb"].resource.shared_bytes()
-        ));
+        files.insert("texture.png".to_owned(), ContentBytes::from(RGBA_PNG));
+        let changed = imports.animated(content(&files), false).unwrap();
+        assert!(!changed.shared_bytes().same(&kept.shared_bytes()));
         files.remove("texture.png");
         assert!(imports.animated(content(&files), false).is_err());
     }

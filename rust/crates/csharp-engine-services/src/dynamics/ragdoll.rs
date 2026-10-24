@@ -542,7 +542,6 @@ pub(super) unsafe extern "C" fn read_ragdoll(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::Arc;
 
     use super::*;
     use crate::appearance::{
@@ -567,7 +566,7 @@ mod tests {
     fn a_ragdoll_spawns_from_the_evaluated_pose_and_places_its_bones_until_released() {
         let mut appearance = crate::appearance::create(
             Default::default(),
-            BTreeMap::from([("body.glb".to_owned(), Arc::<[u8]>::from(BODY_GLB))]),
+            BTreeMap::from([("body.glb".to_owned(), crate::ContentBytes::from(BODY_GLB))]),
         );
         let mut scene = render_presentation::PresentationWorld::default();
         scene.advance_elapsed(1.0);
@@ -745,7 +744,7 @@ mod tests {
     fn a_ragdoll_needs_an_evaluated_pose() {
         let mut appearance = crate::appearance::create(
             Default::default(),
-            BTreeMap::from([("body.glb".to_owned(), Arc::<[u8]>::from(BODY_GLB))]),
+            BTreeMap::from([("body.glb".to_owned(), crate::ContentBytes::from(BODY_GLB))]),
         );
         appearance.begin_call();
         let (instance, joints) = character_for_test(&mut appearance);

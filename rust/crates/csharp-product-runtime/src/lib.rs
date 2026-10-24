@@ -18,7 +18,7 @@ use std::{
 };
 
 use csharp_engine_services::{
-    CsharpAppearanceCallOutput, CsharpAppearanceCatalog, CsharpEngineCallOutput,
+    ContentBytes, CsharpAppearanceCallOutput, CsharpAppearanceCatalog, CsharpEngineCallOutput,
     CsharpEngineServicesError, EngineServiceSet,
 };
 use libloading::Library;
@@ -763,6 +763,10 @@ pub struct CsharpProductRuntime {
     /// error, so the next scheduled receipt carries these.
     pending_recovery_outputs: Vec<RuntimePublication>,
     services: Box<EngineServiceSet>,
+    /// The content `Create` received. The product's `ProductContent` reads
+    /// these bytes in place rather than copying them, so they stay until the
+    /// product is gone (fields drop after `Drop` destroys it).
+    _create_content: Vec<ContentFile>,
     /// The Product and content root whose bundle inventory `reload_content`
     /// and loose files `reload_content_files` re-admit.
     content_source: ProductSource,
@@ -989,7 +993,7 @@ impl CsharpProductRuntime {
                 let path = std::str::from_utf8(&file.path)
                     .expect("collected product paths are UTF-8")
                     .to_owned();
-                (path, Arc::clone(&file.bytes))
+                (path, file.bytes.clone())
             })
             .collect();
         // The generated ABI stores raw context pointers. Boxing the whole
@@ -1110,6 +1114,7 @@ impl CsharpProductRuntime {
             content_changes: BTreeMap::new(),
             pending_recovery_outputs: Vec::new(),
             services,
+            _create_content: content,
             content_source,
             content_root,
             initial_output,
@@ -3131,11 +3136,11 @@ impl ProductHostRuntime for CsharpProductRuntime {
             .iter()
             .map(|path| {
                 self.content_source
-                    .read(&product_container::join(&self.content_root, path))
-                    .map(|bytes| (path.clone(), Arc::from(bytes.as_ref())))
+                    .content(&product_container::join(&self.content_root, path))
+                    .map(|bytes| (path.clone(), bytes))
                     .map_err(|error| ProductHostRuntimeError::new(error.code(), error.to_string()))
             })
-            .collect::<Result<BTreeMap<_, Arc<[u8]>>, _>>()?;
+            .collect::<Result<BTreeMap<_, ContentBytes>, _>>()?;
         for (path, sha256, length) in self.services.reload_content_files(changed) {
             self.content_changes.insert(path, (sha256, length));
         }
@@ -4505,7 +4510,7 @@ fn operation_name(operation: ProductHostOperationKind) -> &'static str {
 #[derive(Debug)]
 struct ContentFile {
     path: Vec<u8>,
-    bytes: Arc<[u8]>,
+    bytes: ContentBytes,
 }
 
 /// Exact product content collected once before the native runtime and immutable
@@ -4576,12 +4581,12 @@ impl CsharpProductContent {
 fn read_content(
     source: &ProductSource,
     paths: &[String],
-) -> Result<Vec<Arc<[u8]>>, CsharpProductRuntimeError> {
+) -> Result<Vec<ContentBytes>, CsharpProductRuntimeError> {
     let threads = std::thread::available_parallelism()
         .map_or(1, std::num::NonZero::get)
         .min(paths.len().max(1));
     let next = std::sync::atomic::AtomicUsize::new(0);
-    let mut read: Vec<Option<Arc<[u8]>>> = vec![None; paths.len()];
+    let mut read: Vec<Option<ContentBytes>> = vec![None; paths.len()];
     std::thread::scope(|scope| {
         let readers: Vec<_> = (0..threads)
             .map(|_| {
@@ -4592,8 +4597,9 @@ fn read_content(
                         let Some(path) = paths.get(index) else {
                             return Ok(done);
                         };
-                        match source.read(path) {
-                            Ok(bytes) => done.push((index, Arc::<[u8]>::from(bytes.as_ref()))),
+                        // A raw container entry is served from the map.
+                        match source.content(path) {
+                            Ok(bytes) => done.push((index, bytes)),
                             Err(error) => {
                                 // The other readers stop at their next file.
                                 next.store(paths.len(), std::sync::atomic::Ordering::Relaxed);

@@ -3,13 +3,14 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use memmap2::Mmap;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::Error;
+use crate::{ContentBytes, Error};
 
 const MAGIC: [u8; 8] = *b"RUSTYPAK";
 const HEADER_LEN: u64 = 32;
@@ -179,6 +180,27 @@ impl Container {
             .entry(path)
             .ok_or_else(|| Error::Missing(path.to_owned()))?;
         self.read(entry)
+    }
+
+    /// The file at `path` as [`ContentBytes`]: served from the map when
+    /// stored raw, decompressed onto the heap when stored as zstd.
+    pub fn content(self: &Arc<Self>, path: &str) -> Result<ContentBytes, Error> {
+        let entry = self
+            .entry(path)
+            .ok_or_else(|| Error::Missing(path.to_owned()))?;
+        if entry.zstd_length.is_none() {
+            let start = entry.offset as usize;
+            return Ok(ContentBytes::mapped(
+                Arc::clone(self),
+                start..start + entry.byte_length as usize,
+            ));
+        }
+        self.read(entry)
+            .map(|bytes| ContentBytes::from(bytes.into_owned()))
+    }
+
+    pub(crate) fn map(&self) -> &[u8] {
+        &self.map
     }
 }
 

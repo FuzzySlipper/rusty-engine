@@ -2332,11 +2332,17 @@ mod tests {
             .expect("canonical annotation")
             .into_bytes();
         let mut catalog = BTreeMap::new();
-        catalog.insert("bundle/asset.json".to_owned(), Arc::from(asset_body));
-        catalog.insert("bundle/object.json".to_owned(), Arc::from(object_body));
+        catalog.insert(
+            "bundle/asset.json".to_owned(),
+            crate::ContentBytes::from(asset_body),
+        );
+        catalog.insert(
+            "bundle/object.json".to_owned(),
+            crate::ContentBytes::from(object_body),
+        );
         catalog.insert(
             "bundle/annotation.json".to_owned(),
-            Arc::from(annotation_body),
+            crate::ContentBytes::from(annotation_body),
         );
         let mut content = RuntimeContentBridge::new(catalog);
         let content_api = crate::content::api(&mut content);

@@ -7,7 +7,7 @@
 //! poses the Engine evaluates as each call settles are kept, so joint reads,
 //! ragdolls and severed parts work as they do in a running product.
 
-use std::{collections::BTreeMap, ffi::c_void, path::PathBuf, ptr, sync::Arc};
+use std::{collections::BTreeMap, ffi::c_void, path::PathBuf, ptr};
 
 use csharp_engine_abi::*;
 use csharp_engine_services::{
@@ -152,7 +152,10 @@ unsafe fn create(
             )
         }?;
         let bytes = unsafe { bytes(file.bytes, file.bytes_len) }?;
-        content.insert(path.to_owned(), Arc::<[u8]>::from(bytes));
+        content.insert(
+            path.to_owned(),
+            csharp_engine_services::ContentBytes::from(bytes),
+        );
     }
     // Supplied content with the SDK's bundle inventory opens its bundles as a
     // loose staged Product does: their files are read when a bundle opens,
@@ -163,7 +166,7 @@ unsafe fn create(
     let catalog = parse_runtime_appearance_catalog(
         content
             .get("runtime-appearances.json")
-            .map(|bytes: &Arc<[u8]>| bytes.as_ref()),
+            .map(|bytes| bytes.as_ref()),
     )?;
     let diagnostics =
         RuntimeDiagnosticsSink::new(RuntimeDiagnosticsConfig::default()).map_err(|error| {

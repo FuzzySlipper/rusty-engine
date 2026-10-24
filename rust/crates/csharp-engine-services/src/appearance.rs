@@ -273,7 +273,10 @@ fn legacy_sprite_request(texture: NativeRenderResourceHandle) -> NativeSpriteApp
 fn sprite_atlas_admits_more_frames_than_the_former_cap() {
     // 5,000 frames: past the former 4,096.
     let mut content_resources = BTreeMap::new();
-    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    content_resources.insert(
+        "atlas.png".to_owned(),
+        crate::ContentBytes::from(tests::RGBA_PNG),
+    );
     let mut bridge =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
     let frames: Vec<_> = (0..5_000_u32)
@@ -305,7 +308,10 @@ fn sprite_atlas_admits_more_frames_than_the_former_cap() {
 #[test]
 fn a_sprite_batch_is_one_appearance_object_and_draw_over_shared_instances() {
     let mut content_resources = BTreeMap::new();
-    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    content_resources.insert(
+        "atlas.png".to_owned(),
+        crate::ContentBytes::from(tests::RGBA_PNG),
+    );
     let mut bridge =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
     let frames = [4_u32, 7].map(|frame_id| NativeSpriteAtlasFrame {
@@ -418,7 +424,10 @@ fn a_sprite_batch_is_one_appearance_object_and_draw_over_shared_instances() {
 #[test]
 fn sprite_atlas_copies_frames_resolves_readout_and_releases_with_appearance() {
     let mut content_resources = BTreeMap::new();
-    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    content_resources.insert(
+        "atlas.png".to_owned(),
+        crate::ContentBytes::from(tests::RGBA_PNG),
+    );
     let mut bridge =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
     let frames = [
@@ -498,7 +507,10 @@ fn sprite_atlas_copies_frames_resolves_readout_and_releases_with_appearance() {
 #[test]
 fn sprite_viewport_updates_retain_valid_placement_and_clear_it_when_disabled() {
     let mut content_resources = BTreeMap::new();
-    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    content_resources.insert(
+        "atlas.png".to_owned(),
+        crate::ContentBytes::from(tests::RGBA_PNG),
+    );
     let mut bridge =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
     let frames = [NativeSpriteAtlasFrame {
@@ -565,7 +577,10 @@ fn sprite_viewport_updates_retain_valid_placement_and_clear_it_when_disabled() {
 #[test]
 fn atlas_sprite_failures_and_legacy_replacement_leave_or_release_the_lease() {
     let mut content_resources = BTreeMap::new();
-    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    content_resources.insert(
+        "atlas.png".to_owned(),
+        crate::ContentBytes::from(tests::RGBA_PNG),
+    );
     let mut bridge =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
     let frames = [NativeSpriteAtlasFrame {
@@ -740,7 +755,10 @@ fn sprite_appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanc
 #[test]
 fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
     let mut content_resources = BTreeMap::new();
-    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    content_resources.insert(
+        "atlas.png".to_owned(),
+        crate::ContentBytes::from(tests::RGBA_PNG),
+    );
     let mut bridge =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
     let atlas_frames = [
@@ -954,7 +972,10 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
 #[test]
 fn sprite_playback_advances_again_after_a_product_pause_and_resume() {
     let mut content_resources = BTreeMap::new();
-    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    content_resources.insert(
+        "atlas.png".to_owned(),
+        crate::ContentBytes::from(tests::RGBA_PNG),
+    );
     let mut bridge =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
     let atlas_frames = [7, 9].map(|frame_id| NativeSpriteAtlasFrame {
@@ -1052,7 +1073,10 @@ fn sprite_playback_advances_again_after_a_product_pause_and_resume() {
 #[test]
 fn sprite_playback_loop_sampling_restart_and_invalid_creation_are_atomic() {
     let mut content_resources = BTreeMap::new();
-    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    content_resources.insert(
+        "atlas.png".to_owned(),
+        crate::ContentBytes::from(tests::RGBA_PNG),
+    );
     let mut bridge =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
     let atlas_frames = [NativeSpriteAtlasFrame {
@@ -1160,7 +1184,10 @@ fn sprite_playback_loop_sampling_restart_and_invalid_creation_are_atomic() {
 #[test]
 fn sprite_playback_frame_selection_updates_cursor_and_renderer_atomically() {
     let mut content_resources = BTreeMap::new();
-    content_resources.insert("atlas.png".to_owned(), Arc::from(tests::RGBA_PNG));
+    content_resources.insert(
+        "atlas.png".to_owned(),
+        crate::ContentBytes::from(tests::RGBA_PNG),
+    );
     let mut bridge =
         RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
     let atlas_frames = [
@@ -1787,7 +1814,7 @@ pub(crate) struct RuntimeAppearanceBridge {
     pub(crate) state: RuntimeAppearanceState,
     /// Held in `state` while a product call owns the real state.
     idle_state: RuntimeAppearanceState,
-    content_resources: BTreeMap<String, Arc<[u8]>>,
+    content_resources: BTreeMap<String, crate::ContentBytes>,
     imports: RenderResourceImports,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     /// Backing of the latest borrowed appearance result.
@@ -1818,7 +1845,7 @@ pub(crate) struct RuntimeAppearanceBridge {
 impl RuntimeAppearanceBridge {
     pub(crate) fn new(
         catalog: RuntimeAppearanceCatalog,
-        content_resources: BTreeMap<String, Arc<[u8]>>,
+        content_resources: BTreeMap<String, crate::ContentBytes>,
     ) -> Self {
         let state = RuntimeAppearanceState::from(RuntimeAppearanceData {
             projector: RuntimeAppearanceProjector::new(catalog),
@@ -8118,7 +8145,7 @@ fn sample_sprite_playback_at(
 
 pub(crate) fn create(
     catalog: RuntimeAppearanceCatalog,
-    content_resources: BTreeMap<String, Arc<[u8]>>,
+    content_resources: BTreeMap<String, crate::ContentBytes>,
 ) -> RuntimeAppearanceBridge {
     RuntimeAppearanceBridge::new(catalog, content_resources)
 }
@@ -11338,7 +11365,7 @@ pub(super) mod tests {
         );
         let mut bridge = RuntimeAppearanceBridge::new(
             RuntimeAppearanceCatalog::default(),
-            BTreeMap::from([("body.glb".to_owned(), Arc::from(BODY))]),
+            BTreeMap::from([("body.glb".to_owned(), crate::ContentBytes::from(BODY))]),
         );
         bridge.begin_call();
         let text = |s: &str| NativeUtf8Slice {
@@ -11486,7 +11513,9 @@ pub(super) mod tests {
         bridge
             .state
             .render_resources
-            .stage(CsharpRenderResource::test_mesh(bytes))
+            .stage(CsharpRenderResource::test_mesh(crate::ContentBytes::from(
+                bytes,
+            )))
             .unwrap();
 
         bridge.begin_call();
@@ -11505,11 +11534,9 @@ pub(super) mod tests {
         bridge
             .state
             .render_resources
-            .stage(CsharpRenderResource::test_mesh(Arc::from(vec![
-                0x5a;
-                8 * 1024
-                    * 1024
-            ])))
+            .stage(CsharpRenderResource::test_mesh(crate::ContentBytes::from(
+                vec![0x5a; 8 * 1024 * 1024],
+            )))
             .unwrap();
         for _ in 0..100 {
             bridge.begin_call();
@@ -11566,7 +11593,7 @@ pub(super) mod tests {
     #[test]
     fn emission_and_occlusion_maps_and_unlit_reach_the_material_descriptor() {
         let mut content = BTreeMap::new();
-        content.insert("glow.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert("glow.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         bridge.begin_call();
         let colour = bridge.open_resource(&resource_request("glow.png")).unwrap();
@@ -13186,7 +13213,7 @@ pub(super) mod tests {
     #[test]
     fn normal_maps_are_linear_textures_retained_beside_the_base_texture() {
         let mut content = BTreeMap::new();
-        content.insert("stone.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert("stone.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         bridge.begin_call();
         let colour = bridge
@@ -13270,10 +13297,13 @@ fn shade(surface: Surface) -> vec4<f32> {
 }
 ";
         let mut content = BTreeMap::new();
-        content.insert("shaders/tint.wgsl".to_owned(), Arc::from(TINT.as_bytes()));
+        content.insert(
+            "shaders/tint.wgsl".to_owned(),
+            crate::ContentBytes::from(TINT.as_bytes()),
+        );
         content.insert(
             "shaders/broken.wgsl".to_owned(),
-            Arc::from(
+            crate::ContentBytes::from(
                 TINT.replace("standard_shade(surface)", "missing")
                     .as_bytes(),
             ),
@@ -13394,8 +13424,11 @@ fn shade(surface: Surface) -> vec4<f32> {
 }
 ";
         let mut content = BTreeMap::new();
-        content.insert("shaders/glow.wgsl".to_owned(), Arc::from(GLOW.as_bytes()));
-        content.insert("noise.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert(
+            "shaders/glow.wgsl".to_owned(),
+            crate::ContentBytes::from(GLOW.as_bytes()),
+        );
+        content.insert("noise.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         bridge.begin_call();
         let open = |bridge: &mut RuntimeAppearanceBridge, keywords: &'static str| {
@@ -13540,8 +13573,8 @@ fn shade(surface: Surface) -> vec4<f32> {
         let last = outside.len() - 4;
         outside[last..].copy_from_slice(&3_u32.to_le_bytes());
         let content = Box::new(crate::content::RuntimeContentBridge::new(BTreeMap::from([
-            (MESH.to_owned(), Arc::from(bytes)),
-            (BAD.to_owned(), Arc::from(outside)),
+            (MESH.to_owned(), crate::ContentBytes::from(bytes)),
+            (BAD.to_owned(), crate::ContentBytes::from(outside)),
         ])));
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
@@ -13611,8 +13644,8 @@ fn shade(surface: Surface) -> vec4<f32> {
         )
         .unwrap();
         let content = crate::content::RuntimeContentBridge::new(BTreeMap::from([
-            (TEXTURE.to_owned(), Arc::from(RGBA_PNG)),
-            (MESH.to_owned(), Arc::from(mesh)),
+            (TEXTURE.to_owned(), crate::ContentBytes::from(RGBA_PNG)),
+            (MESH.to_owned(), crate::ContentBytes::from(mesh)),
         ]));
         let content = Box::new(content);
         let mut bridge =
@@ -13636,7 +13669,10 @@ fn shade(surface: Surface) -> vec4<f32> {
         const TILES: &[u8] =
             include_bytes!("../../../../fixtures/csharp-voxel-atlases/content/tiles.png");
         let mut content = content;
-        content.reload(BTreeMap::from([(TEXTURE.to_owned(), Arc::from(TILES))]));
+        content.reload(BTreeMap::from([(
+            TEXTURE.to_owned(),
+            crate::ContentBytes::from(TILES),
+        )]));
         let reloaded = bridge.open_resource(&resource_request(TEXTURE)).unwrap();
         assert_ne!(reloaded.handle, first.handle);
         assert_eq!(crate::content::tests::body_hashes(), hashes + 2);
@@ -13769,8 +13805,8 @@ fn shade(surface: Surface) -> vec4<f32> {
     #[test]
     fn texture_sampling_variants_share_pixels_but_retain_distinct_handles_and_materials() {
         let mut content = BTreeMap::new();
-        content.insert("tiles.png".to_owned(), Arc::from(RGBA_PNG));
-        content.insert("alias.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert("tiles.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
+        content.insert("alias.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         bridge.begin_call();
         let clamp = bridge
@@ -13894,8 +13930,8 @@ fn shade(surface: Surface) -> vec4<f32> {
     #[test]
     fn sprites_retain_selected_sampling_and_typed_material_facts() {
         let mut content = BTreeMap::new();
-        content.insert("sprite.png".to_owned(), Arc::from(RGBA_PNG));
-        content.insert("normal.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert("sprite.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
+        content.insert("normal.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         bridge.begin_call();
         let mut sprite_texture_request = resource_request("sprite.png");
@@ -14007,10 +14043,13 @@ fn shade(surface: Surface) -> vec4<f32> {
     #[test]
     fn selected_resources_are_deduplicated_and_create_time_only() {
         let mut content_resources = BTreeMap::new();
-        content_resources.insert("selected.png".to_owned(), Arc::from(RGBA_PNG));
+        content_resources.insert(
+            "selected.png".to_owned(),
+            crate::ContentBytes::from(RGBA_PNG),
+        );
         content_resources.insert(
             "unselected.png".to_owned(),
-            Arc::from(&b"not an RGBA PNG"[..]),
+            crate::ContentBytes::from(&b"not an RGBA PNG"[..]),
         );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
@@ -14045,7 +14084,10 @@ fn shade(surface: Surface) -> vec4<f32> {
     #[test]
     fn render_resource_release_counts_owners_guards_live_materials_and_reopens_fresh_slot() {
         let mut content = BTreeMap::new();
-        content.insert("release.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert(
+            "release.png".to_owned(),
+            crate::ContentBytes::from(RGBA_PNG),
+        );
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
 
         bridge.begin_call();
@@ -14158,8 +14200,8 @@ fn shade(surface: Surface) -> vec4<f32> {
     #[test]
     fn material_updates_hold_exactly_the_textures_the_material_names() {
         let mut content = BTreeMap::new();
-        content.insert("foam.png".to_owned(), Arc::from(RGBA_PNG));
-        content.insert("glow.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert("foam.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
+        content.insert("glow.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         bridge.begin_call();
         let foam = bridge.open_resource(&resource_request("foam.png")).unwrap();
@@ -14274,7 +14316,7 @@ fn shade(surface: Surface) -> vec4<f32> {
     #[test]
     fn render_resource_release_waits_for_the_staged_or_retained_sky() {
         let mut content = BTreeMap::new();
-        content.insert("sky.png".to_owned(), Arc::from(RGBA_PNG));
+        content.insert("sky.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         let mut camera = crate::camera_view::RuntimeCameraViewBridge::new();
         bridge.bind_camera_view(&camera);
@@ -14400,11 +14442,13 @@ fn shade(surface: Surface) -> vec4<f32> {
         let mut content_resources = BTreeMap::new();
         content_resources.insert(
             "mesh.json".to_owned(),
-            Arc::from(serde_json::to_vec(&triangle_mesh_document()).expect("mesh JSON")),
+            crate::ContentBytes::from(
+                serde_json::to_vec(&triangle_mesh_document()).expect("mesh JSON"),
+            ),
         );
         content_resources.insert(
             "unbound.json".to_owned(),
-            Arc::from(serde_json::to_vec(&unbound).expect("mesh JSON")),
+            crate::ContentBytes::from(serde_json::to_vec(&unbound).expect("mesh JSON")),
         );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
@@ -14465,10 +14509,12 @@ fn shade(surface: Surface) -> vec4<f32> {
         }
         fn dispose(kind: Kind, count: usize) -> std::time::Duration {
             let mut content_resources = BTreeMap::new();
-            content_resources.insert("atlas.png".to_owned(), Arc::from(RGBA_PNG));
+            content_resources.insert("atlas.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
             content_resources.insert(
                 "mesh.json".to_owned(),
-                Arc::from(serde_json::to_vec(&triangle_mesh_document()).expect("mesh JSON")),
+                crate::ContentBytes::from(
+                    serde_json::to_vec(&triangle_mesh_document()).expect("mesh JSON"),
+                ),
             );
             let mut bridge = RuntimeAppearanceBridge::new(
                 RuntimeAppearanceCatalog::default(),
@@ -14558,7 +14604,9 @@ fn shade(surface: Surface) -> vec4<f32> {
             let mut content_resources = BTreeMap::new();
             content_resources.insert(
                 "mesh.json".to_owned(),
-                Arc::from(serde_json::to_vec(&triangle_mesh_document()).expect("mesh JSON")),
+                crate::ContentBytes::from(
+                    serde_json::to_vec(&triangle_mesh_document()).expect("mesh JSON"),
+                ),
             );
             let mut bridge = RuntimeAppearanceBridge::new(
                 RuntimeAppearanceCatalog::default(),
@@ -14619,7 +14667,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         let mut content_resources = BTreeMap::new();
         content_resources.insert(
             "mesh.json".to_owned(),
-            Arc::from(serde_json::to_vec(&document).expect("mesh JSON")),
+            crate::ContentBytes::from(serde_json::to_vec(&document).expect("mesh JSON")),
         );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
@@ -14633,10 +14681,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         let second = bridge
             .create_static_mesh_from_content(&request)
             .expect("second retained appearance");
-        assert!(Arc::ptr_eq(
-            &imported_bytes,
-            &bridge.imports.cached("mesh.json").unwrap().shared_bytes()
-        ));
+        assert!(imported_bytes.same(&bridge.imports.cached("mesh.json").unwrap().shared_bytes()));
         let fact = appearance_fact(first);
         unsafe { bridge.stage_snapshot(&fact, 1) }.expect("publish the first mesh");
         let staged = bridge.take_staged_call();
@@ -14676,7 +14721,10 @@ fn shade(surface: Surface) -> vec4<f32> {
             "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
         );
         let mut content = BTreeMap::new();
-        content.insert("character.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        content.insert(
+            "character.glb".to_owned(),
+            crate::ContentBytes::from(CHARACTER_GLB),
+        );
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         let mut world = render_presentation::PresentationWorld::default();
         for _ in 0..2 {
@@ -14753,7 +14801,10 @@ fn shade(surface: Surface) -> vec4<f32> {
             "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
         );
         let mut content_resources = BTreeMap::new();
-        content_resources.insert("character.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        content_resources.insert(
+            "character.glb".to_owned(),
+            crate::ContentBytes::from(CHARACTER_GLB),
+        );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
         let resource_path = b"character.glb";
@@ -14847,7 +14898,10 @@ fn shade(surface: Surface) -> vec4<f32> {
             "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
         );
         let mut content_resources = BTreeMap::new();
-        content_resources.insert("character.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        content_resources.insert(
+            "character.glb".to_owned(),
+            crate::ContentBytes::from(CHARACTER_GLB),
+        );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
         let resource_path = b"character.glb";
@@ -14936,7 +14990,10 @@ fn shade(surface: Surface) -> vec4<f32> {
             "actors/ual1-standard.glb",
         ] {
             let mut content_resources = BTreeMap::new();
-            content_resources.insert(relative_path.to_owned(), Arc::from(CHARACTER_GLB));
+            content_resources.insert(
+                relative_path.to_owned(),
+                crate::ContentBytes::from(CHARACTER_GLB),
+            );
             let mut bridge = RuntimeAppearanceBridge::new(
                 RuntimeAppearanceCatalog::default(),
                 content_resources,
@@ -14977,11 +15034,11 @@ fn shade(surface: Surface) -> vec4<f32> {
         let mut content_resources = BTreeMap::new();
         content_resources.insert(
             "actors/character.glb".to_owned(),
-            Arc::from(external.as_slice()),
+            crate::ContentBytes::from(external.as_slice()),
         );
         content_resources.insert(
             "actors/Textures/character.png".to_owned(),
-            Arc::from(RGBA_PNG),
+            crate::ContentBytes::from(RGBA_PNG),
         );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
@@ -15137,7 +15194,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             .is_err());
         external_content.files = crate::content::ContentFiles::snapshot(BTreeMap::from([(
             "texture.png".into(),
-            Arc::from(RGBA_PNG),
+            crate::ContentBytes::from(RGBA_PNG),
         )]));
         let external_resource = bridge.admit_animated_mesh(external_content).unwrap();
         assert!(asset_import::ParsedGlb::parse(
@@ -15163,11 +15220,11 @@ fn shade(surface: Surface) -> vec4<f32> {
         let mut content_resources = BTreeMap::new();
         content_resources.insert(
             "loading-bay/button-floor-square.glb".to_owned(),
-            Arc::from(BUTTON_GLB),
+            crate::ContentBytes::from(BUTTON_GLB),
         );
         content_resources.insert(
             "loading-bay/Textures/colormap.png".to_owned(),
-            Arc::from(RGBA_PNG),
+            crate::ContentBytes::from(RGBA_PNG),
         );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
@@ -15220,11 +15277,11 @@ fn shade(surface: Surface) -> vec4<f32> {
         let mut content_resources = BTreeMap::new();
         content_resources.insert(
             "actors/character.glb".to_owned(),
-            Arc::from(external.as_slice()),
+            crate::ContentBytes::from(external.as_slice()),
         );
         content_resources.insert(
             "actors/textures/character.png".to_owned(),
-            Arc::from(RGBA_PNG),
+            crate::ContentBytes::from(RGBA_PNG),
         );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
@@ -15251,7 +15308,10 @@ fn shade(surface: Surface) -> vec4<f32> {
             "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
         );
         let mut content_resources = BTreeMap::new();
-        content_resources.insert("character.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        content_resources.insert(
+            "character.glb".to_owned(),
+            crate::ContentBytes::from(CHARACTER_GLB),
+        );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
         let path = b"character.glb";
@@ -15427,8 +15487,14 @@ fn shade(surface: Surface) -> vec4<f32> {
             "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
         );
         let mut content_resources = BTreeMap::new();
-        content_resources.insert("primary.glb".to_owned(), Arc::from(CHARACTER_GLB));
-        content_resources.insert("pack.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        content_resources.insert(
+            "primary.glb".to_owned(),
+            crate::ContentBytes::from(CHARACTER_GLB),
+        );
+        content_resources.insert(
+            "pack.glb".to_owned(),
+            crate::ContentBytes::from(CHARACTER_GLB),
+        );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
         let primary_path = b"primary.glb";
@@ -15595,7 +15661,10 @@ fn shade(surface: Surface) -> vec4<f32> {
             "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
         );
         let mut content_resources = BTreeMap::new();
-        content_resources.insert("character.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        content_resources.insert(
+            "character.glb".to_owned(),
+            crate::ContentBytes::from(CHARACTER_GLB),
+        );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
         let path = b"character.glb";
@@ -15745,14 +15814,14 @@ fn shade(surface: Surface) -> vec4<f32> {
         // Many unrelated resources beside the ones the calls name.
         bridge
             .content_resources
-            .insert("sky.png".to_owned(), Arc::from(RGBA_PNG));
+            .insert("sky.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         let fonts: Vec<String> = (0..200_u32).map(|n| format!("fonts/{n}.woff2")).collect();
         for (n, path) in fonts.iter().enumerate() {
             let mut bytes = b"wOF2".to_vec();
             bytes.extend_from_slice(&(n as u32).to_le_bytes());
             bridge
                 .content_resources
-                .insert(path.clone(), Arc::from(bytes));
+                .insert(path.clone(), crate::ContentBytes::from(bytes));
         }
         let open = |bridge: &mut RuntimeAppearanceBridge, path: &str| {
             let mut request = resource_request("");
@@ -16547,9 +16616,15 @@ fn shade(surface: Surface) -> vec4<f32> {
             Arc::from(bytes)
         };
         let mut content_resources = BTreeMap::new();
-        content_resources.insert("a.glb".to_owned(), Arc::from(CHARACTER_GLB));
-        content_resources.insert("b.glb".to_owned(), variant(b"FBX2GLTF"));
-        content_resources.insert("pack.glb".to_owned(), variant(b"fbx2gltf"));
+        content_resources.insert("a.glb".to_owned(), crate::ContentBytes::from(CHARACTER_GLB));
+        content_resources.insert(
+            "b.glb".to_owned(),
+            crate::ContentBytes::from(variant(b"FBX2GLTF")),
+        );
+        content_resources.insert(
+            "pack.glb".to_owned(),
+            crate::ContentBytes::from(variant(b"fbx2gltf")),
+        );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
         let slice = |bytes: &[u8]| NativeUtf8Slice {
@@ -16717,7 +16792,10 @@ fn shade(surface: Surface) -> vec4<f32> {
             "../../../../fixtures/render/assets/kenney-retro-character/character-medium.glb"
         );
         let mut content_resources = BTreeMap::new();
-        content_resources.insert("character.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        content_resources.insert(
+            "character.glb".to_owned(),
+            crate::ContentBytes::from(CHARACTER_GLB),
+        );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
         let path = b"character.glb";
@@ -17139,7 +17217,10 @@ fn shade(surface: Surface) -> vec4<f32> {
     #[test]
     fn admitted_woff2_font_is_resolved_by_asset_billboard_without_raw_asset_strings() {
         let mut content_resources = BTreeMap::new();
-        content_resources.insert("ui.woff2".to_owned(), Arc::from(&b"wOF2font-body"[..]));
+        content_resources.insert(
+            "ui.woff2".to_owned(),
+            crate::ContentBytes::from(&b"wOF2font-body"[..]),
+        );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
         let key = b"status";

@@ -47,7 +47,8 @@ pub struct NativeUtf8Slice {
     pub len: usize,
 }
 
-/// One file borrowed by trusted product code for the duration of creation.
+/// One file borrowed by trusted product code: creation's content stays valid
+/// until the product is destroyed; other requests borrow it for the call.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeContentFile {

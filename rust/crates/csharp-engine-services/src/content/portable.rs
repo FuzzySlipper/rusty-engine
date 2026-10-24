@@ -392,13 +392,13 @@ pub(super) unsafe extern "C" fn read(
 mod tests {
     use super::*;
     fn source(prefix: &str) -> AdmittedContent {
-        let body: Arc<[u8]> = Arc::from(br#"{"schemaVersion":1,"assets":[{"id":"body","kind":"model","path":"body.glb","clips":{"idle":"Idle"}},{"id":"draft-no-kind"},{"id":"draft-required-field","kind":"attachment"}]}"#.as_slice());
+        let body = crate::ContentBytes::from(br#"{"schemaVersion":1,"assets":[{"id":"body","kind":"model","path":"body.glb","clips":{"idle":"Idle"}},{"id":"draft-no-kind"},{"id":"draft-required-field","kind":"attachment"}]}"#.as_slice());
         let path = format!("{prefix}asset.json");
         let files = super::ContentFiles::snapshot(BTreeMap::from([
             (path.clone(), body.clone()),
             (
                 format!("{prefix}body.glb"),
-                Arc::from(b"model bytes".as_slice()),
+                crate::ContentBytes::from(b"model bytes".as_slice()),
             ),
         ]));
         AdmittedContent {
@@ -466,11 +466,17 @@ mod tests {
     }
     #[test]
     fn a_readout_lists_the_closure_resolved_at_load() {
-        let body: Arc<[u8]> = Arc::from(br#"{"schemaVersion":1,"assets":[{"id":"body","kind":"model","path":"body.glb","clips":{"idle":"Idle"},"materials":{"Body":"paint"}},{"id":"paint","kind":"material","textures":{"baseColor":"color"}},{"id":"color","kind":"texture","path":"color.png"},{"id":"unrelated-draft"}]}"#.as_slice());
+        let body = crate::ContentBytes::from(br#"{"schemaVersion":1,"assets":[{"id":"body","kind":"model","path":"body.glb","clips":{"idle":"Idle"},"materials":{"Body":"paint"}},{"id":"paint","kind":"material","textures":{"baseColor":"color"}},{"id":"color","kind":"texture","path":"color.png"},{"id":"unrelated-draft"}]}"#.as_slice());
         let files = super::ContentFiles::snapshot(BTreeMap::from([
             ("asset.json".to_owned(), body.clone()),
-            ("body.glb".to_owned(), Arc::from(b"model".as_slice())),
-            ("color.png".to_owned(), Arc::from(b"image".as_slice())),
+            (
+                "body.glb".to_owned(),
+                crate::ContentBytes::from(b"model".as_slice()),
+            ),
+            (
+                "color.png".to_owned(),
+                crate::ContentBytes::from(b"image".as_slice()),
+            ),
         ]));
         let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
         let reference = bridge.retain(AdmittedContent {

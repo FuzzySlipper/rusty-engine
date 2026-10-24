@@ -1030,7 +1030,10 @@ mod tests {
     fn a_sampled_pose_needs_no_renderer_and_follows_the_clip_controls_and_placement() {
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), {
             let mut content = BTreeMap::new();
-            content.insert("body.glb".to_owned(), Arc::from(CHARACTER_GLB));
+            content.insert(
+                "body.glb".to_owned(),
+                crate::ContentBytes::from(CHARACTER_GLB),
+            );
             content
         });
         bridge.begin_call();
@@ -1144,7 +1147,10 @@ mod tests {
     fn current_playback_is_sampled_at_the_time_the_call_is_drawn() {
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), {
             let mut content = BTreeMap::new();
-            content.insert("body.glb".to_owned(), Arc::from(CHARACTER_GLB));
+            content.insert(
+                "body.glb".to_owned(),
+                crate::ContentBytes::from(CHARACTER_GLB),
+            );
             content
         });
         let play = |bridge: &mut RuntimeAppearanceBridge,
@@ -1241,8 +1247,14 @@ mod tests {
     fn clip_layers_from_a_skeleton_only_pack_lay_over_the_playback() {
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), {
             let mut content = BTreeMap::new();
-            content.insert("body.glb".to_owned(), Arc::from(CHARACTER_GLB));
-            content.insert("body.clips.glb".to_owned(), Arc::from(CLIP_PACK_GLB));
+            content.insert(
+                "body.glb".to_owned(),
+                crate::ContentBytes::from(CHARACTER_GLB),
+            );
+            content.insert(
+                "body.clips.glb".to_owned(),
+                crate::ContentBytes::from(CLIP_PACK_GLB),
+            );
             content
         });
         bridge.set_presentation_clock(0.0, 0.25);
@@ -1441,7 +1453,10 @@ mod tests {
     fn a_sampled_model_is_released_with_its_resource() {
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), {
             let mut content = BTreeMap::new();
-            content.insert("body.glb".to_owned(), Arc::from(CHARACTER_GLB));
+            content.insert(
+                "body.glb".to_owned(),
+                crate::ContentBytes::from(CHARACTER_GLB),
+            );
             content
         });
         let path = b"body.glb";
@@ -1510,7 +1525,10 @@ mod tests {
     #[test]
     fn a_pose_is_checked_against_the_rig_sent_once_when_it_changes_and_its_joints_read_back() {
         let mut content_resources = BTreeMap::new();
-        content_resources.insert("body.glb".to_owned(), Arc::from(CHARACTER_GLB));
+        content_resources.insert(
+            "body.glb".to_owned(),
+            crate::ContentBytes::from(CHARACTER_GLB),
+        );
         let mut bridge =
             RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
         let mut world = render_presentation::PresentationWorld::default();

@@ -2,7 +2,6 @@ use runtime_diagnostics::RuntimeDiagnosticsSink;
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     ffi::c_void,
-    sync::Arc,
 };
 
 use csharp_engine_abi::*;
@@ -25,7 +24,7 @@ use crate::{
 };
 
 /// A clip's content-relative path, body and content identity.
-type ClipSource = (String, Arc<[u8]>, ContentIdentity);
+type ClipSource = (String, crate::ContentBytes, ContentIdentity);
 
 #[derive(Clone)]
 struct AudioClip {
@@ -200,7 +199,7 @@ pub(crate) struct RuntimeAudioCall {
 /// runtime's audio output; post-Create admission retains the selected body in this owner.
 pub(crate) struct RuntimeAudioBridge {
     state: AudioState,
-    content_resources: BTreeMap<String, Arc<[u8]>>,
+    content_resources: BTreeMap<String, crate::ContentBytes>,
     staged: Option<RuntimeAudioCall>,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     realized_facts: VecDeque<AudioRealizationFact>,
@@ -215,7 +214,7 @@ pub(crate) struct RuntimeAudioBridge {
 }
 
 impl RuntimeAudioBridge {
-    pub(crate) fn new(content_resources: BTreeMap<String, Arc<[u8]>>) -> Self {
+    pub(crate) fn new(content_resources: BTreeMap<String, crate::ContentBytes>) -> Self {
         Self {
             state: AudioState {
                 projector: AudioProjector::default(),
@@ -1618,7 +1617,7 @@ mod tests {
         unsafe { std::slice::from_raw_parts(values, len) }.to_vec()
     }
 
-    fn wav() -> Arc<[u8]> {
+    fn wav() -> crate::ContentBytes {
         let mut bytes = vec![0_u8; 48];
         bytes[..4].copy_from_slice(b"RIFF");
         bytes[4..8].copy_from_slice(&40_u32.to_le_bytes());
@@ -1633,7 +1632,7 @@ mod tests {
         bytes[34..36].copy_from_slice(&8_u16.to_le_bytes());
         bytes[36..40].copy_from_slice(b"data");
         bytes[40..44].copy_from_slice(&4_u32.to_le_bytes());
-        Arc::from(bytes)
+        crate::ContentBytes::from(bytes)
     }
 
     #[test]
@@ -1647,7 +1646,7 @@ mod tests {
                 bridge
                     .admit_clip((
                         format!("audio/{n}.wav"),
-                        Arc::from(bytes),
+                        crate::ContentBytes::from(bytes),
                         ContentIdentity::default(),
                     ))
                     .unwrap()
@@ -1679,7 +1678,7 @@ mod tests {
         let shared = bridge
             .admit_clip((
                 "audio/again.wav".to_owned(),
-                Arc::from(bytes),
+                crate::ContentBytes::from(bytes),
                 ContentIdentity::default(),
             ))
             .unwrap();
@@ -1729,11 +1728,15 @@ mod tests {
         for (extension, bytes) in samples {
             let path = format!("audio/tone.{extension}");
             let first = bridge
-                .admit_clip((path.clone(), Arc::from(*bytes), Default::default()))
+                .admit_clip((
+                    path.clone(),
+                    crate::ContentBytes::from(*bytes),
+                    Default::default(),
+                ))
                 .unwrap();
             assert_eq!(
                 bridge
-                    .admit_clip((path, Arc::from(*bytes), Default::default()))
+                    .admit_clip((path, crate::ContentBytes::from(*bytes), Default::default()))
                     .unwrap()
                     .value,
                 first.value
@@ -1756,7 +1759,7 @@ mod tests {
             bridge
                 .admit_clip((
                     format!("audio/{n}.mp3"),
-                    Arc::from(bytes),
+                    crate::ContentBytes::from(bytes),
                     Default::default(),
                 ))
                 .unwrap();
@@ -1767,7 +1770,7 @@ mod tests {
             bridge
                 .admit_clip((
                     format!("audio/large.{extension}"),
-                    Arc::from(bytes),
+                    crate::ContentBytes::from(bytes),
                     Default::default(),
                 ))
                 .unwrap();
@@ -1777,7 +1780,7 @@ mod tests {
             bridge
                 .admit_clip((
                     "audio/unknown.aac".into(),
-                    Arc::from(b"not audio".as_slice()),
+                    crate::ContentBytes::from(b"not audio".as_slice()),
                     Default::default(),
                 ))
                 .unwrap_err()
@@ -1878,8 +1881,14 @@ mod tests {
         content.insert("audio/valid.wav".to_owned(), wav());
         let mut large = wav().to_vec();
         large.resize(9 * 1024 * 1024, 0);
-        content.insert("audio/large.wav".to_owned(), Arc::from(large));
-        content.insert("audio/corrupt.wav".to_owned(), Arc::from(vec![0_u8; 1024]));
+        content.insert(
+            "audio/large.wav".to_owned(),
+            crate::ContentBytes::from(large),
+        );
+        content.insert(
+            "audio/corrupt.wav".to_owned(),
+            crate::ContentBytes::from(vec![0_u8; 1024]),
+        );
         let sink =
             RuntimeDiagnosticsSink::new(Default::default()).expect("bounded diagnostics sink");
         let mut bridge = RuntimeAudioBridge::new(content);
@@ -2122,7 +2131,7 @@ mod tests {
         let second = bridge
             .admit_clip((
                 "audio/second.wav".to_owned(),
-                Arc::from(other),
+                crate::ContentBytes::from(other),
                 Default::default(),
             ))
             .expect("second clip");
@@ -2506,10 +2515,10 @@ mod tests {
         let clip = &state.clips[&first.value];
         assert_eq!(clip.owners, 3);
         assert_eq!(clip.resource.path(), format!("content/{PATH}"));
-        assert!(Arc::ptr_eq(
-            &clip.resource.shared_bytes(),
-            &content.retained_path(PATH).unwrap().bytes
-        ));
+        assert!(clip
+            .resource
+            .shared_bytes()
+            .same(&content.retained_path(PATH).unwrap().bytes));
     }
 
     #[test]
@@ -2787,7 +2796,7 @@ mod tests {
         let second = bridge
             .admit_clip((
                 "audio/revision.wav".to_owned(),
-                Arc::from(second),
+                crate::ContentBytes::from(second),
                 Default::default(),
             ))
             .expect("second content version");

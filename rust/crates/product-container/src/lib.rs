@@ -13,10 +13,12 @@
 //! Native code (CoreCLR assemblies, the NativeAOT module) stays loose beside
 //! the container: hostfxr and the dynamic loader take file paths.
 
+mod bytes;
 mod container;
 mod pack;
 mod source;
 
+pub use bytes::{ContentBytes, WeakContentBytes};
 pub use container::{write, Body, Bundle, Container, Entry, NewEntry, WriteReport};
 pub use pack::{pack_content, pack_product, PackReport, CONTAINER_NAME};
 pub use source::ProductSource;

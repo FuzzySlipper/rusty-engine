@@ -1714,7 +1714,6 @@ mod tests {
     use crate::{appearance::RuntimeAppearanceBridge, spatial::RuntimeSpatialBridge};
     use render_model::{MeshMaterialSlot, RenderDiff, ScatterFade, ScatterPatchDescriptor};
     use render_projection::RuntimeAppearanceCatalog;
-    use std::sync::Arc;
 
     fn session_with_voxel(spatial: &mut RuntimeSpatialBridge) -> NativeSpatialSessionHandle {
         session_with_voxel_mode(spatial, NativeVoxelSurfaceMode::GreedyCubes)
@@ -3277,10 +3276,10 @@ mod tests {
             session_with_voxel_mode(&mut spatial, NativeVoxelSurfaceMode::MarchingCubes);
         let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         let mut resources = BTreeMap::new();
-        resources.insert("surface.png".to_owned(), Arc::from(TEXTURE));
+        resources.insert("surface.png".to_owned(), crate::ContentBytes::from(TEXTURE));
         resources.insert(
             "shaders/tint.wgsl".to_owned(),
-            Arc::from(
+            crate::ContentBytes::from(
                 "#import rusty::types::Surface\n#import rusty::shade::standard_shade\n\
                  fn shade(surface: Surface) -> vec4<f32> { return standard_shade(surface); }\n"
                     .as_bytes(),

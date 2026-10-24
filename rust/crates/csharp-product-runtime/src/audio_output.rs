@@ -227,7 +227,7 @@ impl AudioOutput {
     ) -> Result<(), CsharpProductRuntimeError> {
         self.realizer.refresh(&EngineEntities(services));
         self.realizer
-            .retain_clips(|hash| services.audio_clip_bytes(hash).is_some());
+            .retain_clips(|hash| services.has_audio_clip(hash));
         let facts = self.realizer.take_facts();
         services.ingest_audio_realization_feedback(
             false,
@@ -472,7 +472,11 @@ mod tests {
     fn an_inspection_advance_moves_held_device_audio_to_the_world_moment() {
         let mut services = EngineServiceSet::new(
             csharp_engine_services::parse_runtime_appearance_catalog(None).unwrap(),
-            [("tone.wav".to_owned(), std::sync::Arc::<[u8]>::from(TONE))].into(),
+            [(
+                "tone.wav".to_owned(),
+                csharp_engine_services::ContentBytes::from(TONE),
+            )]
+            .into(),
             None,
             product_host::ProductHostLog::new(Default::default())
                 .unwrap()

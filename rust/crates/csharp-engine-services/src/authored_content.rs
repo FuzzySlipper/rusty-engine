@@ -60,7 +60,7 @@ impl Text {
 
 #[test]
 fn admits_prefab_registry_content_inside_the_owner() {
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::collections::BTreeMap;
 
     fn slice(value: &'static [u8]) -> NativeUtf8Slice {
         NativeUtf8Slice {
@@ -101,7 +101,10 @@ fn admits_prefab_registry_content_inside_the_owner() {
     )
     .unwrap();
     let mut resources = BTreeMap::new();
-    resources.insert("prefabs.json".to_owned(), Arc::from(encoded.into_bytes()));
+    resources.insert(
+        "prefabs.json".to_owned(),
+        crate::ContentBytes::from(encoded.into_bytes()),
+    );
     let mut content = RuntimeContentBridge::new(resources);
     let content_api = crate::content::api(&mut content);
     let mut reference = NativeContentReferenceHandle::default();
@@ -3522,7 +3525,7 @@ mod tests {
         let mut content = BTreeMap::new();
         content.insert(
             "pattern.png".to_owned(),
-            std::sync::Arc::<[u8]>::from(crate::appearance::tests::RGBA_PNG),
+            crate::ContentBytes::from(crate::appearance::tests::RGBA_PNG),
         );
         let mut appearance = crate::appearance::RuntimeAppearanceBridge::new(
             render_projection::RuntimeAppearanceCatalog::default(),
@@ -3723,7 +3726,7 @@ mod tests {
 
     #[test]
     fn admits_typed_and_retained_content_catalogs_through_named_callbacks() {
-        use std::{collections::BTreeMap, sync::Arc};
+        use std::collections::BTreeMap;
 
         let source = AssetCatalog::from_entries(vec![CatalogEntry::new(
             AssetId::parse("scene/test").unwrap(),
@@ -3737,7 +3740,10 @@ mod tests {
             .as_bytes()
             .to_vec();
         let mut resources = BTreeMap::new();
-        resources.insert("catalog.json".to_owned(), Arc::from(canonical));
+        resources.insert(
+            "catalog.json".to_owned(),
+            crate::ContentBytes::from(canonical),
+        );
         let mut content = RuntimeContentBridge::new(resources);
         let content_api = crate::content::api(&mut content);
         let mut reference = NativeContentReferenceHandle::default();
@@ -4501,7 +4507,7 @@ mod tests {
 
     #[test]
     fn prepares_and_publishes_scenes_as_retained_owner_plans() {
-        use std::{collections::BTreeMap, sync::Arc};
+        use std::collections::BTreeMap;
 
         fn identity() -> NativeTransform {
             NativeTransform {
@@ -4882,7 +4888,7 @@ mod tests {
         let mut resources = BTreeMap::new();
         resources.insert(
             "scene.json".to_owned(),
-            Arc::from(authored_scene::encode_scene(&source).unwrap().into_bytes()),
+            crate::ContentBytes::from(authored_scene::encode_scene(&source).unwrap().into_bytes()),
         );
         let mut content = RuntimeContentBridge::new(resources);
         bridge.bind_content(&content);

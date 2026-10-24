@@ -281,7 +281,6 @@ pub(super) unsafe extern "C" fn read_severed_part(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::sync::Arc;
 
     use render_model::RenderDiff;
 
@@ -312,7 +311,7 @@ mod tests {
     fn a_severed_part_cuts_its_joint_off_falls_as_a_body_and_is_released_with_its_instance() {
         let mut appearance = crate::appearance::create(
             Default::default(),
-            BTreeMap::from([("body.glb".to_owned(), Arc::<[u8]>::from(BODY_GLB))]),
+            BTreeMap::from([("body.glb".to_owned(), crate::ContentBytes::from(BODY_GLB))]),
         );
         let mut scene = render_presentation::PresentationWorld::default();
         scene.advance_elapsed(1.0);

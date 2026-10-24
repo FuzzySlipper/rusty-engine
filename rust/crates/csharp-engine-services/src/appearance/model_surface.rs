@@ -246,7 +246,10 @@ mod tests {
         let glb = two_cube_prop();
         let mut bridge = RuntimeAppearanceBridge::new(
             RuntimeAppearanceCatalog::default(),
-            BTreeMap::from([("prop.glb".to_owned(), Arc::from(glb.as_slice()))]),
+            BTreeMap::from([(
+                "prop.glb".to_owned(),
+                crate::ContentBytes::from(glb.as_slice()),
+            )]),
         );
         bridge.begin_call();
         let path = "prop.glb";
@@ -433,7 +436,7 @@ mod tests {
         const ONE: [f32; 3] = [1.0; 3];
         let builds = || crate::appearance::MODEL_SURFACE_BUILDS.with(std::cell::Cell::get);
         let cube_at = |z: f32| {
-            Arc::<[u8]>::from(cube_glb(
+            crate::ContentBytes::from(cube_glb(
                 &[0],
                 serde_json::json!([{"mesh": 0, "translation": [0.0, 0.0, z]}]),
             ))
@@ -485,7 +488,7 @@ mod tests {
     ) -> (Vec<NativeModelSurfacePoint>, Vec<NativeModelRayHit>) {
         let mut bridge = RuntimeAppearanceBridge::new(
             RuntimeAppearanceCatalog::default(),
-            BTreeMap::from([("prop.glb".to_owned(), Arc::from(glb))]),
+            BTreeMap::from([("prop.glb".to_owned(), crate::ContentBytes::from(glb))]),
         );
         bridge.begin_call();
         let path = "prop.glb";

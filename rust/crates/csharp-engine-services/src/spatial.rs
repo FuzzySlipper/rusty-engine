@@ -9979,13 +9979,13 @@ mod tests {
     #[test]
     fn placements_share_one_admitted_artifact_per_content_digest() {
         // A strip of `columns` walkable 1 m cells floored by two triangles.
-        let strip = |columns: usize| -> Arc<[u8]> {
+        let strip = |columns: usize| -> crate::ContentBytes {
             let cells: Vec<String> = (0..columns)
                 .map(|column| {
                     format!(r#"{{"column":{column},"row":0,"level":0,"supportHeight":0.0,"walkable":true}}"#)
                 })
                 .collect();
-            Arc::from(format!(
+            crate::ContentBytes::from(format!(
                 r#"{{"schemaVersion":1,"staticMeshArtifactId":"mesh/strip","bounds":{{"min":[0.0,-1.0,0.0],"max":[{columns}.0,1.0,1.0]}},"collision":{{"positions":[[0.0,0.0,0.0],[{columns}.0,0.0,0.0],[0.0,0.0,1.0],[{columns}.0,0.0,1.0]],"triangles":[[0,1,2],[1,3,2]]}},"navigation":{{"id":"navigation/strip","config":{{"schemaVersion":1,"cellSize":1.0,"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1}},"cells":[{}]}}}}"#,
                 cells.join(",")
             ).into_bytes())
@@ -10099,7 +10099,7 @@ mod tests {
         name: &str,
         level_quantum: f64,
         cells: &[(i64, i64, i64, f64)],
-    ) -> Arc<[u8]> {
+    ) -> crate::ContentBytes {
         let width = cells.iter().map(|cell| cell.0 + 1).max().unwrap_or(1);
         let depth = cells.iter().map(|cell| cell.1 + 1).max().unwrap_or(1);
         let cells: Vec<String> = cells
@@ -10108,7 +10108,7 @@ mod tests {
                 format!(r#"{{"column":{column},"row":{row},"level":{level},"supportHeight":{support:?},"walkable":true}}"#)
             })
             .collect();
-        Arc::from(format!(
+        crate::ContentBytes::from(format!(
             r#"{{"schemaVersion":1,"staticMeshArtifactId":"mesh/{name}","bounds":{{"min":[0.0,-1.0,0.0],"max":[{width}.0,1.0,{depth}.0]}},"collision":{{"positions":[[0.0,0.0,0.0],[{width}.0,0.0,0.0],[0.0,0.0,{depth}.0],[{width}.0,0.0,{depth}.0]],"triangles":[[0,1,2],[1,3,2]]}},"navigation":{{"id":"navigation/{name}","config":{{"schemaVersion":1,"cellSize":1.0,"levelQuantum":{level_quantum:?},"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1}},"cells":[{}]}}}}"#,
             cells.join(",")
         ).into_bytes())
@@ -10666,7 +10666,7 @@ mod tests {
             let path = "spatial/floor.json";
             let mut content = crate::content::RuntimeContentBridge::new(BTreeMap::from([(
                 path.to_owned(),
-                Arc::from(serde_json::to_vec(&artifact).unwrap()),
+                crate::ContentBytes::from(serde_json::to_vec(&artifact).unwrap()),
             )]));
             let api = crate::content::api(&mut content);
             let mut reference = NativeContentReferenceHandle::default();
