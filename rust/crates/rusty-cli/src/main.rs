@@ -666,7 +666,6 @@ struct DevOptions {
     bind_host: Option<String>,
     port: Option<u16>,
     live_debug: bool,
-    debugger: bool,
     headless: bool,
     /// `stream` or `window`, for this launch (`RustyEngineProductRenderOutput`).
     output: Option<String>,
@@ -887,7 +886,6 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
     let mut bind_host = None;
     let mut port = None;
     let mut live_debug = false;
-    let mut debugger = false;
     let mut headless = false;
     let mut output = None;
     let mut audio_output = None;
@@ -925,7 +923,6 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
                 )
             }
             "--live-debug" => live_debug = true,
-            "--debugger" => debugger = true,
             "--headless" => headless = true,
             "--output" => {
                 let value = required_value(&mut values, "--output")?;
@@ -990,7 +987,6 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
         bind_host,
         port,
         live_debug,
-        debugger,
         headless,
         output,
         audio_output,
@@ -1286,7 +1282,7 @@ Get or refresh this command:
 }
 
 fn dev_usage() -> String {
-    format!("usage: rusty dev [--project <ordinary-product.csproj>] [--port <u16>] [--bind-host <IPv4>] [--live-debug] [--debugger]
+    format!("usage: rusty dev [--project <ordinary-product.csproj>] [--port <u16>] [--bind-host <IPv4>] [--live-debug]
                  [--headless [--chromium <executable>]] [--output <stream|window>]
                  [--audio-output <stream|device-optional|device-required>] [--cef-switch <name[=value]>]...
                  [--diagnostics-log <file>] [--label <text>] [--keep] [--idle-timeout <minutes>]
@@ -1353,7 +1349,6 @@ runtime for the UI) into the cache beside the pair.
 
   --port, --bind-host  where the browser host listens
   --live-debug         enable the live-debug command surface
-  --debugger           no runtime startup deadline, for managed breakpoints
   --headless           run unattended: a headless Chromium page keeps the world drawing and the UI mounted
   --chromium           the Chromium executable --headless opens (else one on PATH)
   --output             stream (the default) or window, for this launch
@@ -1892,7 +1887,6 @@ fn delegated_arguments(options: &DevOptions) -> Vec<std::ffi::OsString> {
     }
     for (enabled, flag) in [
         (options.live_debug, "--live-debug"),
-        (options.debugger, "--debugger"),
         (options.headless, "--headless"),
         (options.session, "--session"),
         (options.keep, "--keep"),
@@ -2847,9 +2841,6 @@ fn supervised_host_arguments(
             .ok_or("RUSTY_DEV_PERSISTENCE: persistence root path must be UTF-8")?
             .to_owned(),
     ];
-    if options.debugger {
-        arguments.push("--debugger".to_owned());
-    }
     if options.headless {
         arguments.push("--headless".to_owned());
     }
@@ -3307,30 +3298,6 @@ mod tests {
     }
 
     #[test]
-    fn debugger_mode_reaches_supervised_host_without_changing_product_staging() {
-        let arguments = Arguments::parse(
-            ["dev", "--project", "Product.csproj", "--debugger"].map(str::to_owned),
-        )
-        .expect("debugger options");
-        let CommandName::Dev(options) = arguments.command else {
-            panic!("dev command");
-        };
-        assert!(options.debugger);
-        assert!(!stage_properties(&options)
-            .expect("staging properties")
-            .iter()
-            .any(|property| property.contains("debugger")));
-        let host = supervised_host_arguments(
-            Path::new("/product"),
-            Path::new("/persistence"),
-            7,
-            &options,
-        )
-        .expect("host arguments");
-        assert!(host.iter().any(|argument| argument == "--debugger"));
-    }
-
-    #[test]
     fn headless_option_reaches_the_supervised_host() {
         let arguments = Arguments::parse(
             ["dev", "--project", "Product.csproj", "--headless"].map(str::to_owned),
@@ -3373,7 +3340,6 @@ mod tests {
         assert_eq!(options.bind_host.as_deref(), Some("127.0.0.1"));
         assert_eq!(options.port, Some(9348));
         assert!(options.live_debug);
-        assert!(!options.debugger);
         assert!(!options.headless);
     }
 
@@ -3401,7 +3367,6 @@ mod tests {
             bind_host: None,
             port: None,
             live_debug: false,
-            debugger: false,
             headless: false,
             output: None,
             audio_output: None,

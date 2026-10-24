@@ -674,11 +674,10 @@ A direct launch does not treat its own stdin EOF as a stop request. If its
 runtime crashes, the host stops with a named diagnostic and a nonzero exit; it
 does not silently retry gameplay. Under `rusty dev`, the first crash restarts
 the runtime once, and a second pauses until the next source restage; neither
-replays a request. The product host has no callback deadline. A product
-stuck in a callback shows `inFlightOperation` and its age in live-debug
-telemetry, and the next source restage replaces it. `--debugger` disables the
-30-second runtime startup deadline for managed breakpoints; shutdown remains
-bounded.
+replays a request. The product host has no deadline for loading the product
+or for a callback. A product stuck in a callback shows `inFlightOperation` and
+its age in live-debug telemetry, and the next source restage replaces it;
+shutdown remains bounded.
 
 A direct NativeAOT launch without `--supervised` or `--headless` runs in
 process, as do finite `--exercise` and `--performance-probe` runs and

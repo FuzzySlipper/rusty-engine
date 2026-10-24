@@ -794,9 +794,8 @@ machines sharing a checkout see the pair's file with different times:
 Do not hook a UI compiler onto the SDK's staging or validation targets
 yourself; that reruns it on every C# edit. `--bind-host`, `--port`, and
 `--live-debug` override the corresponding staging properties for a development
-session. Use `--debugger` for managed breakpoint sessions; see
-[CoreCLR diagnostics](coreclr-diagnostics.md) for runtime process discovery,
-profiling, and the debugger's startup deadline.
+session. See [CoreCLR diagnostics](coreclr-diagnostics.md) for managed
+breakpoints, runtime process discovery and profiling.
 
 For explicit staging without launching, run
 `rusty build --project /path/to/Example.Game.csproj` (the SDK target

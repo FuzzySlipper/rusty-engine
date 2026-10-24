@@ -811,7 +811,6 @@ struct Arguments {
     exercise: bool,
     performance_probe: Option<u32>,
     supervised: bool,
-    debugger: bool,
     headless: bool,
     /// The Chromium executable `--headless` opens; else one on `PATH`.
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -1066,7 +1065,6 @@ impl Arguments {
         let mut exercise = false;
         let mut performance_probe = None;
         let mut supervised = false;
-        let mut debugger = false;
         let mut headless = false;
         let mut chromium = None;
         let mut cef_dir = None;
@@ -1140,7 +1138,6 @@ impl Arguments {
                     performance_probe = Some(iterations.get());
                 }
                 "--supervised" => supervised = true,
-                "--debugger" => debugger = true,
                 "--headless" => headless = true,
                 "--chromium" => {
                     chromium = Some(PathBuf::from(
@@ -1194,7 +1191,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory|product.rpak> --loader <nativeaot|coreclr> [--supervised] [--debugger] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--diagnostics-log <file>] [--activity-file <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <iterations> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. A release Product is one container file (`rusty build --pack`) holding product.json, UI and content, with the managed/native artifacts loose beside it. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--debugger` disables the CoreCLR runtime startup deadline for managed debugging; shutdown remains bounded. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--cef-dir` overrides the runtime pack's `lib/cef` and each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`). `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--activity-file` marks the host's last use (input, control, live debug, a page attaching; not frame pulls) in that file's time, which `rusty dev` reads to stop idle sessions. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory|product.rpak> --loader <nativeaot|coreclr> [--supervised] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--diagnostics-log <file>] [--activity-file <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <iterations> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. A release Product is one container file (`rusty build --pack`) holding product.json, UI and content, with the managed/native artifacts loose beside it. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--cef-dir` overrides the runtime pack's `lib/cef` and each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`). `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--activity-file` marks the host's last use (input, control, live debug, a page attaching; not frame pulls) in that file's time, which `rusty dev` reads to stop idle sessions. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -1256,7 +1253,6 @@ impl Arguments {
             exercise,
             performance_probe,
             supervised,
-            debugger,
             headless,
             chromium,
             cef_dir,
@@ -1267,11 +1263,6 @@ impl Arguments {
             runtime_instance_id,
             serve_listener_fd,
         };
-        if arguments.debugger
-            && (!matches!(arguments.loader, ProductLoader::CoreClr) || !arguments.uses_supervisor())
-        {
-            return Err("--debugger requires a supervised CoreCLR product host".to_owned());
-        }
         if arguments.headless && arguments.serve_listener_fd.is_some() {
             return Err("--headless is only valid for a foreground product host".to_owned());
         }
@@ -1710,30 +1701,6 @@ mod tests {
             Ok(_) => panic!("argument list unexpectedly parsed"),
             Err(error) => error,
         }
-    }
-
-    #[test]
-    fn debugger_is_coreclr_supervisor_scoped() {
-        assert!(parse_test_error(&["--debugger", "--supervised"])
-            .contains("requires a supervised CoreCLR product host"));
-        assert!(parse_test_error(&[
-            "--debugger",
-            "--loader",
-            "coreclr",
-            "--runtimeconfig",
-            "product.runtimeconfig.json",
-        ])
-        .contains("requires a supervised CoreCLR product host"));
-        let debugging = parse_test_args(&[
-            "--debugger",
-            "--supervised",
-            "--loader",
-            "coreclr",
-            "--runtimeconfig",
-            "product.runtimeconfig.json",
-        ])
-        .expect("explicit debugger mode");
-        assert!(debugging.debugger && debugging.uses_supervisor());
     }
 
     #[test]

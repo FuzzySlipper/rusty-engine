@@ -28,8 +28,6 @@ use crate::{
     Arguments, ProductLoader, RELOAD_ASSETS_COMMAND, RELOAD_CONTENT_COMMAND,
 };
 
-/// Cold managed products can spend longer loading content than one callback.
-const RUNTIME_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 /// A runtime that cannot finish product disposal is terminated.
 const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
@@ -84,13 +82,7 @@ pub(crate) fn run(args: Arguments) -> Result<std::process::ExitCode, String> {
             .value(),
         persistence_root: args.persistence_root.clone(),
         forwarded: args.runtime_forwarded_arguments()?,
-        startup_timeout: (!args.debugger).then_some(RUNTIME_STARTUP_TIMEOUT),
     };
-    if args.debugger {
-        eprintln!(
-            "RUSTY_HOST debugger: runtime startup deadline is disabled; source restaging still replaces the runtime"
-        );
-    }
     supervise(
         launch,
         &listener,
@@ -397,7 +389,6 @@ struct RuntimeLaunch {
     /// Launch options the runtime process applies itself (Chromium for the
     /// window, the diagnostics file).
     forwarded: Vec<String>,
-    startup_timeout: Option<Duration>,
 }
 
 impl RuntimeLaunch {
@@ -408,9 +399,7 @@ impl RuntimeLaunch {
         let runtime_instance_id = self.next_runtime_instance_id;
         self.next_runtime_instance_id = runtime_instance_id.saturating_add(1).max(1);
         let arguments = self.runtime_arguments(runtime_instance_id)?;
-        let mut runtime = RuntimeProcess::spawn(&self.executable, &arguments, self.listener)?;
-        runtime.startup_deadline = self.startup_timeout.map(|timeout| Instant::now() + timeout);
-        Ok(runtime)
+        RuntimeProcess::spawn(&self.executable, &arguments, self.listener)
     }
 
     fn runtime_arguments(&self, runtime_instance_id: u64) -> Result<Vec<String>, String> {
@@ -450,7 +439,6 @@ struct RuntimeProcess {
     child: Child,
     stdin: Option<ChildStdin>,
     ready: mpsc::Receiver<()>,
-    startup_deadline: Option<Instant>,
     serving: bool,
     reload_after_serve: bool,
     content_after_serve: Vec<String>,
@@ -486,7 +474,6 @@ impl RuntimeProcess {
             stdin: child.stdin.take(),
             child,
             ready: ready_rx,
-            startup_deadline: None,
             serving: false,
             reload_after_serve: false,
             content_after_serve: Vec::new(),
@@ -514,16 +501,6 @@ impl RuntimeProcess {
             return Err(format!(
                 "PRODUCT_HOST_RUNTIME_EXIT: the runtime exited during startup ({status})"
             ));
-        }
-        if self
-            .startup_deadline
-            .is_some_and(|deadline| Instant::now() >= deadline)
-        {
-            self.kill();
-            return Err(
-                "PRODUCT_HOST_RUNTIME_STARTUP_TIMEOUT: the runtime did not load its product within 30 seconds"
-                    .to_owned(),
-            );
         }
         Ok(())
     }
@@ -819,7 +796,6 @@ mod tests {
                     "--cef-switch".to_owned(),
                     "remote-debugging-port=9333".to_owned(),
                 ],
-                startup_timeout: None,
             };
             let arguments = launch.runtime_arguments(7).unwrap();
             let selected = arguments
@@ -872,7 +848,6 @@ mod tests {
             next_runtime_instance_id: 1,
             persistence_root: None,
             forwarded: Vec::new(),
-            startup_timeout: Some(Duration::from_secs(10)),
         };
         let termination = Arc::new(AtomicBool::new(false));
         let (done, result) = mpsc::channel();

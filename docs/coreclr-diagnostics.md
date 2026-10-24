@@ -70,16 +70,15 @@ and [counter guide](https://learn.microsoft.com/en-us/dotnet/core/diagnostics/do
 
 ## Break in a product callback
 
-Start an explicitly debuggable session:
+Any `rusty dev` session can be debugged:
 
 ```bash
 /path/to/runtime-pack/bin/rusty dev --project /path/to/Game.csproj \
-  --runtime /path/to/runtime-pack --debugger
+  --runtime /path/to/runtime-pack
 ```
 
-`--debugger` removes the runtime's 30-second startup deadline for this
-CoreCLR session; the product host has no callback deadline in any mode. A
-paused or hung callback holds its runtime until you continue, detach or stop
+The product host has no deadline for loading the product or for a callback.
+A paused or hung callback holds its runtime until you continue, detach or stop
 the session. Source restaging still replaces the runtime, and stopping the
 session still stops it, even while it is loading at a breakpoint. A runtime
 that does not stop within ten seconds is killed, so avoid editing while
@@ -131,7 +130,7 @@ dotnet msbuild /path/to/Game.csproj -restore -t:StageRustyEngineCoreClrProduct
 # Obtain the staged directory with -getProperty:RustyEngineStagedProductDirectory.
 DOTNET_DefaultDiagnosticPortSuspend=1 /path/to/runtime-pack/bin/rusty-product-host \
   --product /path/to/staged/Product --loader coreclr --supervised \
-  --runtime-instance-id 1 --debugger
+  --runtime-instance-id 1
 ```
 
 Keep that terminal's stdin open. In another terminal, discover the runtime

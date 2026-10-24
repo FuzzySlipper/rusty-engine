@@ -77,8 +77,8 @@ content-bundle and declared [live loose
 content](csharp-product-project.md#live-loose-content) edits reload into the
 running product; C#, project and other loose-content edits rebuild and
 replace the runtime. Useful flags:
-`--live-debug`, `--debugger` (managed breakpoints, see
-[CoreCLR diagnostics](coreclr-diagnostics.md)) and `--headless`.
+`--live-debug` and `--headless`; for managed breakpoints see
+[CoreCLR diagnostics](coreclr-diagnostics.md).
 
 Scripts and agents run it in the background, one session per project:
 `rusty dev start` (same options) returns once the product serves
