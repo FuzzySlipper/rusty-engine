@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::time::Duration;
 
-use gilrs::{Axis, Button, GilrsBuilder};
+use gilrs::ev::filter::{axis_dpad_to_button, FilterFn};
+use gilrs::{Axis, Button, Event, EventType, Gilrs, GilrsBuilder};
 use runtime_input::{AxisValue, ControllerAxis, ControllerButton, PhysicalEdge, RuntimeInputFact};
 
 /// Chromium's standard gamepad buttons 0 to 15, the ones the page reads.
@@ -100,7 +101,10 @@ impl GamepadReader {
         let thread = std::thread::Builder::new()
             .name("desktop-shell-gamepad".to_owned())
             .spawn(move || {
+                // The page's values are the browser's, unfiltered: no dead
+                // zone or jitter filter rescales them here either.
                 let gilrs = GilrsBuilder::new()
+                    .with_default_filters(false)
                     .set_axis_to_btn(TRIGGER_PRESSED, TRIGGER_RELEASED)
                     .build();
                 let mut gilrs = match gilrs {
@@ -117,8 +121,11 @@ impl GamepadReader {
                 let mut last = PadState::default();
                 while !stopping.load(Ordering::Relaxed) {
                     // Events update gilrs's state; the state is what counts.
-                    if gilrs.next_event_blocking(Some(IDLE_WAKE)).is_some() {
-                        while gilrs.next_event().is_some() {}
+                    if let Some(event) = gilrs.next_event_blocking(Some(IDLE_WAKE)) {
+                        dpad_buttons(event, &mut gilrs);
+                        while let Some(event) = gilrs.next_event() {
+                            dpad_buttons(event, &mut gilrs);
+                        }
                     }
                     let state = gilrs
                         .gamepads()
@@ -156,6 +163,18 @@ impl Drop for GamepadReader {
         self.stop.store(true, Ordering::Relaxed);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
+        }
+    }
+}
+
+/// A hat's D-pad as buttons 12 to 15, as the standard mapping has it,
+/// through the one filter kept from gilrs's defaults: it queues each
+/// button's value change, read as events later, and returns its press or
+/// release, which gilrs applies only to the events it returns itself.
+fn dpad_buttons(event: Event, gilrs: &mut Gilrs) {
+    if let EventType::AxisChanged(Axis::DPadX | Axis::DPadY, ..) = event.event {
+        if let Some(edge) = axis_dpad_to_button.filter(Some(event), gilrs) {
+            gilrs.update(&edge);
         }
     }
 }

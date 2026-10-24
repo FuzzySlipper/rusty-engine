@@ -44,7 +44,7 @@ TypeScript UI is composited over it.
   mailbox, as the same facts the page would make. The gamepad is the first
   connected pad, read through gilrs on a thread of its own in Chromium's
   standard mapping (buttons 0 to 15, sticks down positive, triggers pressed
-  past 30/255); gilrs's dead zone zeroes a stick at rest. A UI page running long tasks (layout, GC)
+  past 30/255), with the values unfiltered as the page's are. A UI page running long tasks (layout, GC)
   then cannot delay movement and look. Taking and giving back input are
   control fences: the runtime publishes a fresh binding marked
   `windowInput`, the page's input under it does not count, and its stale
