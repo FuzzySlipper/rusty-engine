@@ -572,3 +572,40 @@ fn a_queued_field_refresh_keeps_the_mesh_an_earlier_queued_change_installed() {
     second.install(&mut deferred).unwrap();
     assert_same_scene(&deferred, &sync, "queued field refresh");
 }
+
+#[test]
+fn a_queued_field_refresh_reaches_a_mesh_an_earlier_queued_change_admitted() {
+    // Found in #10327 review: a later queued change read no mesh for a chunk
+    // an earlier queued change admits, so it carried no field for it, and
+    // the admitted chunk kept a field that missed the later change's rock.
+    let one_voxel = |chunk: [i64; 3], [x, y, z]: [usize; 3]| {
+        let mut cells = vec![0; (CHUNK * CHUNK * CHUNK) as usize];
+        cells[x + CHUNK as usize * (y + CHUNK as usize * z)] = 1;
+        VoxelChunkResidencyOperation::Admit {
+            chunk: VoxelChunkIdentity::from_array(chunk),
+            payload: VoxelChunkPayload::new([CHUNK as u32; 3], cells),
+        }
+    };
+    let mut deferred = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        CHUNK as u32,
+        [],
+        SurfaceMeshOptions {
+            mode: SurfaceMode::GreedyCubes,
+            distance_fields: true,
+            ..SurfaceMeshOptions::default()
+        },
+    )
+    .unwrap();
+    VoxelChunkResidencyService::apply(&mut deferred, &[one_voxel([1, 0, 1], [1, 1, 1])]).unwrap();
+    let mut sync = deferred.clone();
+    let first = [one_voxel([0, 0, 0], [1, 1, 1])];
+    let second = [one_voxel([1, 0, 1], [0, 1, 0])];
+    VoxelChunkResidencyService::apply(&mut sync, &first).unwrap();
+    VoxelChunkResidencyService::apply(&mut sync, &second).unwrap();
+    let (_, first) = VoxelChunkResidencyService::apply_deferred(&mut deferred, &first).unwrap();
+    let (_, second) = VoxelChunkResidencyService::apply_deferred(&mut deferred, &second).unwrap();
+    first.install(&mut deferred).unwrap();
+    second.install(&mut deferred).unwrap();
+    assert_same_scene(&deferred, &sync, "queued field refresh on an admitted mesh");
+}

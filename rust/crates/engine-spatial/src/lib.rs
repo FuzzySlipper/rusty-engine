@@ -1225,13 +1225,12 @@ impl VoxelCollisionScene {
             options: &self.mesh_options,
             noncollidable: &self.noncollidable_materials,
             projection: &self.projection,
-            mesh_chunks: &self.mesh_chunks,
         }
     }
 
     /// Copies of what rebuilding `dirty` and `field_dirty` reads, for a
-    /// worker thread: those chunks and their resident neighbours, the
-    /// colliders `dirty` may keep, and the meshes `field_dirty` refreshes.
+    /// worker thread: those chunks and their resident neighbours and the
+    /// colliders `dirty` may keep.
     pub(crate) fn rebuild_snapshot(
         &self,
         dirty: &BTreeSet<ChunkCoord>,
@@ -1259,12 +1258,6 @@ impl VoxelCollisionScene {
             options: self.mesh_options.clone(),
             noncollidable: self.noncollidable_materials.clone(),
             projection: self.projection.chunk_subset(dirty.iter().copied()),
-            mesh_chunks: field_dirty
-                .difference(dirty)
-                .filter_map(|coordinate| {
-                    Some((*coordinate, self.mesh_chunks.get(coordinate)?.clone()))
-                })
-                .collect(),
         }
     }
 
@@ -1510,47 +1503,26 @@ impl VoxelCollisionScene {
         self.synchronous_state = self.mesh_state;
     }
 
-    /// A rebuild's field-only refreshes copied the meshes it was prepared
-    /// from; an earlier deferred change may have installed new ones since.
-    /// Refresh those chunks' fields on the mesh each has now, so a field
-    /// never brings back the geometry it was computed beside.
-    pub(crate) fn refresh_fields_on_current<'a>(
-        &self,
-        rebuild: &mut ChunkRebuild,
-        field_only: impl Iterator<Item = &'a ChunkCoord>,
+    /// Install rebuilt meshes and colliders for voxels already written at
+    /// the current source revision.
+    pub(crate) fn publish_rebuild(
+        &mut self,
+        dirty: &BTreeSet<ChunkCoord>,
+        mut rebuild: ChunkRebuild,
     ) {
-        for coordinate in field_only {
-            let Some(Some(refreshed)) = rebuild.meshes.get(coordinate) else {
-                continue;
-            };
-            match self.mesh_chunks.get(coordinate) {
-                Some(current) if current.content_hash == refreshed.content_hash => {}
-                Some(current) => {
-                    let field = refresh_distance_field(
-                        &self.voxel_world,
-                        *coordinate,
-                        current,
-                        self.mesh_options.distance_fields,
-                    );
-                    match field {
-                        Some(field) => {
-                            rebuild.meshes.insert(*coordinate, Some(Arc::new(field)));
-                        }
-                        None => {
-                            rebuild.meshes.remove(coordinate);
-                        }
-                    }
-                }
-                None => {
-                    rebuild.meshes.remove(coordinate);
+        // A field-only refresh goes on the mesh the chunk has now, which an
+        // earlier deferred change may have installed after this rebuild read
+        // the voxels.
+        for (coordinate, field) in rebuild.fields {
+            if let Some(current) = self.mesh_chunks.get(&coordinate) {
+                if current.distance_field != field {
+                    let mut chunk = current.as_ref().clone();
+                    chunk.field_hash = field_hash(&field);
+                    chunk.distance_field = field;
+                    rebuild.meshes.insert(coordinate, Some(Arc::new(chunk)));
                 }
             }
         }
-    }
-
-    /// Install rebuilt meshes and colliders for voxels already written at
-    /// the current source revision.
-    pub(crate) fn publish_rebuild(&mut self, dirty: &BTreeSet<ChunkCoord>, rebuild: ChunkRebuild) {
         let mut rebuilt_chunks = 0;
         let mut removed_chunks = 0;
         let mut rebuilt = Vec::new();
@@ -1677,7 +1649,6 @@ pub(crate) struct RebuildSource<'a> {
     options: &'a SurfaceMeshOptions,
     noncollidable: &'a BTreeSet<u16>,
     projection: &'a CollisionProjection,
-    mesh_chunks: &'a BTreeMap<ChunkCoord, Arc<VoxelMeshChunk>>,
 }
 
 impl RebuildSource<'_> {
@@ -1688,7 +1659,8 @@ impl RebuildSource<'_> {
     /// a reconstructed chunk's collider is its drawn mesh, which its
     /// neighbours shape.
     /// `field_dirty` chunks outside `dirty` keep their meshes and rebuild
-    /// only their distance fields.
+    /// only their distance fields, applied to the mesh each has when the
+    /// rebuild is published.
     pub(crate) fn rebuild(
         &self,
         changed: &BTreeSet<ChunkCoord>,
@@ -1713,6 +1685,7 @@ impl RebuildSource<'_> {
         });
         let mut rebuild = ChunkRebuild {
             meshes: BTreeMap::new(),
+            fields: Vec::new(),
             colliders: Vec::new(),
             microseconds: 0,
         };
@@ -1729,19 +1702,12 @@ impl RebuildSource<'_> {
             }
         }
         // A neighbour's edit reached these chunks' fields without touching
-        // their meshes: refresh the field alone.
+        // their meshes: rebuild the field alone.
         for coordinate in field_dirty.difference(dirty) {
-            if let Some(refreshed) = self.mesh_chunks.get(coordinate).and_then(|retained| {
-                refresh_distance_field(
-                    self.world,
-                    *coordinate,
-                    retained,
-                    self.options.distance_fields,
-                )
-            }) {
-                rebuild
-                    .meshes
-                    .insert(*coordinate, Some(Arc::new(refreshed)));
+            if let Some(field) =
+                distance_field_data(self.world, *coordinate, self.options.distance_fields)
+            {
+                rebuild.fields.push((*coordinate, field));
             }
         }
         Ok(rebuild)
@@ -1796,7 +1762,6 @@ pub(crate) struct RebuildSnapshot {
     options: SurfaceMeshOptions,
     noncollidable: BTreeSet<u16>,
     projection: CollisionProjection,
-    mesh_chunks: BTreeMap<ChunkCoord, Arc<VoxelMeshChunk>>,
 }
 
 impl RebuildSnapshot {
@@ -1806,15 +1771,16 @@ impl RebuildSnapshot {
             options: &self.options,
             noncollidable: &self.noncollidable,
             projection: &self.projection,
-            mesh_chunks: &self.mesh_chunks,
         }
     }
 }
 
-/// Rebuilt `dirty` chunks: their meshes (`None` removes one), the colliders
-/// that change (`None` removes one), and the summed meshing time.
+/// Rebuilt `dirty` chunks: their meshes (`None` removes one), the distance
+/// fields of field-only chunks, the colliders that change (`None` removes
+/// one), and the summed meshing time.
 pub(crate) struct ChunkRebuild {
     meshes: BTreeMap<ChunkCoord, Option<Arc<VoxelMeshChunk>>>,
+    fields: Vec<(ChunkCoord, Vec<u8>)>,
     colliders: Vec<(ChunkCoord, Option<PreparedChunkParts>)>,
     microseconds: u64,
 }
@@ -1972,11 +1938,7 @@ pub(crate) fn refresh_distance_field(
     retained: &VoxelMeshChunk,
     enabled: bool,
 ) -> Option<VoxelMeshChunk> {
-    let data = if enabled {
-        svc_mesh::chunk_distance_field(world, coordinate)?.data
-    } else {
-        Vec::new()
-    };
+    let data = distance_field_data(world, coordinate, enabled)?;
     if data == retained.distance_field {
         return None;
     }
@@ -1984,6 +1946,20 @@ pub(crate) fn refresh_distance_field(
     chunk.distance_field = data;
     chunk.field_hash = field_hash(&chunk.distance_field);
     Some(chunk)
+}
+
+/// A chunk's distance field from its voxels (empty while fields are off);
+/// `None` when the chunk is not resident.
+fn distance_field_data(
+    world: &VoxelWorld,
+    coordinate: ChunkCoord,
+    enabled: bool,
+) -> Option<Vec<u8>> {
+    if enabled {
+        Some(svc_mesh::chunk_distance_field(world, coordinate)?.data)
+    } else {
+        Some(Vec::new())
+    }
 }
 
 /// The replacement key of a chunk's distance field alone.
