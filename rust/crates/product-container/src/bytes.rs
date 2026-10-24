@@ -16,9 +16,11 @@ pub struct ContentBytes {
     range: Range<usize>,
 }
 
+/// A heap body sits behind its own `Arc`: a weak handle pins the allocation
+/// it points at, which for the outer `Arc` is one pointer, not the file.
 #[derive(Clone)]
 enum Owner {
-    Heap(Arc<[u8]>),
+    Heap(Arc<Arc<[u8]>>),
     Mapped(Arc<Container>),
 }
 
@@ -46,7 +48,7 @@ impl ContentBytes {
     /// copy otherwise.
     pub fn shared(&self) -> Arc<[u8]> {
         match &self.owner {
-            Owner::Heap(bytes) if self.range == (0..bytes.len()) => Arc::clone(bytes),
+            Owner::Heap(bytes) if self.range == (0..bytes.len()) => Arc::clone(&**bytes),
             _ => Arc::from(&**self),
         }
     }
@@ -55,7 +57,7 @@ impl ContentBytes {
     pub fn same(&self, other: &Self) -> bool {
         self.range == other.range
             && match (&self.owner, &other.owner) {
-                (Owner::Heap(a), Owner::Heap(b)) => Arc::ptr_eq(a, b),
+                (Owner::Heap(a), Owner::Heap(b)) => Arc::ptr_eq(&**a, &**b),
                 (Owner::Mapped(a), Owner::Mapped(b)) => Arc::ptr_eq(a, b),
                 _ => false,
             }
@@ -78,7 +80,7 @@ impl Deref for ContentBytes {
 
     fn deref(&self) -> &[u8] {
         let whole: &[u8] = match &self.owner {
-            Owner::Heap(bytes) => bytes,
+            Owner::Heap(bytes) => &bytes[..],
             Owner::Mapped(container) => container.map(),
         };
         &whole[self.range.clone()]
@@ -101,7 +103,7 @@ impl From<Arc<[u8]>> for ContentBytes {
     fn from(bytes: Arc<[u8]>) -> Self {
         Self {
             range: 0..bytes.len(),
-            owner: Owner::Heap(bytes),
+            owner: Owner::Heap(Arc::new(bytes)),
         }
     }
 }
@@ -145,7 +147,7 @@ pub struct WeakContentBytes {
 
 #[derive(Clone)]
 enum WeakOwner {
-    Heap(Weak<[u8]>),
+    Heap(Weak<Arc<[u8]>>),
     Mapped(Weak<Container>),
 }
 
@@ -192,9 +194,11 @@ mod tests {
         assert!(format!("{packed:?}").contains("heap"));
         assert_eq!(&*packed, "[1,2,3],".repeat(4096).as_bytes());
 
-        // A weak handle keeps neither the container nor a heap body.
+        // A weak handle keeps neither the container nor a heap body, whose
+        // allocation no weak handle reaches.
         let weak_raw = raw.downgrade();
         let weak_packed = packed.downgrade();
+        assert_eq!(Arc::weak_count(&packed.shared()), 0);
         drop((raw, tail, packed));
         assert!(weak_packed.upgrade().is_none());
         assert!(weak_raw.upgrade().is_some());

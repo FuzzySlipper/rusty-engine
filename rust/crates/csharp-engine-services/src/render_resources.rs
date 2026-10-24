@@ -887,9 +887,10 @@ fn resource_slot(handle: u64) -> Result<usize, CsharpEngineServicesError> {
 }
 
 /// A resource held without keeping its body alive: the body is gone with the
-/// last resource, appearance or content reference that shares it.
+/// last resource, appearance or content reference that shares it. Derived
+/// cells are not kept: an upgraded resource builds its own.
 struct WeakRenderResource {
-    /// The resource with an empty body.
+    /// The resource with an empty body and empty cells.
     resource: CsharpRenderResource,
     bytes: WeakContentBytes,
 }
@@ -899,6 +900,8 @@ impl WeakRenderResource {
         Self {
             resource: CsharpRenderResource {
                 bytes: ContentBytes::default(),
+                model_surface: ModelSurfaceCell::default(),
+                pose_model: PoseModelCell::default(),
                 ..resource.clone()
             },
             bytes: resource.bytes.downgrade(),
@@ -2336,6 +2339,33 @@ pub(crate) mod tests {
         RenderResourceImports::default()
             .static_mesh(content("mesh", crate::ContentBytes::from(bytes)))
             .map_err(|error| error.code().to_owned())
+    }
+
+    #[test]
+    fn a_live_import_cache_pins_no_source_body_or_cell() {
+        let mut imports = RenderResourceImports::default();
+        let source = crate::ContentBytes::from(static_mesh_fixture("triangle.static-mesh.json"));
+        let (_, _, resource) = imports
+            .static_mesh(content("mesh.json", source.clone()))
+            .unwrap();
+        assert!(imports.cached("mesh.json").is_some());
+        // No weak handle reaches these allocations, so each is freed with
+        // its last strong owner while the cache entry stays.
+        let source_body = source.shared();
+        let resource_body = resource.bytes.shared();
+        assert!(!Arc::ptr_eq(&source_body, &resource_body));
+        assert_eq!(Arc::weak_count(&source_body), 0);
+        assert_eq!(Arc::weak_count(&resource_body), 0);
+        for cell in [
+            Arc::strong_count(&resource.model_surface.0)
+                + Arc::weak_count(&resource.model_surface.0),
+            Arc::strong_count(&resource.pose_model.0) + Arc::weak_count(&resource.pose_model.0),
+        ] {
+            assert_eq!(cell, 1, "only the resource holds its derived cells");
+        }
+        drop((source, resource, source_body, resource_body));
+        assert!(imports.cached("mesh.json").is_none());
+        assert!(imports.static_content.contains_key("mesh.json"));
     }
 
     #[test]
