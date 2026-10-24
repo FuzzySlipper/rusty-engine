@@ -151,7 +151,7 @@ impl MeshPool {
 
     /// Room for `vertices` and `indices` more, the buffers grown (their
     /// contents copied over) when they would not fit; false when they would
-    /// pass the device's buffer size.
+    /// pass the device's buffer size or it has no memory for them.
     fn reserve(
         &mut self,
         gpu: &Gpu,
@@ -172,7 +172,10 @@ impl MeshPool {
                 .checked_next_power_of_two()
                 .unwrap_or(u32::MAX)
                 .min(self.vertex_ceiling);
-            let grown = vertex_buffer(gpu, capacity);
+            let Ok(grown) = crate::gpu::allocating(&gpu.device, || vertex_buffer(gpu, capacity))
+            else {
+                return false;
+            };
             encoder.copy_buffer_to_buffer(
                 &self.vertices,
                 0,
@@ -189,7 +192,10 @@ impl MeshPool {
                 .checked_next_power_of_two()
                 .unwrap_or(u32::MAX)
                 .min(self.index_ceiling);
-            let grown = index_buffer(gpu, capacity);
+            let Ok(grown) = crate::gpu::allocating(&gpu.device, || index_buffer(gpu, capacity))
+            else {
+                return false;
+            };
             encoder.copy_buffer_to_buffer(
                 &self.indices,
                 0,

@@ -103,6 +103,12 @@ pub(crate) struct AnimatedInstance {
     /// Per material slot values over the slot's material
     /// (`SetMaterialInstanceParameters`).
     pub(crate) parameters: BTreeMap<u16, MaterialInstanceParameters>,
+    /// Skinned primitives the device had no room for: they draw nothing and
+    /// are not skinned again until the instance is made again.
+    refused: BTreeSet<(u32, u32)>,
+    /// Why the last of them was refused, until the operation that made the
+    /// instance reports it.
+    refusal: Option<String>,
 }
 
 /// A skinned mesh's vertices as the last frame with motion drew them: their
@@ -461,7 +467,8 @@ impl Renderer {
                     &|vertex| vertex,
                     primitive.tangents.as_deref(),
                 )
-                .map(|extra| self.vertex_buffer(&format!("{label} tangents"), &extra, false));
+                .map(|extra| self.vertex_buffer(&format!("{label} tangents"), &extra, false))
+                .transpose()?;
                 rigid.insert((mesh_index as u32, primitive_index as u32), mesh);
             }
         }
@@ -526,17 +533,19 @@ impl Renderer {
             },
         );
         // Live instances (a redefinition keeps them) draw on the new asset.
+        let mut refusal = None;
         for handle in self.instances_of(slot) {
-            self.reset_animated_instance(handle);
+            refusal = self.reset_animated_instance(handle).or(refusal);
         }
-        Ok(())
+        refusal.map_or(Ok(()), Err)
     }
 
     pub(crate) fn release_animated_mesh(&mut self, asset: &str) {
         self.release_animated_mesh_resources(asset);
         if let Some(slot) = self.tables.names.get(asset) {
             for handle in self.instances_of(slot) {
-                self.reset_animated_instance(handle);
+                // Released, it draws nothing to refuse.
+                let _ = self.reset_animated_instance(handle);
             }
         }
     }
@@ -573,11 +582,11 @@ impl Renderer {
     /// Start (or restart) an instance's realization after its node row
     /// exists: a new generation, then its parts, at rest until its pose
     /// arrives.
-    pub(crate) fn create_animated_instance(&mut self, handle: RenderHandle) {
+    pub(crate) fn create_animated_instance(&mut self, handle: RenderHandle) -> Result<(), String> {
         let Some(NodeKind::AnimatedMesh(descriptor)) =
             self.tables.nodes.get(&handle).map(|node| &node.kind)
         else {
-            return;
+            return Ok(());
         };
         let descriptor: AnimatedMeshInstanceDescriptor = (**descriptor).clone();
         let object_id = descriptor.metadata.source_entity;
@@ -606,25 +615,31 @@ impl Renderer {
                 part_nodes: Vec::new(),
                 split: None,
                 parameters: BTreeMap::new(),
+                refused: BTreeSet::new(),
+                refusal: None,
             },
         );
         let _ = self.set_animated_inspection(handle, &descriptor.inspection);
-        self.reset_animated_instance(handle);
+        self.reset_animated_instance(handle).map_or(Ok(()), Err)
     }
 
     /// Re-derive an instance's skinned buffers and parts from its asset.
     /// The instance's asset may have changed (created, redefined, released):
     /// its joint-attached children's joints are resolved again against it.
-    fn reset_animated_instance(&mut self, handle: RenderHandle) {
-        let Some(instance) = self.tables.animated.get_mut(&handle) else {
-            return;
-        };
+    /// Returns why a skinned primitive was refused, if one was.
+    fn reset_animated_instance(&mut self, handle: RenderHandle) -> Option<String> {
+        let instance = self.tables.animated.get_mut(&handle)?;
         instance.skinned.clear();
+        instance.refused.clear();
         instance.split = None;
         instance.pose_pending = false;
         self.resolve_attached_joints(handle);
         self.skin_animated_instance(handle);
         self.rebuild_parts(handle);
+        self.tables
+            .animated
+            .get_mut(&handle)
+            .and_then(|instance| instance.refusal.take())
     }
 
     /// Resolve each joint-attached child of `parent` to its joint's node in
@@ -907,6 +922,12 @@ impl Renderer {
                 let (Some(joints), Some(weights)) = (&primitive.joints, &primitive.weights) else {
                     continue;
                 };
+                if instance
+                    .refused
+                    .contains(&(node_index as u32, primitive_index as u32))
+                {
+                    continue;
+                }
                 let split = instance.split.as_ref().and_then(|split| {
                     split
                         .primitives
@@ -989,16 +1010,31 @@ impl Renderer {
                         .previous
                         .take()
                         .or_else(|| history.spare.take())
-                        .unwrap_or_else(|| {
-                            gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                                label: Some("render-wgpu skinned vertices"),
-                                size: mesh.vertices.size(),
-                                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                                mapped_at_creation: false,
-                            })
-                        });
-                    history.previous = Some(std::mem::replace(&mut mesh.vertices, next));
-                    history.previous_positions = Some(mesh.cpu.clone());
+                        .map_or_else(
+                            || {
+                                crate::gpu::allocating(&gpu.device, || {
+                                    gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                                        label: Some("render-wgpu skinned vertices"),
+                                        size: mesh.vertices.size(),
+                                        usage: wgpu::BufferUsages::VERTEX
+                                            | wgpu::BufferUsages::COPY_DST,
+                                        mapped_at_creation: false,
+                                    })
+                                })
+                                .ok()
+                            },
+                            Some,
+                        );
+                    match next {
+                        Some(next) => {
+                            history.previous = Some(std::mem::replace(&mut mesh.vertices, next));
+                            history.previous_positions = Some(mesh.cpu.clone());
+                        }
+                        // No room for a second buffer: the mesh draws
+                        // without motion history, as on a frame without
+                        // motion.
+                        None => *history = SkinnedHistory::default(),
+                    }
                 }
                 gpu.queue
                     .write_buffer(&mesh.vertices, 0, bytemuck::cast_slice(&vertices));
@@ -1027,8 +1063,24 @@ impl Renderer {
                     .and_then(|split| split.primitives.get(&key))
                     .map_or_else(|| primitive.indices.clone(), |split| split.indices.clone());
                 let label = format!("animated {} skin {}/{}", handle.raw(), key.0, key.1);
-                let mut mesh = self.upload_dynamic_vertices(&label, &vertices, &indices);
-                mesh.extra = extra.map(|extra| self.vertex_buffer(&label, &extra, true));
+                let uploaded = self
+                    .upload_dynamic_vertices(&label, &vertices, &indices)
+                    .and_then(|mut mesh| {
+                        mesh.extra = extra
+                            .map(|extra| self.vertex_buffer(&label, &extra, true))
+                            .transpose()?;
+                        Ok(mesh)
+                    });
+                let mut mesh = match uploaded {
+                    Ok(mesh) => mesh,
+                    Err(refusal) => {
+                        if let Some(instance) = self.tables.animated.get_mut(&handle) {
+                            instance.refused.insert(key);
+                            instance.refusal = Some(refusal);
+                        }
+                        continue;
+                    }
+                };
                 // Made for new cuts: each vertex's previous position is where
                 // the last frame drew it, a copy's where its source vertex
                 // was, in its cut's piece or in the body.
@@ -1077,14 +1129,18 @@ impl Renderer {
                     {
                         vertex[..3].copy_from_slice(&position.to_array());
                     }
-                    let history = mesh.skinned.get_or_insert_default();
-                    history.previous = Some(self.vertex_buffer(&label, &previous, true));
-                    history.previous_positions =
-                        Some(std::sync::Arc::new(crate::tables::CpuGeometry {
-                            positions,
-                            indices: Vec::new(),
-                        }));
-                    kept = true;
+                    // Without room for it, the mesh draws without motion
+                    // history.
+                    if let Ok(buffer) = self.vertex_buffer(&label, &previous, true) {
+                        let history = mesh.skinned.get_or_insert_default();
+                        history.previous = Some(buffer);
+                        history.previous_positions =
+                            Some(std::sync::Arc::new(crate::tables::CpuGeometry {
+                                positions,
+                                indices: Vec::new(),
+                            }));
+                        kept = true;
+                    }
                 }
                 if let Some(instance) = self.tables.animated.get_mut(&handle) {
                     instance.skinned.insert(key, mesh);
@@ -1445,27 +1501,64 @@ impl Renderer {
         parts
     }
 
-    /// A vertex buffer holding `data`, rewritable when `dynamic`.
-    fn vertex_buffer(&self, label: &str, data: &[f32], dynamic: bool) -> wgpu::Buffer {
+    /// A vertex buffer holding `data`, rewritable when `dynamic`; refused
+    /// when the device has no room for it.
+    fn vertex_buffer(
+        &self,
+        label: &str,
+        data: &[f32],
+        dynamic: bool,
+    ) -> Result<wgpu::Buffer, String> {
         let usage = if dynamic {
             wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST
         } else {
             wgpu::BufferUsages::VERTEX
         };
-        crate::gpu::buffer_init(
-            &self.gpu.device,
-            &wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: bytemuck::cast_slice(data),
-                usage,
-            },
-        )
+        let device = &self.gpu.device;
+        crate::gpu::allocating(device, || {
+            crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(data),
+                    usage,
+                },
+            )
+        })
+        .map_err(|error| format!("{label} could not be uploaded: {error}"))
     }
 
-    /// Upload a skinned primitive's vertices, which the CPU rewrites.
-    fn upload_dynamic_vertices(&self, label: &str, vertices: &[f32], indices: &[u32]) -> GpuMesh {
+    /// Upload a skinned primitive's vertices, which the CPU rewrites;
+    /// refused when the device has no room for them.
+    fn upload_dynamic_vertices(
+        &self,
+        label: &str,
+        vertices: &[f32],
+        indices: &[u32],
+    ) -> Result<GpuMesh, String> {
         let device = &self.gpu.device;
-        GpuMesh {
+        let (vertex_buffer, index_buffer) = crate::gpu::allocating(device, || {
+            (
+                crate::gpu::buffer_init(
+                    device,
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some(label),
+                        contents: bytemuck::cast_slice(vertices),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    },
+                ),
+                crate::gpu::buffer_init(
+                    device,
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some(label),
+                        contents: bytemuck::cast_slice(indices),
+                        usage: wgpu::BufferUsages::INDEX,
+                    },
+                ),
+            )
+        })
+        .map_err(|error| format!("{label} could not be uploaded: {error}"))?;
+        Ok(GpuMesh {
             bounds: vertex_bounds(vertices),
             cpu: std::sync::Arc::new(crate::tables::CpuGeometry {
                 positions: vertex_positions(vertices),
@@ -1480,26 +1573,12 @@ impl Renderer {
             vertex_occlusion: false,
             morph: None,
             skinned: Some(SkinnedHistory::default()),
-            vertices: crate::gpu::buffer_init(
-                device,
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: bytemuck::cast_slice(vertices),
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                },
-            ),
-            indices: crate::gpu::buffer_init(
-                device,
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: bytemuck::cast_slice(indices),
-                    usage: wgpu::BufferUsages::INDEX,
-                },
-            ),
+            vertices: vertex_buffer,
+            indices: index_buffer,
             topology: Topology::Triangles,
             groups: vec![(0, 0, indices.len() as u32)],
             slots: BTreeMap::new(),
-        }
+        })
     }
 
     /// The GPU mesh an animated part draws.

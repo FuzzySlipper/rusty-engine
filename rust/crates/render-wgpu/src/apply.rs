@@ -378,7 +378,7 @@ impl Renderer {
                     },
                     NodeKind::AnimatedMesh(Box::new(instance.clone())),
                 );
-                self.create_animated_instance(*handle);
+                self.create_animated_instance(*handle)?;
             }
             RenderDiff::CreateVoxelObjectInstance {
                 handle,
@@ -577,7 +577,7 @@ impl Renderer {
                     BTreeMap::new(),
                 )?;
                 mesh.texture_space = payload.texture_space;
-                self.attach_morph(&mut mesh, payload, &format!("payload {}", handle.raw()));
+                self.attach_morph(&mut mesh, payload, &format!("payload {}", handle.raw()))?;
                 mesh.layer_weights = layer_weights;
                 if layer_weights {
                     mesh.layer_palette = payload.layer_palette.clone();
@@ -1253,9 +1253,17 @@ impl Renderer {
                 }
                 None => mesh.bounds,
             };
-            if part.wireframe {
-                mesh.edges
-                    .get_or_init(|| edge_buffer(&self.gpu.device, &mesh.cpu.indices));
+            // Edges the device has no room for (twice the indices): the part
+            // draws its triangles.
+            if part.wireframe && mesh.edges.get().is_none() {
+                match crate::gpu::allocating(&self.gpu.device, || {
+                    edge_buffer(&self.gpu.device, &mesh.cpu.indices)
+                }) {
+                    Ok(edges) => {
+                        let _ = mesh.edges.set(edges);
+                    }
+                    Err(_) => part.wireframe = false,
+                }
             }
             let (descriptor, features) = match part.material {
                 MaterialRef::Retained(id) => match self.tables.materials.get(id) {
@@ -1877,7 +1885,7 @@ impl Renderer {
         // chunk's are: layers 0 to 3 of its slots' terrain layer materials.
         mesh.layer_weights = asset.payload.layer_weights && streams.colors.is_some();
         mesh.texture_space = asset.payload.texture_space;
-        self.attach_morph(&mut mesh, &asset.payload, &asset.asset);
+        self.attach_morph(&mut mesh, &asset.payload, &asset.asset)?;
         let id = self.tables.names.id(&asset.asset);
         self.tables.static_meshes.insert(id, mesh);
         // Its instances and scatter patches draw it, including those that
@@ -1895,10 +1903,22 @@ impl Renderer {
         mesh: &mut GpuMesh,
         payload: &render_model::MeshPayloadDescriptor,
         label: &str,
-    ) {
+    ) -> Result<(), String> {
         let Some(morph) = &payload.morph else {
-            return;
+            return Ok(());
         };
+        let device = &self.gpu.device;
+        let targets = crate::gpu::allocating(device, || {
+            crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(&morph.targets),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            )
+        })
+        .map_err(|error| format!("{label}'s morph targets could not be uploaded: {error}"))?;
         for (position, target) in mesh
             .cpu
             .positions
@@ -1909,17 +1929,11 @@ impl Renderer {
                 .include(*position + Vec3::new(0.0, target[0], 0.0));
         }
         mesh.morph = Some(crate::tables::MorphStream {
-            targets: crate::gpu::buffer_init(
-                &self.gpu.device,
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: bytemuck::cast_slice(&morph.targets),
-                    usage: wgpu::BufferUsages::VERTEX,
-                },
-            ),
+            targets,
             start: morph.start,
             end: morph.end,
         });
+        Ok(())
     }
 
     /// A morphing mesh's part row under `handle`: the morph's range and its

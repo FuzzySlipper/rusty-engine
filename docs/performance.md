@@ -163,6 +163,10 @@ Nothing draws after that, but the runtime keeps stepping and answering: every
 later wgpu call fails quietly. A mesh the device has no room for, out of
 memory or larger than one buffer may hold, is refused: it draws nothing, and
 its operation counts among those skipped, with the error as the last skip.
+That holds for static, voxel and animated meshes, an instance's skinned
+vertices and a mesh's morph targets; a skinned motion-history buffer without
+room draws without motion history, and wireframe edges without room draw as
+triangles.
 Any other wgpu error is a renderer bug and panics.
 
 ## Feature gallery
