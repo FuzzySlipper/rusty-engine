@@ -4394,21 +4394,24 @@ impl CsharpProductContent {
     ) -> Result<Self, CsharpProductRuntimeError> {
         let bundles = csharp_engine_services::ProductContentBundles::admit(source, root)
             .map_err(|error| CsharpProductRuntimeError::new("CSHARP_CONTENT_BUNDLES", error))?;
-        let mut files = Vec::new();
-        for path in source.files(root).map_err(content_error)? {
-            let relative = match root {
-                "" => path.as_str(),
-                root => &path[root.len() + 1..],
-            };
-            if bundles.owns_path(relative) {
-                continue;
-            }
-            let bytes = source.read(&path).map_err(content_error)?;
-            files.push(ContentFile {
-                path: relative.as_bytes().to_vec(),
-                bytes: Arc::from(bytes.as_ref()),
-            });
-        }
+        let relative = |path: &str| match root {
+            "" => path.to_owned(),
+            root => path[root.len() + 1..].to_owned(),
+        };
+        let paths: Vec<String> = source
+            .files(root)
+            .map_err(content_error)?
+            .into_iter()
+            .filter(|path| !bundles.owns_path(&relative(path)))
+            .collect();
+        let files = read_content(source, &paths)?
+            .into_iter()
+            .zip(&paths)
+            .map(|(bytes, path)| ContentFile {
+                path: relative(path).into_bytes(),
+                bytes,
+            })
+            .collect::<Vec<_>>();
         let appearance_catalog = files
             .iter()
             .find(|file| file.path == b"runtime-appearances.json")
@@ -4423,6 +4426,54 @@ impl CsharpProductContent {
             bundles,
         })
     }
+}
+
+/// The bytes of each of `paths`, in order, read on as many threads as the
+/// machine runs. Windows scans a file for malware the first time it is
+/// opened, so a freshly staged loose Product's tens of thousands of files take
+/// minutes to read one at a time; the scans run side by side.
+fn read_content(
+    source: &ProductSource,
+    paths: &[String],
+) -> Result<Vec<Arc<[u8]>>, CsharpProductRuntimeError> {
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZero::get)
+        .min(paths.len().max(1));
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let mut read: Vec<Option<Arc<[u8]>>> = vec![None; paths.len()];
+    std::thread::scope(|scope| {
+        let readers: Vec<_> = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut done = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(path) = paths.get(index) else {
+                            return Ok(done);
+                        };
+                        match source.read(path) {
+                            Ok(bytes) => done.push((index, Arc::<[u8]>::from(bytes.as_ref()))),
+                            Err(error) => {
+                                // The other readers stop at their next file.
+                                next.store(paths.len(), std::sync::atomic::Ordering::Relaxed);
+                                return Err(content_error(error));
+                            }
+                        }
+                    }
+                })
+            })
+            .collect();
+        for reader in readers {
+            for (index, bytes) in reader.join().expect("a content reader panicked")? {
+                read[index] = Some(bytes);
+            }
+        }
+        Ok::<_, CsharpProductRuntimeError>(())
+    })?;
+    Ok(read
+        .into_iter()
+        .map(|bytes| bytes.expect("every path was read"))
+        .collect())
 }
 
 fn content_error(error: product_container::Error) -> CsharpProductRuntimeError {
