@@ -14,7 +14,8 @@
 //! ([`DesktopScene::gameplay`]), so a busy page cannot delay it.
 //!
 //! The shell owns the window, the surface and the draw loop on the main
-//! thread. [`DesktopShell::open`] makes the event loop and the device first,
+//! thread, except the swapchain acquire, which waits on its own thread
+//! (`Presenter`) so window input is not held behind it. [`DesktopShell::open`] makes the event loop and the device first,
 //! so the runtime can build its `Renderer` on [`DesktopShell::gpu`] and start
 //! applying publications before the window exists; [`DesktopShell::run`]
 //! then opens the window and draws the [`DesktopScene`] each frame.
@@ -32,7 +33,7 @@ mod keys;
 mod overlay;
 mod placement;
 
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 pub use render_wgpu::{Gpu, Renderer, RendererOptions};
@@ -40,7 +41,7 @@ use render_wgpu::{PresentSkip, WindowSurface};
 use winit::{
     application::ApplicationHandler,
     event::{DeviceEvent, DeviceId, WindowEvent},
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy},
     window::{Window, WindowId},
 };
 
@@ -50,8 +51,7 @@ pub use render_wgpu::web::WebRuntimeConfig;
 /// The frame interval when the monitor states no refresh rate.
 const DEFAULT_REFRESH: Duration = Duration::from_micros(16_667);
 /// How long before the display should free the next swapchain image the
-/// shell wakes to acquire it. Until then it waits for window events, not in
-/// the acquire, so input reaches the page as it arrives.
+/// shell asks for it. Until then nothing waits in an acquire.
 const ACQUIRE_MARGIN: Duration = Duration::from_millis(2);
 /// How often Chromium is pumped between frames. Without its schedule
 /// callback (welding does not expose it) the page's own work, such as the
@@ -165,6 +165,7 @@ impl DesktopShell {
         let mut shell = Shell {
             config,
             scene,
+            proxy: self.event_loop.create_proxy(),
             gpu: self.gpu,
             window: None,
             started: Instant::now(),
@@ -185,6 +186,8 @@ impl DesktopShell {
 struct Shell {
     config: DesktopShellConfig,
     scene: Arc<dyn DesktopScene>,
+    /// Wakes the event loop when the presenter has acquired an image.
+    proxy: EventLoopProxy<()>,
     gpu: Gpu,
     window: Option<Open>,
     started: Instant,
@@ -194,16 +197,104 @@ struct Shell {
 
 struct Open {
     window: Arc<Window>,
-    surface: WindowSurface,
+    presenter: Presenter,
     settle: placement::Settle,
     /// The monitor's frame interval.
     refresh: Duration,
-    /// When to wake for the next frame.
+    /// When to ask for the next frame's image.
     next_frame: Instant,
+    /// A size the window took while an acquired image was outstanding: the
+    /// swapchain is not reconfigured under one, so it applies before the
+    /// next acquire.
+    resized: Option<(u32, u32)>,
     #[cfg(feature = "web-overlay")]
     ui: Option<overlay::UiOverlay>,
     #[cfg(feature = "web-overlay")]
     last_pump: Instant,
+}
+
+/// The swapchain acquire, on a thread of its own. Under vsync an acquire
+/// waits until the compositor frees an image, and that is sometimes several
+/// frames (40 ms at p99 under KWin, #10336). Done on the event loop, every
+/// key and mouse event arriving meanwhile waited for it.
+struct Presenter {
+    surface: Arc<Mutex<WindowSurface>>,
+    request: Option<mpsc::Sender<()>>,
+    acquired: mpsc::Receiver<Acquired>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    /// An image has been asked for and not yet drawn.
+    pending: bool,
+}
+
+struct Acquired {
+    frame: Result<render_wgpu::SurfaceFrame, PresentSkip>,
+    /// How long the acquire waited.
+    waited: Duration,
+    at: Instant,
+}
+
+impl Presenter {
+    fn start(gpu: &Gpu, surface: WindowSurface, proxy: EventLoopProxy<()>) -> Result<Self, String> {
+        let surface = Arc::new(Mutex::new(surface));
+        let (request, requests) = mpsc::channel::<()>();
+        let (deliver, acquired) = mpsc::channel();
+        let (gpu, shared) = (gpu.clone(), Arc::clone(&surface));
+        let thread = std::thread::Builder::new()
+            .name("desktop-shell-acquire".to_owned())
+            .spawn(move || {
+                while requests.recv().is_ok() {
+                    let started = Instant::now();
+                    let frame = lock(&shared).acquire(&gpu);
+                    let at = Instant::now();
+                    let waited = at - started;
+                    if deliver.send(Acquired { frame, waited, at }).is_err() {
+                        break;
+                    }
+                    // The event loop draws the frame when it next wakes.
+                    let _ = proxy.send_event(());
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            surface,
+            request: Some(request),
+            acquired,
+            thread: Some(thread),
+            pending: false,
+        })
+    }
+
+    /// The surface, while no acquire holds it.
+    fn surface(&self) -> MutexGuard<'_, WindowSurface> {
+        lock(&self.surface)
+    }
+
+    fn ask(&mut self) {
+        if let Some(request) = &self.request {
+            self.pending = request.send(()).is_ok();
+        }
+    }
+
+    fn take(&mut self) -> Option<Acquired> {
+        let acquired = self.acquired.try_recv().ok()?;
+        self.pending = false;
+        Some(acquired)
+    }
+}
+
+impl Drop for Presenter {
+    fn drop(&mut self) {
+        // The thread ends at its next request; an image it acquired and the
+        // loop never drew is released undrawn.
+        self.request.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn lock(surface: &Mutex<WindowSurface>) -> MutexGuard<'_, WindowSurface> {
+    surface.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Shell {
@@ -251,12 +342,14 @@ impl Shell {
                 Duration::from_secs_f64(1000.0 / f64::from(millihertz))
             });
         self.scene.refresh(refresh);
+        let presenter = Presenter::start(&self.gpu, surface, self.proxy.clone())?;
         self.window = Some(Open {
             window,
-            surface,
+            presenter,
             settle,
             refresh,
             next_frame: Instant::now(),
+            resized: None,
             #[cfg(feature = "web-overlay")]
             ui,
             #[cfg(feature = "web-overlay")]
@@ -265,7 +358,8 @@ impl Shell {
         Ok(())
     }
 
-    fn frame(&mut self, event_loop: &ActiveEventLoop) {
+    /// Ask the presenter for the next frame's image.
+    fn ask_frame(&mut self, event_loop: &ActiveEventLoop) {
         let Some(open) = &mut self.window else { return };
         #[cfg(feature = "web-overlay")]
         if let Some(ui) = &mut open.ui {
@@ -274,16 +368,26 @@ impl Shell {
             open.last_pump = Instant::now();
         }
         let _ = event_loop;
-        // The vsync wait happens here, before the scene is taken, so a product
-        // call applying its changes never waits for the display.
-        if !open.surface.configured() {
-            // The size the window had when it was created may not be the one
-            // it settled at (Windows applies it asynchronously).
-            let size = open.window.inner_size();
-            open.surface.resize(&self.gpu, size.width, size.height);
+        {
+            let mut surface = open.presenter.surface();
+            if let Some((width, height)) = open.resized.take() {
+                surface.resize(&self.gpu, width, height);
+            } else if !surface.configured() {
+                // The size the window had when it was created may not be the
+                // one it settled at (Windows applies it asynchronously).
+                let size = open.window.inner_size();
+                surface.resize(&self.gpu, size.width, size.height);
+            }
         }
-        let acquiring = Instant::now();
-        let frame = match open.surface.acquire(&self.gpu) {
+        open.presenter.ask();
+    }
+
+    /// Draw and present the image the presenter acquired. The vsync wait
+    /// happened before, so a product call applying its changes never waits
+    /// for the display.
+    fn frame(&mut self, acquired: Acquired) {
+        let Some(open) = &mut self.window else { return };
+        let frame = match acquired.frame {
             Ok(frame) => frame,
             Err(PresentSkip::Reconfigured | PresentSkip::Unavailable) => {
                 self.report.frames_skipped += 1;
@@ -291,15 +395,15 @@ impl Shell {
                 return;
             }
         };
-        let acquired = Instant::now();
         // Under vsync the display frees the next image about one interval
         // after this one.
-        open.next_frame = acquired + open.refresh.saturating_sub(ACQUIRE_MARGIN);
+        open.next_frame = acquired.at + open.refresh.saturating_sub(ACQUIRE_MARGIN);
         #[cfg(feature = "web-overlay")]
         if let Some(ui) = &mut open.ui {
             ui.page().import_repaint();
         }
-        let surface = &mut open.surface;
+        let mut surface = open.presenter.surface();
+        let surface = &mut *surface;
         // The window's scale factor is the page's device pixel ratio too.
         let pixel_ratio = open.window.scale_factor() as f32;
         #[cfg(feature = "web-overlay")]
@@ -324,13 +428,13 @@ impl Shell {
             drawn.1 = Instant::now();
         });
         let presenting = Instant::now();
-        open.surface.present(&self.gpu, frame);
+        surface.present(&self.gpu, frame);
         let presented = Instant::now();
         self.report.frames_presented += 1;
         self.scene.presented(PresentedFrame {
             step,
             presented_at: SystemTime::now(),
-            acquire: acquired - acquiring,
+            acquire: acquired.waited,
             lock: drawn.0 - locking,
             draw: drawn.1 - drawn.0,
             present: presented - presenting,
@@ -355,7 +459,7 @@ impl Shell {
             }
             #[cfg(feature = "web-overlay")]
             drop(open.ui);
-            drop(open.surface);
+            drop(open.presenter);
             drop(open.window);
         }
         event_loop.exit();
@@ -386,7 +490,15 @@ impl ApplicationHandler for Shell {
         }
         let Some(open) = &mut self.window else { return };
         if let WindowEvent::Resized(size) = event {
-            open.surface.resize(&self.gpu, size.width, size.height);
+            // While an image is being acquired or waits to be drawn, the
+            // next ask applies the size.
+            open.resized = Some((size.width, size.height));
+            if !open.presenter.pending {
+                open.resized = None;
+                open.presenter
+                    .surface()
+                    .resize(&self.gpu, size.width, size.height);
+            }
         }
         if let WindowEvent::Moved(_) = event {
             open.settle.check(&open.window, true);
@@ -429,8 +541,10 @@ impl ApplicationHandler for Shell {
         if let Some(ui) = &mut open.ui {
             ui.flush_gameplay_motion();
         }
-        if Instant::now() >= open.next_frame {
-            self.frame(event_loop);
+        if let Some(acquired) = open.presenter.take() {
+            self.frame(acquired);
+        } else if !open.presenter.pending && Instant::now() >= open.next_frame {
+            self.ask_frame(event_loop);
         } else {
             #[cfg(feature = "web-overlay")]
             if let Some(ui) = &mut open.ui {
@@ -440,16 +554,20 @@ impl ApplicationHandler for Shell {
                 }
             }
         }
-        // Wait for window events until the next frame (or Chromium pump) is
-        // due, rather than blocking in the swapchain acquire.
+        // Wait for window events until the next frame is due (or Chromium's
+        // pump); while an image is being acquired, the presenter wakes the
+        // loop when it has one.
         let Some(open) = &self.window else { return };
+        let frame = (!open.presenter.pending).then_some(open.next_frame);
         #[cfg(feature = "web-overlay")]
         let wake = match &open.ui {
-            Some(_) => open.next_frame.min(open.last_pump + UI_PUMP_INTERVAL),
-            None => open.next_frame,
+            Some(_) => Some(frame.map_or(open.last_pump + UI_PUMP_INTERVAL, |frame| {
+                frame.min(open.last_pump + UI_PUMP_INTERVAL)
+            })),
+            None => frame,
         };
         #[cfg(not(feature = "web-overlay"))]
-        let wake = open.next_frame;
-        event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
+        let wake = frame;
+        event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }
 }

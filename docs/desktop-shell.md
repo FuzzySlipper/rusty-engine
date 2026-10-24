@@ -13,11 +13,12 @@ TypeScript UI is composited over it.
   composition to the window surface. The shell acquires the swapchain image
   before taking the scene and presents after releasing it, so a product call
   applying its changes never waits for vsync; only encoding and submitting
-  the frame hold the scene. Between frames the shell waits for window events
-  rather than in the acquire, waking about 2 ms before the display frees the
-  next image, and pumps Chromium on each key, button or wheel event and every
-  2 ms, so input reaches the page and the page's request reaches the runtime
-  without waiting for a frame. `engine.renderer` reports the window's
+  the frame hold the scene. The acquire waits on a thread of its own, asked
+  about 2 ms before the display should free the next image; the compositor
+  can hold images for several frames, and the event loop keeps taking window
+  events meanwhile. The shell pumps Chromium on each key, button or wheel
+  event and every 2 ms, so input reaches the page and the page's request
+  reaches the runtime without waiting for a frame. `engine.renderer` reports the window's
   presented frames (time and step), its median acquire, lock, draw and
   present times, when input reached the window, and which step consumed
   recent input.
