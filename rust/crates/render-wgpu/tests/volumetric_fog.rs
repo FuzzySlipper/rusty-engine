@@ -365,7 +365,8 @@ fn a_capture_leaves_the_outputs_fog_and_exposure_alone() {
         },
     ];
     let mut alone = scene(VolumetricFogQuality::Low);
-    if refused_on_software(&mut alone, fog.clone()) {
+    // Auto exposure draws on a software adapter too: only the fog is refused.
+    if refused_on_software(&mut alone, vec![medium(0.08)]) {
         return;
     }
     alone.apply(fog.clone());
