@@ -29,6 +29,9 @@ pub enum SpatialOcclusionHit {
     Entity {
         entity: EntityId,
         point: [f64; 3],
+        /// The unit normal of the box face the ray entered; zero when the ray
+        /// starts inside the box.
+        normal: [f64; 3],
         distance: f64,
     },
     Voxel(CollisionRayHit),
@@ -103,7 +106,7 @@ fn nearest_hit(
         if query.ignored_entities.contains(&collider.entity) {
             continue;
         }
-        let Some(distance) = ray_aabb_distance(
+        let Some((distance, normal)) = ray_aabb_entry(
             query.origin,
             direction,
             query.max_distance,
@@ -115,6 +118,7 @@ fn nearest_hit(
         let candidate = SpatialOcclusionHit::Entity {
             entity: collider.entity,
             point: point_at(query.origin, direction, distance),
+            normal,
             distance,
         };
         if nearest.is_none_or(|current| hit_precedes(candidate, current)) {
@@ -148,15 +152,17 @@ fn validate_and_normalize(
     Ok(query.direction.map(|value| value / length))
 }
 
-fn ray_aabb_distance(
+/// The distance at which the ray enters the box and the entered face's normal.
+fn ray_aabb_entry(
     origin: [f64; 3],
     direction: [f64; 3],
     max_distance: f64,
     min: [f64; 3],
     max: [f64; 3],
-) -> Option<f64> {
+) -> Option<(f64, [f64; 3])> {
     let mut near = 0.0_f64;
     let mut far = max_distance;
+    let mut normal = [0.0; 3];
     for axis in 0..3 {
         if direction[axis] == 0.0 {
             if origin[axis] < min[axis] || origin[axis] > max[axis] {
@@ -166,13 +172,18 @@ fn ray_aabb_distance(
         }
         let first = (min[axis] - origin[axis]) / direction[axis];
         let second = (max[axis] - origin[axis]) / direction[axis];
-        near = near.max(first.min(second));
+        let entry = first.min(second);
+        if entry > near {
+            near = entry;
+            normal = [0.0; 3];
+            normal[axis] = -direction[axis].signum();
+        }
         far = far.min(first.max(second));
         if near > far {
             return None;
         }
     }
-    Some(near)
+    Some((near, normal))
 }
 
 fn point_at(origin: [f64; 3], direction: [f64; 3], distance: f64) -> [f64; 3] {

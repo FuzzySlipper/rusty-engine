@@ -33,6 +33,7 @@ fn supplied_door_box_blocks_until_omitted_or_moved_away() {
         Some(SpatialOcclusionHit::Entity {
             entity: DOOR,
             point: [1.5, 0.0, 0.0],
+            normal: [-1.0, 0.0, 0.0],
             distance: 1.5,
         })
     );
@@ -101,6 +102,7 @@ fn exact_ties_prefer_lowest_entity_identity_before_voxel() {
         Some(SpatialOcclusionHit::Entity {
             entity: lower,
             point: [2.0, 0.5, 0.5],
+            normal: [-1.0, 0.0, 0.0],
             distance: 1.5,
         })
     );
@@ -149,4 +151,53 @@ fn large_queries_run_and_invalid_queries_are_typed() {
         ),
         Err(SpatialOcclusionError::InvalidDirection)
     );
+}
+
+#[test]
+fn entity_box_hits_report_the_entered_face_normal() {
+    let scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    let floor = SpatialOcclusionCollider {
+        entity: EntityId::new(2),
+        min: [-10.0, -1.0, -10.0],
+        max: [10.0, 0.0, 10.0],
+    };
+    let wall = SpatialOcclusionCollider {
+        entity: EntityId::new(3),
+        min: [-10.0, 0.0, 5.0],
+        max: [10.0, 4.0, 6.0],
+    };
+    let cast = |origin: [f64; 3], direction: [f64; 3]| {
+        SpatialOcclusionService::cast_ray(
+            &scene,
+            SpatialOcclusionQuery {
+                origin,
+                direction,
+                max_distance: 50.0,
+                ignored_entities: &[],
+            },
+            [floor, wall],
+        )
+        .unwrap()
+    };
+
+    // An angled ray onto the floor and a level one onto the wall.
+    assert!(matches!(
+        cast([0.0, 2.0, 0.0], [0.3, -1.0, 0.2]),
+        Some(SpatialOcclusionHit::Entity { entity, normal: [0.0, 1.0, 0.0], .. })
+            if entity == floor.entity
+    ));
+    assert!(matches!(
+        cast([0.0, 1.0, 0.0], [0.1, 0.0, 1.0]),
+        Some(SpatialOcclusionHit::Entity { entity, normal: [0.0, 0.0, -1.0], .. })
+            if entity == wall.entity
+    ));
+    // A ray starting inside a box has entered no face.
+    assert!(matches!(
+        cast([0.0, -0.5, 0.0], [0.0, 1.0, 0.0]),
+        Some(SpatialOcclusionHit::Entity {
+            normal: [0.0, 0.0, 0.0],
+            distance: 0.0,
+            ..
+        })
+    ));
 }

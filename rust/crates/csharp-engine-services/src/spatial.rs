@@ -6301,12 +6301,14 @@ fn native_occlusion_hit(value: engine_spatial::SpatialOcclusionHit) -> NativeSpa
         engine_spatial::SpatialOcclusionHit::Entity {
             entity,
             point,
+            normal,
             distance,
         } => NativeSpatialHit {
             present: true,
             kind: NativeSpatialHitKind::Entity,
             entity: entity.raw(),
             point: native_f64_vec3(point),
+            normal: native_f64_vec3(normal),
             distance,
             ..Default::default()
         },
@@ -6318,6 +6320,7 @@ fn native_occlusion_hit(value: engine_spatial::SpatialOcclusionHit) -> NativeSpa
             voxel_z: hit.voxel[2],
             face: native_face_value(hit.face),
             point: native_f64_vec3(hit.point),
+            normal: native_f64_vec3(hit.normal),
             distance: hit.distance,
             ..Default::default()
         },
@@ -6606,6 +6609,7 @@ mod tests {
             (hit.kind, hit.entity, hit.distance),
             (NativeSpatialHitKind::Entity, 10, 4.0)
         );
+        assert_eq!((hit.normal.x, hit.normal.y, hit.normal.z), (-1.0, 0.0, 0.0));
         let hit = cast(&empty, &[10], &[]);
         assert_eq!((hit.entity, hit.distance), (11, 6.0));
         // An override replaces only the named active collider's box.
@@ -6619,6 +6623,7 @@ mod tests {
         let wall = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[2, 0, 0]]).unwrap();
         let hit = cast(&wall, &[], &[]);
         assert_eq!((hit.kind, hit.distance), (NativeSpatialHitKind::Voxel, 2.0));
+        assert_eq!((hit.normal.x, hit.normal.y, hit.normal.z), (-1.0, 0.0, 0.0));
     }
 
     #[test]

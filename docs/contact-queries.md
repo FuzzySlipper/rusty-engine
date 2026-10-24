@@ -58,6 +58,11 @@ then part. `WorldContact` reports whether the world answered.
 every contact. Surfaces that only touch do not overlap. Trigger colliders are
 left out unless `IncludeTriggers` is set. `ExcludeWorld` leaves the world out.
 
+`Spatial.CastRay` and `CastSegment` return only the nearest hit, a
+`SpatialHit` with the same `Kind`, `Point` and outward `Normal` for voxels,
+static meshes and entity colliders. A ray that starts inside an entity
+collider hits it at distance 0 with a zero `Normal`.
+
 A sweep moves the shape's `Pivot` (in the shape's frame) in a straight line
 from its start pose to its end pose. Meanwhile the shape turns about the
 pivot by the shortest rotation between the two poses. Use the grip as the
