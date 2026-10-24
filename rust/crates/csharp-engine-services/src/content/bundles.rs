@@ -506,13 +506,19 @@ pub(super) unsafe extern "C" fn open_container(
             Ok(path) => path,
             Err(refusal) => return refuse(&refusal, error),
         };
-    let bundle = Container::open(Path::new(path))
+    let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
+    // A relative path names a container installed beside the Product.
+    let path = match &bridge.installed {
+        Some(installed) => installed.join(path),
+        None => Path::new(path).to_owned(),
+    };
+    let bundle = Container::open(&path)
         .map_err(|failure| container_error(&failure))
         .and_then(|container| {
             OpenBundle::container(container).ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "PRODUCT_CONTAINER_CORRUPT",
-                    format!("`{path}`: an entry has an invalid SHA-256"),
+                    format!("`{}`: an entry has an invalid SHA-256", path.display()),
                 )
             })
         });
@@ -520,7 +526,6 @@ pub(super) unsafe extern "C" fn open_container(
         Ok(bundle) => bundle,
         Err(refusal) => return refuse(&refusal, error),
     };
-    let bridge = unsafe { &mut *context.cast::<RuntimeContentBridge>() };
     let value = bridge.bundles.next();
     bridge.bundles.open.insert(value, bundle);
     unsafe {
@@ -1247,5 +1252,46 @@ mod tests {
             .get("data/table.json")
             .unwrap_err();
         corrupt((refusal.code().to_owned(), refusal.detail().to_owned()));
+    }
+
+    /// A relative container path names a container in the Product's
+    /// installed-content directory; an absolute path is used as given, and a
+    /// missing container refuses with the absolute path it looked at.
+    #[test]
+    fn a_relative_container_path_resolves_in_the_installed_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let module = directory.path().join("module");
+        fs::create_dir_all(&module).unwrap();
+        fs::write(module.join("module.json"), b"{\"id\":\"data\"}").unwrap();
+        let installed = directory.path().join("installed");
+        fs::create_dir_all(&installed).unwrap();
+        product_container::pack_content(&module, &installed.join("data.rpak"), false).unwrap();
+
+        let mut bridge = RuntimeContentBridge::new(BTreeMap::new());
+        bridge.bind_installed_content(installed.clone());
+        let context = (&mut bridge as *mut RuntimeContentBridge).cast();
+        let open = |path: &str| {
+            let mut bundle = NativeContentBundleHandle::default();
+            let mut receipt: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+            let status = unsafe {
+                open_container(
+                    context,
+                    &NativeContentContainerOpenRequest { path: text(path) },
+                    &mut bundle,
+                    &mut receipt,
+                )
+            };
+            (status == ABI_OK)
+                .then_some(bundle)
+                .ok_or_else(|| diagnostic_code(receipt))
+        };
+        open("data.rpak").unwrap();
+        open(installed.join("data.rpak").to_str().unwrap()).unwrap();
+        let (code, message) = open("music.rpak").unwrap_err();
+        assert_eq!(code, "PRODUCT_SOURCE_IO");
+        assert!(
+            message.contains(installed.join("music.rpak").to_str().unwrap()),
+            "{message}"
+        );
     }
 }

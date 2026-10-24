@@ -64,6 +64,10 @@ pub(super) struct ProductBundle {
     pub(super) live_debug: bool,
     /// The source content root a `rusty dev` staging named.
     pub(super) content_source: Option<PathBuf>,
+    /// Where a relative `OpenContainer` path resolves: the directory a
+    /// `rusty dev` staging named, else the Product's own directory (beside
+    /// `product.rpak` in a release).
+    pub(super) installed_content: PathBuf,
 }
 
 impl ProductBundle {
@@ -193,6 +197,10 @@ impl ProductBundle {
             bind_host,
             port: manifest.server.port,
             live_debug: manifest.server.live_debug,
+            installed_content: manifest.development.as_ref().map_or_else(
+                || source.native_root().to_owned(),
+                |development| development.installed_content.clone(),
+            ),
             content_source: manifest
                 .development
                 .map(|development| development.content_source),
@@ -464,6 +472,7 @@ struct Manifest {
 #[serde(rename_all = "camelCase")]
 struct ManifestDevelopment {
     content_source: PathBuf,
+    installed_content: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1040,6 +1049,28 @@ mod tests {
     }
 
     #[test]
+    fn rusty_dev_staging_names_the_installed_content_directory() {
+        let root = fixture_root("installed");
+        write_manifest(&root, "native/product.so");
+        let manifest = fs::read_to_string(root.join(PRODUCT_MANIFEST_NAME)).unwrap();
+        fs::write(
+            root.join(PRODUCT_MANIFEST_NAME),
+            manifest.replace(
+                r#""ignoredV1Field":true"#,
+                r#""development":{"contentSource":"/project/content","installedContent":"/project/local"}"#,
+            ),
+        )
+        .unwrap();
+        let product = read(&root).unwrap();
+        assert_eq!(product.installed_content, Path::new("/project/local"));
+        assert_eq!(
+            product.content_source.as_deref(),
+            Some(Path::new("/project/content"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn a_packed_product_reads_like_the_loose_one_with_native_code_beside_it() {
         let root = fixture_root("packed");
         write_manifest(&root, "native/product.so");
@@ -1056,6 +1087,9 @@ mod tests {
         let loose = read(&root).unwrap();
         let packed = read(&report.container).unwrap();
         assert!(packed.source.container().is_some());
+        // Containers installed beside the product resolve beside product.rpak.
+        assert_eq!(packed.installed_content, release.canonicalize().unwrap());
+        assert_eq!(loose.installed_content, root.canonicalize().unwrap());
         assert_eq!(
             packed.selected_artifacts(ProductLoader::CoreClr).unwrap().0,
             release.canonicalize().unwrap().join("coreclr/product.dll")

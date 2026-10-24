@@ -422,7 +422,28 @@ installed container by packing or copying a new file and renaming it into
 place, never by rewriting it while a product has it open.
 
 A running product opens a container it located, at any filesystem path it
-chose (a module library, a download location), as an ordinary bundle:
+chose (a module library, a download location), as an ordinary bundle. A
+relative path names a container installed beside the product, the same way
+under `rusty dev` and in a release:
+
+- in a release (`--product <release>/product.rpak`), it resolves in the
+  directory that holds `product.rpak`;
+- under `rusty dev`, it resolves in `RustyEngineProductInstalledContent`, the
+  project directory unless the project sets another (relative to the project):
+
+```xml
+<RustyEngineProductInstalledContent>local</RustyEngineProductInstalledContent>
+```
+
+The staged product under `obj/` is never that directory. A tool's
+`EngineTestHost` has no product, so its relative paths resolve in the process
+working directory. A missing container throws `PRODUCT_SOURCE_IO`, and its
+message names the absolute path that was looked at, which a product can show
+the player. `PackContainer` paths are used as given.
+
+```csharp
+using ProductContentBundle data = context.Content.OpenContainer("game-data.rpak");
+```
 
 ```csharp
 using ProductContentBundle module = context.Content.OpenContainer(path);

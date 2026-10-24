@@ -187,6 +187,8 @@ pub struct CsharpProductRuntimeConfig {
     /// `rusty dev`'s source content root, which the ContentSource service
     /// reads and edits.
     content_source: Option<PathBuf>,
+    /// Where a relative `OpenContainer` path resolves.
+    installed_content: Option<PathBuf>,
 }
 
 /// How often the display shows frames, which Engine tweens are presented at
@@ -239,7 +241,17 @@ impl CsharpProductRuntimeConfig {
             product: None,
             presentation_cadence: PresentationCadence::default(),
             content_source: None,
+            installed_content: None,
         }
+    }
+
+    /// The directory a relative `Content.OpenContainer` path resolves in:
+    /// beside `product.rpak` in a release, or the directory a `rusty dev`
+    /// project declares (`development.installedContent`). Without one, a
+    /// relative path resolves in the process working directory.
+    pub fn with_installed_content(mut self, directory: impl Into<PathBuf>) -> Self {
+        self.installed_content = Some(directory.into());
+        self
     }
 
     /// The source content root a `rusty dev` staging named
@@ -991,6 +1003,9 @@ impl CsharpProductRuntime {
             config.direct_intents.clone(),
         )?);
         services.bind_content_bundles(bundles);
+        if let Some(directory) = &config.installed_content {
+            services.bind_installed_content(directory.clone());
+        }
         if let (Some(source), ProductSource::Directory(staged)) =
             (&config.content_source, &content_source)
         {

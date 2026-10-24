@@ -110,6 +110,9 @@ pub(crate) struct RuntimeContentBridge {
     /// Backing of the latest borrowed Content result.
     borrowed: crate::operation_diagnostics::BorrowedResult,
     bundles: bundles::BundleState,
+    /// Where a relative container path resolves; the process working
+    /// directory without one.
+    installed: Option<std::path::PathBuf>,
     next_reference: u64,
 }
 
@@ -138,6 +141,7 @@ impl RuntimeContentBridge {
             references: BTreeMap::new(),
             borrowed: Default::default(),
             bundles: bundles::BundleState::default(),
+            installed: None,
             next_reference: 1,
         }
     }
@@ -268,6 +272,10 @@ impl RuntimeContentBridge {
 
     pub(crate) fn bind_bundles(&mut self, bundles: ProductContentBundles) {
         self.bundles.source = bundles;
+    }
+
+    pub(crate) fn bind_installed_content(&mut self, directory: std::path::PathBuf) {
+        self.installed = Some(directory);
     }
 
     fn read_bytes(&mut self, request: NativeContentReadBytesRequest) -> Option<NativeByteResult> {

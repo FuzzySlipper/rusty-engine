@@ -86,8 +86,9 @@
     <_RustyEngineProductNativeModule>$(TargetName).so</_RustyEngineProductNativeModule>
     <_RustyEngineManifestPresentationAspect Condition="'$(RustyEngineProductPresentationAspectMinimum)' != ''">,&quot;presentationAspect&quot;:{&quot;minimum&quot;:$(RustyEngineProductPresentationAspectMinimum),&quot;maximum&quot;:$(RustyEngineProductPresentationAspectMaximum)}</_RustyEngineManifestPresentationAspect>
     <!-- Only `rusty dev` sets this: the runtime's content source service
-         reads and edits the source content root it names. -->
-    <_RustyEngineManifestDevelopment Condition="'$(RustyEngineProductContentSource)' == 'true'">,&quot;development&quot;:{&quot;contentSource&quot;:&quot;$([System.IO.Path]::GetFullPath('$(RustyEngineProductContentRoot)').Replace('\', '/'))&quot;}</_RustyEngineManifestDevelopment>
+         reads and edits the source content root it names, and relative
+         container paths resolve in the installed-content directory. -->
+    <_RustyEngineManifestDevelopment Condition="'$(RustyEngineProductContentSource)' == 'true'">,&quot;development&quot;:{&quot;contentSource&quot;:&quot;$([System.IO.Path]::GetFullPath('$(RustyEngineProductContentRoot)').Replace('\', '/'))&quot;,&quot;installedContent&quot;:&quot;$([System.IO.Path]::GetFullPath('$(RustyEngineProductInstalledContent)', '$(MSBuildProjectDirectory)').Replace('\', '/'))&quot;}</_RustyEngineManifestDevelopment>
     <_RustyEngineManifestUiProjection Condition="'$(RustyEngineProductUiProjectionStream)' != ''">,&quot;uiProjection&quot;:{&quot;expectedStream&quot;:&quot;$(RustyEngineProductUiProjectionStream)&quot;,&quot;expectedContract&quot;:&quot;$(RustyEngineProductUiProjectionContract)&quot;}</_RustyEngineManifestUiProjection>
     <!-- Keep the browser's existing neutral rig unless a product deliberately
          selects the independently configurable world or viewmodel setting. -->

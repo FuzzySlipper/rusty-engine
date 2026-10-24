@@ -965,7 +965,8 @@ impl Arguments {
                 .with_default_lights(world_lights, viewmodel_lights)
                 .with_renderer_settings(&product.renderer_settings())
                 .with_audio_output(product.audio_output)
-                .with_product(&product.id, &product.title);
+                .with_product(&product.id, &product.title)
+                .with_installed_content(product.installed_content.clone());
             if let Some(source) = &product.content_source {
                 config = config.with_content_source(source.clone());
             }

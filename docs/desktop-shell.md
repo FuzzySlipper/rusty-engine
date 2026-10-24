@@ -188,6 +188,8 @@ A product release that opens a window ships:
 - the Product as `rusty build --pack <release>` writes it: `product.rpak`
   (manifest, UI and content in one file) with `coreclr/` or `native/` loose
   beside it, launched with `--product <release>/product.rpak`;
+- any content containers the product opens by name, beside `product.rpak`
+  (see [containers installed beside the product](csharp-product-project.md#content-containers-installed-beside-the-product));
 - the licences in `share/third-party/`:
   - CEF's and Chromium's credits (`cef/CREDITS.html`, BSD and others);
   - the source of the MPL-2.0 crates `welding`, `grafting` and `fidget-mesh`,

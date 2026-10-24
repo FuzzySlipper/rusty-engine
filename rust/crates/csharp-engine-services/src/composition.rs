@@ -420,6 +420,13 @@ impl EngineServiceSet {
         self.content.bind_bundles(bundles);
     }
 
+    /// Binds the directory a relative `OpenContainer` path resolves in, the
+    /// Product's installed-content directory. Without one, a relative path
+    /// resolves in the process working directory.
+    pub fn bind_installed_content(&mut self, directory: std::path::PathBuf) {
+        self.content.bind_installed_content(directory);
+    }
+
     /// Binds the `rusty dev` source content the ContentSource service reads
     /// and edits. Without one, every ContentSource call refuses.
     pub fn bind_content_source(&mut self, source: crate::ContentSource) {

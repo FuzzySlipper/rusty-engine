@@ -17,6 +17,9 @@
     <RustyEngineProductTitle Condition="'$(RustyEngineProductTitle)' == ''">Rusty Engine Product</RustyEngineProductTitle>
     <RustyEngineProductUiRoot Condition="'$(RustyEngineProductUiRoot)' == ''">$(MSBuildProjectDirectory)/product-ui</RustyEngineProductUiRoot>
     <RustyEngineProductContentRoot Condition="'$(RustyEngineProductContentRoot)' == ''">$(MSBuildProjectDirectory)/content</RustyEngineProductContentRoot>
+    <!-- Under `rusty dev`, a relative Content.OpenContainer path resolves
+         here; a release resolves it beside product.rpak. -->
+    <RustyEngineProductInstalledContent Condition="'$(RustyEngineProductInstalledContent)' == ''">$(MSBuildProjectDirectory)</RustyEngineProductInstalledContent>
     <!-- A product whose UI is compiled names the command and the directory of
          its UI sources (RustyEngineProductUiSourceRoot, defaulted in the
          targets once the product's UI root is known). -->
