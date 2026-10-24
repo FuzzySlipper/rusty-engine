@@ -896,14 +896,16 @@ impl Renderer {
         ] {
             let geometry = primitives::builtin(kind);
             let count = geometry.indices.len() as u32;
-            let mesh = renderer.upload_vertices(
-                "render-wgpu builtin",
-                &geometry.vertices,
-                &geometry.indices,
-                tables::Topology::Triangles,
-                vec![(0, 0, count)],
-                Default::default(),
-            );
+            let mesh = renderer
+                .upload_vertices(
+                    "render-wgpu builtin",
+                    &geometry.vertices,
+                    &geometry.indices,
+                    tables::Topology::Triangles,
+                    vec![(0, 0, count)],
+                    Default::default(),
+                )
+                .expect("a device has room for the builtin meshes");
             renderer.builtins.insert(kind, mesh);
         }
         renderer.tables.parts.selecting = renderer.scatter_select.available();

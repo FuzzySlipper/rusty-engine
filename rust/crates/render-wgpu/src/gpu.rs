@@ -515,6 +515,26 @@ fn request_device(
         .map_err(|error| GpuError::Device(error.to_string()))
 }
 
+/// What `create` makes, or the out-of-memory or validation error raised
+/// while making it, which would otherwise reach the uncaptured-error
+/// handler and panic. For resources sized by product content, which can ask
+/// for more than the device has room for or one buffer may hold.
+pub(crate) fn allocating<T>(
+    device: &wgpu::Device,
+    create: impl FnOnce() -> T,
+) -> Result<T, wgpu::Error> {
+    let memory = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let created = create();
+    // Scopes pop innermost first; a native device answers at once.
+    let validation = pollster::block_on(validation.pop());
+    let memory = pollster::block_on(memory.pop());
+    match validation.or(memory) {
+        Some(error) => Err(error),
+        None => Ok(created),
+    }
+}
+
 /// A buffer holding `contents`, as `DeviceExt::create_buffer_init` makes
 /// it, that does not panic on a lost device. There `create_buffer` returns
 /// an invalid buffer without raising an error, and wgpu's helper panics

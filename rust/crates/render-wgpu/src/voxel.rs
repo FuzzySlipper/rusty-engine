@@ -123,7 +123,7 @@ impl Renderer {
                     .map(|group| (group.material_slot, group.start, group.count))
                     .collect(),
                 BTreeMap::new(),
-            );
+            )?;
             gpu.texture_space = mesh.payload.texture_space;
             meshes.push(gpu);
         }

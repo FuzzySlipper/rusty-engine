@@ -453,7 +453,7 @@ impl Renderer {
                     Topology::Triangles,
                     vec![(0, 0, primitive.indices.len() as u32)],
                     BTreeMap::new(),
-                );
+                )?;
                 mesh.extra = extra_stream(
                     &model,
                     primitive,

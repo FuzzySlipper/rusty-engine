@@ -575,7 +575,7 @@ impl Renderer {
                         .map(|group| (group.material_slot, group.start, group.count))
                         .collect(),
                     BTreeMap::new(),
-                );
+                )?;
                 mesh.texture_space = payload.texture_space;
                 self.attach_morph(&mut mesh, payload, &format!("payload {}", handle.raw()));
                 mesh.layer_weights = layer_weights;
@@ -742,15 +742,17 @@ impl Renderer {
         } = &kind
         {
             let line = crate::primitives::line(*a, *b);
-            let mesh = self.upload_vertices(
+            // Two vertices: a device without room for them draws nothing.
+            if let Ok(mesh) = self.upload_vertices(
                 &format!("line {}", handle.raw()),
                 &line.vertices,
                 &line.indices,
                 Topology::Lines,
                 vec![(0, 0, 2)],
                 BTreeMap::new(),
-            );
-            self.tables.payload_meshes.insert(handle, mesh);
+            ) {
+                self.tables.payload_meshes.insert(handle, mesh);
+            }
         }
         if let Some(parent) = parent.and_then(|parent| self.tables.nodes.get_mut(&parent)) {
             parent.children.push(handle);
@@ -1870,7 +1872,7 @@ impl Renderer {
                 .iter()
                 .map(|slot| (slot.slot, slot.material.clone()))
                 .collect(),
-        );
+        )?;
         // A product mesh's colours can be terrain layer weights, as a voxel
         // chunk's are: layers 0 to 3 of its slots' terrain layer materials.
         mesh.layer_weights = asset.payload.layer_weights && streams.colors.is_some();
@@ -1970,7 +1972,7 @@ impl Renderer {
         topology: Topology,
         groups: Vec<(u16, u32, u32)>,
         slots: BTreeMap<u16, String>,
-    ) -> GpuMesh {
+    ) -> Result<GpuMesh, String> {
         let vertex_count = streams.positions.len() / 3;
         let mut vertices = Vec::with_capacity(vertex_count * VERTEX_FLOATS);
         for vertex in 0..vertex_count {
@@ -2007,8 +2009,32 @@ impl Renderer {
         topology: Topology,
         groups: Vec<(u16, u32, u32)>,
         slots: BTreeMap<u16, String>,
-    ) -> GpuMesh {
+    ) -> Result<GpuMesh, String> {
         let device = &self.gpu.device;
+        // Copied from too: the selected scatter copies draw from a pool of
+        // their meshes (`mesh_pool.rs`). A mesh the device has no room for
+        // is refused, and what draws it draws nothing.
+        let (vertex_buffer, index_buffer) = crate::gpu::allocating(device, || {
+            (
+                crate::gpu::buffer_init(
+                    device,
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some(label),
+                        contents: bytemuck::cast_slice(vertices),
+                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
+                    },
+                ),
+                crate::gpu::buffer_init(
+                    device,
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some(label),
+                        contents: bytemuck::cast_slice(indices),
+                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC,
+                    },
+                ),
+            )
+        })
+        .map_err(|error| format!("{label} could not be uploaded: {error}"))?;
         let mut bounds = Aabb::EMPTY;
         let mut positions = Vec::with_capacity(vertices.len() / VERTEX_FLOATS);
         for vertex in vertices.as_chunks::<VERTEX_FLOATS>().0 {
@@ -2016,7 +2042,7 @@ impl Renderer {
             bounds.include(position);
             positions.push(position);
         }
-        GpuMesh {
+        Ok(GpuMesh {
             bounds,
             cpu: std::sync::Arc::new(crate::tables::CpuGeometry {
                 positions,
@@ -2031,28 +2057,12 @@ impl Renderer {
             vertex_occlusion: false,
             morph: None,
             skinned: None,
-            // Copied from too: the selected scatter copies draw from a pool
-            // of their meshes (`mesh_pool.rs`).
-            vertices: crate::gpu::buffer_init(
-                device,
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: bytemuck::cast_slice(vertices),
-                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
-                },
-            ),
-            indices: crate::gpu::buffer_init(
-                device,
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: bytemuck::cast_slice(indices),
-                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC,
-                },
-            ),
+            vertices: vertex_buffer,
+            indices: index_buffer,
             topology,
             groups,
             slots,
-        }
+        })
     }
 }
 

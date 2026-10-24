@@ -160,8 +160,10 @@ never draws a frame or synchronizes the GPU.
 If the wgpu device is lost (a driver reset, say), `gpu.deviceLost` gives
 wgpu's reason and the driver's message, and the host's stderr logs it once.
 Nothing draws after that, but the runtime keeps stepping and answering: every
-later wgpu call fails quietly. Any other wgpu error is a renderer bug and
-panics.
+later wgpu call fails quietly. A mesh the device has no room for, out of
+memory or larger than one buffer may hold, is refused: it draws nothing, and
+its operation counts among those skipped, with the error as the last skip.
+Any other wgpu error is a renderer bug and panics.
 
 ## Feature gallery
 
