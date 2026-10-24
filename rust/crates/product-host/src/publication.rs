@@ -48,6 +48,9 @@ pub enum RuntimePublication {
         /// The label of a harness that holds input under this binding. While
         /// one does, an attached page shows the claim and sends no input.
         input_claim: Option<String>,
+        /// The desktop window delivers gameplay input under this binding
+        /// (its pointer lock is held), so an attached page sends none.
+        window_input: bool,
     },
     CompleteBaseline {
         runtime: RuntimeInputBinding,
@@ -60,19 +63,22 @@ pub enum RuntimePublication {
 
 impl RuntimePublication {
     pub fn binding(runtime: RuntimeInputBinding, next_input_sequence: u64) -> Self {
-        Self::claimed_binding(runtime, next_input_sequence, None)
+        Self::held_binding(runtime, next_input_sequence, None, false)
     }
 
-    /// A binding that a harness's input claim may hold.
-    pub fn claimed_binding(
+    /// A binding whose input a harness's claim or the desktop window may
+    /// hold instead of the page.
+    pub fn held_binding(
         runtime: RuntimeInputBinding,
         next_input_sequence: u64,
         input_claim: Option<String>,
+        window_input: bool,
     ) -> Self {
         Self::Binding {
             runtime,
             next_input_sequence,
             input_claim,
+            window_input,
         }
     }
 

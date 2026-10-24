@@ -311,6 +311,9 @@ export async function mountProductBrowserHostWithApplication(
   // A harness holding input (`control/claim`): the page sends none and shows
   // who holds it until a binding without a claim arrives.
   let inputClaim: string | null = null;
+  // The desktop window delivers gameplay input itself while it holds the
+  // pointer lock: the page sends none until a binding without it arrives.
+  let windowInput = false;
   let claimBadge: HTMLElement | null = null;
   const showInputClaim = (label: string | null): void => {
     inputClaim = label;
@@ -694,12 +697,14 @@ export async function mountProductBrowserHostWithApplication(
             if (hasFreshRecoveryBinding(output.runtime, inputRecovery.uncertainBinding)) {
               // Its claim applies before page input resumes under it.
               showInputClaim(output.inputClaim ?? null);
+              windowInput = output.windowInput === true;
               completeInputRecovery(output.runtime, output.nextInputSequence);
             }
             return;
           }
           currentInputBinding = output.runtime;
           showInputClaim(output.inputClaim ?? null);
+          windowInput = output.windowInput === true;
           host.input?.bindRuntime({
             runtime: output.runtime,
             context: options.inputContext ?? 'gameplay.default',
@@ -779,10 +784,12 @@ export async function mountProductBrowserHostWithApplication(
         kind: 'binding',
         runtime: result.binding,
         nextInputSequence: result.nextInputSequence,
-        // A result does not say who holds input (a harness's input results
-        // reach every page), so it keeps the claim the last binding
-        // publication set; only a publication changes it.
+        // A result does not say who holds input (a harness's or the
+        // window's input results reach every page), so it keeps the claim
+        // and window input the last binding publication set; only a
+        // publication changes them.
         ...(inputClaim === null ? {} : { inputClaim }),
+        ...(windowInput ? { windowInput } : {}),
       });
     }
     if (result.readout !== undefined
@@ -849,9 +856,10 @@ export async function mountProductBrowserHostWithApplication(
   }
 
   const sendInput = async (batch: readonly RuntimeInputWireEvent[]): Promise<void> => {
-    // While a harness holds input, the page's own input is dropped here, so
-    // focus changes and page blur cannot clear what the harness holds.
-    if (inputClaim !== null) return;
+    // While a harness or the desktop window holds input, the page's own
+    // input is dropped here, so focus changes and page blur cannot clear
+    // what they hold.
+    if (inputClaim !== null || windowInput) return;
     try {
       applyInputResult(await transport.input(batch));
     } catch (cause) {

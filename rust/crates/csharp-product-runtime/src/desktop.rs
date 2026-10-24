@@ -35,6 +35,7 @@ use csharp_product_runtime::{Gpu, Renderer, SceneDriver, WindowFrame, WindowTimi
 use desktop_shell::{
     DesktopScene, DesktopShell, DesktopShellConfig, PresentedFrame, WebRuntimeConfig,
 };
+use product_host::ProductHostWindowInput;
 
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 720;
@@ -90,11 +91,15 @@ impl Desktop {
         title: String,
         origin: &str,
         persistence_root: Option<&std::path::Path>,
-        driver: Arc<SceneDriver>,
-        timing: Arc<WindowTiming>,
+        runtime: WindowRuntime,
         stopping: Arc<AtomicBool>,
         closed: Arc<AtomicBool>,
     ) -> Result<(), String> {
+        let WindowRuntime {
+            driver,
+            timing,
+            input: window_input,
+        } = runtime;
         let cache_dir = match persistence_root {
             Some(root) => {
                 let dir = std::path::absolute(root.join("desktop-ui"))
@@ -107,6 +112,7 @@ impl Desktop {
         let scene = Arc::new(WindowScene {
             driver,
             timing,
+            window_input,
             drawn_seconds: AtomicU64::new(0),
             cadence: self.cadence,
             stopping,
@@ -165,9 +171,19 @@ fn chromium_switches(extra: &[String]) -> Vec<(String, Option<String>)> {
     switches
 }
 
+/// What the window takes from the runtime: the scene it draws, where it
+/// reports its frames, and where it hands gameplay input.
+pub(crate) struct WindowRuntime {
+    pub(crate) driver: Arc<SceneDriver>,
+    pub(crate) timing: Arc<WindowTiming>,
+    pub(crate) input: ProductHostWindowInput,
+}
+
 struct WindowScene {
     driver: Arc<SceneDriver>,
     timing: Arc<WindowTiming>,
+    /// Where the window hands gameplay input while it holds the lock.
+    window_input: ProductHostWindowInput,
     /// The presentation time the frame being presented drew at, as f64 bits.
     drawn_seconds: AtomicU64,
     cadence: csharp_product_runtime::PresentationCadence,
@@ -197,6 +213,14 @@ impl DesktopScene for WindowScene {
 
     fn input_received(&self, at: std::time::SystemTime) {
         self.timing.input_received(at);
+    }
+
+    fn route_gameplay(&self, routed: bool) {
+        self.window_input.route(routed);
+    }
+
+    fn gameplay(&self, facts: Vec<runtime_input::RuntimeInputFact>) {
+        self.window_input.facts(facts);
     }
 
     fn refresh(&self, interval: std::time::Duration) {

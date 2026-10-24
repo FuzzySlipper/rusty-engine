@@ -83,7 +83,8 @@ pub use frames::{
     PRODUCT_HOST_FRAME_CAPTURE_PATH,
 };
 pub use host::{
-    ProductHost, ProductHostAssetReload, ProductHostConfig, ProductHostUiFiles, RunningProductHost,
+    ProductHost, ProductHostAssetReload, ProductHostConfig, ProductHostUiFiles,
+    ProductHostWindowInput, RunningProductHost,
 };
 pub use log::{
     ProductHostLog, ProductHostLogBatch, ProductHostLogConfig, ProductHostLogDisposition,
@@ -99,7 +100,7 @@ pub use model::{
     ProductHostDebugCommandParameterDescriptor, ProductHostDebugResult,
     ProductHostFaultDisposition, ProductHostInputBatch, ProductHostInputResult,
     ProductHostLifecycleOperation, ProductHostOperationKind, ProductHostOperationResult,
-    ProductHostRuntime, ProductHostRuntimeBinding, ProductHostRuntimeFault,
+    ProductHostQueuedInput, ProductHostRuntime, ProductHostRuntimeBinding, ProductHostRuntimeFault,
     ProductHostRuntimeOutput, ProductHostRuntimeReadout, ProductHostRuntimeReceipt,
     ProductHostRuntimeScheduleState, ProductHostRuntimeState, ProductHostTelemetrySnapshot,
     ProductHostTimelineCompletion, ProductHostTimelineCompletionResult,

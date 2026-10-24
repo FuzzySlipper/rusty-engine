@@ -5,7 +5,7 @@ use crate::timeline::{
 };
 pub use runtime_diagnostics::CanonicalU64;
 use runtime_diagnostics::{RuntimeDiagnosticRuntimeBinding, RuntimeUpdateAttribution};
-use runtime_input::{RuntimeInputBinding, RuntimeInputEvent};
+use runtime_input::{RuntimeInputBinding, RuntimeInputEvent, RuntimeInputFact};
 use runtime_lifecycle::{RuntimeControlRevision, RuntimeGeneration, RuntimeInstanceId};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -865,6 +865,30 @@ pub struct ProductHostInputBatch {
     events: Vec<RuntimeInputEvent>,
 }
 
+/// One entry of the host's input mailbox, in arrival order: a page's batch,
+/// or what the desktop window hands over while it holds gameplay input.
+#[derive(Debug, Clone)]
+pub enum ProductHostQueuedInput {
+    Page(ProductHostInputBatch),
+    /// The window takes gameplay input from the page (`true`) or gives it
+    /// back (`false`) ([`ProductHostRuntime::route_window_input`]).
+    WindowRoute(bool),
+    /// Facts the window observed while it holds gameplay input, in order
+    /// ([`ProductHostRuntime::window_input`]).
+    WindowFacts(Vec<RuntimeInputFact>),
+}
+
+impl ProductHostQueuedInput {
+    /// How many input events the entry carries, for mailbox telemetry.
+    pub fn events(&self) -> usize {
+        match self {
+            Self::Page(batch) => batch.events().len(),
+            Self::WindowRoute(_) => 0,
+            Self::WindowFacts(facts) => facts.len(),
+        }
+    }
+}
+
 impl ProductHostInputBatch {
     pub fn new(events: Vec<RuntimeInputEvent>) -> Self {
         Self { events }
@@ -1335,6 +1359,15 @@ pub(crate) enum ProductHostRuntimeOutputWire {
         )]
         #[ts(optional)]
         input_claim: Option<String>,
+        /// The desktop window delivers gameplay input under this binding: the
+        /// page sends none until a binding without it arrives.
+        #[serde(
+            rename = "windowInput",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
+        #[ts(optional)]
+        window_input: Option<bool>,
     },
     /// Ends the outputs that together make one binding's complete baseline.
     /// The host consumes it; the browser sees the `rusty-output-baseline`
@@ -1380,11 +1413,12 @@ impl ProductHostRuntimeOutput {
                 runtime,
                 next_input_sequence,
                 input_claim,
-                ..
+                window_input,
             } => ProductHostRuntimeOutputWire::Binding {
                 runtime: host_runtime_binding(runtime),
                 next_input_sequence: CanonicalU64::new(next_input_sequence),
                 input_claim,
+                window_input: window_input.then_some(true),
             },
             RuntimePublication::CompleteBaseline { runtime, .. } => {
                 ProductHostRuntimeOutputWire::CompleteBaseline {
@@ -1422,6 +1456,7 @@ impl ProductHostRuntimeOutput {
                 runtime,
                 next_input_sequence,
                 input_claim: None,
+                window_input: None,
             },
         }
     }
@@ -1663,6 +1698,34 @@ pub trait ProductHostRuntime: Send + 'static {
         &mut self,
         batch: ProductHostInputBatch,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostInputResult>, ProductHostRuntimeError>;
+
+    /// The desktop window takes gameplay input from the page (`routed`) or
+    /// gives it back, at a control fence: the published binding says which
+    /// of them delivers it, so the page sends none while the window does. A
+    /// harness's claim refuses the window.
+    fn route_window_input(
+        &mut self,
+        _routed: bool,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
+        Err(ProductHostRuntimeError::new_not_applied(
+            "PRODUCT_HOST_WINDOW_INPUT_UNSUPPORTED",
+            "this runtime takes no input from the desktop window",
+        ))
+    }
+
+    /// Facts the desktop window observed while it holds gameplay input. The
+    /// runtime stamps them with its binding and next sequence; once the
+    /// window no longer holds input they are dropped.
+    fn window_input(
+        &mut self,
+        _facts: Vec<RuntimeInputFact>,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostInputResult>, ProductHostRuntimeError> {
+        Err(ProductHostRuntimeError::new_not_applied(
+            "PRODUCT_HOST_WINDOW_INPUT_UNSUPPORTED",
+            "this runtime takes no input from the desktop window",
+        ))
+    }
 
     /// Clears a host-mailbox overflow at the runtime binding fence. A
     /// binding-aware runtime can advance its control revision and publish a

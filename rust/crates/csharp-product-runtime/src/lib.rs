@@ -803,6 +803,9 @@ pub struct CsharpProductRuntime {
     /// A harness holding input (`control/claim`), until it releases or its
     /// lease passes without input.
     input_claim: Option<InputClaim>,
+    /// The desktop window delivers gameplay input instead of the page
+    /// (`route_window_input`).
+    window_input: bool,
 }
 
 struct InputClaim {
@@ -1112,6 +1115,7 @@ impl CsharpProductRuntime {
             renderer_options: config.renderer_options,
             product: config.product,
             input_claim: None,
+            window_input: false,
         })
     }
 
@@ -2378,10 +2382,11 @@ impl CsharpProductRuntime {
 
     /// The binding publication, carrying any harness's input claim.
     fn binding_output(&self) -> RuntimePublication {
-        RuntimePublication::claimed_binding(
+        RuntimePublication::held_binding(
             input_binding(&self.lifecycle),
             self.next_input_sequence().get(),
             self.input_claim.as_ref().map(|claim| claim.label.clone()),
+            self.window_input,
         )
     }
 
@@ -3239,6 +3244,8 @@ impl ProductHostRuntime for CsharpProductRuntime {
         self.lifecycle
             .change_control(RuntimeControlOperation::Replace)
             .map_err(|error| self.lifecycle_runtime_error(error))?;
+        // The harness takes input from the window too.
+        self.window_input = false;
         self.input_claim = Some(InputClaim {
             label,
             lease,
@@ -3347,8 +3354,82 @@ impl ProductHostRuntime for CsharpProductRuntime {
         &mut self,
     ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
     {
+        // The window's route commands may be among what was dropped, so the
+        // page takes input back; the window's later facts are dropped.
+        self.window_input = false;
         let outputs = self.fence_input()?;
         self.receipt(ProductHostOperationKind::ReplaceControl, outputs)
+    }
+
+    fn route_window_input(
+        &mut self,
+        routed: bool,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostOperationResult>, ProductHostRuntimeError>
+    {
+        let (operation, control) = if routed {
+            (
+                ProductHostOperationKind::ReplaceControl,
+                RuntimeControlOperation::Replace,
+            )
+        } else {
+            (
+                ProductHostOperationKind::ReleaseControl,
+                RuntimeControlOperation::Release,
+            )
+        };
+        // Nothing changes hands while a harness holds input, before the
+        // product runs, or when the window already has what it asks for.
+        let state = self.lifecycle.state();
+        if routed == self.window_input
+            || (routed && self.input_claim.is_some())
+            || !matches!(state, RuntimeState::Running | RuntimeState::Paused)
+        {
+            return self.receipt(operation, Vec::new());
+        }
+        self.window_input = routed;
+        self.lifecycle
+            .change_control(control)
+            .map_err(|error| self.lifecycle_runtime_error(error))?;
+        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
+            .map_err(|error| self.runtime_error(error))?;
+        observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
+        let outputs = self.rebind_in_place(Vec::new())?;
+        self.receipt(operation, outputs)
+    }
+
+    fn window_input(
+        &mut self,
+        facts: Vec<RuntimeInputFact>,
+    ) -> Result<ProductHostRuntimeReceipt<ProductHostInputResult>, ProductHostRuntimeError> {
+        if !self.window_input {
+            // The page or a harness holds input now.
+            let result = ProductHostInputResult::with_progress(
+                0,
+                0,
+                0,
+                None,
+                None,
+                self.next_input_sequence(),
+                self.readout(),
+            );
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
+        let binding = input_binding(&self.lifecycle);
+        let context = self.input_lane.context().clone();
+        let first = self.next_input_sequence().get();
+        let events = facts
+            .into_iter()
+            .zip(first..)
+            .map(|(fact, sequence)| {
+                RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+                    binding,
+                    sequence,
+                    context.clone(),
+                    fact,
+                ))
+            })
+            .collect();
+        self.input(ProductHostInputBatch::new(events))
     }
 
     /// Runs a debug command; collision wires then follow whatever it moved
@@ -9275,6 +9356,114 @@ mod tests {
         assert_eq!(
             runtime.pending_inputs.last().unwrap().clear_reason,
             NativeInputClearReason::ControlRevisionChange
+        );
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_desktop_window_holds_gameplay_input_until_it_gives_it_back_or_a_harness_claims_it() {
+        let _guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = realtime_drop_fixture_runtime("window-input");
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .unwrap();
+        let page = runtime.binding();
+        let window_of = |outputs: &[RuntimePublication]| match outputs.first() {
+            Some(RuntimePublication::Binding { window_input, .. }) => *window_input,
+            other => panic!("a route change publishes a binding first, not {other:?}"),
+        };
+        let w = |edge| RuntimeInputFact::Key {
+            code: runtime_input_model::KeyboardControl::KeyW,
+            edge,
+        };
+
+        // The window's facts are dropped until it holds input.
+        let before = runtime.pending_inputs.len();
+        runtime
+            .window_input(vec![w(runtime_input_model::PhysicalEdge::Pressed)])
+            .unwrap();
+        assert_eq!(runtime.pending_inputs.len(), before);
+
+        // Taking input moves the binding, clears held input and says so.
+        let (_, outputs) = runtime.route_window_input(true).unwrap().into_parts();
+        assert!(window_of(&outputs));
+        assert_ne!(runtime.binding(), page);
+        let routed = runtime.binding();
+        assert_eq!(
+            runtime.pending_inputs[0].clear_reason,
+            NativeInputClearReason::ControlRevisionChange
+        );
+        let (_, again) = runtime.route_window_input(true).unwrap().into_parts();
+        assert!(again.is_empty(), "taking it again changes nothing");
+        assert_eq!(runtime.binding(), routed);
+
+        // The window's facts take the lane's next sequences and reach the
+        // product under the window's binding.
+        runtime
+            .window_input(vec![
+                w(runtime_input_model::PhysicalEdge::Pressed),
+                w(runtime_input_model::PhysicalEdge::Released),
+            ])
+            .unwrap();
+        let keys: Vec<_> = runtime
+            .pending_inputs
+            .iter()
+            .filter(|input| input.kind == NativeInputEventKind::Key)
+            .map(|input| (input.keyboard, input.edge))
+            .collect();
+        assert_eq!(
+            keys,
+            [
+                (NativeKeyboardControl::KeyW, NativeInputEdge::Pressed),
+                (NativeKeyboardControl::KeyW, NativeInputEdge::Released),
+            ]
+        );
+        assert_eq!(runtime.next_input_sequence(), CanonicalU64::new(3));
+
+        // A harness's claim takes input from the window; the window's facts
+        // and its giving back change nothing then, and it cannot take input
+        // back while the claim holds.
+        let lease = std::time::Duration::from_secs(60);
+        let (_, claimed) = runtime
+            .claim_control(routed, "crew-agent-2".to_owned(), lease)
+            .unwrap()
+            .into_parts();
+        assert!(!window_of(&claimed));
+        let held = runtime.pending_inputs.len();
+        runtime
+            .window_input(vec![w(runtime_input_model::PhysicalEdge::Pressed)])
+            .unwrap();
+        assert_eq!(runtime.pending_inputs.len(), held);
+        let claim = runtime.binding();
+        assert!(runtime
+            .route_window_input(false)
+            .unwrap()
+            .into_parts()
+            .1
+            .is_empty());
+        assert!(runtime
+            .route_window_input(true)
+            .unwrap()
+            .into_parts()
+            .1
+            .is_empty());
+        assert_eq!(runtime.binding(), claim);
+
+        // Once the harness releases, the window takes input and gives it back.
+        runtime
+            .control(ProductHostControlOperation::Release, claim)
+            .unwrap();
+        runtime.route_window_input(true).unwrap();
+        let routed = runtime.binding();
+        let (_, returned) = runtime.route_window_input(false).unwrap().into_parts();
+        assert!(!window_of(&returned));
+        assert_ne!(
+            runtime.binding(),
+            routed,
+            "giving input back moves the binding"
         );
         drop(runtime);
         fs::remove_dir_all(root).unwrap();

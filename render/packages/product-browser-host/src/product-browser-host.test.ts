@@ -399,6 +399,72 @@ test('while a harness holds input the page sends none and shows the claim', asyn
   });
 });
 
+test('while the desktop window holds input the page sends none and shows no claim', async () => {
+  await withFakeRoot(async (root) => {
+    const routed = { ...RUNNING, controlRevision: '3' } as const;
+    const returned = { ...RUNNING, controlRevision: '4' } as const;
+    let emit: ProductBrowserRuntimeOutputBatchListener | null = null;
+    const sent: (readonly RuntimeInputWireEvent[])[] = [];
+    const key = (runtime: typeof routed | typeof returned): RuntimeInputWireEvent => ({
+      runtime, sequence: '1', context: 'gameplay.default', fact: { kind: 'key', code: 'key-w', edge: 'pressed' },
+    });
+    let pending: RuntimeInputWireEvent[] = [];
+    let cadence: PageCadence | undefined;
+    const host = await mountProductBrowserHostWithApplication({
+      root,
+      transport: {
+        ...adapter,
+        input: async (batch: readonly RuntimeInputWireEvent[]) => {
+          sent.push(batch);
+          return adapter.input(batch);
+        },
+        subscribeOutputBatches: (listener) => {
+          emit = listener;
+          return () => { emit = null; };
+        },
+      },
+      realtimeAdvanceOwner: 'rust-host',
+      mountUi: async () => undefined,
+      autoStart: false,
+    }, async (options) => {
+      cadence = options.onCadence;
+      return fakeApplication({
+        drain: () => { const drained = pending; pending = []; return drained; },
+        bindRuntime: () => undefined,
+      }) as never;
+    });
+    const publish = emit as unknown as ProductBrowserRuntimeOutputBatchListener;
+    const fake = root as unknown as { appended: unknown[] };
+
+    publish([{ kind: 'binding', runtime: routed, nextInputSequence: '1', windowInput: true }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    assert.equal(root.dataset['rustyInputClaim'], undefined);
+    assert.deepEqual(fake.appended, [], 'no badge for the window');
+    pending = [key(routed)];
+    await runCadence(cadence, 1);
+    assert.deepEqual(sent, [], 'no page input while the window holds it');
+    // The window's input results reach the page too; they keep its hold.
+    publish([{
+      kind: 'runtime-input-result',
+      result: {
+        accepted: true, ...ACCEPTED_FAULT, count: 1, acceptedCount: 1, droppedCount: 0,
+        binding: routed, nextInputSequence: '2',
+      },
+    }], { epoch: 1, baseline: false, recovery: 'none' });
+    pending = [key(routed)];
+    await runCadence(cadence, 2);
+    assert.deepEqual(sent, [], 'an input result does not end the window\'s hold');
+
+    publish([{ kind: 'binding', runtime: returned, nextInputSequence: '1' }], {
+      epoch: 1, baseline: false, recovery: 'none',
+    });
+    pending = [key(returned)];
+    await runCadence(cadence, 3);
+    assert.equal(sent.length, 1, 'page input resumes once the window gives it back');
+    await host.dispose();
+  });
+});
 
 test('a claimed binding that completes input recovery keeps the page from sending', async () => {
   await withFakeRoot(async (root) => {

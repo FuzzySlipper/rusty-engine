@@ -4,6 +4,7 @@
 //! shell's input capture reads `code`, so the native code is what keeps
 //! gameplay input identical to the browser.
 
+use runtime_input::KeyboardControl;
 use winit::keyboard::KeyCode;
 use winit::platform::scancode::PhysicalKeyExtScancode;
 
@@ -120,6 +121,94 @@ pub(crate) fn windows_key_code(code: KeyCode) -> Option<i32> {
     })
 }
 
+/// The gameplay control a window key is, as the page's input capture
+/// normalizes `KeyboardEvent.code`: winit's `KeyCode` and the control share
+/// their names, which are the DOM `code` names. `None` for keys gameplay
+/// never sees.
+pub(crate) fn gameplay_key(code: KeyCode) -> Option<KeyboardControl> {
+    macro_rules! same_names {
+        ($($name:ident),* $(,)?) => {{
+            // Exhaustive both ways: a control added without its key does not
+            // compile.
+            #[cfg(test)]
+            #[allow(dead_code)]
+            fn key_code(control: KeyboardControl) -> KeyCode {
+                match control {
+                    $(KeyboardControl::$name => KeyCode::$name,)*
+                }
+            }
+            match code {
+                $(KeyCode::$name => Some(KeyboardControl::$name),)*
+                _ => None,
+            }
+        }};
+    }
+    same_names!(
+        KeyA,
+        KeyB,
+        KeyC,
+        KeyD,
+        KeyE,
+        KeyF,
+        KeyG,
+        KeyH,
+        KeyI,
+        KeyJ,
+        KeyK,
+        KeyL,
+        KeyM,
+        KeyN,
+        KeyO,
+        KeyP,
+        KeyQ,
+        KeyR,
+        KeyS,
+        KeyT,
+        KeyU,
+        KeyV,
+        KeyW,
+        KeyX,
+        KeyY,
+        KeyZ,
+        Digit0,
+        Digit1,
+        Digit2,
+        Digit3,
+        Digit4,
+        Digit5,
+        Digit6,
+        Digit7,
+        Digit8,
+        Digit9,
+        Space,
+        Enter,
+        Escape,
+        ShiftLeft,
+        ShiftRight,
+        ControlLeft,
+        ControlRight,
+        AltLeft,
+        AltRight,
+        ArrowUp,
+        ArrowDown,
+        ArrowLeft,
+        ArrowRight,
+        Backspace,
+        F1,
+        F2,
+        F3,
+        F4,
+        F5,
+        F6,
+        F7,
+        F8,
+        F9,
+        F10,
+        F11,
+        F12,
+    )
+}
+
 /// The native key code Chromium maps to `KeyboardEvent.code`: the XKB
 /// keycode on Linux, the scan code on Windows, the virtual key
 /// code on macOS.
@@ -190,6 +279,20 @@ mod tests {
             assert_ne!(native_key_code(code), 0, "{code:?}");
         }
         assert_ne!(native_key_code(KeyCode::Backspace), 0);
+    }
+
+    #[test]
+    fn gameplay_keys_are_the_controls_of_the_same_name() {
+        assert_eq!(gameplay_key(KeyCode::KeyW), Some(KeyboardControl::KeyW));
+        assert_eq!(gameplay_key(KeyCode::Digit1), Some(KeyboardControl::Digit1));
+        assert_eq!(
+            gameplay_key(KeyCode::ShiftLeft),
+            Some(KeyboardControl::ShiftLeft)
+        );
+        assert_eq!(gameplay_key(KeyCode::F12), Some(KeyboardControl::F12));
+        // Keys the page's capture drops are not gameplay controls here either.
+        assert_eq!(gameplay_key(KeyCode::Tab), None);
+        assert_eq!(gameplay_key(KeyCode::Numpad1), None);
     }
 
     #[cfg(target_os = "linux")]

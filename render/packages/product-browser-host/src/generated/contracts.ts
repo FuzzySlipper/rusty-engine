@@ -243,7 +243,12 @@ export type ProductHostRuntimeOutput = { "kind": "binding", runtime: ProductHost
  * The harness holding input, when one has claimed it: the page shows
  * it and sends no input until a binding without a claim arrives.
  */
-inputClaim?: string, } | { "kind": "ui-projection", envelope: RuntimeUiProjectionEnvelope, } | { "kind": "runtime-readout", readout: ProductHostRuntimeReadout, } | { "kind": "runtime-input-result", result: ProductHostInputResult, };
+inputClaim?: string, 
+/**
+ * The desktop window delivers gameplay input under this binding: the
+ * page sends none until a binding without it arrives.
+ */
+windowInput?: boolean, } | { "kind": "ui-projection", envelope: RuntimeUiProjectionEnvelope, } | { "kind": "runtime-readout", readout: ProductHostRuntimeReadout, } | { "kind": "runtime-input-result", result: ProductHostInputResult, };
 
 /**
  * Minimal local readout passed through from the generated runtime owner.

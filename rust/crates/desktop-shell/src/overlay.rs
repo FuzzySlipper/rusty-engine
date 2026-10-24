@@ -18,7 +18,10 @@ use winit::{
     window::{Cursor, CursorGrabMode, CursorIcon, CustomCursor, Window},
 };
 
-use crate::keys;
+use runtime_input::InputClearReason;
+
+use crate::gameplay::GameplayRoute;
+use crate::{keys, DesktopScene};
 
 /// Console lines the pointer-lock and confinement shim writes; the shell
 /// reads them from the page's console events.
@@ -172,6 +175,8 @@ pub(crate) struct UiOverlay {
     page_cursor: Option<Cursor>,
     /// Image cursors built so far, by content and window scale.
     image_cursors: HashMap<(CursorImage, u64), CustomCursor>,
+    /// Gameplay input the window hands the runtime while it holds the lock.
+    gameplay: GameplayRoute,
 }
 
 impl UiOverlay {
@@ -180,6 +185,7 @@ impl UiOverlay {
         gpu: &Gpu,
         url: &str,
         window: &Arc<Window>,
+        scene: Arc<dyn DesktopScene>,
     ) -> Result<Self, String> {
         let runtime = WebRuntime::initialize(config.clone())?;
         let size = window.inner_size();
@@ -206,6 +212,7 @@ impl UiOverlay {
             motion: (0.0, 0.0),
             page_cursor: Some(CursorIcon::Default.into()),
             image_cursors: HashMap::new(),
+            gameplay: GameplayRoute::new(scene),
         })
     }
 
@@ -237,7 +244,7 @@ impl UiOverlay {
                         self.report_focus();
                     }
                     if matches!(event, NavigationEvent::LoadStart { .. }) {
-                        self.release(window, false);
+                        self.release(window, false, InputClearReason::PointerLockLoss);
                         self.unconfine(window, false);
                     }
                 }
@@ -260,7 +267,7 @@ impl UiOverlay {
                     self.grab(window);
                 }
                 NavigationEvent::ConsoleMessage { message, .. } if message == LOCK_EXIT => {
-                    self.release(window, false);
+                    self.release(window, false, InputClearReason::PointerLockLoss);
                 }
                 NavigationEvent::ConsoleMessage { message, .. } if message == CONFINE_REQUEST => {
                     self.confine(window);
@@ -356,7 +363,13 @@ impl UiOverlay {
         if self.grabbed {
             self.motion.0 += x;
             self.motion.1 += y;
+            self.gameplay.motion(x, y);
         }
+    }
+
+    /// Hand the runtime the locked motion since the last wake.
+    pub(crate) fn flush_gameplay_motion(&mut self) {
+        self.gameplay.flush_motion();
     }
 
     fn grab(&mut self, window: &Window) {
@@ -382,6 +395,7 @@ impl UiOverlay {
         self.recentring = recentring;
         self.motion = (0.0, 0.0);
         self.recentre(window);
+        self.gameplay.take();
     }
 
     /// Warp a recentring lock's cursor back to the window's centre.
@@ -398,10 +412,13 @@ impl UiOverlay {
 
     /// Release the cursor. `tell_page` when the shell, not the page, ended
     /// the lock (Escape, focus loss), as a browser reports an ended lock.
-    fn release(&mut self, window: &Window, tell_page: bool) {
+    /// The page takes gameplay input back, after a clear for `reason`.
+    fn release(&mut self, window: &Window, tell_page: bool, reason: InputClearReason) {
         if !self.grabbed {
             return;
         }
+        self.gameplay.flush_motion();
+        self.gameplay.give_back(reason);
         let _ = window.set_cursor_grab(CursorGrabMode::None);
         self.show_page_cursor(window);
         self.grabbed = false;
@@ -464,7 +481,8 @@ impl UiOverlay {
                 let _ = self.page.set_scale_factor(*scale_factor as f32);
             }
             WindowEvent::Focused(false) => {
-                self.release(window, true);
+                self.release(window, true, InputClearReason::FocusLoss);
+                self.gameplay.forget_keys();
                 self.unconfine(window, true);
                 // Buttons and modifiers released while another window has
                 // focus never reach this one; the page clears its own held
@@ -506,6 +524,10 @@ impl UiOverlay {
                 };
                 let pressed = *state == ElementState::Pressed;
                 self.buttons[index] = pressed;
+                if self.grabbed {
+                    self.gameplay.flush_motion();
+                    self.gameplay.button(index, pressed);
+                }
                 let action = if pressed {
                     MouseAction::Pressed
                 } else {
@@ -521,6 +543,9 @@ impl UiOverlay {
                     ),
                     MouseScrollDelta::PixelDelta(position) => (position.x, position.y),
                 };
+                if self.grabbed {
+                    self.gameplay.wheel(x.round() as i32, y.round() as i32);
+                }
                 self.mouse(
                     MouseButton::Left,
                     MouseAction::WheelScrolled {
@@ -538,11 +563,15 @@ impl UiOverlay {
                 // sees the lock end, not the key. A confinement ends the same way.
                 if code == KeyCode::Escape && (self.grabbed || self.confined) {
                     if pressed {
-                        self.release(window, true);
+                        self.release(window, true, InputClearReason::PointerLockLoss);
                         self.unconfine(window, true);
                     }
                     return;
                 }
+                if self.grabbed {
+                    self.gameplay.flush_motion();
+                }
+                self.gameplay.key(code, pressed);
                 let Some(windows_key_code) = keys::windows_key_code(code) else {
                     return;
                 };

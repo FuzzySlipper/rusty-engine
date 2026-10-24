@@ -6,7 +6,7 @@
 
 use crate::{
     session::{runtime_poisoned, ProductHostOperationOwner},
-    CanonicalU64, ProductHostInputBatch, ProductHostInputResult, ProductHostOperationResult,
+    CanonicalU64, ProductHostInputResult, ProductHostOperationResult, ProductHostQueuedInput,
     ProductHostRuntime, ProductHostRuntimeError, ProductHostRuntimeReceipt,
     ProductHostUpdateAttribution,
 };
@@ -34,7 +34,7 @@ pub fn advance_realtime_with_input_and_publish<R, F, I, P, B, E>(
 >
 where
     R: ProductHostRuntime,
-    F: FnOnce() -> (Vec<ProductHostInputBatch>, bool),
+    F: FnOnce() -> (Vec<ProductHostQueuedInput>, bool),
     I: FnMut(ProductHostRuntimeReceipt<ProductHostInputResult>),
     P: FnMut(ProductHostRuntimeReceipt<ProductHostOperationResult>),
     B: FnOnce(),
@@ -68,7 +68,7 @@ where
 /// debug commands, so input accepted before one must reach the steps it runs.
 pub(crate) fn deliver_queued_input<R, I, P>(
     runtime: &mut R,
-    (batches, overflowed): (Vec<ProductHostInputBatch>, bool),
+    (entries, overflowed): (Vec<ProductHostQueuedInput>, bool),
     publish_input: &mut I,
     publish: &mut P,
 ) -> Vec<ProductHostRuntimeError>
@@ -85,8 +85,18 @@ where
             Err(error) => input_errors.push(error),
         }
     }
-    for batch in batches {
-        let result = runtime.input(batch);
+    for entry in entries {
+        let result = match entry {
+            ProductHostQueuedInput::Page(batch) => runtime.input(batch),
+            ProductHostQueuedInput::WindowFacts(facts) => runtime.window_input(facts),
+            ProductHostQueuedInput::WindowRoute(routed) => {
+                match runtime.route_window_input(routed) {
+                    Ok(receipt) => publish(receipt),
+                    Err(error) => input_errors.push(error),
+                }
+                continue;
+            }
+        };
         match result {
             Ok(receipt) => publish_input(receipt),
             Err(error) => input_errors.push(error),
@@ -160,7 +170,7 @@ mod tests {
 
         fn input(
             &mut self,
-            batch: ProductHostInputBatch,
+            batch: crate::ProductHostInputBatch,
         ) -> Result<ProductHostRuntimeReceipt<ProductHostInputResult>, ProductHostRuntimeError>
         {
             let accepted_through = batch
@@ -218,7 +228,14 @@ mod tests {
         let scheduled = thread::spawn(move || {
             advance_realtime_with_input_and_publish(
                 &scheduled_session,
-                || (vec![ProductHostInputBatch::new(Vec::new())], false),
+                || {
+                    (
+                        vec![ProductHostQueuedInput::Page(
+                            crate::ProductHostInputBatch::new(Vec::new()),
+                        )],
+                        false,
+                    )
+                },
                 CanonicalU64::new(1),
                 |receipt| {
                     let _ = receipt;

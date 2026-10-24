@@ -20,7 +20,7 @@ use crate::{
     ProductHostControlOperation, ProductHostError, ProductHostInputBatch, ProductHostInputResult,
     ProductHostLifecycleOperation, ProductHostLog, ProductHostLogDisposition, ProductHostLogEvent,
     ProductHostLogSeverity, ProductHostOperationKind, ProductHostOperationResult,
-    ProductHostRuntime, ProductHostRuntimeError, ProductHostRuntimeOutput,
+    ProductHostQueuedInput, ProductHostRuntime, ProductHostRuntimeError, ProductHostRuntimeOutput,
     ProductHostRuntimeReceipt, ProductHostTelemetrySnapshot, ProductHostTimelineCompletion,
     ProductHostUpdateAttribution, ProductHostUpdateAttributionSnapshot, MAX_CONNECTIONS,
     MAX_REQUEST_BODY_BYTES, MAX_REQUEST_HEADER_BYTES, MAX_SSE_SUBSCRIBERS,
@@ -285,7 +285,14 @@ impl ProductHost {
             outputs: Arc::clone(&state.outputs),
             output_wake: Arc::clone(&output_wake),
         };
+        let window_input = ProductHostWindowInput {
+            mailbox: Arc::clone(&state.input_mailbox),
+            wake: Arc::clone(&scheduler_wake),
+            diagnostics: config.diagnostics.clone(),
+            enabled: realtime_scheduler_enabled,
+        };
         Ok(RunningProductHost {
+            window_input,
             address,
             asset_reload,
             shutdown,
@@ -311,9 +318,56 @@ pub struct RunningProductHost {
     listener_thread: Option<JoinHandle<()>>,
     handler_threads: Arc<Mutex<Vec<JoinHandle<()>>>>,
     diagnostics: ProductHostLog,
+    window_input: ProductHostWindowInput,
+}
+
+/// The desktop window's way into the host's input mailbox, in order with the
+/// page's batches. While the window holds the pointer lock it takes gameplay
+/// input from the page and hands the facts it observes straight to the
+/// runtime, so a busy page cannot delay them (docs/desktop-shell.md#input).
+#[derive(Clone)]
+pub struct ProductHostWindowInput {
+    mailbox: Arc<HostInputMailbox>,
+    wake: Arc<SchedulerWake>,
+    diagnostics: ProductHostLog,
+    /// Only a realtime runtime drains the mailbox; a caller-driven one keeps
+    /// the page's input path.
+    enabled: bool,
+}
+
+impl ProductHostWindowInput {
+    /// The window takes gameplay input from the page (`true`) or gives it
+    /// back to it.
+    pub fn route(&self, routed: bool) {
+        self.enqueue(ProductHostQueuedInput::WindowRoute(routed));
+    }
+
+    /// Facts the window observed while it holds gameplay input.
+    pub fn facts(&self, facts: Vec<runtime_input::RuntimeInputFact>) {
+        if !facts.is_empty() {
+            self.enqueue(ProductHostQueuedInput::WindowFacts(facts));
+        }
+    }
+
+    fn enqueue(&self, entry: ProductHostQueuedInput) {
+        if !self.enabled {
+            return;
+        }
+        // A full mailbox drops everything it held and the scheduler fences
+        // input, which hands it back to the page as well.
+        let _ = self
+            .mailbox
+            .enqueue(entry, self.diagnostics.now_monotonic_nanoseconds());
+        self.wake.notify();
+    }
 }
 
 impl RunningProductHost {
+    /// The desktop window's way into the input mailbox.
+    pub fn window_input(&self) -> ProductHostWindowInput {
+        self.window_input.clone()
+    }
+
     pub const fn address(&self) -> SocketAddr {
         self.address
     }
@@ -750,7 +804,7 @@ struct HostInputMailbox {
 
 #[derive(Default)]
 struct HostInputMailboxState {
-    batches: VecDeque<ProductHostInputBatch>,
+    batches: VecDeque<ProductHostQueuedInput>,
     queued_events: usize,
     oldest_enqueued_ns: Option<u64>,
     last_drained_oldest_ns: Option<u64>,
@@ -766,10 +820,22 @@ impl Default for HostInputMailbox {
 }
 
 impl HostInputMailbox {
-    fn enqueue(&self, batch: ProductHostInputBatch, enqueued_ns: Option<u64>) -> bool {
+    fn enqueue(&self, entry: ProductHostQueuedInput, enqueued_ns: Option<u64>) -> bool {
         let Ok(mut state) = self.state.lock() else {
             return false;
         };
+        // The window's facts since its last entry join it, so motion handed
+        // over at every event-loop wake fills no more of the mailbox than one
+        // batch per update.
+        if let (
+            Some(ProductHostQueuedInput::WindowFacts(queued)),
+            ProductHostQueuedInput::WindowFacts(facts),
+        ) = (state.batches.back_mut(), &entry)
+        {
+            queued.extend_from_slice(facts);
+            state.queued_events = state.queued_events.saturating_add(facts.len());
+            return true;
+        }
         if state.batches.len() >= MAX_HOST_INPUT_BATCHES {
             // Drop the retained transport prefix and leave an explicit
             // recovery marker. The scheduler will advance the runtime control
@@ -781,15 +847,15 @@ impl HostInputMailbox {
             state.overflowed = true;
             return false;
         }
-        state.queued_events = state.queued_events.saturating_add(batch.events().len());
+        state.queued_events = state.queued_events.saturating_add(entry.events());
         if state.oldest_enqueued_ns.is_none() {
             state.oldest_enqueued_ns = enqueued_ns;
         }
-        state.batches.push_back(batch);
+        state.batches.push_back(entry);
         true
     }
 
-    fn drain(&self) -> (Vec<ProductHostInputBatch>, bool) {
+    fn drain(&self) -> (Vec<ProductHostQueuedInput>, bool) {
         let Ok(mut state) = self.state.lock() else {
             return (Vec::new(), false);
         };
@@ -1717,7 +1783,9 @@ fn invoke_input<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]) -> Htt
     if state.realtime_scheduler_enabled {
         let count = batch.events().len();
         let enqueued_ns = state.diagnostics.now_monotonic_nanoseconds();
-        let admitted = state.input_mailbox.enqueue(batch, enqueued_ns);
+        let admitted = state
+            .input_mailbox
+            .enqueue(ProductHostQueuedInput::Page(batch), enqueued_ns);
         state.scheduler_wake.notify();
         // Admission committed to the mailbox; runtime consumption and its
         // output cursor arrive separately through SSE.
@@ -2990,10 +3058,16 @@ mod tests {
     fn input_mailbox_overflow_clears_prefix_and_marks_resync() {
         let mailbox = HostInputMailbox::default();
         for _ in 0..MAX_HOST_INPUT_BATCHES {
-            assert!(mailbox.enqueue(ProductHostInputBatch::new(Vec::new()), Some(0)));
+            assert!(mailbox.enqueue(
+                ProductHostQueuedInput::Page(ProductHostInputBatch::new(Vec::new())),
+                Some(0)
+            ));
         }
         assert_eq!(mailbox.len(), MAX_HOST_INPUT_BATCHES);
-        assert!(!mailbox.enqueue(ProductHostInputBatch::new(Vec::new()), Some(0)));
+        assert!(!mailbox.enqueue(
+            ProductHostQueuedInput::Page(ProductHostInputBatch::new(Vec::new())),
+            Some(0)
+        ));
 
         let (batches, overflowed) = mailbox.drain();
         assert!(
@@ -3005,10 +3079,59 @@ mod tests {
             "scheduler must receive an explicit resync marker"
         );
 
-        assert!(mailbox.enqueue(ProductHostInputBatch::new(Vec::new()), Some(0)));
+        assert!(mailbox.enqueue(
+            ProductHostQueuedInput::Page(ProductHostInputBatch::new(Vec::new())),
+            Some(0)
+        ));
         let (batches, overflowed) = mailbox.drain();
         assert_eq!(batches.len(), 1);
         assert!(!overflowed);
+    }
+
+    #[test]
+    fn window_input_keeps_its_place_among_page_batches_and_its_facts_join_up() {
+        use runtime_input::{AxisValue, InputClearReason, RuntimeInputFact};
+        let delta = |x: f32| RuntimeInputFact::PointerDelta {
+            x: AxisValue::new(x).unwrap(),
+            y: AxisValue::new(0.0).unwrap(),
+        };
+        let mailbox = HostInputMailbox::default();
+        let page = || ProductHostQueuedInput::Page(ProductHostInputBatch::new(Vec::new()));
+        assert!(mailbox.enqueue(page(), Some(0)));
+        assert!(mailbox.enqueue(ProductHostQueuedInput::WindowRoute(true), Some(0)));
+        assert!(mailbox.enqueue(
+            ProductHostQueuedInput::WindowFacts(vec![delta(1.0)]),
+            Some(0)
+        ));
+        assert!(mailbox.enqueue(
+            ProductHostQueuedInput::WindowFacts(vec![delta(2.0)]),
+            Some(0)
+        ));
+        assert!(mailbox.enqueue(
+            ProductHostQueuedInput::WindowFacts(vec![RuntimeInputFact::Clear {
+                reason: InputClearReason::PointerLockLoss,
+            }]),
+            Some(0)
+        ));
+        assert!(mailbox.enqueue(ProductHostQueuedInput::WindowRoute(false), Some(0)));
+        assert!(mailbox.enqueue(page(), Some(0)));
+        assert_eq!(mailbox.telemetry().events, 3);
+
+        let (entries, overflowed) = mailbox.drain();
+        assert!(!overflowed);
+        let shapes: Vec<_> = entries
+            .iter()
+            .map(|entry| match entry {
+                ProductHostQueuedInput::Page(_) => "page".to_owned(),
+                ProductHostQueuedInput::WindowRoute(routed) => format!("route {routed}"),
+                ProductHostQueuedInput::WindowFacts(facts) => format!("facts {}", facts.len()),
+            })
+            .collect();
+        assert_eq!(
+            shapes,
+            ["page", "route true", "facts 3", "route false", "page"],
+            "the window's facts since its last entry join it, in order"
+        );
     }
 
     fn subscribed_bus() -> (Mutex<OutputBus>, Arc<SubscriberQueue>) {

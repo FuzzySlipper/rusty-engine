@@ -9,7 +9,9 @@
 //! as in a browser, with its UI arbitration unchanged. Chromium's off-screen
 //! mode has no pointer lock, so the shell provides it: the page's lock
 //! requests grab the native cursor, and raw mouse motion reaches the page as
-//! `pointermove` events carrying `movementX`/`movementY`.
+//! `pointermove` events carrying `movementX`/`movementY`. While the shell
+//! holds that lock it also hands gameplay input straight to the runtime
+//! ([`DesktopScene::gameplay`]), so a busy page cannot delay it.
 //!
 //! The shell owns the window, the surface and the draw loop on the main
 //! thread. [`DesktopShell::open`] makes the event loop and the device first,
@@ -22,6 +24,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "web-overlay")]
+mod gameplay;
 #[cfg(any(feature = "web-overlay", test))]
 mod keys;
 #[cfg(feature = "web-overlay")]
@@ -68,6 +72,11 @@ pub trait DesktopScene: Send + Sync {
     fn presented(&self, frame: PresentedFrame);
     /// A key or mouse button event reached the window at `at`.
     fn input_received(&self, at: SystemTime);
+    /// The window took the pointer lock and holds gameplay input (`true`),
+    /// or gave it back to the page.
+    fn route_gameplay(&self, _routed: bool) {}
+    /// Gameplay facts the window observed while it holds input, in order.
+    fn gameplay(&self, _facts: Vec<runtime_input::RuntimeInputFact>) {}
     /// The window's monitor shows a frame every `interval`.
     fn refresh(&self, _interval: Duration) {}
     /// The runtime behind the scene has stopped; the shell closes.
@@ -231,6 +240,7 @@ impl Shell {
                 &self.gpu,
                 url,
                 &window,
+                Arc::clone(&self.scene),
             )?),
             None => None,
         };
@@ -414,6 +424,11 @@ impl ApplicationHandler for Shell {
             return;
         }
         let Some(open) = &mut self.window else { return };
+        // Held motion goes to the runtime at every wake, not every frame.
+        #[cfg(feature = "web-overlay")]
+        if let Some(ui) = &mut open.ui {
+            ui.flush_gameplay_motion();
+        }
         if Instant::now() >= open.next_frame {
             self.frame(event_loop);
         } else {

@@ -314,6 +314,7 @@ fn main() -> Result<std::process::ExitCode, String> {
             // A closed window, or the product asking to end, stops the
             // host the same way.
             let origin = host.origin().to_string();
+            let window_input = host.window_input();
             let ended = WindowEnd {
                 closed: Arc::default(),
                 exit: host_exit,
@@ -339,8 +340,11 @@ fn main() -> Result<std::process::ExitCode, String> {
                     title,
                     &origin,
                     args.persistence_root.as_deref(),
-                    driver,
-                    timing,
+                    desktop::WindowRuntime {
+                        driver,
+                        timing,
+                        input: window_input,
+                    },
                     Arc::clone(&termination),
                     Arc::clone(&ended.closed),
                 )?;

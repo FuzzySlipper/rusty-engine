@@ -36,7 +36,22 @@ TypeScript UI is composited over it.
   arbitration unchanged. Chromium's off-screen mode has no Pointer Lock API,
   so the shell provides it: `requestPointerLock` grabs the native cursor and
   raw mouse motion reaches the page as `pointermove` events with
-  `movementX`/`movementY`. Escape and focus loss end the lock. A product's
+  `movementX`/`movementY`. Escape and focus loss end the lock.
+- **Gameplay input while the lock is held.** The page asks for the lock only
+  in gameplay, so while the shell holds it the shell also hands keys, mouse
+  buttons, wheel and motion straight to the runtime's input mailbox, as the
+  same facts the page would make. A UI page running long tasks (layout, GC)
+  then cannot delay movement and look. Taking and giving back input are
+  control fences: the runtime publishes a fresh binding marked
+  `windowInput`, the page sends no input under it, and its stale batches
+  drop. Taking presses the keys already held; giving back clears for the
+  reason the lock ended (`pointer-lock-loss` or `focus-loss`). The page
+  still receives every event for its UI, so a UI hotkey (an inventory key,
+  chat Enter) also reaches gameplay as a press, then the clear when the UI
+  ends the lock: a product keeps such keys out of its gameplay mappings.
+  Escape ends the lock and is never a gameplay key. A harness's input claim
+  holds input from the window too. Confined and unlocked cursors, gamepads
+  and stream output keep the page's path. A product's
   `confined` cursor mode asks the shell to confine the visible native cursor
   to the window instead (winit's confining grab), so the page keeps ordinary
   cursor positions and DOM hover. Escape and focus loss end it too. Where the
