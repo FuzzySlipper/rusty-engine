@@ -197,15 +197,22 @@ release's manifest. `engine.renderer`'s `window.ui` and the host's closing
 `RUSTY_DESKTOP` line name the engine (for Servo, its version and the GL
 renderer it draws with).
 
-- **Servo** (0.7) runs in the host process, on the window's thread. It draws
-  with GL into two linear GBM buffers on the render node of the GPU the
-  window uses, which the Vulkan device imports once each as DMA-BUFs. Servo
-  paints when it has a new frame and the window composites the last
-  finished buffer; it never paints into the buffer the GPU may still be
-  reading. Servo wakes the window's event loop when it has work, so an idle
-  page runs nothing.
-- Without a GPU with GL and DMA-BUF import the window refuses to open and
-  names the reason; it never falls back to Chromium.
+- **Servo** (0.7) runs in the host process, on the window's thread, and
+  draws with GL into two shared colour buffers. Servo paints when it has a
+  new frame and the window composites the last finished buffer; it never
+  paints into the buffer the GPU may still be reading. Servo wakes the
+  window's event loop when it has work, so an idle page runs nothing.
+  - On Linux the buffers are linear GBM buffers on the render node of the
+    GPU the window uses, imported once each as DMA-BUFs.
+  - On Windows Servo draws with ANGLE (GLES over D3D11) on the window's GPU,
+    matched by LUID, into D3D11 textures with NT handles; each finished frame
+    is imported again, which acquires it from the external queue.
+- Without a GPU with GL and DMA-BUF import (Linux), or ANGLE on the window's
+  adapter (Windows), the window refuses to open and names the reason; it
+  never falls back to Chromium.
+- Servo 0.7 lacks some CSS Chromium has, among them `:has()`, `::backdrop`
+  and `autofocus`, and sizes form controls differently. Check a product's
+  UI in the window under the engine it ships with.
 - `rusty dev --servo-pref name=value` (repeatable, forwarded to
   `rusty-product-host --servo-pref`) sets a Servo preference.
 - The pair's desktop pack carries it; a host built without Servo refuses a

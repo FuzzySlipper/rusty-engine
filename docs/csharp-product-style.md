@@ -139,7 +139,9 @@ The green path:
   cancels them. For a right-click menu, call `preventDefault()` on
   `contextmenu` and draw the menu; the window shows no native one.
 - **Lists and choices.** Overflow lists scroll with the wheel. `<select>` and
-  the date picker work; the window draws their popups.
+  the date picker work; the window draws their popups. Servo
+  ([UI engine](desktop-shell.md#ui-engine)) has no date picker: draw date
+  choices in the page.
 - **Text entry.** Use `<input>` and `<textarea>`. IME composition has not been
   checked in the window.
 - **Tooltips.** Draw them on `pointerenter`/`pointerleave`; the window never
