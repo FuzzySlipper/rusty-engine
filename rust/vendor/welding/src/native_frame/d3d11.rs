@@ -219,7 +219,7 @@ impl WgpuTextureImporter {
 
 /// The LUID of the GPU behind the host's Vulkan device, which names the same
 /// adapter to DXGI.
-fn vulkan_device_luid(
+pub(crate) fn vulkan_device_luid(
     ctx: &HostWgpuContext,
 ) -> Result<windows::Win32::Foundation::LUID, ImportError> {
     use ash::vk;

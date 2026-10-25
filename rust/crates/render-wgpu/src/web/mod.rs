@@ -14,7 +14,8 @@
 //!   [`WebRuntime::run_subprocess`] first in `main`.
 //! - **Servo** (`servo-overlay`) runs in this process on the shell's thread
 //!   and draws with GL into a pair of colour buffers shared with this
-//!   device, imported once each (`servo_page`).
+//!   device (`servo_page`): DMA-BUFs imported once each on Linux, D3D11
+//!   textures (ANGLE) imported again after each frame on Windows.
 //!
 //! Either engine runs unsandboxed: it shows the product's own first-party
 //! UI, never arbitrary pages.
@@ -315,6 +316,7 @@ impl WebOverlay {
             #[cfg(feature = "servo-overlay")]
             Engine::Servo(servo) => Producer::Servo(servo_page::ServoPage::new(
                 servo,
+                &host,
                 &gpu.adapter.get_info(),
                 url,
                 dpi::PhysicalSize::new(width, height),
@@ -681,7 +683,8 @@ impl WebOverlay {
         let Producer::Servo(page) = &self.producer else {
             return;
         };
-        if page.frame_ready() {
+        let painted = page.frame_ready();
+        if painted {
             let started = Instant::now();
             let back = page.target().back();
             if let Some(drawn) = self.drawn_by.get_mut(back).and_then(Option::take) {
@@ -720,6 +723,25 @@ impl WebOverlay {
             self.pages = pages;
             self.drawn_by = vec![None; welding::GL_TARGET_BUFFERS];
             self.last_error = None;
+        } else if cfg!(windows) && painted {
+            // A D3D11 texture import acquires it from the external queue, so
+            // each finished frame is imported again (about 0.15 ms).
+            if let Some(front) = target.front() {
+                let imported = target
+                    .export(front)
+                    .map_err(|e| e.to_string())
+                    .and_then(|frame| {
+                        welding::WgpuTextureImporter::import(frame, &self.host)
+                            .map_err(|e| e.to_string())
+                    });
+                match imported {
+                    Ok(texture) => self.pages[front] = self.layer(texture, [0, 0], true),
+                    Err(error) => {
+                        self.stats.import_errors += 1;
+                        self.last_error = Some(error);
+                    }
+                }
+            }
         }
         self.shown = target.front();
     }

@@ -51,7 +51,7 @@ pub(crate) fn lock_fd_table() -> std::sync::MutexGuard<'static, ()> {
 }
 
 pub mod error;
-#[cfg(all(feature = "gl-target", target_os = "linux"))]
+#[cfg(all(feature = "gl-target", any(target_os = "linux", windows)))]
 pub mod gl_target;
 pub mod native_frame;
 pub mod runtime;
@@ -119,7 +119,7 @@ pub use linux_cef::{LinuxCefConfig as PlatformCefConfig, LinuxCefProducer as Pla
 pub use auth::AuthId;
 pub use downloads::DownloadId;
 pub use error::WeldError;
-#[cfg(all(feature = "gl-target", target_os = "linux"))]
+#[cfg(all(feature = "gl-target", any(target_os = "linux", windows)))]
 pub use gl_target::{GL_TARGET_BUFFERS, GlSharedTarget, GlTargetError};
 #[cfg(target_os = "linux")]
 pub use native_frame::build_dmabuf_capable_device;

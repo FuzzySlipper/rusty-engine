@@ -56,6 +56,10 @@ arboard = { version = "3", default-features = false, optional = true }
 dlss_wgpu = { version = "=6.0.0", optional = true }
 uuid = { version = "1", default-features = false, optional = true }
 
+[target.'cfg(windows)'.dependencies]
+# Servo's GL on Windows is ANGLE over D3D11, built with Servo.
+servo = { version = "=0.7.0", features = ["webcrypto", "gamepad", "no-wgl"], optional = true }
+
 [features]
 # Either UI engine: the frame import and the composite over the scene.
 ui-overlay = ["dep:welding", "dep:dpi"]

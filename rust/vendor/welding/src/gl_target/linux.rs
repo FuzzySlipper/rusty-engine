@@ -23,7 +23,7 @@ use gleam::gl::{self, Gl};
 use khronos_egl as egl;
 
 use super::{GL_TARGET_BUFFERS, GlTargetError};
-use crate::native_frame::{DmaBufImage, DmaBufPlane, NativeFrame};
+use crate::native_frame::{DmaBufImage, DmaBufPlane, HostWgpuContext, NativeFrame};
 
 const EGL_PLATFORM_GBM_KHR: egl::Enum = 0x31D7;
 const EGL_LINUX_DMA_BUF_EXT: egl::Enum = 0x3270;
@@ -120,6 +120,7 @@ pub(super) struct Target {
 
 impl Target {
     pub(super) fn new(
+        _host: &HostWgpuContext,
         adapter: &wgpu::AdapterInfo,
         size: PhysicalSize<u32>,
     ) -> Result<Self, GlTargetError> {

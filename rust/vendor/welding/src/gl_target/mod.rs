@@ -13,6 +13,11 @@
 //!   adapter, bound as GL textures through `EGL_EXT_image_dma_buf_import`,
 //!   with the GL context on an EGL display of that same GBM device. Each
 //!   buffer exports as a [`NativeFrame::DmaBufImage`].
+//! - **Windows:** D3D11 textures with NT shared handles on ANGLE's device,
+//!   the adapter of the host's Vulkan device, bound as GLES textures. Each
+//!   export is a new handle in a [`NativeFrame::Dx12SharedTexture`]; the
+//!   host imports the front buffer again after every finish, which acquires
+//!   it from the external queue.
 //!
 //! The renderer draws into the back buffer ([`GlSharedTarget::bind_back`]);
 //! [`GlSharedTarget::finish`] waits for GL to finish it and makes it the
@@ -25,13 +30,17 @@
 mod linux;
 #[cfg(target_os = "linux")]
 use linux as platform;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use self::windows as platform;
 
 use std::rc::Rc;
 use std::sync::Arc;
 
 use dpi::PhysicalSize;
 
-use crate::native_frame::NativeFrame;
+use crate::native_frame::{HostWgpuContext, NativeFrame};
 
 /// The number of colour buffers in the ring: the renderer draws into one
 /// while the host samples the other.
@@ -54,11 +63,15 @@ pub struct GlSharedTarget {
 }
 
 impl GlSharedTarget {
-    /// A context on the GPU behind `adapter` (the wgpu adapter that will
-    /// import the buffers), with buffers of `size`, current on this thread.
-    pub fn new(adapter: &wgpu::AdapterInfo, size: PhysicalSize<u32>) -> Result<Self, GlTargetError> {
+    /// A context on the GPU behind `host`'s device, whose adapter is
+    /// `adapter`, with buffers of `size`, current on this thread.
+    pub fn new(
+        host: &HostWgpuContext,
+        adapter: &wgpu::AdapterInfo,
+        size: PhysicalSize<u32>,
+    ) -> Result<Self, GlTargetError> {
         Ok(Self {
-            inner: platform::Target::new(adapter, clamp(size))?,
+            inner: platform::Target::new(host, adapter, clamp(size))?,
         })
     }
 

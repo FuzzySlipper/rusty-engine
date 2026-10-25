@@ -364,6 +364,7 @@ impl ServoPage {
     /// `document_script` runs at the start of every document the page loads.
     pub(super) fn new(
         runtime: &ServoRuntime,
+        host: &welding::HostWgpuContext,
         adapter: &wgpu::AdapterInfo,
         url: &str,
         size: PhysicalSize<u32>,
@@ -371,8 +372,8 @@ impl ServoPage {
         document_script: Option<&str>,
     ) -> Result<Self, String> {
         let url = url::Url::parse(url).map_err(|e| format!("the UI page URL {url}: {e}"))?;
-        let target =
-            GlSharedTarget::new(adapter, size).map_err(|e| format!("Servo's GL target: {e}"))?;
+        let target = GlSharedTarget::new(host, adapter, size)
+            .map_err(|e| format!("Servo's GL target: {e}"))?;
         let context = Rc::new(SharedContext { target });
         let delegate = Rc::new(Delegate::default());
         let contents = Rc::new(UserContentManager::new(&runtime.servo));

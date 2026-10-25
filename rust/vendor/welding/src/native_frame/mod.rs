@@ -577,7 +577,7 @@ fn d3d11_event_reached<E: std::fmt::Display>(
 // ── Platform import paths ─────────────────────────────────────────────────────
 
 #[cfg(windows)]
-mod d3d11;
+pub(crate) mod d3d11;
 #[cfg(target_vendor = "apple")]
 mod metal;
 #[cfg(target_os = "linux")]
