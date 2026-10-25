@@ -148,7 +148,8 @@ rusty dev --project <product.csproj> --output window
   `rusty dev` stop rather than restart it as after a crash.
 - **Fetching.** The first window run downloads the pinned pair's desktop
   runtime pack into the cache beside the pair (`desktop-pack/`). It is the
-  pair's host built with the `desktop` feature, plus Chromium's runtime.
+  pair's host built with both UI engines (the `desktop` and `servo`
+  features), plus Chromium's runtime.
   - `rusty` checks the pack's checksum, and that its ABI is the pair's.
   - `rusty status` shows whether it is installed.
   - A pair published without a desktop pack fails the window run with
@@ -157,21 +158,25 @@ rusty dev --project <product.csproj> --output window
   (`scripts/build-desktop-runtime-pack-archive.sh`) and publishes
   `rusty-engine-desktop-pack-<version>-linux-x64.tar.xz` with the pair.
   `pair-release.json` names it under `desktopPack`. The default
-  pack stays free of Chromium.
+  pack stays free of either engine.
 - **Contributors.** `scripts/build-runtime-pack.sh --desktop` builds a pack
-  from a checkout; pass it with `--runtime`.
-  - Building needs `cmake` and `ninja`.
+  from a checkout, and `--desktop --servo` one with Servo too; pass it with
+  `--runtime`.
+  - Building needs `cmake` and `ninja`, and with Servo Python 3 (`python`
+    and `python3` on `PATH`; on Windows `PYTHON3` naming it as well).
   - On Windows it runs in Git Bash inside the MSVC developer environment
     (`vcvars64.bat`), with MSVC's directory ahead of Git's own `link` on
     `PATH`, and builds `target/runtime-pack/win-x64`.
   - The CEF build script downloads CEF into `CEF_PATH` (default `target/cef`).
     The pack takes the distribution of the CEF version cef-dll-sys builds
     against and refuses to build when that one is missing.
-  - Default workspace builds and the verify workflow never enable the
-    feature.
-- **What `lib/cef` holds.** `rusty-product-host
-  --cef-dir <directory>` overrides the location for the browser process
-  (Linux subprocesses load `libcef.so` through the dynamic linker).
+  - Default workspace builds and the verify workflow never enable either
+    engine.
+- **What `lib/cef` holds.** The host loads libcef only when Chromium draws
+  the UI (on Linux through welding's loader, on Windows by delay-loading).
+  `rusty-product-host --cef-dir <directory>` overrides the location for the
+  browser process (Chromium's Linux subprocesses take `libcef.so` from
+  `lib/cef` or the host's rpath).
   - `libcef.so`, stripped;
   - its paks, ICU data and V8 snapshot (ANGLE is inside `libcef.so`);
   - on Windows `libcef.dll` (ANGLE inside it too), `chrome_elf.dll` and the
@@ -203,9 +208,8 @@ renderer it draws with).
   names the reason; it never falls back to Chromium.
 - `rusty dev --servo-pref name=value` (repeatable, forwarded to
   `rusty-product-host --servo-pref`) sets a Servo preference.
-- Only a host built with Servo opens it: `scripts/build-runtime-pack.sh
-  --desktop --servo` builds one (Servo's build needs Python 3). Published
-  desktop packs do not carry it yet, and it runs on Linux only.
+- The pair's desktop pack carries it; a host built without Servo refuses a
+  product that picks it.
 - Window input, the pointer-lock and confinement shim, focus and the
   page's console reach Servo through the same shell paths as Chromium. Servo
   takes the shell's page scripts at the start of every document. The
@@ -220,17 +224,24 @@ renderer it draws with).
 ## Shipping a product
 
 A product release that opens a window ships:
-- `bin/rusty-product-host` from the desktop pack, with `lib/cef` beside it
-  (the host finds it at `../lib/cef`);
+- `bin/rusty-product-host` from the desktop pack;
+- with Chromium (`renderer.windowUi = chromium`), `lib/cef` beside it (the
+  host finds it at `../lib/cef`); with Servo, no `lib/cef`;
+- on Windows, `nethost.dll` and ANGLE's `libEGL.dll` and `libGLESv2.dll`
+  from the pack's `bin/`, beside the host;
 - the Product as `rusty build --pack <release>` writes it: `product.rpak`
   (manifest, UI and content in one file) with `coreclr/` or `native/` loose
   beside it, launched with `--product <release>/product.rpak`;
 - any content containers the product opens by name, beside `product.rpak`
   (see [containers installed beside the product](csharp-product-project.md#content-containers-installed-beside-the-product));
 - the licences in `share/third-party/`:
-  - CEF's and Chromium's credits (`cef/CREDITS.html`, BSD and others);
+  - CEF's and Chromium's credits (`cef/CREDITS.html`, BSD and others), with
+    Chromium;
   - the source of the MPL-2.0 crates `welding`, `grafting` and `fidget-mesh`,
     which must stay available to recipients;
+  - with Servo, `servo/MPL-2.0-SOURCES.txt`, the unmodified MPL-2.0 crates
+    Servo brings and where each one's source is, and on Windows ANGLE's
+    licence (`angle/LICENSE`, BSD);
   - the rest of the pack's notices.
 
 An installer is chosen when a product asks for one.
@@ -238,7 +249,8 @@ An installer is chosen when a product asks for one.
 ## Platforms
 
 - **Linux:** X11 and Wayland, on Vulkan. The desktop host links
-  `libudev.so.1` (gilrs's gamepad discovery). The device is created with the
+  `libudev.so.1` (gilrs's gamepad discovery) and `libfontconfig.so.1`
+  (Servo's fonts). The device is created with the
   DMA-BUF extensions Chromium's frames need. Pointer lock turns at the
   browser's rate on both.
   Wayland locks the pointer. X11 hides the cursor and recentres it rather than

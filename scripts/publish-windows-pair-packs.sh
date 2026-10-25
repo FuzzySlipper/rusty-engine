@@ -9,7 +9,8 @@ set -euo pipefail
 # Windows pair reuses the Linux pair's SDK package (it is the same on every
 # target) and builds its runtime packs at the pair's exact source revision.
 # The machine needs the MSVC build tools, Git Bash, Rust, Node/pnpm, cmake and
-# ninja, and a clone of this repository (see crew-services
+# ninja, Python 3 (Servo's build; `python` and `python3` on PATH, or under
+# ~/tools/python3), and a clone of this repository (see crew-services
 # docs/playtest-windows.md). Run from a machine with `gh` access to the repo.
 #
 # usage: scripts/publish-windows-pair-packs.sh --host <ssh-host> --checkout <C:/path> [--version <pair>] [--if-missing] [--dlss <C:/path>]
@@ -72,7 +73,9 @@ if [[ -n "$dlss" ]]; then
 fi
 cat > "$work/build.sh" <<EOF
 set -euo pipefail
-export PATH="\$(dirname "\$(command -v cl)"):\$HOME/AppData/Local/Microsoft/WinGet/Links:/c/Program Files/nodejs:\$HOME/AppData/Local/pnpm:\$PATH"
+export PATH="\$(dirname "\$(command -v cl)"):\$HOME/tools/python3:\$HOME/AppData/Local/Microsoft/WinGet/Links:/c/Program Files/nodejs:\$HOME/AppData/Local/pnpm:\$PATH"
+# Servo's Stylo build finds Python through PYTHON3.
+export PYTHON3="\$(cygpath -w "\$(command -v python3)")"
 cd "$checkout"
 git fetch -q origin
 git checkout -q --force "$revision"

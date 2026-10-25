@@ -5,8 +5,10 @@
 use std::path::PathBuf;
 
 /// Where Chromium's runtime files are: a runtime pack keeps them in `lib/cef`
-/// beside `bin`. `--cef-dir` overrides it for the browser process; Linux
-/// subprocesses load libcef through the dynamic linker and do not read it.
+/// beside `bin`. The host loads libcef from here only when Chromium draws the
+/// UI, so a release whose window UI is Servo leaves the directory out.
+/// `--cef-dir` overrides it for the browser process; Chromium's Linux
+/// subprocesses take libcef from `lib/cef` or the host's rpath.
 pub(crate) fn cef_dir() -> Result<PathBuf, String> {
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     executable

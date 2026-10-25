@@ -4,6 +4,8 @@ fn main() {
         return;
     }
     match std::env::var("CARGO_CFG_TARGET_OS").as_deref() {
+        // welding loads libcef on first use (`cef_loader`); a subprocess
+        // Chromium started finds it through this search path.
         Ok("linux") => {
             println!("cargo:rustc-link-arg-bin=rusty-product-host=-Wl,-rpath,$ORIGIN/../lib/cef");
         }

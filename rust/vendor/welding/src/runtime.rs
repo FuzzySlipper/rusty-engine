@@ -516,8 +516,16 @@ mod cef_backed {
     /// - macOS: `cef::load_library` must be called before any other CEF API.
     /// - Windows: add `cef_path` to the DLL search path so `libcef.dll` is found
     ///   even when not adjacent to the executable.
-    /// - Linux: `libcef.so` is expected to be in `LD_LIBRARY_PATH`; no action.
+    /// - Linux: load `libcef.so` from `cef_path`, else from the dynamic
+    ///   loader's search path (`cef_loader`).
     fn maybe_load_library(cef_path: &std::path::Path) -> Result<(), WeldError> {
+        #[cfg(target_os = "linux")]
+        crate::cef_loader::load(cef_path).map_err(|reason| {
+            eprintln!("welding: {reason}");
+            WeldError::CefLoadFailed {
+                path: cef_path.join("libcef.so").display().to_string(),
+            }
+        })?;
         #[cfg(target_os = "macos")]
         {
             use std::os::unix::ffi::OsStrExt;

@@ -45,7 +45,7 @@ type ImageTargetTexture = unsafe extern "C" fn(u32, *mut c_void);
 /// libgbm's entry points, loaded at run time so hosts that never make a
 /// target do not link it.
 struct Gbm {
-    _library: gbm_loader::Library,
+    _library: dl::Library,
     create_device: unsafe extern "C" fn(i32) -> *mut c_void,
     device_destroy: unsafe extern "C" fn(*mut c_void),
     bo_create: unsafe extern "C" fn(*mut c_void, u32, u32, u32, u32) -> *mut c_void,
@@ -60,7 +60,7 @@ impl Gbm {
         // SAFETY: libgbm is a C library with no initialisers that run on
         // load; each symbol is read with the signature gbm.h declares.
         unsafe {
-            let library = gbm_loader::Library::new("libgbm.so.1")
+            let library = dl::Library::new("libgbm.so.1")
                 .map_err(|e| GlTargetError::new(format!("libgbm.so.1: {e}")))?;
             macro_rules! symbol {
                 ($name:literal) => {

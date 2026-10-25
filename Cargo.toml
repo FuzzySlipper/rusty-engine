@@ -141,5 +141,6 @@ debug = "line-tables-only"
 
 [patch.crates-io]
 fidget-mesh = { path = "rust/vendor/fidget-mesh" }
+nethost-sys = { path = "rust/vendor/nethost-sys" }
 welding = { path = "rust/vendor/welding" }
 winit = { path = "rust/vendor/winit" }

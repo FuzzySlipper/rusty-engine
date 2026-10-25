@@ -50,6 +50,8 @@ pub(crate) fn lock_fd_table() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+#[cfg(all(feature = "cef-runtime", target_os = "linux"))]
+pub mod cef_loader;
 pub mod error;
 #[cfg(all(feature = "gl-target", any(target_os = "linux", windows)))]
 pub mod gl_target;

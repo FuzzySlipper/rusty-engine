@@ -86,11 +86,18 @@ jobs:
           shared-key: engine-pair
           workspaces: . -> target
 
+      # The desktop pack builds Servo, whose release target is several GB.
+      - name: Free disk space
+        if: steps.published.outputs.skip != 'true'
+        run: |
+          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /usr/share/swift
+          df -h /
+
       - name: Install pair build dependencies
         if: steps.published.outputs.skip != 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang libclang-dev jq unzip ripgrep libasound2-dev libudev-dev mesa-vulkan-drivers libvulkan1 cmake ninja-build
+          sudo apt-get install --yes clang libclang-dev jq unzip ripgrep libasound2-dev libudev-dev libfontconfig-dev mesa-vulkan-drivers libvulkan1 cmake ninja-build
           libclang_path="$(find /usr/lib/llvm-* -name libclang.so -print -quit)"
           test -n "$libclang_path"
           echo "LD_LIBRARY_PATH=$(dirname "$libclang_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"

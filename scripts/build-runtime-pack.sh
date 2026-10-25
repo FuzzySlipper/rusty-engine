@@ -105,8 +105,11 @@ if [[ -n $DLSS_SDK_DIR ]]; then
     VULKAN_SDK=$(cygpath -m "$VULKAN_SDK")
     # NGX's dynamic-CRT library clashes with nethost's static one
     # (LNK2038); with a static C runtime dlss_wgpu links NGX's static-CRT
-    # library.
-    export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static"
+    # library. With Servo, whose SpiderMonkey needs the dynamic C runtime,
+    # nethost links as a DLL instead and NGX's dynamic-CRT library fits.
+    if ((!SERVO)); then
+      export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C target-feature=+crt-static"
+    fi
   fi
   HOST_FEATURES+=(dlss)
 fi
@@ -194,6 +197,42 @@ if ((DESKTOP)); then
     [[ -f "$manifest" ]] || { echo "source of $crate not found" >&2; exit 1; }
     cp -a "$(dirname "$manifest")" "$STAGE/share/third-party/$crate"
   done
+fi
+
+if ((SERVO)); then
+  # Servo's MPL-2.0 crates ship unmodified; where each one's source is.
+  install -d "$STAGE/share/third-party/servo"
+  {
+    echo "The window's Servo UI engine includes these MPL-2.0 crates, unmodified."
+    echo "Each one's source is at the URL beside it. welding and fidget-mesh, the"
+    echo "modified MPL-2.0 components, ship their source in share/third-party."
+    echo
+    cargo tree --locked -p csharp-product-runtime --features servo -e normal \
+      --prefix none --format '{p} {l}' 2>/dev/null | tr -d '\r' |
+      sed 's/ (\*)$//' |
+      awk '$3 !~ /^\(/ { license = $0; sub(/^[^ ]+ [^ ]+ /, "", license) }
+           $3 !~ /^\(/ && license ~ /MPL-2\.0/ && license !~ / OR / {print $1, $2}' | sort -u |
+      while read -r name version; do
+        echo "$name ${version#v} https://crates.io/api/v1/crates/$name/${version#v}/download"
+      done
+  } > "$STAGE/share/third-party/servo/MPL-2.0-SOURCES.txt"
+  if [[ $TARGET == win-x64 ]]; then
+    # Servo draws with ANGLE (GLES over D3D11), built with it; the host loads
+    # its two DLLs from beside itself.
+    for dll in libEGL.dll libGLESv2.dll; do
+      built=$(find "$release/build" -path '*mozangle-*' -name "$dll" -printf '%T@ %p\n' | sort -n | tail -n 1 | cut -d' ' -f2-)
+      [[ -n $built ]] || { echo "ANGLE's $dll was not built" >&2; exit 1; }
+      install -m 755 "$built" "$STAGE/bin/$dll"
+    done
+    # With Servo the host links nethost dynamically (its static library's C
+    # runtime clashes with SpiderMonkey's).
+    nethost=$(find "$release/build" -path '*nethost-sys-*' -name nethost.dll -printf '%T@ %p\n' | sort -n | tail -n 1 | cut -d' ' -f2-)
+    [[ -n $nethost ]] || { echo "nethost.dll was not downloaded" >&2; exit 1; }
+    install -m 755 "$nethost" "$STAGE/bin/nethost.dll"
+    angle=$(jq -r '.packages[] | select(.name == "mozangle") | .manifest_path' <<<"$metadata" | head -n 1 | tr -d '\r')
+    angle=$(cygpath -u "$(dirname "$angle")")
+    install -D -m 644 "$angle/gfx/angle/checkout/LICENSE" "$STAGE/share/third-party/angle/LICENSE"
+  fi
 fi
 
 if [[ -n $DLSS_SDK_DIR ]]; then

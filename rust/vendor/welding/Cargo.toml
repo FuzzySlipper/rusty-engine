@@ -42,13 +42,14 @@ cef-runtime = [
     "dep:base64",
     "dep:cef",
     "dep:serde_json",
+    "dep:dl",
 ]
 cpu-paint-fallback = []
 gl-target = [
     "dep:gleam",
     "dep:glow",
     "dep:khronos-egl",
-    "dep:gbm-loader",
+    "dep:dl",
 ]
 default = ["wgpu-30"]
 wgpu-28 = [
@@ -153,7 +154,7 @@ default-features = false
 [target.'cfg(target_os = "linux")'.dependencies.libc]
 version = "0.2"
 
-[target.'cfg(target_os = "linux")'.dependencies.gbm-loader]
+[target.'cfg(target_os = "linux")'.dependencies.dl]
 version = "0.8"
 optional = true
 package = "libloading"

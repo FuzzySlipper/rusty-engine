@@ -1970,6 +1970,7 @@ dependencies = [
  "libc",
  "libloading 0.9.0",
  "netcorehost",
+ "nethost-sys",
  "product-container",
  "product-host",
  "render-audio",
@@ -6568,8 +6569,6 @@ dependencies = [
 [[package]]
 name = "nethost-sys"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e88fee8a762eee09bc9bd877d3c91f5965ff99ff1eaa44e9a7c5cd32fcb19f6"
 dependencies = [
  "build-target",
  "cargo-emit",

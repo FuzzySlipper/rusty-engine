@@ -3,9 +3,10 @@ set -euo pipefail
 
 # Build the desktop runtime pack for this exact revision and archive it beside
 # the C# release pair: rusty-engine-desktop-pack-<version>-<target>.tar.xz and
-# its .sha256. It is the pair's runtime pack built with the desktop shell and
-# Chromium's runtime (lib/cef), so its ABI fingerprint equals the pair's; the
-# default pack stays free of Chromium. `rusty dev` fetches it on the first
+# its .sha256. It is the pair's runtime pack built with the desktop shell, both
+# UI engines (Chromium, with its runtime in lib/cef, and Servo) so its ABI
+# fingerprint equals the pair's; the default pack stays free of either.
+# Servo's build needs Python 3. `rusty dev` fetches it on the first
 # window-output run of a pinned product (#8860).
 #
 # usage: scripts/build-desktop-runtime-pack-archive.sh --output <new-directory> [--dlss <dlss-sdk>]
@@ -58,7 +59,7 @@ mkdir -p "$(dirname "$output")"
 stage=$(mktemp -d "$(dirname "$output")/.desktop-pack.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 
-"$script_dir/build-runtime-pack.sh" --desktop "${dlss[@]}" --output "$stage/$name" >/dev/null
+"$script_dir/build-runtime-pack.sh" --desktop --servo "${dlss[@]}" --output "$stage/$name" >/dev/null
 manifest="$stage/$name/runtime-manifest.json"
 if [[ "$(jq -r '.sourceRevision' "$manifest")" != "$revision" ]] || [[ ! -f "$stage/$name/lib/cef/$libcef" ]]; then
     echo "RUSTY_ENGINE_DESKTOP_PACK_BUILD: the desktop pack is not this revision's, or has no Chromium runtime" >&2
