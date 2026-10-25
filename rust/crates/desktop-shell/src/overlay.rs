@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use render_wgpu::web::{
     CursorImage, CursorShape, EventModifiers, KeyInput, MouseAction, MouseButton, MouseEvent,
-    NavigationEvent, WebOverlay, WebOverlayStats, WebRuntime, WebRuntimeConfig,
+    NavigationEvent, PageControl, WebOverlay, WebOverlayStats, WebRuntime, WebRuntimeConfig,
 };
 use render_wgpu::Gpu;
 use winit::{
@@ -139,10 +139,129 @@ const PAGE_SHIM: &str = r#"(() => {
   }, true);
   window.__rustyDesktopMotion = (x, y) => {
     if (locked === null) return;
-    locked.dispatchEvent(new PointerEvent('pointermove', {
+    const event = new PointerEvent('pointermove', {
       bubbles: true, composed: true, pointerType: 'mouse', isPrimary: true,
       movementX: x, movementY: y,
-    }));
+    });
+    // Servo's events have no movement attributes yet.
+    if (event.movementX !== x) {
+      Object.defineProperties(event, { movementX: { value: x }, movementY: { value: y } });
+    }
+    locked.dispatchEvent(event);
+  };
+})();"#;
+
+/// Console lines the Servo page's `<select>` list writes: the chosen option,
+/// or none.
+const SELECT_CHOSEN: &str = "rusty-desktop:select ";
+const SELECT_CANCELLED: &str = "rusty-desktop:select-cancel";
+
+#[cfg(feature = "servo-overlay")]
+/// What Servo's page needs beside [`PAGE_SHIM`], at the start of every
+/// document. Chromium tells the shell about new windows, and draws a
+/// `<select>`'s list itself; Servo does neither:
+///
+/// - `window.open` and `target="_blank"` links warn and open nothing, as
+///   they do in Chromium's page;
+/// - `__rustyDesktopSelect(rect, options)` draws the option list the page
+///   asked for at the element's rect (physical pixels), in a closed shadow
+///   root on top of the page, kept inside the view. Arrow keys, Enter,
+///   Escape, a click on an option or outside answer it through the console.
+const SERVO_SHIM: &str = r#"(() => {
+  if (window.__rustyDesktopSelect) return;
+  const newWindow = (url) => console.warn(
+    `rusty desktop shell: a new window for ${url} is not opened in the desktop window. Keep game UI in this page. (docs/desktop-shell.md#browser-features-in-the-window)`);
+  window.open = (url) => { newWindow(new URL(url ?? '', location.href).href); return null; };
+  document.addEventListener('click', (event) => {
+    const link = event.target instanceof Element && event.target.closest('a[target="_blank"]');
+    if (!link || !event.isTrusted) return;
+    event.preventDefault();
+    newWindow(link.href);
+  }, true);
+  let open = null;
+  const close = () => {
+    if (!open) return;
+    open.host.remove();
+    window.removeEventListener('keydown', open.keys, true);
+    window.removeEventListener('pointerdown', open.outside, true);
+    open = null;
+  };
+  const answer = (id) => {
+    close();
+    console.info(id === null ? 'rusty-desktop:select-cancel' : `rusty-desktop:select ${id}`);
+  };
+  window.__rustyDesktopSelectClose = close;
+  window.__rustyDesktopSelect = (rect, options) => {
+    close();
+    const ratio = window.devicePixelRatio || 1;
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'closed' });
+    const style = document.createElement('style');
+    style.textContent = `
+      .list { background: #fff; color: #000; border: 1px solid #767676; font: 13px sans-serif;
+        max-height: 20em; overflow-y: auto; box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+      .group { padding: 2px 6px; font-weight: bold; }
+      .row { padding: 2px 6px; white-space: pre; cursor: default; }
+      .grouped { padding-left: 18px; }
+      .current { background: #1a73e8; color: #fff; }
+      .disabled { color: #888; }`;
+    const list = document.createElement('div');
+    list.className = 'list';
+    const rows = [];
+    let group = null;
+    for (const option of options) {
+      if (option.group !== null && option.group !== group) {
+        const label = document.createElement('div');
+        label.className = 'group';
+        label.textContent = option.group;
+        list.append(label);
+      }
+      group = option.group;
+      const row = document.createElement('div');
+      row.className = 'row' + (option.group !== null ? ' grouped' : '') + (option.disabled ? ' disabled' : '');
+      row.textContent = option.label;
+      const index = rows.length;
+      row.addEventListener('pointerenter', () => { if (!option.disabled) mark(index); });
+      row.addEventListener('pointerup', (event) => {
+        event.stopPropagation();
+        if (!option.disabled) answer(option.id);
+      });
+      rows.push(row);
+      list.append(row);
+    }
+    let current = Math.max(0, options.findIndex((option) => option.selected));
+    const mark = (index) => {
+      current = index;
+      rows.forEach((row, i) => row.classList.toggle('current', i === current));
+      rows[current]?.scrollIntoView({ block: 'nearest' });
+    };
+    root.append(style, list);
+    const [x, y, width, height] = rect.map((value) => value / ratio);
+    host.style.cssText = `position: fixed; z-index: 2147483647; left: ${x}px; top: ${y + height}px; min-width: ${width}px;`;
+    document.documentElement.append(host);
+    // Below the element where it fits, else above it; inside the view.
+    const box = host.getBoundingClientRect();
+    if (box.bottom > innerHeight && y - box.height >= 0) host.style.top = `${y - box.height}px`;
+    if (box.right > innerWidth) host.style.left = `${Math.max(0, innerWidth - box.width)}px`;
+    mark(current);
+    const step = (by) => {
+      for (let i = current + by; i >= 0 && i < rows.length; i += by) {
+        if (!options[i].disabled) return mark(i);
+      }
+    };
+    const keys = (event) => {
+      if (event.key === 'ArrowDown') step(1);
+      else if (event.key === 'ArrowUp') step(-1);
+      else if (event.key === 'Enter' || event.key === ' ') answer(options[current]?.id ?? null);
+      else if (event.key === 'Escape' || event.key === 'Tab') answer(null);
+      else return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const outside = (event) => { if (!event.composedPath().includes(host)) answer(null); };
+    window.addEventListener('keydown', keys, true);
+    window.addEventListener('pointerdown', outside, true);
+    open = { host, keys, outside };
   };
 })();"#;
 
@@ -192,6 +311,12 @@ impl UiOverlay {
         let runtime = WebRuntime::initialize(config.clone(), move || {
             let _ = proxy.send_event(());
         })?;
+        // Servo takes the shell's scripts at the start of each document.
+        #[cfg(feature = "servo-overlay")]
+        let document_script = matches!(config.engine, render_wgpu::web::WebEngine::Servo { .. })
+            .then(|| format!("{PAGE_SHIM}\n{SERVO_SHIM}"));
+        #[cfg(not(feature = "servo-overlay"))]
+        let document_script: Option<String> = None;
         let size = window.inner_size();
         let mut page = WebOverlay::new(
             &runtime,
@@ -200,6 +325,7 @@ impl UiOverlay {
             size.width,
             size.height,
             window.scale_factor() as f32,
+            document_script.as_deref(),
         )?;
         let focus_pending = page.focus().is_err();
         Ok(Self {
@@ -285,8 +411,50 @@ impl UiOverlay {
                 NavigationEvent::ConsoleMessage { message, .. } if message == CONFINE_EXIT => {
                     self.unconfine(window, false);
                 }
+                NavigationEvent::ConsoleMessage { message, .. }
+                    if message.starts_with(SELECT_CHOSEN) =>
+                {
+                    let id = message[SELECT_CHOSEN.len()..].parse().ok();
+                    self.page.answer_select(id);
+                }
+                NavigationEvent::ConsoleMessage { message, .. } if message == SELECT_CANCELLED => {
+                    self.page.answer_select(None);
+                }
                 _ => {}
             }
+        }
+        while let Some(control) = self.page.poll_control() {
+            let script = match control {
+                PageControl::Select { rect, options } => {
+                    // A Rust string's debug form is a valid JavaScript string literal.
+                    let options: Vec<String> = options
+                        .iter()
+                        .map(|option| {
+                            format!(
+                                "{{id:{},label:{:?},disabled:{},selected:{},group:{}}}",
+                                option.id,
+                                option.label,
+                                option.disabled,
+                                option.selected,
+                                option
+                                    .group
+                                    .as_ref()
+                                    .map_or("null".to_owned(), |group| format!("{group:?}"))
+                            )
+                        })
+                        .collect();
+                    format!(
+                        "window.__rustyDesktopSelect([{},{},{},{}],[{}]);",
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                        options.join(",")
+                    )
+                }
+                PageControl::Closed => "window.__rustyDesktopSelectClose();".to_owned(),
+            };
+            let _ = self.page.execute_script(&script);
         }
         while let Some(shape) = self.page.poll_cursor() {
             self.page_cursor = match shape {
@@ -384,6 +552,7 @@ impl UiOverlay {
 
     /// The gamepad's state changed.
     pub(crate) fn gamepad(&mut self, state: crate::gamepad::PadState) {
+        self.page.send_gamepad(state.axes, state.values);
         self.gameplay.pad(state);
     }
 

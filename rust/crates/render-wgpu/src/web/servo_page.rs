@@ -14,15 +14,21 @@ use std::sync::Arc;
 
 use dpi::PhysicalSize;
 use servo::{
-    Code, ConsoleLogLevel, Cursor, DeviceIntRect, DevicePoint, EventLoopWaker, InputEvent, Key,
+    AllowOrDenyRequest, ClipboardDelegate, Code, ConsoleLogLevel, Cursor, DeviceIntRect,
+    DevicePoint, EmbedderControl, EmbedderControlId, EventLoopWaker, GamepadEvent, GamepadIndex,
+    GamepadInputBounds, GamepadSupportedHapticEffects, GamepadUpdateType, InputEvent, Key,
     KeyState, KeyboardEvent, LoadStatus, Location, Modifiers, MouseButtonAction, MouseButtonEvent,
-    MouseLeftViewportEvent, MouseMoveEvent, PrefValue, RenderingContext, RgbaImage, Servo,
-    ServoBuilder, WebView, WebViewBuilder, WebViewDelegate, WebViewPoint, WheelDelta, WheelEvent,
-    WheelMode,
+    MouseLeftViewportEvent, MouseMoveEvent, PrefValue, RenderingContext, RgbaImage, SelectElement,
+    SelectElementOptionOrOptgroup, Servo, ServoBuilder, ServoDelegate, StringRequest,
+    UserContentManager, UserScript, WebView, WebViewBuilder, WebViewDelegate, WebViewPoint,
+    WheelDelta, WheelEvent, WheelMode,
 };
-use welding::GlSharedTarget;
+use welding::{GlSharedTarget, PopupRect};
 
-use super::{CursorShape, KeyInput, MouseAction, MouseButton, MouseEvent, NavigationEvent};
+use super::{
+    CursorShape, KeyInput, MouseAction, MouseButton, MouseEvent, NavigationEvent, PageControl,
+    PageOption,
+};
 
 /// The Servo version this crate embeds, for readouts.
 pub const SERVO_VERSION: &str = "servo 0.7.0";
@@ -59,12 +65,20 @@ impl ServoRuntime {
         // default for Servo to take: ring, which the host already uses. An
         // already installed default stays.
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let prefs = servo::Preferences {
+        let mut prefs = servo::Preferences {
             // The page is composited over the scene: what it leaves undrawn
             // stays transparent.
             shell_background_color_rgba: [0.0, 0.0, 0.0, 0.0],
+            // `navigator.clipboard`, as Chromium has it.
+            dom_async_clipboard_enabled: true,
             ..Default::default()
         };
+        // Before Servo starts: some (the devtools server's) only take effect
+        // then.
+        for (name, text) in preferences {
+            let value = preference_value(&prefs, name, text)?;
+            prefs.set_value(name, value);
+        }
         let opts = servo::Opts {
             config_dir: cache_dir.map(Path::to_path_buf),
             temporary_storage: cache_dir.is_none(),
@@ -75,9 +89,7 @@ impl ServoRuntime {
             .preferences(prefs)
             .event_loop_waker(Box::new(Waker(wake)))
             .build();
-        for (name, value) in preferences {
-            servo.set_preference(name, preference_value(value));
-        }
+        servo.set_delegate(Rc::new(RuntimeDelegate));
         Ok(Self { servo })
     }
 
@@ -86,16 +98,64 @@ impl ServoRuntime {
     }
 }
 
-/// A preference's value as typed on a command line.
-fn preference_value(text: &str) -> PrefValue {
-    if let Ok(value) = text.parse::<bool>() {
-        PrefValue::Bool(value)
-    } else if let Ok(value) = text.parse::<i64>() {
-        PrefValue::Int(value)
-    } else if let Ok(value) = text.parse::<f64>() {
-        PrefValue::Float(value)
-    } else {
-        PrefValue::Str(text.to_owned())
+/// Preference `name`'s value as typed on a command line, of the type its
+/// current value has. Servo panics on an unknown name or a value of another
+/// type, so those are refused here.
+fn preference_value(
+    prefs: &servo::Preferences,
+    name: &str,
+    text: &str,
+) -> Result<PrefValue, String> {
+    if !servo::Preferences::exists(name) {
+        return Err(format!("Servo has no preference {name}"));
+    }
+    let wrong = |kind: &str| format!("Servo's preference {name} takes {kind}, not {text}");
+    Ok(match prefs.get_value(name) {
+        PrefValue::Bool(_) => PrefValue::Bool(text.parse().map_err(|_| wrong("true or false"))?),
+        PrefValue::Int(_) => PrefValue::Int(text.parse().map_err(|_| wrong("an integer"))?),
+        PrefValue::UInt(_) => PrefValue::UInt(text.parse().map_err(|_| wrong("a whole number"))?),
+        PrefValue::Float(_) => PrefValue::Float(text.parse().map_err(|_| wrong("a number"))?),
+        PrefValue::Str(_) => PrefValue::Str(text.to_owned()),
+        PrefValue::Array(_) => return Err(format!("Servo's preference {name} is a list")),
+    })
+}
+
+/// Servo's process-wide callbacks. A developer starts its devtools server
+/// (`devtools_server_enabled`, on 127.0.0.1 by default); its connections are
+/// theirs, so they are allowed.
+struct RuntimeDelegate;
+
+impl ServoDelegate for RuntimeDelegate {
+    fn notify_devtools_server_started(&self, port: u16, _token: String) {
+        eprintln!("render-wgpu: Servo's devtools server listens on port {port}");
+    }
+
+    fn request_devtools_connection(&self, request: AllowOrDenyRequest) {
+        request.allow();
+    }
+}
+
+/// The page writes the system clipboard and never reads it, as in Chromium,
+/// where the read's permission prompt is denied.
+#[derive(Default)]
+struct PageClipboard {
+    /// Kept: on Linux the copied text lives as long as its owner.
+    clipboard: RefCell<Option<arboard::Clipboard>>,
+}
+
+impl ClipboardDelegate for PageClipboard {
+    fn get_text(&self, _: WebView, request: StringRequest) {
+        request.failure("the desktop window denies clipboard reads".to_owned());
+    }
+
+    fn set_text(&self, _: WebView, text: String) {
+        let mut clipboard = self.clipboard.borrow_mut();
+        if clipboard.is_none() {
+            *clipboard = arboard::Clipboard::new().ok();
+        }
+        if let Some(clipboard) = clipboard.as_mut() {
+            let _ = clipboard.set_text(text);
+        }
     }
 }
 
@@ -105,6 +165,9 @@ struct Delegate {
     frame_ready: Cell<bool>,
     events: RefCell<VecDeque<NavigationEvent>>,
     cursors: RefCell<VecDeque<CursorShape>>,
+    controls: RefCell<VecDeque<PageControl>>,
+    /// The `<select>` whose option list the shell is drawing.
+    select: RefCell<Option<SelectElement>>,
 }
 
 impl WebViewDelegate for Delegate {
@@ -123,6 +186,58 @@ impl WebViewDelegate for Delegate {
             _ => return,
         };
         self.events.borrow_mut().push_back(event);
+    }
+
+    /// The shell draws a `<select>`'s option list. Other controls a browser
+    /// shows natively (file and colour pickers, context menus, dialogs) are
+    /// dropped, which cancels them, as off-screen Chromium shows none.
+    fn show_embedder_control(&self, _: WebView, control: EmbedderControl) {
+        let EmbedderControl::SelectElement(select) = control else {
+            return;
+        };
+        if select.allow_select_multiple() {
+            return;
+        }
+        let selected = select.selected_options();
+        let mut options = Vec::new();
+        let mut add = |option: &servo::SelectElementOption, group: Option<&str>| {
+            options.push(PageOption {
+                id: option.id,
+                label: option.label.clone(),
+                disabled: option.is_disabled,
+                selected: selected.contains(&option.id),
+                group: group.map(str::to_owned),
+            });
+        };
+        for entry in select.options() {
+            match entry {
+                SelectElementOptionOrOptgroup::Option(option) => add(option, None),
+                SelectElementOptionOrOptgroup::Optgroup { label, options } => {
+                    for option in options {
+                        add(option, Some(label));
+                    }
+                }
+            }
+        }
+        let rect = select.position();
+        self.controls.borrow_mut().push_back(PageControl::Select {
+            rect: PopupRect {
+                x: rect.min.x,
+                y: rect.min.y,
+                width: rect.width().max(0) as u32,
+                height: rect.height().max(0) as u32,
+            },
+            options,
+        });
+        *self.select.borrow_mut() = Some(select);
+    }
+
+    fn hide_embedder_control(&self, _: WebView, id: EmbedderControlId) {
+        let mut select = self.select.borrow_mut();
+        if select.as_ref().is_some_and(|select| select.id() == id) {
+            select.take();
+            self.controls.borrow_mut().push_back(PageControl::Closed);
+        }
     }
 
     fn notify_cursor_changed(&self, _: WebView, cursor: Cursor) {
@@ -241,31 +356,42 @@ pub(super) struct ServoPage {
     webview: WebView,
     context: Rc<SharedContext>,
     delegate: Rc<Delegate>,
+    /// The gamepad the page last heard of: sticks, then button values.
+    gamepad: RefCell<Option<([f32; 4], [f32; 16])>>,
 }
 
 impl ServoPage {
+    /// `document_script` runs at the start of every document the page loads.
     pub(super) fn new(
         runtime: &ServoRuntime,
         adapter: &wgpu::AdapterInfo,
         url: &str,
         size: PhysicalSize<u32>,
         scale_factor: f32,
+        document_script: Option<&str>,
     ) -> Result<Self, String> {
         let url = url::Url::parse(url).map_err(|e| format!("the UI page URL {url}: {e}"))?;
         let target =
             GlSharedTarget::new(adapter, size).map_err(|e| format!("Servo's GL target: {e}"))?;
         let context = Rc::new(SharedContext { target });
         let delegate = Rc::new(Delegate::default());
+        let contents = Rc::new(UserContentManager::new(&runtime.servo));
+        if let Some(script) = document_script {
+            contents.add_script(Rc::new(UserScript::new(script.to_owned(), None)));
+        }
         let webview = WebViewBuilder::new(&runtime.servo, context.clone())
             .url(url)
             .hidpi_scale_factor(euclid::Scale::new(scale_factor))
             .delegate(delegate.clone())
+            .clipboard_delegate(Rc::new(PageClipboard::default()))
+            .user_content_manager(contents)
             .build();
         webview.show();
         Ok(Self {
             webview,
             context,
             delegate,
+            gamepad: RefCell::new(None),
         })
     }
 
@@ -297,6 +423,67 @@ impl ServoPage {
 
     pub(super) fn poll_cursor(&self) -> Option<CursorShape> {
         self.delegate.cursors.borrow_mut().pop_front()
+    }
+
+    pub(super) fn poll_control(&self) -> Option<PageControl> {
+        self.delegate.controls.borrow_mut().pop_front()
+    }
+
+    /// Choose option `id` of the `<select>` whose list the shell drew, or
+    /// keep its choice with `None`, and close the list.
+    pub(super) fn answer_select(&self, id: Option<usize>) {
+        let Some(mut select) = self.delegate.select.borrow_mut().take() else {
+            return;
+        };
+        if let Some(id) = id {
+            select.select(vec![id]);
+        }
+        select.submit();
+    }
+
+    /// The first gamepad's state in the standard mapping: Servo reads no pads
+    /// itself, so the page's `navigator.getGamepads()` shows this one.
+    pub(super) fn send_gamepad(&self, axes: [f32; 4], values: [f32; 16]) {
+        let index = GamepadIndex(0);
+        let mut last = self.gamepad.borrow_mut();
+        let previous = match *last {
+            Some(previous) => previous,
+            None => {
+                self.webview
+                    .notify_input_event(InputEvent::Gamepad(GamepadEvent::Connected(
+                        index,
+                        "Standard gamepad".to_owned(),
+                        GamepadInputBounds {
+                            axis_bounds: (-1.0, 1.0),
+                            button_bounds: (0.0, 1.0),
+                        },
+                        GamepadSupportedHapticEffects {
+                            supports_dual_rumble: false,
+                            supports_trigger_rumble: false,
+                        },
+                    )));
+                ([f32::NAN; 4], [f32::NAN; 16])
+            }
+        };
+        let changes = axes
+            .iter()
+            .zip(previous.0)
+            .enumerate()
+            .filter(|(_, (now, before))| **now != *before)
+            .map(|(axis, (now, _))| GamepadUpdateType::Axis(axis, f64::from(*now)))
+            .chain(
+                values
+                    .iter()
+                    .zip(previous.1)
+                    .enumerate()
+                    .filter(|(_, (now, before))| **now != *before)
+                    .map(|(button, (now, _))| GamepadUpdateType::Button(button, f64::from(*now))),
+            );
+        for change in changes {
+            self.webview
+                .notify_input_event(InputEvent::Gamepad(GamepadEvent::Updated(index, change)));
+        }
+        *last = Some((axes, values));
     }
 
     pub(super) fn send_mouse(&self, event: MouseEvent) {
@@ -398,11 +585,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn command_line_preferences_take_their_type_from_the_text() {
-        assert!(matches!(preference_value("true"), PrefValue::Bool(true)));
-        assert!(matches!(preference_value("12"), PrefValue::Int(12)));
-        assert!(matches!(preference_value("0.5"), PrefValue::Float(v) if v == 0.5));
-        assert!(matches!(preference_value("en-GB"), PrefValue::Str(s) if s == "en-GB"));
+    fn command_line_preferences_take_the_preference_s_own_type() {
+        let prefs = servo::Preferences::default();
+        let value = |name, text| preference_value(&prefs, name, text);
+        assert!(matches!(
+            value("devtools_server_enabled", "true"),
+            Ok(PrefValue::Bool(true))
+        ));
+        assert!(matches!(
+            value("devtools_server_listen_address", "127.0.0.1:7011"),
+            Ok(PrefValue::Str(address)) if address == "127.0.0.1:7011"
+        ));
+        assert!(value("devtools_server_enabled", "7011").is_err());
+        assert!(value("no_such_preference", "true").is_err());
     }
 
     #[test]

@@ -8942,6 +8942,7 @@ name = "render-wgpu"
 version = "0.1.0"
 dependencies = [
  "animation-pose",
+ "arboard",
  "asset-import",
  "bevy_mikktspace",
  "bytemuck",

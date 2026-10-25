@@ -48,6 +48,8 @@ url = { version = "2", optional = true }
 # Servo's network stack takes rustls's process default provider, which rustls
 # cannot pick once the host links both of its providers.
 rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
+# The Servo page's clipboard writes (Servo's own dependency).
+arboard = { version = "3", default-features = false, optional = true }
 # NVIDIA DLSS as a temporal upscale stage (`dlss.rs`). Off by default: its
 # build needs NVIDIA's DLSS SDK, the Vulkan headers and clang
 # (docs/lighting-and-sky.md#dlss).
@@ -68,6 +70,7 @@ servo-overlay = [
     "dep:euclid",
     "dep:url",
     "dep:rustls",
+    "dep:arboard",
 ]
 dlss = ["dep:dlss_wgpu", "dep:uuid"]
 

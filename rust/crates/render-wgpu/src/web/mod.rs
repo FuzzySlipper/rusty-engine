@@ -198,6 +198,32 @@ pub struct KeyInput<'a> {
     pub modifiers: EventModifiers,
 }
 
+/// A control the page asks the shell to draw over it. Chromium draws its own
+/// (as popups); Servo asks for them.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PageControl {
+    /// A `<select>`'s option list, for the element at `rect` (physical
+    /// pixels in the view). [`WebOverlay::answer_select`] closes it.
+    Select {
+        rect: PopupRect,
+        options: Vec<PageOption>,
+    },
+    /// The page closed the control it asked for.
+    Closed,
+}
+
+/// One option of a `<select>`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PageOption {
+    /// What [`WebOverlay::answer_select`] chooses it by.
+    pub id: usize,
+    pub label: String,
+    pub disabled: bool,
+    pub selected: bool,
+    /// Its `<optgroup>`'s label.
+    pub group: Option<String>,
+}
+
 /// An imported texture and the bind group drawing it at its origin.
 struct Layer {
     texture: ImportedTexture,
@@ -247,7 +273,9 @@ pub struct WebOverlay {
 
 impl WebOverlay {
     /// Load `url` into a transparent page of `width`×`height` physical pixels
-    /// at `scale_factor` physical pixels per CSS pixel.
+    /// at `scale_factor` physical pixels per CSS pixel. Servo runs
+    /// `document_script` at the start of every document; Chromium's page
+    /// takes the shell's scripts on its load events instead.
     pub fn new(
         runtime: &WebRuntime,
         gpu: &Gpu,
@@ -255,12 +283,14 @@ impl WebOverlay {
         width: u32,
         height: u32,
         scale_factor: f32,
+        document_script: Option<&str>,
     ) -> Result<Self, String> {
         let host = HostWgpuContext::new(gpu.device.clone(), gpu.queue.clone());
         let (width, height) = (width.max(1), height.max(1));
         let producer = match &runtime.engine {
             #[cfg(feature = "web-overlay")]
-            Engine::Chromium(cef) => Producer::Chromium(Box::new(
+            Engine::Chromium(cef) => Producer::Chromium(Box::new({
+                let _ = document_script;
                 welding::PlatformCefProducer::new(
                     cef,
                     welding::PlatformCefConfig {
@@ -280,8 +310,8 @@ impl WebOverlay {
                     #[cfg(windows)]
                     &host,
                 )
-                .map_err(|e| e.to_string())?,
-            )),
+                .map_err(|e| e.to_string())?
+            })),
             #[cfg(feature = "servo-overlay")]
             Engine::Servo(servo) => Producer::Servo(servo_page::ServoPage::new(
                 servo,
@@ -289,6 +319,7 @@ impl WebOverlay {
                 url,
                 dpi::PhysicalSize::new(width, height),
                 scale_factor,
+                document_script,
             )?),
         };
         let device = &gpu.device;
@@ -525,6 +556,44 @@ impl WebOverlay {
             Producer::Chromium(producer) => producer.poll_cursor_shape(),
             #[cfg(feature = "servo-overlay")]
             Producer::Servo(page) => page.poll_cursor(),
+        }
+    }
+
+    /// The next control the page asks the shell to draw. Chromium asks for
+    /// none.
+    pub fn poll_control(&mut self) -> Option<PageControl> {
+        match &mut self.producer {
+            #[cfg(feature = "web-overlay")]
+            Producer::Chromium(_) => None,
+            #[cfg(feature = "servo-overlay")]
+            Producer::Servo(page) => page.poll_control(),
+        }
+    }
+
+    /// Answer the open [`PageControl::Select`]: choose option `id`, or keep
+    /// the element's choice with `None`.
+    pub fn answer_select(&mut self, id: Option<usize>) {
+        match &mut self.producer {
+            #[cfg(feature = "web-overlay")]
+            Producer::Chromium(_) => {
+                let _ = id;
+            }
+            #[cfg(feature = "servo-overlay")]
+            Producer::Servo(page) => page.answer_select(id),
+        }
+    }
+
+    /// The first gamepad's state in the standard mapping: sticks (down
+    /// positive) and the 16 buttons' values. Chromium reads pads itself and
+    /// ignores it.
+    pub fn send_gamepad(&mut self, axes: [f32; 4], values: [f32; 16]) {
+        match &mut self.producer {
+            #[cfg(feature = "web-overlay")]
+            Producer::Chromium(_) => {
+                let _ = (axes, values);
+            }
+            #[cfg(feature = "servo-overlay")]
+            Producer::Servo(page) => page.send_gamepad(axes, values),
         }
     }
 
@@ -972,8 +1041,8 @@ mod tests {
             || {},
         )
         .expect("Servo starts");
-        let mut overlay =
-            WebOverlay::new(&runtime, &gpu, PAGE, WIDTH, HEIGHT, 1.0).expect("the page opens");
+        let mut overlay = WebOverlay::new(&runtime, &gpu, PAGE, WIDTH, HEIGHT, 1.0, None)
+            .expect("the page opens");
         let expected = |x: u32, y: u32| {
             if x < 64 && y < 32 {
                 [255, 0, 0, 255]

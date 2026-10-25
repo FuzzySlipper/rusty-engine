@@ -107,26 +107,27 @@ can lock the page's input. Those a page might rely on warn in its console
 [green path](csharp-product-style.md#game-ui-and-diagnostic-ui); diagnostic UI
 may use any of this and runs fully in a browser.
 
-| Feature | In the window |
-| --- | --- |
-| Native HTML5 drag and drop | Refused at once: `dragend` with `dropEffect` `none`, never `drop`. Warns. |
-| `print()` | Does nothing; the shell replaces it, since off screen it never returns and freezes the page. Warns. Ctrl+P is an ordinary key. |
-| `alert`, `confirm`, `prompt` | Cancelled at once: `undefined`, `false`, `null`. Warns. |
-| `beforeunload` prompt | Not shown; the page unloads. |
-| `window.open`, `target="_blank"` links | Not opened; `window.open` returns `null`. Warns with the URL. |
-| Same-tab navigation | Replaces the UI page. |
-| File and colour pickers | Do not open. Warns on click. |
-| `<select>`, date picker | Work: the popup is drawn over the page. |
-| `<dialog>` with `showModal()` | Works. |
-| `title` tooltips | Not shown. |
-| Image cursors (`cursor: url(...) x y, auto`) | Shown with their hotspot, scaled to the window's display scale. A held pointer lock hides them, as it hides any cursor. |
-| `cursor: none` | Hides the native cursor while the pointer is over that element. |
-| Context menu | `contextmenu` fires; no native menu appears. |
-| Download links | Nothing downloads. |
-| Clipboard | `navigator.clipboard.writeText` works; `readText` is denied. |
-| Fullscreen API | Resolves and fills the view; the native window does not change. |
-| Notifications, geolocation and other permission prompts | Denied at once. |
-| Text entry, Tab focus, wheel scrolling | Work. IME composition has not been checked. |
+| Feature | In the window | Under Servo, where it differs |
+| --- | --- | --- |
+| Native HTML5 drag and drop | Refused at once: `dragend` with `dropEffect` `none`, never `drop`. Warns. | Never starts: Servo fires no `dragstart`; pointer events go on. |
+| `print()` | Does nothing; the shell replaces it, since off screen it never returns and freezes the page. Warns. Ctrl+P is an ordinary key. | |
+| `alert`, `confirm`, `prompt` | Cancelled at once: `undefined`, `false`, `null`. Warns. | |
+| `beforeunload` prompt | Not shown; the page unloads. | |
+| `window.open`, `target="_blank"` links | Not opened; `window.open` returns `null`. Warns with the URL. | |
+| Same-tab navigation | Replaces the UI page. | |
+| File and colour pickers | Do not open. Warns on click. | |
+| `<select>`, date picker | Work: the popup is drawn over the page. | The shell draws a `<select>`'s option list over the page (click, arrow keys, Enter, Escape). Servo has no date picker: a date input is a plain text field. |
+| `<dialog>` with `showModal()` | Works. | |
+| `title` tooltips | Not shown. | |
+| Image cursors (`cursor: url(...) x y, auto`) | Shown with their hotspot, scaled to the window's display scale. A held pointer lock hides them, as it hides any cursor. | The fallback keyword shows: Servo reports no image cursors. |
+| `cursor: none` | Hides the native cursor while the pointer is over that element. | |
+| Context menu | `contextmenu` fires; no native menu appears. | |
+| Download links | Nothing downloads. | |
+| Clipboard | `navigator.clipboard.writeText` works; `readText` is denied. | `readText` resolves with an empty string; the system clipboard is never read. |
+| Fullscreen API | Resolves and fills the view; the native window does not change. | |
+| Notifications, geolocation and other permission prompts | Denied at once. | |
+| Gamepads | Chromium reads them itself. | The shell hands Servo the first pad in the standard mapping, named `Standard gamepad`. |
+| Text entry, Tab focus, wheel scrolling | Work. IME composition has not been checked. | |
 
 ## Running
 
@@ -206,9 +207,15 @@ renderer it draws with).
   --desktop --servo` builds one (Servo's build needs Python 3). Published
   desktop packs do not carry it yet, and it runs on Linux only.
 - Window input, the pointer-lock and confinement shim, focus and the
-  page's console reach Servo through the same shell paths as Chromium. The
-  [browser-features table](#browser-features-in-the-window) describes
-  Chromium.
+  page's console reach Servo through the same shell paths as Chromium. Servo
+  takes the shell's page scripts at the start of every document. The
+  [browser-features table](#browser-features-in-the-window) names what
+  differs.
+- Page storage persists under `desktop-ui/servo/` in the persistence root.
+- **Inspecting the page.** `--servo-pref devtools_server_enabled=true`
+  starts Servo's devtools server (Firefox's remote debugging protocol) on
+  127.0.0.1:7000, or `--servo-pref devtools_server_listen_address=<addr>`;
+  the window accepts its connections. Servo has no Chrome DevTools Protocol.
 
 ## Shipping a product
 
