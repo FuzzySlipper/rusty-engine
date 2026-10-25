@@ -6,7 +6,8 @@ pack, and a pairing manifest. Every pair has a version derived from one Engine
 commit, for example `0.1.0-dev.abc123def456`. The archive name, package
 version, SDK-generated ABI metadata, and runtime manifest all name that same
 revision. A published pair also carries a desktop runtime pack: the same host
-built with the desktop shell and Chromium's runtime, for window mode. Do not combine
+built with the desktop shell and both UI engines (Servo, and Chromium with its
+runtime), for window mode. Do not combine
 artifacts from different pairs or add compatibility negotiation.
 
 ## Use a pair from a product

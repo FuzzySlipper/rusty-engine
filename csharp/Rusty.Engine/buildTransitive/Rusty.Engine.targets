@@ -130,9 +130,9 @@
          to a native window (the pair's desktop pack). The rusty dev output
          option sets it for one launch. -->
     <RustyEngineProductRenderOutput Condition="'$(RustyEngineProductRenderOutput)' == ''">stream</RustyEngineProductRenderOutput>
-    <!-- The web engine drawing the UI page in the window: chromium or servo.
-         The rusty dev window-ui option sets it for one launch. -->
-    <RustyEngineProductWindowUi Condition="'$(RustyEngineProductWindowUi)' == ''">chromium</RustyEngineProductWindowUi>
+    <!-- The web engine drawing the UI page in the window: servo, or
+         chromium. The rusty dev window-ui option sets it for one launch. -->
+    <RustyEngineProductWindowUi Condition="'$(RustyEngineProductWindowUi)' == ''">servo</RustyEngineProductWindowUi>
     <!-- Where the sound plays: streamed to the pages watching the frames, or
          on the runtime's output device, optional or required. It follows the
          render output unless set. The rusty dev audio-output option sets it

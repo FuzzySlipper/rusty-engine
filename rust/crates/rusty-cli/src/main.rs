@@ -1309,7 +1309,7 @@ Get or refresh this command:
 fn dev_usage() -> String {
     format!("usage: rusty dev [--project <ordinary-product.csproj>] [--port <u16>] [--bind-host <IPv4>] [--live-debug]
                  [--headless [--chromium <executable>]] [--output <stream|window>]
-                 [--audio-output <stream|device-optional|device-required>] [--window-ui <chromium|servo>]
+                 [--audio-output <stream|device-optional|device-required>] [--window-ui <servo|chromium>]
                  [--cef-switch <name[=value]>]... [--servo-pref <name=value>]...
                  [--diagnostics-log <file>] [--label <text>] [--keep] [--idle-timeout <minutes>]
                  [--instance <name>] [--allow-ephemeral-port]

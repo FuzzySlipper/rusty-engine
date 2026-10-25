@@ -88,8 +88,8 @@ Read [the architecture overview](docs/architecture.md) and
   entrypoints, unsafe native calls, parallel declarations, or checked
   composition projects.
 - A matching runtime pack owns the Rust host, its renderer and the browser
-  shell; the matching desktop pack adds the native window host and Chromium's
-  runtime. `rusty dev` stages the loose Product bundle and uses CoreCLR.
+  shell; the matching desktop pack adds the native window host, with Servo
+  and Chromium as its UI engines, and Chromium's runtime. `rusty dev` stages the loose Product bundle and uses CoreCLR.
   Products do not copy Engine browser assets or invoke Cargo to host
   themselves.
 - Engine source use must be an explicit contributor override. Never teach

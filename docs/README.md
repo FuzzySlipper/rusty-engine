@@ -14,7 +14,7 @@ The root [README](../README.md) is the repository landing page and
 - [Architecture overview](architecture.md): the Rust, generated C#, C# product
   and TypeScript layers, source owners, runtime-rendered output, packaging.
 - [Desktop shell](desktop-shell.md): the native window, `render-wgpu` on a
-  window surface with the product UI composited through Chromium.
+  window surface with the product UI composited through Servo or Chromium.
 
 ## C# SDK
 

@@ -107,7 +107,8 @@ diagnostics through the Engine's diagnostics and UI surfaces.
 ## Game UI and diagnostic UI
 
 Rusty Engine games ship as desktop apps. Players see the product UI page in
-the desktop window, where off-screen Chromium composites it over the scene.
+the desktop window, where an off-screen web engine (Servo, or Chromium)
+composites it over the scene.
 During development the same page also runs in a browser tab, which is where
 agents and tools drive it most easily. The page is ordinary DOM either way,
 and its UI is one of two kinds:
@@ -138,10 +139,13 @@ The green path:
   works everywhere. Never use `alert`, `confirm` or `prompt`: the window
   cancels them. For a right-click menu, call `preventDefault()` on
   `contextmenu` and draw the menu; the window shows no native one.
-- **Lists and choices.** Overflow lists scroll with the wheel. `<select>` and
-  the date picker work; the window draws their popups. Servo
-  ([UI engine](desktop-shell.md#ui-engine)) has no date picker: draw date
-  choices in the page.
+- **Lists and choices.** Overflow lists scroll with the wheel. `<select>`
+  works, single or `multiple`; the window draws its list. The window's
+  default engine, Servo ([UI engine](desktop-shell.md#ui-engine)), has no
+  date picker: draw date and time choices in the page.
+- **Styling.** Servo 0.7 lacks `:has()`, `::backdrop` and `autofocus`, and
+  sizes form controls its own way: style game UI without them, and size
+  controls explicitly.
 - **Text entry.** Use `<input>` and `<textarea>`. IME composition has not been
   checked in the window.
 - **Tooltips.** Draw them on `pointerenter`/`pointerleave`; the window never

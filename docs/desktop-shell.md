@@ -16,16 +16,17 @@ TypeScript UI is composited over it.
   the frame hold the scene. The acquire waits on a thread of its own, asked
   about 2 ms before the display should free the next image; the compositor
   can hold images for several frames, and the event loop keeps taking window
-  events meanwhile. The shell pumps Chromium on each key, button or wheel
-  event and every 2 ms, so input reaches the page and the page's request
-  reaches the runtime without waiting for a frame. `engine.renderer` reports the window's
+  events meanwhile. Servo wakes the event loop when it has work; Chromium is
+  pumped on each key, button or wheel event and every 2 ms. Either way input
+  reaches the page and the page's request reaches the runtime without
+  waiting for a frame. `engine.renderer` reports the window's
   presented frames (time and step), its median acquire, lock, draw and
   present times, when input reached the window, and which step consumed
   recent input.
 - **UI.** The window shows the same browser shell page `rusty dev` serves,
   from the runtime's own HTTP host (`http://127.0.0.1:<port>/`). A web
   engine renders it off-screen and `render-wgpu`'s `web` module composites
-  it over the frame in gamma space: Chromium (CEF) by default, or Servo
+  it over the frame in gamma space: Servo by default, or Chromium (CEF)
   ([UI engine](#ui-engine)). Each Chromium repaint is imported as a new
   texture. An idle UI costs nothing per frame. Off-screen Chromium paints popup widgets
   (a `<select>`'s list, date and colour pickers) as a separate surface. The
@@ -65,12 +66,12 @@ TypeScript UI is composited over it.
   cursor positions and DOM hover. Escape and focus loss end it too. Where the
   platform has no confining grab (macOS) the shell refuses, and the page
   falls back to the browser's drawn cursor under a lock.
-- **Browser features.** The page runs in off-screen Chromium, which shows no
-  native windows of its own: no dialogs, pickers, print previews or new
+- **Browser features.** The page runs in an off-screen web engine, which
+  shows no native windows of its own: no dialogs, pickers, print previews or new
   windows. What each feature does there is
   [below](#browser-features-in-the-window).
-- **Focus.** The off-screen page keeps Chromium's focus while the window is
-  in the background, so the shell reports window focus to it: focus loss sends the
+- **Focus.** The off-screen page keeps its engine's focus while the window
+  is in the background, so the shell reports window focus to it: focus loss sends the
   page a `blur` and makes `document.hasFocus()` false, and the input capture
   clears its held input on that `blur`, as in a browser, locked or not.
 - **Video.** `render-wgpu` plays video clips (WebM, VP9 profile 0, decoded
@@ -84,7 +85,8 @@ TypeScript UI is composited over it.
   reaches the runtime's HTTP host over loopback, as in streaming mode.
   `rusty dev --cef-switch name[=value]` (repeatable, forwarded to
   `rusty-product-host --cef-switch`) passes Chromium switches; with
-  `remote-debugging-port=<port>` a CDP client attaches to the page.
+  `remote-debugging-port=<port>` a CDP client attaches to a Chromium page.
+  Servo's page takes a devtools client instead ([UI engine](#ui-engine)).
 - **UI storage.** The page's local storage persists under the runtime's
   persistence root (`desktop-ui/`).
 - **Window placement.** The window reopens at its last size, position (where
@@ -100,14 +102,15 @@ TypeScript UI is composited over it.
 
 ## Browser features in the window
 
-The window runs the product UI page in off-screen Chromium, so a browser
-feature that would open a native window does not. None of the features below
+The window runs the product UI page in an off-screen web engine (Servo by
+default, or Chromium), so a browser feature that would open a native window
+does not. None of the features below
 can lock the page's input. Those a page might rely on warn in its console
 (`rusty desktop shell: …`). Game UI keeps to the
 [green path](csharp-product-style.md#game-ui-and-diagnostic-ui); diagnostic UI
 may use any of this and runs fully in a browser.
 
-| Feature | In the window | Under Servo, where it differs |
+| Feature | Under Chromium | Under Servo, where it differs |
 | --- | --- | --- |
 | Native HTML5 drag and drop | Refused at once: `dragend` with `dropEffect` `none`, never `drop`. Warns. | Never starts: Servo fires no `dragstart`; pointer events go on. |
 | `print()` | Does nothing; the shell replaces it, since off screen it never returns and freezes the page. Warns. Ctrl+P is an ordinary key. | |
@@ -189,9 +192,9 @@ rusty dev --project <product.csproj> --output window
 ## UI engine
 
 The manifest's `renderer.windowUi` picks the engine that draws the UI page:
-`chromium` (the default) or `servo`. Set it with
+`servo` (the default) or `chromium`. Set it with
 `RustyEngineProductWindowUi`, or for one launch with
-`rusty dev --window-ui servo`; `rusty-product-host --window-ui` overrides a
+`rusty dev --window-ui chromium`; `rusty-product-host --window-ui` overrides a
 release's manifest. `engine.renderer`'s `window.ui` and the host's closing
 `RUSTY_DESKTOP` line name the engine (for Servo, its version and the GL
 renderer it draws with).
@@ -231,8 +234,9 @@ renderer it draws with).
 
 A product release that opens a window ships:
 - `bin/rusty-product-host` from the desktop pack;
-- with Chromium (`renderer.windowUi = chromium`), `lib/cef` beside it (the
-  host finds it at `../lib/cef`); with Servo, no `lib/cef`;
+- with Servo (the default), nothing more; with Chromium
+  (`renderer.windowUi = chromium`), `lib/cef` beside it (the host finds it at
+  `../lib/cef`);
 - on Windows, `nethost.dll` and ANGLE's `libEGL.dll` and `libGLESv2.dll`
   from the pack's `bin/`, beside the host;
 - the Product as `rusty build --pack <release>` writes it: `product.rpak`
@@ -245,9 +249,9 @@ A product release that opens a window ships:
     host links CEF's wrapper whichever engine draws;
   - the source of the MPL-2.0 crates `welding`, `grafting` and `fidget-mesh`,
     which must stay available to recipients;
-  - with Servo, `servo/MPL-2.0-SOURCES.txt`, the unmodified MPL-2.0 crates
-    Servo brings and where each one's source is, and on Windows ANGLE's
-    licence (`angle/LICENSE`, BSD);
+  - `servo/MPL-2.0-SOURCES.txt`, the unmodified MPL-2.0 crates Servo brings
+    and where each one's source is, and on Windows ANGLE's licence
+    (`angle/LICENSE`, BSD): the host carries Servo whichever engine draws;
   - `NOTICES.txt`, the licence and notice texts of every third-party crate
     the host links and the native libraries they build in;
   - the rest of the pack's licences (`dejavu-sans/`, with DLSS
@@ -288,6 +292,6 @@ An installer is chosen when a product asks for one.
   import, and the shell already runs the window on the main thread, as macOS
   requires.
 
-Chromium runs unsandboxed: it shows the product's own first-party UI, never
+Chromium, when chosen, runs unsandboxed: it shows the product's own first-party UI, never
 arbitrary pages. Packaging (installers, updater, signing) is outside this
 page.

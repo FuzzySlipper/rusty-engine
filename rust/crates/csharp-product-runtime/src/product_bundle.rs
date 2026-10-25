@@ -128,7 +128,7 @@ impl ProductBundle {
             Some(_) => return Err(field_error("renderer.output", "must be stream or window")),
         };
         let window_ui = match manifest.renderer.window_ui.as_deref() {
-            None => WindowUi::Chromium,
+            None => WindowUi::Servo,
             Some(name) => WindowUi::parse(name)
                 .ok_or_else(|| field_error("renderer.windowUi", "must be chromium or servo"))?,
         };
@@ -1281,17 +1281,17 @@ mod tests {
         fs::write(&manifest_path, with("tv", "device-required")).unwrap();
         let error = read(&root).expect_err("unknown output rejects");
         assert!(error.contains("product.json:renderer.output"));
-        assert_eq!(bundle.window_ui, WindowUi::Chromium);
+        assert_eq!(bundle.window_ui, WindowUi::Servo);
         let with_ui = |ui: &str| {
             original.replace(
                 "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}",
                 &format!("\"renderer\":{{\"output\":\"window\",\"windowUi\":\"{ui}\"}}"),
             )
         };
-        fs::write(&manifest_path, with_ui("servo")).unwrap();
+        fs::write(&manifest_path, with_ui("chromium")).unwrap();
         assert_eq!(
-            read(&root).expect("servo admits").window_ui,
-            WindowUi::Servo
+            read(&root).expect("chromium admits").window_ui,
+            WindowUi::Chromium
         );
         fs::write(&manifest_path, with_ui("gecko")).unwrap();
         let error = read(&root).expect_err("unknown window UI rejects");
