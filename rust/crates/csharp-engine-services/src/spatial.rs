@@ -11,7 +11,10 @@ use std::{
     ffi::c_void,
     ops::RangeInclusive,
     rc::Rc,
-    sync::{Arc, Weak},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex, PoisonError, Weak,
+    },
     time::Instant,
 };
 
@@ -33,10 +36,10 @@ use engine_spatial::{
     CharacterMeshInstance as SpatialCharacterMeshInstance, CharacterObstacle,
     CharacterStepColliders, CharacterStepSubject, CharacterStepWorld, MaterialVoxel, ShapeContact,
     SpatialOcclusionCollider, SpatialOcclusionQuery, SpatialOcclusionService, StaticMeshAssetId,
-    StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
-    SurfaceMeshOptions, SurfaceMode, TriggerCollider, TriggerGeometrySource, TriggerOverlapFact,
-    TriggerOverlapFactKind, TriggerReconcileCause, TriggerVolumeError, TriggerVolumeSystem,
-    VoxelCollisionScene, VoxelPickRay, VoxelPickService,
+    StaticMeshBaked, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshInstanceId,
+    StaticMeshResidencyPlan, StaticMeshTransform, SurfaceMeshOptions, SurfaceMode, TriggerCollider,
+    TriggerGeometrySource, TriggerOverlapFact, TriggerOverlapFactKind, TriggerReconcileCause,
+    TriggerVolumeError, TriggerVolumeSystem, VoxelCollisionScene, VoxelPickRay, VoxelPickService,
 };
 use entity_state::{
     CharacterMotionComponent, CharacterStance, EntityTransform, Quat, TransformComponent,
@@ -169,6 +172,7 @@ impl AdmittedSpatialContent {
 
 /// A placed artifact: its collision is the static-mesh instance under its
 /// product identity, of the asset its content digest names.
+#[derive(Clone)]
 struct PlacedContentArtifact {
     content: Arc<AdmittedSpatialContent>,
     offset: [i64; 3],
@@ -370,6 +374,56 @@ struct SpatialContentComposition {
 }
 
 impl SpatialContentComposition {
+    /// Take the `leaving` placements out and put the `arriving` ones in,
+    /// counting each cell in `progress`; returns the cells touched.
+    fn place(
+        &mut self,
+        leaving: &BTreeSet<u64>,
+        arriving: BTreeMap<u64, PlacedContentArtifact>,
+        grid: VoxelGridSpec,
+        progress: &AtomicUsize,
+    ) -> Vec<VoxelCoord> {
+        let mut touched = Vec::new();
+        for id in leaving {
+            if let Some(placed) = self.placed.remove(id) {
+                self.cells
+                    .remove(Some(*id), counted(placed.cells(), progress), &mut touched);
+            }
+        }
+        for (id, placed) in arriving {
+            self.cells.add(
+                Some(id),
+                counted(placed.cells(), progress),
+                grid,
+                &mut touched,
+            );
+            self.placed.insert(id, placed);
+        }
+        self.active = true;
+        touched
+    }
+
+    /// Compose the cells again from the layers, after a deferred batch that
+    /// took them was lost or failed to install.
+    fn recompose_cells(&mut self, grid: Option<VoxelGridSpec>) {
+        let mut cells = ComposedCells::default();
+        if let Some(grid) = grid {
+            let mut touched = Vec::new();
+            if let Some((_, base)) = &self.base {
+                cells.add(
+                    None,
+                    layer_cells(&base.navigation, [0; 3], 0, [0.0; 3]),
+                    grid,
+                    &mut touched,
+                );
+            }
+            for (id, placed) in &self.placed {
+                cells.add(Some(*id), placed.cells(), grid, &mut touched);
+            }
+        }
+        self.cells = cells;
+    }
+
     /// The level quantum every layer shares, or one with no layers.
     fn level_quantum(&self) -> f64 {
         self.base
@@ -442,8 +496,7 @@ pub(crate) struct RuntimeSpatialBridge {
     /// The ImplicitSurfaces owner a density stamp reads its field from.
     pub(crate) sibling_implicit: Option<*mut crate::implicit_surfaces::RuntimeImplicitBridge>,
     content: Option<*const crate::content::RuntimeContentBridge>,
-    /// Admitted spatial content by content digest while a session uses it.
-    admitted_content: BTreeMap<[u64; 4], Weak<AdmittedSpatialContent>>,
+    admitted_content: AdmittedContentCache,
     next_session: u64,
     pub(crate) prepared_world_origins: BTreeMap<u64, crate::world_origin::PreparedWorldOriginOwner>,
     pub(crate) next_world_origin_prepared: u64,
@@ -476,7 +529,8 @@ pub(crate) struct SpatialSession {
     /// Deferred residency changes' meshes and colliders, oldest first,
     /// building on worker threads until they install.
     pub(crate) deferred: std::collections::VecDeque<engine_spatial::DeferredChunkRebuild>,
-    /// Deferred static collision batches, baking one at a time.
+    /// Deferred static collision and spatial content batches, prepared one
+    /// at a time.
     static_deferred: static_deferred::StaticDeferred,
 }
 
@@ -490,50 +544,159 @@ impl SpatialSession {
             self.install(rebuild);
         }
         while !self.static_deferred.is_empty() {
-            self.static_deferred
-                .start(self.scene.static_mesh_projection());
-            if let Some((number, baked)) = self.static_deferred.take() {
-                self.install_static(number, baked);
+            self.start_deferred();
+            if let Some(taken) = self.static_deferred.take() {
+                self.install_static(taken);
             }
         }
     }
 
-    /// Install the deferred static collision batch baked so far and start
-    /// the next. Returns whether any installed.
+    /// Install the deferred static collision or content batch prepared so
+    /// far and start the next. Returns whether any installed.
     pub(crate) fn install_built_collision(&mut self) -> bool {
         let mut installed = false;
         while self.static_deferred.is_baked() {
-            let (number, baked) = self.static_deferred.take().expect("checked above");
-            self.install_static(number, baked);
-            self.static_deferred
-                .start(self.scene.static_mesh_projection());
+            let taken = self.static_deferred.take().expect("checked above");
+            self.install_static(taken);
+            self.start_deferred();
             installed = true;
         }
         installed
     }
 
-    fn install_static(
-        &mut self,
-        number: u64,
-        baked: Result<
-            (
-                engine_spatial::StaticMeshResidencyPlan,
-                engine_spatial::StaticMeshBaked,
-            ),
-            String,
-        >,
-    ) {
-        let installed = baked.and_then(|(plan, baked)| {
-            Arc::make_mut(&mut self.scene)
+    /// Start preparing the next deferred batch, when none is being prepared,
+    /// against the session as the batches before it left it. A content
+    /// batch takes the composed cells with it until it installs; every
+    /// change that would read them installs it first.
+    fn start_deferred(&mut self) {
+        let Some((number, batch)) = self.static_deferred.next() else {
+            return;
+        };
+        let projection = self.scene.static_mesh_projection().clone();
+        match batch {
+            static_deferred::DeferredBatch::Collision(batch) => {
+                self.static_deferred
+                    .spawn(number, false, Vec::new(), move |progress| {
+                        static_deferred::bake(&projection, batch, progress)
+                    });
+            }
+            static_deferred::DeferredBatch::Content(batch) => {
+                let grid_origin = self.content_grid_origin();
+                let composition = SpatialContentComposition {
+                    active: self.content.active,
+                    base: self.content.base.clone(),
+                    placed: self.content.placed.clone(),
+                    cells: std::mem::take(&mut self.content.cells),
+                };
+                let placing = batch.placing();
+                self.static_deferred
+                    .spawn(number, true, placing, move |progress| {
+                        admit_content_batch(composition, grid_origin, &projection, batch, progress)
+                    });
+            }
+        }
+    }
+
+    fn install_static(&mut self, taken: static_deferred::Taken) {
+        let static_deferred::Taken {
+            number,
+            content,
+            baked,
+        } = taken;
+        let installed = match baked {
+            Ok(static_deferred::Prepared::Collision(plan, baked)) => Arc::make_mut(&mut self.scene)
                 .install_static_mesh_residency(plan, baked)
-                .map_err(|error| format!("{error:?}"))
-        });
+                .map(drop)
+                .map_err(|error| format!("{error:?}")),
+            Ok(static_deferred::Prepared::Content(admission)) => self.install_content(*admission),
+            Err(refused) => {
+                if content {
+                    match refused.cells {
+                        Some(cells) => self.content.cells = cells,
+                        None => self.content.recompose_cells(self.navigation_grid()),
+                    }
+                }
+                Err(refused.reason)
+            }
+        };
         if let Err(error) = &installed {
             // Nobody is waiting on a receipt: the batch changes nothing, and
             // the readout counts it refused.
             eprintln!("CSHARP_COLLISION_RESIDENCY_DEFERRED: batch {number}: {error}");
         }
         self.static_deferred.finish(number, installed.is_err());
+    }
+
+    /// Install a content batch a worker admitted: its collision, then the
+    /// composition and navigation it built, under a new navigation revision.
+    fn install_content(&mut self, admission: ContentAdmission) -> Result<(), String> {
+        let ContentAdmission {
+            composition,
+            mut navigation,
+            collision,
+            baked,
+        } = admission;
+        if let Err(error) =
+            Arc::make_mut(&mut self.scene).install_static_mesh_residency(collision, baked)
+        {
+            // The worker changed the cells it took; the layers are as they
+            // were.
+            self.content.recompose_cells(self.navigation_grid());
+            return Err(format!("{error:?}"));
+        }
+        self.navigation_revision += 1;
+        navigation.revision = self.navigation_revision;
+        let replaced = (
+            std::mem::replace(&mut self.content, composition),
+            self.navigation.replace(navigation),
+        );
+        // Freeing a large composition's navigation takes an update several
+        // milliseconds, so a thread of its own does it; when none can be
+        // spawned, the closure and what it holds drop here.
+        let _ = std::thread::Builder::new()
+            .name("rusty-content-release".to_owned())
+            .spawn(move || drop(replaced));
+        Ok(())
+    }
+
+    /// Where the composition's navigation grid's zero corner lies; a first
+    /// placement starts a composition on the current frame.
+    fn content_grid_origin(&self) -> [f64; 3] {
+        match (&self.navigation, self.content.active) {
+            (Some(navigation), true) => navigation.grid_origin,
+            _ => [0.0; 3],
+        }
+    }
+
+    fn navigation_grid(&self) -> Option<VoxelGridSpec> {
+        self.navigation
+            .as_ref()
+            .map(|navigation| navigation.projection.grid())
+    }
+
+    /// A content residency receipt for the composition live now.
+    fn content_residency_receipt(
+        &self,
+        collision_revision_before: u64,
+        deferred_batch: u64,
+    ) -> NativeSpatialContentArtifactResidencyReceipt {
+        let live = self.scene.static_mesh_projection();
+        let navigation = self.navigation.as_ref().map_or((0, 0), |navigation| {
+            (
+                navigation.projection.walkable_len() as u64,
+                navigation.projection_hash,
+            )
+        });
+        NativeSpatialContentArtifactResidencyReceipt {
+            collision_revision_before,
+            collision_revision_after: live.revision(),
+            navigation_revision: self.navigation_revision,
+            instance_count: self.content.placed.len() as u64,
+            navigation_cell_count: navigation.0,
+            collision_projection_hash: live.projection_hash(),
+            navigation_projection_hash: navigation.1,
+            deferred_batch,
+        }
     }
 
     /// Install the deferred residency changes built so far, oldest first,
@@ -1139,7 +1302,7 @@ impl RuntimeSpatialBridge {
             sibling_appearance: None,
             sibling_implicit: None,
             content: None,
-            admitted_content: BTreeMap::new(),
+            admitted_content: AdmittedContentCache::default(),
             next_session: 1,
             prepared_world_origins: BTreeMap::new(),
             next_world_origin_prepared: 1,
@@ -1602,34 +1765,41 @@ impl RuntimeSpatialBridge {
             .base
             .as_ref()
             .map(|(identity, _)| spatial_content_asset_id(identity.content_sha256));
+        let placing: BTreeSet<u64> = session.static_deferred.placing().collect();
         let composed = removed_instances
             .iter()
             .copied()
             .chain(instances.iter().map(|instance| instance.id.0))
-            .any(|id| session.content.placed.contains_key(&id) || base_asset == Some(id));
+            .any(|id| {
+                session.content.placed.contains_key(&id)
+                    || placing.contains(&id)
+                    || base_asset == Some(id)
+            });
         if composed {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_COLLISION_DEFERRED_CONTENT",
                 "a deferred collision batch cannot remove or replace composed spatial content's instances",
             ));
         }
-        let batch = session.static_deferred.push(static_deferred::StaticBatch {
-            assets,
-            instances,
-            removed_assets: removed_assets
-                .iter()
-                .copied()
-                .map(StaticMeshAssetId)
-                .collect(),
-            removed_instances: removed_instances
-                .iter()
-                .copied()
-                .map(StaticMeshInstanceId)
-                .collect(),
-        });
-        session
+        let batch = session
             .static_deferred
-            .start(session.scene.static_mesh_projection());
+            .push(static_deferred::DeferredBatch::Collision(
+                static_deferred::StaticBatch {
+                    assets,
+                    instances,
+                    removed_assets: removed_assets
+                        .iter()
+                        .copied()
+                        .map(StaticMeshAssetId)
+                        .collect(),
+                    removed_instances: removed_instances
+                        .iter()
+                        .copied()
+                        .map(StaticMeshInstanceId)
+                        .collect(),
+                },
+            ));
+        session.start_deferred();
         let live = session.scene.static_mesh_projection();
         Ok(NativeCollisionReplaceReceipt {
             revision_before: live.revision(),
@@ -1719,7 +1889,12 @@ impl RuntimeSpatialBridge {
                     .filter_map(|id| session.content.placed[id].asset())
                     .chain(base_asset.filter(|_| base_leaves))
                     .filter(|asset| {
-                        !asset_used_after(&session.scene, *asset, &replaced, &instances)
+                        !asset_used_after(
+                            session.scene.static_mesh_projection(),
+                            *asset,
+                            &replaced,
+                            &instances,
+                        )
                     }),
             );
         }
@@ -1817,46 +1992,6 @@ impl RuntimeSpatialBridge {
         )
     }
 
-    /// The admitted form of a spatial content artifact, parsed the first
-    /// time a session uses its digest and shared while any session does.
-    fn admit_content(
-        &mut self,
-        content: &crate::content::RetainedContent,
-    ) -> Result<Arc<AdmittedSpatialContent>, CsharpEngineServicesError> {
-        let digest = content.sha256();
-        let key = [digest.word0, digest.word1, digest.word2, digest.word3];
-        if let Some(admitted) = self.admitted_content.get(&key).and_then(Weak::upgrade) {
-            return Ok(admitted);
-        }
-        let artifact = parse_spatial_content_artifact(&content.path, &content.bytes)?;
-        let navigation = content_navigation_cells(&artifact.navigation);
-        let positions = artifact.collision.positions;
-        let collision = (!positions.is_empty())
-            .then(|| {
-                StaticMeshColliderAsset::new(
-                    StaticMeshAssetId(spatial_content_asset_id(digest)),
-                    positions,
-                    artifact.collision.triangles,
-                )
-                .map_err(|error| {
-                    CsharpEngineServicesError::new(
-                        "CSHARP_SPATIAL_CONTENT_COLLISION",
-                        format!("{error:?}"),
-                    )
-                })
-            })
-            .transpose()?;
-        let admitted = Arc::new(AdmittedSpatialContent {
-            path: content.path.clone(),
-            collision,
-            navigation,
-        });
-        self.admitted_content
-            .retain(|_, admitted| admitted.strong_count() > 0);
-        self.admitted_content.insert(key, Arc::downgrade(&admitted));
-        Ok(admitted)
-    }
-
     fn replace_content_artifact(
         &mut self,
         request: &NativeSpatialContentArtifactReplaceRequest,
@@ -1879,7 +2014,7 @@ impl RuntimeSpatialBridge {
                     "unknown or stale content reference",
                 )
             })?;
-        let admitted = self.admit_content(&content)?;
+        let admitted = admit_content(&self.admitted_content, &content)?;
         let navigation_grid = navigation_grid(NativePlanarNavConfig {
             grid_id: request.navigation_grid_id,
             cell_size: admitted.navigation.cell_size,
@@ -1974,7 +2109,86 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeSpatialContentArtifactResidencyRequest,
     ) -> Result<NativeSpatialContentArtifactResidencyReceipt, CsharpEngineServicesError> {
+        let (arrivals, removed) = self.read_content_residency(request)?;
+        let config = ContentNavigationConfig {
+            grid_id: request.navigation_grid_id,
+            chunk_size: request.navigation_chunk_size,
+            max_step_cells: u8::try_from(request.navigation_max_step_cells).map_err(|_| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_NAVIGATION_CONFIG",
+                    "maximum navigation step exceeded u8",
+                )
+            })?,
+        };
+        if request.deferred {
+            let cache = Arc::clone(&self.admitted_content);
+            let session = self.session_mut(request.session)?;
+            let batch = session
+                .static_deferred
+                .push(static_deferred::DeferredBatch::Content(ContentBatch {
+                    arrivals,
+                    removed,
+                    config,
+                    cache,
+                }));
+            session.start_deferred();
+            let revision = session.scene.static_mesh_projection().revision();
+            return Ok(session.content_residency_receipt(revision, batch));
+        }
         self.settle_deferred(request.session)?;
+        let arriving = arrivals
+            .into_iter()
+            .map(|arrival| arrival.admit(&self.admitted_content))
+            .collect::<Result<Vec<_>, _>>()?;
+        let source = self.collision_source.clone();
+        let session = self.session_mut(request.session)?;
+        let composing = session.content.active;
+        let grid_origin = session.content_grid_origin();
+        let ContentResidencyPlan {
+            grid,
+            arriving,
+            leaving,
+            collision,
+            ..
+        } = plan_content_residency(
+            &session.content,
+            grid_origin,
+            arriving,
+            &removed,
+            config,
+            session.scene.static_mesh_projection(),
+        )?;
+        let baked = collision
+            .bake(&AtomicUsize::new(0))
+            .map_err(content_collision_error)?;
+        let receipt = source
+            .change_scene(request.session, &mut session.scene, |scene| {
+                scene.install_static_mesh_residency(collision, baked)
+            })
+            .map_err(content_collision_error)?;
+        let touched = session
+            .content
+            .place(&leaving, arriving, grid, &AtomicUsize::new(0));
+        let navigation_revision = session.navigation_revision + 1;
+        session.content.install_navigation(
+            &mut session.navigation,
+            composing,
+            grid,
+            config.max_step_cells,
+            grid_origin,
+            navigation_revision,
+            touched,
+        );
+        session.navigation_revision = navigation_revision;
+        Ok(session.content_residency_receipt(receipt.revision_before, 0))
+    }
+
+    /// A residency request's placements, their artifacts read but not yet
+    /// admitted, and its removals.
+    fn read_content_residency(
+        &self,
+        request: &NativeSpatialContentArtifactResidencyRequest,
+    ) -> Result<(Vec<ContentArrival>, Vec<u64>), CsharpEngineServicesError> {
         let admitted = unsafe {
             borrowed_slice(
                 request.admitted,
@@ -1995,7 +2209,6 @@ impl RuntimeSpatialBridge {
                 "Spatial has no Engine Content owner",
             )
         })?;
-        // Read every artifact before changing anything.
         let mut arrivals = Vec::with_capacity(admitted.len());
         for placement in admitted {
             let translation = native_vec3_value(placement.translation);
@@ -2015,226 +2228,23 @@ impl RuntimeSpatialBridge {
                         "unknown or stale content reference",
                     )
                 })?;
-            arrivals.push((placement, self.admit_content(&content)?, translation));
-        }
-        let max_step_cells = u8::try_from(request.navigation_max_step_cells).map_err(|_| {
-            CsharpEngineServicesError::new(
-                "CSHARP_NAVIGATION_CONFIG",
-                "maximum navigation step exceeded u8",
-            )
-        })?;
-
-        let source = self.collision_source.clone();
-        let session = self.session_mut(request.session)?;
-        let composing = session.content.active;
-        // A first placement starts a composition on the current frame.
-        let grid_origin = match (&session.navigation, composing) {
-            (Some(navigation), true) => navigation.grid_origin,
-            _ => [0.0; 3],
-        };
-        let mut arriving = BTreeMap::new();
-        for (placement, content, translation) in &arrivals {
-            arriving.insert(
-                placement.id,
-                PlacedContentArtifact {
-                    content: Arc::clone(content),
-                    offset: [
-                        placement.column_offset,
-                        placement.level_offset,
-                        placement.row_offset,
-                    ],
-                    turns: (placement.quarter_turns % 4) as u8,
-                    translation: [
-                        f64::from(translation.x),
-                        f64::from(translation.y),
-                        f64::from(translation.z),
-                    ],
-                },
-            );
-        }
-        // Placements removed or replaced by an arriving id.
-        let leaving: BTreeSet<u64> = removed
-            .iter()
-            .chain(arriving.keys())
-            .copied()
-            .filter(|id| session.content.placed.contains_key(id))
-            .collect();
-        let remaining = || {
-            session
-                .content
-                .placed
-                .iter()
-                .filter(|(id, _)| !leaving.contains(id))
-        };
-
-        // The grid is the artifacts' own: the base's cell size, else the
-        // first placement's. The resident artifacts share one cell size and
-        // level quantum; every arriving one must too.
-        let resident_cells = session
-            .content
-            .base
-            .as_ref()
-            .map(|(_, content)| (None, &content.navigation))
-            .or_else(|| {
-                remaining()
-                    .next()
-                    .map(|(id, placed)| (Some(*id), &placed.content.navigation))
+            arrivals.push(ContentArrival {
+                id: placement.id,
+                content,
+                offset: [
+                    placement.column_offset,
+                    placement.level_offset,
+                    placement.row_offset,
+                ],
+                turns: (placement.quarter_turns % 4) as u8,
+                translation: [
+                    f64::from(translation.x),
+                    f64::from(translation.y),
+                    f64::from(translation.z),
+                ],
             });
-        let first_cells = match (resident_cells, arriving.first_key_value()) {
-            (Some((Some(resident), _)), Some((arriving, placed))) if *arriving < resident => {
-                Some(&placed.content.navigation)
-            }
-            (Some((_, cells)), _) => Some(cells),
-            (None, arriving) => arriving.map(|(_, placed)| &placed.content.navigation),
-        };
-        let grid = navigation_grid(NativePlanarNavConfig {
-            grid_id: request.navigation_grid_id,
-            cell_size: first_cells.map_or(1.0, |cells| cells.cell_size),
-            chunk_size: request.navigation_chunk_size,
-            max_step_cells: request.navigation_max_step_cells,
-        })?;
-        let mut level_quantum = None;
-        for cells in resident_cells
-            .map(|(_, cells)| cells)
-            .into_iter()
-            .chain(arriving.values().map(|placed| &placed.content.navigation))
-        {
-            if cells.cell_size != grid.voxel_size()
-                || level_quantum.is_some_and(|quantum| quantum != cells.level_quantum)
-            {
-                return Err(CsharpEngineServicesError::new(
-                    "CSHARP_SPATIAL_CONTENT_NAVIGATION_GRID",
-                    "composed spatial artifacts must share one navigation cell size and level quantum",
-                ));
-            }
-            level_quantum = Some(cells.level_quantum);
         }
-
-        // An arriving id replaces whatever collision instance it named.
-        let removed_instances: BTreeSet<StaticMeshInstanceId> = leaving
-            .iter()
-            .chain(arriving.keys())
-            .map(|id| StaticMeshInstanceId(*id))
-            .collect();
-        let instances: Vec<StaticMeshColliderInstance> = arriving
-            .iter()
-            .filter_map(|(id, placed)| {
-                let asset = placed.asset()?;
-                let [column, level, row] = placed.offset;
-                Some(StaticMeshColliderInstance {
-                    id: StaticMeshInstanceId(*id),
-                    asset,
-                    transform: StaticMeshTransform {
-                        translation: [
-                            grid_origin[0]
-                                + column as f64 * placed.content.navigation.cell_size
-                                + placed.translation[0],
-                            grid_origin[1]
-                                + level as f64 * placed.content.navigation.level_quantum
-                                + placed.translation[1],
-                            grid_origin[2]
-                                + row as f64 * placed.content.navigation.cell_size
-                                + placed.translation[2],
-                        ],
-                        rotation: quarter_turn_rotation(placed.turns),
-                        ..StaticMeshTransform::IDENTITY
-                    },
-                })
-            })
-            .collect();
-        // Assets: add an arriving one no artifact used, drop a leaving one
-        // no collision instance, an artifact's or the product's own, uses
-        // any more. The base artifact's instance id is its asset id.
-        let base_asset = session.content.base.as_ref().map(|(identity, _)| {
-            StaticMeshAssetId(spatial_content_asset_id(identity.content_sha256))
-        });
-        let composed = |asset: StaticMeshAssetId| {
-            session
-                .scene
-                .static_mesh_asset_users(asset)
-                .any(|instance| {
-                    session.content.placed.contains_key(&instance.0)
-                        || base_asset.is_some_and(|base| base.0 == instance.0)
-                })
-        };
-        let mut new_assets = BTreeMap::new();
-        for placed in arriving.values() {
-            if let Some(asset) = &placed.content.collision {
-                if !new_assets.contains_key(&asset.id) && !composed(asset.id) {
-                    new_assets.insert(asset.id, asset.clone());
-                }
-            }
-        }
-        let removed_assets: BTreeSet<StaticMeshAssetId> = leaving
-            .iter()
-            .filter_map(|id| session.content.placed[id].asset())
-            .filter(|asset| {
-                Some(*asset) != base_asset
-                    && !asset_used_after(&session.scene, *asset, &removed_instances, &instances)
-            })
-            .collect();
-        let instance_count = (session.content.placed.len() - leaving.len() + arriving.len()) as u64;
-
-        let collision = source
-            .change_scene(request.session, &mut session.scene, |scene| {
-                scene.apply_static_mesh_residency(
-                    new_assets.into_values(),
-                    instances,
-                    removed_assets,
-                    removed_instances,
-                )
-            })
-            .map_err(|error| {
-                CsharpEngineServicesError::new(
-                    "CSHARP_SPATIAL_CONTENT_COLLISION",
-                    format!("{error:?}"),
-                )
-            })?;
-
-        // Commit.
-        let mut touched = Vec::new();
-        for id in &leaving {
-            if let Some(placed) = session.content.placed.remove(id) {
-                session
-                    .content
-                    .cells
-                    .remove(Some(*id), placed.cells(), &mut touched);
-            }
-        }
-        for (id, placed) in arriving {
-            session
-                .content
-                .cells
-                .add(Some(id), placed.cells(), grid, &mut touched);
-            session.content.placed.insert(id, placed);
-        }
-        session.content.active = true;
-        let navigation_revision = session.navigation_revision + 1;
-        session.content.install_navigation(
-            &mut session.navigation,
-            composing,
-            grid,
-            max_step_cells,
-            grid_origin,
-            navigation_revision,
-            touched,
-        );
-        session.navigation_revision = navigation_revision;
-        let navigation = session.navigation.as_ref().map_or((0, 0), |navigation| {
-            (
-                navigation.projection.walkable_len() as u64,
-                navigation.projection_hash,
-            )
-        });
-        Ok(NativeSpatialContentArtifactResidencyReceipt {
-            collision_revision_before: collision.revision_before,
-            collision_revision_after: collision.revision_after,
-            navigation_revision,
-            instance_count,
-            navigation_cell_count: navigation.0,
-            collision_projection_hash: collision.projection_hash,
-            navigation_projection_hash: navigation.1,
-        })
+        Ok((arrivals, removed.to_vec()))
     }
 
     fn read_content_artifact(
@@ -2263,6 +2273,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeNavigationReplaceRequest,
     ) -> Result<NativeNavigationReplaceReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let cells =
             unsafe { borrowed_slice(request.cells, request.cells_len, "navigation cells") }?;
         let dimensions = ChunkDims::cubic(request.config.chunk_size).ok_or_else(|| {
@@ -2332,6 +2343,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeNavigationVoxelReplaceRequest,
     ) -> Result<NativeNavigationReplaceReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let solids = unsafe {
             borrowed_slice(
                 request.solid_cells,
@@ -2400,6 +2412,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeCollisionNavigationReplaceRequest,
     ) -> Result<NativeCollisionNavigationReplaceReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let (world_min, world_max) = (
             native_vec3_value(request.world_min),
             native_vec3_value(request.world_max),
@@ -2590,6 +2603,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeNavigationTraversalReplaceRequest,
     ) -> Result<NativeNavigationTraversalReplaceReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let cells = unsafe {
             borrowed_slice(
                 request.cells,
@@ -2628,6 +2642,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeNavigationTraversalClearRequest,
     ) -> Result<NativeNavigationTraversalReplaceReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let session = self.session_mut(request.session)?;
         let navigation = session.navigation.as_mut().ok_or_else(|| {
             CsharpEngineServicesError::new(
@@ -2651,6 +2666,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeNavigationVolumetricTraversalReplaceRequest,
     ) -> Result<NativeNavigationVolumetricTraversalReplaceReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let cells = unsafe {
             borrowed_slice(
                 request.cells,
@@ -2702,6 +2718,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeNavigationVolumetricTraversalClearRequest,
     ) -> Result<NativeNavigationVolumetricTraversalReplaceReceipt, CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let session = self.session_mut(request.session)?;
         let source_hash = session
             .navigation
@@ -3034,6 +3051,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeNavigationClearRequest,
     ) -> Result<(), CsharpEngineServicesError> {
+        self.settle_deferred(request.session)?;
         let session = self.session_mut(request.session)?;
         session.navigation_revision += 1;
         session.navigation = None;
@@ -5860,15 +5878,386 @@ fn content_navigation_cells(navigation: &SpatialContentNavigation) -> ContentNav
 /// Whether a collision instance still uses `asset` after a residency delta
 /// that removes or replaces the `replaced` instances and upserts `instances`.
 fn asset_used_after(
-    scene: &VoxelCollisionScene,
+    projection: &engine_spatial::StaticMeshCollisionProjection,
     asset: StaticMeshAssetId,
     replaced: &BTreeSet<StaticMeshInstanceId>,
     instances: &[StaticMeshColliderInstance],
 ) -> bool {
-    scene
-        .static_mesh_asset_users(asset)
+    projection
+        .asset_users(asset)
         .any(|id| !replaced.contains(&id))
         || instances.iter().any(|instance| instance.asset == asset)
+}
+
+/// Admitted spatial content by content digest while a session uses it,
+/// shared with the workers that admit deferred placements.
+type AdmittedContentCache = Arc<Mutex<BTreeMap<[u64; 4], Weak<AdmittedSpatialContent>>>>;
+
+/// The admitted form of a spatial content artifact, parsed the first time a
+/// session uses its digest and shared while any session does.
+fn admit_content(
+    cache: &Mutex<BTreeMap<[u64; 4], Weak<AdmittedSpatialContent>>>,
+    content: &crate::content::RetainedContent,
+) -> Result<Arc<AdmittedSpatialContent>, CsharpEngineServicesError> {
+    let digest = content.sha256();
+    let key = [digest.word0, digest.word1, digest.word2, digest.word3];
+    let cached = || {
+        cache
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(&key)
+            .and_then(Weak::upgrade)
+    };
+    if let Some(admitted) = cached() {
+        return Ok(admitted);
+    }
+    let artifact = parse_spatial_content_artifact(&content.path, &content.bytes)?;
+    let navigation = content_navigation_cells(&artifact.navigation);
+    let positions = artifact.collision.positions;
+    let collision = (!positions.is_empty())
+        .then(|| {
+            StaticMeshColliderAsset::new(
+                StaticMeshAssetId(spatial_content_asset_id(digest)),
+                positions,
+                artifact.collision.triangles,
+            )
+            .map_err(|error| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_SPATIAL_CONTENT_COLLISION",
+                    format!("{error:?}"),
+                )
+            })
+        })
+        .transpose()?;
+    let admitted = Arc::new(AdmittedSpatialContent {
+        path: content.path.clone(),
+        collision,
+        navigation,
+    });
+    let mut cache = cache.lock().unwrap_or_else(PoisonError::into_inner);
+    // A worker may have admitted the same bytes meanwhile.
+    if let Some(admitted) = cache.get(&key).and_then(Weak::upgrade) {
+        return Ok(admitted);
+    }
+    cache.retain(|_, admitted| admitted.strong_count() > 0);
+    cache.insert(key, Arc::downgrade(&admitted));
+    Ok(admitted)
+}
+
+/// A placement as the product asked for it, its artifact read but not yet
+/// admitted.
+struct ContentArrival {
+    id: u64,
+    content: crate::content::RetainedContent,
+    offset: [i64; 3],
+    turns: u8,
+    translation: [f64; 3],
+}
+
+impl ContentArrival {
+    fn admit(
+        self,
+        cache: &Mutex<BTreeMap<[u64; 4], Weak<AdmittedSpatialContent>>>,
+    ) -> Result<(u64, PlacedContentArtifact), CsharpEngineServicesError> {
+        Ok((
+            self.id,
+            PlacedContentArtifact {
+                content: admit_content(cache, &self.content)?,
+                offset: self.offset,
+                turns: self.turns,
+                translation: self.translation,
+            },
+        ))
+    }
+}
+
+/// The navigation settings of a content residency request.
+#[derive(Clone, Copy)]
+struct ContentNavigationConfig {
+    grid_id: u64,
+    chunk_size: u32,
+    max_step_cells: u8,
+}
+
+/// A deferred content residency request as the product made it.
+pub(crate) struct ContentBatch {
+    arrivals: Vec<ContentArrival>,
+    removed: Vec<u64>,
+    config: ContentNavigationConfig,
+    cache: AdmittedContentCache,
+}
+
+impl ContentBatch {
+    /// The ids it places.
+    pub(crate) fn placing(&self) -> Vec<u64> {
+        self.arrivals.iter().map(|arrival| arrival.id).collect()
+    }
+}
+
+/// A content residency change planned against the composition and static
+/// collision it starts from.
+struct ContentResidencyPlan {
+    grid: VoxelGridSpec,
+    arriving: BTreeMap<u64, PlacedContentArtifact>,
+    /// Placements removed or replaced by an arriving id.
+    leaving: BTreeSet<u64>,
+    collision: StaticMeshResidencyPlan,
+    /// The navigation cells taken out and put in.
+    cells: usize,
+}
+
+/// Plan placing `arrivals` and removing `removed` in `composition`, whose
+/// navigation grid's zero corner is at `grid_origin`, with the static
+/// collision `projection`. Removals apply first; an arriving id replaces the
+/// placement or collision instance it named, and the last of an id wins.
+fn plan_content_residency(
+    composition: &SpatialContentComposition,
+    grid_origin: [f64; 3],
+    arrivals: Vec<(u64, PlacedContentArtifact)>,
+    removed: &[u64],
+    config: ContentNavigationConfig,
+    projection: &engine_spatial::StaticMeshCollisionProjection,
+) -> Result<ContentResidencyPlan, CsharpEngineServicesError> {
+    let arriving: BTreeMap<u64, PlacedContentArtifact> = arrivals.into_iter().collect();
+    let leaving: BTreeSet<u64> = removed
+        .iter()
+        .chain(arriving.keys())
+        .copied()
+        .filter(|id| composition.placed.contains_key(id))
+        .collect();
+    let remaining = || {
+        composition
+            .placed
+            .iter()
+            .filter(|(id, _)| !leaving.contains(id))
+    };
+
+    // The grid is the artifacts' own: the base's cell size, else the
+    // first placement's. The resident artifacts share one cell size and
+    // level quantum; every arriving one must too.
+    let resident_cells = composition
+        .base
+        .as_ref()
+        .map(|(_, content)| (None, &content.navigation))
+        .or_else(|| {
+            remaining()
+                .next()
+                .map(|(id, placed)| (Some(*id), &placed.content.navigation))
+        });
+    let first_cells = match (resident_cells, arriving.first_key_value()) {
+        (Some((Some(resident), _)), Some((arriving, placed))) if *arriving < resident => {
+            Some(&placed.content.navigation)
+        }
+        (Some((_, cells)), _) => Some(cells),
+        (None, arriving) => arriving.map(|(_, placed)| &placed.content.navigation),
+    };
+    let grid = navigation_grid(NativePlanarNavConfig {
+        grid_id: config.grid_id,
+        cell_size: first_cells.map_or(1.0, |cells| cells.cell_size),
+        chunk_size: config.chunk_size,
+        max_step_cells: u32::from(config.max_step_cells),
+    })?;
+    let mut level_quantum = None;
+    for cells in resident_cells
+        .map(|(_, cells)| cells)
+        .into_iter()
+        .chain(arriving.values().map(|placed| &placed.content.navigation))
+    {
+        if cells.cell_size != grid.voxel_size()
+            || level_quantum.is_some_and(|quantum| quantum != cells.level_quantum)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPATIAL_CONTENT_NAVIGATION_GRID",
+                "composed spatial artifacts must share one navigation cell size and level quantum",
+            ));
+        }
+        level_quantum = Some(cells.level_quantum);
+    }
+
+    // An arriving id replaces whatever collision instance it named.
+    let removed_instances: BTreeSet<StaticMeshInstanceId> = leaving
+        .iter()
+        .chain(arriving.keys())
+        .map(|id| StaticMeshInstanceId(*id))
+        .collect();
+    let instances: Vec<StaticMeshColliderInstance> = arriving
+        .iter()
+        .filter_map(|(id, placed)| {
+            let asset = placed.asset()?;
+            let [column, level, row] = placed.offset;
+            Some(StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(*id),
+                asset,
+                transform: StaticMeshTransform {
+                    translation: [
+                        grid_origin[0]
+                            + column as f64 * placed.content.navigation.cell_size
+                            + placed.translation[0],
+                        grid_origin[1]
+                            + level as f64 * placed.content.navigation.level_quantum
+                            + placed.translation[1],
+                        grid_origin[2]
+                            + row as f64 * placed.content.navigation.cell_size
+                            + placed.translation[2],
+                    ],
+                    rotation: quarter_turn_rotation(placed.turns),
+                    ..StaticMeshTransform::IDENTITY
+                },
+            })
+        })
+        .collect();
+    // Assets: add an arriving one no artifact used, drop a leaving one
+    // no collision instance, an artifact's or the product's own, uses
+    // any more. The base artifact's instance id is its asset id.
+    let base_asset = composition
+        .base
+        .as_ref()
+        .map(|(identity, _)| StaticMeshAssetId(spatial_content_asset_id(identity.content_sha256)));
+    let composed = |asset: StaticMeshAssetId| {
+        projection.asset_users(asset).any(|instance| {
+            composition.placed.contains_key(&instance.0)
+                || base_asset.is_some_and(|base| base.0 == instance.0)
+        })
+    };
+    let mut new_assets = BTreeMap::new();
+    for placed in arriving.values() {
+        if let Some(asset) = &placed.content.collision {
+            if !new_assets.contains_key(&asset.id) && !composed(asset.id) {
+                new_assets.insert(asset.id, asset.clone());
+            }
+        }
+    }
+    let removed_assets: BTreeSet<StaticMeshAssetId> = leaving
+        .iter()
+        .filter_map(|id| composition.placed[id].asset())
+        .filter(|asset| {
+            Some(*asset) != base_asset
+                && !asset_used_after(projection, *asset, &removed_instances, &instances)
+        })
+        .collect();
+    let cells = leaving
+        .iter()
+        .map(|id| &composition.placed[id])
+        .chain(arriving.values())
+        .map(|placed| placed.content.navigation.cells.len())
+        .sum();
+    let collision = projection
+        .plan_residency(
+            new_assets.into_values(),
+            instances,
+            removed_assets,
+            removed_instances,
+        )
+        .map_err(content_collision_error)?;
+    Ok(ContentResidencyPlan {
+        grid,
+        arriving,
+        leaving,
+        collision,
+        cells,
+    })
+}
+
+fn content_collision_error(
+    error: engine_spatial::StaticMeshCollisionError,
+) -> CsharpEngineServicesError {
+    CsharpEngineServicesError::new("CSHARP_SPATIAL_CONTENT_COLLISION", format!("{error:?}"))
+}
+
+/// A deferred content batch admitted on a worker: the composition and
+/// navigation it leaves, and its collision planned and baked.
+pub(crate) struct ContentAdmission {
+    composition: SpatialContentComposition,
+    navigation: NavigationState,
+    collision: StaticMeshResidencyPlan,
+    baked: StaticMeshBaked,
+}
+
+/// Admit a deferred content batch away from the session, against the
+/// composition (its cells taken from the session) and static collision it
+/// starts from: admit its artifacts, plan and bake their collision, compose
+/// their cells and build the navigation whole. A refusal hands the cells
+/// back unchanged.
+fn admit_content_batch(
+    mut composition: SpatialContentComposition,
+    grid_origin: [f64; 3],
+    projection: &engine_spatial::StaticMeshCollisionProjection,
+    batch: ContentBatch,
+    progress: &static_deferred::Progress,
+) -> static_deferred::Baked {
+    let planned = batch
+        .arrivals
+        .into_iter()
+        .map(|arrival| arrival.admit(&batch.cache))
+        .collect::<Result<Vec<_>, _>>()
+        .and_then(|arriving| {
+            plan_content_residency(
+                &composition,
+                grid_origin,
+                arriving,
+                &batch.removed,
+                batch.config,
+                projection,
+            )
+        })
+        .and_then(|plan| {
+            progress
+                .planned_instances
+                .store(plan.collision.instance_count(), Ordering::Relaxed);
+            progress.planned_cells.store(plan.cells, Ordering::Relaxed);
+            let baked = plan
+                .collision
+                .bake(&progress.baked_instances)
+                .map_err(content_collision_error)?;
+            Ok((plan, baked))
+        });
+    let (plan, baked) = match planned {
+        Ok(planned) => planned,
+        Err(error) => {
+            return Err(static_deferred::Refused {
+                reason: error.to_string(),
+                cells: Some(composition.cells),
+            })
+        }
+    };
+    let ContentResidencyPlan {
+        grid,
+        arriving,
+        leaving,
+        collision,
+        cells,
+    } = plan;
+    composition.place(&leaving, arriving, grid, &progress.composed_cells);
+    progress.composed_cells.store(cells, Ordering::Relaxed);
+    let navigation = composition.cells.navigation(
+        grid,
+        batch.config.max_step_cells,
+        grid_origin,
+        0,
+        composition.level_quantum(),
+    );
+    Ok(static_deferred::Prepared::Content(Box::new(
+        ContentAdmission {
+            composition,
+            navigation,
+            collision,
+            baked,
+        },
+    )))
+}
+
+/// `cells`, counted in `progress` a block at a time.
+fn counted<'a, T: 'a>(
+    cells: impl Iterator<Item = T> + 'a,
+    progress: &'a AtomicUsize,
+) -> impl Iterator<Item = T> + 'a {
+    const BLOCK: usize = 4096;
+    cells.enumerate().map(move |(index, cell)| {
+        if index % BLOCK == BLOCK - 1 {
+            progress.fetch_add(BLOCK, Ordering::Relaxed);
+        }
+        cell
+    })
 }
 
 /// The composition's navigation at `revision` composed whole: one planar
@@ -10048,6 +10437,7 @@ mod tests {
                     navigation_grid_id: 7,
                     navigation_chunk_size: 8,
                     navigation_max_step_cells: 1,
+                    deferred: false,
                 })
                 .expect("placements admit")
         };
@@ -10325,6 +10715,7 @@ mod tests {
                 navigation_grid_id: 7,
                 navigation_chunk_size: 8,
                 navigation_max_step_cells: 1,
+                deferred: false,
             })
         };
         let remove_instances = |bridge: &mut RuntimeSpatialBridge, removed: &[u64]| {
@@ -10453,6 +10844,7 @@ mod tests {
                 navigation_grid_id: 8,
                 navigation_chunk_size: 4,
                 navigation_max_step_cells: 2,
+                deferred: false,
             })
             .unwrap();
         assert_whole(&bridge);
@@ -10558,6 +10950,7 @@ mod tests {
                     navigation_grid_id: 7,
                     navigation_chunk_size: 8,
                     navigation_max_step_cells: 1,
+                    deferred: false,
                 })
                 .unwrap()
         };
@@ -11968,5 +12361,204 @@ mod tests {
             (0, 5, 1)
         );
         assert_eq!(floor_hits(&deferred, session), before);
+    }
+
+    /// A spatial content artifact: a strip of `columns` walkable cells of
+    /// `cell_size` floored by two triangles.
+    fn content_strip(columns: usize, cell_size: f64) -> crate::ContentBytes {
+        let cells: Vec<String> = (0..columns)
+            .map(|column| {
+                format!(
+                    r#"{{"column":{column},"row":0,"level":0,"supportHeight":0.0,"walkable":true}}"#
+                )
+            })
+            .collect();
+        let length = columns as f64 * cell_size;
+        crate::ContentBytes::from(format!(
+            r#"{{"schemaVersion":1,"staticMeshArtifactId":"mesh/strip","bounds":{{"min":[0.0,-1.0,0.0],"max":[{length},1.0,{cell_size}]}},"collision":{{"positions":[[0.0,0.0,0.0],[{length},0.0,0.0],[0.0,0.0,{cell_size}],[{length},0.0,{cell_size}]],"triangles":[[0,1,2],[1,3,2]]}},"navigation":{{"id":"navigation/strip","config":{{"schemaVersion":1,"cellSize":{cell_size},"levelQuantum":0.25,"maximumSlopeDegrees":45.0,"requiredHeadroom":1.0,"supportProbeDrop":0.1}},"cells":[{}]}}}}"#,
+            cells.join(",")
+        ).into_bytes())
+    }
+
+    #[test]
+    fn deferred_content_residency_installs_as_the_synchronous_calls_leave_it() {
+        let paths = [
+            "spatial/long.json",
+            "spatial/short.json",
+            "spatial/coarse.json",
+        ];
+        let mut content = crate::content::RuntimeContentBridge::new(BTreeMap::from([
+            (paths[0].to_owned(), content_strip(400, 1.0)),
+            (paths[1].to_owned(), content_strip(40, 1.0)),
+            (paths[2].to_owned(), content_strip(40, 2.0)),
+        ]));
+        let open = |content: &mut crate::content::RuntimeContentBridge, path: &str| {
+            let api = crate::content::api(content);
+            let mut reference = NativeContentReferenceHandle::default();
+            assert_eq!(
+                unsafe {
+                    (api.open_reference)(
+                        api.context,
+                        &NativeContentOpenRequest {
+                            path: NativeUtf8Slice {
+                                bytes: path.as_ptr(),
+                                len: path.len(),
+                            },
+                        },
+                        &mut reference,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            reference
+        };
+        let [long, short, coarse] = paths.map(|path| open(&mut content, path));
+        let (mut sync, mut deferred) = (RuntimeSpatialBridge::new(), RuntimeSpatialBridge::new());
+        sync.bind_content(&content);
+        deferred.bind_content(&content);
+        let config = NativeSpatialSessionConfig {
+            collision_voxel_size: 1.0,
+            collision_chunk_size: 8,
+            voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+        };
+        let session = sync.create(config).unwrap();
+        assert_eq!(deferred.create(config).unwrap(), session);
+        let place =
+            |id, content, column_offset, quarter_turns| NativeSpatialContentArtifactInstance {
+                id,
+                content,
+                column_offset,
+                level_offset: 0,
+                row_offset: 4,
+                quarter_turns,
+                translation: NativeVec3 {
+                    x: 0.0,
+                    y: 0.5,
+                    z: 0.0,
+                },
+            };
+        let residency = |bridge: &mut RuntimeSpatialBridge,
+                         admitted: &[NativeSpatialContentArtifactInstance],
+                         removed: &[u64],
+                         deferred: bool| {
+            bridge.apply_content_artifact_residency(&NativeSpatialContentArtifactResidencyRequest {
+                session,
+                admitted: admitted.as_ptr(),
+                admitted_len: admitted.len(),
+                removed: removed.as_ptr(),
+                removed_len: removed.len(),
+                navigation_grid_id: 7,
+                navigation_chunk_size: 8,
+                navigation_max_step_cells: 1,
+                deferred,
+            })
+        };
+        let read = |bridge: &mut RuntimeSpatialBridge| {
+            bridge
+                .read_collision_residency(NativeCollisionResidencyReadRequest { session })
+                .unwrap()
+        };
+        // What queries see: the navigation and collision live now.
+        let live = |bridge: &RuntimeSpatialBridge| {
+            let session = &bridge.sessions[&session.value];
+            let navigation = session.navigation.as_ref();
+            let projection = session.scene.static_mesh_projection();
+            (
+                navigation.map(|navigation| {
+                    (
+                        navigation.projection.walkable_len(),
+                        navigation.projection_hash,
+                        navigation.revision,
+                    )
+                }),
+                session.navigation_revision,
+                (projection.instance_count(), projection.projection_hash()),
+                session.content.placed.keys().copied().collect::<Vec<_>>(),
+                session.content.cells.layers.len(),
+            )
+        };
+        let hit_at = |bridge: &RuntimeSpatialBridge, x: f64, z: f64| {
+            bridge.sessions[&session.value]
+                .scene
+                .raycast_world([x, 10.0, z], [0.0, -1.0, 0.0], 20.0)
+                .is_some()
+        };
+
+        // Two placements, one turned, then a removal and a refused
+        // placement while they are in flight: nothing is live until a call
+        // installs them, and then they leave what the synchronous calls do.
+        let receipt = residency(
+            &mut deferred,
+            &[place(1, long, 0, 0), place(2, short, 500, 2)],
+            &[],
+            true,
+        )
+        .unwrap();
+        assert_eq!((receipt.deferred_batch, receipt.instance_count), (1, 0));
+        residency(
+            &mut sync,
+            &[place(1, long, 0, 0), place(2, short, 500, 2)],
+            &[],
+            false,
+        )
+        .unwrap();
+        // A deferred collision batch may not take out a placement still in
+        // flight.
+        let refusal = collision_residency(&mut deferred, session, &[], &[], &[], &[2], 0.0, true)
+            .unwrap_err();
+        assert_eq!(refusal.code(), "CSHARP_COLLISION_DEFERRED_CONTENT");
+        let receipt = residency(&mut deferred, &[place(3, short, 700, 1)], &[1], true).unwrap();
+        assert_eq!(receipt.deferred_batch, 2);
+        residency(&mut sync, &[place(3, short, 700, 1)], &[1], false).unwrap();
+        let refused = residency(&mut deferred, &[place(4, coarse, 900, 0)], &[], true).unwrap();
+        assert_eq!(
+            residency(&mut sync, &[place(4, coarse, 900, 0)], &[], false)
+                .unwrap_err()
+                .code(),
+            "CSHARP_SPATIAL_CONTENT_NAVIGATION_GRID"
+        );
+        assert!(deferred.sessions[&session.value].navigation.is_none());
+        assert!(!hit_at(&deferred, 100.5, 4.5));
+        let reading = read(&mut deferred);
+        assert_eq!((reading.pending_batches, reading.completed_batch), (3, 0));
+        settle_collision(&mut deferred, session);
+        let reading = read(&mut deferred);
+        assert_eq!(
+            (
+                reading.completed_batch,
+                reading.refused_batches,
+                reading.last_refused_batch
+            ),
+            (refused.deferred_batch, 1, refused.deferred_batch)
+        );
+        assert_eq!(live(&deferred), live(&sync));
+        // The first went with the removal; the second is turned a half turn
+        // and the third a quarter turn about their origins.
+        assert!(!hit_at(&deferred, 100.5, 4.5));
+        assert!(hit_at(&deferred, 480.5, 3.5));
+        assert!(hit_at(&deferred, 700.5, -10.0));
+
+        // A synchronous change after a deferred one installs it first; the
+        // refused batch handed the composition back whole, so later
+        // placements recompose from it.
+        residency(&mut deferred, &[place(5, long, 1000, 3)], &[], true).unwrap();
+        residency(&mut deferred, &[], &[3], false).unwrap();
+        residency(&mut sync, &[place(5, long, 1000, 3)], &[], false).unwrap();
+        residency(&mut sync, &[], &[3], false).unwrap();
+        assert_eq!(read(&mut deferred).pending_batches, 0);
+        assert_eq!(live(&deferred), live(&sync));
+        let navigation = deferred.sessions[&session.value]
+            .navigation
+            .as_ref()
+            .unwrap();
+        let whole = deferred.sessions[&session.value].content.cells.navigation(
+            navigation.projection.grid(),
+            1,
+            navigation.grid_origin,
+            navigation.revision,
+            0.25,
+        );
+        assert_eq!(whole.projection_hash, navigation.projection_hash);
     }
 }

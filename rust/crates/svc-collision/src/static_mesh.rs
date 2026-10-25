@@ -374,7 +374,7 @@ impl StaticMeshCollisionProjection {
     }
 
     /// The instances baked from one resident asset.
-    pub(crate) fn asset_users(
+    pub fn asset_users(
         &self,
         id: StaticMeshAssetId,
     ) -> impl Iterator<Item = StaticMeshInstanceId> + '_ {

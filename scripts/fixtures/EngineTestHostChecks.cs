@@ -22,6 +22,7 @@ internal static class EngineTestHostChecks
                 ["meshes/triangle.json"] = System.Text.Encoding.UTF8.GetBytes(TriangleMesh),
                 ["models/prop.glb"] = TwoCubeProp(),
                 ["models/body.glb"] = body,
+                ["spatial/site.rspatial"] = SiteArtifact(),
             },
             LibraryPath = library,
         });
@@ -275,6 +276,7 @@ internal static class EngineTestHostChecks
         RagdollFall(host);
         DeferredResidency(host);
         DeferredCollisionResidency(host);
+        DeferredContentResidency(host);
         Bundles(library);
     }
 
@@ -357,6 +359,133 @@ internal static class EngineTestHostChecks
             sync!.Dispose();
             deferred!.Dispose();
         });
+    }
+
+    // A deferred spatial content change, two sites of about 295 k triangles
+    // and 147 k navigation cells each, returns from its call before parsing,
+    // baking or composing them, reports how far it is while a worker does,
+    // and its collision and navigation are live once the readout says so; a
+    // removal made while they are in flight follows it (#10361).
+    private static void DeferredContentResidency(EngineTestHost host)
+    {
+        SpatialSession? sync = null, deferred = null;
+        ContentReference? site = null;
+        bool Hit(IEngineContext engine, SpatialSession session, float x) => engine.Spatial.CastRay(new(session,
+            new(x, 5, SiteQuads / 2f), -Vector3.UnitY, 10, new(uint.MaxValue, uint.MaxValue),
+            ReadOnlyMemory<SpatialEntityCollider>.Empty, ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<SpatialEntityCollider>.Empty)).Present;
+        NavigationPathOutcome Path(IEngineContext engine, SpatialSession session, long goal) =>
+            engine.Spatial.RequestNavigationPath(new(session, new(1, 0, SiteQuads / 2), new(goal, 0, SiteQuads / 2), 100_000)).Outcome;
+        SpatialContentArtifactResidencyRequest Change(SpatialSession session, SpatialContentArtifactInstance[] placed,
+            ulong[] removed, bool defer) => new(session, placed, removed, 7, 16, 1, defer);
+        TimeSpan synchronous = default, deferredCall = default;
+        ulong removal = 0;
+        host.Call(engine =>
+        {
+            sync = engine.Spatial.CreateSession(new(1, 16, VoxelSurfaceMode.GreedyCubes));
+            deferred = engine.Spatial.CreateSession(new(1, 16, VoxelSurfaceMode.GreedyCubes));
+            site = engine.Content.OpenReference(new("spatial/site.rspatial"));
+            SpatialContentArtifactInstance[] sites =
+                [new(1, site, 0, 0, 0, 0, Vector3.Zero), new(2, site, SiteQuads + 8, 0, 0, 0, Vector3.Zero)];
+            var started = System.Diagnostics.Stopwatch.StartNew();
+            engine.Spatial.ApplyContentArtifactResidency(Change(sync, sites, [], false));
+            synchronous = started.Elapsed;
+            started.Restart();
+            SpatialContentArtifactResidencyReceipt receipt =
+                engine.Spatial.ApplyContentArtifactResidency(Change(deferred, sites, [], true));
+            deferredCall = started.Elapsed;
+            Require(receipt.DeferredBatch == 1 && receipt.InstanceCount == 0 && !Hit(engine, deferred, 100.5f)
+                && !engine.Spatial.ReadNavigationProjection(new(deferred)).Present,
+                $"A deferred placement was live in its own call: {receipt}.");
+            // The second site leaves while the two are admitted.
+            removal = engine.Spatial.ApplyContentArtifactResidency(Change(deferred, [], [2], true)).DeferredBatch;
+            engine.Spatial.ApplyContentArtifactResidency(Change(sync, [], [2], false));
+            CollisionResidencyReadout reading = engine.Spatial.ReadCollisionResidency(new(deferred));
+            Require(reading.PendingBatches == 2 && reading.CompletedBatch == 0, $"The changes in flight read {reading}.");
+        });
+        Require(deferredCall < synchronous / 2,
+            $"A deferred placement's call took {deferredCall.TotalMilliseconds:0} ms, a synchronous one {synchronous.TotalMilliseconds:0} ms.");
+        for (int call = 0; ; call++)
+        {
+            CollisionResidencyReadout reading = default;
+            host.Call(engine => reading = engine.Spatial.ReadCollisionResidency(new(deferred!)));
+            if (reading.CompletedBatch >= removal)
+            {
+                Require(reading.RefusedBatches == 0 && reading.PendingBatches == 0, $"The changes ended as {reading}.");
+                break;
+            }
+            Require(reading.BakedInstances <= reading.PlannedInstances && reading.ComposedCells <= reading.PlannedCells
+                && call < 20_000, $"The changes never finished: {reading}.");
+            System.Threading.Thread.Sleep(1);
+        }
+        host.Call(engine =>
+        {
+            NavigationProjectionReadout left = engine.Spatial.ReadNavigationProjection(new(deferred!));
+            NavigationProjectionReadout expected = engine.Spatial.ReadNavigationProjection(new(sync!));
+            Require(left.WalkableCellCount == SiteQuads * SiteQuads && left.ProjectionHash == expected.ProjectionHash,
+                $"The navigation is not as the changes left it: {left}, synchronous {expected}.");
+            Require(Hit(engine, deferred!, 100.5f) && !Hit(engine, deferred!, SiteQuads + 100.5f),
+                "The collision is not as the changes left it.");
+            Require(Path(engine, deferred!, SiteQuads - 2) == NavigationPathOutcome.Reached
+                && Path(engine, deferred!, SiteQuads + 100) != NavigationPathOutcome.Reached,
+                "A path does not cross the site that stayed, or crosses the one that left.");
+            sync!.Dispose();
+            deferred!.Dispose();
+            site!.Dispose();
+        });
+    }
+
+    private const int SiteQuads = 384;
+
+    // A spatial content artifact in its binary form: a flat floor of
+    // SiteQuads x SiteQuads one-metre cells, every cell walkable.
+    private static byte[] SiteArtifact()
+    {
+        var bytes = new System.IO.MemoryStream();
+        using var writer = new System.IO.BinaryWriter(bytes);
+        writer.Write("RSPATIAL"u8);
+        writer.Write(1u);
+        writer.Write(1u);
+        foreach (double bound in new double[] { 0, -1, 0, SiteQuads, 1, SiteQuads })
+            writer.Write(bound);
+        foreach (double setting in new[] { 1.0, 0.25, 45.0, 1.8, 0.05 })
+            writer.Write(setting);
+        foreach (string id in new[] { "mesh/site", "navigation/site" })
+        {
+            writer.Write((uint)id.Length);
+            writer.Write(System.Text.Encoding.UTF8.GetBytes(id));
+        }
+        const int Row = SiteQuads + 1, Cells = SiteQuads * SiteQuads;
+        writer.Write((ulong)(Row * Row));
+        writer.Write((ulong)(2 * Cells));
+        writer.Write((ulong)Cells);
+        for (int z = 0; z < Row; z++)
+            for (int x = 0; x < Row; x++)
+            {
+                writer.Write((double)x);
+                writer.Write(0.0);
+                writer.Write((double)z);
+            }
+        for (int z = 0; z < SiteQuads; z++)
+            for (int x = 0; x < SiteQuads; x++)
+            {
+                uint corner = (uint)(z * Row + x);
+                foreach (uint index in new[] { corner, corner + Row, corner + 1, corner + 1, corner + Row, corner + Row + 1 })
+                    writer.Write(index);
+            }
+        // Cells by column, then row: their columns, rows, supports and the
+        // walkable bits.
+        for (int column = 0; column < SiteQuads; column++)
+            for (int row = 0; row < SiteQuads; row++)
+                writer.Write(column);
+        for (int column = 0; column < SiteQuads; column++)
+            for (int row = 0; row < SiteQuads; row++)
+                writer.Write(row);
+        for (int cell = 0; cell < Cells; cell++)
+            writer.Write(0.0);
+        for (int cell = 0; cell < Cells / 8; cell++)
+            writer.Write((byte)0xFF);
+        writer.Flush();
+        return bytes.ToArray();
     }
 
     // A deferred residency change writes its voxels at once and installs its

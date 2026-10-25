@@ -1150,14 +1150,6 @@ impl VoxelCollisionScene {
         self.projection.static_mesh_instance_count()
     }
 
-    /// The static collision instances currently baked from one asset.
-    pub fn static_mesh_asset_users(
-        &self,
-        id: StaticMeshAssetId,
-    ) -> impl Iterator<Item = StaticMeshInstanceId> + '_ {
-        self.projection.static_mesh_asset_users(id)
-    }
-
     pub fn replace_static_mesh_colliders(
         &mut self,
         assets: impl IntoIterator<Item = StaticMeshColliderAsset>,

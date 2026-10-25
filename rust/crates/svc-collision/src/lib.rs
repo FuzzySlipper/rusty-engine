@@ -641,14 +641,6 @@ impl CollisionProjection {
         self.static_meshes.instance_count()
     }
 
-    /// The static-mesh instances baked from one resident asset.
-    pub fn static_mesh_asset_users(
-        &self,
-        id: StaticMeshAssetId,
-    ) -> impl Iterator<Item = StaticMeshInstanceId> + '_ {
-        self.static_meshes.asset_users(id)
-    }
-
     /// Return one retained static-mesh instance's authored identity and current
     /// pose. The returned transform is a value snapshot for a call-local
     /// consumer; collision queries continue using the retained shape.

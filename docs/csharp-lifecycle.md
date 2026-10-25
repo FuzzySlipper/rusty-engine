@@ -1275,6 +1275,9 @@ SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArt
   remain.
 - **Refusals.** A malformed artifact or a non-finite translation is refused
   and changes nothing.
+- **Off the update.** With `Deferred` set, the call returns before the
+  artifacts are parsed, baked or composed; see
+  [deferred collision residency](#deferred-collision-residency).
 - **Lifetime.** Placed artifacts with the same content share one collider
   asset, released with the last of them unless an instance added through
   `ApplyCollisionResidency` still uses it. The content references are read
@@ -1301,28 +1304,49 @@ successful admission after a refusal via `scripts/test-csharp-sdk-package.sh
 `ApplyCollisionResidency` with `Deferred` set copies the batch's geometry
 before it returns and does the rest off the update: an Engine worker validates
 and hashes the assets, plans the delta and bakes each instance's collider.
-Batches bake one at a time, in the order they were made, each planned against
-the collision the batches before it left; each installs at the start of the
-first Engine call into the product after it is baked. The same additive,
-replace and removal rules as a synchronous call apply, batch by batch.
+`ApplyContentArtifactResidency` with `Deferred` set reads its content
+references before it returns; the worker parses the artifacts, plans and
+bakes their collision, and composes the session's navigation with them.
+Both kinds are batches of one session order: they are prepared one at a
+time, in the order they were made, each against the session as the batches
+before it left it, and each installs at the start of the first Engine call
+into the product after it is prepared. The same rules as a synchronous call
+apply, batch by batch: additive collision, replacement and removal, and for
+placements removals first, an `Id` placed again replaced and the grid rules
+above.
 
-- **Readiness.** The receipt's `DeferredBatch` names the batch, and its counts
-  and revisions are the collision live now. `ReadCollisionResidency` reports
+```csharp
+ulong batch = engine.Spatial.ApplyContentArtifactResidency(
+    new(session, arriving, leavingIds, 7, 8, 1, Deferred: true)).DeferredBatch;
+// Later, in any call:
+bool live = engine.Spatial.ReadCollisionResidency(new(session)).CompletedBatch >= batch;
+```
+
+- **Readiness.** The receipt's `DeferredBatch` names the batch, and its counts,
+  revisions and hashes are those live now. `ReadCollisionResidency` reports
   `CompletedBatch` (every batch numbered up to it is done), `PendingBatches`,
-  the baking batch's `BakedInstances` of `PlannedInstances` (0 of 0 while it
-  validates), and the live `StaticCollisionRevision`. Collision, rays and
-  character steps use a batch's colliders once `CompletedBatch` reaches it.
+  the batch being prepared's `BakedInstances` of `PlannedInstances` (0 of 0
+  while it validates or parses), a content batch's `ComposedCells` of
+  `PlannedCells` (the navigation cells it takes out and puts in; the
+  navigation is built after the last), and the live `StaticCollisionRevision`.
+  Collision, rays, character steps and navigation use a batch's results once
+  `CompletedBatch` reaches it; until then they use what was live before it. A
+  content batch installs under a new navigation revision.
 - **Refusals.** A batch refused when it is validated, planned or installed (a
-  missing asset, malformed geometry) changes nothing; `RefusedBatches` counts
-  it and the host log names why.
+  missing asset, malformed geometry or artifact, a placement off the
+  composition's grid) changes nothing; `RefusedBatches` counts it,
+  `LastRefusedBatch` names the latest, and the host log names why.
 - **Other changes wait.** A change to the session that is not deferred —
-  synchronous residency, `ReplaceCollision`, content, voxel edits or a
-  world-origin commit — installs the pending batches first and waits for
-  them.
-- **Limits.** A deferred batch cannot remove or replace a composed spatial
-  content artifact's instance (`CSHARP_COLLISION_DEFERRED_CONTENT`): that
-  recomposes navigation in the same call. Copying the geometry is the part
-  the call itself pays.
+  synchronous residency or placement, `ReplaceCollision`, content, navigation
+  and its traversal overlays, voxel edits or a world-origin commit — installs
+  the pending batches first and waits for them.
+- **Limits.** A deferred collision batch cannot remove or replace a composed
+  spatial content artifact's instance, resident or placed by a content batch
+  not yet done (`CSHARP_COLLISION_DEFERRED_CONTENT`): that recomposes
+  navigation in the same call. A content batch builds the composition's
+  navigation whole, so its worker time grows with every placed cell, not only
+  its own. Reading the references is the part the call itself pays;
+  installing swaps the results in.
 
 ### Character steps
 

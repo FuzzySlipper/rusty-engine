@@ -644,7 +644,8 @@ pub struct NativeCollisionResidencyReadRequest {
     pub session: NativeSpatialSessionHandle,
 }
 
-/// How far a session's deferred static collision batches are.
+/// How far a session's deferred static collision and spatial content batches
+/// are.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeCollisionResidencyReadout {
@@ -657,9 +658,16 @@ pub struct NativeCollisionResidencyReadout {
     /// while it validates its assets).
     pub baked_instances: u64,
     pub planned_instances: u64,
+    /// Navigation cells the spatial content batch now admitting has taken
+    /// out of and put into the composition, of those it changes; its
+    /// navigation is built after the last. 0 of 0 for a collision batch.
+    pub composed_cells: u64,
+    pub planned_cells: u64,
     /// Deferred batches refused when they were validated or installed; the
     /// host log names why. A refused batch changes nothing.
     pub refused_batches: u64,
+    /// The latest refused batch's number, 0 before any.
+    pub last_refused_batch: u64,
     /// The static collision revision live now.
     pub static_collision_revision: u64,
 }
@@ -700,6 +708,12 @@ pub struct NativeSpatialContentArtifactResidencyRequest {
     pub navigation_grid_id: u64,
     pub navigation_chunk_size: u32,
     pub navigation_max_step_cells: u32,
+    /// Read the references now and admit the change off the update: an
+    /// Engine worker parses the artifacts, bakes their collision and composes
+    /// the navigation. It is a batch in the session's deferred collision
+    /// residency order, installed at the start of the first Engine call into
+    /// the product after it is done; `ReadCollisionResidency` says when.
+    pub deferred: bool,
 }
 
 #[repr(C)]
@@ -713,6 +727,11 @@ pub struct NativeSpatialContentArtifactResidencyReceipt {
     pub navigation_cell_count: u64,
     pub collision_projection_hash: u64,
     pub navigation_projection_hash: u64,
+    /// A deferred change's batch number, live once the session's
+    /// `NativeCollisionResidencyReadout::completed_batch` reaches it; 0 when
+    /// it applied before the call returned. A deferred receipt's revisions,
+    /// counts and hashes are those live when the call returned.
+    pub deferred_batch: u64,
 }
 
 /// Replaces retained collision and planar navigation from one immutable

@@ -148,3 +148,14 @@ public readonly partial record struct CollisionResidencyRequest
     {
     }
 }
+
+public readonly partial record struct SpatialContentArtifactResidencyRequest
+{
+    /// <summary>A change applied before the call returns.</summary>
+    public SpatialContentArtifactResidencyRequest(SpatialSession Session,
+        System.ReadOnlyMemory<SpatialContentArtifactInstance> Admitted, System.ReadOnlyMemory<ulong> Removed,
+        ulong NavigationGridId, uint NavigationChunkSize, uint NavigationMaxStepCells)
+        : this(Session, Admitted, Removed, NavigationGridId, NavigationChunkSize, NavigationMaxStepCells, false)
+    {
+    }
+}
