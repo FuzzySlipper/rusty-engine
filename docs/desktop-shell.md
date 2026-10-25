@@ -127,7 +127,7 @@ may use any of this and runs fully in a browser.
 | Fullscreen API | Resolves and fills the view; the native window does not change. | |
 | Notifications, geolocation and other permission prompts | Denied at once. | |
 | Gamepads | Chromium reads them itself. | The shell hands Servo the first pad in the standard mapping, named `Standard gamepad`. |
-| Text entry, Tab focus, wheel scrolling | Work. IME composition has not been checked. | |
+| Text entry, Tab focus, wheel scrolling | Work. IME composition has not been checked. A held key's repeats report `repeat` false. A wheel notch scrolls 53 pixels on Linux and 44 on Windows. | Held keys report `repeat`. A wheel notch scrolls 53 pixels on both. |
 
 ## Running
 
