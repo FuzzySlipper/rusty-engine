@@ -17,9 +17,13 @@ winit = "0.30"
 gilrs = { version = "0.11", optional = true }
 
 [features]
-# The product UI over the scene, through Chromium off-screen rendering. Off by
-# default: its build downloads CEF (see docs/desktop-shell.md).
-web-overlay = ["render-wgpu/web-overlay", "dep:gilrs"]
+# The product UI over the scene, through either web engine. Off by default.
+ui-overlay = ["dep:gilrs"]
+# Chromium off-screen rendering: its build downloads CEF (see
+# docs/desktop-shell.md).
+web-overlay = ["ui-overlay", "render-wgpu/web-overlay"]
+# Servo in this process.
+servo-overlay = ["ui-overlay", "render-wgpu/servo-overlay"]
 
 [dev-dependencies]
 render-model.workspace = true
@@ -32,4 +36,4 @@ gtk = "0.18"
 
 [[example]]
 name = "shell_demo"
-required-features = ["web-overlay"]
+required-features = ["ui-overlay"]

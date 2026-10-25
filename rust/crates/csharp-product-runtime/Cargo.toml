@@ -37,6 +37,8 @@ desktop-shell = { workspace = true, optional = true }
 # The desktop shell: a native window with the product UI through Chromium.
 # Off by default; its build downloads CEF (see docs/desktop-shell.md).
 desktop = ["dep:desktop-shell", "desktop-shell/web-overlay"]
+# Servo as the window's other UI engine (`renderer.windowUi = servo`).
+servo = ["desktop", "desktop-shell/servo-overlay"]
 # NVIDIA DLSS as a temporal upscale stage. Off by default: its build needs
 # NVIDIA's DLSS SDK (docs/lighting-and-sky.md#dlss).
 dlss = ["render-wgpu/dlss"]

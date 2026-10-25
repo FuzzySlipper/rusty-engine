@@ -643,7 +643,12 @@ export type ProductHostWindowMedians = { acquire: number, lock: number, draw: nu
  * What the recent frames the desktop window presented cost, and when they
  * reached it.
  */
-export type ProductHostWindowStatistics = { recentFrames: number, framesPerSecond: number, medianMs: ProductHostWindowMedians, 
+export type ProductHostWindowStatistics = { 
+/**
+ * The web engine drawing the UI page: `chromium`, or Servo's version and
+ * the GL renderer it draws with.
+ */
+ui: string | null, recentFrames: number, framesPerSecond: number, medianMs: ProductHostWindowMedians, 
 /**
  * When each recent frame was presented, the step it showed and the
  * presentation time it drew at.

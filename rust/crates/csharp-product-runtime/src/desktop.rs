@@ -1,6 +1,6 @@
 //! The desktop mode of the runtime process: a native window presenting the
 //! world through `render-wgpu`, with the product UI from this host's own
-//! browser shell composited over it by Chromium (`desktop-shell`).
+//! browser shell composited over it by Chromium or Servo (`desktop-shell`).
 
 use std::path::PathBuf;
 
@@ -33,9 +33,11 @@ use std::sync::Arc;
 
 use csharp_product_runtime::{Gpu, Renderer, SceneDriver, WindowFrame, WindowTiming};
 use desktop_shell::{
-    DesktopScene, DesktopShell, DesktopShellConfig, PresentedFrame, WebRuntimeConfig,
+    DesktopScene, DesktopShell, DesktopShellConfig, PresentedFrame, WebEngine, WebRuntimeConfig,
 };
 use product_host::ProductHostWindowInput;
+
+use crate::product_bundle::WindowUi;
 
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 720;
@@ -44,11 +46,16 @@ const WINDOW_HEIGHT: u32 = 720;
 /// renderer on the window's device.
 pub(crate) struct Desktop {
     shell: DesktopShell,
+    /// The web engine drawing the UI page.
+    ui: WindowUi,
     cef_dir: Option<PathBuf>,
     /// Extra Chromium switches for the UI page, `name[=value]`; for example
     /// `remote-debugging-port=9333` lets a CDP client (the playtest harness,
     /// a debugger) attach to the page.
     switches: Vec<String>,
+    /// Servo preferences for the UI page, `name=value`.
+    #[cfg_attr(not(feature = "servo"), allow(dead_code))]
+    servo_preferences: Vec<String>,
     /// The monitor's refresh, which the window reports once it opens.
     cadence: csharp_product_runtime::PresentationCadence,
 }
@@ -58,16 +65,27 @@ impl Desktop {
     /// thread, before any other thread starts.
     pub(crate) fn open_if_selected(
         output: csharp_product_runtime::RenderOutput,
+        ui: WindowUi,
         cef_dir: Option<PathBuf>,
         switches: &[String],
+        servo_preferences: &[String],
     ) -> Result<Option<Self>, String> {
         if output != csharp_product_runtime::RenderOutput::Window {
             return Ok(None);
         }
+        if ui == WindowUi::Servo && !cfg!(feature = "servo") {
+            return Err(
+                "the product's window UI is servo (renderer.windowUi), and this desktop host \
+                 was built without Servo"
+                    .to_owned(),
+            );
+        }
         Ok(Some(Self {
             shell: DesktopShell::open()?,
+            ui,
             cef_dir,
             switches: switches.to_vec(),
+            servo_preferences: servo_preferences.to_vec(),
             cadence: csharp_product_runtime::PresentationCadence::default(),
         }))
     }
@@ -126,18 +144,36 @@ impl Desktop {
                 ui_url: Some(format!("{}/", origin.trim_end_matches('/'))),
                 placement_file: persistence_root.map(|root| root.join("desktop-window")),
                 web: WebRuntimeConfig {
-                    cef_dir: match self.cef_dir {
-                        Some(directory) => directory,
-                        None => cef_dir()?,
+                    engine: match self.ui {
+                        WindowUi::Chromium => WebEngine::Chromium {
+                            cef_dir: match self.cef_dir {
+                                Some(directory) => directory,
+                                None => cef_dir()?,
+                            },
+                            switches: chromium_switches(&self.switches),
+                        },
+                        #[cfg(feature = "servo")]
+                        WindowUi::Servo => WebEngine::Servo {
+                            preferences: self
+                                .servo_preferences
+                                .iter()
+                                .filter_map(|preference| preference.split_once('='))
+                                .map(|(name, value)| (name.to_owned(), value.to_owned()))
+                                .collect(),
+                        },
+                        #[cfg(not(feature = "servo"))]
+                        WindowUi::Servo => {
+                            return Err("this desktop host was built without Servo".to_owned())
+                        }
                     },
                     cache_dir,
-                    switches: chromium_switches(&self.switches),
                 },
             },
             scene,
         )?;
         println!(
-            "RUSTY_DESKTOP {{\"framesPresented\":{},\"framesSkipped\":{},\"seconds\":{:.1},\"uiImports\":{},\"uiImportErrors\":{}}}",
+            "RUSTY_DESKTOP {{\"ui\":{:?},\"framesPresented\":{},\"framesSkipped\":{},\"seconds\":{:.1},\"uiImports\":{},\"uiImportErrors\":{}}}",
+            report.ui_engine.as_deref().unwrap_or(""),
             report.frames_presented,
             report.frames_skipped,
             report.seconds,
@@ -209,6 +245,10 @@ impl DesktopScene for WindowScene {
             draw: frame.draw,
             present: frame.present,
         });
+    }
+
+    fn ui_opened(&self, engine: &str) {
+        self.timing.ui_opened(engine);
     }
 
     fn input_received(&self, at: std::time::SystemTime) {

@@ -100,7 +100,7 @@ impl Gpu {
         #[allow(unused_mut)]
         let mut descriptor =
             wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(window.clone()));
-        #[cfg(all(feature = "web-overlay", windows))]
+        #[cfg(all(feature = "ui-overlay", windows))]
         {
             descriptor.backends = wgpu::Backends::VULKAN;
         }
@@ -109,7 +109,7 @@ impl Gpu {
             .create_surface(window)
             .map_err(|error| GpuError::Surface(error.to_string()))?;
         let gpu = Self::from_instance(instance, Some(&surface))?;
-        #[cfg(all(feature = "web-overlay", windows))]
+        #[cfg(all(feature = "ui-overlay", windows))]
         gpu.window_refusal()?;
         let surface = crate::WindowSurface::new(&gpu, surface, width, height)?;
         Ok((gpu, surface))
@@ -125,21 +125,21 @@ impl Gpu {
         #[allow(unused_mut)]
         let mut descriptor =
             wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(display));
-        #[cfg(all(feature = "web-overlay", windows))]
+        #[cfg(all(feature = "ui-overlay", windows))]
         {
             descriptor.backends = wgpu::Backends::VULKAN;
         }
         let gpu = Self::from_instance(instance(descriptor), None)?;
-        #[cfg(all(feature = "web-overlay", windows))]
+        #[cfg(all(feature = "ui-overlay", windows))]
         gpu.window_refusal()?;
         Ok(gpu)
     }
 
     /// Refuses, naming the reason, a device that cannot draw a window with
-    /// the web overlay on Windows. The overlay imports Chromium's frames,
+    /// the UI overlay on Windows. The overlay imports the UI page's frames,
     /// D3D11 textures, into Vulkan with `VK_KHR_external_memory_win32`
     /// (`welding`); a software adapter is refused too.
-    #[cfg(all(feature = "web-overlay", windows))]
+    #[cfg(all(feature = "ui-overlay", windows))]
     fn window_refusal(&self) -> Result<(), GpuError> {
         let info = self.adapter.get_info();
         if info.device_type == wgpu::DeviceType::Cpu {
@@ -444,15 +444,15 @@ fn instance(descriptor: wgpu::InstanceDescriptor) -> wgpu::Instance {
 }
 
 /// A device and queue on `adapter`, and whether it has NGX's Vulkan
-/// extensions for DLSS. The web overlay adds what importing Chromium's
+/// extensions for DLSS. The UI overlay adds what importing the UI page's
 /// frames needs.
 fn request_device(
     adapter: &wgpu::Adapter,
     #[allow(unused_mut)] mut descriptor: wgpu::DeviceDescriptor<'_>,
 ) -> Result<(wgpu::Device, wgpu::Queue, bool), GpuError> {
-    // The web overlay imports Chromium's frames, D3D11 textures, with
+    // The UI overlay imports the page's frames, D3D11 textures, with
     // `VK_KHR_external_memory_win32` (`Gpu::window_refusal`).
-    #[cfg(all(feature = "web-overlay", windows))]
+    #[cfg(all(feature = "ui-overlay", windows))]
     {
         descriptor.required_features |=
             adapter.features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_WIN32;
@@ -460,9 +460,9 @@ fn request_device(
     // On Linux it imports DMA-BUFs. Chromium may leave the modifier
     // implicit (it does under X11), which only a device created with the
     // DMA-BUF extensions and `VULKAN_EXTERNAL_MEMORY_DMA_BUF` can import.
-    #[cfg(all(feature = "web-overlay", target_os = "linux"))]
+    #[cfg(all(feature = "ui-overlay", target_os = "linux"))]
     let dmabuf = adapter.get_info().backend == wgpu::Backend::Vulkan;
-    #[cfg(all(feature = "web-overlay", target_os = "linux"))]
+    #[cfg(all(feature = "ui-overlay", target_os = "linux"))]
     if dmabuf {
         descriptor.required_features |=
             adapter.features() & wgpu::Features::VULKAN_EXTERNAL_MEMORY_DMA_BUF;
@@ -472,7 +472,7 @@ fn request_device(
         let info = adapter.get_info();
         if info.backend == wgpu::Backend::Vulkan && info.vendor == crate::dlss::NVIDIA {
             let mut support = dlss_wgpu::FeatureSupport::default();
-            #[cfg(all(feature = "web-overlay", target_os = "linux"))]
+            #[cfg(all(feature = "ui-overlay", target_os = "linux"))]
             let made = welding::build_dmabuf_capable_device_with(
                 adapter,
                 &descriptor,
@@ -489,7 +489,7 @@ fn request_device(
                 },
             )
             .map_err(|error| error.to_string());
-            #[cfg(not(all(feature = "web-overlay", target_os = "linux")))]
+            #[cfg(not(all(feature = "ui-overlay", target_os = "linux")))]
             let made = dlss_wgpu::request_device(
                 crate::dlss::PROJECT_ID,
                 adapter,
@@ -504,7 +504,7 @@ fn request_device(
             }
         }
     }
-    #[cfg(all(feature = "web-overlay", target_os = "linux"))]
+    #[cfg(all(feature = "ui-overlay", target_os = "linux"))]
     if dmabuf {
         return welding::build_dmabuf_capable_device(adapter, &descriptor)
             .map(|(device, queue)| (device, queue, false))

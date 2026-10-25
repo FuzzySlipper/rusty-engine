@@ -1,19 +1,19 @@
-//! The UI page over the scene: Chromium, window input into the page, and the
-//! shell-provided pointer lock.
+//! The UI page over the scene: its web engine, window input into the page,
+//! and the shell-provided pointer lock.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use render_wgpu::web::{
-    CursorImage, CursorShape, EventModifiers, KeyEvent, KeyEventKind, MouseAction, MouseButton,
-    MouseEvent, NavigationEvent, WebOverlay, WebOverlayStats, WebRuntime, WebRuntimeConfig,
+    CursorImage, CursorShape, EventModifiers, KeyInput, MouseAction, MouseButton, MouseEvent,
+    NavigationEvent, WebOverlay, WebOverlayStats, WebRuntime, WebRuntimeConfig,
 };
 use render_wgpu::Gpu;
 use winit::{
     dpi::PhysicalPosition,
     event::{ElementState, MouseScrollDelta, WindowEvent},
-    event_loop::ActiveEventLoop,
-    keyboard::{KeyCode, ModifiersState, PhysicalKey},
+    event_loop::{ActiveEventLoop, EventLoopProxy},
+    keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey},
     raw_window_handle::{HasWindowHandle, RawWindowHandle},
     window::{Cursor, CursorGrabMode, CursorIcon, CustomCursor, Window},
 };
@@ -187,8 +187,11 @@ impl UiOverlay {
         window: &Arc<Window>,
         scene: Arc<dyn DesktopScene>,
         controller: bool,
+        proxy: EventLoopProxy<()>,
     ) -> Result<Self, String> {
-        let runtime = WebRuntime::initialize(config.clone())?;
+        let runtime = WebRuntime::initialize(config.clone(), move || {
+            let _ = proxy.send_event(());
+        })?;
         let size = window.inner_size();
         let mut page = WebOverlay::new(
             &runtime,
@@ -215,6 +218,12 @@ impl UiOverlay {
             image_cursors: HashMap::new(),
             gameplay: GameplayRoute::new(scene, controller),
         })
+    }
+
+    /// Whether the engine wakes the event loop for its work, rather than
+    /// being pumped on a timer.
+    pub(crate) fn wakes(&self) -> bool {
+        self.runtime.wakes()
     }
 
     pub(crate) fn page(&mut self) -> &mut WebOverlay {
@@ -581,34 +590,34 @@ impl UiOverlay {
                 let Some(windows_key_code) = keys::windows_key_code(code) else {
                     return;
                 };
-                let native_key_code = keys::native_key_code(code);
-                let modifiers = self.event_modifiers();
-                let kind = if pressed {
-                    KeyEventKind::RawKeyDown
-                } else {
-                    KeyEventKind::KeyUp
+                // winit names keys and codes as the W3C does, except Super
+                // (the W3C's Meta) and Space.
+                let code_name = match code {
+                    KeyCode::SuperLeft => "MetaLeft".to_owned(),
+                    KeyCode::SuperRight => "MetaRight".to_owned(),
+                    code => format!("{code:?}"),
                 };
-                let _ = self.page.send_key(KeyEvent {
-                    kind,
-                    windows_key_code,
-                    native_key_code,
-                    character: None,
-                    modifiers,
-                });
-                if pressed && !self.modifiers.control_key() && !self.modifiers.super_key() {
-                    for character in event.text.iter().flat_map(|text| text.chars()) {
-                        if character.is_control() {
-                            continue;
-                        }
-                        let _ = self.page.send_key(KeyEvent {
-                            kind: KeyEventKind::Char,
-                            windows_key_code: character as i32,
-                            native_key_code,
-                            character: Some(character),
-                            modifiers,
-                        });
+                let named;
+                let key = match &event.logical_key {
+                    Key::Character(text) => text.as_str(),
+                    Key::Named(NamedKey::Space) => " ",
+                    Key::Named(NamedKey::Super) => "Meta",
+                    Key::Named(name) => {
+                        named = format!("{name:?}");
+                        &named
                     }
-                }
+                    _ => "Unidentified",
+                };
+                let _ = self.page.send_key(&KeyInput {
+                    pressed,
+                    repeat: event.repeat,
+                    code: &code_name,
+                    key,
+                    text: event.text.as_deref(),
+                    windows_key_code,
+                    native_key_code: keys::native_key_code(code),
+                    modifiers: self.event_modifiers(),
+                });
             }
             _ => {}
         }

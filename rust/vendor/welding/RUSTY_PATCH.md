@@ -56,3 +56,21 @@ fixes its device-creation callback.
   (`DMABUF_DEVICE_EXTENSIONS`, a copy of Graft's private list) and then lets
   the host's `extend` add to the callback's arguments. `src/lib.rs` exports
   it on Linux with `wgpu-30`.
+
+Engine #10364 draws the desktop window's UI with Servo as well as Chromium.
+Servo renders with GL; its frames must reach the window's Vulkan device
+without a copy, and the FFI that needs belongs here with welding's other
+native interop rather than in the Engine's unsafe-free crates.
+
+- `src/gl_target/` (feature `gl-target`, Linux) adds `GlSharedTarget`: an EGL
+  context on a GBM device of the wgpu adapter's render node (matched by PCI
+  bus, else vendor and device), drawing into a ring of linear ABGR8888 GBM
+  buffers bound as GL textures through `EGL_EXT_image_dma_buf_import`. Each
+  buffer exports as `NativeFrame::DmaBufImage` for `WgpuTextureImporter`.
+  libgbm is loaded at run time (`libloading` 0.8, renamed `gbm-loader`).
+- `Cargo.toml`: the `gl-target` feature and its optional `gleam`, `glow` and
+  `khronos-egl` (dynamic) dependencies.
+
+Upstream has no GL producer; this fits beside its CEF producers as a
+generic "GL renderer into wgpu" source.
+

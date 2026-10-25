@@ -3,8 +3,9 @@
 //! TypeScript UI composited over it.
 //!
 //! The UI is the same browser shell page `rusty dev` serves, rendered off
-//! screen by Chromium (`render-wgpu`'s `web-overlay` feature) and imported as
-//! a texture whenever it repaints. Window input goes to that page, so the
+//! screen by Chromium (`render-wgpu`'s `web-overlay` feature) or by Servo in
+//! this process (`servo-overlay`), and imported as a texture whenever it
+//! repaints. Window input goes to that page, so the
 //! page's existing input capture produces the same normalized runtime input
 //! as in a browser, with its UI arbitration unchanged. Chromium's off-screen
 //! mode has no pointer lock, so the shell provides it: the page's lock
@@ -20,18 +21,18 @@
 //! applying publications before the window exists; [`DesktopShell::run`]
 //! then opens the window and draws the [`DesktopScene`] each frame.
 //!
-//! Without the `web-overlay` feature the shell presents the scene with no UI
-//! and builds without CEF.
+//! Without either feature the shell presents the scene with no UI and builds
+//! without a web engine.
 
 #![forbid(unsafe_code)]
 
-#[cfg(feature = "web-overlay")]
+#[cfg(feature = "ui-overlay")]
 mod gamepad;
-#[cfg(feature = "web-overlay")]
+#[cfg(feature = "ui-overlay")]
 mod gameplay;
-#[cfg(any(feature = "web-overlay", test))]
+#[cfg(any(feature = "ui-overlay", test))]
 mod keys;
-#[cfg(feature = "web-overlay")]
+#[cfg(feature = "ui-overlay")]
 mod overlay;
 mod placement;
 
@@ -47,8 +48,8 @@ use winit::{
     window::{Window, WindowId},
 };
 
-#[cfg(feature = "web-overlay")]
-pub use render_wgpu::web::WebRuntimeConfig;
+#[cfg(feature = "ui-overlay")]
+pub use render_wgpu::web::{WebEngine, WebRuntimeConfig};
 
 /// The frame interval when the monitor states no refresh rate.
 const DEFAULT_REFRESH: Duration = Duration::from_micros(16_667);
@@ -58,7 +59,7 @@ const ACQUIRE_MARGIN: Duration = Duration::from_millis(2);
 /// How often Chromium is pumped between frames. Without its schedule
 /// callback (welding does not expose it) the page's own work, such as the
 /// request carrying its input to the runtime, waits for the next pump.
-#[cfg(feature = "web-overlay")]
+#[cfg(feature = "ui-overlay")]
 const UI_PUMP_INTERVAL: Duration = Duration::from_millis(2);
 
 /// The retained scene the window presents: a renderer built on
@@ -74,6 +75,8 @@ pub trait DesktopScene: Send + Sync {
     fn presented(&self, frame: PresentedFrame);
     /// A key or mouse button event reached the window at `at`.
     fn input_received(&self, at: SystemTime);
+    /// The UI page opened in `engine` (its name, version and GPU renderer).
+    fn ui_opened(&self, _engine: &str) {}
     /// The window took the pointer lock and holds gameplay input
     /// (`routed`), reading the gamepad too when `controller`, or gave it
     /// back to the page.
@@ -114,7 +117,7 @@ pub struct DesktopShellConfig {
     /// Where the window's size, position and maximized state are kept between
     /// runs; `None` always opens at `width` × `height`.
     pub placement_file: Option<std::path::PathBuf>,
-    #[cfg(feature = "web-overlay")]
+    #[cfg(feature = "ui-overlay")]
     pub web: WebRuntimeConfig,
 }
 
@@ -129,6 +132,8 @@ pub fn run_web_subprocess(cef_dir: &std::path::Path) -> Result<Option<i32>, Stri
 #[derive(Debug, Clone, Default)]
 pub struct DesktopShellReport {
     pub adapter: String,
+    /// The web engine that drew the UI page.
+    pub ui_engine: Option<String>,
     pub frames_presented: u64,
     pub frames_skipped: u64,
     pub seconds: f64,
@@ -210,12 +215,12 @@ struct Open {
     /// swapchain is not reconfigured under one, so it applies before the
     /// next acquire.
     resized: Option<(u32, u32)>,
-    #[cfg(feature = "web-overlay")]
+    #[cfg(feature = "ui-overlay")]
     ui: Option<overlay::UiOverlay>,
     /// Reads the gamepad for the window's gameplay route, where gilrs can.
-    #[cfg(feature = "web-overlay")]
+    #[cfg(feature = "ui-overlay")]
     gamepad: Option<gamepad::GamepadReader>,
-    #[cfg(feature = "web-overlay")]
+    #[cfg(feature = "ui-overlay")]
     last_pump: Instant,
 }
 
@@ -330,15 +335,15 @@ impl Shell {
         let surface = WindowSurface::create(&self.gpu, window.clone(), size.width, size.height)
             .map_err(|error| error.to_string())?;
         self.report.adapter = format!("{:?}", self.gpu.adapter_summary());
-        #[cfg(feature = "web-overlay")]
+        #[cfg(feature = "ui-overlay")]
         let gamepad = self.config.ui_url.as_ref().and_then(|_| {
             let proxy = self.proxy.clone();
             gamepad::GamepadReader::start(move || {
                 let _ = proxy.send_event(());
             })
         });
-        #[cfg(feature = "web-overlay")]
-        let ui = match &self.config.ui_url {
+        #[cfg(feature = "ui-overlay")]
+        let mut ui = match &self.config.ui_url {
             Some(url) => Some(overlay::UiOverlay::open(
                 &self.config.web,
                 &self.gpu,
@@ -346,9 +351,16 @@ impl Shell {
                 &window,
                 Arc::clone(&self.scene),
                 gamepad.is_some(),
+                self.proxy.clone(),
             )?),
             None => None,
         };
+        #[cfg(feature = "ui-overlay")]
+        if let Some(ui) = &mut ui {
+            let engine = ui.page().engine();
+            self.scene.ui_opened(&engine);
+            self.report.ui_engine = Some(engine);
+        }
         let refresh = window
             .current_monitor()
             .and_then(|monitor| monitor.refresh_rate_millihertz())
@@ -364,11 +376,11 @@ impl Shell {
             refresh,
             next_frame: Instant::now(),
             resized: None,
-            #[cfg(feature = "web-overlay")]
+            #[cfg(feature = "ui-overlay")]
             ui,
-            #[cfg(feature = "web-overlay")]
+            #[cfg(feature = "ui-overlay")]
             gamepad,
-            #[cfg(feature = "web-overlay")]
+            #[cfg(feature = "ui-overlay")]
             last_pump: Instant::now(),
         });
         Ok(())
@@ -377,7 +389,7 @@ impl Shell {
     /// Ask the presenter for the next frame's image.
     fn ask_frame(&mut self, event_loop: &ActiveEventLoop) {
         let Some(open) = &mut self.window else { return };
-        #[cfg(feature = "web-overlay")]
+        #[cfg(feature = "ui-overlay")]
         if let Some(ui) = &mut open.ui {
             ui.pump(&open.window, event_loop);
             ui.flush_motion();
@@ -414,7 +426,7 @@ impl Shell {
         // Under vsync the display frees the next image about one interval
         // after this one.
         open.next_frame = acquired.at + open.refresh.saturating_sub(ACQUIRE_MARGIN);
-        #[cfg(feature = "web-overlay")]
+        #[cfg(feature = "ui-overlay")]
         if let Some(ui) = &mut open.ui {
             ui.page().import_repaint();
         }
@@ -422,14 +434,14 @@ impl Shell {
         let surface = &mut *surface;
         // The window's scale factor is the page's device pixel ratio too.
         let pixel_ratio = open.window.scale_factor() as f32;
-        #[cfg(feature = "web-overlay")]
+        #[cfg(feature = "ui-overlay")]
         let mut ui = open.ui.as_mut();
         let locking = Instant::now();
         let mut drawn = (locking, locking);
         let step = self.scene.draw(&mut |renderer, now| {
             drawn.0 = Instant::now();
             renderer.set_pixel_ratio(pixel_ratio);
-            #[cfg(feature = "web-overlay")]
+            #[cfg(feature = "ui-overlay")]
             if let Some(ui) = ui.as_deref_mut() {
                 renderer.render_view_composition_to_frame_with_overlay(
                     surface,
@@ -455,7 +467,7 @@ impl Shell {
             draw: drawn.1 - drawn.0,
             present: presented - presenting,
         });
-        #[cfg(feature = "web-overlay")]
+        #[cfg(feature = "ui-overlay")]
         if let Some(ui) = &open.ui {
             let stats = ui.stats();
             self.report.ui_imports = stats.imports;
@@ -473,7 +485,7 @@ impl Shell {
                     eprintln!("desktop-shell: could not keep the window placement: {error}");
                 }
             }
-            #[cfg(feature = "web-overlay")]
+            #[cfg(feature = "ui-overlay")]
             drop(open.ui);
             drop(open.presenter);
             drop(open.window);
@@ -519,7 +531,7 @@ impl ApplicationHandler for Shell {
         if let WindowEvent::Moved(_) = event {
             open.settle.check(&open.window, true);
         }
-        #[cfg(feature = "web-overlay")]
+        #[cfg(feature = "ui-overlay")]
         if let Some(ui) = &mut open.ui {
             ui.window_event(&open.window, &event);
             // Chromium's work runs only when pumped: do it now rather than
@@ -537,7 +549,7 @@ impl ApplicationHandler for Shell {
     }
 
     fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
-        #[cfg(feature = "web-overlay")]
+        #[cfg(feature = "ui-overlay")]
         if let (Some(open), DeviceEvent::MouseMotion { delta }) = (&mut self.window, &event) {
             if let Some(ui) = &mut open.ui {
                 ui.raw_motion(delta.0, delta.1);
@@ -554,11 +566,16 @@ impl ApplicationHandler for Shell {
         let Some(open) = &mut self.window else { return };
         // Held motion goes to the runtime at every wake, not every frame;
         // a gamepad change wakes the loop.
-        #[cfg(feature = "web-overlay")]
+        #[cfg(feature = "ui-overlay")]
         if let Some(ui) = &mut open.ui {
             ui.flush_gameplay_motion();
             if let Some(state) = open.gamepad.as_ref().and_then(|pad| pad.latest()) {
                 ui.gamepad(state);
+            }
+            // Servo wakes the loop when it has work; it runs at every wake.
+            if ui.wakes() {
+                ui.pump(&open.window, event_loop);
+                open.last_pump = Instant::now();
             }
         }
         if let Some(acquired) = open.presenter.take() {
@@ -566,27 +583,29 @@ impl ApplicationHandler for Shell {
         } else if !open.presenter.pending && Instant::now() >= open.next_frame {
             self.ask_frame(event_loop);
         } else {
-            #[cfg(feature = "web-overlay")]
+            #[cfg(feature = "ui-overlay")]
             if let Some(ui) = &mut open.ui {
-                if open.last_pump.elapsed() >= UI_PUMP_INTERVAL {
+                if !ui.wakes() && open.last_pump.elapsed() >= UI_PUMP_INTERVAL {
                     ui.pump(&open.window, event_loop);
                     open.last_pump = Instant::now();
                 }
             }
         }
         // Wait for window events until the next frame is due (or Chromium's
-        // pump); while an image is being acquired, the presenter wakes the
+        // pump; Servo wakes the loop itself); while an image is being acquired, the presenter wakes the
         // loop when it has one.
         let Some(open) = &self.window else { return };
         let frame = (!open.presenter.pending).then_some(open.next_frame);
-        #[cfg(feature = "web-overlay")]
+        #[cfg(feature = "ui-overlay")]
         let wake = match &open.ui {
-            Some(_) => Some(frame.map_or(open.last_pump + UI_PUMP_INTERVAL, |frame| {
-                frame.min(open.last_pump + UI_PUMP_INTERVAL)
-            })),
-            None => frame,
+            Some(ui) if !ui.wakes() => {
+                Some(frame.map_or(open.last_pump + UI_PUMP_INTERVAL, |frame| {
+                    frame.min(open.last_pump + UI_PUMP_INTERVAL)
+                }))
+            }
+            _ => frame,
         };
-        #[cfg(not(feature = "web-overlay"))]
+        #[cfg(not(feature = "ui-overlay"))]
         let wake = frame;
         event_loop.set_control_flow(wake.map_or(ControlFlow::Wait, ControlFlow::WaitUntil));
     }

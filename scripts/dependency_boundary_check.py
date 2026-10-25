@@ -74,6 +74,8 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     # The desktop shell's UI overlay (Chromium off-screen rendering).
     "cef": frozenset({"render-wgpu"}),
     "welding": frozenset({"render-wgpu"}),
+    # The window's other UI engine, in process (#10364).
+    "servo": frozenset({"render-wgpu"}),
     # NVIDIA DLSS through the renderer's Vulkan device (#9947).
     "dlss_wgpu": frozenset({"render-wgpu"}),
     "winit": frozenset({"desktop-shell"}),

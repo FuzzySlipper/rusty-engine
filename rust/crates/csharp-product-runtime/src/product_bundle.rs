@@ -51,6 +51,9 @@ pub(super) struct ProductBundle {
     renderer_settings: ProductRendererSettings,
     /// Where the runtime draws (`renderer.output`).
     pub(super) render_output: csharp_product_runtime::RenderOutput,
+    /// The web engine drawing the UI page in the window (`renderer.windowUi`).
+    #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+    pub(super) window_ui: WindowUi,
     /// The aspect range the page keeps (`renderer.presentationAspect`).
     presentation_aspect: Option<ProductHostPresentationAspect>,
     /// Where committed audio plays (`audio.output`).
@@ -124,6 +127,11 @@ impl ProductBundle {
             Some("window") => csharp_product_runtime::RenderOutput::Window,
             Some(_) => return Err(field_error("renderer.output", "must be stream or window")),
         };
+        let window_ui = match manifest.renderer.window_ui.as_deref() {
+            None => WindowUi::Chromium,
+            Some(name) => WindowUi::parse(name)
+                .ok_or_else(|| field_error("renderer.windowUi", "must be chromium or servo"))?,
+        };
         let presentation_aspect = match manifest.renderer.presentation_aspect {
             None => None,
             Some(ManifestPresentationAspect { minimum, maximum })
@@ -188,6 +196,7 @@ impl ProductBundle {
             ui_projection: manifest.ui_projection,
             renderer_settings,
             render_output,
+            window_ui,
             presentation_aspect,
             audio_output,
             lifecycle,
@@ -441,6 +450,23 @@ impl ProductBundle {
     }
 }
 
+/// The web engine drawing the UI page in the desktop window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WindowUi {
+    Chromium,
+    Servo,
+}
+
+impl WindowUi {
+    pub(crate) fn parse(name: &str) -> Option<Self> {
+        match name {
+            "chromium" => Some(Self::Chromium),
+            "servo" => Some(Self::Servo),
+            _ => None,
+        }
+    }
+}
+
 fn field_error(field: &str, detail: impl std::fmt::Display) -> String {
     format!("{PRODUCT_MANIFEST_NAME}:{field}: {detail}")
 }
@@ -512,6 +538,8 @@ struct ManifestContent {
 struct ManifestRenderer {
     #[serde(default)]
     output: Option<String>,
+    #[serde(default)]
+    window_ui: Option<String>,
     #[serde(default)]
     presentation_aspect: Option<ManifestPresentationAspect>,
     #[serde(default)]
@@ -1253,6 +1281,21 @@ mod tests {
         fs::write(&manifest_path, with("tv", "device-required")).unwrap();
         let error = read(&root).expect_err("unknown output rejects");
         assert!(error.contains("product.json:renderer.output"));
+        assert_eq!(bundle.window_ui, WindowUi::Chromium);
+        let with_ui = |ui: &str| {
+            original.replace(
+                "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}",
+                &format!("\"renderer\":{{\"output\":\"window\",\"windowUi\":\"{ui}\"}}"),
+            )
+        };
+        fs::write(&manifest_path, with_ui("servo")).unwrap();
+        assert_eq!(
+            read(&root).expect("servo admits").window_ui,
+            WindowUi::Servo
+        );
+        fs::write(&manifest_path, with_ui("gecko")).unwrap();
+        let error = read(&root).expect_err("unknown window UI rejects");
+        assert!(error.contains("product.json:renderer.windowUi"));
         fs::write(&manifest_path, with("stream", "speakers")).unwrap();
         let error = read(&root).expect_err("unknown audio output rejects");
         assert!(error.contains("product.json:audio.output"));

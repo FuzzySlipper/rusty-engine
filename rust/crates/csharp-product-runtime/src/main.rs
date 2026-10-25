@@ -46,7 +46,7 @@ pub(crate) const RELOAD_CONTENT_COMMAND: &str = "reload-content";
 /// Its supervisor, and `rusty dev`, read it as a stop rather than a crash.
 #[cfg_attr(not(any(unix, feature = "desktop")), allow(dead_code))]
 pub(crate) const PRODUCT_STOPPED_EXIT_CODE: u8 = 79;
-use product_bundle::ProductBundle;
+use product_bundle::{ProductBundle, WindowUi};
 
 static NEXT_DIRECT_RUNTIME_INSTANCE_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -125,8 +125,12 @@ fn main() -> Result<std::process::ExitCode, String> {
     #[cfg(feature = "desktop")]
     let desktop = desktop::Desktop::open_if_selected(
         render_output,
+        args.window_ui
+            .or(args.product.as_ref().map(|product| product.window_ui))
+            .unwrap_or(WindowUi::Chromium),
         args.cef_dir.clone(),
         &args.cef_switches,
+        &args.servo_preferences,
     )?;
     let diagnostics = ProductHostLog::new(args.log_config()).map_err(|error| error.to_string())?;
     let content = args.content().map_err(|error| error.to_string())?;
@@ -824,6 +828,11 @@ struct Arguments {
     cef_dir: Option<PathBuf>,
     /// Extra Chromium switches for the window's UI page, `name[=value]`.
     cef_switches: Vec<String>,
+    /// The web engine for the window's UI page, overriding the manifest's
+    /// `renderer.windowUi`.
+    window_ui: Option<WindowUi>,
+    /// Servo preferences for the window's UI page, `name=value`.
+    servo_preferences: Vec<String>,
     /// Where the host writes its NDJSON diagnostics.
     diagnostics_log: Option<PathBuf>,
     /// The file whose time marks the host's last use (`rusty dev` idle expiry).
@@ -926,6 +935,16 @@ impl Arguments {
         }
         for switch in &self.cef_switches {
             arguments.extend(["--cef-switch".to_owned(), switch.clone()]);
+        }
+        if let Some(ui) = self.window_ui {
+            let name = match ui {
+                WindowUi::Chromium => "chromium",
+                WindowUi::Servo => "servo",
+            };
+            arguments.extend(["--window-ui".to_owned(), name.to_owned()]);
+        }
+        for preference in &self.servo_preferences {
+            arguments.extend(["--servo-pref".to_owned(), preference.clone()]);
         }
         if let Some(file) = &self.diagnostics_log {
             arguments.extend(["--diagnostics-log".to_owned(), path(file)?]);
@@ -1074,6 +1093,8 @@ impl Arguments {
         let mut chromium = None;
         let mut cef_dir = None;
         let mut cef_switches = Vec::new();
+        let mut window_ui = None;
+        let mut servo_preferences = Vec::new();
         let mut diagnostics_log = None;
         let mut activity_file = None;
         let mut performance_configuration = None;
@@ -1157,6 +1178,20 @@ impl Arguments {
                 "--cef-switch" => {
                     cef_switches.push(values.next().ok_or("--cef-switch requires name[=value]")?)
                 }
+                "--window-ui" => {
+                    let name = values
+                        .next()
+                        .ok_or("--window-ui requires chromium or servo")?;
+                    window_ui = Some(
+                        WindowUi::parse(&name).ok_or("--window-ui must be chromium or servo")?,
+                    );
+                }
+                "--servo-pref" => servo_preferences.push(
+                    values
+                        .next()
+                        .filter(|preference| preference.contains('='))
+                        .ok_or("--servo-pref requires name=value")?,
+                ),
                 "--diagnostics-log" => {
                     diagnostics_log = Some(PathBuf::from(
                         values.next().ok_or("--diagnostics-log requires a file")?,
@@ -1196,7 +1231,7 @@ impl Arguments {
                 }
                 "--help" => {
                     return Err(format!(
-                        "usage: rusty-product-host --product <Product-directory|product.rpak> --loader <nativeaot|coreclr> [--supervised] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--diagnostics-log <file>] [--activity-file <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <iterations> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. A release Product is one container file (`rusty build --pack`) holding product.json, UI and content, with the managed/native artifacts loose beside it. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--cef-dir` overrides the runtime pack's `lib/cef` and each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`). `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--activity-file` marks the host's last use (input, control, live debug, a page attaching; not frame pulls) in that file's time, which `rusty dev` reads to stop idle sessions. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
+                        "usage: rusty-product-host --product <Product-directory|product.rpak> --loader <nativeaot|coreclr> [--supervised] [--headless [--chromium <executable>]] [--cef-dir <directory>] [--cef-switch <name[=value]>]... [--window-ui <chromium|servo>] [--servo-pref <name=value>]... [--diagnostics-log <file>] [--activity-file <file>] [--runtime-instance-id <nonzero-u64>] [--persistence-root <absolute-path>] [--exercise] [--performance-probe <iterations> [--performance-configuration <label>]]\n\nThe Product directory contains product.json plus its declared managed/native artifacts, UI, and admitted content. A release Product is one container file (`rusty build --pack`) holding product.json, UI and content, with the managed/native artifacts loose beside it. The matched Engine browser shell is discovered beside this runtime-pack binary; Product directories never carry Engine JavaScript. `--loader` chooses one exact optional manifest artifact. `--exercise` runs Engine provider-fixture assertions (voxel/UI/input/timeline/fault behavior), not a general product health check; ordinary products should omit it. See docs/csharp-product-project.md#host-exercise-contract. `--supervised` is the explicit rusty-dev stdin-close shutdown hook. `--headless` opens the page in headless Chromium after the listener is ready, so an unattended run keeps drawing and mounts the product UI (animation and video completions flow without it), and closes it with the host; `--chromium` selects its executable, else one on `PATH`. The product manifest's `renderer.output` selects stream or window output; in window output `--window-ui` overrides the manifest's `renderer.windowUi` (the web engine drawing the UI page), `--cef-dir` overrides the runtime pack's `lib/cef`, each `--cef-switch` adds a Chromium switch for the UI page (for example `remote-debugging-port=9333`) and each `--servo-pref` sets a Servo preference. `--diagnostics-log` writes the host's NDJSON diagnostics to that file. `--activity-file` marks the host's last use (input, control, live debug, a page attaching; not frame pulls) in that file's time, which `rusty dev` reads to stop idle sessions. `--runtime-instance-id` names this host-owned runtime incarnation; direct launches allocate a process-local fallback when it is omitted. Server bind/port and explicit liveDebug opt-in are Product metadata. `--identity` prints machine-readable matched runtime identity; `--version` prints a concise diagnostic identity.\n\n{PHYSICAL_MAPPING_USAGE}"
                     ));
                 }
                 _ => return Err(format!("unknown argument `{arg}`")),
@@ -1262,6 +1297,8 @@ impl Arguments {
             chromium,
             cef_dir,
             cef_switches,
+            window_ui,
+            servo_preferences,
             diagnostics_log,
             activity_file,
             performance_configuration,

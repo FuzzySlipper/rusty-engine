@@ -71,7 +71,7 @@ mod video;
 mod volumetric_fog;
 mod voxel;
 mod water;
-#[cfg(feature = "web-overlay")]
+#[cfg(feature = "ui-overlay")]
 pub mod web;
 
 use std::collections::HashMap;

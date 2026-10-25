@@ -104,6 +104,8 @@ pub struct WindowTiming(Mutex<WindowRecord>);
 struct WindowRecord {
     frames: VecDeque<WindowFrame>,
     inputs: VecDeque<SystemTime>,
+    /// The web engine drawing the UI page.
+    ui: Option<String>,
 }
 
 /// One frame the window presented: the step it showed, when, and how long
@@ -132,6 +134,11 @@ impl WindowTiming {
         record.frames.push_back(frame);
     }
 
+    /// The UI page opened in `engine`.
+    pub fn ui_opened(&self, engine: &str) {
+        self.record().ui = Some(engine.to_owned());
+    }
+
     /// A key or mouse button event reached the window at `at`.
     pub fn input_received(&self, at: SystemTime) {
         let mut record = self.record();
@@ -157,6 +164,7 @@ impl WindowTiming {
             _ => 0.0,
         };
         ProductHostWindowStatistics {
+            ui: record.ui.clone(),
             recent_frames: frames.len(),
             frames_per_second: if span > 0.0 {
                 (frames.len() - 1) as f64 / span

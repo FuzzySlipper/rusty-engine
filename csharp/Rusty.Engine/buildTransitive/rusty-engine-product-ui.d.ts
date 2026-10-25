@@ -1137,6 +1137,11 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      * reached it.
      */
     export type ProductHostWindowStatistics = {
+        /**
+         * The web engine drawing the UI page: `chromium`, or Servo's version and
+         * the GL renderer it draws with.
+         */
+        ui: string | null;
         recentFrames: number;
         framesPerSecond: number;
         medianMs: ProductHostWindowMedians;

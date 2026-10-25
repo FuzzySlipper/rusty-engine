@@ -32,10 +32,22 @@ pollster.workspace = true
 # Billboard labels (#8827): glyph rasterizing and WOFF2 font decoding.
 fontdue = "0.9.4"
 wuff = "0.2.9"
-# The desktop shell's UI overlay: Chromium (CEF) off-screen rendering imported
-# into this crate's device. Off by default: its build downloads CEF.
-welding = { version = "=0.15.0", default-features = false, features = ["wgpu-30", "cef-runtime"], optional = true }
+# The desktop shell's UI overlay: a web engine's frames imported into this
+# crate's device. Chromium (CEF, `web-overlay`) renders off-screen; its build
+# downloads CEF. Servo (`servo-overlay`) draws with GL into buffers shared
+# with this device (`welding`'s GL target).
+welding = { version = "=0.15.0", default-features = false, features = ["wgpu-30"], optional = true }
 dpi = { version = "0.1.2", optional = true }
+servo = { version = "=0.7.0", features = ["webcrypto", "gamepad"], optional = true }
+# Servo's rendering-context trait names these GL and surface types.
+gleam = { version = "0.15.1", optional = true }
+glow = { version = "0.17.0", optional = true }
+surfman = { version = "0.14.0", default-features = false, optional = true }
+euclid = { version = "0.22", optional = true }
+url = { version = "2", optional = true }
+# Servo's network stack takes rustls's process default provider, which rustls
+# cannot pick once the host links both of its providers.
+rustls = { version = "0.23", default-features = false, features = ["ring"], optional = true }
 # NVIDIA DLSS as a temporal upscale stage (`dlss.rs`). Off by default: its
 # build needs NVIDIA's DLSS SDK, the Vulkan headers and clang
 # (docs/lighting-and-sky.md#dlss).
@@ -43,7 +55,20 @@ dlss_wgpu = { version = "=6.0.0", optional = true }
 uuid = { version = "1", default-features = false, optional = true }
 
 [features]
-web-overlay = ["dep:welding", "dep:dpi"]
+# Either UI engine: the frame import and the composite over the scene.
+ui-overlay = ["dep:welding", "dep:dpi"]
+web-overlay = ["ui-overlay", "welding/cef-runtime"]
+servo-overlay = [
+    "ui-overlay",
+    "welding/gl-target",
+    "dep:servo",
+    "dep:gleam",
+    "dep:glow",
+    "dep:surfman",
+    "dep:euclid",
+    "dep:url",
+    "dep:rustls",
+]
 dlss = ["dep:dlss_wgpu", "dep:uuid"]
 
 [dev-dependencies]

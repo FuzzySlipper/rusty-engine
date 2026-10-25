@@ -23,10 +23,11 @@ TypeScript UI is composited over it.
   present times, when input reached the window, and which step consumed
   recent input.
 - **UI.** The window shows the same browser shell page `rusty dev` serves,
-  from the runtime's own HTTP host (`http://127.0.0.1:<port>/`). Chromium
-  (CEF) renders it off-screen and `render-wgpu`'s `web` module imports each
-  repaint as a texture and composites it over the frame in gamma space. An
-  idle UI costs nothing per frame. Off-screen Chromium paints popup widgets
+  from the runtime's own HTTP host (`http://127.0.0.1:<port>/`). A web
+  engine renders it off-screen and `render-wgpu`'s `web` module composites
+  it over the frame in gamma space: Chromium (CEF) by default, or Servo
+  ([UI engine](#ui-engine)). Each Chromium repaint is imported as a new
+  texture. An idle UI costs nothing per frame. Off-screen Chromium paints popup widgets
   (a `<select>`'s list, date and colour pickers) as a separate surface. The
   overlay draws it over the page at its rect while it shows. A popup that
   would reach past the window is moved inside it, and pointer events over it
@@ -179,6 +180,35 @@ rusty dev --project <product.csproj> --output window
   SwiftShader and the bundled Vulkan loader are left out. The overlay imports
   Chromium's frames as GPU textures, so it needs the system GPU driver and
   Vulkan loader the world renderer already uses.
+
+## UI engine
+
+The manifest's `renderer.windowUi` picks the engine that draws the UI page:
+`chromium` (the default) or `servo`. Set it with
+`RustyEngineProductWindowUi`, or for one launch with
+`rusty dev --window-ui servo`; `rusty-product-host --window-ui` overrides a
+release's manifest. `engine.renderer`'s `window.ui` and the host's closing
+`RUSTY_DESKTOP` line name the engine (for Servo, its version and the GL
+renderer it draws with).
+
+- **Servo** (0.7) runs in the host process, on the window's thread. It draws
+  with GL into two linear GBM buffers on the render node of the GPU the
+  window uses, which the Vulkan device imports once each as DMA-BUFs. Servo
+  paints when it has a new frame and the window composites the last
+  finished buffer; it never paints into the buffer the GPU may still be
+  reading. Servo wakes the window's event loop when it has work, so an idle
+  page runs nothing.
+- Without a GPU with GL and DMA-BUF import the window refuses to open and
+  names the reason; it never falls back to Chromium.
+- `rusty dev --servo-pref name=value` (repeatable, forwarded to
+  `rusty-product-host --servo-pref`) sets a Servo preference.
+- Only a host built with Servo opens it: `scripts/build-runtime-pack.sh
+  --desktop --servo` builds one (Servo's build needs Python 3). Published
+  desktop packs do not carry it yet, and it runs on Linux only.
+- Window input, the pointer-lock and confinement shim, focus and the
+  page's console reach Servo through the same shell paths as Chromium. The
+  [browser-features table](#browser-features-in-the-window) describes
+  Chromium.
 
 ## Shipping a product
 

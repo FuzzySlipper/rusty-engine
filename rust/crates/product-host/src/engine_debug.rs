@@ -502,6 +502,9 @@ pub struct ProductHostStreamStatistics {
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductHostWindowStatistics {
+    /// The web engine drawing the UI page: `chromium`, or Servo's version and
+    /// the GL renderer it draws with.
+    pub ui: Option<String>,
     pub recent_frames: usize,
     pub frames_per_second: f64,
     pub median_ms: ProductHostWindowMedians,

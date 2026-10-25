@@ -672,8 +672,13 @@ struct DevOptions {
     /// `stream`, `device-optional` or `device-required`
     /// (`RustyEngineProductAudioOutput`).
     audio_output: Option<String>,
+    /// `chromium` or `servo` draws the window's UI page, for this launch
+    /// (the host's `--window-ui`, over the manifest's `renderer.windowUi`).
+    window_ui: Option<String>,
     /// Chromium switches for the window's UI page, `name[=value]`.
     cef_switches: Vec<String>,
+    /// Servo preferences for the window's UI page, `name=value`.
+    servo_preferences: Vec<String>,
     /// The Chromium executable `--headless` opens.
     chromium: Option<PathBuf>,
     /// Where the host writes its NDJSON diagnostics.
@@ -889,7 +894,9 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
     let mut headless = false;
     let mut output = None;
     let mut audio_output = None;
+    let mut window_ui = None;
     let mut cef_switches = Vec::new();
+    let mut servo_preferences = Vec::new();
     let mut chromium = None;
     let mut diagnostics_log = None;
     let mut session = false;
@@ -944,7 +951,23 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
                 }
                 audio_output = Some(value);
             }
+            "--window-ui" => {
+                let value = required_value(&mut values, "--window-ui")?;
+                if !matches!(value.as_str(), "chromium" | "servo") {
+                    return Err(
+                        "RUSTY_DEV_ARGUMENT: --window-ui must be chromium or servo".to_owned()
+                    );
+                }
+                window_ui = Some(value);
+            }
             "--cef-switch" => cef_switches.push(required_value(&mut values, "--cef-switch")?),
+            "--servo-pref" => {
+                let value = required_value(&mut values, "--servo-pref")?;
+                if !value.contains('=') {
+                    return Err("RUSTY_DEV_ARGUMENT: --servo-pref must be name=value".to_owned());
+                }
+                servo_preferences.push(value);
+            }
             "--chromium" => {
                 chromium = Some(PathBuf::from(required_value(&mut values, "--chromium")?))
             }
@@ -990,7 +1013,9 @@ fn parse_dev(values: Vec<String>) -> Result<DevOptions, String> {
         headless,
         output,
         audio_output,
+        window_ui,
         cef_switches,
+        servo_preferences,
         chromium,
         diagnostics_log,
         session,
@@ -1284,7 +1309,8 @@ Get or refresh this command:
 fn dev_usage() -> String {
     format!("usage: rusty dev [--project <ordinary-product.csproj>] [--port <u16>] [--bind-host <IPv4>] [--live-debug]
                  [--headless [--chromium <executable>]] [--output <stream|window>]
-                 [--audio-output <stream|device-optional|device-required>] [--cef-switch <name[=value]>]...
+                 [--audio-output <stream|device-optional|device-required>] [--window-ui <chromium|servo>]
+                 [--cef-switch <name[=value]>]... [--servo-pref <name=value>]...
                  [--diagnostics-log <file>] [--label <text>] [--keep] [--idle-timeout <minutes>]
                  [--instance <name>] [--allow-ephemeral-port]
                  [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
@@ -1354,7 +1380,9 @@ runtime for the UI) into the cache beside the pair.
   --output             stream (the default) or window, for this launch
   --audio-output       stream plays in the watching pages (the default with stream output); device-required
                        fails the load without an audio device; device-optional runs silent
+  --window-ui          chromium (the default) or servo draws the window's UI page, for this launch
   --cef-switch         a Chromium switch for the window's UI page, e.g. remote-debugging-port=9333
+  --servo-pref         a Servo preference for the window's UI page, name=value
   --diagnostics-log    write the host's NDJSON diagnostics to this file
   --label              who or what the session is for, shown by `rusty dev list`
   --keep               never stop this session for being idle
@@ -1866,8 +1894,14 @@ fn delegated_arguments(options: &DevOptions) -> Vec<std::ffi::OsString> {
     if let Some(audio_output) = &options.audio_output {
         push("--audio-output", audio_output.into());
     }
+    if let Some(window_ui) = &options.window_ui {
+        push("--window-ui", window_ui.into());
+    }
     for switch in &options.cef_switches {
         push("--cef-switch", switch.into());
+    }
+    for preference in &options.servo_preferences {
+        push("--servo-pref", preference.into());
     }
     if let Some(chromium) = &options.chromium {
         push("--chromium", chromium.clone().into());
@@ -2561,6 +2595,7 @@ fn stage_properties(options: &DevOptions) -> Result<Vec<String>, String> {
     if let Some(audio_output) = &options.audio_output {
         properties.push(format!("-p:RustyEngineProductAudioOutput={audio_output}"));
     }
+
     Ok(properties)
 }
 
@@ -2854,6 +2889,12 @@ fn supervised_host_arguments(
     }
     for switch in &options.cef_switches {
         arguments.extend(["--cef-switch".to_owned(), switch.clone()]);
+    }
+    if let Some(window_ui) = &options.window_ui {
+        arguments.extend(["--window-ui".to_owned(), window_ui.clone()]);
+    }
+    for preference in &options.servo_preferences {
+        arguments.extend(["--servo-pref".to_owned(), preference.clone()]);
     }
     if let Some(log) = &options.diagnostics_log {
         let log = absolute(log)?;
@@ -3370,7 +3411,9 @@ mod tests {
             headless: false,
             output: None,
             audio_output: None,
+            window_ui: None,
             cef_switches: Vec::new(),
+            servo_preferences: Vec::new(),
             chromium: None,
             diagnostics_log: None,
             session: false,
@@ -3486,10 +3529,15 @@ mod tests {
             "/usr/bin/chromium",
             "--cef-switch",
             "remote-debugging-port=9333",
+            "--window-ui",
+            "servo",
+            "--servo-pref",
+            "dom_webgl2_enabled=false",
             "--diagnostics-log",
             "/logs/diagnostics.ndjson",
         ]);
         let properties = stage_properties(&options).expect("staging properties");
+
         assert!(properties.contains(&"-p:RustyEngineProductContentSource=true".to_owned()));
         assert!(properties.contains(&"-p:RustyEngineProductRenderOutput=window".to_owned()));
         assert!(properties.contains(&"-p:RustyEngineProductAudioOutput=device-required".to_owned()));
@@ -3503,12 +3551,18 @@ mod tests {
         for pair in [
             ["--chromium", "/usr/bin/chromium"],
             ["--cef-switch", "remote-debugging-port=9333"],
+            ["--window-ui", "servo"],
+            ["--servo-pref", "dom_webgl2_enabled=false"],
             ["--diagnostics-log", "/logs/diagnostics.ndjson"],
         ] {
             assert!(host.windows(2).any(|window| window == pair), "{pair:?}");
         }
         assert!(Arguments::parse(
             ["dev", "--project", "P.csproj", "--output", "tv"].map(str::to_owned)
+        )
+        .is_err());
+        assert!(Arguments::parse(
+            ["dev", "--project", "P.csproj", "--window-ui", "gecko"].map(str::to_owned)
         )
         .is_err());
         assert!(Arguments::parse(
@@ -3560,6 +3614,10 @@ mod tests {
             "--live-debug",
             "--cef-switch",
             "remote-debugging-port=9333",
+            "--window-ui",
+            "servo",
+            "--servo-pref",
+            "dom_webgl2_enabled=false",
             "--instance",
             "playtest-2",
             "--label",
@@ -3588,6 +3646,8 @@ mod tests {
         assert_eq!(delegated.output.as_deref(), Some("window"));
         assert!(delegated.live_debug);
         assert_eq!(delegated.cef_switches, ["remote-debugging-port=9333"]);
+        assert_eq!(delegated.window_ui.as_deref(), Some("servo"));
+        assert_eq!(delegated.servo_preferences, ["dom_webgl2_enabled=false"]);
         // Session options survive delegation, so the pair's session has them.
         assert_eq!(delegated.instance.as_deref(), Some("playtest-2"));
         assert_eq!(delegated.label.as_deref(), Some("crew-playtest:abc"));

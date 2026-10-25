@@ -14,13 +14,16 @@ esac
 OUTPUT="$REPO_ROOT/target/runtime-pack/$TARGET"
 
 usage() {
-  echo "usage: scripts/build-runtime-pack.sh [--output <new-directory>] [--desktop] [--dlss <dlss-sdk>]" >&2
+  echo "usage: scripts/build-runtime-pack.sh [--output <new-directory>] [--desktop [--servo]] [--dlss <dlss-sdk>]" >&2
 }
 
 # --desktop builds the host with the desktop shell and ships Chromium's
 # runtime in lib/cef. CEF's build downloads it into CEF_PATH (default
 # target/cef); building it needs cmake and ninja.
 DESKTOP=0
+# --servo, with --desktop, adds Servo as the window's other UI engine
+# (renderer.windowUi = servo); its build needs Python 3.
+SERVO=0
 # --dlss builds the renderer with NVIDIA DLSS from the DLSS SDK checkout
 # given, and ships its library beside the host with NVIDIA's licence text
 # (docs/lighting-and-sky.md#dlss). The build also needs clang and the Vulkan
@@ -36,6 +39,10 @@ while (($#)); do
       ;;
     --desktop)
       DESKTOP=1
+      shift
+      ;;
+    --servo)
+      SERVO=1
       shift
       ;;
     --dlss)
@@ -59,6 +66,11 @@ case "$OUTPUT" in
   *) OUTPUT="$REPO_ROOT/$OUTPUT" ;;
 esac
 
+if ((SERVO && !DESKTOP)); then
+  echo "--servo needs --desktop" >&2
+  exit 2
+fi
+
 if [[ -e "$OUTPUT" ]]; then
   echo "runtime-pack output already exists: $OUTPUT" >&2
   echo "choose a new --output directory; this builder never replaces an artifact" >&2
@@ -79,6 +91,9 @@ HOST_FEATURES=()
 if ((DESKTOP)); then
   export CEF_PATH="${CEF_PATH:-$REPO_ROOT/target/cef}"
   HOST_FEATURES+=(desktop)
+fi
+if ((SERVO)); then
+  HOST_FEATURES+=(servo)
 fi
 if [[ -n $DLSS_SDK_DIR ]]; then
   # dlss_wgpu's build reads both; nothing reads them at run time.

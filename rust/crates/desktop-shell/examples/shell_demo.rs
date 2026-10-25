@@ -3,10 +3,13 @@
 //! ```text
 //! CEF_PATH=<cef dir> cargo run -p desktop-shell --features web-overlay \
 //!     --example shell_demo -- <cef dir> <ui url> [seconds]
+//! cargo run -p desktop-shell --features servo-overlay \
+//!     --example shell_demo -- servo <ui url> [seconds]
 //! ```
 //!
 //! A spinning cube stands in for a product's scene; the page is any URL,
-//! normally a UI probe. The shell report prints on exit.
+//! normally a UI probe, drawn by Chromium from `<cef dir>` or by Servo. The
+//! shell report prints on exit.
 //!
 //! Linux only. On Windows libcef stops at a breakpoint on one of its own
 //! threads shortly after the browser starts, whatever the build profile,
@@ -20,7 +23,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use desktop_shell::{
-    DesktopScene, DesktopShell, DesktopShellConfig, Gpu, Renderer, RendererOptions,
+    DesktopScene, DesktopShell, DesktopShellConfig, Gpu, Renderer, RendererOptions, WebEngine,
     WebRuntimeConfig,
 };
 use render_host_contracts::{
@@ -156,21 +159,16 @@ fn main() -> Result<(), String> {
         );
     }
     let mut args = std::env::args().skip(1);
-    let cef_dir = std::path::PathBuf::from(args.next().ok_or("usage: <cef dir> <url> [seconds]")?);
-    if let Some(code) = desktop_shell::run_web_subprocess(&cef_dir)? {
-        std::process::exit(code);
-    }
+    let engine = args
+        .next()
+        .ok_or("usage: <cef dir | servo> <url> [seconds]")?;
+    let engine = if engine == "servo" {
+        servo()?
+    } else {
+        chromium(std::path::PathBuf::from(engine))?
+    };
     let url = args.next().ok_or("missing UI url")?;
     let seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(10);
-    let switches = std::env::var("DEMO_SWITCHES")
-        .unwrap_or_default()
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(|switch| match switch.split_once('=') {
-            Some((name, value)) => (name.to_owned(), Some(value.to_owned())),
-            None => (switch.to_owned(), None),
-        })
-        .collect();
     let shell = DesktopShell::open()?;
     let scene = Arc::new(SpinningCube::build(shell.gpu(), seconds));
     let report = shell.run(
@@ -181,13 +179,46 @@ fn main() -> Result<(), String> {
             ui_url: Some(url),
             placement_file: None,
             web: WebRuntimeConfig {
-                cef_dir,
+                engine,
                 cache_dir: None,
-                switches,
             },
         },
         scene,
     )?;
     println!("{report:?}");
     Ok(())
+}
+
+#[cfg(feature = "web-overlay")]
+fn chromium(cef_dir: std::path::PathBuf) -> Result<WebEngine, String> {
+    if let Some(code) = desktop_shell::run_web_subprocess(&cef_dir)? {
+        std::process::exit(code);
+    }
+    let switches = std::env::var("DEMO_SWITCHES")
+        .unwrap_or_default()
+        .split(',')
+        .filter(|s| !s.is_empty())
+        .map(|switch| match switch.split_once('=') {
+            Some((name, value)) => (name.to_owned(), Some(value.to_owned())),
+            None => (switch.to_owned(), None),
+        })
+        .collect();
+    Ok(WebEngine::Chromium { cef_dir, switches })
+}
+
+#[cfg(not(feature = "web-overlay"))]
+fn chromium(_: std::path::PathBuf) -> Result<WebEngine, String> {
+    Err("built without web-overlay: pass servo".to_owned())
+}
+
+#[cfg(feature = "servo-overlay")]
+fn servo() -> Result<WebEngine, String> {
+    Ok(WebEngine::Servo {
+        preferences: Vec::new(),
+    })
+}
+
+#[cfg(not(feature = "servo-overlay"))]
+fn servo() -> Result<WebEngine, String> {
+    Err("built without servo-overlay".to_owned())
 }
