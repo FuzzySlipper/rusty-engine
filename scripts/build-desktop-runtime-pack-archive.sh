@@ -59,7 +59,7 @@ mkdir -p "$(dirname "$output")"
 stage=$(mktemp -d "$(dirname "$output")/.desktop-pack.XXXXXX")
 trap 'rm -rf -- "$stage"' EXIT
 
-"$script_dir/build-runtime-pack.sh" --desktop --servo "${dlss[@]}" --output "$stage/$name" >/dev/null
+"$script_dir/build-runtime-pack.sh" --desktop "${dlss[@]}" --output "$stage/$name" >/dev/null
 manifest="$stage/$name/runtime-manifest.json"
 if [[ "$(jq -r '.sourceRevision' "$manifest")" != "$revision" ]] || [[ ! -f "$stage/$name/lib/cef/$libcef" ]]; then
     echo "RUSTY_ENGINE_DESKTOP_PACK_BUILD: the desktop pack is not this revision's, or has no Chromium runtime" >&2

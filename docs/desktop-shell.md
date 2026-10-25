@@ -160,9 +160,8 @@ rusty dev --project <product.csproj> --output window
   `pair-release.json` names it under `desktopPack`. The default
   pack stays free of either engine.
 - **Contributors.** `scripts/build-runtime-pack.sh --desktop` builds a pack
-  from a checkout, and `--desktop --servo` one with Servo too; pass it with
-  `--runtime`.
-  - Building needs `cmake` and `ninja`, and with Servo Python 3 (`python`
+  with both UI engines from a checkout; pass it with `--runtime`.
+  - Building needs `cmake`, `ninja` and, for Servo, Python 3 (`python`
     and `python3` on `PATH`; on Windows `PYTHON3` naming it as well).
   - On Windows it runs in Git Bash inside the MSVC developer environment
     (`vcvars64.bat`), with MSVC's directory ahead of Git's own `link` on
