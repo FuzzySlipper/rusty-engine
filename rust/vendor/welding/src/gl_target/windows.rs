@@ -10,6 +10,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::ffi::c_void;
+use std::os::windows::io::{FromRawHandle, IntoRawHandle, OwnedHandle};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -45,6 +46,9 @@ type ImageTargetTexture = unsafe extern "C" fn(u32, *mut c_void);
 /// One shared colour buffer and the GL objects drawing into it.
 struct Buffer {
     texture: ID3D11Texture2D,
+    /// The texture's NT handle, made once (DXGI makes one per texture);
+    /// each exported frame owns a duplicate.
+    shared: OwnedHandle,
     image: egl::Image,
     gl_texture: u32,
     depth: u32,
@@ -218,18 +222,14 @@ impl Target {
             .buffers
             .get(index)
             .ok_or_else(|| GlTargetError::new(format!("no buffer {index}")))?;
-        // SAFETY: the texture was made with SHARED_NTHANDLE; the new handle
-        // is owned by the frame, which closes it.
+        let handle = buffer
+            .shared
+            .try_clone()
+            .map_err(|e| GlTargetError::new(format!("DuplicateHandle: {e}")))?;
+        // SAFETY: the duplicate is a new handle the frame owns and closes.
         let frame = unsafe {
-            let resource: IDXGIResource1 = buffer
-                .texture
-                .cast()
-                .map_err(|e| GlTargetError::new(e.to_string()))?;
-            let handle = resource
-                .CreateSharedHandle(None, GENERIC_ALL.0, PCWSTR::null())
-                .map_err(|e| GlTargetError::new(format!("CreateSharedHandle: {e}")))?;
             Dx12SharedTexture::from_owned_raw_handle(
-                handle.0,
+                handle.into_raw_handle(),
                 buffers.size,
                 wgpu::TextureFormat::Rgba8Unorm,
                 buffers.generation,
@@ -265,6 +265,17 @@ impl Target {
         }
         .map_err(|e| GlTargetError::new(format!("CreateTexture2D: {e}")))?;
         let texture = texture.ok_or_else(|| GlTargetError::new("CreateTexture2D gave no texture"))?;
+        // SAFETY: the texture was made with SHARED_NTHANDLE; the handle is
+        // new and owned by the buffer.
+        let shared = unsafe {
+            let resource: IDXGIResource1 = texture
+                .cast()
+                .map_err(|e| GlTargetError::new(e.to_string()))?;
+            let handle = resource
+                .CreateSharedHandle(None, GENERIC_ALL.0, PCWSTR::null())
+                .map_err(|e| GlTargetError::new(format!("CreateSharedHandle: {e}")))?;
+            OwnedHandle::from_raw_handle(handle.0)
+        };
         // SAFETY: the client buffer is a live D3D11 texture of ANGLE's
         // device, which EGL_ANGLE_image_d3d11_texture takes.
         let image = unsafe {
@@ -308,6 +319,7 @@ impl Target {
         );
         let buffer = Buffer {
             texture,
+            shared,
             image,
             gl_texture,
             depth,
