@@ -35,7 +35,8 @@ use std::sync::Arc;
 
 use csharp_product_runtime::{Gpu, Renderer, SceneDriver, WindowFrame, WindowTiming};
 use desktop_shell::{
-    DesktopScene, DesktopShell, DesktopShellConfig, PresentedFrame, WebEngine, WebRuntimeConfig,
+    DesktopScene, DesktopShell, DesktopShellConfig, PresentedFrame, UiRepaints, WebEngine,
+    WebRuntimeConfig,
 };
 use product_host::ProductHostWindowInput;
 
@@ -251,6 +252,15 @@ impl DesktopScene for WindowScene {
 
     fn ui_opened(&self, engine: &str) {
         self.timing.ui_opened(engine);
+    }
+
+    fn ui_repainted(&self, repaints: UiRepaints) {
+        self.timing.ui_repainted(
+            repaints.imports,
+            repaints.import_errors,
+            repaints.last_cost,
+            repaints.last_shown_at,
+        );
     }
 
     fn input_received(&self, at: std::time::SystemTime) {

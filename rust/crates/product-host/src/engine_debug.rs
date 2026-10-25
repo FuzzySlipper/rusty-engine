@@ -514,6 +514,22 @@ pub struct ProductHostWindowStatistics {
     /// When recent key and mouse button events reached the window, in Unix
     /// milliseconds.
     pub inputs_received_at_unix_ms: Vec<f64>,
+    pub ui_repaints: ProductHostUiRepaints,
+}
+
+/// The UI page's repaints the window imported: how many, how many imports
+/// failed, the median host-thread cost of a recent one (for Chromium
+/// importing it, for Servo painting it too), and when the frames first
+/// drawing recent ones were presented, in Unix milliseconds.
+#[derive(Debug, Clone, PartialEq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostUiRepaints {
+    #[ts(type = "number")]
+    pub count: u64,
+    #[ts(type = "number")]
+    pub errors: u64,
+    pub median_ms: f64,
+    pub shown_at_unix_ms: Vec<f64>,
 }
 
 /// Median milliseconds per frame for each stage of presenting it: waiting

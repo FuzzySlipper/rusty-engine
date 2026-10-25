@@ -49,8 +49,8 @@ use product_host::{
     ProductHostRendererStatistics, ProductHostScatterSelectionStatistics,
     ProductHostScatterStatistics, ProductHostShadowStatistics, ProductHostSnowStatistics,
     ProductHostStreamMedians, ProductHostStreamStatistics, ProductHostTimedStep,
-    ProductHostUpscaleStatistics, ProductHostWaterStatistics, ProductHostWetnessStatistics,
-    ProductHostWindowMedians, ProductHostWindowStatistics,
+    ProductHostUiRepaints, ProductHostUpscaleStatistics, ProductHostWaterStatistics,
+    ProductHostWetnessStatistics, ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -106,6 +106,11 @@ struct WindowRecord {
     inputs: VecDeque<SystemTime>,
     /// The web engine drawing the UI page.
     ui: Option<String>,
+    ui_imports: u64,
+    ui_import_errors: u64,
+    /// Recent UI repaints: when the frame drawing each was presented, and
+    /// its host-thread cost.
+    ui_repaints: VecDeque<(SystemTime, Duration)>,
 }
 
 /// One frame the window presented: the step it showed, when, and how long
@@ -137,6 +142,26 @@ impl WindowTiming {
     /// The UI page opened in `engine`.
     pub fn ui_opened(&self, engine: &str) {
         self.record().ui = Some(engine.to_owned());
+    }
+
+    /// The window imported UI repaints (`imports` so far, `import_errors`
+    /// failed), the last costing `cost` and first shown at `shown_at`.
+    pub fn ui_repainted(
+        &self,
+        imports: u64,
+        import_errors: u64,
+        cost: Duration,
+        shown_at: SystemTime,
+    ) {
+        let mut record = self.record();
+        if imports != record.ui_imports {
+            if record.ui_repaints.len() == WINDOW_FRAMES {
+                record.ui_repaints.pop_front();
+            }
+            record.ui_repaints.push_back((shown_at, cost));
+        }
+        record.ui_imports = imports;
+        record.ui_import_errors = import_errors;
     }
 
     /// A key or mouse button event reached the window at `at`.
@@ -186,6 +211,24 @@ impl WindowTiming {
                 })
                 .collect(),
             inputs_received_at_unix_ms: record.inputs.iter().copied().map(unix_ms).collect(),
+            ui_repaints: ProductHostUiRepaints {
+                count: record.ui_imports,
+                errors: record.ui_import_errors,
+                median_ms: {
+                    let mut costs: Vec<f64> = record
+                        .ui_repaints
+                        .iter()
+                        .map(|(_, cost)| ms(*cost))
+                        .collect();
+                    costs.sort_by(f64::total_cmp);
+                    costs.get(costs.len() / 2).copied().unwrap_or(0.0)
+                },
+                shown_at_unix_ms: record
+                    .ui_repaints
+                    .iter()
+                    .map(|(at, _)| unix_ms(*at))
+                    .collect(),
+            },
         }
     }
 

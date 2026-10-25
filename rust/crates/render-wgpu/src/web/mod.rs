@@ -176,7 +176,7 @@ pub struct WebOverlayStats {
     /// UI repaints imported since the overlay started.
     pub imports: u64,
     /// How long the last import took on the host thread: for Servo, painting
-    /// the page and waiting for GL to finish it.
+    /// the page, waiting for GL to finish it and importing it.
     pub last_import_ms: f64,
     pub import_errors: u64,
 }
@@ -686,8 +686,8 @@ impl WebOverlay {
             return;
         };
         let painted = page.frame_ready();
+        let started = Instant::now();
         if painted {
-            let started = Instant::now();
             let back = page.target().back();
             if let Some(drawn) = self.drawn_by.get_mut(back).and_then(Option::take) {
                 let _ = self.host.device.poll(wgpu::PollType::Wait {
@@ -696,8 +696,6 @@ impl WebOverlay {
                 });
             }
             page.paint();
-            self.stats.imports += 1;
-            self.stats.last_import_ms = started.elapsed().as_secs_f64() * 1e3;
         }
         let target = page.target();
         if target.generation() != self.imported_generation {
@@ -744,6 +742,10 @@ impl WebOverlay {
                     }
                 }
             }
+        }
+        if painted {
+            self.stats.imports += 1;
+            self.stats.last_import_ms = started.elapsed().as_secs_f64() * 1e3;
         }
         self.shown = target.front();
     }

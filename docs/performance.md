@@ -64,7 +64,12 @@ and presenting, and `shown`: each recent frame's presentation time (Unix
 milliseconds), the step it showed and the `presentationSeconds` it drew at
 ([presentation time](csharp-lifecycle.md#presentation-time)). While the world
 runs, `presentationSeconds` should advance every frame, even across frames
-that show the same step.
+that show the same step. `window.uiRepaints` counts the UI page's repaints
+the window imported and the imports that failed, gives the median
+milliseconds a recent one cost the window's thread (for Chromium importing
+it; for Servo painting it too) and when the frames first drawing recent ones
+were presented. Against `inputsReceivedAtUnixMs`, those times give input to
+the frame showing the page's response.
 `settings` gives the renderer settings in effect: what the product or its
 manifest requested, what draws, and why each refused setting differs
 ([renderer settings](lighting-and-sky.md#renderer-settings)). Of its two

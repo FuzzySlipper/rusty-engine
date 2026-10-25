@@ -1017,6 +1017,18 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
         step: number;
     };
     /**
+     * The UI page's repaints the window imported: how many, how many imports
+     * failed, the median host-thread cost of a recent one (for Chromium
+     * importing it, for Servo painting it too), and when the frames first
+     * drawing recent ones were presented, in Unix milliseconds.
+     */
+    export type ProductHostUiRepaints = {
+        count: number;
+        errors: number;
+        medianMs: number;
+        shownAtUnixMs: Array<number>;
+    };
+    /**
      * One complete C# update callback observation. Durations are integer
      * microseconds so the diagnostics wire remains canonical and float-free.
      */
@@ -1155,6 +1167,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          * milliseconds.
          */
         inputsReceivedAtUnixMs: Array<number>;
+        uiRepaints: ProductHostUiRepaints;
     };
     export type RuntimeDiagnosticDisposition = "accepted" | "rejected-recoverable" | "degraded" | "resync-required" | "terminal";
     export type RuntimeDiagnosticEvent = {

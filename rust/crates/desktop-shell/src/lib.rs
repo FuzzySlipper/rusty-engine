@@ -77,6 +77,9 @@ pub trait DesktopScene: Send + Sync {
     fn input_received(&self, at: SystemTime);
     /// The UI page opened in `engine` (its name, version and GPU renderer).
     fn ui_opened(&self, _engine: &str) {}
+    /// The window imported UI page repaints or failed to, and presented the
+    /// frame drawing the last of them.
+    fn ui_repainted(&self, _repaints: UiRepaints) {}
     /// The window took the pointer lock and holds gameplay input
     /// (`routed`), reading the gamepad too when `controller`, or gave it
     /// back to the page.
@@ -104,6 +107,17 @@ pub struct PresentedFrame {
     /// Encoding and submitting the frame.
     pub draw: Duration,
     pub present: Duration,
+}
+
+/// The UI page's repaints the window has imported: how many, how many imports
+/// failed, the host-thread cost of the last one (for Chromium importing it;
+/// for Servo painting it too) and when the frame drawing it was presented.
+#[derive(Debug, Clone, Copy)]
+pub struct UiRepaints {
+    pub imports: u64,
+    pub import_errors: u64,
+    pub last_cost: Duration,
+    pub last_shown_at: SystemTime,
 }
 
 #[derive(Debug, Clone)]
@@ -470,6 +484,16 @@ impl Shell {
         #[cfg(feature = "ui-overlay")]
         if let Some(ui) = &open.ui {
             let stats = ui.stats();
+            if (stats.imports, stats.import_errors)
+                != (self.report.ui_imports, self.report.ui_import_errors)
+            {
+                self.scene.ui_repainted(UiRepaints {
+                    imports: stats.imports,
+                    import_errors: stats.import_errors,
+                    last_cost: Duration::from_secs_f64(stats.last_import_ms / 1e3),
+                    last_shown_at: SystemTime::now(),
+                });
+            }
             self.report.ui_imports = stats.imports;
             self.report.ui_import_errors = stats.import_errors;
             self.report.last_ui_error = ui.last_error();
