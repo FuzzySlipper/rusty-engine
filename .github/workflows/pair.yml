@@ -136,8 +136,8 @@ jobs:
           CEF_PATH: ${{ runner.temp }}/cef
         run: |
           ./scripts/build-desktop-runtime-pack-archive.sh --output "$RUNNER_TEMP/desktop"
-          pair_abi=$(tar -xzOf "$RUNNER_TEMP"/pair/*.tar.gz --wildcards '*/pair-manifest.json' | jq -c .runtime.abi)
-          desktop_abi=$(tar -xJOf "$RUNNER_TEMP"/desktop/*.tar.xz --wildcards '*/runtime-manifest.json' | jq -c .runtime.abi)
+          pair_abi=$(tar -xzOf "$RUNNER_TEMP"/pair/*.tar.gz --wildcards '*/pair-manifest.json' | jq -cS .runtime.abi)
+          desktop_abi=$(tar -xJOf "$RUNNER_TEMP"/desktop/*.tar.xz --wildcards '*/runtime-manifest.json' | jq -cS .runtime.abi)
           if [[ "$pair_abi" != "$desktop_abi" ]]; then
             echo "the desktop pack's ABI $desktop_abi is not the pair's $pair_abi" >&2
             exit 1
