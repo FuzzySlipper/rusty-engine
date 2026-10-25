@@ -151,8 +151,8 @@ const PAGE_SHIM: &str = r#"(() => {
   };
 })();"#;
 
-/// Console lines the Servo page's `<select>` list writes: the chosen option,
-/// or none.
+/// Console lines the Servo page's `<select>` list writes: the chosen
+/// options' ids, comma-separated, or none.
 const SELECT_CHOSEN: &str = "rusty-desktop:select ";
 const SELECT_CANCELLED: &str = "rusty-desktop:select-cancel";
 
@@ -163,10 +163,14 @@ const SELECT_CANCELLED: &str = "rusty-desktop:select-cancel";
 ///
 /// - `window.open` and `target="_blank"` links warn and open nothing, as
 ///   they do in Chromium's page;
-/// - `__rustyDesktopSelect(rect, options)` draws the option list the page
-///   asked for at the element's rect (physical pixels), in a closed shadow
-///   root on top of the page, kept inside the view. Arrow keys, Enter,
-///   Escape, a click on an option or outside answer it through the console.
+/// - `__rustyDesktopSelect(rect, options, multiple)` draws the option list
+///   the page asked for at the element's rect (physical pixels), in a closed
+///   shadow root on top of the page, kept inside the view: below the element
+///   or, where there is more room, above it, scrolling what does not fit.
+///   Arrow keys, Enter, Escape, a click on an option or outside answer it
+///   through the console. A `multiple` list toggles options with a click or
+///   Space and answers with Enter or a click outside; Escape keeps the
+///   element's choice.
 const SERVO_SHIM: &str = r#"(() => {
   if (window.__rustyDesktopSelect) return;
   const newWindow = (url) => console.warn(
@@ -183,15 +187,15 @@ const SERVO_SHIM: &str = r#"(() => {
     if (!open) return;
     open.host.remove();
     window.removeEventListener('keydown', open.keys, true);
-    window.removeEventListener('pointerdown', open.outside, true);
+    window.removeEventListener('mousedown', open.outside, true);
     open = null;
   };
-  const answer = (id) => {
+  const answer = (ids) => {
     close();
-    console.info(id === null ? 'rusty-desktop:select-cancel' : `rusty-desktop:select ${id}`);
+    console.info(ids === null ? 'rusty-desktop:select-cancel' : `rusty-desktop:select ${ids.join(',')}`);
   };
   window.__rustyDesktopSelectClose = close;
-  window.__rustyDesktopSelect = (rect, options) => {
+  window.__rustyDesktopSelect = (rect, options, multiple) => {
     close();
     const ratio = window.devicePixelRatio || 1;
     const host = document.createElement('div');
@@ -199,14 +203,18 @@ const SERVO_SHIM: &str = r#"(() => {
     const style = document.createElement('style');
     style.textContent = `
       .list { background: #fff; color: #000; border: 1px solid #767676; font: 13px sans-serif;
-        max-height: 20em; overflow-y: auto; box-shadow: 0 2px 6px rgba(0,0,0,.35); }
+        box-sizing: border-box; max-height: 20em; overflow-y: auto; overflow-x: hidden;
+        box-shadow: 0 2px 6px rgba(0,0,0,.35); }
       .group { padding: 2px 6px; font-weight: bold; }
-      .row { padding: 2px 6px; white-space: pre; cursor: default; }
+      .row { padding: 2px 6px; white-space: pre; overflow: hidden; text-overflow: ellipsis; cursor: default; }
       .grouped { padding-left: 18px; }
+      .multiple .row::before { content: '\\2713'; display: inline-block; width: 1.2em; visibility: hidden; }
+      .multiple .row.chosen::before { visibility: visible; }
       .current { background: #1a73e8; color: #fff; }
       .disabled { color: #888; }`;
     const list = document.createElement('div');
-    list.className = 'list';
+    list.className = multiple ? 'list multiple' : 'list';
+    const chosen = new Set(options.filter((option) => option.selected).map((option) => option.id));
     const rows = [];
     let group = null;
     for (const option of options) {
@@ -222,9 +230,12 @@ const SERVO_SHIM: &str = r#"(() => {
       row.textContent = option.label;
       const index = rows.length;
       row.addEventListener('pointerenter', () => { if (!option.disabled) mark(index); });
+      row.classList.toggle('chosen', chosen.has(option.id));
       row.addEventListener('pointerup', (event) => {
         event.stopPropagation();
-        if (!option.disabled) answer(option.id);
+        if (option.disabled) return;
+        if (multiple) toggle(index);
+        else answer([option.id]);
       });
       rows.push(row);
       list.append(row);
@@ -235,14 +246,32 @@ const SERVO_SHIM: &str = r#"(() => {
       rows.forEach((row, i) => row.classList.toggle('current', i === current));
       rows[current]?.scrollIntoView({ block: 'nearest' });
     };
+    const toggle = (index) => {
+      const id = options[index].id;
+      if (!chosen.delete(id)) chosen.add(id);
+      rows[index].classList.toggle('chosen', chosen.has(id));
+      mark(index);
+    };
+    const chosenIds = () => options.filter((option) => chosen.has(option.id)).map((option) => option.id);
+    // A press moves focus off the <select>, and Servo closes its control,
+    // ignoring later answers, when the element loses focus.
+    list.addEventListener('mousedown', (event) => event.preventDefault());
     root.append(style, list);
     const [x, y, width, height] = rect.map((value) => value / ratio);
-    host.style.cssText = `position: fixed; z-index: 2147483647; left: ${x}px; top: ${y + height}px; min-width: ${width}px;`;
+    host.style.cssText = `position: fixed; z-index: 2147483647; left: ${x}px; top: ${y + height}px;
+      min-width: ${Math.min(width, innerWidth)}px; max-width: ${innerWidth}px;`;
     document.documentElement.append(host);
-    // Below the element where it fits, else above it; inside the view.
+    // Below the element where the list fits, else on the side with more
+    // room, scrolling what does not fit there; never past the view's edges.
+    const natural = list.getBoundingClientRect().height;
+    const below = innerHeight - (y + height);
+    const above = y;
+    const downward = natural <= below || below >= above;
+    const shown = Math.max(0, Math.min(natural, downward ? below : above));
+    list.style.maxHeight = `${shown}px`;
+    host.style.top = `${Math.max(0, downward ? y + height : y - shown)}px`;
     const box = host.getBoundingClientRect();
-    if (box.bottom > innerHeight && y - box.height >= 0) host.style.top = `${y - box.height}px`;
-    if (box.right > innerWidth) host.style.left = `${Math.max(0, innerWidth - box.width)}px`;
+    host.style.left = `${Math.max(0, Math.min(x, innerWidth - box.width))}px`;
     mark(current);
     const step = (by) => {
       for (let i = current + by; i >= 0 && i < rows.length; i += by) {
@@ -252,15 +281,23 @@ const SERVO_SHIM: &str = r#"(() => {
     const keys = (event) => {
       if (event.key === 'ArrowDown') step(1);
       else if (event.key === 'ArrowUp') step(-1);
-      else if (event.key === 'Enter' || event.key === ' ') answer(options[current]?.id ?? null);
+      else if (multiple && event.key === ' ') { if (!options[current]?.disabled) toggle(current); }
+      else if (multiple && event.key === 'Enter') answer(chosenIds());
+      else if (event.key === 'Enter' || event.key === ' ') answer(options[current] ? [options[current].id] : null);
       else if (event.key === 'Escape' || event.key === 'Tab') answer(null);
       else return;
       event.preventDefault();
       event.stopImmediatePropagation();
     };
-    const outside = (event) => { if (!event.composedPath().includes(host)) answer(null); };
+    const outside = (event) => {
+      if (event.composedPath().includes(host)) return;
+      // A multiple list answers with what was toggled, so the press keeps
+      // the element's focus.
+      if (multiple) event.preventDefault();
+      answer(multiple ? chosenIds() : null);
+    };
     window.addEventListener('keydown', keys, true);
-    window.addEventListener('pointerdown', outside, true);
+    window.addEventListener('mousedown', outside, true);
     open = { host, keys, outside };
   };
 })();"#;
@@ -414,8 +451,11 @@ impl UiOverlay {
                 NavigationEvent::ConsoleMessage { message, .. }
                     if message.starts_with(SELECT_CHOSEN) =>
                 {
-                    let id = message[SELECT_CHOSEN.len()..].parse().ok();
-                    self.page.answer_select(id);
+                    let ids: Vec<usize> = message[SELECT_CHOSEN.len()..]
+                        .split(',')
+                        .filter_map(|id| id.parse().ok())
+                        .collect();
+                    self.page.answer_select(Some(&ids));
                 }
                 NavigationEvent::ConsoleMessage { message, .. } if message == SELECT_CANCELLED => {
                     self.page.answer_select(None);
@@ -425,7 +465,11 @@ impl UiOverlay {
         }
         while let Some(control) = self.page.poll_control() {
             let script = match control {
-                PageControl::Select { rect, options } => {
+                PageControl::Select {
+                    rect,
+                    options,
+                    multiple,
+                } => {
                     // A Rust string's debug form is a valid JavaScript string literal.
                     let options: Vec<String> = options
                         .iter()
@@ -444,7 +488,7 @@ impl UiOverlay {
                         })
                         .collect();
                     format!(
-                        "window.__rustyDesktopSelect([{},{},{},{}],[{}]);",
+                        "window.__rustyDesktopSelect([{},{},{},{}],[{}],{multiple});",
                         rect.x,
                         rect.y,
                         rect.width,
@@ -552,7 +596,8 @@ impl UiOverlay {
 
     /// The gamepad's state changed.
     pub(crate) fn gamepad(&mut self, state: crate::gamepad::PadState) {
-        self.page.send_gamepad(state.axes, state.values);
+        self.page
+            .send_gamepad(state.connected.then_some((state.axes, state.values)));
         self.gameplay.pad(state);
     }
 

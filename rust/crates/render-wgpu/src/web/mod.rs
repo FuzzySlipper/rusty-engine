@@ -208,6 +208,8 @@ pub enum PageControl {
     Select {
         rect: PopupRect,
         options: Vec<PageOption>,
+        /// A `<select multiple>`: any number of options can be chosen.
+        multiple: bool,
     },
     /// The page closed the control it asked for.
     Closed,
@@ -572,30 +574,30 @@ impl WebOverlay {
         }
     }
 
-    /// Answer the open [`PageControl::Select`]: choose option `id`, or keep
-    /// the element's choice with `None`.
-    pub fn answer_select(&mut self, id: Option<usize>) {
+    /// Answer the open [`PageControl::Select`]: choose options `ids`, or
+    /// keep the element's choice with `None`.
+    pub fn answer_select(&mut self, ids: Option<&[usize]>) {
         match &mut self.producer {
             #[cfg(feature = "web-overlay")]
             Producer::Chromium(_) => {
-                let _ = id;
+                let _ = ids;
             }
             #[cfg(feature = "servo-overlay")]
-            Producer::Servo(page) => page.answer_select(id),
+            Producer::Servo(page) => page.answer_select(ids),
         }
     }
 
-    /// The first gamepad's state in the standard mapping: sticks (down
-    /// positive) and the 16 buttons' values. Chromium reads pads itself and
-    /// ignores it.
-    pub fn send_gamepad(&mut self, axes: [f32; 4], values: [f32; 16]) {
+    /// The first gamepad's state in the standard mapping, `None` when no pad
+    /// is connected: sticks (down positive) and the 16 buttons' values.
+    /// Chromium reads pads itself and ignores it.
+    pub fn send_gamepad(&mut self, pad: Option<([f32; 4], [f32; 16])>) {
         match &mut self.producer {
             #[cfg(feature = "web-overlay")]
             Producer::Chromium(_) => {
-                let _ = (axes, values);
+                let _ = pad;
             }
             #[cfg(feature = "servo-overlay")]
-            Producer::Servo(page) => page.send_gamepad(axes, values),
+            Producer::Servo(page) => page.send_gamepad(pad),
         }
     }
 

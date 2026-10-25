@@ -168,6 +168,62 @@ struct Delegate {
     controls: RefCell<VecDeque<PageControl>>,
     /// The `<select>` whose option list the shell is drawing.
     select: RefCell<Option<SelectElement>>,
+    /// The connected gamepad's sticks and button values.
+    gamepad: Cell<Option<Pad>>,
+    /// What the page's document last heard of the gamepad.
+    announced: Cell<Option<Pad>>,
+}
+
+/// A gamepad's sticks, then its button values.
+type Pad = ([f32; 4], [f32; 16]);
+
+impl Delegate {
+    /// Tell the page's document what changed about the gamepad: its
+    /// connection, then each stick and button that moved. Servo reads no pads
+    /// itself, so the page's `navigator.getGamepads()` shows this one.
+    fn tell_gamepad(&self, webview: &WebView) {
+        let index = GamepadIndex(0);
+        let send = |event| webview.notify_input_event(InputEvent::Gamepad(event));
+        let (heard, now) = (self.announced.get(), self.gamepad.get());
+        self.announced.set(now);
+        let Some((axes, values)) = now else {
+            if heard.is_some() {
+                send(GamepadEvent::Disconnected(index));
+            }
+            return;
+        };
+        let (heard_axes, heard_values) = heard.unwrap_or_else(|| {
+            send(GamepadEvent::Connected(
+                index,
+                "Standard gamepad".to_owned(),
+                GamepadInputBounds {
+                    axis_bounds: (-1.0, 1.0),
+                    button_bounds: (0.0, 1.0),
+                },
+                GamepadSupportedHapticEffects {
+                    supports_dual_rumble: false,
+                    supports_trigger_rumble: false,
+                },
+            ));
+            ([f32::NAN; 4], [f32::NAN; 16])
+        });
+        for (axis, (now, before)) in axes.into_iter().zip(heard_axes).enumerate() {
+            if now != before {
+                send(GamepadEvent::Updated(
+                    index,
+                    GamepadUpdateType::Axis(axis, f64::from(now)),
+                ));
+            }
+        }
+        for (button, (now, before)) in values.into_iter().zip(heard_values).enumerate() {
+            if now != before {
+                send(GamepadEvent::Updated(
+                    index,
+                    GamepadUpdateType::Button(button, f64::from(now)),
+                ));
+            }
+        }
+    }
 }
 
 impl WebViewDelegate for Delegate {
@@ -178,12 +234,18 @@ impl WebViewDelegate for Delegate {
     fn notify_load_status_changed(&self, webview: WebView, status: LoadStatus) {
         let url = webview.url().map(String::from).unwrap_or_default();
         let event = match status {
+            // Each document keeps its own gamepads: a new one hears of the
+            // connected pad and its state.
+            LoadStatus::HeadParsed => {
+                self.announced.set(None);
+                self.tell_gamepad(&webview);
+                return;
+            }
             LoadStatus::Started => NavigationEvent::LoadStart { url },
             LoadStatus::Complete => NavigationEvent::LoadEnd {
                 url,
                 http_status: 200,
             },
-            _ => return,
         };
         self.events.borrow_mut().push_back(event);
     }
@@ -195,9 +257,6 @@ impl WebViewDelegate for Delegate {
         let EmbedderControl::SelectElement(select) = control else {
             return;
         };
-        if select.allow_select_multiple() {
-            return;
-        }
         let selected = select.selected_options();
         let mut options = Vec::new();
         let mut add = |option: &servo::SelectElementOption, group: Option<&str>| {
@@ -228,6 +287,7 @@ impl WebViewDelegate for Delegate {
                 height: rect.height().max(0) as u32,
             },
             options,
+            multiple: select.allow_select_multiple(),
         });
         *self.select.borrow_mut() = Some(select);
     }
@@ -356,8 +416,6 @@ pub(super) struct ServoPage {
     webview: WebView,
     context: Rc<SharedContext>,
     delegate: Rc<Delegate>,
-    /// The gamepad the page last heard of: sticks, then button values.
-    gamepad: RefCell<Option<([f32; 4], [f32; 16])>>,
 }
 
 impl ServoPage {
@@ -392,7 +450,6 @@ impl ServoPage {
             webview,
             context,
             delegate,
-            gamepad: RefCell::new(None),
         })
     }
 
@@ -430,61 +487,23 @@ impl ServoPage {
         self.delegate.controls.borrow_mut().pop_front()
     }
 
-    /// Choose option `id` of the `<select>` whose list the shell drew, or
+    /// Choose options `ids` of the `<select>` whose list the shell drew, or
     /// keep its choice with `None`, and close the list.
-    pub(super) fn answer_select(&self, id: Option<usize>) {
+    pub(super) fn answer_select(&self, ids: Option<&[usize]>) {
         let Some(mut select) = self.delegate.select.borrow_mut().take() else {
             return;
         };
-        if let Some(id) = id {
-            select.select(vec![id]);
+        if let Some(ids) = ids {
+            select.select(ids.to_vec());
         }
         select.submit();
     }
 
-    /// The first gamepad's state in the standard mapping: Servo reads no pads
-    /// itself, so the page's `navigator.getGamepads()` shows this one.
-    pub(super) fn send_gamepad(&self, axes: [f32; 4], values: [f32; 16]) {
-        let index = GamepadIndex(0);
-        let mut last = self.gamepad.borrow_mut();
-        let previous = match *last {
-            Some(previous) => previous,
-            None => {
-                self.webview
-                    .notify_input_event(InputEvent::Gamepad(GamepadEvent::Connected(
-                        index,
-                        "Standard gamepad".to_owned(),
-                        GamepadInputBounds {
-                            axis_bounds: (-1.0, 1.0),
-                            button_bounds: (0.0, 1.0),
-                        },
-                        GamepadSupportedHapticEffects {
-                            supports_dual_rumble: false,
-                            supports_trigger_rumble: false,
-                        },
-                    )));
-                ([f32::NAN; 4], [f32::NAN; 16])
-            }
-        };
-        let changes = axes
-            .iter()
-            .zip(previous.0)
-            .enumerate()
-            .filter(|(_, (now, before))| **now != *before)
-            .map(|(axis, (now, _))| GamepadUpdateType::Axis(axis, f64::from(*now)))
-            .chain(
-                values
-                    .iter()
-                    .zip(previous.1)
-                    .enumerate()
-                    .filter(|(_, (now, before))| **now != *before)
-                    .map(|(button, (now, _))| GamepadUpdateType::Button(button, f64::from(*now))),
-            );
-        for change in changes {
-            self.webview
-                .notify_input_event(InputEvent::Gamepad(GamepadEvent::Updated(index, change)));
-        }
-        *last = Some((axes, values));
+    /// The first gamepad's state in the standard mapping, `None` when no pad
+    /// is connected.
+    pub(super) fn send_gamepad(&self, pad: Option<Pad>) {
+        self.delegate.gamepad.set(pad);
+        self.delegate.tell_gamepad(&self.webview);
     }
 
     pub(super) fn send_mouse(&self, event: MouseEvent) {

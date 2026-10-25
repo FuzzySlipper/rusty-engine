@@ -46,9 +46,11 @@ const TRIGGER_RELEASED: f32 = 25.0 / 255.0;
 const IDLE_WAKE: Duration = Duration::from_millis(100);
 
 /// One pad's state in Chromium's standard mapping: sticks left x, left y,
-/// right x, right y (down positive), and each button's value and press.
+/// right x, right y (down positive), and each button's value and press. With
+/// no pad connected it is at rest.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub(crate) struct PadState {
+    pub(crate) connected: bool,
     pub(crate) axes: [f32; 4],
     pub(crate) values: [f32; 16],
     pub(crate) pressed: [bool; 16],
@@ -181,6 +183,7 @@ fn dpad_buttons(event: Event, gilrs: &mut Gilrs) {
 
 fn read(pad: &gilrs::Gamepad<'_>) -> PadState {
     let mut state = PadState {
+        connected: true,
         // gilrs's sticks are up positive; the page's are down positive.
         axes: [
             pad.value(Axis::LeftStickX),
