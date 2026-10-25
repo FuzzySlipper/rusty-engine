@@ -240,6 +240,9 @@ fi
 
 # Include the corresponding source and license for our modified MPL component.
 install -d "$STAGE/share/third-party"
+# The licence and notice texts of the third-party crates the host links and
+# the native libraries they build in (Brotli, SpiderMonkey, ANGLE, ...).
+"${PYTHON3:-python3}" scripts/third-party-notices.py "${HOST_FEATURES[@]}" > "$STAGE/share/third-party/NOTICES.txt"
 cp -a rust/vendor/fidget-mesh "$STAGE/share/third-party/fidget-mesh"
 # render-wgpu embeds DejaVu Sans; its license travels with the binaries.
 install -D -m 0644 rust/crates/render-wgpu/fonts/LICENSE "$STAGE/share/third-party/dejavu-sans/LICENSE"

@@ -241,14 +241,17 @@ A product release that opens a window ships:
 - any content containers the product opens by name, beside `product.rpak`
   (see [containers installed beside the product](csharp-product-project.md#content-containers-installed-beside-the-product));
 - the licences in `share/third-party/`:
-  - CEF's and Chromium's credits (`cef/CREDITS.html`, BSD and others), with
-    Chromium;
+  - CEF's and Chromium's credits (`cef/CREDITS.html`, BSD and others): the
+    host links CEF's wrapper whichever engine draws;
   - the source of the MPL-2.0 crates `welding`, `grafting` and `fidget-mesh`,
     which must stay available to recipients;
   - with Servo, `servo/MPL-2.0-SOURCES.txt`, the unmodified MPL-2.0 crates
     Servo brings and where each one's source is, and on Windows ANGLE's
     licence (`angle/LICENSE`, BSD);
-  - the rest of the pack's notices.
+  - `NOTICES.txt`, the licence and notice texts of every third-party crate
+    the host links and the native libraries they build in;
+  - the rest of the pack's licences (`dejavu-sans/`, with DLSS
+    `nvidia-dlss/`).
 
 An installer is chosen when a product asks for one.
 
