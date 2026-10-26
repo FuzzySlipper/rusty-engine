@@ -502,6 +502,26 @@ impl InstalledPair {
     pub fn desktop_pack(&self) -> PathBuf {
         self.root.join("desktop-pack")
     }
+
+    /// Whether the pair's source is newer than this `rusty`'s, so the pair
+    /// may document options this command lacks. Unknown when either was built
+    /// without a source time (a contributor's `cargo build`, or an older pair).
+    pub fn is_newer_than_this_cli(&self) -> bool {
+        let manifest = fs::read(self.runtime_pack().join("runtime-manifest.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
+        let pair = manifest.and_then(|manifest| manifest["sourceTime"].as_u64());
+        is_newer(SOURCE_TIME.and_then(|time| time.parse().ok()), pair)
+    }
+}
+
+/// The commit time (Unix seconds) of the source this `rusty` was built from,
+/// stamped by scripts/build-runtime-pack.sh; it matches the pack manifest's
+/// `sourceTime`.
+const SOURCE_TIME: Option<&str> = option_env!("RUSTY_SOURCE_TIME");
+
+fn is_newer(own: Option<u64>, pair: Option<u64>) -> bool {
+    matches!((own, pair), (Some(own), Some(pair)) if pair > own)
 }
 
 pub fn installed(version: &str) -> Result<Option<InstalledPair>, String> {
@@ -1145,6 +1165,15 @@ mod tests {
         assert_eq!(shape.notes.len(), 1);
         assert!(shape.notes[0].contains("outside the repository pin"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn only_a_known_later_source_time_is_newer() {
+        assert!(is_newer(Some(100), Some(101)));
+        assert!(!is_newer(Some(101), Some(100)));
+        assert!(!is_newer(Some(100), Some(100)));
+        assert!(!is_newer(None, Some(100)));
+        assert!(!is_newer(Some(100), None));
     }
 
     #[test]

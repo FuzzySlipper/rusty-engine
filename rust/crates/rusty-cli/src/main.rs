@@ -97,6 +97,9 @@ fn run() -> Result<ExitCode, String> {
         CommandName::Dev(options) => dev(options).map(|()| ExitCode::SUCCESS),
         CommandName::DevStart(options, arguments) => {
             check_port(&options)?;
+            if let Ok(Some((_, pair))) = pinned_pair_if_installed(&options.project) {
+                hint_newer_pair_cli(&pair);
+            }
             session::start(&options.project, options.instance.as_deref(), &arguments)
         }
         CommandName::DevStop(project, instance) => session::stop(&project, instance.as_deref()),
@@ -140,6 +143,7 @@ fn dev(mut options: DevOptions) -> Result<(), String> {
         };
         if let Some((pin, pair)) = pinned {
             warn_shape(&pin, &absolute(&options.project)?);
+            hint_newer_pair_cli(&pair);
             if options.runtime.is_none() {
                 // Window output switches to the pair's desktop pack once the
                 // staged manifest says so (see `window_runtime`).
@@ -1380,7 +1384,7 @@ runtime for the UI) into the cache beside the pair.
   --output             stream (the default) or window, for this launch
   --audio-output       stream plays in the watching pages (the default with stream output); device-required
                        fails the load without an audio device; device-optional runs silent
-  --window-ui          chromium (the default) or servo draws the window's UI page, for this launch
+  --window-ui          servo (the default) or chromium draws the window's UI page, for this launch
   --cef-switch         a Chromium switch for the window's UI page, e.g. remote-debugging-port=9333
   --servo-pref         a Servo preference for the window's UI page, name=value
   --diagnostics-log    write the host's NDJSON diagnostics to this file
@@ -1644,6 +1648,20 @@ fn warn_shape(pin: &Pin, project: &Path) {
             .iter()
             .for_each(|problem| eprintln!("RUSTY_PROJECT_SHAPE: {problem}")),
         Err(error) => eprintln!("{error}"),
+    }
+}
+
+/// An older `rusty` still runs a newer pair (`rusty dev` hands over to the
+/// pair's own copy), but it refuses options the pair documents, so say how to
+/// refresh it.
+fn hint_newer_pair_cli(pair: &InstalledPair) {
+    if pair.is_newer_than_this_cli() {
+        let this =
+            env::current_exe().map_or_else(|_| "rusty".to_owned(), |exe| exe.display().to_string());
+        eprintln!(
+            "rusty: {this} is older than Engine pair {}, so options that pair documents may be missing. Refresh it with:\n  {BOOTSTRAP}",
+            pair.version
+        );
     }
 }
 
@@ -2054,6 +2072,7 @@ fn install(options: &InstallOptions) -> Result<ExitCode, String> {
     }
     let pin = require_pin(&product_start(options.project.as_deref())?)?;
     let (pair, downloaded) = pair::install_version(&pin.version)?;
+    hint_newer_pair_cli(&pair);
     if downloaded {
         println!(
             "Installed Engine pair {} at {}",
@@ -2107,6 +2126,7 @@ fn update(options: &UpdateOptions) -> Result<ExitCode, String> {
         return Ok(ExitCode::SUCCESS);
     }
     let (pair, _) = pair::install_version(&target_version)?;
+    hint_newer_pair_cli(&pair);
     pin.write(&target_version)?;
     println!(
         "Pinned {} -> {target_version} in {}; installed at {}",
@@ -2133,6 +2153,7 @@ fn status(options: &StatusOptions) -> Result<ExitCode, String> {
             match pair::installed(&pin.version)? {
                 Some(pair) => {
                     println!("installed      yes");
+                    hint_newer_pair_cli(&pair);
                     println!("runtime pack   {}", pair.runtime_pack().display());
                     let desktop = pair.desktop_pack();
                     if desktop.join("runtime-manifest.json").is_file() {

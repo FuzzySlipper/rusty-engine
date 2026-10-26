@@ -120,7 +120,10 @@ cargo build --locked --release -p csharp-product-runtime "${HOST_FEATURES[@]}" \
 # 380 MB smaller.
 cargo build --locked --release -p csharp-product-runtime "${SCENE_FEATURES[@]}" \
   --bin rusty-scene-render
-cargo build --locked --release -p rusty-cli --bin rusty
+# rusty compares this commit time with a pair's `sourceTime` to say when it
+# is older than the pair it runs.
+SOURCE_TIME="$(git log -1 --format=%ct)"
+RUSTY_SOURCE_TIME="$SOURCE_TIME" cargo build --locked --release -p rusty-cli --bin rusty
 # The Engine services, headless and in process, for products' unit tests
 # (Rusty.Engine.Testing.EngineTestHost).
 cargo build --locked --release -p csharp-engine-test-host --lib
@@ -292,6 +295,7 @@ REVISION="$(git rev-parse HEAD)"
   printf '  "schemaVersion": 1,\n'
   printf '  "target": "%s",\n' "$TARGET"
   printf '  "sourceRevision": "%s",\n' "$REVISION"
+  printf '  "sourceTime": %s,\n' "$SOURCE_TIME"
   printf '  "runtime": %s,\n' "$IDENTITY"
   printf '  "files": [\n'
   first=1

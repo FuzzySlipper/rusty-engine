@@ -37,6 +37,12 @@ the newest pair may not have its Windows archive yet (see
 own `PATH` may not include `~/.local/bin`; launch configurations use
 `PATH="$HOME/.local/bin:$PATH" exec rusty dev --project …`.
 
+A pair's `rusty` is newer than the one on `PATH` once `rusty update` moves the
+pin past it. The older command still installs and runs the pair (`rusty dev`
+hands over to the pair's own copy), but refuses options the pair documents;
+`rusty update`, `install`, `status` and `dev` say so and print the bootstrap
+command above to refresh it.
+
 A product pins exactly one pair with one element in its `Directory.Build.props`.
 The same file declares that pair's feed in the shared cache, and every project
 references the package exactly (brackets; a bare version is a NuGet minimum and
