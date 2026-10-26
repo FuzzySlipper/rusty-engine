@@ -1665,6 +1665,13 @@ fn hint_newer_pair_cli(pair: &InstalledPair) {
     }
 }
 
+/// [`hint_newer_pair_cli`] for the pinned pair, when it is installed.
+fn hint_newer_pinned_cli(pin: &Pin) {
+    if let Ok(Some(pair)) = pair::installed(&pin.version) {
+        hint_newer_pair_cli(&pair);
+    }
+}
+
 fn not_installed(pin: &Pin) -> String {
     format!(
         "RUSTY_PAIR_NOT_INSTALLED: Engine pair {} (pinned in `{}`) is not installed; run `rusty install` in the product repository.",
@@ -2063,6 +2070,7 @@ fn exit_code(status: ExitStatus) -> ExitCode {
 fn install(options: &InstallOptions) -> Result<ExitCode, String> {
     if let Some(archive) = &options.archive {
         let pair = pair::install_archive(&absolute(archive)?, options.verified_sha256.as_deref())?;
+        hint_newer_pair_cli(&pair);
         println!(
             "Installed Engine pair {} at {}",
             pair.version,
@@ -2107,6 +2115,7 @@ fn update(options: &UpdateOptions) -> Result<ExitCode, String> {
     println!("target   {target_version}");
     if target_version == pin.version {
         println!("The product is already pinned to {target_version}.");
+        hint_newer_pinned_cli(&pin);
         return Ok(ExitCode::SUCCESS);
     }
     let notes = match &target {
@@ -2123,6 +2132,7 @@ fn update(options: &UpdateOptions) -> Result<ExitCode, String> {
             .as_ref()
             .map_or_else(String::new, |version| format!(" --to {version}"));
         println!("Apply it with: rusty update{to}");
+        hint_newer_pinned_cli(&pin);
         return Ok(ExitCode::SUCCESS);
     }
     let (pair, _) = pair::install_version(&target_version)?;

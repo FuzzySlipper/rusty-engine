@@ -507,11 +507,16 @@ impl InstalledPair {
     /// may document options this command lacks. Unknown when either was built
     /// without a source time (a contributor's `cargo build`, or an older pair).
     pub fn is_newer_than_this_cli(&self) -> bool {
-        let manifest = fs::read(self.runtime_pack().join("runtime-manifest.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok());
-        let pair = manifest.and_then(|manifest| manifest["sourceTime"].as_u64());
-        is_newer(SOURCE_TIME.and_then(|time| time.parse().ok()), pair)
+        is_newer(
+            SOURCE_TIME.and_then(|time| time.parse().ok()),
+            self.source_time(),
+        )
+    }
+
+    /// The commit time its runtime pack records, if it records one.
+    fn source_time(&self) -> Option<u64> {
+        let bytes = fs::read(self.runtime_pack().join("runtime-manifest.json")).ok()?;
+        serde_json::from_slice::<Value>(&bytes).ok()?["sourceTime"].as_u64()
     }
 }
 
@@ -1164,6 +1169,31 @@ mod tests {
         assert!(shape.problems.is_empty(), "{:?}", shape.problems);
         assert_eq!(shape.notes.len(), 1);
         assert!(shape.notes[0].contains("outside the repository pin"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_pair_reads_its_source_time_from_its_runtime_pack() {
+        let root = env::temp_dir().join(format!("rusty-source-time-{}", std::process::id()));
+        let pair = InstalledPair {
+            version: "0.1.0-dev.aaaaaaaaaaaa".to_owned(),
+            root: root.clone(),
+        };
+        assert_eq!(pair.source_time(), None);
+        fs::create_dir_all(pair.runtime_pack()).unwrap();
+        fs::write(
+            pair.runtime_pack().join("runtime-manifest.json"),
+            r#"{"sourceRevision": "a", "sourceTime": 1792996168}"#,
+        )
+        .unwrap();
+        assert_eq!(pair.source_time(), Some(1_792_996_168));
+        // A pair from before the time was recorded has none.
+        fs::write(
+            pair.runtime_pack().join("runtime-manifest.json"),
+            r#"{"sourceRevision": "a"}"#,
+        )
+        .unwrap();
+        assert_eq!(pair.source_time(), None);
         fs::remove_dir_all(root).unwrap();
     }
 
