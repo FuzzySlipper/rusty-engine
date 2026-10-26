@@ -296,7 +296,7 @@ impl Gpu {
     }
 
     /// Why this device cannot lay decals, if it cannot: the world pass binds
-    /// two more textures with them than WebGPU guarantees.
+    /// three more textures with them than WebGPU guarantees.
     pub(crate) fn decals_refusal(&self) -> Option<String> {
         let granted = self.device.limits().max_sampled_textures_per_shader_stage;
         (granted < crate::decals::WORLD_SAMPLED_TEXTURES).then(|| {

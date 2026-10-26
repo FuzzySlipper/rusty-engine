@@ -3,8 +3,9 @@
 //! wrapping flat ground, a slope, a step's edge and a curved mesh; its angle
 //! falloff keeps the projection off faces that turn away; vegetation copies
 //! and animated meshes are passed by unless the decal asks; a decal fades
-//! out between its fade times; a nearest-mipmapped atlas stays crisp; and a
-//! normal atlas bends the light. Same harness as `tests/screenshots.rs`.
+//! out between its fade times; a nearest-mipmapped atlas stays crisp; a
+//! normal atlas bends the light; and a decal's emission glows, from the
+//! colour atlas or an emission atlas. Same harness as `tests/screenshots.rs`.
 
 mod support;
 
@@ -18,6 +19,7 @@ use support::*;
 
 const ATLAS: &str = "texture/decal-atlas";
 const NORMALS: &str = "texture/decal-normals";
+const EMISSION: &str = "texture/decal-emission";
 
 /// Grey ground with a 30-degree ramp rising toward +x, a raised platform
 /// whose edge faces +x, a sphere, and short posts scattered at the back,
@@ -175,6 +177,7 @@ fn decal(center: [f32; 3], size: [f32; 3]) -> DecalDescriptor {
         color: [0.9, 0.05, 0.05, 1.0],
         roughness: 0.0,
         normal_strength: 0.0,
+        emission: [0.0; 3],
         angle_falloff: false,
         on_vegetation: false,
         on_animated: false,
@@ -519,6 +522,7 @@ fn a_nearest_mipmapped_atlas_stays_crisp() {
                 atlas: Some(DecalAtlasDescriptor {
                     color: ATLAS.into(),
                     normals: None,
+                    emission: None,
                 }),
             },
             place(1, white),
@@ -560,6 +564,7 @@ fn a_normal_atlas_bends_the_light() {
             atlas: Some(DecalAtlasDescriptor {
                 color: ATLAS.into(),
                 normals: Some(NORMALS.into()),
+                emission: None,
             }),
         },
     ]);
@@ -577,4 +582,105 @@ fn a_normal_atlas_bends_the_light() {
         (before - after).abs() > 8.0,
         "the light on it changes: {before} to {after}"
     );
+}
+
+/// A black decal reflects nothing, so what shows of it is the light it
+/// emits; placing it again without emission puts it out.
+#[test]
+fn an_emissive_decal_glows_and_placing_it_again_changes_its_glow() {
+    let mut harness = scene();
+    let view = above(0.0, 3.0, 2.0);
+    let mut coal = decal([0.0, 0.0, 2.0], [1.0, 0.5, 1.0]);
+    coal.color = [0.0, 0.0, 0.0, 1.0];
+    harness.apply(vec![place(1, coal)]);
+    let cold = render(&mut harness, &view);
+    coal.emission = [3.0, 0.0, 0.0];
+    harness.apply(vec![place(1, coal)]);
+    let glowing = render(&mut harness, &view);
+    assert!(
+        centre(&cold).abs() < 2.0 && centre(&glowing) > 150.0,
+        "black, then glowing: {:.1}, {:.1}",
+        centre(&cold),
+        centre(&glowing)
+    );
+    assert!(
+        redness(&glowing, 0..20, 0..20).abs() < 2.0,
+        "outside the box is bare"
+    );
+    coal.emission = [0.0; 3];
+    harness.apply(vec![place(1, coal)]);
+    assert_eq!(render(&mut harness, &view), cold);
+}
+
+/// The darkest red in the frame's middle.
+fn darkest_red(rgba: &[u8]) -> u8 {
+    let mut darkest = u8::MAX;
+    for y in HEIGHT / 2 - 40..HEIGHT / 2 + 40 {
+        for x in WIDTH / 2 - 40..WIDTH / 2 + 40 {
+            darkest = darkest.min(rgba[((y * WIDTH + x) * 4) as usize]);
+        }
+    }
+    darkest
+}
+
+/// Without an emission atlas a decal glows where the colour atlas's texels
+/// are bright (the checker's white ones, single texels kept crisp by the
+/// nearest-mipmapped filter); an emission atlas gives the glow instead.
+#[test]
+fn emission_comes_from_the_colour_atlas_or_an_emission_atlas() {
+    let mut harness = scene();
+    let solid = [255u8; 4].repeat(16);
+    let png = encode_png(4, 4, &solid).expect("encode the emission");
+    let texture = TextureDescriptor::admit_png_rgba8_resource(
+        EMISSION.to_owned(),
+        &png,
+        TextureFilter::NearestMipmapped,
+        TextureWrap::Clamp,
+        1,
+    )
+    .expect("admit the emission");
+    if let Some(TexturePayloadSource::Resource { resource }) =
+        texture.payload.as_ref().map(|payload| &payload.source)
+    {
+        harness.resources.insert(resource, png);
+    }
+    let atlas = checker_atlas(&mut harness, TextureFilter::NearestMipmapped);
+    let mut coal = decal([0.0, 0.0, 2.0], [1.0, 0.5, 1.0]);
+    coal.color = [0.0, 0.0, 0.0, 1.0];
+    coal.emission = [3.0, 0.0, 0.0];
+    let view = above(0.0, 1.2, 2.0);
+    harness.apply(vec![
+        atlas,
+        RenderDiff::DefineTexture { texture },
+        RenderDiff::SetDecalAtlas {
+            atlas: Some(DecalAtlasDescriptor {
+                color: ATLAS.into(),
+                normals: None,
+                emission: None,
+            }),
+        },
+        place(1, coal),
+    ]);
+    let checkered = render(&mut harness, &view);
+    harness.apply(vec![RenderDiff::SetDecalAtlas {
+        atlas: Some(DecalAtlasDescriptor {
+            color: ATLAS.into(),
+            normals: None,
+            emission: Some(EMISSION.into()),
+        }),
+    }]);
+    let whole = render(&mut harness, &view);
+    assert!(
+        darkest_red(&checkered) < 40 && distinct(&checkered) < 16,
+        "the colour atlas's black texels stay dark, crisp: {} at least, {} brightnesses",
+        darkest_red(&checkered),
+        distinct(&checkered)
+    );
+    assert!(
+        darkest_red(&whole) > 150,
+        "the emission atlas glows over all of it: {} at least",
+        darkest_red(&whole)
+    );
+    let readout = harness.renderer.gpu_readout().decals;
+    assert!(readout.emission && readout.emissive == 1);
 }

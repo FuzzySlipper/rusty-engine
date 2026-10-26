@@ -3074,6 +3074,7 @@ mod tests {
             },
             roughness: 0.0,
             normal_strength: 0.0,
+            emission: NativeVec3::default(),
             angle_falloff: true,
             on_vegetation: false,
             on_animated_meshes: false,
@@ -3084,7 +3085,8 @@ mod tests {
 
     /// Decals publish as retained scene state: a decal with a life fades
     /// from the presentation time its call publishes at and is removed once
-    /// faded; removing, the readout, the atlas and the refusals.
+    /// faded; replacing one changes its emission; removing, the readout,
+    /// the atlas and the refusals.
     #[test]
     fn decals_publish_fade_on_the_presentation_timeline_and_go_when_faded() {
         use crate::operation_diagnostics::{empty_receipt, receipt_codes};
@@ -3161,6 +3163,9 @@ mod tests {
                 value: atlas_info.handle.value,
             },
             normals: NativeRenderResourceReference::default(),
+            emission: NativeRenderResourceReference {
+                value: atlas_info.handle.value,
+            },
         };
         assert_eq!(
             unsafe {
@@ -3189,11 +3194,55 @@ mod tests {
             set(decal_request(1, 0.0, 0.0), std::ptr::null_mut()),
             ABI_OK
         );
+        let glowing = NativeVec3 {
+            x: 4.0,
+            y: 1.5,
+            z: 0.2,
+        };
+        assert_eq!(
+            set(
+                NativeDecalRequest {
+                    emission: glowing,
+                    ..decal_request(2, 0.5, 0.25)
+                },
+                std::ptr::null_mut()
+            ),
+            ABI_OK
+        );
+        assert_eq!(read().emissive, 1);
+        // Placing decal 2 again cools it; placing it glowing again restores it.
         assert_eq!(
             set(decal_request(2, 0.5, 0.25), std::ptr::null_mut()),
             ABI_OK
         );
+        assert_eq!(read().emissive, 0);
+        assert_eq!(
+            set(
+                NativeDecalRequest {
+                    emission: glowing,
+                    ..decal_request(2, 0.5, 0.25)
+                },
+                std::ptr::null_mut()
+            ),
+            ABI_OK
+        );
         let mut refused = decal_request(3, 0.0, 0.0);
+        let mut refusal = empty_receipt();
+        assert_eq!(
+            set(
+                NativeDecalRequest {
+                    emission: NativeVec3 {
+                        x: -1.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                    ..refused
+                },
+                &mut refusal
+            ),
+            0
+        );
+        assert_eq!(receipt_codes(&refusal), ["CSHARP_DECAL"]);
         for bad in [
             NativeVec3 {
                 x: 0.0,
@@ -3211,7 +3260,7 @@ mod tests {
             assert_eq!(set(refused, &mut refusal), 0);
             assert_eq!(receipt_codes(&refusal), ["CSHARP_DECAL"]);
         }
-        assert_eq!(read().decals, 2);
+        assert_eq!((read().decals, read().emissive), (2, 1));
         let mut call = services.finish_call().expect("decal call");
         let ops = call.take_output().frames[0].ops.clone();
         let placed = |id: u64| {
@@ -3225,7 +3274,11 @@ mod tests {
         assert!(ops.iter().any(|op| matches!(
             op,
             render_model::RenderDiff::SetDecalAtlas {
-                atlas: Some(render_model::DecalAtlasDescriptor { normals: None, .. })
+                atlas: Some(render_model::DecalAtlasDescriptor {
+                    normals: None,
+                    emission: Some(_),
+                    ..
+                })
             }
         )));
         let lasting = placed(1).expect("decal 1");
@@ -3236,6 +3289,7 @@ mod tests {
         );
         // Published at 1.1 s: decal 2 fades from 1.6 s to 1.85 s.
         let fading = placed(2).expect("decal 2");
+        assert_eq!(fading.emission, [4.0, 1.5, 0.2]);
         assert!((fading.fade_start - 1.6).abs() < 1e-9 && (fading.fade_end - 1.85).abs() < 1e-9);
 
         // Past its fade, decal 2 goes; decal 1 is removed by the product.

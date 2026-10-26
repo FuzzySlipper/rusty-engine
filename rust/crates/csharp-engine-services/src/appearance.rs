@@ -1675,20 +1675,30 @@ impl RuntimeAppearanceCall {
                 .ok_or_else(|| {
                     CsharpEngineServicesError::new(
                         "CSHARP_DECAL_ATLAS",
-                        "a decal atlas and its normals must be texture resources",
+                        "a decal atlas, its normals and its emission must be texture resources",
                     )
                 })
         };
         let color = texture(request.color)?;
-        let normals = match request.normals.value {
-            0 => None,
-            _ => Some(texture(request.normals)?),
-        };
+        let optional =
+            |reference: csharp_engine_abi::NativeRenderResourceReference| match reference.value {
+                0 => Ok(None),
+                _ => texture(reference).map(Some),
+            };
+        let normals = optional(request.normals)?;
+        let emission = optional(request.emission)?;
         let atlas = render_model::DecalAtlasDescriptor {
             color: color.id.clone(),
             normals: normals.as_ref().map(|texture| texture.id.clone()),
+            emission: emission.as_ref().map(|texture| texture.id.clone()),
         };
-        Ok((std::iter::once(color).chain(normals).collect(), atlas))
+        Ok((
+            std::iter::once(color)
+                .chain(normals)
+                .chain(emission)
+                .collect(),
+            atlas,
+        ))
     }
 
     pub(crate) fn image_effect(

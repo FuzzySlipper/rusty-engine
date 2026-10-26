@@ -438,6 +438,11 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          * A normal atlas bends the surfaces.
          */
         normals: boolean;
+        /**
+         * Decals that emit light, and whether an emission atlas gives it.
+         */
+        emissive: number;
+        emission: boolean;
     };
     /**
      * `diagnostics/read`: diagnostics after a cursor, or the retained ones.

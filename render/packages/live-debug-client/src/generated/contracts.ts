@@ -68,7 +68,11 @@ buildMicros: number,
 /**
  * A normal atlas bends the surfaces.
  */
-normals: boolean, };
+normals: boolean, 
+/**
+ * Decals that emit light, and whether an emission atlas gives it.
+ */
+emissive: number, emission: boolean, };
 
 /**
  * `diagnostics/read`: diagnostics after a cursor, or the retained ones.

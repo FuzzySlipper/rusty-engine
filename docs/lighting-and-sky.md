@@ -1494,10 +1494,10 @@ world pass projects an atlas region through, down the box's own -y, onto the
 opaque surfaces inside it.
 
 ```csharp
-engine.CameraView.SetDecalAtlas(new(marks, default)); // opened NearestMipmapped
+engine.CameraView.SetDecalAtlas(new(marks, Normals: default, Emission: default)); // opened NearestMipmapped
 engine.CameraView.SetDecal(new(Id: 7, Center: foot, Rotation: facing, Size: new(.3f, .6f, .3f),
     Region: new(0, 0, .5f, .5f), Color: new Color(1, 1, 1, .9f), Roughness: 0, NormalStrength: 0,
-    AngleFalloff: true, OnVegetation: false, OnAnimatedMeshes: false, LifeSeconds: 60, FadeSeconds: 10));
+    Emission: Vector3.Zero, AngleFalloff: true, OnVegetation: false, OnAnimatedMeshes: false, LifeSeconds: 60, FadeSeconds: 10));
 engine.CameraView.RemoveDecal(new(7));
 DecalReadout decals = engine.CameraView.ReadDecals();
 ```
@@ -1514,6 +1514,16 @@ DecalReadout decals = engine.CameraView.ReadDecals();
   `Roughness` above 0 lays that roughness where it covers (a wet patch);
   `NormalStrength` bends the surface by the normal atlas (`SetDecalAtlas`'s
   `Normals`: red along the box's +x, green up the region).
+- `Emission` (linear RGB, may exceed 1) is light the decal gives off where
+  it covers: times the emission atlas's texel (`SetDecalAtlas`'s
+  `Emission`, laid out like the colour atlas), or the colour atlas's texel
+  without one, by the same cover as its colour. It is added after the
+  surface is lit, as a material's `EmissionColor` is, so shadows and night
+  leave it glowing and above bloom's threshold it blooms; the colour blend
+  is unchanged. It lights nothing else: a fire's light on its surroundings
+  stays the product's point lights. Placing the decal again by `Id` with a
+  new `Emission` (no remove) lets coals cool; `ReadDecals` counts the
+  decals that emit.
 - `AngleFalloff` fades the decal on faces turning away from the box's +y,
   whole up to about 60 degrees and gone from about 80, so a step's riser or
   a wall does not show the projection smeared along it. Without it every
@@ -1530,10 +1540,10 @@ DecalReadout decals = engine.CameraView.ReadDecals();
   in the shader, with no further calls, and the Engine removes it. 0 keeps it
   until it is removed or replaced; a product may also fade one by replacing
   it with a lower opacity.
-- The atlas is sampled with its texture's own filter, with mip levels chosen
-  from the projection's screen gradients: open it `NearestMipmapped` for
-  crisp texels up close (CraftSurvive's crunch rule), `Linear` for smooth
-  ones. `SetDecalAtlas(default)` removes the atlas; it may not be released
+- The atlas, its normals and its emission are sampled with the colour
+  atlas's filter, with mip levels chosen from the projection's screen
+  gradients: open it `NearestMipmapped` for crisp texels up close
+  (CraftSurvive's crunch rule), `Linear` for smooth ones. `SetDecalAtlas(default)` removes the atlas; it may not be released
   while decals sample it.
 - A scene holds at most 4,096 decals (`ReadDecals` gives the count and the
   budget); one more is refused as `CSHARP_DECAL_BUDGET`. They are retained
@@ -1541,10 +1551,13 @@ DecalReadout decals = engine.CameraView.ReadDecals();
   renderer rebuilds when they change; a still set costs no upload. A
   fragment tests only the decals whose box reaches its cell. `engine.renderer`
   reports `gpu.decals`: the count, grid entries, the busiest cell's count,
-  the buffer's bytes, the last upload and its CPU time. Their shading is
-  part of the `world` pass and grows with the decals per cell; a world view
-  with none placed pays one read.
-- They need 18 sampled textures per shader stage, two more than WebGPU
+  the buffer's bytes, the last upload and its CPU time, and how many emit
+  and whether an emission atlas gives their light. Their shading is part of
+  the `world` pass and grows with the decals per cell; a world view with
+  none placed pays one read, and a decal that emits nothing skips the
+  emission. A decal placed again rebuilds the grid like any change, so a
+  product cooling its coals every update pays that rebuild each update.
+- They need 19 sampled textures per shader stage, three more than WebGPU
   guarantees; the Vulkan adapters this renderer targets have them.
   A device without them lays none, and `gpu.decals.refused` says why.
 

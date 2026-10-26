@@ -533,6 +533,11 @@ pub struct DecalDescriptor {
     pub roughness: f32,
     /// How strongly the normal atlas bends the surface (0: not at all).
     pub normal_strength: f32,
+    /// Linear light it emits where it covers (may exceed 1), times the
+    /// emission atlas or, without one, the colour atlas; added after the
+    /// surface is lit. Zero for a decal that emits none.
+    #[serde(default)]
+    pub emission: [f32; 3],
     /// Fade out surfaces that turn away from the box's +y, so steep faces
     /// do not show the projection smeared along them.
     pub angle_falloff: bool,
@@ -551,13 +556,16 @@ impl DecalDescriptor {
 }
 
 /// The textures decals sample (`CameraView.SetDecalAtlas`): the atlas their
-/// regions come from, by texture id, and a normal atlas laid out the same.
+/// regions come from, by texture id, and a normal atlas and an emission
+/// atlas laid out the same.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DecalAtlasDescriptor {
     pub color: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub normals: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emission: Option<String>,
 }
 
 /// A fog volume (`CameraView.SetFogVolume`): a box or ellipsoid of fog the

@@ -15,8 +15,9 @@ to the other one for one between 40 and 44 m; trees are placement records.
 The far grass thins with distance, its kept clumps growing so the hills stay as
 green, and trees draw a cheaper cone from 150 m and baked impostor cards from
 320 m, crossfading between levels (#10017).
-`generate-textures.py` writes `content/grass.png`, `content/rock.png` and
-the decal atlas `content/marks.png`.
+`generate-textures.py` writes `content/grass.png`, `content/rock.png`, the
+decal atlas `content/marks.png`, and the coal atlas `content/coals.png` with
+the light it emits, `content/coals-emission.png`.
 
 Stage with the exact SDK version and matching feed and runtime:
 
@@ -45,6 +46,13 @@ Live debug commands:
   `marks.png` atlas (a footprint, a scorch, a splash and an ash ring;
   `generate-textures.py` writes it) over the ground where the camera looks,
   without or with the angle falloff, and report `CameraView.ReadDecals`.
+- `decals.coals <count> <size> <seconds>`: night (a low exposure, bloom, a
+  dark sky) and that many patches of char with glowing seams and
+  single-texel coals (`coals.png` and its emission atlas, 32 texels a metre
+  at size 1) over the ground where the camera looks, each placed again by
+  its id every update as it cools over `seconds` and kindles again (0 lays
+  them cold, emitting nothing); a count of 0 removes them and brings the day
+  back.
 - `weather.wetness <wetness> <puddles> <frozen>`: the hills wet after rain,
   puddles gathering, frozen from their edges in (1: ice), as
   `CameraView.ReadWetness` reports it.

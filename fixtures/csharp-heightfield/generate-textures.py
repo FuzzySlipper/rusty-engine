@@ -1,5 +1,7 @@
 """Writes content/grass.png and content/rock.png, 64x64 tileable noise for the fixture's two terrain layers,
-and content/marks.png, a 64x64 decal atlas of four 32x32 marks: a footprint, a scorch, a splash and an ash ring."""
+content/marks.png, a 64x64 decal atlas of four 32x32 marks: a footprint, a scorch, a splash and an ash ring,
+and content/coals.png with content/coals-emission.png, a 64x64 atlas of four 32x32 patches of char crossed by
+glowing seams and single-texel coals, and the light they emit laid out the same."""
 import math
 import random
 from pathlib import Path
@@ -59,3 +61,33 @@ def marks():
 
 
 marks().save(content / "marks.png")
+
+
+def coals():
+    """Char with seams and single-texel coals, and the light they emit."""
+    color = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
+    emission = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 255))
+    half = SIZE // 2
+    for patch in range(4):
+        rng = random.Random(10396 + patch)
+        left, top = patch % 2 * half, patch // 2 * half
+        # A seam wanders across the patch; coals lie scattered.
+        seam = {(x, int(half / 2 + 6 * math.sin(x / 4 + patch))) for x in range(half)}
+        for y in range(half):
+            for x in range(half):
+                u, v = (x + 0.5) / half * 2 - 1, (y + 0.5) / half * 2 - 1
+                if math.hypot(u, v) >= 1:
+                    continue
+                pixel, glow = (22, 18, 16, 235), (0, 0, 0)
+                if (x, y) in seam:
+                    pixel, glow = (150, 60, 20, 255), (200, 70, 15)
+                elif rng.random() < 0.04:
+                    pixel, glow = (220, 110, 30, 255), (255, 140, 40)
+                color.putpixel((left + x, top + y), pixel)
+                emission.putpixel((left + x, top + y), glow + (255,))
+    return color, emission
+
+
+coal_color, coal_emission = coals()
+coal_color.save(content / "coals.png")
+coal_emission.save(content / "coals-emission.png")

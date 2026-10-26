@@ -1,6 +1,7 @@
 //! Projected decals (`RenderDiff::SetDecal`, `CameraView.SetDecal`): marks
 //! the world pass lays over the opaque surfaces inside a box each
-//! (`rusty::decals::decaled`), lit with them. A world-space grid of
+//! (`rusty::decals::decaled`), lit with them, and the light they emit
+//! added after. A world-space grid of
 //! `CELL_METRES` cells over the ground, hashed into `BUCKETS` buckets, lists
 //! the decals whose box reaches each cell, so a fragment tests only its
 //! bucket's. The grid and the rows are built on the CPU when the decals
@@ -17,15 +18,18 @@ use crate::tables::GpuTexture;
 /// `decals.wgsl` DECAL_BUCKETS, DECAL_CELL_METRES and DECAL_ROW_WORDS.
 const BUCKETS: usize = 16384;
 const CELL_METRES: f32 = 2.0;
-const ROW_WORDS: usize = 28;
+const ROW_WORDS: usize = 32;
 const HEADER_WORDS: usize = 4;
 const ANGLE_FALLOFF: u32 = 1;
 const ON_VEGETATION: u32 = 2;
 const ON_ANIMATED: u32 = 4;
 /// The sampled textures a world pass binds with decals: the material's 12,
 /// the frame's 3 and the view's occlusion (16, WebGPU's guarantee), then the
-/// decal atlas and its normals.
-pub(crate) const WORLD_SAMPLED_TEXTURES: u32 = 18;
+/// decal atlas, its normals and its emission.
+pub(crate) const WORLD_SAMPLED_TEXTURES: u32 = 19;
+/// `decals.wgsl` header flags.
+const NORMAL_ATLAS: u32 = 1;
+const EMISSION_ATLAS: u32 = 2;
 
 /// What the decals hold and cost, for `engine.renderer`'s `gpu.decals`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -45,6 +49,9 @@ pub struct DecalReadout {
     pub build_micros: f64,
     /// A normal atlas bends the surfaces.
     pub normals: bool,
+    /// Decals that emit light, and whether an emission atlas gives it.
+    pub emissive: u32,
+    pub emission: bool,
 }
 
 pub(crate) fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -76,6 +83,7 @@ pub(crate) fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
             ),
             fragment(3, texture),
+            fragment(4, texture),
         ],
     })
 }
@@ -111,7 +119,7 @@ impl Decals {
                 usage: wgpu::BufferUsages::STORAGE,
                 mapped_at_creation: false,
             });
-            bind_group(gpu, layout, &buffer, white, white)
+            bind_group(gpu, layout, &buffer, [white; 3])
         });
         Self {
             decals: BTreeMap::new(),
@@ -149,11 +157,11 @@ impl Decals {
     /// Texture `id` was defined or released: the atlas binds it again if it
     /// names it.
     pub fn texture_changed(&mut self, id: &str) {
-        if self
-            .atlas
-            .as_ref()
-            .is_some_and(|atlas| atlas.color == id || atlas.normals.as_deref() == Some(id))
-        {
+        if self.atlas.as_ref().is_some_and(|atlas| {
+            atlas.color == id
+                || atlas.normals.as_deref() == Some(id)
+                || atlas.emission.as_deref() == Some(id)
+        }) {
             self.rebind = true;
             self.dirty = true;
         }
@@ -179,9 +187,14 @@ impl Decals {
             .as_ref()
             .and_then(|atlas| atlas.normals.as_ref())
             .and_then(|id| textures.get(id));
+        let emission = self
+            .atlas
+            .as_ref()
+            .and_then(|atlas| atlas.emission.as_ref())
+            .and_then(|id| textures.get(id));
         if self.dirty {
             let started = std::time::Instant::now();
-            self.build(normals.is_some());
+            self.build(normals.is_some(), emission.is_some());
             self.readout.build_micros = started.elapsed().as_secs_f64() * 1e6;
             let bytes = (self.words.len() * 4) as u64;
             if self
@@ -214,8 +227,7 @@ impl Decals {
                 gpu,
                 layout,
                 self.buffer.as_ref().expect("uploaded above"),
-                color,
-                normals.unwrap_or(white),
+                [color, normals.unwrap_or(white), emission.unwrap_or(white)],
             ));
             self.rebind = false;
         }
@@ -236,14 +248,16 @@ impl Decals {
     }
 
     /// The header, the buckets' first entries, their lists and the rows.
-    fn build(&mut self, normals: bool) {
+    fn build(&mut self, normals: bool, emission: bool) {
         let count = self.decals.len();
         // Each decal's buckets: every cell its box's footprint reaches, each
         // bucket once, so no decal lays twice over one fragment.
         let mut placed: Vec<(u32, u32)> = Vec::new();
         let mut buckets: Vec<usize> = Vec::new();
         let mut rows: Vec<u32> = Vec::with_capacity(count * ROW_WORDS);
+        let mut emissive = 0;
         for (index, decal) in self.decals.values().enumerate() {
+            emissive += u32::from(decal.emission != [0.0; 3]);
             let (row, low, high) = row(decal);
             rows.extend(row.iter().map(|value| value.to_bits()));
             let cells = |low: f32, high: f32| {
@@ -288,7 +302,7 @@ impl Decals {
             count as u32,
             rows_at as u32,
             lists_at as u32,
-            u32::from(normals),
+            if normals { NORMAL_ATLAS } else { 0 } | if emission { EMISSION_ATLAS } else { 0 },
         ]);
         self.words.extend(first);
         self.words.extend(lists);
@@ -296,6 +310,8 @@ impl Decals {
         self.readout.decals = count as u32;
         self.readout.entries = placed.len() as u32;
         self.readout.normals = normals;
+        self.readout.emissive = emissive;
+        self.readout.emission = emission;
     }
 }
 
@@ -334,6 +350,7 @@ fn row(decal: &DecalDescriptor) -> ([f32; ROW_WORDS], [f32; 3], [f32; 3]) {
     ]);
     row[24..27].copy_from_slice(&axes[1].to_array());
     row[27] = decal.fade_end as f32;
+    row[28..31].copy_from_slice(&decal.emission);
     let reach: glam::Vec3 = axes
         .iter()
         .enumerate()
@@ -350,11 +367,11 @@ fn bind_group(
     gpu: &Gpu,
     layout: &wgpu::BindGroupLayout,
     buffer: &wgpu::Buffer,
-    color: &GpuTexture,
-    normals: &GpuTexture,
+    [color, normals, emission]: [&GpuTexture; 3],
 ) -> wgpu::BindGroup {
     let (color_view, sampler) = color.material_binding();
     let (normals_view, _) = normals.material_binding();
+    let (emission_view, _) = emission.material_binding();
     gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("render-wgpu decals"),
         layout,
@@ -375,6 +392,10 @@ fn bind_group(
                 binding: 3,
                 resource: wgpu::BindingResource::TextureView(normals_view),
             },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(emission_view),
+            },
         ],
     })
 }
@@ -392,6 +413,7 @@ mod tests {
             color: [1.0; 4],
             roughness: 0.0,
             normal_strength: 0.0,
+            emission: [0.0; 3],
             angle_falloff: false,
             on_vegetation: false,
             on_animated: false,
@@ -417,7 +439,7 @@ mod tests {
         };
         decals.set(7, decal([0.5, 0.0, 0.5], [0.4, 1.0, 0.4]));
         decals.set(3, decal([3.0, 0.0, -1.0], [6.0, 1.0, 1.0]));
-        decals.build(false);
+        decals.build(false, false);
         let words = &decals.words;
         assert_eq!(words[0], 2);
         let (rows, lists) = (words[1] as usize, words[2] as usize);

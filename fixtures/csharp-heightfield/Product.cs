@@ -43,6 +43,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // looks, each box this many times as tall as it is wide so it reaches over the slopes under it.
     private const float DecalDepth = 1.5f, DecalOpacity = .9f, DecalSpiralMetres = .9f;
     private static readonly double GoldenAngle = Math.PI * (3 - Math.Sqrt(5));
+    // Emissive decals (#10396): patches of char with glowing seams and coals from the 2x2 `coals.png` atlas
+    // and its `coals-emission.png`, at 32 texels a metre, each cooling from Hot to nothing over its own
+    // cycle and kindling again, under a night exposure so the light they emit is what shows.
+    private const ulong CoalIdBase = 1_000_000;
+    private static readonly Vector3 Hot = new(24, 9, 2.5f);
+    private const float CoalSpiralMetres = 1.1f, NightExposure = .04f, NightBloomThreshold = 1, NightBloomIntensity = .8f;
+    private static readonly Color NightSky = new(.002f, .002f, .004f, 1);
     private const double ContinentFlightRadius = 100_000, ContinentFlightSpeed = 300, ContinentFlightHeight = 400;
 
     private readonly IEngineContext engine;
@@ -67,6 +74,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private Light? sky;
     private RenderResource? marks;
     private ulong decals;
+    private RenderResource? coalAtlas, coalGlow;
+    private DecalRequest[] coals = [];
+    private double coalSeconds, coolSeconds;
     private double flightHeight = FlightHeight;
 
     public Product(ProductCreateContext context)
@@ -129,6 +139,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         Fly();
         streamer!.Update();
         vegetation.Update();
+        Cool(seconds);
         if (double.IsNaN(settleSeconds) && engine.Heightfield.Read(heightfield!).Settled)
             settleSeconds = Stopwatch.GetElapsedTime(settleStarted).TotalSeconds;
         return ProductUpdateResult.None;
@@ -323,7 +334,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         for (ulong id = 1; id <= decals; id++) engine.CameraView.RemoveDecal(new(id));
         marks ??= engine.Graphics.OpenResource(new("marks.png", TextureFilter.NearestMipmapped, TextureWrap.Clamp)).Handle;
-        engine.CameraView.SetDecalAtlas(new(marks, default));
+        engine.CameraView.SetDecalAtlas(new(marks, default, default));
         double heading = flying ? angle + (Math.PI / 2) : angle;
         double reach = flightHeight / Math.Tan(LookDown * Math.PI / 180);
         double centerX = eye.X + Math.Cos(heading) * reach, centerZ = eye.Z + Math.Sin(heading) * reach;
@@ -336,10 +347,71 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             float cell = id % 4;
             Vector4 region = new(cell % 2 / 2, MathF.Floor(cell / 2) / 2, cell % 2 / 2 + .5f, MathF.Floor(cell / 2) / 2 + .5f);
             engine.CameraView.SetDecal(new(id, new(x, (float)ground.Height, z), Quaternion.CreateFromAxisAngle(Vector3.UnitY, (float)turn),
-                new(size, size * DecalDepth, size), region, new Color(1, 1, 1, DecalOpacity), 0, 0, falloff != 0, false, false, 0, 0));
+                new(size, size * DecalDepth, size), region, new Color(1, 1, 1, DecalOpacity), 0, 0, Vector3.Zero, falloff != 0, false, false, 0, 0));
         }
         DecalReadout readout = engine.CameraView.ReadDecals();
         return FormattableString.Invariant($"decals={readout.Decals} budget={readout.Budget} center={centerX:F1},{centerZ:F1}");
+    }
+
+    [DebugCommand("decals.coals", Description = "Night: scatters this many glowing coal decals of this size (metres) on the ground where the camera looks, each cooling over this many seconds and kindling again (0: laid cold, emitting nothing); a count of 0 removes them and brings the day back.")]
+    public string Coals(float count, float size, float seconds)
+    {
+        for (int index = 0; index < coals.Length; index++) engine.CameraView.RemoveDecal(new(coals[index].Id));
+        coals = [];
+        if (count <= 0)
+        {
+            engine.CameraView.SetToneMapping(new(ToneMappingOperator.None, 1));
+            engine.CameraView.SetBloom(new(0, 0));
+            engine.CameraView.SetBackgroundColor(new(FogColor));
+            engine.CameraView.SetFog(new(FogMode.ExponentialSquared, FogColor, 0, 0, FogDensity));
+            return ReadCoals();
+        }
+
+        coalAtlas ??= engine.Graphics.OpenResource(new("coals.png", TextureFilter.NearestMipmapped, TextureWrap.Clamp)).Handle;
+        coalGlow ??= engine.Graphics.OpenResource(new("coals-emission.png", TextureFilter.NearestMipmapped, TextureWrap.Clamp)).Handle;
+        engine.CameraView.SetDecalAtlas(new(coalAtlas, default, coalGlow));
+        engine.CameraView.SetToneMapping(new(ToneMappingOperator.AcesFilmic, NightExposure));
+        engine.CameraView.SetBloom(new(NightBloomThreshold, NightBloomIntensity));
+        engine.CameraView.SetBackgroundColor(new(NightSky));
+        engine.CameraView.SetFog(new(FogMode.ExponentialSquared, NightSky, 0, 0, FogDensity));
+        double heading = flying ? angle + (Math.PI / 2) : angle;
+        double reach = flightHeight / Math.Tan(LookDown * Math.PI / 180);
+        double centerX = eye.X + Math.Cos(heading) * reach, centerZ = eye.Z + Math.Sin(heading) * reach;
+        coals = new DecalRequest[(int)count];
+        for (int index = 0; index < coals.Length; index++)
+        {
+            double turn = (index + 1) * GoldenAngle, radius = CoalSpiralMetres * size * Math.Sqrt(index + 1);
+            float x = (float)(centerX + Math.Cos(turn) * radius), z = (float)(centerZ + Math.Sin(turn) * radius);
+            HeightfieldPickResult ground = engine.Heightfield.Pick(new(heightfield!, new(x, (float)PickFrom, z), -Vector3.UnitY, 0));
+            float cell = index % 4;
+            Vector4 region = new(cell % 2 / 2, MathF.Floor(cell / 2) / 2, cell % 2 / 2 + .5f, MathF.Floor(cell / 2) / 2 + .5f);
+            coals[index] = new(CoalIdBase + (ulong)index, new(x, (float)ground.Height, z), Quaternion.CreateFromAxisAngle(Vector3.UnitY, (float)turn),
+                new(size, size * DecalDepth, size), region, new Color(1, 1, 1, 1), 0, 0, seconds > 0 ? Hot : Vector3.Zero, true, false, false, 0, 0);
+            engine.CameraView.SetDecal(coals[index]);
+        }
+
+        coolSeconds = seconds;
+        coalSeconds = 0;
+        return ReadCoals();
+    }
+
+    /// <summary>Each coal decal's glow as it cools over its own phase of the cycle, placed again by its id.</summary>
+    private void Cool(double seconds)
+    {
+        if (coals.Length == 0 || coolSeconds <= 0) return;
+        coalSeconds += seconds;
+        for (int index = 0; index < coals.Length; index++)
+        {
+            double phase = (coalSeconds / coolSeconds + index * GoldenAngle / (2 * Math.PI)) % 1;
+            float heat = (float)((1 - phase) * (1 - phase));
+            engine.CameraView.SetDecal(coals[index] with { Emission = Hot * heat });
+        }
+    }
+
+    private string ReadCoals()
+    {
+        DecalReadout readout = engine.CameraView.ReadDecals();
+        return FormattableString.Invariant($"decals={readout.Decals} emissive={readout.Emissive} budget={readout.Budget}");
     }
 
     [DebugCommand("heightfield.pick", Description = "Picks the drawn ground along a ray from a point in a direction.")]
@@ -359,11 +431,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void Dispose()
     {
         sky?.Dispose();
-        if (marks is not null)
+        if (marks is not null || coalAtlas is not null)
         {
             // The atlas may not be released while decals sample it.
             engine.CameraView.SetDecalAtlas(default);
-            marks.Dispose();
+            marks?.Dispose();
+            coalAtlas?.Dispose();
+            coalGlow?.Dispose();
         }
         vegetation.Dispose();
         streamer?.Dispose();

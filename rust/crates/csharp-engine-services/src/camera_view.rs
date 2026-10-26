@@ -55,10 +55,8 @@ struct CameraState {
     /// last `SetWetness` and `SetSnow` left them.
     wetness: Option<WetnessDescriptor>,
     snow: Option<SnowDescriptor>,
-    /// The decals placed, by id, with the presentation seconds each is gone
-    /// at (0: it stays); a decal placed this call has 0 until it is
-    /// published (`decal_operations`).
-    decals: BTreeMap<u64, f64>,
+    /// The decals placed, by id.
+    decals: BTreeMap<u64, PlacedDecal>,
     /// The decal atlas's textures, which may not be released while decals
     /// sample them.
     decal_atlas: Option<NativeDecalAtlasRequest>,
@@ -379,9 +377,11 @@ impl RuntimeCameraViewBridge {
         let stars = state
             .stars
             .is_some_and(|stars| stars.catalogue.value == resource || stars.band.value == resource);
-        let decals = state
-            .decal_atlas
-            .is_some_and(|atlas| atlas.color.value == resource || atlas.normals.value == resource);
+        let decals = state.decal_atlas.is_some_and(|atlas| {
+            [atlas.color, atlas.normals, atlas.emission]
+                .iter()
+                .any(|texture| texture.value == resource)
+        });
         stars
             || decals
             || match state.background {
@@ -1383,13 +1383,17 @@ impl RuntimeCameraViewBridge {
             .chain(&color)
             .chain([&request.roughness, &request.normal_strength])
             .all(|value| value.is_finite());
+        let emission = vec3(request.emission);
         let times = [request.life_seconds, request.fade_seconds];
         if !finite
             || !size.iter().all(|value| value.is_finite() && *value > 0.0)
+            || !emission
+                .iter()
+                .all(|value| value.is_finite() && *value >= 0.0)
             || !times.iter().all(|value| value.is_finite() && *value >= 0.0)
         {
             return Err(refused(
-                "a decal needs finite values: a size above 0 along each axis, and a life and fade of 0 or more seconds",
+                "a decal needs finite values: a size above 0 along each axis, an emission of 0 or more, and a life and fade of 0 or more seconds",
             ));
         }
         let staged = self.staged_mut()?;
@@ -1401,7 +1405,13 @@ impl RuntimeCameraViewBridge {
                 "a scene holds at most 4096 decals; remove one before placing another",
             ));
         }
-        staged.state.decals.insert(request.id, 0.0);
+        staged.state.decals.insert(
+            request.id,
+            PlacedDecal {
+                end: 0.0,
+                emissive: emission != [0.0; 3],
+            },
+        );
         staged.decals.push((
             request.id,
             Some(PendingDecal {
@@ -1413,6 +1423,7 @@ impl RuntimeCameraViewBridge {
                     color,
                     roughness: request.roughness.clamp(0.0, 1.0),
                     normal_strength: request.normal_strength.max(0.0),
+                    emission,
                     angle_falloff: request.angle_falloff,
                     on_vegetation: request.on_vegetation,
                     on_animated: request.on_animated_meshes,
@@ -1458,6 +1469,11 @@ impl RuntimeCameraViewBridge {
         NativeDecalReadout {
             decals: state.decals.len() as u32,
             budget: render_model::DecalDescriptor::MAX_DECALS as u32,
+            emissive: state
+                .decals
+                .values()
+                .filter(|placed| placed.emissive)
+                .count() as u32,
         }
     }
 
@@ -1895,6 +1911,15 @@ fn composition_error(
 /// The call's background, fog, tone mapping, bloom, auto exposure, colour
 /// grading, atmosphere, sun shaft and sky light selections as one frame, or
 /// None when the call selected none of them.
+/// A placed decal: the presentation seconds it is gone at (0: it stays; a
+/// decal placed this call has 0 until it is published, `decal_operations`),
+/// and whether it emits light (`ReadDecals`).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PlacedDecal {
+    end: f64,
+    emissive: bool,
+}
+
 /// A decal as the product placed it: its fade is stamped on the
 /// presentation timeline when the call is published.
 #[derive(Debug, Clone, Copy)]
@@ -1926,8 +1951,8 @@ pub(crate) fn decal_operations(call: &mut RuntimeCameraViewCall, now: f64) -> Ve
                     decal.fade_end = decal.fade_start + fade.max(DECAL_SHORTEST_FADE);
                 }
                 // A decal placed and removed in the call is not published.
-                if let Some(end) = call.state.decals.get_mut(&id) {
-                    *end = decal.fade_end;
+                if let Some(placed) = call.state.decals.get_mut(&id) {
+                    placed.end = decal.fade_end;
                     operations.push(RenderDiff::SetDecal { id, decal });
                 }
             }
@@ -1938,7 +1963,7 @@ pub(crate) fn decal_operations(call: &mut RuntimeCameraViewCall, now: f64) -> Ve
         .state
         .decals
         .iter()
-        .filter(|(_, end)| **end > 0.0 && **end <= now)
+        .filter(|(_, placed)| placed.end > 0.0 && placed.end <= now)
         .map(|(id, _)| *id)
         .collect();
     for id in gone {

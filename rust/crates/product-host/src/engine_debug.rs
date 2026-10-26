@@ -228,6 +228,9 @@ pub struct ProductHostDecalStatistics {
     pub build_micros: f64,
     /// A normal atlas bends the surfaces.
     pub normals: bool,
+    /// Decals that emit light, and whether an emission atlas gives it.
+    pub emissive: u32,
+    pub emission: bool,
 }
 
 /// The water pass's view of the scene: whether water materials can absorb,

@@ -1164,6 +1164,8 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             upload_bytes: readout.decals.upload_bytes,
             build_micros: readout.decals.build_micros,
             normals: readout.decals.normals,
+            emissive: readout.decals.emissive,
+            emission: readout.decals.emission,
         },
         water: ProductHostWaterStatistics {
             refused: readout.water.refused,

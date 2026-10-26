@@ -856,7 +856,12 @@ pub struct NativeSkyBackgroundBlendRequest {
 /// opacity); without an atlas the decal is its colour. `roughness` above 0
 /// is the roughness where it covers (0 keeps the surface's), and
 /// `normal_strength` how strongly the normal atlas bends the surface.
-/// `angle_falloff` fades it on faces turning away from the box's +y (whole
+/// `emission` (linear RGB, each 0 or more, may exceed 1 so it blooms) is
+/// light the decal emits where it covers: times the emission atlas's texel,
+/// or the colour atlas's without one, by the same cover as its colour,
+/// added after the surface is lit, so shadows and night leave it glowing; it
+/// lights nothing else. Zero emits none. Placing the decal again by `id`
+/// changes it, so coals can cool. `angle_falloff` fades it on faces turning away from the box's +y (whole
 /// to about 60 degrees, none from about 80), so a step's riser or a wall
 /// does not show the projection smeared. Vegetation copies and animated
 /// meshes are passed by unless `on_vegetation` or `on_animated_meshes`.
@@ -877,6 +882,8 @@ pub struct NativeDecalRequest {
     pub color: NativeColor,
     pub roughness: f32,
     pub normal_strength: f32,
+    /// Linear RGB light it emits where it covers (0: none).
+    pub emission: NativeVec3,
     pub angle_falloff: bool,
     pub on_vegetation: bool,
     pub on_animated_meshes: bool,
@@ -892,21 +899,27 @@ pub struct NativeDecalRemoval {
 }
 
 /// The textures decals sample: `color` the atlas their regions come from
-/// (0 removes it, and each decal draws in its colour), and `normals` a
+/// (0 removes it, and each decal draws in its colour), `normals` a
 /// tangent-space normal atlas laid out the same (0: none), its red along the
-/// box's +x and green up the region.
+/// box's +x and green up the region, and `emission` an atlas laid out the
+/// same whose linear RGB times a decal's `emission` is the light it emits
+/// (0: the colour atlas gives it). All three are sampled with the colour
+/// atlas's filter.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDecalAtlasRequest {
     pub color: NativeRenderResourceReference,
     pub normals: NativeRenderResourceReference,
+    pub emission: NativeRenderResourceReference,
 }
 
-/// The decals placed as this call leaves them, and the most a scene holds.
-/// Their GPU cost is `engine.renderer`'s `gpu.decals`.
+/// The decals placed as this call leaves them, the most a scene holds, and
+/// how many of them emit light. Their GPU cost is `engine.renderer`'s
+/// `gpu.decals`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeDecalReadout {
     pub decals: u32,
     pub budget: u32,
+    pub emissive: u32,
 }

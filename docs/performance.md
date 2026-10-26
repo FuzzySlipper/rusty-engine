@@ -103,7 +103,8 @@ with the adapter's compute limits beside them:
 resolutions, and why DLSS is refused while asked for. `gpu.water.refused`
 says why a device has no copy of the scene's colour for water, if it has
 none. `gpu.decals` is the [projected decals](lighting-and-sky.md#projected-decals)
-(their count, grid entries, busiest cell, bytes and last rebuild),
+(their count, grid entries, busiest cell, bytes, last rebuild and how many
+emit),
 `gpu.wetness` the [wetness](lighting-and-sky.md#wet-surfaces) and
 `gpu.snow` the [snow cover](lighting-and-sky.md#snow-cover) in force, whose
 shading is part of the `world` pass. `gpu.indirectLight`
