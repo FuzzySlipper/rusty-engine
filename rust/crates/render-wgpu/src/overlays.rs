@@ -1142,10 +1142,18 @@ impl Renderer {
                 depth,
                 left,
             } => {
+                // A hand with no finger between its two names its index as
+                // the middle: the centre heads midway between them.
+                let between = middle == index;
                 let (layer, wrist, frame) = joint(entity, wrist)?;
                 let (_, index, _) = joint(entity, index)?;
                 let (_, middle, _) = joint(entity, middle)?;
                 let (_, pinky, _) = joint(entity, pinky)?;
+                let middle = if between {
+                    index.lerp(pinky, 0.5)
+                } else {
+                    middle
+                };
                 // Index then pinky about the wrist turns out of a right
                 // palm.
                 let normal = (index - wrist).cross(pinky - wrist).try_normalize()?

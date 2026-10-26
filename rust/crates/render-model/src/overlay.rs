@@ -177,7 +177,9 @@ pub enum Landmark {
     /// `middle` finger's base and `depth` metres out of the palm, with the
     /// palm's normal as its axis: across the `index` and `pinky` bases (a
     /// hand's outermost fingers; a three-fingered hand's last is its
-    /// pinky), turned for a `left` hand. Its frame is the wrist's. It aims
+    /// pinky), turned for a `left` hand. A two-fingered hand names its
+    /// `index` as its `middle`, and the centre heads midway between its
+    /// index and pinky bases. Its frame is the wrist's. It aims
     /// from its joints' plane, `depth` under its point, so a point inside a
     /// fist round a handle still aims from the palm.
     Palm {

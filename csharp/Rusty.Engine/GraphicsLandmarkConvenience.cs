@@ -33,7 +33,9 @@ public readonly partial record struct Landmark
     /// A palm's centre, <paramref name="along"/> of the way from the <paramref name="wrist"/> to the
     /// <paramref name="middle"/> finger's base and <paramref name="depth"/> metres out of the palm,
     /// with the palm's normal (across the <paramref name="index"/> and <paramref name="pinky"/>
-    /// bases, the hand's outermost fingers) as its axis. Its aim is taken from the joints' plane,
+    /// bases, the hand's outermost fingers) as its axis. A two-fingered hand passes its index base
+    /// as <paramref name="middle"/>, and the centre heads midway between its index and pinky bases.
+    /// Its aim is taken from the joints' plane,
     /// <paramref name="depth"/> under the point, so a point inside a fist round a handle still aims
     /// from the palm.
     /// </summary>
@@ -81,7 +83,8 @@ public enum Digit
 /// palm's centre and normal, the web between thumb and index, the knuckles' line, a digit's pad and
 /// its joints. Each chain runs from the digit's base, fixed to the hand, to its last joint. A
 /// three-fingered hand has an empty <see cref="Ring"/> chain and names its last finger the
-/// <see cref="Pinky"/>: its palm and knuckles then run across the fingers it has.
+/// <see cref="Pinky"/>; a two-fingered one has empty <see cref="Middle"/> and <see cref="Ring"/>
+/// chains. Its palm and knuckles then run across the fingers it has.
 /// </summary>
 public sealed record HandRig(ulong Entity, HandSide Side, uint Wrist, uint[] Thumb, uint[] Index, uint[] Middle, uint[] Ring, uint[] Pinky)
 {
@@ -127,9 +130,12 @@ public sealed record HandRig(ulong Entity, HandSide Side, uint Wrist, uint[] Thu
         _ => Pinky,
     };
 
-    /// <summary>The palm's centre, with its normal (out of the palm) as the axis.</summary>
+    /// <summary>
+    /// The palm's centre, toward the middle finger's base (midway between the index and pinky bases
+    /// on a two-fingered hand), with its normal (out of the palm) as the axis.
+    /// </summary>
     public Landmark Palm(float along = PalmAlong, float depth = PalmDepth) =>
-        Landmark.Palm(Entity, Wrist, Index[0], Middle[0], Pinky[0], along, depth, Side);
+        Landmark.Palm(Entity, Wrist, Index[0], Middle.Length > 0 ? Middle[0] : Index[0], Pinky[0], along, depth, Side);
 
     /// <summary>
     /// The knuckles' line, this much of the way from the pinky's base to the index finger's, its axis

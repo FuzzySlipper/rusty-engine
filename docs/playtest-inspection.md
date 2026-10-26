@@ -451,7 +451,9 @@ A `Landmark` is a point with an axis and a frame, found as drawn:
 - `Landmark.Palm(entity, wrist, index, middle, pinky, along, depth, side)`:
   `along` of the way from the wrist to the middle finger's base and `depth`
   metres out of the palm, its axis the palm's normal across the index and
-  pinky bases (out of a right palm, turned for a left one). Distances are
+  pinky bases (out of a right palm, turned for a left one). A two-fingered
+  hand passes its index base as the middle, and the centre heads midway
+  between its index and pinky bases. Distances are
   measured from that point; its aim is taken from the joints' plane, `depth`
   under it, so a fist round a handle, whose point lies inside the fist on
   or beside the handle's line, still reads how its palm faces the handle.
@@ -465,8 +467,9 @@ the index: a fist's grip runs along it), `Pad(digit)` (past a digit's last
 joint), `Joint(digit, n)` and `AtWrist()`. Their default measures are
 `HandRig.PalmAlong`, `PalmDepth`, `WebAmount`, `KnucklesAmount` and
 `PadReach`. A three-fingered hand passes an empty ring chain and names its
-last finger the pinky; its palm and knuckles then run across the fingers it
-has, and `Pad(Digit.Ring)` has no finger to find.
+last finger the pinky; a two-fingered one passes empty middle and ring
+chains. Its palm and knuckles then run across the fingers it has, and `Pad`
+of a missing digit has no finger to find.
 
 ```csharp
 HandRig hand = HandRig.FromJoints(engine.Animation.ReadJoints(arms).Span, ArmsId, HandSide.Right,
@@ -499,8 +502,7 @@ names the `step` the measured scene showed.
 What stays approximate: a landmark is where the renderer drew the joints, not
 the skinned surface; `Beyond` assumes the rig's last bone runs along its
 joint as the bone before it does; a palm and the knuckles need index and
-pinky bases and a palm a middle one, so a hand with fewer than three fingers
-has neither.
+pinky bases, so a one-fingered hand has neither.
 `fixtures/csharp-skeleton-poses` publishes `fixture.grip`: one pair within
 tolerance, one outside, one aimed.
 
