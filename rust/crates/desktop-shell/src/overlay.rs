@@ -182,7 +182,8 @@ const SELECT_CANCELLED: &str = "rusty-desktop:select-cancel";
 /// - a change inside an inline `<svg>` (an attribute, child or text below
 ///   the `<svg>` element) redraws it. Servo draws an `<svg>` from its
 ///   serialized markup and redraws it only when the `<svg>` element itself
-///   changes, so the shim touches that element;
+///   changes, so the shim touches that element. A click in an `<svg>`
+///   leaves no caret there: Servo would draw the picture selected;
 /// - a click on a `date`, `time` or `datetime-local` input, or Alt+Down on
 ///   one, opens a calendar and hour and minute lists, placed as a `<select>`'s
 ///   list is; a choice writes the input's value with `input` and `change`
@@ -257,6 +258,18 @@ const SERVO_SHIM: &str = r#"(() => {
       svg.toggleAttribute('data-rusty-redraw');
     }
   }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
+  // A click in an <svg> leaves Servo's caret in it, and Servo then draws the
+  // whole picture as selected when it next redraws it. Nothing in an <svg>
+  // takes a caret, so it is dropped.
+  const dropSvgCaret = () => {
+    const selection = getSelection();
+    if (!selection || selection.rangeCount === 0 || !selection.isCollapsed) return;
+    const node = selection.anchorNode;
+    const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+    if (element && outermostSvg(element)) selection.removeAllRanges();
+  };
+  document.addEventListener('selectionchange', dropSvgCaret);
+  addEventListener('pointerup', () => setTimeout(dropSvgCaret, 0), true);
   let open = null;
   const close = () => {
     if (!open) return;

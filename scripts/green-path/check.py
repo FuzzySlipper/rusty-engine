@@ -821,6 +821,9 @@ class Check:
             return
         servo = self.args.window_ui == 'servo'
         self.input_geometry()
+        # A click in the picture first: Servo would leave its caret there and
+        # draw the picture selected once it changes.
+        self.at(700, 120); self.at(705, 122); self.click()
         self.at(1100, 650); self.at(1105, 652, 0.5)
         loaded = self.shot('svg loaded')
         for change in ('names', 'shown', 'fill', 'child'):

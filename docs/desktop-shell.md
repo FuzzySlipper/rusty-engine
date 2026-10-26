@@ -176,13 +176,12 @@ markup and rasterizes that with resvg. What follows from that:
   Engine's Servo carries a fix to Servo 0.7's SVG font cache, without which
   text in a font that had drawn once was lost when the picture was redrawn
   ([servo-script patch](../rust/vendor/servo-script/RUSTY_PATCH.md)).
-- **Alpha.** The page is about half transparent where an `<svg>` is, shapes
-  and background alike. A Wayland window lets the desktop show through
-  there; an X11 window does not.
+- **Clicks.** A click in an `<svg>` leaves Servo's caret in it, and Servo
+  then draws the whole picture selected (tinted) when it next redraws it.
+  The shell's page script drops a caret left in an `<svg>`.
 
 `scripts/green-path/check.py --only svg` checks each point from the window's
-pixels; under Chromium every item passes. On the `wayland` route the alpha
-fails Servo's paint items.
+pixels, after a click in the `<svg>`; under Chromium every item passes.
 
 ## Running
 
