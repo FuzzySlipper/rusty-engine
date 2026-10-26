@@ -661,8 +661,9 @@ impl UiOverlay {
 
     /// Evaluate live debug's script `id` in the page, in its global scope.
     /// The page answers on the console with the script's completion value,
-    /// awaited when it is a promise, as `{"value": ...}` in JSON (`undefined`
-    /// reads `null`), or what it threw as `{"error": ...}`. Either carries
+    /// awaited when it is a promise and serialized as soon as it settles, as
+    /// `{"value": ...}` in JSON (`undefined` reads `null`), or what it threw
+    /// or what failed to serialize as `{"error": ...}`. Either carries
     /// `renderedAtUnixMs`: when the page had laid out what the finished script
     /// changed (two animation frames later), or `null` when no frame came
     /// within 250 ms or the page unloaded first (the script navigated away).
@@ -670,15 +671,18 @@ impl UiOverlay {
     pub(crate) fn evaluate(&mut self, id: u64, source: &str) -> Result<(), String> {
         // A Rust string's debug form is a valid JavaScript string literal.
         let script = format!(
-            "(async () => {{ let answer; \
+            "(async () => {{ let body; \
              try {{ const value = await (0, eval)({source:?}); \
-             answer = {{ value: value === undefined ? null : value }}; }} \
-             catch (error) {{ answer = {{ error: String(error) }}; }} \
+             body = JSON.stringify({{ value: value === undefined ? null : value }}); }} \
+             catch (error) {{ body = JSON.stringify({{ error: String(error) }}); }} \
              let sent = false; \
              const send = (rendered) => {{ if (sent) return; sent = true; \
-               answer.renderedAtUnixMs = rendered; \
-               console.info('{PAGE_ANSWER}{id} ' + JSON.stringify(answer)); }}; \
-             addEventListener('pagehide', () => send(null), {{ once: true }}); \
+               removeEventListener('pagehide', unload); \
+               const field = '\"renderedAtUnixMs\":' + JSON.stringify(rendered); \
+               console.info('{PAGE_ANSWER}{id} ' + \
+                 (body === '{{}}' ? '{{' + field + '}}' : body.slice(0, -1) + ',' + field + '}}')); }}; \
+             const unload = () => send(null); \
+             addEventListener('pagehide', unload); \
              requestAnimationFrame(() => requestAnimationFrame(() => send(Date.now()))); \
              setTimeout(() => send(null), 250); }})();"
         );
