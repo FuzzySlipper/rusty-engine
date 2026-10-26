@@ -109,14 +109,6 @@ class X11Input:
         code = self.x.XKeysymToKeycode(self.d, self.x.XStringToKeysym(KEYS[name][0].encode()))
         self.xt.XTestFakeKeyEvent(self.d, code, down, 0); self.flush()
 
-    def steal_focus(self):
-        """Map another window over the window for a moment."""
-        root = self.x.XDefaultRootWindow(self.d)
-        other = self.x.XCreateSimpleWindow(self.d, ctypes.c_ulong(root), 100, 100, 300, 200, 0, 0, 0)
-        self.x.XMapRaised(self.d, ctypes.c_ulong(other)); self.flush(); time.sleep(1.5)
-        self.x.XDestroyWindow(self.d, ctypes.c_ulong(other)); self.flush(); time.sleep(1.5)
-        return True
-
 
 class WaylandInput:
     """KWin's org_kde_kwin_fake_input over the Wayland wire protocol, with no
@@ -197,9 +189,6 @@ class WaylandInput:
     def key(self, name, down):
         self.send(self.fake, 10, struct.pack('<II', KEYS[name][1], int(down)))
 
-    def steal_focus(self):
-        return False
-
 
 class WindowsInput:
     def __init__(self, title):
@@ -244,6 +233,7 @@ class WindowsInput:
         rect = self.wintypes.RECT()
         self.user32.GetClientRect(window, ctypes.byref(rect))
         self.origin = (point.x, point.y)
+        self.window = window
         return rect.right, rect.bottom
 
     def move(self, px, py):
@@ -269,8 +259,71 @@ class WindowsInput:
         union.ki = self.KEYBDINPUT(0, scan, flags, 0, 0)
         self.send(self.INPUT(1, union))
 
-    def steal_focus(self):
-        return False
+
+# ---------------------------------------------------------------- window control
+
+class KWinWindow:
+    """Resizes and minimizes the product's window through KWin scripting
+    (D-Bus), for X11 and Wayland windows alike."""
+
+    def __init__(self, title, bus_env, scratch):
+        self.title, self.env, self.scratch, self.runs = title, dict(os.environ, **bus_env), scratch, 0
+
+    def script(self, body):
+        self.runs += 1
+        name = f'green-path-{os.getpid()}-{self.runs}'
+        path = os.path.join(self.scratch, name + '.js')
+        with open(path, 'w') as script:
+            script.write(f'const window = workspace.windowList().find((w) => w.caption === {json.dumps(self.title)});\n'
+                         f'if (window) {{ {body} }}\n')
+        call = lambda *words: subprocess.run(['dbus-send', '--session', '--print-reply', '--dest=org.kde.KWin', *words],
+                                             env=self.env, capture_output=True, text=True, timeout=20)
+        loaded = call('/Scripting', 'org.kde.kwin.Scripting.loadScript', f'string:{path}', f'string:{name}')
+        number = loaded.stdout.split()[-1] if 'int32' in loaded.stdout else None
+        if number is None:
+            return False
+        ran = call(f'/Scripting/Script{number}', 'org.kde.kwin.Script.run')
+        time.sleep(0.8)
+        call('/Scripting', 'org.kde.kwin.Scripting.unloadScript', f'string:{name}')
+        return ran.returncode == 0
+
+    def resize(self, width, height):
+        """Make the client area `width` by `height`."""
+        return self.script(
+            'const frame = window.frameGeometry, client = window.clientGeometry;'
+            f'window.frameGeometry = {{ x: frame.x, y: frame.y, width: {width} + frame.width - client.width, '
+            f'height: {height} + frame.height - client.height }};')
+
+    def focus_away(self):
+        """Minimize the window for a moment, then give it focus back."""
+        if not self.script('window.minimized = true;'):
+            return False
+        time.sleep(1.5)
+        return self.script('window.minimized = false; workspace.activeWindow = window;')
+
+
+class Win32Window:
+    def __init__(self, route):
+        self.route = route
+
+    def resize(self, width, height):
+        user32, wintypes = self.route.user32, self.route.wintypes
+        frame, client = wintypes.RECT(), wintypes.RECT()
+        user32.GetWindowRect(self.route.window, ctypes.byref(frame))
+        user32.GetClientRect(self.route.window, ctypes.byref(client))
+        extra = (frame.right - frame.left - client.right, frame.bottom - frame.top - client.bottom)
+        ok = user32.MoveWindow(self.route.window, frame.left, frame.top, width + extra[0], height + extra[1], True)
+        time.sleep(0.8)
+        return bool(ok)
+
+    def focus_away(self):
+        user32 = self.route.user32
+        user32.ShowWindow(self.route.window, 6)  # SW_MINIMIZE
+        time.sleep(1.5)
+        user32.ShowWindow(self.route.window, 9)  # SW_RESTORE
+        user32.SetForegroundWindow(self.route.window)
+        time.sleep(0.8)
+        return True
 
 
 # ---------------------------------------------------------------- gamepads
@@ -370,8 +423,9 @@ class Runtime:
 # ---------------------------------------------------------------- the check
 
 class Check:
-    def __init__(self, args, runtime, route, pad_kind, report_log, port, shots):
+    def __init__(self, args, runtime, route, control, pad_kind, report_log, port, shots):
         self.args, self.runtime, self.input, self.pad_kind = args, runtime, route, pad_kind
+        self.control = control
         self.log, self.port, self.shots = report_log, port, shots
         self.results = []
 
@@ -414,6 +468,17 @@ class Check:
                 return
             time.sleep(0.2)
         raise SystemExit(f'the window did not load {url}')
+
+    def reload(self):
+        before = len(self.events())
+        self.runtime.eval('setTimeout(() => location.reload(), 50); "reloading"')
+        deadline = time.time() + 20
+        while time.time() < deadline:
+            if any(e.get('event') == 'loaded' for e in self.events()[before:]):
+                time.sleep(1.0)
+                return
+            time.sleep(0.2)
+        raise SystemExit('the window did not reload its page')
 
     def page_size(self):
         size = self.runtime.eval('[innerWidth, innerHeight]').get('value')
@@ -463,6 +528,14 @@ class Check:
             """After each item the page still takes a click and a key."""
             self.mark(name + ': check')
             self.at(1080, 640); self.click(); self.key('a')
+            # The page's reports arrive over HTTP: wait for both before the
+            # next item's marker.
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                checked = self.step_events(name + ': check')
+                if any(e.get('event') == 'ping' for e in checked) and any(e.get('event') == 'keydown' for e in checked):
+                    break
+                time.sleep(0.1)
 
         def press(i, name, button='left', then=None, wait=1.5):
             self.mark(name)
@@ -494,7 +567,9 @@ class Check:
         def judge(name, test, detail):
             events = self.step_events(name)
             checked = self.step_events(name + ': check')
-            took = any(e.get('event') in ('ping', 'keydown') for e in checked) or name == 'same-tab link'
+            # Both the click and the key must still reach the page.
+            took = name == 'same-tab link' or (any(e.get('event') == 'ping' for e in checked)
+                                               and any(e.get('event') == 'keydown' and e.get('key') == 'a' for e in checked))
             ok = bool(test(events)) and took
             self.record('audit', name, ok, detail if took else detail + '; the page stopped taking input')
 
@@ -509,8 +584,9 @@ class Check:
         judge('fullscreen', has('fullscreen granted', element=True), 'fills the view')
         judge('clipboard', lambda e: has('clipboard write ok')(e) and not any(
             x.get('event') == 'clipboard read ok' and x.get('value') for x in e), 'write works, read denied or empty')
-        judge('notification', lambda e: not has('notification permission', value='granted')(e), 'not granted')
-        judge('geolocation', lambda e: not has('geolocation granted')(e), 'not granted')
+        judge('notification', lambda e: any(x.get('event') == 'notification permission' and x.get('value') in ('denied', 'default')
+                                            for x in e), 'requestPermission answers denied')
+        judge('geolocation', has('geolocation refused', code=1), 'getCurrentPosition fails with PERMISSION_DENIED')
         judge('gamepads', has('gamepads'), 'navigator.getGamepads answers')
         judge('dialog.showModal', has('dialog open', open=True), 'opens')
         judge('target=_blank link', lambda e: warned('new window')(e) and not has('loaded', url='/other')(e), 'warns, opens nothing')
@@ -521,7 +597,7 @@ class Check:
         judge('wheel over list', lambda e: any(x.get('event') == 'list scrolled' and x.get('top', 0) > 0 for x in e), 'the list scrolls')
         judge('text entry', has('text input', value='hi'), 'typing reaches the input')
         judge('Tab focus', has('keydown', key='Tab'), 'Tab reaches the page')
-        judge('download link', lambda e: True, 'nothing downloads')
+        judge('download link', lambda e: not has('loaded')(e), 'the page stays (whether a file was written is not observed)')
         judge('beforeunload + reload', has('loaded', url='/audit'), 'reloads with no prompt')
         judge('Ctrl+P', has('keydown', key='p'), 'an ordinary key')
         judge('same-tab link', has('loaded', url='/other'), 'replaces the page')
@@ -542,7 +618,7 @@ class Check:
         self.chord('Shift_L', 'a')
         self.key('d', 0.3, hold=0.8)
         self.mark('wheel'); self.at(600, 400); self.input.wheel(1); time.sleep(0.3); self.input.wheel(-1); time.sleep(0.3)
-        self.mark('focus loss'); stolen = self.input.steal_focus()
+        self.mark('focus loss'); stolen = self.control.focus_away()
         self.mark('click back'); self.at(600, 400); self.click(pause=1.0)
         locked = [e for e in self.step_events('pointer lock') if e.get('event') == 'pointerlockchange']
         ended = [e for e in self.step_events('Escape ends the lock') if e.get('event') == 'pointerlockchange']
@@ -568,10 +644,13 @@ class Check:
         self.record('probe', 'wheel', bool(turned) and turned[0] and not turned[-1]
                     and turned == sorted(turned, reverse=True), f'deltaY {wheel}')
         if stolen:
-            blur = any(e.get('event') == 'blur' and e.get('hasFocus') is False for e in self.step_events('focus loss'))
-            self.record('probe', 'focus loss', blur, 'blur, hasFocus() false')
+            events = self.step_events('focus loss')
+            blur = [i for i, e in enumerate(events) if e.get('event') == 'blur' and e.get('hasFocus') is False]
+            back = [i for i, e in enumerate(events) if e.get('event') == 'focus' and e.get('hasFocus') is True]
+            self.record('probe', 'focus loss', bool(blur), 'minimized: blur, hasFocus() false')
+            self.record('probe', 'focus back', bool(blur and back and back[-1] > blur[0]), 'restored: focus, hasFocus() true')
         else:
-            self.record('probe', 'focus loss', None, 'this route opens no other window')
+            self.record('probe', 'focus loss', None, 'the window could not be minimized (no KWin scripting)')
 
     def drag(self):
         self.at(130, 130); self.at(140, 140, 0.3)
@@ -587,32 +666,58 @@ class Check:
         self.record('drag', 'drag and drop', bool(up and up[0].get('dropped') and up[0].get('moves', 0) >= 10),
                     f"{up[0].get('moves') if up else 0} moves, dropped in the slot" if up else 'no pointerup')
 
+    def list_inside(self):
+        """Where the shell's open list host sits in the view, under Servo."""
+        place = self.runtime.eval('(() => { const host = document.documentElement.lastElementChild; '
+                                  'if (!host || host === document.body) return null; '
+                                  'const box = host.getBoundingClientRect(); '
+                                  'return [box.left, box.top, box.right, box.bottom, innerWidth, innerHeight]; })()').get('value')
+        if not place:
+            return False, 'no list open'
+        left, top, right, bottom, width, height = place
+        inside = left >= 0 and top >= 0 and right <= width + 0.5 and bottom <= height + 0.5
+        return inside, f'list {left:.0f},{top:.0f}..{right:.0f},{bottom:.0f} in a {width}x{height} view'
+
     def review(self):
+        full = self.input_geometry()
+        # A click on a row, in the full window, where both engines open the
+        # middle select's list below it.
+        top = round(full[1] / 2 - 12)
+        self.at(600, 300); self.at(610, 305)
+        self.mark('middle: click a row'); self.at(110, top + 10); self.at(115, top + 12); self.click(pause=1.0)
+        self.at(100, top + 24 + 40); self.at(100, top + 24 + 42); self.click(pause=0.8)
+        # A short window, where a long list fits neither below nor above the
+        # select in the middle; the page places that select when it loads.
+        short = self.control.resize(full[0], 400)
+        if short:
+            self.reload()
         width, height = self.input_geometry()
         top = round(height / 2 - 12)
+        servo = self.args.window_ui == 'servo'
         self.at(600, 300); self.at(610, 305)
         self.mark('middle: last option by keys'); self.at(110, top + 10); self.at(115, top + 12); self.click(pause=1.0)
         self.shot('review middle open')
+        placed = self.list_inside() if servo else (None, 'Chromium places its own popup, outside the page')
         for _ in range(45):
             self.key('Down', 0.02)
         time.sleep(0.4); self.key('Return', 0.6)
-        # The list opens below the select where 20em fits, else on the side with more room.
-        below = height - (top + 24)
-        downward = below >= 260 or below >= top
-        self.mark('middle: click a row'); self.at(115, top + 12); self.click(pause=1.0)
-        row = top + 24 + 40 if downward else top - 40
-        self.at(100, row); self.at(100, row + 2); self.click(pause=0.8)
         self.mark('multi: keys toggle, a click outside answers'); self.at(335, 50); self.at(340, 52); self.click(pause=1.0)
         self.key('Up'); self.key('space'); self.key('Down'); self.key('Down'); self.key('space')
         self.at(900, 300); self.click(pause=0.8)
         self.mark('multi: Escape keeps the choice'); self.at(340, 52); self.click(pause=1.0)
         self.key('Down'); self.key('space'); self.key('Escape', 0.6)
-        self.mark('edge select'); self.at(width - 64, height - 15); self.at(width - 60, height - 14); self.click(pause=1.0)
-        self.shot('review edge open'); self.key('Escape', 0.6)
+        self.mark('edge select by keys'); self.at(width - 64, height - 15); self.at(width - 60, height - 14); self.click(pause=1.0)
+        self.shot('review edge open')
+        edge_placed = self.list_inside() if servo else (None, 'Chromium places its own popup, outside the page')
+        for _ in range(29):
+            self.key('Down', 0.02)
+        time.sleep(0.4); self.key('Return', 0.6)
         changes = lambda step: [e.get('selected') for e in self.step_events(step) if e.get('event') == 'change']
         # Chromium changes the value as the arrow keys move; the last change counts.
         keys = changes('middle: last option by keys')
-        self.record('review', 'select by keys', keys[-1:] == [[39]], f'last change {keys[-1:]} (the last of 40 options)')
+        where = f'in a {width}x{height} window' + ('' if short else ' (it could not be made short)')
+        self.record('review', 'middle select list inside the view', placed[0] if short else None, f'{placed[1]}; {where}')
+        self.record('review', 'select by keys', keys[-1:] == [[39]], f'last change {keys[-1:]} (the last of 40 options), {where}')
         clicked = changes('middle: click a row')
         self.record('review', 'select by a click on a row', bool(clicked) and clicked[-1] != [39], f'change {clicked}')
         if self.args.window_ui == 'chromium':
@@ -624,7 +729,12 @@ class Check:
             self.record('review', 'select multiple', multi == [[0, 1, 2]], f'change {multi}')
             kept = changes('multi: Escape keeps the choice')
             self.record('review', 'Escape keeps the choice', kept == [], f'change {kept}')
+        self.record('review', 'edge select list inside the view', edge_placed[0], edge_placed[1])
+        edge = changes('edge select by keys')
+        self.record('review', 'edge select by keys', edge[-1:] == [[29]], f'last change {edge[-1:]} (the last of 30 options)')
         self.gamepad()
+        if short:
+            self.control.resize(*full)
 
     def gamepad(self):
         width, height = self.input_geometry()
@@ -716,6 +826,9 @@ class Check:
                     f'on the window thread; {final["uiRepaints"]["errors"]} import errors')
 
     def input_geometry(self):
+        if isinstance(self.input, WaylandInput):
+            # The page knows its size; the window may have been resized.
+            self.input.size = tuple(self.runtime.eval('[innerWidth, innerHeight]')['value'])
         return self.input.geometry()
 
 
@@ -767,7 +880,14 @@ def main():
     open(log, 'w').close()
     env = dict(os.environ)
     kwin = None
-    if args.route in ('x11', 'wayland'):
+    display, socket_name = os.environ.get('DISPLAY'), os.environ.get('WAYLAND_DISPLAY')
+    if args.route in ('x11', 'wayland') and args.origin:
+        # A running product is on this session's display; KWin scripting and
+        # fake input need this session's KWin to allow them.
+        if not (display if args.route == 'x11' else socket_name):
+            parser.error(f'--origin on the {args.route} route needs '
+                         f'{"DISPLAY" if args.route == "x11" else "WAYLAND_DISPLAY"} of the product\'s session')
+    elif args.route in ('x11', 'wayland'):
         kwin, socket_name, display, args.compositor_env = private_kwin(args.out)
         if args.route == 'x11':
             env['DISPLAY'] = display
@@ -790,8 +910,9 @@ def main():
         else:
             route = WindowsInput(runtime.title)
             route.geometry()
+        control = Win32Window(route) if args.route == 'windows' else KWinWindow(runtime.title, args.compositor_env, args.out)
         pad = 'uinput' if args.route != 'windows' and os.access('/dev/uinput', os.W_OK) else 'vigem' if args.vigem_pad else None
-        check = Check(args, runtime, route, pad, log, port, os.path.join(args.out, 'shots'))
+        check = Check(args, runtime, route, control, pad, log, port, os.path.join(args.out, 'shots'))
         for page in args.only.split(','):
             print(f'{page}:', flush=True)
             check.load(page)

@@ -65,7 +65,17 @@ const PAGE_SHIM: &str = r#"(() => {
   window.__rustyDesktopFocus = (focused) => {
     if (windowFocused === focused) return;
     windowFocused = focused;
-    window.dispatchEvent(new FocusEvent(focused ? 'focus' : 'blur'));
+    if (!focused) return window.dispatchEvent(new FocusEvent('blur'));
+    // Chromium takes the focus the shell gives it a moment later: the page
+    // hears focus once document.hasFocus() reads true, as in a browser, or
+    // after 250 ms.
+    const asked = performance.now();
+    const tell = () => {
+      if (!windowFocused) return;
+      if (hasFocus.call(document) || performance.now() - asked > 250) window.dispatchEvent(new FocusEvent('focus'));
+      else setTimeout(tell, 10);
+    };
+    tell();
   };
   const change = () => document.dispatchEvent(new Event('pointerlockchange'));
   Object.defineProperty(Document.prototype, 'pointerLockElement', {
@@ -166,7 +176,9 @@ const SELECT_CANCELLED: &str = "rusty-desktop:select-cancel";
 /// `<select>`'s list itself; Servo does neither:
 ///
 /// - `window.open` and `target="_blank"` links warn and open nothing, as
-///   they do in Chromium's page;
+///   they do in Chromium's page; download links warn and download nothing;
+///   `Notification` and `navigator.geolocation`, which Servo lacks, deny at
+///   once;
 /// - a click on a `date`, `time` or `datetime-local` input, or Alt+Down on
 ///   one, opens a calendar and hour and minute lists, placed as a `<select>`'s
 ///   list is; a choice writes the input's value with `input` and `change`
@@ -191,6 +203,31 @@ const SERVO_SHIM: &str = r#"(() => {
     event.preventDefault();
     newWindow(link.href);
   }, true);
+  // Servo ignores a link's download attribute and would load the file in
+  // place of the page; nothing downloads, as in Chromium's page.
+  document.addEventListener('click', (event) => {
+    const link = event.target instanceof Element && event.target.closest('a[download]');
+    if (!link) return;
+    event.preventDefault();
+    console.warn(`rusty desktop shell: ${link.href} does not download in the desktop window. (docs/desktop-shell.md#browser-features-in-the-window)`);
+  }, true);
+  // Servo has no Notification or Geolocation API; they deny at once, as in
+  // Chromium's page, rather than being missing.
+  if (!('Notification' in window)) {
+    window.Notification = class Notification extends EventTarget {
+      static permission = 'denied';
+      static requestPermission(callback) { callback?.('denied'); return Promise.resolve('denied'); }
+      constructor() { super(); throw new TypeError('Notifications are denied in the desktop window'); }
+    };
+  }
+  if (!navigator.geolocation) {
+    const denied = (error) => error?.({ code: 1, message: 'Geolocation is denied in the desktop window', PERMISSION_DENIED: 1 });
+    Object.defineProperty(navigator, 'geolocation', { value: {
+      getCurrentPosition: (_, error) => denied(error),
+      watchPosition: (_, error) => { denied(error); return 0; },
+      clearWatch: () => {},
+    } });
+  }
   let open = null;
   const close = () => {
     if (!open) return;

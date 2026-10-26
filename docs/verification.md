@@ -171,15 +171,19 @@ python3 scripts/green-path/check.py --route x11 --window-ui servo \
 - **What runs.** With `--runtime` the check starts the controller-interaction
   fixture on that pack (`--sdk-version` and `--sdk-feed` for an unpublished
   pair); with `--origin` and `--title` it uses a window product already
-  running with `--live-debug`. It loads each page in `scripts/green-path/pages`
+  running with `--live-debug`, on this session's display (`DISPLAY` or
+  `WAYLAND_DISPLAY`; its KWin must allow scripting and fake input). It loads each page in `scripts/green-path/pages`
   into the window's own page through `engine.ui.eval`
   ([the page through live debug](desktop-shell.md#shape)) and drives it:
   - `audit`: the [browser features](desktop-shell.md#browser-features-in-the-window),
     each followed by a click and a key that must still reach the page;
   - `probe`: pointer lock and its relative motion, confinement, key codes and
-    locations, modifiers, repeat, wheel, focus loss (X11);
+    locations, modifiers, repeat, wheel, focus loss and its return (the
+    window minimized and restored through KWin scripting or user32);
   - `drag`: pointer capture and a drop;
-  - `review`: `<select>` lists in the middle and at the edge of the window,
+  - `review`: `<select>` lists in the middle of a window made 400 pixels
+    high, where a long list fits on neither side, and at its edge (inside the
+    view under Servo, the last option reachable by keys under both),
     `multiple`, a click on a row, and the gamepad across unplug, replug and a
     reload (a uinput pad on Linux, `--vigem-pad <vpad-win.exe>` on Windows);
   - `pickers`: date, time and `datetime-local` choices with the keyboard;
@@ -189,7 +193,8 @@ python3 scripts/green-path/check.py --route x11 --window-ui servo \
   page reports (`reports.ndjson`) and screenshots to `--out`, and exits 1 when
   an item fails. Differences between the engines that
   [desktop-shell.md](desktop-shell.md) documents are results, not failures.
-  `--only page,...` runs some pages.
+  An item it cannot observe reads `not run`, never `pass`. `--only page,...`
+  runs some pages.
 
 It needs a GPU and a desktop or compositor, so it is no CI gate: run it on
 den-agents and den-win11 for a Servo upgrade, a change to the window shell or

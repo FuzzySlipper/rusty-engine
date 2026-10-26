@@ -241,11 +241,16 @@ cef::wrap_client! {
         permission_handler: cef::PermissionHandler,
         context_menu_handler: cef::ContextMenuHandler,
         find_handler: cef::FindHandler,
+        focus_handler: cef::FocusHandler,
         scripts: Arc<crate::app::PendingScripts>,
         events: Arc<WebEventQueue>,
     }
 
     impl Client {
+        fn focus_handler(&self) -> Option<cef::FocusHandler> {
+            Some(self.focus_handler.clone())
+        }
+
         fn render_handler(&self) -> Option<cef::RenderHandler> {
             Some(self.render_handler.clone())
         }
@@ -341,9 +346,25 @@ impl WeldClient {
             permission_handler,
             context_menu_handler,
             find_handler,
+            WeldFocusHandler::new(),
             scripts,
             events,
         )
+    }
+}
+
+cef::wrap_focus_handler! {
+    pub(super) struct WeldFocusHandler;
+
+    impl FocusHandler {
+        // The page is the whole UI, with no browser chrome to Tab into:
+        // focus leaving its last (or first) element comes back to the page.
+        fn on_take_focus(&self, browser: Option<&mut cef::Browser>, _next: ::std::os::raw::c_int) {
+            if let Some(host) = browser.and_then(|browser| browser.host()) {
+                host.set_focus(0);
+                host.set_focus(1);
+            }
+        }
     }
 }
 

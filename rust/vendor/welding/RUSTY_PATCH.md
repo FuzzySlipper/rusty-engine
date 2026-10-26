@@ -74,3 +74,11 @@ native interop rather than in the Engine's unsafe-free crates.
 Upstream has no GL producer; this fits beside its CEF producers as a
 generic "GL renderer into wgpu" source.
 
+
+## Tab keeps focus in the page
+
+`src/{linux,windows,macos}_cef/cef_backed.rs` give `WeldClient` a focus
+handler. Off-screen there is no browser chrome to Tab into, so when focus
+would leave the page past its last (or first) element (`OnTakeFocus`), the
+browser takes it back (`SetFocus(false)`, then `SetFocus(true)`); otherwise
+`document.hasFocus()` stays false until the next click.

@@ -136,10 +136,10 @@ may use any of this and runs fully in a browser.
 | Image cursors (`cursor: url(...) x y, auto`) | Shown with their hotspot, scaled to the window's display scale. A held pointer lock hides them, as it hides any cursor. | The fallback keyword shows: Servo reports no image cursors. |
 | `cursor: none` | Hides the native cursor while the pointer is over that element. | |
 | Context menu | `contextmenu` fires; no native menu appears. | |
-| Download links | Nothing downloads. | |
+| Download links | Nothing downloads. | Nothing downloads and the page stays (Servo would load the file in its place). Warns. |
 | Clipboard | `navigator.clipboard.writeText` works; `readText` is denied. | `readText` resolves with an empty string; the system clipboard is never read. |
 | Fullscreen API | Resolves and fills the view; the native window does not change. | |
-| Notifications, geolocation and other permission prompts | Denied at once. | |
+| Notifications, geolocation and other permission prompts | Denied at once. | Servo has no Notification or Geolocation API; the shell's stand-ins deny at once. |
 | Gamepads | Chromium reads them itself. | The shell hands Servo the first pad in the standard mapping, named `Standard gamepad`. |
 | Text entry, Tab focus, wheel scrolling | Work. IME composition has not been checked. A held key's repeats report `repeat` false. A wheel notch scrolls 53 pixels on Linux and 44 on Windows. | Held keys report `repeat`. A wheel notch scrolls 53 pixels on both. |
 
