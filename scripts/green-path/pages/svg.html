@@ -1,0 +1,62 @@
+<!doctype html>
+<html><head><style>
+  body { margin: 0; background: #000; font-family: sans-serif; }
+  svg { position: absolute; left: 0; top: 0; display: block; }
+  .styled { fill: #00ff00; stroke: #0000ff; stroke-width: 8px; }
+  .name { display: none; }
+  .shows-names .name { display: inline; }
+  .marker .hint { display: none; }
+  .marker:hover .hint { display: inline; }
+  #swatch { position: absolute; left: 40px; top: 560px; width: 120px; height: 120px; background: #000080; }
+</style></head>
+<body>
+<!-- Inline SVG as a game map draws it. Top row: paint from a document class
+     rule and from a fill attribute, a fill attribute changed in place, a
+     child added in place. Middle: a name shown by a class on an HTML
+     ancestor, a square shown by its display attribute set in place, a text
+     with no font-family attribute, and a text drawn at load that must still
+     be drawn after the changes redraw the picture. Bottom: a hint shown by
+     :hover, and one a pointer listener on the inner group shows. The swatch
+     is plain HTML that an engine.ui.eval changes. The check judges each from
+     the window's pixels. -->
+<div id="names">
+  <svg id="map" width="1240" height="540">
+    <path class="styled" d="M40 40h120v120h-120z"/>
+    <path fill="#00ff00" d="M200 40h120v120h-120z"/>
+    <path id="filled" fill="#0000ff" d="M360 40h120v120h-120z"/>
+    <g id="added"></g>
+    <text class="name" x="40" y="260" fill="#ff0000" font-family="sans-serif" font-size="64">MMM</text>
+    <rect id="shown" x="440" y="200" width="80" height="80" fill="#ffff00" display="none"/>
+    <text x="560" y="260" fill="#00ffff" font-size="64">MMM</text>
+    <text x="900" y="260" fill="#ffffff" font-family="serif" font-size="64">MMM</text>
+    <g class="marker">
+      <rect x="40" y="320" width="200" height="200" fill="#404040"/>
+      <text class="hint" x="280" y="450" fill="#ff0000" font-family="sans-serif" font-size="64">MMM</text>
+    </g>
+    <g id="listened">
+      <rect x="640" y="320" width="200" height="200" fill="#404040"/>
+      <text id="listenedHint" x="880" y="450" fill="#ffff00" font-family="sans-serif" font-size="64" display="none">MMM</text>
+    </g>
+  </svg>
+</div>
+<div id="swatch"></div>
+<script>
+const report = (event, detail = {}) => fetch('/report', { method: 'POST', body: JSON.stringify({ event, ...detail }) });
+const svg = 'http://www.w3.org/2000/svg';
+const hint = document.getElementById('listenedHint');
+document.getElementById('listened').addEventListener('pointerenter', () => hint.setAttribute('display', 'inline'));
+// The check's eval only asks for a change; the page makes it from its own
+// task, as a game UI does when a message arrives.
+window.__svgChange = (name) => setTimeout(() => {
+  if (name === 'names') document.getElementById('names').classList.add('shows-names');
+  if (name === 'shown') document.getElementById('shown').setAttribute('display', 'inline');
+  if (name === 'fill') document.getElementById('filled').setAttribute('fill', '#ff00ff');
+  if (name === 'child') {
+    const rect = document.createElementNS(svg, 'rect');
+    for (const [key, value] of Object.entries({ x: 520, y: 40, width: 120, height: 120, fill: '#ffff00' })) rect.setAttribute(key, value);
+    document.getElementById('added').append(rect);
+  }
+  report('changed', { name });
+}, 50);
+report('loaded', { width: innerWidth, height: innerHeight });
+</script></body></html>

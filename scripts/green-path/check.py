@@ -19,7 +19,8 @@ Routes:
 A uinput pad (Linux) or `--vigem-pad <vpad-win.exe>` (Windows, ViGEmBus)
 drives the gamepad items; without one they are not run. Differences
 docs/desktop-shell.md documents between the engines are results, not
-failures. It needs a GPU and a desktop or compositor, so it is no CI gate.
+failures: the table shows them as "differs". The svg page's items are judged
+from screenshots of the private KWin, so they are not run on Windows. It needs a GPU and a desktop or compositor, so it is no CI gate.
 
 usage: check.py --route x11|wayland|windows --window-ui servo|chromium --out <new dir>
          (--runtime <desktop pack> [--sdk-version <v> --sdk-feed <dir>] | --origin <url> --title <window title>)
@@ -40,12 +41,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 FIXTURE = 'fixtures/csharp-controller-interaction/CsharpControllerInteraction.csproj'
 FIXTURE_TITLE = 'Controller Interaction'
-PAGES = ['audit', 'probe', 'drag', 'review', 'pickers', 'latency']
+PAGES = ['audit', 'probe', 'drag', 'review', 'pickers', 'svg', 'latency']
 WINDOWS = sys.platform == 'win32'
 
 # name: (X keysym, evdev code, Windows virtual key)
@@ -486,15 +488,16 @@ class Check:
 
     def shot(self, name):
         if not self.shots:
-            return
+            return None
         path = os.path.join(self.shots, name.replace(' ', '_') + '.png')
         if WINDOWS:
-            return
+            return None
         env = dict(os.environ, **self.args.compositor_env)
         subprocess.run(['spectacle', '-b', '-n', '-f', '-o', path], env=env, capture_output=True, timeout=30)
+        return path if os.path.exists(path) else None
 
     def record(self, page, item, ok, detail):
-        state = {True: 'pass', False: 'FAIL', None: 'not run'}[ok]
+        state = {True: 'pass', False: 'FAIL', None: 'not run', 'differs': 'differs'}[ok]
         self.results.append({'page': page, 'item': item, 'result': state, 'detail': detail})
         print(f'  {state:7} {item}: {detail}', flush=True)
 
@@ -802,6 +805,92 @@ class Check:
             kept = [e for e in self.step_events('date: Escape keeps the value') if e.get('event') == 'change']
             self.record('pickers', 'date: Escape keeps the value', not kept, f'{len(kept)} changes')
 
+    def svg(self):
+        """Inline SVG judged from the window's pixels. Servo draws an <svg>
+        from its markup alone (docs/desktop-shell.md#inline-svg-in-the-window):
+        rules from the document's stylesheets, :hover among them, do not
+        reach it, which the table shows as a documented difference."""
+        names = ['class rule paint', 'fill attribute paint', 'fill attribute changed in place',
+                 'child added in place', 'name shown by an HTML ancestor class', 'display attribute set in place',
+                 'text in the page\'s font', 'text drawn again after a change', 'hint shown by :hover',
+                 'listener on an inner element',
+                 'eval change shown at once']
+        if WINDOWS:
+            for name in names:
+                self.record('svg', name, None, 'judged from screenshots, which this route has not')
+            return
+        servo = self.args.window_ui == 'servo'
+        self.input_geometry()
+        self.at(1100, 650); self.at(1105, 652, 0.5)
+        loaded = self.shot('svg loaded')
+        for change in ('names', 'shown', 'fill', 'child'):
+            self.runtime.eval(f'__svgChange({json.dumps(change)}); null')
+        time.sleep(1.0)
+        changed = self.shot('svg changed')
+        self.at(140, 420); self.at(145, 425, 1.0)
+        hovered = self.shot('svg hover')
+        self.at(740, 420); self.at(745, 425, 1.0)
+        listened = self.shot('svg listener')
+        # An eval's change must be shown with no further eval or input: wait
+        # for the window's readout to show a repaint after the answer, then
+        # capture.
+        asked = time.time() * 1e3
+        self.runtime.eval('document.getElementById("swatch").style.background = "#ffffff"; null')
+        answered, shown = time.time() * 1e3, None
+        while time.time() * 1e3 < answered + 1000 and shown is None:
+            shown = next((t for t in self.runtime.window()['uiRepaints']['shownAtUnixMs'] if t >= asked), None)
+        evaluated = self.shot('svg eval')
+        if None in (loaded, changed, hovered, listened, evaluated):
+            for name in names:
+                self.record('svg', name, None, 'no screenshot')
+            return
+        origin = self.input.origin
+        shots = {path: Png(path) for path in (loaded, changed, hovered, listened, evaluated)}
+
+        def colour(path, x, y):
+            return shots[path].pixel(origin[0] + x, origin[1] + y)
+
+        def count(path, rect, want):
+            x0, y0, x1, y1 = rect
+            png = shots[path]
+            return sum(close(png.pixel(origin[0] + x, origin[1] + y), want)
+                       for y in range(y0, y1, 2) for x in range(x0, x1, 2))
+
+        green, magenta, yellow, red = (0, 255, 0), (255, 0, 255), (255, 255, 0), (255, 0, 0)
+        cyan, white = (0, 255, 255), (255, 255, 255)
+
+        def item(name, drawn, detail, differs=False):
+            self.record('svg', name, drawn or ('differs' if differs and servo else False), detail)
+
+        got = colour(changed, 100, 100)
+        item('class rule paint', close(got, green), f'pixel {got}, want {green}', differs=True)
+        got = colour(changed, 260, 100)
+        item('fill attribute paint', close(got, green), f'pixel {got}, want {green}')
+        got = colour(changed, 420, 100)
+        item('fill attribute changed in place', close(got, magenta), f'pixel {got}, want {magenta}')
+        got = colour(changed, 580, 100)
+        item('child added in place', close(got, yellow), f'pixel {got}, want {yellow}')
+        def appears(after, rect, want):
+            """Hidden at load, drawn in `after`."""
+            before, got = count(loaded, rect, want), count(after, rect, want)
+            return before < 10 and got > 50, f'{before} then {got} matching pixels'
+
+        drawn, detail = appears(changed, (40, 200, 400, 280), red)
+        item('name shown by an HTML ancestor class', drawn, detail, differs=True)
+        got = colour(changed, 480, 240)
+        item('display attribute set in place', close(got, yellow), f'pixel {got}, want {yellow}')
+        got = count(changed, (560, 200, 880, 280), cyan)
+        item('text in the page\'s font', got > 50, f'{got} cyan pixels', differs=True)
+        got = count(changed, (900, 200, 1220, 280), white)
+        item('text drawn again after a change', got > 50, f'{got} white pixels', differs=True)
+        drawn, detail = appears(hovered, (280, 390, 640, 470), red)
+        item('hint shown by :hover', drawn, detail, differs=True)
+        drawn, detail = appears(listened, (880, 390, 1240, 470), yellow)
+        item('listener on an inner element', drawn, detail, differs=True)
+        got = colour(evaluated, 100, 620)
+        wait = f'{shown - asked:.0f} ms after the eval was sent' if shown is not None else 'no repaint within 1 s'
+        item('eval change shown at once', shown is not None and close(got, white), f'shown {wait}; pixel {got}')
+
     def latency(self):
         self.input_geometry()
         self.at(640, 500)
@@ -830,6 +919,53 @@ class Check:
             # The page knows its size; the window may have been resized.
             self.input.size = tuple(self.runtime.eval('[innerWidth, innerHeight]')['value'])
         return self.input.geometry()
+
+
+# ---------------------------------------------------------------- screenshots
+
+def close(got, want, tolerance=40):
+    return all(abs(a - b) <= tolerance for a, b in zip(got, want))
+
+
+class Png:
+    """An 8-bit RGB or RGBA PNG, as spectacle writes them."""
+
+    def __init__(self, path):
+        data = open(path, 'rb').read()
+        chunks, at = [], 8
+        while at < len(data):
+            length, kind = struct.unpack('>I4s', data[at:at + 8])
+            chunks.append((kind, data[at + 8:at + 8 + length]))
+            at += 12 + length
+        header = next(body for kind, body in chunks if kind == b'IHDR')
+        self.width, self.height, depth, colour_type = struct.unpack('>IIBB', header[:10])
+        if depth != 8 or colour_type not in (2, 6):
+            raise SystemExit(f'{path}: not an 8-bit RGB or RGBA PNG')
+        self.step = 3 if colour_type == 2 else 4
+        raw = zlib.decompress(b''.join(body for kind, body in chunks if kind == b'IDAT'))
+        stride, self.rows, previous = self.width * self.step, [], bytearray(self.width * self.step)
+        for y in range(self.height):
+            kind, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+            for i in range(stride):
+                left = line[i - self.step] if i >= self.step else 0
+                up = previous[i]
+                if kind == 1:
+                    line[i] = (line[i] + left) & 255
+                elif kind == 2:
+                    line[i] = (line[i] + up) & 255
+                elif kind == 3:
+                    line[i] = (line[i] + (left + up) // 2) & 255
+                elif kind == 4:
+                    corner = previous[i - self.step] if i >= self.step else 0
+                    p = left + up - corner
+                    pa, pb, pc = abs(p - left), abs(p - up), abs(p - corner)
+                    line[i] = (line[i] + (left if pa <= pb and pa <= pc else up if pb <= pc else corner)) & 255
+            self.rows.append(line)
+            previous = line
+
+    def pixel(self, x, y):
+        at = x * self.step
+        return tuple(self.rows[y][at:at + 3])
 
 
 # ---------------------------------------------------------------- compositor
@@ -936,6 +1072,7 @@ def main():
     lines += [f"| {r['page']} | {r['item']} | {r['result']} | {r['detail']} |" for r in results]
     failed = [r for r in results if r['result'] == 'FAIL']
     lines += ['', f"{sum(r['result'] == 'pass' for r in results)} pass, {len(failed)} fail, "
+              f"{sum(r['result'] == 'differs' for r in results)} documented differences, "
               f"{sum(r['result'] == 'not run' for r in results)} not run"]
     open(os.path.join(args.out, 'results.md'), 'w').write('\n'.join(lines) + '\n')
     json.dump(results, open(os.path.join(args.out, 'results.json'), 'w'), indent=1)

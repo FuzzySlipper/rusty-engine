@@ -187,12 +187,19 @@ python3 scripts/green-path/check.py --route x11 --window-ui servo \
     `multiple`, a click on a row, and the gamepad across unplug, replug and a
     reload (a uinput pad on Linux, `--vigem-pad <vpad-win.exe>` on Windows);
   - `pickers`: date, time and `datetime-local` choices with the keyboard;
+  - `svg`: an inline `<svg>` judged from screenshots: paint from a class
+    rule and from attributes, attribute and child changes in place, names
+    shown by an ancestor class, `:hover` and a pointer listener, text after
+    a redraw ([inline SVG](desktop-shell.md#inline-svg-in-the-window)), and
+    an `engine.ui.eval` change captured once `engine.renderer` shows its
+    repaint (not run on Windows);
   - `latency`: a key to the first presented frame showing the page's
     change, and the repaint's cost, from `engine.renderer`.
 - **Results.** It prints a table and writes `results.md`, `results.json`, the
   page reports (`reports.ndjson`) and screenshots to `--out`, and exits 1 when
   an item fails. Differences between the engines that
-  [desktop-shell.md](desktop-shell.md) documents are results, not failures.
+  [desktop-shell.md](desktop-shell.md) documents are results, not failures;
+  the table shows them as `differs`.
   An item it cannot observe reads `not run`, never `pass`. `--only page,...`
   runs some pages.
 

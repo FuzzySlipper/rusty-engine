@@ -94,6 +94,12 @@ TypeScript UI is composited over it.
   serialization, so updates go on meanwhile and an awaited script may call
   the host's routes. A streaming runtime refuses both: its page runs in the
   viewer's browser.
+  - A change a script makes is shown a few frames after it is sent, with no
+    further script or input: on Linux 15 to 75 ms under Servo, which updates
+    its rendering on a 20 ms timer. The answer can arrive before that frame.
+  - To capture what a script changed, note the time before sending it, then
+    read `engine.renderer` until `window.uiRepaints.shownAtUnixMs` holds a
+    later time, and capture after that.
 - **Debugging protocols.** `rusty dev --cef-switch name[=value]` (repeatable, forwarded to
   `rusty-product-host --cef-switch`) passes Chromium switches; with
   `remote-debugging-port=<port>` a CDP client attaches to a Chromium page.
@@ -142,6 +148,37 @@ may use any of this and runs fully in a browser.
 | Notifications, geolocation and other permission prompts | Denied at once. | Servo has no Notification or Geolocation API; the shell's stand-ins deny at once. |
 | Gamepads | Chromium reads them itself. | The shell hands Servo the first pad in the standard mapping, named `Standard gamepad`. |
 | Text entry, Tab focus, wheel scrolling | Work. IME composition has not been checked. A held key's repeats report `repeat` false. A wheel notch scrolls 53 pixels on Linux and 44 on Windows. | Held keys report `repeat`. A wheel notch scrolls 53 pixels on both. |
+| Inline `<svg>` | Works. | Drawn as a picture of its markup: document stylesheets, `:hover`, inherited fonts and pointer events inside it do not apply, and text may be lost. See [inline SVG](#inline-svg-in-the-window). |
+
+### Inline SVG in the window
+
+Servo 0.7 draws an inline `<svg>` as an image: it serializes the element's
+markup and rasterizes that with resvg. What follows from that:
+
+- **Only the markup is drawn.** Presentation attributes (`fill`, `stroke`,
+  `display`, `transform` and the like) and `style` attributes apply. Rules
+  from the page's stylesheets do not, so neither do classes on HTML
+  ancestors, `:hover` or `:focus`, nor a font or colour inherited from the
+  page; `getComputedStyle` still reports them. A `<style>` element
+  inside the `<svg>` is read by resvg's own CSS parser, which skips some
+  rules; don't rely on it.
+- **Changes redraw it.** Servo itself redraws only when the `<svg>`
+  element's own attributes or children change. The shell's page script
+  watches every `<svg>` and marks the outermost one when anything inside it
+  changes (an attribute, a child, text), so the picture follows the DOM.
+- **Events reach the `<svg>` element.** Pointer events over any part of it
+  target the `<svg>` itself, never an inner shape.
+- **Text.** A `<text>` draws only with a `font-family` attribute, and each
+  font draws text once: when the picture is redrawn, or an `<svg>` drawn
+  later uses the same font, that text is missing. Servo's SVG font cache
+  keeps font ids from a font database it has dropped.
+- **Alpha.** The page is about half transparent where an `<svg>` is, shapes
+  and background alike. A Wayland window lets the desktop show through
+  there; an X11 window does not.
+
+`scripts/green-path/check.py --only svg` checks each point from the window's
+pixels; under Chromium every item passes. On the `wayland` route the alpha
+fails Servo's paint items.
 
 ## Running
 

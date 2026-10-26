@@ -179,6 +179,10 @@ const SELECT_CANCELLED: &str = "rusty-desktop:select-cancel";
 ///   they do in Chromium's page; download links warn and download nothing;
 ///   `Notification` and `navigator.geolocation`, which Servo lacks, deny at
 ///   once;
+/// - a change inside an inline `<svg>` (an attribute, child or text below
+///   the `<svg>` element) redraws it. Servo draws an `<svg>` from its
+///   serialized markup and redraws it only when the `<svg>` element itself
+///   changes, so the shim touches that element;
 /// - a click on a `date`, `time` or `datetime-local` input, or Alt+Down on
 ///   one, opens a calendar and hour and minute lists, placed as a `<select>`'s
 ///   list is; a choice writes the input's value with `input` and `change`
@@ -228,6 +232,31 @@ const SERVO_SHIM: &str = r#"(() => {
       clearWatch: () => {},
     } });
   }
+  // Servo draws an inline <svg> as an image of its markup, made again only
+  // when the outermost <svg> element's attributes or children change. A
+  // change further in toggles an attribute on that element, which leaves
+  // the markup as it was.
+  const svgNamespace = 'http://www.w3.org/2000/svg';
+  const outermostSvg = (node) => {
+    let svg = null;
+    for (let element = node; element; element = element.parentElement) {
+      if (element.localName === 'svg' && element.namespaceURI === svgNamespace) svg = element;
+    }
+    return svg;
+  };
+  new MutationObserver((records) => {
+    const changed = new Set();
+    for (const record of records) {
+      const target = record.type === 'characterData' ? record.target.parentElement : record.target;
+      if (target?.namespaceURI !== svgNamespace) continue;
+      const svg = outermostSvg(target);
+      if (svg && svg !== target) changed.add(svg);
+    }
+    for (const svg of changed) {
+      svg.toggleAttribute('data-rusty-redraw');
+      svg.toggleAttribute('data-rusty-redraw');
+    }
+  }).observe(document, { subtree: true, childList: true, attributes: true, characterData: true });
   let open = null;
   const close = () => {
     if (!open) return;
