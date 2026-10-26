@@ -22,9 +22,17 @@ docs/desktop-shell.md documents between the engines are results, not
 failures: the table shows them as "differs". The svg page's paint items are
 judged from screenshots of the private KWin, so they are not run on Windows. It needs a GPU and a desktop or compositor, so it is no CI gate.
 
+The probe page also types its letters through a keyboard device: on the x11
+route through one in the private KWin, and with `--uinput-keyboard` through a
+kernel keyboard, which only the desktop session's compositor reads: run the
+product in that session and give `--origin` (on den-agents the agents' own
+desktop, `DISPLAY=:0`). That session's Xwayland refuses XTest, so only the
+typing item there is a result. A key some other virtual keyboard holds down
+(den-agents' Sunshine held N once) is never pressed again: no device sees it.
+
 usage: check.py --route x11|wayland|windows --window-ui servo|chromium --out <new dir>
          (--runtime <desktop pack> [--sdk-version <v> --sdk-feed <dir>] | --origin <url> --title <window title>)
-         [--vigem-pad <vpad-win.exe>] [--only page,...]
+         [--vigem-pad <vpad-win.exe>] [--uinput-keyboard] [--only page,...]
 """
 import argparse
 import ctypes
@@ -368,6 +376,30 @@ class UinputPad:
         os.close(self.fd)
 
 
+class UinputKeyboard:
+    """A keyboard device through /dev/uinput. Only a compositor that reads the
+    seat's devices sees it: the desktop session, not a private KWin."""
+
+    def __init__(self):
+        import fcntl
+        self.fd = os.open('/dev/uinput', os.O_WRONLY | os.O_NONBLOCK)
+        fcntl.ioctl(self.fd, 0x40045564, 0x01)  # UI_SET_EVBIT EV_KEY
+        for code in sorted({key[1] for key in KEYS.values()}):
+            fcntl.ioctl(self.fd, 0x40045565, code)
+        setup = struct.pack('<HHHH80sI', 0x03, 0x1234, 0x5679, 1, b'Green-path check keyboard', 0)
+        fcntl.ioctl(self.fd, 0x405c5503, setup)
+        fcntl.ioctl(self.fd, 0x5501)
+        time.sleep(1.5)
+
+    def key(self, name, down):
+        os.write(self.fd, struct.pack('<qqHHi', 0, 0, 0x01, KEYS[name][1], int(down)) + struct.pack('<qqHHi', 0, 0, 0, 0, 0))
+
+    def close(self):
+        import fcntl
+        fcntl.ioctl(self.fd, 0x5502)
+        os.close(self.fd)
+
+
 # ---------------------------------------------------------------- the runtime
 
 class Runtime:
@@ -435,6 +467,8 @@ class Check:
         self.control = control
         self.log, self.port, self.shots = report_log, port, shots
         self.results = []
+        # On the x11 route, the private KWin's socket, for a keyboard device there.
+        self.compositor_socket = None
 
     # -- page and report plumbing
     def mark(self, name):
@@ -629,6 +663,25 @@ class Check:
         for letter in 'abcdefghijklmnopqrstuvwxyz':
             self.key(letter, 0.08)
         typed = self.runtime.eval('document.getElementById("text").value').get('value')
+        # The same letters from a keyboard device: one in the private KWin,
+        # which hands them on as it does a real keyboard's keys, or a kernel
+        # one the desktop session reads. The KWin device goes once typed:
+        # while it is there XTest's pointer misses.
+        device_typed = {}
+        devices = []
+        if self.compositor_socket:
+            devices.append(('the compositor', lambda: WaylandInput(self.compositor_socket)))
+        if self.args.uinput_keyboard:
+            devices.append(('a uinput keyboard', UinputKeyboard))
+        for name, make in devices:
+            self.mark(f'typing through {name}')
+            self.runtime.eval('const text = document.getElementById("text"); text.value = ""; text.focus(); null')
+            keyboard = make()
+            for letter in 'abcdefghijklmnopqrstuvwxyz':
+                keyboard.key(letter, True); time.sleep(0.04); keyboard.key(letter, False); time.sleep(0.08)
+            time.sleep(0.3)
+            keyboard.sock.close() if isinstance(keyboard, WaylandInput) else keyboard.close()
+            device_typed[name] = self.runtime.eval('document.getElementById("text").value').get('value')
         self.mark('wheel'); self.at(600, 400); self.input.wheel(1); time.sleep(0.3); self.input.wheel(-1); time.sleep(0.3)
         self.mark('focus loss'); stolen = self.control.focus_away()
         self.mark('click back'); self.at(600, 400); self.click(pause=1.0)
@@ -652,6 +705,8 @@ class Check:
                               if e.get('event') == 'keydown' and e.get('code', '').startswith('Key'))
         self.record('probe', 'typed letters', typed == 'abcdefghijklmnopqrstuvwxyz',
                     f'field {typed!r}; keydowns {typed_codes!r}')
+        for name, typed in device_typed.items():
+            self.record('probe', f'typed letters through {name}', typed == 'abcdefghijklmnopqrstuvwxyz', f'field {typed!r}')
         held = [e for e in keys if e.get('code') == 'KeyD']
         self.record('probe', 'a held key repeats', len(held) >= 3, f'{len(held)} keydowns (repeat flags documented per engine)')
         wheel = [e.get('deltaY') for e in self.step_events('wheel') if e.get('event') == 'wheel']
@@ -1060,6 +1115,7 @@ def main():
     parser.add_argument('--origin')
     parser.add_argument('--title')
     parser.add_argument('--vigem-pad')
+    parser.add_argument('--uinput-keyboard', action='store_true')
     parser.add_argument('--only', default=','.join(PAGES))
     args = parser.parse_args()
     if not args.runtime and not args.origin:
@@ -1105,6 +1161,8 @@ def main():
         control = Win32Window(route) if args.route == 'windows' else KWinWindow(runtime.title, args.compositor_env, args.out)
         pad = 'uinput' if args.route != 'windows' and os.access('/dev/uinput', os.W_OK) else 'vigem' if args.vigem_pad else None
         check = Check(args, runtime, route, control, pad, log, port, os.path.join(args.out, 'shots'))
+        if args.route == 'x11' and kwin:
+            check.compositor_socket = socket_name
         for page in args.only.split(','):
             print(f'{page}:', flush=True)
             check.load(page)
