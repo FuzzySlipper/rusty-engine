@@ -8,6 +8,10 @@
   .marker .hint { display: none; }
   .marker:hover .hint { display: inline; }
   #swatch { position: absolute; left: 40px; top: 560px; width: 120px; height: 120px; background: #000080; }
+  /* Repaints the page all the while. */
+  #spinner { position: absolute; left: 1160px; top: 600px; width: 40px; height: 40px; background: #808080;
+             animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
 </style></head>
 <body>
 <!-- Inline SVG as a game map draws it. Top row: paint from a document class
@@ -17,8 +21,9 @@
      with no font-family attribute, and a text drawn at load that must still
      be drawn after the changes redraw the picture. Bottom: a hint shown by
      :hover, and one a pointer listener on the inner group shows. The swatch
-     is plain HTML that an engine.ui.eval changes. The check judges each from
-     the window's pixels. -->
+     is plain HTML that an engine.ui.eval changes after a wait, while the
+     spinner keeps the page repainting. The check judges each from the
+     window's pixels. -->
 <div id="names">
   <svg id="map" width="1240" height="540">
     <path class="styled" d="M40 40h120v120h-120z"/>
@@ -40,6 +45,7 @@
   </svg>
 </div>
 <div id="swatch"></div>
+<div id="spinner"></div>
 <script>
 const report = (event, detail = {}) => fetch('/report', { method: 'POST', body: JSON.stringify({ event, ...detail }) });
 const svg = 'http://www.w3.org/2000/svg';

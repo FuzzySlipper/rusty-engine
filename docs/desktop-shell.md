@@ -87,7 +87,10 @@ TypeScript UI is composited over it.
   `engine.ui.eval <expression>` evaluates JavaScript (the rest of the line)
   in the window's UI page, in its global scope, and answers with the
   engine's name and the value as JSON (awaited when it is a promise;
-  `undefined` reads `null`), or what it threw. `engine.ui.dom [selector]`
+  `undefined` reads `null`), or what it threw. The answer's
+  `renderedAtUnixMs` is when the page had laid out what the finished script
+  changed (two animation frames after it), or `null` when no frame came
+  within 250 ms (the script navigated away). `engine.ui.dom [selector]`
   answers the document's HTML, or the first matching element's. The window
   takes the script at its next wake (at most a frame later); a command waits
   up to 5 s for the page. The host answers both outside the runtime's
@@ -97,9 +100,10 @@ TypeScript UI is composited over it.
   - A change a script makes is shown a few frames after it is sent, with no
     further script or input: on Linux 15 to 75 ms under Servo, which updates
     its rendering on a 20 ms timer. The answer can arrive before that frame.
-  - To capture what a script changed, note the time before sending it, then
-    read `engine.renderer` until `window.uiRepaints.shownAtUnixMs` holds a
-    later time, and capture after that.
+  - To capture what a script changed, read `engine.renderer` until
+    `window.uiRepaints.shownAtUnixMs` holds a time after the answer's
+    `renderedAtUnixMs`, then capture. A repaint shown earlier, while an
+    awaited script was still running, can predate its change.
 - **Debugging protocols.** `rusty dev --cef-switch name[=value]` (repeatable, forwarded to
   `rusty-product-host --cef-switch`) passes Chromium switches; with
   `remote-debugging-port=<port>` a CDP client attaches to a Chromium page.

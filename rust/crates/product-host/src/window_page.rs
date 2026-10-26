@@ -30,12 +30,18 @@ struct Answer {
     value: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    /// When the page had laid out what the finished script changed; a
+    /// repaint shown after it shows the change.
+    #[serde(rename = "renderedAtUnixMs")]
+    rendered_at_unix_ms: Option<f64>,
 }
 
 #[derive(serde::Deserialize)]
 struct PageAnswer {
     value: Option<serde_json::Value>,
     error: Option<String>,
+    #[serde(rename = "renderedAtUnixMs")]
+    rendered_at_unix_ms: Option<f64>,
 }
 
 /// Answers `engine.ui.eval <expression>`, where the expression is the rest
@@ -78,6 +84,10 @@ pub(crate) fn execute(
         serde_json::from_str::<PageAnswer>(&json)
             .map_err(|error| format!("the page's answer is not JSON: {error}"))
     });
+    let rendered_at_unix_ms = answer
+        .as_ref()
+        .ok()
+        .and_then(|answer| answer.rendered_at_unix_ms);
     let (succeeded, value, error) = match answer {
         Ok(PageAnswer {
             error: Some(error), ..
@@ -91,6 +101,7 @@ pub(crate) fn execute(
         ui: page.engine(),
         value,
         error,
+        rendered_at_unix_ms,
     };
     Some(match serde_json::to_string_pretty(&answer) {
         Ok(message) => (succeeded, message),
@@ -129,13 +140,14 @@ mod tests {
 
     #[test]
     fn eval_answers_the_value_or_what_was_thrown_with_the_engine() {
-        let value = page(Ok(r#"{"value":{"n":3}}"#));
+        let value = page(Ok(r#"{"value":{"n":3},"renderedAtUnixMs":1792996168000}"#));
         let (succeeded, message) = execute(Some(&value), "engine.ui.eval 1 + 2").unwrap();
         assert!(succeeded);
         assert_eq!(*value.script.lock().unwrap(), "1 + 2");
         let message: serde_json::Value = serde_json::from_str(&message).unwrap();
         assert_eq!(message["ui"], "servo 0.7.0");
         assert_eq!(message["value"]["n"], 3);
+        assert_eq!(message["renderedAtUnixMs"], 1792996168000.0);
 
         let thrown = page(Ok(r#"{"error":"Error: boom"}"#));
         let (succeeded, message) = execute(Some(&thrown), "engine.ui.eval boom()").unwrap();

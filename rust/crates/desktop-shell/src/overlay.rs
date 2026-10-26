@@ -662,16 +662,22 @@ impl UiOverlay {
     /// Evaluate live debug's script `id` in the page, in its global scope.
     /// The page answers on the console with the script's completion value,
     /// awaited when it is a promise, as `{"value": ...}` in JSON (`undefined`
-    /// reads `null`), or what it threw as `{"error": ...}`. An error here
-    /// means the page could not take the script.
+    /// reads `null`), or what it threw as `{"error": ...}`. Either carries
+    /// `renderedAtUnixMs`: when the page had laid out what the finished script
+    /// changed (two animation frames later), or `null` when no frame came
+    /// within 250 ms (the script navigated away). An error here means the
+    /// page could not take the script.
     pub(crate) fn evaluate(&mut self, id: u64, source: &str) -> Result<(), String> {
         // A Rust string's debug form is a valid JavaScript string literal.
         let script = format!(
             "(async () => {{ let answer; \
              try {{ const value = await (0, eval)({source:?}); \
-             answer = JSON.stringify({{ value: value === undefined ? null : value }}); }} \
-             catch (error) {{ answer = JSON.stringify({{ error: String(error) }}); }} \
-             console.info('{PAGE_ANSWER}{id} ' + answer); }})();"
+             answer = {{ value: value === undefined ? null : value }}; }} \
+             catch (error) {{ answer = {{ error: String(error) }}; }} \
+             answer.renderedAtUnixMs = await Promise.race([ \
+               new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(Date.now())))), \
+               new Promise((done) => setTimeout(() => done(null), 250))]); \
+             console.info('{PAGE_ANSWER}{id} ' + JSON.stringify(answer)); }})();"
         );
         self.page.execute_script(&script)
     }

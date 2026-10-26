@@ -831,14 +831,17 @@ class Check:
         hovered = self.shot('svg hover')
         self.at(740, 420); self.at(745, 425, 1.0)
         listened = self.shot('svg listener')
-        # An eval's change must be shown with no further eval or input: wait
-        # for the window's readout to show a repaint after the answer, then
-        # capture.
-        asked = time.time() * 1e3
-        self.runtime.eval('document.getElementById("swatch").style.background = "#ffffff"; null')
+        # An eval's change must be shown with no further eval or input. The
+        # script awaits a timer first while the page animates, so repaints
+        # come between sending it and its change: wait for one after the page
+        # reports the finished change laid out, then capture.
+        sent = time.time() * 1e3
+        answer = self.runtime.eval('new Promise((done) => setTimeout(done, 300)).then(() => { '
+                                   'document.getElementById("swatch").style.background = "#ffffff"; return null; })')
+        rendered = answer.get('renderedAtUnixMs')
         answered, shown = time.time() * 1e3, None
-        while time.time() * 1e3 < answered + 1000 and shown is None:
-            shown = next((t for t in self.runtime.window()['uiRepaints']['shownAtUnixMs'] if t >= asked), None)
+        while rendered is not None and time.time() * 1e3 < answered + 1000 and shown is None:
+            shown = next((t for t in self.runtime.window()['uiRepaints']['shownAtUnixMs'] if t > rendered), None)
         evaluated = self.shot('svg eval')
         if None in (loaded, changed, hovered, listened, evaluated):
             for name in names:
@@ -888,7 +891,12 @@ class Check:
         drawn, detail = appears(listened, (880, 390, 1240, 470), yellow)
         item('listener on an inner element', drawn, detail, differs=True)
         got = colour(evaluated, 100, 620)
-        wait = f'{shown - asked:.0f} ms after the eval was sent' if shown is not None else 'no repaint within 1 s'
+        if rendered is None:
+            wait = 'the page reported no laid-out change'
+        elif shown is None:
+            wait = 'no repaint within 1 s of the answer'
+        else:
+            wait = f'{shown - sent:.0f} ms after the eval was sent'
         item('eval change shown at once', shown is not None and close(got, white), f'shown {wait}; pixel {got}')
 
     def latency(self):
