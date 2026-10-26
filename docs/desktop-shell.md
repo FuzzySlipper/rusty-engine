@@ -90,7 +90,7 @@ TypeScript UI is composited over it.
   `undefined` reads `null`), or what it threw. The answer's
   `renderedAtUnixMs` is when the page had laid out what the finished script
   changed (two animation frames after it), or `null` when no frame came
-  within 250 ms (the script navigated away). `engine.ui.dom [selector]`
+  within 250 ms or the page unloaded first (the script navigated away). `engine.ui.dom [selector]`
   answers the document's HTML, or the first matching element's. The window
   takes the script at its next wake (at most a frame later); a command waits
   up to 5 s for the page. The host answers both outside the runtime's

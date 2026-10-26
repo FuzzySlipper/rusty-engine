@@ -665,8 +665,8 @@ impl UiOverlay {
     /// reads `null`), or what it threw as `{"error": ...}`. Either carries
     /// `renderedAtUnixMs`: when the page had laid out what the finished script
     /// changed (two animation frames later), or `null` when no frame came
-    /// within 250 ms (the script navigated away). An error here means the
-    /// page could not take the script.
+    /// within 250 ms or the page unloaded first (the script navigated away).
+    /// An error here means the page could not take the script.
     pub(crate) fn evaluate(&mut self, id: u64, source: &str) -> Result<(), String> {
         // A Rust string's debug form is a valid JavaScript string literal.
         let script = format!(
@@ -674,10 +674,13 @@ impl UiOverlay {
              try {{ const value = await (0, eval)({source:?}); \
              answer = {{ value: value === undefined ? null : value }}; }} \
              catch (error) {{ answer = {{ error: String(error) }}; }} \
-             answer.renderedAtUnixMs = await Promise.race([ \
-               new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(Date.now())))), \
-               new Promise((done) => setTimeout(() => done(null), 250))]); \
-             console.info('{PAGE_ANSWER}{id} ' + JSON.stringify(answer)); }})();"
+             let sent = false; \
+             const send = (rendered) => {{ if (sent) return; sent = true; \
+               answer.renderedAtUnixMs = rendered; \
+               console.info('{PAGE_ANSWER}{id} ' + JSON.stringify(answer)); }}; \
+             addEventListener('pagehide', () => send(null), {{ once: true }}); \
+             requestAnimationFrame(() => requestAnimationFrame(() => send(Date.now()))); \
+             setTimeout(() => send(null), 250); }})();"
         );
         self.page.execute_script(&script)
     }
