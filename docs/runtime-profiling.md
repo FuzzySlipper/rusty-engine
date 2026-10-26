@@ -71,9 +71,10 @@ frame rate or the number of batched C# callbacks.
 ## Optimized Linux native capture
 
 Runtime packs build Rust with release optimization and `line-tables-only`
-debug information. The executable contains unwind information and file/line
-mappings; `symbols/` retains the matching debug companions and `build-info.txt`
-with source revision, dirty-state indication, compiler and profile information.
+debug information. On Linux each executable contains its unwind information
+and file/line mappings itself; on Windows `symbols/` holds the matching
+`.pdb` files. `symbols/build-info.txt` records the source revision, dirty-state
+indication, compiler and profile information.
 Keep the entire matching pack with the profile. Ordinary product launch still
 needs no source checkout. An investigator uses that revision's source for code
 inspection. A dirty contributor pack is explicitly identified as such.

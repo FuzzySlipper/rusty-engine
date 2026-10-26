@@ -77,6 +77,7 @@ cd "$REPO_ROOT"
 # outputs so a clean checkout does not depend on stale local artifacts.
 pnpm --dir render run build
 HOST_FEATURES=()
+SCENE_FEATURES=()
 if ((DESKTOP)); then
   export CEF_PATH="${CEF_PATH:-$REPO_ROOT/target/cef}"
   HOST_FEATURES+=(servo)
@@ -98,12 +99,27 @@ if [[ -n $DLSS_SDK_DIR ]]; then
     fi
   fi
   HOST_FEATURES+=(dlss)
+  SCENE_FEATURES+=(dlss)
 fi
 if ((${#HOST_FEATURES[@]})); then
   HOST_FEATURES=(--features "$(IFS=,; echo "${HOST_FEATURES[*]}")")
 fi
+# On Windows the desktop pack ships nethost.dll; the renderer links it too, so
+# with DLSS (built without crt-static there) nethost's static library does not
+# clash with NGX's C runtime.
+if [[ $TARGET == win-x64 ]] && ((DESKTOP)); then
+  SCENE_FEATURES+=(nethost-sys/dll)
+fi
+if ((${#SCENE_FEATURES[@]})); then
+  SCENE_FEATURES=(--features "$(IFS=,; echo "${SCENE_FEATURES[*]}")")
+fi
 cargo build --locked --release -p csharp-product-runtime "${HOST_FEATURES[@]}" \
-  --bin rusty-product-host --bin rusty-live-debug --bin rusty-scene-render
+  --bin rusty-product-host --bin rusty-live-debug
+# The offline renderer opens no window: built without the desktop shell and
+# its UI engines (cargo features apply to the whole package), it is about
+# 380 MB smaller.
+cargo build --locked --release -p csharp-product-runtime "${SCENE_FEATURES[@]}" \
+  --bin rusty-scene-render
 cargo build --locked --release -p rusty-cli --bin rusty
 # The Engine services, headless and in process, for products' unit tests
 # (Rusty.Engine.Testing.EngineTestHost).
@@ -252,17 +268,6 @@ if [[ $TARGET == win-x64 ]]; then
   for binary in rusty-product-host rusty-live-debug rusty-scene-render rusty; do
     [[ ! -f "$release/${binary//-/_}.pdb" ]] || install -m 644 "$release/${binary//-/_}.pdb" "$STAGE/symbols/$binary.pdb"
   done
-elif command -v objcopy >/dev/null 2>&1; then
-  objcopy --only-keep-debug "$STAGE/bin/rusty-product-host" \
-    "$STAGE/symbols/rusty-product-host.debug"
-  objcopy --only-keep-debug "$STAGE/bin/rusty-live-debug" \
-    "$STAGE/symbols/rusty-live-debug.debug"
-  objcopy --only-keep-debug "$STAGE/bin/rusty-scene-render" \
-    "$STAGE/symbols/rusty-scene-render.debug"
-  objcopy --only-keep-debug "$STAGE/bin/rusty" \
-    "$STAGE/symbols/rusty.debug"
-  objcopy --only-keep-debug "$STAGE/lib/librusty_engine_test_host.so" \
-    "$STAGE/symbols/librusty_engine_test_host.so.debug"
 fi
 
 IDENTITY="$("$STAGE/bin/rusty-product-host$EXE" --identity)"
