@@ -241,6 +241,18 @@ impl DocumentEventHandler {
 
     /// Note a pending input event, to be processed at the next `update_the_rendering` task.
     pub(crate) fn note_pending_input_event(&self, event: ConstellationInputEvent) {
+        // A gamepad's state is no rendering work: queue its task now, so that
+        // `navigator.getGamepads()` shows a press before any task the press
+        // causes elsewhere, such as a network message it brings about.
+        #[cfg(feature = "gamepad")]
+        if let InputEvent::Gamepad(ref gamepad_event) = event.event.event {
+            self.handle_gamepad_event(gamepad_event.clone());
+            self.notify_embedder_that_events_were_handled(vec![InputEventOutcome {
+                id: event.event.id,
+                result: InputEventResult::default(),
+            }]);
+            return;
+        }
         let mut pending_input_events = self.pending_input_events.borrow_mut();
         if matches!(event.event.event, InputEvent::MouseMove(..)) {
             // First try to replace any existing mouse move event.

@@ -21,4 +21,12 @@ attribute. Its own computed `display` is `none` (nothing inside the picture
 gets a box), so 0.7.0 refused it as a focusable area: a `<g tabindex="0">`
 took focus neither from `focus()` nor from Tab.
 
-Remove this vendored copy once a Servo release carries both fixes.
+Engine #10401 changes `dom/document/document_event_handler.rs`: a gamepad
+input event queues its gamepad task when it arrives. 0.7.0 held it with the
+other input events until the next "update the rendering", so a page's
+`navigator.getGamepads()` could show a pad press after a network message the
+press had already brought about (in the desktop window, the UI projection of
+the panel the press opened), and the page then took the held button as a new
+press.
+
+Remove this vendored copy once a Servo release carries these fixes.
