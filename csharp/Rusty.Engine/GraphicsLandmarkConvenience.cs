@@ -33,8 +33,9 @@ public readonly partial record struct Landmark
     /// A palm's centre, <paramref name="along"/> of the way from the <paramref name="wrist"/> to the
     /// <paramref name="middle"/> finger's base and <paramref name="depth"/> metres out of the palm,
     /// with the palm's normal (across the <paramref name="index"/> and <paramref name="pinky"/>
-    /// bases) as its axis. Its aim is taken from the joints' plane, <paramref name="depth"/> under
-    /// the point, so a point inside a fist round a handle still aims from the palm.
+    /// bases, the hand's outermost fingers) as its axis. Its aim is taken from the joints' plane,
+    /// <paramref name="depth"/> under the point, so a point inside a fist round a handle still aims
+    /// from the palm.
     /// </summary>
     public static Landmark Palm(ulong entity, uint wrist, uint index, uint middle, uint pinky, float along, float depth, HandSide side) =>
         new(LandmarkKind.Palm, OverlaySpace.Joint, entity, wrist, index, middle, pinky, default, Quaternion.Identity, default, along, depth, side == HandSide.Left);
@@ -77,8 +78,10 @@ public enum Digit
 
 /// <summary>
 /// A hand's rig joints, named once, and the standard hand landmarks found from them as drawn: the
-/// palm's centre and normal, the web between thumb and index, a digit's pad and its joints. Each
-/// chain runs from the digit's base, fixed to the hand, to its last joint.
+/// palm's centre and normal, the web between thumb and index, the knuckles' line, a digit's pad and
+/// its joints. Each chain runs from the digit's base, fixed to the hand, to its last joint. A
+/// three-fingered hand has an empty <see cref="Ring"/> chain and names its last finger the
+/// <see cref="Pinky"/>: its palm and knuckles then run across the fingers it has.
 /// </summary>
 public sealed record HandRig(ulong Entity, HandSide Side, uint Wrist, uint[] Thumb, uint[] Index, uint[] Middle, uint[] Ring, uint[] Pinky)
 {
@@ -86,6 +89,8 @@ public sealed record HandRig(ulong Entity, HandSide Side, uint Wrist, uint[] Thu
     public const float PalmAlong = 0.55f, PalmDepth = 0.012f;
     /// <summary>The web: this much of the way from the thumb's base to the index finger's.</summary>
     public const float WebAmount = 0.5f;
+    /// <summary>The knuckles: this much of the way from the pinky's base to the index finger's.</summary>
+    public const float KnucklesAmount = 0.5f;
     /// <summary>A pad: past the last joint by this share of the bone before it.</summary>
     public const float PadReach = 0.8f;
 
@@ -125,6 +130,12 @@ public sealed record HandRig(ulong Entity, HandSide Side, uint Wrist, uint[] Thu
     /// <summary>The palm's centre, with its normal (out of the palm) as the axis.</summary>
     public Landmark Palm(float along = PalmAlong, float depth = PalmDepth) =>
         Landmark.Palm(Entity, Wrist, Index[0], Middle[0], Pinky[0], along, depth, Side);
+
+    /// <summary>
+    /// The knuckles' line, this much of the way from the pinky's base to the index finger's, its axis
+    /// along them: a fist's grip runs along it.
+    /// </summary>
+    public Landmark Knuckles(float amount = KnucklesAmount) => Landmark.Between(Entity, Pinky[0], Index[0], amount);
 
     /// <summary>The web between the thumb's base and the index finger's.</summary>
     public Landmark Web(float amount = WebAmount) => Landmark.Between(Entity, Thumb[0], Index[0], amount);

@@ -459,9 +459,14 @@ A `Landmark` is a point with an axis and a frame, found as drawn:
 `HandRig.FromJoints(joints, entity, side, wrist, thumb, index, middle, ring,
 pinky)` names a hand's rig joints once (each digit's chain from its base,
 fixed to the hand, to its last joint) and gives the standard hand landmarks:
-`Palm()`, `Web()` (between the thumb's and index finger's bases), `Pad(digit)`
-(past a digit's last joint), `Joint(digit, n)` and `AtWrist()`. Their default
-measures are `HandRig.PalmAlong`, `PalmDepth`, `WebAmount` and `PadReach`.
+`Palm()`, `Web()` (between the thumb's and index finger's bases),
+`Knuckles()` (between the pinky's and index finger's bases, its axis toward
+the index: a fist's grip runs along it), `Pad(digit)` (past a digit's last
+joint), `Joint(digit, n)` and `AtWrist()`. Their default measures are
+`HandRig.PalmAlong`, `PalmDepth`, `WebAmount`, `KnucklesAmount` and
+`PadReach`. A three-fingered hand passes an empty ring chain and names its
+last finger the pinky; its palm and knuckles then run across the fingers it
+has, and `Pad(Digit.Ring)` has no finger to find.
 
 ```csharp
 HandRig hand = HandRig.FromJoints(engine.Animation.ReadJoints(arms).Span, ArmsId, HandSide.Right,
@@ -472,6 +477,8 @@ engine.Graphics.PublishOverlaySet(new("held.landmarks", [], [
     LandmarkPair.Distance("trigger", hand.Pad(Digit.Index), Landmark.At(pistol, trigger), 0.015f),
     LandmarkPair.Distance("backstrap", hand.Web(), Landmark.At(pistol, backstrapTop), 0.02f),
     LandmarkPair.Facing("facing", hand.Palm(), Landmark.At(pistol, grip, axis: butt - backstrapTop), LandmarkAim.Line, 65),
+    // The knuckles run from the pinky up to the index: up the grip.
+    LandmarkPair.Facing("along", hand.Knuckles(), Landmark.At(pistol, grip, axis: backstrapTop - butt), LandmarkAim.Axis, 35),
 ]));
 ```
 
@@ -491,7 +498,9 @@ names the `step` the measured scene showed.
 
 What stays approximate: a landmark is where the renderer drew the joints, not
 the skinned surface; `Beyond` assumes the rig's last bone runs along its
-joint as the bone before it does; a palm needs index, middle and pinky bases.
+joint as the bone before it does; a palm and the knuckles need index and
+pinky bases and a palm a middle one, so a hand with fewer than three fingers
+has neither.
 `fixtures/csharp-skeleton-poses` publishes `fixture.grip`: one pair within
 tolerance, one outside, one aimed.
 
