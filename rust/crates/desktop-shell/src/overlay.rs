@@ -642,6 +642,10 @@ impl UiOverlay {
                     if matches!(event, NavigationEvent::LoadStart { .. }) {
                         self.release(window, false, InputClearReason::PointerLockLoss);
                         self.unconfine(window, false);
+                    } else if self.focused {
+                        // A page from another origin loads in a new Chromium
+                        // renderer, which starts without focus.
+                        let _ = self.page.focus();
                     }
                 }
                 NavigationEvent::DragStarted { x, y, .. } => {

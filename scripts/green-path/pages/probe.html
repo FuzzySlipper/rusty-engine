@@ -1,0 +1,33 @@
+<!doctype html>
+<html><body style="margin:0;font:14px sans-serif;background:transparent">
+<button id="lock" style="position:absolute;left:40px;top:40px;width:200px;height:60px">pointer lock</button>
+<button id="confine" style="position:absolute;left:300px;top:40px;width:200px;height:60px">confine cursor</button>
+<input id="text" style="position:absolute;left:40px;top:140px;width:300px;height:30px">
+<script>
+const report = (event, detail = {}) => fetch('/report', { method: 'POST', body: JSON.stringify({ event, ...detail }) });
+let mx = 0, my = 0, moves = 0;
+lock.onclick = () => lock.requestPointerLock();
+confine.onclick = () => report('confine', { granted: window.__rustyDesktopCursor?.confine() ?? null });
+document.addEventListener('rusty-desktop-confinement-end', (e) => report('confinement end', e.detail));
+document.addEventListener('pointerlockchange', () => {
+  report('pointerlockchange', { locked: document.pointerLockElement !== null, movementX: mx, movementY: my, moves });
+  mx = my = moves = 0;
+});
+document.addEventListener('pointermove', (e) => { if (document.pointerLockElement) { mx += e.movementX; my += e.movementY; moves++; } });
+addEventListener('keydown', (e) => report('keydown', { key: e.key, code: e.code, location: e.location, repeat: e.repeat, shift: e.shiftKey, ctrl: e.ctrlKey }));
+addEventListener('blur', () => report('blur', { hasFocus: document.hasFocus() }));
+addEventListener('focus', () => report('focus', { hasFocus: document.hasFocus() }));
+let last = '';
+(function poll() {
+  const pad = navigator.getGamepads()[0];
+  if (pad) {
+    const state = JSON.stringify({ id: pad.id, mapping: pad.mapping, axes: pad.axes.map((a) => +a.toFixed(2)), pressed: pad.buttons.map((b) => (b.pressed ? 1 : 0)).join('') });
+    if (state !== last) { last = state; report('gamepad', JSON.parse(state)); }
+  }
+  requestAnimationFrame(poll);
+})();
+addEventListener('gamepadconnected', (e) => report('gamepadconnected', { id: e.gamepad.id }));
+addEventListener('pointerdown', (e) => { if (!document.pointerLockElement) report('pointerdown', { x: e.clientX, y: e.clientY, button: e.button }); });
+addEventListener('wheel', (e) => report('wheel', { deltaY: e.deltaY, deltaMode: e.deltaMode, x: e.clientX, y: e.clientY }));
+report('loaded', { ratio: devicePixelRatio, hasFocus: document.hasFocus() });
+</script></body></html>

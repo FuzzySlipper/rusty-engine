@@ -1,0 +1,15 @@
+<!doctype html>
+<html><body style="margin:0;font:14px sans-serif;background:#eef">
+<!-- Date, time and datetime-local inputs, a choice made with the keyboard. -->
+<input id="date" type="date" value="2026-10-25" min="2026-10-05" max="2026-11-20" style="position:absolute;left:40px;top:40px;width:160px;height:24px">
+<input id="time" type="time" value="09:30" style="position:absolute;left:300px;top:40px;width:120px;height:24px">
+<input id="local" type="datetime-local" value="2026-10-25T18:45" style="position:absolute;left:520px;top:40px;width:200px;height:24px">
+<input id="bottom" type="date" style="position:absolute;left:40px;bottom:8px;width:160px;height:24px">
+<script>
+const report = (event, detail = {}) => fetch('/report', { method: 'POST', body: JSON.stringify({ event, ...detail }) });
+for (const input of document.querySelectorAll('input')) {
+  input.addEventListener('input', () => report('input', { id: input.id, value: input.value }));
+  input.addEventListener('change', () => report('change', { id: input.id, value: input.value }));
+}
+report('loaded', { width: innerWidth, height: innerHeight, values: [...document.querySelectorAll('input')].map((i) => i.value) });
+</script></body></html>

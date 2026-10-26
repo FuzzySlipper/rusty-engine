@@ -1,0 +1,66 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>green-path audit</title><style>
+html, body { margin: 0; background: transparent; font: 13px sans-serif; color: white; }
+button, input, select, a, div.box { position: absolute; box-sizing: border-box; width: 160px; height: 40px; }
+#list { overflow-y: scroll; height: 120px; background: #335; }
+#list p { margin: 0; height: 30px; }
+</style></head><body>
+<div id="controls"></div>
+<input id="text" style="left:1000px;top:560px" placeholder="type here">
+<button id="ping" style="left:1000px;top:620px">ping</button>
+<script>
+const report = (event, detail = {}) => fetch('/report', { method: 'POST', body: JSON.stringify({ t: performance.now() | 0, event, ...detail }) }).catch(() => {});
+const controls = document.getElementById('controls');
+const at = (i) => `left:${40 + 180 * (i % 5)}px;top:${40 + 60 * Math.floor(i / 5)}px`;
+const features = [
+  ['alert', () => { const t = performance.now(); alert('audit alert'); report('alert returned', { ms: performance.now() - t | 0 }); }],
+  ['confirm', () => { const t = performance.now(); const r = confirm('audit confirm'); report('confirm returned', { value: r, ms: performance.now() - t | 0 }); }],
+  ['prompt', () => { const t = performance.now(); const r = prompt('audit prompt', 'x'); report('prompt returned', { value: r, ms: performance.now() - t | 0 }); }],
+  ['window.open', () => { const w = window.open('/other', '_blank'); report('window.open returned', { value: w === null ? 'null' : 'window' }); }],
+  ['print', () => { const t = performance.now(); window.print(); report('print returned', { ms: performance.now() - t | 0 }); }],
+  ['fullscreen', () => document.documentElement.requestFullscreen().then(() => report('fullscreen granted', { element: !!document.fullscreenElement }), (e) => report('fullscreen refused', { error: String(e) }))],
+  ['clipboard write+read', async () => {
+    try { await navigator.clipboard.writeText('audit-clip'); report('clipboard write ok'); } catch (e) { report('clipboard write failed', { error: String(e) }); }
+    try { report('clipboard read ok', { value: await navigator.clipboard.readText() }); } catch (e) { report('clipboard read failed', { error: String(e) }); }
+  }],
+  ['notification', () => Notification.requestPermission().then((r) => report('notification permission', { value: r }))],
+  ['geolocation', () => navigator.geolocation.getCurrentPosition(() => report('geolocation granted'), (e) => report('geolocation refused', { code: e.code }))],
+  ['gamepads', () => report('gamepads', { value: navigator.getGamepads().length })],
+  ['dialog.showModal', () => { const d = document.createElement('dialog'); d.textContent = 'modal'; document.body.append(d); d.showModal(); report('dialog open', { open: d.open }); setTimeout(() => d.close(), 500); }],
+];
+features.forEach(([name, run], i) => {
+  const b = document.createElement('button'); b.textContent = name; b.style.cssText = at(i);
+  b.addEventListener('click', () => { report('clicked', { name }); run(); });
+  controls.append(b);
+});
+const add = (html, i) => { controls.insertAdjacentHTML('beforeend', html.replace('STYLE', at(i))); return controls.lastElementChild; };
+const link = add('<a href="/other" target="_blank" style="STYLE;background:#555">target=_blank link</a>', 11);
+const file = add('<input type="file" style="STYLE">', 12);
+file.addEventListener('change', () => report('file chosen', { count: file.files.length }));
+file.addEventListener('cancel', () => report('file cancel'));
+file.addEventListener('click', () => report('clicked', { name: 'file' }));
+const date = add('<input type="date" style="STYLE">', 13);
+date.addEventListener('click', () => report('clicked', { name: 'date' }));
+const color = add('<input type="color" style="STYLE">', 14);
+color.addEventListener('click', () => report('clicked', { name: 'color' }));
+const select = add('<select style="STYLE"><option>one</option><option>two</option><option>three</option></select>', 15);
+select.addEventListener('change', () => report('select changed', { value: select.value }));
+const tip = add('<div class="box" title="native tooltip" style="STYLE;background:#535">hover for title</div>', 16);
+const ctx = add('<div class="box" style="STYLE;background:#553">right-click me</div>', 17);
+ctx.addEventListener('contextmenu', (e) => report('contextmenu event', { prevented: e.defaultPrevented }));
+const list = add('<div id="list" class="box" style="STYLE;height:120px"></div>', 20);
+for (let i = 0; i < 20; i++) list.insertAdjacentHTML('beforeend', `<p>row ${i}</p>`);
+list.addEventListener('scroll', () => report('list scrolled', { top: list.scrollTop }), { once: true });
+const download = add('<a href="/audit" download="saved.html" style="STYLE;background:#555">download link</a>', 18);
+const nav = add('<a href="/other" style="STYLE;background:#555">same-tab link</a>', 19);
+const unload = add('<button style="STYLE">beforeunload + reload</button>', 23);
+unload.addEventListener('click', () => { window.addEventListener('beforeunload', (e) => { e.preventDefault(); e.returnValue = ''; }); report('reloading'); location.reload(); });
+document.getElementById('ping').addEventListener('click', () => report('ping'));
+document.getElementById('text').addEventListener('input', (e) => report('text input', { value: e.target.value }));
+window.addEventListener('keydown', (e) => { if (e.target.id !== 'text') report('keydown', { key: e.key }); });
+document.addEventListener('fullscreenchange', () => report('fullscreenchange', { element: !!document.fullscreenElement }));
+window.addEventListener('focus', () => report('window focus'));
+window.addEventListener('blur', () => report('window blur'));
+console.warn = ((warn) => (...args) => { report('console.warn', { text: args.join(' ').slice(0, 110) }); warn(...args); })(console.warn);
+report('loaded', { url: location.pathname });
+</script></body></html>

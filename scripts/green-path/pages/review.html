@@ -1,0 +1,31 @@
+<!doctype html>
+<html><body style="margin:0;font:14px sans-serif;background:#eef">
+<!-- Select lists that fit neither side, a multiple select, an over-wide label,
+     and the gamepad across unplug, replug and reload. -->
+<select id="middle" style="position:absolute;left:40px;width:160px"></select>
+<select id="multi" multiple style="position:absolute;left:260px;top:40px;width:160px;height:24px">
+  <option>Alpha</option><option selected>Bravo</option><option>Charlie</option><option disabled>Delta (disabled)</option><option>Echo</option>
+</select>
+<select id="edge" style="position:absolute;right:4px;bottom:4px;width:120px"></select>
+<button id="reload" style="position:absolute;left:480px;top:40px;width:120px;height:30px">reload</button>
+<pre id="out" style="position:absolute;left:480px;top:90px;margin:0;font:12px monospace"></pre>
+<script>
+const report = (event, detail = {}) => fetch('/report', { method: 'POST', body: JSON.stringify({ event, ...detail }) });
+const middle = document.getElementById('middle');
+middle.style.top = `${Math.round(innerHeight / 2 - 12)}px`;
+for (let i = 0; i < 40; i++) middle.add(new Option(i === 7 ? 'Option 7 with a label far wider than the window it is drawn in, so it must be cut short at the edge' : `Option ${i}`));
+for (let i = 0; i < 30; i++) edge.add(new Option(`Edge ${i}`));
+const selected = (el) => [...el.selectedOptions].map((o) => o.index);
+for (const el of [middle, multi, edge]) el.addEventListener('change', () => report('change', { id: el.id, selected: selected(el) }));
+reload.onclick = () => location.reload();
+addEventListener('gamepadconnected', (e) => report('gamepadconnected', { index: e.gamepad.index, id: e.gamepad.id }));
+addEventListener('gamepaddisconnected', (e) => report('gamepaddisconnected', { index: e.gamepad.index }));
+let last = '';
+(function poll() {
+  const pad = navigator.getGamepads()[0];
+  const state = pad ? JSON.stringify({ connected: pad.connected, a: pad.buttons[0].pressed, x: +pad.axes[0].toFixed(2) }) : 'none';
+  if (state !== last) { last = state; report('gamepad', { state }); out.textContent = state; }
+  requestAnimationFrame(poll);
+})();
+report('loaded', { height: innerHeight, width: innerWidth, ratio: devicePixelRatio, multi: selected(multi) });
+</script></body></html>

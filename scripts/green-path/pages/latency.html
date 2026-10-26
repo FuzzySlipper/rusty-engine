@@ -1,0 +1,9 @@
+<!doctype html>
+<html><body style="margin:0;font:14px sans-serif;background:transparent">
+<!-- Input to frame: U toggles a 240 px panel, the page's only change. -->
+<div id="panel" hidden style="position:absolute;left:0;top:0;width:240px;height:240px;background:#f0f"></div>
+<script>
+const panel = document.getElementById('panel');
+document.addEventListener('keydown', (e) => { if (e.code === 'KeyU' && !e.repeat) panel.hidden = !panel.hidden; });
+fetch('/report', { method: 'POST', body: JSON.stringify({ event: 'loaded', url: location.pathname }) });
+</script></body></html>

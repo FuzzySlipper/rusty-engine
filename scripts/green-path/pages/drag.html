@@ -1,0 +1,18 @@
+<!doctype html>
+<html><body style="margin:0;font:14px sans-serif;background:transparent">
+<div id="item" style="position:absolute;left:100px;top:100px;width:80px;height:80px;background:#c84;touch-action:none;user-select:none">item</div>
+<div id="slot" style="position:absolute;left:400px;top:100px;width:100px;height:100px;border:3px dashed #8c8"></div>
+<script>
+const report = (event, detail = {}) => fetch('/report', { method: 'POST', body: JSON.stringify({ event, ...detail }) });
+let start = null, moves = 0;
+item.addEventListener('pointerdown', (e) => { item.setPointerCapture(e.pointerId); start = [e.clientX - item.offsetLeft, e.clientY - item.offsetTop]; moves = 0; report('pointerdown', { captured: item.hasPointerCapture(e.pointerId) }); });
+item.addEventListener('pointermove', (e) => { if (!start) return; moves++; item.style.left = `${e.clientX - start[0]}px`; item.style.top = `${e.clientY - start[1]}px`; });
+item.addEventListener('pointerup', (e) => {
+  start = null;
+  const a = item.getBoundingClientRect(), b = slot.getBoundingClientRect();
+  const inside = a.x + a.width / 2 > b.x && a.x + a.width / 2 < b.right && a.y + a.height / 2 > b.y && a.y + a.height / 2 < b.bottom;
+  report('pointerup', { moves, dropped: inside, left: item.offsetLeft, top: item.offsetTop });
+});
+item.addEventListener('lostpointercapture', () => report('lostpointercapture'));
+report('loaded');
+</script></body></html>
