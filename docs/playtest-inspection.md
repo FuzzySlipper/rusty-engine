@@ -451,7 +451,10 @@ A `Landmark` is a point with an axis and a frame, found as drawn:
 - `Landmark.Palm(entity, wrist, index, middle, pinky, along, depth, side)`:
   `along` of the way from the wrist to the middle finger's base and `depth`
   metres out of the palm, its axis the palm's normal across the index and
-  pinky bases (out of a right palm, turned for a left one).
+  pinky bases (out of a right palm, turned for a left one). Distances are
+  measured from that point; its aim is taken from the joints' plane, `depth`
+  under it, so a fist round a handle, whose point lies inside the fist on
+  or beside the handle's line, still reads how its palm faces the handle.
 
 `HandRig.FromJoints(joints, entity, side, wrist, thumb, index, middle, ring,
 pinky)` names a hand's rig joints once (each digit's chain from its base,

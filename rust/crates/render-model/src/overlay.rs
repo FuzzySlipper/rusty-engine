@@ -175,8 +175,11 @@ pub enum Landmark {
     },
     /// A palm's centre, `along` of the way from the `wrist` joint to the
     /// `middle` finger's base and `depth` metres out of the palm, with the
-    /// palm's normal as its axis: across the `index` and `pinky` bases,
-    /// turned for a `left` hand. Its frame is the wrist's.
+    /// palm's normal as its axis: across the `index` and `pinky` bases (a
+    /// hand's outermost fingers; a three-fingered hand's last is its
+    /// pinky), turned for a `left` hand. Its frame is the wrist's. It aims
+    /// from its joints' plane, `depth` under its point, so a point inside a
+    /// fist round a handle still aims from the palm.
     Palm {
         entity: u64,
         wrist: u32,

@@ -205,6 +205,10 @@ struct Placed {
     layer: ViewLayer,
     point: Vec3,
     axis: Option<Vec3>,
+    /// How far `point` stands out along `axis` from where its aim is taken:
+    /// a palm's depth out of its joints' plane, so a point inside a fist
+    /// still aims from the palm.
+    depth: f32,
     frame: Quat,
 }
 
@@ -229,6 +233,7 @@ impl Placed {
             layer,
             point: turn * self.point + shift,
             axis: self.axis.map(|axis| turn * axis),
+            depth: self.depth,
             frame: (turn * self.frame).normalize(),
         })
     }
@@ -246,13 +251,14 @@ struct PairDrawn {
 impl PairDrawn {
     fn measure(pair: &LandmarkPair, from: Placed, to: Placed) -> Self {
         let distance = from.point.distance(to.point);
+        let origin = from.point - from.axis.unwrap_or(Vec3::ZERO) * from.depth;
         let aimed = match pair.aim {
             LandmarkAim::None => None,
             LandmarkAim::Axis => to.axis,
-            LandmarkAim::Point => Some(to.point - from.point),
+            LandmarkAim::Point => Some(to.point - origin),
             LandmarkAim::Line => to
                 .axis
-                .map(|axis| to.point + axis * (from.point - to.point).dot(axis) - from.point),
+                .map(|axis| to.point + axis * (origin - to.point).dot(axis) - origin),
         };
         let angle = from
             .axis
@@ -1086,6 +1092,7 @@ impl Renderer {
                     layer,
                     point: to_pass.transform_point3(Vec3::from_array(point)),
                     axis: (frame * Vec3::from_array(axis)).try_normalize(),
+                    depth: 0.0,
                     frame,
                 }
             }
@@ -1101,6 +1108,7 @@ impl Renderer {
                     layer,
                     point: from.lerp(to, amount),
                     axis: (to - from).try_normalize(),
+                    depth: 0.0,
                     frame,
                 }
             }
@@ -1120,6 +1128,7 @@ impl Renderer {
                     layer,
                     point: at + axis.unwrap_or(Vec3::ZERO) * bone.length() * amount,
                     axis,
+                    depth: 0.0,
                     frame,
                 }
             }
@@ -1145,6 +1154,7 @@ impl Renderer {
                     layer,
                     point: wrist.lerp(middle, along) + normal * depth,
                     axis: Some(normal),
+                    depth,
                     frame,
                 }
             }

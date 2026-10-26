@@ -33,7 +33,8 @@ public readonly partial record struct Landmark
     /// A palm's centre, <paramref name="along"/> of the way from the <paramref name="wrist"/> to the
     /// <paramref name="middle"/> finger's base and <paramref name="depth"/> metres out of the palm,
     /// with the palm's normal (across the <paramref name="index"/> and <paramref name="pinky"/>
-    /// bases) as its axis.
+    /// bases) as its axis. Its aim is taken from the joints' plane, <paramref name="depth"/> under
+    /// the point, so a point inside a fist round a handle still aims from the palm.
     /// </summary>
     public static Landmark Palm(ulong entity, uint wrist, uint index, uint middle, uint pinky, float along, float depth, HandSide side) =>
         new(LandmarkKind.Palm, OverlaySpace.Joint, entity, wrist, index, middle, pinky, default, Quaternion.Identity, default, along, depth, side == HandSide.Left);
