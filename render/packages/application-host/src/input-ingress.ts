@@ -169,6 +169,13 @@ export function createRustyApplicationInputIngress(
     controllerAxes.clear();
     controllerButtonValues.clear();
   };
+  // A binding or context change publishes when a panel opens or closes, while
+  // the pad button that opened or closed it may still be held. What is held
+  // stays held for the new owner: only a release and a new press reach it.
+  const rebind = (): void => {
+    clearLocal();
+    refreshControllerBaseline();
+  };
   const clear = (reason: RuntimeInputWireClearReason): void => {
     clearLocal();
     // A held menu button must not become a new press when ownership changes,
@@ -449,16 +456,16 @@ export function createRustyApplicationInputIngress(
     },
     bindRuntime: (binding: RustyApplicationRuntimeInputBinding) => {
       if (disposed) return;
-      if (queue.bindRuntime(binding)) clearLocal();
+      if (queue.bindRuntime(binding)) rebind();
     },
     synchronizeRuntime: (binding: RustyApplicationRuntimeInputBinding) => {
       if (disposed) return;
-      if (queue.bindRuntime(binding)) clearLocal();
+      if (queue.bindRuntime(binding)) rebind();
     },
     rebaselineRuntime,
     setContext: (context: string) => {
       if (disposed) return;
-      if (queue.setContext(context)) clearLocal();
+      if (queue.setContext(context)) rebind();
     },
     clear: (reason: RuntimeInputWireClearReason) => {
       if (!disposed) clear(reason);

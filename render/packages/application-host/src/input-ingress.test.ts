@@ -933,3 +933,49 @@ void test('a held controller button stays one press when a form control in the i
   ]);
   ingress.dispose();
 });
+
+void test('a held controller button stays one press when the binding changes as a panel opens', () => {
+  const windowTarget = createListenerTarget();
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
+  const buttons = Array.from({ length: 16 }, () => ({ value: 0, pressed: false }));
+  const gamepad = { index: 0, connected: true, axes: [0.5, 0, 0, 0], buttons } as unknown as Gamepad;
+  const document = {
+    ...createListenerTarget(),
+    activeElement: null,
+    pointerLockElement: null,
+    defaultView: windowTarget,
+    hasFocus: () => true,
+  } as unknown as Document;
+  const observed: unknown[] = [];
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL, selectedController: { index: 0 } }, {
+    canvas: () => canvas,
+    eventTarget: createListenerTarget() as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: () => false,
+    interactionMode: () => 'interface',
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [gamepad],
+    observeInterfaceInput: (observation) => { observed.push(observation.fact); },
+  });
+
+  // The press that opened the panel was gameplay's; the interface takes the
+  // pad with it still held, then the window's pointer lock ends and the
+  // runtime publishes a new binding.
+  buttons[1] = { value: 1, pressed: true };
+  ingress.interactionModeChanged();
+  ingress.bindRuntime({ ...INITIAL, runtime: { ...INITIAL.runtime, controlRevision: '12' } });
+  ingress.setContext('interface.default');
+  ingress.sampleController();
+  ingress.sampleController();
+  assert.deepEqual(observed, [], 'the still-held button and stick are no new facts');
+  buttons[1] = { value: 0, pressed: false };
+  ingress.sampleController();
+  buttons[1] = { value: 1, pressed: true };
+  ingress.sampleController();
+  assert.deepEqual(observed.filter((fact) => (fact as { kind: string }).kind === 'controller-button'), [
+    { kind: 'controller-button', button: 'button-1', edge: 'released' },
+    { kind: 'controller-button', button: 'button-1', edge: 'pressed' },
+  ]);
+  ingress.dispose();
+});
