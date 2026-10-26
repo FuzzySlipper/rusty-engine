@@ -620,6 +620,10 @@ class Check:
             self.key(name, 0.3)
         self.chord('Shift_L', 'a')
         self.key('d', 0.3, hold=0.8)
+        self.mark('typing'); self.runtime.eval('const text = document.getElementById("text"); text.value = ""; text.focus(); null')
+        for letter in 'abcdefghijklmnopqrstuvwxyz':
+            self.key(letter, 0.08)
+        typed = self.runtime.eval('document.getElementById("text").value').get('value')
         self.mark('wheel'); self.at(600, 400); self.input.wheel(1); time.sleep(0.3); self.input.wheel(-1); time.sleep(0.3)
         self.mark('focus loss'); stolen = self.control.focus_away()
         self.mark('click back'); self.at(600, 400); self.click(pause=1.0)
@@ -639,6 +643,10 @@ class Check:
         want = [('KeyW', 0), ('ShiftLeft', 1), ('ControlRight', 2), ('Numpad7', 3), ('Enter', 0), ('Space', 0), ('Tab', 0), ('F5', 0)]
         self.record('probe', 'key codes and locations', codes[:8] == want, ' '.join(f'{c}/{l}' for c, l in codes[:8]))
         self.record('probe', 'modifiers', any(e.get('key') == 'A' and e.get('shift') for e in keys), 'Shift+A reads A with shiftKey')
+        typed_codes = ''.join(e['code'][3:].lower() for e in self.step_events('typing')
+                              if e.get('event') == 'keydown' and e.get('code', '').startswith('Key'))
+        self.record('probe', 'typed letters', typed == 'abcdefghijklmnopqrstuvwxyz',
+                    f'field {typed!r}; keydowns {typed_codes!r}')
         held = [e for e in keys if e.get('code') == 'KeyD']
         self.record('probe', 'a held key repeats', len(held) >= 3, f'{len(held)} keydowns (repeat flags documented per engine)')
         wheel = [e.get('deltaY') for e in self.step_events('wheel') if e.get('event') == 'wheel']
