@@ -63,6 +63,11 @@ KEYS = {
     **{c: (c, code, ord(c.upper())) for c, code in zip('zxcvbnm', range(44, 51))},
     **{str(n): (str(n), 2 + (n - 1) % 10, 0x30 + n) for n in range(10)},
 }
+# How late getGamepads() may show a pad press in the median, in ms. Servo held
+# pad updates for its next rendering update (a median of 15 ms here, up to
+# 30), and the runtime's answer to the press could arrive first; Chromium
+# polls the pad itself (6 ms, up to 19).
+PAD_SHOWN_MS = 10
 EXTENDED_VK = {0x25, 0x26, 0x27, 0x28, 0xA3, 0x22}
 
 
@@ -758,7 +763,18 @@ class Check:
             self.mark('pad replugged'); pad = UinputPad(); pad.stick(32767); time.sleep(0.5)
             self.mark('reload with the stick held'); self.at(535, 50); self.at(540, 55); self.click(pause=3.0)
             self.mark('after reload'); pad.stick(0); time.sleep(0.4); pad.press(True); time.sleep(0.5); pad.press(False); time.sleep(0.5)
+            # A press must show in getGamepads() before anything it brings
+            # about elsewhere, such as the runtime's answer opening a panel
+            # (Servo held pad updates until its next rendering update).
+            self.mark('press timing'); sent = []
+            for _ in range(10):
+                sent.append(time.time() * 1e3); pad.press(True); time.sleep(0.12); pad.press(False); time.sleep(0.4)
             pad.close(); time.sleep(1.5)
+            seen = [e['at'] for e in self.step_events('press timing') if e.get('event') == 'pad press seen']
+            delays = sorted(min((at - t for at in seen if at >= t - 2), default=float('inf')) for t in sent)
+            self.record('review', 'gamepad press shown at once', len(seen) == 10 and delays[5] <= PAD_SHOWN_MS,
+                        f'{len(seen)} of 10 presses seen; device to getGamepads() median {delays[5]:.0f} ms, '
+                        f'max {delays[-1]:.0f} ms (median at most {PAD_SHOWN_MS})')
             self.record('review', 'gamepad connects and reads',
                         'gamepadconnected' in kinds('pad plugged') and any('"a":true' in (s or '') for s in state('pad plugged')), 'press and release')
             self.record('review', 'gamepad unplugs', 'gamepaddisconnected' in kinds('pad unplugged'), 'gamepaddisconnected; getGamepads()[0] null')

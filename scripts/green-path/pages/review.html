@@ -1,7 +1,8 @@
 <!doctype html>
 <html><body style="margin:0;font:14px sans-serif;background:#eef">
 <!-- Select lists that fit neither side, a multiple select, an over-wide label,
-     and the gamepad across unplug, replug and reload. -->
+     and the gamepad across unplug, replug and reload, and how soon a press
+     shows in getGamepads(). -->
 <select id="middle" style="position:absolute;left:40px;width:160px"></select>
 <select id="multi" multiple style="position:absolute;left:260px;top:40px;width:160px;height:24px">
   <option>Alpha</option><option selected>Bravo</option><option>Charlie</option><option disabled>Delta (disabled)</option><option>Echo</option>
@@ -27,5 +28,13 @@ let last = '';
   if (state !== last) { last = state; report('gamepad', { state }); out.textContent = state; }
   requestAnimationFrame(poll);
 })();
+// When the page first sees the A button down, polled every millisecond, for
+// the check to time a press from the device to getGamepads().
+let down = false;
+setInterval(() => {
+  const pressed = navigator.getGamepads()[0]?.buttons[0].pressed === true;
+  if (pressed && !down) report('pad press seen', { at: Date.now() });
+  down = pressed;
+}, 1);
 report('loaded', { height: innerHeight, width: innerWidth, ratio: devicePixelRatio, multi: selected(multi) });
 </script></body></html>
