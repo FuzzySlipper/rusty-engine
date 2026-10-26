@@ -90,8 +90,10 @@ TypeScript UI is composited over it.
   `undefined` reads `null`), or what it threw. `engine.ui.dom [selector]`
   answers the document's HTML, or the first matching element's. The window
   takes the script at its next wake (at most a frame later); a command waits
-  up to 5 s for the page. A streaming runtime refuses both: its page runs in
-  the viewer's browser.
+  up to 5 s for the page. The host answers both outside the runtime's
+  serialization, so updates go on meanwhile and an awaited script may call
+  the host's routes. A streaming runtime refuses both: its page runs in the
+  viewer's browser.
 - **Debugging protocols.** `rusty dev --cef-switch name[=value]` (repeatable, forwarded to
   `rusty-product-host --cef-switch`) passes Chromium switches; with
   `remote-debugging-port=<port>` a CDP client attaches to a Chromium page.

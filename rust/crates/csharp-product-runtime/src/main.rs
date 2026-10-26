@@ -207,6 +207,9 @@ fn main() -> Result<std::process::ExitCode, String> {
     if let Some(capture) = runtime.frame_capture() {
         config = config.with_frame_capture(capture);
     }
+    if let Some(window) = runtime.window_timing() {
+        config = config.with_window_page(window);
+    }
     if let Some(listener) = args.serve_listener_fd {
         // A supervised product runs from load, with or without a browser.
         let started = runtime

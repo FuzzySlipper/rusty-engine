@@ -211,11 +211,6 @@ impl WindowTiming {
         }
     }
 
-    /// The web engine drawing the UI page, once it opened.
-    pub fn ui_engine(&self) -> Option<String> {
-        self.record().ui.clone()
-    }
-
     /// A key or mouse button event reached the window at `at`.
     pub fn input_received(&self, at: SystemTime) {
         let mut record = self.record();
@@ -286,6 +281,16 @@ impl WindowTiming {
 
     fn record(&self) -> std::sync::MutexGuard<'_, WindowRecord> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl product_host::ProductHostWindowPage for WindowTiming {
+    fn evaluate(&self, source: String, timeout: Duration) -> Result<String, String> {
+        self.evaluate_in_page(source, timeout)
+    }
+
+    fn engine(&self) -> Option<String> {
+        self.record().ui.clone()
     }
 }
 

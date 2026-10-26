@@ -65,6 +65,7 @@ pub struct ProductHostConfig {
     capture: Option<crate::ProductHostFrameCapture>,
     ui_files: Option<ProductHostUiFiles>,
     activity: Option<Arc<crate::ProductHostActivity>>,
+    window_page: Option<Arc<dyn crate::ProductHostWindowPage>>,
 }
 
 /// The content type and bytes of the image or font the runtime granted its
@@ -92,7 +93,15 @@ impl ProductHostConfig {
             capture: None,
             ui_files: None,
             activity: None,
+            window_page: None,
         }
+    }
+
+    /// Answer live debug's `engine.ui.eval` and `engine.ui.dom` from the
+    /// desktop window's UI page, outside the runtime's serialization.
+    pub fn with_window_page(mut self, page: Arc<dyn crate::ProductHostWindowPage>) -> Self {
+        self.window_page = Some(page);
+        self
     }
 
     /// Serve the images and fonts the runtime granted its product UI at
@@ -236,6 +245,7 @@ impl ProductHost {
             capture: config.capture,
             ui_files: config.ui_files,
             activity: config.activity,
+            window_page: config.window_page,
         });
         let handler_threads = Arc::new(Mutex::new(Vec::new()));
         let listener_state = Arc::clone(&state);
@@ -499,6 +509,7 @@ struct HostState<R> {
     capture: Option<crate::ProductHostFrameCapture>,
     ui_files: Option<ProductHostUiFiles>,
     activity: Option<Arc<crate::ProductHostActivity>>,
+    window_page: Option<Arc<dyn crate::ProductHostWindowPage>>,
 }
 
 impl<R> HostState<R> {
@@ -1626,6 +1637,13 @@ fn invoke_debug_execute<R: ProductHostRuntime>(state: &HostState<R>, body: &[u8]
         Ok(command) => command,
         Err(_) => return debug_text_error(400, "debug command body must be valid UTF-8"),
     };
+    // The page's answer may need the host (an awaited fetch of a runtime
+    // route), so the wait for it holds no runtime lock.
+    if let Some((succeeded, message)) =
+        crate::window_page::execute(state.window_page.as_deref(), command)
+    {
+        return HttpResponse::text(if succeeded { 200 } else { 422 }, message);
+    }
     match state
         .runtime
         .session()
@@ -3684,6 +3702,7 @@ mod tests {
             capture: None,
             ui_files: None,
             activity: None,
+            window_page: None,
         };
         // Held time: nothing ticks, so the key waits in the mailbox.
         let queued = invoke_input(&state, br#"{"batch":[{"runtime":{"instanceId":"41","generation":"1","controlRevision":"1"},"sequence":"14","context":"gameplay.default","fact":{"kind":"key","code":"key-w","edge":"pressed"}}]}"#);
@@ -3740,6 +3759,7 @@ mod tests {
             capture: None,
             ui_files: None,
             activity: None,
+            window_page: None,
         })
     }
 
@@ -3831,6 +3851,7 @@ mod tests {
             capture: None,
             ui_files: None,
             activity: None,
+            window_page: None,
         };
         let response = invoke_lifecycle(
             &state,
@@ -3882,6 +3903,7 @@ mod tests {
             capture: None,
             ui_files: None,
             activity: None,
+            window_page: None,
         });
         let (held, held_ready) = std::sync::mpsc::channel();
         let (release, release_owner) = std::sync::mpsc::channel();
