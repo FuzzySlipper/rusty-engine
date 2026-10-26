@@ -193,9 +193,11 @@ engine.Dynamics.SetRagdollDrive(new(ragdoll, weak, DynamicsRagdollRoot.Simulated
   axis. All zero leaves a link limp. Set the drive again at any time to
   change strengths; an empty list stops driving.
 - **Root.** `Kinematic` moves the root bones (those no link has as its
-  child) to their place in the pose each step, so the character stays where
-  its animation puts it. `Simulated` lets them fall with the rest; switching
-  keeps the velocity they moved with.
+  child) to their place in the pose by the end of each step, at an even pace
+  through its substeps, so the character stays where its animation puts it.
+  `Simulated` lets them fall with the rest; switching keeps the velocity
+  they moved with, so a running character carries its momentum into a
+  knockdown.
 - **Each step.** Before every `Step`, `StepAndRead` or `StepWithReactions`
   of its world, a driven ragdoll aims at the pose the last call evaluated. A
   ragdoll whose instance is gone keeps its last aim.

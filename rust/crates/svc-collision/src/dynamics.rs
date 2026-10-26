@@ -217,6 +217,8 @@ pub struct DynamicsSolver {
     water: Vec<DynamicsWaterPlane>,
     /// The bodies the water acts on.
     floating: BTreeMap<DynamicsBodyId, Floating>,
+    /// Where kinematic bodies are to be by the end of the next step.
+    kinematic_targets: BTreeMap<DynamicsBodyId, Pose>,
     generation: u64,
 }
 
@@ -237,6 +239,7 @@ impl DynamicsSolver {
             shapes: BTreeMap::new(),
             water: Vec::new(),
             floating: BTreeMap::new(),
+            kinematic_targets: BTreeMap::new(),
             generation: 0,
         }
     }
@@ -330,6 +333,7 @@ impl DynamicsSolver {
         self.joints.retain(|_, joint| !joint.attaches(id));
         self.shapes.remove(&id);
         self.floating.remove(&id);
+        self.kinematic_targets.remove(&id);
         let attached = self.tethers_attached_to(id);
         for tether in &attached {
             if let Some(tether) = self.tethers.remove(tether) {
@@ -597,8 +601,10 @@ impl DynamicsSolver {
         self.joints.get(&id)?.motor()
     }
 
-    /// Move a body kinematically to `placement` over the next step, or make
-    /// it simulated again with `None`, keeping the velocity it moved with.
+    /// Move a body kinematically to `placement` over the next step, at an
+    /// even pace through all of its substeps, or make it simulated again with
+    /// `None`, keeping the velocity it moved with. A kinematic body given no
+    /// placement for a step stays where it is.
     pub fn set_body_kinematic(
         &mut self,
         id: DynamicsBodyId,
@@ -614,15 +620,16 @@ impl DynamicsSolver {
                 if body.body_type() != RigidBodyType::KinematicPositionBased {
                     body.set_body_type(RigidBodyType::KinematicPositionBased, true);
                 }
-                body.set_next_kinematic_position(Pose::from_parts(
-                    vector(translation),
-                    self::rotation(rotation),
-                ));
+                self.kinematic_targets.insert(
+                    id,
+                    Pose::from_parts(vector(translation), self::rotation(rotation)),
+                );
             }
             None => {
                 if body.body_type() != RigidBodyType::Dynamic {
                     body.set_body_type(RigidBodyType::Dynamic, true);
                 }
+                self.kinematic_targets.remove(&id);
             }
         }
         Ok(())
@@ -844,7 +851,20 @@ impl DynamicsSolver {
         }
         let substeps = steps as usize * subdivisions;
         let mut water = vec![DynamicsWaterReadout::default(); self.floating.len()];
-        for _ in 0..substeps {
+        // Kinematic bodies reach their targets at the end of the step, at the
+        // step's velocity in every substep rather than all in the first.
+        let moves = std::mem::take(&mut self.kinematic_targets)
+            .into_iter()
+            .filter_map(|(id, target)| {
+                let handle = *self.bodies.get(&id)?;
+                Some((handle, *self.world.bodies[handle].position(), target))
+            })
+            .collect::<Vec<_>>();
+        for substep in 0..substeps {
+            let along = (substep + 1) as f64 / substeps as f64;
+            for (handle, start, target) in &moves {
+                self.world.bodies[*handle].set_next_kinematic_position(start.lerp(target, along));
+            }
             for tether in self.tethers.values_mut() {
                 tether.reel(&mut self.world, dt);
             }

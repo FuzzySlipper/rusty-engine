@@ -606,6 +606,55 @@ mod tests {
     }
 
     #[test]
+    fn a_moving_kinematic_root_keeps_its_velocity_through_substeps_and_release() {
+        let (bones, links, rest) = figure();
+        let mut solver = DynamicsSolver::new([0.0; 3]);
+        let spawn = RagdollSpawn {
+            rest: rest.clone(),
+            current: rest.clone(),
+            previous: None,
+        };
+        solver
+            .insert_ragdoll(&bones, &links, material(), &spawn)
+            .unwrap();
+        let drives = vec![
+            RagdollDrive {
+                stiffness: 400.0,
+                damping: 20.0,
+                max_torque: 600.0,
+            };
+            links.len()
+        ];
+        // One metre per second along X, over three steps.
+        let mut target = rest.clone();
+        for _ in 0..3 {
+            for pose in &mut target {
+                pose.translation[0] += TICK;
+            }
+            solver
+                .drive_ragdoll(&bones, &links, &drives, &target, true)
+                .unwrap();
+            solver.step(TICK, 1, &[]).unwrap();
+            let root = solver.body(bones[0].body).unwrap();
+            assert!((root.linear_velocity[0] - 1.0).abs() < 1e-3, "{root:?}");
+        }
+        let placed = solver.ragdoll_placements(&bones)[0].unwrap();
+        assert!((placed.translation[0] - target[0].translation[0]).abs() < 1e-9);
+
+        // Released, it keeps moving as it moved.
+        solver
+            .drive_ragdoll(&bones, &links, &drives, &target, false)
+            .unwrap();
+        solver.step(TICK, 1, &[]).unwrap();
+        let root = solver.body(bones[0].body).unwrap();
+        assert!(
+            (root.linear_velocity[0] - 1.0).abs() < 0.05,
+            "{:?}",
+            root.linear_velocity
+        );
+    }
+
+    #[test]
     fn a_driven_figure_holds_its_pose_sways_back_from_a_hit_and_falls_when_weakened() {
         let (bones, links, rest) = figure();
         let mut solver = DynamicsSolver::new(GRAVITY);
