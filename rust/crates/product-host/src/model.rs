@@ -669,6 +669,37 @@ impl ProductHostDebugCatalog {
         self
     }
 
+    /// Adds the desktop window's UI page commands. A runtime that streams
+    /// its frames refuses them: its page runs in the viewer's browser.
+    pub fn with_ui_page(mut self) -> Self {
+        let parameter = |name: &str| ProductHostDebugCommandParameterDescriptor {
+            name: name.to_owned(),
+            type_name: "string".to_owned(),
+        };
+        for (name, description, parameters) in [
+            (
+                "engine.ui.eval",
+                "Evaluate JavaScript (the rest of the line) in the desktop window's UI page under either UI engine; answers its JSON value, awaited when a promise, or what it threw",
+                vec![parameter("expression")],
+            ),
+            (
+                "engine.ui.dom",
+                "Read the desktop window's UI page: the document's HTML, or the first element matching a CSS selector (the rest of the line)",
+                vec![parameter("selector")],
+            ),
+        ] {
+            if self.commands.iter().any(|command| command.name == name) {
+                continue;
+            }
+            self.commands.push(ProductHostDebugCommandDescriptor {
+                name: name.to_owned(),
+                description: description.to_owned(),
+                parameters,
+            });
+        }
+        self
+    }
+
     pub fn with_renderer_diagnostics(mut self) -> Self {
         self.available = true;
         for (name, description) in [

@@ -263,6 +263,14 @@ impl DesktopScene for WindowScene {
         );
     }
 
+    fn page_script(&self) -> Option<(u64, String)> {
+        self.timing.page_script()
+    }
+
+    fn page_answered(&self, id: u64, answer: Result<String, String>) {
+        self.timing.page_answered(id, answer);
+    }
+
     fn input_received(&self, at: std::time::SystemTime) {
         self.timing.input_received(at);
     }

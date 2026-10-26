@@ -726,6 +726,7 @@ mod inspect_debug;
 mod inspect_view;
 mod playtest;
 mod scene_debug;
+mod ui_page_debug;
 
 /// A finished product call: what it published, any input mapping it
 /// selected, and the product exception or Engine error that ended it.
@@ -2953,6 +2954,9 @@ impl CsharpProductRuntime {
         if let Some(result) = self.execute_content_source_debug(command) {
             return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
+        if let Some(result) = self.execute_ui_page_debug(command) {
+            return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
+        }
         if let Some(result) = self.execute_scene_debug(command) {
             return Ok(ProductHostRuntimeReceipt::new(result, Vec::new()));
         }
@@ -3531,6 +3535,7 @@ impl ProductHostRuntime for CsharpProductRuntime {
         let catalog = catalog
             .with_renderer_diagnostics()
             .with_content_source()
+            .with_ui_page()
             .with_scene_readouts();
         let catalog = if self.frame_output.is_some() {
             catalog.with_runtime_renderer_inspection()

@@ -25,8 +25,8 @@
 //! page can wait until it shows that frame.
 
 use std::borrow::Cow;
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use csharp_engine_abi::{
@@ -96,9 +96,13 @@ pub(crate) struct FrameOutput {
 }
 
 /// What the desktop window reports about the frames it presents and the
-/// input it receives, for the renderer statistics (`engine.renderer`).
+/// input it receives, for the renderer statistics (`engine.renderer`), and
+/// the scripts live-debug asks its UI page to evaluate (`engine.ui.eval`).
 #[derive(Default)]
 pub struct WindowTiming(Mutex<WindowRecord>);
+
+/// A script for the window's UI page and the way back to whoever asked.
+type PageReply = mpsc::Sender<Result<String, String>>;
 
 #[derive(Default)]
 struct WindowRecord {
@@ -111,6 +115,11 @@ struct WindowRecord {
     /// Recent UI repaints: when the frame drawing each was presented, and
     /// its host-thread cost.
     ui_repaints: VecDeque<(SystemTime, Duration)>,
+    /// Scripts the window has not taken yet, and those it took and has not
+    /// answered.
+    page_scripts: VecDeque<(u64, String)>,
+    page_waiting: HashMap<u64, PageReply>,
+    next_page_script: u64,
 }
 
 /// One frame the window presented: the step it showed, when, and how long
@@ -162,6 +171,49 @@ impl WindowTiming {
         }
         record.ui_imports = imports;
         record.ui_import_errors = import_errors;
+    }
+
+    /// Evaluate `source` in the window's UI page and wait up to `timeout`
+    /// for its answer: the page's JSON (`{"value": ...}` or `{"error":
+    /// ...}`), or why there is none. The window takes the script at its next
+    /// wake, at least once a frame.
+    pub fn evaluate_in_page(&self, source: String, timeout: Duration) -> Result<String, String> {
+        let (reply, answer) = mpsc::channel();
+        let id = {
+            let mut record = self.record();
+            record.next_page_script += 1;
+            let id = record.next_page_script;
+            record.page_scripts.push_back((id, source));
+            record.page_waiting.insert(id, reply);
+            id
+        };
+        let answer = answer.recv_timeout(timeout);
+        let mut record = self.record();
+        record.page_waiting.remove(&id);
+        record.page_scripts.retain(|(queued, _)| *queued != id);
+        answer.map_err(|_| {
+            format!(
+                "the window's UI page did not answer within {} s",
+                timeout.as_secs_f64()
+            )
+        })?
+    }
+
+    /// The next script for the UI page, with the id its answer carries.
+    pub fn page_script(&self) -> Option<(u64, String)> {
+        self.record().page_scripts.pop_front()
+    }
+
+    /// The UI page answered script `id`.
+    pub fn page_answered(&self, id: u64, answer: Result<String, String>) {
+        if let Some(reply) = self.record().page_waiting.remove(&id) {
+            let _ = reply.send(answer);
+        }
+    }
+
+    /// The web engine drawing the UI page, once it opened.
+    pub fn ui_engine(&self) -> Option<String> {
+        self.record().ui.clone()
     }
 
     /// A key or mouse button event reached the window at `at`.

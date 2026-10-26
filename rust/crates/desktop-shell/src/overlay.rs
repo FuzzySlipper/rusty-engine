@@ -151,6 +151,10 @@ const PAGE_SHIM: &str = r#"(() => {
   };
 })();"#;
 
+/// The console line a live-debug script's answer arrives on:
+/// `rusty-desktop:eval <id> <JSON>`.
+const PAGE_ANSWER: &str = "rusty-desktop:eval ";
+
 /// Console lines the Servo page's `<select>` list writes: the chosen
 /// options' ids, comma-separated, or none.
 const SELECT_CHOSEN: &str = "rusty-desktop:select ";
@@ -333,6 +337,8 @@ pub(crate) struct UiOverlay {
     image_cursors: HashMap<(CursorImage, u64), CustomCursor>,
     /// Gameplay input the window hands the runtime while it holds the lock.
     gameplay: GameplayRoute,
+    /// Live-debug scripts' answers from the page, not yet passed on.
+    page_answers: Vec<(u64, String)>,
 }
 
 impl UiOverlay {
@@ -380,7 +386,30 @@ impl UiOverlay {
             page_cursor: Some(CursorIcon::Default.into()),
             image_cursors: HashMap::new(),
             gameplay: GameplayRoute::new(scene, controller),
+            page_answers: Vec::new(),
         })
+    }
+
+    /// Evaluate live debug's script `id` in the page, in its global scope.
+    /// The page answers on the console with the script's completion value,
+    /// awaited when it is a promise, as `{"value": ...}` in JSON (`undefined`
+    /// reads `null`), or what it threw as `{"error": ...}`. An error here
+    /// means the page could not take the script.
+    pub(crate) fn evaluate(&mut self, id: u64, source: &str) -> Result<(), String> {
+        // A Rust string's debug form is a valid JavaScript string literal.
+        let script = format!(
+            "(async () => {{ let answer; \
+             try {{ const value = await (0, eval)({source:?}); \
+             answer = JSON.stringify({{ value: value === undefined ? null : value }}); }} \
+             catch (error) {{ answer = JSON.stringify({{ error: String(error) }}); }} \
+             console.info('{PAGE_ANSWER}{id} ' + answer); }})();"
+        );
+        self.page.execute_script(&script)
+    }
+
+    /// The page's answers to live-debug scripts since the last call.
+    pub(crate) fn take_page_answers(&mut self) -> Vec<(u64, String)> {
+        std::mem::take(&mut self.page_answers)
     }
 
     /// Whether the engine wakes the event loop for its work, rather than
@@ -459,6 +488,15 @@ impl UiOverlay {
                 }
                 NavigationEvent::ConsoleMessage { message, .. } if message == SELECT_CANCELLED => {
                     self.page.answer_select(None);
+                }
+                NavigationEvent::ConsoleMessage { message, .. }
+                    if message.starts_with(PAGE_ANSWER) =>
+                {
+                    if let Some((id, answer)) = message[PAGE_ANSWER.len()..].split_once(' ') {
+                        if let Ok(id) = id.parse() {
+                            self.page_answers.push((id, answer.to_owned()));
+                        }
+                    }
                 }
                 _ => {}
             }

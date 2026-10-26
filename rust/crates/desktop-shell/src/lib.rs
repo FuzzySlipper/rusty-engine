@@ -80,6 +80,14 @@ pub trait DesktopScene: Send + Sync {
     /// The window imported UI page repaints or failed to, and presented the
     /// frame drawing the last of them.
     fn ui_repainted(&self, _repaints: UiRepaints) {}
+    /// The next script to evaluate in the UI page, and the id its answer
+    /// carries. The shell asks at every wake.
+    fn page_script(&self) -> Option<(u64, String)> {
+        None
+    }
+    /// The UI page answered script `id` with its JSON (`{"value": ...}` or
+    /// `{"error": ...}`), or the window could not run it.
+    fn page_answered(&self, _id: u64, _answer: Result<String, String>) {}
     /// The window took the pointer lock and holds gameplay input
     /// (`routed`), reading the gamepad too when `controller`, or gave it
     /// back to the page.
@@ -588,6 +596,26 @@ impl ApplicationHandler for Shell {
             return;
         }
         let Some(open) = &mut self.window else { return };
+        // Live debug's scripts for the UI page start at every wake; the
+        // page's answers arrive with its console messages.
+        while let Some((id, source)) = self.scene.page_script() {
+            #[cfg(feature = "ui-overlay")]
+            if let Some(ui) = &mut open.ui {
+                if let Err(error) = ui.evaluate(id, &source) {
+                    self.scene.page_answered(id, Err(error));
+                }
+                continue;
+            }
+            let _ = source;
+            self.scene
+                .page_answered(id, Err("the window has no UI page".to_owned()));
+        }
+        #[cfg(feature = "ui-overlay")]
+        if let Some(ui) = &mut open.ui {
+            for (id, answer) in ui.take_page_answers() {
+                self.scene.page_answered(id, Ok(answer));
+            }
+        }
         // Held motion goes to the runtime at every wake, not every frame;
         // a gamepad change wakes the loop.
         #[cfg(feature = "ui-overlay")]

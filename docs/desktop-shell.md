@@ -83,7 +83,16 @@ TypeScript UI is composited over it.
   watching pages (see [recorded audio](recorded-audio.md#realization)).
 - **Live debug.** `rusty-live-debug --origin http://127.0.0.1:<port>`
   reaches the runtime's HTTP host over loopback, as in streaming mode.
-  `rusty dev --cef-switch name[=value]` (repeatable, forwarded to
+- **The page through live debug.** Under either engine,
+  `engine.ui.eval <expression>` evaluates JavaScript (the rest of the line)
+  in the window's UI page, in its global scope, and answers with the
+  engine's name and the value as JSON (awaited when it is a promise;
+  `undefined` reads `null`), or what it threw. `engine.ui.dom [selector]`
+  answers the document's HTML, or the first matching element's. The window
+  takes the script at its next wake (at most a frame later); a command waits
+  up to 5 s for the page. A streaming runtime refuses both: its page runs in
+  the viewer's browser.
+- **Debugging protocols.** `rusty dev --cef-switch name[=value]` (repeatable, forwarded to
   `rusty-product-host --cef-switch`) passes Chromium switches; with
   `remote-debugging-port=<port>` a CDP client attaches to a Chromium page.
   Servo's page takes a devtools client instead ([UI engine](#ui-engine)).
