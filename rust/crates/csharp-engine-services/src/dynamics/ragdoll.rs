@@ -1,10 +1,11 @@
 //! Limited joints between Dynamics bodies, and ragdolls: bodies per bone of
 //! an animation instance, spawned at its evaluated pose and placing its bones
-//! as a world-space pose layer after every step.
+//! as a world-space pose layer after every step. A driven ragdoll's motors
+//! aim, before every step, for the instance's pose below that layer.
 
 use engine_spatial::{
     DynamicsJoint, DynamicsJointFrame, DynamicsJointLimit, DynamicsPlacement, RagdollBone,
-    RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
+    RagdollDrive, RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
 };
 use render_model::{PlacedJoint, PlacedPoseLayer};
 
@@ -19,8 +20,11 @@ pub(super) struct Ragdoll {
     bones: Vec<RagdollBone>,
     /// The rig joint each bone places.
     joints: Vec<u32>,
-    links: Vec<u64>,
+    links: Vec<RagdollLink>,
     blend: f32,
+    /// Each link's motor strength and whether the root follows the pose,
+    /// while the ragdoll is driven.
+    drive: Option<(Vec<RagdollDrive>, bool)>,
 }
 
 pub(super) enum RagdollSlot {
@@ -238,8 +242,9 @@ impl RuntimeDynamicsBridge {
                 instance: request.instance.value,
                 bones: solver_bones,
                 joints: bones.iter().map(|bone| bone.joint).collect(),
-                links: solver_links.iter().map(|link| link.joint).collect(),
+                links: solver_links,
                 blend,
+                drive: None,
             }),
         );
         self.place_ragdoll(handle)?;
@@ -310,7 +315,7 @@ impl RuntimeDynamicsBridge {
         };
         if let Some(WorldSlot::Active(world)) = self.worlds.get_mut(&ragdoll.world) {
             for link in &ragdoll.links {
-                world.solver.remove_joint(*link);
+                world.solver.remove_joint(link.joint);
             }
             for bone in &ragdoll.bones {
                 world.solver.remove_body(bone.body);
@@ -344,6 +349,127 @@ impl RuntimeDynamicsBridge {
             ragdoll.blend = value;
         }
         self.place_ragdoll(request.ragdoll.value)
+    }
+
+    fn set_ragdoll_drive(
+        &mut self,
+        request: &NativeDynamicsRagdollDriveRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let drives =
+            unsafe { borrowed_slice(request.drives, request.drives_len, "ragdoll drives") }?;
+        let handle = request.ragdoll.value;
+        let ragdoll = self.active_ragdoll(handle)?;
+        if !drives.is_empty() && drives.len() != ragdoll.links.len() {
+            return Err(ragdoll_error(format!(
+                "{} drives for {} links: give one per link, or none",
+                drives.len(),
+                ragdoll.links.len()
+            )));
+        }
+        let strength = |value: f32| value.is_finite() && value >= 0.0;
+        if drives.iter().any(|drive| {
+            !(strength(drive.stiffness) && strength(drive.damping) && strength(drive.max_torque))
+        }) {
+            return Err(ragdoll_error(
+                "a drive's stiffness, damping and max torque are finite and not negative",
+            ));
+        }
+        let drive = (!drives.is_empty()).then(|| {
+            (
+                drives
+                    .iter()
+                    .map(|drive| RagdollDrive {
+                        stiffness: f64::from(drive.stiffness),
+                        damping: f64::from(drive.damping),
+                        max_torque: f64::from(drive.max_torque),
+                    })
+                    .collect(),
+                request.root == NativeDynamicsRagdollRoot::Kinematic,
+            )
+        });
+        let world = ragdoll.world;
+        if drive.is_none() {
+            // Undriven: no motors, and the root simulates.
+            let (bones, links) = (ragdoll.bones.clone(), ragdoll.links.clone());
+            let limp = vec![
+                RagdollDrive {
+                    stiffness: 0.0,
+                    damping: 0.0,
+                    max_torque: 0.0,
+                };
+                links.len()
+            ];
+            let target = self
+                .active_world(world)?
+                .solver
+                .ragdoll_placements(&bones)
+                .into_iter()
+                .map(|placement| {
+                    placement.unwrap_or(DynamicsPlacement {
+                        translation: [0.0; 3],
+                        rotation: [0.0, 0.0, 0.0, 1.0],
+                    })
+                })
+                .collect::<Vec<_>>();
+            self.active_world_mut(world)?
+                .solver
+                .drive_ragdoll(&bones, &links, &limp, &target, false)
+                .map_err(solver_error("CSHARP_RAGDOLL"))?;
+        }
+        if let Some(RagdollSlot::Active(ragdoll)) = self.ragdolls.get_mut(&handle) {
+            ragdoll.drive = drive;
+        }
+        Ok(())
+    }
+
+    /// Before a step of `world`, its driven ragdolls aim their motors (and
+    /// kinematic roots) at their instances' latest pose below the ragdoll
+    /// layer. A ragdoll whose instance is gone keeps its last aim.
+    pub(super) fn drive_ragdolls_of(
+        &mut self,
+        world: u64,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let driven: Vec<u64> = self
+            .ragdolls
+            .iter()
+            .filter_map(|(handle, slot)| match slot {
+                RagdollSlot::Active(ragdoll)
+                    if ragdoll.world == world && ragdoll.drive.is_some() =>
+                {
+                    Some(*handle)
+                }
+                _ => None,
+            })
+            .collect();
+        for handle in driven {
+            let ragdoll = self.active_ragdoll(handle)?;
+            let instance = ragdoll.instance;
+            let Ok(source) = self
+                .appearance()?
+                .ragdoll_source(instance, "CSHARP_RAGDOLL_POSE")
+            else {
+                continue;
+            };
+            let ragdoll = self.active_ragdoll(handle)?;
+            let pose = source.unlayered.as_deref().unwrap_or(&source.latest.joints);
+            let Some(target) = ragdoll
+                .joints
+                .iter()
+                .map(|joint| pose.get(*joint as usize).map(placement))
+                .collect::<Option<Vec<_>>>()
+            else {
+                continue;
+            };
+            let Some((drives, kinematic)) = ragdoll.drive.clone() else {
+                continue;
+            };
+            let (bones, links) = (ragdoll.bones.clone(), ragdoll.links.clone());
+            self.active_world_mut(world)?
+                .solver
+                .drive_ragdoll(&bones, &links, &drives, &target, kinematic)
+                .map_err(solver_error("CSHARP_RAGDOLL"))?;
+        }
+        Ok(())
     }
 
     fn apply_ragdoll_impulse(
@@ -506,6 +632,21 @@ pub(super) unsafe extern "C" fn set_ragdoll_blend(
     })
 }
 
+pub(super) unsafe extern "C" fn set_ragdoll_drive(
+    context: *mut c_void,
+    request: *const NativeDynamicsRagdollDriveRequest,
+    receipt: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if request.is_null() {
+        clear_receipt(receipt);
+        return 0;
+    }
+    let mut done = ();
+    ragdoll_call(context, receipt, &mut done, |bridge| {
+        bridge.set_ragdoll_drive(unsafe { &*request })
+    })
+}
+
 pub(super) unsafe extern "C" fn apply_ragdoll_impulse(
     context: *mut c_void,
     request: NativeDynamicsRagdollImpulseRequest,
@@ -546,6 +687,7 @@ mod tests {
     use super::*;
     use crate::appearance::{
         character_for_test, end_call_posed, place_character_for_test, ragdoll_layer_for_test,
+        RuntimeAppearanceBridge,
     };
 
     const BODY_GLB: &[u8] =
@@ -736,6 +878,167 @@ mod tests {
         let solver = &dynamics.active_world(world.value).unwrap().solver;
         assert_eq!((solver.body_count(), solver.joint_count()), (0, 0));
         assert!(dynamics.read_ragdoll(ragdoll).is_err());
+    }
+
+    #[test]
+    fn a_driven_ragdoll_aims_at_the_pose_below_its_layer_and_falls_when_released() {
+        let mut appearance = crate::appearance::create(
+            Default::default(),
+            BTreeMap::from([("body.glb".to_owned(), crate::ContentBytes::from(BODY_GLB))]),
+        );
+        let mut scene = render_presentation::PresentationWorld::default();
+        scene.advance_elapsed(1.0);
+        appearance.set_presentation_clock(1.0, 0.0);
+        appearance.begin_call();
+        let (instance, joints) = character_for_test(&mut appearance);
+        end_call_posed(&mut appearance, &mut scene, 0.0);
+
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut dynamics = RuntimeDynamicsBridge::new(spatial.collision_source());
+        dynamics.bind_appearance(&mut appearance);
+        appearance.begin_call();
+        let world = dynamics
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3 {
+                    x: 0.0,
+                    y: -9.81,
+                    z: 0.0,
+                },
+            })
+            .unwrap();
+        let bone = |joint: &str, end: &str| NativeDynamicsRagdollBone {
+            joint: joints[joint],
+            end_joint: joints[end],
+            length: 0.0,
+            shape: NativeDynamicsRagdollShape::Capsule,
+            radius: 0.06,
+            half_depth: 0.0,
+            mass: 5.0,
+        };
+        let bones = [
+            bone("Hips", "Spine"),
+            bone("LeftUpLeg", "LeftLeg"),
+            bone("LeftLeg", "LeftFoot"),
+        ];
+        let links = [
+            NativeDynamicsRagdollLink {
+                parent: 0,
+                child: 1,
+                axis: NativeVec3 {
+                    x: 0.0,
+                    y: 1.0,
+                    z: 0.0,
+                },
+                limits: limits(NativeDynamicsJointKind::Cone, -0.3, 0.3),
+            },
+            NativeDynamicsRagdollLink {
+                parent: 1,
+                child: 2,
+                axis: NativeVec3 {
+                    x: 1.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                limits: limits(NativeDynamicsJointKind::Hinge, 0.0, 2.4),
+            },
+        ];
+        let ragdoll = dynamics
+            .create_ragdoll(&NativeDynamicsRagdollRequest {
+                world,
+                instance,
+                bones: bones.as_ptr(),
+                bones_len: bones.len(),
+                links: links.as_ptr(),
+                links_len: links.len(),
+                collision_groups: 1,
+                collision_mask: u32::MAX,
+                friction: 0.8,
+                restitution: 0.0,
+                linear_damping: 0.0,
+                angular_damping: 0.2,
+                blend: 1.0,
+            })
+            .unwrap();
+        let strong = [NativeDynamicsRagdollLinkDrive {
+            stiffness: 300.0,
+            damping: 15.0,
+            max_torque: 500.0,
+        }; 2];
+        let drive = |dynamics: &mut RuntimeDynamicsBridge,
+                     drives: &[NativeDynamicsRagdollLinkDrive],
+                     root| {
+            dynamics.set_ragdoll_drive(&NativeDynamicsRagdollDriveRequest {
+                ragdoll,
+                drives: drives.as_ptr(),
+                drives_len: drives.len(),
+                root,
+            })
+        };
+        // One drive per link, or none.
+        assert!(drive(
+            &mut dynamics,
+            &strong[..1],
+            NativeDynamicsRagdollRoot::Kinematic
+        )
+        .is_err());
+        drive(&mut dynamics, &strong, NativeDynamicsRagdollRoot::Kinematic).unwrap();
+        let step = |dynamics: &mut RuntimeDynamicsBridge| {
+            let action: [NativeDynamicsAction; 0] = [];
+            dynamics
+                .step(&NativeDynamicsStepRequest {
+                    world,
+                    step_seconds: TICK,
+                    steps: 1,
+                    actions: action.as_ptr(),
+                    actions_len: 0,
+                })
+                .unwrap();
+        };
+        // Calls of a running game: step, then the call settles the pose.
+        let mut calls = |dynamics: &mut RuntimeDynamicsBridge,
+                         appearance: &mut RuntimeAppearanceBridge,
+                         count: usize| {
+            for _ in 0..count {
+                step(dynamics);
+                end_call_posed(appearance, &mut scene, f64::from(TICK));
+                appearance.begin_call();
+                dynamics.bind_appearance(appearance);
+            }
+        };
+        calls(&mut dynamics, &mut appearance, 60);
+
+        // It aims for the pose below its own layer, and holds it.
+        let source = appearance
+            .ragdoll_source(instance.value, "CSHARP_RAGDOLL_POSE")
+            .unwrap();
+        let target = source.unlayered.expect("the pose below the ragdoll layer");
+        let read = dynamics.read_ragdoll(ragdoll).unwrap();
+        let placed = unsafe { std::slice::from_raw_parts(read.bones, read.bones_len) };
+        for (index, joint) in ["Hips", "LeftUpLeg", "LeftLeg"].into_iter().enumerate() {
+            let want = target[joints[joint] as usize].world.translation;
+            let got = placed[index].translation;
+            let off = [got.x - want[0], got.y - want[1], got.z - want[2]]
+                .map(|delta| delta * delta)
+                .iter()
+                .sum::<f32>()
+                .sqrt();
+            assert!(off < 0.05, "{joint} is {off} m from its pose");
+        }
+        let solver = &dynamics.active_world(world.value).unwrap().solver;
+        let RagdollSlot::Active(driven) = &dynamics.ragdolls[&ragdoll.value] else {
+            unreachable!()
+        };
+        let hips = driven.bones[0].body;
+        assert!(solver.body_is_kinematic(hips));
+        let standing = solver.body(hips).unwrap().translation[1];
+
+        // Undriven, the root simulates and the ragdoll falls.
+        drive(&mut dynamics, &[], NativeDynamicsRagdollRoot::Kinematic).unwrap();
+        calls(&mut dynamics, &mut appearance, 30);
+        let solver = &dynamics.active_world(world.value).unwrap().solver;
+        assert!(!solver.body_is_kinematic(hips));
+        let fallen = solver.body(hips).unwrap().translation[1];
+        assert!(fallen < standing - 0.5, "{standing} -> {fallen}");
     }
 
     /// An instance published in the call that spawns the ragdoll has no

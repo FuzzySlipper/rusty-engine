@@ -5,7 +5,9 @@ cone, each with limits and damping. `Dynamics.CreateRagdoll` builds a ragdoll
 from them: one body per chosen bone of an animated character. The ragdoll
 spawns at the pose the character was drawn in and moving as it moved. While
 it lives, the skeleton follows the bodies as a layer over its
-[pose](skeleton-poses.md), mixed in by a blend weight.
+[pose](skeleton-poses.md), mixed in by a blend weight. A
+[driven](#driven-ragdolls) ragdoll's links pull its bones toward the
+animated pose with motors, so it can take a hit and recover.
 
 ```csharp
 // The fall, and the hit that causes it, of a resident published before.
@@ -25,12 +27,17 @@ ragdoll.Dispose();
 
 `fixtures/csharp-ragdoll` drops the joint-attachment fixture's character from
 its idle pose with a hit to the chest (`ragdoll.fall`), and blends it back to
-idle (`ragdoll.getup`). `ragdoll.inspect` reports:
+idle (`ragdoll.getup`). It also stands the character in its idle as a driven
+ragdoll (`ragdoll.stand`), hits its chest so it sways and comes back
+(`ragdoll.hit`), and weakens its motors so it falls (`ragdoll.weaken`).
+`ragdoll.inspect` reports:
 
 - when the ragdoll came to rest;
 - how close its shapes came to the floor;
 - the hinges' least flexion;
-- its pose 480 steps after the hit, so that falls can be compared.
+- its pose 480 steps after the hit, so that falls can be compared;
+- for a driven ragdoll, how far its bones turned from the idle pose, and
+  from the pose they held when hit.
 
 ## Joints
 
@@ -159,3 +166,44 @@ instance leaves the bodies simulating until the ragdoll is disposed.
 inputs give the same fall. A world that has held other bodies carries their
 history in Rapier's arena and pair order, so the fixture starts each fall in
 a fresh world.
+
+## Driven ragdolls
+
+`SetRagdollDrive` gives each link a motor that turns its child bone toward
+the turn it has from its parent in the instance's pose, as the clips, IK and
+the product's pose overrides make it (not the ragdoll's own layer). A product
+aims the ragdoll at a pose of its own by setting those overrides.
+
+```csharp
+// Stand under motors, the hips held to the animation.
+DynamicsRagdollLinkDrive[] strong = [.. links.Select(_ => new DynamicsRagdollLinkDrive(
+    Stiffness: 600, Damping: 40, MaxTorque: 1500))];
+engine.Dynamics.SetRagdollDrive(new(ragdoll, strong, DynamicsRagdollRoot.Kinematic));
+
+// A hit sways it and the motors bring it back; to fall, weaken them and
+// let the hips go.
+engine.Dynamics.ApplyRagdollImpulse(new(ragdoll, Bone: 1, hitPoint, hitImpulse));
+DynamicsRagdollLinkDrive[] weak = [.. links.Select(_ => new DynamicsRagdollLinkDrive(20, 2, 20))];
+engine.Dynamics.SetRagdollDrive(new(ragdoll, weak, DynamicsRagdollRoot.Simulated));
+```
+
+- **Strength.** One `DynamicsRagdollLinkDrive` per link, in the links'
+  order: a spring of `Stiffness` (N·m per radian) with `Damping`
+  (N·m·s per radian), never with more than `MaxTorque` (N·m) about each
+  axis. All zero leaves a link limp. Set the drive again at any time to
+  change strengths; an empty list stops driving.
+- **Root.** `Kinematic` moves the root bones (those no link has as its
+  child) to their place in the pose each step, so the character stays where
+  its animation puts it. `Simulated` lets them fall with the rest; switching
+  keeps the velocity they moved with.
+- **Each step.** Before every `Step`, `StepAndRead` or `StepWithReactions`
+  of its world, a driven ragdoll aims at the pose the last call evaluated. A
+  ragdoll whose instance is gone keeps its last aim.
+- **Hinges.** A hinge reaches only the turn about its axis, so a bone whose
+  pose bends off that axis holds the nearest turn it can (the fixture's
+  elbows and knees sit about 0.2 radians from the idle pose).
+- Motors are a second Rapier joint per link beside the limited one, since
+  Rapier's coupled cone axes take no motor. The limits still hold.
+- `ApplyRagdollImpulse`, `ReadRagdoll` and the blend work as for any ragdoll.
+  A kinematic root never sleeps, so a ragdoll held by one never reads
+  `Resting`.

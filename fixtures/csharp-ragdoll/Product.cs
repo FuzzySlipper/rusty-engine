@@ -11,6 +11,14 @@ namespace CsharpRagdoll;
 /// and gets up again (<c>ragdoll.getup</c>). <c>ragdoll.inspect</c> reports
 /// rest, floor clearance, the hinges' least flexion and the pose a fixed
 /// number of steps after the hit, so two falls can be compared.
+/// <para>
+/// <c>ragdoll.stand</c> spawns it driven instead: motors hold each link at
+/// the idle pose and its hips follow the pose kinematically.
+/// <c>ragdoll.hit</c> hits its chest, and it sways and comes back;
+/// <c>ragdoll.weaken</c> weakens the motors and frees the hips, and it
+/// falls. <c>ragdoll.inspect</c> then also reports how far the bones turned
+/// from the pose they stood in, now and at most since the hit.
+/// </para>
 /// </summary>
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
@@ -27,6 +35,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const int HitBone = 1;
     private static readonly Vector3 HitOffset = new(0.05f, 0.4f, 0.1f);
     private static readonly Vector3 HitImpulse = new(0, 0, -110);
+    /// <summary>The standing ragdoll's hit, which its motors take.</summary>
+    private static readonly Vector3 StandingHitImpulse = new(0, 0, -80);
+    /// <summary>Motors that hold the idle pose against gravity and give to a hit.</summary>
+    private static readonly DynamicsRagdollLinkDrive Strong = new(Stiffness: 600, Damping: 40, MaxTorque: 1500);
+    /// <summary>Motors too weak to hold the body up.</summary>
+    private static readonly DynamicsRagdollLinkDrive Weak = new(Stiffness: 20, Damping: 2, MaxTorque: 20);
 
     private sealed record Bone(string Joint, string? End, float Length, DynamicsRagdollShape Shape, float Radius, float HalfDepth, float Mass);
     private sealed record Link(int Parent, int Child, Vector3 Axis, DynamicsJointLimits Limits);
@@ -75,7 +89,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly DynamicsRagdollLink[] links;
     private readonly float[] lengths;
     private DynamicsRagdoll? ragdoll;
-    private bool falling;
+    private bool falling, standing;
+    /// <summary>Each bone's rotation when the driven ragdoll spawned: the idle pose it holds.</summary>
+    private Quaternion[] stood = [];
+    /// <summary>Each bone's rotation when it was hit: the pose its motors hold.</summary>
+    private Quaternion[] held = [];
+    private float drift, sway, widestSway, hipsHeight;
+    private string driftBone = "-", swayBone = "-";
+    private int? hitAt;
     private float blend;
     private bool gettingUp;
     private int ticks, falls;
@@ -140,6 +161,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         {
             Spawn();
         }
+        if (standing && engine.Animation.ReadJointPose(instance).Reported)
+        {
+            SpawnStanding();
+        }
         if (ragdoll is null || facts.AdmittedStepCount == 0)
         {
             return ProductUpdateResult.None;
@@ -161,6 +186,26 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return ProductUpdateResult.None;
     }
 
+    private void SpawnStanding()
+    {
+        standing = false;
+        ragdoll = engine.Dynamics.CreateRagdoll(new(world, instance, bones, links, FallGroup, uint.MaxValue, 0.8f, 0, 0.05f, 0.3f, 1));
+        Drive(Strong, DynamicsRagdollRoot.Kinematic);
+        blend = 1;
+        ticks = 0;
+        restedAt = null;
+        hitAt = null;
+        held = [];
+        widestSway = 0;
+        lowest = float.MaxValue;
+        leastFlexion = float.MaxValue;
+        MeasureLengths();
+        stood = [.. engine.Dynamics.ReadRagdoll(ragdoll).Bones.ToArray().Select(bone => bone.Rotation)];
+    }
+
+    private void Drive(DynamicsRagdollLinkDrive drive, DynamicsRagdollRoot root) =>
+        engine.Dynamics.SetRagdollDrive(new(ragdoll!, Enumerable.Repeat(drive, links.Length).ToArray(), root));
+
     private void Spawn()
     {
         falling = false;
@@ -171,7 +216,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         lowest = float.MaxValue;
         leastFlexion = float.MaxValue;
         falls++;
-        // Each bone's length, from the pose it spawned in.
+        MeasureLengths();
+        DynamicsRagdollResult spawned = engine.Dynamics.ReadRagdoll(ragdoll);
+        Transform chest = spawned.Bones.Span[HitBone];
+        engine.Dynamics.ApplyRagdollImpulse(new(ragdoll, HitBone, chest.Translation + Vector3.Transform(HitOffset, chest.Rotation), HitImpulse));
+    }
+
+    /// <summary>Each bone's length, from the pose the ragdoll spawned in.</summary>
+    private void MeasureLengths()
+    {
         ReadOnlySpan<AnimationJointInfo> rig = engine.Animation.ReadJoints(bodyResource).Span;
         ReadOnlySpan<JointPose> pose = engine.Animation.ReadJointPose(instance).Joints.Span;
         for (int index = 0; index < Bones.Length; index++)
@@ -183,9 +236,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
                     pose[(int)AnimationJoints.IndexOf(rig, bone.Joint)].World.Translation,
                     pose[(int)AnimationJoints.IndexOf(rig, bone.End)].World.Translation);
         }
-        DynamicsRagdollResult spawned = engine.Dynamics.ReadRagdoll(ragdoll);
-        Transform chest = spawned.Bones.Span[HitBone];
-        engine.Dynamics.ApplyRagdollImpulse(new(ragdoll, HitBone, chest.Translation + Vector3.Transform(HitOffset, chest.Rotation), HitImpulse));
     }
 
     private void Observe()
@@ -196,6 +246,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         {
             restedAt ??= ticks;
         }
+        hipsHeight = placed[0].Translation.Y;
+        (drift, driftBone) = Turned(placed, stood);
+        (sway, swayBone) = Turned(placed, held);
+        widestSway = MathF.Max(widestSway, sway);
         // Clearance is the bodies' own: the drawn end joints it measures
         // to move away from them while the ragdoll blends out.
         lowestNow = float.MaxValue;
@@ -226,6 +280,21 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             }
             recorded.Add(string.Create(CultureInfo.InvariantCulture, $"{sum.X:F5},{sum.Y:F5},{sum.Z:F5}"));
         }
+    }
+
+    /// <summary>The most any bone is turned from <paramref name="reference"/>, in radians, and which bone.</summary>
+    private static (float Angle, string Bone) Turned(ReadOnlySpan<Transform> placed, Quaternion[] reference)
+    {
+        (float angle, string bone) = (0, "-");
+        for (int index = 0; index < reference.Length && index < placed.Length; index++)
+        {
+            float dot = MathF.Min(1, MathF.Abs(Quaternion.Dot(placed[index].Rotation, reference[index])));
+            if (2 * MathF.Acos(dot) > angle)
+            {
+                (angle, bone) = (2 * MathF.Acos(dot), Bones[index].Joint);
+            }
+        }
+        return (angle, bone);
     }
 
     /// <summary>The lowest point of a bone's shape, from its joint placement.</summary>
@@ -266,6 +335,47 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return least;
     }
 
+    [DebugCommand("ragdoll.stand")]
+    public string Stand()
+    {
+        ragdoll?.Dispose();
+        ragdoll = null;
+        world.Dispose();
+        world = CreateWorld();
+        gettingUp = false;
+        falling = false;
+        stood = [];
+        held = [];
+        engine.Animation.SetPlayback(new(instance, AnimationPlaybackKind.Sample, Idle, AnimationLoopMode.Repeat, 1, 1, true, 0, false, IdleSample));
+        standing = true;
+        return Inspect();
+    }
+
+    [DebugCommand("ragdoll.hit")]
+    public string Hit()
+    {
+        if (ragdoll is not null)
+        {
+            ReadOnlySpan<Transform> placed = engine.Dynamics.ReadRagdoll(ragdoll).Bones.Span;
+            held = [.. placed.ToArray().Select(bone => bone.Rotation)];
+            Transform chest = placed[HitBone];
+            engine.Dynamics.ApplyRagdollImpulse(new(ragdoll, HitBone, chest.Translation + Vector3.Transform(HitOffset, chest.Rotation), StandingHitImpulse));
+            hitAt = ticks;
+            widestSway = 0;
+        }
+        return Inspect();
+    }
+
+    [DebugCommand("ragdoll.weaken")]
+    public string Weaken()
+    {
+        if (ragdoll is not null)
+        {
+            Drive(Weak, DynamicsRagdollRoot.Simulated);
+        }
+        return Inspect();
+    }
+
     [DebugCommand("ragdoll.fall")]
     public string Fall()
     {
@@ -274,6 +384,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         world.Dispose();
         world = CreateWorld();
         gettingUp = false;
+        standing = false;
+        stood = [];
+        held = [];
         engine.Animation.SetPlayback(new(instance, AnimationPlaybackKind.Sample, Idle, AnimationLoopMode.Repeat, 1, 1, true, 0, false, IdleSample));
         falling = true;
         return Inspect();
@@ -289,7 +402,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     [DebugCommand("ragdoll.inspect")]
     public string Inspect() => string.Create(CultureInfo.InvariantCulture,
-        $"falls={falls}; ragdoll={ragdoll is not null}; blend={blend:F2}; ticks={ticks}; restedAt={restedAt?.ToString(CultureInfo.InvariantCulture) ?? "-"}; lowest={(lowest == float.MaxValue ? 0 : lowest):F4} ({lowestBone}); lowestNow={(lowestNow == float.MaxValue ? 0 : lowestNow):F4}; leastFlexion={(leastFlexion == float.MaxValue ? 0 : leastFlexion):F3}; recorded=[{string.Join(" | ", recorded)}]");
+        $"falls={falls}; ragdoll={ragdoll is not null}; blend={blend:F2}; ticks={ticks}; restedAt={restedAt?.ToString(CultureInfo.InvariantCulture) ?? "-"}; lowest={(lowest == float.MaxValue ? 0 : lowest):F4} ({lowestBone}); lowestNow={(lowestNow == float.MaxValue ? 0 : lowestNow):F4}; leastFlexion={(leastFlexion == float.MaxValue ? 0 : leastFlexion):F3}; recorded=[{string.Join(" | ", recorded)}]; hips={hipsHeight:F3}; drift={drift:F3} ({driftBone}); hitAt={hitAt?.ToString(CultureInfo.InvariantCulture) ?? "-"}; sway={sway:F3} ({swayBone}); widestSway={widestSway:F3}");
 
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
     public void Start() { }

@@ -54,6 +54,11 @@ pub type NativeSetDynamicsRagdollBlend = unsafe extern "C" fn(
     NativeDynamicsRagdollBlendRequest,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetDynamicsRagdollDrive = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDynamicsRagdollDriveRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeApplyDynamicsRagdollImpulse = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsRagdollImpulseRequest,
@@ -1515,6 +1520,7 @@ pub struct NativeDynamicsApi {
     pub create_ragdoll: NativeCreateDynamicsRagdoll,
     pub destroy_ragdoll: NativeDestroyDynamicsRagdoll,
     pub set_ragdoll_blend: NativeSetDynamicsRagdollBlend,
+    pub set_ragdoll_drive: NativeSetDynamicsRagdollDrive,
     pub apply_ragdoll_impulse: NativeApplyDynamicsRagdollImpulse,
     pub apply_point_impulse: NativeApplyDynamicsPointImpulse,
     pub read_ragdoll: NativeReadDynamicsRagdoll,

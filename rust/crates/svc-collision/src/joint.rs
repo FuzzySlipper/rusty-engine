@@ -1,9 +1,10 @@
 //! Limited joints between two Dynamics bodies: a hinge, or a cone with
-//! twist, each with optional damping. Ragdolls link their bones with them.
+//! twist, each with optional damping, and optionally a motor turning the
+//! second frame toward a target. Ragdolls link their bones with them.
 
 use rapier3d_f64::prelude::{
-    GenericJointBuilder, ImpulseJointHandle, JointAxesMask, JointAxis, MotorModel, PhysicsWorld,
-    Pose, RigidBodyHandle, Rotation, Vector,
+    GenericJoint, GenericJointBuilder, ImpulseJointHandle, JointAxesMask, JointAxis, MotorModel,
+    PhysicsWorld, Pose, RigidBodyHandle, Rotation, Vector,
 };
 
 use crate::dynamics::DynamicsBodyId;
@@ -63,6 +64,47 @@ pub struct DynamicsJoint {
     pub contacts_enabled: bool,
 }
 
+/// A motor pulling a joint's second frame toward `target`, its turn from
+/// the first frame (a quaternion in x/y/z/w order), like a spring of
+/// `stiffness` (N·m per radian) with `damping` (N·m·s per radian), never
+/// with more than `max_torque` (N·m) about each axis.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DynamicsJointMotor {
+    pub target: [f64; 4],
+    pub stiffness: f64,
+    pub damping: f64,
+    pub max_torque: f64,
+}
+
+impl DynamicsJointMotor {
+    fn valid(&self) -> bool {
+        crate::dynamics::unit_rotation(self.target).is_some()
+            && [self.stiffness, self.damping, self.max_torque]
+                .into_iter()
+                .all(|value| value.is_finite() && value >= 0.0)
+    }
+
+    /// Rapier's angular motor drives `2 asin` of each imaginary part of the
+    /// frames' relative rotation to its target, so a target with those
+    /// parts is the whole turn (taken the short way round).
+    fn angles(&self) -> [f64; 3] {
+        let [x, y, z, w] = Rotation::from_array(self.target).normalize().to_array();
+        let sign = if w < 0.0 { -1.0 } else { 1.0 };
+        [x, y, z].map(|part| 2.0 * (sign * part).clamp(-1.0, 1.0).asin())
+    }
+
+    fn apply(&self, joint: &mut GenericJoint) {
+        for (axis, angle) in ANGULAR_AXES.into_iter().zip(self.angles()) {
+            joint
+                .set_motor_model(axis, MotorModel::ForceBased)
+                .set_motor(axis, angle, 0.0, self.stiffness, self.damping)
+                .set_motor_max_force(axis, self.max_torque);
+        }
+    }
+}
+
+const ANGULAR_AXES: [JointAxis; 3] = [JointAxis::AngX, JointAxis::AngY, JointAxis::AngZ];
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DynamicsJointError {
     Invalid { id: u64 },
@@ -83,6 +125,10 @@ impl DynamicsJointError {
 pub(crate) struct SolverJoint {
     pub(crate) definition: DynamicsJoint,
     handle: ImpulseJointHandle,
+    /// A second joint between the same frames that only drives: Rapier's
+    /// coupled cone axes take no motor, so the limits and the motor are
+    /// apart.
+    motor: Option<(DynamicsJointMotor, ImpulseJointHandle)>,
 }
 
 impl SolverJoint {
@@ -155,14 +201,70 @@ impl SolverJoint {
             builder
         };
         let handle = world.impulse_joints.insert(first, second, builder, true);
-        Self { definition, handle }
+        Self {
+            definition,
+            handle,
+            motor: None,
+        }
     }
 
     /// Detach from the world. Rapier already removed the joint if one of its
     /// bodies was removed.
-    pub(crate) fn remove(self, world: &mut PhysicsWorld) -> DynamicsJoint {
+    pub(crate) fn remove(
+        self,
+        world: &mut PhysicsWorld,
+    ) -> (DynamicsJoint, Option<DynamicsJointMotor>) {
         world.impulse_joints.remove(self.handle, true);
-        self.definition
+        let motor = self.motor.map(|(motor, handle)| {
+            world.impulse_joints.remove(handle, true);
+            motor
+        });
+        (self.definition, motor)
+    }
+
+    pub(crate) fn motor(&self) -> Option<DynamicsJointMotor> {
+        self.motor.map(|(motor, _)| motor)
+    }
+
+    /// Drive the joint with `motor`, or stop driving it. An unchanged motor
+    /// leaves the bodies asleep.
+    pub(crate) fn set_motor(
+        &mut self,
+        motor: Option<DynamicsJointMotor>,
+        world: &mut PhysicsWorld,
+        first: RigidBodyHandle,
+        second: RigidBodyHandle,
+    ) -> Result<(), DynamicsJointError> {
+        if motor.is_some_and(|motor| !motor.valid()) {
+            return Err(DynamicsJointError::Invalid {
+                id: self.definition.id,
+            });
+        }
+        match (motor, &mut self.motor) {
+            (Some(motor), Some((current, _))) if *current == motor => {}
+            (Some(motor), Some((current, handle))) => {
+                if let Some(joint) = world.impulse_joints.get_mut(*handle, true) {
+                    motor.apply(&mut joint.data);
+                }
+                *current = motor;
+            }
+            (Some(motor), None) => {
+                let mut joint = GenericJointBuilder::new(JointAxesMask::empty())
+                    .local_frame1(self.definition.first_frame.pose())
+                    .local_frame2(self.definition.second_frame.pose())
+                    .contacts_enabled(self.definition.contacts_enabled)
+                    .build();
+                motor.apply(&mut joint);
+                let handle = world.impulse_joints.insert(first, second, joint, true);
+                self.motor = Some((motor, handle));
+            }
+            (None, Some((_, handle))) => {
+                world.impulse_joints.remove(*handle, true);
+                self.motor = None;
+            }
+            (None, None) => {}
+        }
+        Ok(())
     }
 
     pub(crate) fn attaches(&self, body: DynamicsBodyId) -> bool {

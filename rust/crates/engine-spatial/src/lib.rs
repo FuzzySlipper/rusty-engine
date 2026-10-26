@@ -74,11 +74,11 @@ pub use rigid_body::{
 pub use svc_collision::{
     DynamicsAction, DynamicsAnchorObservation, DynamicsBodyId, DynamicsBodyInput,
     DynamicsBodyOutput, DynamicsContact, DynamicsEnvironmentReceipt, DynamicsError, DynamicsJoint,
-    DynamicsJointError, DynamicsJointFrame, DynamicsJointLimit, DynamicsMassProperties,
-    DynamicsPlacement, DynamicsRopeSolverConfig, DynamicsShape, DynamicsSolver,
-    DynamicsStepReceipt, DynamicsTether, DynamicsTetherEndpoint, DynamicsTetherError,
-    DynamicsTetherReadout, DynamicsWaterPlane, DynamicsWaterReadout, RagdollBone, RagdollLink,
-    RagdollMaterial, RagdollShape, RagdollSpawn,
+    DynamicsJointError, DynamicsJointFrame, DynamicsJointLimit, DynamicsJointMotor,
+    DynamicsMassProperties, DynamicsPlacement, DynamicsRopeSolverConfig, DynamicsShape,
+    DynamicsSolver, DynamicsStepReceipt, DynamicsTether, DynamicsTetherEndpoint,
+    DynamicsTetherError, DynamicsTetherReadout, DynamicsWaterPlane, DynamicsWaterReadout,
+    RagdollBone, RagdollDrive, RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
 };
 pub use trigger::{
     KinematicTriggerDefinition, TriggerCollider, TriggerGeometrySource, TriggerLifecycleReceipt,

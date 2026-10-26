@@ -1148,6 +1148,7 @@ sealed class DynamicsServiceFake : IDynamicsService
     public DynamicsJointReleaseReceipt RemoveJoint(DynamicsJointRemoveRequest request) => throw new NotSupportedException();
     public DynamicsRagdoll CreateRagdoll(DynamicsRagdollRequest request) => throw new NotSupportedException();
     public void SetRagdollBlend(DynamicsRagdollBlendRequest request) => throw new NotSupportedException();
+    public void SetRagdollDrive(DynamicsRagdollDriveRequest request) => throw new NotSupportedException();
     public void ApplyRagdollImpulse(DynamicsRagdollImpulseRequest request) => throw new NotSupportedException();
     public void ApplyPointImpulse(DynamicsPointImpulseRequest request) => throw new NotSupportedException();
     public DynamicsRagdollResult ReadRagdoll(DynamicsRagdoll ragdoll) => throw new NotSupportedException();

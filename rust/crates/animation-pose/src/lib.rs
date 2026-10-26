@@ -144,7 +144,7 @@ impl PoseModel {
         world: &Transform,
     ) -> Vec<PosedJoint> {
         let world = transform_matrix(world);
-        let pose = self.evaluate(actions, controls, world, None);
+        let pose = self.evaluate(actions, controls, world, None, None);
         posed_joints(&self.joints, &pose, world)
     }
 
@@ -155,13 +155,15 @@ impl PoseModel {
 
     /// Every node posed by clip actions, then the clip layers and the other
     /// `controls`, with the instance placed by `world`: instance-space node
-    /// transforms. `solves`, when given, receives the IK chains.
+    /// transforms. `solves`, when given, receives the IK chains, and
+    /// `unlayered` the pose before the placed layers when there are any.
     pub(crate) fn evaluate(
         &self,
         actions: &[ClipAction],
         controls: &AnimatedMeshPose,
         world: Mat4,
         solves: Option<&mut Vec<IkSolve>>,
+        unlayered: Option<&mut Vec<Mat4>>,
     ) -> Vec<Mat4> {
         let mut locals = sample_locals(&self.rig, &self.clips, actions);
         layer_clips(
@@ -172,7 +174,15 @@ impl PoseModel {
             &self.joints,
             &|clip| self.clip_index(clip),
         );
-        controlled(&self.rig, &self.joints, locals, controls, world, solves)
+        controlled(
+            &self.rig,
+            &self.joints,
+            locals,
+            controls,
+            world,
+            solves,
+            unlayered,
+        )
     }
 
     /// Every node at rest, in the instance's space.

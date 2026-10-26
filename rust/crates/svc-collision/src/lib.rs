@@ -60,10 +60,13 @@ pub use dynamics::{
     DynamicsBodyOutput, DynamicsContact, DynamicsEnvironmentReceipt, DynamicsError,
     DynamicsMassProperties, DynamicsShape, DynamicsSolver, DynamicsStepReceipt,
 };
-pub use joint::{DynamicsJoint, DynamicsJointError, DynamicsJointFrame, DynamicsJointLimit};
+pub use joint::{
+    DynamicsJoint, DynamicsJointError, DynamicsJointFrame, DynamicsJointLimit, DynamicsJointMotor,
+};
 pub use model_surface::{ModelSurface, ModelSurfaceHit, ModelSurfacePoint, PlacedModelSurface};
 pub use ragdoll::{
-    DynamicsPlacement, RagdollBone, RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
+    DynamicsPlacement, RagdollBone, RagdollDrive, RagdollLink, RagdollMaterial, RagdollShape,
+    RagdollSpawn,
 };
 
 pub use static_mesh::{

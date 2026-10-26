@@ -790,6 +790,40 @@ pub struct NativeDynamicsRagdollBlendRequest {
     pub blend: f32,
 }
 
+/// How strongly one link turns its child bone toward the target pose: a
+/// spring of `stiffness` (N·m per radian) with `damping` (N·m·s per
+/// radian), never with more than `max_torque` (N·m) about each axis. All
+/// zero leaves the link limp.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRagdollLinkDrive {
+    pub stiffness: f32,
+    pub damping: f32,
+    pub max_torque: f32,
+}
+
+/// Whether a driven ragdoll's root bones (those no link has as its child)
+/// simulate, or follow the target pose kinematically.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeDynamicsRagdollRoot {
+    Simulated = 0,
+    Kinematic = 1,
+}
+
+/// Drives a ragdoll's links with motors toward its instance's pose after
+/// the clips, IK and pose overrides (not its own layer), each step. `drives`
+/// has one entry per link, in the links' order; none stops driving and
+/// simulates the root. Set again to change strengths while it runs.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRagdollDriveRequest {
+    pub ragdoll: NativeDynamicsRagdollHandle,
+    pub drives: *const NativeDynamicsRagdollLinkDrive,
+    pub drives_len: usize,
+    pub root: NativeDynamicsRagdollRoot,
+}
+
 /// An impulse (N·s) at a world point of one body, as from a hit or a
 /// contact: it changes the body's linear and angular velocity at once and
 /// wakes it; the next step moves it.

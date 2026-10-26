@@ -3,11 +3,11 @@ use std::sync::Arc;
 
 use rapier3d_f64::prelude::{
     ColliderBuilder, ColliderHandle, Group, IntegrationParameters, InteractionGroups,
-    InteractionTestMode, LockedAxes, MassProperties, PhysicsWorld, RigidBodyBuilder,
+    InteractionTestMode, LockedAxes, MassProperties, PhysicsWorld, Pose, RigidBodyBuilder,
     RigidBodyHandle, RigidBodyType, Rotation, SharedShape, Vector,
 };
 
-use crate::joint::{DynamicsJoint, DynamicsJointError, SolverJoint};
+use crate::joint::{DynamicsJoint, DynamicsJointError, DynamicsJointMotor, SolverJoint};
 use crate::tether::{
     DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherError, DynamicsTetherReadout,
     SolverTether,
@@ -367,12 +367,11 @@ impl DynamicsSolver {
         let (handle, _) = self.world.insert(builder, collider);
         self.bodies.insert(body.id, handle);
         self.shapes.insert(body.id, body.shape);
-        for joint in joints {
+        for (joint, motor) in joints {
             let (first, second) = (self.bodies[&joint.first], self.bodies[&joint.second]);
-            self.joints.insert(
-                joint.id,
-                SolverJoint::insert(joint, &mut self.world, first, second),
-            );
+            let mut inserted = SolverJoint::insert(joint, &mut self.world, first, second);
+            inserted.set_motor(motor, &mut self.world, first, second)?;
+            self.joints.insert(joint.id, inserted);
         }
         for (definition, was_taut) in attached {
             let tether = SolverTether::insert(definition, was_taut, &mut self.world, |id| {
@@ -573,6 +572,66 @@ impl DynamicsSolver {
             SolverJoint::insert(definition, &mut self.world, first, second),
         );
         Ok(())
+    }
+
+    /// Drive joint `id` with `motor`, or stop driving it with `None`.
+    /// Replacing the joint with `set_joint` stops its motor.
+    pub fn set_joint_motor(
+        &mut self,
+        id: u64,
+        motor: Option<DynamicsJointMotor>,
+    ) -> Result<(), DynamicsError> {
+        let joint = self
+            .joints
+            .get_mut(&id)
+            .ok_or(DynamicsJointError::Invalid { id })?;
+        let (first, second) = (
+            self.bodies[&joint.definition.first],
+            self.bodies[&joint.definition.second],
+        );
+        joint.set_motor(motor, &mut self.world, first, second)?;
+        Ok(())
+    }
+
+    pub fn joint_motor(&self, id: u64) -> Option<DynamicsJointMotor> {
+        self.joints.get(&id)?.motor()
+    }
+
+    /// Move a body kinematically to `placement` over the next step, or make
+    /// it simulated again with `None`, keeping the velocity it moved with.
+    pub fn set_body_kinematic(
+        &mut self,
+        id: DynamicsBodyId,
+        placement: Option<([f64; 3], [f64; 4])>,
+    ) -> Result<(), DynamicsError> {
+        let handle = self.handle(id)?;
+        let body = &mut self.world.bodies[handle];
+        match placement {
+            Some((translation, rotation)) => {
+                let rotation = unit_rotation(rotation)
+                    .filter(|_| translation.into_iter().all(f64::is_finite))
+                    .ok_or(DynamicsError::InvalidBody { body: id })?;
+                if body.body_type() != RigidBodyType::KinematicPositionBased {
+                    body.set_body_type(RigidBodyType::KinematicPositionBased, true);
+                }
+                body.set_next_kinematic_position(Pose::from_parts(
+                    vector(translation),
+                    self::rotation(rotation),
+                ));
+            }
+            None => {
+                if body.body_type() != RigidBodyType::Dynamic {
+                    body.set_body_type(RigidBodyType::Dynamic, true);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn body_is_kinematic(&self, id: DynamicsBodyId) -> bool {
+        self.bodies
+            .get(&id)
+            .is_some_and(|handle| self.world.bodies[*handle].is_kinematic())
     }
 
     pub fn remove_joint(&mut self, id: u64) -> bool {

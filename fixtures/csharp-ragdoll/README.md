@@ -19,8 +19,14 @@ Live-debug commands:
 - `ragdoll.fall` starts a fresh Dynamics world, spawns the ragdoll from the
   reported idle pose, and hits it in the chest.
 - `ragdoll.getup` plays idle again and blends the ragdoll out over a second.
+- `ragdoll.stand` starts a fresh world and spawns the ragdoll driven: motors
+  hold every link at the idle pose and the hips follow it kinematically.
+- `ragdoll.hit` hits the standing ragdoll's chest; it sways and comes back.
+- `ragdoll.weaken` weakens its motors and simulates its hips, and it falls.
 - `ragdoll.inspect` reports the fall's steps and when the ragdoll rested. It
   also reports the lowest point its shapes reached (all time and now) and the
   least hinge flexion; a negative flexion would be an elbow or knee bending
-  backwards. Its last field is a pose signature, recorded 480 steps after
-  each hit.
+  backwards. Then a pose signature, recorded 480 steps after each fall's
+  hit; the hips' height; `drift`, the most any bone is turned from the pose
+  the ragdoll stood in (radians); and since `ragdoll.hit`, the step it came
+  and the widest drift.

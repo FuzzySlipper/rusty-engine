@@ -20,6 +20,8 @@ pub(crate) struct RagdollSource {
     pub(crate) rest: Vec<PosedJoint>,
     pub(crate) latest: ::animation_pose::PosedJoints,
     pub(crate) previous: Option<::animation_pose::PosedJoints>,
+    /// `latest` before its ragdoll layer, when it has one.
+    pub(crate) unlayered: Option<Vec<PosedJoint>>,
 }
 
 const NO_PARENT: u32 = u32::MAX;
@@ -624,6 +626,7 @@ impl RuntimeAppearanceBridge {
             rest: reading.rest,
             latest: reading.latest,
             previous: reading.previous,
+            unlayered: reading.unlayered,
         })
     }
 

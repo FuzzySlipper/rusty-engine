@@ -5,11 +5,15 @@
 //! A bone's body spans from its joint to its tip. Joint frames come from the
 //! rest pose, so a limit means the same turn whatever pose the ragdoll
 //! spawns in.
+//!
+//! A driven ragdoll's links carry motors that turn each child bone toward
+//! its turn from its parent in a target pose, and its root can follow the
+//! target kinematically.
 
 use rapier3d_f64::prelude::{GenericJoint, Pose, Rotation, Vector};
 
 use crate::dynamics::{DynamicsBodyId, DynamicsBodyInput, DynamicsShape, DynamicsSolver};
-use crate::joint::{DynamicsJoint, DynamicsJointFrame, DynamicsJointLimit};
+use crate::joint::{DynamicsJoint, DynamicsJointFrame, DynamicsJointLimit, DynamicsJointMotor};
 use crate::DynamicsError;
 
 /// The shortest capsule core, so a bone shorter than its diameter still has
@@ -81,6 +85,17 @@ pub struct RagdollLink {
     pub axis: [f64; 3],
     pub limit: DynamicsJointLimit,
     pub damping: f64,
+}
+
+/// How strongly a link turns its child bone toward the target pose: a
+/// spring of `stiffness` (N·m per radian) with `damping` (N·m·s per radian),
+/// never with more than `max_torque` (N·m) about each axis. All zero leaves
+/// the link limp.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RagdollDrive {
+    pub stiffness: f64,
+    pub damping: f64,
+    pub max_torque: f64,
 }
 
 /// What every body of a ragdoll shares.
@@ -256,6 +271,64 @@ impl DynamicsSolver {
             }
         }
         result
+    }
+
+    /// Drive each link toward the turn its child bone has from its parent
+    /// in `target` (each bone's joint placement), with `drives`, one per
+    /// link. Root bones (bones no link has as its child) move kinematically
+    /// to their place in `target` when `kinematic_root`, and are simulated
+    /// otherwise. A bone whose body is gone is skipped.
+    pub fn drive_ragdoll(
+        &mut self,
+        bones: &[RagdollBone],
+        links: &[RagdollLink],
+        drives: &[RagdollDrive],
+        target: &[DynamicsPlacement],
+        kinematic_root: bool,
+    ) -> Result<(), DynamicsError> {
+        if drives.len() != links.len() || target.len() != bones.len() {
+            return Err(DynamicsError::InvalidBody {
+                body: bones.first().map_or(DynamicsBodyId(0), |bone| bone.body),
+            });
+        }
+        let body_pose = |bone: usize| target[bone].pose() * bone_offset(&bones[bone]);
+        for (link, drive) in links.iter().zip(drives) {
+            let Some(joint) = self.joint(link.joint) else {
+                continue;
+            };
+            let limp = drive.max_torque == 0.0 || (drive.stiffness == 0.0 && drive.damping == 0.0);
+            let motor = (!limp).then(|| {
+                let first = body_pose(link.parent) * joint.first_frame.pose();
+                let second = body_pose(link.child) * joint.second_frame.pose();
+                let [x, y, z, w] = (first.rotation.inverse() * second.rotation).to_array();
+                // A hinge reaches only the turn about its axis.
+                let target = match link.limit {
+                    DynamicsJointLimit::Hinge { .. } => [x, 0.0, 0.0, w],
+                    DynamicsJointLimit::Cone { .. } => [x, y, z, w],
+                };
+                DynamicsJointMotor {
+                    target,
+                    stiffness: drive.stiffness,
+                    damping: drive.damping,
+                    max_torque: drive.max_torque,
+                }
+            });
+            self.set_joint_motor(link.joint, motor)?;
+        }
+        for (index, bone) in bones.iter().enumerate() {
+            if links.iter().any(|link| link.child == index) || self.body(bone.body).is_none() {
+                continue;
+            }
+            let pose = body_pose(index);
+            let placement = kinematic_root.then(|| {
+                (
+                    pose.translation.to_array(),
+                    pose.rotation.normalize().to_array(),
+                )
+            });
+            self.set_body_kinematic(bone.body, placement)?;
+        }
+        Ok(())
     }
 
     /// Where each bone's joint is, from its body. `None` for a bone whose
@@ -512,6 +585,104 @@ mod tests {
         );
         let second = fall(ticks);
         assert_eq!(first.bodies, second.bodies, "same inputs, same fall");
+    }
+
+    /// Each bone's turn from where `target` places it, in radians.
+    fn drift(
+        solver: &DynamicsSolver,
+        bones: &[RagdollBone],
+        target: &[DynamicsPlacement],
+    ) -> Vec<f64> {
+        solver
+            .ragdoll_placements(bones)
+            .iter()
+            .zip(target)
+            .map(|(placed, target)| {
+                let placed = Rotation::from_array(placed.unwrap().rotation);
+                let target = Rotation::from_array(target.rotation);
+                placed.angle_between(target)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_driven_figure_holds_its_pose_sways_back_from_a_hit_and_falls_when_weakened() {
+        let (bones, links, rest) = figure();
+        let mut solver = DynamicsSolver::new(GRAVITY);
+        solver.bind_environment(&floor());
+        let spawn = RagdollSpawn {
+            rest: rest.clone(),
+            current: rest.clone(),
+            previous: None,
+        };
+        solver
+            .insert_ragdoll(&bones, &links, material(), &spawn)
+            .unwrap();
+        let strong = vec![
+            RagdollDrive {
+                stiffness: 400.0,
+                damping: 20.0,
+                max_torque: 600.0,
+            };
+            links.len()
+        ];
+        let run = |solver: &mut DynamicsSolver,
+                   drives: &[RagdollDrive],
+                   kinematic: bool,
+                   ticks: usize| {
+            let mut widest = 0.0_f64;
+            for _ in 0..ticks {
+                solver
+                    .drive_ragdoll(&bones, &links, drives, &rest, kinematic)
+                    .unwrap();
+                solver.step(TICK, 1, &[]).unwrap();
+                widest = widest.max(drift(solver, &bones, &rest).into_iter().fold(0.0, f64::max));
+            }
+            widest
+        };
+
+        let limp = vec![
+            RagdollDrive {
+                stiffness: 0.0,
+                damping: 0.0,
+                max_torque: 0.0,
+            };
+            links.len()
+        ];
+        // Without motors the arm drops from the held root at once.
+        let mut unheld = DynamicsSolver::new(GRAVITY);
+        unheld.bind_environment(&floor());
+        unheld
+            .insert_ragdoll(&bones, &links, material(), &spawn)
+            .unwrap();
+        let sagged = run(&mut unheld, &limp, true, 120);
+        assert!(sagged > 0.3, "a limp arm stayed within {sagged} rad");
+
+        // Standing under its motors, held up by the kinematic root.
+        let held = run(&mut solver, &strong, true, 120);
+        assert!(held < 0.1, "drifted {held} rad from the pose");
+        assert!(solver.body_is_kinematic(bones[0].body));
+
+        // A hit to the upper arm swings it away; the motors bring it back.
+        solver
+            .apply_impulse_at_point(bones[5].body, [7.6, 1.5, 8.0], [0.0, 0.0, 40.0])
+            .unwrap();
+        let swayed = run(&mut solver, &strong, true, 30);
+        assert!(swayed > 0.2, "the hit swung it {swayed} rad");
+        run(&mut solver, &strong, true, 120);
+        let back = drift(&solver, &bones, &rest)
+            .into_iter()
+            .fold(0.0, f64::max);
+        assert!(back < 0.1, "still {back} rad off its pose");
+        let motor = solver.joint_motor(links[4].joint).unwrap();
+        assert_eq!(motor.stiffness, 400.0);
+
+        // Weakened, with the root simulated, it falls.
+        run(&mut solver, &limp, false, 240);
+        assert!(!solver.body_is_kinematic(bones[0].body));
+        assert!(solver.joint_motor(links[4].joint).is_none());
+        let hips = solver.body(bones[0].body).unwrap().translation[1];
+        assert!(hips < 0.5, "the hips are still {hips} m up");
     }
 
     #[test]

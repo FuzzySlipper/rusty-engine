@@ -105,6 +105,8 @@ struct Evaluation {
     seconds: f64,
     world: Mat4,
     pose: EvaluatedPose,
+    /// The nodes before the placed layers (a ragdoll's), when there are any.
+    unlayered: Option<Arc<[[f32; 16]]>>,
 }
 
 /// What one settle produced.
@@ -140,6 +142,9 @@ pub struct PosedJoints {
 #[derive(Debug, Clone, PartialEq)]
 pub struct JointReading {
     pub latest: PosedJoints,
+    /// `latest`'s joints before its placed layers (a ragdoll's), when it
+    /// has any: the pose a driven ragdoll aims for.
+    pub unlayered: Option<Vec<PosedJoint>>,
     /// The evaluation before `latest`, of the same instance, at an earlier
     /// time.
     pub previous: Option<PosedJoints>,
@@ -374,7 +379,7 @@ impl AnimatedScene {
             .into_iter()
             .collect();
         let placement = self.placement(world, handle).unwrap_or(Mat4::IDENTITY);
-        let (nodes, pieces, ik) = evaluated(model, &actions, &instance.controls, placement);
+        let (nodes, pieces, ik, _) = evaluated(model, &actions, &instance.controls, placement);
         Some(EvaluatedPose {
             seconds: world.elapsed_seconds(),
             nodes: nodes.into(),
@@ -425,6 +430,10 @@ impl AnimatedScene {
             .collect();
         Some(JointReading {
             latest: posed(latest),
+            unlayered: latest
+                .unlayered
+                .as_ref()
+                .map(|nodes| posed_joints(&model.joints, &matrices(nodes), latest.world)),
             previous: instance.previous.as_ref().map(posed),
             rest: posed_joints(&model.joints, &model.rest_nodes(), world),
             ik_chains,
@@ -610,6 +619,7 @@ impl Instance {
                         seconds: now,
                         world,
                         pose: latest.pose,
+                        unlayered: latest.unlayered,
                     });
                 }
             }
@@ -621,7 +631,7 @@ impl Instance {
             &duration,
             controller.map(|controller| controller.actions(now, &duration)),
         );
-        let (nodes, pieces, ik) = evaluated(&model, &actions, &self.controls, world);
+        let (nodes, pieces, ik, unlayered) = evaluated(&model, &actions, &self.controls, world);
         self.owners = if self.controls.cuts.is_empty() {
             Vec::new()
         } else {
@@ -658,6 +668,7 @@ impl Instance {
             seconds: now,
             world,
             pose: pose.clone(),
+            unlayered: unlayered.map(Into::into),
         });
         (!unchanged).then_some(pose)
     }
@@ -678,17 +689,33 @@ impl Instance {
     }
 }
 
+/// Nodes, severed pieces, IK chains, and the nodes before placed layers.
+type Evaluated = (
+    Vec<[f32; 16]>,
+    Vec<EvaluatedPiece>,
+    Vec<EvaluatedIkChain>,
+    Option<Vec<[f32; 16]>>,
+);
+
 /// Every node of `model` posed by `actions` and `controls` with the
 /// instance placed by `world`, column-major in the instance's space, with
-/// the severed pieces of the controls' cuts and the IK chains.
+/// the severed pieces of the controls' cuts, the IK chains and, when the
+/// controls place layers, the nodes before them.
 fn evaluated(
     model: &PoseModel,
     actions: &[ClipAction],
     controls: &AnimatedMeshPose,
     world: Mat4,
-) -> (Vec<[f32; 16]>, Vec<EvaluatedPiece>, Vec<EvaluatedIkChain>) {
+) -> Evaluated {
     let mut solves = Vec::new();
-    let nodes = model.evaluate(actions, controls, world, Some(&mut solves));
+    let mut unlayered = Vec::new();
+    let nodes = model.evaluate(
+        actions,
+        controls,
+        world,
+        Some(&mut solves),
+        Some(&mut unlayered),
+    );
     let pieces = if controls.cuts.is_empty() {
         Vec::new()
     } else {
@@ -717,7 +744,9 @@ fn evaluated(
         })
         .collect();
     let nodes = nodes.iter().map(Mat4::to_cols_array).collect();
-    (nodes, pieces, ik)
+    let unlayered =
+        (!controls.layers.is_empty()).then(|| unlayered.iter().map(Mat4::to_cols_array).collect());
+    (nodes, pieces, ik, unlayered)
 }
 
 /// How many nodes `handle` hangs under.

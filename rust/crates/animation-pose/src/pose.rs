@@ -64,7 +64,8 @@ pub struct IkSolve {
 /// The sampled `locals` under `pose`: IK in order, then overrides, then
 /// layers, composed. `rig` maps rig joint indices to nodes; `world` places the
 /// instance, for `World` values. A joint the rig does not name is skipped.
-/// `solves`, when given, receives each IK chain in order.
+/// `solves`, when given, receives each IK chain in order, and `unlayered`
+/// the pose before the layers when there are any.
 pub fn controlled<H: Hierarchy + ?Sized>(
     model: &H,
     rig: &[Option<usize>],
@@ -72,6 +73,7 @@ pub fn controlled<H: Hierarchy + ?Sized>(
     pose: &AnimatedMeshPose,
     world: Mat4,
     mut solves: Option<&mut Vec<IkSolve>>,
+    unlayered: Option<&mut Vec<Mat4>>,
 ) -> Vec<Mat4> {
     if let Some(solves) = solves.as_deref_mut() {
         solves.clear();
@@ -111,6 +113,9 @@ pub fn controlled<H: Hierarchy + ?Sized>(
         }
     }
     let mut posed = evaluate(model, &locals, &by_node, world, to_model);
+    if let Some(unlayered) = unlayered.filter(|_| !pose.layers.is_empty()) {
+        unlayered.clone_from(&posed);
+    }
     for layer in &pose.layers {
         posed = blend_layer(model, &posed, layer, &node, to_model);
     }
@@ -437,7 +442,7 @@ mod tests {
         pose: &AnimatedMeshPose,
         world: Mat4,
     ) -> Vec<Mat4> {
-        super::controlled(model, rig, locals, pose, world, None)
+        super::controlled(model, rig, locals, pose, world, None, None)
     }
 
     fn position(posed: &[Mat4], node: usize) -> Vec3 {
@@ -515,7 +520,15 @@ mod tests {
         pose.two_bone_ik[1].space = PoseSpace::World;
         pose.two_bone_ik[1].target = [3.0, 5.0, 0.0];
         let mut solves = Vec::new();
-        super::controlled(&model, &RIG, rest(&model), &pose, world, Some(&mut solves));
+        super::controlled(
+            &model,
+            &RIG,
+            rest(&model),
+            &pose,
+            world,
+            Some(&mut solves),
+            None,
+        );
         assert_eq!(
             solves,
             [
@@ -532,7 +545,15 @@ mod tests {
             ]
         );
         pose.two_bone_ik.clear();
-        super::controlled(&model, &RIG, rest(&model), &pose, world, Some(&mut solves));
+        super::controlled(
+            &model,
+            &RIG,
+            rest(&model),
+            &pose,
+            world,
+            Some(&mut solves),
+            None,
+        );
         assert!(solves.is_empty(), "a pose without IK records no chains");
     }
 
