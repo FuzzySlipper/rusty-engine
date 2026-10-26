@@ -12,7 +12,9 @@ use style::values::computed::Overflow;
 use xml5ever::local_name;
 
 use crate::dom::Node;
+use crate::dom::bindings::root::DomRoot;
 use crate::dom::document::focus::FocusableAreaKind;
+use crate::dom::iterators::ShadowIncluding;
 use crate::dom::types::{Element, HTMLElement};
 
 impl Element {
@@ -29,7 +31,10 @@ impl Element {
     pub(crate) fn focusable_area_kind(&self, no_gc: &NoGC) -> FocusableAreaKind {
         // Do not allow unrendered, disconnected, or disabled nodes to be focusable areas ever.
         let node: &Node = self.upcast();
-        if !node.is_connected() || !self.has_css_layout_box() || self.is_actually_disabled() {
+        if !node.is_connected() ||
+            !(self.has_css_layout_box() || self.is_drawn_in_inline_svg()) ||
+            self.is_actually_disabled()
+        {
             return Default::default();
         }
 
@@ -146,6 +151,32 @@ impl Element {
             )) => FocusableAreaKind::Click,
             _ => Default::default(),
         }
+    }
+
+    /// Servo draws an inline `<svg>` as one picture rasterized from its markup, so the elements
+    /// inside it have no layout box of their own. One is being rendered when the `<svg>` that
+    /// draws it has a box and neither it nor an SVG ancestor has a `display="none"` attribute,
+    /// which is what the picture follows.
+    fn is_drawn_in_inline_svg(&self) -> bool {
+        if !self.is_svg_element() {
+            return false;
+        }
+        for ancestor in self
+            .upcast::<Node>()
+            .inclusive_ancestors(ShadowIncluding::No)
+            .filter_map(DomRoot::downcast::<Element>)
+        {
+            if !ancestor.is_svg_element() {
+                return false;
+            }
+            if ancestor.has_css_layout_box() {
+                return true;
+            }
+            if ancestor.get_string_attribute(&local_name!("display")) == "none" {
+                return false;
+            }
+        }
+        false
     }
 
     /// <https://html.spec.whatwg.org/multipage/#sequentially-focusable>.

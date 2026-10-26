@@ -14,4 +14,11 @@ the first parse, which in any later parse names no face or another one, so
 text in a font that had drawn once was missing when the picture was redrawn
 or another `<svg>` used it.
 
-Remove this vendored copy once a Servo release carries a fix.
+Engine #10397 changes `dom/element/focus.rs`: an element inside an inline
+`<svg>` counts as rendered for focus when the `<svg>` that draws it has a
+layout box and neither it nor an SVG ancestor has a `display="none"`
+attribute. Its own computed `display` is `none` (nothing inside the picture
+gets a box), so 0.7.0 refused it as a focusable area: a `<g tabindex="0">`
+took focus neither from `focus()` nor from Tab.
+
+Remove this vendored copy once a Servo release carries both fixes.

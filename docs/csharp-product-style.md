@@ -158,7 +158,9 @@ The green path:
   in place redraws. Give `<text>` a `font-family` attribute. Put anything
   the player points at or clicks in HTML elements placed over the `<svg>`:
   Servo sends pointer events to the `<svg>` element, not to the shapes
-  inside it.
+  inside it. A shape a keyboard or pad steps onto may be a
+  `<g tabindex="0">`: `focus()` and Tab reach it under both engines, and a
+  `focusin` listener sets the attribute that draws its ring.
 - **Pickers.** Draw file and colour choices in the page. No native file or
   colour picker opens in the window.
 - **One page.** Game UI stays in the one page. Navigating replaces the UI, and

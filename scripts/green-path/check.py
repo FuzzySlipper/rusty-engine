@@ -19,8 +19,8 @@ Routes:
 A uinput pad (Linux) or `--vigem-pad <vpad-win.exe>` (Windows, ViGEmBus)
 drives the gamepad items; without one they are not run. Differences
 docs/desktop-shell.md documents between the engines are results, not
-failures: the table shows them as "differs". The svg page's items are judged
-from screenshots of the private KWin, so they are not run on Windows. It needs a GPU and a desktop or compositor, so it is no CI gate.
+failures: the table shows them as "differs". The svg page's paint items are
+judged from screenshots of the private KWin, so they are not run on Windows. It needs a GPU and a desktop or compositor, so it is no CI gate.
 
 usage: check.py --route x11|wayland|windows --window-ui servo|chromium --out <new dir>
          (--runtime <desktop pack> [--sdk-version <v> --sdk-feed <dir>] | --origin <url> --title <window title>)
@@ -815,6 +815,7 @@ class Check:
                  'text in the page\'s font', 'text drawn again after a change', 'hint shown by :hover',
                  'listener on an inner element',
                  'eval change shown at once']
+        self.svg_focus()
         if WINDOWS:
             for name in names:
                 self.record('svg', name, None, 'judged from screenshots, which this route has not')
@@ -901,6 +902,26 @@ class Check:
         else:
             wait = f'{shown - sent:.0f} ms after the eval was sent'
         item('eval change shown at once', shown is not None and close(got, white), f'shown {wait}; pixel {got}')
+
+    def svg_focus(self):
+        """A <g tabindex="0"> takes focus from the HTML button before it, by
+        focus() and by a real Tab, and reports it through
+        document.activeElement and its focus events."""
+        start = ('__focusLog.length = 0; document.getElementById("before").focus(); '
+                 '__focusLog.length = 0; null')
+        read = '({ active: document.activeElement.id, log: __focusLog })'
+        want = ['focusout before', 'focus point', 'focusin point']
+
+        def judge(name, got):
+            got = got.get('value') or {}
+            ok = got.get('active') == 'point' and all(event in got.get('log', []) for event in want)
+            self.record('svg', name, ok, f'active {got.get("active")!r}, events {got.get("log")}')
+
+        self.runtime.eval(start)
+        judge('element focused by focus()', self.runtime.eval(f'document.getElementById("point").focus(); {read}'))
+        self.runtime.eval(start)
+        self.key('Tab', 0.6)
+        judge('element focused by Tab', self.runtime.eval(read))
 
     def latency(self):
         self.input_geometry()

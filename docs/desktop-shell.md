@@ -152,7 +152,7 @@ may use any of this and runs fully in a browser.
 | Notifications, geolocation and other permission prompts | Denied at once. | Servo has no Notification or Geolocation API; the shell's stand-ins deny at once. |
 | Gamepads | Chromium reads them itself. | The shell hands Servo the first pad in the standard mapping, named `Standard gamepad`. |
 | Text entry, Tab focus, wheel scrolling | Work. IME composition has not been checked. A held key's repeats report `repeat` false. A wheel notch scrolls 53 pixels on Linux and 44 on Windows. | Held keys report `repeat`. A wheel notch scrolls 53 pixels on both. |
-| Inline `<svg>` | Works. | Drawn as a picture of its markup: document stylesheets, `:hover`, inherited fonts and pointer events inside it do not apply. See [inline SVG](#inline-svg-in-the-window). |
+| Inline `<svg>` | Works. | Drawn as a picture of its markup: document stylesheets, `:hover`, `:focus`, inherited fonts and pointer events inside it do not apply; `focus()` and Tab reach an element with a `tabindex`. See [inline SVG](#inline-svg-in-the-window). |
 
 ### Inline SVG in the window
 
@@ -176,12 +176,24 @@ markup and rasterizes that with resvg. What follows from that:
   Engine's Servo carries a fix to Servo 0.7's SVG font cache, without which
   text in a font that had drawn once was lost when the picture was redrawn
   ([servo-script patch](../rust/vendor/servo-script/RUSTY_PATCH.md)).
+- **Focus.** An element inside the `<svg>` with a `tabindex` takes focus
+  from `focus()` and from Tab, sets `document.activeElement` and fires
+  `focus`, `focusin` and the previous element's `focusout`, as in Chromium.
+  The Engine's Servo carries the fix: Servo 0.7 gives nothing inside an
+  `<svg>` a layout box and so refused it focus
+  ([servo-script patch](../rust/vendor/servo-script/RUSTY_PATCH.md)). An
+  element counts as hidden only through a `display="none"` attribute on it
+  or an SVG ancestor. A click does not focus it (the click goes to the
+  `<svg>`), and `:focus` does not draw: show the focus by changing an
+  attribute on `focusin`/`focusout`.
 - **Clicks.** A click in an `<svg>` leaves Servo's caret in it, and Servo
   then draws the whole picture selected (tinted) when it next redraws it.
   The shell's page script drops a caret left in an `<svg>`.
 
 `scripts/green-path/check.py --only svg` checks each point from the window's
-pixels, after a click in the `<svg>`; under Chromium every item passes.
+pixels, after a click in the `<svg>`, and focuses a `<g tabindex="0">` by
+`focus()` and by Tab; under Chromium every item passes, and under Servo the
+focus items pass too.
 
 ## Running
 
