@@ -205,12 +205,16 @@ if ((DESKTOP)); then
 fi
 
 if ((DESKTOP)); then
-  # Servo's MPL-2.0 crates ship unmodified; where each one's source is.
+  # Servo's MPL-2.0 crates ship unmodified, but for servo-script, whose
+  # source ships here (rust/vendor/servo-script/RUSTY_PATCH.md); where each
+  # other one's source is.
   install -d "$STAGE/share/third-party/servo"
+  cp -a rust/vendor/servo-script "$STAGE/share/third-party/servo-script"
   {
     echo "The window's Servo UI engine includes these MPL-2.0 crates, unmodified."
-    echo "Each one's source is at the URL beside it. welding and fidget-mesh, the"
-    echo "modified MPL-2.0 components, ship their source in share/third-party."
+    echo "Each one's source is at the URL beside it. welding, fidget-mesh and"
+    echo "servo-script, the modified MPL-2.0 components, ship their source in"
+    echo "share/third-party."
     echo
     cargo tree --locked -p csharp-product-runtime --features servo -e normal \
       --prefix none --format '{p} {l}' 2>/dev/null | tr -d '\r' |

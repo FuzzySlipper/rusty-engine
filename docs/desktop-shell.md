@@ -148,7 +148,7 @@ may use any of this and runs fully in a browser.
 | Notifications, geolocation and other permission prompts | Denied at once. | Servo has no Notification or Geolocation API; the shell's stand-ins deny at once. |
 | Gamepads | Chromium reads them itself. | The shell hands Servo the first pad in the standard mapping, named `Standard gamepad`. |
 | Text entry, Tab focus, wheel scrolling | Work. IME composition has not been checked. A held key's repeats report `repeat` false. A wheel notch scrolls 53 pixels on Linux and 44 on Windows. | Held keys report `repeat`. A wheel notch scrolls 53 pixels on both. |
-| Inline `<svg>` | Works. | Drawn as a picture of its markup: document stylesheets, `:hover`, inherited fonts and pointer events inside it do not apply, and text may be lost. See [inline SVG](#inline-svg-in-the-window). |
+| Inline `<svg>` | Works. | Drawn as a picture of its markup: document stylesheets, `:hover`, inherited fonts and pointer events inside it do not apply. See [inline SVG](#inline-svg-in-the-window). |
 
 ### Inline SVG in the window
 
@@ -168,10 +168,10 @@ markup and rasterizes that with resvg. What follows from that:
   changes (an attribute, a child, text), so the picture follows the DOM.
 - **Events reach the `<svg>` element.** Pointer events over any part of it
   target the `<svg>` itself, never an inner shape.
-- **Text.** A `<text>` draws only with a `font-family` attribute, and each
-  font draws text once: when the picture is redrawn, or an `<svg>` drawn
-  later uses the same font, that text is missing. Servo's SVG font cache
-  keeps font ids from a font database it has dropped.
+- **Text.** A `<text>` draws only with a `font-family` attribute. The
+  Engine's Servo carries a fix to Servo 0.7's SVG font cache, without which
+  text in a font that had drawn once was lost when the picture was redrawn
+  ([servo-script patch](../rust/vendor/servo-script/RUSTY_PATCH.md)).
 - **Alpha.** The page is about half transparent where an `<svg>` is, shapes
   and background alike. A Wayland window lets the desktop show through
   there; an X11 window does not.

@@ -155,10 +155,10 @@ The green path:
   ([inline SVG](desktop-shell.md#inline-svg-in-the-window)). Give shapes
   presentation attributes (`fill`, `stroke`, `display`) and change those
   attributes from script for selection, focus and visibility; changing them
-  in place redraws. Put labels and anything the player points at or clicks
-  in HTML elements placed over the `<svg>`: Servo loses SVG text when the
-  picture is redrawn, and sends pointer events to the `<svg>` element, not
-  to the shapes inside it. Its area of the page is also half transparent
+  in place redraws. Give `<text>` a `font-family` attribute. Put anything
+  the player points at or clicks in HTML elements placed over the `<svg>`:
+  Servo sends pointer events to the `<svg>` element, not to the shapes
+  inside it. Its area of the page is also half transparent
   under Servo.
 - **Pickers.** Draw file and colour choices in the page. No native file or
   colour picker opens in the window.

@@ -882,7 +882,7 @@ class Check:
         got = count(changed, (560, 200, 880, 280), cyan)
         item('text in the page\'s font', got > 50, f'{got} cyan pixels', differs=True)
         got = count(changed, (900, 200, 1220, 280), white)
-        item('text drawn again after a change', got > 50, f'{got} white pixels', differs=True)
+        item('text drawn again after a change', got > 50, f'{got} white pixels')
         drawn, detail = appears(hovered, (280, 390, 640, 470), red)
         item('hint shown by :hover', drawn, detail, differs=True)
         drawn, detail = appears(listened, (880, 390, 1240, 470), yellow)
