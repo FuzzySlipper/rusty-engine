@@ -140,9 +140,10 @@ The green path:
   cancels them. For a right-click menu, call `preventDefault()` on
   `contextmenu` and draw the menu; the window shows no native one.
 - **Lists and choices.** Overflow lists scroll with the wheel. `<select>`
-  works, single or `multiple`; the window draws its list. The window's
-  default engine, Servo ([UI engine](desktop-shell.md#ui-engine)), has no
-  date picker: draw date and time choices in the page.
+  works, single or `multiple`, and so do `date`, `time` and
+  `datetime-local` inputs; the window draws their lists and pickers. Keep
+  to those types: `month` and `week` inputs are text fields under Servo
+  ([UI engine](desktop-shell.md#ui-engine)).
 - **Styling.** Servo 0.7 lacks `:has()`, `::backdrop` and `autofocus`, and
   sizes form controls its own way: style game UI without them, and size
   controls explicitly.

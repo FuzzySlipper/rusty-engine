@@ -128,7 +128,7 @@ may use any of this and runs fully in a browser.
 | `window.open`, `target="_blank"` links | Not opened; `window.open` returns `null`. Warns with the URL. | |
 | Same-tab navigation | Replaces the UI page. | |
 | File and colour pickers | Do not open. Warns on click. | |
-| `<select>`, date picker | Work: the popup is drawn over the page. | The shell draws a `<select>`'s option list over the page, inside the view (click, arrow keys, Enter, Escape); a `multiple` list toggles options with a click or Space and answers with Enter or a click outside. Servo has no date picker: a date input is a plain text field. |
+| `<select>`, date and time pickers | Work: the popup is drawn over the page. | The shell draws a `<select>`'s option list over the page, inside the view (click, arrow keys, Enter, Escape); a `multiple` list toggles options with a click or Space and answers with Enter or a click outside. A click on a `date`, `time` or `datetime-local` input (or Alt+Down on one) opens the shell's calendar and hour and minute lists; a choice sets the value with `input` and `change` events, honouring `min` and `max` days. Other date-like types (`month`, `week`) stay text fields. |
 | `<dialog>` with `showModal()` | Works. | |
 | `title` tooltips | Not shown. | |
 | Image cursors (`cursor: url(...) x y, auto`) | Shown with their hotspot, scaled to the window's display scale. A held pointer lock hides them, as it hides any cursor. | The fallback keyword shows: Servo reports no image cursors. |

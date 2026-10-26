@@ -167,6 +167,11 @@ const SELECT_CANCELLED: &str = "rusty-desktop:select-cancel";
 ///
 /// - `window.open` and `target="_blank"` links warn and open nothing, as
 ///   they do in Chromium's page;
+/// - a click on a `date`, `time` or `datetime-local` input, or Alt+Down on
+///   one, opens a calendar and hour and minute lists, placed as a `<select>`'s
+///   list is; a choice writes the input's value with `input` and `change`
+///   events. Arrow keys and Page Up/Down move the day, Enter answers, Escape
+///   or a click outside closes it;
 /// - `__rustyDesktopSelect(rect, options, multiple)` draws the option list
 ///   the page asked for at the element's rect (physical pixels), in a closed
 ///   shadow root on top of the page, kept inside the view: below the element
@@ -197,6 +202,28 @@ const SERVO_SHIM: &str = r#"(() => {
   const answer = (ids) => {
     close();
     console.info(ids === null ? 'rusty-desktop:select-cancel' : `rusty-desktop:select ${ids.join(',')}`);
+  };
+  // Below the anchor (CSS pixels) where the panel fits, else on the side
+  // with more room, scrolling what does not fit there; never past the view's
+  // edges.
+  const place = (host, panel, [x, y, width, height]) => {
+    host.style.cssText = `position: fixed; z-index: 2147483647; left: ${x}px; top: ${y + height}px;
+      min-width: ${Math.min(width, innerWidth)}px; max-width: ${innerWidth}px;`;
+    document.documentElement.append(host);
+    const natural = panel.getBoundingClientRect().height;
+    const below = innerHeight - (y + height);
+    const above = y;
+    const downward = natural <= below || below >= above;
+    const shown = Math.max(0, Math.min(natural, downward ? below : above));
+    panel.style.maxHeight = `${shown}px`;
+    host.style.top = `${Math.max(0, downward ? y + height : y - shown)}px`;
+    const box = host.getBoundingClientRect();
+    host.style.left = `${Math.max(0, Math.min(x, innerWidth - box.width))}px`;
+  };
+  const show = (host, keys, outside) => {
+    window.addEventListener('keydown', keys, true);
+    window.addEventListener('mousedown', outside, true);
+    open = { host, keys, outside };
   };
   window.__rustyDesktopSelectClose = close;
   window.__rustyDesktopSelect = (rect, options, multiple) => {
@@ -261,21 +288,7 @@ const SERVO_SHIM: &str = r#"(() => {
     // ignoring later answers, when the element loses focus.
     list.addEventListener('mousedown', (event) => event.preventDefault());
     root.append(style, list);
-    const [x, y, width, height] = rect.map((value) => value / ratio);
-    host.style.cssText = `position: fixed; z-index: 2147483647; left: ${x}px; top: ${y + height}px;
-      min-width: ${Math.min(width, innerWidth)}px; max-width: ${innerWidth}px;`;
-    document.documentElement.append(host);
-    // Below the element where the list fits, else on the side with more
-    // room, scrolling what does not fit there; never past the view's edges.
-    const natural = list.getBoundingClientRect().height;
-    const below = innerHeight - (y + height);
-    const above = y;
-    const downward = natural <= below || below >= above;
-    const shown = Math.max(0, Math.min(natural, downward ? below : above));
-    list.style.maxHeight = `${shown}px`;
-    host.style.top = `${Math.max(0, downward ? y + height : y - shown)}px`;
-    const box = host.getBoundingClientRect();
-    host.style.left = `${Math.max(0, Math.min(x, innerWidth - box.width))}px`;
+    place(host, list, rect.map((value) => value / ratio));
     mark(current);
     const step = (by) => {
       for (let i = current + by; i >= 0 && i < rows.length; i += by) {
@@ -300,10 +313,191 @@ const SERVO_SHIM: &str = r#"(() => {
       if (multiple) event.preventDefault();
       answer(multiple ? chosenIds() : null);
     };
-    window.addEventListener('keydown', keys, true);
-    window.addEventListener('mousedown', outside, true);
-    open = { host, keys, outside };
+    show(host, keys, outside);
   };
+  // Servo draws date and time inputs as text fields: a click, or Alt+Down
+  // on a focused one, opens the shell's picker, which writes the value back
+  // with input and change events, as a browser's picker does.
+  const TIMES = new Set(['date', 'time', 'datetime-local']);
+  const pad = (number) => String(number).padStart(2, '0');
+  const iso = (year, month, day) => `${String(year).padStart(4, '0')}-${pad(month + 1)}-${pad(day)}`;
+  const parse = (value) => {
+    const date = /^(\d{4,})-(\d{2})-(\d{2})/.exec(value);
+    const time = /(?:^|T)(\d{2}):(\d{2})/.exec(value);
+    return {
+      date: date && { year: +date[1], month: +date[2] - 1, day: +date[3] },
+      time: time && { hour: +time[1], minute: +time[2] },
+    };
+  };
+  const monthName = (year, month) => {
+    try { return new Date(year, month, 1).toLocaleString(undefined, { month: 'long', year: 'numeric' }); }
+    catch { return `${year}-${pad(month + 1)}`; }
+  };
+  const pickTime = (input) => {
+    close();
+    const withDate = input.type !== 'time';
+    const withTime = input.type !== 'date';
+    const now = new Date();
+    const value = parse(input.value);
+    let date = value.date ?? { year: now.getFullYear(), month: now.getMonth(), day: now.getDate() };
+    let time = value.time ?? { hour: now.getHours(), minute: 0 };
+    let shown = { year: date.year, month: date.month };
+    const [min, max] = [parse(input.min).date, parse(input.max).date]
+      .map((limit) => limit && iso(limit.year, limit.month, limit.day));
+    const allowed = (day) => (!min || day >= min) && (!max || day <= max);
+    const host = document.createElement('div');
+    const root = host.attachShadow({ mode: 'closed' });
+    const style = document.createElement('style');
+    style.textContent = `
+      .panel { background: #fff; color: #000; border: 1px solid #767676; font: 13px sans-serif;
+        box-sizing: border-box; overflow: auto; padding: 6px; box-shadow: 0 2px 6px rgba(0,0,0,.35);
+        display: flex; flex-direction: column; gap: 6px; width: max-content; }
+      .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-weight: bold; }
+      .grid { display: grid; grid-template-columns: repeat(7, 2.2em); }
+      .grid div { text-align: center; padding: 3px 0; cursor: default; }
+      .weekday { color: #666; font-size: 11px; }
+      .other { color: #aaa; }
+      .disabled { color: #ccc; }
+      .chosen, .times div.chosen { background: #1a73e8; color: #fff; }
+      .today { outline: 1px solid #1a73e8; }
+      .times { display: flex; gap: 4px; }
+      .times .column { height: 10em; overflow-y: auto; border: 1px solid #ddd; }
+      .times .column div { padding: 2px 8px; cursor: default; }
+      .foot { display: flex; justify-content: flex-end; gap: 6px; }
+      button { font: inherit; }`;
+    const panel = document.createElement('div');
+    panel.className = 'panel';
+    const commit = () => {
+      const day = iso(date.year, date.month, date.day);
+      const clock = `${pad(time.hour)}:${pad(time.minute)}`;
+      close();
+      input.value = withDate && withTime ? `${day}T${clock}` : withDate ? day : clock;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    };
+    const button = (label, action) => {
+      const element = document.createElement('button');
+      element.textContent = label;
+      element.addEventListener('click', (event) => { event.stopPropagation(); action(); });
+      return element;
+    };
+    const head = document.createElement('div');
+    const title = document.createElement('span');
+    const grid = document.createElement('div');
+    const moveMonth = (by) => {
+      const first = new Date(shown.year, shown.month + by, 1);
+      shown = { year: first.getFullYear(), month: first.getMonth() };
+      drawDays();
+    };
+    const drawDays = () => {
+      title.textContent = monthName(shown.year, shown.month);
+      grid.replaceChildren();
+      for (const name of ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa']) {
+        const cell = document.createElement('div');
+        cell.className = 'weekday';
+        cell.textContent = name;
+        grid.append(cell);
+      }
+      const start = new Date(shown.year, shown.month, 1 - new Date(shown.year, shown.month, 1).getDay());
+      const today = iso(now.getFullYear(), now.getMonth(), now.getDate());
+      const chosen = iso(date.year, date.month, date.day);
+      for (let i = 0; i < 42; i++) {
+        const day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
+        const key = iso(day.getFullYear(), day.getMonth(), day.getDate());
+        const cell = document.createElement('div');
+        cell.textContent = day.getDate();
+        cell.classList.toggle('other', day.getMonth() !== shown.month);
+        cell.classList.toggle('disabled', !allowed(key));
+        cell.classList.toggle('chosen', key === chosen);
+        cell.classList.toggle('today', key === today);
+        cell.addEventListener('pointerup', (event) => {
+          event.stopPropagation();
+          if (!allowed(key)) return;
+          date = { year: day.getFullYear(), month: day.getMonth(), day: day.getDate() };
+          if (!withTime) return commit();
+          shown = { year: date.year, month: date.month };
+          drawDays();
+        });
+        grid.append(cell);
+      }
+    };
+    if (withDate) {
+      head.className = 'head';
+      head.append(button('\u2039', () => moveMonth(-1)), title, button('\u203a', () => moveMonth(1)));
+      grid.className = 'grid';
+      panel.append(head, grid);
+      drawDays();
+    }
+    const columns = [];
+    if (withTime) {
+      const times = document.createElement('div');
+      times.className = 'times';
+      for (const [part, count] of [['hour', 24], ['minute', 60]]) {
+        const column = document.createElement('div');
+        column.className = 'column';
+        for (let n = 0; n < count; n++) {
+          const cell = document.createElement('div');
+          cell.textContent = pad(n);
+          cell.classList.toggle('chosen', time[part] === n);
+          cell.addEventListener('pointerup', (event) => {
+            event.stopPropagation();
+            time = { ...time, [part]: n };
+            for (const other of column.children) other.classList.toggle('chosen', other === cell);
+          });
+          column.append(cell);
+        }
+        columns.push([column, part]);
+        times.append(column);
+      }
+      panel.append(times);
+    }
+    const foot = document.createElement('div');
+    foot.className = 'foot';
+    foot.append(button('Clear', () => {
+      close();
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }));
+    if (withTime) foot.append(button('Done', commit));
+    panel.append(foot);
+    // A press inside keeps the input focused.
+    panel.addEventListener('mousedown', (event) => event.preventDefault());
+    root.append(style, panel);
+    const box = input.getBoundingClientRect();
+    place(host, panel, [box.left, box.top, box.width, box.height]);
+    for (const [column, part] of columns) column.children[time[part]]?.scrollIntoView({ block: 'center' });
+    const keys = (event) => {
+      const by = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -7, ArrowDown: 7 }[event.key];
+      if (withDate && by !== undefined) {
+        const day = new Date(date.year, date.month, date.day + by);
+        date = { year: day.getFullYear(), month: day.getMonth(), day: day.getDate() };
+        shown = { year: date.year, month: date.month };
+        drawDays();
+      } else if (withDate && (event.key === 'PageUp' || event.key === 'PageDown')) {
+        moveMonth(event.key === 'PageUp' ? -1 : 1);
+      } else if (event.key === 'Enter') {
+        if (!withDate || allowed(iso(date.year, date.month, date.day))) commit();
+      } else if (event.key === 'Escape' || event.key === 'Tab') {
+        close();
+      } else return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    const outside = (event) => { if (!event.composedPath().includes(host)) close(); };
+    show(host, keys, outside);
+  };
+  document.addEventListener('click', (event) => {
+    const input = event.target instanceof Element && event.target.closest('input');
+    if (!input || !event.isTrusted || !TIMES.has(input.type) || input.disabled || input.readOnly) return;
+    pickTime(input);
+  });
+  document.addEventListener('keydown', (event) => {
+    const input = event.target instanceof Element && event.target.closest('input');
+    if (!input || open || !TIMES.has(input.type) || !(event.altKey && event.key === 'ArrowDown')) return;
+    event.preventDefault();
+    pickTime(input);
+  });
 })();"#;
 
 /// Physical pixels per wheel line, as Chromium scrolls on Linux.
