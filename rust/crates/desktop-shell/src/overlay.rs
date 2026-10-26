@@ -369,6 +369,8 @@ const SERVO_SHIM: &str = r#"(() => {
     panel.className = 'panel';
     const commit = () => {
       const day = iso(date.year, date.month, date.day);
+      // Days outside min and max are refused whichever way the choice comes.
+      if (withDate && !allowed(day)) return;
       const clock = `${pad(time.hour)}:${pad(time.minute)}`;
       close();
       input.value = withDate && withTime ? `${day}T${clock}` : withDate ? day : clock;
@@ -475,9 +477,15 @@ const SERVO_SHIM: &str = r#"(() => {
         shown = { year: date.year, month: date.month };
         drawDays();
       } else if (withDate && (event.key === 'PageUp' || event.key === 'PageDown')) {
-        moveMonth(event.key === 'PageUp' ? -1 : 1);
+        // The chosen day moves a month, kept inside the shorter month.
+        const by = event.key === 'PageUp' ? -1 : 1;
+        const first = new Date(date.year, date.month + by, 1);
+        const last = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+        date = { year: first.getFullYear(), month: first.getMonth(), day: Math.min(date.day, last) };
+        shown = { year: date.year, month: date.month };
+        drawDays();
       } else if (event.key === 'Enter') {
-        if (!withDate || allowed(iso(date.year, date.month, date.day))) commit();
+        commit();
       } else if (event.key === 'Escape' || event.key === 'Tab') {
         close();
       } else return;
@@ -494,7 +502,8 @@ const SERVO_SHIM: &str = r#"(() => {
   });
   document.addEventListener('keydown', (event) => {
     const input = event.target instanceof Element && event.target.closest('input');
-    if (!input || open || !TIMES.has(input.type) || !(event.altKey && event.key === 'ArrowDown')) return;
+    if (!input || open || !TIMES.has(input.type) || input.disabled || input.readOnly
+      || !(event.altKey && event.key === 'ArrowDown')) return;
     event.preventDefault();
     pickTime(input);
   });
