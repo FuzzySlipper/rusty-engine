@@ -323,13 +323,27 @@ impl VoxelRenderProjector {
     /// Whether projecting `instances` now would draw a projected chunk at
     /// another level, or build a coarse mesh that waited for a quiet
     /// projection.
+    ///
+    /// A product calls this every update. At the level and meshes the last
+    /// projection chose at, nothing can change level and no chunk is read;
+    /// otherwise the chunks are read until one would change.
     pub fn level_of_detail_changed(&self, instances: &[VoxelProjectionInstance<'_>]) -> bool {
         instances.iter().any(|instance| {
             self.continued(instance).is_some_and(|previous| {
-                let level = self.levels.get(&instance.instance_id);
-                !previous.pending_coarse.is_empty()
-                    || wanted_coarse(&previous.coarse, instance.scene, level)
-                        != previous.coarse.keys().copied().collect()
+                let scene = instance.scene;
+                let level = self
+                    .levels
+                    .get(&instance.instance_id)
+                    .filter(|_| scene.has_coarse_meshes());
+                if !previous.pending_coarse.is_empty() {
+                    return true;
+                }
+                if previous.coarse_level.as_ref() == level
+                    && previous.mesh_state == scene.mesh_state()
+                {
+                    return false;
+                }
+                coarse_differs(&previous.coarse, scene, level)
             })
         })
     }
@@ -923,6 +937,31 @@ fn wanted_coarse(
         .collect()
 }
 
+/// Whether `level` draws a different set of chunks coarse from `current`,
+/// read chunk by chunk until one differs. Both are in chunk order, so they
+/// are walked together.
+fn coarse_differs(
+    current: &BTreeMap<[i64; 3], VoxelMeshChunk>,
+    scene: &VoxelCollisionScene,
+    level: Option<&VoxelLevelOfDetail>,
+) -> bool {
+    let Some(level) = level else {
+        return !current.is_empty();
+    };
+    let mut coarse = current.keys().peekable();
+    for chunk in scene.mesh_chunks() {
+        // A chunk drawn coarse whose mesh went.
+        if coarse.next_if(|coord| **coord < chunk.chunk).is_some() {
+            return true;
+        }
+        let coarse_now = coarse.next_if_eq(&&chunk.chunk).is_some();
+        if drawn_coarse(scene, chunk, level, coarse_now) != coarse_now {
+            return true;
+        }
+    }
+    coarse.next().is_some()
+}
+
 /// Whether `level` draws a chunk coarse, given whether it is drawn coarse
 /// now.
 fn drawn_coarse(
@@ -1479,6 +1518,51 @@ mod tests {
                 })
             })
             .collect()
+    }
+
+    #[test]
+    fn a_still_viewer_sees_a_level_change_only_when_a_coarse_chunk_goes() {
+        let mut scene = floor_scene();
+        let materials = BTreeMap::from([(1, material(1))]);
+        let mut projector = VoxelRenderProjector::new();
+        projector.set_level_of_detail(
+            "land",
+            Some(VoxelLevelOfDetail {
+                viewer: [0.0, 4.0, 4.0],
+                coarse_distance: 10.0,
+            }),
+        );
+        fn instances(scene: &VoxelCollisionScene) -> [VoxelProjectionInstance<'_>; 1] {
+            [VoxelProjectionInstance {
+                instance_id: "land".to_string(),
+                asset_id: "land".to_string(),
+                transform: Transform::IDENTITY,
+                scene,
+            }]
+        }
+        projector.project(&instances(&scene), &materials).unwrap();
+        assert_eq!(projector.coarse_chunk_count("land"), 2);
+        assert!(!projector.level_of_detail_changed(&instances(&scene)));
+
+        // Emptying coarse chunk 3 removes its mesh.
+        let cleared: Vec<_> = (24..32)
+            .flat_map(|x| {
+                (0..8)
+                    .flat_map(move |z| (0..3).map(move |y| VoxelEdit::Clear { address: [x, y, z] }))
+            })
+            .collect();
+        VoxelEditService::apply(&mut scene, &cleared).unwrap();
+        assert!(scene.mesh_chunk([3, 0, 0]).is_none());
+        assert!(projector.level_of_detail_changed(&instances(&scene)));
+        projector.project(&instances(&scene), &materials).unwrap();
+        assert_eq!(projector.coarse_chunk_count("land"), 1);
+        // Chunk 2's coarse mesh waits for the stream to pause, then nothing
+        // changes level.
+        for _ in 0..QUIET_PROJECTIONS {
+            assert!(projector.level_of_detail_changed(&instances(&scene)));
+            projector.project(&instances(&scene), &materials).unwrap();
+        }
+        assert!(!projector.level_of_detail_changed(&instances(&scene)));
     }
 
     #[test]
