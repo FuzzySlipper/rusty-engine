@@ -82,6 +82,8 @@ struct VoxelScenePresentationState {
     /// derives them again only when a presentation's materials or a scene's
     /// non-occluding slots changed.
     renderer_materials: Option<RendererMaterials>,
+    /// Wall time of the last projection.
+    projection_microseconds: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -135,6 +137,7 @@ impl RuntimeVoxelScenePresentationBridge {
                 next_presentation: 1,
                 viewer: None,
                 renderer_materials: None,
+                projection_microseconds: 0,
             },
             staged: None,
             appearance: None,
@@ -1136,6 +1139,16 @@ fn project_all_presentations(
     state: &mut VoxelScenePresentationState,
     spatial: &SpatialCollisionSource,
 ) -> Result<RenderFrameDiff, CsharpEngineServicesError> {
+    let started = Instant::now();
+    let frame = project_presentations(state, spatial);
+    state.projection_microseconds = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+    frame
+}
+
+fn project_presentations(
+    state: &mut VoxelScenePresentationState,
+    spatial: &SpatialCollisionSource,
+) -> Result<RenderFrameDiff, CsharpEngineServicesError> {
     set_levels_of_detail(state);
     let scenes = presentation_scenes(state, spatial)?;
     let instances = presentation_instances(&scenes);
@@ -1269,6 +1282,9 @@ fn presentation_readout(
     let scatter = state
         .projector
         .scatter_readout(&presentation_instance_id(handle.value));
+    let projection = state
+        .projector
+        .instance_projection(&presentation_instance_id(handle.value));
     Ok(NativeVoxelScenePresentationReadout {
         present: true,
         source_revision: scene.source_revision().raw(),
@@ -1285,6 +1301,11 @@ fn presentation_readout(
         scatter_patch_count: scatter.patches,
         scatter_instance_count: scatter.instances,
         scatter_over_budget_count: scatter.over_budget,
+        projected_every_chunk: projection.compared_every_chunk,
+        projected_chunk_count: projection.visited_chunks,
+        published_mesh_count: projection.published_meshes,
+        coarse_built_count: projection.coarse_built,
+        projection_microseconds: state.projection_microseconds,
     })
 }
 
@@ -1955,6 +1976,72 @@ mod tests {
         assert_eq!(off.coarse_chunk_count, 0);
         let call = bridge.take_staged_call().unwrap();
         assert_eq!(replaced(&call.frames), 2);
+    }
+
+    #[test]
+    fn a_refresh_after_several_edits_projects_only_their_chunks() {
+        let mut spatial = RuntimeSpatialBridge::new();
+        let session = four_chunk_floor(&mut spatial);
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        appearance.begin_call();
+        let stone = material(&mut appearance);
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        bridge.bind_appearance(&mut appearance);
+        bridge.begin_call();
+        let bindings = [NativeVoxelSceneMaterialBinding {
+            material_slot: 1,
+            material: stone,
+        }];
+        let presentation = bridge
+            .project_scene(NativeProjectVoxelSceneRequest {
+                session,
+                materials: bindings.as_ptr(),
+                materials_len: bindings.len(),
+            })
+            .unwrap();
+        // Projecting the scene compared every chunk; a refresh without a
+        // change compares none.
+        let unchanged = bridge.refresh(presentation).unwrap();
+        assert!(!unchanged.projected_every_chunk);
+        assert_eq!(unchanged.projected_chunk_count, 0);
+        let call = bridge.take_staged_call().unwrap();
+        bridge.commit_call(call);
+
+        // Two edits inside chunk 0 before the next refresh.
+        let voxel = crate::voxel::api(&mut spatial);
+        for x in [2, 4] {
+            let edit = NativeVoxelEdit {
+                state: 0,
+                kind: NativeVoxelEditKind::Clear,
+                address: NativeVoxelAddress { x, y: 1, z: 4 },
+                material_slot: 0,
+            };
+            let mut receipt = NativeVoxelEditReceipt::default();
+            let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+            assert_eq!(
+                unsafe {
+                    (voxel.apply_edits)(
+                        voxel.context,
+                        &NativeVoxelEditTransaction {
+                            session,
+                            edits: &edit,
+                            edits_len: 1,
+                        },
+                        &mut receipt,
+                        &mut error,
+                    )
+                },
+                ABI_OK
+            );
+            assert_eq!(receipt.rebuilt_mesh_chunks, 1);
+        }
+        bridge.begin_call();
+        let edited = bridge.refresh(presentation).unwrap();
+        assert!(!edited.projected_every_chunk);
+        assert_eq!(edited.projected_chunk_count, 1);
+        assert_eq!(edited.published_mesh_count, 1);
+        assert_eq!(edited.coarse_built_count, 0);
     }
 
     /// A primary camera at `world`, with no backdrop link.

@@ -137,7 +137,7 @@ pub use world_origin::{
 };
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -270,6 +270,9 @@ pub struct VoxelChunkMeshUpdate {
     /// Time spent meshing the rebuilt chunks, summed over chunks (chunks may
     /// mesh in parallel, so wall time can be shorter).
     pub mesh_microseconds: u64,
+    /// Time spent building the changed chunks' colliders, summed over
+    /// chunks like `mesh_microseconds`.
+    pub collider_microseconds: u64,
 }
 
 /// Static collision authority plus its query-optimized derived projection.
@@ -292,6 +295,11 @@ pub struct VoxelCollisionScene {
     /// (including a world-origin rebase) and every local change takes a new
     /// one; a clone shares it until either copy changes.
     mesh_state: u64,
+    /// The latest local mesh changes, oldest first: the `mesh_state` each
+    /// was applied to and its dirty chunks ([`Self::dirty_chunks_since`]).
+    /// Beyond the latest, it names no more chunks than the scene has
+    /// meshes. A build starts it empty.
+    mesh_history: VecDeque<(u64, Vec<[i64; 3]>)>,
     source_revision: VoxelSourceRevision,
     /// The source revision the meshes and colliders show while a deferred
     /// residency change rebuilds them (`DeferredChunkRebuild`); `None` when
@@ -638,9 +646,11 @@ impl VoxelCollisionScene {
                 reused_chunks: 0,
                 removed_chunks: 0,
                 mesh_microseconds,
+                collider_microseconds: 0,
             },
             mesh_options,
             mesh_state: next_mesh_state(),
+            mesh_history: VecDeque::new(),
             source_revision: revisions.source,
             projected_revision: None,
             synchronous_state: next_mesh_state(),
@@ -772,7 +782,9 @@ impl VoxelCollisionScene {
             reused_chunks: self.mesh_chunks.len() - rebuilt_chunks,
             removed_chunks: 0,
             mesh_microseconds: 0,
+            collider_microseconds: 0,
         };
+        self.record_mesh_update();
     }
 
     /// Replace the surface modes and characters. Every chunk is remeshed and
@@ -886,9 +898,30 @@ impl VoxelCollisionScene {
     /// Identity of the current chunk meshes. Two scenes with the same state
     /// have the same meshes. When `mesh_update().previous_mesh_state` is the
     /// state a consumer last saw, `mesh_update().dirty_chunks` names every
-    /// chunk mesh that changed since then.
+    /// chunk mesh that changed since then; [`Self::dirty_chunks_since`]
+    /// answers for a consumer several changes behind.
     pub const fn mesh_state(&self) -> u64 {
         self.mesh_state
+    }
+
+    /// Every chunk whose mesh changed or went since the scene had
+    /// `mesh_state`, in chunk order: none when it still has it. `None` when
+    /// that state is not among the recent local changes (a rebuilt scene, or
+    /// a consumer too many changes behind); compare every chunk then.
+    pub fn dirty_chunks_since(&self, mesh_state: u64) -> Option<Vec<[i64; 3]>> {
+        if mesh_state == self.mesh_state {
+            return Some(Vec::new());
+        }
+        let start = self
+            .mesh_history
+            .iter()
+            .position(|(before, _)| *before == mesh_state)?;
+        let dirty: BTreeSet<_> = self
+            .mesh_history
+            .range(start..)
+            .flat_map(|(_, dirty)| dirty.iter().copied())
+            .collect();
+        Some(dirty.into_iter().collect())
     }
 
     pub const fn source_revision(&self) -> VoxelSourceRevision {
@@ -1552,7 +1585,25 @@ impl VoxelCollisionScene {
             reused_chunks: self.mesh_chunks.len() - rebuilt_chunks,
             removed_chunks,
             mesh_microseconds: rebuild.microseconds,
+            collider_microseconds: rebuild.collider_microseconds,
         };
+        self.record_mesh_update();
+    }
+
+    /// Add the mesh update just made to the history, dropping the oldest
+    /// changes once it names more chunks than the scene has meshes: a
+    /// consumer that far behind compares every chunk anyway.
+    fn record_mesh_update(&mut self) {
+        let Some(previous) = self.mesh_update.previous_mesh_state else {
+            return;
+        };
+        self.mesh_history
+            .push_back((previous, self.mesh_update.dirty_chunks.clone()));
+        let mut named: usize = self.mesh_history.iter().map(|(_, dirty)| dirty.len()).sum();
+        while self.mesh_history.len() > 1 && named > self.mesh_chunks.len() {
+            let (_, dropped) = self.mesh_history.pop_front().expect("more than one");
+            named -= dropped.len();
+        }
     }
 
     pub fn aabb_overlaps_solid(&self, min: [f64; 3], max: [f64; 3]) -> bool {
@@ -1671,7 +1722,10 @@ impl RebuildSource<'_> {
                 _ => None,
             };
             let collider = (!greedy || changed.contains(&coordinate)).then(|| {
-                self.prepare_collider(coordinate, mesh.as_ref().map(|(mesh, _)| mesh.as_ref()))
+                let started = Instant::now();
+                let collider =
+                    self.prepare_collider(coordinate, mesh.as_ref().map(|(mesh, _)| mesh.as_ref()));
+                (collider, started.elapsed().as_micros() as u64)
             });
             Ok::<_, CollisionSceneError>((mesh, collider))
         });
@@ -1680,6 +1734,7 @@ impl RebuildSource<'_> {
             fields: Vec::new(),
             colliders: Vec::new(),
             microseconds: 0,
+            collider_microseconds: 0,
         };
         for (coordinate, built) in coordinates.into_iter().zip(built) {
             let (mesh, collider) = built?;
@@ -1689,7 +1744,9 @@ impl RebuildSource<'_> {
             rebuild
                 .meshes
                 .insert(coordinate, mesh.map(|(mesh, _)| mesh));
-            if let Some(collider) = collider {
+            if let Some((collider, microseconds)) = collider {
+                rebuild.collider_microseconds =
+                    rebuild.collider_microseconds.saturating_add(microseconds);
                 rebuild.colliders.push((coordinate, collider));
             }
         }
@@ -1769,12 +1826,13 @@ impl RebuildSnapshot {
 
 /// Rebuilt `dirty` chunks: their meshes (`None` removes one), the distance
 /// fields of field-only chunks, the colliders that change (`None` removes
-/// one), and the summed meshing time.
+/// one), and the summed meshing and collider times.
 pub(crate) struct ChunkRebuild {
     meshes: BTreeMap<ChunkCoord, Option<Arc<VoxelMeshChunk>>>,
     fields: Vec<(ChunkCoord, Vec<u8>)>,
     colliders: Vec<(ChunkCoord, Option<PreparedChunkParts>)>,
     microseconds: u64,
+    collider_microseconds: u64,
 }
 
 fn build_mesh_chunks(

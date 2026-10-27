@@ -139,7 +139,16 @@ pub struct NativeVoxelEditReceipt {
     pub reused_mesh_chunks: u32,
     pub removed_mesh_chunks: u32,
     pub status: NativeVoxelEditStatus,
+    /// Time spent meshing the rebuilt chunks, summed over chunks (they mesh
+    /// in parallel, so wall time can be shorter).
     pub mesh_microseconds: u64,
+    /// Time spent building the colliders of the changed chunks, summed over
+    /// chunks like `mesh_microseconds`.
+    pub collider_microseconds: u64,
+    /// Time spent waiting for and installing the session's earlier deferred
+    /// residency and static collision changes before applying the edits:
+    /// their work, which every synchronous change finishes first.
+    pub settle_microseconds: u64,
 }
 
 #[repr(u32)]

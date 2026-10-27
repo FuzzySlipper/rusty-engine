@@ -464,7 +464,11 @@ impl RuntimeSpatialBridge {
             .copied()
             .map(native_edit)
             .collect::<Result<Vec<_>, _>>()?;
-        self.edit_scene(request.session, |session| {
+        self.edit_scene_deferring(request.session, |session| {
+            let started = Instant::now();
+            session.settle();
+            let settle_microseconds =
+                started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
             session.change_collision(|scene| {
                 match engine_spatial::VoxelEditService::apply(scene, &edits) {
                     Ok(receipt) => {
@@ -476,8 +480,13 @@ impl RuntimeSpatialBridge {
                                 receipt.fact.changed_max_inclusive,
                             ),
                         );
-                        let mut native = native_edit_receipt(&receipt);
-                        native.mesh_microseconds = scene.mesh_update().mesh_microseconds;
+                        let update = scene.mesh_update();
+                        let native = NativeVoxelEditReceipt {
+                            mesh_microseconds: update.mesh_microseconds,
+                            collider_microseconds: update.collider_microseconds,
+                            settle_microseconds,
+                            ..native_edit_receipt(&receipt)
+                        };
                         (Ok(native), vec![changed])
                     }
                     Err(VoxelEditApplyError::Rejected(VoxelEditRejection::NoChanges)) => {
@@ -486,6 +495,7 @@ impl RuntimeSpatialBridge {
                             status: NativeVoxelEditStatus::NoChanges,
                             revision_before: revision,
                             accepted_revision: revision,
+                            settle_microseconds,
                             ..Default::default()
                         };
                         (Ok(receipt), Vec::new())
@@ -838,7 +848,7 @@ fn native_edit_receipt(receipt: &engine_spatial::VoxelEditReceipt) -> NativeVoxe
         reused_mesh_chunks: narrow(receipt.reused_mesh_chunks),
         removed_mesh_chunks: narrow(receipt.removed_mesh_chunks),
         status: NativeVoxelEditStatus::Accepted,
-        mesh_microseconds: 0,
+        ..Default::default()
     }
 }
 

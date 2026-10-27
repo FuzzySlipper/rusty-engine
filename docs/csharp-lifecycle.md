@@ -764,9 +764,14 @@ are an upstream Engine task and a valid stopping point.
 through the Engine renderer. Bind every currently used scene material slot to
 a live `Appearance` material, retain the disposable projection, and call
 `RefreshScene` after voxel edits, residency changes, or origin changes. A
-refresh right after one voxel update visits only the chunks that update
-changed; after several updates, a replaced scene, a material change or an
-origin rebase it checks every chunk. `ProjectSceneDirectional` and
+refresh visits only the chunks whose meshes changed since the last
+projection, however many edits and residency changes came between, so a
+product may apply edits that need no same-frame visuals (regrowth, a fire's
+write-back) and refresh once, later. It checks every chunk after a replaced
+scene, a material change, an origin rebase, or more changes than the scene
+has chunks. The readout says what the last projection did:
+`ProjectedEveryChunk`, `ProjectedChunkCount`, `PublishedMeshCount`,
+`CoarseBuiltCount` and `ProjectionMicroseconds`. `ProjectSceneDirectional` and
 `UpdateSceneDirectional` additionally accept sparse `SpatialFace` overrides;
 omitted faces use the required base slot binding. On a reconstructed surface
 the face is the polygon's box-projection face. `ReadMaterialMapping` returns

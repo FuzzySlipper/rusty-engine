@@ -235,6 +235,31 @@ fn one_cell_edit_in_a_large_world_touches_only_its_neighbourhood() {
     );
 }
 
+#[test]
+fn a_consumer_several_changes_behind_reads_only_the_chunks_they_changed() {
+    let mut scene = terrain(4, 4);
+    let seen = scene.mesh_state();
+    assert_eq!(scene.dirty_chunks_since(seen), Some(Vec::new()));
+    for address in [[3, 1, 3], [8 * 2 + 3, 1, 3], [3, 1, 8 * 3 + 4]] {
+        VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address }]).unwrap();
+    }
+    assert_eq!(
+        scene.dirty_chunks_since(seen),
+        Some(vec![[0, 0, 0], [0, 0, 3], [2, 0, 0]])
+    );
+    // A rebuilt scene starts a new history.
+    assert_eq!(rebuilt(&scene).dirty_chunks_since(seen), None);
+
+    // A consumer more changes behind than the scene has chunks compares
+    // every chunk.
+    let chunks = scene.mesh_chunks().len() as i64;
+    for index in 0..=chunks {
+        let address = [index, 1, 8 + 3];
+        VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address }]).unwrap();
+    }
+    assert_eq!(scene.dirty_chunks_since(seen), None);
+}
+
 fn resting_ball(id: u64, at: [f64; 3]) -> DynamicsBodyInput {
     DynamicsBodyInput {
         id: DynamicsBodyId(id),

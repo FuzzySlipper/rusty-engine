@@ -24,6 +24,14 @@ Unchanged chunks keep their meshes and collider shapes; a bound Dynamics world
 keeps those colliders too. Nothing copies, hashes or rebuilds the whole scene.
 The authority hash is an order-independent sum maintained per voxel.
 
+An edit receipt breaks its call down: `RebuiltMeshChunks`,
+`MeshMicroseconds` and `ColliderMicroseconds` (summed over chunks, which build
+in parallel) and `SettleMicroseconds`, the time spent first installing the
+session's earlier deferred changes. `VoxelScenePresentation.RefreshScene`
+then republishes only the chunks changed since the last projection
+([scene presentation](csharp-lifecycle.md#microvoxel-objects)); its readout reports the chunks
+it compared, the meshes it sent and the time it took.
+
 A failed edit changes nothing:
 - invalid coordinates, material slots or states are refused before any write;
 - if a touched chunk's mesh cannot be built, the written voxels are reverted.
@@ -70,6 +78,12 @@ changed inside it: a solid 16³ chunk's mesh and collider, or a checker chunk's
 
 `voxel_edit_scaling` clears 1–123 cells inside one chunk of a 16- or 64-chunk
 world.
+
+In a running product, the
+[`csharp-voxel-edit-cost`](../fixtures/csharp-voxel-edit-cost/README.md) fixture
+times `ApplyEdits` and `RefreshScene` for 1, 50 and 256 cells in one chunk,
+256 cells across 16 chunks, and two edits before one refresh, in a
+dual-contoured landscape of 768 chunks drawn with level of detail.
 
 ## Memory
 

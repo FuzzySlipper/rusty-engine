@@ -110,6 +110,8 @@ struct InstanceSnapshot {
     pending_coarse: BTreeMap<[i64; 3], u32>,
     /// Time spent meshing the coarse chunks the last projection built.
     coarse_mesh_microseconds: u64,
+    /// What the last projection did.
+    last_projection: VoxelInstanceProjectionReadout,
     /// The scatter patches placed on the chunks.
     scatter: ScatterSnapshot,
 }
@@ -130,14 +132,15 @@ pub(crate) enum VoxelRenderKey {
 }
 
 /// Which of an instance's chunks a projection visits.
-enum ChunkVisit<'a> {
+enum ChunkVisit {
     /// The scene has the mesh state last projected.
     None,
-    /// The scene's last change was applied to the mesh state last projected,
-    /// so its dirty list names every changed chunk.
-    Dirty(&'a [[i64; 3]]),
+    /// The chunks changed since the mesh state last projected, however many
+    /// changes ago (`VoxelCollisionScene::dirty_chunks_since`).
+    Dirty(Vec<[i64; 3]>),
     /// Compare every chunk: a new or rebound instance, a rebuilt or
-    /// diverged scene, a skipped change, or a changed slot mapping.
+    /// diverged scene, one too many changes behind, or a changed slot
+    /// mapping.
     All,
 }
 
@@ -147,7 +150,7 @@ struct InstancePlan<'a> {
     mapped: bool,
     /// The slot mapping changed, so every payload is rewritten.
     replace_all: bool,
-    visit: ChunkVisit<'a>,
+    visit: ChunkVisit,
     coarse: CoarsePlan,
 }
 
@@ -362,17 +365,13 @@ impl VoxelRenderProjector {
             let replace_all = previous.is_some_and(|previous| {
                 previous.mapped != mapped || previous.material_slots != *slots
             });
-            let visit = match previous {
-                Some(previous) if !replace_all && previous.mesh_state == scene.mesh_state() => {
-                    ChunkVisit::None
-                }
-                Some(previous)
-                    if !replace_all
-                        && scene.mesh_update().previous_mesh_state == Some(previous.mesh_state) =>
-                {
-                    ChunkVisit::Dirty(&scene.mesh_update().dirty_chunks)
-                }
-                _ => ChunkVisit::All,
+            let visit = match previous
+                .filter(|_| !replace_all)
+                .and_then(|previous| scene.dirty_chunks_since(previous.mesh_state))
+            {
+                Some(dirty) if dirty.is_empty() => ChunkVisit::None,
+                Some(dirty) => ChunkVisit::Dirty(dirty),
+                None => ChunkVisit::All,
             };
             let check = ChunkCheck {
                 instance,
@@ -524,6 +523,7 @@ impl VoxelRenderProjector {
                         coarse: BTreeMap::new(),
                         pending_coarse: BTreeMap::new(),
                         coarse_mesh_microseconds: 0,
+                        last_projection: VoxelInstanceProjectionReadout::default(),
                         scatter: ScatterSnapshot::default(),
                     });
                     (snapshot, handle)
@@ -535,6 +535,7 @@ impl VoxelRenderProjector {
                 pending,
                 microseconds,
             } = std::mem::take(&mut plan.coarse);
+            let coarse_built = built.len() as u64;
             let mut level_changes: BTreeSet<_> = built.keys().chain(&dropped).copied().collect();
             for coord in &dropped {
                 snapshot.coarse.remove(coord);
@@ -553,8 +554,10 @@ impl VoxelRenderProjector {
                 retained: &mut snapshot.chunks,
                 slots: plan.slots,
                 replace_all: plan.replace_all,
+                visited: 0,
+                published: 0,
             };
-            match plan.visit {
+            match &plan.visit {
                 ChunkVisit::None => {}
                 ChunkVisit::Dirty(coords) => {
                     for coord in coords {
@@ -581,6 +584,12 @@ impl VoxelRenderProjector {
             for coord in level_changes {
                 chunks.project(coord, drawn(coord))?;
             }
+            snapshot.last_projection = VoxelInstanceProjectionReadout {
+                compared_every_chunk: matches!(plan.visit, ChunkVisit::All),
+                visited_chunks: chunks.visited,
+                published_meshes: chunks.published,
+                coarse_built,
+            };
             ScatterProjection {
                 registry: &mut self.registry,
                 instance_id: &instance.instance_id,
@@ -648,6 +657,13 @@ impl VoxelRenderProjector {
             .map_or(0, |instance| instance.coarse_mesh_microseconds)
     }
 
+    /// What the last projection did for an instance.
+    pub fn instance_projection(&self, instance_id: &str) -> VoxelInstanceProjectionReadout {
+        self.last_instances
+            .get(instance_id)
+            .map_or_else(Default::default, |instance| instance.last_projection)
+    }
+
     pub fn root_handle(&self, instance_id: &str) -> Option<RenderHandle> {
         self.registry
             .handle_of(&VoxelRenderKey::Root(instance_id.to_string()))
@@ -670,6 +686,22 @@ impl VoxelRenderProjector {
     }
 }
 
+/// What a projection did for one instance: a refresh after a local edit
+/// compares the edited chunks alone, unless the scene was rebuilt or the
+/// projector is too many changes behind.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VoxelInstanceProjectionReadout {
+    /// Whether it compared every chunk, not only those changed since the
+    /// mesh state it projected before.
+    pub compared_every_chunk: bool,
+    /// Chunks it compared with what the renderer holds.
+    pub visited_chunks: u64,
+    /// Chunk meshes it sent to the renderer, fine or coarse.
+    pub published_meshes: u64,
+    /// Coarse meshes it built.
+    pub coarse_built: u64,
+}
+
 /// Renderer work for one instance's chunks.
 struct ChunkProjection<'a> {
     registry: &'a mut StableHandleRegistry<VoxelRenderKey>,
@@ -679,6 +711,9 @@ struct ChunkProjection<'a> {
     retained: &'a mut BTreeMap<[i64; 3], ChunkSnapshot>,
     slots: &'a VoxelMaterialSlotMapping,
     replace_all: bool,
+    /// Chunks projected so far, and the meshes sent for them.
+    visited: u64,
+    published: u64,
 }
 
 impl ChunkProjection<'_> {
@@ -688,6 +723,7 @@ impl ChunkProjection<'_> {
         coord: [i64; 3],
         chunk: Option<&VoxelMeshChunk>,
     ) -> Result<(), VoxelProjectionError> {
+        self.visited += 1;
         let key = VoxelRenderKey::Chunk {
             instance: self.instance_id.to_string(),
             chunk: coord,
@@ -732,6 +768,7 @@ impl ChunkProjection<'_> {
         if previous
             .is_none_or(|previous| previous.content_hash != chunk.content_hash || self.replace_all)
         {
+            self.published += 1;
             self.operations.push(RenderDiff::ReplaceMeshPayload {
                 handle,
                 payload: voxel_mesh_payload_with_material_slots(chunk, self.slots),
@@ -863,7 +900,7 @@ fn plan_coarse(
     previous: Option<&InstanceSnapshot>,
     scene: &VoxelCollisionScene,
     level: Option<&VoxelLevelOfDetail>,
-    visit: &ChunkVisit<'_>,
+    visit: &ChunkVisit,
 ) -> Result<CoarsePlan, VoxelProjectionError> {
     let empty = BTreeMap::new();
     let current = previous.map_or(&empty, |previous| &previous.coarse);
@@ -873,7 +910,7 @@ fn plan_coarse(
     let mut edited = Vec::new();
     let mut streamed = Vec::new();
     if let ChunkVisit::Dirty(dirty) = visit {
-        for coord in *dirty {
+        for coord in dirty {
             let was = previous.and_then(|previous| previous.chunks.get(coord));
             match (was, scene.mesh_chunk(*coord)) {
                 (Some(was), Some(now)) => {
@@ -1422,6 +1459,57 @@ mod tests {
         assert_eq!(
             replaced(&projector, &scene, &edited.frame),
             BTreeMap::from([(1, false), (2, true)])
+        );
+    }
+
+    #[test]
+    fn edits_since_the_last_projection_project_only_their_chunks() {
+        let mut scene = floor_scene();
+        let materials = BTreeMap::from([(1, material(1))]);
+        let mut projector = VoxelRenderProjector::new();
+        projector.set_level_of_detail(
+            "land",
+            Some(VoxelLevelOfDetail {
+                viewer: [0.0, 4.0, 4.0],
+                coarse_distance: 10.0,
+            }),
+        );
+        fn instances(scene: &VoxelCollisionScene) -> [VoxelProjectionInstance<'_>; 1] {
+            [VoxelProjectionInstance {
+                instance_id: "land".to_string(),
+                asset_id: "land".to_string(),
+                transform: Transform::IDENTITY,
+                scene,
+            }]
+        }
+        projector.project(&instances(&scene), &materials).unwrap();
+        assert_eq!(
+            projector.instance_projection("land"),
+            VoxelInstanceProjectionReadout {
+                compared_every_chunk: true,
+                visited_chunks: 4,
+                published_meshes: 4,
+                coarse_built: 2,
+            }
+        );
+        // Two changes before the next projection, beyond the coarse chunks'
+        // reach.
+        for address in [[2, 1, 4], [4, 1, 3]] {
+            VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address }]).unwrap();
+        }
+        let edited = projector.project(&instances(&scene), &materials).unwrap();
+        assert_eq!(
+            replaced(&projector, &scene, &edited.frame),
+            BTreeMap::from([(0, false)])
+        );
+        assert_eq!(
+            projector.instance_projection("land"),
+            VoxelInstanceProjectionReadout {
+                compared_every_chunk: false,
+                visited_chunks: 1,
+                published_meshes: 1,
+                coarse_built: 0,
+            }
         );
     }
 

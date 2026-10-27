@@ -121,7 +121,8 @@ worker thread. Nothing waits for them: they install at the start of the first
 Engine call into the product after they are built, usually the next update or
 the one after, in the order the changes were made, so one still building holds
 back those after it. A change to that session that is not deferred installs
-them first and waits for them. Until they install, `Voxel.Read` shows the new
+them first and waits for them; an edit receipt's `SettleMicroseconds` reports
+that wait. Until they install, `Voxel.Read` shows the new
 voxels while collision, picking and the scene presentation show the chunks as
 they were, and the receipt's and `Voxel.ReadScene`'s `CollisionRevision` and
 `MeshRevision` name the revision they show. A stream that admits chunks ahead

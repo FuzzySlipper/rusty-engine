@@ -226,6 +226,21 @@ pub struct NativeVoxelScenePresentationReadout {
     pub scatter_instance_count: u64,
     /// Chunks within a scatter's reach left bare by its instance budget.
     pub scatter_over_budget_count: u64,
+    /// Whether the last projection compared every chunk, not only those
+    /// whose meshes changed since the projection before: the first one, a
+    /// rebuilt scene, a changed material mapping, or more changes since
+    /// than the scene has chunks.
+    pub projected_every_chunk: bool,
+    /// Chunks the last projection compared with what the renderer holds.
+    pub projected_chunk_count: u64,
+    /// Chunk meshes the last projection sent to the renderer, fine or
+    /// coarse.
+    pub published_mesh_count: u64,
+    /// Coarse meshes the last projection built.
+    pub coarse_built_count: u64,
+    /// Wall time of the last projection, which projects every presentation
+    /// of the product.
+    pub projection_microseconds: u64,
 }
 
 /// Result of clearing all retained voxel scene projections in this product
