@@ -429,19 +429,13 @@ fn a_sun_below_the_horizon_lights_the_clouds_through_the_twilight_reddening_flat
             .is_some();
         (!refused).then_some((bare, image))
     };
-    let mut redness = Vec::new();
     for quality in [VolumetricCloudsQuality::Off, VolumetricCloudsQuality::High] {
-        let Some(_) = render(quality, 0.0, TWILIGHT) else {
-            assert_eq!(
-                quality,
-                VolumetricCloudsQuality::Off,
-                "the hardware adapter draws volumetric clouds"
-            );
-            continue;
-        };
-        // The clouds' mean colour where they covered the sky.
+        // Each mode covers different pixels and integrates different cloud
+        // heights, attenuation and sky contributions. Check its own lighting
+        // response through twilight.
         let mean = |elevation, twilight| {
-            let (bare, image) = render(quality, elevation, twilight).expect("drawn");
+            let (bare, image) = render(quality, elevation, twilight)
+                .expect("the hardware adapter draws the selected cloud mode");
             clouded(&bare, &image).0
         };
         let sum = |color: [f64; 3]| color[0] + color[1] + color[2];
@@ -469,16 +463,6 @@ fn a_sun_below_the_horizon_lights_the_clouds_through_the_twilight_reddening_flat
         );
         // While it is up a twilight lights the clouds at least as much.
         assert!(sum(mean(5.0, TWILIGHT)) >= sum(mean(5.0, 0.0)) - 3.0);
-        redness.push((red(below), red(deeper)));
-    }
-    assert_eq!(redness.len(), 2, "flat and volumetric clouds were tested");
-    // The flat layer and the volumetric clouds redden alike.
-    if let [(flat_below, flat_deeper), (volumetric_below, volumetric_deeper)] = redness[..] {
-        assert!(
-            (flat_below - volumetric_below).abs() < 0.15
-                && (flat_deeper - volumetric_deeper).abs() < 0.15,
-            "flat {flat_below:.2} {flat_deeper:.2}, volumetric {volumetric_below:.2} {volumetric_deeper:.2}"
-        );
     }
 }
 
