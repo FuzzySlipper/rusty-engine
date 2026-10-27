@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import re
 import sys
 from pathlib import Path
@@ -13,6 +14,14 @@ import dependency_boundary_check
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+CARGO_METADATA_PATH: Path | None = None
+
+
+def parse_test_args() -> tuple[Path | None, list[str]]:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--metadata", type=Path)
+    args, unittest_args = parser.parse_known_args()
+    return args.metadata, [sys.argv[0], *unittest_args]
 
 
 def metadata_fixture(
@@ -56,7 +65,7 @@ def metadata_fixture(
 
 class DependencyBoundaryTests(unittest.TestCase):
     def test_current_workspace_graph_is_accepted(self) -> None:
-        metadata = dependency_boundary_check.load_metadata(REPO_ROOT)
+        metadata = dependency_boundary_check.load_metadata(REPO_ROOT, CARGO_METADATA_PATH)
         self.assertEqual(dependency_boundary_check.find_violations(metadata), [])
 
     def test_render_projection_may_observe_entity_spatial_voxel_and_service_facts(self) -> None:
@@ -332,4 +341,5 @@ class EnvironmentReadTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    CARGO_METADATA_PATH, unittest_args = parse_test_args()
+    unittest.main(argv=unittest_args, verbosity=2)

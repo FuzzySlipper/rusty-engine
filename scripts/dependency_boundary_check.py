@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 from collections import deque
 import json
-import os
 from pathlib import Path
 import subprocess
 import sys
@@ -117,10 +116,6 @@ def parse_args() -> argparse.Namespace:
 
 
 def load_metadata(root: Path, metadata_path: Path | None = None) -> dict[str, Any]:
-    if metadata_path is None:
-        shared_metadata = os.environ.get("RUSTY_ENGINE_CARGO_METADATA")
-        if shared_metadata:
-            metadata_path = Path(shared_metadata)
     if metadata_path is not None:
         with metadata_path.open(encoding="utf-8") as source:
             return json.load(source)

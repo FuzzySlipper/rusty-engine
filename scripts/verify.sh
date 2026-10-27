@@ -6,14 +6,14 @@ cd "$REPO_ROOT"
 
 METADATA_DIR="$(mktemp -d -t rusty-engine-verify-metadata.XXXXXX)"
 trap 'rm -rf "$METADATA_DIR"' EXIT
-export RUSTY_ENGINE_CARGO_METADATA="$METADATA_DIR/cargo-metadata.json"
+METADATA_PATH="$METADATA_DIR/cargo-metadata.json"
 
 cargo fmt --all --check
 # The dependency checker and architecture tests share this resolved graph.
-cargo metadata --format-version 1 --locked --all-features > "$RUSTY_ENGINE_CARGO_METADATA"
+cargo metadata --format-version 1 --locked --all-features > "$METADATA_PATH"
 ./scripts/audit-standalone.sh
-python3 ./scripts/dependency_boundary_check.py --metadata "$RUSTY_ENGINE_CARGO_METADATA"
-PYTHONDONTWRITEBYTECODE=1 python3 ./scripts/test_architecture_checks.py
+python3 ./scripts/dependency_boundary_check.py --metadata "$METADATA_PATH"
+PYTHONDONTWRITEBYTECODE=1 python3 ./scripts/test_architecture_checks.py --metadata "$METADATA_PATH"
 # CPU/native ownership tests, then software-renderer startup, supported draw,
 # refusal and retained-state/capture checks. The full renderer image suite and
 # ignored temporal sequences run on hardware through the GPU lane.
