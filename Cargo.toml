@@ -138,6 +138,27 @@ debug = "line-tables-only"
 [profile.release]
 debug = "line-tables-only"
 
+# Repeated WGSL composition and validation dominate the exhaustive shader
+# matrix. Keep the workspace's dev profile for Engine code, but optimize the
+# measured parser/composer and regex hot path.
+[profile.dev.package.naga]
+opt-level = 3
+
+[profile.dev.package.naga_oil]
+opt-level = 3
+
+[profile.dev.package.regex]
+opt-level = 3
+
+[profile.dev.package.regex-automata]
+opt-level = 3
+
+[profile.dev.package.regex-syntax]
+opt-level = 3
+
+[profile.dev.package.aho-corasick]
+opt-level = 3
+
 [patch.crates-io]
 fidget-mesh = { path = "rust/vendor/fidget-mesh" }
 nethost-sys = { path = "rust/vendor/nethost-sys" }

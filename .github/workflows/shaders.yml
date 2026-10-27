@@ -1,0 +1,48 @@
+name: shaders
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/shaders.yml'
+      - 'rust-toolchain*'
+      - '.cargo/config'
+      - '.cargo/config.toml'
+      - 'rust/crates/render-shaders/**'
+  pull_request:
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/shaders.yml'
+      - 'rust-toolchain*'
+      - '.cargo/config'
+      - '.cargo/config.toml'
+      - 'rust/crates/render-shaders/**'
+  # The normal verification jobs follow rolling stable too. This scheduled run
+  # makes compiler updates exercise the exhaustive matrix even without a
+  # repository change.
+  schedule:
+    - cron: '0 12 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  shader-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Rusty Engine
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Compose the exhaustive shader matrix
+        run: cargo test -p render-shaders --lib --locked -- --include-ignored --test-threads=1

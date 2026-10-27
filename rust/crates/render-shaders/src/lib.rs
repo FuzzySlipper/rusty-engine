@@ -761,31 +761,64 @@ pub fn check_product_shader(path: &str, source: &str, keywords: &[String]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// Runs `check` over every standard feature set that can occur
-    /// (`Features::occurs`), the sets split across the cores, each thread
-    /// with its own `Shaders` that `prepare` readies (registering the
-    /// product shaders the check composes with).
-    fn every_feature_set<T: Send>(
+    #[derive(Clone, Copy)]
+    enum FeatureCase {
+        Material(Features),
+        Caster(Features),
+    }
+
+    /// The full family the renderer can ask the composer to build, plus one
+    /// copy of each distinct caster input when the matrix needs shadow tests.
+    fn exhaustive_feature_cases(include_casters: bool) -> Vec<FeatureCase> {
+        let features = (0..=Features::ALL_BITS)
+            .map(Features::bit)
+            .filter(|features| features.occurs())
+            .collect::<Vec<_>>();
+        let mut cases = Vec::with_capacity(features.len() * if include_casters { 2 } else { 1 });
+        let mut casters = HashSet::new();
+        for features in features {
+            cases.push(FeatureCase::Material(features));
+            if include_casters {
+                let caster = features.caster();
+                if casters.insert(caster) {
+                    cases.push(FeatureCase::Caster(caster));
+                }
+            }
+        }
+        cases
+    }
+
+    /// Runs the exhaustive shader cases with a bounded worker pool. Claiming
+    /// small batches dynamically keeps workers busy when some feature variants
+    /// take longer to compose than others.
+    fn every_feature_case<T: Send>(
         prepare: impl Fn(&mut Shaders) -> T + Sync,
-        check: impl Fn(&mut Shaders, &T, Features) + Sync,
+        cases: &[FeatureCase],
+        check: impl Fn(&mut Shaders, &T, FeatureCase) + Sync,
     ) {
-        let sets = Features::ALL_BITS as usize + 1;
+        const MAX_WORKERS: usize = 4;
+        const CASES_PER_CLAIM: usize = 16;
+        let next_case = AtomicUsize::new(0);
         let threads = std::thread::available_parallelism()
             .map_or(1, |cores| cores.get())
-            .min(16);
-        let per_thread = sets.div_ceil(threads);
+            .min(MAX_WORKERS);
         std::thread::scope(|scope| {
-            for chunk in 0..threads {
-                let (prepare, check) = (&prepare, &check);
+            for _ in 0..threads {
+                let (prepare, cases, check) = (&prepare, cases, &check);
+                let next_case = &next_case;
                 scope.spawn(move || {
                     let mut shaders = Shaders::new();
                     let state = prepare(&mut shaders);
-                    let start = chunk * per_thread;
-                    for bits in start..(start + per_thread).min(sets) {
-                        let features = Features::bit(bits as u32);
-                        if features.occurs() {
-                            check(&mut shaders, &state, features);
+                    loop {
+                        let start = next_case.fetch_add(CASES_PER_CLAIM, Ordering::Relaxed);
+                        if start >= cases.len() {
+                            break;
+                        }
+                        for case in &cases[start..(start + CASES_PER_CLAIM).min(cases.len())] {
+                            check(&mut shaders, &state, *case);
                         }
                     }
                 });
@@ -793,47 +826,27 @@ mod tests {
         });
     }
 
-    fn validate(module: &naga::Module) -> Result<(), String> {
-        naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::all(),
-        )
-        .validate(module)
-        .map(|_| ())
-        .map_err(|error| format!("{error:?}"))
+    fn compose_case(shaders: &mut Shaders, entry: Entry, features: Features) {
+        if let Err(error) = shaders.compose(entry, features) {
+            panic!("{entry:?} {features:?}: {error}");
+        }
     }
 
-    /// Every entry composes and validates under every feature set it can be
-    /// compiled with, the world pass with and without MOTION, without a
-    /// device.
+    /// Cheap composition coverage for each entry and representative world and
+    /// caster feature sets. The exhaustive matrix runs in shaders.yml.
     #[test]
-    fn every_entry_composes_under_every_feature_set() {
-        let compose = |shaders: &mut Shaders, entry: Entry, features: Features| {
-            let (path, source) = entry.source();
-            match shaders.composer.make_naga_module(NagaModuleDescriptor {
-                source,
-                file_path: path,
-                shader_type: ShaderType::Wgsl,
-                shader_defs: features.defs(),
-                ..Default::default()
-            }) {
-                Ok(module) => validate(&module)
-                    .unwrap_or_else(|error| panic!("{entry:?} {features:?}: {error}")),
-                Err(error) => panic!(
-                    "{entry:?} {features:?}: {}",
-                    error.emit_to_string(&shaders.composer)
-                ),
-            }
-        };
-        every_feature_set(
-            |_| (),
-            |shaders, (), features| {
-                compose(shaders, Entry::World, features);
-                compose(shaders, Entry::World, features | Features::MOTION);
-                compose(shaders, Entry::Shadow, features.caster());
-            },
-        );
+    fn every_entry_composes_for_representative_features() {
         let mut shaders = Shaders::new();
+        for features in [
+            Features::default(),
+            Features::NORMAL_MAP,
+            Features::MASK | Features::WIND,
+            Features::WATER,
+        ] {
+            compose_case(&mut shaders, Entry::World, features);
+            compose_case(&mut shaders, Entry::World, features | Features::MOTION);
+            compose_case(&mut shaders, Entry::Shadow, features.caster());
+        }
         for entry in [
             Entry::Sky,
             Entry::Stars,
@@ -856,17 +869,38 @@ mod tests {
             Entry::Hiz,
             Entry::Upscale,
         ] {
-            compose(&mut shaders, entry, Features::default());
+            compose_case(&mut shaders, entry, Features::default());
         }
         // The passes that draw into a world target with its motion target.
         for entry in [Entry::Effects, Entry::Ghost, Entry::Precipitation] {
-            compose(&mut shaders, entry, Features::MOTION);
+            compose_case(&mut shaders, entry, Features::MOTION);
         }
         assert_eq!(Features::MOTION.caster(), Features::default());
         assert!(Features::WATER.occurs() && Features::default().occurs());
         assert!(!(Features::WATER | Features::MASK).occurs());
         assert!(!(Features::UNLIT | Features::NORMAL_MAP).occurs());
         assert!((Features::UNLIT | Features::VERTEX_TANGENTS | Features::WIND).occurs());
+    }
+
+    /// Full world, motion-world and distinct caster combinations. Composer
+    /// validation is enabled by default and is the validation exercised here.
+    #[test]
+    #[ignore = "exhaustive shader matrix; run through .github/workflows/shaders.yml"]
+    fn every_standard_feature_set_composes() {
+        let cases = exhaustive_feature_cases(true);
+        every_feature_case(
+            |_| (),
+            &cases,
+            |shaders, (), case| match case {
+                FeatureCase::Material(features) => {
+                    compose_case(shaders, Entry::World, features);
+                    compose_case(shaders, Entry::World, features | Features::MOTION);
+                }
+                FeatureCase::Caster(features) => {
+                    compose_case(shaders, Entry::Shadow, features);
+                }
+            },
+        );
     }
 
     const VIGNETTE: &str = r#"
@@ -918,13 +952,15 @@ fn shade(surface: Surface) -> vec4<f32> {
         let mut shaders = Shaders::new();
         let rim = shaders.product(rim_shader());
         assert_eq!(shaders.product(rim_shader()), rim, "one id for one shader");
-        every_feature_set(
-            |shaders| shaders.product(rim_shader()),
-            |shaders, rim, features| {
-                if let Err(error) = shaders.compose(Entry::World, features.with_product(*rim)) {
-                    panic!("{features:?}: {error}");
-                }
-            },
+        compose_case(
+            &mut shaders,
+            Entry::World,
+            Features::default().with_product(rim),
+        );
+        compose_case(
+            &mut shaders,
+            Entry::World,
+            Features::NORMAL_MAP.with_product(rim),
         );
         // The standard family still composes after a product module.
         shaders.compose(Entry::World, Features::NORMAL_MAP).unwrap();
@@ -935,6 +971,22 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert!(error.contains(":8:"), "{error}");
         let error = check_product_shader("shaders/empty.wgsl", "fn other() {}", &[]).unwrap_err();
         assert!(error.contains("shade"), "{error}");
+    }
+
+    #[test]
+    #[ignore = "exhaustive shader matrix; run through .github/workflows/shaders.yml"]
+    fn product_shader_composes_under_every_feature_set() {
+        let cases = exhaustive_feature_cases(false);
+        every_feature_case(
+            |shaders| shaders.product(rim_shader()),
+            &cases,
+            |shaders, rim, case| match case {
+                FeatureCase::Material(features) => {
+                    compose_case(shaders, Entry::World, features.with_product(*rim));
+                }
+                FeatureCase::Caster(_) => unreachable!("this matrix has no caster cases"),
+            },
+        );
     }
 
     const DISSOLVE: &str = "#import rusty::types::{Surface, Caster}
@@ -1011,27 +1063,11 @@ fn cast_shadow(caster: Caster) {
             Features::MASK,
             "no caster stage"
         );
-        for names in [&["DISSOLVE"][..], &[]] {
-            every_feature_set(
-                |shaders| {
-                    shaders.product(ProductShader {
-                        path: "shaders/dissolve.wgsl".to_string(),
-                        source: DISSOLVE.to_string(),
-                        keywords: keywords(names),
-                    })
-                },
-                |shaders, product, bits| {
-                    let features = bits.with_product(*product);
-                    if let Err(error) = shaders.compose(Entry::World, features) {
-                        panic!("{features:?}: {error}");
-                    }
-                    if let Err(error) = shaders.compose(Entry::Shadow, features.caster()) {
-                        panic!("{features:?}: {error}");
-                    }
-                },
-            );
+        for (product, features) in [(dissolve, Features::MASK), (plain, Features::default())] {
+            let features = features.with_product(product);
+            compose_case(&mut shaders, Entry::World, features);
+            compose_case(&mut shaders, Entry::Shadow, features.caster());
         }
-
         // Any legal spelling of the declaration is a caster stage; one in a
         // comment, or under a keyword not given, is not.
         let casts = |source: &str, names: &[&str]| {
@@ -1055,6 +1091,53 @@ fn cast_shadow(caster: Caster) {
         assert!(casts(&optional, &["CASTS"]));
         assert!(!casts(&optional, &[]));
         check_product_shader("shaders/dissolve.wgsl", &optional, &[]).unwrap();
+    }
+
+    #[test]
+    #[ignore = "exhaustive shader matrix; run through .github/workflows/shaders.yml"]
+    fn keyword_product_variants_compose_under_every_feature_set() {
+        let keywords = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| name.to_string())
+                .collect::<Vec<_>>()
+        };
+        let cases = exhaustive_feature_cases(true);
+        every_feature_case(
+            |shaders| {
+                let dissolve = shaders.product(ProductShader {
+                    path: "shaders/dissolve.wgsl".to_string(),
+                    source: DISSOLVE.to_string(),
+                    keywords: keywords(&["DISSOLVE"]),
+                });
+                let plain = shaders.product(ProductShader {
+                    path: "shaders/dissolve.wgsl".to_string(),
+                    source: DISSOLVE.to_string(),
+                    keywords: Vec::new(),
+                });
+                [dissolve, plain]
+            },
+            &cases,
+            |shaders, products, case| {
+                let mut compose = |entry, features| {
+                    if let Err(error) = shaders.compose(entry, features) {
+                        panic!("{entry:?} {features:?}: {error}");
+                    }
+                };
+                match case {
+                    FeatureCase::Material(features) => {
+                        for product in products {
+                            compose(Entry::World, features.with_product(*product));
+                        }
+                    }
+                    FeatureCase::Caster(features) => {
+                        for product in products {
+                            compose(Entry::Shadow, features.with_product(*product).caster());
+                        }
+                    }
+                }
+            },
+        );
     }
 
     const WAVING: &str = "#import rusty::types::{Surface, Vertex}
@@ -1144,10 +1227,9 @@ fn shade(surface: Surface) -> vec4<f32> {
     }
 
     /// A displace stage keeps its product in the caster pass (the shadow
-    /// follows the vertices) without a caster fragment stage, composes in
-    /// the world and shadow passes under every feature set, with its
-    /// displaced normal stage, and moves with time. A displaced normal
-    /// alone leaves the shadow to the standard caster.
+    /// follows the vertices) without a caster fragment stage, and moves with
+    /// time. A displaced normal alone leaves the shadow to the standard
+    /// caster.
     #[test]
     fn a_displace_stage_places_vertices_in_both_passes() {
         let mut shaders = Shaders::new();
@@ -1172,24 +1254,15 @@ fn shade(surface: Surface) -> vec4<f32> {
             "a standard material stands"
         );
         assert!(Features::WIND.caster().moves_with_time(), "the wind moves");
-        every_feature_set(
-            |shaders| {
-                shaders.product(ProductShader {
-                    path: "shaders/waving.wgsl".to_string(),
-                    source: WAVING.to_string(),
-                    keywords: Vec::new(),
-                })
-            },
-            |shaders, waving, bits| {
-                let features = bits.with_product(*waving);
-                if let Err(error) = shaders.compose(Entry::World, features) {
-                    panic!("{features:?}: {error}");
-                }
-                if let Err(error) = shaders.compose(Entry::Shadow, features.caster()) {
-                    panic!("{features:?}: {error}");
-                }
-            },
-        );
+        for material in [
+            Features::default(),
+            Features::MASK,
+            Features::MASK | Features::WIND,
+        ] {
+            let features = material.with_product(waving);
+            compose_case(&mut shaders, Entry::World, features);
+            compose_case(&mut shaders, Entry::Shadow, features.caster());
+        }
         check_product_shader("shaders/waving.wgsl", WAVING, &[]).unwrap();
         let both = format!("{WAVING}\nfn cast_shadow(caster: Caster) {{}}\n")
             .replace("{Surface, Vertex}", "{Surface, Vertex, Caster}");
@@ -1212,5 +1285,33 @@ fn shade(surface: Surface) -> vec4<f32> {
         ] {
             assert!(check_keyword(reserved).is_err(), "{reserved} is reserved");
         }
+    }
+
+    #[test]
+    #[ignore = "exhaustive shader matrix; run through .github/workflows/shaders.yml"]
+    fn displace_product_shader_composes_under_every_feature_set() {
+        let cases = exhaustive_feature_cases(true);
+        every_feature_case(
+            |shaders| {
+                shaders.product(ProductShader {
+                    path: "shaders/waving.wgsl".to_string(),
+                    source: WAVING.to_string(),
+                    keywords: Vec::new(),
+                })
+            },
+            &cases,
+            |shaders, waving, case| match case {
+                FeatureCase::Material(features) => {
+                    compose_case(shaders, Entry::World, features.with_product(*waving));
+                }
+                FeatureCase::Caster(features) => {
+                    compose_case(
+                        shaders,
+                        Entry::Shadow,
+                        features.with_product(*waving).caster(),
+                    );
+                }
+            },
+        );
     }
 }
