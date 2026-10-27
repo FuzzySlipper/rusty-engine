@@ -258,6 +258,14 @@ fn a_consumer_several_changes_behind_reads_only_the_chunks_they_changed() {
         VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address }]).unwrap();
     }
     assert_eq!(scene.dirty_chunks_since(seen), None);
+
+    // With the history full, a consumer that caught up after each edit
+    // reads that edit's chunk alone.
+    for z in [3, 8 + 3, 16 + 3] {
+        let seen = scene.mesh_state();
+        VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address: [3, 0, z] }]).unwrap();
+        assert_eq!(scene.dirty_chunks_since(seen), Some(vec![[0, 0, z / 8]]));
+    }
 }
 
 fn resting_ball(id: u64, at: [f64; 3]) -> DynamicsBodyInput {

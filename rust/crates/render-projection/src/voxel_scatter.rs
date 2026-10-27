@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use crate::voxel::{VoxelProjectionError, VoxelRenderKey};
 use crate::StableHandleRegistry;
+use core_space::WorldPos;
 use engine_spatial::{VoxelCollisionScene, VoxelMeshChunk};
 use render_model::{
     MeshMaterialSlot, RenderDiff, RenderHandle, ScatterFade, ScatterInstance,
@@ -319,8 +320,8 @@ fn reached<'a>(
     placed: &impl Fn(&[i64; 3]) -> bool,
 ) -> Vec<(f64, &'a VoxelMeshChunk)> {
     let radius = f64::from(field.scatters[scatter].radius);
-    let mut chunks: Vec<_> = scene
-        .mesh_chunks()
+    let mut chunks: Vec<_> = chunks_within(scene, field.viewer, radius * SCATTER_HYSTERESIS)
+        .into_iter()
         .filter(|chunk| !coarse.contains_key(&chunk.chunk))
         .map(|chunk| (chunk_distance(chunk, field.viewer), chunk))
         .filter(|(distance, chunk)| {
@@ -330,6 +331,36 @@ fn reached<'a>(
         .collect();
     chunks.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.chunk.cmp(&b.1.chunk)));
     chunks
+}
+
+/// The meshed chunks that may lie within `reach` of `viewer`: those in the
+/// box of chunk cells the reach spans, so the cost follows the reach rather
+/// than the scene, or every meshed chunk when that box holds more cells than
+/// the scene has meshes.
+fn chunks_within(
+    scene: &VoxelCollisionScene,
+    viewer: [f64; 3],
+    reach: f64,
+) -> Vec<&VoxelMeshChunk> {
+    let grid = scene.voxel_world().grid();
+    let corner = |sign: f64| {
+        let at = viewer.map(|value| value + sign * reach);
+        grid.voxel_to_chunk(grid.world_to_voxel(WorldPos::new(at[0], at[1], at[2])))
+    };
+    let (low, high) = (corner(-1.0), corner(1.0));
+    let (low, high) = ([low.x, low.y, low.z], [high.x, high.y, high.z]);
+    let cells: f64 = (0..3)
+        .map(|axis| (high[axis] as f64 - low[axis] as f64 + 1.0).max(0.0))
+        .product();
+    if !reach.is_finite() || cells > scene.mesh_chunks().len() as f64 {
+        return scene.mesh_chunks().collect();
+    }
+    (low[0]..=high[0])
+        .flat_map(|x| {
+            (low[1]..=high[1]).flat_map(move |y| (low[2]..=high[2]).map(move |z| [x, y, z]))
+        })
+        .filter_map(|chunk| scene.mesh_chunk(chunk))
+        .collect()
 }
 
 /// Whether projecting now would place or remove a patch: the viewer moved a
@@ -719,6 +750,46 @@ mod tests {
             SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn chunks_within_a_reach_are_those_a_scan_finds_after_a_rebase_too() {
+        let scene = floor_scene();
+        let mut origin = WorldOriginState::default();
+        let prepared = WorldOriginRebaseService
+            .prepare(
+                &origin,
+                WorldOriginRebaseRequest {
+                    target_origin: WorldOrigin::new([13, 0, 0]),
+                    entities: Vec::new(),
+                    exclude_outside_envelope: false,
+                },
+            )
+            .unwrap();
+        let (rebased, _) = WorldOriginRebaseService
+            .commit(&mut origin, &scene, &prepared)
+            .unwrap();
+        for scene in [&scene, &rebased] {
+            for (viewer, reach) in [
+                ([4.0, 4.0, 4.0], 3.0),
+                ([12.0, 1.0, 4.0], 7.5),
+                ([20.0, 4.0, 4.0], 1e9),
+            ] {
+                let mut found: Vec<_> = chunks_within(scene, viewer, reach)
+                    .into_iter()
+                    .filter(|chunk| chunk_distance(chunk, viewer) <= reach)
+                    .map(|chunk| chunk.chunk)
+                    .collect();
+                found.sort_unstable();
+                let scanned: Vec<_> = scene
+                    .mesh_chunks()
+                    .filter(|chunk| chunk_distance(chunk, viewer) <= reach)
+                    .map(|chunk| chunk.chunk)
+                    .collect();
+                assert!(!scanned.is_empty());
+                assert_eq!(found, scanned, "{viewer:?} {reach}");
+            }
+        }
     }
 
     fn grass() -> VoxelScatter {

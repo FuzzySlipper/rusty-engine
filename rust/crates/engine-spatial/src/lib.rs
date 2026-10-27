@@ -300,6 +300,8 @@ pub struct VoxelCollisionScene {
     /// Beyond the latest, it names no more chunks than the scene has
     /// meshes. A build starts it empty.
     mesh_history: VecDeque<(u64, Vec<[i64; 3]>)>,
+    /// How many chunks `mesh_history` names, counting repeats.
+    mesh_history_chunks: usize,
     source_revision: VoxelSourceRevision,
     /// The source revision the meshes and colliders show while a deferred
     /// residency change rebuilds them (`DeferredChunkRebuild`); `None` when
@@ -651,6 +653,7 @@ impl VoxelCollisionScene {
             mesh_options,
             mesh_state: next_mesh_state(),
             mesh_history: VecDeque::new(),
+            mesh_history_chunks: 0,
             source_revision: revisions.source,
             projected_revision: None,
             synchronous_state: next_mesh_state(),
@@ -912,16 +915,15 @@ impl VoxelCollisionScene {
         if mesh_state == self.mesh_state {
             return Some(Vec::new());
         }
-        let start = self
-            .mesh_history
-            .iter()
-            .position(|(before, _)| *before == mesh_state)?;
-        let dirty: BTreeSet<_> = self
-            .mesh_history
-            .range(start..)
-            .flat_map(|(_, dirty)| dirty.iter().copied())
-            .collect();
-        Some(dirty.into_iter().collect())
+        // Newest first, so a consumer one change behind reads one entry.
+        let mut dirty = BTreeSet::new();
+        for (before, changed) in self.mesh_history.iter().rev() {
+            dirty.extend(changed.iter().copied());
+            if *before == mesh_state {
+                return Some(dirty.into_iter().collect());
+            }
+        }
+        None
     }
 
     pub const fn source_revision(&self) -> VoxelSourceRevision {
@@ -1597,12 +1599,12 @@ impl VoxelCollisionScene {
         let Some(previous) = self.mesh_update.previous_mesh_state else {
             return;
         };
+        self.mesh_history_chunks += self.mesh_update.dirty_chunks.len();
         self.mesh_history
             .push_back((previous, self.mesh_update.dirty_chunks.clone()));
-        let mut named: usize = self.mesh_history.iter().map(|(_, dirty)| dirty.len()).sum();
-        while self.mesh_history.len() > 1 && named > self.mesh_chunks.len() {
+        while self.mesh_history.len() > 1 && self.mesh_history_chunks > self.mesh_chunks.len() {
             let (_, dropped) = self.mesh_history.pop_front().expect("more than one");
-            named -= dropped.len();
+            self.mesh_history_chunks -= dropped.len();
         }
     }
 

@@ -22,7 +22,8 @@ Live debug commands:
   breakdown follows: rebuilt chunks, mesh, collider and settle microseconds
   from the edit receipt, and from the presentation readout whether the
   refresh compared every chunk, the chunks it compared, the meshes it sent,
-  the coarse meshes it built and its projection microseconds.
+  the coarse meshes it built, the chunks whose level of detail it chose and
+  its projection microseconds.
 
 The cases, near the camera:
 

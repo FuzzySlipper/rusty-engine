@@ -1305,6 +1305,7 @@ fn presentation_readout(
         projected_chunk_count: projection.visited_chunks,
         published_mesh_count: projection.published_meshes,
         coarse_built_count: projection.coarse_built,
+        coarse_planned_count: projection.coarse_planned,
         projection_microseconds: state.projection_microseconds,
     })
 }
@@ -2042,6 +2043,7 @@ mod tests {
         assert_eq!(edited.projected_chunk_count, 1);
         assert_eq!(edited.published_mesh_count, 1);
         assert_eq!(edited.coarse_built_count, 0);
+        assert_eq!(edited.coarse_planned_count, 0);
     }
 
     /// A primary camera at `world`, with no backdrop link.

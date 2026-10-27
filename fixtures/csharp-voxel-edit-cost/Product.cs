@@ -199,6 +199,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
                 $"colliderUs={last.Receipt.ColliderMicroseconds} settleUs={last.Receipt.SettleMicroseconds} | " +
                 $"everyChunk={last.Readout.ProjectedEveryChunk} projected={last.Readout.ProjectedChunkCount} " +
                 $"published={last.Readout.PublishedMeshCount} coarseBuilt={last.Readout.CoarseBuiltCount} " +
+                $"coarsePlanned={last.Readout.CoarsePlannedCount} " +
                 $"projectionUs={last.Readout.ProjectionMicroseconds}");
         }
         return report.ToString();

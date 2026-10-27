@@ -771,7 +771,9 @@ write-back) and refresh once, later. It checks every chunk after a replaced
 scene, a material change, an origin rebase, or more changes than the scene
 has chunks. The readout says what the last projection did:
 `ProjectedEveryChunk`, `ProjectedChunkCount`, `PublishedMeshCount`,
-`CoarseBuiltCount` and `ProjectionMicroseconds`. `ProjectSceneDirectional` and
+`CoarseBuiltCount`, `CoarsePlannedCount` and `ProjectionMicroseconds`. While
+the viewer stands still, level of detail and scatter are chosen again only
+near the changed chunks. `ProjectSceneDirectional` and
 `UpdateSceneDirectional` additionally accept sparse `SpatialFace` overrides;
 omitted faces use the required base slot binding. On a reconstructed surface
 the face is the polygon's box-projection face. `ReadMaterialMapping` returns

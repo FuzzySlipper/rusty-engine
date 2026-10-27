@@ -108,6 +108,11 @@ struct InstanceSnapshot {
     /// chunk was admitted or evicted within their reach. The value counts the
     /// projections since that admitted or evicted nothing within reach.
     pending_coarse: BTreeMap<[i64; 3], u32>,
+    /// The chunks the level of detail draws coarse, and the level it chose
+    /// them at: a projection at the same level chooses again only for
+    /// chunks whose meshes came or went.
+    wanted_coarse: BTreeSet<[i64; 3]>,
+    coarse_level: Option<VoxelLevelOfDetail>,
     /// Time spent meshing the coarse chunks the last projection built.
     coarse_mesh_microseconds: u64,
     /// What the last projection did.
@@ -164,8 +169,35 @@ struct CoarsePlan {
     /// Chunks drawn coarse whose coarse mesh waits for the stream to pause,
     /// with the quiet projections each has seen.
     pending: BTreeMap<[i64; 3], u32>,
+    /// The chunks the level of detail now draws coarse, and its level.
+    wanted: WantedCoarse,
+    level: Option<VoxelLevelOfDetail>,
+    /// Chunks whose level of detail it chose, and whether that was every
+    /// chunk.
+    planned: u64,
+    every_chunk: bool,
     /// Time spent building `built`, summed over chunks.
     microseconds: u64,
+}
+
+/// How the chunks drawn coarse change.
+enum WantedCoarse {
+    /// Chosen again from every chunk.
+    Chosen(BTreeSet<[i64; 3]>),
+    /// Chosen again for chunks whose meshes came or went.
+    Changed {
+        added: Vec<[i64; 3]>,
+        removed: Vec<[i64; 3]>,
+    },
+}
+
+impl Default for WantedCoarse {
+    fn default() -> Self {
+        Self::Changed {
+            added: Vec::new(),
+            removed: Vec::new(),
+        }
+    }
 }
 
 /// Retained voxel projection. Each call visits only the chunks whose meshes
@@ -522,6 +554,8 @@ impl VoxelRenderProjector {
                         chunks: BTreeMap::new(),
                         coarse: BTreeMap::new(),
                         pending_coarse: BTreeMap::new(),
+                        wanted_coarse: BTreeSet::new(),
+                        coarse_level: None,
                         coarse_mesh_microseconds: 0,
                         last_projection: VoxelInstanceProjectionReadout::default(),
                         scatter: ScatterSnapshot::default(),
@@ -533,9 +567,23 @@ impl VoxelRenderProjector {
                 built,
                 dropped,
                 pending,
+                wanted,
+                level,
+                planned,
+                every_chunk,
                 microseconds,
             } = std::mem::take(&mut plan.coarse);
             let coarse_built = built.len() as u64;
+            match wanted {
+                WantedCoarse::Chosen(wanted) => snapshot.wanted_coarse = wanted,
+                WantedCoarse::Changed { added, removed } => {
+                    snapshot.wanted_coarse.extend(added);
+                    for coord in &removed {
+                        snapshot.wanted_coarse.remove(coord);
+                    }
+                }
+            }
+            snapshot.coarse_level = level;
             let mut level_changes: BTreeSet<_> = built.keys().chain(&dropped).copied().collect();
             for coord in &dropped {
                 snapshot.coarse.remove(coord);
@@ -585,10 +633,11 @@ impl VoxelRenderProjector {
                 chunks.project(coord, drawn(coord))?;
             }
             snapshot.last_projection = VoxelInstanceProjectionReadout {
-                compared_every_chunk: matches!(plan.visit, ChunkVisit::All),
+                compared_every_chunk: every_chunk || matches!(plan.visit, ChunkVisit::All),
                 visited_chunks: chunks.visited,
                 published_meshes: chunks.published,
                 coarse_built,
+                coarse_planned: planned,
             };
             ScatterProjection {
                 registry: &mut self.registry,
@@ -691,8 +740,9 @@ impl VoxelRenderProjector {
 /// projector is too many changes behind.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct VoxelInstanceProjectionReadout {
-    /// Whether it compared every chunk, not only those changed since the
-    /// mesh state it projected before.
+    /// Whether it compared every chunk, or chose every chunk's level of
+    /// detail, rather than only those changed since the mesh state it
+    /// projected before.
     pub compared_every_chunk: bool,
     /// Chunks it compared with what the renderer holds.
     pub visited_chunks: u64,
@@ -700,6 +750,10 @@ pub struct VoxelInstanceProjectionReadout {
     pub published_meshes: u64,
     /// Coarse meshes it built.
     pub coarse_built: u64,
+    /// Chunks whose level of detail it chose: every chunk when the viewer
+    /// or the level of detail changed, otherwise those near a change and
+    /// those waiting for a stream to pause.
+    pub coarse_planned: u64,
 }
 
 /// Renderer work for one instance's chunks.
@@ -862,30 +916,35 @@ fn wanted_coarse(
     let Some(level) = level.filter(|_| scene.has_coarse_meshes()) else {
         return BTreeSet::new();
     };
-    let extent = f64::from(scene.chunk_size()) * scene.voxel_size();
     scene
         .mesh_chunks()
-        .filter(|chunk| {
-            // The distance from the viewer to the chunk's cube.
-            let distance = (0..3)
-                .map(|axis| {
-                    let low = f64::from(chunk.translation[axis]);
-                    let outside = (low - level.viewer[axis])
-                        .max(level.viewer[axis] - (low + extent))
-                        .max(0.0);
-                    outside * outside
-                })
-                .sum::<f64>()
-                .sqrt();
-            let hysteresis = if current.contains_key(&chunk.chunk) {
-                1.0
-            } else {
-                COARSE_HYSTERESIS
-            };
-            distance > level.coarse_distance * hysteresis
-        })
+        .filter(|chunk| drawn_coarse(scene, chunk, level, current.contains_key(&chunk.chunk)))
         .map(|chunk| chunk.chunk)
         .collect()
+}
+
+/// Whether `level` draws a chunk coarse, given whether it is drawn coarse
+/// now.
+fn drawn_coarse(
+    scene: &VoxelCollisionScene,
+    chunk: &VoxelMeshChunk,
+    level: &VoxelLevelOfDetail,
+    coarse_now: bool,
+) -> bool {
+    let extent = f64::from(scene.chunk_size()) * scene.voxel_size();
+    // The distance from the viewer to the chunk's cube.
+    let distance = (0..3)
+        .map(|axis| {
+            let low = f64::from(chunk.translation[axis]);
+            let outside = (low - level.viewer[axis])
+                .max(level.viewer[axis] - (low + extent))
+                .max(0.0);
+            outside * outside
+        })
+        .sum::<f64>()
+        .sqrt();
+    let hysteresis = if coarse_now { 1.0 } else { COARSE_HYSTERESIS };
+    distance > level.coarse_distance * hysteresis
 }
 
 /// Which coarse meshes to build and drop. A coarse mesh reads two voxels
@@ -896,15 +955,20 @@ fn wanted_coarse(
 /// within reach. Until then a chunk newly drawn coarse shows its full mesh
 /// and one already coarse keeps its coarse mesh. A neighbour remeshed only
 /// for its seams changes nothing.
+///
+/// At the level the last projection chose at, only chunks whose meshes came
+/// or went can change whether they are drawn coarse, and only those near a
+/// change or waiting for a stream to pause can need a coarse mesh: the plan
+/// looks at those alone.
 fn plan_coarse(
     previous: Option<&InstanceSnapshot>,
     scene: &VoxelCollisionScene,
     level: Option<&VoxelLevelOfDetail>,
     visit: &ChunkVisit,
 ) -> Result<CoarsePlan, VoxelProjectionError> {
+    let level = level.filter(|_| scene.has_coarse_meshes()).copied();
     let empty = BTreeMap::new();
     let current = previous.map_or(&empty, |previous| &previous.coarse);
-    let wanted = wanted_coarse(current, scene, level);
     // The dirty chunks whose voxels changed: edited in place, or admitted or
     // evicted.
     let mut edited = Vec::new();
@@ -928,9 +992,67 @@ fn plan_coarse(
             .iter()
             .any(|changed| (0..3).all(|axis| (changed[axis] - coord[axis]).abs() <= 1))
     };
-    let mut plan = CoarsePlan::default();
+    let mut plan = CoarsePlan {
+        level,
+        ..CoarsePlan::default()
+    };
+    // The chunks drawn coarse that may need a coarse mesh now, and those no
+    // longer drawn coarse.
+    let candidates: Vec<[i64; 3]>;
+    let mut unwanted: Vec<[i64; 3]> = Vec::new();
+    match previous
+        .filter(|previous| !matches!(visit, ChunkVisit::All) && previous.coarse_level == level)
+    {
+        Some(previous) => {
+            let mut added = Vec::new();
+            let mut removed = Vec::new();
+            if let Some(level) = &level {
+                for coord in &streamed {
+                    let wanted = scene.mesh_chunk(*coord).is_some_and(|chunk| {
+                        drawn_coarse(scene, chunk, level, current.contains_key(coord))
+                    });
+                    match (previous.wanted_coarse.contains(coord), wanted) {
+                        (false, true) => added.push(*coord),
+                        (true, false) => removed.push(*coord),
+                        _ => {}
+                    }
+                }
+            }
+            let wanted = |coord: &[i64; 3]| {
+                (previous.wanted_coarse.contains(coord) || added.contains(coord))
+                    && !removed.contains(coord)
+            };
+            let near: BTreeSet<[i64; 3]> = edited
+                .iter()
+                .chain(&streamed)
+                .flat_map(|changed| {
+                    (-1..=1).flat_map(move |x| {
+                        (-1..=1).flat_map(move |y| {
+                            (-1..=1).map(move |z| [changed[0] + x, changed[1] + y, changed[2] + z])
+                        })
+                    })
+                })
+                .chain(previous.pending_coarse.keys().copied())
+                .filter(|coord| wanted(coord))
+                .collect();
+            unwanted.extend(removed.iter().filter(|coord| current.contains_key(*coord)));
+            plan.planned = (streamed.len() + near.len()) as u64;
+            candidates = near.into_iter().collect();
+            plan.wanted = WantedCoarse::Changed { added, removed };
+        }
+        None => {
+            let wanted = wanted_coarse(current, scene, level.as_ref());
+            if level.is_some() {
+                plan.planned = scene.mesh_chunks().len() as u64;
+                plan.every_chunk = true;
+            }
+            unwanted.extend(current.keys().filter(|coord| !wanted.contains(*coord)));
+            candidates = wanted.iter().copied().collect();
+            plan.wanted = WantedCoarse::Chosen(wanted);
+        }
+    }
     let mut build = Vec::new();
-    for coord in &wanted {
+    for coord in &candidates {
         let now = match visit {
             ChunkVisit::All => true,
             ChunkVisit::None | ChunkVisit::Dirty(_) => {
@@ -970,12 +1092,7 @@ fn plan_coarse(
             None => plan.dropped.push(*coord),
         }
     }
-    plan.dropped.extend(
-        current
-            .keys()
-            .filter(|coord| !wanted.contains(*coord))
-            .copied(),
-    );
+    plan.dropped.extend(unwanted);
     Ok(plan)
 }
 
@@ -1490,6 +1607,7 @@ mod tests {
                 visited_chunks: 4,
                 published_meshes: 4,
                 coarse_built: 2,
+                coarse_planned: 4,
             }
         );
         // Two changes before the next projection, beyond the coarse chunks'
@@ -1509,8 +1627,91 @@ mod tests {
                 visited_chunks: 1,
                 published_meshes: 1,
                 coarse_built: 0,
+                coarse_planned: 0,
             }
         );
+    }
+
+    #[test]
+    fn a_still_viewer_plans_level_of_detail_only_near_an_edit() {
+        // The floor of `floor_scene`, sixteen chunks long.
+        let voxels = (0..128).flat_map(|x| {
+            (0..8).flat_map(move |z| {
+                (0..3).map(move |y| MaterialVoxel {
+                    state: 0,
+                    address: [x, y, z],
+                    material_slot: 1,
+                })
+            })
+        });
+        let mut scene = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+            1.0,
+            8,
+            voxels,
+            SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring),
+        )
+        .unwrap();
+        let materials = BTreeMap::from([(1, material(1))]);
+        let mut projector = VoxelRenderProjector::new();
+        projector.set_level_of_detail(
+            "land",
+            Some(VoxelLevelOfDetail {
+                viewer: [0.0, 4.0, 4.0],
+                coarse_distance: 10.0,
+            }),
+        );
+        fn instances(scene: &VoxelCollisionScene) -> [VoxelProjectionInstance<'_>; 1] {
+            [VoxelProjectionInstance {
+                instance_id: "land".to_string(),
+                asset_id: "land".to_string(),
+                transform: Transform::IDENTITY,
+                scene,
+            }]
+        }
+        projector.project(&instances(&scene), &materials).unwrap();
+        assert_eq!(projector.instance_projection("land").coarse_planned, 16);
+        assert_eq!(projector.coarse_chunk_count("land"), 14);
+
+        // Inside a fine chunk: no coarse chunk is within reach.
+        VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address: [3, 1, 4] }]).unwrap();
+        projector.project(&instances(&scene), &materials).unwrap();
+        assert_eq!(
+            projector.instance_projection("land"),
+            VoxelInstanceProjectionReadout {
+                compared_every_chunk: false,
+                visited_chunks: 1,
+                published_meshes: 1,
+                coarse_built: 0,
+                coarse_planned: 0,
+            }
+        );
+
+        // Inside coarse chunk 8: it and its coarse neighbours rebuild.
+        VoxelEditService::apply(
+            &mut scene,
+            &[VoxelEdit::Clear {
+                address: [68, 1, 4],
+            }],
+        )
+        .unwrap();
+        projector.project(&instances(&scene), &materials).unwrap();
+        let edited = projector.instance_projection("land");
+        assert!(!edited.compared_every_chunk);
+        assert_eq!((edited.coarse_planned, edited.coarse_built), (3, 3));
+        assert_eq!(projector.coarse_chunk_count("land"), 14);
+
+        // Moving the viewer chooses every chunk's level again.
+        projector.set_level_of_detail(
+            "land",
+            Some(VoxelLevelOfDetail {
+                viewer: [20.0, 4.0, 4.0],
+                coarse_distance: 10.0,
+            }),
+        );
+        projector.project(&instances(&scene), &materials).unwrap();
+        let moved = projector.instance_projection("land");
+        assert!(moved.compared_every_chunk);
+        assert_eq!(moved.coarse_planned, 16);
     }
 
     /// The floor of [`floor_scene`] across chunks 0 to 2 only, a stream's
