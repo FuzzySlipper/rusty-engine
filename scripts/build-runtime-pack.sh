@@ -148,6 +148,17 @@ if [[ $TARGET == win-x64 ]]; then
   install -D -m 755 "$release/rusty_engine_test_host.dll" "$STAGE/lib/rusty_engine_test_host.dll"
 else
   install -D -m 755 "$release/librusty_engine_test_host.so" "$STAGE/lib/librusty_engine_test_host.so"
+  # A release copies these binaries, so they carry no debug information. It
+  # stays in the pack: .debug/ beside each one is where perf, gdb and Rust
+  # backtraces find it through the binary's debuglink.
+  for binary in bin/rusty-product-host bin/rusty-live-debug bin/rusty-scene-render bin/rusty bin/rusty-launcher \
+    lib/librusty_engine_test_host.so; do
+    debug="$(dirname "$STAGE/$binary")/.debug/$(basename "$binary").debug"
+    install -d "$(dirname "$debug")"
+    objcopy --only-keep-debug "$STAGE/$binary" "$debug"
+    strip "$STAGE/$binary"
+    objcopy --add-gnu-debuglink="$debug" "$STAGE/$binary"
+  done
 fi
 install -m 644 render/artifacts/product-browser-host/product-browser-host.js \
   "$STAGE/share/browser/engine/product-browser-host.js"

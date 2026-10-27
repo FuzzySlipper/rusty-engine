@@ -71,9 +71,11 @@ frame rate or the number of batched C# callbacks.
 ## Optimized Linux native capture
 
 Runtime packs build Rust with release optimization and `line-tables-only`
-debug information. On Linux each executable contains its unwind information
-and file/line mappings itself; on Windows `symbols/` holds the matching
-`.pdb` files. `symbols/build-info.txt` records the source revision, dirty-state
+debug information. On Linux the binaries are stripped and their file/line
+mappings sit beside them in `.debug/` (`bin/.debug/rusty-product-host.debug`,
+`lib/.debug/librusty_engine_test_host.so.debug`), which perf, gdb and Rust
+backtraces find through each binary's debuglink; on Windows `symbols/` holds
+the matching `.pdb` files. `symbols/build-info.txt` records the source revision, dirty-state
 indication, compiler and profile information.
 Keep the entire matching pack with the profile. Ordinary product launch still
 needs no source checkout. An investigator uses that revision's source for code

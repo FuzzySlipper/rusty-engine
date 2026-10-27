@@ -321,6 +321,10 @@ platform it runs on (linux-x64 or win-x64). The release runs where no `rusty`,
 - **The host** comes from the pinned pair's runtime pack, or from its desktop
   pack when the product opens a window. `--runtime <pack>` names another
   pack, as for `rusty dev`.
+- **No debug information.** The host, the launcher and the tools' test host
+  library are copied stripped; their debug information stays in the pack
+  (`.debug/` on Linux, `symbols/` on Windows). On linux-x64 the desktop host
+  is about 175 MB and the test host library about 40 MB.
 - **The launcher** is the executable a player starts. It is named by
   `RustyEngineProductLauncherName`, which defaults to the assembly name, with
   `.exe` on Windows. It runs `bin/rusty-product-host --product

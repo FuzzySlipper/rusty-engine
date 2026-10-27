@@ -134,7 +134,8 @@ unsafe_code = "forbid"
 [profile.dev]
 debug = "line-tables-only"
 
-# Optimized runtime packs retain file/line information for native sampling.
+# Optimized runtime packs retain file/line information for native sampling,
+# beside their stripped binaries (docs/runtime-profiling.md).
 # Contributors can request full locals/types with CARGO_PROFILE_RELEASE_DEBUG=2.
 [profile.release]
 debug = "line-tables-only"

@@ -256,6 +256,9 @@ mod tests {
             write(&pack.join(format!("bin/{binary}{exe}")), binary.as_bytes());
         }
         write(&pack.join("bin/nethost.dll"), b"nethost");
+        // The pack's debug information, which a release leaves behind.
+        write(&pack.join("bin/.debug/rusty-product-host.debug"), b"debug");
+        write(&pack.join("symbols/rusty-product-host.pdb"), b"pdb");
         write(&pack.join("lib/cef/libcef.so"), b"cef");
         write(&pack.join("share/browser/index.html"), b"shell");
         write(&pack.join("share/third-party/NOTICES.txt"), b"notices");
@@ -295,6 +298,8 @@ mod tests {
             .join(format!("bin/rusty-scene-render{exe}"))
             .exists());
         assert!(!release.join("bin/stale").exists());
+        assert!(!release.join("bin/.debug").exists());
+        assert!(!release.join("symbols").exists());
         assert!(!release.join("lib").exists(), "Servo needs no lib/cef");
         assert!(release.join("share/browser/index.html").is_file());
         assert!(release.join("share/third-party/NOTICES.txt").is_file());
