@@ -85,10 +85,6 @@
     <_RustyEngineProductUiBuildStamp>$([System.IO.Path]::GetFullPath('$(RustyEngineStagedProductDirectory)/../ui-build.stamp'))</_RustyEngineProductUiBuildStamp>
     <_RustyEngineProductNativeModule>$(TargetName).so</_RustyEngineProductNativeModule>
     <_RustyEngineManifestPresentationAspect Condition="'$(RustyEngineProductPresentationAspectMinimum)' != ''">,&quot;presentationAspect&quot;:{&quot;minimum&quot;:$(RustyEngineProductPresentationAspectMinimum),&quot;maximum&quot;:$(RustyEngineProductPresentationAspectMaximum)}</_RustyEngineManifestPresentationAspect>
-    <!-- Only `rusty dev` sets this: the runtime's content source service
-         reads and edits the source content root it names, and relative
-         container paths resolve in the installed-content directory. -->
-    <_RustyEngineManifestDevelopment Condition="'$(RustyEngineProductContentSource)' == 'true'">,&quot;development&quot;:{&quot;contentSource&quot;:&quot;$([System.IO.Path]::GetFullPath('$(RustyEngineProductContentRoot)').Replace('\', '/'))&quot;,&quot;installedContent&quot;:&quot;$([System.IO.Path]::GetFullPath('$(RustyEngineProductInstalledContent)', '$(MSBuildProjectDirectory)').Replace('\', '/'))&quot;}</_RustyEngineManifestDevelopment>
     <_RustyEngineManifestUiProjection Condition="'$(RustyEngineProductUiProjectionStream)' != ''">,&quot;uiProjection&quot;:{&quot;expectedStream&quot;:&quot;$(RustyEngineProductUiProjectionStream)&quot;,&quot;expectedContract&quot;:&quot;$(RustyEngineProductUiProjectionContract)&quot;}</_RustyEngineManifestUiProjection>
     <!-- Keep the browser's existing neutral rig unless a product deliberately
          selects the independently configurable world or viewmodel setting. -->
@@ -312,8 +308,34 @@
     </PropertyGroup>
   </Target>
 
-  <Target Name="_RustyEngineWriteProductManifest">
+  <!-- Only `rusty dev` builds the product's tools (RustyEngineProductTool),
+       so Host.RunTool starts each from its build output. The product's
+       restore does not reach them, so each is restored here and then built
+       in a fresh evaluation that sees what the restore wrote. -->
+  <Target Name="_RustyEngineBuildDevelopmentTools"
+          Condition="'$(RustyEngineProductContentSource)' == 'true' and '@(RustyEngineProductTool)' != ''">
+    <MSBuild Projects="@(RustyEngineProductTool)" Targets="Restore"
+             Properties="MSBuildRestoreSessionId=$([System.Guid]::NewGuid())" />
+    <MSBuild Projects="@(RustyEngineProductTool)" Targets="Build"
+             Properties="_RustyEngineDevelopmentToolRestored=true">
+      <Output TaskParameter="TargetOutputs" ItemName="_RustyEngineDevelopmentToolAssembly" />
+    </MSBuild>
+    <ItemGroup>
+      <_RustyEngineDevelopmentTool Include="@(_RustyEngineDevelopmentToolAssembly)"
+                                   ToolName="$([System.IO.Path]::GetFileNameWithoutExtension('%(MSBuildSourceProjectFile)'))"
+                                   Executable="$([System.String]::Copy('%(RootDir)%(Directory)%(Filename)$(_NativeExecutableExtension)').Replace('\', '/'))" />
+    </ItemGroup>
+  </Target>
+
+  <Target Name="_RustyEngineWriteProductManifest" DependsOnTargets="_RustyEngineBuildDevelopmentTools">
     <PropertyGroup>
+      <_RustyEngineManifestTools>@(RustyEngineProductTool->'&quot;%(Filename)&quot;', ',')</_RustyEngineManifestTools>
+      <_RustyEngineManifestDevelopmentTools>@(_RustyEngineDevelopmentTool->'&quot;%(ToolName)&quot;:&quot;%(Executable)&quot;', ',')</_RustyEngineManifestDevelopmentTools>
+      <!-- Only `rusty dev` sets this: the runtime's content source service
+           reads and edits the source content root it names, relative
+           container paths resolve in the installed-content directory, and
+           tools run from their build output. -->
+      <_RustyEngineManifestDevelopment Condition="'$(RustyEngineProductContentSource)' == 'true'">,&quot;development&quot;:{&quot;contentSource&quot;:&quot;$([System.IO.Path]::GetFullPath('$(RustyEngineProductContentRoot)').Replace('\', '/'))&quot;,&quot;installedContent&quot;:&quot;$([System.IO.Path]::GetFullPath('$(RustyEngineProductInstalledContent)', '$(MSBuildProjectDirectory)').Replace('\', '/'))&quot;,&quot;tools&quot;:{$(_RustyEngineManifestDevelopmentTools)}}</_RustyEngineManifestDevelopment>
       <_RustyEngineManifestIntents>@(RustyEngineProductInputIntent-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;value&quot;:&quot;%(Value)&quot;}', ',')</_RustyEngineManifestIntents>
       <_RustyEngineManifestMappings>@(RustyEngineProductInputMapping-&gt;'{&quot;id&quot;:&quot;%(Identity)&quot;,&quot;intent&quot;:&quot;%(Intent)&quot;,&quot;trigger&quot;:&quot;%(Trigger)&quot;}', ',')</_RustyEngineManifestMappings>
     </PropertyGroup>
@@ -328,7 +350,7 @@
       <_RustyEngineManifestLiveContent>@(_RustyEngineManifestLiveContentPath-&gt;'&quot;%(Path)&quot;', ',')</_RustyEngineManifestLiveContent>
     </PropertyGroup>
     <WriteLinesToFile File="$(RustyEngineStagedProductDirectory)/product.json" Overwrite="true"
-                      Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;}$(_RustyEngineManifestNativeAot)$(_RustyEngineManifestCoreClr),&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;,&quot;ui&quot;:[$(_RustyEngineManifestUiContent)],&quot;live&quot;:[$(_RustyEngineManifestLiveContent)]},&quot;lifecycle&quot;:{&quot;fixedStep&quot;:{&quot;hz&quot;:$(RustyEngineProductFixedStepHz),&quot;maxCatchUpSteps&quot;:$(RustyEngineProductFixedStepMaxCatchUpSteps)}},&quot;input&quot;:{&quot;cursorMode&quot;:&quot;$(RustyEngineProductInputCursorMode)&quot;,&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]}$(_RustyEngineManifestUiProjection),&quot;renderer&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductRenderOutput)&quot;,&quot;windowUi&quot;:&quot;$(RustyEngineProductWindowUi)&quot;$(_RustyEngineManifestPresentationAspect),&quot;gpuCulling&quot;:&quot;$(RustyEngineProductGpuCulling)&quot;,&quot;antialiasing&quot;:&quot;$(RustyEngineProductAntialiasing)&quot;,&quot;vsync&quot;:&quot;$(RustyEngineProductVsync)&quot;,&quot;renderScale&quot;:$(RustyEngineProductRenderScale),&quot;lighting&quot;:{&quot;shadows&quot;:&quot;$(RustyEngineProductSceneShadows)&quot;,&quot;backdropShadows&quot;:&quot;$(RustyEngineProductBackdropShadows)&quot;,&quot;shadowBudget&quot;:$(RustyEngineProductShadowBudget),&quot;ambientOcclusion&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductAmbientOcclusion)&quot;,&quot;strength&quot;:$(RustyEngineProductAmbientOcclusionStrength),&quot;radius&quot;:$(RustyEngineProductAmbientOcclusionRadius)},&quot;clusteredLighting&quot;:&quot;$(RustyEngineProductClusteredLighting)&quot;,&quot;volumetricFog&quot;:&quot;$(RustyEngineProductVolumetricFog)&quot;,&quot;volumetricClouds&quot;:&quot;$(RustyEngineProductVolumetricClouds)&quot;,&quot;waterReflections&quot;:&quot;$(RustyEngineProductWaterReflections)&quot;,&quot;defaultLights&quot;:{&quot;world&quot;:&quot;$(RustyEngineProductDefaultWorldLights)&quot;,&quot;viewmodel&quot;:&quot;$(RustyEngineProductDefaultViewmodelLights)&quot;}}},&quot;audio&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductAudioOutput)&quot;},&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)}$(_RustyEngineManifestDevelopment)}" />
+                      Lines="{&quot;artifact&quot;:&quot;rusty.product.bundle&quot;,&quot;schemaVersion&quot;:1,&quot;product&quot;:{&quot;id&quot;:&quot;$(RustyEngineProductId)&quot;,&quot;title&quot;:&quot;$(RustyEngineProductTitle)&quot;}$(_RustyEngineManifestNativeAot)$(_RustyEngineManifestCoreClr),&quot;ui&quot;:{&quot;root&quot;:&quot;ui&quot;,&quot;entry&quot;:&quot;$(RustyEngineProductUiEntry)&quot;},&quot;content&quot;:{&quot;root&quot;:&quot;content&quot;,&quot;ui&quot;:[$(_RustyEngineManifestUiContent)],&quot;live&quot;:[$(_RustyEngineManifestLiveContent)]},&quot;lifecycle&quot;:{&quot;fixedStep&quot;:{&quot;hz&quot;:$(RustyEngineProductFixedStepHz),&quot;maxCatchUpSteps&quot;:$(RustyEngineProductFixedStepMaxCatchUpSteps)}},&quot;input&quot;:{&quot;cursorMode&quot;:&quot;$(RustyEngineProductInputCursorMode)&quot;,&quot;intents&quot;:[$(_RustyEngineManifestIntents)],&quot;mappings&quot;:[$(_RustyEngineManifestMappings)]}$(_RustyEngineManifestUiProjection),&quot;renderer&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductRenderOutput)&quot;,&quot;windowUi&quot;:&quot;$(RustyEngineProductWindowUi)&quot;$(_RustyEngineManifestPresentationAspect),&quot;gpuCulling&quot;:&quot;$(RustyEngineProductGpuCulling)&quot;,&quot;antialiasing&quot;:&quot;$(RustyEngineProductAntialiasing)&quot;,&quot;vsync&quot;:&quot;$(RustyEngineProductVsync)&quot;,&quot;renderScale&quot;:$(RustyEngineProductRenderScale),&quot;lighting&quot;:{&quot;shadows&quot;:&quot;$(RustyEngineProductSceneShadows)&quot;,&quot;backdropShadows&quot;:&quot;$(RustyEngineProductBackdropShadows)&quot;,&quot;shadowBudget&quot;:$(RustyEngineProductShadowBudget),&quot;ambientOcclusion&quot;:{&quot;mode&quot;:&quot;$(RustyEngineProductAmbientOcclusion)&quot;,&quot;strength&quot;:$(RustyEngineProductAmbientOcclusionStrength),&quot;radius&quot;:$(RustyEngineProductAmbientOcclusionRadius)},&quot;clusteredLighting&quot;:&quot;$(RustyEngineProductClusteredLighting)&quot;,&quot;volumetricFog&quot;:&quot;$(RustyEngineProductVolumetricFog)&quot;,&quot;volumetricClouds&quot;:&quot;$(RustyEngineProductVolumetricClouds)&quot;,&quot;waterReflections&quot;:&quot;$(RustyEngineProductWaterReflections)&quot;,&quot;defaultLights&quot;:{&quot;world&quot;:&quot;$(RustyEngineProductDefaultWorldLights)&quot;,&quot;viewmodel&quot;:&quot;$(RustyEngineProductDefaultViewmodelLights)&quot;}}},&quot;audio&quot;:{&quot;output&quot;:&quot;$(RustyEngineProductAudioOutput)&quot;},&quot;server&quot;:{&quot;bindHost&quot;:&quot;$(RustyEngineProductBindHost)&quot;,&quot;port&quot;:$(RustyEngineProductPort),&quot;liveDebug&quot;:$(RustyEngineProductLiveDebug)},&quot;tools&quot;:[$(_RustyEngineManifestTools)]$(_RustyEngineManifestDevelopment)}" />
   </Target>
 
   <!-- The directories of the projects the product references, directly or

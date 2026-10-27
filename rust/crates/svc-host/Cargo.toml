@@ -1,0 +1,19 @@
+[package]
+name    = "svc-host"
+version.workspace = true
+edition.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The folder picker through xdg-desktop-portal, whichever desktop draws it.
+ashpd = { version = "0.13", default-features = false, features = ["async-io", "file_chooser"] }
+pollster.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# The Windows folder dialog (IFileOpenDialog).
+rfd = { version = "0.16", default-features = false }
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

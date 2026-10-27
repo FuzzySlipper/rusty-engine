@@ -81,6 +81,9 @@ EXTERNAL_DEPENDENCY_OWNERS = {
     "winit": frozenset({"desktop-shell"}),
     # Gamepads the window reads while it holds gameplay input (#10338).
     "gilrs": frozenset({"desktop-shell"}),
+    # The platform folder picker a setup screen asks for (#10423).
+    "ashpd": frozenset({"svc-host"}),
+    "rfd": frozenset({"svc-host"}),
     # Video clips: WebM demux and VP9 decode (#8791).
     "matroska-demuxer": frozenset({"render-video"}),
     "rusty_vp9": frozenset({"render-video"}),

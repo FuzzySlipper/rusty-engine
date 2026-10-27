@@ -353,16 +353,23 @@ platform it runs on (linux-x64 or win-x64). The release runs where no `rusty`,
   - Each tool is published framework-dependent into `tools/<project name>/`.
     Its apphost finds the runtime at `../../dotnet`, and the test host
     library is beside the tool.
-  - A player runs it from the release, for example
-    `tools/DataImport/DataImport <folder>`.
+  - The release's manifest names each tool, and the product runs one with
+    `Host.RunTool`; a player can also run it by hand, for example
+    `tools/DataImport/DataImport <folder>`. Its executable keeps its
+    project's name.
   - Its release directory is `AppContext.BaseDirectory/../..`. A tool that
     installs a container packs it there with
-    `ProductContentBundle.PackContainer`, and the product opens it by its
-    relative name (see
+    `ProductContentBundle.PackContainer`, or in the directory the product
+    passes it, and the product opens it by its relative name (see
     [containers installed beside the product](csharp-product-project.md#content-containers-installed-beside-the-product)).
 - **Setup steps.** The launcher offers no setup step of its own. A product
-  that cannot start without a container shows the player the tool to run on
-  its own entry screen.
+  that cannot start without a container offers the step on its own entry
+  screen: it asks the host for a folder, runs its tool on it while showing
+  the tool's output, and opens the container the tool installed, all from
+  `Update` (see
+  [setup steps](csharp-product-project.md#setup-steps-choosing-a-folder-and-running-a-tool)).
+  On Linux the folder picker is xdg-desktop-portal's, so the player's desktop
+  needs a running portal.
 - **Rebuilding.** Building into the same directory again replaces
   `product.rpak`, the product's artifacts, the launcher, `bin/`, `lib/`,
   `share/`, `dotnet/` and `tools/`. Anything else stays, such as containers a

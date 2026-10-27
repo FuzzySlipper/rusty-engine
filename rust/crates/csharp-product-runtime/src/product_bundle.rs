@@ -6,6 +6,7 @@
 //! browser host's product UI bytes immutable for the lifetime of the launch.
 
 use std::{
+    collections::BTreeMap,
     net::Ipv4Addr,
     path::{Path, PathBuf},
 };
@@ -71,6 +72,10 @@ pub(super) struct ProductBundle {
     /// `rusty dev` staging named, else the Product's own directory (beside
     /// `product.rpak` in a release).
     pub(super) installed_content: PathBuf,
+    /// Each declared tool's executable by name: `tools/<name>/<name>` beside
+    /// the Product in a release, the build output a `rusty dev` staging
+    /// named.
+    pub(super) tools: BTreeMap<String, PathBuf>,
 }
 
 impl ProductBundle {
@@ -210,6 +215,21 @@ impl ProductBundle {
                 || source.native_root().to_owned(),
                 |development| development.installed_content.clone(),
             ),
+            tools: match &manifest.development {
+                Some(development) => development.tools.clone(),
+                None => manifest
+                    .tools
+                    .iter()
+                    .map(|name| {
+                        let executable = source
+                            .native_root()
+                            .join("tools")
+                            .join(name)
+                            .join(format!("{name}{}", std::env::consts::EXE_SUFFIX));
+                        (name.clone(), executable)
+                    })
+                    .collect(),
+            },
             content_source: manifest
                 .development
                 .map(|development| development.content_source),
@@ -490,6 +510,9 @@ struct Manifest {
     input: ManifestInput,
     #[serde(default)]
     server: ManifestServer,
+    /// The project names of the tools a release carries in `tools/`.
+    #[serde(default)]
+    tools: Vec<String>,
     development: Option<ManifestDevelopment>,
 }
 
@@ -499,6 +522,9 @@ struct Manifest {
 struct ManifestDevelopment {
     content_source: PathBuf,
     installed_content: PathBuf,
+    /// Each declared tool's built executable by name.
+    #[serde(default)]
+    tools: BTreeMap<String, PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1085,15 +1111,48 @@ mod tests {
             root.join(PRODUCT_MANIFEST_NAME),
             manifest.replace(
                 r#""ignoredV1Field":true"#,
-                r#""development":{"contentSource":"/project/content","installedContent":"/project/local"}"#,
+                r#""tools":["Import"],"development":{"contentSource":"/project/content","installedContent":"/project/local","tools":{"Import":"/project/Import/bin/Import"}}"#,
             ),
         )
         .unwrap();
         let product = read(&root).unwrap();
         assert_eq!(product.installed_content, Path::new("/project/local"));
+        // A staged tool runs from its build output.
+        assert_eq!(
+            product.tools,
+            BTreeMap::from([(
+                "Import".to_owned(),
+                PathBuf::from("/project/Import/bin/Import")
+            )])
+        );
         assert_eq!(
             product.content_source.as_deref(),
             Some(Path::new("/project/content"))
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_released_tool_runs_from_tools_beside_the_product() {
+        let root = fixture_root("released-tools");
+        write_manifest(&root, "native/product.so");
+        let manifest = fs::read_to_string(root.join(PRODUCT_MANIFEST_NAME)).unwrap();
+        fs::write(
+            root.join(PRODUCT_MANIFEST_NAME),
+            manifest.replace(r#""ignoredV1Field":true"#, r#""tools":["Import"]"#),
+        )
+        .unwrap();
+        let product = read(&root).unwrap();
+        let executable = format!("Import{}", std::env::consts::EXE_SUFFIX);
+        assert_eq!(
+            product.tools,
+            BTreeMap::from([(
+                "Import".to_owned(),
+                root.canonicalize()
+                    .unwrap()
+                    .join("tools/Import")
+                    .join(executable)
+            )])
         );
         fs::remove_dir_all(root).unwrap();
     }

@@ -9,6 +9,12 @@
     <RustyEngineProductTitle>Release Fixture</RustyEngineProductTitle>
     <RustyEngineProductLauncherName>ReleaseFixture</RustyEngineProductLauncherName>
     <RustyEngineProductRenderOutput>window</RustyEngineProductRenderOutput>
+    <!-- Under rusty dev the tool installs the container here, outside the sources. -->
+    <RustyEngineProductInstalledContent>.runtime/installed</RustyEngineProductInstalledContent>
+    <RustyEngineProductUiProjectionStream>release</RustyEngineProductUiProjectionStream>
+    <RustyEngineProductUiProjectionContract>release.screen.v1</RustyEngineProductUiProjectionContract>
+    <!-- The entry screen is all interface: the pointer stays free for Import. -->
+    <RustyEngineProductInputCursorMode>unlocked</RustyEngineProductInputCursorMode>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,5 +22,7 @@
       <ExcludeAssets Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">compile;runtime</ExcludeAssets>
     </PackageReference>
     <RustyEngineProductTool Include="../ReleaseImport/ReleaseImport.csproj" />
+    <RustyEngineProductInputIntent Include="release.import" Value="payload:release.import.v1" />
+    <RustyEngineProductInputIntent Include="release.cancel" Value="payload:release.cancel.v1" />
   </ItemGroup>
 </Project>

@@ -424,6 +424,7 @@ impl EngineServiceSet {
     /// Product's installed-content directory. Without one, a relative path
     /// resolves in the process working directory.
     pub fn bind_installed_content(&mut self, directory: std::path::PathBuf) {
+        self.host.bind_installed_content(&directory);
         self.content.bind_installed_content(directory);
     }
 
@@ -608,6 +609,15 @@ impl EngineServiceSet {
         )
     }
 
+    /// The tools the product declares (`RustyEngineProductTool`), each by
+    /// its project name with its executable, which `Host.RunTool` may start.
+    pub fn bind_product_tools(
+        &mut self,
+        tools: std::collections::BTreeMap<String, std::path::PathBuf>,
+    ) {
+        self.host.bind_tools(tools);
+    }
+
     /// Makes `Host.RequestExit` available, for a host with a window, and
     /// returns the flag a request sets once the product asks to end.
     pub fn enable_host_exit(&mut self) -> Arc<std::sync::atomic::AtomicBool> {
@@ -785,6 +795,7 @@ impl EngineServiceSet {
         self.video.begin_call();
         self.render_output.begin_call();
         self.http.begin_call();
+        self.host.begin_call();
         self.session.begin_call();
         self.camera_view.begin_call();
         self.renderer_settings.begin_call();

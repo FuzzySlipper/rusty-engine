@@ -189,6 +189,8 @@ pub struct CsharpProductRuntimeConfig {
     content_source: Option<PathBuf>,
     /// Where a relative `OpenContainer` path resolves.
     installed_content: Option<PathBuf>,
+    /// The tools `Host.RunTool` may start, by name.
+    product_tools: std::collections::BTreeMap<String, PathBuf>,
 }
 
 /// How often the display shows frames, which Engine tweens are presented at
@@ -242,7 +244,18 @@ impl CsharpProductRuntimeConfig {
             presentation_cadence: PresentationCadence::default(),
             content_source: None,
             installed_content: None,
+            product_tools: std::collections::BTreeMap::new(),
         }
+    }
+
+    /// The tools the product declares (`RustyEngineProductTool`), each by
+    /// its project name with its executable, which `Host.RunTool` may start.
+    pub fn with_product_tools(
+        mut self,
+        tools: std::collections::BTreeMap<String, PathBuf>,
+    ) -> Self {
+        self.product_tools = tools;
+        self
     }
 
     /// The directory a relative `Content.OpenContainer` path resolves in:
@@ -1039,6 +1052,7 @@ impl CsharpProductRuntime {
         if let Some(directory) = &config.installed_content {
             services.bind_installed_content(directory.clone());
         }
+        services.bind_product_tools(config.product_tools.clone());
         if let (Some(source), ProductSource::Directory(staged)) =
             (&config.content_source, &content_source)
         {

@@ -33,6 +33,7 @@ svc-spatial.workspace = true
 svc-rng.workspace = true
 svc-implicit.workspace = true
 svc-http.workspace = true
+svc-host.workspace = true
 svc-session.workspace = true
 svc-mesh.workspace = true
 svc-water.workspace = true
