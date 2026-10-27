@@ -932,6 +932,12 @@ target's manifest lists exactly the runtime artifacts that target staged. To
 run both loaders against one bundle (for example, to compare them), use
 `-t:StageRustyEngineCombinedProduct`, which stages both and lists both.
 
+`Rusty.Engine` itself publishes with no trim or AOT analysis warnings, so a
+product can build with `TreatWarningsAsErrors`. The one SDK member that
+warns is `JsonProductStateCodec<T>`'s `JsonSerializerOptions` constructor,
+which uses reflection; under NativeAOT pass a source-generated
+`JsonTypeInfo<T>`.
+
 Engine contributors may run `rusty dev --engine-source
 /absolute/rusty-engine`. That explicit option selects the source checkout's
 runtime pack and passes `RustyEngineUseSourceDevelopment=true` plus the

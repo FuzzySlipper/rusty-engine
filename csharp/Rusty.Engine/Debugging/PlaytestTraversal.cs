@@ -36,15 +36,15 @@ public static class PlaytestTraversal
     public static string Probe(ISpatialService spatial, SpatialSession session, Vector3 feet,
         float height, float stepHeight, float distance, ReadOnlyMemory<SpatialEntityCollider> entities)
     {
-        var samples = new List<object>();
+        var samples = new List<PlaytestRaySample>();
         void Cast(string label, Vector3 origin, Vector3 direction, double range)
         {
             var hit = spatial.CastRay(new SpatialRaycastRequest(session, origin, direction, range,
                 new SpatialQueryFilter(1, uint.MaxValue), entities, ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<SpatialEntityCollider>.Empty));
-            samples.Add(new { label, origin = V(origin), direction = V(direction), range, hit = hit.Present,
-                distance = hit.Present ? hit.Distance : (double?)null, kind = hit.Kind.ToString(),
-                entity = hit.Entity.ToString(), instance = hit.Instance.ToString(),
-                point = hit.Present ? V(hit.Point) : null, normal = hit.Present ? V(hit.Normal) : null });
+            samples.Add(new(label, V(origin), V(direction), range, hit.Present,
+                hit.Present ? hit.Distance : null, hit.Kind.ToString(),
+                hit.Entity.ToString(), hit.Instance.ToString(),
+                hit.Present ? V(hit.Point) : null, hit.Present ? V(hit.Normal) : null));
         }
         for (int i = 0; i < 8; i++)
         {
@@ -55,7 +55,8 @@ public static class PlaytestTraversal
             Cast($"heading-{i * 45}-head", feet + Vector3.UnitY * (height - .1f), direction, distance);
             Cast($"heading-{i * 45}-floor", feet + direction * distance + Vector3.UnitY * (stepHeight + .1f), -Vector3.UnitY, height + stepHeight);
         }
-        return JsonSerializer.Serialize(new { meaning = "sampled rays only, not body clearance or guaranteed route; headings 0=-Z,90=+X", samples });
+        return JsonSerializer.Serialize(new PlaytestProbe("sampled rays only, not body clearance or guaranteed route; headings 0=-Z,90=+X", samples),
+            PlaytestJson.Default.PlaytestProbe);
     }
     private static float[] V(Vector3 p) => new[] { p.X, p.Y, p.Z };
 }

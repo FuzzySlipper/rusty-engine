@@ -5,6 +5,9 @@
     <Nullable>enable</Nullable>
     <!-- The SDK owns the product's native interop and service implementations. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Products publish NativeAOT, so trim and AOT analysis warnings fail this build. -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RustyEngineGeneratedBindingsDir Condition="'$(RustyEngineGeneratedBindingsDir)' == ''">$(MSBuildProjectDirectory)/obj/Generated</RustyEngineGeneratedBindingsDir>
     <RustyEngineGeneratedInputsDir Condition="'$(RustyEngineGeneratedInputsDir)' == ''">$(RustyEngineGeneratedBindingsDir)/GeneratedInputs</RustyEngineGeneratedInputsDir>
     <RustyEngineGenerateBindings Condition="'$(RustyEngineGenerateBindings)' == ''">true</RustyEngineGenerateBindings>

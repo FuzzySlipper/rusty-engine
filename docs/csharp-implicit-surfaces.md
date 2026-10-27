@@ -462,7 +462,7 @@ graph.
 
 `JsonProductStateCodec<T>` is the ordinary JSON path over `ProductStateStore<T>`: supply
 the save type plus a `JsonTypeInfo<T>` (source-generated contexts work under NativeAOT
-without reflection) or `JsonSerializerOptions` for CoreCLR convenience, then Save/Load
+without reflection) or `JsonSerializerOptions` for CoreCLR convenience (a trim and AOT warning in the caller), then Save/Load
 with no byte-buffer plumbing and no version scaffolding. Absent keys report absent;
 malformed bytes fail in deserialization; a JSON null document fails rather than decoding
 to a missing value. Custom binary codecs stay available through the same small

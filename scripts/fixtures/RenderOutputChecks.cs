@@ -17,7 +17,7 @@ internal sealed class RenderOutputChecks
     private readonly List<(string Name, RenderOutput Output)> _jobs = new();
     private readonly List<IDisposable> _owners = new();
     private bool _finished;
-    private RenderOutput _missing;
+    private RenderOutput? _missing;
     private int _batch;
     private readonly bool _reopen;
     private const ulong StaticObject = 101;

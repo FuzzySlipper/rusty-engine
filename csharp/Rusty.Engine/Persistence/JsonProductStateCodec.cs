@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
@@ -14,6 +15,7 @@ namespace Rusty.Engine.Persistence;
 /// </summary>
 public sealed class JsonProductStateCodec<TState> : IProductStateCodec<TState>
 {
+    private const string ReflectionMetadata = "Reflection-based JSON metadata; under NativeAOT or trimming pass a source-generated JsonTypeInfo<TState>.";
     private readonly JsonTypeInfo<TState> _typeInfo;
 
     /// <summary>
@@ -34,6 +36,8 @@ public sealed class JsonProductStateCodec<TState> : IProductStateCodec<TState>
     /// NativeAOT-safe: under NativeAOT use the <see cref="JsonTypeInfo{T}"/> overload with a
     /// source-generated context instead.
     /// </summary>
+    [RequiresUnreferencedCode(ReflectionMetadata)]
+    [RequiresDynamicCode(ReflectionMetadata)]
     public JsonProductStateCodec(JsonSerializerOptions? options = null)
         : this(ResolveReflectionMetadata(options))
     {
@@ -51,6 +55,8 @@ public sealed class JsonProductStateCodec<TState> : IProductStateCodec<TState>
             ? state
             : throw new InvalidOperationException("JSON product state decoded to null.");
 
+    [RequiresUnreferencedCode(ReflectionMetadata)]
+    [RequiresDynamicCode(ReflectionMetadata)]
     private static JsonTypeInfo<TState> ResolveReflectionMetadata(JsonSerializerOptions? options)
     {
         JsonSerializerOptions effective = options ?? JsonSerializerOptions.Default;

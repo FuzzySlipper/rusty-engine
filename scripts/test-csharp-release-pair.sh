@@ -57,6 +57,9 @@ cat > "$consumer/PairConsumer.csproj" <<EOF
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Library</OutputType>
     <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- As products build: a trim or AOT warning from Rusty.Engine fails the NativeAOT publish. -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <RustyEngineProductEntryType>PairConsumer.Product</RustyEngineProductEntryType>
     <RustyEngineProductId>fixture.release-pair</RustyEngineProductId>
     <RustyEngineProductTitle>Release pair fixture</RustyEngineProductTitle>
@@ -88,13 +91,15 @@ cat > "$consumer/PairConsumer.csproj" <<EOF
 EOF
 cat > "$consumer/Product.cs" <<'EOF'
 using Rusty.Engine;
+using Rusty.Engine.Debugging;
 
 namespace PairConsumer;
 
-public sealed class Product : IEngineProduct
+public sealed class Product : IEngineProduct, IDebugCommandModuleSource
 {
     private readonly RenderOutputChecks _outputs;
     private readonly UiStream _ui;
+    private readonly PlaytestDebugChecks _playtest;
     public Product(ProductCreateContext context)
     {
         _ui = context.Engine.Ui.OpenStream(new("pair.ui", "pair.ui.v1"));
@@ -117,6 +122,8 @@ public sealed class Product : IEngineProduct
         JsonPersistenceChecks.Run(context.Engine);
         SpatialResidencyChecks.Run(context.Engine);
         CharacterMeshChecks.Run(context.Engine);
+        _playtest = new(context.Engine);
+        _playtest.Run();
         AddressableInventoryStacksExercise.Run();
         ItemCapacityCostExercise.Run();
         ProductInputMapping[] replacement = initialMappings.Select((mapping, index) =>
@@ -128,6 +135,7 @@ public sealed class Product : IEngineProduct
         if (initialMappings[0].Keyboard != KeyboardControl.Backspace)
             throw new InvalidOperationException("Runtime replacement mutated the initial composition snapshot.");
     }
+    public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => _playtest.RegisterDebugCommands(registrar);
     public void Start() { }
     public void Attach() { }
     public ProductUpdateResult Update(ProductUpdate update) { _outputs.Tick(); return ProductUpdateResult.None; }
@@ -141,6 +149,7 @@ EOF
 cp "$repo_root/scripts/fixtures/JsonPersistenceChecks.cs" "$consumer/JsonPersistenceChecks.cs"
 cp "$repo_root/scripts/fixtures/SpatialResidencyChecks.cs" "$consumer/SpatialResidencyChecks.cs"
 cp "$repo_root/scripts/fixtures/CharacterMeshChecks.cs" "$consumer/CharacterMeshChecks.cs"
+cp "$repo_root/scripts/fixtures/PlaytestDebugChecks.cs" "$consumer/PlaytestDebugChecks.cs"
 cp "$repo_root/scripts/fixtures/RenderOutputChecks.cs" "$consumer/RenderOutputChecks.cs"
 cp "$repo_root/fixtures/render/assets/kenney-retro-character/character-medium.glb" "$consumer/content/animated.glb"
 cp "$repo_root/fixtures/voxel-conversion/kenney-wall-a.glb" "$consumer/content/static.glb"
@@ -475,6 +484,13 @@ fi
 done
 echo "Packaged $loader inventory, input, persistence, residency, capture, and export checks passed"
 done
+# Without --aot the product still publishes NativeAOT, warnings as errors, so
+# a trim or AOT warning from Rusty.Engine fails the pair.
+if [[ "$run_aot" != --aot ]]; then
+    (cd "$consumer" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+        dotnet msbuild PairConsumer.csproj -t:VerifyRustyEngineAot -p:RustyEngineProductPort=0)
+    echo "Packaged consumer NativeAOT publish passed"
+fi
 
 # The extracted pair is disposable now: change its first payload file in place.
 tampered=$(jq -r '.payload[0].path' "$pair_root/pair-manifest.json")
