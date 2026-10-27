@@ -48,7 +48,7 @@ jobs:
       - name: Restore Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: engine-ci
+          shared-key: engine-ci-complete
           workspaces: . -> target
 
       - name: Install architecture audit dependency

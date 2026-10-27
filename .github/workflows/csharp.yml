@@ -70,7 +70,10 @@ jobs:
       - name: Restore Rust build cache
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: engine-ci
+          # Rust verification builds the complete dependency/test graph.
+          # Read its cache without letting this faster, smaller job replace it.
+          shared-key: engine-ci-complete
+          save-if: false
           workspaces: . -> target
 
       - name: Install C# verification dependencies
