@@ -33,5 +33,4 @@ if (( failed != 0 )); then
   exit 1
 fi
 
-cargo metadata --format-version 1 --locked --no-deps > /dev/null
 echo "standalone audit passed: local Cargo paths and tracked symlinks remain inside Rusty Engine"

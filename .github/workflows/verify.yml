@@ -10,6 +10,7 @@ on:
       - 'render/packages/*/src/generated/**'
       - 'scripts/audit-standalone.sh'
       - 'scripts/dependency_boundary_check.py'
+      - 'scripts/test_architecture_checks.py'
       - 'scripts/verify.sh'
       - '.github/workflows/verify.yml'
   pull_request:
@@ -20,6 +21,7 @@ on:
       - 'render/packages/*/src/generated/**'
       - 'scripts/audit-standalone.sh'
       - 'scripts/dependency_boundary_check.py'
+      - 'scripts/test_architecture_checks.py'
       - 'scripts/verify.sh'
       - '.github/workflows/verify.yml'
   workflow_dispatch:

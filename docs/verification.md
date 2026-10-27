@@ -9,10 +9,11 @@ gate a review. Pair publications run one at a time.
 
 | Lane | Default evidence |
 | --- | --- |
-| Rust | Formatting, standalone and Cargo dependency boundary checks, workspace tests, Clippy with warnings as errors |
-| C# | Binding generation and a disposable packaged SDK consumer staged and exercised through the Rust CoreCLR host |
+| Rust | Formatting, standalone and Cargo dependency boundary checks, workspace tests (including native desktop input/parser tests), Clippy with warnings as errors |
+| Shaders | Exhaustive WGSL composition on shader, dependency, profile or compiler-configuration changes, with weekly rolling-stable and manual runs |
+| C# | Binding generation, a disposable packaged SDK consumer exercised through the Rust CoreCLR host, fixture compilation, and all eight managed example programs' assertions |
 | Browser | Browser shell and live-debug bundle build, closed-bundle check, compiled unit tests, performance result tooling tests |
-| Docs | Local links and CI owner routing |
+| Docs | Local links and CI owner routing for each push/pull-request event |
 | Pair | On `main`: build, exercise with a packaged consumer, and publish the matched SDK/runtime pair and desktop runtime pack |
 
 Run the corresponding `scripts/verify.sh`, `scripts/verify-csharp.sh`,
@@ -20,6 +21,36 @@ Run the corresponding `scripts/verify.sh`, `scripts/verify-csharp.sh`,
 `scripts/verify-docs.sh` locally. The browser shell needs its pnpm
 dependencies; C# requires .NET, Clang/libclang and the pinned binding tools.
 The render-wgpu screenshot tests run on llvmpipe (`mesa-vulkan-drivers`) in CI.
+
+The docs checker uses PyYAML to read Actions workflows. Install it with
+`python3 -m pip install --user -r scripts/requirements-ci.txt` before running
+`scripts/verify-docs.sh` locally. The Rust and C# checks together are
+`scripts/verify-rust-and-csharp.sh`; that command does not run the other lanes.
+
+The ordinary Rust run keeps the fast `render-shaders` behavior tests. Four
+exhaustive composition tests are explicitly ignored there and run in the
+`shaders` workflow (`shader-matrix`). Run the same matrix locally with:
+
+```sh
+cargo test -p render-shaders --lib --locked -- --include-ignored --test-threads=1
+```
+
+It composes every material set modeled by `Features::occurs`, the standard
+world with and without motion, and each distinct caster input per product
+case. The composer supplies validation. Package-specific dev profiles optimize
+the shader compiler and its regex dependencies; Engine code keeps its normal
+dev profile. The separate workflow watches the shader crate, manifests,
+lockfile, Cargo/compiler configuration and its own workflow. A `render-wgpu`
+edit alone does not change this isolated matrix's inputs; rendering integration
+tests still run in the Rust lane. Weekly execution covers rolling compiler
+updates without source edits.
+
+C# fixture compilation is distinct from execution: the package smoke runs
+its selected service checks, including copied Perception and WaterField results,
+and the release-pair exercise verifies the shipped archive. The eight managed
+examples build once in Release and execute with `--no-build`. Their fake
+services test managed behavior; they do not replace native or visible product
+exercises. NativeAOT remains opt-in.
 
 ## GPU verification
 

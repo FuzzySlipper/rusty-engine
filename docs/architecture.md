@@ -213,7 +213,7 @@ draws: `stream` (the default) streams frames to the browser shell, and
 `render-stream`). The product project sets it with
 `RustyEngineProductRenderOutput`, and `rusty dev --output` overrides it for one
 launch. No environment variable selects Engine behaviour:
-`scripts/test_architecture_checks.py` refuses new reads in the runtime, host,
+`scripts/test_architecture_checks.py` flags ordinary environment reads in the runtime, host,
 renderer, shell and CLI crates beyond the platform's own (`PATH`, `HOME`,
 `USERPROFILE`, `XDG_CACHE_HOME`, `DOTNET_ROOT`, `WAYLAND_DISPLAY`,
 `WGPU_BACKEND`).

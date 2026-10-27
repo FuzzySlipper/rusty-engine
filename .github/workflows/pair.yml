@@ -21,6 +21,9 @@ on:
       - 'scripts/build-csharp-release-info.sh'
       - 'scripts/build-desktop-runtime-pack-archive.sh'
       - 'scripts/fixtures/**'
+      - 'scripts/pair-platform.sh'
+      - 'scripts/third-party-notices.py'
+      - 'scripts/inventory-validation.py'
       - '.github/workflows/pair.yml'
       - '!**/*.md'
   workflow_dispatch:

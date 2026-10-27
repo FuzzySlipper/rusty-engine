@@ -3,6 +3,6 @@
   "private": true,
   "packageManager": "pnpm@11.7.0",
   "scripts": {
-    "verify:all": "./scripts/verify-all.sh"
+    "verify:rust-and-csharp": "./scripts/verify-rust-and-csharp.sh"
   }
 }

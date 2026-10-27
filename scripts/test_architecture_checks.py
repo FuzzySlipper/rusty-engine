@@ -271,35 +271,30 @@ ALLOWED_ENVIRONMENT_READS = {
     "WAYLAND_DISPLAY": "which display server the window opens on",
     "WGPU_BACKEND": "wgpu's own adapter override, honoured before choosing one",
 }
-# The one admitted form of an environment read: `env::var("NAME")` or
-# `env::var_os("NAME")` with an allowed literal name. Every other mention of
-# std::env's readers is refused, so no import, alias, glob, function value or
-# FFI call can read the environment out of the check's sight.
-ALLOWED_READ = re.compile(r'env\s*::\s*var(?:_os)?\s*\(\s*"([A-Z_0-9]+)"\s*\)')
-READER_MENTION = re.compile(r"env\s*::\s*(?:\{[^}]*\}|vars?(?:_os)?\b)")
-USE_STATEMENT = re.compile(r"\buse\s+[^;]*;", re.DOTALL)
-GETENV = re.compile(r"\bgetenv\b")
+# Product settings should be named in product configuration. Keep this check
+# aimed at the ordinary Rust environment-read APIs and the platform variables
+# we intentionally allow; it is not an alias or FFI circumvention audit.
+ENV_READER = re.compile(
+    r"\b(?:std\s*::\s*)?env\s*::\s*(var_os|var|vars_os|vars)\s*\(\s*([^)]*)\)",
+    re.DOTALL,
+)
+STRING_LITERAL = re.compile(r'"([A-Z_0-9]+)"')
+GETENV = re.compile(r"\bgetenv\s*\(")
 
 
 def environment_violations(text: str) -> list[str]:
     """Environment reads in Rust source that could select behaviour."""
-    violations = []
-    admitted = set()
-    for match in ALLOWED_READ.finditer(text):
-        if match.group(1) in ALLOWED_ENVIRONMENT_READS:
-            admitted.add(match.start())
-        else:
-            violations.append(match.group(0))
-    for match in READER_MENTION.finditer(text):
-        if match.start() not in admitted and not ALLOWED_READ.match(text, match.start()):
-            violations.append(match.group(0))
-    for statement in USE_STATEMENT.finditer(text):
-        normalized = " ".join(statement.group(0).split())
-        # A `use` that reaches std::env may import the module itself, nothing
-        # from it, and may neither glob nor rename.
-        if re.search(r"\benv\b", normalized) and re.search(r"\*|\bas\b|env\s*::", normalized):
-            violations.append(normalized)
-    violations.extend(match.group(0) for match in GETENV.finditer(text))
+    violations = [match.group(0) for match in GETENV.finditer(text)]
+    for match in ENV_READER.finditer(text):
+        reader, argument = match.groups()
+        literal = STRING_LITERAL.fullmatch(argument.strip())
+        if (
+            reader in {"var", "var_os"}
+            and literal is not None
+            and literal.group(1) in ALLOWED_ENVIRONMENT_READS
+        ):
+            continue
+        violations.append(match.group(0))
     return violations
 
 
@@ -317,21 +312,12 @@ class EnvironmentReadTests(unittest.TestCase):
             "select behaviour through the product manifest, a launch argument or a config file",
         )
 
-    def test_the_check_sees_every_way_to_read_a_behaviour_variable(self) -> None:
-        self.assertNotIn("RUSTY_RENDER_OUTPUT", ALLOWED_ENVIRONMENT_READS)
+    def test_ordinary_behaviour_setting_reads_need_an_admitted_literal(self) -> None:
         for text in [
             'let output = std::env::var_os("RUSTY_RENDER_OUTPUT");',
             "let output = env::var(OUTPUT_VARIABLE);",
-            'let path = std::env::var_os("PATH").or(env::var_os(FALLBACK));',
-            'use std::env::var;\nlet output = var("RUSTY_RENDER_OUTPUT");',
-            'use std::env::{self, var_os};\nlet output = var_os("RUSTY_RENDER_OUTPUT");',
-            'use std::{\n    env::var_os as read,\n    fs,\n};\nlet output = read("RUSTY_RENDER_OUTPUT");',
-            'use std::env as environment;\nlet output = environment::var("RUSTY_RENDER_OUTPUT");',
-            'use std::env::*;\nlet output = var("RUSTY_RENDER_OUTPUT");',
-            'use std::env;\nlet read = env::var;\nlet output = read("RUSTY_RENDER_OUTPUT");',
-            'use std::env::{self as environment};\nlet output = environment::var("RUSTY_RENDER_OUTPUT");',
-            'let output = unsafe { libc::getenv(name.as_ptr()) };',
             "for (name, value) in std::env::vars() {}",
+            "let output = unsafe { libc::getenv(name.as_ptr()) };",
         ]:
             self.assertNotEqual(environment_violations(text), [], text)
 

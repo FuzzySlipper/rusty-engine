@@ -18,6 +18,7 @@ on:
       - 'scripts/verify-csharp*.sh'
       - 'scripts/pack-csharp-sdk.sh'
       - 'scripts/test-csharp-sdk-package.sh'
+      - 'scripts/fixtures/**'
       - '.github/workflows/csharp.yml'
   pull_request:
     paths:
@@ -35,6 +36,7 @@ on:
       - 'scripts/verify-csharp*.sh'
       - 'scripts/pack-csharp-sdk.sh'
       - 'scripts/test-csharp-sdk-package.sh'
+      - 'scripts/fixtures/**'
       - '.github/workflows/csharp.yml'
   workflow_dispatch:
     inputs:
