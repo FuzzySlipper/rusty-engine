@@ -47,7 +47,7 @@ jobs:
 
       # The video options panel's tests drive it in headless Chromium.
       - name: Install headless Chromium
-        run: pnpm --dir render exec playwright install --with-deps --only-shell chromium
+        run: pnpm --dir render exec playwright install --only-shell chromium
 
       - name: Build and test the browser shell and live-debug panel
         run: pnpm --dir render run verify
