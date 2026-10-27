@@ -18,7 +18,7 @@ use runtime_input::{
 };
 use winit::keyboard::KeyCode;
 
-use crate::gamepad::{self, PadState};
+use crate::gamepad_state::{self, PadState};
 use crate::{keys, DesktopScene};
 
 /// The page's input capture's bound on one wheel event's delta.
@@ -75,7 +75,7 @@ impl GameplayRoute {
                 axes: [0.0; 4],
                 ..self.pad
             };
-            let held = gamepad::changes(&sticks, &self.pad);
+            let held = gamepad_state::changes(&sticks, &self.pad);
             self.sent = self.pad;
             if !held.is_empty() {
                 self.scene.gameplay(held);
@@ -103,7 +103,7 @@ impl GameplayRoute {
         if !self.routed || !self.controller {
             return;
         }
-        let facts = gamepad::changes(&self.sent, &state);
+        let facts = gamepad_state::changes(&self.sent, &state);
         self.sent = state;
         if !facts.is_empty() {
             self.scene.gameplay(facts);
@@ -345,6 +345,29 @@ mod tests {
     }
 
     #[test]
+    fn a_key_after_focus_loss_is_a_new_press() {
+        let (mut route, recorder) = route();
+        route.take();
+        taken(&recorder);
+        route.key(KeyCode::KeyW, true);
+        assert_eq!(
+            taken(&recorder),
+            [key_fact(KeyboardControl::KeyW, PhysicalEdge::Pressed)]
+        );
+
+        route.give_back(InputClearReason::FocusLoss);
+        taken(&recorder);
+        route.forget_keys();
+        route.take();
+        taken(&recorder);
+        route.key(KeyCode::KeyW, true);
+        assert_eq!(
+            taken(&recorder),
+            [key_fact(KeyboardControl::KeyW, PhysicalEdge::Pressed)]
+        );
+    }
+
+    #[test]
     fn motion_is_handed_over_whole_and_the_wheel_as_the_page_reads_it() {
         let (mut route, recorder) = route();
         route.take();
@@ -398,7 +421,7 @@ mod tests {
             taken(&recorder),
             [
                 Handed::Route(true, true),
-                Handed::Facts(gamepad::changes(&PadState::default(), &stick(&held))),
+                Handed::Facts(gamepad_state::changes(&PadState::default(), &stick(&held),)),
             ]
         );
         // Each change goes as it is read; giving back stops it.
@@ -407,7 +430,7 @@ mod tests {
         route.pad(moved);
         assert_eq!(
             taken(&recorder),
-            [Handed::Facts(gamepad::changes(&held, &moved))]
+            [Handed::Facts(gamepad_state::changes(&held, &moved))]
         );
         route.give_back(InputClearReason::FocusLoss);
         taken(&recorder);
@@ -417,7 +440,7 @@ mod tests {
         route.take();
         assert_eq!(
             taken(&recorder).last(),
-            Some(&Handed::Facts(gamepad::changes(
+            Some(&Handed::Facts(gamepad_state::changes(
                 &PadState::default(),
                 &stick(&held)
             )))
@@ -429,7 +452,7 @@ mod tests {
         route.pad(pressed);
         assert_eq!(
             taken(&recorder),
-            [Handed::Facts(gamepad::changes(&held, &pressed))]
+            [Handed::Facts(gamepad_state::changes(&held, &pressed))]
         );
     }
 }

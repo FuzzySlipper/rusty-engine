@@ -26,9 +26,13 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(any(feature = "ui-overlay", test))]
+mod cursor_image;
 #[cfg(feature = "ui-overlay")]
 mod gamepad;
-#[cfg(feature = "ui-overlay")]
+#[cfg(any(feature = "ui-overlay", test))]
+mod gamepad_state;
+#[cfg(any(feature = "ui-overlay", test))]
 mod gameplay;
 #[cfg(any(feature = "ui-overlay", test))]
 mod keys;

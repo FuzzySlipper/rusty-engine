@@ -2,8 +2,9 @@
 //! samples `navigator.getGamepads()` on its own schedule, so a UI page
 //! running long tasks delayed presses and missed short ones. This reads the
 //! first connected pad through gilrs on a thread of its own and hands the
-//! event loop snapshots in Chromium's standard mapping; [`changes`] turns two
-//! snapshots into the facts the page's capture makes from the same pad.
+//! event loop snapshots in Chromium's standard mapping;
+//! [`crate::gamepad_state::changes`] turns two snapshots into the facts the
+//! page's capture makes from the same pad.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
@@ -11,32 +12,28 @@ use std::time::Duration;
 
 use gilrs::ev::filter::{axis_dpad_to_button, FilterFn};
 use gilrs::{Axis, Button, Event, EventType, Gilrs, GilrsBuilder};
-use runtime_input::{AxisValue, ControllerAxis, ControllerButton, PhysicalEdge, RuntimeInputFact};
+
+pub(crate) use crate::gamepad_state::PadState;
 
 /// Chromium's standard gamepad buttons 0 to 15, the ones the page reads.
-const BUTTONS: [(Button, ControllerButton); 16] = [
-    (Button::South, ControllerButton::Button0),
-    (Button::East, ControllerButton::Button1),
-    (Button::West, ControllerButton::Button2),
-    (Button::North, ControllerButton::Button3),
-    (Button::LeftTrigger, ControllerButton::Button4),
-    (Button::RightTrigger, ControllerButton::Button5),
-    (Button::LeftTrigger2, ControllerButton::Button6),
-    (Button::RightTrigger2, ControllerButton::Button7),
-    (Button::Select, ControllerButton::Button8),
-    (Button::Start, ControllerButton::Button9),
-    (Button::LeftThumb, ControllerButton::Button10),
-    (Button::RightThumb, ControllerButton::Button11),
-    (Button::DPadUp, ControllerButton::Button12),
-    (Button::DPadDown, ControllerButton::Button13),
-    (Button::DPadLeft, ControllerButton::Button14),
-    (Button::DPadRight, ControllerButton::Button15),
-];
-const AXES: [ControllerAxis; 4] = [
-    ControllerAxis::Axis0,
-    ControllerAxis::Axis1,
-    ControllerAxis::Axis2,
-    ControllerAxis::Axis3,
+/// Keep this order aligned with `gamepad_state::BUTTONS`.
+const BUTTONS: [Button; 16] = [
+    Button::South,
+    Button::East,
+    Button::West,
+    Button::North,
+    Button::LeftTrigger,
+    Button::RightTrigger,
+    Button::LeftTrigger2,
+    Button::RightTrigger2,
+    Button::Select,
+    Button::Start,
+    Button::LeftThumb,
+    Button::RightThumb,
+    Button::DPadUp,
+    Button::DPadDown,
+    Button::DPadLeft,
+    Button::DPadRight,
 ];
 /// Chromium counts an analog trigger pressed past 30/255; gilrs's default is
 /// 0.75.
@@ -44,46 +41,6 @@ const TRIGGER_PRESSED: f32 = 30.0 / 255.0;
 const TRIGGER_RELEASED: f32 = 25.0 / 255.0;
 /// How often the reader looks at its stop flag while no pad event arrives.
 const IDLE_WAKE: Duration = Duration::from_millis(100);
-
-/// One pad's state in Chromium's standard mapping: sticks left x, left y,
-/// right x, right y (down positive), and each button's value and press. With
-/// no pad connected it is at rest.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub(crate) struct PadState {
-    pub(crate) connected: bool,
-    pub(crate) axes: [f32; 4],
-    pub(crate) values: [f32; 16],
-    pub(crate) pressed: [bool; 16],
-}
-
-/// The facts that take the runtime from `from` to `to`, in the page's order:
-/// axes, then each button's value and its press or release.
-pub(crate) fn changes(from: &PadState, to: &PadState) -> Vec<RuntimeInputFact> {
-    let mut facts = Vec::new();
-    for (index, axis) in AXES.into_iter().enumerate() {
-        if to.axes[index] != from.axes[index] {
-            if let Ok(value) = AxisValue::new(to.axes[index]) {
-                facts.push(RuntimeInputFact::ControllerAxis { axis, value });
-            }
-        }
-    }
-    for (index, (_, button)) in BUTTONS.into_iter().enumerate() {
-        if to.values[index] != from.values[index] {
-            if let Ok(value) = AxisValue::new(to.values[index]) {
-                facts.push(RuntimeInputFact::ControllerButtonValue { button, value });
-            }
-        }
-        if to.pressed[index] != from.pressed[index] {
-            let edge = if to.pressed[index] {
-                PhysicalEdge::Pressed
-            } else {
-                PhysicalEdge::Released
-            };
-            facts.push(RuntimeInputFact::ControllerButton { button, edge });
-        }
-    }
-    facts
-}
 
 /// The gilrs thread. Dropping it stops the thread.
 pub(crate) struct GamepadReader {
@@ -193,7 +150,7 @@ fn read(pad: &gilrs::Gamepad<'_>) -> PadState {
         ],
         ..PadState::default()
     };
-    for (index, (button, _)) in BUTTONS.into_iter().enumerate() {
+    for (index, button) in BUTTONS.into_iter().enumerate() {
         state.values[index] = pad.button_data(button).map_or(0.0, |data| data.value());
         state.pressed[index] = pad.is_pressed(button);
     }
@@ -204,47 +161,4 @@ fn read(pad: &gilrs::Gamepad<'_>) -> PadState {
         }
     }
     state
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn changes_follow_the_pages_order_and_report_only_what_moved() {
-        let rest = PadState::default();
-        let mut pressed = rest;
-        pressed.axes[1] = 0.5;
-        pressed.values[0] = 1.0;
-        pressed.pressed[0] = true;
-        pressed.values[7] = 0.25;
-        let value = |v| AxisValue::new(v).unwrap();
-        assert_eq!(
-            changes(&rest, &pressed),
-            [
-                RuntimeInputFact::ControllerAxis {
-                    axis: ControllerAxis::Axis1,
-                    value: value(0.5),
-                },
-                RuntimeInputFact::ControllerButtonValue {
-                    button: ControllerButton::Button0,
-                    value: value(1.0),
-                },
-                RuntimeInputFact::ControllerButton {
-                    button: ControllerButton::Button0,
-                    edge: PhysicalEdge::Pressed,
-                },
-                RuntimeInputFact::ControllerButtonValue {
-                    button: ControllerButton::Button7,
-                    value: value(0.25),
-                },
-            ]
-        );
-        assert!(changes(&pressed, &pressed).is_empty());
-        assert_eq!(
-            changes(&pressed, &rest).len(),
-            4,
-            "back to rest undoes each"
-        );
-    }
 }

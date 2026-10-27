@@ -28,11 +28,6 @@ servo-overlay = ["ui-overlay", "render-wgpu/servo-overlay"]
 [dev-dependencies]
 render-model.workspace = true
 render-host-contracts.workspace = true
-# The #8790 overlay spike (patterns 1 and 2) only.
-wry.workspace = true
-
-[target.'cfg(target_os = "linux")'.dev-dependencies]
-gtk = "0.18"
 
 [[example]]
 name = "shell_demo"
