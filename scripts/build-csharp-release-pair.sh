@@ -161,10 +161,15 @@ pair_manifest="$pair_root/pair-manifest.json"
 } > "$pair_manifest"
 
 mkdir "$output"
+install -m 644 "$pair_manifest" "$output/pair-manifest.json"
 timestamp=$(git show -s --format=%ct HEAD)
+archive_started=$SECONDS
 tar --sort=name --mtime="@$timestamp" --owner=0 --group=0 --numeric-owner \
     -C "$stage" -czf "$archive_path" "$pair_name"
+printf 'pair archive compression: %ss\n' "$((SECONDS - archive_started))" >&2
+digest_started=$SECONDS
 printf '%s  %s\n' "$(sha256sum "$archive_path" | awk '{print $1}')" "$archive_name" > "$checksum_path"
+printf 'pair archive digest: %ss\n' "$((SECONDS - digest_started))" >&2
 
 printf 'csharp release pair built: %s\n' "$archive_path"
 printf 'checksum: %s\n' "$checksum_path"

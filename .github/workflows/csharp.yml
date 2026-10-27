@@ -76,6 +76,16 @@ jobs:
           save-if: false
           workspaces: . -> target
 
+      - name: Read the binding tool version
+        id: cbindgen
+        run: echo "version=$(sed -n 's/^cbindgen_version=//p' scripts/generate-csharp-native-bindings.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the binding tool
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rusty-engine/tools/cbindgen-${{ steps.cbindgen.outputs.version }}
+          key: cbindgen-${{ runner.os }}-${{ runner.arch }}-${{ steps.cbindgen.outputs.version }}
+
       - name: Install C# verification dependencies
         run: |
           sudo apt-get update

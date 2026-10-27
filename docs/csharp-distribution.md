@@ -217,6 +217,19 @@ desktop pack with `scripts/build-desktop-runtime-pack-archive.sh` and checks
 that its ABI matches the pair's, builds release information against the
 current Latest pair, and publishes the same archive and desktop pack with
 `scripts/publish-csharp-release-pair.sh`.
+
+The builders also leave `pair-manifest.json` and `runtime-manifest.json`
+beside their respective archives, so CI compares the ABI without decompressing
+the archives again. The consumer exercise still verifies and runs the exact
+pair archive that is published. The desktop archive uses xz's fast preset 1;
+its format and installation path are unchanged. Build logs time native compilation, browser
+bundling, staging, inventory generation and compression separately.
+
+Publication uses sccache for unchanged Rust library compilation across fresh
+checkouts; final binary and test-host linking still runs. The pinned cbindgen
+tool lives under `${XDG_CACHE_HOME:-$HOME/.cache}/rusty-engine/tools`, outside
+the disposable Cargo target directory, and CI caches it by version and platform.
+
 Documentation-only changes do not produce a pair. Run the workflow by hand
 (`gh workflow run pair.yml`) to retry a failed publication.
 

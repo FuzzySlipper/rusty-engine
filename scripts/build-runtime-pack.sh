@@ -17,6 +17,13 @@ usage() {
   echo "usage: scripts/build-runtime-pack.sh [--output <new-directory>] [--desktop] [--dlss <dlss-sdk>]" >&2
 }
 
+timed() {
+  local label=$1 started=$SECONDS
+  shift
+  "$@"
+  printf 'runtime-pack %s: %ss\n' "$label" "$((SECONDS - started))" >&2
+}
+
 # --desktop builds the host with the desktop shell and both of the window's
 # UI engines: Chromium, whose runtime ships in lib/cef, and Servo
 # (renderer.windowUi = servo). CEF's build downloads Chromium into CEF_PATH
@@ -75,7 +82,7 @@ trap cleanup EXIT
 cd "$REPO_ROOT"
 # The browser shell and live-debug bundles, from the packages' fresh dist
 # outputs so a clean checkout does not depend on stale local artifacts.
-pnpm --dir render run build
+timed browser-build pnpm --dir render run build
 HOST_FEATURES=()
 SCENE_FEATURES=()
 if ((DESKTOP)); then
@@ -113,21 +120,22 @@ fi
 if ((${#SCENE_FEATURES[@]})); then
   SCENE_FEATURES=(--features "$(IFS=,; echo "${SCENE_FEATURES[*]}")")
 fi
-cargo build --locked --release -p csharp-product-runtime "${HOST_FEATURES[@]}" \
+timed host-build cargo build --locked --release -p csharp-product-runtime "${HOST_FEATURES[@]}" \
   --bin rusty-product-host --bin rusty-live-debug
 # The offline renderer opens no window: built without the desktop shell and
 # its UI engines (cargo features apply to the whole package), it is about
 # 380 MB smaller.
-cargo build --locked --release -p csharp-product-runtime "${SCENE_FEATURES[@]}" \
+timed offline-renderer-build cargo build --locked --release -p csharp-product-runtime "${SCENE_FEATURES[@]}" \
   --bin rusty-scene-render
 # rusty compares this commit time with a pair's `sourceTime` to say when it
 # is older than the pair it runs.
 SOURCE_TIME="$(git log -1 --format=%ct)"
-RUSTY_SOURCE_TIME="$SOURCE_TIME" cargo build --locked --release -p rusty-cli --bin rusty
+timed cli-build env RUSTY_SOURCE_TIME="$SOURCE_TIME" cargo build --locked --release -p rusty-cli --bin rusty
 # The Engine services, headless and in process, for products' unit tests
 # (Rusty.Engine.Testing.EngineTestHost).
-cargo build --locked --release -p csharp-engine-test-host --lib
+timed test-host-build cargo build --locked --release -p csharp-engine-test-host --lib
 
+stage_started=$SECONDS
 install -d "$STAGE/bin" "$STAGE/share/browser/engine/live-debug-panel" "$STAGE/share/browser/engine/video-options" \
   "$STAGE/share/live-debug-client" "$STAGE/share/live-debug-panel" "$STAGE/symbols"
 release="${CARGO_TARGET_DIR:-target}/release"
@@ -153,7 +161,9 @@ find render/packages/live-debug-client/dist -maxdepth 1 -type f \
   ! -name '*.test.*' ! -name '*.tsbuildinfo' \
   -exec install -m 644 {} "$STAGE/share/live-debug-client/" \;
 cp -a render/artifacts/live-debug-panel/. "$STAGE/share/live-debug-panel/"
+printf 'runtime-pack native/browser staging: %ss\n' "$((SECONDS - stage_started))" >&2
 
+stage_started=$SECONDS
 if ((DESKTOP)); then
   # Only what Chromium loads at run time: the library (stripped of its
   # 1.2 GB of debug info), its resources, ICU data, V8 snapshot, and one
@@ -186,7 +196,7 @@ if ((DESKTOP)); then
       install -m 755 "$CEF_DIST/$file" "$STAGE/lib/cef/$file"
     done
   else
-    strip -o "$STAGE/lib/cef/libcef.so" "$CEF_DIST/libcef.so"
+    timed cef-strip strip -o "$STAGE/lib/cef/libcef.so" "$CEF_DIST/libcef.so"
   fi
   for file in "${CEF_RESOURCES[@]}"; do
     install -m 644 "$CEF_DIST/$file" "$STAGE/lib/cef/$file"
@@ -262,10 +272,11 @@ if [[ -n $DLSS_SDK_DIR ]]; then
 fi
 
 # Include the corresponding source and license for our modified MPL component.
+printf 'runtime-pack desktop/vendor staging (includes CEF strip): %ss\n' "$((SECONDS - stage_started))" >&2
 install -d "$STAGE/share/third-party"
 # The licence and notice texts of the third-party crates the host links and
 # the native libraries they build in (Brotli, SpiderMonkey, ANGLE, ...).
-"${PYTHON3:-python3}" scripts/third-party-notices.py "${HOST_FEATURES[@]}" > "$STAGE/share/third-party/NOTICES.txt"
+timed third-party-notices "${PYTHON3:-python3}" scripts/third-party-notices.py "${HOST_FEATURES[@]}" > "$STAGE/share/third-party/NOTICES.txt"
 cp -a rust/vendor/fidget-mesh "$STAGE/share/third-party/fidget-mesh"
 # render-wgpu embeds DejaVu Sans; its license travels with the binaries.
 install -D -m 0644 rust/crates/render-wgpu/fonts/LICENSE "$STAGE/share/third-party/dejavu-sans/LICENSE"
@@ -281,6 +292,7 @@ IDENTITY="$("$STAGE/bin/rusty-product-host$EXE" --identity)"
 REVISION="$(git rev-parse HEAD)"
 # Source/compiler provenance travels with the symbols. Dirty contributor packs
 # identify that fact explicitly; published packs should come from a clean commit.
+inventory_started=$SECONDS
 {
   printf 'sourceRevision=%s\n' "$REVISION"
   if [[ -n "$(git status --porcelain)" ]]; then
@@ -293,25 +305,33 @@ REVISION="$(git rev-parse HEAD)"
   printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
   rustc --version --verbose
 } > "$STAGE/symbols/build-info.txt"
-{
-  printf '{\n'
-  printf '  "artifact": "rusty.product.runtime-pack",\n'
-  printf '  "schemaVersion": 1,\n'
-  printf '  "target": "%s",\n' "$TARGET"
-  printf '  "sourceRevision": "%s",\n' "$REVISION"
-  printf '  "sourceTime": %s,\n' "$SOURCE_TIME"
-  printf '  "runtime": %s,\n' "$IDENTITY"
-  printf '  "files": [\n'
-  first=1
-  while IFS= read -r file; do
-    relative="${file#"$STAGE/"}"
-    digest="$(sha256sum "$file" | awk '{print $1}')"
-    size="$(wc -c < "$file" | tr -d '[:space:]')"
-    if ((first)); then first=0; else printf ',\n'; fi
-    printf '    {"path":"%s","sha256":"%s","bytes":%s}' "$relative" "$digest" "$size"
-  done < <(find "$STAGE" -type f ! -name runtime-manifest.json -print | LC_ALL=C sort)
-  printf '\n  ]\n}\n'
-} > "$STAGE/runtime-manifest.json"
+# Hash each staged file once in one process. The inventory is the same one
+# consumers already use; spawning sha256sum/awk/wc/tr per source file was a
+# substantial part of desktop staging.
+"${PYTHON3:-python3}" - "$STAGE" "$TARGET" "$REVISION" "$SOURCE_TIME" "$IDENTITY" > "$STAGE/runtime-manifest.json" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+stage = Path(sys.argv[1])
+files = []
+for path in sorted(stage.rglob("*"), key=lambda path: path.relative_to(stage).as_posix()):
+    if path.name == "runtime-manifest.json" or path.is_symlink() or not path.is_file():
+        continue
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    files.append({"path": path.relative_to(stage).as_posix(),
+                  "sha256": digest.hexdigest(), "bytes": path.stat().st_size})
+json.dump({"artifact": "rusty.product.runtime-pack", "schemaVersion": 1,
+           "target": sys.argv[2], "sourceRevision": sys.argv[3],
+           "sourceTime": int(sys.argv[4]), "runtime": json.loads(sys.argv[5]),
+           "files": files}, sys.stdout, indent=2)
+sys.stdout.write("\n")
+PY
+printf 'runtime-pack inventory: %ss\n' "$((SECONDS - inventory_started))" >&2
 
 mv -- "$STAGE" "$OUTPUT"
 trap - EXIT

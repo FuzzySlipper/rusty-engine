@@ -58,10 +58,11 @@ fi
 rm -f -- "$stamp"
 
 cbindgen_version=0.29.4
-cbindgen_root="$repo_root/target/cbindgen-$cbindgen_version"
+# Keep the pinned tool across target cleanup and across Engine checkouts.
+cbindgen_root="${XDG_CACHE_HOME:-$HOME/.cache}/rusty-engine/tools/cbindgen-$cbindgen_version"
 cbindgen_bin="$cbindgen_root/bin/cbindgen"
 if [[ ! -x "$cbindgen_bin" ]]; then
-    cargo install cbindgen --version "$cbindgen_version" --locked --root "$cbindgen_root"
+    PATH="$cbindgen_root/bin:$PATH" cargo install cbindgen --version "$cbindgen_version" --locked --root "$cbindgen_root"
 fi
 
 if ! command -v clang >/dev/null 2>&1; then

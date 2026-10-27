@@ -67,8 +67,13 @@ if [[ "$(jq -r '.sourceRevision' "$manifest")" != "$revision" ]] || [[ ! -f "$st
 fi
 
 mkdir "$output"
+install -m 644 "$manifest" "$output/runtime-manifest.json"
 timestamp=$(git show -s --format=%ct HEAD)
+archive_started=$SECONDS
 tar --sort=name --mtime="@$timestamp" --owner=0 --group=0 --numeric-owner \
-    -C "$stage" -cf - "$name" | xz -T0 -6 > "$output/$name.tar.xz"
+    -C "$stage" -cf - "$name" | xz -T0 -1 > "$output/$name.tar.xz"
+printf 'desktop archive compression: %ss\n' "$((SECONDS - archive_started))" >&2
+digest_started=$SECONDS
 (cd "$output" && sha256sum "$name.tar.xz" > "$name.tar.xz.sha256")
+printf 'desktop archive digest: %ss\n' "$((SECONDS - digest_started))" >&2
 printf '%s\n' "$output/$name.tar.xz"

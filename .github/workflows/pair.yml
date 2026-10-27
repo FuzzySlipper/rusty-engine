@@ -89,11 +89,42 @@ jobs:
           shared-key: engine-pair
           workspaces: . -> target
 
+      - name: Read the binding tool version
+        id: cbindgen
+        if: steps.published.outputs.skip != 'true'
+        run: echo "version=$(sed -n 's/^cbindgen_version=//p' scripts/generate-csharp-native-bindings.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the binding tool
+        if: steps.published.outputs.skip != 'true'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/rusty-engine/tools/cbindgen-${{ steps.cbindgen.outputs.version }}
+          key: cbindgen-${{ runner.os }}-${{ runner.arch }}-${{ steps.cbindgen.outputs.version }}
+
+      - name: Install the Rust compiler cache
+        if: steps.published.outputs.skip != 'true'
+        uses: mozilla-actions/sccache-action@v0.0.11
+        with:
+          version: v0.19.0
+
+      - name: Cache unchanged Rust compilation across checkouts
+        if: steps.published.outputs.skip != 'true'
+        run: |
+          echo 'RUSTC_WRAPPER=sccache' >> "$GITHUB_ENV"
+          echo 'SCCACHE_GHA_ENABLED=true' >> "$GITHUB_ENV"
+          echo 'CARGO_INCREMENTAL=0' >> "$GITHUB_ENV"
+
       # The desktop pack builds Servo, whose release target is several GB.
       - name: Free disk space
         if: steps.published.outputs.skip != 'true'
         run: |
-          sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /usr/share/swift
+          # A measured release target, CEF and staged desktop pack occupy
+          # about 22 GiB. Leave 25 GiB of headroom after cache restoration
+          # for compilation, linking and both packs' temporary outputs.
+          available_kib=$(df --output=avail -k / | tail -n 1)
+          if ((available_kib < 25 * 1024 * 1024)); then
+            sudo rm -rf /usr/local/lib/android /opt/ghc /usr/local/.ghcup /usr/share/swift
+          fi
           df -h /
 
       - name: Install pair build dependencies
@@ -139,8 +170,8 @@ jobs:
           CEF_PATH: ${{ runner.temp }}/cef
         run: |
           ./scripts/build-desktop-runtime-pack-archive.sh --output "$RUNNER_TEMP/desktop"
-          pair_abi=$(tar -xzOf "$RUNNER_TEMP"/pair/*.tar.gz --wildcards '*/pair-manifest.json' | jq -cS .runtime.abi)
-          desktop_abi=$(tar -xJOf "$RUNNER_TEMP"/desktop/*.tar.xz --wildcards '*/runtime-manifest.json' | jq -cS .runtime.abi)
+          pair_abi=$(jq -cS .runtime.abi "$RUNNER_TEMP/pair/pair-manifest.json")
+          desktop_abi=$(jq -cS .runtime.abi "$RUNNER_TEMP/desktop/runtime-manifest.json")
           if [[ "$pair_abi" != "$desktop_abi" ]]; then
             echo "the desktop pack's ABI $desktop_abi is not the pair's $pair_abi" >&2
             exit 1
