@@ -5,7 +5,7 @@
 # machine's accepted baseline. A failing test stops the lane. The scene run
 # exits 0 on pass, 1 when flagged, 2 when a candidate render failed.
 #
-#   scripts/gpu-lane.sh [--scene NAME]... [--repeats N]
+#   scripts/gpu-lane.sh [--dlss] [--scene NAME]... [--repeats N]
 #
 # RUSTY_GPU_LANE_ROOT is the lane directory (scenes.json, scenes/, machines/,
 # runs/); RUSTY_GPU_LANE_MACHINE names this machine's baseline (else the host
@@ -16,10 +16,20 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 lane="${RUSTY_GPU_LANE_ROOT:-/data/rusty-engine-gpu-lane}"
 cd "$root"
 
-cargo test --release -p render-wgpu --locked
-scripts/gpu-lane-temporal-tests.sh
+render_features=()
+host_features=()
+temporal_flags=()
+if [[ "${1:-}" == --dlss ]]; then
+  render_features=(--features dlss)
+  host_features=(--features csharp-product-runtime/dlss)
+  temporal_flags=(--dlss)
+  shift
+fi
 
-cargo build --release --locked -p csharp-product-runtime --bin rusty-scene-render -p render-verify --bin rusty-gpu-lane
+cargo test --release -p render-wgpu --locked "${render_features[@]}"
+scripts/gpu-lane-temporal-tests.sh "${temporal_flags[@]}"
+
+cargo build --release --locked -p csharp-product-runtime --bin rusty-scene-render -p render-verify --bin rusty-gpu-lane "${host_features[@]}"
 
 head="$(git rev-parse HEAD)"
 source="$head"

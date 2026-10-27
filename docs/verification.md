@@ -104,6 +104,10 @@ one. `--scene NAME` (repeatable) runs a subset. A name that matches no scene
 fails the run (`report.unmatched` lists it), and so does a run that renders
 nothing, so a misspelt subset never passes unrendered.
 
+On an RTX adapter with the DLSS SDK configured, use
+`scripts/gpu-lane.sh --dlss [--scene NAME]...`. That enables DLSS for the full
+renderer suite, the explicit temporal assertions and the candidate renderer.
+
 The JSON report records each snapshot and its arguments, and the first
 successful readout from each renderer: adapter, software status, product
 provenance, requested/effective settings, refusals and upscale method. Record
@@ -200,8 +204,8 @@ accepted. Other machines copy the new scenes and accept the same pair on
 their own GPUs.
 
 On Windows, run the script from Git Bash, or run its test and build commands
-followed by `rusty-gpu-lane run` directly. On an RTX adapter, also run the
-temporal script with `--dlss` to exercise the DLSS quality/history assertions.
+followed by `rusty-gpu-lane run` directly. Use the lane's `--dlss` option on
+an RTX adapter, or include the equivalent feature flags in the direct commands.
 The lane renders with Vulkan there, as the desktop window does.
 
 NativeAOT is a separate fidelity path: `scripts/verify-csharp.sh --aot`, the
