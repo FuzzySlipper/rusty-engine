@@ -113,6 +113,11 @@ struct InstanceSnapshot {
     /// chunks whose meshes came or went.
     wanted_coarse: BTreeSet<[i64; 3]>,
     coarse_level: Option<VoxelLevelOfDetail>,
+    /// The level and mesh state a level-of-detail check since the last
+    /// projection found nothing to change at, and the chunks the last check
+    /// read.
+    unchanged_at: Option<(Option<VoxelLevelOfDetail>, u64)>,
+    checked_chunks: u64,
     /// Time spent meshing the coarse chunks the last projection built.
     coarse_mesh_microseconds: u64,
     /// What the last projection did.
@@ -325,27 +330,53 @@ impl VoxelRenderProjector {
     /// projection.
     ///
     /// A product calls this every update. At the level and meshes the last
-    /// projection chose at, nothing can change level and no chunk is read;
-    /// otherwise the chunks are read until one would change.
-    pub fn level_of_detail_changed(&self, instances: &[VoxelProjectionInstance<'_>]) -> bool {
-        instances.iter().any(|instance| {
-            self.continued(instance).is_some_and(|previous| {
-                let scene = instance.scene;
-                let level = self
-                    .levels
-                    .get(&instance.instance_id)
-                    .filter(|_| scene.has_coarse_meshes());
-                if !previous.pending_coarse.is_empty() {
-                    return true;
-                }
-                if previous.coarse_level.as_ref() == level
-                    && previous.mesh_state == scene.mesh_state()
-                {
-                    return false;
-                }
-                coarse_differs(&previous.coarse, scene, level)
-            })
-        })
+    /// projection chose at, or a check since found nothing to change at,
+    /// no chunk is read; otherwise the chunks are read until one would
+    /// change.
+    pub fn level_of_detail_changed(&mut self, instances: &[VoxelProjectionInstance<'_>]) -> bool {
+        for instance in instances {
+            let scene = instance.scene;
+            let level = self
+                .levels
+                .get(&instance.instance_id)
+                .filter(|_| scene.has_coarse_meshes())
+                .copied();
+            let layer = self.layer_of(&instance.instance_id);
+            let Some(previous) =
+                self.last_instances
+                    .get_mut(&instance.instance_id)
+                    .filter(|previous| {
+                        previous.asset_id == instance.asset_id && previous.layer == layer
+                    })
+            else {
+                continue;
+            };
+            if !previous.pending_coarse.is_empty() {
+                return true;
+            }
+            let at = (level, scene.mesh_state());
+            if (previous.coarse_level, previous.mesh_state) == at
+                || previous.unchanged_at == Some(at)
+            {
+                previous.checked_chunks = 0;
+                continue;
+            }
+            let (differs, read) = coarse_differs(&previous.coarse, scene, level.as_ref());
+            previous.checked_chunks = read;
+            if differs {
+                return true;
+            }
+            previous.unchanged_at = Some(at);
+        }
+        false
+    }
+
+    /// The chunks the last level-of-detail check read for an instance.
+    #[cfg(test)]
+    fn checked_chunks(&self, instance_id: &str) -> u64 {
+        self.last_instances
+            .get(instance_id)
+            .map_or(0, |instance| instance.checked_chunks)
     }
 
     pub fn project(
@@ -570,6 +601,8 @@ impl VoxelRenderProjector {
                         pending_coarse: BTreeMap::new(),
                         wanted_coarse: BTreeSet::new(),
                         coarse_level: None,
+                        unchanged_at: None,
+                        checked_chunks: 0,
                         coarse_mesh_microseconds: 0,
                         last_projection: VoxelInstanceProjectionReadout::default(),
                         scatter: ScatterSnapshot::default(),
@@ -598,6 +631,7 @@ impl VoxelRenderProjector {
                 }
             }
             snapshot.coarse_level = level;
+            snapshot.unchanged_at = None;
             let mut level_changes: BTreeSet<_> = built.keys().chain(&dropped).copied().collect();
             for coord in &dropped {
                 snapshot.coarse.remove(coord);
@@ -938,28 +972,30 @@ fn wanted_coarse(
 }
 
 /// Whether `level` draws a different set of chunks coarse from `current`,
-/// read chunk by chunk until one differs. Both are in chunk order, so they
-/// are walked together.
+/// read chunk by chunk until one differs, and the chunks it read. Both are
+/// in chunk order, so they are walked together.
 fn coarse_differs(
     current: &BTreeMap<[i64; 3], VoxelMeshChunk>,
     scene: &VoxelCollisionScene,
     level: Option<&VoxelLevelOfDetail>,
-) -> bool {
+) -> (bool, u64) {
     let Some(level) = level else {
-        return !current.is_empty();
+        return (!current.is_empty(), 0);
     };
     let mut coarse = current.keys().peekable();
+    let mut read = 0;
     for chunk in scene.mesh_chunks() {
+        read += 1;
         // A chunk drawn coarse whose mesh went.
         if coarse.next_if(|coord| **coord < chunk.chunk).is_some() {
-            return true;
+            return (true, read);
         }
         let coarse_now = coarse.next_if_eq(&&chunk.chunk).is_some();
         if drawn_coarse(scene, chunk, level, coarse_now) != coarse_now {
-            return true;
+            return (true, read);
         }
     }
-    coarse.next().is_some()
+    (coarse.next().is_some(), read)
 }
 
 /// Whether `level` draws a chunk coarse, given whether it is drawn coarse
@@ -1543,6 +1579,7 @@ mod tests {
         projector.project(&instances(&scene), &materials).unwrap();
         assert_eq!(projector.coarse_chunk_count("land"), 2);
         assert!(!projector.level_of_detail_changed(&instances(&scene)));
+        assert_eq!(projector.checked_chunks("land"), 0);
 
         // Emptying coarse chunk 3 removes its mesh.
         let cleared: Vec<_> = (24..32)
@@ -1591,9 +1628,13 @@ mod tests {
         );
         assert!(!projector.level_of_detail_changed(&instances));
 
-        // 11 away is within the hysteresis; 12 is not.
+        // 11 away is within the hysteresis; 12 is not. A viewer that
+        // stops there reads the chunks once.
         projector.set_level_of_detail("land", at(-3.0));
         assert!(!projector.level_of_detail_changed(&instances));
+        assert_eq!(projector.checked_chunks("land"), 4);
+        assert!(!projector.level_of_detail_changed(&instances));
+        assert_eq!(projector.checked_chunks("land"), 0);
         projector.set_level_of_detail("land", at(-4.0));
         assert!(projector.level_of_detail_changed(&instances));
         let farther = projector.project(&instances, &materials).unwrap();
