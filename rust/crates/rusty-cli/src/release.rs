@@ -44,13 +44,6 @@ pub fn assemble(inputs: &Inputs, release: &Path, compress: bool) -> Result<PathB
     let manifest: Value = serde_json::from_slice(&manifest).map_err(|error| {
         format!("RUSTY_BUILD_RELEASE: the staged product.json is invalid JSON: {error}")
     })?;
-    fs::create_dir_all(release).map_err(|error| io(release, error))?;
-    for owned in OWNED {
-        let path = release.join(owned);
-        if path.is_dir() {
-            fs::remove_dir_all(&path).map_err(|error| io(&path, error))?;
-        }
-    }
     let report = product_container::pack_product(inputs.staged, release, compress)
         .map_err(|error| format!("RUSTY_BUILD_RELEASE: {error}"))?;
     println!(
@@ -60,6 +53,14 @@ pub fn assemble(inputs: &Inputs, release: &Path, compress: bool) -> Result<PathB
         report.container.display(),
         report.loose_files.len()
     );
+    // Packing first refuses a release directory that holds the staged
+    // Product (or lies inside it) before anything there is removed.
+    for owned in OWNED {
+        let path = release.join(owned);
+        if path.is_dir() {
+            fs::remove_dir_all(&path).map_err(|error| io(&path, error))?;
+        }
+    }
 
     // The host, and the libraries it loads from beside itself on Windows
     // (nethost, ANGLE) and with DLSS (NGX's library).
@@ -309,6 +310,32 @@ mod tests {
             .is_file());
         assert!(release.join("tools/Import/Import.dll").is_file());
         assert_eq!(fs::read(release.join("data.rpak")).unwrap(), b"installed");
+    }
+
+    #[test]
+    fn a_release_holding_the_staged_product_is_refused_before_anything_is_removed() {
+        let project = tempfile::tempdir().unwrap();
+        let staged = project.path().join("obj/Rusty.Engine/Product");
+        write(
+            &staged.join("product.json"),
+            br#"{"ui":{"root":"ui"},"content":{"root":"content"}}"#,
+        );
+        write(&staged.join("ui/main.js"), b"ui");
+        write(&project.path().join("tools/Import.cs"), b"tool source");
+        let inputs = Inputs {
+            staged: &staged,
+            launcher_name: "Game",
+            tools: project.path(),
+            dotnet_root: project.path(),
+            runtime_version: "10.0.0",
+            pack: project.path(),
+        };
+        let error = assemble(&inputs, project.path(), false).unwrap_err();
+        assert!(error.contains("PRODUCT_PACK_OVERLAP"), "{error}");
+        assert_eq!(
+            fs::read(project.path().join("tools/Import.cs")).unwrap(),
+            b"tool source"
+        );
     }
 
     #[test]
