@@ -297,7 +297,10 @@ ulong roll = host.Call(engine =>
 
 The build copies the pinned pair's test host library beside the tool's build
 and publish output, so `dotnet run` and a published (framework-dependent) tool
-need no `LibraryPath` and no installed pair on a machine of the same platform. The ABI check is the test host's. A tool
+need no `LibraryPath` and no installed pair on a machine of the same platform. A
+product ships its tools in its release by naming them with
+`RustyEngineProductTool` items (see
+[shipping a product](desktop-shell.md#shipping-a-product)). The ABI check is the test host's. A tool
 gets the services the test host has: no renderer, audio, input or product
 lifecycle. It has no build bundles, but it packs and opens
 [content containers](csharp-product-project.md#content-containers-installed-beside-the-product)

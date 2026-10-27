@@ -901,7 +901,10 @@ missing magic, a truncated file, or an inventory whose paths are out of order
 or whose byte ranges overlap or leave the file stops the host at start with
 `PRODUCT_CONTAINER_NOT_A_CONTAINER`, `PRODUCT_CONTAINER_TRUNCATED` or
 `PRODUCT_CONTAINER_CORRUPT`. `rusty dev` keeps the loose directory, so a UI
-or bundle restage still reloads in place.
+or bundle restage still reloads in place. `--release` writes the same
+container into a complete release a player runs, with the host, the .NET
+runtime, the product's tools and a launcher (see
+[shipping a product](desktop-shell.md#shipping-a-product)).
 
 Files are stored raw, so the host borrows them from the mapped file. `--pack
 --compress` stores each file that zstd shrinks by at least a tenth compressed

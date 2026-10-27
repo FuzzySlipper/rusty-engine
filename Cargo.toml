@@ -14,6 +14,7 @@ members = [
     "rust/crates/svc-http",
     "rust/crates/svc-session",
     "rust/crates/product-container",
+    "rust/crates/product-launcher",
     "rust/crates/runtime-lifecycle",
     "rust/crates/runtime-input",
     "rust/crates/runtime-ui",

@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RustyEngineSdkPackageVersion>$(RustyEngineFixtureSdkVersion)</RustyEngineSdkPackageVersion>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RustyEngineProductEntryType>CsharpRelease.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>csharp-release</RustyEngineProductId>
+    <RustyEngineProductTitle>Release Fixture</RustyEngineProductTitle>
+    <RustyEngineProductLauncherName>ReleaseFixture</RustyEngineProductLauncherName>
+    <RustyEngineProductRenderOutput>window</RustyEngineProductRenderOutput>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="$(RustyEngineFixtureSdkVersion)">
+      <ExcludeAssets Condition="'$(RustyEngineUseSourceDevelopment)' == 'true'">compile;runtime</ExcludeAssets>
+    </PackageReference>
+    <RustyEngineProductTool Include="../ReleaseImport/ReleaseImport.csproj" />
+  </ItemGroup>
+</Project>

@@ -298,19 +298,72 @@ renderer it draws with).
 
 ## Shipping a product
 
-A product release that opens a window ships:
-- `bin/rusty-product-host` from the desktop pack;
-- with Servo (the default), nothing more; with Chromium
-  (`renderer.windowUi = chromium`), `lib/cef` beside it (the host finds it at
-  `../lib/cef`);
-- on Windows, `nethost.dll` and ANGLE's `libEGL.dll` and `libGLESv2.dll`
-  from the pack's `bin/`, beside the host;
-- the Product as `rusty build --pack <release>` writes it: `product.rpak`
-  (manifest, UI and content in one file) with `coreclr/` or `native/` loose
-  beside it, launched with `--product <release>/product.rpak`;
-- any content containers the product opens by name, beside `product.rpak`
-  (see [containers installed beside the product](csharp-product-project.md#content-containers-installed-beside-the-product));
-- the licences in `share/third-party/`:
+`rusty build --release <dir> [--compress] [--aot]` writes a release for the
+platform it runs on (linux-x64 or win-x64). The release runs where no `rusty`,
+.NET SDK, .NET runtime or checkout is installed:
+
+```text
+<dir>/
+  <launcher>[.exe]         named by RustyEngineProductLauncherName
+  product.rpak             manifest, UI and content (as `--pack` writes it)
+  coreclr/ or native/      the product's assemblies or NativeAOT module
+  bin/                     rusty-product-host, and beside it on Windows
+                           nethost.dll, libEGL.dll and libGLESv2.dll, and with
+                           DLSS NGX's library
+  lib/cef/                 only with renderer.windowUi = chromium
+  share/browser/           the host's browser shell
+  share/third-party/       the licences
+  dotnet/                  the .NET runtime, for CoreCLR and the tools
+  tools/<project>/         each tool the product names
+  *.rpak                   containers installed beside the product
+```
+
+- **The host** comes from the pinned pair's runtime pack, or from its desktop
+  pack when the product opens a window. `--runtime <pack>` names another
+  pack, as for `rusty dev`.
+- **The launcher** is the executable a player starts. It is named by
+  `RustyEngineProductLauncherName`, which defaults to the assembly name, with
+  `.exe` on Windows. It runs `bin/rusty-product-host --product
+  <dir>/product.rpak` with the loader the product declares (`native/` when
+  built with `--aot`), and passes its own arguments on.
+  - Its persistence root is the player's data directory for the product id:
+    `$XDG_DATA_HOME/<id>` or `~/.local/share/<id>` on Linux,
+    `%LOCALAPPDATA%\<id>` on Windows.
+  - On Windows it opens no console window. The host's output goes to
+    `last-run.log` in that directory.
+- **The .NET runtime.** A CoreCLR product stays framework-dependent. The
+  release carries the runtime of the SDK that built it in `dotnet/`, laid out
+  as a .NET root: `host/fxr/<version>` and
+  `shared/Microsoft.NETCore.App/<version>`. The host loads hostfxr from
+  `dotnet/` when it is there beside `bin/`, and otherwise from the installed
+  runtime. Its licences are in `share/third-party/dotnet/`.
+- **Tools.** Each `RustyEngineProductTool` item names a tool project, an
+  executable with `RustyEngineToolHost`:
+
+  ```xml
+  <ItemGroup>
+    <RustyEngineProductTool Include="../DataImport/DataImport.csproj" />
+  </ItemGroup>
+  ```
+
+  - Each tool is published framework-dependent into `tools/<project name>/`.
+    Its apphost finds the runtime at `../../dotnet`, and the test host
+    library is beside the tool.
+  - A player runs it from the release, for example
+    `tools/DataImport/DataImport <folder>`.
+  - Its release directory is `AppContext.BaseDirectory/../..`. A tool that
+    installs a container packs it there with
+    `ProductContentBundle.PackContainer`, and the product opens it by its
+    relative name (see
+    [containers installed beside the product](csharp-product-project.md#content-containers-installed-beside-the-product)).
+- **Setup steps.** The launcher offers no setup step of its own. A product
+  that cannot start without a container shows the player the tool to run on
+  its own entry screen.
+- **Rebuilding.** Building into the same directory again replaces
+  `product.rpak`, the product's artifacts, the launcher, `bin/`, `lib/`,
+  `share/`, `dotnet/` and `tools/`. Anything else stays, such as containers a
+  player installed.
+- **The licences** in `share/third-party/`:
   - CEF's and Chromium's credits (`cef/CREDITS.html`, BSD and others): the
     host links CEF's wrapper whichever engine draws;
   - the source of the MPL-2.0 crates `welding`, `grafting` and `fidget-mesh`,
@@ -320,10 +373,12 @@ A product release that opens a window ships:
     (`angle/LICENSE`, BSD): the host carries Servo whichever engine draws;
   - `NOTICES.txt`, the licence and notice texts of every third-party crate
     the host links and the native libraries they build in;
+  - the .NET runtime's `LICENSE.txt` and `ThirdPartyNotices.txt` (MIT) in
+    `dotnet/`;
   - the rest of the pack's licences (`dejavu-sans/`, with DLSS
     `nvidia-dlss/`).
 
-An installer is chosen when a product asks for one.
+Installers, updaters and code signing are chosen when a product asks for one.
 
 ## Platforms
 

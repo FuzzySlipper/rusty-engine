@@ -7,6 +7,7 @@
 
 mod asset;
 mod pair;
+mod release;
 mod session;
 
 use std::{
@@ -32,6 +33,9 @@ const STAGE_TARGET: &str = "StageRustyEngineCoreClrProduct";
 const AOT_TARGET: &str = "VerifyRustyEngineAot";
 const STAGE_ASSETS_TARGET: &str = "StageRustyEngineProductAssets";
 const STAGED_PRODUCT_PROPERTY: &str = "RustyEngineStagedProductDirectory";
+const RELEASE_TOOLS_TARGET: &str = "PublishRustyEngineProductTools";
+const RELEASE_TOOLS_PROPERTY: &str = "RustyEngineReleaseToolsDirectory";
+const LAUNCHER_NAME_PROPERTY: &str = "RustyEngineProductLauncherName";
 const WATCH_PATHS_PROPERTY: &str = "RustyEngineWatchPaths";
 const UI_SOURCE_ROOT_PROPERTY: &str = "RustyEngineProductUiSourceRoot";
 const UI_ROOT_PROPERTY: &str = "RustyEngineProductUiRoot";
@@ -708,6 +712,11 @@ struct BuildOptions {
     aot: bool,
     /// Release directory for the packed Product.
     pack: Option<PathBuf>,
+    /// Release directory for the packed Product with its host, runtime,
+    /// tools and launcher.
+    release: Option<PathBuf>,
+    /// The runtime pack a release takes its host from, instead of the pin's.
+    runtime: Option<PathBuf>,
     /// Store files zstd shrinks enough compressed in the packed Product.
     compress: bool,
 }
@@ -1102,10 +1111,14 @@ fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
     let mut engine_source = None;
     let mut aot = false;
     let mut pack = None;
+    let mut release = None;
+    let mut runtime = None;
     let mut compress = false;
     while let Some(value) = values.next() {
         match value.as_str() {
             "--project" => project = Some(PathBuf::from(required_value(&mut values, "--project")?)),
+            "--release" => release = Some(PathBuf::from(required_value(&mut values, "--release")?)),
+            "--runtime" => runtime = Some(PathBuf::from(required_value(&mut values, "--runtime")?)),
             "--engine-source" => {
                 engine_source = Some(PathBuf::from(required_value(
                     &mut values,
@@ -1118,14 +1131,27 @@ fn parse_build(values: Vec<String>) -> Result<BuildOptions, String> {
             _ => return Err(unknown_argument("build", &value, build_usage)),
         }
     }
-    if compress && pack.is_none() {
-        return Err("RUSTY_ARGUMENT: --compress applies to --pack".to_owned());
+    if pack.is_some() && release.is_some() {
+        return Err(
+            "RUSTY_ARGUMENT: --pack and --release each write a release; choose one".to_owned(),
+        );
+    }
+    if compress && pack.is_none() && release.is_none() {
+        return Err("RUSTY_ARGUMENT: --compress applies to --pack or --release".to_owned());
+    }
+    if runtime.is_some() && (release.is_none() || engine_source.is_some()) {
+        return Err(
+            "RUSTY_ARGUMENT: --runtime selects a release's runtime pack; it needs --release and no --engine-source"
+                .to_owned(),
+        );
     }
     Ok(BuildOptions {
         project: selected_project(project, "rusty build")?,
         engine_source,
         aot,
         pack,
+        release,
+        runtime,
         compress,
     })
 }
@@ -1248,7 +1274,8 @@ commands:
                 offline); --archive <pair.tar.gz> installs one you already have
   update        move the pin to a newer published pair, install it, and list what changed
   build         restore, build and stage the product; --aot also publishes NativeAOT;
-                --pack <release-dir> [--compress] writes a release product.rpak
+                --pack <release-dir> [--compress] writes a release product.rpak;
+                --release <release-dir> writes a release a player runs as it is
   dev           build and run the product on its pinned runtime, rebuilding on source changes
   dev start     the same in the background, one per project; prints where it serves
   dev status    whether the project's background session runs
@@ -1409,6 +1436,8 @@ Examples:
 
 fn build_usage() -> String {
     "usage: rusty build [--project <product.csproj>] [--aot] [--pack <release-dir> [--compress]] [--engine-source <rusty-engine-source>]
+       rusty build [--project <product.csproj>] [--aot] --release <release-dir> [--compress]
+                   [--runtime <runtime-pack> | --engine-source <rusty-engine-source>]
 
 Restores against the pinned SDK in the shared cache, builds, and stages the CoreCLR product bundle
 (the SDK target StageRustyEngineCoreClrProduct). --aot runs VerifyRustyEngineAot, which also
@@ -1421,6 +1450,25 @@ Run it with `rusty-product-host --product <release-dir>/product.rpak --loader <c
 --compress stores each file zstd shrinks by at least a tenth compressed (text and JSON, not media);
 the rest stay raw.
 
+--release writes a complete release instead, for this machine's platform, that runs where no rusty,
+.NET SDK, .NET runtime or checkout is installed:
+  <launcher>            RustyEngineProductLauncherName (default: the assembly name), .exe on Windows;
+                        what a player starts. It runs bin/rusty-product-host on product.rpak with the
+                        product's loader and the player's data directory for the product id
+                        (XDG_DATA_HOME or ~/.local/share, %LOCALAPPDATA% on Windows) as its
+                        persistence root, passing on its own arguments. On Windows it opens no
+                        console; the host's output goes to last-run.log there.
+  product.rpak, coreclr/ or native/   as --pack writes them
+  bin/                  the host and the libraries it loads beside itself (nethost, ANGLE, DLSS)
+  lib/cef/              Chromium's runtime, only when RustyEngineProductWindowUi is chromium
+  share/browser/        the host's browser shell
+  share/third-party/    the licences, with the .NET runtime's in dotnet/
+  dotnet/               the .NET runtime of the SDK that built it, for CoreCLR and the tools
+  tools/<project>/      each RustyEngineProductTool project, published to run on dotnet/
+The host comes from the pinned pair's runtime pack, its desktop pack for window output, or
+--runtime. Rebuilding replaces those entries and keeps anything else, such as content containers a
+player installed beside product.rpak.
+
 Plain `dotnet build`, `dotnet test` and `dotnet run` resolve the same SDK: the product's
 Directory.Build.props declares the pinned pair's feed (`rusty status` checks it).
 
@@ -1428,7 +1476,8 @@ Examples:
   rusty build --project src/Game/Game.csproj
   rusty build --project src/Game/Game.csproj --aot
   rusty build --project src/Game/Game.csproj --pack release
-  rusty build --project src/Game/Game.csproj --pack release --compress"
+  rusty build --project src/Game/Game.csproj --pack release --compress
+  rusty build --release release --compress"
         .to_owned()
 }
 
@@ -1992,6 +2041,11 @@ fn build(options: &BuildOptions) -> Result<ExitCode, String> {
             warn_shape(&pin, &project);
         }
     }
+    let stage = if options.aot {
+        AOT_TARGET
+    } else {
+        STAGE_TARGET
+    };
     let mut arguments = vec![
         "msbuild".to_owned(),
         project
@@ -2001,21 +2055,33 @@ fn build(options: &BuildOptions) -> Result<ExitCode, String> {
         "-restore".to_owned(),
         "-nologo".to_owned(),
         "-verbosity:minimal".to_owned(),
-        format!(
-            "-t:{}",
-            if options.aot {
-                AOT_TARGET
-            } else {
-                STAGE_TARGET
-            }
-        ),
+        if options.release.is_some() {
+            format!("-t:{stage};{RELEASE_TOOLS_TARGET}")
+        } else {
+            format!("-t:{stage}")
+        },
     ];
     arguments.extend(source_properties(options.engine_source.as_deref())?);
     arguments.extend(DevelopmentRoots::of(&project)?.msbuild_properties()?);
     let result_file =
         env::temp_dir().join(format!("rusty-build-stage-{}.json", std::process::id()));
-    if options.pack.is_some() {
-        arguments.push(format!("-getProperty:{STAGED_PRODUCT_PROPERTY}"));
+    let properties: &[&str] = if options.release.is_some() {
+        &[
+            STAGED_PRODUCT_PROPERTY,
+            LAUNCHER_NAME_PROPERTY,
+            RELEASE_TOOLS_PROPERTY,
+            "NetCoreRoot",
+            "BundledNETCoreAppPackageVersion",
+        ]
+    } else if options.pack.is_some() {
+        &[STAGED_PRODUCT_PROPERTY]
+    } else {
+        &[]
+    };
+    if !properties.is_empty() {
+        for property in properties {
+            arguments.push(format!("-getProperty:{property}"));
+        }
         arguments.push(format!(
             "-getResultOutputFile:{}",
             result_file
@@ -2028,13 +2094,16 @@ fn build(options: &BuildOptions) -> Result<ExitCode, String> {
         .status()
         .map_err(|error| format!("RUSTY_PREREQUISITE: could not start dotnet: {error}; install the .NET {REQUIRED_DOTNET_MAJOR} SDK"))?;
     if status.success() {
-        if let Some(release) = &options.pack {
-            // With one -getProperty, MSBuild writes the bare value.
+        let result = (!properties.is_empty()).then(|| {
             let result = fs::read_to_string(&result_file);
             let _ = fs::remove_file(&result_file);
-            let result = result.map_err(|error| {
+            result.map_err(|error| {
                 format!("RUSTY_BUILD_PACK: staging produced no property result: {error}")
-            })?;
+            })
+        });
+        if let Some(release) = &options.pack {
+            // With one -getProperty, MSBuild writes the bare value.
+            let result = result.clone().expect("--pack reads a property")?;
             let staged = Some(result.trim())
                 .filter(|value| !value.is_empty())
                 .ok_or("RUSTY_BUILD_PACK: staging reported no product directory")?;
@@ -2050,6 +2119,35 @@ fn build(options: &BuildOptions) -> Result<ExitCode, String> {
                 report.loose_files.len()
             );
         }
+        if let Some(release) = &options.release {
+            let result: Value = serde_json::from_str(&result.expect("--release reads properties")?)
+                .map_err(|error| {
+                    format!("RUSTY_BUILD_RELEASE: staging property result is not JSON: {error}")
+                })?;
+            let property = |name: &str| -> Result<&str, String> {
+                result["Properties"][name]
+                    .as_str()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or_else(|| {
+                        format!("RUSTY_BUILD_RELEASE: property {name} produced no value; the pinned SDK predates --release")
+                    })
+            };
+            let staged = absolute(Path::new(property(STAGED_PRODUCT_PROPERTY)?))?;
+            let pack = release_pack(options, &project, &staged)?;
+            release::assemble(
+                &release::Inputs {
+                    staged: &staged,
+                    launcher_name: property(LAUNCHER_NAME_PROPERTY)?,
+                    tools: Path::new(property(RELEASE_TOOLS_PROPERTY)?),
+                    dotnet_root: Path::new(property("NetCoreRoot")?),
+                    runtime_version: property("BundledNETCoreAppPackageVersion")?,
+                    pack: &pack,
+                },
+                &absolute(release)?,
+                options.compress,
+            )?;
+        }
         return Ok(ExitCode::SUCCESS);
     }
     eprintln!(
@@ -2057,6 +2155,29 @@ fn build(options: &BuildOptions) -> Result<ExitCode, String> {
         arguments.join(" ")
     );
     Ok(exit_code(status))
+}
+
+/// The runtime pack a release takes its host from: --runtime, the source
+/// override's pack, or the pinned pair's, swapped for its desktop pack when
+/// the product opens a window.
+fn release_pack(options: &BuildOptions, project: &Path, staged: &Path) -> Result<PathBuf, String> {
+    let (root, pinned_selection) = if let Some(runtime) = &options.runtime {
+        (absolute(runtime)?, false)
+    } else if let Some(source) = &options.engine_source {
+        (
+            absolute(source)?
+                .join("target/runtime-pack")
+                .join(pair::TARGET),
+            false,
+        )
+    } else if let Some((_, pair)) = pinned_pair(project)? {
+        (pair.runtime_pack(), true)
+    } else {
+        (runtime_beside_current_executable(project)?, false)
+    };
+    let pack = window_runtime(RuntimePack::at(root), staged, pinned_selection)?;
+    pack.verify()?;
+    Ok(pack.root)
 }
 
 fn exit_code(status: ExitStatus) -> ExitCode {

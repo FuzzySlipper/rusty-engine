@@ -7846,6 +7846,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "product-launcher"
+version = "0.1.0"
+dependencies = [
+ "product-container",
+ "serde_json",
+]
+
+[[package]]
 name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8772,6 +8780,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "signal-hook",
+ "tempfile",
 ]
 
 [[package]]

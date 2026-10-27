@@ -365,6 +365,23 @@
     <Message Importance="High" Text="Rusty Engine linux-x64 NativeAOT Product staged at $(RustyEngineStagedProductDirectory)" />
   </Target>
 
+  <!-- A release written by `rusty build` names its launcher after the
+       product and ships the tool executables the product names
+       (RustyEngineProductTool items, each a RustyEngineToolHost project).
+       Each tool is published framework-dependent into its own directory,
+       tools/<project name>/ in the release, and its apphost runs on the .NET
+       runtime the release carries two levels up, in dotnet/. -->
+  <PropertyGroup>
+    <RustyEngineProductLauncherName Condition="'$(RustyEngineProductLauncherName)' == ''">$(AssemblyName)</RustyEngineProductLauncherName>
+    <RustyEngineReleaseToolsDirectory>$([System.IO.Path]::GetFullPath('$(RustyEngineStagedProductDirectory)/../release-tools'))</RustyEngineReleaseToolsDirectory>
+  </PropertyGroup>
+  <Target Name="PublishRustyEngineProductTools">
+    <RemoveDir Directories="$(RustyEngineReleaseToolsDirectory)" />
+    <MakeDir Directories="$(RustyEngineReleaseToolsDirectory)" />
+    <Exec Condition="'@(RustyEngineProductTool)' != ''"
+          Command="dotnet publish &quot;%(RustyEngineProductTool.FullPath)&quot; --configuration Release --output &quot;$(RustyEngineReleaseToolsDirectory)/%(RustyEngineProductTool.Filename)&quot; -p:SelfContained=false -p:AppHostDotNetSearch=AppRelative &quot;-p:AppHostRelativeDotNet=$([System.IO.Path]::Combine('..', '..', 'dotnet'))&quot; &quot;-p:RustyEngineUseSourceDevelopment=$(RustyEngineUseSourceDevelopment)&quot; &quot;-p:RustyEngineSourceDevelopmentPath=$(RustyEngineSourceDevelopmentPath)&quot;" />
+  </Target>
+
   <!-- One bundle that either loader can run, for comparing them. -->
   <Target Name="StageRustyEngineCombinedProduct"
           DependsOnTargets="_RustyEngineStageCoreClrAssemblies;_RustyEngineStageNativeAotModule;StageRustyEngineProductAssets;_RustyEngineWriteProductManifest">

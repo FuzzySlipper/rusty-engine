@@ -490,23 +490,32 @@ impl LoadedProductApi {
             )
         })?;
         let method_name = PdCString::from_os_str("BindV1").expect("fixed managed method name");
-        let hostfxr = nethost::load_hostfxr().map_err(|error| {
+        let dotnet_root = release_dotnet_root()?;
+        let hostfxr = match &dotnet_root {
+            Some(root) => nethost::load_hostfxr_with_dotnet_root(root),
+            None => nethost::load_hostfxr(),
+        }
+        .map_err(|error| {
             CsharpProductRuntimeError::new(
                 "CSHARP_CORECLR_HOSTFXR",
                 format!("could not locate/load hostfxr: {error}"),
             )
         })?;
-        let context = hostfxr
-            .initialize_for_runtime_config(&runtime_config)
-            .map_err(|error| {
-                CsharpProductRuntimeError::new(
-                    "CSHARP_CORECLR_RUNTIMECONFIG",
-                    format!(
-                        "could not initialize CoreCLR from `{}`: {error}",
-                        runtime_config_path.display()
-                    ),
-                )
-            })?;
+        let context = match &dotnet_root {
+            Some(root) => {
+                hostfxr.initialize_for_runtime_config_with_dotnet_root(&runtime_config, root)
+            }
+            None => hostfxr.initialize_for_runtime_config(&runtime_config),
+        }
+        .map_err(|error| {
+            CsharpProductRuntimeError::new(
+                "CSHARP_CORECLR_RUNTIMECONFIG",
+                format!(
+                    "could not initialize CoreCLR from `{}`: {error}",
+                    runtime_config_path.display()
+                ),
+            )
+        })?;
         let loader = context
             .get_delegate_loader_for_assembly(assembly)
             .map_err(|error| {
@@ -679,6 +688,18 @@ fn abi_identity_text(value: NativeUtf8Slice) -> String {
         .into_owned()
 }
 
+/// The .NET runtime a release carries in `dotnet/` beside the host's `bin/`
+/// (`rusty build --release`), so a player needs no installed .NET. Without
+/// one, hostfxr is the installed runtime's.
+fn release_dotnet_root() -> Result<Option<PdCString>, CsharpProductRuntimeError> {
+    let root = std::env::current_exe()
+        .ok()
+        .and_then(|executable| Some(executable.parent()?.parent()?.join("dotnet")))
+        .filter(|root| root.join("host/fxr").is_dir());
+    root.map(|root| coreclr_path_string(&root, "CSHARP_CORECLR_HOSTFXR", "release .NET root"))
+        .transpose()
+}
+
 fn coreclr_path(
     path: &Path,
     code: &'static str,
@@ -690,6 +711,14 @@ fn coreclr_path(
             format!("{label} `{}` is not a file", path.display()),
         ));
     }
+    coreclr_path_string(path, code, label)
+}
+
+fn coreclr_path_string(
+    path: &Path,
+    code: &'static str,
+    label: &str,
+) -> Result<PdCString, CsharpProductRuntimeError> {
     PdCString::from_os_str(path.as_os_str()).map_err(|error| {
         CsharpProductRuntimeError::new(
             code,

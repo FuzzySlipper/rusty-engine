@@ -131,6 +131,8 @@ timed offline-renderer-build cargo build --locked --release -p csharp-product-ru
 # is older than the pair it runs.
 SOURCE_TIME="$(git log -1 --format=%ct)"
 timed cli-build env RUSTY_SOURCE_TIME="$SOURCE_TIME" cargo build --locked --release -p rusty-cli --bin rusty
+# A release's product-named launcher (rusty build --release).
+timed launcher-build cargo build --locked --release -p product-launcher --bin rusty-launcher
 # The Engine services, headless and in process, for products' unit tests
 # (Rusty.Engine.Testing.EngineTestHost).
 timed test-host-build cargo build --locked --release -p csharp-engine-test-host --lib
@@ -139,7 +141,7 @@ stage_started=$SECONDS
 install -d "$STAGE/bin" "$STAGE/share/browser/engine/live-debug-panel" "$STAGE/share/browser/engine/video-options" \
   "$STAGE/share/live-debug-client" "$STAGE/share/live-debug-panel" "$STAGE/symbols"
 release="${CARGO_TARGET_DIR:-target}/release"
-for binary in rusty-product-host rusty-live-debug rusty-scene-render rusty; do
+for binary in rusty-product-host rusty-live-debug rusty-scene-render rusty rusty-launcher; do
   install -m 755 "$release/$binary$EXE" "$STAGE/bin/$binary$EXE"
 done
 if [[ $TARGET == win-x64 ]]; then
@@ -283,7 +285,7 @@ install -D -m 0644 rust/crates/render-wgpu/fonts/LICENSE "$STAGE/share/third-par
 
 if [[ $TARGET == win-x64 ]]; then
   # MSVC writes symbols beside each binary as a .pdb.
-  for binary in rusty-product-host rusty-live-debug rusty-scene-render rusty; do
+  for binary in rusty-product-host rusty-live-debug rusty-scene-render rusty rusty-launcher; do
     [[ ! -f "$release/${binary//-/_}.pdb" ]] || install -m 644 "$release/${binary//-/_}.pdb" "$STAGE/symbols/$binary.pdb"
   done
 fi

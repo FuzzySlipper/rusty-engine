@@ -1,0 +1,15 @@
+[package]
+name = "product-launcher"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "rusty-launcher"
+path = "src/main.rs"
+
+[dependencies]
+serde_json.workspace = true
+product-container.workspace = true
+
+[lints]
+workspace = true
