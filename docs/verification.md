@@ -20,8 +20,9 @@ Run the corresponding `scripts/verify.sh`, `scripts/verify-csharp.sh`,
 `pnpm --dir render run verify` (the browser shell and live-debug panel), or
 `scripts/verify-docs.sh` locally. The browser shell needs its pnpm
 dependencies; C# requires .NET, Clang/libclang and the pinned binding tools.
-The selected render-wgpu software checks run on llvmpipe
-(`mesa-vulkan-drivers`) in CI. The full renderer image suite runs on hardware.
+Every render-wgpu test target runs on llvmpipe (`mesa-vulkan-drivers`) in CI,
+with individual hardware-only tests explicitly ignored. The GPU lane also
+runs the full renderer suite and its hardware-only sequences on a real adapter.
 
 The docs checker uses PyYAML to read Actions workflows. Install it with
 `python3 -m pip install --user -r scripts/requirements-ci.txt` before running
@@ -66,13 +67,13 @@ timings. `rusty-scene-render` says on stderr and in its report
 (`softwareAdapter`) when it ran on a software adapter, so such numbers are not
 mistaken for GPU evidence; they are never acceptance gates.
 
-`scripts/verify.sh` runs the non-renderer workspace tests, renderer unit tests,
-and the `driver`, `scene_changes`, `views`, `inspection`, `device_lost`,
-`renderer_settings`, `labels`, `taau`, `volumetric_clouds`, `volumetric_fog`,
-`water`, `ambient_occlusion` and `image_effect` integration targets. Their default
-tests cover supported output, refusals and retained state; hardware-only
-temporal cases are explicitly ignored instead of returning an empty pass.
-The full renderer suite and those temporal cases belong on a real adapter:
+`scripts/verify.sh` runs `cargo test --workspace --locked`, including every
+renderer target. New test files run by default. Refusal/limit, packed-output,
+animation lifetime, retained-state and no-consumer/no-work assertions remain
+in this recurring run. Only individual hardware-only cases are explicitly
+ignored instead of returning an empty pass. The GPU lane runs the full
+renderer suite and those explicit temporal cases on a real adapter. They can
+also be run separately:
 
 ```sh
 WGPU_ADAPTER_NAME="AMD Radeon RX 9070 XT" cargo test --release -p render-wgpu --locked
@@ -88,8 +89,10 @@ readout, but does not replace the temporal history assertions.
 ### The GPU lane
 
 `scripts/gpu-lane.sh` runs the lane on the machine it is on, for the commit
-checked out. It builds `rusty-scene-render` and `rusty-gpu-lane`, then renders
-every scene of the lane directory twice over: with the machine's accepted
+checked out. It first runs `cargo test --release -p render-wgpu --locked` and
+`scripts/gpu-lane-temporal-tests.sh`; a failing assertion stops the lane.
+It then builds `rusty-scene-render` and `rusty-gpu-lane` and renders every
+scene of the lane directory twice over: with the machine's accepted
 baseline renderer and with the candidate, alternating which goes first, as
 many times each as `scenes.json` says (`repeats`, 3 by default; den-agents
 uses 5, since some passes run at one of two speeds there) or `--repeats`
@@ -196,9 +199,10 @@ appends the reason to `recaptures.log`. If a capture fails, nothing is
 accepted. Other machines copy the new scenes and accept the same pair on
 their own GPUs.
 
-On Windows, run the two `cargo build` lines of the script and then
-`rusty-gpu-lane run` directly, or the script from Git Bash. The lane renders
-with Vulkan there, as the desktop window does.
+On Windows, run the script from Git Bash, or run its test and build commands
+followed by `rusty-gpu-lane run` directly. On an RTX adapter, also run the
+temporal script with `--dlss` to exercise the DLSS quality/history assertions.
+The lane renders with Vulkan there, as the desktop window does.
 
 NativeAOT is a separate fidelity path: `scripts/verify-csharp.sh --aot`, the
 C# workflow dispatch option, and `scripts/test-csharp-release-pair.sh PAIR --aot`.

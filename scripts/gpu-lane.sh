@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Runs the GPU verification lane (docs/verification.md#gpu-verification) on
-# this machine for the checked-out commit: builds the candidate renderer and
-# the lane tool, renders every scene against the machine's accepted baseline,
-# and prints the report. Exits 0 on pass, 1 when flagged, 2 when a candidate
-# render failed.
+# this machine for the checked-out commit: runs the full renderer test suite
+# and explicit hardware sequences, then renders every scene against the
+# machine's accepted baseline. A failing test stops the lane. The scene run
+# exits 0 on pass, 1 when flagged, 2 when a candidate render failed.
 #
 #   scripts/gpu-lane.sh [--scene NAME]... [--repeats N]
 #
@@ -16,7 +16,10 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 lane="${RUSTY_GPU_LANE_ROOT:-/data/rusty-engine-gpu-lane}"
 cd "$root"
 
-cargo build --release -p csharp-product-runtime --bin rusty-scene-render -p render-verify --bin rusty-gpu-lane
+cargo test --release -p render-wgpu --locked
+scripts/gpu-lane-temporal-tests.sh
+
+cargo build --release --locked -p csharp-product-runtime --bin rusty-scene-render -p render-verify --bin rusty-gpu-lane
 
 head="$(git rev-parse HEAD)"
 source="$head"
