@@ -4,6 +4,11 @@
 //! the window holds it. Facts are the ones the page's input capture makes
 //! from the same events. The gamepad, read by the window too
 //! ([`crate::gamepad`]), goes the same way.
+//!
+//! A key or pad button already down when the window takes input belongs to
+//! whoever saw it go down, usually the page's UI closing a panel: gameplay
+//! gets only a release and a new press, as the page's capture does across a
+//! change of owner. A held stick is a position, not a press, and carries over.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -23,9 +28,11 @@ pub(crate) struct GameplayRoute {
     scene: Arc<dyn DesktopScene>,
     /// The window holds gameplay input now.
     routed: bool,
-    /// Keys down in the window, held input or not: taking input presses the
-    /// ones held then, as the page's capture keeps them across a lock.
+    /// Keys down in the window, held input or not.
     down: BTreeSet<KeyboardControl>,
+    /// Keys that were down when the window took input: their release is not
+    /// gameplay's.
+    withheld: BTreeSet<KeyboardControl>,
     /// Buttons whose press the runtime had from the window. The press that
     /// took the lock is not one, as the page's capture leaves it out.
     pressed: BTreeSet<PointerButton>,
@@ -46,6 +53,7 @@ impl GameplayRoute {
             scene,
             routed: false,
             down: BTreeSet::new(),
+            withheld: BTreeSet::new(),
             pressed: BTreeSet::new(),
             motion: (0.0, 0.0),
             controller,
@@ -61,16 +69,18 @@ impl GameplayRoute {
         }
         self.routed = true;
         self.scene.route_gameplay(true, self.controller);
-        let mut held: Vec<_> = self
-            .down
-            .iter()
-            .map(|&code| key(code, PhysicalEdge::Pressed))
-            .collect();
+        self.withheld = self.down.clone();
         if self.controller {
-            held.extend(gamepad::changes(&PadState::default(), &self.pad));
+            let sticks = PadState {
+                axes: [0.0; 4],
+                ..self.pad
+            };
+            let held = gamepad::changes(&sticks, &self.pad);
             self.sent = self.pad;
+            if !held.is_empty() {
+                self.scene.gameplay(held);
+            }
         }
-        self.scene.gameplay(held);
     }
 
     /// The lock ended for `reason`: the page takes input back.
@@ -103,6 +113,7 @@ impl GameplayRoute {
     /// Keys the window lost track of (another window has focus).
     pub(crate) fn forget_keys(&mut self) {
         self.down.clear();
+        self.withheld.clear();
     }
 
     pub(crate) fn key(&mut self, code: KeyCode, pressed: bool) {
@@ -115,6 +126,9 @@ impl GameplayRoute {
         } else {
             self.down.remove(&control)
         };
+        if !pressed && self.withheld.remove(&control) {
+            return;
+        }
         if self.routed && changed {
             self.scene.gameplay(vec![key(control, edge(pressed))]);
         }
@@ -257,26 +271,31 @@ mod tests {
     }
 
     #[test]
-    fn taking_input_presses_the_keys_held_and_giving_it_back_clears() {
+    fn a_key_held_when_input_is_taken_waits_for_a_new_press_and_giving_back_clears() {
         let (mut route, recorder) = route();
         // Before the lock the page has the keys; the window only keeps track.
+        // Escape is the key whose press closed the page's menu and took the
+        // lock: it was the page's, not gameplay's.
+        route.key(KeyCode::Escape, true);
         route.key(KeyCode::KeyW, true);
-        route.key(KeyCode::Tab, true);
         assert_eq!(taken(&recorder), []);
         route.take();
-        assert_eq!(
-            taken(&recorder),
-            [
-                Handed::Route(true, false),
-                key_fact(KeyboardControl::KeyW, PhysicalEdge::Pressed),
-            ]
-        );
-        // A repeat is no new press; a release ends the held key.
+        assert_eq!(taken(&recorder), [Handed::Route(true, false)]);
+        // Neither its repeat nor its release is gameplay's.
+        route.key(KeyCode::Escape, true);
+        route.key(KeyCode::Escape, false);
+        route.key(KeyCode::KeyW, false);
+        assert_eq!(taken(&recorder), []);
+        // A new press is; a repeat is no new press; a release ends it.
+        route.key(KeyCode::KeyW, true);
         route.key(KeyCode::KeyW, true);
         route.key(KeyCode::KeyW, false);
         assert_eq!(
             taken(&recorder),
-            [key_fact(KeyboardControl::KeyW, PhysicalEdge::Released)]
+            [
+                key_fact(KeyboardControl::KeyW, PhysicalEdge::Pressed),
+                key_fact(KeyboardControl::KeyW, PhysicalEdge::Released),
+            ]
         );
         route.give_back(InputClearReason::PointerLockLoss);
         assert_eq!(
@@ -362,25 +381,33 @@ mod tests {
         let recorder = Arc::new(Recorder::default());
         let mut route = GameplayRoute::new(Arc::clone(&recorder) as _, true);
         let mut held = PadState::default();
-        held.values[0] = 1.0;
-        held.pressed[0] = true;
-        // Before the lock the page has the pad; taking input presses what
-        // is held then, after the keys.
-        route.key(KeyCode::KeyW, true);
+        held.axes[1] = -1.0;
+        held.values[1] = 1.0;
+        held.pressed[1] = true;
+        let stick = |state: &PadState| PadState {
+            axes: state.axes,
+            ..PadState::default()
+        };
+        // Before the lock the page has the pad. Taking input carries the
+        // stick held then; the button held then was the page's (B closing a
+        // panel), so gameplay gets nothing of it.
         route.pad(held);
         assert_eq!(taken(&recorder), []);
         route.take();
-        let mut facts = vec![key(KeyboardControl::KeyW, PhysicalEdge::Pressed)];
-        facts.extend(gamepad::changes(&PadState::default(), &held));
         assert_eq!(
             taken(&recorder),
-            [Handed::Route(true, true), Handed::Facts(facts)]
+            [
+                Handed::Route(true, true),
+                Handed::Facts(gamepad::changes(&PadState::default(), &stick(&held))),
+            ]
         );
         // Each change goes as it is read; giving back stops it.
-        route.pad(PadState::default());
+        let mut moved = held;
+        moved.axes[1] = 0.0;
+        route.pad(moved);
         assert_eq!(
             taken(&recorder),
-            [Handed::Facts(gamepad::changes(&held, &PadState::default()))]
+            [Handed::Facts(gamepad::changes(&held, &moved))]
         );
         route.give_back(InputClearReason::FocusLoss);
         taken(&recorder);
@@ -388,14 +415,21 @@ mod tests {
         assert_eq!(taken(&recorder), []);
         // Taken again, the window starts from the pad as it is.
         route.take();
-        let handed = taken(&recorder);
         assert_eq!(
-            handed.last(),
-            Some(&Handed::Facts(
-                std::iter::once(key(KeyboardControl::KeyW, PhysicalEdge::Pressed))
-                    .chain(gamepad::changes(&PadState::default(), &held))
-                    .collect()
-            ))
+            taken(&recorder).last(),
+            Some(&Handed::Facts(gamepad::changes(
+                &PadState::default(),
+                &stick(&held)
+            )))
+        );
+        // A button pressed while the window holds input goes as it is.
+        let mut pressed = held;
+        pressed.pressed[0] = true;
+        pressed.values[0] = 1.0;
+        route.pad(pressed);
+        assert_eq!(
+            taken(&recorder),
+            [Handed::Facts(gamepad::changes(&held, &pressed))]
         );
     }
 }

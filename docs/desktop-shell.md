@@ -51,9 +51,12 @@ TypeScript UI is composited over it.
   control fences: the runtime publishes a fresh binding marked
   `windowInput`, the page's input under it does not count, and its stale
   batches drop. Where gilrs cannot read gamepads the window says so when it
-  takes input, and the page's controller facts still count. Taking presses
-  the keys and pad buttons already held; giving back clears for the
-  reason the lock ended (`pointer-lock-loss` or `focus-loss`). The page
+  takes input, and the page's controller facts still count. A key or pad
+  button already held when the window takes input was the page's (Escape or
+  B closing a menu, which asks for the lock): gameplay gets nothing of it
+  until it is released and pressed again. A held stick carries over. Giving
+  back clears for the reason the lock ended (`pointer-lock-loss` or
+  `focus-loss`). The page
   still receives every event for its UI, so a UI hotkey (an inventory key,
   chat Enter) also reaches gameplay as a press, then the clear when the UI
   ends the lock: a product keeps such keys out of its gameplay mappings.
@@ -143,7 +146,7 @@ may use any of this and runs fully in a browser.
 | `<select>`, date and time pickers | Work: the popup is drawn over the page. | The shell draws a `<select>`'s option list over the page, inside the view (click, arrow keys, Enter, Escape); a `multiple` list toggles options with a click or Space and answers with Enter or a click outside. A click on a `date`, `time` or `datetime-local` input (or Alt+Down on one) opens the shell's calendar and hour and minute lists; a choice sets the value with `input` and `change` events, honouring `min` and `max` days. Other date-like types (`month`, `week`) stay text fields. |
 | `<dialog>` with `showModal()` | Works. | |
 | `title` tooltips | Not shown. | |
-| Image cursors (`cursor: url(...) x y, auto`) | Shown with their hotspot, scaled to the window's display scale. A held pointer lock hides them, as it hides any cursor. | The fallback keyword shows: Servo reports no image cursors. |
+| Image cursors (`cursor: url(...) x y, auto`) | Shown with their hotspot, scaled to the window's display scale. A held pointer lock hides them, as it hides any cursor. | Shown the same way: Servo reports only the keyword, so the shell's page script reads the image cursor (`url(...)`, or an `image-set(...)`'s first image and its resolution) of the element under the pointer and hands its pixels to the window. |
 | `cursor: none` | Hides the native cursor while the pointer is over that element. | |
 | Context menu | `contextmenu` fires; no native menu appears. | |
 | Download links | Nothing downloads. | Nothing downloads and the page stays (Servo would load the file in its place). Warns. |

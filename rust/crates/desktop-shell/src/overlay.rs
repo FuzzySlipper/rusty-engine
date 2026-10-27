@@ -170,6 +170,14 @@ const PAGE_ANSWER: &str = "rusty-desktop:eval ";
 const SELECT_CHOSEN: &str = "rusty-desktop:select ";
 const SELECT_CANCELLED: &str = "rusty-desktop:select-cancel";
 
+/// Console lines the Servo page's shim writes for an image cursor, which
+/// Servo reports only as its keyword: `rusty-desktop:cursor-image <id>
+/// <width> <height> <hotspot x> <hotspot y> <scale> <RGBA hex>` once per
+/// image, then `rusty-desktop:cursor <id>` each time it shows, or
+/// `rusty-desktop:cursor none` to show the keyword again.
+const CURSOR_IMAGE: &str = "rusty-desktop:cursor-image ";
+const CURSOR_SHOWN: &str = "rusty-desktop:cursor ";
+
 #[cfg(feature = "servo-overlay")]
 /// What Servo's page needs beside [`PAGE_SHIM`], at the start of every
 /// document. Chromium tells the shell about new windows, and draws a
@@ -270,6 +278,52 @@ const SERVO_SHIM: &str = r#"(() => {
   };
   document.addEventListener('selectionchange', dropSvgCaret);
   addEventListener('pointerup', () => setTimeout(dropSvgCaret, 0), true);
+  // Servo tells the shell only a cursor's keyword. The shim reads the image
+  // cursor of the element under the pointer, `url(...)` or an
+  // `image-set(...)`'s first image, and hands its pixels to the shell once,
+  // then names it each time it shows; `none` gives the keyword back.
+  const cursorIds = new Map();
+  let shownCursor = '', cursorTarget = null, cursorQueued = false, nextCursorId = 0;
+  const imageCursor = (css) => {
+    const found = /^(?:image-set\(\s*)?url\("((?:[^"\\]|\\.)*)"\)(?:\s+([\d.]+)(dppx|x))?\)?\s+(-?[\d.]+)\s+(-?[\d.]+)/.exec(css)
+      ?? /^(?:image-set\(\s*)?url\("((?:[^"\\]|\\.)*)"\)(?:\s+([\d.]+)(dppx|x))?\)?/.exec(css);
+    if (!found) return null;
+    return { url: found[1].replace(/\\(.)/g, '$1'), scale: Number(found[2] ?? 1) || 1, x: Number(found[4] ?? 0), y: Number(found[5] ?? 0) };
+  };
+  const defineCursor = async (css, cursor) => {
+    const image = new Image();
+    image.src = cursor.url;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = image.naturalWidth;
+    canvas.height = image.naturalHeight;
+    const context = canvas.getContext('2d');
+    context.drawImage(image, 0, 0);
+    const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+    let hex = '';
+    for (const byte of pixels) hex += (byte < 16 ? '0' : '') + byte.toString(16);
+    const id = nextCursorId++;
+    const clamp = (value, size) => Math.max(0, Math.min(size - 1, Math.round(value * cursor.scale)));
+    console.info(`rusty-desktop:cursor-image ${id} ${canvas.width} ${canvas.height} ${clamp(cursor.x, canvas.width)} ${clamp(cursor.y, canvas.height)} ${cursor.scale} ${hex}`);
+    return id;
+  };
+  const showCursor = () => {
+    cursorQueued = false;
+    const css = document.pointerLockElement || !cursorTarget?.isConnected ? '' : getComputedStyle(cursorTarget).cursor;
+    if (css === shownCursor) return;
+    shownCursor = css;
+    const cursor = imageCursor(css);
+    if (!cursor) { console.info('rusty-desktop:cursor none'); return; }
+    if (!cursorIds.has(css)) cursorIds.set(css, defineCursor(css, cursor).catch(() => null));
+    cursorIds.get(css).then((id) => {
+      if (shownCursor === css) console.info(id === null ? 'rusty-desktop:cursor none' : `rusty-desktop:cursor ${id}`);
+    });
+  };
+  const queueCursor = (event) => {
+    cursorTarget = event.target instanceof Element ? event.target : cursorTarget;
+    if (!cursorQueued) { cursorQueued = true; requestAnimationFrame(showCursor); }
+  };
+  for (const type of ['pointermove', 'pointerdown', 'pointerup', 'pointerover']) addEventListener(type, queueCursor, true);
   let open = null;
   const close = () => {
     if (!open) return;
@@ -615,6 +669,12 @@ pub(crate) struct UiOverlay {
     /// What the page asks the native cursor to show; `None` hides it. A lock
     /// hides the cursor over this and shows it again on release.
     page_cursor: Option<Cursor>,
+    /// What the UI engine last reported, which an image cursor from the
+    /// Servo shim stands in front of.
+    reported_cursor: Option<Cursor>,
+    /// The Servo shim's image cursors, by its id, and the one it shows.
+    shim_cursors: HashMap<u64, CursorImage>,
+    shim_cursor: Option<CursorImage>,
     /// Image cursors built so far, by content and window scale.
     image_cursors: HashMap<(CursorImage, u64), CustomCursor>,
     /// Gameplay input the window hands the runtime while it holds the lock.
@@ -666,6 +726,9 @@ impl UiOverlay {
             focus_pending,
             motion: (0.0, 0.0),
             page_cursor: Some(CursorIcon::Default.into()),
+            reported_cursor: Some(CursorIcon::Default.into()),
+            shim_cursors: HashMap::new(),
+            shim_cursor: None,
             image_cursors: HashMap::new(),
             gameplay: GameplayRoute::new(scene, controller),
             page_answers: Vec::new(),
@@ -785,6 +848,23 @@ impl UiOverlay {
                         .collect();
                     self.page.answer_select(Some(&ids));
                 }
+                NavigationEvent::ConsoleMessage { message, .. }
+                    if message.starts_with(CURSOR_IMAGE) =>
+                {
+                    if let Some((id, image)) = shim_cursor_image(&message[CURSOR_IMAGE.len()..]) {
+                        self.shim_cursors.insert(id, image);
+                    }
+                }
+                NavigationEvent::ConsoleMessage { message, .. }
+                    if message.starts_with(CURSOR_SHOWN) =>
+                {
+                    let shown = &message[CURSOR_SHOWN.len()..];
+                    self.shim_cursor = shown
+                        .parse()
+                        .ok()
+                        .and_then(|id| self.shim_cursors.get(&id).cloned());
+                    self.show_cursor(window, event_loop);
+                }
                 NavigationEvent::ConsoleMessage { message, .. } if message == SELECT_CANCELLED => {
                     self.page.answer_select(None);
                 }
@@ -838,7 +918,7 @@ impl UiOverlay {
             let _ = self.page.execute_script(&script);
         }
         while let Some(shape) = self.page.poll_cursor() {
-            self.page_cursor = match shape {
+            self.reported_cursor = match shape {
                 CursorShape::Custom(name) if name == "none" => None,
                 CursorShape::Image(image) => Some(
                     self.image_cursor(image, window.scale_factor(), event_loop)
@@ -846,9 +926,22 @@ impl UiOverlay {
                 ),
                 shape => Some(cursor_icon(&shape).into()),
             };
-            if !self.grabbed {
-                self.show_page_cursor(window);
-            }
+            self.show_cursor(window, event_loop);
+        }
+    }
+
+    /// The Servo shim's image cursor while it shows one, else what the UI
+    /// engine reported.
+    fn show_cursor(&mut self, window: &Window, event_loop: &ActiveEventLoop) {
+        self.page_cursor = match self.shim_cursor.clone() {
+            Some(image) => Some(
+                self.image_cursor(image, window.scale_factor(), event_loop)
+                    .map_or(CursorIcon::Default.into(), Cursor::Custom),
+            ),
+            None => self.reported_cursor.clone(),
+        };
+        if !self.grabbed {
+            self.show_page_cursor(window);
         }
     }
 
@@ -1199,6 +1292,37 @@ impl UiOverlay {
     }
 }
 
+/// A `rusty-desktop:cursor-image` line's id and image, after its prefix.
+fn shim_cursor_image(line: &str) -> Option<(u64, CursorImage)> {
+    let mut fields = line.split(' ');
+    let mut number = || fields.next()?.parse::<u32>().ok();
+    let id = u64::from(number()?);
+    let (width, height, hotspot_x, hotspot_y) = (number()?, number()?, number()?, number()?);
+    let scale: f32 = fields.next()?.parse().ok()?;
+    let hex = fields.next()?.as_bytes();
+    if hex.len() != width as usize * height as usize * 8 || scale.is_nan() || scale <= 0.0 {
+        return None;
+    }
+    let nibble = |byte: u8| (byte as char).to_digit(16).map(|digit| digit as u8);
+    let rgba: Option<Vec<u8>> = hex
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|&[high, low]| Some(nibble(high)? << 4 | nibble(low)?))
+        .collect();
+    Some((
+        id,
+        CursorImage {
+            rgba: rgba?.into(),
+            width,
+            height,
+            hotspot_x,
+            hotspot_y,
+            scale,
+        },
+    ))
+}
+
 fn cursor_icon(shape: &CursorShape) -> CursorIcon {
     match shape {
         CursorShape::Pointer => CursorIcon::Pointer,
@@ -1243,4 +1367,25 @@ fn is_x11(window: &Window) -> bool {
             RawWindowHandle::Xlib(_) | RawWindowHandle::Xcb(_)
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::shim_cursor_image;
+
+    #[test]
+    fn a_shim_cursor_line_is_its_image() {
+        // Two pixels, red then half-transparent white, hotspot at the second, two image pixels per CSS pixel.
+        let (id, image) = shim_cursor_image("7 2 1 1 0 2 ff0000ffffffff80").unwrap();
+        assert_eq!(id, 7);
+        assert_eq!(
+            (image.width, image.height, image.hotspot_x, image.hotspot_y),
+            (2, 1, 1, 0)
+        );
+        assert_eq!(image.scale, 2.0);
+        assert_eq!(&image.rgba[..], &[255, 0, 0, 255, 255, 255, 255, 128]);
+        // Pixels that do not fill the size, or are not hex, are no image.
+        assert!(shim_cursor_image("7 2 1 1 0 2 ff0000ff").is_none());
+        assert!(shim_cursor_image("7 2 1 1 0 2 ff0000ffffffffzz").is_none());
+    }
 }
