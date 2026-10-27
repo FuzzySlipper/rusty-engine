@@ -41,13 +41,18 @@ fi
 while IFS= read -r fixture_project; do
   dotnet build "$REPO_ROOT/$fixture_project" --nologo --verbosity quiet
 done < <(cd "$REPO_ROOT" && git grep -l 'csharp/Rusty.Engine/Rusty.Engine.csproj' -- 'fixtures/csharp-*/*.csproj')
-# The SDK's example projects implement its service interfaces in fakes, so a
-# new interface member must reach them too.
-while IFS= read -r example_project; do
-  dotnet build "$REPO_ROOT/$example_project" --nologo --verbosity quiet
-done < <(cd "$REPO_ROOT" && git ls-files -- 'csharp/*.Example/*.csproj')
-dotnet run --project "$REPO_ROOT/csharp/Rusty.Engine.Content.Example" --configuration Release
-dotnet run --project "$REPO_ROOT/csharp/Rusty.Engine.Implicit.Example" --configuration Release
+# These executable examples implement generated service interfaces in fakes,
+# and their assertions exercise the managed helpers used by products. Build
+# each once in the same configuration, then run every assertion without
+# triggering a second Release build.
+mapfile -t example_projects < <(cd "$REPO_ROOT" && git ls-files -- 'csharp/*.Example/*.csproj')
+for example_project in "${example_projects[@]}"; do
+  dotnet build "$REPO_ROOT/$example_project" --configuration Release --nologo --verbosity quiet
+done
+for example_project in "${example_projects[@]}"; do
+  example_dir="${example_project%/*}"
+  dotnet run --project "$REPO_ROOT/$example_dir" --configuration Release --no-build
+done
 
 if [[ "$verify_aot" != true ]]; then
   echo "generated C# SDK package, CoreCLR Product staging, and Rust host lifecycle smoke passed"

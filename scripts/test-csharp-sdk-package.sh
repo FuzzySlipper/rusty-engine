@@ -170,6 +170,7 @@ cp "$consumer_dir/Library.cs" "$source_override_dir/Library.cs"
 cp "$repo_root/scripts/fixtures/ImplicitRecipeChecks.cs" "$consumer_dir/ImplicitRecipeChecks.cs"
 cp "$repo_root/scripts/fixtures/ImplicitAuditChecks.cs" "$consumer_dir/ImplicitAuditChecks.cs"
 cp "$repo_root/scripts/fixtures/DynamicsResultChecks.cs" "$consumer_dir/DynamicsResultChecks.cs"
+cp "$repo_root/scripts/fixtures/GeneratedResultCopyChecks.cs" "$consumer_dir/GeneratedResultCopyChecks.cs"
 cp "$repo_root/scripts/fixtures/ColorSpaceChecks.cs" "$consumer_dir/ColorSpaceChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentBundleChecks.cs" "$consumer_dir/ProductContentBundleChecks.cs"
 cp "$repo_root/scripts/fixtures/ProductContentMixedBundleChecks.cs" "$consumer_dir/ProductContentMixedBundleChecks.cs"
@@ -211,6 +212,7 @@ public sealed class Product : IEngineProduct
             new Color(0.3f, 0.6f, 0.9f, 1), default, 1, new Color(1, 1, 1, 1), default, 0, false,
             MaterialAlphaMode.Opaque, 0.5f));
         _spatial = _engine.Spatial.CreateSession(new SpatialSessionConfig(1, 8, VoxelSurfaceMode.GreedyCubes));
+        GeneratedResultCopyChecks.Run(_engine, _spatial);
         _engine.Voxel.ApplyEdits(new VoxelEditTransaction(
             _spatial, new[] { new VoxelEdit(VoxelEditKind.Set, new VoxelAddress(0, 0, 0), 3) }));
         _voxelPresentation = _engine.VoxelScenePresentation.ProjectScene(

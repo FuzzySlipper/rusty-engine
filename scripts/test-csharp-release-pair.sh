@@ -431,6 +431,10 @@ done
 [[ -n "$origin" ]] || { cat "$host_log" >&2; echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime pack did not launch the CoreCLR product" >&2; exit 1; }
 curl --fail --silent "$origin/product-bootstrap.json" | jq -e '.product.id == "fixture.release-pair" and .ui.entry == "product-ui/main.js" and .input.cursorMode == "unlocked"' >/dev/null \
     || { echo "RUSTY_ENGINE_PAIR_TEST_RUNTIME: extracted runtime did not serve the staged Product" >&2; exit 1; }
+curl --fail --silent "$origin/product-ui/main.js" | grep -F "root.dataset.fixture = 'ready'" >/dev/null \
+    || { echo "RUSTY_ENGINE_PAIR_TEST_UI: extracted runtime did not serve the Product UI" >&2; exit 1; }
+[[ $(curl --silent --output /dev/null --write-out '%{http_code}' "$origin/content/trial.txt") == 404 ]] \
+    || { echo "RUSTY_ENGINE_PAIR_TEST_CONTENT: product content was exposed as a static route" >&2; exit 1; }
 
 [[ -s "$work/persistence-$loader/json-roundtrip/journey" ]] || {
     echo "JSON fixture did not write real persistent state" >&2; exit 1;
