@@ -413,18 +413,15 @@ fn mean_difference(a: &[u8], b: &[u8]) -> f64 {
     total as f64 / (a.len() / 4 * 3) as f64
 }
 
-/// A drifting broken layer under High volumetric clouds; None on a software
-/// adapter, which refuses them.
-fn drifting() -> Option<Harness> {
+/// A drifting broken layer under High volumetric clouds.
+fn drifting() -> Harness {
     let mut harness = scene(VolumetricCloudsQuality::High);
-    if harness
-        .renderer
-        .settings_readout()
-        .volumetric_clouds
-        .is_some()
-    {
-        return None;
-    }
+    require_hardware_adapter(&harness.gpu, "volumetric-cloud history");
+    assert_eq!(
+        harness.renderer.settings_readout().volumetric_clouds,
+        None,
+        "the hardware adapter draws volumetric clouds"
+    );
     harness.apply(vec![RenderDiff::SetClouds {
         clouds: Some(CloudsDescriptor {
             coverage: 0.5,
@@ -437,7 +434,7 @@ fn drifting() -> Option<Harness> {
             twilight_degrees: 0.0,
         }),
     }]);
-    Some(harness)
+    harness
 }
 
 fn up_at(harness: &mut Harness, yaw: f64, time: f64) -> Vec<u8> {
@@ -451,10 +448,9 @@ fn up_at(harness: &mut Harness, yaw: f64, time: f64) -> Vec<u8> {
 /// output frames of drifting clouds under a turning camera and native TAAU
 /// draw exactly as they do without captures.
 #[test]
+#[ignore = "hardware-only cloud history sequence; run scripts/gpu-lane-temporal-tests.sh"]
 fn a_capture_leaves_the_outputs_cloud_history_alone() {
-    let Some(mut alone) = drifting() else {
-        return;
-    };
+    let mut alone = drifting();
     let temporal = RenderDiff::SetRendererSettings {
         settings: RendererSettingsDescriptor {
             antialiasing: Antialiasing::Temporal,
@@ -473,7 +469,7 @@ fn a_capture_leaves_the_outputs_cloud_history_alone() {
         .collect();
     let expected = output_frames_around_captures(&mut alone, &moments, None);
     for size in [(WIDTH, HEIGHT), (200, 120)] {
-        let mut captured = drifting().expect("drew above");
+        let mut captured = drifting();
         captured.apply(vec![temporal.clone()]);
         let frames = output_frames_around_captures(&mut captured, &moments, Some(size));
         for (frame, (expected, drawn)) in expected.iter().zip(&frames).enumerate() {
@@ -487,10 +483,9 @@ fn a_capture_leaves_the_outputs_cloud_history_alone() {
 }
 
 #[test]
+#[ignore = "hardware-only cloud temporal sequence; run scripts/gpu-lane-temporal-tests.sh"]
 fn drifting_clouds_hold_steady_from_frame_to_frame() {
-    let Some(mut harness) = drifting() else {
-        return;
-    };
+    let mut harness = drifting();
     // Thirty frames a second for a second and a third: the clouds drift
     // 0.4 m a frame, a fraction of a reduced pixel at their 1.5 km.
     let frames: Vec<Vec<u8>> = (0..40)
@@ -510,17 +505,16 @@ fn drifting_clouds_hold_steady_from_frame_to_frame() {
 }
 
 #[test]
+#[ignore = "hardware-only cloud temporal sequence; run scripts/gpu-lane-temporal-tests.sh"]
 fn a_turning_camera_leaves_no_trails_and_a_cut_starts_afresh() {
-    let Some(mut turning) = drifting() else {
-        return;
-    };
+    let mut turning = drifting();
     // The clouds held (time still) while the camera turns 0.3° a frame for
     // 40 frames; then the same final view held still as long.
     let mut last = Vec::new();
     for frame in 0..=40 {
         last = up_at(&mut turning, 12.0 - 0.3 * f64::from(40 - frame), 2.0);
     }
-    let mut still = drifting().expect("hardware");
+    let mut still = drifting();
     let mut settled = Vec::new();
     for _ in 0..=40 {
         settled = up_at(&mut still, 12.0, 2.0);
@@ -536,7 +530,7 @@ fn a_turning_camera_leaves_no_trails_and_a_cut_starts_afresh() {
     // renderer's.
     turning.renderer.set_animation_time(2.0);
     let cut = turning.render(&camera([100.0, 1.0, 0.0], 12.0, 25.0)).1;
-    let mut fresh = drifting().expect("hardware");
+    let mut fresh = drifting();
     fresh.renderer.set_animation_time(2.0);
     assert_eq!(
         cut,
@@ -546,10 +540,9 @@ fn a_turning_camera_leaves_no_trails_and_a_cut_starts_afresh() {
 }
 
 #[test]
+#[ignore = "hardware-only cloud motion sequence; run scripts/gpu-lane-temporal-tests.sh"]
 fn drifting_volumetric_clouds_move_on_a_still_camera() {
-    let Some(mut harness) = drifting() else {
-        return;
-    };
+    let mut harness = drifting();
     harness
         .renderer
         .set_overlay_shown(render_wgpu::OverlayShown {

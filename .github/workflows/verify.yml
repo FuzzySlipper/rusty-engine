@@ -53,7 +53,7 @@ jobs:
 
       - name: Install architecture audit dependency
         # mesa-vulkan-drivers supplies llvmpipe (lavapipe), the software Vulkan
-        # adapter for render-wgpu software draw/refusal checks.
+        # adapter for render-wgpu software draw/refusal and retained-state checks.
         run: sudo apt-get update && sudo apt-get install --yes ripgrep libasound2-dev mesa-vulkan-drivers libvulkan1
 
       - name: Verify

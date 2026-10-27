@@ -5,8 +5,10 @@
 //! view settles; a moved part leaves no trail; a software adapter refuses
 //! it and draws without it; a tool's capture between output frames leaves
 //! their history alone. `Antialiasing::Dlss` draws DLSS (`dlss.rs`) on
-//! an RTX GPU in a build with it, and TAAU where it is refused. Needs a wgpu
-//! adapter: CI uses `WGPU_BACKEND=vulkan` with llvmpipe.
+//! an RTX GPU in a build with it, and TAAU where it is refused. Software CI
+//! runs the refusal and draw smoke tests; visual sequences are ignored there
+//! and run explicitly on a GPU. `WGPU_ADAPTER_NAME` selects the adapter using
+//! wgpu's standard test environment variable.
 
 mod support;
 
@@ -126,11 +128,10 @@ fn mean_difference(a: &[u8], b: &[u8]) -> f64 {
 }
 
 #[test]
+#[ignore = "hardware-only visual sequence; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test taau -- --ignored"]
 fn native_taa_smooths_edges_toward_msaa_and_settles() {
     let mut harness = scene();
-    if harness.gpu.is_software() {
-        return;
-    }
+    require_hardware_adapter(&harness.gpu, "native TAA edge quality and settling");
     let (_, msaa) = settle(&mut harness, Antialiasing::Msaa4, 1.0, 2);
     let (_, aliased) = settle(&mut harness, Antialiasing::Off, 1.0, 2);
     let (stats, taa) = settle(&mut harness, Antialiasing::Temporal, 1.0, 40);
@@ -153,11 +154,10 @@ fn native_taa_smooths_edges_toward_msaa_and_settles() {
 }
 
 #[test]
+#[ignore = "hardware-only visual sequence; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test taau -- --ignored"]
 fn half_scale_taau_is_nearer_the_native_picture_than_bilinear() {
     let mut harness = scene();
-    if harness.gpu.is_software() {
-        return;
-    }
+    require_hardware_adapter(&harness.gpu, "half-scale TAAU image quality");
     let (_, native) = settle(&mut harness, Antialiasing::Msaa4, 1.0, 2);
     let (_, bilinear) = settle(&mut harness, Antialiasing::Msaa4, 0.5, 2);
     let (stats, taau) = settle(&mut harness, Antialiasing::Temporal, 0.5, 64);
@@ -183,18 +183,20 @@ fn half_scale_taau_is_nearer_the_native_picture_than_bilinear() {
 }
 
 /// Where DLSS draws (an RTX GPU in a build with it).
+#[cfg(feature = "dlss")]
 #[test]
+#[ignore = "RTX-only visual sequence; build with render-wgpu/dlss and select the RTX adapter with WGPU_ADAPTER_NAME"]
 fn dlss_quality_is_nearer_the_native_picture_than_bilinear() {
     let mut harness = scene();
-    if harness.gpu.is_software() {
-        return;
-    }
+    require_hardware_adapter(&harness.gpu, "DLSS image quality");
     let (_, native) = settle(&mut harness, Antialiasing::Msaa4, 1.0, 2);
     let (_, bilinear) = settle(&mut harness, Antialiasing::Msaa4, 0.67, 2);
     let (stats, dlss) = settle(&mut harness, Antialiasing::Dlss, 0.67, 64);
-    if stats.upscale != Some(UpscaleMethod::Dlss) {
-        return;
-    }
+    assert_eq!(
+        stats.upscale,
+        Some(UpscaleMethod::Dlss),
+        "the RTX DLSS path drew"
+    );
     let (spatial, temporal) = (
         edge_difference(&native, &bilinear),
         edge_difference(&native, &dlss),
@@ -210,11 +212,10 @@ fn dlss_quality_is_nearer_the_native_picture_than_bilinear() {
 }
 
 #[test]
+#[ignore = "hardware-only visual sequence; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test taau -- --ignored"]
 fn a_moved_part_leaves_no_trail() {
     let mut harness = scene();
-    if harness.gpu.is_software() {
-        return;
-    }
+    require_hardware_adapter(&harness.gpu, "TAAU moved-part history");
     settle(&mut harness, Antialiasing::Temporal, 0.67, 32);
     harness.apply(vec![RenderDiff::Update {
         handle: RenderHandle::new(MOVED),
@@ -346,39 +347,34 @@ fn runner_view() -> RendererCompositionCamera {
 }
 
 #[test]
+#[ignore = "hardware-only animated visual sequence; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test taau -- --ignored"]
 fn a_running_skinned_character_leaves_no_trail() {
-    if let Some((_, difference)) = runner_against_a_fresh_frame(Antialiasing::Temporal) {
-        assert!(
-            difference < 3.0,
-            "the runner against a fresh frame: {difference:.3}"
-        );
-    }
+    let (_, difference) = runner_against_a_fresh_frame(Antialiasing::Temporal);
+    assert!(
+        difference < 3.0,
+        "the runner against a fresh frame: {difference:.3}"
+    );
 }
 
 /// Where DLSS draws (an RTX GPU in a build with it).
+#[cfg(feature = "dlss")]
 #[test]
+#[ignore = "RTX-only animated visual sequence; build with render-wgpu/dlss and select the RTX adapter with WGPU_ADAPTER_NAME"]
 fn a_running_skinned_character_leaves_no_trail_under_dlss() {
-    if let Some((Some(UpscaleMethod::Dlss), difference)) =
-        runner_against_a_fresh_frame(Antialiasing::Dlss)
-    {
-        assert!(
-            difference < 3.0,
-            "the runner against a fresh frame: {difference:.3}"
-        );
-    }
+    let (stage, difference) = runner_against_a_fresh_frame(Antialiasing::Dlss);
+    assert_eq!(stage, Some(UpscaleMethod::Dlss), "the RTX DLSS path drew");
+    assert!(
+        difference < 3.0,
+        "the runner against a fresh frame: {difference:.3}"
+    );
 }
 
 /// The body running for 48 frames at render scale 0.67 under
 /// `antialiasing`: the stage that drew the last frame, and its mean
-/// difference from the same moment drawn afresh with 4x MSAA. None on a
-/// software adapter.
-fn runner_against_a_fresh_frame(
-    antialiasing: Antialiasing,
-) -> Option<(Option<UpscaleMethod>, f64)> {
+/// difference from the same moment drawn afresh with 4x MSAA. Hardware-only.
+fn runner_against_a_fresh_frame(antialiasing: Antialiasing) -> (Option<UpscaleMethod>, f64) {
     let mut harness = scene();
-    if harness.gpu.is_software() {
-        return None;
-    }
+    require_hardware_adapter(&harness.gpu, "animated TAAU/DLSS history");
     let body = admit_body(&mut harness);
     harness.apply(vec![
         RenderDiff::DefineAnimatedMesh {
@@ -428,7 +424,7 @@ fn runner_against_a_fresh_frame(
         (stage, last) = (stats.upscale, picture);
     }
     let reference = fresh_msaa_frame(&harness, &view);
-    Some((stage, mean_difference(&last, &reference)))
+    (stage, mean_difference(&last, &reference))
 }
 
 /// The harness's world at this moment drawn afresh, with 4x MSAA and no
@@ -557,10 +553,10 @@ fn wall_view() -> RendererCompositionCamera {
 /// or not, and the picture away from the viewmodel is the same. Under TAAU,
 /// and under DLSS where it draws.
 #[test]
+#[ignore = "hardware-only viewmodel sequence; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test taau -- --ignored"]
 fn a_viewmodel_leaves_the_worlds_depth_aware_dilation_alone() {
-    if scene().gpu.is_software() {
-        return;
-    }
+    let gpu = scene().gpu;
+    require_hardware_adapter(&gpu, "viewmodel depth-aware TAAU/DLSS dilation");
     for antialiasing in [Antialiasing::Temporal, Antialiasing::Dlss] {
         let (_, stage, without) = crate_before_a_sliding_wall(antialiasing, false, false, 24);
         let (_, _, with) = crate_before_a_sliding_wall(antialiasing, true, false, 24);
@@ -604,12 +600,12 @@ fn a_viewmodel_leaves_the_worlds_depth_aware_dilation_alone() {
 /// way). Under TAAU, and under DLSS where it draws, which takes the
 /// viewmodel's depth over the world's.
 #[test]
+#[ignore = "hardware-only viewmodel sequence; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test taau -- --ignored"]
 fn a_moving_viewmodel_before_a_sliding_world_leaves_no_trail() {
     /// How much more the corner may differ with the cube moving.
     const MARGIN: f64 = 1.5;
-    if scene().gpu.is_software() {
-        return;
-    }
+    let gpu = scene().gpu;
+    require_hardware_adapter(&gpu, "moving viewmodel TAAU/DLSS history");
     for antialiasing in [Antialiasing::Temporal, Antialiasing::Dlss] {
         let corner = |moving: bool| {
             let (harness, stage, last) =
@@ -706,20 +702,10 @@ fn crate_frames_around_captures(
 /// The capture draws without the temporal stage: no jitter or motion, and
 /// bilinear below render scale 1. With the motion inspection alone, and
 /// under TAAU and DLSS (TAAU where it is refused) on a GPU.
-#[test]
-fn a_capture_between_output_frames_leaves_their_history_alone() {
-    let gpu = scene().gpu;
-    let mut cases = vec![(Antialiasing::Off, 1.0, true)];
-    if !gpu.is_software() {
-        cases.extend([
-            (Antialiasing::Temporal, 1.0, false),
-            (Antialiasing::Temporal, 0.67, false),
-            (Antialiasing::Temporal, 0.67, true),
-            (Antialiasing::Dlss, 0.67, false),
-        ]);
-    }
+fn captures_between_output_frames_leave_history_alone(cases: &[(Antialiasing, f32, bool)]) {
     for ((antialiasing, scale, shown), size) in cases
-        .into_iter()
+        .iter()
+        .copied()
         .flat_map(|case| [(case, (200, 120)), (case, (WIDTH, HEIGHT))])
     {
         let case = format!("{antialiasing:?} at {scale}, motion shown {shown}, capture {size:?}");
@@ -764,4 +750,27 @@ fn a_capture_between_output_frames_leaves_their_history_alone() {
             );
         }
     }
+}
+
+/// The software smoke keeps one simple claim: a capture in the off mode does
+/// not change the output frames, even when the inspection overlay is shown.
+#[test]
+fn a_capture_between_output_frames_preserves_off_mode() {
+    captures_between_output_frames_leave_history_alone(&[(Antialiasing::Off, 1.0, true)]);
+}
+
+/// Temporal state is only exercised where the temporal stage can draw. The
+/// software suite runs the off-mode ownership test above; this explicit GPU
+/// suite checks that captures leave TAAU/DLSS history, jitter and pixels alone.
+#[test]
+#[ignore = "hardware-only temporal sequence; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test taau -- --ignored"]
+fn a_capture_between_output_frames_preserves_temporal_history() {
+    let gpu = scene().gpu;
+    require_hardware_adapter(&gpu, "capture during TAAU/DLSS history");
+    captures_between_output_frames_leave_history_alone(&[
+        (Antialiasing::Temporal, 1.0, false),
+        (Antialiasing::Temporal, 0.67, false),
+        (Antialiasing::Temporal, 0.67, true),
+        (Antialiasing::Dlss, 0.67, false),
+    ]);
 }

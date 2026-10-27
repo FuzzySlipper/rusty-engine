@@ -20,7 +20,8 @@ Run the corresponding `scripts/verify.sh`, `scripts/verify-csharp.sh`,
 `pnpm --dir render run verify` (the browser shell and live-debug panel), or
 `scripts/verify-docs.sh` locally. The browser shell needs its pnpm
 dependencies; C# requires .NET, Clang/libclang and the pinned binding tools.
-The render-wgpu screenshot tests run on llvmpipe (`mesa-vulkan-drivers`) in CI.
+The selected render-wgpu software checks run on llvmpipe
+(`mesa-vulkan-drivers`) in CI. The full renderer image suite runs on hardware.
 
 The docs checker uses PyYAML to read Actions workflows. Install it with
 `python3 -m pip install --user -r scripts/requirements-ci.txt` before running
@@ -65,6 +66,25 @@ timings. `rusty-scene-render` says on stderr and in its report
 (`softwareAdapter`) when it ran on a software adapter, so such numbers are not
 mistaken for GPU evidence; they are never acceptance gates.
 
+`scripts/verify.sh` runs the non-renderer workspace tests, renderer unit tests,
+and the `driver`, `scene_changes`, `views`, `inspection`, `device_lost`,
+`renderer_settings`, `labels`, `taau`, `volumetric_clouds`, `volumetric_fog`,
+`water`, `ambient_occlusion` and `image_effect` integration targets. Their default
+tests cover supported output, refusals and retained state; hardware-only
+temporal cases are explicitly ignored instead of returning an empty pass.
+The full renderer suite and those temporal cases belong on a real adapter:
+
+```sh
+WGPU_ADAPTER_NAME="AMD Radeon RX 9070 XT" cargo test --release -p render-wgpu --locked
+WGPU_ADAPTER_NAME="AMD Radeon RX 9070 XT" scripts/gpu-lane-temporal-tests.sh
+```
+
+Select the adapter's actual name. An explicitly invoked hardware test fails
+if it receives a software adapter. On an RTX machine with the DLSS build
+prerequisites, pass `--dlss` to the temporal script to include its DLSS visual
+assertions. An offline DLSS capture demonstrates that path's output and
+readout, but does not replace the temporal history assertions.
+
 ### The GPU lane
 
 `scripts/gpu-lane.sh` runs the lane on the machine it is on, for the commit
@@ -80,6 +100,11 @@ scene passes, 1 when one is flagged and 2 when the candidate could not render
 one. `--scene NAME` (repeatable) runs a subset. A name that matches no scene
 fails the run (`report.unmatched` lists it), and so does a run that renders
 nothing, so a misspelt subset never passes unrendered.
+
+The JSON report records each snapshot and its arguments, and the first
+successful readout from each renderer: adapter, software status, product
+provenance, requested/effective settings, refusals and upscale method. Record
+the driver version beside the run using the host's driver tools.
 
 The lane directory (`RUSTY_GPU_LANE_ROOT`, `/data/rusty-engine-gpu-lane` on
 den-agents) holds:

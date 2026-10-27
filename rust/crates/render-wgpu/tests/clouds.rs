@@ -405,12 +405,13 @@ fn twilight_clouds(twilight_degrees: f32) -> RenderDiff {
 }
 
 #[test]
+#[ignore = "hardware-only volumetric-cloud twilight visual test; run scripts/gpu-lane-temporal-tests.sh"]
 fn a_sun_below_the_horizon_lights_the_clouds_through_the_twilight_reddening_flat_and_volumetric_alike(
 ) {
     const TWILIGHT: f32 = 8.0;
+    require_hardware_adapter(&gpu(), "volumetric-cloud twilight lighting");
     // Up into a dusk sky toward the sun with the clouds' twilight, several
-    // frames so the volumetric history settles; None when a software
-    // adapter refuses the volumetric clouds.
+    // frames so the volumetric history settles.
     let render = |quality, elevation: f32, twilight: f32| {
         let mut harness = panorama(quality, DUSK_SKY);
         harness.renderer.set_animation_time(2.0);
@@ -431,6 +432,11 @@ fn a_sun_below_the_horizon_lights_the_clouds_through_the_twilight_reddening_flat
     let mut redness = Vec::new();
     for quality in [VolumetricCloudsQuality::Off, VolumetricCloudsQuality::High] {
         let Some(_) = render(quality, 0.0, TWILIGHT) else {
+            assert_eq!(
+                quality,
+                VolumetricCloudsQuality::Off,
+                "the hardware adapter draws volumetric clouds"
+            );
             continue;
         };
         // The clouds' mean colour where they covered the sky.
@@ -465,6 +471,7 @@ fn a_sun_below_the_horizon_lights_the_clouds_through_the_twilight_reddening_flat
         assert!(sum(mean(5.0, TWILIGHT)) >= sum(mean(5.0, 0.0)) - 3.0);
         redness.push((red(below), red(deeper)));
     }
+    assert_eq!(redness.len(), 2, "flat and volumetric clouds were tested");
     // The flat layer and the volumetric clouds redden alike.
     if let [(flat_below, flat_deeper), (volumetric_below, volumetric_deeper)] = redness[..] {
         assert!(

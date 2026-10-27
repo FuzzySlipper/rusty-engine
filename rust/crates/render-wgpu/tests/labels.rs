@@ -999,10 +999,9 @@ fn labels_under(
 /// stay as readable. Under TAAU, and under DLSS where it draws, which takes
 /// the mask as its bias toward the current colour.
 #[test]
+#[ignore = "hardware-only temporal visual test; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test labels -- --ignored"]
 fn labels_and_overlay_lines_leave_no_trail_under_a_temporal_stage() {
-    if harness().gpu.is_software() {
-        return;
-    }
+    require_hardware_adapter(&gpu(), "temporal label and overlay-line history");
     for antialiasing in [Antialiasing::Temporal, Antialiasing::Dlss] {
         let (moving, _, stage) = labels_under(antialiasing, 0);
         if antialiasing == Antialiasing::Dlss && stage != Some(render_wgpu::UpscaleMethod::Dlss) {
@@ -1124,11 +1123,10 @@ fn an_inspection_capture_leaves_the_primary_motion_target_alone() {
 /// views' do: with the primary camera turning under the view's rect, they
 /// draw as the current frame alone would (R10271-2).
 #[test]
+#[ignore = "hardware-only temporal visual test; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test labels -- --ignored"]
 fn an_anchored_inspection_views_labels_hold_under_a_temporal_stage() {
-    if harness().gpu.is_software() {
-        return;
-    }
     let mut harness = harness();
+    require_hardware_adapter(&harness.gpu, "anchored inspection-view label history");
     let magenta = |layer, position, words| BillboardDescriptor {
         background: [1.0, 0.0, 1.0, 1.0],
         ..label(position, text(words), layer)

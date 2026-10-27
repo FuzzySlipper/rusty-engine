@@ -181,10 +181,12 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                 let (id, value) = choice
                     .split_once('=')
                     .ok_or_else(|| format!("--choose needs ID=VALUE\n{USAGE}"))?;
-                // A number or true/false as itself, anything else as a name.
+                // Numbers and booleans as themselves, quoted strings as a
+                // name (including numeric choices such as shadowBudget=\"32\"),
+                // anything else as an unquoted name.
                 let value = serde_json::from_str::<serde_json::Value>(value)
                     .ok()
-                    .filter(|value| value.is_number() || value.is_boolean())
+                    .filter(|value| value.is_number() || value.is_boolean() || value.is_string())
                     .unwrap_or_else(|| serde_json::Value::from(value));
                 RendererSettingsOverrides::default()
                     .choose(id, &value)
@@ -851,6 +853,8 @@ mod tests {
             "--choose",
             "shadows=true",
             "--choose",
+            r#"shadowBudget="32""#,
+            "--choose",
             "renderScale=0.75",
         ])
         .unwrap()
@@ -860,6 +864,7 @@ mod tests {
             [
                 ("antialiasing".to_owned(), serde_json::json!("off")),
                 ("shadows".to_owned(), serde_json::json!(true)),
+                ("shadowBudget".to_owned(), serde_json::json!("32")),
                 ("renderScale".to_owned(), serde_json::json!(0.75)),
             ]
         );

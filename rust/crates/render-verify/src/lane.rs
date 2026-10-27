@@ -207,11 +207,22 @@ pub fn unix_seconds() -> u64 {
         .unwrap_or(0)
 }
 
+/// What the renderer reported about one output. `settings` is kept intact so
+/// requested/effective values and refusal reasons remain visible in reports.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenderReadout {
+    pub adapter: String,
+    pub software_adapter: bool,
+    pub product: Option<serde_json::Value>,
+    pub settings: Option<serde_json::Value>,
+    pub upscale: Option<String>,
+}
+
 /// What one render reported.
 #[derive(Debug, Clone, PartialEq)]
 struct RenderRun {
-    adapter: String,
-    software: bool,
+    readout: RenderReadout,
     frame_ms: f64,
     passes: BTreeMap<String, f64>,
 }
@@ -256,8 +267,16 @@ fn render(
         }
     }
     Ok(RenderRun {
-        adapter: report["adapter"].as_str().unwrap_or("unknown").to_owned(),
-        software: report["softwareAdapter"].as_bool().unwrap_or(false),
+        readout: RenderReadout {
+            adapter: report["adapter"].as_str().unwrap_or("unknown").to_owned(),
+            software_adapter: report["softwareAdapter"].as_bool().unwrap_or(false),
+            product: report.get("product").cloned(),
+            settings: report.get("settings").cloned(),
+            upscale: report
+                .pointer("/timing/upscale")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned),
+        },
         frame_ms,
         passes,
     })
@@ -336,11 +355,19 @@ impl Verdict {
 #[serde(rename_all = "camelCase")]
 pub struct SceneResult {
     pub name: String,
+    /// Snapshot used for both renderers, relative to the lane root.
+    pub file: String,
+    /// Renderer options applied to both renderers.
+    pub args: Vec<String>,
     pub notes: String,
     pub verdict: Verdict,
     /// Why it is flagged or failed, one line each.
     pub reasons: Vec<String>,
     pub image: Option<ImageDiff>,
+    /// First successful renderer readout on each side, including the
+    /// product and effective/refused settings.
+    pub baseline_readout: Option<RenderReadout>,
+    pub candidate_readout: Option<RenderReadout>,
     /// How much each renderer's own repeats differed from its first: a
     /// non-deterministic scene, judged above that noise.
     pub self_noise_share: f64,
@@ -482,10 +509,10 @@ fn run_scene(
                 Ok(run) => {
                     // Every render counts: a candidate falling back to a
                     // software adapter after a hardware baseline is caught.
-                    if !adapters.contains(&run.adapter) {
-                        adapters.push(run.adapter.clone());
+                    if !adapters.contains(&run.readout.adapter) {
+                        adapters.push(run.readout.adapter.clone());
                     }
-                    *software_adapter |= run.software;
+                    *software_adapter |= run.readout.software_adapter;
                     runs[which].push(run);
                     images[which].push(image);
                 }
@@ -502,10 +529,14 @@ fn run_scene(
     let diff_image = directory.join("diff.png");
     let mut result = SceneResult {
         name: scene.name.clone(),
+        file: scene.file.clone(),
+        args: scene.args.clone(),
         notes: scene.notes.clone(),
         verdict: Verdict::Pass,
         reasons: Vec::new(),
         image: None,
+        baseline_readout: runs[0].first().map(|run| run.readout.clone()),
+        candidate_readout: runs[1].first().map(|run| run.readout.clone()),
         self_noise_share: 0.0,
         frame: None,
         passes: Vec::new(),

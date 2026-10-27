@@ -79,6 +79,19 @@ pub fn gpu() -> Gpu {
         .clone()
 }
 
+/// Fail an explicitly selected visual test if WGPU resolved to a software
+/// adapter. The regular software suite leaves these tests ignored; running
+/// one explicitly on llvmpipe would otherwise make the missing GPU claim
+/// look like a pass.
+#[track_caller]
+pub fn require_hardware_adapter(gpu: &Gpu, scenario: &str) {
+    let selected = std::env::var("WGPU_ADAPTER_NAME").unwrap_or_else(|_| "<wgpu default>".into());
+    assert!(
+        !gpu.is_software(),
+        "{scenario} requires a hardware adapter, but WGPU selected a software adapter (WGPU_ADAPTER_NAME={selected}); select an actual GPU"
+    );
+}
+
 impl Harness {
     pub fn new(options: RendererOptions) -> Self {
         Self::on(gpu(), options)
