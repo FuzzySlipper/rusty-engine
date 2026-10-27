@@ -471,6 +471,49 @@ void test('input ingress rebaselines held keyboard and pointer state without rep
   ingress.dispose();
 });
 
+void test('a key the interface handled, whose handler returns to gameplay at once, never reaches gameplay', () => {
+  const eventTarget = createListenerTarget();
+  const documentTarget = createListenerTarget();
+  const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
+  const document = {
+    ...documentTarget,
+    activeElement: canvas,
+    pointerLockElement: canvas,
+    defaultView: createListenerTarget(),
+  } as unknown as Document;
+  // As the application host decides: a handled event, or one outside gameplay, is not gameplay's.
+  let mode: 'gameplay' | 'interface' = 'interface';
+  const ingress = createRustyApplicationInputIngress({ binding: INITIAL }, {
+    canvas: () => canvas,
+    eventTarget: eventTarget as unknown as HTMLElement,
+    document,
+    allowsGameplayInput: (event) => !event.defaultPrevented && mode === 'gameplay',
+    interactionMode: () => mode,
+    active: () => true,
+    focusGameplay: () => undefined,
+    gamepads: () => [],
+  });
+  const facts = (): unknown[] => ingress.drain().flatMap((entry) => 'fact' in entry && entry.fact.kind !== 'clear' ? [entry.fact] : []);
+  // The page's capture-phase handler closes its menu on Escape, prevents the
+  // default and returns to gameplay before the ingress hears the keydown, as
+  // under Servo, which grants the pointer lock within the same event.
+  mode = 'gameplay';
+  documentTarget.emit('keydown', { code: 'Escape', defaultPrevented: true } as KeyboardEvent);
+  documentTarget.emit('keyup', { code: 'Escape', defaultPrevented: false } as KeyboardEvent);
+  assert.deepEqual(facts(), []);
+  // A later rebaseline has no Escape held to replay.
+  ingress.rebaselineRuntime({ runtime: { instanceId: '7', generation: '3', controlRevision: '12' }, context: INITIAL.context, nextSequence: '1' });
+  assert.deepEqual(facts(), []);
+  // A fresh press in gameplay is gameplay's.
+  documentTarget.emit('keydown', { code: 'Escape', defaultPrevented: false } as KeyboardEvent);
+  documentTarget.emit('keyup', { code: 'Escape', defaultPrevented: false } as KeyboardEvent);
+  assert.deepEqual(facts(), [
+    { kind: 'key', code: 'escape', edge: 'pressed' },
+    { kind: 'key', code: 'escape', edge: 'released' },
+  ]);
+  ingress.dispose();
+});
+
 void test('controller pressure survives subthreshold changes, neutral, rebaseline and disconnect', () => {
   const canvas = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 200, bottom: 100, width: 200, height: 100 }) } as unknown as HTMLCanvasElement;
   const document = {
