@@ -142,15 +142,17 @@ pub(crate) struct GpuMesh {
     /// and the range, in the mesh's own units, over which it morphs.
     pub morph: Option<MorphStream>,
     /// An animated instance's CPU-skinned vertices (SKINNED,
-    /// `animated.rs`): what a pass writing motion reads as their previous
-    /// frame's pose.
+    /// `animated.rs`), or a static mesh instance's deformed payload
+    /// (`apply.rs` `deformed_history`): what a pass writing motion reads as
+    /// their previous frame's pose or shape.
     pub skinned: Option<SkinnedHistory>,
 }
 
 /// A skinned mesh's vertices as the last frame with motion drew them
 /// (`animated.rs`). A new pose is written into another buffer of their
 /// size, so the drawn one stays as it was: at most one more per varying
-/// mesh, and none while no frame draws motion.
+/// mesh, and none while no frame draws motion. A deformed payload's new
+/// shape is a new buffer already, so it keeps the drawn one here.
 #[derive(Default)]
 pub(crate) struct SkinnedHistory {
     /// The vertices the last frame with motion drew, while a newer pose is

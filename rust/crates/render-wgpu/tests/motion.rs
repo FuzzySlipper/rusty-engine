@@ -234,6 +234,70 @@ fn a_moved_part_moves_once_and_then_holds() {
     assert_eq!(moving(&held, 0, 0.2), (0, 0), "nothing moves");
 }
 
+/// The cube under group 5 drawn as its replaced payload, shifted `x` along x.
+fn reshape_cube(harness: &mut Harness, x: f32) {
+    let mut shifted = cube();
+    if let MeshPayloadSource::Inline { positions, .. } = &mut shifted.source {
+        let moved: Vec<f32> = positions
+            .iter()
+            .enumerate()
+            .map(|(index, value)| if index % 3 == 0 { value + x } else { *value })
+            .collect();
+        *positions = moved.into();
+    }
+    shifted.bounds.min[0] += x;
+    shifted.bounds.max[0] += x;
+    harness.apply(vec![RenderDiff::ReplaceMeshPayload {
+        handle: RenderHandle::new(6),
+        payload: shifted,
+    }]);
+}
+
+#[test]
+fn a_deformed_mesh_moves_its_vertices_once_and_then_holds() {
+    let mut harness = harness();
+    harness.apply(cube_ahead(3.0));
+    reshape_cube(&mut harness, 0.0);
+    draw(&mut harness, &eye(0.0));
+    // A soft body's new shape: its vertices moved 0.2 m across, the
+    // instance's transform did not.
+    reshape_cube(&mut harness, 0.2);
+    let (_, moved) = draw(&mut harness, &eye(0.0));
+    assert_close(
+        motion(&moved, CENTRE.0, CENTRE.1),
+        [FOCAL_PIXELS * 0.2 / 2.5, 0.0],
+        0.5,
+        "the reshaped cube",
+    );
+    assert_close(motion(&moved, 4, 4), [0.0, 0.0], 0.2, "the background");
+    // Drawn once, the shape holds still.
+    let (_, held) = draw(&mut harness, &eye(0.0));
+    assert_eq!(moving(&held, 0, 0.2), (0, 0), "nothing moves");
+    // Two shapes between frames: the motion runs from the one drawn.
+    reshape_cube(&mut harness, 0.1);
+    reshape_cube(&mut harness, 0.3);
+    let (_, twice) = draw(&mut harness, &eye(0.0));
+    assert_close(
+        motion(&twice, CENTRE.0, CENTRE.1),
+        [FOCAL_PIXELS * 0.1 / 2.5, 0.0],
+        0.5,
+        "from the shape drawn",
+    );
+    // A shape of another vertex count has no previous one: it draws still.
+    let mut other = floor(1.0);
+    other.bounds.max[1] = 0.01;
+    harness.apply(vec![RenderDiff::ReplaceMeshPayload {
+        handle: RenderHandle::new(6),
+        payload: other,
+    }]);
+    let (_, replaced) = draw(&mut harness, &eye(0.0));
+    assert_eq!(
+        moving(&replaced, 0, 0.2),
+        (0, 0),
+        "a new mesh has no motion"
+    );
+}
+
 #[test]
 fn the_viewmodel_moves_with_the_camera() {
     let mut harness = harness();

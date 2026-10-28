@@ -2,9 +2,9 @@
 //! jitters the primary views and gathers their frames into a history at
 //! output resolution. Its edges come close to 4× MSAA's at native scale,
 //! and closer to the native picture than bilinear at half scale; a still
-//! view settles; a moved part leaves no trail; a software adapter refuses
-//! it and draws without it; a tool's capture between output frames leaves
-//! their history alone. `Antialiasing::Dlss` draws DLSS (`dlss.rs`) on
+//! view settles; a moved part and a deformed mesh leave no trail; a
+//! software adapter refuses it and draws without it; a tool's capture
+//! between output frames leaves their history alone. `Antialiasing::Dlss` draws DLSS (`dlss.rs`) on
 //! an RTX GPU in a build with it, and TAAU where it is refused. Software CI
 //! runs the refusal and draw smoke tests; visual sequences are ignored there
 //! and run explicitly on a GPU. `WGPU_ADAPTER_NAME` selects the adapter using
@@ -443,6 +443,132 @@ fn fresh_msaa_frame(harness: &Harness, view: &RendererCompositionCamera) -> Vec<
     let target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, 4);
     renderer.render_offscreen(view, &target);
     target.read_rgba(&harness.gpu)
+}
+
+#[test]
+#[ignore = "hardware-only animated visual sequence; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test taau -- --ignored"]
+fn a_flapping_deformed_mesh_leaves_no_trail() {
+    let (_, trail) = flag_trail(Antialiasing::Temporal);
+    assert!(
+        trail < FLAG_TRAIL,
+        "the flapping flag's trail: {trail} pixels"
+    );
+}
+
+/// Where DLSS draws (an RTX GPU in a build with it).
+#[cfg(feature = "dlss")]
+#[test]
+#[ignore = "RTX-only animated visual sequence; build with render-wgpu/dlss and select the RTX adapter with WGPU_ADAPTER_NAME"]
+fn a_flapping_deformed_mesh_leaves_no_trail_under_dlss() {
+    let (stage, trail) = flag_trail(Antialiasing::Dlss);
+    assert_eq!(stage, Some(UpscaleMethod::Dlss), "the RTX DLSS path drew");
+    assert!(
+        trail < FLAG_TRAIL,
+        "the flapping flag's trail: {trail} pixels"
+    );
+}
+
+const FLAG: u64 = 300;
+const FLAG_MESH: &str = "static-mesh/taau-flag";
+const FLAG_MATERIAL: &str = "material/taau-flag";
+/// Pixels the flapping flag may get wrong beyond the still flag's. Without
+/// the deformed mesh's motion TAAU on RADV gets 222 more wrong (the flag's
+/// shape a frame or more behind), with it 44.
+const FLAG_TRAIL: usize = 100;
+
+/// A 3 m × 1.2 m sheet of 24 × 12 quads before the crates, its hoist at the
+/// left still and its fly rippling up and down and toward the camera (by
+/// `flapping`), as a soft body's surface is drawn: its payload at `seconds`.
+fn flag_at(seconds: f64, flapping: f32) -> MeshPayloadDescriptor {
+    const COLUMNS: u32 = 24;
+    const ROWS: u32 = 12;
+    let (mut positions, mut normals, mut uvs, mut indices) = (vec![], vec![], vec![], vec![]);
+    for row in 0..=ROWS {
+        for column in 0..=COLUMNS {
+            let (u, v) = (column as f32 / COLUMNS as f32, row as f32 / ROWS as f32);
+            let phase = std::f32::consts::TAU * (u * 1.5 - flapping * seconds as f32);
+            positions.extend_from_slice(&[
+                -1.5 + 3.0 * u,
+                0.6 + 1.2 * v + 0.3 * u * phase.sin(),
+                -1.0 + 0.2 * u * phase.cos(),
+            ]);
+            normals.extend_from_slice(&[0.0, 0.0, 1.0]);
+            uvs.extend_from_slice(&[u, v]);
+        }
+    }
+    let at = |column: u32, row: u32| row * (COLUMNS + 1) + column;
+    for row in 0..ROWS {
+        for column in 0..COLUMNS {
+            let (a, b, c, d) = (
+                at(column, row),
+                at(column + 1, row),
+                at(column + 1, row + 1),
+                at(column, row + 1),
+            );
+            indices.extend_from_slice(&[a, b, c, a, c, d]);
+        }
+    }
+    let count = indices.len() as u32;
+    payload(positions, normals, uvs, indices, &[(0, count)])
+}
+
+/// How many more pixels the flag flapping at 1.2 Hz gets wrong than the
+/// flag held still, each drawn for 48 frames at render scale 0.67 under
+/// `antialiasing` with its payload replaced every frame and compared with
+/// the same moment drawn afresh with 4x MSAA; and the stage that drew.
+/// Hardware-only.
+fn flag_trail(antialiasing: Antialiasing) -> (Option<UpscaleMethod>, usize) {
+    let (stage, flapping) = flag_against_a_fresh_frame(antialiasing, 1.2);
+    let (_, still) = flag_against_a_fresh_frame(antialiasing, 0.0);
+    eprintln!(
+        "{antialiasing:?} flag pixels off by more than 48: {flapping} flapping, {still} still"
+    );
+    (stage, flapping.saturating_sub(still))
+}
+
+/// The flag drawn for 48 frames, its payload replaced every frame: the
+/// stage that drew the last frame, and how many of its pixels are off by
+/// more than 48 levels from the same moment drawn afresh with 4x MSAA.
+fn flag_against_a_fresh_frame(
+    antialiasing: Antialiasing,
+    flapping: f32,
+) -> (Option<UpscaleMethod>, usize) {
+    const STEP: f64 = 1.0 / 60.0;
+    let mut harness = scene();
+    require_hardware_adapter(&harness.gpu, "deformed mesh TAAU/DLSS history");
+    harness.apply(vec![
+        RenderDiff::DefineMaterial {
+            material: material(FLAG_MATERIAL, [0.85, 0.15, 0.1, 1.0], None),
+        },
+        static_mesh(FLAG_MESH, flag_at(0.0, flapping), FLAG_MATERIAL),
+        instance(FLAG, None, FLAG_MESH, Transform::IDENTITY),
+        RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                antialiasing,
+                render_scale: 0.67,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        },
+    ]);
+    harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, harness.renderer.samples());
+    let (mut stage, mut last) = (None, Vec::new());
+    for frame in 1..=48 {
+        harness.apply(vec![RenderDiff::ReplaceMeshPayload {
+            handle: RenderHandle::new(FLAG),
+            payload: flag_at(f64::from(frame) * STEP, flapping),
+        }]);
+        let (stats, picture) = harness.render(&view());
+        (stage, last) = (stats.upscale, picture);
+    }
+    let reference = fresh_msaa_frame(&harness, &view());
+    let wrong = last
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(reference.as_chunks::<4>().0)
+        .filter(|(a, b)| (0..3).any(|channel| a[channel].abs_diff(b[channel]) > 48))
+        .count();
+    (stage, wrong)
 }
 
 /// The viewmodel cube in the lower right corner.

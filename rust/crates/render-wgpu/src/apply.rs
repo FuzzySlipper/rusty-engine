@@ -20,7 +20,7 @@ use crate::resources::{self, ResourceSource};
 use crate::shaders::Features;
 use crate::tables::{
     Aabb, Builtin, Environment, GpuMesh, GpuTexture, MaterialRef, MaterialRow, MeshRef, NodeKind,
-    NodeRow, Part, PartClass, PartRow, Topology,
+    NodeRow, Part, PartClass, PartRow, SkinnedHistory, Topology,
 };
 use crate::voxel::VoxelSurfaceUniform;
 use crate::Renderer;
@@ -610,15 +610,30 @@ impl Renderer {
                 for (base, palette) in variants {
                     self.define_layer_variant(&base, &palette)?;
                 }
-                if let Some(previous) = self.tables.payload_meshes.insert(*handle, mesh) {
-                    if let Some(slot) = previous.distance_field.and_then(|field| field.slot) {
-                        self.distance_fields.release(slot);
-                    }
+                let deformed = matches!(
+                    self.tables.nodes.get(handle).map(|node| &node.kind),
+                    Some(NodeKind::StaticMesh { .. })
+                );
+                let previous = self.tables.payload_meshes.remove(handle);
+                if deformed {
+                    mesh.skinned = self.deformed_history(*handle, &mesh, previous.as_ref());
                 }
+                if let Some(slot) = previous
+                    .and_then(|previous| previous.distance_field)
+                    .and_then(|field| field.slot)
+                {
+                    self.distance_fields.release(slot);
+                }
+                self.tables.payload_meshes.insert(*handle, mesh);
                 if let NodeKind::Primitive { has_payload, .. } = &mut self.node_mut(*handle)?.kind {
                     *has_payload = true;
                 }
+                // The parts are the same groups over new geometry: each keeps
+                // its predecessor's previous model, so a deformed mesh that
+                // also moves keeps that motion.
+                let before = self.node_parts(*handle);
                 self.rebuild_parts(*handle);
+                self.temporal.carry(&before, &self.node_parts(*handle));
             }
             RenderDiff::ReplaceMeshDistanceField { handle, field } => {
                 if !self.tables.payload_meshes.contains_key(handle) {
@@ -3077,6 +3092,84 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetVoxelObjectFrame { .. } => "setVoxelObjectFrame",
         RenderDiff::CreateSprite { .. } => "createSprite",
         RenderDiff::UpdateSprite { .. } => "updateSprite",
+    }
+}
+
+impl Renderer {
+    fn node_parts(&self, handle: RenderHandle) -> Vec<crate::tables::PartId> {
+        self.tables
+            .nodes
+            .get(&handle)
+            .map_or(Vec::new(), |node| node.parts.clone())
+    }
+
+    /// A static mesh instance's new shape (a soft body's surface): while
+    /// frames draw motion, its vertices move from the shape the last frame
+    /// with motion drew, as a skinned mesh's do (`animated.rs`). That is
+    /// the replaced payload's vertices if a motion frame drew them, else
+    /// the shape they themselves moved from. A shape of another vertex
+    /// count has no previous one.
+    fn deformed_history(
+        &mut self,
+        handle: RenderHandle,
+        mesh: &GpuMesh,
+        replaced: Option<&GpuMesh>,
+    ) -> Option<SkinnedHistory> {
+        if !self.temporal.keeps_history() {
+            return None;
+        }
+        let frames = self.temporal.motion_frames();
+        let previous = replaced
+            .filter(|replaced| replaced.cpu.positions.len() == mesh.cpu.positions.len())
+            .and_then(|replaced| {
+                let drawn = self
+                    .deformed_settling
+                    .get(&handle)
+                    .is_none_or(|written| *written < frames);
+                if drawn {
+                    Some(replaced.vertices.clone())
+                } else {
+                    replaced.skinned.as_ref()?.previous.clone()
+                }
+            });
+        self.deformed_settling.insert(handle, frames);
+        Some(SkinnedHistory {
+            previous,
+            ..SkinnedHistory::default()
+        })
+    }
+
+    /// At the start of a frame with motion: a deformed shape a frame has
+    /// drawn since it was written is its own previous shape again.
+    pub(crate) fn settle_deformed_history(&mut self) {
+        let frames = self.temporal.motion_frames();
+        let meshes = &mut self.tables.payload_meshes;
+        self.deformed_settling.retain(|handle, written| {
+            if *written == frames {
+                return true;
+            }
+            if let Some(history) = meshes
+                .get_mut(handle)
+                .and_then(|mesh| mesh.skinned.as_mut())
+            {
+                history.previous = None;
+            }
+            false
+        });
+    }
+
+    /// Frames no longer draw motion: no deformed shape is kept.
+    pub(crate) fn forget_deformed_history(&mut self) {
+        for handle in std::mem::take(&mut self.deformed_settling).into_keys() {
+            if let Some(history) = self
+                .tables
+                .payload_meshes
+                .get_mut(&handle)
+                .and_then(|mesh| mesh.skinned.as_mut())
+            {
+                history.previous = None;
+            }
+        }
     }
 }
 

@@ -583,6 +583,10 @@ pub struct Renderer {
     /// Animated instances whose skinned vertices hold a previous pose for
     /// the motion (`animated.rs` `settle_skinned_history`).
     skinned_settling: Vec<render_model::RenderHandle>,
+    /// Static mesh instances whose replaced payload holds the shape the
+    /// last frame with motion drew, and the motion frame each new shape was
+    /// written for (`apply.rs` `deformed_history`).
+    deformed_settling: HashMap<render_model::RenderHandle, u64>,
     ghosts: HashMap<render_presentation::GhostPlateHandle, ghost::GhostPlate>,
     ghost_pipelines: ghost::GhostPipelines,
     /// Overlay sets and what inspection shows (`overlays.rs`).
@@ -858,6 +862,7 @@ impl Renderer {
             animation_facts: Vec::new(),
             animation_generations: HashMap::new(),
             skinned_settling: Vec::new(),
+            deformed_settling: HashMap::new(),
             ghosts: HashMap::new(),
             ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
             overlays: overlays::Overlays::new(),

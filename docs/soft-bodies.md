@@ -167,8 +167,10 @@ fresh bounds. It is one committed description like any other, so the
 window, the stream, captures, snapshots and offline renders draw the same
 shape. The renderer draws it as a static mesh instance whose payload was
 replaced (`RenderDiff::ReplaceMeshPayload`), with the appearance's
-material. The replaced mesh carries no previous positions: temporal
-anti-aliasing and upscaling see the deformation without motion vectors.
+material. While frames draw motion (temporal anti-aliasing, TAAU or
+DLSS), each vertex moves from where the last such frame drew it, as a
+skinned mesh's do, so a flapping flag leaves no trail; a new shape of
+another vertex count (a tear) starts without motion.
 
 ## Readouts
 
@@ -207,7 +209,6 @@ empty, and `soft.inspect` reports its scene's mean step time.
   float visibly.
 - A whole surface is re-sent after every step that moves it (positions,
   normals and UVs; twice the vertices when two-sided).
-- No per-vertex motion vectors (see Drawing).
 - Joint attachments follow the pose one call behind, carried forward by its
   latest motion; a sudden change of motion lags a step.
 

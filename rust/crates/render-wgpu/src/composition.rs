@@ -476,8 +476,10 @@ impl Renderer {
             if motion {
                 self.particles.drawn();
                 self.settle_skinned_history();
+                self.settle_deformed_history();
             } else if kept {
                 self.forget_skinned_history();
+                self.forget_deformed_history();
             }
         }
         if stage.is_none() && !effect {
