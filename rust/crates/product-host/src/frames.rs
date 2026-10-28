@@ -72,7 +72,7 @@ pub(crate) const FLAG_HELD: u8 = 1;
 /// A frame showing a playing video: the page shows it above its UI.
 pub(crate) const FLAG_VIDEO: u8 = 2;
 /// Size rendered before any viewer states one.
-const DEFAULT_FRAME_SIZE: (u32, u32) = (1280, 720);
+const DEFAULT_FRAME_SIZE: (u32, u32) = (1920, 1080);
 /// A viewer is still watching this long after its last request ended.
 const VIEWER_GRACE: Duration = Duration::from_secs(2);
 /// A page that watches starts a frame request at least once per

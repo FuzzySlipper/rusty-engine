@@ -1090,7 +1090,7 @@ def private_kwin(out):
     env = dict(os.environ, KWIN_WAYLAND_NO_PERMISSION_CHECKS='1', KWIN_SCREENSHOT_NO_PERMISSION_CHECKS='1')
     process = subprocess.Popen(['dbus-run-session', '--', 'sh', '-c',
                                 f'echo "$DBUS_SESSION_BUS_ADDRESS" > "{bus}"; exec kwin_wayland --virtual --socket {name} '
-                                '--xwayland --no-lockscreen --width 1280 --height 800'],
+                                '--xwayland --no-lockscreen --width 1920 --height 1080'],
                                env=env, stdout=open(os.path.join(out, 'kwin.log'), 'w'), stderr=subprocess.STDOUT,
                                start_new_session=True)
     for _ in range(100):

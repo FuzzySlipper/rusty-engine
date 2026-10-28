@@ -56,8 +56,8 @@ pub struct LaneSettings {
 impl Default for LaneSettings {
     fn default() -> Self {
         Self {
-            width: 1280,
-            height: 720,
+            width: 1920,
+            height: 1080,
             frames: 30,
             turn: 0.25,
             repeats: 3,
@@ -862,7 +862,7 @@ mod tests {
         assert_eq!(settings.frames, 10);
         assert_eq!(settings.turn, 0.0);
         assert_eq!(settings.changed_share_flag, 0.01);
-        assert_eq!(settings.width, 1280);
+        assert_eq!(settings.width, 1920);
     }
 
     #[test]

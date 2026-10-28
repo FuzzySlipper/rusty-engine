@@ -118,7 +118,7 @@ snapshot on the running product (`engine.renderer.snapshot <path>`, see
 again on a fresh renderer:
 
 ```sh
-rusty-scene-render scene.rscene out.png --width 1280 --height 720 --frames 600
+rusty-scene-render scene.rscene out.png --width 1920 --height 1080 --frames 600
 ```
 
 It prints the adapter, the time to open and apply the snapshot, the mean

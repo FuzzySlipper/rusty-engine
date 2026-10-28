@@ -23,7 +23,7 @@ use crate::{
 };
 
 /// Size a capture draws at when neither the caller nor a window states one.
-const DEFAULT_CAPTURE_SIZE: (u32, u32) = (1280, 720);
+const DEFAULT_CAPTURE_SIZE: (u32, u32) = (1920, 1080);
 
 /// One renderer change a committed product call made, in call order.
 #[derive(Debug, Clone, Copy)]
@@ -606,7 +606,7 @@ impl SceneDriver {
     }
 
     /// Draws the committed scene once into a target of its own and reads it
-    /// back, at `size`, else the window's surface size, else 1280x720, at
+    /// back, at `size`, else the window's surface size, else 1920x1080, at
     /// the pixel ratio the last output drew with. A capture changes no
     /// output's frame size or pixel ratio and draws into no output; its
     /// facts are reported like a drawn frame's. It is a reading

@@ -29,7 +29,7 @@ use render_host_contracts::{RendererCameraPose, RendererViewComposition};
 use render_wgpu::{Capture, DrawnCamera, OffscreenTarget, SceneDriver};
 
 /// Size drawn for an explicit request while no viewer states one.
-const UNWATCHED_SIZE: (u32, u32) = (1280, 720);
+const UNWATCHED_SIZE: (u32, u32) = (1920, 1080);
 /// How long an idle render thread sleeps before rechecking for viewers.
 const IDLE_WAIT: Duration = Duration::from_millis(250);
 /// JPEG quality: 88 KB per 1280x720 Doom frame, without visible blocking.

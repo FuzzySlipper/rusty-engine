@@ -131,7 +131,7 @@ and any settings it overrides. The defaults:
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `width`, `height` | 1280, 720 | Render size |
+| `width`, `height` | 1920, 1080 | Render size |
 | `frames`, `turn` | 30, 0.25 | Frames per render, and degrees the camera turns each, so timings cover more than one view; the image is the snapshot's own view, drawn before them |
 | `repeats` | 3 | Renders per renderer |
 | `changedAbove` | 2 | A pixel counts as changed when a colour channel moves more than this many levels |

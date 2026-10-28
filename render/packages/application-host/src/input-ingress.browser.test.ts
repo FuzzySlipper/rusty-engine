@@ -109,10 +109,10 @@ after(async () => {
 type Drained = ReadonlyArray<{ sequence: string; fact?: { kind: string; reason?: string; code?: string; edge?: string }; intent?: string }>;
 
 test('a menu claimed from pointer-locked gameplay reaches the product once, after held input clears', async () => {
-  const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
   await page.goto(origin);
   await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
-  await page.mouse.click(320, 180);
+  await page.mouse.click(960, 540);
   await page.waitForFunction(() => document.pointerLockElement !== null);
   const drain = (): Promise<Drained> => page.evaluate(
     () => (window as unknown as { host: { input: { drain: () => Drained } } }).host.input.drain(),
@@ -142,11 +142,11 @@ test('a menu claimed from pointer-locked gameplay reaches the product once, afte
 
 
 test('Backspace and F1-F12 deliver both edges, consume gameplay shortcuts, and respect text focus and context clearing', async () => {
-  const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
   try {
     await page.goto(origin);
     await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
-    await page.mouse.click(320, 180);
+    await page.mouse.click(960, 540);
     await page.waitForFunction(() => document.pointerLockElement !== null);
     const drain = (): Promise<Drained> => page.evaluate(
       () => (window as unknown as { host: { input: { drain: () => Drained } } }).host.input.drain(),
@@ -194,7 +194,7 @@ test('Backspace and F1-F12 deliver both edges, consume gameplay shortcuts, and r
       assert.equal(prevented, false);
     }
     assert.ok((await drain()).every(entry => entry.fact?.kind === 'clear'));
-    await page.mouse.click(320, 180);
+    await page.mouse.click(960, 540);
     await page.waitForFunction(() => document.pointerLockElement !== null);
     await drain();
     await page.keyboard.down('F12');
@@ -211,7 +211,7 @@ test('Backspace and F1-F12 deliver both edges, consume gameplay shortcuts, and r
 });
 
 test('a d-pad press held while focus moves onto a select is one press to the interface', async () => {
-  const page = await browser.newPage({ viewport: { width: 640, height: 360 } });
+  const page = await browser.newPage({ viewport: { width: 1920, height: 1080 } });
   try {
     await page.goto(`${origin}/menu`);
     await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);

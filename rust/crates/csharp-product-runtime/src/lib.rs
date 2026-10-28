@@ -2685,7 +2685,7 @@ impl CsharpProductRuntime {
             .collect::<Option<Vec<u32>>>()
             .ok_or_else(usage)?;
         let (width, height) = match size.as_slice() {
-            [] => (1280, 720),
+            [] => (1920, 1080),
             [width, height] => (*width, *height),
             _ => return Err(usage()),
         };

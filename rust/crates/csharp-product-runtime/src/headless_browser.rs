@@ -43,7 +43,7 @@ impl HeadlessBrowser {
             .arg("--disable-extensions")
             .arg("--disable-sync")
             .arg("--hide-scrollbars")
-            .arg("--window-size=1280,720")
+            .arg("--window-size=1920,1080")
             .arg(format!("--user-data-dir={}", profile.display()))
             .arg(url)
             .stdin(Stdio::null())

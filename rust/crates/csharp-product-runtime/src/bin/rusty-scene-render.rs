@@ -100,7 +100,7 @@ struct Arguments {
 fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments>, String> {
     let mut arguments = arguments.into_iter();
     let mut positional = Vec::new();
-    let (mut width, mut height, mut frames) = (1280_u32, 720_u32, 0_u32);
+    let (mut width, mut height, mut frames) = (1920_u32, 1080_u32, 0_u32);
     let (mut walk, mut turn, mut advance) = (0.0_f64, 0.0_f64, 0.0_f64);
     let mut ambient_occlusion: Option<AmbientOcclusionPath> = None;
     let mut ambient_occlusion_strength: Option<f32> = None;
