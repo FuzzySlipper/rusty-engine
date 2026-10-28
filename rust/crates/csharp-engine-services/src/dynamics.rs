@@ -414,7 +414,6 @@ impl RuntimeDynamicsBridge {
         let world = self.active_world_mut(request.world.value)?;
         world.solver.translate(delta);
         world.bind_scene(identity, &scene);
-        self.rebase_soft_body_targets(request.world.value, delta);
         Ok(())
     }
 

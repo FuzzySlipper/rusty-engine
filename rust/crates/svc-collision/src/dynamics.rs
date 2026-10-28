@@ -10,6 +10,7 @@ use rapier3d_f64::prelude::{
 use crate::joint::{DynamicsJoint, DynamicsJointError, DynamicsJointMotor, SolverJoint};
 use crate::soft_body::{
     soft_id, DynamicsSoftBodyError, DynamicsSoftBodyId, DynamicsSoftBodySettings, SolverSoftBody,
+    TearEvents,
 };
 use crate::tether::{
     DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherError, DynamicsTetherReadout,
@@ -340,7 +341,7 @@ impl DynamicsSolver {
             return Vec::new();
         };
         self.joints.retain(|_, joint| !joint.attaches(id));
-        self.detach_soft_bodies_from(id);
+        self.detach_soft_bodies_from(body);
         self.shapes.remove(&id);
         self.floating.remove(&id);
         self.kinematic_targets.remove(&id);
@@ -376,7 +377,7 @@ impl DynamicsSolver {
             .extract_if(.., |_, joint| joint.attaches(body.id))
             .map(|(_, joint)| joint.remove(&mut self.world))
             .collect::<Vec<_>>();
-        let soft_attachments = self.detach_soft_bodies_from(body.id);
+        let soft_attachments = self.detach_soft_bodies_from(previous);
         self.world.remove_body(previous);
         let (builder, collider) = body_builders(&body);
         let (handle, _) = self.world.insert(builder, collider);
@@ -898,8 +899,12 @@ impl DynamicsSolver {
             }
             if soft {
                 self.soft_substep(along);
+                let tears = TearEvents::default();
+                self.world.step_with_events(&(), &tears);
+                self.reconcile_soft_tears(tears.take());
+            } else {
+                self.world.step();
             }
-            self.world.step();
             self.resist_rolling(dt);
             for tether in self.tethers.values_mut() {
                 tether.accumulate(&self.world);

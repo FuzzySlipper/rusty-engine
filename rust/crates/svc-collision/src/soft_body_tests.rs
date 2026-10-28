@@ -620,3 +620,100 @@ fn settings_shape_and_material_are_checked_and_soft_bodies_are_removed() {
     assert_eq!(solver.soft_body_count(), 0);
     steps(&mut solver, 1);
 }
+
+#[test]
+fn coincident_surface_vertices_keep_their_own_uvs() {
+    // Two triangles meeting at one point, its two particles with UVs of
+    // their own, as at a texture seam.
+    let mut solver = DynamicsSolver::new([0.0; 3]);
+    let uvs = vec![
+        [0.0, 0.0],
+        [0.5, 0.0],
+        [0.0, 0.5],
+        [1.0, 0.0],
+        [0.5, 1.0],
+        [1.0, 0.5],
+    ];
+    let shape = DynamicsSoftBodyShape::Surface {
+        positions: vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0],
+            [-1.0, 0.0, 0.0],
+            [0.0, -1.0, 0.0],
+        ],
+        uvs: uvs.clone(),
+        triangles: vec![[0, 1, 2], [3, 4, 5]],
+    };
+    solver.insert_soft_body(input(SHEET, shape)).unwrap();
+    let surface = solver.soft_body_surface(SHEET, false).unwrap();
+    for (corner, particle) in [0, 1, 2, 3, 4, 5].into_iter().enumerate() {
+        assert_eq!(surface.uvs[surface.indices[corner] as usize], uvs[particle]);
+    }
+}
+
+#[test]
+fn a_driven_particle_stays_driven_while_tears_renumber_the_cloth() {
+    let mut solver = DynamicsSolver::new(GRAVITY);
+    solver
+        .configure_soft_bodies(DynamicsSoftBodySettings {
+            substeps: 4,
+            ..Default::default()
+        })
+        .unwrap();
+    let mut torn = banner();
+    torn.material.tear_strain = Some(0.4);
+    solver.insert_soft_body(torn).unwrap();
+    steps(&mut solver, 10);
+    let pins: Vec<[f64; 3]> = banner()
+        .pinned
+        .iter()
+        .map(|pin| particles(&solver, SHEET)[*pin as usize].position)
+        .collect();
+    let before = solver.soft_body(SHEET).unwrap();
+    // The bottom-right corner, dragged 3 m down over half a second.
+    let bottom = COLUMNS * ROWS - 1;
+    let start = particles(&solver, SHEET)[bottom as usize].position;
+    let mut tracked = bottom;
+    for tick in 1..=30 {
+        let mut target = start;
+        target[1] -= 3.0 * f64::from(tick.min(30)) / 30.0;
+        solver
+            .set_soft_body_targets(SHEET, &[(tracked, target)])
+            .unwrap();
+        steps(&mut solver, 1);
+        // The driven particle is the one now at the target: a tear may
+        // have renumbered it, but it was driven there all the same.
+        let now = particles(&solver, SHEET);
+        let at = now.iter().position(|particle| {
+            particle.kinematic
+                && (0..3).all(|axis| (particle.position[axis] - target[axis]).abs() < 1.0e-6)
+        });
+        match at {
+            Some(index) => tracked = index as u32,
+            // Torn off into a piece of its own: the lowest point of the body.
+            None => {
+                let lowest = solver.soft_body(SHEET).unwrap().bounds_min[1];
+                assert!(
+                    (lowest - target[1]).abs() < 1.0e-6,
+                    "tick {tick}: {lowest} {target:?}"
+                );
+                break;
+            }
+        }
+    }
+    let after = solver.soft_body(SHEET).unwrap();
+    assert_ne!(after.topology_version, before.topology_version, "{after:?}");
+    // The pins still hold the same particles where they were.
+    let now = particles(&solver, SHEET);
+    for pin in pins {
+        assert!(
+            now.iter()
+                .any(|particle| particle.kinematic && particle.position == pin),
+            "{pin:?}"
+        );
+    }
+    let surface = solver.soft_body_surface(SHEET, false).unwrap();
+    assert!(surface.positions.iter().flatten().all(|v| v.is_finite()));
+}

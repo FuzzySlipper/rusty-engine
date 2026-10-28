@@ -15,11 +15,14 @@
 //! as bodies of their own; they are drawn and read as part of the body.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Mutex;
 
 use rapier3d_f64::dynamics::{
-    SoftBody, SoftBodyBuilder, SoftBodyCellModel, SoftBodyHandle, SoftBodyMaterial, SoftBodySolver,
-    SpringCoefficients,
+    RigidBodyHandle, RigidBodySet, SoftBody, SoftBodyBuilder, SoftBodyCellModel, SoftBodyHandle,
+    SoftBodyMaterial, SoftBodySet, SoftBodySolver, SoftBodyTearEvent, SpringCoefficients,
 };
+use rapier3d_f64::geometry::{ColliderSet, CollisionEvent, ContactPair};
+use rapier3d_f64::pipeline::EventHandler;
 use rapier3d_f64::prelude::Vector;
 use rapier3d_f64::prelude::{ColliderBuilder, Group, InteractionGroups, InteractionTestMode};
 
@@ -413,24 +416,31 @@ pub struct DynamicsSoftBodyBodyAttachment {
 /// Where the drawn surface's UVs come from.
 #[derive(Debug, Clone)]
 enum SurfaceUvs {
-    /// By each particle's initial rest position, so the copies a tear makes
-    /// of a particle keep its UV.
-    Particles(HashMap<[u64; 3], [f32; 2]>),
+    /// One per particle of each piece (as `handles`), carried through every
+    /// tear: a split particle's copies take its UV.
+    Particles(Vec<Vec<[f32; 2]>>),
     /// One per vertex of the skin.
     Skin(Vec<[f32; 2]>),
 }
+
+/// A particle of a soft body: the piece holding it (an index into the
+/// body's `handles`) and its index there. A tear renumbers particles and
+/// moves some into new pieces; these follow them.
+type Particle = (usize, u32);
 
 pub(crate) struct SolverSoftBody {
     /// The body, then every piece split off it, in the order they split.
     handles: Vec<SoftBodyHandle>,
     uvs: SurfaceUvs,
-    pinned: BTreeSet<u32>,
+    pinned: BTreeSet<Particle>,
     /// Driven particles and where they reach by the end of the next step.
-    targets: BTreeMap<u32, [f64; 3]>,
-    attached: Vec<DynamicsSoftBodyBodyAttachment>,
+    targets: BTreeMap<Particle, [f64; 3]>,
+    /// Particles driven by joint attachments, in attachment order, and
+    /// where they were last driven.
+    joints: Vec<(Particle, Option<[f64; 3]>)>,
     forces: DynamicsSoftBodyForces,
     /// Where each driven particle started the step.
-    starts: Vec<(u32, Vector, Vector)>,
+    starts: Vec<(Particle, Vector, Vector)>,
     /// Whether the body moved or changed since its surface was last taken.
     moved: bool,
     contact_count: u32,
@@ -549,16 +559,7 @@ impl DynamicsSolver {
         }
         let handle = self.world.insert_soft_body(builder);
         let uvs = match uvs {
-            // Keyed as the body keeps its rest shape, so the copies a tear
-            // makes of a particle find its UV.
-            Uvs::Particles(uvs) => SurfaceUvs::Particles(
-                self.world.soft_bodies[handle]
-                    .particles()
-                    .iter()
-                    .zip(uvs)
-                    .map(|(particle, uv)| (bits(particle.initial_rest_position()), uv))
-                    .collect(),
-            ),
+            Uvs::Particles(uvs) => SurfaceUvs::Particles(vec![uvs]),
             Uvs::Skin(uvs) => SurfaceUvs::Skin(uvs),
         };
         self.soft_bodies.insert(
@@ -566,9 +567,13 @@ impl DynamicsSolver {
             SolverSoftBody {
                 handles: vec![handle],
                 uvs,
-                pinned: input.pinned.into_iter().collect(),
+                pinned: input
+                    .pinned
+                    .into_iter()
+                    .map(|particle| (0, particle))
+                    .collect(),
                 targets: BTreeMap::new(),
-                attached: Vec::new(),
+                joints: Vec::new(),
                 forces: DynamicsSoftBodyForces::default(),
                 starts: Vec::new(),
                 moved: true,
@@ -620,24 +625,11 @@ impl DynamicsSolver {
         id: DynamicsSoftBodyId,
         particles: &[u32],
     ) -> Result<(), DynamicsError> {
-        let (handle, count) = self.soft_main(id)?;
+        let (_, count) = self.soft_main(id)?;
         check_particles(id, count, particles.iter().copied())?;
-        let soft = self.soft_bodies.get_mut(&id).expect("checked above");
-        let next: BTreeSet<u32> = particles.iter().copied().collect();
-        let body = self.world.soft_bodies.get_mut(handle).expect("live handle");
-        for released in soft.pinned.difference(&next) {
-            if !soft.targets.contains_key(released) {
-                body.set_particle_pinned(*released as usize, false);
-            }
-        }
-        for pinned in next.difference(&soft.pinned) {
-            if !soft.targets.contains_key(pinned) {
-                body.set_particle_pinned(*pinned as usize, true);
-            }
-        }
-        body.wake_up();
-        soft.pinned = next;
-        soft.moved = true;
+        self.change_kinematic(id, |soft| {
+            soft.pinned = particles.iter().map(|particle| (0, *particle)).collect();
+        });
         Ok(())
     }
 
@@ -649,7 +641,7 @@ impl DynamicsSolver {
         id: DynamicsSoftBodyId,
         targets: &[(u32, [f64; 3])],
     ) -> Result<(), DynamicsError> {
-        let (handle, count) = self.soft_main(id)?;
+        let (_, count) = self.soft_main(id)?;
         check_particles(id, count, targets.iter().map(|(particle, _)| *particle))?;
         if !targets
             .iter()
@@ -657,28 +649,97 @@ impl DynamicsSolver {
         {
             return Err(DynamicsSoftBodyError::Invalid { body: id }.into());
         }
-        let soft = self.soft_bodies.get_mut(&id).expect("checked above");
-        let next: BTreeMap<u32, [f64; 3]> = targets.iter().copied().collect();
-        let body = self.world.soft_bodies.get_mut(handle).expect("live handle");
-        for released in soft.targets.keys() {
-            if !next.contains_key(released) {
-                // A pinned particle stays held where the drive left it.
-                body.set_particle_pinned(*released as usize, soft.pinned.contains(released));
+        self.change_kinematic(id, |soft| {
+            soft.targets = targets
+                .iter()
+                .map(|(particle, at)| ((0, *particle), *at))
+                .collect();
+        });
+        Ok(())
+    }
+
+    /// The particles joint attachments drive, in attachment order: driven
+    /// to [`Self::set_soft_body_joint_targets`] from the next step on, until
+    /// replaced. Particles no longer listed go free unless pinned or driven.
+    pub fn set_soft_body_joint_particles(
+        &mut self,
+        id: DynamicsSoftBodyId,
+        particles: &[u32],
+    ) -> Result<(), DynamicsError> {
+        let (_, count) = self.soft_main(id)?;
+        check_particles(id, count, particles.iter().copied())?;
+        self.change_kinematic(id, |soft| {
+            soft.joints = particles
+                .iter()
+                .map(|particle| ((0, *particle), None))
+                .collect();
+        });
+        Ok(())
+    }
+
+    /// Where each joint-driven particle goes by the end of the next step, in
+    /// attachment order; `None` holds it where it was last driven.
+    pub fn set_soft_body_joint_targets(
+        &mut self,
+        id: DynamicsSoftBodyId,
+        targets: &[Option<[f64; 3]>],
+    ) -> Result<(), DynamicsError> {
+        let soft = self
+            .soft_bodies
+            .get_mut(&id)
+            .ok_or(DynamicsSoftBodyError::Unknown { body: id })?;
+        let finite = targets
+            .iter()
+            .flatten()
+            .all(|at| at.iter().copied().all(f64::is_finite));
+        if targets.len() != soft.joints.len() || !finite {
+            return Err(DynamicsSoftBodyError::Invalid { body: id }.into());
+        }
+        for ((_, last), target) in soft.joints.iter_mut().zip(targets) {
+            if target.is_some() {
+                *last = *target;
             }
         }
-        for particle in next.keys() {
-            if !soft.targets.contains_key(particle) && !soft.pinned.contains(particle) {
-                body.set_particle_pinned(*particle as usize, true);
-            }
-        }
-        body.wake_up();
-        soft.targets = next;
         soft.moved = true;
         Ok(())
     }
 
+    /// Change a body's pins and drives, then pin the particles that became
+    /// kinematic and release the ones that stopped.
+    fn change_kinematic(
+        &mut self,
+        id: DynamicsSoftBodyId,
+        change: impl FnOnce(&mut SolverSoftBody),
+    ) {
+        let Some(soft) = self.soft_bodies.get_mut(&id) else {
+            return;
+        };
+        let before = soft.kinematic();
+        change(soft);
+        let after = soft.kinematic();
+        for particle in before.symmetric_difference(&after) {
+            let Some(body) = soft
+                .handles
+                .get(particle.0)
+                .and_then(|handle| self.world.soft_bodies.get_mut(*handle))
+            else {
+                continue;
+            };
+            if (particle.1 as usize) < body.num_particles() {
+                body.set_particle_pinned(particle.1 as usize, after.contains(particle));
+            }
+        }
+        for handle in &soft.handles {
+            if let Some(body) = self.world.soft_bodies.get_mut(*handle) {
+                body.wake_up();
+            }
+        }
+        soft.moved = true;
+    }
+
     /// Replace the body attachments: each particle is held to the point of
-    /// its body where the particle is now, both ways.
+    /// its body where the particle is now, both ways. Attachments a tear
+    /// carried into pieces are replaced too.
     pub fn set_soft_body_attachments(
         &mut self,
         id: DynamicsSoftBodyId,
@@ -690,12 +751,20 @@ impl DynamicsSolver {
             .iter()
             .map(|attachment| self.handle(attachment.body))
             .collect::<Result<Vec<_>, _>>()?;
-        let soft = self.soft_bodies.get_mut(&id).expect("checked above");
         let world = &mut self.world;
-        let body = world.soft_bodies.get_mut(handle).expect("live handle");
-        for previous in &soft.attached {
-            body.detach_particle(previous.particle as usize);
+        for piece in &self.soft_bodies[&id].handles {
+            if let Some(body) = world.soft_bodies.get_mut(*piece) {
+                let attached: BTreeSet<u32> = body
+                    .particle_attachments()
+                    .iter()
+                    .map(|attachment| attachment.particle)
+                    .collect();
+                for particle in attached {
+                    body.detach_particle(particle as usize);
+                }
+            }
         }
+        let body = world.soft_bodies.get_mut(handle).expect("live handle");
         for (attachment, rigid) in attachments.iter().zip(&rigid) {
             body.attach_particle(attachment.particle as usize, *rigid, &world.bodies);
         }
@@ -703,7 +772,6 @@ impl DynamicsSolver {
         for rigid in rigid {
             world.wake_up(rigid, true);
         }
-        soft.attached = attachments.to_vec();
         Ok(())
     }
 
@@ -896,10 +964,11 @@ impl DynamicsSolver {
     ) -> Option<DynamicsSoftBodySurface> {
         let soft = self.soft_bodies.get(&id)?;
         let mut surface = DynamicsSoftBodySurface::default();
-        for body in soft
+        for (slot, body) in soft
             .handles
             .iter()
-            .filter_map(|handle| self.world.soft_bodies.get(*handle))
+            .enumerate()
+            .filter_map(|(slot, handle)| Some((slot, self.world.soft_bodies.get(*handle)?)))
         {
             let skin = match &soft.uvs {
                 SurfaceUvs::Skin(uvs) => body
@@ -930,13 +999,13 @@ impl DynamicsSolver {
                         for particle in triangle {
                             let vertex = *vertex_of.entry(*particle).or_insert_with(|| {
                                 let at = body.particles()[*particle as usize].position();
-                                let rest =
-                                    body.particles()[*particle as usize].initial_rest_position();
                                 surface.positions.push(at.as_vec3().to_array());
                                 surface.uvs.push(match uvs {
-                                    SurfaceUvs::Particles(table) => {
-                                        table.get(&bits(rest)).copied().unwrap_or_default()
-                                    }
+                                    SurfaceUvs::Particles(pieces) => pieces
+                                        .get(slot)
+                                        .and_then(|piece| piece.get(*particle as usize))
+                                        .copied()
+                                        .unwrap_or_default(),
                                     SurfaceUvs::Skin(_) => [0.0; 2],
                                 });
                                 surface.positions.len() as u32 - 1
@@ -1001,18 +1070,33 @@ impl DynamicsSolver {
         Ok((soft.handles[0], body.num_particles()))
     }
 
-    /// Before a step: note where each driven particle starts.
+    /// Before a step: note where each driven particle starts and where it
+    /// goes, a joint's target over the product's.
     pub(crate) fn begin_soft_step(&mut self) {
         for soft in self.soft_bodies.values_mut() {
+            let driven: BTreeMap<Particle, [f64; 3]> = soft
+                .targets
+                .iter()
+                .map(|(particle, target)| (*particle, *target))
+                .chain(
+                    soft.joints
+                        .iter()
+                        .filter_map(|(particle, target)| Some((*particle, (*target)?))),
+                )
+                .collect();
             soft.starts.clear();
-            let Some(body) = self.world.soft_bodies.get(soft.handles[0]) else {
-                continue;
-            };
-            for (particle, target) in &soft.targets {
-                if (*particle as usize) < body.num_particles() {
-                    let start = body.particle_position(*particle as usize);
+            for (particle, target) in driven {
+                let Some(body) = soft
+                    .handles
+                    .get(particle.0)
+                    .and_then(|handle| self.world.soft_bodies.get(*handle))
+                else {
+                    continue;
+                };
+                if (particle.1 as usize) < body.num_particles() {
+                    let start = body.particle_position(particle.1 as usize);
                     soft.starts
-                        .push((*particle, start, Vector::from_array(*target)));
+                        .push((particle, start, Vector::from_array(target)));
                 }
             }
         }
@@ -1023,14 +1107,15 @@ impl DynamicsSolver {
     pub(crate) fn soft_substep(&mut self, along: f64) {
         for soft in self.soft_bodies.values_mut() {
             let forces = soft.forces;
-            for (index, handle) in soft.handles.iter().enumerate() {
+            for (slot, handle) in soft.handles.iter().enumerate() {
                 let Some(body) = self.world.soft_bodies.get_mut(*handle) else {
                     continue;
                 };
-                if index == 0 {
-                    for (particle, start, target) in &soft.starts {
+                for (particle, start, target) in &soft.starts {
+                    // Tears are reconciled after every substep.
+                    if particle.0 == slot && (particle.1 as usize) < body.num_particles() {
                         body.set_particle_kinematic_target(
-                            *particle as usize,
+                            particle.1 as usize,
                             start.lerp(*target, along),
                         );
                     }
@@ -1046,8 +1131,7 @@ impl DynamicsSolver {
         }
     }
 
-    /// After a step: adopt pieces split off by tears, count contacts and
-    /// note which bodies moved.
+    /// After a step: count contacts and note which bodies moved.
     pub(crate) fn end_soft_step(&mut self) {
         let mut touching: BTreeMap<u64, u32> = BTreeMap::new();
         for pair in self.world.contact_pairs() {
@@ -1067,17 +1151,6 @@ impl DynamicsSolver {
             }
         }
         for (id, soft) in &mut self.soft_bodies {
-            let mut index = 0;
-            while index < soft.handles.len() {
-                if let Some(body) = self.world.soft_bodies.get(soft.handles[index]) {
-                    for piece in body.pieces() {
-                        if !soft.handles.contains(piece) {
-                            soft.handles.push(*piece);
-                        }
-                    }
-                }
-                index += 1;
-            }
             soft.contact_count = touching.get(&id.0).copied().unwrap_or(0);
             soft.moved |= soft.handles.iter().any(|handle| {
                 self.world
@@ -1100,32 +1173,46 @@ impl DynamicsSolver {
                     body.set_particle_position(index, position);
                 }
             }
-            for target in soft.targets.values_mut() {
+            let moved = |target: &mut [f64; 3]| {
                 *target = (Vector::from_array(*target) + delta).to_array();
-            }
+            };
+            soft.targets.values_mut().for_each(moved);
+            soft.joints
+                .iter_mut()
+                .filter_map(|(_, target)| target.as_mut())
+                .for_each(moved);
             soft.moved = true;
         }
     }
 
-    /// Drop attachments to a body about to be removed; returns them so a
-    /// replacement can take them again.
+    /// Drop attachments to a rigid body about to be removed; returns them
+    /// so a replacement can take them again. Rapier detaches a particle
+    /// from every body at once, so its other attachments are made again.
     pub(crate) fn detach_soft_bodies_from(
         &mut self,
-        id: DynamicsBodyId,
-    ) -> Vec<(DynamicsSoftBodyId, u32)> {
+        rigid: RigidBodyHandle,
+    ) -> Vec<(SoftBodyHandle, u32)> {
         let mut detached = Vec::new();
-        for (soft_id, soft) in &mut self.soft_bodies {
-            let Some(body) = self.world.soft_bodies.get_mut(soft.handles[0]) else {
+        let world = &mut self.world;
+        for handle in self.soft_bodies.values().flat_map(|soft| &soft.handles) {
+            let Some(body) = world.soft_bodies.get_mut(*handle) else {
                 continue;
             };
-            soft.attached.retain(|attachment| {
-                if attachment.body != id {
-                    return true;
-                }
-                body.detach_particle(attachment.particle as usize);
-                detached.push((*soft_id, attachment.particle));
-                false
-            });
+            let attachments = body.particle_attachments().to_vec();
+            let particles: BTreeSet<u32> = attachments
+                .iter()
+                .filter(|attachment| attachment.body == rigid)
+                .map(|attachment| attachment.particle)
+                .collect();
+            for particle in &particles {
+                body.detach_particle(*particle as usize);
+                detached.push((*handle, *particle));
+            }
+            for other in attachments.iter().filter(|attachment| {
+                particles.contains(&attachment.particle) && attachment.body != rigid
+            }) {
+                body.attach_particle(other.particle as usize, other.body, &world.bodies);
+            }
         }
         detached
     }
@@ -1133,23 +1220,159 @@ impl DynamicsSolver {
     pub(crate) fn reattach_soft_bodies(
         &mut self,
         id: DynamicsBodyId,
-        attachments: Vec<(DynamicsSoftBodyId, u32)>,
+        attachments: Vec<(SoftBodyHandle, u32)>,
     ) {
         let Ok(rigid) = self.handle(id) else {
             return;
         };
-        for (soft_id, particle) in attachments {
-            let Some(soft) = self.soft_bodies.get_mut(&soft_id) else {
-                continue;
-            };
-            let world = &mut self.world;
-            let Some(body) = world.soft_bodies.get_mut(soft.handles[0]) else {
-                continue;
-            };
-            body.attach_particle(particle as usize, rigid, &world.bodies);
-            soft.attached
-                .push(DynamicsSoftBodyBodyAttachment { particle, body: id });
+        let world = &mut self.world;
+        for (handle, particle) in attachments {
+            if let Some(body) = world.soft_bodies.get_mut(handle) {
+                body.attach_particle(particle as usize, rigid, &world.bodies);
+            }
         }
+    }
+
+    /// After a substep: follow each tear's renumbering and new pieces, so
+    /// pins, drives and UVs still name the particles they named.
+    pub(crate) fn reconcile_soft_tears(&mut self, tears: Vec<SoftBodyTearEvent>) {
+        for tear in tears {
+            let Some(soft) = self
+                .soft_bodies
+                .values_mut()
+                .find(|soft| soft.handles.contains(&tear.soft_body))
+            else {
+                continue;
+            };
+            soft.reconcile(&tear);
+        }
+    }
+}
+
+impl SolverSoftBody {
+    /// The particles held kinematic: pinned, driven or joint-driven.
+    fn kinematic(&self) -> BTreeSet<Particle> {
+        self.pinned
+            .iter()
+            .chain(self.targets.keys())
+            .chain(self.joints.iter().map(|(particle, _)| particle))
+            .copied()
+            .collect()
+    }
+
+    fn slot(&self, handle: SoftBodyHandle) -> Option<usize> {
+        self.handles.iter().position(|known| *known == handle)
+    }
+
+    fn reconcile(&mut self, tear: &SoftBodyTearEvent) {
+        let Some(torn) = self.slot(tear.soft_body) else {
+            return;
+        };
+        for piece in &tear.pieces {
+            if self.slot(piece.soft_body).is_none() {
+                self.handles.push(piece.soft_body);
+            }
+        }
+        let handles = self.handles.clone();
+        let slot = |handle: SoftBodyHandle| {
+            handles
+                .iter()
+                .position(|known| *known == handle)
+                .expect("the tear's pieces are adopted")
+        };
+        // A tear keeps its particles' indices and appends the copies; a
+        // split then numbers each piece's particles afresh.
+        let remap = |particle: Particle| -> Particle {
+            if particle.0 != torn {
+                return particle;
+            }
+            match tear.particle_destination(particle.1) {
+                Some((handle, index)) => (slot(handle), index),
+                None => particle,
+            }
+        };
+        self.pinned = self
+            .pinned
+            .iter()
+            .map(|particle| remap(*particle))
+            .collect();
+        self.targets = self
+            .targets
+            .iter()
+            .map(|(particle, target)| (remap(*particle), *target))
+            .collect();
+        for (particle, _) in &mut self.joints {
+            *particle = remap(*particle);
+        }
+        for (particle, _, _) in &mut self.starts {
+            *particle = remap(*particle);
+        }
+        if let SurfaceUvs::Particles(pieces) = &mut self.uvs {
+            pieces.resize(handles.len(), Vec::new());
+            let mut torn_uvs = std::mem::take(&mut pieces[torn]);
+            for &(copy, source) in &tear.split_particles {
+                let uv = torn_uvs.get(source as usize).copied().unwrap_or_default();
+                if torn_uvs.len() <= copy as usize {
+                    torn_uvs.resize(copy as usize + 1, [0.0; 2]);
+                }
+                torn_uvs[copy as usize] = uv;
+            }
+            if tear.pieces.is_empty() {
+                pieces[torn] = torn_uvs;
+            } else {
+                for piece in &tear.pieces {
+                    pieces[slot(piece.soft_body)] = piece
+                        .particles
+                        .iter()
+                        .map(|particle| {
+                            torn_uvs
+                                .get(*particle as usize)
+                                .copied()
+                                .unwrap_or_default()
+                        })
+                        .collect();
+                }
+            }
+        }
+        self.moved = true;
+    }
+}
+
+/// Collects a substep's tears for [`DynamicsSolver::reconcile_soft_tears`].
+#[derive(Default)]
+pub(crate) struct TearEvents(Mutex<Vec<SoftBodyTearEvent>>);
+
+impl TearEvents {
+    pub(crate) fn take(&self) -> Vec<SoftBodyTearEvent> {
+        std::mem::take(&mut *self.0.lock().expect("tear events are only pushed"))
+    }
+}
+
+impl EventHandler for TearEvents {
+    fn handle_collision_event(
+        &self,
+        _: &RigidBodySet,
+        _: &ColliderSet,
+        _: CollisionEvent,
+        _: Option<&ContactPair>,
+    ) {
+    }
+
+    fn handle_contact_force_event(
+        &self,
+        _: f64,
+        _: &RigidBodySet,
+        _: &ColliderSet,
+        _: &ContactPair,
+        _: f64,
+    ) {
+    }
+
+    fn handle_soft_body_tear_event(&self, _: &SoftBodySet, event: &SoftBodyTearEvent) {
+        self.0
+            .lock()
+            .expect("tear events are only pushed")
+            .push(event.clone());
     }
 }
 
@@ -1405,10 +1628,6 @@ fn check_particles(
 
 pub(crate) fn soft_id(user_data: u128) -> Option<u64> {
     (user_data & SOFT_COLLIDER_TAG != 0).then(|| (user_data & u128::from(u64::MAX)) as u64)
-}
-
-fn bits(position: Vector) -> [u64; 3] {
-    position.to_array().map(f64::to_bits)
 }
 
 fn positive(value: f64) -> bool {

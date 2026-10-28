@@ -22,19 +22,17 @@ pub(super) enum SoftBodySlot {
 
 pub(super) struct SoftBody {
     world: u64,
-    /// Targets the product set, merged with the joints' each step.
-    targets: Vec<(u32, [f64; 3])>,
     joints: Option<JointAttachments>,
     /// Appearances drawing it, and whether each draws triangles' backs.
     appearances: Vec<(u64, bool)>,
 }
 
+/// The joints and offsets of a soft body's joint attachments, in the order
+/// the solver keeps their particles (which tears renumber).
 struct JointAttachments {
     instance: u64,
-    /// Particle, joint and offset in the joint's frame.
-    attachments: Vec<(u32, u32, [f64; 3])>,
-    /// Where they were driven last, held while the instance has no pose.
-    last: Vec<(u32, [f64; 3])>,
+    /// Joint and offset in the joint's frame.
+    attachments: Vec<(u32, [f64; 3])>,
 }
 
 fn soft_error(message: impl Into<String>) -> CsharpEngineServicesError {
@@ -264,7 +262,6 @@ impl RuntimeDynamicsBridge {
             handle,
             SoftBodySlot::Active(SoftBody {
                 world: request.world.value,
-                targets: Vec::new(),
                 joints: None,
                 appearances: Vec::new(),
             }),
@@ -345,28 +342,8 @@ impl RuntimeDynamicsBridge {
             .map(|target| (target.particle, point(target.position)))
             .collect::<Vec<_>>();
         let handle = request.soft_body.value;
-        let joint_targets = self
-            .active_soft_body(handle)?
-            .joints
-            .as_ref()
-            .map(|joints| joints.last.clone())
-            .unwrap_or_default();
-        self.drive(handle, &targets, &joint_targets)?;
-        self.active_soft_body_mut(handle)?.targets = targets;
-        Ok(())
-    }
-
-    /// Product targets, then joint targets over them.
-    fn drive(
-        &mut self,
-        handle: u64,
-        targets: &[(u32, [f64; 3])],
-        joints: &[(u32, [f64; 3])],
-    ) -> Result<(), CsharpEngineServicesError> {
-        let merged: BTreeMap<u32, [f64; 3]> = targets.iter().chain(joints).copied().collect();
-        let merged: Vec<(u32, [f64; 3])> = merged.into_iter().collect();
         self.soft_solver(handle)?
-            .set_soft_body_targets(DynamicsSoftBodyId(handle), &merged)
+            .set_soft_body_targets(DynamicsSoftBodyId(handle), &targets)
             .map_err(soft_solver_error)
     }
 
@@ -441,16 +418,18 @@ impl RuntimeDynamicsBridge {
                 *offset = local(&posed.world, at.position);
             }
         }
-        let targets = self.active_soft_body(handle)?.targets.clone();
-        if joints.is_empty() {
-            self.active_soft_body_mut(handle)?.joints = None;
-            return self.drive(handle, &targets, &[]);
-        }
-        self.active_soft_body_mut(handle)?.joints = Some(JointAttachments {
-            instance,
-            attachments: joints,
-            last: Vec::new(),
-        });
+        let particles: Vec<u32> = joints.iter().map(|(particle, _, _)| *particle).collect();
+        self.soft_solver(handle)?
+            .set_soft_body_joint_particles(DynamicsSoftBodyId(handle), &particles)
+            .map_err(soft_solver_error)?;
+        self.active_soft_body_mut(handle)?.joints =
+            (!joints.is_empty()).then(|| JointAttachments {
+                instance,
+                attachments: joints
+                    .into_iter()
+                    .map(|(_, joint, offset)| (joint, offset))
+                    .collect(),
+            });
         // Driven from the next step on.
         self.drive_soft_body(handle, 0.0)
     }
@@ -485,35 +464,29 @@ impl RuntimeDynamicsBridge {
                 .ok(),
             false => None,
         };
-        let body = self.active_soft_body_mut(handle)?;
-        let joints = body.joints.as_mut().expect("checked above");
-        if let Some(source) = source {
-            // Where each offset is now, carried forward by the pose's latest
-            // motion to the end of the step.
-            let ahead = source.previous.as_ref().and_then(|previous| {
-                let interval = source.latest.seconds - previous.seconds;
-                (interval > 0.0).then(|| (&previous.joints, seconds / interval))
-            });
-            joints.last = attachments
-                .iter()
-                .filter_map(|(particle, joint, offset)| {
-                    let posed = source.latest.joints.get(*joint as usize)?;
-                    let now = place(&posed.world, *offset);
-                    let target = match ahead {
-                        Some((previous, ahead)) => {
-                            let before = place(&previous.get(*joint as usize)?.world, *offset);
-                            std::array::from_fn(|axis| {
-                                now[axis] + (now[axis] - before[axis]) * ahead
-                            })
-                        }
-                        None => now,
-                    };
-                    Some((*particle, target))
+        // Where each offset is now, carried forward by the pose's latest
+        // motion to the end of the step; with no pose, held where it was.
+        let targets: Vec<Option<[f64; 3]>> = attachments
+            .iter()
+            .map(|(joint, offset)| {
+                let source = source.as_ref()?;
+                let now = place(&source.latest.joints.get(*joint as usize)?.world, *offset);
+                let ahead = source.previous.as_ref().and_then(|previous| {
+                    let interval = source.latest.seconds - previous.seconds;
+                    let before = place(&previous.joints.get(*joint as usize)?.world, *offset);
+                    (interval > 0.0).then_some((before, seconds / interval))
+                });
+                Some(match ahead {
+                    Some((before, ahead)) => {
+                        std::array::from_fn(|axis| now[axis] + (now[axis] - before[axis]) * ahead)
+                    }
+                    None => now,
                 })
-                .collect();
-        }
-        let (targets, last) = (body.targets.clone(), joints.last.clone());
-        self.drive(handle, &targets, &last)
+            })
+            .collect();
+        self.soft_solver(handle)?
+            .set_soft_body_joint_targets(DynamicsSoftBodyId(handle), &targets)
+            .map_err(soft_solver_error)
     }
 
     /// After a step of `world`: reshape the appearances of each soft body
@@ -688,27 +661,6 @@ impl RuntimeDynamicsBridge {
             particles: self.soft_particles.as_ptr(),
             particles_len: self.soft_particles.len(),
         })
-    }
-
-    /// Product targets move with a rebase of their world; joint targets
-    /// follow the pose.
-    pub(super) fn rebase_soft_body_targets(&mut self, world: u64, delta: [f64; 3]) {
-        for slot in self.soft_bodies.values_mut() {
-            let SoftBodySlot::Active(body) = slot else {
-                continue;
-            };
-            if body.world != world {
-                continue;
-            }
-            for (_, target) in &mut body.targets {
-                *target = std::array::from_fn(|axis| target[axis] + delta[axis]);
-            }
-            if let Some(joints) = &mut body.joints {
-                for (_, target) in &mut joints.last {
-                    *target = std::array::from_fn(|axis| target[axis] + delta[axis]);
-                }
-            }
-        }
     }
 }
 

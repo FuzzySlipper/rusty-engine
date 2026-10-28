@@ -107,9 +107,12 @@ differ in who says where they go.
   the pose drawn this call; with no pose it holds the last targets. An empty
   list ends them. Joint targets win over product targets for one particle.
 
-Particle indices are the body's own. A tear that splits a piece off makes
-it a body of its own, read and drawn with this one, whose particles cannot
-be addressed.
+Particle indices are the body's current numbering, as
+`ReadSoftBodyParticles` lists it. A tear renumbers the particles and may move
+some into pieces of their own, read and drawn with the body but not
+addressable. Pins, targets and body and joint attachments keep holding the
+particles they held, wherever the tear put them; setting pins, targets or
+attachments again replaces those in the pieces too.
 
 ## Forces
 
@@ -217,7 +220,10 @@ empty, and `soft.inspect` reports its scene's mean step time.
   and free particles and release them; a body attachment pulls both ways
   and ends with the body; a rebase moves particles and targets; the drawn
   surface's UVs, normals, bounds and two-sided back; a torn banner draws
-  every piece with its UVs; a filled mesh draws its own triangles;
+  every piece with its UVs; coincident surface vertices keep their own
+  UVs; a driven particle stays driven, and pins stay on their particles,
+  while a tear renumbers the cloth mid-step; a filled mesh draws its own
+  triangles;
   self-contacts and FEM bodies step finite; validation and removal.
 - Bridge tests: an appearance is reshaped by the steps that move its body,
   and not once the body is gone; joint attachments carry cloth with a posed
