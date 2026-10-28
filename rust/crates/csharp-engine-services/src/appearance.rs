@@ -7273,6 +7273,12 @@ impl RuntimeAppearanceBridge {
         })
     }
 
+    /// Empties the retained object set, as an empty snapshot does, so that
+    /// product shutdown may dispose what it showed in any order.
+    pub(crate) fn retire_snapshot(&mut self) -> Result<(), CsharpEngineServicesError> {
+        self.stage_changes(&[], None, &BTreeMap::new())
+    }
+
     /// Makes the given facts the complete retained object set. A snapshot
     /// cannot name joints, so each object keeps its attachment.
     unsafe fn stage_snapshot(
@@ -11091,7 +11097,7 @@ pub(super) mod tests {
         }
     }
 
-    pub(super) fn primitive_request() -> NativePrimitiveAppearanceRequest {
+    pub(crate) fn primitive_request() -> NativePrimitiveAppearanceRequest {
         NativePrimitiveAppearanceRequest {
             geometry: NativePrimitiveGeometry::Cube,
             wireframe: false,
@@ -11986,7 +11992,7 @@ pub(super) mod tests {
         ));
     }
 
-    pub(super) fn appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanceFact {
+    pub(crate) fn appearance_fact(appearance: NativeAppearanceHandle) -> NativeAppearanceFact {
         NativeAppearanceFact {
             object_id: 7,
             has_parent_object: false,

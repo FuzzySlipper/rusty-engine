@@ -366,6 +366,18 @@ impl RuntimeCameraViewBridge {
         self.state = staged.state;
     }
 
+    /// Clears the sky, star field and decal atlas, the camera view's uses of
+    /// renderer resources, so product shutdown can release them in any order.
+    pub(crate) fn retire_textures(&mut self) -> Result<(), CsharpEngineServicesError> {
+        self.clear_sky()?;
+        let staged = self.staged_mut()?;
+        staged.stars = Some(None);
+        staged.state.stars = None;
+        staged.decal_atlas = Some(None);
+        staged.state.decal_atlas = None;
+        Ok(())
+    }
+
     /// Appearance resource release must observe a sky selected earlier in the
     /// same product callback as well as the committed retained selection.
     pub(crate) fn uses_sky_texture(&self, resource: u64) -> bool {

@@ -22,6 +22,13 @@ runtime is paused ([actions while paused](#actions-while-paused)).
 - `ProductCreateContext.Debugging.Snapshot` holds the latest lifecycle state
   and runtime binding, including host-only fault and control transitions, and
   the facts of the last delivered update.
+- A shut-down product shows nothing: before calling `Shutdown` the Engine
+  retires the published appearance set and the sky, star field and decal
+  atlas. `Shutdown` and `Dispose` may then release
+  appearances and renderer resources in any order, however the run ended
+  (window closed, `rusty dev stop`, product exit). Ownership order between
+  the product's own handles still applies, such as an animation instance
+  before its appearance.
 - The runtime, not the product, drives lifecycle transitions and owns host
   integration. Do not create another central game loop or advance Engine time
   yourself.

@@ -700,6 +700,17 @@ impl EngineServiceSet {
         self.begin_services(ui_binding, None, None, true);
     }
 
+    /// Product shutdown. A shut-down product shows nothing, so the Engine
+    /// retires its retained scene and sky first: the product then disposes
+    /// what it showed in any order, however the run ended.
+    pub fn begin_shutdown_call(&mut self, ui_binding: RuntimeUiRuntimeBinding) {
+        self.begin_services(ui_binding, None, None, false);
+        // Each only removes; a refusal would leave the product's own
+        // disposal to report what is still in use.
+        let _ = self.appearance.retire_snapshot();
+        let _ = self.camera_view.retire_textures();
+    }
+
     pub fn begin_update_call(
         &mut self,
         ui_binding: RuntimeUiRuntimeBinding,
@@ -5594,5 +5605,98 @@ mod tests {
         };
         assert_eq!(text(diagnostic.code), expected);
         assert!(!text(diagnostic.message).is_empty());
+    }
+
+    /// Product shutdown retires the published scene and sky first, so a
+    /// product disposes an appearance and a texture still in use as it
+    /// leaves them, in any order. An ordinary call still refuses.
+    #[test]
+    fn shutdown_disposes_what_the_product_still_shows() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::from([(
+                "sky.png".to_owned(),
+                crate::ContentBytes::from(crate::appearance::tests::RGBA_PNG),
+            )]),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let mut texture = NativeRenderResourceInfo::default();
+        let mut appearance = NativeAppearanceHandle::default();
+        unsafe {
+            assert_eq!(
+                (api.graphics.open_resource)(
+                    api.graphics.context,
+                    &crate::appearance::tests::resource_request("sky.png"),
+                    &mut texture,
+                    std::ptr::null_mut(),
+                ),
+                ABI_OK
+            );
+            assert_eq!(
+                (api.camera_view.set_sky_background)(
+                    api.camera_view.context,
+                    texture.handle,
+                    std::ptr::null_mut(),
+                ),
+                ABI_OK
+            );
+            assert_eq!(
+                (api.graphics.create_primitive)(
+                    api.graphics.context,
+                    crate::appearance::tests::primitive_request(),
+                    &mut appearance,
+                    std::ptr::null_mut(),
+                ),
+                ABI_OK
+            );
+            let fact = crate::appearance::tests::appearance_fact(appearance);
+            assert_eq!(
+                (api.graphics.publish_snapshot)(
+                    api.graphics.context,
+                    &fact,
+                    1,
+                    std::ptr::null_mut(),
+                ),
+                ABI_OK
+            );
+        }
+        services.finish_call().expect("published");
+        // A refusal is borrowed until the next call, so each is read at once.
+        let codes = |status, refusal: &NativeOperationErrorReceipt| {
+            if status == ABI_OK {
+                Vec::new()
+            } else {
+                receipt_codes(refusal)
+            }
+        };
+        let dispose = |api: &NativeEngineApi| unsafe {
+            let mut refusal = empty_receipt();
+            let status =
+                (api.graphics.destroy_appearance)(api.graphics.context, appearance, &mut refusal);
+            let appearance_codes = codes(status, &refusal);
+            let mut refusal = empty_receipt();
+            let status =
+                (api.graphics.destroy_resource)(api.graphics.context, texture.handle, &mut refusal);
+            [appearance_codes, codes(status, &refusal)]
+        };
+
+        services.begin_call(binding());
+        assert_eq!(
+            dispose(&services.api()),
+            [
+                ["CSHARP_APPEARANCE_IN_USE"],
+                ["CSHARP_RENDER_RESOURCE_IN_USE"]
+            ]
+        );
+        services.finish_call().expect("refused call");
+
+        services.begin_shutdown_call(binding());
+        assert_eq!(dispose(&services.api()), [Vec::<String>::new(), Vec::new()]);
+        services.finish_call().expect("shutdown call");
     }
 }

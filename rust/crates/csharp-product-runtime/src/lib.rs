@@ -2244,6 +2244,8 @@ impl CsharpProductRuntime {
                 | ProductHostOperationKind::Restart
         ) {
             self.services.begin_lifecycle_call(call_binding);
+        } else if matches!(operation, ProductHostOperationKind::Shutdown) {
+            self.services.begin_shutdown_call(call_binding);
         } else {
             self.services.begin_call(call_binding);
         }
