@@ -131,7 +131,7 @@ const UNSCALED: f32 = 1e-6;
 /// applied to its local scale about the node as `posed` places it; its
 /// descendants follow. Children go first, so a parent scaled to 0 never has
 /// to be undone to scale a child. An axis the pose below already scales to 0
-/// stays 0.
+/// stays 0, and a mirrored one stays mirrored.
 fn scale_joints<H: Hierarchy + ?Sized>(
     model: &H,
     posed: &mut [Mat4],
@@ -155,12 +155,17 @@ fn scale_joints<H: Hierarchy + ?Sized>(
                 let target = if joint.additive {
                     scale * value
                 } else {
-                    Vec3::splat(value)
+                    // A mirrored axis stays mirrored.
+                    from.signum() * value
                 };
                 scale = scale.lerp(target, joint.weight);
             }
         }
-        let factor = Vec3::select(from.cmpgt(Vec3::splat(DEGENERATE)), scale / from, Vec3::ONE);
+        let factor = Vec3::select(
+            from.abs().cmpgt(Vec3::splat(DEGENERATE)),
+            scale / from,
+            Vec3::ONE,
+        );
         if !factor.is_finite() || factor.abs_diff_eq(Vec3::ONE, UNSCALED) {
             continue;
         }
@@ -795,6 +800,27 @@ mod tests {
         let both = posed(vec![scaled(0, false, 0.0, 1.0), scaled(1, false, 2.0, 1.0)]);
         assert!(both.iter().all(|node| node.is_finite()));
         assert_eq!(position(&both, 2), Vec3::ZERO);
+    }
+
+    #[test]
+    fn a_mirrored_joint_scales_and_stays_mirrored() {
+        let mut model = arm();
+        model.nodes[1].rest.scale = Vec3::new(-1.0, 1.0, 1.0);
+        let unposed = compose(&model, &rest(&model));
+        let posed = |scale: f32| {
+            let pose = AnimatedMeshPose {
+                overrides: vec![scaled(1, false, scale, 1.0)],
+                ..AnimatedMeshPose::default()
+            };
+            controlled(&model, &RIG, rest(&model), &pose, Mat4::IDENTITY)
+        };
+        let collapsed = posed(0.0);
+        assert_eq!(collapsed[1].transform_vector3(Vec3::ONE), Vec3::ZERO);
+        assert_eq!(position(&collapsed, 2), position(&collapsed, 1));
+        assert_eq!(posed(1.0), unposed, "scale 1 keeps the mirror");
+        let doubled = posed(2.0);
+        assert!(doubled[1].determinant() < 0.0, "still mirrored");
+        assert!(position(&doubled, 2).distance(Vec3::new(-1.0, 0.0, 0.0)) < 1e-5);
     }
 
     /// A layer placing the arm's three joints at x = `x0`, `x0`+1, `x0`+2.
