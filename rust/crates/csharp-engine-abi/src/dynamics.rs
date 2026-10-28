@@ -892,3 +892,354 @@ pub struct NativeDynamicsRagdollResult {
     pub resting: bool,
     pub blend: f32,
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeDynamicsSoftBodyHandle {
+    pub value: u64,
+}
+
+/// What a soft body is made of.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeDynamicsSoftBodyShape {
+    /// A sheet of `resolution_x` columns × `resolution_y` rows of particles
+    /// at `origin + column * across + row * down`, with structural, shear
+    /// and bending edges. Particle `column * rows + row`; UVs run 0 to 1
+    /// across the columns and down the rows.
+    Cloth = 0,
+    /// A solid box of tetrahedra about `origin`, `across` its half extents,
+    /// on a grid of `resolution_x/y/z` particles per axis.
+    Box = 1,
+    /// A hollow icosphere about `origin` of `radius`, refined
+    /// `resolution_x` times (0 to 6), with bending across its edges.
+    Shell = 2,
+    /// A triangle mesh whose vertices are the particles (`positions`,
+    /// `uvs`, three `indices` per triangle): a banner, a cloak, a shell of
+    /// any shape.
+    Surface = 3,
+    /// Tetrahedra over the particles (four `indices` each); the drawn
+    /// surface is their boundary.
+    Solid = 4,
+    /// A closed, outward-wound triangle mesh filled with tetrahedra of
+    /// about `cell_size`. The mesh rides the cells and is what is drawn.
+    Filled = 5,
+}
+
+/// How cells resist deformation.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeDynamicsSoftBodyCellModel {
+    /// Each cell keeps its volume; with the edges, a jelly.
+    Volume = 0,
+    /// Linear elasticity (Young's modulus, Poisson's ratio) in each cell's
+    /// own frame, recovering from inverted cells.
+    Corotational = 1,
+    /// Stiffer under compression, softer under stretch; twice the cost.
+    NeoHookean = 2,
+}
+
+/// How a soft body's elasticity is solved.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeDynamicsSoftBodySolver {
+    /// Constraints swept with contacts each substep: cheap; a stiff body
+    /// keeps some give.
+    Constraints = 0,
+    /// Implicit finite elements over the whole body: stiff bodies hold
+    /// their shape, at a factorization per step.
+    Fem = 1,
+}
+
+/// A constraint family's stiffness: how fast it springs back (Hz) and its
+/// damping ratio (1 is critical), independent of mass and step length.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftness {
+    pub frequency: f32,
+    pub damping_ratio: f32,
+}
+
+/// How a soft body resists, yields and tears. `edge` springs hold edge
+/// lengths, `bend` resists folding, `volume` keeps cells' and closed
+/// pieces' volumes, `shape_matching` pulls toward the rest shape. Elastic
+/// cells take `young_modulus` (Pa), `poisson_ratio` (below 0.5) and
+/// `elastic_damping_ratio`. `deformation_damping` (per second) damps wobble
+/// but not the body's motion. Past `plastic_yield` (cells) or
+/// `edge_plastic_yield` (edges) the rest shape flows toward the current one
+/// at the creep rate, up to the max. A positive `tear_strain` (stretch over
+/// rest length) or `tear_force` (N) tears elements; zero never tears.
+/// `max_tears_per_step` 0 is unlimited; `min_piece` 0 is Rapier's default
+/// smallest piece.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyMaterial {
+    pub edge: NativeDynamicsSoftness,
+    pub bend: NativeDynamicsSoftness,
+    pub volume: NativeDynamicsSoftness,
+    pub shape_matching: NativeDynamicsSoftness,
+    pub young_modulus: f32,
+    pub poisson_ratio: f32,
+    pub elastic_damping_ratio: f32,
+    pub deformation_damping: f32,
+    pub plastic_yield: f32,
+    pub plastic_creep: f32,
+    pub plastic_max: f32,
+    pub edge_plastic_yield: f32,
+    pub edge_plastic_creep: f32,
+    pub edge_plastic_max: f32,
+    pub tear_strain: f32,
+    pub tear_force: f32,
+    pub tear_smoothing: f32,
+    pub interior_strength: f32,
+    pub max_tears_per_step: u32,
+    pub min_piece: u32,
+}
+
+/// Creates a soft body in `world`. The shape reads the fields its
+/// `NativeDynamicsSoftBodyShape` names; positions are in the world. `mass`
+/// (kg) spreads evenly over the particles. `particle_radius` is the
+/// surface's contact thickness (0: half the mean edge). `pinned` particles
+/// are held where they are. `self_contacts` lets the surface collide with
+/// itself. `mesh_collision` makes a filled mesh meet the world through its
+/// own triangles (which must be at least as fine as its cells) rather than
+/// through its cells' boundary. `extra_substeps` and `extra_iterations`
+/// buy accuracy for the body and what it touches.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub shape: NativeDynamicsSoftBodyShape,
+    pub origin: NativeVec3,
+    pub across: NativeVec3,
+    pub down: NativeVec3,
+    pub radius: f32,
+    pub cell_size: f32,
+    pub resolution_x: u32,
+    pub resolution_y: u32,
+    pub resolution_z: u32,
+    pub positions: *const NativeVec3,
+    pub positions_len: usize,
+    pub uvs: *const NativeVec2,
+    pub uvs_len: usize,
+    pub indices: *const u32,
+    pub indices_len: usize,
+    pub pinned: *const u32,
+    pub pinned_len: usize,
+    pub mass: f32,
+    pub particle_radius: f32,
+    pub linear_damping: f32,
+    pub gravity_scale: f32,
+    pub cell_model: NativeDynamicsSoftBodyCellModel,
+    pub solver: NativeDynamicsSoftBodySolver,
+    pub material: NativeDynamicsSoftBodyMaterial,
+    pub volume_preservation: bool,
+    pub volume_factor: f32,
+    pub shape_matching: bool,
+    pub self_contacts: bool,
+    pub mesh_collision: bool,
+    pub collision_groups: u32,
+    pub collision_mask: u32,
+    pub friction: f32,
+    pub restitution: f32,
+    pub extra_substeps: u32,
+    pub extra_iterations: u32,
+    pub can_sleep: bool,
+}
+
+/// Soft-body settings of a world. While it holds a soft body, each step is
+/// split into `substeps` (at least ropes' substeps when it also holds
+/// ropes). A body hit fast asks for up to `max_extra_substeps` more.
+/// `contact_stiffening` stiffens soft contacts over rigid ones (Rapier's
+/// default is 4). A constraint strained past `resweep_strain` is solved
+/// again after the contacts (default 0.75).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodySettingsRequest {
+    pub world: NativeDynamicsWorldHandle,
+    pub substeps: u32,
+    pub max_extra_substeps: u32,
+    pub contact_stiffening: f32,
+    pub resweep_strain: f32,
+}
+
+/// Changes a live soft body's material and volume preservation in place.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyMaterialRequest {
+    pub soft_body: NativeDynamicsSoftBodyHandle,
+    pub material: NativeDynamicsSoftBodyMaterial,
+    pub volume_preservation: bool,
+    pub volume_factor: f32,
+}
+
+/// Holds `particles` where they are, and releases the particles pinned
+/// before that are not listed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyPinsRequest {
+    pub soft_body: NativeDynamicsSoftBodyHandle,
+    pub particles: *const u32,
+    pub particles_len: usize,
+}
+
+/// A particle driven to a world `position` by the end of the next step.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyTarget {
+    pub particle: u32,
+    pub position: NativeVec3,
+}
+
+/// Drives the targets' particles along a straight path to their positions
+/// over the next step; they push what they meet and nothing pushes them.
+/// Driven particles not listed again go free (a pinned one holds where it
+/// was left). Set the targets each step to move them along a path.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyTargetsRequest {
+    pub soft_body: NativeDynamicsSoftBodyHandle,
+    pub targets: *const NativeDynamicsSoftBodyTarget,
+    pub targets_len: usize,
+}
+
+/// A particle held both ways to the point of `body` where the particle is
+/// when attached.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyBodyAttachment {
+    pub particle: u32,
+    pub body: NativeDynamicsBodyReference,
+}
+
+/// Replaces a soft body's body attachments. The body and the cloth pull
+/// on each other; a destroyed body's attachments end.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyBodyAttachmentsRequest {
+    pub soft_body: NativeDynamicsSoftBodyHandle,
+    pub attachments: *const NativeDynamicsSoftBodyBodyAttachment,
+    pub attachments_len: usize,
+}
+
+/// A particle driven to `offset` in a rig joint's frame (`Animation.ReadJoints`
+/// index), as the joint is posed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyJointAttachment {
+    pub particle: u32,
+    pub joint: u32,
+    pub offset: NativeVec3,
+}
+
+/// Replaces a soft body's joint attachments to `instance`: before each step
+/// each particle is driven where its joint's offset is in the instance's
+/// evaluated pose, carried forward by the pose's latest motion so it keeps
+/// up with the pose drawn this call. With `capture_offsets` each offset is
+/// where the particle is now in its joint's frame, and the instance must
+/// have a pose (published a call before). Empty `attachments` ends them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyJointAttachmentsRequest {
+    pub soft_body: NativeDynamicsSoftBodyHandle,
+    pub instance: NativeAnimationInstanceHandle,
+    pub attachments: *const NativeDynamicsSoftBodyJointAttachment,
+    pub attachments_len: usize,
+    pub capture_offsets: bool,
+}
+
+/// Forces a soft body feels every substep until set again. `acceleration`
+/// (m/s²) pushes every free particle alike. Air moving at `wind` (m/s)
+/// pushes each surface triangle along its normal by
+/// `drag × area × v|v|`, `v` the air's speed through it: `drag` is half the
+/// air density times a drag coefficient (kg/m³), about 0.6 for a flag.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyForcesRequest {
+    pub soft_body: NativeDynamicsSoftBodyHandle,
+    pub acceleration: NativeVec3,
+    pub wind: NativeVec3,
+    pub drag: f32,
+}
+
+/// Changes the velocity of every free particle within `radius` of `point`
+/// by `velocity_change` (m/s), scaled down linearly to nothing at `radius`;
+/// a radius of zero or less changes every free particle fully. A hit, a
+/// jump, a squash from above.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyVelocityChangeRequest {
+    pub soft_body: NativeDynamicsSoftBodyHandle,
+    pub point: NativeVec3,
+    pub velocity_change: NativeVec3,
+    pub radius: f32,
+}
+
+/// Pushes every free particle within `radius` of `center` away from it at
+/// `speed` (m/s), scaled down linearly to nothing at `radius`. A negative
+/// speed pulls in.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyRadialRequest {
+    pub soft_body: NativeDynamicsSoftBodyHandle,
+    pub center: NativeVec3,
+    pub speed: f32,
+    pub radius: f32,
+}
+
+/// A soft body after the latest step, with every piece a tear split off
+/// it. `volume` and `rest_volume` are its closed pieces' (zero for an open
+/// sheet). `max_stretch` is the largest edge stretch over rest length.
+/// `contact_count` counts the colliders its surface touches (environment,
+/// bodies, soft bodies, itself). `topology_version` changes with each tear.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsSoftBodyReadout {
+    pub particle_count: u32,
+    pub piece_count: u32,
+    pub center_of_mass: NativeVec3,
+    pub linear_velocity: NativeVec3,
+    pub bounds_min: NativeVec3,
+    pub bounds_max: NativeVec3,
+    pub volume: f32,
+    pub rest_volume: f32,
+    pub max_stretch: f32,
+    pub contact_count: u32,
+    pub sleeping: bool,
+    pub topology_version: u32,
+}
+
+/// One particle: `kinematic` when pinned or driven (moved, never pushed).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsSoftBodyParticle {
+    pub position: NativeVec3,
+    pub velocity: NativeVec3,
+    pub mass: f32,
+    pub kinematic: bool,
+    pub on_surface: bool,
+}
+
+/// The body's particles in particle order (not its torn-off pieces').
+/// `particles` points into Dynamics bridge storage until the next call on
+/// the same context.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyParticlesResult {
+    pub particles: *const NativeDynamicsSoftBodyParticle,
+    pub particles_len: usize,
+}
+
+/// An appearance drawing a soft body's surface with `material`, reshaped
+/// after every step that moves it. Publish it with an `AppearanceFact` at
+/// the world origin (identity transform), as its vertices are in the
+/// world. `two_sided` also draws each triangle's back with its own normal,
+/// for cloth under a one-sided material. It keeps the last shape drawn
+/// once its soft body is gone.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsSoftBodyAppearanceRequest {
+    pub soft_body: NativeDynamicsSoftBodyHandle,
+    pub material: NativeMaterialHandle,
+    pub two_sided: bool,
+}

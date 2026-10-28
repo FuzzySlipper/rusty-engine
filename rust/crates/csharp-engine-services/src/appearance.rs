@@ -1,6 +1,10 @@
 use crate::composition::{borrowed_slice, borrowed_utf8, CsharpEngineServicesError, ABI_OK};
 
 mod animation_pose;
+mod deformed;
+pub(crate) use deformed::DeformedShape;
+#[cfg(test)]
+pub(crate) use deformed::{material_for_test, show_for_test};
 mod model_surface;
 pub(crate) use animation_pose::evaluate_poses;
 pub(crate) use animation_pose::RagdollSource;
@@ -4104,7 +4108,7 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
-    fn destroy_appearance(
+    pub(crate) fn destroy_appearance(
         &mut self,
         appearance: NativeAppearanceHandle,
     ) -> Result<(), CsharpEngineServicesError> {
@@ -4527,6 +4531,7 @@ impl RuntimeAppearanceBridge {
             asset,
             material_overrides: Vec::new(),
             material_parameters: Default::default(),
+            deformed: None,
         })?;
         let state = &mut *self.staged_mut()?.state;
         state
@@ -4716,6 +4721,7 @@ impl RuntimeAppearanceBridge {
             asset: mesh_id,
             material_overrides: Vec::new(),
             material_parameters: Default::default(),
+            deformed: None,
         })?;
         self.set_appearance_resources(appearance.value, [request.resource.value])?;
         Ok(appearance)
@@ -4778,6 +4784,7 @@ impl RuntimeAppearanceBridge {
             asset: mesh_id,
             material_overrides: Vec::new(),
             material_parameters: Default::default(),
+            deformed: None,
         })?;
         self.set_appearance_resources(appearance.value, [resource])?;
         Ok(appearance)

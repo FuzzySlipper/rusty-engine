@@ -1128,6 +1128,19 @@ sealed class DynamicsServiceFake : IDynamicsService
 
     public DynamicsWorld CreateWorld(DynamicsWorldConfig request) => throw new NotSupportedException();
     public DynamicsWaterReceipt SetWater(DynamicsWaterRequest request) => throw new NotSupportedException();
+    public DynamicsSoftBody CreateSoftBody(DynamicsSoftBodyRequest request) => throw new NotSupportedException();
+    public void ConfigureSoftBodies(DynamicsSoftBodySettingsRequest request) => throw new NotSupportedException();
+    public void UpdateSoftBodyMaterial(DynamicsSoftBodyMaterialRequest request) => throw new NotSupportedException();
+    public void SetSoftBodyPins(DynamicsSoftBodyPinsRequest request) => throw new NotSupportedException();
+    public void SetSoftBodyTargets(DynamicsSoftBodyTargetsRequest request) => throw new NotSupportedException();
+    public void SetSoftBodyBodyAttachments(DynamicsSoftBodyBodyAttachmentsRequest request) => throw new NotSupportedException();
+    public void SetSoftBodyJointAttachments(DynamicsSoftBodyJointAttachmentsRequest request) => throw new NotSupportedException();
+    public void SetSoftBodyForces(DynamicsSoftBodyForcesRequest request) => throw new NotSupportedException();
+    public void ApplySoftBodyVelocityChange(DynamicsSoftBodyVelocityChangeRequest request) => throw new NotSupportedException();
+    public void ApplySoftBodyRadialVelocityChange(DynamicsSoftBodyRadialRequest request) => throw new NotSupportedException();
+    public DynamicsSoftBodyReadout ReadSoftBody(DynamicsSoftBody softBody) => throw new NotSupportedException();
+    public ReadOnlyMemory<DynamicsSoftBodyParticle> ReadSoftBodyParticles(DynamicsSoftBody softBody) => throw new NotSupportedException();
+    public Appearance CreateSoftBodyAppearance(DynamicsSoftBodyAppearanceRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateBody(DynamicsCreateBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateSphereBody(DynamicsCreateSphereBodyRequest request) => throw new NotSupportedException();
     public DynamicsBody CreateCuboidBody(DynamicsCreateCuboidBodyRequest request) => throw new NotSupportedException();

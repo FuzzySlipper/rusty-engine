@@ -8,8 +8,8 @@ use std::{
 
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, Geometry,
-    LightDescriptor, Material, MaterialInstanceParameters, MeshMaterialSlot, RenderDiff,
-    RenderHandle, RenderLayer, RenderMaterialDescriptor, RenderMetadata, RenderNode,
+    LightDescriptor, Material, MaterialInstanceParameters, MeshMaterialSlot, MeshPayloadDescriptor,
+    RenderDiff, RenderHandle, RenderLayer, RenderMaterialDescriptor, RenderMetadata, RenderNode,
     ShaderDescriptor, ShadowCasting, SpriteAtlasDescriptor, SpriteBatchDescriptor,
     SpriteInstanceDescriptor, StaticMeshAsset, StaticMeshInstanceDescriptor, TextureDescriptor,
     Transform,
@@ -41,6 +41,11 @@ pub enum Appearance {
         /// texture tint, emission). A change updates the instance in place.
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         material_parameters: BTreeMap<u16, MaterialInstanceParameters>,
+        /// What the instance draws in place of the asset's geometry, with the
+        /// asset's slots: a deformed mesh. A change replaces the instance's
+        /// payload in place.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        deformed: Option<Arc<MeshPayloadDescriptor>>,
     },
     AnimatedMesh {
         #[serde(default)]
@@ -630,14 +635,21 @@ pub(crate) fn requires_recreate(previous: &Appearance, next: &Appearance) -> boo
             Appearance::StaticMesh {
                 asset: previous,
                 material_overrides: previous_slots,
+                deformed: previous_shape,
                 ..
             },
             Appearance::StaticMesh {
                 asset: next,
                 material_overrides: next_slots,
+                deformed: next_shape,
                 ..
             },
-        ) => previous != next || previous_slots != next_slots,
+            // A replaced payload cannot be taken back in place.
+        ) => {
+            previous != next
+                || previous_slots != next_slots
+                || (previous_shape.is_some() && next_shape.is_none())
+        }
         (
             Appearance::AnimatedMesh {
                 asset: previous,
@@ -775,6 +787,23 @@ pub(crate) fn create_node(
 
 /// The parameter operations that take a node's material slots from
 /// `previous` to `next`.
+/// Replace a static mesh instance's payload when its deformed shape changed.
+pub(crate) fn append_deformation(
+    operations: &mut Vec<RenderDiff>,
+    handle: RenderHandle,
+    previous: Option<&Arc<MeshPayloadDescriptor>>,
+    next: Option<&Arc<MeshPayloadDescriptor>>,
+) {
+    if let Some(next) = next {
+        if !previous.is_some_and(|previous| Arc::ptr_eq(previous, next)) {
+            operations.push(RenderDiff::ReplaceMeshPayload {
+                handle,
+                payload: (**next).clone(),
+            });
+        }
+    }
+}
+
 pub(crate) fn append_material_parameters(
     operations: &mut Vec<RenderDiff>,
     handle: RenderHandle,
@@ -882,11 +911,13 @@ pub(crate) fn append_node_updates(
             Appearance::StaticMesh {
                 material_overrides: old_slots,
                 material_parameters: old_parameters,
+                deformed: old_shape,
                 ..
             },
             Appearance::StaticMesh {
                 material_overrides: new_slots,
                 material_parameters: new_parameters,
+                deformed: new_shape,
                 ..
             },
         ) => {
@@ -903,6 +934,7 @@ pub(crate) fn append_node_updates(
                 });
             }
             append_material_parameters(operations, handle, old_parameters, new_parameters);
+            append_deformation(operations, handle, old_shape.as_ref(), new_shape.as_ref());
         }
         (Appearance::Sprite { sprite: old }, Appearance::Sprite { sprite: new }) => {
             append_sprite_updates(
@@ -1027,6 +1059,7 @@ mod tests {
                 asset: "mesh/held".to_owned(),
                 material_overrides: Vec::new(),
                 material_parameters: Default::default(),
+                deformed: None,
             },
             Appearance::AnimatedMesh {
                 asset: "animated/held".to_owned(),

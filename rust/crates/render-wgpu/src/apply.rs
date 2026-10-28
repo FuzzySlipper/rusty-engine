@@ -978,7 +978,14 @@ impl Renderer {
                 if let Some((mesh_id, mesh)) =
                     wanted(names, &self.tables.static_meshes, &mut used, asset)
                 {
-                    for (slot, start, count) in &mesh.groups {
+                    // A replaced payload (a deformed mesh) draws its own
+                    // groups with the asset's slots.
+                    let replaced = self.tables.payload_meshes.get(&handle);
+                    let (mesh_ref, groups) = match replaced {
+                        Some(payload) => (MeshRef::Payload(handle), &payload.groups),
+                        None => (MeshRef::Static(mesh_id), &mesh.groups),
+                    };
+                    for (slot, start, count) in groups {
                         let material_id = overrides.get(slot).or_else(|| mesh.slots.get(slot));
                         let (material_ref, color, emission) = match material_id
                             .and_then(|id| wanted(names, materials, &mut used, id))
@@ -992,7 +999,7 @@ impl Renderer {
                         };
                         parts.push((
                             Part {
-                                mesh: MeshRef::Static(mesh_id),
+                                mesh: mesh_ref.clone(),
                                 first_index: *start,
                                 index_count: *count,
                                 material: material_ref,

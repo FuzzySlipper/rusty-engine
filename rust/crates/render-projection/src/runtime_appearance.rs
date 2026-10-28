@@ -14,9 +14,9 @@ use render_model::{
 use serde::Deserialize;
 
 use crate::appearance::{
-    append_material_parameters, append_node_updates, check_appearance_references, create_node,
-    light_kind, requires_recreate, resource_diffs, update_resources, NodeUpdate, NodeValues,
-    ResourceSnapshot, ResourceUpdate,
+    append_deformation, append_material_parameters, append_node_updates,
+    check_appearance_references, create_node, light_kind, requires_recreate, resource_diffs,
+    update_resources, NodeUpdate, NodeValues, ResourceSnapshot, ResourceUpdate,
 };
 use crate::{
     Appearance, AppearanceProjectionError, AppearanceResources, HandleAllocationError,
@@ -803,6 +803,9 @@ impl RuntimeAppearanceProjector {
                     material_parameters,
                 );
             }
+            if let Appearance::StaticMesh { deformed, .. } = &object.values().appearance {
+                append_deformation(&mut operations, handle, None, deformed.as_ref());
+            }
             if let Some(joint) = &object.joint {
                 joints.push(RenderDiff::SetParentJoint {
                     handle,
@@ -1267,6 +1270,7 @@ mod tests {
                         asset: "mesh/triangle".to_owned(),
                         material_overrides: Vec::new(),
                         material_parameters: Default::default(),
+                        deformed: None,
                     },
                 ),
                 (
@@ -1352,6 +1356,7 @@ mod tests {
                 RenderDiff::DefineStaticMesh { .. } => "define-mesh",
                 RenderDiff::DefineAnimatedMesh { .. } => "define-animated",
                 RenderDiff::ReleaseStaticMesh { .. } => "release-mesh",
+                RenderDiff::ReplaceMeshPayload { .. } => "payload",
                 _ => "other",
             })
             .collect()
@@ -1635,6 +1640,50 @@ mod tests {
         assert!(projector.appearance_in_use(MESH));
         projector.apply(&[], &[2]).unwrap();
         assert!(!projector.appearance_in_use(MESH));
+    }
+
+    #[test]
+    fn a_deformed_mesh_replaces_its_instances_payload_only_when_it_changes() {
+        let mut projector = projector();
+        let mesh = RuntimeAppearanceFact {
+            appearance: MESH,
+            ..fact(2)
+        };
+        projector.apply(&[mesh], &[]).unwrap();
+        let handle = projector.object_handle(2);
+        let shape = Arc::new(projector.resources().static_meshes[0].payload.clone());
+        let deform = |projector: &mut RuntimeAppearanceProjector, next: Option<&Arc<_>>| {
+            if let Some(Appearance::StaticMesh { deformed, .. }) = projector.appearance_mut(MESH) {
+                *deformed = next.cloned();
+            }
+        };
+        deform(&mut projector, Some(&shape));
+        assert_eq!(kinds(&projector.reconcile().unwrap()), ["payload"]);
+        // The same shape is not sent again.
+        deform(&mut projector, Some(&shape));
+        assert!(projector.reconcile().unwrap().ops.is_empty());
+        let mut moved = (*shape).clone();
+        moved.bounds.max[1] = 3.0;
+        deform(&mut projector, Some(&Arc::new(moved)));
+        assert_eq!(kinds(&projector.reconcile().unwrap()), ["payload"]);
+        assert_eq!(projector.object_handle(2), handle);
+        // An object shown later starts in the current shape.
+        let shown = projector
+            .apply(
+                &[RuntimeAppearanceFact {
+                    appearance: MESH,
+                    ..fact(3)
+                }],
+                &[],
+            )
+            .unwrap();
+        assert_eq!(kinds(&shown), ["create-mesh", "payload"]);
+        // Dropping the shape draws the asset again, as a new instance.
+        deform(&mut projector, None);
+        assert_eq!(
+            kinds(&projector.reconcile().unwrap()),
+            ["destroy", "destroy", "create-mesh", "create-mesh"]
+        );
     }
 
     #[test]

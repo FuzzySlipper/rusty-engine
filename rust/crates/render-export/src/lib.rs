@@ -93,6 +93,8 @@ enum Kind {
     StaticMesh {
         asset: String,
         overrides: BTreeMap<u16, String>,
+        /// A replaced payload drawn with the asset's slots.
+        payload: Option<Box<MeshPayloadDescriptor>>,
     },
     AnimatedMesh {
         asset: String,
@@ -182,6 +184,7 @@ impl Frozen {
                     Kind::StaticMesh {
                         asset: instance.asset.clone(),
                         overrides: overrides(&instance.material_overrides),
+                        payload: None,
                     },
                 ),
                 RenderDiff::CreateAnimatedMeshInstance {
@@ -268,7 +271,9 @@ impl Frozen {
                 }
                 RenderDiff::ReplaceMeshPayload { handle, payload } => {
                     if let Some(Node {
-                        kind: Kind::Primitive { payload: slot, .. },
+                        kind:
+                            Kind::Primitive { payload: slot, .. }
+                            | Kind::StaticMesh { payload: slot, .. },
                         ..
                     }) = scene.nodes.get_mut(handle)
                     {
@@ -605,7 +610,11 @@ impl<'a> Writer<'a> {
                 material,
                 payload,
             } => self.primitive(node, *geometry, *material, payload.as_deref())?,
-            Kind::StaticMesh { asset, overrides } => Some(self.static_mesh(node, asset, overrides)?),
+            Kind::StaticMesh {
+                asset,
+                overrides,
+                payload,
+            } => Some(self.static_mesh(node, asset, overrides, payload.as_deref())?),
             Kind::AnimatedMesh { asset, overrides } => {
                 self.animated(handle, index, asset, overrides, &node.parameters)?;
                 None
@@ -685,15 +694,22 @@ impl<'a> Writer<'a> {
         node: &Node,
         asset: &str,
         overrides: &BTreeMap<u16, String>,
+        payload: Option<&MeshPayloadDescriptor>,
     ) -> Result<usize, String> {
         let definition = self.scene.static_meshes.get(asset).ok_or_else(|| {
             format!("exportGlb: static mesh {asset} is not in the captured frame")
         })?;
-        if !self.static_geometry.contains_key(asset) {
-            let streams = self.payload_streams(&definition.payload)?;
-            self.static_geometry.insert(asset.to_owned(), streams);
-        }
-        let (streams, groups) = self.static_geometry[asset].clone();
+        let (streams, groups) = match payload {
+            // A replaced payload is this node's own geometry.
+            Some(payload) => self.payload_streams(payload)?,
+            None => {
+                if !self.static_geometry.contains_key(asset) {
+                    let streams = self.payload_streams(&definition.payload)?;
+                    self.static_geometry.insert(asset.to_owned(), streams);
+                }
+                self.static_geometry[asset].clone()
+            }
+        };
         let slots: BTreeMap<u16, &String> = definition
             .material_slots
             .iter()

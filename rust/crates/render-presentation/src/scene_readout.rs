@@ -440,7 +440,7 @@ impl PresentationWorld {
         const HALF: f32 = 0.5;
         match &node.kind {
             // A replaced payload is what the node draws.
-            NodeKind::Primitive(_) if node.mesh_payload.is_some() => node
+            NodeKind::Primitive(_) | NodeKind::StaticMesh(_) if node.mesh_payload.is_some() => node
                 .mesh_payload
                 .as_ref()
                 .map(|payload| (payload.bounds.min, payload.bounds.max)),

@@ -8,6 +8,9 @@ use rapier3d_f64::prelude::{
 };
 
 use crate::joint::{DynamicsJoint, DynamicsJointError, DynamicsJointMotor, SolverJoint};
+use crate::soft_body::{
+    soft_id, DynamicsSoftBodyError, DynamicsSoftBodyId, DynamicsSoftBodySettings, SolverSoftBody,
+};
 use crate::tether::{
     DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherError, DynamicsTetherReadout,
     SolverTether,
@@ -150,6 +153,7 @@ pub enum DynamicsError {
     InvalidBody { body: DynamicsBodyId },
     InvalidAction { body: DynamicsBodyId },
     InvalidWater { plane: usize },
+    SoftBody(DynamicsSoftBodyError),
 }
 
 impl DynamicsError {
@@ -163,6 +167,7 @@ impl DynamicsError {
             Self::InvalidBody { .. } => "invalid-dynamics-body",
             Self::InvalidAction { .. } => "invalid-dynamics-action",
             Self::InvalidWater { .. } => "invalid-dynamics-water",
+            Self::SoftBody(error) => error.code(),
         }
     }
 }
@@ -202,7 +207,7 @@ pub struct DynamicsAnchorObservation {
 /// warm starts carry over. Changes apply directly; nothing is staged or
 /// rolled back.
 pub struct DynamicsSolver {
-    world: PhysicsWorld,
+    pub(crate) world: PhysicsWorld,
     bodies: BTreeMap<DynamicsBodyId, RigidBodyHandle>,
     /// Static colliders keyed by the address of their shared shape, so a
     /// rebind replaces only the chunks and mesh instances that changed.
@@ -219,6 +224,8 @@ pub struct DynamicsSolver {
     floating: BTreeMap<DynamicsBodyId, Floating>,
     /// Where kinematic bodies are to be by the end of the next step.
     kinematic_targets: BTreeMap<DynamicsBodyId, Pose>,
+    pub(crate) soft_bodies: BTreeMap<DynamicsSoftBodyId, SolverSoftBody>,
+    pub(crate) soft_settings: DynamicsSoftBodySettings,
     generation: u64,
 }
 
@@ -240,6 +247,8 @@ impl DynamicsSolver {
             water: Vec::new(),
             floating: BTreeMap::new(),
             kinematic_targets: BTreeMap::new(),
+            soft_bodies: BTreeMap::new(),
+            soft_settings: DynamicsSoftBodySettings::default(),
             generation: 0,
         }
     }
@@ -331,6 +340,7 @@ impl DynamicsSolver {
             return Vec::new();
         };
         self.joints.retain(|_, joint| !joint.attaches(id));
+        self.detach_soft_bodies_from(id);
         self.shapes.remove(&id);
         self.floating.remove(&id);
         self.kinematic_targets.remove(&id);
@@ -366,10 +376,12 @@ impl DynamicsSolver {
             .extract_if(.., |_, joint| joint.attaches(body.id))
             .map(|(_, joint)| joint.remove(&mut self.world))
             .collect::<Vec<_>>();
+        let soft_attachments = self.detach_soft_bodies_from(body.id);
         self.world.remove_body(previous);
         let (builder, collider) = body_builders(&body);
         let (handle, _) = self.world.insert(builder, collider);
         self.bodies.insert(body.id, handle);
+        self.reattach_soft_bodies(body.id, soft_attachments);
         self.shapes.insert(body.id, body.shape);
         for (joint, motor) in joints {
             let (first, second) = (self.bodies[&joint.first], self.bodies[&joint.second]);
@@ -678,6 +690,7 @@ impl DynamicsSolver {
         for tether in self.tethers.values_mut() {
             tether.translate(&mut self.world, delta);
         }
+        self.translate_soft_bodies(delta);
         for readout in &mut self.tether_readouts {
             readout.first = (vector(readout.first) + delta).to_array();
             readout.second = (vector(readout.second) + delta).to_array();
@@ -833,9 +846,19 @@ impl DynamicsSolver {
             }
         }
 
-        // Ropes and limited joints need the finer solve.
+        // Ropes and limited joints need the finer solve; soft bodies take
+        // their own substeps.
         let roped = !self.tethers.is_empty() || !self.joints.is_empty();
-        let subdivisions = if roped { self.rope_solver.substeps } else { 1 };
+        let soft = !self.soft_bodies.is_empty();
+        let subdivisions = match (roped, soft) {
+            (true, true) => self
+                .rope_solver
+                .substeps
+                .max(self.soft_settings.substeps as usize),
+            (true, false) => self.rope_solver.substeps,
+            (false, true) => self.soft_settings.substeps as usize,
+            (false, false) => 1,
+        };
         let dt = step_seconds / subdivisions as f64;
         self.world.integration_parameters = IntegrationParameters {
             dt,
@@ -844,8 +867,10 @@ impl DynamicsSolver {
             } else {
                 IntegrationParameters::default().num_solver_iterations
             },
+            soft_bodies: self.soft_settings.rapier(),
             ..IntegrationParameters::default()
         };
+        self.begin_soft_step();
         for tether in self.tethers.values_mut() {
             tether.begin_step();
         }
@@ -871,6 +896,9 @@ impl DynamicsSolver {
             if !self.floating.is_empty() {
                 self.apply_water(dt, &mut water);
             }
+            if soft {
+                self.soft_substep(along);
+            }
             self.world.step();
             self.resist_rolling(dt);
             for tether in self.tethers.values_mut() {
@@ -891,14 +919,25 @@ impl DynamicsSolver {
             body.reset_torques(false);
         }
 
+        if soft {
+            self.end_soft_step();
+        }
         self.contacts.clear();
         for pair in self
             .world
             .contact_pairs()
             .filter(|pair| pair.has_any_active_contact())
         {
-            let first = dynamic_id(self.world.colliders[pair.collider1].user_data);
-            let second = dynamic_id(self.world.colliders[pair.collider2].user_data);
+            let (first, second) = (
+                self.world.colliders[pair.collider1].user_data,
+                self.world.colliders[pair.collider2].user_data,
+            );
+            // Soft-body contacts are counted on the soft body.
+            if soft_id(first).is_some() || soft_id(second).is_some() {
+                continue;
+            }
+            let first = dynamic_id(first);
+            let second = dynamic_id(second);
             let (first, second) = match (first, second) {
                 (Some(first), second) => (first, second),
                 (None, Some(second)) => (second, None),
@@ -992,7 +1031,7 @@ impl DynamicsSolver {
         }
     }
 
-    fn handle(&self, id: DynamicsBodyId) -> Result<RigidBodyHandle, DynamicsError> {
+    pub(crate) fn handle(&self, id: DynamicsBodyId) -> Result<RigidBodyHandle, DynamicsError> {
         self.bodies
             .get(&id)
             .copied()
@@ -1193,7 +1232,7 @@ fn positive(value: f64) -> bool {
 }
 
 fn dynamic_id(user_data: u128) -> Option<DynamicsBodyId> {
-    (user_data != 0).then(|| DynamicsBodyId((user_data - 1) as u64))
+    (user_data != 0 && soft_id(user_data).is_none()).then(|| DynamicsBodyId((user_data - 1) as u64))
 }
 
 impl CollisionProjection {

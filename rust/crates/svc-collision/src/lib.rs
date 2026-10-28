@@ -40,6 +40,7 @@ mod inspection;
 mod joint;
 mod model_surface;
 mod ragdoll;
+mod soft_body;
 mod static_mesh;
 mod tether;
 mod water;
@@ -67,6 +68,13 @@ pub use model_surface::{ModelSurface, ModelSurfaceHit, ModelSurfacePoint, Placed
 pub use ragdoll::{
     DynamicsPlacement, RagdollBone, RagdollDrive, RagdollLink, RagdollMaterial, RagdollShape,
     RagdollSpawn,
+};
+
+pub use soft_body::{
+    DynamicsSoftBodyBodyAttachment, DynamicsSoftBodyCellModel, DynamicsSoftBodyError,
+    DynamicsSoftBodyForces, DynamicsSoftBodyId, DynamicsSoftBodyInput, DynamicsSoftBodyMaterial,
+    DynamicsSoftBodyParticle, DynamicsSoftBodyReadout, DynamicsSoftBodySettings,
+    DynamicsSoftBodyShape, DynamicsSoftBodySolver, DynamicsSoftBodySurface, DynamicsSoftness,
 };
 
 pub use static_mesh::{

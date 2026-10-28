@@ -1367,6 +1367,10 @@ pub enum RenderDiff {
     Destroy {
         handle: RenderHandle,
     },
+    /// Replace what a primitive or static mesh instance draws. A static
+    /// mesh instance keeps its asset's material slots and its overrides, and
+    /// draws the payload's groups with them: a deformed mesh, such as a soft
+    /// body's surface each step.
     ReplaceMeshPayload {
         handle: RenderHandle,
         payload: MeshPayloadDescriptor,

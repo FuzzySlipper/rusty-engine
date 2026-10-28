@@ -149,5 +149,6 @@ river current on a tether.
   righting, a current carrying a raft, and bodies outside the water or not
   named; the water field tests float a box on a field's river.
 
-Rope meshes, cloth and climbing are not part of this service. Hinges, cones
-and ragdolls are in [limited joints and ragdolls](ragdolls.md).
+Rope meshes and climbing are not part of this service. Hinges, cones and
+ragdolls are in [limited joints and ragdolls](ragdolls.md); cloth and elastic
+volumes are [soft bodies](soft-bodies.md).

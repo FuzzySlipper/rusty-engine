@@ -80,6 +80,12 @@ pub use svc_collision::{
     DynamicsTetherError, DynamicsTetherReadout, DynamicsWaterPlane, DynamicsWaterReadout,
     RagdollBone, RagdollDrive, RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
 };
+pub use svc_collision::{
+    DynamicsSoftBodyBodyAttachment, DynamicsSoftBodyCellModel, DynamicsSoftBodyError,
+    DynamicsSoftBodyForces, DynamicsSoftBodyId, DynamicsSoftBodyInput, DynamicsSoftBodyMaterial,
+    DynamicsSoftBodyParticle, DynamicsSoftBodyReadout, DynamicsSoftBodySettings,
+    DynamicsSoftBodyShape, DynamicsSoftBodySolver, DynamicsSoftBodySurface, DynamicsSoftness,
+};
 pub use trigger::{
     KinematicTriggerDefinition, TriggerCollider, TriggerGeometrySource, TriggerLifecycleReceipt,
     TriggerOverlapFact, TriggerOverlapFactKind, TriggerOverlapPair, TriggerOverlapReadout,

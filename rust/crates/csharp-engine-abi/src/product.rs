@@ -92,6 +92,80 @@ pub type NativeReadDynamicsSeveredPart = unsafe extern "C" fn(
     *mut NativeDynamicsSeveredPartReadout,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeCreateDynamicsSoftBody = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDynamicsSoftBodyRequest,
+    *mut NativeDynamicsSoftBodyHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeDestroyDynamicsSoftBody = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSoftBodyHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeConfigureDynamicsSoftBodies = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSoftBodySettingsRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeUpdateDynamicsSoftBodyMaterial = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSoftBodyMaterialRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetDynamicsSoftBodyPins = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDynamicsSoftBodyPinsRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetDynamicsSoftBodyTargets = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDynamicsSoftBodyTargetsRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetDynamicsSoftBodyBodyAttachments = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDynamicsSoftBodyBodyAttachmentsRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetDynamicsSoftBodyJointAttachments = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeDynamicsSoftBodyJointAttachmentsRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetDynamicsSoftBodyForces = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSoftBodyForcesRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeApplyDynamicsSoftBodyVelocityChange = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSoftBodyVelocityChangeRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeApplyDynamicsSoftBodyRadialVelocityChange = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSoftBodyRadialRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadDynamicsSoftBody = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSoftBodyHandle,
+    *mut NativeDynamicsSoftBodyReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadDynamicsSoftBodyParticles = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSoftBodyHandle,
+    *mut NativeDynamicsSoftBodyParticlesResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeCreateDynamicsSoftBodyAppearance = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsSoftBodyAppearanceRequest,
+    *mut NativeAppearanceHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateDynamicsWorld = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsWorldConfig,
@@ -1548,6 +1622,23 @@ pub struct NativeDynamicsApi {
     pub replace_sphere_body: NativeReplaceDynamicsSphereBody,
     pub replace_capsule_body: NativeReplaceDynamicsCapsuleBody,
     pub set_water: NativeSetDynamicsWater,
+    pub create_soft_body: NativeCreateDynamicsSoftBody,
+    pub destroy_soft_body: NativeDestroyDynamicsSoftBody,
+    pub configure_soft_bodies: NativeConfigureDynamicsSoftBodies,
+    pub update_soft_body_material: NativeUpdateDynamicsSoftBodyMaterial,
+    pub set_soft_body_pins: NativeSetDynamicsSoftBodyPins,
+    pub set_soft_body_targets: NativeSetDynamicsSoftBodyTargets,
+    pub set_soft_body_body_attachments: NativeSetDynamicsSoftBodyBodyAttachments,
+    pub set_soft_body_joint_attachments: NativeSetDynamicsSoftBodyJointAttachments,
+    pub set_soft_body_forces: NativeSetDynamicsSoftBodyForces,
+    pub apply_soft_body_velocity_change: NativeApplyDynamicsSoftBodyVelocityChange,
+    pub apply_soft_body_radial_velocity_change: NativeApplyDynamicsSoftBodyRadialVelocityChange,
+    pub read_soft_body: NativeReadDynamicsSoftBody,
+    pub read_soft_body_particles: NativeReadDynamicsSoftBodyParticles,
+    pub create_soft_body_appearance: NativeCreateDynamicsSoftBodyAppearance,
+    /// Disposes an appearance `create_soft_body_appearance` made, through
+    /// Graphics, which owns it.
+    pub destroy_soft_body_appearance: NativeDestroyAppearance,
 }
 
 #[repr(C)]

@@ -1529,6 +1529,7 @@ impl PresentationWorld {
             RenderDiff::ReplaceMeshPayload { handle, payload } => {
                 let node = self.node_mut(*handle)?;
                 if !matches!(&node.kind, NodeKind::Primitive(node) if node.geometry != Geometry::Group)
+                    && !matches!(&node.kind, NodeKind::StaticMesh(_))
                 {
                     return Err(PresentationWorldError::WrongNodeKind(*handle));
                 }

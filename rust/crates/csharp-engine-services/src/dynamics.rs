@@ -3,6 +3,7 @@ mod chain;
 mod errors;
 mod ragdoll;
 mod severed;
+mod soft_body;
 use errors::{clear_receipt, refuse};
 
 use std::{
@@ -49,6 +50,10 @@ pub(crate) struct RuntimeDynamicsBridge {
     ragdoll_bones: Box<[NativeTransform]>,
     severed_parts: BTreeMap<u64, severed::SeveredSlot>,
     next_severed_part: u64,
+    soft_bodies: BTreeMap<u64, soft_body::SoftBodySlot>,
+    next_soft_body: u64,
+    /// Backing for the latest borrowed soft-body particles result.
+    soft_particles: Vec<NativeDynamicsSoftBodyParticle>,
     /// The sibling Animation bridge ragdolls pose (`bind_appearance`).
     appearance: Option<*mut crate::appearance::RuntimeAppearanceBridge>,
     /// The sibling WaterField bridge water field entries sample
@@ -289,6 +294,9 @@ impl RuntimeDynamicsBridge {
             ragdoll_bones: Box::new([]),
             severed_parts: BTreeMap::new(),
             next_severed_part: 1,
+            soft_bodies: BTreeMap::new(),
+            next_soft_body: 1,
+            soft_particles: Vec::new(),
             appearance: None,
             water_fields: None,
         }
@@ -355,6 +363,9 @@ impl RuntimeDynamicsBridge {
         for part in self.severed_parts_of(handle.value) {
             self.release_severed_part(part)?;
         }
+        for soft_body in self.soft_bodies_of(handle.value) {
+            self.release_soft_body(soft_body);
+        }
         self.worlds.insert(handle.value, WorldSlot::Tombstoned);
         for body in bodies {
             self.bodies.insert(body, BodySlot::Tombstoned);
@@ -403,6 +414,7 @@ impl RuntimeDynamicsBridge {
         let world = self.active_world_mut(request.world.value)?;
         world.solver.translate(delta);
         world.bind_scene(identity, &scene);
+        self.rebase_soft_body_targets(request.world.value, delta);
         Ok(())
     }
 
@@ -729,6 +741,7 @@ impl RuntimeDynamicsBridge {
         self.sample_water_fields(world_handle)?;
         self.release_orphaned_parts_of(world_handle)?;
         self.drive_ragdolls_of(world_handle)?;
+        self.drive_soft_bodies_of(world_handle, f64::from(step_seconds) * f64::from(steps))?;
         let world = self.active_world_mut(world_handle)?;
         let receipt = world
             .solver
@@ -737,6 +750,7 @@ impl RuntimeDynamicsBridge {
         world.contacts = contacts_by_body(world.solver.contacts());
         self.place_ragdolls_of(world_handle)?;
         self.place_severed_parts_of(world_handle)?;
+        self.draw_soft_bodies_of(world_handle)?;
         let links = receipt.rope_link_count as u32;
         let substeps = receipt.rope_substeps as u32;
         let iterations = receipt.rope_iterations as u32;
@@ -1752,6 +1766,21 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         replace_sphere_body,
         replace_capsule_body,
         set_water,
+        create_soft_body: soft_body::create_soft_body,
+        destroy_soft_body: soft_body::destroy_soft_body,
+        configure_soft_bodies: soft_body::configure_soft_bodies,
+        update_soft_body_material: soft_body::update_soft_body_material,
+        set_soft_body_pins: soft_body::set_soft_body_pins,
+        set_soft_body_targets: soft_body::set_soft_body_targets,
+        set_soft_body_body_attachments: soft_body::set_soft_body_body_attachments,
+        set_soft_body_joint_attachments: soft_body::set_soft_body_joint_attachments,
+        set_soft_body_forces: soft_body::set_soft_body_forces,
+        apply_soft_body_velocity_change: soft_body::apply_soft_body_velocity_change,
+        apply_soft_body_radial_velocity_change: soft_body::apply_soft_body_radial_velocity_change,
+        read_soft_body: soft_body::read_soft_body,
+        read_soft_body_particles: soft_body::read_soft_body_particles,
+        create_soft_body_appearance: soft_body::create_soft_body_appearance,
+        destroy_soft_body_appearance: soft_body::destroy_soft_body_appearance,
     }
 }
 

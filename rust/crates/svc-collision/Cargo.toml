@@ -15,4 +15,4 @@ svc-spatial = { path = "../svc-spatial" }
 # Rapier 0.34 uses Parry 0.29, so keep the direct query and solver geometry on
 # one exact minor release instead of retaining two shape stacks.
 parry3d-f64 = { version = "0.31", features = ["enhanced-determinism"] }
-rapier3d-f64 = { version = "0.36", default-features = false, features = ["dim3", "f64", "std", "enhanced-determinism"] }
+rapier3d-f64 = { version = "0.36", default-features = false, features = ["dim3", "f64", "std", "enhanced-determinism", "fem"] }

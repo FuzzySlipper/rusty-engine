@@ -192,6 +192,18 @@ fn changes_redraw_as_the_whole_scene(gpu_culling: bool) {
         "the wall draws the fallback"
     );
 
+    // A deformed instance (a soft body's surface): its replaced payload
+    // draws in place of its asset's geometry, with the asset's material.
+    harness.apply(vec![RenderDiff::ReplaceMeshPayload {
+        handle: RenderHandle::new(101),
+        payload: crate_mesh(1.6),
+    }]);
+    let deformed = assert_fresh(&mut harness, "replaced instance payload");
+    assert!(
+        differing_pixels(&deformed, &released) > 0,
+        "the late crate is taller"
+    );
+
     // A redefined mesh: its instance draws the new shape.
     harness.apply(vec![static_mesh(
         "mesh/crate",
@@ -200,7 +212,7 @@ fn changes_redraw_as_the_whole_scene(gpu_culling: bool) {
     )]);
     let taller = assert_fresh(&mut harness, "redefined mesh");
     assert!(
-        differing_pixels(&taller, &released) > 0,
+        differing_pixels(&taller, &deformed) > 0,
         "the crate is taller"
     );
 
