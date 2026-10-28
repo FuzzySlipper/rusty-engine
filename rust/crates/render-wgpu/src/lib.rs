@@ -61,6 +61,7 @@ mod scatter_select;
 mod shaders;
 mod shadows;
 mod sky_light;
+mod splats;
 mod stars;
 mod surface;
 mod tables;
@@ -116,6 +117,7 @@ pub use frame::FrameStats;
 pub use impostor::ImpostorReadout;
 pub use occlusion::OcclusionReadout;
 pub use scatter_select::ScatterSelectionReadout;
+pub use splats::{posed_palette, SplatAsset, SplatAssetId, SplatInstance, SplatPoint};
 pub use water::WaterReadout;
 
 /// Scatter patches taken in since the renderer was made (cumulative: read
@@ -640,6 +642,8 @@ pub struct Renderer {
     precipitation: precipitation::Precipitation,
     /// Projected decals over the opaque world (`decals.rs`).
     decals: decals::Decals,
+    /// Skinned Gaussian splat characters (spike, `splats.rs`).
+    splats: splats::Splats,
     /// The volumetric fog over each world view (`volumetric_fog.rs`).
     volumetric_fog: volumetric_fog::VolumetricFog,
     /// The product's image effect over each primary view (`image_effect.rs`).
@@ -882,6 +886,7 @@ impl Renderer {
             effects,
             precipitation,
             decals,
+            splats: splats::Splats::new(gpu),
             volumetric_fog,
             image_effect: image_effect::ImageEffect::new(gpu),
             particles: Default::default(),
@@ -1185,6 +1190,7 @@ impl Renderer {
                     self.upscale.timing(),
                     self.water.timing(),
                 ])
+                .chain(self.splats.timings())
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
             distance_fields: self.distance_fields.readout(),
@@ -1211,6 +1217,31 @@ impl Renderer {
     /// bakes after the scene has been still for `probes::DEBOUNCE`.
     /// The image effect's shader modules composed and pipelines made so
     /// far: a parameter change builds neither.
+    /// Add a splat character's rest splats (spike, `splats.rs`).
+    pub fn add_splat_asset(&mut self, asset: &SplatAsset) -> SplatAssetId {
+        self.splats.add_asset(asset)
+    }
+
+    /// The splat characters every world view draws, posed (spike).
+    pub fn set_splat_instances(&mut self, instances: Vec<SplatInstance>) {
+        self.splats.set_instances(instances);
+    }
+
+    /// Bits of view depth the splat sort orders by: 16, 24 or 32 (spike).
+    pub fn set_splat_sort_bits(&mut self, bits: u32) {
+        self.splats.set_sort_bits(bits);
+    }
+
+    /// The splats the last frame drew, after its sort (spike).
+    pub fn splat_visible_count(&self) -> u32 {
+        self.splats.visible(&self.gpu)
+    }
+
+    /// Wait for every submitted frame to finish on the GPU (spike timing).
+    pub fn wait_for_gpu(&self) {
+        let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    }
+
     pub fn image_effect_builds(&self) -> (u64, u64) {
         self.image_effect.builds()
     }

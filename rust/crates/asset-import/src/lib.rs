@@ -16,6 +16,7 @@ mod plan;
 mod publish;
 mod sidecar;
 mod source;
+mod vsplat;
 
 pub use animated_glb::{
     glb_model_triangles, import_animated_glb_asset, import_parsed_animated_glb_asset,
@@ -53,6 +54,7 @@ pub use source::{
     parse_source, SourceCollision, SourceGroup, SourceMaterial, SourceMesh, SourceParse,
     MAX_SOURCE_INDICES, MAX_SOURCE_VERTICES, SUPPORTED_SOURCE_SCHEMA,
 };
+pub use vsplat::{decode_vsplat, VsplatCharacter, VsplatError, VsplatSplat};
 
 pub const IMPORTER_VERSION: u32 = 2;
 

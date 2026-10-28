@@ -3374,6 +3374,38 @@ impl Renderer {
             parts = encoded;
         }
         self.finish.resolve_layer(view.layer, &mut encoder);
+        // Splat characters over the world, tested against its depth, sorted
+        // among themselves (`splats.rs`).
+        let splatting = world_layer && self.splats.drawing();
+        if splatting {
+            let camera = view.drawn_camera();
+            self.splats.encode_compute(
+                &self.gpu,
+                &mut encoder,
+                &camera,
+                [area.width as f32, area.height as f32],
+            );
+            self.splats.prepare_draw(&self.gpu.device, hdr_format);
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-wgpu splats"),
+                color_attachments: &kept(&hdr, view.motion.as_ref())[..attached],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: view.target.depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: self.splats.draw_writes(),
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            in_viewport(&mut pass);
+            self.splats.draw(&mut pass, hdr_format);
+            drop(pass);
+            self.splats.resolve_draw(&mut encoder);
+        }
         if effects.soft() {
             // Soft billboards fade against the world's depth, which the world
             // pass was drawing into, so they draw over its HDR target in a
@@ -3518,6 +3550,9 @@ impl Renderer {
             world_layer,
         );
         self.gpu.queue.submit([encoder.finish()]);
+        if splatting {
+            self.splats.submitted();
+        }
         if fog.is_some() {
             self.volumetric_fog.submitted();
         }

@@ -59,6 +59,9 @@ The root [README](../README.md) is the repository landing page and
   irradiance queries, persistence and product-clock panorama blending, and
   the renderer settings: render scale, temporal upscaling (TAAU and DLSS)
   and the player's video options.
+- [Gaussian splat characters (spike)](gaussian-splats.md): `.vsplat`
+  characters skinned, sorted and drawn on the GPU next to the world, their
+  measured cost, and what production needs.
 - [Portable assets](portable-assets.md): Engine-owned sprite/model semantics
   over loose files and bundles.
 - [Appearance tweens](appearance-tweens.md): Engine-played hops, squash and
