@@ -248,6 +248,8 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             temporal: options.temporal,
             dlss: options.dlss,
             vsync: options.vsync,
+            // An offline render has no window.
+            window_mode: render_model::WindowMode::default(),
             render_scale: options.render_scale,
             volumetric_fog: options.volumetric_fog,
             volumetric_clouds: options.volumetric_clouds,

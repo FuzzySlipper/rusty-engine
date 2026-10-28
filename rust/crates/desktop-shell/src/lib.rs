@@ -135,16 +135,18 @@ pub struct UiRepaints {
 #[derive(Debug, Clone)]
 pub struct DesktopShellConfig {
     pub title: String,
-    pub width: u32,
-    pub height: u32,
-    /// Opens maximized when no placement is remembered; `width` × `height`
-    /// is then the size it restores to.
-    pub maximized: bool,
+    /// How the window opens when no placement is remembered. Afterwards the
+    /// renderer's requested mode (`Renderer::window_mode`) applies whenever
+    /// it changes.
+    pub mode: render_model::WindowMode,
+    /// The windowed size, in physical pixels, when none is remembered, kept
+    /// within the monitor; `None` is three quarters of the monitor.
+    pub windowed_size: Option<(u32, u32)>,
     /// The UI page, normally the runtime's browser shell URL. `None` presents
     /// the scene alone.
     pub ui_url: Option<String>,
-    /// Where the window's size, position and maximized state are kept between
-    /// runs; `None` always opens at `width` × `height`.
+    /// Where the window's mode and windowed size and position are kept
+    /// between runs; `None` always opens as `mode` and `windowed_size` say.
     pub placement_file: Option<std::path::PathBuf>,
     #[cfg(feature = "ui-overlay")]
     pub web: WebRuntimeConfig,
@@ -236,6 +238,16 @@ struct Open {
     window: Arc<Window>,
     presenter: Presenter,
     settle: placement::Settle,
+    /// How the window shows, as of its last resize.
+    shown: render_model::WindowMode,
+    /// The mode the renderer's request last took from the window
+    /// (`Renderer::adopt_window_mode`); `None` before the first frame.
+    adopted: Option<render_model::WindowMode>,
+    /// A requested mode the window was asked to show and has not yet.
+    applying: Option<render_model::WindowMode>,
+    /// The last size and position the window had while windowed.
+    windowed: winit::dpi::PhysicalSize<u32>,
+    windowed_position: Option<winit::dpi::PhysicalPosition<i32>>,
     /// The monitor's frame interval.
     refresh: Duration,
     /// When to ask for the next frame's image.
@@ -339,28 +351,44 @@ fn lock(surface: &Mutex<WindowSurface>) -> MutexGuard<'_, WindowSurface> {
 
 impl Shell {
     fn open(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
-        let mut attributes = Window::default_attributes()
-            .with_title(self.config.title.clone())
-            .with_inner_size(winit::dpi::PhysicalSize::new(
-                self.config.width,
-                self.config.height,
-            ))
-            .with_maximized(self.config.maximized);
-        let mut settle = placement::Settle::default();
-        if let Some(placement) = self
+        let attributes = Window::default_attributes().with_title(self.config.title.clone());
+        let remembered = self
             .config
             .placement_file
             .as_deref()
-            .and_then(placement::Placement::load)
-        {
-            (attributes, settle) = placement.apply(attributes, event_loop);
-        }
+            .and_then(placement::Placement::load);
+        let (attributes, mut settle, windowed, windowed_position) = match remembered {
+            Some(placement) => {
+                let (attributes, settle) = placement.apply(attributes, event_loop);
+                (attributes, settle, Some(placement.size), placement.position)
+            }
+            None => {
+                let size = placement::first_windowed_size(self.config.windowed_size, event_loop);
+                let mut attributes = attributes
+                    .with_maximized(self.config.mode == render_model::WindowMode::Maximized)
+                    .with_fullscreen(
+                        (self.config.mode == render_model::WindowMode::Fullscreen)
+                            .then_some(winit::window::Fullscreen::Borderless(None)),
+                    );
+                if let Some(size) = size {
+                    attributes = attributes.with_inner_size(size);
+                }
+                (attributes, placement::Settle::default(), size, None)
+            }
+        };
         let window = Arc::new(
             event_loop
                 .create_window(attributes)
                 .map_err(|error| error.to_string())?,
         );
         settle.check(&window, false);
+        let shown = placement::mode_of(&window);
+        let windowed = windowed.unwrap_or_else(|| window.inner_size());
+        let windowed_position = windowed_position.or_else(|| {
+            (shown == render_model::WindowMode::Windowed)
+                .then(|| window.inner_position().ok())
+                .flatten()
+        });
         let size = window.inner_size();
         let surface = WindowSurface::create(&self.gpu, window.clone(), size.width, size.height)
             .map_err(|error| error.to_string())?;
@@ -403,6 +431,11 @@ impl Shell {
             window,
             presenter,
             settle,
+            shown,
+            adopted: None,
+            applying: None,
+            windowed,
+            windowed_position,
             refresh,
             next_frame: Instant::now(),
             resized: None,
@@ -468,8 +501,15 @@ impl Shell {
         let mut ui = open.ui.as_mut();
         let locking = Instant::now();
         let mut drawn = (locking, locking);
+        let shown = open.shown;
+        let adopt = open.adopted != Some(shown);
+        let mut requested = shown;
         let step = self.scene.draw(&mut |renderer, now| {
             drawn.0 = Instant::now();
+            if adopt {
+                renderer.adopt_window_mode(shown);
+            }
+            requested = renderer.window_mode();
             renderer.set_pixel_ratio(pixel_ratio);
             #[cfg(feature = "ui-overlay")]
             if let Some(ui) = ui.as_deref_mut() {
@@ -488,6 +528,18 @@ impl Shell {
         let presenting = Instant::now();
         surface.present(&self.gpu, frame);
         let presented = Instant::now();
+        // The request follows how the window shows (a remembered mode, the
+        // window manager), so a request for another mode is one to apply.
+        open.adopted = Some(shown);
+        if requested == shown {
+            open.applying = None;
+        } else if open.applying != Some(requested) {
+            if shown == render_model::WindowMode::Windowed {
+                open.windowed_position = open.window.inner_position().ok();
+            }
+            placement::show(&open.window, requested, open.windowed);
+            open.applying = Some(requested);
+        }
         self.report.frames_presented += 1;
         self.scene.presented(PresentedFrame {
             step,
@@ -521,7 +573,17 @@ impl Shell {
         // The page and Chromium go before the window and device.
         if let Some(open) = self.window.take() {
             if let Some(path) = &self.config.placement_file {
-                if let Err(error) = placement::Placement::of(&open.window).save(path) {
+                let mode = placement::mode_of(&open.window);
+                let placement = placement::Placement {
+                    size: open.windowed,
+                    // A window never moved since it opened reported no move.
+                    position: match mode {
+                        render_model::WindowMode::Windowed => open.window.inner_position().ok(),
+                        _ => open.windowed_position,
+                    },
+                    mode,
+                };
+                if let Err(error) = placement.save(path) {
                     eprintln!("desktop-shell: could not keep the window placement: {error}");
                 }
             }
@@ -558,6 +620,10 @@ impl ApplicationHandler for Shell {
         }
         let Some(open) = &mut self.window else { return };
         if let WindowEvent::Resized(size) = event {
+            open.shown = placement::mode_of(&open.window);
+            if open.shown == render_model::WindowMode::Windowed {
+                open.windowed = size;
+            }
             // While an image is being acquired or waits to be drawn, the
             // next ask applies the size.
             open.resized = Some((size.width, size.height));
@@ -570,6 +636,11 @@ impl ApplicationHandler for Shell {
         }
         if let WindowEvent::Moved(_) = event {
             open.settle.check(&open.window, true);
+            // A window being maximized can move before it resizes, so ask
+            // how it shows rather than trusting the last resize.
+            if placement::mode_of(&open.window) == render_model::WindowMode::Windowed {
+                open.windowed_position = open.window.inner_position().ok();
+            }
         }
         #[cfg(feature = "ui-overlay")]
         if let Some(ui) = &mut open.ui {

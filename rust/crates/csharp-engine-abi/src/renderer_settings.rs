@@ -68,6 +68,17 @@ pub enum NativeWaterReflectionsQuality {
     High = 2,
 }
 
+/// How the desktop window shows: a window of its own size, maximized
+/// within the monitor's work area, or borderless fullscreen, covering the
+/// monitor at the desktop's resolution. Streamed output has no window.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeWindowMode {
+    Windowed = 0,
+    Maximized = 1,
+    Fullscreen = 2,
+}
+
 /// The renderer's settings: which pipeline features draw and at what
 /// quality. The product manifest supplies the initial values
 /// (`RustyEngineProduct*` properties); `Set` replaces them all from the next
@@ -99,6 +110,10 @@ pub struct NativeRendererSettingsRequest {
     pub render_scale: f32,
     /// Window output waits for the display's refresh before presenting.
     pub vsync: bool,
+    /// How the window shows. The request follows the window: a remembered
+    /// mode it reopened in, or one the player chose through the window
+    /// manager, becomes the requested mode.
+    pub window_mode: NativeWindowMode,
     /// Bin each world view's lights into view-frustum clusters before
     /// shading, instead of shading every light per fragment.
     pub clustered_lighting: bool,
@@ -153,6 +168,7 @@ pub struct NativeRendererSettingsReadout {
     pub ambient_occlusion_refusal: NativeRendererSettingRefusal,
     pub antialiasing_refusal: NativeRendererSettingRefusal,
     pub vsync_refusal: NativeRendererSettingRefusal,
+    pub window_mode_refusal: NativeRendererSettingRefusal,
     pub clustered_lighting_refusal: NativeRendererSettingRefusal,
     pub gpu_culling_refusal: NativeRendererSettingRefusal,
     pub occlusion_culling_refusal: NativeRendererSettingRefusal,

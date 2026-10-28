@@ -291,7 +291,8 @@ strength and radius), antialiasing (`Off`, `Msaa2`, `Msaa4`, `Temporal`
 1: the world, viewmodel, labels and effects draw at that fraction of the
 frame's size and are upscaled into it by the `upscale` pass, bilinearly
 unless the temporal stage draws, while a playing video and the browser or
-window UI keep their full size), vsync,
+window UI keep their full size), vsync, the window mode (`Windowed`,
+`Maximized` or `Fullscreen`, borderless; [the window](desktop-shell.md#shape)),
 and the clustered lighting and GPU culling switches. The product manifest's
 `RustyEngineProduct*` properties are the initial values
 ([the product project](csharp-product-project.md#renderer-settings)), so a
@@ -307,7 +308,8 @@ differently: `NoComputeShaders` (distance-field occlusion and clustered
 lighting fall back to the screen-space pass and the light loop),
 `NoIndirectDraws` (GPU culling keeps the CPU list), `UnsupportedSampleCount`
 (the adapter cannot multisample at that count, so the default 4 draws) and
-`NoDisplay` (streamed output has no display, so vsync is moot) and
+`NoDisplay` (streamed output has no display or window, so vsync and the
+window mode are moot) and
 `VsyncOnly` (the window's display has no immediate or mailbox present mode,
 so frames wait for its refresh with vsync off), `SoftwareAdapter` (a
 GPU-only feature on a software adapter, the temporal stage among them),
@@ -501,6 +503,7 @@ renderer setting, is reported and ignored.
 | `renderScale` | Display | 0.33 to 1 in steps of 0.01 |
 | `antialiasing` | Display | `off`, `2x`, `4x`, `temporal`, `dlss` |
 | `vsync` | Display | on or off |
+| `windowMode` | Display | `windowed`, `maximized`, `fullscreen` |
 | `shadows` | Quality | on or off |
 | `backdropShadows` | Quality | on or off |
 | `shadowBudget` | Quality | `4`, `8`, `16`, `32`, `none` |

@@ -902,6 +902,36 @@ pub enum WaterReflectionsQuality {
     High,
 }
 
+/// How the desktop window shows (`RendererSettingsDescriptor`): a window
+/// of its own size, maximized within the monitor's work area, or covering
+/// the monitor at the desktop's resolution with no frame (borderless
+/// fullscreen). Streamed output has no window.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WindowMode {
+    Windowed,
+    #[default]
+    Maximized,
+    Fullscreen,
+}
+
+impl WindowMode {
+    pub const ALL: [Self; 3] = [Self::Windowed, Self::Maximized, Self::Fullscreen];
+
+    /// Its text form: `windowed`, `maximized` or `fullscreen`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Windowed => "windowed",
+            Self::Maximized => "maximized",
+            Self::Fullscreen => "fullscreen",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|mode| mode.name() == name)
+    }
+}
+
 /// How the primary destination smooths its edges
 /// (`RendererSettingsDescriptor::antialiasing`): several samples a pixel
 /// (MSAA), or a temporal upscale stage that gathers jittered frames at the
@@ -1074,6 +1104,10 @@ pub struct RendererSettingsDescriptor {
     pub render_scale: f32,
     /// Window output waits for the display's refresh before presenting.
     pub vsync: bool,
+    /// How the desktop window shows. Settings written before it existed
+    /// open maximized.
+    #[serde(default)]
+    pub window_mode: WindowMode,
     /// Bin each world view's lights into view-frustum clusters before
     /// shading, instead of shading every light per fragment.
     pub clustered_lighting: bool,
@@ -1118,6 +1152,7 @@ impl RendererSettingsDescriptor {
         antialiasing: Antialiasing::Msaa4,
         render_scale: 1.0,
         vsync: true,
+        window_mode: WindowMode::Maximized,
         clustered_lighting: false,
         gpu_culling: false,
         occlusion_culling: false,

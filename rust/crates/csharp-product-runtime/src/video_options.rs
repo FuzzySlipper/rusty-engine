@@ -141,6 +141,9 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
     if id == "vsync" && streamed {
         return Some("The game is streamed to a browser page, which paces its own frames.");
     }
+    if id == "windowMode" && streamed {
+        return Some("The game is streamed to a browser page, which has no window of its own.");
+    }
     let refused = match id {
         "ambientOcclusion" => readout.ambient_occlusion,
         "antialiasing" => readout.antialiasing,

@@ -42,17 +42,15 @@ use product_host::ProductHostWindowInput;
 
 use crate::product_bundle::WindowUi;
 
-/// The size the window restores to; with no remembered placement it first
-/// opens maximized.
-const WINDOW_WIDTH: u32 = 1280;
-const WINDOW_HEIGHT: u32 = 720;
-
 /// The window, opened before the product loads so the runtime builds its
 /// renderer on the window's device.
 pub(crate) struct Desktop {
     shell: DesktopShell,
     /// The web engine drawing the UI page.
     ui: WindowUi,
+    /// The product's windowed size with none remembered
+    /// (`renderer.windowSize`); `None` follows the monitor.
+    windowed_size: Option<(u32, u32)>,
     cef_dir: Option<PathBuf>,
     /// Extra Chromium switches for the UI page, `name[=value]`; for example
     /// `remote-debugging-port=9333` lets a CDP client (the playtest harness,
@@ -71,6 +69,7 @@ impl Desktop {
     pub(crate) fn open_if_selected(
         output: csharp_product_runtime::RenderOutput,
         ui: WindowUi,
+        windowed_size: Option<(u32, u32)>,
         cef_dir: Option<PathBuf>,
         switches: &[String],
         servo_preferences: &[String],
@@ -88,6 +87,7 @@ impl Desktop {
         Ok(Some(Self {
             shell: DesktopShell::open()?,
             ui,
+            windowed_size,
             cef_dir,
             switches: switches.to_vec(),
             servo_preferences: servo_preferences.to_vec(),
@@ -132,6 +132,8 @@ impl Desktop {
             }
             None => None,
         };
+        // The product's request with the player's choices over it.
+        let mode = driver.settings_readout().requested.window_mode;
         let scene = Arc::new(WindowScene {
             driver,
             timing,
@@ -144,9 +146,8 @@ impl Desktop {
         let report = self.shell.run(
             DesktopShellConfig {
                 title,
-                width: WINDOW_WIDTH,
-                height: WINDOW_HEIGHT,
-                maximized: true,
+                mode,
+                windowed_size: self.windowed_size,
                 ui_url: Some(format!("{}/", origin.trim_end_matches('/'))),
                 placement_file: persistence_root.map(|root| root.join("desktop-window")),
                 web: WebRuntimeConfig {

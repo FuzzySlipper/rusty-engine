@@ -334,6 +334,7 @@ impl Renderer {
                 temporal: false,
                 dlss: false,
                 vsync: false,
+                window_mode: render_model::WindowMode::Windowed,
                 render_scale: 1.0,
                 volumetric_fog: render_model::VolumetricFogQuality::Off,
                 volumetric_clouds: render_model::VolumetricCloudsQuality::Off,

@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::{
     AmbientOcclusionMode, Antialiasing, RendererSettingsDescriptor, VolumetricCloudsQuality,
-    VolumetricFogQuality, WaterReflectionsQuality,
+    VolumetricFogQuality, WaterReflectionsQuality, WindowMode,
 };
 
 /// One choice of a [`RendererSettingKind::Choice`] option.
@@ -197,6 +197,21 @@ const AMBIENT_OCCLUSION_CHOICES: &[RendererSettingChoice] = &[
     },
 ];
 
+const WINDOW_MODE_CHOICES: &[RendererSettingChoice] = &[
+    RendererSettingChoice {
+        value: "windowed",
+        label: "Windowed",
+    },
+    RendererSettingChoice {
+        value: "maximized",
+        label: "Maximized",
+    },
+    RendererSettingChoice {
+        value: "fullscreen",
+        label: "Fullscreen",
+    },
+];
+
 const VOLUMETRIC_FOG_CHOICES: &[RendererSettingChoice] = &[
     RendererSettingChoice {
         value: "off",
@@ -254,6 +269,18 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         kind: RendererSettingKind::Toggle,
         restart: false,
         cost: "No GPU cost: the frame rate is capped at the display's refresh.",
+        gallery: GalleryExperiment::None,
+    },
+    RendererSettingOption {
+        id: "windowMode",
+        label: "Window mode",
+        group: "Display",
+        description: "Shows the game in a window of its own size, maximized, or fullscreen: covering the whole monitor at the desktop's resolution, with no frame.",
+        kind: RendererSettingKind::Choice {
+            choices: WINDOW_MODE_CHOICES,
+        },
+        restart: false,
+        cost: "No GPU cost beyond drawing the window's size.",
         gallery: GalleryExperiment::None,
     },
     RendererSettingOption {
@@ -438,6 +465,8 @@ pub struct RendererSettingsOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vsync: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub window_mode: Option<WindowMode>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub shadows: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub backdrop_shadows: Option<bool>,
@@ -503,6 +532,9 @@ impl RendererSettingsOverrides {
         if let Some(value) = self.vsync {
             settings.vsync = value;
         }
+        if let Some(value) = self.window_mode {
+            settings.window_mode = value;
+        }
         if let Some(value) = self.shadows {
             settings.shadows = value;
         }
@@ -548,6 +580,7 @@ impl RendererSettingsOverrides {
             "renderScale" => self.render_scale.is_some(),
             "antialiasing" => self.antialiasing.is_some(),
             "vsync" => self.vsync.is_some(),
+            "windowMode" => self.window_mode.is_some(),
             "shadows" => self.shadows.is_some(),
             "backdropShadows" => self.backdrop_shadows.is_some(),
             "shadowBudget" => self.shadow_budget.is_some(),
@@ -603,6 +636,7 @@ impl RendererSettingsOverrides {
                 self.antialiasing = Antialiasing::from_name(choice()?);
             }
             "vsync" => self.vsync = Some(toggle()?),
+            "windowMode" => self.window_mode = WindowMode::from_name(choice()?),
             "shadows" => self.shadows = Some(toggle()?),
             "backdropShadows" => self.backdrop_shadows = Some(toggle()?),
             "shadowBudget" => {
@@ -659,6 +693,7 @@ impl RendererSettingsOverrides {
             "renderScale" => self.render_scale = None,
             "antialiasing" => self.antialiasing = None,
             "vsync" => self.vsync = None,
+            "windowMode" => self.window_mode = None,
             "shadows" => self.shadows = None,
             "backdropShadows" => self.backdrop_shadows = None,
             "shadowBudget" => self.shadow_budget = None,
@@ -736,6 +771,7 @@ impl RendererSettingsOverrides {
             render_scale: preset.render_scale.or(self.render_scale),
             antialiasing: preset.antialiasing.or(self.antialiasing),
             vsync: preset.vsync.or(self.vsync),
+            window_mode: preset.window_mode.or(self.window_mode),
             shadows: preset.shadows.or(self.shadows),
             backdrop_shadows: preset.backdrop_shadows.or(self.backdrop_shadows),
             shadow_budget: preset.shadow_budget.or(self.shadow_budget),
@@ -762,6 +798,7 @@ pub fn renderer_setting_value(settings: &RendererSettingsDescriptor, id: &str) -
         "renderScale" => Value::from(round_to(settings.render_scale as f64, 0.01)),
         "antialiasing" => Value::from(settings.antialiasing.name()),
         "vsync" => Value::from(settings.vsync),
+        "windowMode" => Value::from(settings.window_mode.name()),
         "shadows" => Value::from(settings.shadows),
         "backdropShadows" => Value::from(settings.backdrop_shadows),
         "shadowBudget" => Value::from(

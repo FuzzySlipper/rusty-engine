@@ -24,6 +24,7 @@ fn settings() -> RendererSettingsDescriptor {
         antialiasing: Antialiasing::Off,
         render_scale: 1.0,
         vsync: false,
+        window_mode: render_model::WindowMode::Fullscreen,
         clustered_lighting: false,
         gpu_culling: false,
         occlusion_culling: false,
@@ -203,5 +204,48 @@ fn a_display_without_an_immediate_mode_keeps_vsync_on() {
         harness.renderer.settings_readout().vsync,
         None,
         "vsync asked for is what the display does"
+    );
+}
+
+#[test]
+fn the_request_takes_the_window_mode_the_window_shows() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.apply(vec![RenderDiff::SetRendererSettings {
+        settings: settings(),
+    }]);
+    assert_eq!(
+        harness.renderer.window_mode(),
+        render_model::WindowMode::Fullscreen
+    );
+
+    // The window reopened maximized, as the player left it: the renderer
+    // and the retained world take it (as the C# services do on ingest).
+    harness
+        .renderer
+        .adopt_window_mode(render_model::WindowMode::Maximized);
+    harness
+        .world
+        .adopt_window_mode(render_model::WindowMode::Maximized);
+    let readout = harness.renderer.settings_readout();
+    assert_eq!(
+        readout.requested.window_mode,
+        render_model::WindowMode::Maximized
+    );
+    assert_eq!(
+        readout.product.window_mode,
+        render_model::WindowMode::Maximized
+    );
+    assert_eq!(
+        harness.renderer.window_mode(),
+        render_model::WindowMode::Maximized
+    );
+
+    // A request for fullscreen again is a change from what the window shows.
+    harness.apply(vec![RenderDiff::SetRendererSettings {
+        settings: settings(),
+    }]);
+    assert_eq!(
+        harness.renderer.window_mode(),
+        render_model::WindowMode::Fullscreen
     );
 }

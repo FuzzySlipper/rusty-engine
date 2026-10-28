@@ -55,6 +55,11 @@ pub(super) struct ProductBundle {
     /// The web engine drawing the UI page in the window (`renderer.windowUi`).
     #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
     pub(super) window_ui: WindowUi,
+    /// The window's size when it opens windowed with no size remembered
+    /// (`renderer.windowSize`), in physical pixels; `None` follows the
+    /// monitor.
+    #[cfg_attr(not(feature = "desktop"), allow(dead_code))]
+    pub(super) window_size: Option<(u32, u32)>,
     /// The aspect range the page keeps (`renderer.presentationAspect`).
     presentation_aspect: Option<ProductHostPresentationAspect>,
     /// Where committed audio plays (`audio.output`).
@@ -137,6 +142,20 @@ impl ProductBundle {
             Some(name) => WindowUi::parse(name)
                 .ok_or_else(|| field_error("renderer.windowUi", "must be chromium or servo"))?,
         };
+        let window_size = match manifest.renderer.window_size.as_deref() {
+            None => None,
+            Some(text) => Some(
+                text.split_once('x')
+                    .and_then(|(width, height)| Some((width.parse().ok()?, height.parse().ok()?)))
+                    .filter(|&(width, height): &(u32, u32)| width > 0 && height > 0)
+                    .ok_or_else(|| {
+                        field_error(
+                            "renderer.windowSize",
+                            "must be WIDTHxHEIGHT, such as 1920x1080",
+                        )
+                    })?,
+            ),
+        };
         let presentation_aspect = match manifest.renderer.presentation_aspect {
             None => None,
             Some(ManifestPresentationAspect { minimum, maximum })
@@ -202,6 +221,7 @@ impl ProductBundle {
             renderer_settings,
             render_output,
             window_ui,
+            window_size,
             presentation_aspect,
             audio_output,
             lifecycle,
@@ -566,6 +586,12 @@ struct ManifestRenderer {
     output: Option<String>,
     #[serde(default)]
     window_ui: Option<String>,
+    /// `windowed`, `maximized` or `fullscreen`; absent is maximized.
+    #[serde(default)]
+    window_mode: Option<String>,
+    /// `WIDTHxHEIGHT`; absent follows the monitor.
+    #[serde(default)]
+    window_size: Option<String>,
     #[serde(default)]
     presentation_aspect: Option<ManifestPresentationAspect>,
     #[serde(default)]
@@ -745,6 +771,15 @@ impl ProductRendererSettings {
             Some("disabled") => false,
             Some(_) => return Err(field_error("renderer.vsync", "must be enabled or disabled")),
         };
+        let window_mode = match value.window_mode.as_deref() {
+            None => render_model::WindowMode::Maximized,
+            Some(name) => render_model::WindowMode::from_name(name).ok_or_else(|| {
+                field_error(
+                    "renderer.windowMode",
+                    "must be windowed, maximized or fullscreen",
+                )
+            })?,
+        };
         let volumetric_fog = match value.lighting.volumetric_fog.as_deref() {
             None | Some("off") => render_model::VolumetricFogQuality::Off,
             Some("low") => render_model::VolumetricFogQuality::Low,
@@ -796,6 +831,7 @@ impl ProductRendererSettings {
                 antialiasing,
                 render_scale,
                 vsync,
+                window_mode,
                 clustered_lighting: switch(
                     value.lighting.clustered_lighting.as_deref(),
                     "renderer.lighting.clusteredLighting",
@@ -1475,6 +1511,49 @@ mod tests {
         assert!(read(&root)
             .unwrap_err()
             .contains("renderer.lighting.ambientOcclusion.radius"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reads_and_validates_the_window_mode_and_size() {
+        let root = fixture_root("window-mode");
+        write_manifest(&root, "native/product.so");
+        let path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&path).unwrap();
+        let defaults = read(&root).unwrap();
+        assert_eq!(
+            (
+                defaults.renderer_settings().window_mode,
+                defaults.window_size
+            ),
+            (render_model::WindowMode::Maximized, None),
+            "absent: maximized, sized by the monitor"
+        );
+        let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
+        fs::write(
+            &path,
+            original.replace(
+                marker,
+                "\"renderer\":{\"windowMode\":\"windowed\",\"windowSize\":\"1920x1080\"}",
+            ),
+        )
+        .unwrap();
+        let bundle = read(&root).unwrap();
+        assert_eq!(
+            (bundle.renderer_settings().window_mode, bundle.window_size),
+            (render_model::WindowMode::Windowed, Some((1920, 1080)))
+        );
+        for (renderer, field) in [
+            ("{\"windowMode\":\"exclusive\"}", "renderer.windowMode"),
+            ("{\"windowSize\":\"1920\"}", "renderer.windowSize"),
+            ("{\"windowSize\":\"0x1080\"}", "renderer.windowSize"),
+        ] {
+            fs::write(
+                &path,
+                original.replace(marker, &format!("\"renderer\":{renderer}")),
+            )
+            .unwrap();
+            assert!(read(&root).unwrap_err().contains(field), "{renderer}");
+        }
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

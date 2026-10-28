@@ -646,6 +646,10 @@ impl EngineServiceSet {
         let traced = readout.effective.ambient_occlusion
             == csharp_engine_abi::NativeAmbientOcclusionMode::DistanceField;
         self.fields_changed |= self.spatial.set_distance_fields(traced);
+        // The request follows how the window shows.
+        self.presentation_world.adopt_window_mode(
+            crate::renderer_settings::renderer_settings_descriptor(&readout.requested).window_mode,
+        );
         self.renderer_settings.ingest(readout);
     }
 
@@ -2018,6 +2022,7 @@ mod tests {
             antialiasing: NativeAntialiasing::Msaa2,
             render_scale: 0.75,
             vsync: false,
+            window_mode: csharp_engine_abi::NativeWindowMode::Fullscreen,
             clustered_lighting: true,
             gpu_culling: true,
             occlusion_culling: true,
@@ -2045,6 +2050,7 @@ mod tests {
                 antialiasing: render_model::Antialiasing::Msaa2,
                 render_scale: 0.75,
                 vsync: false,
+                window_mode: render_model::WindowMode::Fullscreen,
                 clustered_lighting: true,
                 gpu_culling: true,
                 occlusion_culling: true,
@@ -2071,6 +2077,7 @@ mod tests {
             ambient_occlusion_refusal: NativeRendererSettingRefusal::NoComputeShaders,
             antialiasing_refusal: NativeRendererSettingRefusal::None,
             vsync_refusal: NativeRendererSettingRefusal::NoDisplay,
+            window_mode_refusal: NativeRendererSettingRefusal::NoDisplay,
             clustered_lighting_refusal: NativeRendererSettingRefusal::None,
             gpu_culling_refusal: NativeRendererSettingRefusal::None,
             occlusion_culling_refusal: NativeRendererSettingRefusal::None,

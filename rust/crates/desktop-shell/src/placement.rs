@@ -1,21 +1,25 @@
-//! The window's size, position and maximized state, kept between runs in one
-//! small file under the product's persistence root.
+//! The window's mode and its last windowed size and position, kept between
+//! runs in one small file under the product's persistence root.
 //!
-//! The file is one line: `width height x y maximized`, with `-` for a position
-//! the platform does not report (Wayland). `x y` is the client area's
+//! The file is one line: `width height x y mode`, mode `0` windowed, `1`
+//! maximized and `2` fullscreen, with `-` for a position the platform does
+//! not report (Wayland) or the window never had. The size and position are
+//! the window's last while windowed, so leaving maximized or fullscreen,
+//! now or on a later run, restores them. `x y` is the client area's
 //! top-left: the platforms place a new window's frame there instead, and
 //! winit's frame position is unreliable where the window manager does not
 //! reparent (KWin's Xwayland reports none), so [`Settle`] moves the frame
 //! once the client area has landed. A missing or unreadable file opens the
-//! window at its default size.
+//! window as the product asks.
 
 use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
+use render_model::WindowMode;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{Window, WindowAttributes};
+use winit::window::{Fullscreen, Window, WindowAttributes};
 
 /// Smallest and largest restored side, in physical pixels.
 const SIDE: std::ops::RangeInclusive<u32> = 200..=16384;
@@ -25,9 +29,10 @@ const PLACING: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct Placement {
-    size: PhysicalSize<u32>,
-    position: Option<PhysicalPosition<i32>>,
-    maximized: bool,
+    /// The windowed size and position.
+    pub(crate) size: PhysicalSize<u32>,
+    pub(crate) position: Option<PhysicalPosition<i32>>,
+    pub(crate) mode: WindowMode,
 }
 
 impl Placement {
@@ -37,7 +42,7 @@ impl Placement {
 
     fn parse(text: &str) -> Option<Self> {
         let words: Vec<&str> = text.split_whitespace().collect();
-        let [width, height, x, y, maximized] = words.as_slice() else {
+        let [width, height, x, y, mode] = words.as_slice() else {
             return None;
         };
         let side = |value: &str| value.parse().ok().filter(|side| SIDE.contains(side));
@@ -48,20 +53,13 @@ impl Placement {
         Some(Self {
             size: PhysicalSize::new(side(width)?, side(height)?),
             position,
-            maximized: match *maximized {
-                "1" => true,
-                "0" => false,
+            mode: match *mode {
+                "0" => WindowMode::Windowed,
+                "1" => WindowMode::Maximized,
+                "2" => WindowMode::Fullscreen,
                 _ => return None,
             },
         })
-    }
-
-    pub(crate) fn of(window: &Window) -> Self {
-        Self {
-            size: window.inner_size(),
-            position: window.inner_position().ok(),
-            maximized: window.is_maximized(),
-        }
     }
 
     /// Writes the placement, replacing the previous file whole.
@@ -74,16 +72,20 @@ impl Placement {
             "{} {} {x} {y} {}\n",
             self.size.width,
             self.size.height,
-            u8::from(self.maximized)
+            match self.mode {
+                WindowMode::Windowed => 0,
+                WindowMode::Maximized => 1,
+                WindowMode::Fullscreen => 2,
+            }
         );
         let partial = path.with_extension("partial");
         fs::write(&partial, text).map_err(|error| error.to_string())?;
         fs::rename(&partial, path).map_err(|error| error.to_string())
     }
 
-    /// The window opens at this size, and at this position when it still
-    /// falls on a connected monitor. The returned [`Settle`] finishes the
-    /// position once the window exists.
+    /// The window opens in this mode, restoring to this size, and windowed at
+    /// this position when it still falls on a connected monitor. The
+    /// returned [`Settle`] finishes the position once the window exists.
     pub(crate) fn apply(
         &self,
         attributes: WindowAttributes,
@@ -91,12 +93,19 @@ impl Placement {
     ) -> (WindowAttributes, Settle) {
         let attributes = attributes
             .with_inner_size(self.size)
-            .with_maximized(self.maximized);
+            .with_maximized(self.mode == WindowMode::Maximized)
+            .with_fullscreen(
+                (self.mode == WindowMode::Fullscreen).then_some(Fullscreen::Borderless(None)),
+            );
         match self.position {
-            Some(position) if !self.maximized && on_a_monitor(position, event_loop) => (
-                attributes.with_position(position),
-                Settle(Some((position, Instant::now()))),
-            ),
+            Some(position)
+                if self.mode == WindowMode::Windowed && on_a_monitor(position, event_loop) =>
+            {
+                (
+                    attributes.with_position(position),
+                    Settle(Some((position, Instant::now()))),
+                )
+            }
             _ => (attributes, Settle(None)),
         }
     }
@@ -133,6 +142,59 @@ impl Settle {
     }
 }
 
+/// How `window` shows now.
+pub(crate) fn mode_of(window: &Window) -> WindowMode {
+    if window.fullscreen().is_some() {
+        WindowMode::Fullscreen
+    } else if window.is_maximized() {
+        WindowMode::Maximized
+    } else {
+        WindowMode::Windowed
+    }
+}
+
+/// Shows `window` in `mode`; leaving maximized or fullscreen restores
+/// `windowed`.
+pub(crate) fn show(window: &Window, mode: WindowMode, windowed: PhysicalSize<u32>) {
+    match mode {
+        WindowMode::Fullscreen => window.set_fullscreen(Some(Fullscreen::Borderless(None))),
+        WindowMode::Maximized => {
+            window.set_fullscreen(None);
+            window.set_maximized(true);
+        }
+        WindowMode::Windowed => {
+            window.set_fullscreen(None);
+            window.set_maximized(false);
+            let _ = window.request_inner_size(windowed);
+        }
+    }
+}
+
+/// The size a window opens windowed at with none remembered: `wanted`, kept
+/// within the monitor, else three quarters of the monitor each way. `None`
+/// where no monitor is known, so the platform chooses.
+pub(crate) fn first_windowed_size(
+    wanted: Option<(u32, u32)>,
+    event_loop: &ActiveEventLoop,
+) -> Option<PhysicalSize<u32>> {
+    let monitor = event_loop
+        .primary_monitor()
+        .or_else(|| event_loop.available_monitors().next())
+        .map(|monitor| monitor.size());
+    match (wanted, monitor) {
+        (Some((width, height)), Some(monitor)) => Some(PhysicalSize::new(
+            width.min(monitor.width),
+            height.min(monitor.height),
+        )),
+        (Some((width, height)), None) => Some(PhysicalSize::new(width, height)),
+        (None, Some(monitor)) => Some(PhysicalSize::new(
+            monitor.width * 3 / 4,
+            monitor.height * 3 / 4,
+        )),
+        (None, None) => None,
+    }
+}
+
 fn on_a_monitor(position: PhysicalPosition<i32>, event_loop: &ActiveEventLoop) -> bool {
     event_loop.available_monitors().any(|monitor| {
         let origin = monitor.position();
@@ -152,13 +214,14 @@ mod tests {
         let placement = Placement {
             size: PhysicalSize::new(1600, 900),
             position: Some(PhysicalPosition::new(-40, 25)),
-            maximized: true,
+            mode: WindowMode::Fullscreen,
         };
         placement.save(&path).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "1600 900 -40 25 2\n");
         assert_eq!(Placement::load(&path), Some(placement));
         let wayland = Placement {
             position: None,
-            maximized: false,
+            mode: WindowMode::Windowed,
             ..placement
         };
         wayland.save(&path).unwrap();
@@ -174,7 +237,7 @@ mod tests {
             "1280 720",
             "10 10 - - 0",
             "1280 720 a b 0",
-            "1280 720 - - 2",
+            "1280 720 - - 3",
         ] {
             assert_eq!(Placement::parse(text), None, "{text:?}");
         }

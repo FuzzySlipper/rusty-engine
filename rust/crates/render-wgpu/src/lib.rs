@@ -318,6 +318,9 @@ pub struct RendererOptions {
     /// off presents as soon as a frame is drawn. Streamed output has no
     /// display.
     pub vsync: bool,
+    /// How the desktop window shows; the window applies it
+    /// (`Renderer::window_mode`). Streamed output has no window.
+    pub window_mode: render_model::WindowMode,
     /// The fraction of the primary destination's size the primary views
     /// draw at, the render resolution (`upscale.rs`): 0.33 to 1.
     pub render_scale: f32,
@@ -352,6 +355,7 @@ impl Default for RendererOptions {
             temporal: false,
             dlss: false,
             vsync: RendererSettingsDescriptor::DEFAULT.vsync,
+            window_mode: RendererSettingsDescriptor::DEFAULT.window_mode,
             render_scale: RendererSettingsDescriptor::DEFAULT.render_scale,
             volumetric_fog: render_model::VolumetricFogQuality::Off,
             volumetric_clouds: render_model::VolumetricCloudsQuality::Off,
@@ -389,6 +393,7 @@ impl RendererOptions {
         self.temporal = settings.antialiasing.temporal();
         self.dlss = settings.antialiasing == Antialiasing::Dlss;
         self.vsync = settings.vsync;
+        self.window_mode = settings.window_mode;
         self.render_scale = settings.render_scale;
         self.clustered_lighting = settings.clustered_lighting;
         self.gpu_culling = settings.gpu_culling;
@@ -425,6 +430,7 @@ impl RendererOptions {
             },
             render_scale: self.render_scale,
             vsync: self.vsync,
+            window_mode: self.window_mode,
             clustered_lighting: self.clustered_lighting,
             gpu_culling: self.gpu_culling,
             occlusion_culling: self.occlusion_culling,
@@ -1014,6 +1020,23 @@ impl Renderer {
     /// Whether window output should wait for the display's refresh.
     pub fn vsync(&self) -> bool {
         self.options.vsync
+    }
+
+    /// How the desktop window should show.
+    pub fn window_mode(&self) -> render_model::WindowMode {
+        self.options.window_mode
+    }
+
+    /// The window shows `mode` other than by request: it reopened in the
+    /// player's remembered mode, or the player changed it through the window
+    /// manager. The request takes it, so the product reads how the window
+    /// shows and a request for any other mode is a change the window applies.
+    pub fn adopt_window_mode(&mut self, mode: render_model::WindowMode) {
+        self.product_settings.window_mode = mode;
+        if self.player_settings.window_mode.is_some() {
+            self.player_settings.window_mode = Some(mode);
+        }
+        self.options.window_mode = mode;
     }
 
     /// The present modes of the display the renderer draws to, from which

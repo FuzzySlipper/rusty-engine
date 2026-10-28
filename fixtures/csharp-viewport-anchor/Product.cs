@@ -54,6 +54,21 @@ public sealed class Product(ProductCreateContext context) : IEngineProduct, IDeb
         return anchored ? "anchored to hero" : "own viewport";
     }
 
+    [DebugCommand("viewport.window.mode", Description = "Show the window windowed, maximized or fullscreen through RendererSettings.")]
+    public string Mode(WindowMode mode)
+    {
+        var settings = context.Engine.RendererSettings;
+        settings.Set(settings.Read().Requested with { WindowMode = mode });
+        return WindowModes();
+    }
+
+    [DebugCommand("viewport.window.read", Description = "Read the requested and effective window modes.")]
+    public string WindowModes()
+    {
+        var readout = context.Engine.RendererSettings.Read();
+        return $"requested={readout.Requested.WindowMode};effective={readout.Effective.WindowMode};refusal={readout.WindowModeRefusal}";
+    }
+
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
 
     public ProductUpdateResult Update(ProductUpdate update)

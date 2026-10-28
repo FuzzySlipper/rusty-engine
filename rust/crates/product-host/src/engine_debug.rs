@@ -110,6 +110,8 @@ pub struct ProductHostRendererSettingValues {
     /// The fraction of the primary destination's size the world draws at.
     pub render_scale: f32,
     pub vsync: bool,
+    /// `windowed`, `maximized` or `fullscreen`.
+    pub window_mode: String,
     pub clustered_lighting: bool,
     pub gpu_culling: bool,
     pub occlusion_culling: bool,

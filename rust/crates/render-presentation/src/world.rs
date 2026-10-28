@@ -446,6 +446,15 @@ impl PresentationWorld {
         self.revision
     }
 
+    /// The retained renderer settings take the window mode the window shows
+    /// (render-wgpu `Renderer::adopt_window_mode`), so a request for that mode
+    /// is unchanged and a request for another reaches the renderer.
+    pub fn adopt_window_mode(&mut self, mode: render_model::WindowMode) {
+        if let Some(settings) = &mut self.retained.renderer_settings {
+            settings.window_mode = mode;
+        }
+    }
+
     /// World-space origin of the retained node published for `entity`
     /// (`RenderMetadata::source_entity`), composed through its parents. A
     /// joint attachment uses its parent node's transform, not the joint's.

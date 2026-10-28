@@ -113,11 +113,29 @@ TypeScript UI is composited over it.
   Servo's page takes a devtools client instead ([UI engine](#ui-engine)).
 - **UI storage.** The page's local storage persists under the runtime's
   persistence root (`desktop-ui/`).
-- **Window placement.** The first window opens maximized, restoring to
-  1280×720. Later runs reopen at the last size, position (where
-  the platform reports one; Wayland does not) and maximized state, kept in
-  `desktop-window` under the persistence root. A position that no longer falls
-  on a connected monitor is dropped. There is no fullscreen mode.
+- **Window mode.** The window shows `windowed`, `maximized` or `fullscreen`:
+  borderless, covering the monitor at the desktop's resolution (there is no
+  exclusive fullscreen). It is the `windowMode` renderer setting
+  ([renderer settings](lighting-and-sky.md#renderer-settings)): the product
+  sets its default (`RustyEngineProductWindowMode`, `maximized` unless set),
+  changes it at runtime through `RendererSettings.Set`, and the player picks it
+  in the video options. The shell applies a change on its next frame. The
+  request follows how the window shows: when it reopens in a remembered mode,
+  or the player maximizes or restores it through the window manager, the
+  requested mode becomes that one, so `Read().Requested` is the window's mode
+  and a request for any other applies. Leaving fullscreen through the window
+  manager is not seen (winit keeps its own fullscreen state); the next
+  request applies as usual.
+- **Window placement.** A first window, with no placement remembered, opens in
+  the requested mode. Windowed, it opens at the product's
+  `RustyEngineProductWindowSize` kept within the monitor, else three quarters
+  of the monitor each way. Later runs reopen in the last mode, at the last
+  windowed size and position (where the platform reports one; Wayland does
+  not), kept in `desktop-window` under the persistence root, so leaving
+  maximized or fullscreen restores a real windowed size. The remembered mode
+  wins over the requested one it reopens under, until the product or player
+  asks for another. A position that no longer falls on a connected monitor is
+  dropped.
   - The saved position is the client area's. A new window's frame goes where
     it is asked to, so once the client area has landed the shell moves the
     window back by the frame's offset. winit's frame position is not used:

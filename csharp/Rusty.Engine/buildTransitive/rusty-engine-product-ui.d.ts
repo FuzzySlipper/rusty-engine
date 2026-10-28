@@ -745,6 +745,10 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         renderScale: number;
         vsync: boolean;
+        /**
+         * `windowed`, `maximized` or `fullscreen`.
+         */
+        windowMode: string;
         clusteredLighting: boolean;
         gpuCulling: boolean;
         occlusionCulling: boolean;

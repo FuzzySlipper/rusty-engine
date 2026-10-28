@@ -11,12 +11,12 @@ use csharp_engine_abi::{
     NativeRendererSettingOptionReadout, NativeRendererSettingRefusal, NativeRendererSettingsApi,
     NativeRendererSettingsCatalogueResult, NativeRendererSettingsReadout,
     NativeRendererSettingsRequest, NativeUtf8Slice, NativeVolumetricCloudsQuality,
-    NativeVolumetricFogQuality, NativeWaterReflectionsQuality,
+    NativeVolumetricFogQuality, NativeWaterReflectionsQuality, NativeWindowMode,
 };
 use render_model::{
     renderer_setting_value, AmbientOcclusionMode, AmbientOcclusionSettings, Antialiasing,
     RendererSettingKind, RendererSettingsDescriptor, VolumetricCloudsQuality, VolumetricFogQuality,
-    WaterReflectionsQuality, RENDERER_SETTING_OPTIONS,
+    WaterReflectionsQuality, WindowMode, RENDERER_SETTING_OPTIONS,
 };
 
 use crate::composition::ABI_OK;
@@ -74,6 +74,7 @@ impl RuntimeRendererSettingsBridge {
                 ambient_occlusion_refusal: NativeRendererSettingRefusal::None,
                 antialiasing_refusal: NativeRendererSettingRefusal::None,
                 vsync_refusal: NativeRendererSettingRefusal::None,
+                window_mode_refusal: NativeRendererSettingRefusal::None,
                 clustered_lighting_refusal: NativeRendererSettingRefusal::None,
                 gpu_culling_refusal: NativeRendererSettingRefusal::None,
                 occlusion_culling_refusal: NativeRendererSettingRefusal::None,
@@ -96,6 +97,7 @@ impl RuntimeRendererSettingsBridge {
             "ambientOcclusion" => readout.ambient_occlusion_refusal,
             "antialiasing" => readout.antialiasing_refusal,
             "vsync" => readout.vsync_refusal,
+            "windowMode" => readout.window_mode_refusal,
             "clusteredLighting" => readout.clustered_lighting_refusal,
             "gpuCulling" => readout.gpu_culling_refusal,
             "occlusionCulling" => readout.occlusion_culling_refusal,
@@ -240,6 +242,11 @@ pub(crate) fn renderer_settings_descriptor(
         },
         render_scale: request.render_scale,
         vsync: request.vsync,
+        window_mode: match request.window_mode {
+            NativeWindowMode::Windowed => WindowMode::Windowed,
+            NativeWindowMode::Maximized => WindowMode::Maximized,
+            NativeWindowMode::Fullscreen => WindowMode::Fullscreen,
+        },
         clustered_lighting: request.clustered_lighting,
         gpu_culling: request.gpu_culling,
         occlusion_culling: request.occlusion_culling,
@@ -285,6 +292,11 @@ pub fn renderer_settings_request(
         },
         render_scale: settings.render_scale,
         vsync: settings.vsync,
+        window_mode: match settings.window_mode {
+            WindowMode::Windowed => NativeWindowMode::Windowed,
+            WindowMode::Maximized => NativeWindowMode::Maximized,
+            WindowMode::Fullscreen => NativeWindowMode::Fullscreen,
+        },
         clustered_lighting: settings.clustered_lighting,
         gpu_culling: settings.gpu_culling,
         occlusion_culling: settings.occlusion_culling,

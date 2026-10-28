@@ -749,7 +749,8 @@ impl FrameOutput {
 
     /// The renderer's settings in effect and what the device refused, as
     /// `RendererSettings.Read` returns them. Streamed output has no display
-    /// to synchronise with, so its vsync is refused.
+    /// to synchronise with and no window to show, so its vsync and window
+    /// mode are refused.
     pub(crate) fn settings_readout(&self) -> NativeRendererSettingsReadout {
         let readout = self.driver.settings_readout();
         let refusal = |refusal: Option<SettingRefusal>| match refusal {
@@ -787,6 +788,11 @@ impl FrameOutput {
             ambient_occlusion_refusal: refusal(readout.ambient_occlusion),
             antialiasing_refusal: refusal(readout.antialiasing),
             vsync_refusal,
+            window_mode_refusal: if self.stream.is_some() {
+                NativeRendererSettingRefusal::NoDisplay
+            } else {
+                NativeRendererSettingRefusal::None
+            },
             clustered_lighting_refusal: refusal(readout.clustered_lighting),
             gpu_culling_refusal: refusal(readout.gpu_culling),
             occlusion_culling_refusal: refusal(readout.occlusion_culling),
@@ -981,6 +987,7 @@ fn settings_statistics(
             antialiasing: settings.antialiasing.name().to_owned(),
             render_scale: settings.render_scale,
             vsync: settings.vsync,
+            window_mode: settings.window_mode.name().to_owned(),
             clustered_lighting: settings.clustered_lighting,
             gpu_culling: settings.gpu_culling,
             occlusion_culling: settings.occlusion_culling,
@@ -1040,6 +1047,12 @@ fn settings_statistics(
         refused.insert(
             "vsync".to_owned(),
             "streamed output has no display to synchronise with".to_owned(),
+        );
+    }
+    if streamed {
+        refused.insert(
+            "windowMode".to_owned(),
+            "streamed output has no window".to_owned(),
         );
     }
     ProductHostRendererSettings {

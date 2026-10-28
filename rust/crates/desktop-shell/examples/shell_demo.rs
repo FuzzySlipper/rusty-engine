@@ -174,9 +174,8 @@ fn main() -> Result<(), String> {
     let report = shell.run(
         DesktopShellConfig {
             title: "desktop shell demo".to_owned(),
-            width: 1280,
-            height: 720,
-            maximized: false,
+            mode: render_model::WindowMode::Windowed,
+            windowed_size: Some((1280, 720)),
             ui_url: Some(url),
             placement_file: None,
             web: WebRuntimeConfig {

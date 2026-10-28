@@ -8,6 +8,8 @@ workspace = true
 
 [dependencies]
 render-wgpu.workspace = true
+# The window mode a product and its players choose.
+render-model.workspace = true
 # The gameplay facts the window hands the runtime while it holds the lock.
 runtime-input.workspace = true
 # Only this crate may depend on winit (scripts/dependency_boundary_check.py).
@@ -26,7 +28,6 @@ web-overlay = ["ui-overlay", "render-wgpu/web-overlay"]
 servo-overlay = ["ui-overlay", "render-wgpu/servo-overlay"]
 
 [dev-dependencies]
-render-model.workspace = true
 render-host-contracts.workspace = true
 
 [[example]]

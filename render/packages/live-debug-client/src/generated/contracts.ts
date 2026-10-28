@@ -329,7 +329,11 @@ antialiasing: string,
 /**
  * The fraction of the primary destination's size the world draws at.
  */
-renderScale: number, vsync: boolean, clusteredLighting: boolean, gpuCulling: boolean, occlusionCulling: boolean, 
+renderScale: number, vsync: boolean, 
+/**
+ * `windowed`, `maximized` or `fullscreen`.
+ */
+windowMode: string, clusteredLighting: boolean, gpuCulling: boolean, occlusionCulling: boolean, 
 /**
  * `off`, `low` or `high`.
  */

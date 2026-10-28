@@ -128,6 +128,9 @@ fn main() -> Result<std::process::ExitCode, String> {
         args.window_ui
             .or(args.product.as_ref().map(|product| product.window_ui))
             .unwrap_or(WindowUi::Servo),
+        args.product
+            .as_ref()
+            .and_then(|product| product.window_size),
         args.cef_dir.clone(),
         &args.cef_switches,
         &args.servo_preferences,

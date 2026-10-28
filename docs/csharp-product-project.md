@@ -1111,6 +1111,14 @@ whether window output waits for the display's refresh before presenting;
 streamed output has no display. These write `renderer.antialiasing`,
 `renderer.renderScale` and `renderer.vsync`.
 
+`RustyEngineProductWindowMode` sets how the desktop window first shows:
+`windowed`, `maximized` (the default) or `fullscreen` (borderless, at the
+desktop's resolution). `RustyEngineProductWindowSize`, such as `1920x1080`,
+is the windowed size in physical pixels, kept within the monitor; unset, a
+windowed window opens at three quarters of the monitor. They write
+`renderer.windowMode` and `renderer.windowSize`. A remembered placement wins
+over both ([window placement](desktop-shell.md#shape)).
+
 ### Requested scene shadows
 
 Set `RustyEngineProductSceneShadows` to `enabled` to render scene shadow maps

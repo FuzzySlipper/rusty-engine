@@ -23,3 +23,8 @@ SDK feed, and launch with that pair's `rusty dev --project ... --live-debug`.
   ran while none did. Close the page to see it turn false.
 - `window.rustyFixtureUi.setScale(1.5)` in the page sets the UI scale, which
   the next readout reports.
+- `viewport.window.mode Windowed|Maximized|Fullscreen` sets the window mode
+  through `RendererSettings.Set`, and `viewport.window.read` reads the
+  requested and effective modes. The window shows the change and
+  reopens in it, at its last windowed size. Streamed output refuses it
+  (`NoDisplay`).
