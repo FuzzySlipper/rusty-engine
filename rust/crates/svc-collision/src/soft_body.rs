@@ -10,8 +10,9 @@
 //! every particle alike.
 //!
 //! The drawn surface is the body's boundary over its particles (or, for a
-//! filled mesh, that mesh riding the cells), with smooth normals and the
-//! UVs it was created with. A tear splits particles and may split pieces off
+//! filled mesh, that mesh riding the cells; for a surface with a skin, the
+//! skin riding its triangles), with smooth normals and the UVs it was
+//! created with. A tear splits particles and may split pieces off
 //! as bodies of their own; they are drawn and read as part of the body.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -27,6 +28,7 @@ use rapier3d_f64::prelude::Vector;
 use rapier3d_f64::prelude::{ColliderBuilder, Group, InteractionGroups, InteractionTestMode};
 
 use crate::dynamics::{DynamicsBodyId, DynamicsSolver};
+use crate::soft_body_skin::{particle_normals, DynamicsSoftBodySkin, SkinBinding};
 use crate::DynamicsError;
 
 /// Soft-body colliders carry this bit in their user data, so contact
@@ -65,11 +67,14 @@ pub enum DynamicsSoftBodyShape {
         subdivisions: u32,
     },
     /// A triangle mesh whose vertices are the particles: a banner, a cloak,
-    /// a shell of any shape. Edges and bending follow the triangles.
+    /// a shell of any shape. Edges and bending follow the triangles. With a
+    /// `skin`, that mesh is drawn instead, riding the triangles: a thick or
+    /// detailed garment over a coarse sheet.
     Surface {
         positions: Vec<[f64; 3]>,
         uvs: Vec<[f32; 2]>,
         triangles: Vec<[u32; 3]>,
+        skin: Option<DynamicsSoftBodySkin>,
     },
     /// Tetrahedral cells over the particles; the drawn surface is their
     /// boundary.
@@ -432,6 +437,8 @@ pub(crate) struct SolverSoftBody {
     /// The body, then every piece split off it, in the order they split.
     handles: Vec<SoftBodyHandle>,
     uvs: SurfaceUvs,
+    /// A surface's skin, drawn in place of its triangles.
+    skin: Option<SkinBinding>,
     pinned: BTreeSet<Particle>,
     /// Driven particles and where they reach by the end of the next step.
     targets: BTreeMap<Particle, [f64; 3]>,
@@ -512,6 +519,19 @@ impl DynamicsSolver {
             return Err(invalid());
         }
         let (builder, uvs) = shape_builder(&input.shape).ok_or_else(invalid)?;
+        let skin = match &input.shape {
+            DynamicsSoftBodyShape::Surface {
+                triangles,
+                skin: Some(skin),
+                ..
+            } => {
+                if !skin.is_valid() {
+                    return Err(invalid());
+                }
+                Some(SkinBinding::bind(skin, &builder.positions, triangles).ok_or_else(invalid)?)
+            }
+            _ => None,
+        };
         let count = builder.positions.len();
         if input
             .pinned
@@ -567,6 +587,7 @@ impl DynamicsSolver {
             SolverSoftBody {
                 handles: vec![handle],
                 uvs,
+                skin,
                 pinned: input
                     .pinned
                     .into_iter()
@@ -963,6 +984,9 @@ impl DynamicsSolver {
         two_sided: bool,
     ) -> Option<DynamicsSoftBodySurface> {
         let soft = self.soft_bodies.get(&id)?;
+        if let Some(skin) = &soft.skin {
+            return Some(self.skin_surface(soft, skin, two_sided));
+        }
         let mut surface = DynamicsSoftBodySurface::default();
         for (slot, body) in soft
             .handles
@@ -1017,37 +1041,83 @@ impl DynamicsSolver {
             }
         }
         surface.normals = smooth_normals(&surface.positions, &surface.indices);
-        if two_sided {
-            let count = surface.positions.len() as u32;
-            surface.positions.extend_from_within(..);
-            surface.uvs.extend_from_within(..);
-            let backs: Vec<[f32; 3]> = surface
-                .normals
-                .iter()
-                .map(|normal| normal.map(|component| -component))
-                .collect();
-            surface.normals.extend(backs);
-            let fronts = surface.indices.len();
-            for triangle in 0..fronts / 3 {
-                let [a, b, c] = [0, 1, 2].map(|k| surface.indices[triangle * 3 + k] + count);
-                surface.indices.extend([a, c, b]);
-            }
-        }
-        let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
-        for position in &surface.positions {
-            for axis in 0..3 {
-                min[axis] = min[axis].min(position[axis]);
-                max[axis] = max[axis].max(position[axis]);
-            }
-        }
-        if surface.positions.is_empty() {
-            (min, max) = ([0.0; 3], [0.0; 3]);
-        }
-        surface.bounds_min = min;
-        surface.bounds_max = max;
-        Some(surface)
+        Some(finish_surface(surface, two_sided))
     }
 
+    /// A skinned surface: the skin over each piece's particles and their
+    /// normals.
+    fn skin_surface(
+        &self,
+        soft: &SolverSoftBody,
+        skin: &SkinBinding,
+        two_sided: bool,
+    ) -> DynamicsSoftBodySurface {
+        let pieces: Vec<Option<(Vec<Vector>, Vec<Vector>)>> = soft
+            .handles
+            .iter()
+            .map(|handle| {
+                let body = self.world.soft_bodies.get(*handle)?;
+                let positions: Vec<Vector> = body
+                    .particles()
+                    .iter()
+                    .map(|particle| particle.position())
+                    .collect();
+                let normals = particle_normals(&positions, body.boundary());
+                Some((positions, normals))
+            })
+            .collect();
+        let get = |particle: (usize, u32), normal: bool| {
+            let (positions, normals) = pieces.get(particle.0)?.as_ref()?;
+            let list = if normal { normals } else { positions };
+            list.get(particle.1 as usize).copied()
+        };
+        finish_surface(
+            skin.draw(
+                |particle| get(particle, false),
+                |particle| get(particle, true),
+            ),
+            two_sided,
+        )
+    }
+}
+
+/// Add the backs of a two-sided surface and its bounds.
+fn finish_surface(
+    mut surface: DynamicsSoftBodySurface,
+    two_sided: bool,
+) -> DynamicsSoftBodySurface {
+    if two_sided {
+        let count = surface.positions.len() as u32;
+        surface.positions.extend_from_within(..);
+        surface.uvs.extend_from_within(..);
+        let backs: Vec<[f32; 3]> = surface
+            .normals
+            .iter()
+            .map(|normal| normal.map(|component| -component))
+            .collect();
+        surface.normals.extend(backs);
+        let fronts = surface.indices.len();
+        for triangle in 0..fronts / 3 {
+            let [a, b, c] = [0, 1, 2].map(|k| surface.indices[triangle * 3 + k] + count);
+            surface.indices.extend([a, c, b]);
+        }
+    }
+    let (mut min, mut max) = ([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]);
+    for position in &surface.positions {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(position[axis]);
+            max[axis] = max[axis].max(position[axis]);
+        }
+    }
+    if surface.positions.is_empty() {
+        (min, max) = ([0.0; 3], [0.0; 3]);
+    }
+    surface.bounds_min = min;
+    surface.bounds_max = max;
+    surface
+}
+
+impl DynamicsSolver {
     fn soft_handles(&self, id: DynamicsSoftBodyId) -> Result<Vec<SoftBodyHandle>, DynamicsError> {
         Ok(self
             .soft_bodies
@@ -1307,6 +1377,9 @@ impl SolverSoftBody {
         for (particle, _, _) in &mut self.starts {
             *particle = remap(*particle);
         }
+        if let Some(skin) = &mut self.skin {
+            skin.remap(remap);
+        }
         if let SurfaceUvs::Particles(pieces) = &mut self.uvs {
             pieces.resize(handles.len(), Vec::new());
             let mut torn_uvs = std::mem::take(&mut pieces[torn]);
@@ -1547,6 +1620,7 @@ fn shape_builder(shape: &DynamicsSoftBodyShape) -> Option<(SoftBodyBuilder, Uvs)
             positions,
             uvs,
             triangles,
+            ..
         } => {
             let count = positions.len();
             if !in_range(triangles.iter().flatten(), count) {

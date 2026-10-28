@@ -9,7 +9,7 @@
 use engine_spatial::{
     DynamicsSoftBodyBodyAttachment, DynamicsSoftBodyCellModel, DynamicsSoftBodyForces,
     DynamicsSoftBodyId, DynamicsSoftBodyInput, DynamicsSoftBodyMaterial, DynamicsSoftBodySettings,
-    DynamicsSoftBodyShape, DynamicsSoftBodySolver, DynamicsSoftness,
+    DynamicsSoftBodyShape, DynamicsSoftBodySkin, DynamicsSoftBodySolver, DynamicsSoftness,
 };
 
 use super::*;
@@ -178,6 +178,39 @@ impl RuntimeDynamicsBridge {
             .collect();
         let indices = unsafe { borrowed_slice(request.indices, request.indices_len, "indices") }?;
         let pinned = unsafe { borrowed_slice(request.pinned, request.pinned_len, "pinned") }?;
+        let skin_positions = unsafe {
+            borrowed_slice(
+                request.skin_positions,
+                request.skin_positions_len,
+                "skin positions",
+            )
+        }?;
+        let skin = if skin_positions.is_empty() {
+            None
+        } else if request.shape != NativeDynamicsSoftBodyShape::Surface {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SOFT_BODY",
+                "only a surface soft body draws a skin",
+            ));
+        } else {
+            Some(DynamicsSoftBodySkin {
+                positions: skin_positions
+                    .iter()
+                    .map(|position| point(*position))
+                    .collect(),
+                uvs: unsafe { borrowed_slice(request.skin_uvs, request.skin_uvs_len, "skin uvs") }?
+                    .iter()
+                    .map(|uv| [uv.x, uv.y])
+                    .collect(),
+                triangles: grouped(unsafe {
+                    borrowed_slice(
+                        request.skin_indices,
+                        request.skin_indices_len,
+                        "skin indices",
+                    )
+                }?)?,
+            })
+        };
         let shape = match request.shape {
             NativeDynamicsSoftBodyShape::Cloth => DynamicsSoftBodyShape::Cloth {
                 origin: point(request.origin),
@@ -204,6 +237,7 @@ impl RuntimeDynamicsBridge {
                 positions,
                 uvs,
                 triangles: grouped(indices)?,
+                skin,
             },
             NativeDynamicsSoftBodyShape::Solid => DynamicsSoftBodyShape::Solid {
                 positions,
@@ -926,6 +960,12 @@ mod tests {
             indices_len: 0,
             pinned: pinned.as_ptr(),
             pinned_len: pinned.len(),
+            skin_positions: std::ptr::null(),
+            skin_positions_len: 0,
+            skin_uvs: std::ptr::null(),
+            skin_uvs_len: 0,
+            skin_indices: std::ptr::null(),
+            skin_indices_len: 0,
             mass: 0.5,
             particle_radius: 0.0,
             linear_damping: 0.1,

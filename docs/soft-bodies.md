@@ -43,7 +43,7 @@ fields it uses. Positions are in the world. The builders fill in the rest:
 | `Cloth` | `Cloth(world, origin, across, down, columns, rows, mass)` | a sheet with structural, shear and bending edges | 0 to 1 across the columns and down the rows |
 | `Box` | `Box(world, center, halfExtents, particles, mass, youngModulus)` | tetrahedra on a grid | the front (x, y) projection |
 | `Shell` | `Shell(world, center, radius, subdivisions, mass)` | an icosphere with bending across its edges, keeping its volume | longitude and latitude |
-| `Surface` | `Surface(world, positions, uvs, triangles, mass)` | the triangles' vertices as particles: a cloak, a banner of any shape | as given |
+| `Surface` | `Surface(world, positions, uvs, triangles, mass)` | the triangles' vertices as particles: a cloak, a banner of any shape; drawn as its triangles or as a [skin](#skins) | as given, or the skin's |
 | `Solid` | `Solid(world, positions, uvs, tetrahedra, mass, youngModulus)` | the given tetrahedra; drawn as their boundary | as given |
 | `Filled` | `Filled(world, positions, uvs, triangles, cellSize, mass, youngModulus)` | a closed mesh filled with tetrahedra; drawn as the mesh riding them | as given |
 
@@ -81,6 +81,22 @@ never tears). `Default` is Rapier's; `Cloth` stiffens edges and softens
 bending; `Elastic(youngModulus)` sets a solid's stiffness; `Tearing(strain)`
 adds a tear threshold. `UpdateSoftBodyMaterial` changes a live body's
 material and volume preservation.
+
+## Skins
+
+`Surface(...).WithSkin(positions, uvs, triangles)` draws a separate mesh
+instead of the sheet's triangles: a thick or detailed garment riding a
+coarse simulated sheet (the sheet is the simulation proxy). At creation each
+skin vertex takes the point of the nearest sheet triangle and its offset
+from there, in a frame of the sheet's smooth normal and that triangle's
+first edge; each draw places it the same way on the moved sheet. Normals are
+area-weighted over the skin's own triangles, shared by vertices at one rest
+position (split only for UVs). Collision is still the sheet's: its particle
+radius is the garment's contact thickness. A tear carries the skin with the
+particles it rides.
+
+`fixtures/csharp-cloak-comparison` draws the owner's 1300-vertex, 1 cm thick
+cloak over a 13 × 16 sheet this way.
 
 ## Holding and moving particles
 
@@ -154,7 +170,7 @@ body is not redrawn.
 `CreateSoftBodyAppearance(softBody, material, twoSided)` returns a Graphics
 `Appearance` drawing the body's surface with the material: the cells'
 boundary or the cloth's triangles over the particles, or a filled mesh's
-own triangles. Publish it like any appearance, with an `AppearanceFact` at
+or a skin's own triangles. Publish it like any appearance, with an `AppearanceFact` at
 the origin, as its vertices are in the world. `TwoSided` also draws each
 triangle's back with its own normal, for cloth under a one-sided material.
 Dispose it as any appearance (after a snapshot without it). It keeps its

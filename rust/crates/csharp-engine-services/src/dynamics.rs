@@ -739,8 +739,9 @@ impl RuntimeDynamicsBridge {
     ) -> Result<NativeDynamicsStepReceipt, CsharpEngineServicesError> {
         self.sample_water_fields(world_handle)?;
         self.release_orphaned_parts_of(world_handle)?;
-        self.drive_ragdolls_of(world_handle)?;
-        self.drive_soft_bodies_of(world_handle, f64::from(step_seconds) * f64::from(steps))?;
+        let seconds = f64::from(step_seconds) * f64::from(steps);
+        self.drive_ragdolls_of(world_handle, seconds)?;
+        self.drive_soft_bodies_of(world_handle, seconds)?;
         let world = self.active_world_mut(world_handle)?;
         let receipt = world
             .solver
@@ -1737,6 +1738,7 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         create_ragdoll: ragdoll::create_ragdoll,
         destroy_ragdoll: ragdoll::destroy_ragdoll,
         set_ragdoll_blend: ragdoll::set_ragdoll_blend,
+        set_ragdoll_wind: ragdoll::set_ragdoll_wind,
         set_ragdoll_drive: ragdoll::set_ragdoll_drive,
         apply_ragdoll_impulse: ragdoll::apply_ragdoll_impulse,
         apply_point_impulse: ragdoll::apply_point_impulse,

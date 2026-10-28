@@ -8,7 +8,8 @@
 //!
 //! A driven ragdoll's links carry motors that turn each child bone toward
 //! its turn from its parent in a target pose, and its root can follow the
-//! target kinematically.
+//! target kinematically. Animated bones always follow it: the body a cape,
+//! tail or hair hangs from, or shapes that push cloth aside.
 
 use rapier3d_f64::prelude::{GenericJoint, Pose, Rotation, Vector};
 
@@ -37,6 +38,19 @@ impl DynamicsPlacement {
         self.pose()
             .inverse_transform_point(Vector::from_array(point))
             .to_array()
+    }
+
+    /// This placement carried on by the motion it made since `before`:
+    /// `factor` 1 moves and turns it as far again.
+    pub fn carried(self, before: Self, factor: f64) -> Self {
+        let (now, before) = (self.pose(), before.pose());
+        let turn = now.rotation * before.rotation.inverse();
+        // The short way round.
+        let turn = if turn.w < 0.0 { -turn } else { turn };
+        Self::of(Pose::from_parts(
+            now.translation + (now.translation - before.translation) * factor,
+            Rotation::from_scaled_axis(turn.to_scaled_axis() * factor) * now.rotation,
+        ))
     }
 
     fn pose(self) -> Pose {
@@ -73,6 +87,8 @@ pub struct RagdollBone {
     pub tip: [f64; 3],
     pub shape: RagdollShape,
     pub mass: f64,
+    /// Moved kinematically to the target pose rather than simulated.
+    pub animated: bool,
 }
 
 /// A limited joint at the child bone's joint. `axis` is the hinge or twist
@@ -275,9 +291,10 @@ impl DynamicsSolver {
 
     /// Drive each link toward the turn its child bone has from its parent
     /// in `target` (each bone's joint placement), with `drives`, one per
-    /// link. Root bones (bones no link has as its child) move kinematically
-    /// to their place in `target` when `kinematic_root`, and are simulated
-    /// otherwise. A bone whose body is gone is skipped.
+    /// link. Animated bones move kinematically to their place in `target`,
+    /// and so do root bones (bones no link has as its child) when
+    /// `kinematic_root`; other bones are simulated. A bone whose body is
+    /// gone is skipped.
     pub fn drive_ragdoll(
         &mut self,
         bones: &[RagdollBone],
@@ -296,7 +313,9 @@ impl DynamicsSolver {
             let Some(joint) = self.joint(link.joint) else {
                 continue;
             };
-            let limp = drive.max_torque == 0.0 || (drive.stiffness == 0.0 && drive.damping == 0.0);
+            let limp = drive.max_torque == 0.0
+                || (drive.stiffness == 0.0 && drive.damping == 0.0)
+                || bones[link.child].animated;
             let motor = (!limp).then(|| {
                 let first = body_pose(link.parent) * joint.first_frame.pose();
                 let second = body_pose(link.child) * joint.second_frame.pose();
@@ -316,11 +335,12 @@ impl DynamicsSolver {
             self.set_joint_motor(link.joint, motor)?;
         }
         for (index, bone) in bones.iter().enumerate() {
-            if links.iter().any(|link| link.child == index) || self.body(bone.body).is_none() {
+            let root = !links.iter().any(|link| link.child == index);
+            if !(root || bone.animated) || self.body(bone.body).is_none() {
                 continue;
             }
             let pose = body_pose(index);
-            let placement = kinematic_root.then(|| {
+            let placement = (bone.animated || kinematic_root).then(|| {
                 (
                     pose.translation.to_array(),
                     pose.rotation.normalize().to_array(),
@@ -404,6 +424,7 @@ mod tests {
             tip: [0.0, length, 0.0],
             shape: RagdollShape::Capsule { radius },
             mass,
+            animated: false,
         };
         let bones = vec![
             RagdollBone {

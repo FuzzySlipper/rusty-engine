@@ -88,12 +88,17 @@ public readonly partial record struct DynamicsSoftBodyRequest
             CellModel = DynamicsSoftBodyCellModel.Corotational,
         };
 
+    /// <summary>This surface drawing <paramref name="positions"/> (with <paramref name="uvs"/>, one per position or none, and three <paramref name="triangles"/> indices each) instead of its own triangles: a thick or detailed garment riding a coarse simulated sheet.</summary>
+    public DynamicsSoftBodyRequest WithSkin(ReadOnlyMemory<Vector3> positions, ReadOnlyMemory<Vector2> uvs, ReadOnlyMemory<uint> triangles) =>
+        this with { SkinPositions = positions, SkinUvs = uvs, SkinIndices = triangles };
+
     /// <summary>The index of a cloth's particle at <paramref name="column"/> and <paramref name="row"/>.</summary>
     public uint ClothParticle(uint column, uint row) => column * ResolutionY + row;
 
     private static DynamicsSoftBodyRequest Base(DynamicsWorld world, DynamicsSoftBodyShape shape, float mass, DynamicsSoftBodyMaterial material) => new(
         world, shape, Vector3.Zero, Vector3.Zero, Vector3.Zero, 0, 0, 0, 0, 0,
         ReadOnlyMemory<Vector3>.Empty, ReadOnlyMemory<Vector2>.Empty, ReadOnlyMemory<uint>.Empty, ReadOnlyMemory<uint>.Empty,
+        ReadOnlyMemory<Vector3>.Empty, ReadOnlyMemory<Vector2>.Empty, ReadOnlyMemory<uint>.Empty,
         mass, 0, DefaultLinearDamping, 1,
         DynamicsSoftBodyCellModel.Volume, DynamicsSoftBodySolver.Constraints, material,
         false, 1, false, false, false,

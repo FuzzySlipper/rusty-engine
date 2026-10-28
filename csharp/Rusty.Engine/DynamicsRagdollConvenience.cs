@@ -18,13 +18,16 @@ public readonly partial record struct DynamicsRagdollBone
 
     /// <summary>A capsule from <paramref name="joint"/> to where <paramref name="endJoint"/> is at rest.</summary>
     public static DynamicsRagdollBone Capsule(uint joint, uint endJoint, float radius, float mass) =>
-        new(joint, endJoint, 0, DynamicsRagdollShape.Capsule, radius, 0, mass);
+        new(joint, endJoint, 0, DynamicsRagdollShape.Capsule, radius, 0, mass, false);
 
     /// <summary>A capsule <paramref name="length"/> metres along <paramref name="joint"/>'s +Y, for a bone with no end joint (a hand, a head).</summary>
     public static DynamicsRagdollBone CapsuleAlong(uint joint, float length, float radius, float mass) =>
-        new(joint, NoEndJoint, length, DynamicsRagdollShape.Capsule, radius, 0, mass);
+        new(joint, NoEndJoint, length, DynamicsRagdollShape.Capsule, radius, 0, mass, false);
 
     /// <summary>A box from <paramref name="joint"/> to where <paramref name="endJoint"/> is at rest, <paramref name="halfWidth"/> along the joint's X and <paramref name="halfDepth"/> along its Z.</summary>
     public static DynamicsRagdollBone Box(uint joint, uint endJoint, float halfWidth, float halfDepth, float mass) =>
-        new(joint, endJoint, 0, DynamicsRagdollShape.Box, halfWidth, halfDepth, mass);
+        new(joint, endJoint, 0, DynamicsRagdollShape.Box, halfWidth, halfDepth, mass, false);
+
+    /// <summary>This bone following the animated pose instead of simulating: a body a cape or tail hangs from, or a shape that pushes cloth aside.</summary>
+    public DynamicsRagdollBone FollowingPose() => this with { Animated = true };
 }

@@ -17,6 +17,7 @@ use crate::tether::{
     SolverTether,
 };
 use crate::water::{shape_volume, submerged, DynamicsWaterPlane, DynamicsWaterReadout};
+use crate::wind::{DynamicsWind, Face};
 use crate::CollisionProjection;
 
 const MASS_PROPERTIES_FRAME_NORMALIZATION_TOLERANCE: f64 = 1.0e-3;
@@ -223,6 +224,8 @@ pub struct DynamicsSolver {
     water: Vec<DynamicsWaterPlane>,
     /// The bodies the water acts on.
     floating: BTreeMap<DynamicsBodyId, Floating>,
+    /// The bodies the wind blows on.
+    blown: BTreeMap<DynamicsBodyId, DynamicsWind>,
     /// Where kinematic bodies are to be by the end of the next step.
     kinematic_targets: BTreeMap<DynamicsBodyId, Pose>,
     pub(crate) soft_bodies: BTreeMap<DynamicsSoftBodyId, SolverSoftBody>,
@@ -247,6 +250,7 @@ impl DynamicsSolver {
             shapes: BTreeMap::new(),
             water: Vec::new(),
             floating: BTreeMap::new(),
+            blown: BTreeMap::new(),
             kinematic_targets: BTreeMap::new(),
             soft_bodies: BTreeMap::new(),
             soft_settings: DynamicsSoftBodySettings::default(),
@@ -344,6 +348,7 @@ impl DynamicsSolver {
         self.detach_soft_bodies_from(body);
         self.shapes.remove(&id);
         self.floating.remove(&id);
+        self.blown.remove(&id);
         self.kinematic_targets.remove(&id);
         let attached = self.tethers_attached_to(id);
         for tether in &attached {
@@ -749,6 +754,45 @@ impl DynamicsSolver {
         Ok(())
     }
 
+    /// Blow air past a body in every substep from the next step on, or stop.
+    pub fn set_body_wind(
+        &mut self,
+        id: DynamicsBodyId,
+        wind: Option<DynamicsWind>,
+    ) -> Result<(), DynamicsError> {
+        self.handle(id)?;
+        match wind {
+            Some(wind) if !wind.is_valid() => Err(DynamicsError::InvalidBody { body: id }),
+            Some(wind) => {
+                self.blown.insert(id, wind);
+                Ok(())
+            }
+            None => {
+                self.blown.remove(&id);
+                Ok(())
+            }
+        }
+    }
+
+    /// One substep of wind on every blown, simulated body: its drag at the
+    /// body's centre, from the air's speed past it.
+    fn apply_wind(&mut self, dt: f64) {
+        for (id, wind) in &self.blown {
+            let (Some(&handle), Some(&shape)) = (self.bodies.get(id), self.shapes.get(id)) else {
+                continue;
+            };
+            let body = &mut self.world.bodies[handle];
+            if !body.is_dynamic() || !body.is_enabled() {
+                continue;
+            }
+            let air = vector(wind.wind) - body.linvel();
+            let force = Face::of(shape).force(*body.rotation(), air, wind.drag);
+            if force != Vector::ZERO {
+                body.apply_impulse(force * dt, true);
+            }
+        }
+    }
+
     /// What the water did to a floating body over the latest step.
     pub fn water_readout(&self, id: DynamicsBodyId) -> Option<DynamicsWaterReadout> {
         self.floating.get(&id).map(|floating| floating.readout)
@@ -896,6 +940,9 @@ impl DynamicsSolver {
             }
             if !self.floating.is_empty() {
                 self.apply_water(dt, &mut water);
+            }
+            if !self.blown.is_empty() {
+                self.apply_wind(dt);
             }
             if soft {
                 self.soft_substep(along);
@@ -1293,6 +1340,61 @@ mod tests {
             sleeping: false,
             continuous_collision: false,
         }
+    }
+
+    #[test]
+    fn wind_pushes_a_plate_face_on_and_stops_when_cleared() {
+        let mut solver = DynamicsSolver::new([0.0; 3]);
+        let plate = DynamicsShape::Cuboid {
+            half_extents: [0.5, 0.5, 0.01],
+        };
+        solver
+            .insert_body(DynamicsBodyInput {
+                shape: plate,
+                ..body()
+            })
+            .unwrap();
+        solver
+            .insert_body(DynamicsBodyInput {
+                id: DynamicsBodyId(2),
+                translation: [5.0, 0.0, 0.0],
+                // Edge-on to the wind.
+                rotation: [
+                    0.0,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                    0.0,
+                    std::f64::consts::FRAC_1_SQRT_2,
+                ],
+                shape: plate,
+                ..body()
+            })
+            .unwrap();
+        let wind = DynamicsWind {
+            wind: [0.0, 0.0, 10.0],
+            drag: 0.6,
+        };
+        for id in [1, 2] {
+            solver
+                .set_body_wind(DynamicsBodyId(id), Some(wind))
+                .unwrap();
+        }
+        assert!(solver
+            .set_body_wind(DynamicsBodyId(1), Some(DynamicsWind { drag: -1.0, ..wind }))
+            .is_err());
+        solver.step(TICK, 1, &[]).unwrap();
+        // 0.6 × 1 m² × 10² on 1 kg for a tick.
+        let face_on = solver.body(DynamicsBodyId(1)).unwrap().linear_velocity;
+        assert!((face_on[2] - 60.0 * TICK).abs() < 0.02, "{face_on:?}");
+        let edge_on = solver.body(DynamicsBodyId(2)).unwrap().linear_velocity;
+        assert!(edge_on.iter().all(|v| v.abs() < 1e-9), "{edge_on:?}");
+        // Moving with the air, it feels less.
+        solver.step(TICK, 30, &[]).unwrap();
+        let carried = solver.body(DynamicsBodyId(1)).unwrap().linear_velocity[2];
+        assert!(carried < 10.0 && carried > 3.0, "{carried}");
+        solver.set_body_wind(DynamicsBodyId(1), None).unwrap();
+        solver.step(TICK, 1, &[]).unwrap();
+        let coasting = solver.body(DynamicsBodyId(1)).unwrap().linear_velocity[2];
+        assert!((coasting - carried).abs() < 1e-9);
     }
 
     fn explicit_body() -> DynamicsBodyInput {

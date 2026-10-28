@@ -1162,6 +1162,7 @@ sealed class DynamicsServiceFake : IDynamicsService
     public DynamicsRagdoll CreateRagdoll(DynamicsRagdollRequest request) => throw new NotSupportedException();
     public void SetRagdollBlend(DynamicsRagdollBlendRequest request) => throw new NotSupportedException();
     public void SetRagdollDrive(DynamicsRagdollDriveRequest request) => throw new NotSupportedException();
+    public void SetRagdollWind(DynamicsRagdollWindRequest request) => throw new NotSupportedException();
     public void ApplyRagdollImpulse(DynamicsRagdollImpulseRequest request) => throw new NotSupportedException();
     public void ApplyPointImpulse(DynamicsPointImpulseRequest request) => throw new NotSupportedException();
     public DynamicsRagdollResult ReadRagdoll(DynamicsRagdoll ragdoll) => throw new NotSupportedException();

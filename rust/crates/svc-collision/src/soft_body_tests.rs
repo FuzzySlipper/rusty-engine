@@ -4,7 +4,7 @@ use svc_spatial::VoxelWorld;
 use svc_volume::VoxelChunk;
 
 use super::*;
-use crate::{CollisionProjection, DynamicsBodyInput, DynamicsShape};
+use crate::{CollisionProjection, DynamicsBodyInput, DynamicsShape, DynamicsSoftBodySkin};
 
 const TICK: f64 = 1.0 / 60.0;
 const GRAVITY: [f64; 3] = [0.0, -9.81, 0.0];
@@ -586,6 +586,7 @@ fn settings_shape_and_material_are_checked_and_soft_bodies_are_removed() {
                 positions: vec![[0.0; 3]; 3],
                 uvs: Vec::new(),
                 triangles: vec![[0, 1, 3]],
+                skin: None,
             },
         ))
         .is_err());
@@ -645,6 +646,7 @@ fn coincident_surface_vertices_keep_their_own_uvs() {
         ],
         uvs: uvs.clone(),
         triangles: vec![[0, 1, 2], [3, 4, 5]],
+        skin: None,
     };
     solver.insert_soft_body(input(SHEET, shape)).unwrap();
     let surface = solver.soft_body_surface(SHEET, false).unwrap();
@@ -716,4 +718,94 @@ fn a_driven_particle_stays_driven_while_tears_renumber_the_cloth() {
     }
     let surface = solver.soft_body_surface(SHEET, false).unwrap();
     assert!(surface.positions.iter().flatten().all(|v| v.is_finite()));
+}
+
+#[test]
+fn a_skinned_sheet_draws_its_skin_riding_the_swinging_sheet() {
+    // A 1 m sheet of 5 × 5 particles hanging from its top row, and a slab
+    // 2 cm thick over it as the skin: twice the vertices, closed at no edge.
+    let mut positions = Vec::new();
+    for row in 0..5 {
+        for column in 0..5 {
+            positions.push([column as f64 * 0.25, 2.0 - row as f64 * 0.25, 0.0]);
+        }
+    }
+    let mut triangles = Vec::new();
+    for row in 0..4u32 {
+        for column in 0..4u32 {
+            let a = row * 5 + column;
+            triangles.extend([[a, a + 5, a + 1], [a + 1, a + 5, a + 6]]);
+        }
+    }
+    let side = |z: f64| positions.iter().map(move |p| [p[0], p[1], z]);
+    let skin = DynamicsSoftBodySkin {
+        positions: side(0.01).chain(side(-0.01)).collect(),
+        uvs: Vec::new(),
+        triangles: triangles
+            .iter()
+            .copied()
+            .chain(triangles.iter().map(|[a, b, c]| [a + 25, c + 25, b + 25]))
+            .collect(),
+    };
+    let mut solver = DynamicsSolver::new(GRAVITY);
+    let mut shape = input(
+        SHEET,
+        DynamicsSoftBodyShape::Surface {
+            positions: positions.clone(),
+            uvs: Vec::new(),
+            triangles: triangles.clone(),
+            skin: Some(skin.clone()),
+        },
+    );
+    shape.pinned = (0..5).collect();
+    solver.insert_soft_body(shape).unwrap();
+    let rest = solver.soft_body_surface(SHEET, false).unwrap();
+    assert_eq!(rest.positions.len(), 50);
+    assert_eq!(rest.indices.len(), skin.triangles.len() * 3);
+    for (drawn, given) in rest.positions.iter().zip(&skin.positions) {
+        assert!((0..3).all(|axis| (f64::from(drawn[axis]) - given[axis]).abs() < 1e-5));
+    }
+    // Blown face-on, the sheet swings back; its skin goes with it, still
+    // 2 cm thick.
+    solver
+        .set_soft_body_forces(
+            SHEET,
+            DynamicsSoftBodyForces {
+                wind: [0.0, 0.0, -8.0],
+                drag: 0.6,
+                ..DynamicsSoftBodyForces::default()
+            },
+        )
+        .unwrap();
+    solver.step(TICK, 60, &[]).unwrap();
+    let blown = solver.soft_body_surface(SHEET, false).unwrap();
+    let particles = solver.soft_body_particles(SHEET).unwrap();
+    let bottom = particles[22].position;
+    assert!(bottom[2] < -0.2, "{bottom:?}");
+    let front = blown.positions[22];
+    let back = blown.positions[47];
+    let thickness = (0..3)
+        .map(|axis| (front[axis] - back[axis]).powi(2))
+        .sum::<f32>()
+        .sqrt();
+    assert!((thickness - 0.02).abs() < 0.004, "{thickness}");
+    let middle = [0, 1, 2].map(|axis| (front[axis] + back[axis]) / 2.0);
+    assert!(
+        (0..3).all(|axis| (f64::from(middle[axis]) - bottom[axis]).abs() < 0.01),
+        "{middle:?} {bottom:?}"
+    );
+    // A skin must fit its sheet.
+    let mut broken = skin;
+    broken.triangles.push([0, 1, 50]);
+    assert!(solver
+        .insert_soft_body(input(
+            DynamicsSoftBodyId(2),
+            DynamicsSoftBodyShape::Surface {
+                positions,
+                uvs: Vec::new(),
+                triangles,
+                skin: Some(broken),
+            },
+        ))
+        .is_err());
 }

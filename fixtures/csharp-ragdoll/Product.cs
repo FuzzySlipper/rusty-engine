@@ -141,7 +141,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
         ReadOnlyMemory<AnimationJointInfo> rig = engine.Animation.ReadJoints(bodyResource);
         uint Joint(string? id) => id is null ? DynamicsRagdollBone.NoEndJoint : AnimationJoints.IndexOf(rig.Span, id);
-        bones = [.. Bones.Select(bone => new DynamicsRagdollBone(Joint(bone.Joint), Joint(bone.End), bone.Length, bone.Shape, bone.Radius, bone.HalfDepth, bone.Mass))];
+        bones = [.. Bones.Select(bone => new DynamicsRagdollBone(Joint(bone.Joint), Joint(bone.End), bone.Length, bone.Shape, bone.Radius, bone.HalfDepth, bone.Mass, false))];
         links = [.. Links.Select(link => new DynamicsRagdollLink((uint)link.Parent, (uint)link.Child, link.Axis, link.Limits))];
         lengths = new float[Bones.Length];
     }

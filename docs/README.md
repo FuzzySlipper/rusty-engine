@@ -77,7 +77,8 @@ The root [README](../README.md) is the repository landing page and
 - [Rope physics](rope-physics.md): Dynamics tethers, character coupling and
   bodies floating in water.
 - [Limited joints and ragdolls](ragdolls.md): hinges and cones between
-  Dynamics bodies, and animated characters that fall as ragdolls.
+  Dynamics bodies, animated characters that fall as ragdolls, and simulated
+  bones (a cape, a tail) hanging from bones that follow the pose.
 - [Soft bodies](soft-bodies.md): cloth and elastic volumes in a Dynamics
   world, pinned, driven, attached to bodies or bones, blown by wind and drawn
   by the Engine.

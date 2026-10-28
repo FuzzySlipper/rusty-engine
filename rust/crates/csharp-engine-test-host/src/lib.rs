@@ -685,6 +685,7 @@ mod tests {
                 radius,
                 half_depth,
                 mass,
+                animated: false,
             }
         };
         let bones = [

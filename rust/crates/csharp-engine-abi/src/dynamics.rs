@@ -733,9 +733,12 @@ pub enum NativeDynamicsRagdollShape {
     Box = 1,
 }
 
-/// One simulated bone: the rig joint (`Animation.ReadJoints` index) its body
-/// hangs from. The body spans to `end_joint` where it is at rest, or with
-/// `end_joint` `u32::MAX` `length` metres along the joint's +Y.
+/// One bone of a ragdoll: the rig joint (`Animation.ReadJoints` index) its
+/// body hangs from. The body spans to `end_joint` where it is at rest, or
+/// with `end_joint` `u32::MAX` `length` metres along the joint's +Y. An
+/// `animated` bone is not simulated: its body follows the instance's pose
+/// kinematically, carried forward to the end of each step, and the ragdoll
+/// does not place it. Simulated bones hang from it and collide with it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsRagdollBone {
@@ -746,6 +749,7 @@ pub struct NativeDynamicsRagdollBone {
     pub radius: f32,
     pub half_depth: f32,
     pub mass: f32,
+    pub animated: bool,
 }
 
 /// A limited joint at the `child` bone's joint, linking it to the `parent`
@@ -788,6 +792,19 @@ pub struct NativeDynamicsRagdollRequest {
 pub struct NativeDynamicsRagdollBlendRequest {
     pub ragdoll: NativeDynamicsRagdollHandle,
     pub blend: f32,
+}
+
+/// Air moving at `wind` (m/s) past the ragdoll's simulated bones from the
+/// next step on, until set again. Each bone feels `drag × area × v|v|`, `v`
+/// the air's speed through it: a box bone as a plate along its depth (joint
+/// Z), a capsule across its length. `drag` is half the air's density times
+/// a drag coefficient, as a soft body's (0.6 for a flat plate); 0 stops it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsRagdollWindRequest {
+    pub ragdoll: NativeDynamicsRagdollHandle,
+    pub wind: NativeVec3,
+    pub drag: f32,
 }
 
 /// How strongly one link turns its child bone toward the target pose: a
@@ -1004,7 +1021,10 @@ pub struct NativeDynamicsSoftBodyMaterial {
 /// itself. `mesh_collision` makes a filled mesh meet the world through its
 /// own triangles (which must be at least as fine as its cells) rather than
 /// through its cells' boundary. `extra_substeps` and `extra_iterations`
-/// buy accuracy for the body and what it touches.
+/// buy accuracy for the body and what it touches. A surface given
+/// `skin_positions` (with `skin_uvs` one per position or none, and
+/// `skin_indices` three per triangle) draws that mesh instead of its own
+/// triangles, each skin vertex riding the triangle it was nearest at rest.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsSoftBodyRequest {
@@ -1026,6 +1046,12 @@ pub struct NativeDynamicsSoftBodyRequest {
     pub indices_len: usize,
     pub pinned: *const u32,
     pub pinned_len: usize,
+    pub skin_positions: *const NativeVec3,
+    pub skin_positions_len: usize,
+    pub skin_uvs: *const NativeVec2,
+    pub skin_uvs_len: usize,
+    pub skin_indices: *const u32,
+    pub skin_indices_len: usize,
     pub mass: f32,
     pub particle_radius: f32,
     pub linear_damping: f32,

@@ -59,6 +59,7 @@ impl RuntimeDynamicsBridge {
             tip,
             shape,
             mass,
+            animated: false,
         };
         let material = RagdollMaterial {
             collision_groups: request.collision_groups,
@@ -338,6 +339,7 @@ mod tests {
             radius: 0.1,
             half_depth: 0.0,
             mass: 4.0,
+            animated: false,
         };
         let request = |joint: &str| NativeDynamicsSeveredPartRequest {
             world,

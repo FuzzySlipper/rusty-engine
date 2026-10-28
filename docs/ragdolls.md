@@ -77,6 +77,8 @@ and a list of links. Joint indices are those of `Animation.ReadJoints`.
   along its Z.
 - `Mass` is in kilograms; inertia follows from the shape.
 - The builders are `DynamicsRagdollBone.Capsule`, `CapsuleAlong` and `Box`.
+- `Animated` (`FollowingPose()`) bones are not simulated: see
+  [animated bones](#animated-bones).
 
 **Links.** Each `DynamicsRagdollLink` joins a `Parent` bone to a `Child` bone
 at the child's joint:
@@ -167,6 +169,30 @@ inputs give the same fall. A world that has held other bodies carries their
 history in Rapier's arena and pair order, so the fixture starts each fall in
 a fresh world.
 
+## Animated bones
+
+An animated bone's body follows the instance's pose kinematically: before
+each step it moves to where the pose will be by the end of the step (the
+latest evaluated pose carried forward by its latest motion), and the
+ragdoll never places it. Simulated bones linked to it hang from it, and
+other bones and soft bodies collide with it. So a ragdoll can be:
+
+- a cape, tail or hair on a character playing its clips: animated body
+  bones, simulated bones linked below them;
+- shapes that keep cloth off a character: animated bones alone
+  (`fixtures/csharp-cloak-comparison` gives its soft cloak torso boxes and
+  limb capsules this way).
+
+A sudden change in the pose's motion lags a step. Animated bones never
+sleep.
+
+`SetRagdollWind(new(ragdoll, wind, drag))` blows air past the simulated
+bones from the next step on, in every substep, until set again: each feels
+`drag × area × v|v|`, `v` the air's speed through it. A box bone is a plate
+pushed along its depth (the joint's Z), a capsule a cylinder pushed across
+its length. `drag` is a soft body's (`FlagDrag`, 0.6, for cloth), and with
+no wind it still drags a bone that moves. A drag of 0 stops it.
+
 ## Driven ragdolls
 
 `SetRagdollDrive` gives each link a motor that turns its child bone toward
@@ -194,7 +220,8 @@ engine.Dynamics.SetRagdollDrive(new(ragdoll, weak, DynamicsRagdollRoot.Simulated
   change strengths; an empty list stops driving.
 - **Root.** `Kinematic` moves the root bones (those no link has as its
   child) to their place in the pose by the end of each step, at an even pace
-  through its substeps, so the character stays where its animation puts it.
+  through its substeps, as animated bones move, so the character stays
+  where its animation puts it; the ragdoll does not place them.
   `Simulated` lets them fall with the rest; switching keeps the velocity
   they moved with, so a running character carries its momentum into a
   knockdown.

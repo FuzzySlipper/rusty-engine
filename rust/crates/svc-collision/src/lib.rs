@@ -41,15 +41,18 @@ mod joint;
 mod model_surface;
 mod ragdoll;
 mod soft_body;
+mod soft_body_skin;
 mod static_mesh;
 mod tether;
 mod water;
+mod wind;
 
 pub use contacts::{
     ContactPose, ContactQueryError, ContactShape, ContactSource, ContactTarget, ShapeContact,
 };
 pub use inspection::{InspectedCollider, InspectedColliderSource, CUBOID_LINES, TRIANGLE_LINES};
 pub use water::{shape_volume, submerged, DynamicsWaterPlane, DynamicsWaterReadout, Submerged};
+pub use wind::DynamicsWind;
 
 pub use tether::{
     DynamicsRopeSolverConfig, DynamicsTether, DynamicsTetherEndpoint, DynamicsTetherError,
@@ -76,6 +79,7 @@ pub use soft_body::{
     DynamicsSoftBodyParticle, DynamicsSoftBodyReadout, DynamicsSoftBodySettings,
     DynamicsSoftBodyShape, DynamicsSoftBodySolver, DynamicsSoftBodySurface, DynamicsSoftness,
 };
+pub use soft_body_skin::DynamicsSoftBodySkin;
 
 pub use static_mesh::{
     StaticMeshAssetId, StaticMeshBaked, StaticMeshColliderAsset, StaticMeshColliderInstance,

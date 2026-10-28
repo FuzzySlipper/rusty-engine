@@ -78,13 +78,15 @@ pub use svc_collision::{
     DynamicsMassProperties, DynamicsPlacement, DynamicsRopeSolverConfig, DynamicsShape,
     DynamicsSolver, DynamicsStepReceipt, DynamicsTether, DynamicsTetherEndpoint,
     DynamicsTetherError, DynamicsTetherReadout, DynamicsWaterPlane, DynamicsWaterReadout,
-    RagdollBone, RagdollDrive, RagdollLink, RagdollMaterial, RagdollShape, RagdollSpawn,
+    DynamicsWind, RagdollBone, RagdollDrive, RagdollLink, RagdollMaterial, RagdollShape,
+    RagdollSpawn,
 };
 pub use svc_collision::{
     DynamicsSoftBodyBodyAttachment, DynamicsSoftBodyCellModel, DynamicsSoftBodyError,
     DynamicsSoftBodyForces, DynamicsSoftBodyId, DynamicsSoftBodyInput, DynamicsSoftBodyMaterial,
     DynamicsSoftBodyParticle, DynamicsSoftBodyReadout, DynamicsSoftBodySettings,
-    DynamicsSoftBodyShape, DynamicsSoftBodySolver, DynamicsSoftBodySurface, DynamicsSoftness,
+    DynamicsSoftBodyShape, DynamicsSoftBodySkin, DynamicsSoftBodySolver, DynamicsSoftBodySurface,
+    DynamicsSoftness,
 };
 pub use trigger::{
     KinematicTriggerDefinition, TriggerCollider, TriggerGeometrySource, TriggerLifecycleReceipt,
