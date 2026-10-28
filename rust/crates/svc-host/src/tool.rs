@@ -149,14 +149,11 @@ impl ToolRun {
         }
     }
 
-    /// Ends a running tool; the run reads `Cancelled` from now on. A finished
-    /// run keeps how it ended.
+    /// Asks a running tool to end. The run keeps reading `Running` until the
+    /// tool has stopped, then `Cancelled`; a tool that exited first keeps its
+    /// exit code.
     pub fn cancel(&self) {
-        let mut progress = self.shared.progress();
-        if progress.state == ToolRunState::Running {
-            progress.state = ToolRunState::Cancelled;
-            self.shared.cancel.store(true, Ordering::Release);
-        }
+        self.shared.cancel.store(true, Ordering::Release);
     }
 }
 
@@ -188,15 +185,22 @@ fn read_lines(stream: impl Read + Send + 'static, shared: &Arc<Shared>) -> JoinH
         .expect("the tool run's output thread starts")
 }
 
+/// Owns the child until it has ended, so the run reads finished only once the
+/// tool can no longer write anything.
 fn wait(mut child: Child, readers: [Option<JoinHandle<()>>; 2], shared: &Shared) {
     let status = loop {
-        if shared.cancel.load(Ordering::Acquire) {
-            let _ = child.kill();
-            let _ = child.wait();
-            return;
-        }
         match child.try_wait() {
             Ok(Some(status)) => break status.code().unwrap_or(-1),
+            Ok(None) if shared.cancel.load(Ordering::Acquire) => {
+                let _ = child.kill();
+                let ended = child.wait();
+                let mut progress = shared.progress();
+                if let Err(error) = ended {
+                    progress.push(format!("waiting for the cancelled tool failed: {error}\n"));
+                }
+                progress.state = ToolRunState::Cancelled;
+                return;
+            }
             Ok(None) => thread::sleep(POLL),
             Err(error) => {
                 shared
@@ -210,10 +214,7 @@ fn wait(mut child: Child, readers: [Option<JoinHandle<()>>; 2], shared: &Shared)
     for reader in readers.into_iter().flatten() {
         let _ = reader.join();
     }
-    let mut progress = shared.progress();
-    if progress.state == ToolRunState::Running {
-        progress.state = ToolRunState::Exited(status);
-    }
+    shared.progress().state = ToolRunState::Exited(status);
 }
 
 #[cfg(all(test, unix))]
@@ -241,18 +242,23 @@ mod tests {
     }
 
     #[test]
-    fn a_finished_run_keeps_its_exit_code_and_every_line_it_wrote_in_order() {
+    fn a_finished_run_keeps_its_exit_code_and_every_line_it_wrote() {
         let directory = tempfile::tempdir().unwrap();
         let run = shell("pwd; echo out; echo err >&2; exit 3", directory.path());
         let snapshot = settle(&run);
         assert_eq!(snapshot.state, ToolRunState::Exited(3));
         assert_eq!(snapshot.lines, 3);
+        // Standard output and error are read apart, so only each stream's own
+        // lines keep their order.
         let lines: Vec<&str> = snapshot.output.lines().collect();
-        assert_eq!(
-            lines[0],
-            directory.path().canonicalize().unwrap().to_str().unwrap()
-        );
-        assert!(lines.contains(&"out") && lines.contains(&"err"));
+        let stdout: Vec<&str> = lines
+            .iter()
+            .copied()
+            .filter(|line| *line != "err")
+            .collect();
+        let pwd = directory.path().canonicalize().unwrap();
+        assert_eq!(stdout, [pwd.to_str().unwrap(), "out"]);
+        assert!(lines.contains(&"err"));
     }
 
     #[test]
@@ -272,18 +278,36 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_run_stops_the_tool_and_reads_cancelled() {
+    /// A run reads `Cancelled` only once the tool has stopped: from then on
+    /// it writes nothing more.
+    fn a_cancelled_run_reads_cancelled_only_once_the_tool_has_stopped() {
         let directory = tempfile::tempdir().unwrap();
-        let marker = directory.path().join("finished");
-        let run = shell("echo started; sleep 5; touch finished", directory.path());
+        let ticks = directory.path().join("ticks");
+        // The shell itself appends (a builtin), so killing it stops every write.
+        let run = shell(
+            "echo started; while :; do echo tick >> ticks; done",
+            directory.path(),
+        );
         while run.snapshot().lines == 0 {
             thread::sleep(Duration::from_millis(10));
         }
         run.cancel();
-        assert_eq!(run.snapshot().state, ToolRunState::Cancelled);
-        thread::sleep(Duration::from_millis(300));
-        drop(run);
-        assert!(!marker.exists());
+        let snapshot = settle(&run);
+        assert_eq!(snapshot.state, ToolRunState::Cancelled);
+        let written = std::fs::metadata(&ticks).unwrap().len();
+        assert!(written > 0);
+        thread::sleep(POLL * 4);
+        assert_eq!(std::fs::metadata(&ticks).unwrap().len(), written);
+    }
+
+    #[test]
+    fn a_tool_that_exited_before_its_cancel_keeps_its_exit_code() {
+        let directory = tempfile::tempdir().unwrap();
+        let run = shell("exit 5", directory.path());
+        let snapshot = settle(&run);
+        run.cancel();
+        assert_eq!(snapshot.state, ToolRunState::Exited(5));
+        assert_eq!(run.snapshot().state, ToolRunState::Exited(5));
     }
 
     #[test]

@@ -533,11 +533,15 @@ if (readout.State == ToolRunState.Exited && readout.ExitCode == 0)
     standard output and error, so it changes when there is new output.
   - `ReadOutputText` gives the last 64 lines, oldest first: enough for
     progress and a failure's message.
-  - `CancelToolRun` ends the tool and the run reads `Cancelled` at once.
-    Disposing a run that is still going cancels it, and so does the product
-    ending. A container a cancelled `PackContainer` was writing never
-    appears: only its hidden pending file stays, and the next pack of that
-    name removes it.
+  - `CancelToolRun` asks the tool to end. The run keeps reading `Running`
+    until the tool has stopped, then `Cancelled`, so once it reads
+    `Cancelled` the tool writes nothing more; a tool that exited first keeps
+    its `Exited` code. Disposing a run that is still going cancels it, and so
+    does the product ending.
+  - Cancelling undoes nothing the tool finished before it stopped. A
+    `PackContainer` stopped part way leaves only its hidden pending file,
+    which the next pack of that name removes; one that had finished has
+    already put its container in place.
 - **Opening the result.** A container the tool installed opens by its
   relative name with `OpenContainer` as soon as the run reads `Exited`, with
   no restart. A product closes its own bundles of a container before running

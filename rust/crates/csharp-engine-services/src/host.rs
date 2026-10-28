@@ -454,12 +454,12 @@ unsafe extern "C" fn read_tool_run_output(
     }
 }
 
+/// Asks the tool to end; a later call reads `Cancelled` once it has stopped.
 unsafe extern "C" fn cancel_tool_run(context: *mut c_void, handle: NativeToolRunHandle) -> i32 {
-    match unsafe { context.cast::<RuntimeHostBridge>().as_mut() } {
-        Some(bridge) => match bridge.runs.get_mut(&handle.value) {
+    match unsafe { context.cast::<RuntimeHostBridge>().as_ref() } {
+        Some(bridge) => match bridge.runs.get(&handle.value) {
             Some(run) => {
                 run.run.cancel();
-                run.snapshot = run.run.snapshot();
                 ABI_OK
             }
             None => 0,

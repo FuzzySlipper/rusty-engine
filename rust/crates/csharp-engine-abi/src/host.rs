@@ -116,7 +116,7 @@ pub enum NativeToolRunState {
     Running = 0,
     /// The tool ended by itself; `exit_code` says how.
     Exited = 1,
-    /// The product cancelled it, which ended the tool.
+    /// The product cancelled it and the tool has stopped.
     Cancelled = 2,
     /// The executable could not be started; its output says why.
     FailedToStart = 3,
@@ -203,7 +203,9 @@ pub struct NativeHostApi {
     /// The tool's recent output lines as UTF-8 text, oldest first, borrowed
     /// until the next Host call.
     pub read_tool_run_output: NativeReadToolRunOutput,
-    /// Ends a running tool; the run reads `Cancelled` at once.
+    /// Asks a running tool to end. The run reads `Running` until the tool
+    /// has stopped, then `Cancelled`; a tool that exited first keeps its
+    /// `Exited` code.
     pub cancel_tool_run: NativeCancelToolRun,
     /// Disposing a run still going cancels it.
     pub destroy_tool_run: NativeDestroyToolRun,
