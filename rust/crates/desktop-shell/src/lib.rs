@@ -573,12 +573,21 @@ impl Shell {
         // The page and Chromium go before the window and device.
         if let Some(open) = self.window.take() {
             if let Some(path) = &self.config.placement_file {
-                let mode = placement::mode_of(&open.window);
+                // Closed while minimized (from the taskbar), it keeps how it
+                // last showed.
+                let minimized = placement::minimized(&open.window, open.window.inner_size());
+                let mode = if minimized {
+                    open.shown
+                } else {
+                    placement::mode_of(&open.window)
+                };
                 let placement = placement::Placement {
                     size: open.windowed,
                     // A window never moved since it opened reported no move.
                     position: match mode {
-                        render_model::WindowMode::Windowed => open.window.inner_position().ok(),
+                        render_model::WindowMode::Windowed if !minimized => {
+                            open.window.inner_position().ok()
+                        }
                         _ => open.windowed_position,
                     },
                     mode,
@@ -620,9 +629,13 @@ impl ApplicationHandler for Shell {
         }
         let Some(open) = &mut self.window else { return };
         if let WindowEvent::Resized(size) = event {
-            open.shown = placement::mode_of(&open.window);
-            if open.shown == render_model::WindowMode::Windowed {
-                open.windowed = size;
+            // Minimizing resizes to nothing (Windows: 0x0) and reads as
+            // windowed: it is not a placement to keep.
+            if !placement::minimized(&open.window, size) {
+                open.shown = placement::mode_of(&open.window);
+                if open.shown == render_model::WindowMode::Windowed {
+                    open.windowed = size;
+                }
             }
             // While an image is being acquired or waits to be drawn, the
             // next ask applies the size.
@@ -638,7 +651,9 @@ impl ApplicationHandler for Shell {
             open.settle.check(&open.window, true);
             // A window being maximized can move before it resizes, so ask
             // how it shows rather than trusting the last resize.
-            if placement::mode_of(&open.window) == render_model::WindowMode::Windowed {
+            if !placement::minimized(&open.window, open.window.inner_size())
+                && placement::mode_of(&open.window) == render_model::WindowMode::Windowed
+            {
                 open.windowed_position = open.window.inner_position().ok();
             }
         }

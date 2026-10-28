@@ -155,8 +155,9 @@ fn option_label(id: &str) -> String {
 }
 
 /// The variants for a scene drawn with `settings`: every feature it leaves
-/// off or below its top quality, then everything on. Display pacing (vsync)
-/// and tuning values (occlusion strength and radius) are not features.
+/// off or below its top quality, then everything on. Display pacing (vsync),
+/// the window mode and tuning values (occlusion strength and radius) are not
+/// features.
 pub fn plan(
     settings: &RendererSettingsDescriptor,
     camera: Option<[f64; 3]>,
@@ -721,7 +722,7 @@ mod tests {
             .filter(|option| option.gallery == GalleryExperiment::None)
             .all(|option| matches!(
                 option.id,
-                "vsync" | "ambientOcclusionStrength" | "ambientOcclusionRadius"
+                "vsync" | "windowMode" | "ambientOcclusionStrength" | "ambientOcclusionRadius"
             )));
     }
 }

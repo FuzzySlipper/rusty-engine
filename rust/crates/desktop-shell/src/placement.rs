@@ -153,6 +153,12 @@ pub(crate) fn mode_of(window: &Window) -> WindowMode {
     }
 }
 
+/// Whether `window`, at `size`, is minimized: the platform says so, or it
+/// has no area (Windows reports a minimized window as 0x0).
+pub(crate) fn minimized(window: &Window, size: PhysicalSize<u32>) -> bool {
+    window.is_minimized() == Some(true) || size.width == 0 || size.height == 0
+}
+
 /// Shows `window` in `mode`; leaving maximized or fullscreen restores
 /// `windowed`.
 pub(crate) fn show(window: &Window, mode: WindowMode, windowed: PhysicalSize<u32>) {
