@@ -336,12 +336,14 @@ impl Presenter {
 
 impl Drop for Presenter {
     fn drop(&mut self) {
-        // The thread ends at its next request; an image it acquired and the
-        // loop never drew is released undrawn.
+        // The thread ends at its next request. An image it acquired and the
+        // loop never drew is released undrawn here, before the surface
+        // drops: wgpu panics destroying a swapchain under a held image.
         self.request.take();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+        while self.acquired.try_recv().is_ok() {}
     }
 }
 
