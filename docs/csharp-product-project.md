@@ -994,7 +994,8 @@ rusty build --project /path/to/Example.Game.csproj --aot
 It publishes the project for `linux-x64` as a NativeAOT shared library and
 stages `native/<Product>.so` with the Product UI and content. It does not build
 or stage CoreCLR, and its `product.json` lists only `nativeAot`. Each staging
-target's manifest lists exactly the runtime artifacts that target staged. To
+target's manifest lists exactly the runtime artifacts that target staged, and
+it removes a loader an earlier target left, so a release ships only its own. To
 run both loaders against one bundle (for example, to compare them), use
 `-t:StageRustyEngineCombinedProduct`, which stages both and lists both.
 

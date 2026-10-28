@@ -484,13 +484,21 @@ fi
 done
 echo "Packaged $loader inventory, input, persistence, residency, capture, and export checks passed"
 done
-# Without --aot the product still publishes NativeAOT, warnings as errors, so
-# a trim or AOT warning from Rusty.Engine fails the pair.
-if [[ "$run_aot" != --aot ]]; then
-    (cd "$consumer" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
-        dotnet msbuild PairConsumer.csproj -t:VerifyRustyEngineAot -p:RustyEngineProductPort=0)
-    echo "Packaged consumer NativeAOT publish passed"
-fi
+# The product always publishes NativeAOT, warnings as errors, so a trim or AOT
+# warning from Rusty.Engine fails the pair. Its release, built over an earlier
+# CoreCLR staging, ships only the NativeAOT loader.
+(cd "$consumer" && DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+    dotnet msbuild PairConsumer.csproj -t:StageRustyEngineCoreClrProduct -p:RustyEngineProductPort=0)
+DOTNET_CLI_HOME="$consumer_home" NUGET_PACKAGES="$consumer_packages" \
+    "$runtime/bin/rusty" build --project "$consumer/PairConsumer.csproj" --aot --release "$work/aot-release"
+[[ -d "$work/aot-release/native" && ! -e "$work/aot-release/coreclr" ]] \
+    && grep -aqF '"nativeAot":{"module"' "$work/aot-release/product.rpak" \
+    && ! grep -aqF '"coreclr":{' "$work/aot-release/product.rpak" || {
+    ls "$work/aot-release" >&2
+    echo "RUSTY_ENGINE_PAIR_TEST_RELEASE: a NativeAOT release over a CoreCLR staging shipped the CoreCLR loader" >&2
+    exit 1
+}
+echo "Packaged consumer NativeAOT publish and release passed"
 
 # The extracted pair is disposable now: change its first payload file in place.
 tampered=$(jq -r '.payload[0].path' "$pair_root/pair-manifest.json")
