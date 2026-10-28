@@ -137,6 +137,9 @@ pub struct DesktopShellConfig {
     pub title: String,
     pub width: u32,
     pub height: u32,
+    /// Opens maximized when no placement is remembered; `width` × `height`
+    /// is then the size it restores to.
+    pub maximized: bool,
     /// The UI page, normally the runtime's browser shell URL. `None` presents
     /// the scene alone.
     pub ui_url: Option<String>,
@@ -341,7 +344,8 @@ impl Shell {
             .with_inner_size(winit::dpi::PhysicalSize::new(
                 self.config.width,
                 self.config.height,
-            ));
+            ))
+            .with_maximized(self.config.maximized);
         let mut settle = placement::Settle::default();
         if let Some(placement) = self
             .config

@@ -42,6 +42,8 @@ use product_host::ProductHostWindowInput;
 
 use crate::product_bundle::WindowUi;
 
+/// The size the window restores to; with no remembered placement it first
+/// opens maximized.
 const WINDOW_WIDTH: u32 = 1280;
 const WINDOW_HEIGHT: u32 = 720;
 
@@ -144,6 +146,7 @@ impl Desktop {
                 title,
                 width: WINDOW_WIDTH,
                 height: WINDOW_HEIGHT,
+                maximized: true,
                 ui_url: Some(format!("{}/", origin.trim_end_matches('/'))),
                 placement_file: persistence_root.map(|root| root.join("desktop-window")),
                 web: WebRuntimeConfig {

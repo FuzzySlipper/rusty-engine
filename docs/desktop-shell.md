@@ -113,7 +113,8 @@ TypeScript UI is composited over it.
   Servo's page takes a devtools client instead ([UI engine](#ui-engine)).
 - **UI storage.** The page's local storage persists under the runtime's
   persistence root (`desktop-ui/`).
-- **Window placement.** The window reopens at its last size, position (where
+- **Window placement.** The first window opens maximized, restoring to
+  1280×720. Later runs reopen at the last size, position (where
   the platform reports one; Wayland does not) and maximized state, kept in
   `desktop-window` under the persistence root. A position that no longer falls
   on a connected monitor is dropped. There is no fullscreen mode.

@@ -305,6 +305,7 @@ class KWinWindow:
     def resize(self, width, height):
         """Make the client area `width` by `height`."""
         return self.script(
+            'window.setMaximize(false, false);'
             'const frame = window.frameGeometry, client = window.clientGeometry;'
             f'window.frameGeometry = {{ x: frame.x, y: frame.y, width: {width} + frame.width - client.width, '
             f'height: {height} + frame.height - client.height }};')
@@ -324,6 +325,7 @@ class Win32Window:
     def resize(self, width, height):
         user32, wintypes = self.route.user32, self.route.wintypes
         frame, client = wintypes.RECT(), wintypes.RECT()
+        user32.ShowWindow(self.route.window, 9)  # SW_RESTORE: the window opens maximized
         user32.GetWindowRect(self.route.window, ctypes.byref(frame))
         user32.GetClientRect(self.route.window, ctypes.byref(client))
         extra = (frame.right - frame.left - client.right, frame.bottom - frame.top - client.bottom)

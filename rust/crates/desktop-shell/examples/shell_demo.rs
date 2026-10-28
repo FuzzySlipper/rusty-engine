@@ -176,6 +176,7 @@ fn main() -> Result<(), String> {
             title: "desktop shell demo".to_owned(),
             width: 1280,
             height: 720,
+            maximized: false,
             ui_url: Some(url),
             placement_file: None,
             web: WebRuntimeConfig {
