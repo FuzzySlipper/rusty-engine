@@ -285,11 +285,13 @@ pub enum NativePoseSpace {
     World = 2,
 }
 
-/// One joint's rotation and/or translation over the evaluated pose, mixed in
-/// by `weight` (0 to 1). `joint` indexes `ReadJoints`. A `Local` value
-/// replaces the joint's local value, or with `additive` composes onto it. A
-/// `Model` or `World` value places the joint there and its descendants
-/// follow; the joint keeps its evaluated scale.
+/// One joint's rotation, translation and/or scale over the evaluated pose,
+/// mixed in by `weight` (0 to 1). `joint` indexes `ReadJoints`. A `Local`
+/// value replaces the joint's local value, or with `additive` composes onto
+/// it. A `Model` or `World` value places the joint there and its descendants
+/// follow; the joint keeps its evaluated scale. `scale` (uniform, 0 or more)
+/// is the joint's local scale in every space, applied after layers about the
+/// joint as drawn, its descendants following: 0 collapses them into it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeJointOverride {
@@ -300,6 +302,8 @@ pub struct NativeJointOverride {
     pub rotation: NativeQuat,
     pub override_translation: bool,
     pub translation: NativeVec3,
+    pub override_scale: bool,
+    pub scale: f32,
     pub weight: f32,
 }
 

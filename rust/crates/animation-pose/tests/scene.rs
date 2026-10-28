@@ -270,6 +270,7 @@ fn the_evaluated_pose_is_the_pose_sampled_at_simulation_time() {
             additive: true,
             rotation: Some([0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2]),
             translation: None,
+            scale: None,
             weight: 0.5,
         }],
         ..AnimatedMeshPose::default()

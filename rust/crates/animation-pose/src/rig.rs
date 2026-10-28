@@ -292,12 +292,19 @@ pub fn rig_nodes<H: Hierarchy + ?Sized>(
 }
 
 /// A matrix as an Engine transform (translation, normalized rotation,
-/// scale).
+/// scale). A matrix scaled to 0 on an axis has no rotation to read and reads
+/// the identity.
 pub fn transform_of(value: Mat4) -> Transform {
     let (scale, rotation, translation) = value.to_scale_rotation_translation();
+    let rotation = rotation.normalize();
     Transform {
         translation: translation.to_array(),
-        rotation: rotation.normalize().to_array(),
+        rotation: if rotation.is_finite() {
+            rotation
+        } else {
+            Quat::IDENTITY
+        }
+        .to_array(),
         scale: scale.to_array(),
     }
 }

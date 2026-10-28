@@ -204,6 +204,7 @@ impl RuntimeAppearanceBridge {
                     translation: joint
                         .override_translation
                         .then_some(vec3(joint.translation)),
+                    scale: joint.override_scale.then_some(joint.scale),
                     weight: joint.weight,
                 })
                 .collect(),
@@ -1118,6 +1119,8 @@ mod tests {
                     rotation: NativeQuat::default(),
                     override_translation: true,
                     translation: target,
+                    override_scale: false,
+                    scale: 1.0,
                     weight: 1.0,
                 },
                 overrides_len: 1,
@@ -1138,6 +1141,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(hand_x(&uncontrolled, hand), hand_x(&late, hand));
+
+        // A joint scaled to 0 reads back with its scale.
+        bridge
+            .set_animation_pose(&NativeAnimationPoseRequest {
+                instance,
+                two_bone_ik: std::ptr::null(),
+                two_bone_ik_len: 0,
+                overrides: &NativeJointOverride {
+                    joint: hand,
+                    space: NativePoseSpace::Local,
+                    additive: false,
+                    override_rotation: false,
+                    rotation: NativeQuat::default(),
+                    override_translation: false,
+                    translation: NativeVec3::default(),
+                    override_scale: true,
+                    scale: 0.0,
+                    weight: 1.0,
+                },
+                overrides_len: 1,
+            })
+            .unwrap();
+        let collapsed = sampled(&mut bridge, &request("run", 0.6)).unwrap();
+        let hand_pose = collapsed[hand as usize].model;
+        assert_eq!(
+            [hand_pose.scale.x, hand_pose.scale.y, hand_pose.scale.z],
+            [0.0; 3]
+        );
+        assert!(hand_pose.rotation.w.is_finite());
+        assert_eq!(hand_x(&collapsed, hand), hand_x(&late, hand));
 
         let refused = sampled(&mut bridge, &request("fly", 0.5)).unwrap_err();
         assert!(refused.to_string().contains("fly"), "{refused}");

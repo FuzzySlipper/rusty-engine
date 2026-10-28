@@ -7,19 +7,26 @@ public readonly partial record struct JointOverride
 {
     /// <summary>Replaces the joint's local rotation, mixed in by <paramref name="weight"/>.</summary>
     public static JointOverride LocalRotation(uint joint, Quaternion rotation, float weight = 1) =>
-        new(joint, PoseSpace.Local, false, true, rotation, false, Vector3.Zero, weight);
+        new(joint, PoseSpace.Local, false, true, rotation, false, Vector3.Zero, false, 1, weight);
 
     /// <summary>Turns the joint by <paramref name="rotation"/> after its evaluated local rotation, e.g. a finger curl over a clip.</summary>
     public static JointOverride AddLocalRotation(uint joint, Quaternion rotation, float weight = 1) =>
-        new(joint, PoseSpace.Local, true, true, rotation, false, Vector3.Zero, weight);
+        new(joint, PoseSpace.Local, true, true, rotation, false, Vector3.Zero, false, 1, weight);
 
     /// <summary>Places the joint in <paramref name="space"/> (<see cref="PoseSpace.Model"/> or <see cref="PoseSpace.World"/>); its descendants follow.</summary>
     public static JointOverride Place(uint joint, PoseSpace space, Vector3 translation, Quaternion rotation, float weight = 1) =>
-        new(joint, space, false, true, rotation, true, translation, weight);
+        new(joint, space, false, true, rotation, true, translation, false, 1, weight);
 
     /// <summary>Turns the joint to <paramref name="rotation"/> in <paramref name="space"/>, where it is.</summary>
     public static JointOverride Orient(uint joint, PoseSpace space, Quaternion rotation, float weight = 1) =>
-        new(joint, space, false, true, rotation, false, Vector3.Zero, weight);
+        new(joint, space, false, true, rotation, false, Vector3.Zero, false, 1, weight);
+
+    /// <summary>
+    /// Sets the joint's uniform local scale, mixed in by <paramref name="weight"/>, after the clips, overrides and layers;
+    /// its descendants follow. 0 collapses the joint's subtree into it, e.g. a first-person body's head and arms.
+    /// </summary>
+    public static JointOverride LocalScale(uint joint, float scale, float weight = 1) =>
+        new(joint, PoseSpace.Local, false, false, Quaternion.Identity, false, Vector3.Zero, true, scale, weight);
 }
 
 public static class AnimationJoints

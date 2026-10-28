@@ -865,6 +865,7 @@ fn pose_controls_reach_a_world_target_and_read_as_drawn() {
                 additive: true,
                 rotation: Some([0.0, 0.0, FRAC_1_SQRT_2, FRAC_1_SQRT_2]),
                 translation: None,
+                scale: None,
                 weight: curl,
             }],
             layers: Vec::new(),
@@ -1449,6 +1450,73 @@ fn a_cut_joint_draws_its_subtree_as_a_piece_where_it_is_placed() {
     harness.apply(vec![cutting(Vec::new())]);
     let (_, restored) = harness.render(&view);
     assert_eq!(restored, whole);
+}
+
+/// A joint override scaling the head to 0 collapses the head's vertices into
+/// it: the body draws as with the head cut and sent out of view, save the
+/// vertices the neck shares, and the rest of the body as before. The head
+/// reads back scaled to 0 where it was, and scale 1 draws the body unchanged.
+#[test]
+fn a_joint_scaled_to_zero_collapses_its_vertices_into_it() {
+    let mut harness = Harness::new(RendererOptions::default());
+    character_scene(&mut harness);
+    let body = admit(&mut harness, "csharp-joint-attachments/content/body.glb");
+    let (neck, head) = (rig_joint(&body, "Neck"), rig_joint(&body, "Head"));
+    let view = character_view();
+    let posing = |pose: AnimatedMeshPose| RenderDiff::SetAnimatedMeshPose {
+        handle: RenderHandle::new(BODY),
+        pose,
+    };
+    let scaling = |scale: f32| {
+        posing(AnimatedMeshPose {
+            overrides: vec![JointOverride {
+                joint: head,
+                space: PoseSpace::Local,
+                additive: false,
+                rotation: None,
+                translation: None,
+                scale: Some(scale),
+                weight: 1.0,
+            }],
+            ..AnimatedMeshPose::default()
+        })
+    };
+    let (_, whole) = harness.render(&view);
+    let joints = drawn(&harness).latest.joints;
+
+    harness.apply(vec![scaling(1.0)]);
+    let (_, unscaled) = harness.render(&view);
+    assert_eq!(unscaled, whole, "scale 1 draws the body unchanged");
+
+    harness.apply(vec![scaling(0.0)]);
+    let (_, collapsed) = harness.render(&view);
+    let reported = drawn(&harness).latest.joints;
+    assert_eq!(reported[head as usize].model.scale, [0.0; 3]);
+    assert_eq!(
+        reported[head as usize].world.translation, joints[head as usize].world.translation,
+        "the head collapses where it was"
+    );
+    assert_eq!(reported[neck as usize], joints[neck as usize]);
+
+    // Far behind the camera: the head's piece leaves the view.
+    let pose: Vec<Transform> = joints.iter().map(|joint| joint.model).collect();
+    let mut placement = joints[head as usize].world;
+    placement.translation[2] += 50.0;
+    harness.apply(vec![posing(AnimatedMeshPose {
+        cuts: vec![JointCut {
+            joint: head,
+            pose,
+            placement,
+        }],
+        ..AnimatedMeshPose::default()
+    })]);
+    let (_, headless) = harness.render(&view);
+    let head_pixels = differing_pixels(&whole, &headless);
+    let seam = differing_pixels(&collapsed, &headless);
+    assert!(
+        seam * 10 < head_pixels,
+        "the collapsed head draws as the head taken away: {seam} of {head_pixels} head pixels differ"
+    );
 }
 
 /// The motion view's range (`compose.wgsl` `MOTION_VIEW_RANGE`): it draws x

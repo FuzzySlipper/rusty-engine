@@ -59,7 +59,8 @@ A pose is evaluated in this order:
    overrides apply in list order.
 4. **Ragdoll layers.** A [ragdoll](ragdolls.md) places its bones as one
    layer over the result, mixed in by its blend weight.
-5. **Skinning.** Joint attachments then hang from the result.
+5. **Override scales.** Children are scaled before parents.
+6. **Skinning.** Joint attachments then hang from the result.
 
 ## Clip layers
 
@@ -114,7 +115,7 @@ both turns in from 0 to 1.
 
 ## Overrides
 
-A `JointOverride` sets a joint's rotation, its translation or both, mixed
+A `JointOverride` sets a joint's rotation, translation and/or scale, mixed
 over the pose below it by `weight` (0 to 1):
 
 - `Local`: the joint's value relative to its parent. With `Additive`, the
@@ -132,8 +133,16 @@ moves its joint from where the pose below puts it toward the placement, and
 its descendants follow. A zero weight changes nothing, and a full-weight
 placement reaches its target whatever its ancestors' weights.
 
-`JointOverride.LocalRotation`, `AddLocalRotation`, `Place` and `Orient`
-build the common cases.
+A scale (`OverrideScale`, uniform, 0 or more) is the joint's local scale in
+every space, with `Additive` multiplying the evaluated one. It applies last,
+after ragdoll layers, about the joint where it is drawn, and its descendants
+follow. Scale 0 collapses the joint's subtree into the joint: a first-person
+body hides its head and arms by scaling the head and each shoulder to 0, and
+the rest of the body keeps its clips. Read back, the joint has scale 0 and the
+identity rotation; anything attached under it collapses with it.
+
+`JointOverride.LocalRotation`, `AddLocalRotation`, `Place`, `Orient` and
+`LocalScale` build the common cases.
 
 ## Writing and reading
 

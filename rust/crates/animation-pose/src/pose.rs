@@ -62,7 +62,7 @@ pub struct IkSolve {
 }
 
 /// The sampled `locals` under `pose`: IK in order, then overrides, then
-/// layers, composed. `rig` maps rig joint indices to nodes; `world` places the
+/// layers, then the overrides' scales, composed. `rig` maps rig joint indices to nodes; `world` places the
 /// instance, for `World` values. A joint the rig does not name is skipped.
 /// `solves`, when given, receives each IK chain in order, and `unlayered`
 /// the pose before the layers when there are any.
@@ -119,7 +119,66 @@ pub fn controlled<H: Hierarchy + ?Sized>(
     for layer in &pose.layers {
         posed = blend_layer(model, &posed, layer, &node, to_model);
     }
+    scale_joints(model, &mut posed, &by_node);
     posed
+}
+
+/// Factors closer to 1 than this leave a joint as drawn, so a scale of 1
+/// draws the pose exactly.
+const UNSCALED: f32 = 1e-6;
+
+/// Each node's override scales, in list order and each at its own weight,
+/// applied to its local scale about the node as `posed` places it; its
+/// descendants follow. Children go first, so a parent scaled to 0 never has
+/// to be undone to scale a child. An axis the pose below already scales to 0
+/// stays 0.
+fn scale_joints<H: Hierarchy + ?Sized>(
+    model: &H,
+    posed: &mut [Mat4],
+    by_node: &HashMap<usize, Vec<&JointOverride>>,
+) {
+    for &index in model.order().iter().rev() {
+        let Some(joints) = by_node.get(&index) else {
+            continue;
+        };
+        if joints.iter().all(|joint| joint.scale.is_none()) {
+            continue;
+        }
+        let placed = posed[index];
+        let local = model
+            .parent(index)
+            .map_or(placed, |parent| posed[parent].inverse() * placed);
+        let (from, _, _) = local.to_scale_rotation_translation();
+        let mut scale = from;
+        for joint in joints {
+            if let Some(value) = joint.scale {
+                let target = if joint.additive {
+                    scale * value
+                } else {
+                    Vec3::splat(value)
+                };
+                scale = scale.lerp(target, joint.weight);
+            }
+        }
+        let factor = Vec3::select(from.cmpgt(Vec3::splat(DEGENERATE)), scale / from, Vec3::ONE);
+        if !factor.is_finite() || factor.abs_diff_eq(Vec3::ONE, UNSCALED) {
+            continue;
+        }
+        let about = placed * Mat4::from_scale(factor) * placed.inverse();
+        let mut moved = vec![false; posed.len()];
+        moved[index] = true;
+        for &node in model.order() {
+            if node != index && !model.parent(node).is_some_and(|parent| moved[parent]) {
+                continue;
+            }
+            moved[node] = true;
+            posed[node] = if node == index {
+                placed * Mat4::from_scale(factor)
+            } else {
+                about * posed[node]
+            };
+        }
+    }
 }
 
 /// Each node's overrides in list order, parents first, each at its own
@@ -583,6 +642,7 @@ mod tests {
                 additive: true,
                 rotation: Some(curl.to_array()),
                 translation: None,
+                scale: None,
                 weight: 0.5,
             }],
             ..AnimatedMeshPose::default()
@@ -600,6 +660,7 @@ mod tests {
                 additive: false,
                 rotation: Some(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2).to_array()),
                 translation: Some([5.0, 3.0, 0.0]),
+                scale: None,
                 weight: 1.0,
             }],
             ..AnimatedMeshPose::default()
@@ -619,6 +680,7 @@ mod tests {
             additive,
             rotation: None,
             translation: Some([x, 0.0, 0.0]),
+            scale: None,
             weight,
         }
     }
@@ -663,6 +725,7 @@ mod tests {
                     additive: false,
                     rotation: Some(quarter.to_array()),
                     translation: None,
+                    scale: None,
                     weight: 1.0,
                 },
                 JointOverride {
@@ -671,6 +734,7 @@ mod tests {
                     additive: true,
                     rotation: Some(quarter.to_array()),
                     translation: None,
+                    scale: None,
                     weight: 1.0,
                 },
             ],
@@ -685,6 +749,52 @@ mod tests {
         );
         let forearm = position(&posed, 2) - position(&posed, 1);
         assert!(forearm.distance(-Vec3::X) < 1e-5, "{forearm:?}");
+    }
+
+    fn scaled(joint: u32, additive: bool, scale: f32, weight: f32) -> JointOverride {
+        JointOverride {
+            joint,
+            space: PoseSpace::Local,
+            additive,
+            rotation: None,
+            translation: None,
+            scale: Some(scale),
+            weight,
+        }
+    }
+
+    #[test]
+    fn a_scaled_joint_scales_its_subtree_about_itself() {
+        let model = arm();
+        let pose = |overrides| AnimatedMeshPose {
+            overrides,
+            ..AnimatedMeshPose::default()
+        };
+        let unposed = compose(&model, &rest(&model));
+        let posed =
+            |overrides| controlled(&model, &RIG, rest(&model), &pose(overrides), Mat4::IDENTITY);
+
+        let collapsed = posed(vec![scaled(1, false, 0.0, 1.0)]);
+        assert_eq!(collapsed[0], unposed[0], "the shoulder is as it was");
+        assert_eq!(position(&collapsed, 1), Vec3::X);
+        assert_eq!(collapsed[1].transform_vector3(Vec3::ONE), Vec3::ZERO);
+        assert_eq!(
+            position(&collapsed, 2),
+            Vec3::X,
+            "the hand collapses into the elbow"
+        );
+        assert_eq!(collapsed[2].transform_vector3(Vec3::ONE), Vec3::ZERO);
+
+        assert_eq!(posed(vec![scaled(1, false, 1.0, 1.0)]), unposed);
+        let half = posed(vec![scaled(1, false, 0.0, 0.5)]);
+        assert!(position(&half, 2).distance(Vec3::new(1.5, 0.0, 0.0)) < 1e-5);
+        let doubled = posed(vec![scaled(1, true, 2.0, 1.0)]);
+        assert!(position(&doubled, 2).distance(Vec3::new(3.0, 0.0, 0.0)) < 1e-5);
+
+        // A child scaled under a parent scaled to 0 stays collapsed.
+        let both = posed(vec![scaled(0, false, 0.0, 1.0), scaled(1, false, 2.0, 1.0)]);
+        assert!(both.iter().all(|node| node.is_finite()));
+        assert_eq!(position(&both, 2), Vec3::ZERO);
     }
 
     /// A layer placing the arm's three joints at x = `x0`, `x0`+1, `x0`+2.

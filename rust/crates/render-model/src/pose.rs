@@ -100,11 +100,14 @@ pub enum PoseSpace {
     World,
 }
 
-/// One joint's rotation and/or translation over the pose below it, mixed in
-/// by `weight`. A `Local` value replaces the joint's local value, or with
-/// `additive` composes onto it (rotation after the clip's, translation
-/// added). A `Model` or `World` value moves the joint toward that placement
-/// and its descendants follow; the joint keeps its evaluated scale. Each
+/// One joint's rotation, translation and/or scale over the pose below it,
+/// mixed in by `weight`. A `Local` value replaces the joint's local value, or
+/// with `additive` composes onto it (rotation after the clip's, translation
+/// added, scale multiplied). A `Model` or `World` value moves the joint
+/// toward that placement and its descendants follow; the joint keeps its
+/// evaluated scale. `scale` is the joint's uniform local scale in every
+/// space, applied after the layers about the joint as drawn, its
+/// descendants following: 0 collapses the joint's subtree into it. Each
 /// override's weight is its own, and one joint's overrides apply in list
 /// order across spaces.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -119,6 +122,9 @@ pub struct JointOverride {
     pub rotation: Option<[f32; 4]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub translation: Option<[f32; 3]>,
+    /// Uniform, 0 or more.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
     pub weight: f32,
 }
 
@@ -231,6 +237,8 @@ pub enum AnimatedMeshPoseError {
     InvalidWeight,
     InvalidRotation,
     InvalidTranslation,
+    /// A negative or non-finite joint scale.
+    InvalidScale,
     /// `additive` outside `Local` space.
     AdditiveOutsideLocal,
     /// An IK constraint in `Local` space.
@@ -310,6 +318,12 @@ impl AnimatedMeshPose {
             {
                 return Err(AnimatedMeshPoseError::InvalidTranslation);
             }
+            if joint
+                .scale
+                .is_some_and(|scale| !scale.is_finite() || scale < 0.0)
+            {
+                return Err(AnimatedMeshPoseError::InvalidScale);
+            }
         }
         Ok(())
     }
@@ -345,6 +359,7 @@ mod tests {
             additive,
             rotation: Some([0.0, 0.0, 0.0, 1.0]),
             translation: None,
+            scale: None,
             weight: 1.0,
         }
     }
