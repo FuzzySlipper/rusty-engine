@@ -84,7 +84,11 @@ moving while gameplay time holds.
 
 ## Arms
 
-A `FirstPersonArms` draws one arms model by its `ArmRig` profile:
+A `FirstPersonArms` draws one arms model by its `ArmRig` profile. It opens
+`ArmRig.Model` from the product's own content; a product whose arms live in a
+`ProductContentBundle` it loaded (operator-local art kept out of its release)
+opens the model there and passes the `ContentReference` instead, and the
+rig's `Model` then only names it in errors. The profile gives:
 
 - the GLB and the clip played under the IK;
 - the model's turn and scale;

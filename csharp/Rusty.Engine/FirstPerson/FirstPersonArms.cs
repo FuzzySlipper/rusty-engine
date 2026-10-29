@@ -38,13 +38,26 @@ public sealed class FirstPersonArms : IDisposable
     /// </summary>
     /// <param name="objectId">The published object the arms are drawn on; an object keeps one animation instance, so a new rig takes a new object.</param>
     public FirstPersonArms(IEngineContext engine, HeldArms arms, ArmRig rig, ulong objectId)
+        : this(engine, arms, rig, objectId, engine.Content.OpenReference(new(rig.Model)), owned: true) { }
+
+    /// <summary>
+    /// Draws the rig with a model the product has already opened, such as one from a <see cref="ProductContentBundle"/>
+    /// it loaded beside its own content; <see cref="ArmRig.Model"/> then only names the model in errors. The reference
+    /// is read here and stays the caller's to dispose.
+    /// </summary>
+    /// <param name="objectId">The published object the arms are drawn on; an object keeps one animation instance, so a new rig takes a new object.</param>
+    /// <param name="content">The arms model's content.</param>
+    public FirstPersonArms(IEngineContext engine, HeldArms arms, ArmRig rig, ulong objectId, ContentReference content)
+        : this(engine, arms, rig, objectId, content, owned: false) { }
+
+    private FirstPersonArms(IEngineContext engine, HeldArms arms, ArmRig rig, ulong objectId, ContentReference content, bool owned)
     {
         this.engine = engine;
         this.arms = arms;
         this.rig = rig;
         Object = objectId;
-        using ContentReference content = engine.Content.OpenReference(new(rig.Model));
-        model = engine.Animation.OpenAnimatedMeshFromContent(new(content));
+        try { model = engine.Animation.OpenAnimatedMeshFromContent(new(content)); }
+        finally { if (owned) content.Dispose(); }
         try
         {
             AnimationJointInfo[] joints = engine.Animation.ReadJoints(model).ToArray();
