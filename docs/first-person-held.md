@@ -104,6 +104,12 @@ the right hand. Holds, per-look `HandShape`s and closure therefore mean the
 same hand on every rig, and a new arms mesh is a new profile, not new
 holds.
 
+Fingers curl about their own X (`DigitFrames.Native`) or about the measured
+knuckle line (`Measured`). A thumb is aimed on either: each bone is turned to
+where its clip's `[curl, swing]` plus the added ones read in the canonical
+frame (`HandKnuckles`), so a thumb shape lands as written whatever the
+thumb joints' own frames.
+
 Each update, in this order:
 
 1. Set `Lean` to the motion's lean.

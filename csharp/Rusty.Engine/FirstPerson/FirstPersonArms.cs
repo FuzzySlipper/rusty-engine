@@ -215,11 +215,12 @@ public sealed class FirstPersonArms : IDisposable
     }
 
     // One arm: its IK chain, its digit joints (index, middle, ring and little fingers, then the thumb), and what is
-    // measured from the drawn model: the turn from the hand's canonical frame to its joint's, and each digit joint's
-    // curl and swing axes in its own frame.
+    // measured from the drawn model: the turn from the hand's canonical frame to its joint's, each finger joint's curl
+    // axis in its own frame, and each thumb joint's turn in the hand's canonical frame and its bone in its own frame.
     private sealed class Side(bool left, uint upper, uint lower, uint hand, uint[][] fingers, uint[] thumb)
     {
-        private readonly Dictionary<uint, (Vector3 Curl, Vector3 Swing)> axes = [];
+        private readonly Dictionary<uint, Vector3> curls = [];
+        private readonly (Quaternion Turn, Vector3 Bone)[] thumbs = new (Quaternion, Vector3)[3];
 
         internal bool Left => left;
         internal uint Upper => upper;
@@ -234,7 +235,8 @@ public sealed class FirstPersonArms : IDisposable
             + Vector3.Distance(joints[lower].Model.Translation, joints[hand].Model.Translation);
 
         // The knuckles are fixed to the hand, so where they sit in its frame gives the canonical frame whatever the
-        // hand's turn; each digit's axes are taken in the joint's own frame, so they hold however the digit has turned.
+        // hand's turn; each finger's curl axis is taken in the joint's own frame, so it holds however the finger has
+        // turned. A thumb's bones are taken as HandKnuckles reads them, so it can be aimed where a shape reads.
         internal void Measure(JointPose[] joints, DigitFrames frames)
         {
             Transform wrist = joints[hand].Model;
@@ -242,20 +244,17 @@ public sealed class FirstPersonArms : IDisposable
             Vector3 Local(uint joint) => Vector3.Transform(joints[joint].Model.Translation - wrist.Translation, unturn);
             Frame = HandFrame.Measure(Local(fingers[0][0]), Local(fingers[1][0]), Local(fingers[3][0]), left);
             Quaternion canonical = Quaternion.Normalize(wrist.Rotation * Quaternion.Inverse(Frame));
-            Vector3 x = Vector3.Transform(Vector3.UnitX, canonical), z = Vector3.Transform(Vector3.UnitZ, canonical);
+            Vector3 x = Vector3.Transform(Vector3.UnitX, canonical);
             foreach (uint[] finger in fingers)
                 foreach (uint joint in finger)
-                    axes[joint] = frames == DigitFrames.Native ? (Vector3.UnitX, Vector3.UnitZ)
-                        : (Vector3.Transform(x, Quaternion.Inverse(joints[joint].Model.Rotation)), Vector3.Zero);
+                    curls[joint] = frames == DigitFrames.Native ? Vector3.UnitX : Vector3.Transform(x, Quaternion.Inverse(joints[joint].Model.Rotation));
+            Quaternion uncanonical = Quaternion.Inverse(canonical);
             for (int i = 0; i < 3; i++)
             {
-                if (frames == DigitFrames.Native) { axes[thumb[i]] = (Vector3.UnitX, Vector3.UnitZ); continue; }
-                // A thumb curls across the palm: about the axis square to its own length and the palm's normal (-Z),
-                // signed so a positive turn of a negative curl angle brings it toward the palm, as a finger's does.
-                Quaternion own = joints[thumb[i]].Model.Rotation;
-                Vector3 along = Vector3.Normalize(joints[i < 2 ? thumb[i + 1] : thumb[i]].Model.Translation - joints[i < 2 ? thumb[i] : thumb[i - 1]].Model.Translation);
-                Vector3 curl = Vector3.Normalize(Vector3.Cross(-z, along));
-                axes[thumb[i]] = (Vector3.Transform(curl, Quaternion.Inverse(own)), Vector3.Transform(z, Quaternion.Inverse(own)));
+                // The last joint's bone runs as the one before it does in that joint's own frame.
+                (uint from, uint to) = i < 2 ? (thumb[i], thumb[i + 1]) : (thumb[1], thumb[2]);
+                Vector3 bone = Vector3.Transform(joints[to].Model.Translation - joints[from].Model.Translation, Quaternion.Inverse(joints[from].Model.Rotation));
+                thumbs[i] = (Quaternion.Normalize(uncanonical * joints[thumb[i]].Model.Rotation), Vector3.Normalize(bone));
             }
             Clip = Knuckles(joints);
             Measured = true;
@@ -267,7 +266,9 @@ public sealed class FirstPersonArms : IDisposable
         // Each digit joint's turn over the clip: the rig's grip (to the canonical holding pose), the look's shape, then
         // the closure toward the arms' close at 1 or open at -1. Opening blends the shape toward the open bend, so a
         // shaped finger never bends back past it; squeezing adds to the shape. Curls are negative turns about the curl
-        // axis (toward the palm); a thumb swings about its swing axis, mirrored on the left.
+        // axis (toward the palm). Each thumb bone is aimed where its clip's [curl, swing] plus the added ones put it in
+        // the hand's canonical frame (swing mirrored on the left), so the drawn thumb reads as asked whatever its
+        // joints' own frames.
         internal IEnumerable<(uint Joint, Quaternion Turn)> Close(ArmRig rig, ArmDigits digits, HandShape? shape, float closure)
         {
             DigitBend bend = closure > 0 ? digits.Close : digits.Open;
@@ -279,17 +280,37 @@ public sealed class FirstPersonArms : IDisposable
                 for (int i = 0; i < 3; i++)
                 {
                     float curl = grip.Fingers[f][i] + Bend(shape?.Fingers[f][i] ?? 0, bend.Fingers[i]);
-                    if (curl != 0) yield return (fingers[f][i], Quaternion.CreateFromAxisAngle(axes[fingers[f][i]].Curl, -curl * Radians));
+                    if (curl != 0) yield return (fingers[f][i], Quaternion.CreateFromAxisAngle(curls[fingers[f][i]], -curl * Radians));
                 }
+            float[][] added = [.. Enumerable.Range(0, 3).Select(i => new[] {
+                grip.Thumb[i][0] + Bend(shape?.Thumb[i][0] ?? 0, bend.Thumb[i][0]), grip.Thumb[i][1] + Bend(shape?.Thumb[i][1] ?? 0, bend.Thumb[i][1]) })];
+            if (Clip is not { } clip || added.All(a => a[0] == 0 && a[1] == 0)) yield break;
+            // A joint's angles are its bone's from the bone before, so each bone's rise and swing in the canonical
+            // frame are the sums down the thumb; `moved` is how far the joints above have turned it (canonical frame).
+            float rise = 0, swing = 0;
+            Quaternion moved = Quaternion.Identity;
             for (int i = 0; i < 3; i++)
             {
-                float curl = grip.Thumb[i][0] + Bend(shape?.Thumb[i][0] ?? 0, bend.Thumb[i][0]),
-                    swing = grip.Thumb[i][1] + Bend(shape?.Thumb[i][1] ?? 0, bend.Thumb[i][1]);
-                if (curl == 0 && swing == 0) continue;
-                (Vector3 curlAxis, Vector3 swingAxis) = axes[thumb[i]];
-                yield return (thumb[i], Quaternion.Normalize(
-                    Quaternion.CreateFromAxisAngle(swingAxis, swing * side * Radians) * Quaternion.CreateFromAxisAngle(curlAxis, -curl * Radians)));
+                rise += (clip.Thumb[i][0] + added[i][0]) * Radians;
+                swing += (clip.Thumb[i][1] + added[i][1]) * Radians * side;
+                Vector3 aim = new(-MathF.Cos(rise) * MathF.Sin(swing), MathF.Cos(rise) * MathF.Cos(swing), -MathF.Sin(rise));
+                Quaternion placed = Quaternion.Normalize(moved * thumbs[i].Turn);
+                Quaternion arc = Arc(Vector3.Transform(thumbs[i].Bone, placed), aim);
+                moved = Quaternion.Normalize(arc * moved);
+                yield return (thumb[i], Quaternion.Normalize(Quaternion.Inverse(placed) * arc * placed));
             }
+        }
+
+        // The shortest turn from one unit direction to another.
+        private static Quaternion Arc(Vector3 from, Vector3 to)
+        {
+            float dot = Vector3.Dot(from, to);
+            if (dot < -0.9999f)
+            {
+                Vector3 across = Vector3.Cross(from, MathF.Abs(from.X) < 0.9f ? Vector3.UnitX : Vector3.UnitY);
+                return Quaternion.CreateFromAxisAngle(Vector3.Normalize(across), MathF.PI);
+            }
+            return Quaternion.Normalize(new Quaternion(Vector3.Cross(from, to), 1 + dot));
         }
     }
 }

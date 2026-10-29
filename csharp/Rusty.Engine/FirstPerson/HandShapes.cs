@@ -201,10 +201,9 @@ public static class HandKnuckles
 }
 
 /// <summary>
-/// How a rig's digits turn. <c>Native</c>: each digit joint's own frame is the hand's canonical frame (a finger curls
-/// about its X, a thumb also swings about its Z). <c>Measured</c>: curl and swing axes are measured from the drawn hand
-/// (a finger curls about the knuckle line, a thumb across the palm and swings about the palm's normal), for rigs
-/// authored any other way.
+/// How a rig's fingers curl. <c>Native</c>: about each finger joint's own X. <c>Measured</c>: about the knuckle line
+/// measured from the drawn hand, for rigs authored any other way. A thumb is aimed on either: each bone goes where its
+/// [curl, swing] reads (<see cref="HandKnuckles"/>), whatever its joints' frames.
 /// </summary>
 [JsonConverter(typeof(JsonStringEnumConverter<DigitFrames>))]
 public enum DigitFrames { Native, Measured }
