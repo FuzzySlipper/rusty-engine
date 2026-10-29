@@ -147,12 +147,14 @@ pub struct TwoBoneIkConstraint {
     pub weight: f32,
 }
 
-/// Turns `joint` by `share` of how far `to` has rolled relative to `from`
-/// since the clip pose, about the line from `from` to `to`, after IK and
-/// overrides: a forearm twist joint taking part of the hand's roll, so a
-/// rolled hand does not twist the whole turn into the wrist. The joint turns
-/// about its own origin and its descendants follow, except `to` and its
-/// descendants, which stay where IK and overrides put them.
+/// Turns `joint` until it has rolled `share` of how far `to` has rolled
+/// relative to `from` since the clip pose, about the line from `from` to
+/// `to`, after IK and overrides: a forearm twist joint taking part of the
+/// hand's roll, so a rolled hand does not twist the whole turn into the
+/// wrist. A turn inherited from a twist joint above it counts toward its
+/// share, so twists apply parents first. The joint turns about its own
+/// origin and its descendants follow, except `to` and its descendants, which
+/// stay where IK and overrides put them.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct JointTwist {

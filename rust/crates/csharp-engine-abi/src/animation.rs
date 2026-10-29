@@ -365,9 +365,10 @@ pub struct NativeTwoBoneIk {
     pub weight: f32,
 }
 
-/// Turns `joint` by `share` of how far `to` has rolled relative to `from`
-/// since the clip pose, about the line from `from` to `to`, after IK and
-/// overrides: a forearm twist joint taking part of the hand's roll. The
+/// Turns `joint` until it has rolled `share` of how far `to` has rolled
+/// relative to `from` since the clip pose, about the line from `from` to
+/// `to`, after IK and overrides: a forearm twist joint taking part of the
+/// hand's roll, counting a turn inherited from a twist joint above it. The
 /// joint's descendants follow it, except `to` and its own, which keep where
 /// IK and overrides put them.
 #[repr(C)]

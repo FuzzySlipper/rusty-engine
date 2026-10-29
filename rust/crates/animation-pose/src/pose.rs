@@ -118,12 +118,25 @@ pub fn controlled<H: Hierarchy + ?Sized>(
     }
     let mut posed = evaluate(model, &locals, &by_node, world, to_model);
     if let Some(sampled) = &sampled {
-        for twist in &pose.twists {
-            if let (Some(joint), Some(from), Some(to)) =
-                (node(twist.joint), node(twist.from), node(twist.to))
-            {
-                share_twist(model, &mut posed, sampled, [joint, from, to], twist);
-            }
+        // Parents first, so a twist joint under another listed one settles
+        // after the turn it inherits.
+        let mut rank = vec![usize::MAX; model.node_count()];
+        for (at, &index) in model.order().iter().enumerate() {
+            rank[index] = at;
+        }
+        let mut twists: Vec<_> = pose
+            .twists
+            .iter()
+            .filter_map(|twist| {
+                Some((
+                    [node(twist.joint)?, node(twist.from)?, node(twist.to)?],
+                    twist,
+                ))
+            })
+            .collect();
+        twists.sort_by_key(|([joint, _, _], _)| rank[*joint]);
+        for (nodes, twist) in twists {
+            share_twist(model, &mut posed, sampled, nodes, twist);
         }
     }
     if let Some(unlayered) = unlayered.filter(|_| !pose.layers.is_empty()) {
@@ -137,8 +150,9 @@ pub fn controlled<H: Hierarchy + ?Sized>(
 }
 
 /// Turns `joint` (with its descendants, except `to`'s subtree) about its
-/// origin by the twist's share of `to`'s roll relative to `from` since
-/// `sampled`, about the line from `from` to `to`.
+/// origin until it has rolled the twist's share of `to`'s roll relative to
+/// `from` since `sampled`, about the line from `from` to `to`: a turn it
+/// inherited from a listed twist joint above it counts toward its share.
 fn share_twist<H: Hierarchy + ?Sized>(
     model: &H,
     posed: &mut [Mat4],
@@ -152,17 +166,21 @@ fn share_twist<H: Hierarchy + ?Sized>(
     if line.length() < DEGENERATE {
         return;
     }
-    // `to`'s change since the clip, in `from`'s frame, and its twist part
-    // about the line.
     let base = rotation(posed[from]);
-    let now = base.inverse() * rotation(posed[to]);
-    let clip = rotation(sampled[from]).inverse() * rotation(sampled[to]);
-    let change = now * clip.inverse();
     let axis = (base.inverse() * line).normalize();
-    let half = change.xyz().dot(axis).atan2(change.w);
-    let roll = (2.0 * half + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
-        - std::f32::consts::PI;
-    let turn = Quat::from_axis_angle(line.normalize(), roll * twist.share);
+    let wrap = |angle: f32| {
+        (angle + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
+    };
+    // A node's change since the clip, in `from`'s frame, and its twist part
+    // about the line.
+    let roll = |posed: &[Mat4], node: usize| {
+        let now = base.inverse() * rotation(posed[node]);
+        let clip = rotation(sampled[from]).inverse() * rotation(sampled[node]);
+        let change = now * clip.inverse();
+        wrap(2.0 * change.xyz().dot(axis).atan2(change.w))
+    };
+    let angle = wrap(roll(posed, to) * twist.share - roll(posed, joint));
+    let turn = Quat::from_axis_angle(line.normalize(), angle);
     let pivot = origin(posed[joint]);
     let about =
         Mat4::from_translation(pivot) * Mat4::from_quat(turn) * Mat4::from_translation(-pivot);
@@ -1059,5 +1077,72 @@ mod tests {
         assert!(position(&posed, 2).distance(Vec3::new(2.0, 0.0, 0.0)) < 1e-5);
         let finger = Vec3::new(2.0, 0.0, 0.0) + target * Vec3::new(0.1, 0.0, 0.0);
         assert!(position(&posed, 5).distance(finger) < 1e-5);
+    }
+
+    #[test]
+    fn a_twist_joint_under_another_ends_at_its_own_share() {
+        // The elbow, twist joints A and B in a chain along the forearm, then
+        // the hand.
+        let node = |parent: Option<usize>, x: f32| RigNode {
+            name: None,
+            parent,
+            rest: Trs {
+                translation: Vec3::new(x, 0.0, 0.0),
+                rotation: Quat::IDENTITY,
+                scale: Vec3::ONE,
+            },
+        };
+        let model = Rig {
+            nodes: vec![
+                node(None, 0.0),
+                node(Some(0), 1.0),
+                node(Some(1), 0.3),
+                node(Some(2), 0.3),
+                node(Some(3), 0.4),
+            ],
+            order: vec![0, 1, 2, 3, 4],
+            skins: Vec::new(),
+            clips: Vec::new(),
+        };
+        let rig = [0, 1, 2, 3, 4].map(Some);
+        let degrees_off =
+            |a: Quat, b: Quat| 2.0 * (a.inverse() * b).xyz().length().asin().to_degrees();
+        for roll in [90.0f32, -90.0] {
+            let target = Quat::from_rotation_x(roll.to_radians());
+            for listed in [[(2, 0.25), (3, 0.5)], [(3, 0.5), (2, 0.25)]] {
+                let pose = AnimatedMeshPose {
+                    overrides: vec![JointOverride {
+                        joint: 4,
+                        space: PoseSpace::Model,
+                        additive: false,
+                        rotation: Some(target.to_array()),
+                        translation: None,
+                        scale: None,
+                        weight: 1.0,
+                    }],
+                    twists: listed
+                        .map(|(joint, share)| JointTwist {
+                            joint,
+                            from: 1,
+                            to: 4,
+                            share,
+                        })
+                        .to_vec(),
+                    ..AnimatedMeshPose::default()
+                };
+                let posed = controlled(&model, &rig, rest(&model), &pose, Mat4::IDENTITY);
+                let rotation = |node: usize| posed[node].to_scale_rotation_translation().1;
+                for (node, share) in [(2, 0.25), (3, 0.5)] {
+                    let expected = Quat::from_rotation_x((roll * share).to_radians());
+                    assert!(
+                        degrees_off(rotation(node), expected) < 0.01,
+                        "roll {roll}, listed {listed:?}: joint {node} at {:?}",
+                        rotation(node).to_euler(glam::EulerRot::XYZ)
+                    );
+                }
+                assert!(degrees_off(rotation(4), target) < 0.01);
+                assert!(position(&posed, 4).distance(Vec3::new(2.0, 0.0, 0.0)) < 1e-5);
+            }
+        }
     }
 }

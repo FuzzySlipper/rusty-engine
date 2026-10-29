@@ -147,9 +147,11 @@ identity rotation; anything attached under it collapses with it.
 
 ## Twists
 
-A `JointTwist(joint, from, to, share)` turns `joint` by `share` of how far
-`to` has rolled relative to `from` since the clip pose, about the line from
-`from` to `to`. It runs after IK and overrides, so it shares the roll they
+A `JointTwist(joint, from, to, share)` turns `joint` until it has rolled
+`share` of how far `to` has rolled relative to `from` since the clip pose,
+about the line from `from` to `to`. A turn it inherits from a twist joint
+above it counts toward its share, so on a chain of twist joints each ends
+at its own share whatever order they are listed in. It runs after IK and overrides, so it shares the roll they
 drew. A rolled hand otherwise puts its whole roll at the wrist; with the
 forearm's twist joints taking part of it (`from` the lower arm, `to` the
 hand), the forearm turns with the hand. The joint turns about its own origin
