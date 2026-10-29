@@ -5665,6 +5665,12 @@ mod tests {
                 ABI_OK
             );
         }
+        let ghost = services
+            .appearance
+            .presentation_create_ghost_plate(crate::appearance::tests::ghost_plate_request(
+                crate::appearance::tests::appearance_fact(appearance).object_id,
+            ))
+            .expect("a ghost plate of the shown object");
         services.finish_call().expect("published");
         // A refusal is borrowed until the next call, so each is read at once.
         let codes = |status, refusal: &NativeOperationErrorReceipt| {
@@ -5696,6 +5702,10 @@ mod tests {
         services.finish_call().expect("refused call");
 
         services.begin_shutdown_call(binding());
+        services
+            .appearance
+            .presentation_destroy_ghost_plate(ghost)
+            .expect("the retired ghost plate is still the product's to dispose");
         assert_eq!(dispose(&services.api()), [Vec::<String>::new(), Vec::new()]);
         services.finish_call().expect("shutdown call");
     }

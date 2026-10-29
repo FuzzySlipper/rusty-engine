@@ -1474,6 +1474,8 @@ pub(crate) struct RuntimeAppearanceData {
     emitters: BTreeMap<u64, ParticleEmitterHandle>,
     ghost_plate_projector: GhostPlateProjector,
     ghost_plates: BTreeMap<u64, RuntimeGhostPlatePresentation>,
+    /// Ghost plates shutdown retired; the product's destroy still succeeds.
+    retired_ghost_plates: BTreeSet<u64>,
     next_ghost_plate: u64,
     pub(crate) tweens: crate::tween::RuntimeTweens,
 }
@@ -1914,6 +1916,7 @@ impl RuntimeAppearanceBridge {
             emitters: BTreeMap::new(),
             ghost_plate_projector: GhostPlateProjector::default(),
             ghost_plates: BTreeMap::new(),
+            retired_ghost_plates: BTreeSet::new(),
             next_ghost_plate: 1,
             tweens: Default::default(),
         });
@@ -2786,6 +2789,14 @@ impl RuntimeAppearanceBridge {
         presentation: NativeGhostPlatePresentationHandle,
     ) -> Result<(), CsharpEngineServicesError> {
         let handle = presentation.value;
+        if self
+            .staged_mut()?
+            .state
+            .retired_ghost_plates
+            .remove(&handle)
+        {
+            return Ok(());
+        }
         self.ghost_plate(handle)?;
         self.stage_ghost_plate(
             handle,
@@ -7274,8 +7285,22 @@ impl RuntimeAppearanceBridge {
     }
 
     /// Empties the retained object set, as an empty snapshot does, so that
-    /// product shutdown may dispose what it showed in any order.
+    /// product shutdown may dispose what it showed in any order. Ghost plates
+    /// go first, as their sources must outlive them.
     pub(crate) fn retire_snapshot(&mut self) -> Result<(), CsharpEngineServicesError> {
+        let ghosts: Vec<u64> = self
+            .staged_ref()?
+            .state
+            .ghost_plates
+            .keys()
+            .copied()
+            .collect();
+        for handle in ghosts {
+            self.presentation_destroy_ghost_plate(NativeGhostPlatePresentationHandle {
+                value: handle,
+            })?;
+            self.staged_mut()?.state.retired_ghost_plates.insert(handle);
+        }
         self.stage_changes(&[], None, &BTreeMap::new())
     }
 
