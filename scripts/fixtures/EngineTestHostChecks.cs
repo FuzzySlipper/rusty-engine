@@ -625,7 +625,7 @@ internal static class EngineTestHostChecks
             for (int index = 0; index < bones.Length; index++)
             {
                 var bone = described[index];
-                bones[index] = new(Joint(rig, bone.Joint), Joint(rig, bone.End), bone.Length, bone.Shape, bone.Radius, bone.HalfDepth, bone.Mass);
+                bones[index] = new(Joint(rig, bone.Joint), Joint(rig, bone.End), bone.Length, bone.Shape, bone.Radius, bone.HalfDepth, bone.Mass, false);
             }
             DynamicsJointLimits elbow = DynamicsJointLimits.Hinge(0, 2.5f, 2), knee = DynamicsJointLimits.Hinge(0, 2.4f, 2);
             DynamicsRagdollLink[] links =
