@@ -849,6 +849,7 @@ fn pose_controls_reach_a_world_target_and_read_as_drawn() {
     let reach = |target: [f32; 3], curl: f32| RenderDiff::SetAnimatedMeshPose {
         handle: RenderHandle::new(BODY),
         pose: AnimatedMeshPose {
+            twists: Vec::new(),
             clip_layers: Vec::new(),
             two_bone_ik: vec![TwoBoneIkConstraint {
                 root: arm,
@@ -935,6 +936,7 @@ fn an_evaluated_pose_carries_each_ik_chains_target_and_shortfall() {
     let reach = |target: [f32; 3]| RenderDiff::SetAnimatedMeshPose {
         handle: RenderHandle::new(BODY),
         pose: AnimatedMeshPose {
+            twists: Vec::new(),
             clip_layers: Vec::new(),
             two_bone_ik: vec![TwoBoneIkConstraint {
                 root: arm,
@@ -995,6 +997,7 @@ fn inspection_draws_the_joint_chain_and_ik_reach_of_an_instance() {
         RenderDiff::SetAnimatedMeshPose {
             handle: RenderHandle::new(BODY),
             pose: AnimatedMeshPose {
+                twists: Vec::new(),
                 clip_layers: Vec::new(),
                 two_bone_ik: vec![TwoBoneIkConstraint {
                     root: joint("RightArm"),

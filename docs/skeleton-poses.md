@@ -57,10 +57,11 @@ A pose is evaluated in this order:
 2. **Two-bone IK**, in list order.
 3. **Joint overrides.** Parents are applied before children; one joint's
    overrides apply in list order.
-4. **Ragdoll layers.** A [ragdoll](ragdolls.md) places its bones as one
+4. **Twists**, in list order.
+5. **Ragdoll layers.** A [ragdoll](ragdolls.md) places its bones as one
    layer over the result, mixed in by its blend weight.
-5. **Override scales.** Children are scaled before parents.
-6. **Skinning.** Joint attachments then hang from the result.
+6. **Override scales.** Children are scaled before parents.
+7. **Skinning.** Joint attachments then hang from the result.
 
 ## Clip layers
 
@@ -143,6 +144,19 @@ identity rotation; anything attached under it collapses with it.
 
 `JointOverride.LocalRotation`, `AddLocalRotation`, `Place`, `Orient` and
 `LocalScale` build the common cases.
+
+## Twists
+
+A `JointTwist(joint, from, to, share)` turns `joint` by `share` of how far
+`to` has rolled relative to `from` since the clip pose, about the line from
+`from` to `to`. It runs after IK and overrides, so it shares the roll they
+drew. A rolled hand otherwise puts its whole roll at the wrist; with the
+forearm's twist joints taking part of it (`from` the lower arm, `to` the
+hand), the forearm turns with the hand. The joint turns about its own origin
+and its descendants follow, except `to` and its own: they stay where IK and
+overrides put them, so a twist joint between the lower arm and the hand
+leaves the hand on its target. The `AnimationPoseRequest` constructor without
+twists sends none.
 
 ## Writing and reading
 

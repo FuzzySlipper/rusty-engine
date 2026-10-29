@@ -10,6 +10,8 @@ foreach (DigitFrames frames in new[] { DigitFrames.Native, DigitFrames.Measured 
 {
     ThumbShapesReadBack(frames);
 }
+TwistJointsShareTheHandsRoll();
+TwistJointsLieOnTheArm();
 Console.WriteLine("first-person arms exercises passed");
 
 static void ThumbShapesReadBack(DigitFrames frames)
@@ -20,7 +22,7 @@ static void ThumbShapesReadBack(DigitFrames frames)
         {
             HandShape shape = new([[10, 5, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]], [[curl, swing], [-curl, swing / 2], [curl / 2, -swing / 3]]);
             FakeRig fake = new();
-            using FirstPersonArms arms = fake.Arms(Rig(frames));
+            using FirstPersonArms arms = fake.Arms(Rig(frames, [], []));
             HandAim aim = new(new(0.2f, -0.2f, -0.5f), Quaternion.Identity, null, 0, new(0.5f, -1, 0), Shape: shape);
             // The first reach measures the clip and poses the hands; the second reads the posed hands.
             arms.Reach(aim, aim);
@@ -47,12 +49,40 @@ static void ThumbShapesReadBack(DigitFrames frames)
     }
 }
 
-static ArmRig Rig(DigitFrames frames)
+static void TwistJointsShareTheHandsRoll()
 {
-    ArmJoints Arm(string s) => new($"{s}_upper", $"{s}_lower", $"{s}_hand",
+    FakeRig fake = new();
+    using FirstPersonArms arms = fake.Arms(Rig(DigitFrames.Measured, [new("r_forearm2", 0.6f)], [new("l_twist", 0.5f)]));
+    HandAim aim = new(new(0.2f, -0.2f, -0.5f), Quaternion.CreateFromAxisAngle(Vector3.UnitZ, MathF.PI / 2), null, 0, new(0.5f, -1, 0));
+    arms.Reach(aim, aim);
+    JointTwist[] twists = fake.Pose!.Value.Twists.ToArray();
+    JointTwist[] expected = [new(fake.Index("r_forearm2"), fake.Index("r_lower"), fake.Index("r_hand"), 0.6f),
+        new(fake.Index("l_twist"), fake.Index("l_lower"), fake.Index("l_hand"), 0.5f)];
+    Require(twists.SequenceEqual(expected), $"twists sent: {string.Join(", ", twists)}");
+}
+
+static void TwistJointsLieOnTheArm()
+{
+    foreach (string joint in new[] { "root", "r_hand", "r_index1", "l_upper" })
+    {
+        FakeRig fake = new();
+        try
+        {
+            using FirstPersonArms arms = fake.Arms(Rig(DigitFrames.Measured, [new(joint, 0.5f)], []));
+            throw new InvalidOperationException($"a twist joint '{joint}' off the right forearm was taken");
+        }
+        catch (InvalidOperationException error) when (error.Message.StartsWith("main.twist[0]: ", StringComparison.Ordinal))
+        {
+        }
+    }
+}
+
+static ArmRig Rig(DigitFrames frames, ArmTwist[] mainTwist, ArmTwist[] offTwist)
+{
+    ArmJoints Arm(string s, ArmTwist[] twist) => new($"{s}_upper", $"{s}_lower", $"{s}_hand",
         [.. new[] { "index", "middle", "ring", "little" }.Select(f => new[] { $"{s}_{f}1", $"{s}_{f}2", $"{s}_{f}3" })],
-        [$"{s}_thumb1", $"{s}_thumb2", $"{s}_thumb3"]);
-    return new("arms.glb", FakeRig.Clip, Vector3.Zero, Arm("r"), Arm("l"), frames, Vector3.Zero, new(HandShape.None));
+        [$"{s}_thumb1", $"{s}_thumb2", $"{s}_thumb3"]) { Twist = twist };
+    return new("arms.glb", FakeRig.Clip, Vector3.Zero, Arm("r", mainTwist), Arm("l", offTwist), frames, Vector3.Zero, new(HandShape.None));
 }
 
 static float Wrap(float degrees) => degrees > 180 ? degrees - 360 : degrees <= -180 ? degrees + 360 : degrees;

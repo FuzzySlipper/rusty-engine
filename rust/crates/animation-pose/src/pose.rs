@@ -1,12 +1,14 @@
 //! Pose controls (`AnimatedMeshPose`) over a sampled clip pose: two-bone IK,
-//! then joint overrides, composed into instance-space node transforms.
+//! then joint overrides and twists, composed into instance-space node
+//! transforms.
 //! Skinning and joint attachments read the result.
 
 use std::collections::HashMap;
 
 use glam::{Mat4, Quat, Vec3};
 use render_model::{
-    AnimatedMeshPose, JointOverride, PlacedJoint, PlacedPoseLayer, PoseSpace, TwoBoneIkConstraint,
+    AnimatedMeshPose, JointOverride, JointTwist, PlacedJoint, PlacedPoseLayer, PoseSpace,
+    TwoBoneIkConstraint,
 };
 
 use crate::{Hierarchy, Trs};
@@ -62,7 +64,7 @@ pub struct IkSolve {
 }
 
 /// The sampled `locals` under `pose`: IK in order, then overrides, then
-/// layers, then the overrides' scales, composed. `rig` maps rig joint indices to nodes; `world` places the
+/// twists, then layers, then the overrides' scales, composed. `rig` maps rig joint indices to nodes; `world` places the
 /// instance, for `World` values. A joint the rig does not name is skipped.
 /// `solves`, when given, receives each IK chain in order, and `unlayered`
 /// the pose before the layers when there are any.
@@ -83,6 +85,8 @@ pub fn controlled<H: Hierarchy + ?Sized>(
     }
     let to_model = world.inverse();
     let node = |joint: u32| rig.get(joint as usize).copied().flatten();
+    // Twists measure each roll from the clip pose.
+    let sampled = (!pose.twists.is_empty()).then(|| compose(model, &locals));
     for ik in &pose.two_bone_ik {
         let (target, pole) = match ik.space {
             PoseSpace::World => (
@@ -113,6 +117,15 @@ pub fn controlled<H: Hierarchy + ?Sized>(
         }
     }
     let mut posed = evaluate(model, &locals, &by_node, world, to_model);
+    if let Some(sampled) = &sampled {
+        for twist in &pose.twists {
+            if let (Some(joint), Some(from), Some(to)) =
+                (node(twist.joint), node(twist.from), node(twist.to))
+            {
+                share_twist(model, &mut posed, sampled, [joint, from, to], twist);
+            }
+        }
+    }
     if let Some(unlayered) = unlayered.filter(|_| !pose.layers.is_empty()) {
         unlayered.clone_from(&posed);
     }
@@ -121,6 +134,46 @@ pub fn controlled<H: Hierarchy + ?Sized>(
     }
     scale_joints(model, &mut posed, &by_node);
     posed
+}
+
+/// Turns `joint` (with its descendants, except `to`'s subtree) about its
+/// origin by the twist's share of `to`'s roll relative to `from` since
+/// `sampled`, about the line from `from` to `to`.
+fn share_twist<H: Hierarchy + ?Sized>(
+    model: &H,
+    posed: &mut [Mat4],
+    sampled: &[Mat4],
+    [joint, from, to]: [usize; 3],
+    twist: &JointTwist,
+) {
+    let rotation = |placed: Mat4| placed.to_scale_rotation_translation().1.normalize();
+    let origin = |placed: Mat4| placed.w_axis.truncate();
+    let line = origin(posed[to]) - origin(posed[from]);
+    if line.length() < DEGENERATE {
+        return;
+    }
+    // `to`'s change since the clip, in `from`'s frame, and its twist part
+    // about the line.
+    let base = rotation(posed[from]);
+    let now = base.inverse() * rotation(posed[to]);
+    let clip = rotation(sampled[from]).inverse() * rotation(sampled[to]);
+    let change = now * clip.inverse();
+    let axis = (base.inverse() * line).normalize();
+    let half = change.xyz().dot(axis).atan2(change.w);
+    let roll = (2.0 * half + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU)
+        - std::f32::consts::PI;
+    let turn = Quat::from_axis_angle(line.normalize(), roll * twist.share);
+    let pivot = origin(posed[joint]);
+    let about =
+        Mat4::from_translation(pivot) * Mat4::from_quat(turn) * Mat4::from_translation(-pivot);
+    let mut moved = vec![false; posed.len()];
+    for &node in model.order() {
+        moved[node] =
+            node == joint || (node != to && model.parent(node).is_some_and(|parent| moved[parent]));
+        if moved[node] {
+            posed[node] = about * posed[node];
+        }
+    }
 }
 
 /// Factors closer to 1 than this leave a joint as drawn, so a scale of 1
@@ -480,6 +533,7 @@ mod tests {
 
     fn ik(target: Vec3, pole: Vec3, weight: f32) -> AnimatedMeshPose {
         AnimatedMeshPose {
+            twists: Vec::new(),
             clip_layers: Vec::new(),
             two_bone_ik: vec![TwoBoneIkConstraint {
                 root: 0,
@@ -929,5 +983,81 @@ mod tests {
                 position(&posed, 1)
             );
         }
+    }
+
+    /// A forearm along +X with a twist joint between the elbow and the hand
+    /// (node 3) and one beside the hand (node 4), as rigs place them.
+    fn forearm() -> Rig {
+        let node = |parent: Option<usize>, x: f32| RigNode {
+            name: None,
+            parent,
+            rest: Trs {
+                translation: Vec3::new(x, 0.0, 0.0),
+                rotation: Quat::IDENTITY,
+                scale: Vec3::ONE,
+            },
+        };
+        Rig {
+            nodes: vec![
+                node(None, 0.0),
+                node(Some(0), 1.0),
+                node(Some(3), 0.5),
+                node(Some(1), 0.5),
+                node(Some(1), 0.25),
+                node(Some(2), 0.1),
+            ],
+            order: vec![0, 1, 3, 2, 4, 5],
+            skins: Vec::new(),
+            clips: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn twist_joints_take_their_share_of_the_hands_roll_since_the_clip() {
+        let model = forearm();
+        let rig = [0, 1, 2, 3, 4, 5].map(Some);
+        // The clip already rolls the hand 30 degrees about the forearm.
+        let mut locals = rest(&model);
+        locals[2].rotation = Quat::from_rotation_x(30f32.to_radians());
+        let target = Quat::from_rotation_x(-60f32.to_radians()) * Quat::from_rotation_z(0.3);
+        let pose = AnimatedMeshPose {
+            overrides: vec![JointOverride {
+                joint: 2,
+                space: PoseSpace::Model,
+                additive: false,
+                rotation: Some(target.to_array()),
+                translation: None,
+                scale: None,
+                weight: 1.0,
+            }],
+            twists: [(3, 0.5), (4, 0.25)]
+                .map(|(joint, share)| JointTwist {
+                    joint,
+                    from: 1,
+                    to: 2,
+                    share,
+                })
+                .to_vec(),
+            ..AnimatedMeshPose::default()
+        };
+        let posed = controlled(&model, &rig, locals, &pose, Mat4::IDENTITY);
+        let rotation = |node: usize| posed[node].to_scale_rotation_translation().1;
+        // Exact near zero, unlike `angle_between`'s arccosine.
+        let degrees_off =
+            |a: Quat, b: Quat| 2.0 * (a.inverse() * b).xyz().length().asin().to_degrees();
+        // -60 from +30: a roll of -90 about the forearm.
+        for (node, degrees) in [(3, -45.0f32), (4, -22.5)] {
+            let expected = Quat::from_rotation_x(degrees.to_radians());
+            assert!(
+                degrees_off(rotation(node), expected) < 0.01,
+                "twist joint {node}: {:?}",
+                rotation(node).to_euler(glam::EulerRot::XYZ)
+            );
+        }
+        // The hand keeps its target and its place; its finger follows it.
+        assert!(degrees_off(rotation(2), target) < 0.01);
+        assert!(position(&posed, 2).distance(Vec3::new(2.0, 0.0, 0.0)) < 1e-5);
+        let finger = Vec3::new(2.0, 0.0, 0.0) + target * Vec3::new(0.1, 0.0, 0.0);
+        assert!(position(&posed, 5).distance(finger) < 1e-5);
     }
 }

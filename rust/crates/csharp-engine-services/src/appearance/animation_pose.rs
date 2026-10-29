@@ -177,6 +177,8 @@ impl RuntimeAppearanceBridge {
                 "animation pose overrides",
             )?
         };
+        let twists =
+            unsafe { borrowed_slice(request.twists, request.twists_len, "animation pose twists")? };
         let pose = AnimatedMeshPose {
             clip_layers: Vec::new(),
             two_bone_ik: two_bone_ik
@@ -210,6 +212,15 @@ impl RuntimeAppearanceBridge {
                     weight: joint.weight,
                 })
                 .collect(),
+            twists: twists
+                .iter()
+                .map(|twist| JointTwist {
+                    joint: twist.joint,
+                    from: twist.from,
+                    to: twist.to,
+                    share: twist.share,
+                })
+                .collect(),
             layers: Vec::new(),
             cuts: Vec::new(),
         };
@@ -234,7 +245,12 @@ impl RuntimeAppearanceBridge {
                 .two_bone_ik
                 .iter()
                 .flat_map(|ik| [ik.root, ik.mid, ik.end])
-                .chain(pose.overrides.iter().map(|joint| joint.joint));
+                .chain(pose.overrides.iter().map(|joint| joint.joint))
+                .chain(
+                    pose.twists
+                        .iter()
+                        .flat_map(|twist| [twist.joint, twist.from, twist.to]),
+                );
             if let Some(joint) = named.into_iter().find(|joint| *joint >= joints) {
                 return Err(pose_error(format!(
                     "joint {joint} is outside the rig's {joints} joints"
@@ -1127,6 +1143,8 @@ mod tests {
                     weight: 1.0,
                 },
                 overrides_len: 1,
+                twists: std::ptr::null(),
+                twists_len: 0,
             })
             .unwrap();
         let controlled = sampled(&mut bridge, &request("run", 0.6)).unwrap();
@@ -1164,6 +1182,8 @@ mod tests {
                     weight: 1.0,
                 },
                 overrides_len: 1,
+                twists: std::ptr::null(),
+                twists_len: 0,
             })
             .unwrap();
         let collapsed = sampled(&mut bridge, &request("run", 0.6)).unwrap();
@@ -1622,6 +1642,8 @@ mod tests {
             two_bone_ik_len: chain.len(),
             overrides: std::ptr::null(),
             overrides_len: 0,
+            twists: std::ptr::null(),
+            twists_len: 0,
         };
         let backwards = [ik(hand, forearm, arm)];
         let refused = bridge

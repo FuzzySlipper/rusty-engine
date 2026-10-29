@@ -92,11 +92,21 @@ rig's `Model` then only names it in errors. The profile gives:
 
 - the GLB and the clip played under the IK;
 - the model's turn and scale;
-- each arm's joints by name;
+- each arm's joints by name, with the forearm's twist joints (`Twist`);
 - `DigitFrames`, which says how the digits turn;
 - the palm's offset from the hand joint;
 - a per-hand `Grip` that brings the clip's hands to the arms' canonical
   holding pose.
+
+`ArmJoints.Twist` lists forearm joints that share the hand's roll, each with
+its share (0 to 1; 0.5 is typical): a twist joint beside the hand (UE's
+`lowerarm_twist_01`) or a forearm segment between the lower arm and the hand
+(a CAT rig's second forearm bone). Each update they turn by their share of
+the hand's roll about the forearm, as the Engine draws it after the reach
+([twists](skeleton-poses.md#twists)), and the hand keeps its turn, so a
+rolled hold doesn't pinch the wrist. A listed joint must descend from the
+upper arm and not from the hand; the arms refuse one that doesn't, naming
+`main.twist[i]` or `off.twist[i]`.
 
 Each hand's frame is measured from its knuckles into a canonical hand frame:
 +Y along the fingers, +Z out of the back, +X toward the little finger on

@@ -59,16 +59,27 @@ public sealed record ArmRig(string Model, string Clip, Vector3 Turn, ArmJoints M
 
 /// <summary>
 /// One arm's joints by name: the IK chain from the upper arm to the hand (<see cref="Lower"/> descends from
-/// <see cref="Upper"/> and the hand from it, with any twist joints between), and each digit's three joints from its base
-/// out: the index, middle, ring and little fingers, then the thumb.
+/// <see cref="Upper"/> and the hand from it, with any twist joints between), each digit's three joints from its base
+/// out: the index, middle, ring and little fingers, then the thumb, and the forearm's twist joints (<see cref="Twist"/>).
 /// </summary>
 public sealed record ArmJoints(string Upper, string Lower, string Hand, string[][] Fingers, string[] Thumb)
 {
+    /// <summary>
+    /// Forearm joints that share the hand's roll about the forearm (from the lower arm joint to the hand joint), so a
+    /// rolled hold turns the forearm with the hand rather than twisting the whole roll into the wrist: a twist joint
+    /// beside the hand (UE's <c>lowerarm_twist_01</c>) or a forearm segment between the lower arm and the hand (a CAT
+    /// rig's second forearm bone). Each descends from <see cref="Upper"/> and not from the hand; none by default.
+    /// </summary>
+    public ArmTwist[] Twist { get; set; } = [];
+
     /// <summary>Whether another arm names the same joints.</summary>
     public bool Same(ArmJoints other) => Upper == other.Upper && Lower == other.Lower && Hand == other.Hand
         && Fingers.Length == other.Fingers.Length && Fingers.Zip(other.Fingers).All(p => p.First.SequenceEqual(p.Second))
-        && Thumb.SequenceEqual(other.Thumb);
+        && Thumb.SequenceEqual(other.Thumb) && Twist.SequenceEqual(other.Twist);
 }
+
+/// <summary>A forearm twist joint by name and the share of the hand's roll it turns by (0 none, 1 all of it; 0.5 is typical).</summary>
+public sealed record ArmTwist(string Joint, float Share);
 
 /// <summary>
 /// What a hand reaches for (camera space): its look's grip and turn, the look's own hold when it has one (degrees, the

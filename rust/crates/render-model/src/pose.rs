@@ -20,7 +20,10 @@ pub struct AnimatedMeshPose {
     /// apply in list order.
     #[serde(default)]
     pub overrides: Vec<JointOverride>,
-    /// Applied in order after the overrides, each mixed over the pose below
+    /// Applied in order after the overrides, before the layers.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub twists: Vec<JointTwist>,
+    /// Applied in order after the twists, each mixed over the pose below
     /// it as one pose.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layers: Vec<PlacedPoseLayer>,
@@ -144,6 +147,21 @@ pub struct TwoBoneIkConstraint {
     pub weight: f32,
 }
 
+/// Turns `joint` by `share` of how far `to` has rolled relative to `from`
+/// since the clip pose, about the line from `from` to `to`, after IK and
+/// overrides: a forearm twist joint taking part of the hand's roll, so a
+/// rolled hand does not twist the whole turn into the wrist. The joint turns
+/// about its own origin and its descendants follow, except `to` and its
+/// descendants, which stay where IK and overrides put them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct JointTwist {
+    pub joint: u32,
+    pub from: u32,
+    pub to: u32,
+    pub share: f32,
+}
+
 /// An animated instance's pose as the Engine evaluated it once for every
 /// realizer: each GLB node's transform in the instance's space, column-major,
 /// in the mesh's node order. A realizer skins from it, places rigid parts
@@ -245,6 +263,8 @@ pub enum AnimatedMeshPoseError {
     IkSpace,
     /// IK joints that are not three distinct joints.
     IkJoints,
+    /// A twist measured from a joint to itself, or with a non-finite share.
+    InvalidTwist,
     InvalidTarget,
     InvalidTime,
 }
@@ -299,6 +319,13 @@ impl AnimatedMeshPose {
                 }
             }
         }
+        if self
+            .twists
+            .iter()
+            .any(|twist| twist.from == twist.to || !twist.share.is_finite())
+        {
+            return Err(AnimatedMeshPoseError::InvalidTwist);
+        }
         for joint in &self.overrides {
             if !weight(joint.weight) {
                 return Err(AnimatedMeshPoseError::InvalidWeight);
@@ -344,7 +371,10 @@ impl AnimatedMeshPose {
 
     /// Whether it changes the clip pose at all.
     pub fn controls(&self) -> bool {
-        !self.two_bone_ik.is_empty() || !self.overrides.is_empty() || !self.layers.is_empty()
+        !self.two_bone_ik.is_empty()
+            || !self.overrides.is_empty()
+            || !self.twists.is_empty()
+            || !self.layers.is_empty()
     }
 }
 
@@ -367,6 +397,7 @@ mod tests {
     #[test]
     fn additive_is_local_only_and_ik_needs_a_placed_space() {
         let pose = |overrides, two_bone_ik| AnimatedMeshPose {
+            twists: Vec::new(),
             clip_layers: Vec::new(),
             two_bone_ik,
             overrides,

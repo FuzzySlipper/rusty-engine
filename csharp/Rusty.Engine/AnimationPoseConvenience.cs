@@ -29,6 +29,13 @@ public readonly partial record struct JointOverride
         new(joint, PoseSpace.Local, false, false, Quaternion.Identity, false, Vector3.Zero, true, scale, weight);
 }
 
+public readonly partial record struct AnimationPoseRequest
+{
+    /// <summary>Two-bone IK then joint overrides, with no twist joints.</summary>
+    public AnimationPoseRequest(AnimationInstance instance, ReadOnlyMemory<TwoBoneIk> twoBoneIk, ReadOnlyMemory<JointOverride> overrides)
+        : this(instance, twoBoneIk, overrides, ReadOnlyMemory<JointTwist>.Empty) { }
+}
+
 public static class AnimationJoints
 {
     /// <summary>The index pose controls use for the rig joint named <paramref name="id"/>, from <see cref="IAnimationService.ReadJoints"/>.</summary>

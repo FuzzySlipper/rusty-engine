@@ -365,8 +365,23 @@ pub struct NativeTwoBoneIk {
     pub weight: f32,
 }
 
-/// Replaces one instance's pose controls: two-bone IK then joint overrides,
-/// applied after its clips and before skinning. Empty lists clear them.
+/// Turns `joint` by `share` of how far `to` has rolled relative to `from`
+/// since the clip pose, about the line from `from` to `to`, after IK and
+/// overrides: a forearm twist joint taking part of the hand's roll. The
+/// joint's descendants follow it, except `to` and its own, which keep where
+/// IK and overrides put them.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeJointTwist {
+    pub joint: u32,
+    pub from: u32,
+    pub to: u32,
+    pub share: f32,
+}
+
+/// Replaces one instance's pose controls: two-bone IK, then joint overrides,
+/// then twists, applied after its clips and before skinning. Empty lists
+/// clear them.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationPoseRequest {
@@ -375,6 +390,8 @@ pub struct NativeAnimationPoseRequest {
     pub two_bone_ik_len: usize,
     pub overrides: *const NativeJointOverride,
     pub overrides_len: usize,
+    pub twists: *const NativeJointTwist,
+    pub twists_len: usize,
 }
 
 /// One rig joint. Its position in `ReadJoints` is the index pose controls

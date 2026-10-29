@@ -5,9 +5,9 @@ namespace Rusty.Engine.FirstPerson;
 /// <summary>
 /// First-person arms drawn by one rig profile (<see cref="ArmRig"/>): its model on the viewmodel layer, placed so its
 /// right upper arm sits at the arms' shoulder, whose hands reach their weapons' grips by the Engine's two-bone IK each
-/// update over the rig's clip, each hand turned with its weapon's look by the hold and its digits shaped and closed as
-/// the look and motion say. Only the weapons move by authored motion; the arms follow, elbows bending toward their
-/// poles, the left mirroring the right. Nothing names a rig's frames: each hand's frame and digit axes are measured from
+/// update over the rig's clip, each hand turned with its weapon's look by the hold (its forearm's twist joints sharing
+/// the roll) and its digits shaped and closed as the look and motion say. Only the weapons move by authored motion; the
+/// arms follow, elbows bending toward their poles, the left mirroring the right. Nothing names a rig's frames: each hand's frame and digit axes are measured from
 /// the drawn model once, so any rig with two arms and five digits a hand can hold.
 /// </summary>
 /// <remarks>
@@ -69,10 +69,27 @@ public sealed class FirstPersonArms : IDisposable
                 int at = Array.FindIndex(joints, j => j.Id == name);
                 return at >= 0 ? (uint)at : throw new InvalidOperationException($"{field}: the arms model '{rig.Model}' has no joint '{name}'.");
             }
-            Side Arm(ArmJoints chain, string field, bool left) => new(left,
-                Joint(chain.Upper, $"{field}.upper"), Joint(chain.Lower, $"{field}.lower"), Joint(chain.Hand, $"{field}.hand"),
-                [.. chain.Fingers.Select((f, i) => f.Select(n => Joint(n, $"{field}.fingers[{i}]")).ToArray())],
-                [.. chain.Thumb.Select(n => Joint(n, $"{field}.thumb"))]);
+            bool Descends(uint joint, uint from)
+            {
+                for (uint at = joints[joint].Parent; at < joints.Length; at = joints[at].Parent)
+                    if (at == from) return true;
+                return false;
+            }
+            Side Arm(ArmJoints chain, string field, bool left)
+            {
+                uint upper = Joint(chain.Upper, $"{field}.upper"), hand = Joint(chain.Hand, $"{field}.hand");
+                (uint, float)[] twists = [.. chain.Twist.Select((t, i) =>
+                {
+                    uint joint = Joint(t.Joint, $"{field}.twist[{i}]");
+                    // A twist joint turns about the forearm with its descendants; under the hand it would turn the hand's own.
+                    if (!Descends(joint, upper) || joint == hand || Descends(joint, hand))
+                        throw new InvalidOperationException($"{field}.twist[{i}]: '{t.Joint}' in the arms model '{rig.Model}' does not lie on the arm below '{chain.Upper}' and above '{chain.Hand}'.");
+                    return (joint, t.Share);
+                })];
+                return new(left, upper, Joint(chain.Lower, $"{field}.lower"), hand,
+                    [.. chain.Fingers.Select((f, i) => f.Select(n => Joint(n, $"{field}.fingers[{i}]")).ToArray())],
+                    [.. chain.Thumb.Select(n => Joint(n, $"{field}.thumb"))], twists);
+            }
             main = Arm(rig.Main, "main", false);
             off = Arm(rig.Off, "off", true);
             // Each hand's joints named once for the Engine's hand landmarks.
@@ -171,15 +188,18 @@ public sealed class FirstPersonArms : IDisposable
         Vector3 Into(Vector3 point) => Vector3.Transform(point - placed.Translation, unturn) / rig.Scale;
         List<TwoBoneIk> chains = [];
         List<JointOverride> overrides = [];
+        List<JointTwist> twists = [];
         foreach (var (side, hand) in new[] { (main, mainHand), (off, offHand) })
         {
             (Vector3 wrist, Quaternion turn) = Wrist(hand, side.Left);
             chains.Add(new(side.Upper, side.Lower, side.Hand, PoseSpace.Model, Into(wrist), Into(hand.Pole), 1));
+            // The forearm's twist joints share the hand's roll about the forearm, as the Engine draws it after the reach.
+            twists.AddRange(side.Twists.Select(t => new JointTwist(t.Joint, side.Lower, side.Hand, t.Share)));
             if (!side.Measured) continue;
             overrides.Add(JointOverride.Orient(side.Hand, PoseSpace.Model, Quaternion.Normalize(unturn * turn * side.Frame)));
             overrides.AddRange(side.Close(rig, arms.Hands, hand.Shape, hand.Closure).Select(t => JointOverride.AddLocalRotation(t.Joint, t.Turn)));
         }
-        engine.Animation.SetPose(new(instance, chains.ToArray(), overrides.ToArray()));
+        engine.Animation.SetPose(new(instance, chains.ToArray(), overrides.ToArray(), twists.ToArray()));
     }
 
     /// <summary>
@@ -214,10 +234,11 @@ public sealed class FirstPersonArms : IDisposable
         return new(at, turn, new Vector3(rig.Scale));
     }
 
-    // One arm: its IK chain, its digit joints (index, middle, ring and little fingers, then the thumb), and what is
-    // measured from the drawn model: the turn from the hand's canonical frame to its joint's, each finger joint's curl
-    // axis in its own frame, and each thumb joint's turn in the hand's canonical frame and its bone in its own frame.
-    private sealed class Side(bool left, uint upper, uint lower, uint hand, uint[][] fingers, uint[] thumb)
+    // One arm: its IK chain, its digit joints (index, middle, ring and little fingers, then the thumb), its forearm
+    // twist joints and their shares, and what is measured from the drawn model: the turn from the hand's canonical
+    // frame to its joint's, each finger joint's curl axis in its own frame, and each thumb joint's turn in the hand's
+    // canonical frame and its bone in its own frame.
+    private sealed class Side(bool left, uint upper, uint lower, uint hand, uint[][] fingers, uint[] thumb, (uint Joint, float Share)[] twists)
     {
         private readonly Dictionary<uint, Vector3> curls = [];
         private readonly (Quaternion Turn, Vector3 Bone)[] thumbs = new (Quaternion, Vector3)[3];
@@ -226,6 +247,7 @@ public sealed class FirstPersonArms : IDisposable
         internal uint Upper => upper;
         internal uint Lower => lower;
         internal uint Hand => hand;
+        internal (uint Joint, float Share)[] Twists => twists;
         internal bool Measured { get; private set; }
         internal Quaternion Frame { get; private set; } = Quaternion.Identity;
         internal HandShape? Clip { get; private set; }
