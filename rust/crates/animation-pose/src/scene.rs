@@ -148,6 +148,8 @@ pub struct JointReading {
     /// The evaluation before `latest`, of the same instance, at an earlier
     /// time.
     pub previous: Option<PosedJoints>,
+    /// `previous`'s joints before its placed layers, when it has any.
+    pub previous_unlayered: Option<Vec<PosedJoint>>,
     /// The rig at rest, placed as `latest` is.
     pub rest: Vec<PosedJoint>,
     /// Each two-bone IK chain of `latest`, in the controls' order.
@@ -435,6 +437,14 @@ impl AnimatedScene {
                 .as_ref()
                 .map(|nodes| posed_joints(&model.joints, &matrices(nodes), latest.world)),
             previous: instance.previous.as_ref().map(posed),
+            previous_unlayered: instance.previous.as_ref().and_then(|previous| {
+                let nodes = previous.unlayered.as_ref()?;
+                Some(posed_joints(
+                    &model.joints,
+                    &matrices(nodes),
+                    previous.world,
+                ))
+            }),
             rest: posed_joints(&model.joints, &model.rest_nodes(), world),
             ik_chains,
         })

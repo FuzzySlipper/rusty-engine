@@ -504,10 +504,16 @@ impl RuntimeDynamicsBridge {
                 continue;
             };
             let ragdoll = self.active_ragdoll(handle)?;
+            // Both poses below the ragdoll's layer: the bones' own motion
+            // never moves what they aim for.
             let pose = source.unlayered.as_deref().unwrap_or(&source.latest.joints);
             let ahead = source.previous.as_ref().and_then(|previous| {
                 let interval = source.latest.seconds - previous.seconds;
-                (interval > 0.0).then_some((&previous.joints, seconds / interval))
+                let before = source
+                    .previous_unlayered
+                    .as_deref()
+                    .unwrap_or(&previous.joints);
+                (interval > 0.0).then_some((before, seconds / interval))
             });
             let Some(target) = ragdoll
                 .joints
@@ -1072,13 +1078,13 @@ mod tests {
         )
         .is_err());
         drive(&mut dynamics, &strong, NativeDynamicsRagdollRoot::Kinematic).unwrap();
-        let step = |dynamics: &mut RuntimeDynamicsBridge| {
+        let step = |dynamics: &mut RuntimeDynamicsBridge, steps: u32| {
             let action: [NativeDynamicsAction; 0] = [];
             dynamics
                 .step(&NativeDynamicsStepRequest {
                     world,
                     step_seconds: TICK,
-                    steps: 1,
+                    steps,
                     actions: action.as_ptr(),
                     actions_len: 0,
                 })
@@ -1087,15 +1093,16 @@ mod tests {
         // Calls of a running game: step, then the call settles the pose.
         let mut calls = |dynamics: &mut RuntimeDynamicsBridge,
                          appearance: &mut RuntimeAppearanceBridge,
-                         count: usize| {
+                         count: usize,
+                         steps: u32| {
             for _ in 0..count {
-                step(dynamics);
-                end_call_posed(appearance, &mut scene, f64::from(TICK));
+                step(dynamics, steps);
+                end_call_posed(appearance, &mut scene, f64::from(TICK) * f64::from(steps));
                 appearance.begin_call();
                 dynamics.bind_appearance(appearance);
             }
         };
-        calls(&mut dynamics, &mut appearance, 60);
+        calls(&mut dynamics, &mut appearance, 60, 1);
 
         // It aims for the pose below its own layer, and holds it.
         let source = appearance
@@ -1122,9 +1129,62 @@ mod tests {
         assert!(solver.body_is_kinematic(hips));
         let standing = solver.body(hips).unwrap().translation[1];
 
+        // Knocked aside, the leg's motors keep aiming at the pose: what the
+        // bones do never moves their targets, one step a call or several.
+        let motors = |dynamics: &RuntimeDynamicsBridge| {
+            let RagdollSlot::Active(driven) = &dynamics.ragdolls[&ragdoll.value] else {
+                unreachable!()
+            };
+            let solver = &dynamics.active_world(world.value).unwrap().solver;
+            driven
+                .links
+                .iter()
+                .map(|link| solver.joint_motor(link.joint).expect("a motor").target)
+                .collect::<Vec<_>>()
+        };
+        let aimed = motors(&dynamics);
+        dynamics
+            .apply_ragdoll_impulse(NativeDynamicsRagdollImpulseRequest {
+                ragdoll,
+                bone: 2,
+                point: {
+                    let [x, y, z] = target[joints["LeftFoot"] as usize].world.translation;
+                    NativeVec3 { x, y, z }
+                },
+                impulse: NativeVec3 {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 30.0,
+                },
+            })
+            .unwrap();
+        for steps in [1, 1, 4, 4] {
+            calls(&mut dynamics, &mut appearance, 1, steps);
+            let read = dynamics.read_ragdoll(ragdoll).unwrap();
+            let shin =
+                unsafe { std::slice::from_raw_parts(read.bones, read.bones_len) }[2].rotation;
+            let want = target[joints["LeftLeg"] as usize].world.rotation;
+            let off = 2.0
+                * (shin.x * want[0] + shin.y * want[1] + shin.z * want[2] + shin.w * want[3])
+                    .abs()
+                    .min(1.0)
+                    .acos();
+            assert!(off > 0.1, "the shin is knocked aside ({off} rad)");
+            for (got, want) in motors(&dynamics).iter().zip(&aimed) {
+                let turn = got
+                    .iter()
+                    .zip(want)
+                    .map(|(got, want)| got * want)
+                    .sum::<f64>()
+                    .abs();
+                assert!(turn > 1.0 - 1e-9, "{got:?} aims away from {want:?}");
+            }
+        }
+        calls(&mut dynamics, &mut appearance, 60, 1);
+
         // Undriven, the root simulates and the ragdoll falls.
         drive(&mut dynamics, &[], NativeDynamicsRagdollRoot::Kinematic).unwrap();
-        calls(&mut dynamics, &mut appearance, 30);
+        calls(&mut dynamics, &mut appearance, 30, 1);
         let solver = &dynamics.active_world(world.value).unwrap().solver;
         assert!(!solver.body_is_kinematic(hips));
         let fallen = solver.body(hips).unwrap().translation[1];
