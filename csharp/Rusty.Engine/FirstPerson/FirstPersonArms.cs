@@ -20,6 +20,9 @@ public sealed class FirstPersonArms : IDisposable
     // A reach never quite straightens the arm, and the body leans at most this far (metres).
     private const float Slack = .01f, MostReaching = .3f;
     private const float Radians = MathF.PI / 180;
+    // A clamped hand's wrist is settled once a pass moves it less than this (metres), within at most so many passes.
+    private const float Settled = 1e-5f;
+    private const int MostSettling = 8;
 
     private readonly IEngineContext engine;
     private readonly HeldArms arms;
@@ -203,17 +206,23 @@ public sealed class FirstPersonArms : IDisposable
             Vector3 grip = Into(hand.Grip), pole = Into(hand.Pole);
             palm /= rig.Scale;
             // The hand's canonical frame in the model's space, kept within the wrist's range of the forearm the reach
-            // draws. A hand turned back keeps its palm on the grip: its wrist moves, and the range is taken again from
-            // the forearm that reaches there.
+            // draws. A hand turned back keeps its palm on the grip, so its wrist moves and the forearm with it: the range
+            // is taken again from the forearm that reaches there until the wrist settles, and the reach is solved to
+            // the wrist the range was last taken at.
             Quaternion canonical = Quaternion.Normalize(unturn * turn);
             Vector3 target = grip - Vector3.Transform(palm, canonical);
             if (side.Measured && drawnJoints is { } posed)
             {
                 (Quaternion kept, Vector3 swung, WristBend bend) = side.Limit(posed, rig.Wrist, target, pole, canonical);
-                if (bend.Clamped > 0)
-                    (kept, swung, _) = side.Limit(posed, rig.Wrist, grip - Vector3.Transform(palm, kept), pole, canonical);
-                (canonical, pole, side.Bend) = (kept, swung, bend);
-                target = grip - Vector3.Transform(palm, canonical);
+                WristBend asked = bend;
+                for (int i = 0; i < MostSettling && bend.Clamped > 0; i++)
+                {
+                    Vector3 next = grip - Vector3.Transform(palm, kept);
+                    if (Vector3.Distance(next, target) * rig.Scale < Settled) break;
+                    target = next;
+                    (kept, swung, bend) = side.Limit(posed, rig.Wrist, target, pole, canonical);
+                }
+                (canonical, pole, side.Bend) = (kept, swung, bend with { Flexion = asked.Flexion, Ulnar = asked.Ulnar, Roll = asked.Roll });
             }
             chains.Add(new(side.Upper, side.Lower, side.Hand, PoseSpace.Model, target, pole, 1));
             // The forearm's twist joints share the hand's roll about the forearm, as the Engine draws it after the reach.

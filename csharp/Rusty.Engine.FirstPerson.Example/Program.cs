@@ -95,45 +95,56 @@ static Quaternion FakeFrame(bool left)
     return HandFrame.Measure(Knuckle(0.17f), Knuckle(0.19f), Knuckle(0.23f), left);
 }
 
-static (WristBend Main, WristBend Off, Quaternion[] Drawn) Reach(Quaternion look, float z, Func<WristRange, WristRange>? range = null)
+static (WristBend Main, WristBend Off, JointPose[] Drawn, FakeRig Fake) Reach(Quaternion look, float z, Func<WristRange, WristRange>? range = null,
+    Vector3 palm = default)
 {
     // Each hand at its clip's wrist (z -0.6, so the arm reaches straight down -Z) or nearer, its elbow's pole below.
     FakeRig fake = new();
     ArmRig rig = Rig(DigitFrames.Measured, [], []);
+    rig.Palm = palm;
     if (range is not null) rig.Wrist = range(rig.Wrist);
     using FirstPersonArms arms = fake.Arms(rig);
     HandAim right = new(new(0.2f, -0.2f, z), look, Vector3.Zero, 0, new(0.2f, -1, z / 2));
     HandAim left = right with { Grip = new(-0.2f, -0.2f, z), Look = HeldFrames.Mirror(look), Pole = new(-0.2f, -1, z / 2) };
     arms.Reach(right, left);
     arms.Reach(right, left);
-    JointOverride[] overrides = fake.Pose!.Value.Overrides.ToArray();
-    Quaternion Drawn(string s) => overrides.Single(o => o.Joint == fake.Index($"{s}_hand") && o.Space == PoseSpace.Model).Rotation;
-    return (arms.WristClamp.Main, arms.WristClamp.Off, [Drawn("r"), Drawn("l")]);
+    return (arms.WristClamp.Main, arms.WristClamp.Off, fake.Drawn(), fake);
+}
+
+// A drawn hand read off the fake's drawn joints (model space): its bend from the forearm (flexion, ulnar deviation),
+// its roll from the inside of the elbow, where its palm sits, and its canonical frame, in the right hand's terms.
+static (float Flexion, float Ulnar, float Roll, Vector3 Palm, Quaternion Canonical) Measured(JointPose[] joints, FakeRig fake, bool left, Vector3 palm)
+{
+    string s = left ? "l" : "r";
+    float side = left ? -1 : 1;
+    Vector3 a = joints[fake.Index($"{s}_upper")].Model.Translation, b = joints[fake.Index($"{s}_lower")].Model.Translation;
+    Transform hand = joints[fake.Index($"{s}_hand")].Model;
+    Quaternion canonical = Quaternion.Normalize(hand.Rotation * Quaternion.Inverse(FakeFrame(left)));
+    Vector3 forearm = Vector3.Normalize(hand.Translation - b), f = Vector3.Transform(forearm, Quaternion.Inverse(canonical));
+    Vector3 along = Vector3.Normalize(hand.Translation - a);
+    Vector3 Across(Vector3 v, Vector3 axis) => v - axis * Vector3.Dot(v, axis);
+    Vector3 inside = Across(-Across(b - a, along), forearm), thumb = Across(Vector3.Transform(new Vector3(-side, 0, 0), canonical), forearm);
+    float roll = MathF.Atan2(Vector3.Dot(Vector3.Cross(inside, thumb), forearm) * side, Vector3.Dot(inside, thumb));
+    return (MathF.Atan2(f.Z, f.Y) * 180 / MathF.PI, -MathF.Asin(Math.Clamp(f.X * side, -1, 1)) * 180 / MathF.PI, roll * 180 / MathF.PI,
+        hand.Translation + Vector3.Transform(left ? HeldFrames.Mirror(palm) : palm, canonical), left ? HeldFrames.Mirror(canonical) : canonical);
 }
 
 static void WristsBendWithinTheirRange()
 {
     // A hand asked 100 degrees back (extension), and one rolled 120 degrees palm up (supination), with the elbow held
-    // to its pole; and the roll again with the elbow free, which a straight arm's elbow takes up by swinging.
+    // to its pole: each is drawn at the range's edge, as the Engine's solve reaches.
     foreach (var (name, look) in new[] {
         ("extension", Neutral() * Quaternion.CreateFromAxisAngle(Vector3.UnitX, Radians(100))),
         ("roll", Quaternion.CreateFromAxisAngle(-Vector3.UnitZ, Radians(120)) * Neutral()) })
     {
-        var (main, off, drawn) = Reach(look, -0.6f, r => r with { Elbow = 0 });
+        var (main, off, drawn, fake) = Reach(look, -0.6f, r => r with { Elbow = 0 });
         bool extension = name == "extension";
         foreach (bool offHand in new[] { false, true })
         {
             WristBend bend = offHand ? off : main;
-            // The drawn hand's canonical frame is the joint's turn less the measured frame, read in the right hand's terms.
-            Quaternion canonical = Quaternion.Normalize(drawn[offHand ? 1 : 0] * Quaternion.Inverse(FakeFrame(offHand)));
-            if (offHand) canonical = HeldFrames.Mirror(canonical);
-            // The Engine's solve never quite straightens the arm, so its forearm lies a degree or so off -Z.
-            Vector3 forearm = Vector3.Transform(-Vector3.UnitZ, Quaternion.Inverse(canonical));
-            float flexion = MathF.Atan2(forearm.Z, forearm.Y) * 180 / MathF.PI;
-            Vector3 thumb = Vector3.Transform(-Vector3.UnitX, canonical);
-            float roll = MathF.Atan2(thumb.X, thumb.Y) * 180 / MathF.PI;
+            var hand = Measured(drawn, fake, offHand, Vector3.Zero);
             string at = $"{name} {(offHand ? "off" : "main")}";
-            Require(extension ? MathF.Abs(flexion + 60) < 1.5f : MathF.Abs(roll - 90) < 1.5f, $"{at}: drawn at flexion {flexion}, roll {roll}");
+            Require(extension ? MathF.Abs(hand.Flexion + 60) < 0.05f : MathF.Abs(hand.Roll - 90) < 0.05f, $"{at}: drawn at {hand}");
             Require((extension ? MathF.Abs(bend.Flexion + 100) : MathF.Abs(bend.Roll - 120)) < 1.5f && MathF.Abs(bend.Clamped - (extension ? 40 : 30)) < 1.5f,
                 $"{at}: reported {bend}");
         }
@@ -142,33 +153,37 @@ static void WristsBendWithinTheirRange()
 
 static void ClampedHandsKeepTheirPalmOnTheGrip()
 {
-    // A palm well off the hand joint, held 100 degrees back: the hand is turned back about its grip, not its wrist.
-    FakeRig fake = new();
-    ArmRig rig = Rig(DigitFrames.Measured, [], []);
-    rig.Palm = new(0.01f, 0.08f, -0.03f);
-    using FirstPersonArms arms = fake.Arms(rig);
+    // A palm well off the hand joint, held 100 degrees back, at full reach and with the elbow bent, the elbow held or
+    // free: the drawn hand is within the range of the forearm the solve drew, its palm on the grip, and the reported
+    // correction is the one drawn.
+    Vector3 palm = new(0.01f, 0.08f, -0.03f);
     Quaternion look = Neutral() * Quaternion.CreateFromAxisAngle(Vector3.UnitX, Radians(100));
-    HandAim right = new(new(0.2f, -0.2f, -0.55f), look, Vector3.Zero, 0, new(0.2f, -1, -0.3f));
-    HandAim left = right with { Grip = new(-0.2f, -0.2f, -0.55f), Look = HeldFrames.Mirror(look), Pole = new(-0.2f, -1, -0.3f) };
-    arms.Reach(right, left);
-    arms.Reach(right, left);
-    Require(arms.WristClamp.Main.Clamped > 10, $"clamped {arms.WristClamp.Main}");
-    JointOverride[] overrides = fake.Pose!.Value.Overrides.ToArray();
-    TwoBoneIk[] chains = fake.Pose!.Value.TwoBoneIk.ToArray();
-    foreach (var (s, i, aim) in new[] { ("r", 0, right), ("l", 1, left) })
-    {
-        Quaternion drawn = overrides.Single(o => o.Joint == fake.Index($"{s}_hand") && o.Space == PoseSpace.Model).Rotation;
-        Quaternion canonical = Quaternion.Normalize(drawn * Quaternion.Inverse(FakeFrame(i == 1)));
-        Vector3 palm = i == 1 ? HeldFrames.Mirror(rig.Palm) : rig.Palm;
-        // The model sits with its upper arm at the shoulder, unturned: camera space less (0, -0.2, 0).
-        Vector3 held = chains[i].Target + Vector3.Transform(palm, canonical) + new Vector3(0, -0.2f, 0);
-        Require(Vector3.Distance(held, aim.Grip) < 1e-4f, $"{s} palm at {held}, grip {aim.Grip}");
-    }
+    foreach (float z in new[] { -0.55f, -0.35f })
+        foreach (float elbow in new[] { 0f, 30f })
+        {
+            WristRange range = new() { Elbow = elbow };
+            var (main, off, drawn, fake) = Reach(look, z, r => range, palm);
+            foreach (bool offHand in new[] { false, true })
+            {
+                WristBend bend = offHand ? off : main;
+                var hand = Measured(drawn, fake, offHand, palm);
+                string at = $"z {z} elbow {elbow} {(offHand ? "off" : "main")}";
+                const float Slop = 0.05f;
+                Require(hand.Flexion >= -range.Extension - Slop && hand.Flexion <= range.Flexion + Slop
+                    && hand.Ulnar >= -range.Radial - Slop && hand.Ulnar <= range.Ulnar + Slop && MathF.Abs(hand.Roll) <= range.Roll + Slop,
+                    $"{at}: drawn at {hand}");
+                // Model space is camera space less the shoulder's placement (0, -0.2, 0).
+                Vector3 grip = new((offHand ? -1 : 1) * 0.2f, 0, z);
+                Require(Vector3.Distance(hand.Palm, grip) < 1e-4f, $"{at}: palm at {hand.Palm}, grip {grip}");
+                float turned = 2 * MathF.Acos(MathF.Min(1, MathF.Abs(Quaternion.Dot(hand.Canonical, look)))) * 180 / MathF.PI;
+                Require(bend.Clamped > 10 && MathF.Abs(bend.Clamped - turned) < Slop, $"{at}: reported {bend}, drawn {turned} degrees from the ask");
+            }
+        }
 }
 
 static void ElbowsSwingToKeepTheWrist()
 {
-    var (rolledMain, rolledOff, _) = Reach(Quaternion.CreateFromAxisAngle(-Vector3.UnitZ, Radians(110)) * Neutral(), -0.6f);
+    var (rolledMain, rolledOff, _, _) = Reach(Quaternion.CreateFromAxisAngle(-Vector3.UnitZ, Radians(110)) * Neutral(), -0.6f);
     Require(rolledMain.Clamped < .5f && rolledOff.Clamped < .5f && MathF.Abs(rolledMain.Elbow) >= 20 && MathF.Abs(rolledOff.Elbow) >= 20,
         $"a straight arm rolled 110 degrees: {rolledMain}, {rolledOff}");
 
@@ -255,6 +270,9 @@ sealed class FakeRig
 
     public AnimationPoseRequest? Pose { get; private set; }
 
+    /// <summary>The joints as drawn now.</summary>
+    public JointPose[] Drawn() => Draw();
+
     public uint Index(string id) => (uint)joints.FindIndex(j => j.Id == id);
 
     public FirstPersonArms Arms(ArmRig rig)
@@ -274,8 +292,36 @@ sealed class FakeRig
         return joints.Count - 1;
     }
 
-    // The clip pose with the last pose's overrides, parents first (each joint's parent comes before it).
+    // The clip pose with the last pose's two-bone IK, then its overrides, parents first (each joint's parent comes before
+    // it). Each chain is solved as the Engine solves it: the root turned so the mid joint lies on the bend the pole
+    // selects, then the mid turned so the end reaches the target, each turn about the joint's origin.
     private JointPose[] Draw()
+    {
+        Dictionary<int, Quaternion> turned = [];
+        foreach (TwoBoneIk chain in Pose?.TwoBoneIk.ToArray() ?? [])
+        {
+            const float Margin = 1e-4f;
+            Transform[] posed = Forward(turned, false);
+            Vector3 a = posed[chain.Root].Translation, b = posed[chain.Mid].Translation, c = posed[chain.End].Translation;
+            float upper = Vector3.Distance(a, b), lower = Vector3.Distance(b, c), reach = Vector3.Distance(a, chain.Target);
+            Vector3 along = (chain.Target - a) / reach;
+            float span = upper + lower, distance = Math.Clamp(reach, MathF.Abs(upper - lower) + span * Margin, span * (1 - Margin));
+            Vector3 OffAxis(Vector3 point) => point - a - along * Vector3.Dot(point - a, along);
+            Vector3 bend = Vector3.Normalize(OffAxis(chain.Pole).Length() > 1e-6f ? OffAxis(chain.Pole) : OffAxis(b));
+            float cos = Math.Clamp((upper * upper + distance * distance - lower * lower) / (2 * upper * distance), -1, 1);
+            Vector3 mid = a + (along * cos + bend * MathF.Sqrt(1 - cos * cos)) * upper, end = a + along * distance;
+            turned[(int)chain.Root] = Arc((b - a) / upper, (mid - a) / upper) * turned.GetValueOrDefault((int)chain.Root, Quaternion.Identity);
+            posed = Forward(turned, false);
+            b = posed[chain.Mid].Translation;
+            c = posed[chain.End].Translation;
+            turned[(int)chain.Mid] = Arc(Vector3.Normalize(c - b), Vector3.Normalize(end - b)) * turned.GetValueOrDefault((int)chain.Mid, Quaternion.Identity);
+        }
+        return [.. Forward(turned, true).Select(t => new JointPose(t, t))];
+    }
+
+    // The clip pose with each joint in `turned` turned about its own origin (model space) and, when asked, the pose's
+    // overrides.
+    private Transform[] Forward(Dictionary<int, Quaternion> turned, bool overridden)
     {
         Transform[] model = new Transform[joints.Count];
         for (int i = 0; i < joints.Count; i++)
@@ -289,7 +335,9 @@ sealed class FakeRig
             Quaternion local = Quaternion.Inverse(clipParentTurn) * turn;
             Vector3 offset = Vector3.Transform(at - clipParentAt, Quaternion.Inverse(clipParentTurn));
             Quaternion drawn = parentTurn * local;
-            foreach (JointOverride joint in Pose?.Overrides.ToArray() ?? [])
+            if (turned.TryGetValue(i, out Quaternion extra)) drawn = extra * drawn;
+            local = Quaternion.Inverse(parentTurn) * drawn;
+            foreach (JointOverride joint in overridden ? Pose?.Overrides.ToArray() ?? [] : [])
             {
                 if (joint.Joint != i) continue;
                 drawn = joint.Space == PoseSpace.Local ? parentTurn * (local = local * joint.Rotation) : joint.Rotation;
@@ -297,8 +345,10 @@ sealed class FakeRig
             }
             model[i] = new(parentAt + Vector3.Transform(offset, parentTurn), Quaternion.Normalize(drawn), Vector3.One);
         }
-        return [.. model.Select(t => new JointPose(t, t))];
+        return model;
     }
+
+    private static Quaternion Arc(Vector3 from, Vector3 to) => Quaternion.Normalize(new Quaternion(Vector3.Cross(from, to), 1 + Vector3.Dot(from, to)));
 
     public class Animation : DispatchProxy
     {
