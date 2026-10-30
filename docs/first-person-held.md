@@ -96,7 +96,8 @@ rig's `Model` then only names it in errors. The profile gives:
 - `DigitFrames`, which says how the digits turn;
 - the palm's offset from the hand joint;
 - a per-hand `Grip` that brings the clip's hands to the arms' canonical
-  holding pose.
+  holding pose;
+- the wrist's range (`Wrist`).
 
 `ArmJoints.Twist` lists forearm joints that share the hand's roll, each with
 its share (0 to 1; 0.5 is typical): a twist joint beside the hand (UE's
@@ -139,3 +140,61 @@ look's `HeldLandmarks` (trigger, back strap, butt, fore-end), with
 tolerances from `HandLandmarkTuning`. The renderer measures each pair on the
 pose it drew. `GripLandmarks.Line` formats one measurement for a debug
 command.
+
+### Wrist range
+
+A hand is oriented after the reach, so a hold that disagrees with the
+forearm the IK draws would bend the wrist past what a wrist does.
+`ArmRig.Wrist` (a `WristRange`, degrees) bounds it: `flexion` toward the
+palm (70 by default), `extension` toward the back of the hand (60),
+`radial` toward the thumb (20), `ulnar` toward the little finger (35), and
+`roll` about the forearm either way (90), which the twist joints share. The
+roll is from the hand's neutral turn: the thumb toward the inside of the
+elbow (away from its pole) and the back of the hand outward. Each reach
+works out the forearm and elbow bend the Engine's solve will draw for the
+wrist's target and pole, and measures the asked hand against them. A hand
+past the range first has its elbow swing about the line from the shoulder
+to the wrist, up to `elbow` degrees (30) from its pole, when that brings
+the forearm under the hand or takes up its roll. The rest is clamped: the
+hand is turned the least that brings its bend to the range's edge, then
+rolled back about the forearm. A clamped hand turns about its grip, so its
+palm stays on what it holds and the wrist moves.
+
+`WristClamp` reports each hand's last reach as a `WristBend`: the asked
+flexion (negative is extension), ulnar deviation (negative is radial) and
+roll (positive turns the palm up) with the elbow at its pole, how far the
+hand was turned back (`Clamped`, 0 in range) and how far the elbow swung. A debug command can
+list the looks whose holds ask past the range.
+
+### Solved grips
+
+A `SolvedGrip` is a grip found by contact around the look, such as
+asset-pipeline's `tools/fps-arms/grip.py` writes. Give it to a hand as
+`HandAim.Solved`, with `HandAim.Grip` at the look's grip point (the point
+the solve held it at). The hand is then turned and placed so the look sits
+in it where the solve put it, in place of a hold and the rig's palm offset.
+Its shape applies when the aim has none, over the rig's `Grip` as a look's
+shape does. The format is JSON:
+
+```json
+{
+  "shape": {"fingers": [[8, -30, -17], [19, -30, -16], [23, -62, -39], [14, -61, -39]],
+            "thumb": [[47, -6], [-54, 58], [-10, 67]]},
+  "object": {"in_canonical": {"position": [0.0, 0.0743, -0.0294],
+                              "rotation": [0.43046, -0.43046, 0.56099, -0.56099]}}
+}
+```
+
+- `shape`: a `HandShape` for the right hand, over the canonical holding
+  pose (`ArmDigits.Pose`).
+- `object.in_canonical`: the look's placement in the right hand's
+  canonical frame (+Y along the fingers, +Z out of the back, +X toward the
+  little finger), from the hand joint. `position` is where the grip point
+  sits (metres) and `rotation` the quaternion `[w, x, y, z]` that takes the
+  look's axes (its length along -Z, its up side +Y) into the hand's.
+
+Other members may sit beside these, as `grip.py`'s diagnostics do; a
+product reading the file with unmapped members refused reads these with
+its own options. The placement is of the hand the grip was solved on, so a
+rig whose palm sits elsewhere from its hand joint needs its own solve. On
+the off hand, a solved grip mirrors as a hold does.

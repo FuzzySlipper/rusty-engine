@@ -6,7 +6,8 @@ namespace Rusty.Engine.FirstPerson;
 /// First-person arms drawn by one rig profile (<see cref="ArmRig"/>): its model on the viewmodel layer, placed so its
 /// right upper arm sits at the arms' shoulder, whose hands reach their weapons' grips by the Engine's two-bone IK each
 /// update over the rig's clip, each hand turned with its weapon's look by the hold (its forearm's twist joints sharing
-/// the roll) and its digits shaped and closed as the look and motion say. Only the weapons move by authored motion; the
+/// the roll, its wrist bending only as far as the rig's <see cref="ArmRig.Wrist"/> range) and its digits shaped and closed
+/// as the look and motion say. Only the weapons move by authored motion; the
 /// arms follow, elbows bending toward their poles, the left mirroring the right. Nothing names a rig's frames: each hand's frame and digit axes are measured from
 /// the drawn model once, so any rig with two arms and five digits a hand can hold.
 /// </summary>
@@ -18,6 +19,7 @@ public sealed class FirstPersonArms : IDisposable
 {
     // A reach never quite straightens the arm, and the body leans at most this far (metres).
     private const float Slack = .01f, MostReaching = .3f;
+    private const float Radians = MathF.PI / 180;
 
     private readonly IEngineContext engine;
     private readonly HeldArms arms;
@@ -133,6 +135,12 @@ public sealed class FirstPersonArms : IDisposable
     /// </summary>
     public (float Main, float Off) Shortfall { get; private set; }
 
+    /// <summary>
+    /// How each wrist was asked to bend from its forearm and how far its hand was turned back to keep it in the rig's
+    /// <see cref="ArmRig.Wrist"/> range on the last reach: a look whose hold asks past the range shows here.
+    /// </summary>
+    public (WristBend Main, WristBend Off) WristClamp => (main.Bend, off.Bend);
+
     /// <summary>Each arm's length from the upper arm joint through the elbow to the hand joint as last drawn (metres), once measured.</summary>
     public (float Main, float Off) ArmLength { get; private set; }
 
@@ -191,32 +199,54 @@ public sealed class FirstPersonArms : IDisposable
         List<JointTwist> twists = [];
         foreach (var (side, hand) in new[] { (main, mainHand), (off, offHand) })
         {
-            (Vector3 wrist, Quaternion turn) = Wrist(hand, side.Left);
-            chains.Add(new(side.Upper, side.Lower, side.Hand, PoseSpace.Model, Into(wrist), Into(hand.Pole), 1));
+            (Quaternion turn, Vector3 palm) = Holding(hand, side.Left);
+            Vector3 grip = Into(hand.Grip), pole = Into(hand.Pole);
+            palm /= rig.Scale;
+            // The hand's canonical frame in the model's space, kept within the wrist's range of the forearm the reach
+            // draws. A hand turned back keeps its palm on the grip: its wrist moves, and the range is taken again from
+            // the forearm that reaches there.
+            Quaternion canonical = Quaternion.Normalize(unturn * turn);
+            Vector3 target = grip - Vector3.Transform(palm, canonical);
+            if (side.Measured && drawnJoints is { } posed)
+            {
+                (Quaternion kept, Vector3 swung, WristBend bend) = side.Limit(posed, rig.Wrist, target, pole, canonical);
+                if (bend.Clamped > 0)
+                    (kept, swung, _) = side.Limit(posed, rig.Wrist, grip - Vector3.Transform(palm, kept), pole, canonical);
+                (canonical, pole, side.Bend) = (kept, swung, bend);
+                target = grip - Vector3.Transform(palm, canonical);
+            }
+            chains.Add(new(side.Upper, side.Lower, side.Hand, PoseSpace.Model, target, pole, 1));
             // The forearm's twist joints share the hand's roll about the forearm, as the Engine draws it after the reach.
             twists.AddRange(side.Twists.Select(t => new JointTwist(t.Joint, side.Lower, side.Hand, t.Share)));
             if (!side.Measured) continue;
-            overrides.Add(JointOverride.Orient(side.Hand, PoseSpace.Model, Quaternion.Normalize(unturn * turn * side.Frame)));
-            overrides.AddRange(side.Close(rig, arms.Hands, hand.Shape, hand.Closure).Select(t => JointOverride.AddLocalRotation(t.Joint, t.Turn)));
+            overrides.Add(JointOverride.Orient(side.Hand, PoseSpace.Model, Quaternion.Normalize(canonical * side.Frame)));
+            overrides.AddRange(side.Close(rig, arms.Hands, hand.Shape ?? hand.Solved?.Shape, hand.Closure).Select(t => JointOverride.AddLocalRotation(t.Joint, t.Turn)));
         }
         engine.Animation.SetPose(new(instance, chains.ToArray(), overrides.ToArray(), twists.ToArray()));
     }
 
     /// <summary>
     /// Where a hand's wrist goes to hold its grip (camera space), and how the hand's canonical frame turns: with the look,
-    /// by the look's own hold or else the arms', with the palm, not the wrist, on the grip. The left hand holds as the
-    /// right does, mirrored.
+    /// by its solved grip, else the look's own hold or else the arms', with the palm, not the wrist, on the grip. The
+    /// left hand holds as the right does, mirrored. This is the hand as asked, before the wrist's range.
     /// </summary>
     public (Vector3 Wrist, Quaternion Turn) Wrist(HandAim hand, bool left)
     {
-        Quaternion hold = HeldFrames.Turn(hand.Hold ?? arms.Hold);
-        Vector3 palm = rig.Palm;
+        (Quaternion turn, Vector3 palm) = Holding(hand, left);
+        return (hand.Grip - Vector3.Transform(palm, turn), turn);
+    }
+
+    // How a hand's canonical frame turns to hold its grip (camera space), and the grip's offset from its hand joint in
+    // that frame (metres).
+    private (Quaternion Turn, Vector3 Palm) Holding(HandAim hand, bool left)
+    {
+        Quaternion hold = hand.Solved?.Hold ?? HeldFrames.Turn(hand.Hold ?? arms.Hold);
+        Vector3 palm = hand.Solved?.Palm ?? rig.Palm;
         // The left hand's frame mirrors the right's, so its palm offset is the right's mirrored; its hold is the right
         // hand's mirrored too when it holds its own (mirrored) look, but given as is on a look held in both hands.
         if (left) palm = HeldFrames.Mirror(palm);
         if (left && hand.HoldMirrored) hold = HeldFrames.Mirror(hold);
-        Quaternion turn = Quaternion.Normalize(hand.Look * hold);
-        return (hand.Grip - Vector3.Transform(palm, turn), turn);
+        return (Quaternion.Normalize(hand.Look * hold), palm);
     }
 
     public void Dispose()
@@ -251,6 +281,7 @@ public sealed class FirstPersonArms : IDisposable
         internal bool Measured { get; private set; }
         internal Quaternion Frame { get; private set; } = Quaternion.Identity;
         internal HandShape? Clip { get; private set; }
+        internal WristBend Bend { get; set; }
 
         internal float Length(JointPose[] joints) =>
             Vector3.Distance(joints[upper].Model.Translation, joints[lower].Model.Translation)
@@ -282,6 +313,95 @@ public sealed class FirstPersonArms : IDisposable
             Measured = true;
         }
 
+        // The hand's canonical frame (model space) kept within the wrist's range of the forearm the Engine's two-bone
+        // solve will draw for this target and pole, and the pole to solve with. The forearm's line and the elbow's bend
+        // follow from the shoulder, the bone lengths, the target and the pole as the solve finds them. The hand bends from
+        // the forearm in its own frame; it rolls about the forearm from its neutral turn, the thumb toward the inside of
+        // the elbow (away from its pole) and the back of the hand outward. A hand past the range first has its elbow
+        // swing about the line from the shoulder to the target, up to the range's elbow, to bring the forearm under it;
+        // then the bend is clamped to the range's edge and the roll back within it.
+        internal (Quaternion Canonical, Vector3 Pole, WristBend Bend) Limit(JointPose[] joints, WristRange range, Vector3 target, Vector3 pole, Quaternion canonical)
+        {
+            const float Degenerate = 1e-6f, Margin = 1e-4f;
+            Vector3 a = joints[upper].Model.Translation, elbow = joints[lower].Model.Translation;
+            float l1 = Vector3.Distance(a, elbow), l2 = Vector3.Distance(elbow, joints[hand].Model.Translation), reach = Vector3.Distance(a, target);
+            if (l1 < Degenerate || l2 < Degenerate || reach < Degenerate) return (canonical, pole, default);
+            Vector3 along = (target - a) / reach;
+            float span = l1 + l2, distance = Math.Clamp(reach, MathF.Abs(l1 - l2) + span * Margin, span * (1 - Margin));
+            float cos = Math.Clamp((l1 * l1 + distance * distance - l2 * l2) / (2 * l1 * distance), -1, 1), sin = MathF.Sqrt(MathF.Max(0, 1 - cos * cos));
+            Vector3 OffAxis(Vector3 point) => point - a - along * Vector3.Dot(point - a, along);
+            Vector3 bend = OffAxis(pole) is var p && p.Length() > Degenerate ? Vector3.Normalize(p)
+                : OffAxis(elbow) is var e && e.Length() > Degenerate ? Vector3.Normalize(e) : Vector3.Normalize(Vector3.Cross(along, MathF.Abs(along.X) < .9f ? Vector3.UnitX : Vector3.UnitY));
+            Vector3 end = a + along * distance;
+            // The elbow's bend toward the pole once swung, and the forearm's line from the elbow to the wrist.
+            (Vector3 Bend, Vector3 Forearm) Arm(float swing)
+            {
+                Vector3 b = Vector3.Transform(bend, Quaternion.CreateFromAxisAngle(along, swing * Radians));
+                return (b, Vector3.Normalize(end - (a + (along * cos + b * sin) * l1)));
+            }
+            // The forearm's line in the hand's frame lies along +Y with the wrist straight, toward the back (+Z) when the
+            // hand flexes and toward the little finger's side when it bends toward the thumb. The roll is the thumb's turn
+            // about the forearm from the inside of the elbow, toward the back of the hand (supination on either hand).
+            float sideways = left ? -1 : 1;
+            Vector3 thumb = new(-sideways, 0, 0);
+            (float Flexion, float Ulnar, float Roll) Angles(Quaternion hand, (Vector3 Bend, Vector3 Forearm) arm)
+            {
+                Vector3 f = Vector3.Transform(arm.Forearm, Quaternion.Inverse(hand));
+                Vector3 inside = -arm.Bend - arm.Forearm * Vector3.Dot(-arm.Bend, arm.Forearm), toward = Vector3.Transform(thumb, hand);
+                toward -= arm.Forearm * Vector3.Dot(toward, arm.Forearm);
+                float roll = inside.Length() > Degenerate && toward.Length() > Degenerate
+                    ? MathF.Atan2(Vector3.Dot(Vector3.Cross(inside, toward), arm.Forearm) * sideways, Vector3.Dot(inside, toward)) / Radians : 0;
+                return (MathF.Atan2(f.Z, f.Y) / Radians, -MathF.Asin(Math.Clamp(f.X * sideways, -1, 1)) / Radians, roll);
+            }
+            float Past((float Flexion, float Ulnar, float Roll) bent) =>
+                new Vector3(MathF.Max(0, bent.Flexion - range.Flexion) + MathF.Max(0, -bent.Flexion - range.Extension),
+                    MathF.Max(0, bent.Ulnar - range.Ulnar) + MathF.Max(0, -bent.Ulnar - range.Radial), MathF.Max(0, MathF.Abs(bent.Roll) - range.Roll)).Length();
+            float PastAt(float swing) => Past(Angles(canonical, Arm(swing)));
+            (float Flexion, float Ulnar, float Roll) asked = Angles(canonical, Arm(0));
+            float swung = 0;
+            if (Past(asked) > 0 && range.Elbow > 0)
+            {
+                // The least swing either way that brings the hand into range, refined between steps so the elbow moves
+                // smoothly as the hand does; else the swing that leaves it least past, when that gains a worthwhile turn.
+                const int Steps = 12;
+                const float Worthwhile = .5f;
+                float least = Past(asked);
+                for (int i = 1; i <= Steps && least > 0; i++)
+                    foreach (float sign in new[] { 1f, -1f })
+                    {
+                        float at = sign * range.Elbow * i / Steps, past = PastAt(at);
+                        if (past <= 0)
+                        {
+                            float inside = at, outside = sign * range.Elbow * (i - 1) / Steps;
+                            for (int r = 0; r < 8; r++)
+                            {
+                                float mid = (inside + outside) / 2;
+                                if (PastAt(mid) <= 0) inside = mid; else outside = mid;
+                            }
+                            (swung, least) = (inside, 0);
+                            break;
+                        }
+                        if (past < least - (swung == 0 ? Worthwhile : 0)) (swung, least) = (at, past);
+                    }
+            }
+            var arm = Arm(swung);
+            // The bend clamped in the hand's frame: the hand turned the least that brings the forearm's line there.
+            (float flexion, float ulnar, _) = Angles(canonical, arm);
+            float keptFlexion = Math.Clamp(flexion, -range.Extension, range.Flexion), keptUlnar = Math.Clamp(ulnar, -range.Radial, range.Ulnar);
+            Quaternion kept = canonical;
+            if (keptFlexion != flexion || keptUlnar != ulnar)
+            {
+                float x = -MathF.Sin(keptUlnar * Radians) * sideways, rest = MathF.Cos(keptUlnar * Radians);
+                Vector3 inRange = new(x, rest * MathF.Cos(keptFlexion * Radians), rest * MathF.Sin(keptFlexion * Radians));
+                kept = Quaternion.Normalize(canonical * Arc(inRange, Vector3.Normalize(Vector3.Transform(arm.Forearm, Quaternion.Inverse(canonical)))));
+            }
+            // Then the roll, about the forearm, which leaves the bend as it is.
+            float roll = Angles(kept, arm).Roll, keptRoll = Math.Clamp(roll, -range.Roll, range.Roll);
+            if (keptRoll != roll) kept = Quaternion.Normalize(Quaternion.CreateFromAxisAngle(arm.Forearm, (keptRoll - roll) * sideways * Radians) * kept);
+            float dot = MathF.Min(1, MathF.Abs(Quaternion.Dot(kept, canonical)));
+            return (kept, swung != 0 ? a + arm.Bend : pole, new(asked.Flexion, asked.Ulnar, asked.Roll, 2 * MathF.Acos(dot) / Radians, swung));
+        }
+
         internal HandShape Knuckles(JointPose[] joints) =>
             HandKnuckles.Read(joints, Quaternion.Normalize(joints[hand].Model.Rotation * Quaternion.Inverse(Frame)), fingers, thumb, left);
 
@@ -297,7 +417,6 @@ public sealed class FirstPersonArms : IDisposable
             HandShape grip = left ? rig.Grip.Off ?? rig.Grip.Main : rig.Grip.Main;
             float weight = MathF.Abs(closure), side = left ? -1 : 1;
             float Bend(float shaped, float target) => closure < 0 ? shaped * (1 - weight) + target * weight : shaped + target * weight;
-            const float Radians = MathF.PI / 180;
             for (int f = 0; f < fingers.Length; f++)
                 for (int i = 0; i < 3; i++)
                 {
@@ -336,3 +455,13 @@ public sealed class FirstPersonArms : IDisposable
         }
     }
 }
+
+/// <summary>
+/// How a wrist was asked to bend from its forearm on a reach (degrees), with the elbow at its pole: toward the palm
+/// (<see cref="Flexion"/>, negative toward the back of the hand), toward the little finger (<see cref="Ulnar"/>, negative
+/// toward the thumb) and rolled about the forearm from its neutral turn, the thumb toward the inside of the elbow
+/// (<see cref="Roll"/>, positive turning the palm up: supination); how far the hand was turned back to stay in range
+/// (<see cref="Clamped"/>, 0 for a hand in range) and how far the elbow swung from its pole toward it
+/// (<see cref="Elbow"/>).
+/// </summary>
+public readonly record struct WristBend(float Flexion, float Ulnar, float Roll, float Clamped, float Elbow);

@@ -12,6 +12,10 @@ foreach (DigitFrames frames in new[] { DigitFrames.Native, DigitFrames.Measured 
 }
 TwistJointsShareTheHandsRoll();
 TwistJointsLieOnTheArm();
+WristsBendWithinTheirRange();
+ElbowsSwingToKeepTheWrist();
+ClampedHandsKeepTheirPalmOnTheGrip();
+SolvedGripsSeatTheLookInTheHand();
 Console.WriteLine("first-person arms exercises passed");
 
 static void ThumbShapesReadBack(DigitFrames frames)
@@ -75,6 +79,120 @@ static void TwistJointsLieOnTheArm()
         {
         }
     }
+}
+
+// The right hand's canonical frame with its wrist neutral on the fake's arm along -Z with its elbow's pole below:
+// fingers along -Z, the thumb up (toward the inside of the elbow) and the back of the hand outward (+X).
+static Quaternion Neutral() => Quaternion.CreateFromAxisAngle(Vector3.UnitZ, -MathF.PI / 2) * Quaternion.CreateFromAxisAngle(Vector3.UnitX, -MathF.PI / 2);
+
+static float Radians(float degrees) => degrees * MathF.PI / 180;
+
+// The turn from a fake hand's canonical frame to its (unturned) joint's, as the arms measure it from its knuckles.
+static Quaternion FakeFrame(bool left)
+{
+    float side = left ? -1 : 1;
+    Vector3 Knuckle(float x) => new Vector3(x * side, 0, -0.69f) - new Vector3(0.2f * side, 0, -0.6f);
+    return HandFrame.Measure(Knuckle(0.17f), Knuckle(0.19f), Knuckle(0.23f), left);
+}
+
+static (WristBend Main, WristBend Off, Quaternion[] Drawn) Reach(Quaternion look, float z, Func<WristRange, WristRange>? range = null)
+{
+    // Each hand at its clip's wrist (z -0.6, so the arm reaches straight down -Z) or nearer, its elbow's pole below.
+    FakeRig fake = new();
+    ArmRig rig = Rig(DigitFrames.Measured, [], []);
+    if (range is not null) rig.Wrist = range(rig.Wrist);
+    using FirstPersonArms arms = fake.Arms(rig);
+    HandAim right = new(new(0.2f, -0.2f, z), look, Vector3.Zero, 0, new(0.2f, -1, z / 2));
+    HandAim left = right with { Grip = new(-0.2f, -0.2f, z), Look = HeldFrames.Mirror(look), Pole = new(-0.2f, -1, z / 2) };
+    arms.Reach(right, left);
+    arms.Reach(right, left);
+    JointOverride[] overrides = fake.Pose!.Value.Overrides.ToArray();
+    Quaternion Drawn(string s) => overrides.Single(o => o.Joint == fake.Index($"{s}_hand") && o.Space == PoseSpace.Model).Rotation;
+    return (arms.WristClamp.Main, arms.WristClamp.Off, [Drawn("r"), Drawn("l")]);
+}
+
+static void WristsBendWithinTheirRange()
+{
+    // A hand asked 100 degrees back (extension), and one rolled 120 degrees palm up (supination), with the elbow held
+    // to its pole; and the roll again with the elbow free, which a straight arm's elbow takes up by swinging.
+    foreach (var (name, look) in new[] {
+        ("extension", Neutral() * Quaternion.CreateFromAxisAngle(Vector3.UnitX, Radians(100))),
+        ("roll", Quaternion.CreateFromAxisAngle(-Vector3.UnitZ, Radians(120)) * Neutral()) })
+    {
+        var (main, off, drawn) = Reach(look, -0.6f, r => r with { Elbow = 0 });
+        bool extension = name == "extension";
+        foreach (bool offHand in new[] { false, true })
+        {
+            WristBend bend = offHand ? off : main;
+            // The drawn hand's canonical frame is the joint's turn less the measured frame, read in the right hand's terms.
+            Quaternion canonical = Quaternion.Normalize(drawn[offHand ? 1 : 0] * Quaternion.Inverse(FakeFrame(offHand)));
+            if (offHand) canonical = HeldFrames.Mirror(canonical);
+            // The Engine's solve never quite straightens the arm, so its forearm lies a degree or so off -Z.
+            Vector3 forearm = Vector3.Transform(-Vector3.UnitZ, Quaternion.Inverse(canonical));
+            float flexion = MathF.Atan2(forearm.Z, forearm.Y) * 180 / MathF.PI;
+            Vector3 thumb = Vector3.Transform(-Vector3.UnitX, canonical);
+            float roll = MathF.Atan2(thumb.X, thumb.Y) * 180 / MathF.PI;
+            string at = $"{name} {(offHand ? "off" : "main")}";
+            Require(extension ? MathF.Abs(flexion + 60) < 1.5f : MathF.Abs(roll - 90) < 1.5f, $"{at}: drawn at flexion {flexion}, roll {roll}");
+            Require((extension ? MathF.Abs(bend.Flexion + 100) : MathF.Abs(bend.Roll - 120)) < 1.5f && MathF.Abs(bend.Clamped - (extension ? 40 : 30)) < 1.5f,
+                $"{at}: reported {bend}");
+        }
+    }
+}
+
+static void ClampedHandsKeepTheirPalmOnTheGrip()
+{
+    // A palm well off the hand joint, held 100 degrees back: the hand is turned back about its grip, not its wrist.
+    FakeRig fake = new();
+    ArmRig rig = Rig(DigitFrames.Measured, [], []);
+    rig.Palm = new(0.01f, 0.08f, -0.03f);
+    using FirstPersonArms arms = fake.Arms(rig);
+    Quaternion look = Neutral() * Quaternion.CreateFromAxisAngle(Vector3.UnitX, Radians(100));
+    HandAim right = new(new(0.2f, -0.2f, -0.55f), look, Vector3.Zero, 0, new(0.2f, -1, -0.3f));
+    HandAim left = right with { Grip = new(-0.2f, -0.2f, -0.55f), Look = HeldFrames.Mirror(look), Pole = new(-0.2f, -1, -0.3f) };
+    arms.Reach(right, left);
+    arms.Reach(right, left);
+    Require(arms.WristClamp.Main.Clamped > 10, $"clamped {arms.WristClamp.Main}");
+    JointOverride[] overrides = fake.Pose!.Value.Overrides.ToArray();
+    TwoBoneIk[] chains = fake.Pose!.Value.TwoBoneIk.ToArray();
+    foreach (var (s, i, aim) in new[] { ("r", 0, right), ("l", 1, left) })
+    {
+        Quaternion drawn = overrides.Single(o => o.Joint == fake.Index($"{s}_hand") && o.Space == PoseSpace.Model).Rotation;
+        Quaternion canonical = Quaternion.Normalize(drawn * Quaternion.Inverse(FakeFrame(i == 1)));
+        Vector3 palm = i == 1 ? HeldFrames.Mirror(rig.Palm) : rig.Palm;
+        // The model sits with its upper arm at the shoulder, unturned: camera space less (0, -0.2, 0).
+        Vector3 held = chains[i].Target + Vector3.Transform(palm, canonical) + new Vector3(0, -0.2f, 0);
+        Require(Vector3.Distance(held, aim.Grip) < 1e-4f, $"{s} palm at {held}, grip {aim.Grip}");
+    }
+}
+
+static void ElbowsSwingToKeepTheWrist()
+{
+    var (rolledMain, rolledOff, _) = Reach(Quaternion.CreateFromAxisAngle(-Vector3.UnitZ, Radians(110)) * Neutral(), -0.6f);
+    Require(rolledMain.Clamped < .5f && rolledOff.Clamped < .5f && MathF.Abs(rolledMain.Elbow) >= 20 && MathF.Abs(rolledOff.Elbow) >= 20,
+        $"a straight arm rolled 110 degrees: {rolledMain}, {rolledOff}");
+
+    // A hand nearer the shoulder, so the elbow bends and the forearm rises to it, turned outward past the range
+    // (extension): the elbow swings in to lay the forearm under it and less is clamped than with the elbow held.
+    Quaternion look = Quaternion.CreateFromAxisAngle(Vector3.UnitY, Radians(-70)) * Neutral();
+    WristBend held = Reach(look, -0.45f, r => r with { Elbow = 0 }).Main, swung = Reach(look, -0.45f).Main;
+    Require(held.Elbow == 0 && swung.Elbow != 0 && MathF.Abs(swung.Elbow) <= 30, $"elbow swung {held.Elbow} held, {swung.Elbow} free");
+    Require(held.Clamped > 1 && swung.Clamped < held.Clamped - 1, $"clamped {held.Clamped} degrees with the elbow held, {swung.Clamped} with it swinging");
+}
+
+static void SolvedGripsSeatTheLookInTheHand()
+{
+    // A solve's look placement in the hand's canonical frame holds wherever the look is turned.
+    SolvedGrip solved = new(HandShape.None, new(new(new(0.0002f, 0.0743f, -0.0294f), [0.43225f, -0.42867f, 0.55961f, -0.56236f])));
+    FakeRig fake = new();
+    using FirstPersonArms arms = fake.Arms(Rig(DigitFrames.Measured, [], []));
+    Quaternion look = Quaternion.CreateFromYawPitchRoll(0.3f, -0.5f, 0.2f);
+    Vector3 grip = new(0.15f, -0.25f, -0.5f);
+    (Vector3 wrist, Quaternion turn) = arms.Wrist(new(grip, look, new(40, 0, 0), 0, new(0.5f, -1, 0), Solved: solved), false);
+    Vector3 position = Vector3.Transform(grip - wrist, Quaternion.Inverse(turn));
+    Quaternion placed = Quaternion.Normalize(Quaternion.Inverse(turn) * look);
+    Require(Vector3.Distance(position, solved.Palm) < 1e-5f && MathF.Abs(Quaternion.Dot(placed, solved.Object.InCanonical.Turn)) > 0.99999f,
+        $"the look sits at {position}, {placed} in the hand; solved {solved.Palm}, {solved.Object.InCanonical.Turn}");
 }
 
 static ArmRig Rig(DigitFrames frames, ArmTwist[] mainTwist, ArmTwist[] offTwist)

@@ -22,7 +22,8 @@ public record HeldArms(Vector3 Shoulder, Vector3 Pole, Vector3 Hold, ArmDigits H
 /// hand joint in the hand's canonical frame (right hand; the left mirrors it); and each digit joint's turn added to the
 /// clip's hands to bring them to the arms' canonical holding pose (<see cref="Grip"/>, per hand where the clip's hands
 /// differ; measure it with <see cref="FirstPersonArms.Knuckles"/> and <see cref="HandKnuckles.Difference"/>). A rig's
-/// hand frames and digit axes are measured from the drawn model, so holds, shapes and closure suit every rig.
+/// hand frames and digit axes are measured from the drawn model, so holds, shapes and closure suit every rig. Each
+/// wrist bends within <see cref="Wrist"/>.
 /// </summary>
 public sealed record ArmRig(string Model, string Clip, Vector3 Turn, ArmJoints Main, ArmJoints Off, DigitFrames Digits, Vector3 Palm, HeldShape Grip)
 {
@@ -30,12 +31,15 @@ public sealed record ArmRig(string Model, string Clip, Vector3 Turn, ArmJoints M
     public Vector3 Palm { get; set; } = Palm;
     /// <summary>The model's uniform scale into metres (1 for a model already in metres).</summary>
     public float Scale { get; set; } = 1;
+    /// <summary>How far each wrist bends from its forearm; a hand asked past it is drawn at its edge.</summary>
+    public WristRange Wrist { get; set; } = new();
 
     /// <summary>What is wrong with this profile, if anything (joints the model lacks are found when it is drawn).</summary>
     public IEnumerable<HeldProblem> Problems()
     {
         if (!Model.EndsWith(".glb", StringComparison.Ordinal)) yield return new("model", "must be a GLB content path.");
         if (Scale <= 0) yield return new("scale", "must be positive.");
+        foreach (HeldProblem problem in Wrist.Problems()) yield return problem.Under("wrist");
         foreach (HeldProblem problem in Grip.Problems(offAllowed: true)) yield return problem.Under("grip");
         foreach (var (name, joints) in new[] { ("main", Main), ("off", Off) })
         {
@@ -45,16 +49,41 @@ public sealed record ArmRig(string Model, string Clip, Vector3 Turn, ArmJoints M
         }
     }
 
-    /// <summary>Takes another profile's tuning in place: its turn, scale, palm and grip.</summary>
+    /// <summary>Takes another profile's tuning in place: its turn, scale, palm, wrist range and grip.</summary>
     public void Take(ArmRig fresh)
     {
-        (Turn, Scale, Palm) = (fresh.Turn, fresh.Scale, fresh.Palm);
+        (Turn, Scale, Palm, Wrist) = (fresh.Turn, fresh.Scale, fresh.Palm, fresh.Wrist);
         Grip.Take(fresh.Grip);
     }
 
     /// <summary>Whether another profile draws the same: the same model, clip, joints and digit frames (what tuning in place cannot change).</summary>
     public bool SameDrawing(ArmRig fresh) => Model == fresh.Model && Clip == fresh.Clip && Digits == fresh.Digits
         && Main.Same(fresh.Main) && Off.Same(fresh.Off);
+}
+
+/// <summary>
+/// How far a wrist bends from its forearm (degrees): toward the palm (<see cref="Flexion"/>) and the back of the hand
+/// (<see cref="Extension"/>), toward the thumb (<see cref="Radial"/>) and the little finger (<see cref="Ulnar"/>), and how
+/// far the hand rolls about the forearm either way (<see cref="Roll"/>, which the forearm's twist joints share) from its
+/// neutral turn, the thumb toward the inside of the elbow and the back of the hand outward. A hand asked past the range
+/// has its elbow swing up to <see cref="Elbow"/> about the line from the shoulder to the wrist, to bring the forearm under
+/// the hand or take up its roll, before the rest is clamped.
+/// </summary>
+public sealed record WristRange
+{
+    public float Flexion { get; set; } = 70;
+    public float Extension { get; set; } = 60;
+    public float Radial { get; set; } = 20;
+    public float Ulnar { get; set; } = 35;
+    public float Roll { get; set; } = 90;
+    public float Elbow { get; set; } = 30;
+
+    /// <summary>What is wrong with this range, if anything: a negative angle, or a bend or roll past a half turn.</summary>
+    public IEnumerable<HeldProblem> Problems()
+    {
+        foreach (var (name, degrees) in new[] { ("flexion", Flexion), ("extension", Extension), ("radial", Radial), ("ulnar", Ulnar), ("roll", Roll), ("elbow", Elbow) })
+            if (degrees is < 0 or > 180) yield return new(name, "must lie from 0 to 180 degrees.");
+    }
 }
 
 /// <summary>
@@ -86,7 +115,9 @@ public sealed record ArmTwist(string Joint, float Share);
 /// hand's canonical frame from the look's; else the arms' <see cref="HeldArms.Hold"/>), how closed the hand is (-1 open,
 /// 0 its grip, 1 squeezed), the point its elbow bends toward, whether a left hand's hold is the right hand's mirrored
 /// (its own mirrored look) or given as is (the off grip of a look held in both hands), and how the look shapes the
-/// hand's digits.
+/// hand's digits. A look held by a <see cref="SolvedGrip"/> gives it as <see cref="Solved"/>: the hand then holds the
+/// look where the solve placed it, <see cref="Grip"/> being the point on the look the solve's placement is of, and the
+/// solve's shape applies when the aim has none.
 /// </summary>
 public readonly record struct HandAim(Vector3 Grip, Quaternion Look, Vector3? Hold, float Closure, Vector3 Pole, bool HoldMirrored = true,
-    HandShape? Shape = null);
+    HandShape? Shape = null, SolvedGrip? Solved = null);
