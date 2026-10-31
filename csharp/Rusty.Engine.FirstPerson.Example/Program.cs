@@ -318,9 +318,9 @@ static void FadesBetweenModesAndClipsDoNotPop()
     // Weapon-led, the look is the product's, a little off where the clip holds the hand.
     HandAim main = Aim(new(0.15f, -0.25f, -0.45f), Quaternion.CreateFromAxisAngle(Vector3.UnitY, 0.3f)), off = Aim(new(-0.2f, -0.2f, -0.5f));
     const float Step = 1 / 60f, Fade = 0.2f;
-    Vector3? last = null;
-    float most = 0;
-    void Update(ArmClipFrame? frame)
+    Vector3 last = default;
+    // One update; how far the look moved in it.
+    float Update(ArmClipFrame? frame)
     {
         arms.Lead(frame, Step);
         (Vector3 grip, Quaternion look) = arms.Ride(main);
@@ -328,23 +328,29 @@ static void FadesBetweenModesAndClipsDoNotPop()
         Transform placed = arms.Fact(true).Transform;
         Vector3 wrist = Camera(placed, fake.Drawn()[fake.Index("r_hand")].Model.Translation);
         Require(Vector3.Distance(wrist, arms.Wrist(main with { Grip = grip, Look = look }, false).Wrist) < 1e-3f, $"the hand left the look at {arms.Clip}");
-        if (last is { } before) most = MathF.Max(most, Vector3.Distance(before, grip));
+        float moved = Vector3.Distance(last, grip);
         last = grip;
+        return moved;
+    }
+    // A fade covers its gap over Fade / Step updates, so no update moves the look more than a share of it.
+    void Fades(ArmClipFrame? frame, string what)
+    {
+        Vector3 from = last;
+        float most = Enumerable.Range(0, 20).Max(_ => Update(frame));
+        float gap = Vector3.Distance(from, last);
+        Require(gap > 0.05f && most < gap / 4, $"{what}: the look jumped {most} m in one update of a {gap} m fade");
     }
     for (int i = 0; i < 5; i++) Update(null);
-    Vector3 weaponLed = last!.Value;
-    // Into clip-led on a still clip, a fade to another clip, then back to weapon-led.
-    for (int i = 0; i < 20; i++) Update(new("strike", 0.5f, Fade: Fade));
+    Vector3 weaponLed = last;
+    Fades(new("strike", 0.5f, Fade: Fade), "into clip-led");
     Require(arms.Clip.Led == 1, $"the arms are clip-led after the fade: {arms.Clip}");
-    Vector3 striking = last!.Value;
-    for (int i = 0; i < 20; i++) Update(new("guard", 0.5f, Fade: Fade));
+    Fades(new("guard", 0.5f, Fade: Fade), "to another clip");
     Require(arms.Clip is { Led: 1, From: null, Blend: 1 }, $"the guard has faded in: {arms.Clip}");
-    Vector3 guarding = last!.Value;
-    for (int i = 0; i < 20; i++) Update(null);
-    Require(arms.Clip.Led == 0 && Vector3.Distance(last!.Value, weaponLed) < 1e-5f, $"the arms are weapon-led again: {arms.Clip}");
-    // Each fade covers its gap over Fade / Step updates, so no update moves the look more than a share of the least gap.
-    float gap = MathF.Min(Vector3.Distance(weaponLed, striking), MathF.Min(Vector3.Distance(striking, guarding), Vector3.Distance(guarding, weaponLed)));
-    Require(gap > 0.05f && most < gap / 4, $"the look jumped {most} m in one update over fades of at least {gap} m");
+    Fades(new("strike", 0.95f, Fade: Fade), "back to the strike");
+    // The same clip played again from its start fades in over where it ended.
+    Fades(new("strike", 0.05f, Fade: Fade), "the strike again");
+    Fades(null, "back to weapon-led");
+    Require(arms.Clip.Led == 0 && Vector3.Distance(last, weaponLed) < 1e-5f, $"the arms are weapon-led again: {arms.Clip}");
 }
 
 static HandAim Aim(Vector3 grip, Quaternion? look = null, float reach = 1) =>

@@ -4,7 +4,7 @@ namespace Rusty.Engine.FirstPerson;
 /// An arms clip an action plays when the arms are clip-led (<see cref="FirstPersonArms.Lead"/>), fitted to the action's
 /// timing: <see cref="Marks"/> say where each phase lies in the clip, and each phase is played over the seconds the
 /// product's <see cref="PhaseTiming"/> gives it, so retuning an action's speed needs no new export. A clip started while
-/// another plays fades in over <see cref="Fade"/> seconds.
+/// another plays, or this one again, fades in over <see cref="Fade"/> seconds.
 /// </summary>
 public sealed record ArmClip(string Clip, ClipMarks Marks)
 {
@@ -55,7 +55,8 @@ public readonly record struct ArmClipFrame(string Clip, float Time, MotionPhase?
 public readonly record struct ArmClipReading(ArmClipFrame? Playing, string? From, float FromTime, float Blend, float Led);
 
 // The clips clip-led arms play and their fades: the playing clip over the one it replaces, and how far the arms are led
-// by clips rather than by their weapons. A clip started inside another's fade fades in over whichever of the two showed
+// by clips rather than by their weapons. A clip whose time goes back has started again (an action played twice, a loop
+// come round), so it fades in over where it was. A clip started inside another's fade fades in over whichever of the two showed
 // more, and the other drops out.
 internal sealed class ClipLead
 {
@@ -76,7 +77,7 @@ internal sealed class ClipLead
         float Step(float value, float toward) => fade <= 0 ? toward : toward > value ? MathF.Min(toward, value + delta / fade) : MathF.Max(toward, value - delta / fade);
         if (frame is { } next)
         {
-            if (playing is { } now && now.Clip != next.Clip && led > 0)
+            if (playing is { } now && (now.Clip != next.Clip || next.Time < now.Time) && led > 0)
             {
                 from = blend >= .5f || from is null ? (now.Clip, now.Time) : from;
                 blend = 0;

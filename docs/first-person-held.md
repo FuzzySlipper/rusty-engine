@@ -258,6 +258,8 @@ always reach.
 ### Fades
 
 A new clip fades in over the clip before, which holds where it was. A clip
+whose time goes back has started again (an action played twice in a row, a
+loop coming round) and fades in over where it was the same way. A clip
 started inside another's fade fades in over whichever of the two showed
 more; the other drops out.
 The arms fade between clip-led and weapon-led over the clip's fade, for
