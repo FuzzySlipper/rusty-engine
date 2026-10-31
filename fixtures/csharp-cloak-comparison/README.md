@@ -1,7 +1,7 @@
 # Cloak comparison
 
 Ordinary packaged C# product comparing two ways to move a character's
-cloak, on the owner-supplied mage (`asset-pipeline/tests/mage-128-female`,
+cloak, on the Patch-supplied mage (`asset-pipeline/tests/mage-128-female`,
 Tripo retopology of the hi3d model):
 
 - **bones**: 5 columns of 4 cape bones hang from the chest as a

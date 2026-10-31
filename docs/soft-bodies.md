@@ -95,7 +95,7 @@ position (split only for UVs). Collision is still the sheet's: its particle
 radius is the garment's contact thickness. A tear carries the skin with the
 particles it rides.
 
-`fixtures/csharp-cloak-comparison` draws the owner's 1300-vertex, 1 cm thick
+`fixtures/csharp-cloak-comparison` draws Patch's 1300-vertex, 1 cm thick
 cloak over a 13 × 16 sheet this way.
 
 ## Holding and moving particles

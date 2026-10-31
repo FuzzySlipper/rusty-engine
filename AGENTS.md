@@ -42,8 +42,8 @@ Read [the architecture overview](docs/architecture.md) and
   until they strangle performance. Add one only when you are very sure a
   concrete failure needs it and its cost fits how often it runs. Trust
   identities the Engine or SDK already computed (a staged inventory's SHA-256
-  is not recomputed on bundle open). This holds even when a task, a plan or the
-  owner appears to ask for a check: double-check that it is really needed, and
+  is not recomputed on bundle open). This holds even when a task, a plan or
+  Patch appears to ask for a check: double-check that it is really needed, and
   ask before adding it if the reason is not concrete.
 
 ## Den and missing capabilities
@@ -55,7 +55,7 @@ Read [the architecture overview](docs/architecture.md) and
   failed operation; do not invent task records or infer dependency completion.
   Continue work whose scope and authority are already established. Pause only
   decisions or actions that depend on unavailable Den information. This is the
-  owner-approved project exception to a blanket Den-unavailable stop rule.
+  project exception approved by Patch to a blanket Den-unavailable stop rule.
 - If a needed mechanism is not expressible through the generated API, identify
   the exact upstream capability, file or link the owning request when
   authorized, and stop downstream substitution. If the owning Engine change is
