@@ -33,12 +33,19 @@ public sealed record ArmRig(string Model, string Clip, Vector3 Turn, ArmJoints M
     public float Scale { get; set; } = 1;
     /// <summary>How far each wrist bends from its forearm; a hand asked past it is drawn at its edge.</summary>
     public WristRange Wrist { get; set; } = new();
+    /// <summary>
+    /// Clip packs on the model's skeleton whose clips the arms play beside the model's own when clip-led
+    /// (<see cref="FirstPersonArms.Lead"/>); none by default.
+    /// </summary>
+    public ArmClipPack[] Packs { get; set; } = [];
 
     /// <summary>What is wrong with this profile, if anything (joints the model lacks are found when it is drawn).</summary>
     public IEnumerable<HeldProblem> Problems()
     {
         if (!Model.EndsWith(".glb", StringComparison.Ordinal)) yield return new("model", "must be a GLB content path.");
         if (Scale <= 0) yield return new("scale", "must be positive.");
+        for (int i = 0; i < Packs.Length; i++)
+            if (!Packs[i].Path.EndsWith(".glb", StringComparison.Ordinal)) yield return new($"packs[{i}].path", "must be a GLB content path.");
         foreach (HeldProblem problem in Wrist.Problems()) yield return problem.Under("wrist");
         foreach (HeldProblem problem in Grip.Problems(offAllowed: true)) yield return problem.Under("grip");
         foreach (var (name, joints) in new[] { ("main", Main), ("off", Off) })
@@ -56,10 +63,13 @@ public sealed record ArmRig(string Model, string Clip, Vector3 Turn, ArmJoints M
         Grip.Take(fresh.Grip);
     }
 
-    /// <summary>Whether another profile draws the same: the same model, clip, joints and digit frames (what tuning in place cannot change).</summary>
+    /// <summary>Whether another profile draws the same: the same model, clip, packs, joints and digit frames (what tuning in place cannot change).</summary>
     public bool SameDrawing(ArmRig fresh) => Model == fresh.Model && Clip == fresh.Clip && Digits == fresh.Digits
-        && Main.Same(fresh.Main) && Off.Same(fresh.Off);
+        && Packs.SequenceEqual(fresh.Packs) && Main.Same(fresh.Main) && Off.Same(fresh.Off);
 }
+
+/// <summary>A clip pack on an arms model's skeleton (a GLB content path), with the producer and licence its association records.</summary>
+public sealed record ArmClipPack(string Path, string Producer, string License);
 
 /// <summary>
 /// How far a wrist bends from its forearm (degrees): toward the palm (<see cref="Flexion"/>) and the back of the hand
@@ -117,7 +127,9 @@ public sealed record ArmTwist(string Joint, float Share);
 /// (its own mirrored look) or given as is (the off grip of a look held in both hands), and how the look shapes the
 /// hand's digits. A look held by a <see cref="SolvedGrip"/> gives it as <see cref="Solved"/>: the hand then holds the
 /// look where the solve placed it, <see cref="Grip"/> being the point on the look the solve's placement is of, and the
-/// solve's shape applies when the aim has none.
+/// solve's shape applies when the aim has none. On clip-led arms (<see cref="FirstPersonArms.Lead"/>) the off hand leaves
+/// its clip by <see cref="Reach"/> to reach its grip (0 it plays the clip, 1 it holds the grip: the off grip of a look held
+/// in both hands); weapon-led hands always reach, and arms fading between the two blend them.
 /// </summary>
 public readonly record struct HandAim(Vector3 Grip, Quaternion Look, Vector3? Hold, float Closure, Vector3 Pole, bool HoldMirrored = true,
-    HandShape? Shape = null, SolvedGrip? Solved = null);
+    HandShape? Shape = null, SolvedGrip? Solved = null, float Reach = 1);

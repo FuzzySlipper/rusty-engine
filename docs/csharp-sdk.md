@@ -358,6 +358,9 @@ For runtime inspection use [playtest inspection](playtest-inspection.md) and
 - [World interaction](controller-interaction.md) for containers, doors and
   controller aim assistance; [world streaming contract](world-streaming-contract.md)
   before designing a streaming worker.
+- [First-person held weapons and arms](first-person-held.md): weapon-led arms
+  that reach by IK, or [clip-led arms](first-person-held.md#clip-led-arms)
+  played by baked clips fitted to action timing, and when to pick each.
 - [Product style](csharp-product-style.md): domain layout and thin
   Read → Decide → Apply → Publish coordination. These are conventions, not an
   Engine framework.

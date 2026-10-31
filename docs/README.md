@@ -65,7 +65,7 @@ The root [README](../README.md) is the repository landing page and
   stretch, punches, shakes and fades over published objects.
 - [First-person held weapons and arms](first-person-held.md): authored held
   motion played as tweens, sway and head bob, and arms that reach and hold
-  by rig profile.
+  by rig profile, or play baked arm clips with the look riding the hand.
 - [Skeleton poses](skeleton-poses.md): two-bone IK and joint overrides over
   animated meshes, evaluated once by the Engine, and reading the evaluated
   joints.

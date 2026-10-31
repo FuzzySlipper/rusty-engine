@@ -16,6 +16,12 @@ WristsBendWithinTheirRange();
 ElbowsSwingToKeepTheWrist();
 ClampedHandsKeepTheirPalmOnTheGrip();
 SolvedGripsSeatTheLookInTheHand();
+ClipsAreFittedToTheActionsTiming();
+TheLookRidesTheClipsHand();
+AClipBentPastTheWristIsHeldInRange();
+TheOffHandStaysOnItsGrip();
+CarryMovesTheArmsAndTheLook();
+FadesBetweenModesAndClipsDoNotPop();
 Console.WriteLine("first-person arms exercises passed");
 
 static void ThumbShapesReadBack(DigitFrames frames)
@@ -210,6 +216,156 @@ static void SolvedGripsSeatTheLookInTheHand()
         $"the look sits at {position}, {placed} in the hand; solved {solved.Palm}, {solved.Object.InCanonical.Turn}");
 }
 
+static void ClipsAreFittedToTheActionsTiming()
+{
+    ArmClip strike = new("strike", new(0.1f, 0.4f, 0.6f, 0.9f));
+    foreach (PhaseTiming timing in new PhaseTiming[] { new(0.2f, 0.1f, 0.3f), new(0.5f, 0.05f, 0.6f) })
+    {
+        foreach (var (seconds, time, phase) in new[] { (0f, 0.1f, MotionPhase.Windup), (timing.Windup / 2, 0.25f, MotionPhase.Windup),
+            (timing.Windup, 0.4f, MotionPhase.Commit), (timing.Windup + timing.Commit / 2, 0.5f, MotionPhase.Commit),
+            (timing.Windup + timing.Commit, 0.6f, MotionPhase.Recovery), (timing.Duration, 0.9f, MotionPhase.Recovery), (timing.Duration + 1, 0.9f, MotionPhase.Recovery) })
+        {
+            ArmClipFrame frame = strike.At(timing, seconds);
+            Require(MathF.Abs(frame.Time - time) < 1e-5f && frame.Phase == phase, $"{timing} at {seconds}s samples {frame}, expected {time} in {phase}");
+        }
+    }
+    Require(new ArmClip("strike", new(0.5f, 0.4f, 0.6f, 0.9f)).Problems().Any(p => p.Field == "marks"), "marks out of order are refused");
+}
+
+static void TheLookRidesTheClipsHand()
+{
+    ArmClip strike = new("strike", new(0, 0.3f, 0.6f, 1)) { Fade = 0 };
+    foreach (PhaseTiming timing in new PhaseTiming[] { new(0.2f, 0.1f, 0.3f), new(0.45f, 0.08f, 0.5f) })
+    {
+        FakeRig fake = new();
+        using FirstPersonArms arms = fake.Arms(Rig(DigitFrames.Measured, [new("r_forearm2", 0.5f)], []) with { Palm = new(0.01f, 0.08f, -0.03f) });
+        HandAim main = Aim(new(0.2f, -0.2f, -0.5f)), off = Aim(new(-0.2f, -0.2f, -0.5f), reach: 0);
+        Vector3? last = null;
+        float moved = 0;
+        for (float t = 0; t <= timing.Duration; t += 0.02f)
+        {
+            arms.Lead(strike.At(timing, t), 0.02f);
+            (Vector3 grip, Quaternion look) = arms.Ride(main);
+            arms.Reach(main, off);
+            RequireHeld(fake, arms, main, grip, look, $"{timing} at {t:0.00}s");
+            Require(arms.Clip is { Led: 1, Playing.Clip: "strike" } reading && reading.Playing!.Value.Phase == strike.At(timing, t).Phase, $"the arms read {arms.Clip}");
+            if (last is { } before) moved += Vector3.Distance(before, grip);
+            last = grip;
+        }
+        Require(moved > 0.1f, $"the strike moved the look {moved} m");
+    }
+}
+
+static void AClipBentPastTheWristIsHeldInRange()
+{
+    FakeRig fake = new();
+    using FirstPersonArms arms = fake.Arms(Rig(DigitFrames.Measured, [], []) with { Palm = new(0.01f, 0.08f, -0.03f) });
+    HandAim main = Aim(new(0.2f, -0.2f, -0.5f)), off = Aim(new(-0.2f, -0.2f, -0.5f), reach: 0);
+    arms.Lead(new("snap", 1), 1);
+    (Vector3 grip, Quaternion look) = arms.Ride(main);
+    arms.Reach(main, off);
+    Require(arms.WristClamp.Main.Clamped > 1, $"the snapped wrist was turned back {arms.WristClamp.Main.Clamped} degrees");
+    RequireHeld(fake, arms, main, grip, look, "a clamped clip hand");
+}
+
+static void TheOffHandStaysOnItsGrip()
+{
+    // A guard brings the right hand in, where the left reaches the look's off grip.
+    ArmClip guard = new("guard", new(0, 0.3f, 0.6f, 1));
+    PhaseTiming timing = new(0.3f, 0.1f, 0.3f);
+    FakeRig fake = new();
+    using FirstPersonArms arms = fake.Arms(Rig(DigitFrames.Measured, [], []));
+    HandAim main = Aim(new(0.2f, -0.2f, -0.5f));
+    // The off grip sits on the look, 15 cm toward the left hand from the main grip.
+    Vector3 along = new(-0.15f, 0, 0.05f);
+    for (float t = 0; t <= timing.Duration; t += 0.05f)
+    {
+        arms.Lead(guard.At(timing, t), 0.05f);
+        (Vector3 grip, Quaternion look) = arms.Ride(main);
+        HandAim off = new(grip + Vector3.Transform(along, look), look, new(0, 0, 0), 0, new(-0.5f, -1, 0), HoldMirrored: false);
+        arms.Reach(main, off);
+        Transform placed = arms.Fact(true).Transform;
+        Vector3 wrist = Camera(placed, fake.Drawn()[fake.Index("l_hand")].Model.Translation);
+        Vector3 asked = arms.Wrist(off, true).Wrist;
+        Require(Vector3.Distance(wrist, asked) < 1e-3f, $"at {t:0.00}s the off wrist is drawn at {wrist}, its grip asks {asked}");
+    }
+}
+
+static void CarryMovesTheArmsAndTheLook()
+{
+    FakeRig fake = new();
+    using FirstPersonArms arms = fake.Arms(Rig(DigitFrames.Measured, [], []));
+    HandAim main = Aim(new(0.2f, -0.2f, -0.5f)), off = Aim(new(-0.2f, -0.2f, -0.5f), reach: 0);
+    arms.Lead(new("strike", 0.5f), 1);
+    (Vector3 still, Quaternion stillLook) = arms.Ride(main);
+    Vector3 bob = new(0.01f, -0.02f, 0.005f);
+    arms.Carry = bob;
+    arms.CarryTurn = Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.05f);
+    arms.Lead(new("strike", 0.5f), 0);
+    (Vector3 carried, Quaternion look) = arms.Ride(main);
+    arms.Reach(main, off);
+    Vector3 shoulder = new Vector3(0.2f, -0.2f, 0) + bob;
+    Vector3 expected = shoulder + Vector3.Transform(still - new Vector3(0.2f, -0.2f, 0), arms.CarryTurn);
+    Require(Vector3.Distance(carried, expected) < 1e-4f, $"the carried look sits at {carried}, expected {expected}");
+    Require(MathF.Abs(Quaternion.Dot(look, Quaternion.Normalize(arms.CarryTurn * stillLook))) > 0.99999f, "the carry turns the look with the arms");
+    RequireHeld(fake, arms, main, carried, look, "carried");
+}
+
+static void FadesBetweenModesAndClipsDoNotPop()
+{
+    FakeRig fake = new();
+    using FirstPersonArms arms = fake.Arms(Rig(DigitFrames.Measured, [], []));
+    // Weapon-led, the look is the product's, a little off where the clip holds the hand.
+    HandAim main = Aim(new(0.15f, -0.25f, -0.45f), Quaternion.CreateFromAxisAngle(Vector3.UnitY, 0.3f)), off = Aim(new(-0.2f, -0.2f, -0.5f));
+    const float Step = 1 / 60f, Fade = 0.2f;
+    Vector3? last = null;
+    float most = 0;
+    void Update(ArmClipFrame? frame)
+    {
+        arms.Lead(frame, Step);
+        (Vector3 grip, Quaternion look) = arms.Ride(main);
+        arms.Reach(main, off);
+        Transform placed = arms.Fact(true).Transform;
+        Vector3 wrist = Camera(placed, fake.Drawn()[fake.Index("r_hand")].Model.Translation);
+        Require(Vector3.Distance(wrist, arms.Wrist(main with { Grip = grip, Look = look }, false).Wrist) < 1e-3f, $"the hand left the look at {arms.Clip}");
+        if (last is { } before) most = MathF.Max(most, Vector3.Distance(before, grip));
+        last = grip;
+    }
+    for (int i = 0; i < 5; i++) Update(null);
+    Vector3 weaponLed = last!.Value;
+    // Into clip-led on a still clip, a fade to another clip, then back to weapon-led.
+    for (int i = 0; i < 20; i++) Update(new("strike", 0.5f, Fade: Fade));
+    Require(arms.Clip.Led == 1, $"the arms are clip-led after the fade: {arms.Clip}");
+    Vector3 striking = last!.Value;
+    for (int i = 0; i < 20; i++) Update(new("guard", 0.5f, Fade: Fade));
+    Require(arms.Clip is { Led: 1, From: null, Blend: 1 }, $"the guard has faded in: {arms.Clip}");
+    Vector3 guarding = last!.Value;
+    for (int i = 0; i < 20; i++) Update(null);
+    Require(arms.Clip.Led == 0 && Vector3.Distance(last!.Value, weaponLed) < 1e-5f, $"the arms are weapon-led again: {arms.Clip}");
+    // Each fade covers its gap over Fade / Step updates, so no update moves the look more than a share of the least gap.
+    float gap = MathF.Min(Vector3.Distance(weaponLed, striking), MathF.Min(Vector3.Distance(striking, guarding), Vector3.Distance(guarding, weaponLed)));
+    Require(gap > 0.05f && most < gap / 4, $"the look jumped {most} m in one update over fades of at least {gap} m");
+}
+
+static HandAim Aim(Vector3 grip, Quaternion? look = null, float reach = 1) =>
+    new(grip, look ?? Quaternion.Identity, null, 0, new(grip.X > 0 ? 0.5f : -0.5f, -1, 0), Reach: reach);
+
+static Vector3 Camera(Transform placed, Vector3 model) => placed.Translation + Vector3.Transform(model * placed.Scale.X, placed.Rotation);
+
+// The drawn main hand holds the look where the ride put it: its wrist where the look's grip asks it, its frame turned
+// as the look's hold turns it.
+static void RequireHeld(FakeRig fake, FirstPersonArms arms, HandAim main, Vector3 grip, Quaternion look, string when)
+{
+    Transform placed = arms.Fact(true).Transform;
+    JointPose hand = fake.Drawn()[fake.Index("r_hand")];
+    (Vector3 wrist, Quaternion turn) = arms.Wrist(main with { Grip = grip, Look = look }, false);
+    Vector3 drawn = Camera(placed, hand.Model.Translation);
+    Quaternion frame = HeldFrames.Turn(arms.HandFrames!.Value.Main);
+    Quaternion drawnTurn = Quaternion.Normalize(placed.Rotation * hand.Model.Rotation * Quaternion.Inverse(frame));
+    Require(Vector3.Distance(drawn, wrist) < 1e-4f && MathF.Abs(Quaternion.Dot(drawnTurn, turn)) > 0.9999f,
+        $"{when}: the hand is drawn at {drawn} turned {drawnTurn}; the look holds it at {wrist} turned {turn}");
+}
+
 static ArmRig Rig(DigitFrames frames, ArmTwist[] mainTwist, ArmTwist[] offTwist)
 {
     ArmJoints Arm(string s, ArmTwist[] twist) => new($"{s}_upper", $"{s}_lower", $"{s}_hand",
@@ -238,6 +394,26 @@ sealed class FakeRig
     public const string Clip = "hold";
 
     private readonly List<(string Id, int Parent, Vector3 At, Quaternion Turn)> joints = [];
+    private AnimationLayersRequest? layers;
+
+    /// <summary>
+    /// Each clip's local turns of the joints it moves, over their rest, at a fraction of the clip; the hold clip is the
+    /// rest pose. Every clip has every joint's channel, so a clip laid over another moves all of it.
+    /// </summary>
+    private static readonly Dictionary<string, Func<float, (string Joint, Quaternion Turn)[]>> clipTurns = new()
+    {
+        [Clip] = _ => [],
+        // A strike: the right arm raised, its elbow bent through the middle of the clip, the wrist flexing a little.
+        ["strike"] = t => [("r_upper", Quaternion.CreateFromAxisAngle(Vector3.UnitX, 0.9f * t) * Quaternion.CreateFromAxisAngle(Vector3.UnitY, 0.4f * t)),
+            ("r_lower", Quaternion.CreateFromAxisAngle(Vector3.UnitX, -0.8f * MathF.Sin(MathF.PI * t))),
+            ("r_hand", Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.3f * t)), ("l_upper", Quaternion.CreateFromAxisAngle(Vector3.UnitX, 0.3f * t))],
+        // A guard: the right arm swung in, the left raised.
+        ["guard"] = t => [("r_upper", Quaternion.CreateFromAxisAngle(Vector3.UnitY, 0.5f + 0.1f * t)), ("l_upper", Quaternion.CreateFromAxisAngle(Vector3.UnitX, 0.6f))],
+        // The right wrist bent back far past any wrist's range.
+        ["snap"] = t => [("r_hand", Quaternion.CreateFromAxisAngle(Vector3.UnitX, 2.2f * t))],
+    };
+
+    public static string[] Clips => [.. clipTurns.Keys];
 
     public FakeRig()
     {
@@ -275,6 +451,33 @@ sealed class FakeRig
 
     public uint Index(string id) => (uint)joints.FindIndex(j => j.Id == id);
 
+    /// <summary>Each joint's local turn over its rest: clip <paramref name="a"/> at its time blended toward <paramref name="b"/> by <paramref name="weight"/>.</summary>
+    private Quaternion[] Clipped((string Clip, float Time) a, (string Clip, float Time)? b = null, float weight = 0)
+    {
+        Quaternion[] Of((string Clip, float Time) at)
+        {
+            Quaternion[] turns = [.. joints.Select(_ => Quaternion.Identity)];
+            foreach ((string joint, Quaternion turn) in clipTurns[at.Clip](Math.Clamp(at.Time, 0, 1))) turns[Index(joint)] = turn;
+            return turns;
+        }
+        Quaternion[] from = Of(a);
+        if (b is not { } toward) return from;
+        Quaternion[] to = Of(toward);
+        return [.. from.Select((q, i) => Quaternion.Slerp(q, to[i], weight))];
+    }
+
+    // The rest pose with the instance's layers laid over it in order, each moving every joint toward its clip by its weight.
+    private Quaternion[] Layered()
+    {
+        Quaternion[] turns = Clipped((Clip, 0));
+        foreach (AnimationClipLayer layer in layers?.Layers.ToArray() ?? [])
+        {
+            Quaternion[] clip = Clipped((Clips[layer.Clip], layer.Time));
+            turns = [.. turns.Select((q, i) => Quaternion.Slerp(q, clip[i], layer.Weight))];
+        }
+        return turns;
+    }
+
     public FirstPersonArms Arms(ArmRig rig)
     {
         Animation animation = DispatchProxy.Create<IAnimationService, Animation>() as Animation ?? throw new InvalidOperationException();
@@ -284,6 +487,14 @@ sealed class FakeRig
         HeldArms held = new(new(0.2f, -0.2f, 0), new(0.5f, -1, 0), Vector3.Zero,
             new(new([0, 0, 0], [[0, 0], [0, 0], [0, 0]]), new([0, 0, 0], [[0, 0], [0, 0], [0, 0]]), HandShape.None));
         return new FirstPersonArms((IEngineContext)engine, held, rig, 1, new ContentReference(new(1), () => { }));
+    }
+
+    // A clip (blended toward another) sampled without the instance's layers or controls, as the Engine samples a model.
+    private ReadOnlyMemory<JointPose> Sample(AnimationModelPoseSampleRequest request)
+    {
+        Quaternion[] clip = request.BlendClip.Length == 0 ? Clipped((request.Clip, request.Time))
+            : Clipped((request.Clip, request.Time), (request.BlendClip, request.BlendTime), request.BlendWeight);
+        return Forward(clip, [], false).Select(t => new JointPose(t, t)).ToArray();
     }
 
     private int Add(string id, int parent, Vector3 at, Quaternion turn)
@@ -297,11 +508,12 @@ sealed class FakeRig
     // selects, then the mid turned so the end reaches the target, each turn about the joint's origin.
     private JointPose[] Draw()
     {
+        Quaternion[] clip = Layered();
         Dictionary<int, Quaternion> turned = [];
         foreach (TwoBoneIk chain in Pose?.TwoBoneIk.ToArray() ?? [])
         {
             const float Margin = 1e-4f;
-            Transform[] posed = Forward(turned, false);
+            Transform[] posed = Forward(clip, turned, false);
             Vector3 a = posed[chain.Root].Translation, b = posed[chain.Mid].Translation, c = posed[chain.End].Translation;
             float upper = Vector3.Distance(a, b), lower = Vector3.Distance(b, c), reach = Vector3.Distance(a, chain.Target);
             Vector3 along = (chain.Target - a) / reach;
@@ -311,17 +523,17 @@ sealed class FakeRig
             float cos = Math.Clamp((upper * upper + distance * distance - lower * lower) / (2 * upper * distance), -1, 1);
             Vector3 mid = a + (along * cos + bend * MathF.Sqrt(1 - cos * cos)) * upper, end = a + along * distance;
             turned[(int)chain.Root] = Arc((b - a) / upper, (mid - a) / upper) * turned.GetValueOrDefault((int)chain.Root, Quaternion.Identity);
-            posed = Forward(turned, false);
+            posed = Forward(clip, turned, false);
             b = posed[chain.Mid].Translation;
             c = posed[chain.End].Translation;
             turned[(int)chain.Mid] = Arc(Vector3.Normalize(c - b), Vector3.Normalize(end - b)) * turned.GetValueOrDefault((int)chain.Mid, Quaternion.Identity);
         }
-        return [.. Forward(turned, true).Select(t => new JointPose(t, t))];
+        return [.. Forward(clip, turned, true).Select(t => new JointPose(t, t))];
     }
 
-    // The clip pose with each joint in `turned` turned about its own origin (model space) and, when asked, the pose's
-    // overrides.
-    private Transform[] Forward(Dictionary<int, Quaternion> turned, bool overridden)
+    // The clip pose (each joint's local turn over its rest) with each joint in `turned` turned about its own origin (model
+    // space) and, when asked, the pose's overrides, each mixed in by its weight.
+    private Transform[] Forward(Quaternion[] clip, Dictionary<int, Quaternion> turned, bool overridden)
     {
         Transform[] model = new Transform[joints.Count];
         for (int i = 0; i < joints.Count; i++)
@@ -332,7 +544,7 @@ sealed class FakeRig
             Vector3 parentAt = parent < 0 ? Vector3.Zero : model[parent].Translation;
             Vector3 clipParentAt = parent < 0 ? Vector3.Zero : joints[parent].At;
             // The clip's local transform, under the parent as drawn.
-            Quaternion local = Quaternion.Inverse(clipParentTurn) * turn;
+            Quaternion local = Quaternion.Inverse(clipParentTurn) * turn * clip[i];
             Vector3 offset = Vector3.Transform(at - clipParentAt, Quaternion.Inverse(clipParentTurn));
             Quaternion drawn = parentTurn * local;
             if (turned.TryGetValue(i, out Quaternion extra)) drawn = extra * drawn;
@@ -340,7 +552,8 @@ sealed class FakeRig
             foreach (JointOverride joint in overridden ? Pose?.Overrides.ToArray() ?? [] : [])
             {
                 if (joint.Joint != i) continue;
-                drawn = joint.Space == PoseSpace.Local ? parentTurn * (local = local * joint.Rotation) : joint.Rotation;
+                Quaternion over = joint.Space == PoseSpace.Local ? parentTurn * local * joint.Rotation : joint.Rotation;
+                drawn = Quaternion.Slerp(parentTurn * local, over, joint.Weight);
                 local = Quaternion.Inverse(parentTurn) * drawn;
             }
             model[i] = new(parentAt + Vector3.Transform(offset, parentTurn), Quaternion.Normalize(drawn), Vector3.One);
@@ -359,7 +572,9 @@ sealed class FakeRig
             nameof(IAnimationService.OpenAnimatedMeshFromContent) => new RenderResource(new(1), () => { }),
             nameof(IAnimationService.ReadJoints) => new ReadOnlyMemory<AnimationJointInfo>(
                 [.. Rig.joints.Select(j => new AnimationJointInfo(j.Id, j.Parent < 0 ? uint.MaxValue : (uint)j.Parent))]),
-            nameof(IAnimationService.ReadClips) => new ReadOnlyMemory<AnimationClipInfo>([new(Clip, Clip, 1, true, 0)]),
+            nameof(IAnimationService.ReadClips) => new ReadOnlyMemory<AnimationClipInfo>([.. Clips.Select(c => new AnimationClipInfo(c, c, 1, true, 0))]),
+            nameof(IAnimationService.SetLayers) => Rig.layers = (AnimationLayersRequest)args![0]!,
+            nameof(IAnimationService.SampleModelJointPose) => Rig.Sample((AnimationModelPoseSampleRequest)args![0]!),
             nameof(IAnimationService.CreateAnimatedMeshAppearance) => new Appearance(new(1), () => { }),
             nameof(IAnimationService.CreateInstance) => new AnimationInstance(new(1), () => { }),
             nameof(IAnimationService.SetPlayback) => null,

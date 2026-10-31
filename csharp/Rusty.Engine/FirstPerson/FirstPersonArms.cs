@@ -12,8 +12,10 @@ namespace Rusty.Engine.FirstPerson;
 /// the drawn model once, so any rig with two arms and five digits a hand can hold.
 /// </summary>
 /// <remarks>
-/// Each update: set <see cref="Lean"/>, call <see cref="Aim"/> with both hands' aims, publish <see cref="Fact"/> in the
-/// snapshot, then call <see cref="Reach"/> with the same aims once that snapshot is published.
+/// Each update: set <see cref="Lean"/> and <see cref="Carry"/>, call <see cref="Aim"/> with both hands' aims, publish
+/// <see cref="Fact"/> in the snapshot, then call <see cref="Reach"/> with the same aims once that snapshot is published.
+/// Arms can instead be clip-led, by baked arm clips with the look riding the hand: call <see cref="Lead"/> and
+/// <see cref="Ride"/> first (see <see cref="Lead"/>).
 /// </remarks>
 public sealed class FirstPersonArms : IDisposable
 {
@@ -28,6 +30,16 @@ public sealed class FirstPersonArms : IDisposable
     private readonly HeldArms arms;
     private readonly ArmRig rig;
     private readonly RenderResource model;
+    private readonly RenderResource[] packs;
+    private readonly string[] clips;
+    private readonly ClipLead lead = new();
+    private readonly AnimationLayerSet layers = new();
+    private bool layered;
+    // The main hand as the clip draws it this update, once ridden: the aim it reaches by, and its wrist turned back into
+    // range (model space) when the clip bends it past.
+    private (HandAim Aim, (Vector3 Wrist, Vector3 Pole, Quaternion Canonical)? Clamped)? ride;
+    // The clips' pose this update, once ridden: the shoulders where the clip puts them, for the reach's wrist range.
+    private JointPose[]? sampled;
     private readonly Appearance appearance;
     private readonly Side main, off;
     private readonly HandRig mainRig, offRig;
@@ -36,6 +48,9 @@ public sealed class FirstPersonArms : IDisposable
     private Vector3? upperArm, offUpperArm;
     private Vector3 reaching;
     private JointPose[]? drawnJoints;
+    // Which hand each two-bone chain of the last pose reached (off or not), and how far the arms were clip-led then.
+    private bool[] reachedBy = [];
+    private float drawnLed;
 
     /// <summary>
     /// Opens the rig's model and names its joints. Throws <see cref="InvalidOperationException"/> naming the field when
@@ -43,7 +58,7 @@ public sealed class FirstPersonArms : IDisposable
     /// </summary>
     /// <param name="objectId">The published object the arms are drawn on; an object keeps one animation instance, so a new rig takes a new object.</param>
     public FirstPersonArms(IEngineContext engine, HeldArms arms, ArmRig rig, ulong objectId)
-        : this(engine, arms, rig, objectId, engine.Content.OpenReference(new(rig.Model)), owned: true) { }
+        : this(engine, arms, rig, objectId, engine.Content.OpenReference(new(rig.Model)), null, owned: true) { }
 
     /// <summary>
     /// Draws the rig with a model the product has already opened, such as one from a <see cref="ProductContentBundle"/>
@@ -52,21 +67,38 @@ public sealed class FirstPersonArms : IDisposable
     /// </summary>
     /// <param name="objectId">The published object the arms are drawn on; an object keeps one animation instance, so a new rig takes a new object.</param>
     /// <param name="content">The arms model's content.</param>
-    public FirstPersonArms(IEngineContext engine, HeldArms arms, ArmRig rig, ulong objectId, ContentReference content)
-        : this(engine, arms, rig, objectId, content, owned: false) { }
+    /// <param name="packs">The content of the rig's <see cref="ArmRig.Packs"/>, in order, when they are opened by the caller too; read here and the caller's to dispose.</param>
+    public FirstPersonArms(IEngineContext engine, HeldArms arms, ArmRig rig, ulong objectId, ContentReference content, IReadOnlyList<ContentReference>? packs = null)
+        : this(engine, arms, rig, objectId, content, packs, owned: false) { }
 
-    private FirstPersonArms(IEngineContext engine, HeldArms arms, ArmRig rig, ulong objectId, ContentReference content, bool owned)
+    private FirstPersonArms(IEngineContext engine, HeldArms arms, ArmRig rig, ulong objectId, ContentReference content, IReadOnlyList<ContentReference>? packContent, bool owned)
     {
         this.engine = engine;
         this.arms = arms;
         this.rig = rig;
         Object = objectId;
+        if (packContent is { } given && given.Count != rig.Packs.Length)
+            throw new InvalidOperationException($"packs: the rig names {rig.Packs.Length} clip packs and {given.Count} were given.");
         try { model = engine.Animation.OpenAnimatedMeshFromContent(new(content)); }
         finally { if (owned) content.Dispose(); }
+        List<RenderResource> opened = [];
         try
         {
+            // Packs are associated before the appearance is made, so its clips are the model's own and then each pack's.
+            for (int i = 0; i < rig.Packs.Length; i++)
+            {
+                ArmClipPack pack = rig.Packs[i];
+                if (packContent is { } open) opened.Add(engine.Animation.OpenAnimationClipPackFromContent(new(open[i])));
+                else
+                {
+                    using ContentReference source = engine.Content.OpenReference(new(pack.Path));
+                    opened.Add(engine.Animation.OpenAnimationClipPackFromContent(new(source)));
+                }
+                engine.Animation.AssociateAnimationClipPack(new(model, opened[^1], pack.Producer, pack.License));
+            }
+            packs = [.. opened];
             AnimationJointInfo[] joints = engine.Animation.ReadJoints(model).ToArray();
-            string[] clips = [.. engine.Animation.ReadClips(model).ToArray().Select(c => c.Id)];
+            clips = [.. engine.Animation.ReadClips(model).ToArray().Select(c => c.Id)];
             if (!clips.Contains(rig.Clip))
                 throw new InvalidOperationException($"clip: the arms model '{rig.Model}' has no clip '{rig.Clip}'. Its clips: {string.Join(", ", clips)}.");
             uint Joint(string name, string field)
@@ -104,7 +136,12 @@ public sealed class FirstPersonArms : IDisposable
             offRig = Hand(rig.Off, HandSide.Left);
             appearance = engine.Animation.CreateAnimatedMeshAppearance(new(model));
         }
-        catch { model.Dispose(); throw; }
+        catch
+        {
+            foreach (RenderResource pack in opened) pack.Dispose();
+            model.Dispose();
+            throw;
+        }
     }
 
     /// <summary>The published object these arms are drawn on.</summary>
@@ -128,6 +165,23 @@ public sealed class FirstPersonArms : IDisposable
 
     /// <summary>How far the motion leans the body: the shoulders' move from where the arms place them (camera space).</summary>
     public Vector3 Lean { get; set; }
+
+    /// <summary>
+    /// How procedural layers move the arms and what they hold: head bob, sway, landing and settle, and
+    /// <see cref="HeldLayers"/> punches (camera space metres), turning them by <see cref="CarryTurn"/> about the shoulder.
+    /// Clip-led arms carry their ridden look with them; weapon-led hands keep their grips, so give a weapon-led look the
+    /// same offset as today and the two modes move alike.
+    /// </summary>
+    public Vector3 Carry { get; set; }
+
+    /// <summary>How procedural layers turn the arms about the shoulder (camera space), with <see cref="Carry"/>.</summary>
+    public Quaternion CarryTurn { get; set; } = Quaternion.Identity;
+
+    /// <summary>The clips the arms can play when clip-led: the model's own, then each of the rig's packs'.</summary>
+    public IReadOnlyList<string> Clips => clips;
+
+    /// <summary>What clip-led arms are sampling: the clip, its time and phase, any clip fading out under it, and how far the arms are clip-led.</summary>
+    public ArmClipReading Clip => lead.Reading;
 
     /// <summary>How far the body leans in on its own so a hand reaches a grip past its arm's length (camera space).</summary>
     public Vector3 Reaching => reaching;
@@ -168,12 +222,74 @@ public sealed class FirstPersonArms : IDisposable
         reaching = best.Length() > MostReaching ? Vector3.Normalize(best) * MostReaching : best;
     }
 
+    /// <summary>
+    /// First each update: whether the arms are led by a clip, and which clip at what time (<see cref="ArmClip.At"/> fits an
+    /// action's), or by their weapons (null), as they are until called. Clip-led arms play the clip on both arms with
+    /// no reach, the look rides the main hand (<see cref="Ride"/>), and the off hand reaches its grip by its aim's
+    /// <see cref="HandAim.Reach"/>. A new clip fades in over the one before by its frame's fade, and the arms fade
+    /// between clip-led and weapon-led over the same seconds; <paramref name="delta"/> is the seconds since the last
+    /// update, on the clock the action's time is on. Then call <see cref="Ride"/>, <see cref="Fact"/> and
+    /// <see cref="Reach"/> (clip-led arms skip <see cref="Aim"/>). Throws <see cref="InvalidOperationException"/> for a
+    /// clip the arms do not have (<see cref="Clips"/>).
+    /// </summary>
+    public void Lead(ArmClipFrame? frame, float delta)
+    {
+        if (frame is { } f && !clips.Contains(f.Clip))
+            throw new InvalidOperationException($"clip: the arms model '{rig.Model}' and its packs have no clip '{f.Clip}'. Its clips: {string.Join(", ", clips)}.");
+        lead.Advance(frame, delta);
+        (ride, sampled) = (null, null);
+        if (lead.Led > 0) reaching = Vector3.Zero;
+    }
+
+    /// <summary>
+    /// After <see cref="Lead"/>, before the arms are published: where the look is held this update (camera space), its
+    /// grip point and turn. On clip-led arms it rides the main hand as the clip draws it, held by the aim's solved grip,
+    /// hold and the rig's palm as a weapon-led hand holds its look, the wrist kept within the rig's range; publish the
+    /// look there, and place a look held in both hands' off grip from it. Weapon-led, it is the aim's own grip and look;
+    /// fading between the two, it blends them. Give <see cref="Reach"/> the same main aim.
+    /// </summary>
+    public (Vector3 Grip, Quaternion Look) Ride(HandAim mainHand)
+    {
+        (ride, sampled) = (null, null);
+        if (lead.Led <= 0 || lead.Playing is not { } playing) return (mainHand.Grip, mainHand.Look);
+        Prepare();
+        JointPose[] posed = engine.Animation.SampleModelJointPose(lead.From is { } from
+            ? new(model, from.Clip, from.Time, playing.Clip, playing.Time, lead.Blend, true, Unplaced)
+            : AnimationModelPoseSampleRequest.OfClip(model, playing.Clip, playing.Time, Unplaced)).ToArray();
+        Transform placed = Placement();
+        Vector3 shoulder = posed[main.Upper].Model.Translation, wrist = posed[main.Hand].Model.Translation, elbow = posed[main.Lower].Model.Translation;
+        // The clip's elbow is the pole it bends toward, unless the clip holds the arm straight: then the aim's pole.
+        Vector3 line = Vector3.Normalize(wrist - shoulder), bent = elbow - shoulder - line * Vector3.Dot(elbow - shoulder, line);
+        if (bent.Length() < 1e-3f * Vector3.Distance(shoulder, wrist))
+            elbow = Vector3.Transform(mainHand.Pole - placed.Translation, Quaternion.Inverse(placed.Rotation)) / rig.Scale;
+        Quaternion canonical = Quaternion.Normalize(posed[main.Hand].Model.Rotation * Quaternion.Inverse(main.Frame));
+        (Quaternion kept, Vector3 pole, WristBend bend) = main.Limit(posed, rig.Wrist, wrist, elbow, canonical);
+        main.Bend = bend;
+        Vector3 Out(Vector3 point) => placed.Translation + Vector3.Transform(point * rig.Scale, placed.Rotation);
+        Quaternion turn = Quaternion.Normalize(placed.Rotation * kept);
+        (Quaternion hold, Vector3 palm) = Grasp(mainHand, false);
+        Vector3 grip = Out(wrist) + Vector3.Transform(palm, turn);
+        Quaternion look = Quaternion.Normalize(turn * Quaternion.Inverse(hold));
+        float led = lead.Led;
+        HandAim aim = mainHand with
+        {
+            Grip = Vector3.Lerp(mainHand.Grip, grip, led),
+            Look = Quaternion.Slerp(mainHand.Look, look, led),
+            Pole = Vector3.Lerp(mainHand.Pole, Out(pole), led),
+        };
+        ride = (aim, bend.Clamped > 0 ? (wrist, pole, kept) : null);
+        sampled = posed;
+        return (aim.Grip, aim.Look);
+    }
+
     /// <summary>The arms' fact for the snapshot: the model placed so its right upper arm sits at the shoulder, facing -Z, on the viewmodel layer.</summary>
     public AppearanceFact Fact(bool shown) => new(Object, false, 0, Placement(), appearance, shown, RenderLayer.Viewmodel);
 
     /// <summary>
     /// Once the arms are in the published snapshot, reaches each hand for its grip with the hand turned with its look,
     /// its digits shaped as the look says and closed as given. The off hand's grip and turn are already mirrored.
+    /// Clip-led arms play their clip: the main hand rides it (turned back into the wrist's range where the clip bends it
+    /// past), and the off hand reaches by its aim's <see cref="HandAim.Reach"/>.
     /// </summary>
     public void Reach(HandAim mainHand, HandAim offHand)
     {
@@ -186,22 +302,58 @@ public sealed class FirstPersonArms : IDisposable
         {
             JointPose[] joints = drawn.Joints.ToArray();
             drawnJoints = joints;
-            upperArm = joints[main.Upper].Model.Translation;
-            offUpperArm = joints[off.Upper].Model.Translation;
+            // A clip moves the shoulders as it acts, so the arms stay placed where they last were weapon-led.
+            if (drawnLed <= 0 || upperArm is null)
+            {
+                upperArm = joints[main.Upper].Model.Translation;
+                offUpperArm = joints[off.Upper].Model.Translation;
+            }
             if (!main.Measured) main.Measure(joints, rig.Digits);
             if (!off.Measured) off.Measure(joints, rig.Digits);
             ArmLength = (main.Length(joints) * rig.Scale, off.Length(joints) * rig.Scale);
-            if (drawn.IkChains.Length == 2) Shortfall = (drawn.IkChains.Span[0].Shortfall * rig.Scale, drawn.IkChains.Span[1].Shortfall * rig.Scale);
+            IkChainReach[] reached = drawn.IkChains.ToArray();
+            float Fell(bool offHand) => Array.IndexOf(reachedBy, offHand) is var at && at >= 0 && at < reached.Length ? reached[at].Shortfall * rig.Scale : 0;
+            Shortfall = (Fell(false), Fell(true));
         }
+        drawnLed = lead.Led;
+        Layer();
         Transform placed = Placement();
         Quaternion unturn = Quaternion.Inverse(placed.Rotation);
         // Camera space into the model's own space, where the IK targets and hand turns are given.
         Vector3 Into(Vector3 point) => Vector3.Transform(point - placed.Translation, unturn) / rig.Scale;
         List<TwoBoneIk> chains = [];
+        List<bool> reachers = [];
         List<JointOverride> overrides = [];
         List<JointTwist> twists = [];
-        foreach (var (side, hand) in new[] { (main, mainHand), (off, offHand) })
+        float led = lead.Led;
+        foreach (var (side, aimed) in new[] { (main, mainHand), (off, offHand) })
         {
+            HandAim hand = aimed;
+            // The forearm's twist joints share the hand's roll about the forearm, as the Engine draws it after the reach.
+            twists.AddRange(side.Twists.Select(t => new JointTwist(t.Joint, side.Lower, side.Hand, t.Share)));
+            // How far the hand leaves its clip for its aim, and its digits their clip for the look's shape.
+            float weight = 1;
+            if (led > 0 && side == main && ride is { } riding)
+            {
+                if (led >= 1)
+                {
+                    // Fully clip-led, the hand is the clip's, unless the clip bends its wrist past the range.
+                    if (riding.Clamped is { } clamped && side.Measured)
+                    {
+                        chains.Add(new(side.Upper, side.Lower, side.Hand, PoseSpace.Model, clamped.Wrist, clamped.Pole, 1));
+                        reachers.Add(false);
+                        overrides.Add(JointOverride.Orient(side.Hand, PoseSpace.Model, Quaternion.Normalize(clamped.Canonical * side.Frame)));
+                    }
+                    continue;
+                }
+                hand = riding.Aim;
+            }
+            else if (led > 0 && side == off)
+            {
+                weight = 1 + (Math.Clamp(hand.Reach, 0, 1) - 1) * led;
+                if (weight <= 0) continue;
+            }
+            float shaping = side == main ? 1 - led : weight;
             (Quaternion turn, Vector3 palm) = Holding(hand, side.Left);
             Vector3 grip = Into(hand.Grip), pole = Into(hand.Pole);
             palm /= rig.Scale;
@@ -211,7 +363,7 @@ public sealed class FirstPersonArms : IDisposable
             // the wrist the range was last taken at.
             Quaternion canonical = Quaternion.Normalize(unturn * turn);
             Vector3 target = grip - Vector3.Transform(palm, canonical);
-            if (side.Measured && drawnJoints is { } posed)
+            if (side.Measured && (sampled ?? drawnJoints) is { } posed)
             {
                 (Quaternion kept, Vector3 swung, WristBend bend) = side.Limit(posed, rig.Wrist, target, pole, canonical);
                 WristBend asked = bend;
@@ -224,14 +376,30 @@ public sealed class FirstPersonArms : IDisposable
                 }
                 (canonical, pole, side.Bend) = (kept, swung, bend with { Flexion = asked.Flexion, Ulnar = asked.Ulnar, Roll = asked.Roll });
             }
-            chains.Add(new(side.Upper, side.Lower, side.Hand, PoseSpace.Model, target, pole, 1));
-            // The forearm's twist joints share the hand's roll about the forearm, as the Engine draws it after the reach.
-            twists.AddRange(side.Twists.Select(t => new JointTwist(t.Joint, side.Lower, side.Hand, t.Share)));
+            chains.Add(new(side.Upper, side.Lower, side.Hand, PoseSpace.Model, target, pole, weight));
+            reachers.Add(side == off);
             if (!side.Measured) continue;
-            overrides.Add(JointOverride.Orient(side.Hand, PoseSpace.Model, Quaternion.Normalize(canonical * side.Frame)));
-            overrides.AddRange(side.Close(rig, arms.Hands, hand.Shape ?? hand.Solved?.Shape, hand.Closure).Select(t => JointOverride.AddLocalRotation(t.Joint, t.Turn)));
+            overrides.Add(JointOverride.Orient(side.Hand, PoseSpace.Model, Quaternion.Normalize(canonical * side.Frame), weight));
+            if (shaping > 0)
+                overrides.AddRange(side.Close(rig, arms.Hands, hand.Shape ?? hand.Solved?.Shape, hand.Closure).Select(t => JointOverride.AddLocalRotation(t.Joint, t.Turn, shaping)));
         }
+        reachedBy = [.. reachers];
         engine.Animation.SetPose(new(instance, chains.ToArray(), overrides.ToArray(), twists.ToArray()));
+    }
+
+    // The clips over the rig's: the one fading out at its held time, then the playing one over it, as far as the arms
+    // are clip-led. Ride samples the same blend. Weapon-led arms lay none.
+    private void Layer()
+    {
+        if (instance is null || (lead.Led <= 0 && !layered)) return;
+        layers.Clear();
+        if (lead.Led > 0 && lead.Playing is { } playing)
+        {
+            if (lead.From is { } from) layers.Override((uint)Array.IndexOf(clips, from.Clip), from.Time, lead.Led);
+            layers.Override((uint)Array.IndexOf(clips, playing.Clip), playing.Time, lead.Led * (lead.From is null ? 1 : lead.Blend));
+        }
+        engine.Animation.SetLayers(layers.ToRequest(instance));
+        layered = layers.Count > 0;
     }
 
     /// <summary>
@@ -249,13 +417,34 @@ public sealed class FirstPersonArms : IDisposable
     // that frame (metres).
     private (Quaternion Turn, Vector3 Palm) Holding(HandAim hand, bool left)
     {
+        (Quaternion hold, Vector3 palm) = Grasp(hand, left);
+        return (Quaternion.Normalize(hand.Look * hold), palm);
+    }
+
+    // How a hand's canonical frame turns from its look's, and the grip's offset from its hand joint in that frame (metres).
+    private (Quaternion Hold, Vector3 Palm) Grasp(HandAim hand, bool left)
+    {
         Quaternion hold = hand.Solved?.Hold ?? HeldFrames.Turn(hand.Hold ?? arms.Hold);
         Vector3 palm = hand.Solved?.Palm ?? rig.Palm;
         // The left hand's frame mirrors the right's, so its palm offset is the right's mirrored; its hold is the right
         // hand's mirrored too when it holds its own (mirrored) look, but given as is on a look held in both hands.
         if (left) palm = HeldFrames.Mirror(palm);
         if (left && hand.HoldMirrored) hold = HeldFrames.Mirror(hold);
-        return (Quaternion.Normalize(hand.Look * hold), palm);
+        return (hold, palm);
+    }
+
+    private static Transform Unplaced => new(Vector3.Zero, Quaternion.Identity, Vector3.One);
+
+    // Clip-led arms ride a hand before any pose is drawn: the hands are measured, and the upper arm placed, from the
+    // rig's clip at its start, as a first weapon-led reach would measure them.
+    private void Prepare()
+    {
+        if (main.Measured && off.Measured && upperArm is not null) return;
+        JointPose[] joints = engine.Animation.SampleModelJointPose(AnimationModelPoseSampleRequest.OfClip(model, rig.Clip, 0, Unplaced)).ToArray();
+        upperArm ??= joints[main.Upper].Model.Translation;
+        offUpperArm ??= joints[off.Upper].Model.Translation;
+        if (!main.Measured) main.Measure(joints, rig.Digits);
+        if (!off.Measured) off.Measure(joints, rig.Digits);
     }
 
     public void Dispose()
@@ -263,13 +452,15 @@ public sealed class FirstPersonArms : IDisposable
         instance?.Dispose();
         appearance.Dispose();
         model.Dispose();
+        foreach (RenderResource pack in packs) pack.Dispose();
     }
 
-    // The model turned and scaled into camera space, its right upper arm (as last drawn) at the arms' shoulder.
+    // The model turned and scaled into camera space, its right upper arm (as last drawn weapon-led) at the arms'
+    // shoulder, carried and turned about it by the procedural layers.
     private Transform Placement()
     {
-        Quaternion turn = HeldFrames.Turn(rig.Turn);
-        Vector3 at = arms.Shoulder + Lean + reaching - Vector3.Transform((upperArm ?? Vector3.Zero) * rig.Scale, turn);
+        Quaternion turn = Quaternion.Normalize(CarryTurn * HeldFrames.Turn(rig.Turn));
+        Vector3 at = arms.Shoulder + Lean + reaching + Carry - Vector3.Transform((upperArm ?? Vector3.Zero) * rig.Scale, turn);
         return new(at, turn, new Vector3(rig.Scale));
     }
 

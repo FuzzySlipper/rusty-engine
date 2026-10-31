@@ -198,3 +198,101 @@ product reading the file with unmapped members refused reads these with
 its own options. The placement is of the hand the grip was solved on, so a
 rig whose palm sits elsewhere from its hand joint needs its own solve. On
 the off hand, a solved grip mirrors as a hold does.
+
+## Clip-led arms
+
+The arms above are weapon-led: only the weapons move by authored motion,
+and the arms follow by IK. The same `FirstPersonArms` can instead be
+clip-led: baked arm clips (authored in Blender on a control rig, retargeted
+mocap, a clip pack) drive both arms, and the look rides the main hand. The
+elbows, shoulders, arcs and follow-through are then the clip's, not the
+IK's. A product picks the mode per look or per action, each update.
+
+Pick weapon-led for looks with no clips of their own, motion that must suit
+every rig, and holds tuned against the hand. Pick clip-led when the motion
+is authored on the arms: a strike whose shoulder and elbow act, a clip pack
+that ships its clips, or a pose IK keeps getting wrong.
+
+### Clips and timing
+
+The rig plays clips from its GLB and from `ArmRig.Packs`, clip packs on the
+same skeleton ([clip packs](portable-assets.md#animation-clips-and-clip-packs)),
+each with the producer and licence its association records. `Clips` lists
+them. A product whose packs live in a content bundle passes their
+`ContentReference`s to the constructor beside the model's.
+
+An `ArmClip` is a clip an action plays, with `ClipMarks`: where its windup
+starts, its strike lands (the commit starts), its commit ends and its
+recovery ends, as fractions of the clip. `ArmClip.At(timing, seconds)` fits
+each phase of the clip to the action's `PhaseTiming`, so the clip plays
+through the windup over the product's windup seconds, and so on. Gameplay
+timing stays in product content: retuning a weapon's speed needs no new
+export. `Fade` (seconds, 0.15 by default) is how long it fades in.
+
+```json
+{"clip": "knife_jab", "marks": {"start": 0.05, "strike": 0.35, "recover": 0.5, "end": 0.95}, "fade": 0.1}
+```
+
+### Each update
+
+1. Call `Lead` with the clip frame, `arm.At(timing, actionSeconds)`, or
+   null for weapon-led, and the seconds since the last update on the clock
+   the action runs on. An idle or guard loop is an `ArmClipFrame` the
+   product times itself.
+2. Set `Lean` and `Carry` (below).
+3. Call `Ride` with the main hand's aim. It samples the clip pose and
+   returns where the look is held, its grip point and turn, by the aim's
+   solved grip or hold and the rig's palm, as a weapon-led hand holds it.
+   Publish the look there. A look held in both hands places its off grip
+   from it.
+4. Publish `Fact(shown)`, then call `Reach` with the same aims. Skip
+   `Aim`: a clip-led main hand reaches for nothing.
+
+The main hand is the clip's: no IK, its digits as the clip shapes them.
+The off hand plays the clip too, or leaves it for its grip by its aim's
+`Reach` (0 the clip, 1 the grip), which a curve can fade. The grip of a
+look held in both hands is reached by IK after the clip, with the off
+hand's shape and closure, as a weapon-led hand's is. Weapon-led hands
+always reach.
+
+### Fades
+
+A new clip fades in over the clip before, which holds where it was. A clip
+started inside another's fade fades in over whichever of the two showed
+more; the other drops out.
+The arms fade between clip-led and weapon-led over the clip's fade, for
+example while a weapon is drawn. In between, the look's placement blends
+from the aim's to the ridden one, and the main hand reaches the blend, so
+neither the look nor the hand jumps. The arms stay placed where they were
+last drawn weapon-led, so a clip's shoulder acting shows.
+
+### Procedural layers
+
+Head bob, sway, landing, settle and `HeldLayers` punches move the arms by
+`Carry` (camera space metres) and `CarryTurn` (about the shoulder). The
+ridden look moves with the hand that holds it. Weapon-led hands keep their
+grips under a carry. Give a weapon-led look the same offsets as today and
+`Carry` too, and the two modes move alike.
+
+### Wrist range, twist and readouts
+
+A clip that bends the main wrist past `ArmRig.Wrist` is held in range as a
+weapon-led reach is: the elbow swings first, then the hand is turned back,
+with the IK solving the arm to the swung elbow. The ridden look follows the
+kept hand. Twist joints share whatever roll IK and overrides add on top of
+the clip, so a clip that animates its own twist joints keeps them.
+
+`Clip` reports what is sampled: the clip, time and phase, any clip fading
+out under it, the fade, and how far the arms are clip-led (`Led`).
+`WristClamp`, `Knuckles`, `Shortfall` and the hand rigs for
+`GripLandmarks` read as they do weapon-led.
+
+### Limits
+
+- One skeleton per clip set. Clips are not retargeted between skeletons.
+- Clips should animate every arm joint. The look is placed from a sample of
+  the clips alone, and a joint a clip lacks shows the rig's clip below it.
+- Additive clip layers on top would move the drawn hand off the ridden
+  look. Use `Carry` for procedural motion.
+- The digits of a clip-led main hand are the clip's. A look's shape and
+  closure apply to the off hand that reaches.
