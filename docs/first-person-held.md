@@ -213,6 +213,11 @@ every rig, and holds tuned against the hand. Pick clip-led when the motion
 is authored on the arms: a strike whose shoulder and elbow act, a clip pack
 that ships its clips, or a pose IK keeps getting wrong.
 
+`fixtures/csharp-first-person-clips` plays a knife strike from a clip pack
+on Drillimpact's PSX arms (CC0) at two timings, a staff held in both hands
+over a guard clip, and fades to and from a weapon-led look, with the
+Engine measuring the hands against the look on the poses it draws.
+
 ### Clips and timing
 
 The rig plays clips from its GLB and from `ArmRig.Packs`, clip packs on the

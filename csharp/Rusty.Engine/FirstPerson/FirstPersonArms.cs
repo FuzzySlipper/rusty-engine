@@ -351,7 +351,12 @@ public sealed class FirstPersonArms : IDisposable
             else if (led > 0 && side == off)
             {
                 weight = 1 + (Math.Clamp(hand.Reach, 0, 1) - 1) * led;
-                if (weight <= 0) continue;
+                // A hand that plays its clip bends its wrist as the clip does.
+                if (weight <= 0)
+                {
+                    side.Bend = default;
+                    continue;
+                }
             }
             float shaping = side == main ? 1 - led : weight;
             (Quaternion turn, Vector3 palm) = Holding(hand, side.Left);
