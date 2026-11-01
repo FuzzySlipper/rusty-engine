@@ -47,29 +47,38 @@ public readonly record struct ClipMarks(float Start, float Strike, float Recover
 public readonly record struct ArmClipFrame(string Clip, float Time, MotionPhase? Phase = null, float Fade = .15f);
 
 /// <summary>
-/// What clip-led arms are sampling: the clip and time (<see cref="Playing"/>), the clip fading out under it and the time
-/// it holds at (<see cref="From"/>, <see cref="FromTime"/>), how far the playing clip has faded in over it
-/// (<see cref="Blend"/>, 1 once there is nothing under it) and how far the arms are clip-led (<see cref="Led"/>, 0
-/// weapon-led, 1 clip-led).
+/// What clip-led arms are sampling: the clip and time (<see cref="Playing"/>), the clip fading out right under it and the
+/// time it holds at (<see cref="From"/>, <see cref="FromTime"/>), how far the playing clip has faded in over what is under
+/// it (<see cref="Blend"/>, 1 once there is nothing under it), how many clips are still fading out under it
+/// (<see cref="Under"/>: more than one when a clip started inside another's fade) and how far the arms are clip-led
+/// (<see cref="Led"/>, 0 weapon-led, 1 clip-led).
 /// </summary>
-public readonly record struct ArmClipReading(ArmClipFrame? Playing, string? From, float FromTime, float Blend, float Led);
+public readonly record struct ArmClipReading(ArmClipFrame? Playing, string? From, float FromTime, float Blend, float Led, int Under = 0);
 
-// The clips clip-led arms play and their fades: the playing clip over the one it replaces, and how far the arms are led
+// The clips clip-led arms play and their fades: the playing clip over the ones it replaces, and how far the arms are led
 // by clips rather than by their weapons. A clip whose time goes back has started again (an action played twice, a loop
-// come round), so it fades in over where it was. A clip started inside another's fade fades in over whichever of the two showed
-// more, and the other drops out.
+// come round), so it fades in over where it was. A clip started inside another's fade keeps the pose that fade showed:
+// the clip it interrupted holds where it was at the share it had faded in, over the ones under it, and the new clip
+// fades in over all of them. Once the playing clip has faded in fully, nothing under it shows and they drop out.
 internal sealed class ClipLead
 {
+    // Clips still fading out under the playing one, laid bottom first: each holds at its time, at the share it had
+    // faded in over those under it when it was replaced. Clips replaced every update would pile up without end, so past
+    // this many the bottom one, the least showing, drops out.
+    internal const int MostUnder = 8;
+
+    private readonly List<(string Clip, float Time, float Weight)> under = [];
     private ArmClipFrame? playing;
-    private (string Clip, float Time)? from;
     private float blend = 1, led;
 
     internal ArmClipFrame? Playing => playing;
-    internal (string Clip, float Time)? From => from;
+    internal IReadOnlyList<(string Clip, float Time, float Weight)> Under => under;
     internal float Blend => blend;
     internal float Led => led;
 
-    internal ArmClipReading Reading => new(playing, from?.Clip, from?.Time ?? 0, blend, led);
+    internal ArmClipReading Reading => under.Count == 0
+        ? new(playing, null, 0, blend, led)
+        : new(playing, under[^1].Clip, under[^1].Time, blend, led, under.Count);
 
     internal void Advance(ArmClipFrame? frame, float delta)
     {
@@ -79,20 +88,29 @@ internal sealed class ClipLead
         {
             if (playing is { } now && (now.Clip != next.Clip || next.Time < now.Time) && led > 0)
             {
-                from = blend >= .5f || from is null ? (now.Clip, now.Time) : from;
+                under.Add((now.Clip, now.Time, blend));
+                if (under.Count > MostUnder) under.RemoveAt(0);
                 blend = 0;
             }
-            else if (led <= 0) (from, blend) = (null, 1);
+            else if (led <= 0)
+            {
+                under.Clear();
+                blend = 1;
+            }
             playing = next;
             blend = Step(blend, 1);
-            if (blend >= 1) from = null;
+            if (blend >= 1) under.Clear();
             led = Step(led, 1);
         }
         else
         {
-            // Back to weapon-led: the last clip holds where it was while the arms fade back.
+            // Back to weapon-led: the last clips hold where they were while the arms fade back.
             led = Step(led, 0);
-            if (led <= 0) (playing, from, blend) = (null, null, 1);
+            if (led <= 0)
+            {
+                under.Clear();
+                (playing, blend) = (null, 1);
+            }
         }
     }
 }

@@ -245,7 +245,8 @@ export. `Fade` (seconds, 0.15 by default) is how long it fades in.
    the action runs on. An idle or guard loop is an `ArmClipFrame` the
    product times itself.
 2. Set `Lean` and `Carry` (below).
-3. Call `Ride` with the main hand's aim. It samples the clip pose and
+3. Call `Ride` with the main hand's aim. It samples the clips as the
+   arms play them (all of a fade's clips once the arms have been drawn) and
    returns where the look is held, its grip point and turn, by the aim's
    solved grip or hold and the rig's palm, as a weapon-led hand holds it.
    Publish the look there. A look held in both hands places its off grip
@@ -271,8 +272,12 @@ always reach.
 A new clip fades in over the clip before, which holds where it was. A clip
 whose time goes back has started again (an action played twice in a row, a
 loop coming round) and fades in over where it was the same way. A clip
-started inside another's fade fades in over whichever of the two showed
-more; the other drops out.
+started inside another's fade fades in over the pose that fade showed:
+the clip it interrupted holds where it was, at the share it had faded in,
+over the clips under it, so nothing jumps however short the actions. Once
+the playing clip has faded in fully the clips under it drop out. At most
+eight clips fade under one; a ninth drops the bottom one, which a product
+starting a clip every update would see as a small jump.
 The arms fade between clip-led and weapon-led over the clip's fade, for
 example while a weapon is drawn. In between, the look's placement blends
 from the aim's to the ridden one, and the main hand reaches the blend, so
@@ -289,22 +294,24 @@ grips under a carry. Give a weapon-led look the same offsets as today and
 
 ### Wrist range, twist and readouts
 
-A clip that bends the main wrist past `ArmRig.Wrist` is held in range as a
+A clip that bends a wrist past `ArmRig.Wrist` is held in range as a
 weapon-led reach is: the elbow swings first, then the hand is turned back,
 with the IK solving the arm to the swung elbow. The ridden look follows the
-kept hand. Twist joints share whatever roll IK and overrides add on top of
+kept main hand. An off hand that plays its clip is held in range the same
+way, and one that reaches leaves the kept hand for its grip. Twist joints share whatever roll IK and overrides add on top of
 the clip, so a clip that animates its own twist joints keeps them.
 
-`Clip` reports what is sampled: the clip, time and phase, any clip fading
-out under it, the fade, and how far the arms are clip-led (`Led`).
+`Clip` reports what is sampled: the clip, time and phase, the clip fading
+out right under it and how many are (`Under`), the fade, and how far the
+arms are clip-led (`Led`).
 `WristClamp`, `Knuckles`, `Shortfall` and the hand rigs for
 `GripLandmarks` read as they do weapon-led.
 
 ### Limits
 
 - One skeleton per clip set. Clips are not retargeted between skeletons.
-- Clips should animate every arm joint. The look is placed from a sample of
-  the clips alone, and a joint a clip lacks shows the rig's clip below it.
+- Clips should animate every arm joint: a joint a clip lacks shows the
+  rig's clip below it, drawn and where the look is placed alike.
 - Additive clip layers on top would move the drawn hand off the ridden
   look. Use `Carry` for procedural motion.
 - The digits of a clip-led main hand are the clip's, or with `ShapeClip`

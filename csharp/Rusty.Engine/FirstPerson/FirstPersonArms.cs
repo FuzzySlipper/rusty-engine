@@ -239,6 +239,7 @@ public sealed class FirstPersonArms : IDisposable
         lead.Advance(frame, delta);
         (ride, sampled) = (null, null);
         if (lead.Led > 0) reaching = Vector3.Zero;
+        Layer();
     }
 
     /// <summary>
@@ -253,17 +254,15 @@ public sealed class FirstPersonArms : IDisposable
         (ride, sampled) = (null, null);
         if (lead.Led <= 0 || lead.Playing is not { } playing) return (mainHand.Grip, mainHand.Look);
         Prepare();
-        JointPose[] posed = engine.Animation.SampleModelJointPose(lead.From is { } from
-            ? new(model, from.Clip, from.Time, playing.Clip, playing.Time, lead.Blend, true, Unplaced)
-            : AnimationModelPoseSampleRequest.OfClip(model, playing.Clip, playing.Time, Unplaced)).ToArray();
+        // The instance plays the clips as Lead laid them, however many are fading; before it is drawn, the model samples
+        // the playing clip over the one right under it.
+        JointPose[] posed = (instance is not null
+            ? engine.Animation.SampleJointPose(AnimationPoseSampleRequest.OfCurrentPlayback(instance, Unplaced, false))
+            : engine.Animation.SampleModelJointPose(lead.Under is [.., var from]
+                ? new(model, from.Clip, from.Time, playing.Clip, playing.Time, lead.Blend, true, Unplaced)
+                : AnimationModelPoseSampleRequest.OfClip(model, playing.Clip, playing.Time, Unplaced))).ToArray();
         Transform placed = Placement();
-        Vector3 shoulder = posed[main.Upper].Model.Translation, wrist = posed[main.Hand].Model.Translation, elbow = posed[main.Lower].Model.Translation;
-        // The clip's elbow is the pole it bends toward, unless the clip holds the arm straight: then the aim's pole.
-        Vector3 line = Vector3.Normalize(wrist - shoulder), bent = elbow - shoulder - line * Vector3.Dot(elbow - shoulder, line);
-        if (bent.Length() < 1e-3f * Vector3.Distance(shoulder, wrist))
-            elbow = Vector3.Transform(mainHand.Pole - placed.Translation, Quaternion.Inverse(placed.Rotation)) / rig.Scale;
-        Quaternion canonical = Quaternion.Normalize(posed[main.Hand].Model.Rotation * Quaternion.Inverse(main.Frame));
-        (Quaternion kept, Vector3 pole, WristBend bend) = main.Limit(posed, rig.Wrist, wrist, elbow, canonical);
+        (Vector3 wrist, Vector3 pole, Quaternion kept, WristBend bend) = ClipHand(main, posed, mainHand.Pole);
         main.Bend = bend;
         Vector3 Out(Vector3 point) => placed.Translation + Vector3.Transform(point * rig.Scale, placed.Rotation);
         Quaternion turn = Quaternion.Normalize(placed.Rotation * kept);
@@ -282,6 +281,23 @@ public sealed class FirstPersonArms : IDisposable
         return (aim.Grip, aim.Look);
     }
 
+    // A hand as the clip draws it (model space), kept within the wrist's range: its wrist, the pole its elbow bends
+    // toward, its canonical frame turned back into range, and how far it was turned. The clip's elbow is the pole,
+    // unless the clip holds the arm straight: then the aim's pole (camera space).
+    private (Vector3 Wrist, Vector3 Pole, Quaternion Kept, WristBend Bend) ClipHand(Side side, JointPose[] posed, Vector3 aimPole)
+    {
+        Vector3 shoulder = posed[side.Upper].Model.Translation, wrist = posed[side.Hand].Model.Translation, elbow = posed[side.Lower].Model.Translation;
+        Vector3 line = Vector3.Normalize(wrist - shoulder), bent = elbow - shoulder - line * Vector3.Dot(elbow - shoulder, line);
+        if (bent.Length() < 1e-3f * Vector3.Distance(shoulder, wrist))
+        {
+            Transform placed = Placement();
+            elbow = Vector3.Transform(aimPole - placed.Translation, Quaternion.Inverse(placed.Rotation)) / rig.Scale;
+        }
+        Quaternion canonical = Quaternion.Normalize(posed[side.Hand].Model.Rotation * Quaternion.Inverse(side.Frame));
+        (Quaternion kept, Vector3 pole, WristBend bend) = side.Limit(posed, rig.Wrist, wrist, elbow, canonical);
+        return (wrist, pole, kept, bend);
+    }
+
     /// <summary>The arms' fact for the snapshot: the model placed so its right upper arm sits at the shoulder, facing -Z, on the viewmodel layer.</summary>
     public AppearanceFact Fact(bool shown) => new(Object, false, 0, Placement(), appearance, shown, RenderLayer.Viewmodel);
 
@@ -289,7 +305,7 @@ public sealed class FirstPersonArms : IDisposable
     /// Once the arms are in the published snapshot, reaches each hand for its grip with the hand turned with its look,
     /// its digits shaped as the look says and closed as given. The off hand's grip and turn are already mirrored.
     /// Clip-led arms play their clip: the main hand rides it (turned back into the wrist's range where the clip bends it
-    /// past), and the off hand reaches by its aim's <see cref="HandAim.Reach"/>.
+    /// past), and the off hand plays it, held in range the same way, or leaves it for its grip by its aim's <see cref="HandAim.Reach"/>.
     /// </summary>
     public void Reach(HandAim mainHand, HandAim offHand)
     {
@@ -297,6 +313,7 @@ public sealed class FirstPersonArms : IDisposable
         {
             instance = engine.Animation.CreateInstance(new(appearance, Object));
             engine.Animation.SetPlayback(new(instance, AnimationPlaybackKind.Play, rig.Clip, AnimationLoopMode.Repeat, 1, 1, true, 0, true, 0));
+            Layer();
         }
         if (engine.Animation.ReadJointPose(instance) is { Reported: true } drawn)
         {
@@ -316,7 +333,6 @@ public sealed class FirstPersonArms : IDisposable
             Shortfall = (Fell(false), Fell(true));
         }
         drawnLed = lead.Led;
-        Layer();
         Transform placed = Placement();
         Quaternion unturn = Quaternion.Inverse(placed.Rotation);
         // Camera space into the model's own space, where the IK targets and hand turns are given.
@@ -354,10 +370,22 @@ public sealed class FirstPersonArms : IDisposable
             else if (led > 0 && side == off)
             {
                 weight = 1 + (Math.Clamp(hand.Reach, 0, 1) - 1) * led;
-                // A hand that plays its clip bends its wrist as the clip does.
+                // A hand that plays its clip bends its wrist as the clip does, turned back into the wrist's range where
+                // the clip bends it past; its reach for its grip goes on from there by its weight.
+                WristBend played = default;
+                if (sampled is { } clipped && side.Measured)
+                {
+                    (Vector3 wrist, Vector3 swung, Quaternion kept, played) = ClipHand(side, clipped, hand.Pole);
+                    if (played.Clamped > 0)
+                    {
+                        chains.Add(new(side.Upper, side.Lower, side.Hand, PoseSpace.Model, wrist, swung, 1));
+                        reachers.Add(false);
+                        overrides.Add(JointOverride.Orient(side.Hand, PoseSpace.Model, Quaternion.Normalize(kept * side.Frame)));
+                    }
+                }
                 if (weight <= 0)
                 {
-                    side.Bend = default;
+                    side.Bend = played;
                     continue;
                 }
             }
@@ -395,16 +423,17 @@ public sealed class FirstPersonArms : IDisposable
         engine.Animation.SetPose(new(instance, chains.ToArray(), overrides.ToArray(), twists.ToArray()));
     }
 
-    // The clips over the rig's: the one fading out at its held time, then the playing one over it, as far as the arms
-    // are clip-led. Ride samples the same blend. Weapon-led arms lay none.
+    // The clips over the rig's: those fading out at their held times and shares, bottom first, then the playing one over
+    // them, as far as the arms are clip-led. Lead lays them for the update, so Ride samples what is drawn. Weapon-led
+    // arms lay none.
     private void Layer()
     {
         if (instance is null || (lead.Led <= 0 && !layered)) return;
         layers.Clear();
         if (lead.Led > 0 && lead.Playing is { } playing)
         {
-            if (lead.From is { } from) layers.Override((uint)Array.IndexOf(clips, from.Clip), from.Time, lead.Led);
-            layers.Override((uint)Array.IndexOf(clips, playing.Clip), playing.Time, lead.Led * (lead.From is null ? 1 : lead.Blend));
+            foreach ((string clip, float time, float weight) in lead.Under) layers.Override((uint)Array.IndexOf(clips, clip), time, lead.Led * weight);
+            layers.Override((uint)Array.IndexOf(clips, playing.Clip), playing.Time, lead.Led * lead.Blend);
         }
         engine.Animation.SetLayers(layers.ToRequest(instance));
         layered = layers.Count > 0;

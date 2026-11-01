@@ -258,14 +258,30 @@ static void TheLookRidesTheClipsHand()
 
 static void AClipBentPastTheWristIsHeldInRange()
 {
+    // The clip bends both wrists past the range; the main hand rides it and the off hand plays it (no reach for a grip).
     FakeRig fake = new();
     using FirstPersonArms arms = fake.Arms(Rig(DigitFrames.Measured, [], []) with { Palm = new(0.01f, 0.08f, -0.03f) });
     HandAim main = Aim(new(0.2f, -0.2f, -0.5f)), off = Aim(new(-0.2f, -0.2f, -0.5f), reach: 0);
-    arms.Lead(new("snap", 1), 1);
-    (Vector3 grip, Quaternion look) = arms.Ride(main);
-    arms.Reach(main, off);
-    Require(arms.WristClamp.Main.Clamped > 1, $"the snapped wrist was turned back {arms.WristClamp.Main.Clamped} degrees");
-    RequireHeld(fake, arms, main, grip, look, "a clamped clip hand");
+    // A first update creates the instance; the second rides the clip as the instance plays it.
+    for (int i = 0; i < 2; i++)
+    {
+        arms.Lead(new("snap", 1), 1);
+        (Vector3 grip, Quaternion look) = arms.Ride(main);
+        arms.Reach(main, off);
+        RequireHeld(fake, arms, main, grip, look, $"a clamped clip hand, update {i}");
+        WristRange range = new();
+        foreach (bool offHand in new[] { false, true })
+        {
+            WristBend bend = offHand ? arms.WristClamp.Off : arms.WristClamp.Main;
+            var hand = Measured(fake.Drawn(), fake, offHand, Vector3.Zero);
+            string at = $"update {i} {(offHand ? "off" : "main")}";
+            const float Slop = 0.05f;
+            Require(bend.Clamped > 1, $"{at}: the snapped wrist was turned back {bend.Clamped} degrees");
+            Require(hand.Flexion >= -range.Extension - Slop && hand.Flexion <= range.Flexion + Slop
+                && hand.Ulnar >= -range.Radial - Slop && hand.Ulnar <= range.Ulnar + Slop && MathF.Abs(hand.Roll) <= range.Roll + Slop,
+                $"{at}: the snapped hand is drawn at {hand}");
+        }
+    }
 }
 
 static void TheOffHandStaysOnItsGrip()
@@ -349,6 +365,25 @@ static void FadesBetweenModesAndClipsDoNotPop()
     Fades(new("strike", 0.95f, Fade: Fade), "back to the strike");
     // The same clip played again from its start fades in over where it ended.
     Fades(new("strike", 0.05f, Fade: Fade), "the strike again");
+    // A clip started inside another's fade fades in over the pose that fade showed: half way from the guard to the
+    // strike, the guard starts again, and the update it starts in moves the look no more than a fade update does.
+    Fades(new("guard", 0.5f, Fade: Fade), "to the guard again");
+    float fading = Enumerable.Range(0, 6).Max(_ => Update(new("strike", 0.5f, Fade: Fade)));
+    Require(arms.Clip is { Under: 1, Blend: > 0.4f and < 0.6f }, $"the strike is half faded in: {arms.Clip}");
+    float interrupted = Update(new("guard", 0.95f, Fade: Fade));
+    Require(arms.Clip is { Under: 2, From: "strike" }, $"the guard fades in over the strike and the guard under it: {arms.Clip}");
+    Require(interrupted <= fading * 1.5f, $"the interrupted fade moved the look {interrupted} m in one update, a fade update at most {fading} m");
+    Fades(new("guard", 0.95f, Fade: Fade), "over the interrupted fade");
+    Require(arms.Clip is { Under: 0, Blend: 1 }, $"the guard has faded in over both: {arms.Clip}");
+    // Without a step, a new clip changes nothing drawn.
+    Update(new("strike", 0.5f, Fade: Fade));
+    Update(new("strike", 0.5f, Fade: Fade));
+    Vector3 held = last;
+    arms.Lead(new("guard", 0.1f, Fade: Fade), 0);
+    (Vector3 still, _) = arms.Ride(main);
+    arms.Reach(main, off);
+    Require(Vector3.Distance(still, held) < 1e-5f, $"a clip started with no time passing moved the look {Vector3.Distance(still, held)} m");
+    last = still;
     Fades(null, "back to weapon-led");
     Require(arms.Clip.Led == 0 && Vector3.Distance(last, weaponLed) < 1e-5f, $"the arms are weapon-led again: {arms.Clip}");
 }
@@ -415,8 +450,8 @@ sealed class FakeRig
             ("r_hand", Quaternion.CreateFromAxisAngle(Vector3.UnitZ, 0.3f * t)), ("l_upper", Quaternion.CreateFromAxisAngle(Vector3.UnitX, 0.3f * t))],
         // A guard: the right arm swung in, the left raised.
         ["guard"] = t => [("r_upper", Quaternion.CreateFromAxisAngle(Vector3.UnitY, 0.5f + 0.1f * t)), ("l_upper", Quaternion.CreateFromAxisAngle(Vector3.UnitX, 0.6f))],
-        // The right wrist bent back far past any wrist's range.
-        ["snap"] = t => [("r_hand", Quaternion.CreateFromAxisAngle(Vector3.UnitX, 2.2f * t))],
+        // Both wrists bent back far past any wrist's range.
+        ["snap"] = t => [("r_hand", Quaternion.CreateFromAxisAngle(Vector3.UnitX, 2.2f * t)), ("l_hand", Quaternion.CreateFromAxisAngle(Vector3.UnitX, 2.2f * t))],
     };
 
     public static string[] Clips => [.. clipTurns.Keys];
@@ -503,6 +538,13 @@ sealed class FakeRig
         return Forward(clip, [], false).Select(t => new JointPose(t, t)).ToArray();
     }
 
+    // The instance as it plays now: the rest pose with its layers, without its controls, as the Engine samples its current playback.
+    private ReadOnlyMemory<JointPose> Sample(AnimationPoseSampleRequest request)
+    {
+        if (!request.UseCurrentPlayback || request.ApplyPoseControls) throw new NotSupportedException("the fake samples only current playback without controls");
+        return Forward(Layered(), [], false).Select(t => new JointPose(t, t)).ToArray();
+    }
+
     private int Add(string id, int parent, Vector3 at, Quaternion turn)
     {
         joints.Add((id, parent, at, turn));
@@ -581,6 +623,7 @@ sealed class FakeRig
             nameof(IAnimationService.ReadClips) => new ReadOnlyMemory<AnimationClipInfo>([.. Clips.Select(c => new AnimationClipInfo(c, c, 1, true, 0))]),
             nameof(IAnimationService.SetLayers) => Rig.layers = (AnimationLayersRequest)args![0]!,
             nameof(IAnimationService.SampleModelJointPose) => Rig.Sample((AnimationModelPoseSampleRequest)args![0]!),
+            nameof(IAnimationService.SampleJointPose) => Rig.Sample((AnimationPoseSampleRequest)args![0]!),
             nameof(IAnimationService.CreateAnimatedMeshAppearance) => new Appearance(new(1), () => { }),
             nameof(IAnimationService.CreateInstance) => new AnimationInstance(new(1), () => { }),
             nameof(IAnimationService.SetPlayback) => null,
