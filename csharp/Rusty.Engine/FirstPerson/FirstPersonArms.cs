@@ -344,6 +344,9 @@ public sealed class FirstPersonArms : IDisposable
                         reachers.Add(false);
                         overrides.Add(JointOverride.Orient(side.Hand, PoseSpace.Model, Quaternion.Normalize(clamped.Canonical * side.Frame)));
                     }
+                    // Its digits too, unless the aim shapes them over the clip as a weapon-led hand's.
+                    if (riding.Aim.ShapeClip && side.Measured)
+                        overrides.AddRange(side.Close(rig, arms.Hands, riding.Aim.Shape ?? riding.Aim.Solved?.Shape, riding.Aim.Closure).Select(t => JointOverride.AddLocalRotation(t.Joint, t.Turn)));
                     continue;
                 }
                 hand = riding.Aim;
@@ -358,7 +361,7 @@ public sealed class FirstPersonArms : IDisposable
                     continue;
                 }
             }
-            float shaping = side == main ? 1 - led : weight;
+            float shaping = side == main ? (hand.ShapeClip ? 1 : 1 - led) : weight;
             (Quaternion turn, Vector3 palm) = Holding(hand, side.Left);
             Vector3 grip = Into(hand.Grip), pole = Into(hand.Pole);
             palm /= rig.Scale;

@@ -129,7 +129,10 @@ public sealed record ArmTwist(string Joint, float Share);
 /// look where the solve placed it, <see cref="Grip"/> being the point on the look the solve's placement is of, and the
 /// solve's shape applies when the aim has none. On clip-led arms (<see cref="FirstPersonArms.Lead"/>) the off hand leaves
 /// its clip by <see cref="Reach"/> to reach its grip (0 it plays the clip, 1 it holds the grip: the off grip of a look held
-/// in both hands); weapon-led hands always reach, and arms fading between the two blend them.
+/// in both hands); weapon-led hands always reach, and arms fading between the two blend them. A clip-led main hand's
+/// digits are its clip's, unless <see cref="ShapeClip"/>: then they take the aim's shape and closure over the clip, as a
+/// weapon-led hand's take them over the rig's clip, for clips whose digits hold the rig's clip pose (packs retargeted
+/// onto the rig with the rig's own hands).
 /// </summary>
 public readonly record struct HandAim(Vector3 Grip, Quaternion Look, Vector3? Hold, float Closure, Vector3 Pole, bool HoldMirrored = true,
-    HandShape? Shape = null, SolvedGrip? Solved = null, float Reach = 1);
+    HandShape? Shape = null, SolvedGrip? Solved = null, float Reach = 1, bool ShapeClip = false);

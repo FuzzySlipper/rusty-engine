@@ -253,7 +253,13 @@ export. `Fade` (seconds, 0.15 by default) is how long it fades in.
 4. Publish `Fact(shown)`, then call `Reach` with the same aims. Skip
    `Aim`: a clip-led main hand reaches for nothing.
 
-The main hand is the clip's: no IK, its digits as the clip shapes them.
+The main hand is the clip's: no IK, its digits as the clip shapes them,
+unless its aim sets `ShapeClip`. Then its digits take the aim's shape and
+closure over the clip, as a weapon-led hand's take them over the rig's
+clip, so a look holds the same hand in both modes. Set it for clips whose
+digits hold the rig's clip pose, such as packs retargeted onto the rig with
+its own hands; a clip that shapes its own hand (a knife clip's fist) leaves
+it unset.
 The off hand plays the clip too, or leaves it for its grip by its aim's
 `Reach` (0 the clip, 1 the grip), which a curve can fade. The grip of a
 look held in both hands is reached by IK after the clip, with the off
@@ -301,5 +307,7 @@ out under it, the fade, and how far the arms are clip-led (`Led`).
   the clips alone, and a joint a clip lacks shows the rig's clip below it.
 - Additive clip layers on top would move the drawn hand off the ridden
   look. Use `Carry` for procedural motion.
-- The digits of a clip-led main hand are the clip's. A look's shape and
-  closure apply to the off hand that reaches.
+- The digits of a clip-led main hand are the clip's, or with `ShapeClip`
+  the rig's clip pose shaped by the aim; the clip's own finger acting is
+  then replaced. A look's shape and closure apply to the off hand that
+  reaches.
