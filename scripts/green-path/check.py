@@ -19,8 +19,8 @@ Routes:
 A uinput pad (Linux) or `--vigem-pad <vpad-win.exe>` (Windows, ViGEmBus)
 drives the gamepad items; without one they are not run. Differences
 docs/desktop-shell.md documents between the engines are results, not
-failures: the table shows them as "differs". The svg page's paint items are
-judged from screenshots of the private KWin, so they are not run on Windows. It needs a GPU and a desktop or compositor, so it is no CI gate.
+failures: the table shows them as "differs". The svg and mask pages' paint items
+are judged from screenshots of the private KWin, so they are not run on Windows. It needs a GPU and a desktop or compositor, so it is no CI gate.
 
 The probe page also types its letters through a keyboard device: on the x11
 route through one in the private KWin, and with `--uinput-keyboard` through a
@@ -55,8 +55,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(HERE))
 FIXTURE = 'fixtures/csharp-controller-interaction/CsharpControllerInteraction.csproj'
 FIXTURE_TITLE = 'Controller Interaction'
-PAGES = ['audit', 'probe', 'drag', 'review', 'pickers', 'svg', 'latency']
+PAGES = ['audit', 'probe', 'drag', 'review', 'pickers', 'svg', 'mask', 'latency']
 WINDOWS = sys.platform == 'win32'
+# Edge pixels a masked element may draw unlike its reference.
+MASK_DIFFERING_SHARE = 0.02
 
 # name: (X keysym, evdev code, Windows virtual key)
 KEYS = {
@@ -983,6 +985,38 @@ class Check:
         else:
             wait = f'{shown - sent:.0f} ms after the eval was sent'
         item('eval change shown at once', shown is not None and close(got, white), f'shown {wait}; pixel {got}')
+
+    def mask(self):
+        """CSS masks judged from the window's pixels: each masked element
+        against the canvas reference the page draws below it."""
+        names = ['helm: image mask excluded from a full cover', 'mask-size, mask-position and mask-repeat',
+                 '-webkit- aliases', 'gradient mask', 'image mask intersected with a gradient']
+        supports = self.runtime.eval('JSON.stringify(window.__maskSupports)').get('value')
+        supports = json.loads(supports) if supports else {}
+        self.record('mask', 'parsed: ' + ', '.join(supports), bool(supports) and all(supports.values()), f'{supports}')
+        if WINDOWS:
+            for name in names:
+                self.record('mask', name, None, 'judged from screenshots, which this route has not')
+            return
+        self.input_geometry()
+        self.at(1100, 650); self.at(1105, 652, 0.5)
+        path = self.shot('mask')
+        if path is None:
+            for name in names:
+                self.record('mask', name, None, 'no screenshot')
+            return
+        png, (ox, oy) = Png(path), self.input.origin
+        for index, name in enumerate(names):
+            left, compared, differing = 40 + 200 * index, 0, 0
+            for y in range(0, 160, 2):
+                for x in range(0, 160, 2):
+                    got = png.pixel(ox + left + x, oy + 40 + y)
+                    want = png.pixel(ox + left + x, oy + 260 + y)
+                    compared += 1
+                    differing += not close(got, want, 48)
+            share = differing / compared
+            self.record('mask', name, share <= MASK_DIFFERING_SHARE,
+                        f'{share:.2%} of pixels differ from the reference (at most {MASK_DIFFERING_SHARE:.0%})')
 
     def svg_focus(self):
         """A <g tabindex="0"> takes focus from the HTML button before it, by

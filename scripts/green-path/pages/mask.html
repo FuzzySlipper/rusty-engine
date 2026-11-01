@@ -1,0 +1,99 @@
+<!doctype html>
+<html><head><style>
+  body { margin: 0; background: #000; }
+  .cell { position: absolute; top: 40px; width: 160px; height: 160px; }
+  .reference { position: absolute; top: 260px; }
+  /* What a paper doll draws under a helm: two colours, so a mask shows. */
+  .content { width: 160px; height: 160px; image-rendering: pixelated;
+             background: linear-gradient(to right, #ff0000 50%, #0000ff 50%); }
+</style></head>
+<body>
+<!-- CSS masks as a paper doll uses them. Top row: masked elements; below
+     each, a canvas drawing what it must look like. A: a helm's mask that
+     clears what lies beneath it, `url(mask), linear-gradient(#000,#000)` with
+     `mask-composite: exclude`. B: mask-size, mask-position and mask-repeat.
+     C: the -webkit- aliases. D: a gradient mask. E: an image mask
+     intersected with a gradient. The mask image is a 16x16 data: URL drawn
+     at whole multiples with image-rendering: pixelated, so both engines draw
+     the same pixels. The check compares each element with its reference. -->
+<div id="cells"></div>
+<script>
+const report = (event, detail = {}) => fetch('/report', { method: 'POST', body: JSON.stringify({ event, ...detail }) });
+const SIZE = 16, CELL = 160, COLUMNS = [40, 240, 440, 640, 840];
+
+// The helm: opaque but for an arched opening, with a half-alpha brim.
+const alpha = [];
+for (let y = 0; y < SIZE; y++) {
+  for (let x = 0; x < SIZE; x++) {
+    const opening = x >= 4 && x < 12 && y >= 4 && y < 13 && !(y === 4 && (x === 4 || x === 11));
+    alpha.push(y === 14 ? 128 : opening ? 0 : 255);
+  }
+}
+const maskCanvas = document.createElement('canvas');
+maskCanvas.width = maskCanvas.height = SIZE;
+const maskContext = maskCanvas.getContext('2d');
+const maskData = maskContext.createImageData(SIZE, SIZE);
+alpha.forEach((a, i) => { maskData.data[i * 4 + 3] = a; });
+maskContext.putImageData(maskData, 0, 0);
+const mask = `url(${maskCanvas.toDataURL('image/png')})`;
+
+const at = (u, v, size, left = 0, top = 0, repeat = false) => {
+  // The mask image's alpha at (u, v) in its element, tiled from (left, top).
+  let x = u - left, y = v - top;
+  if (repeat) { x = ((x % size) + size) % size; y = ((y % size) + size) % size; }
+  if (x < 0 || y < 0 || x >= size || y >= size) return 0;
+  return alpha[Math.floor(y / size * SIZE) * SIZE + Math.floor(x / size * SIZE)] / 255;
+};
+const cases = [
+  { name: 'helm', style: { 'mask-image': `${mask}, linear-gradient(#000, #000)`, 'mask-size': `${CELL}px ${CELL}px, 100% 100%`,
+                           'mask-repeat': 'no-repeat', 'mask-composite': 'exclude' },
+    value: (u, v) => 1 - at(u, v, CELL) },
+  { name: 'tiles', style: { 'mask-image': mask, 'mask-size': '32px 32px', 'mask-position': '10px 20px', 'mask-repeat': 'repeat' },
+    value: (u, v) => at(u, v, 32, 10, 20, true) },
+  { name: 'webkit', style: { '-webkit-mask-image': mask, '-webkit-mask-size': '80px 80px', '-webkit-mask-position': 'center',
+                             '-webkit-mask-repeat': 'no-repeat' },
+    value: (u, v) => at(u, v, 80, 40, 40) },
+  { name: 'gradient', style: { 'mask-image': 'linear-gradient(to right, transparent, #000)' },
+    value: (u) => (u + 0.5) / CELL },
+  { name: 'intersect', style: { 'mask-image': `${mask}, linear-gradient(#000 50%, transparent 50%)`, 'mask-size': `${CELL}px ${CELL}px, 100% 100%`,
+                                'mask-composite': 'intersect' },
+    value: (u, v) => at(u, v, CELL) * (v < CELL / 2 ? 1 : 0) },
+];
+const cells = document.getElementById('cells');
+cases.forEach((c, i) => {
+  const cell = document.createElement('div');
+  cell.className = 'cell';
+  cell.style.left = `${COLUMNS[i]}px`;
+  const content = document.createElement('div');
+  content.className = 'content';
+  for (const [name, value] of Object.entries(c.style)) content.style.setProperty(name, value);
+  cell.appendChild(content);
+  cells.appendChild(cell);
+
+  const reference = document.createElement('canvas');
+  reference.className = 'reference';
+  reference.width = reference.height = CELL;
+  reference.style.left = `${COLUMNS[i]}px`;
+  const context = reference.getContext('2d');
+  const image = context.createImageData(CELL, CELL);
+  for (let v = 0; v < CELL; v++) {
+    for (let u = 0; u < CELL; u++) {
+      const m = Math.round(c.value(u, v) * 255), o = (v * CELL + u) * 4;
+      image.data[o] = u < CELL / 2 ? m : 0;
+      image.data[o + 2] = u < CELL / 2 ? 0 : m;
+      image.data[o + 3] = 255;
+    }
+  }
+  context.putImageData(image, 0, 0);
+  cells.appendChild(reference);
+});
+
+window.__maskSupports = {
+  'mask-image': CSS.supports('mask-image', 'url(a.png)'),
+  '-webkit-mask-image': CSS.supports('-webkit-mask-image', 'url(a.png)'),
+  'mask-composite': CSS.supports('mask-composite', 'exclude'),
+  'computed mask-image': getComputedStyle(cells.firstChild.firstChild).maskImage !== 'none',
+};
+report('loaded', { cases: cases.map((c) => c.name), supports: window.__maskSupports });
+</script>
+</body></html>

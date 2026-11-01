@@ -9902,8 +9902,6 @@ dependencies = [
 [[package]]
 name = "servo-layout"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "675bf3cb0127b58dde2d072f783c2c57d92c271abd037bc76c781a778af285f4"
 dependencies = [
  "accesskit",
  "app_units",
@@ -11306,8 +11304,6 @@ dependencies = [
 [[package]]
 name = "stylo"
 version = "0.22.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a255e46af2478628c48daab3774090caabd7812b1dd3ca98801c2b9c53491ed"
 dependencies = [
  "app_units",
  "arrayvec",

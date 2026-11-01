@@ -166,6 +166,8 @@ opt-level = 3
 [patch.crates-io]
 fidget-mesh = { path = "rust/vendor/fidget-mesh" }
 nethost-sys = { path = "rust/vendor/nethost-sys" }
+servo-layout = { path = "rust/vendor/servo-layout" }
 servo-script = { path = "rust/vendor/servo-script" }
+stylo = { path = "rust/vendor/stylo" }
 welding = { path = "rust/vendor/welding" }
 winit = { path = "rust/vendor/winit" }

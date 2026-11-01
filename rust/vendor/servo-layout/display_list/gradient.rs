@@ -26,12 +26,62 @@ pub(super) enum WebRenderGradient {
     Conic(WebRenderConicGradient),
 }
 
+/// Where a gradient's colours lie in its box, before WebRender is given it.
+pub(super) enum GradientShape {
+    Linear {
+        start: units::LayoutPoint,
+        end: units::LayoutPoint,
+    },
+    Radial {
+        center: units::LayoutPoint,
+        radius: units::LayoutSize,
+    },
+    Conic {
+        center: units::LayoutPoint,
+        angle: f32,
+    },
+}
+
+/// A gradient resolved for a box: its shape, its used stops and how it extends.
+pub(super) struct GradientParts {
+    pub shape: GradientShape,
+    pub stops: Vec<wr::GradientStop>,
+    pub extend_mode: ExtendMode,
+}
+
 pub(super) fn build(
     style: &ComputedValues,
     gradient: &Gradient,
     size: Size2D<f32, LayoutPixel>,
     builder: &mut super::DisplayListBuilder,
 ) -> WebRenderGradient {
+    let GradientParts {
+        shape,
+        stops,
+        extend_mode,
+    } = resolve(style, gradient, size);
+    match shape {
+        GradientShape::Linear { start, end } => {
+            WebRenderGradient::Linear(builder.wr().create_gradient(start, end, stops, extend_mode))
+        },
+        GradientShape::Radial { center, radius } => WebRenderGradient::Radial(
+            builder
+                .wr()
+                .create_radial_gradient(center, radius, stops, extend_mode),
+        ),
+        GradientShape::Conic { center, angle } => WebRenderGradient::Conic(
+            builder
+                .wr()
+                .create_conic_gradient(center, angle, stops, extend_mode),
+        ),
+    }
+}
+
+pub(super) fn resolve(
+    style: &ComputedValues,
+    gradient: &Gradient,
+    size: Size2D<f32, LayoutPixel>,
+) -> GradientParts {
     match gradient {
         Gradient::Linear {
             items,
@@ -46,7 +96,6 @@ pub(super) fn build(
             color_interpolation_method,
             *flags,
             size,
-            builder,
         ),
         Gradient::Radial {
             shape,
@@ -63,7 +112,6 @@ pub(super) fn build(
             color_interpolation_method,
             *flags,
             size,
-            builder,
         ),
         Gradient::Conic {
             angle,
@@ -79,21 +127,19 @@ pub(super) fn build(
             items,
             *flags,
             size,
-            builder,
         ),
     }
 }
 
 /// <https://drafts.csswg.org/css-images-3/#linear-gradients>
-pub(super) fn build_linear(
+fn build_linear(
     style: &ComputedValues,
     items: &[GradientItem<Color, LengthPercentage>],
     line_direction: &LineDirection,
     color_interpolation_method: &ColorInterpolationMethod,
     flags: GradientFlags,
     gradient_box: Size2D<f32, LayoutPixel>,
-    builder: &mut super::DisplayListBuilder,
-) -> WebRenderGradient {
+) -> GradientParts {
     use style::values::specified::position::HorizontalPositionKeyword::*;
     use style::values::specified::position::VerticalPositionKeyword::*;
     use units::LayoutVector2D as Vec2;
@@ -181,17 +227,18 @@ pub(super) fn build_linear(
         gradient_items_to_color_stops(style, items, Au::from_f32_px(gradient_line_length));
     let stops = create_webrender_stops(&mut color_stops, color_interpolation_method, extend_mode);
 
-    WebRenderGradient::Linear(builder.wr().create_gradient(
-        start_point,
-        end_point,
+    GradientParts {
+        shape: GradientShape::Linear {
+            start: start_point,
+            end: end_point,
+        },
         stops,
         extend_mode,
-    ))
+    }
 }
 
 /// <https://drafts.csswg.org/css-images-3/#radial-gradients>
-#[expect(clippy::too_many_arguments)]
-pub(super) fn build_radial(
+fn build_radial(
     style: &ComputedValues,
     items: &[GradientItem<Color, LengthPercentage>],
     shape: &EndingShape,
@@ -199,8 +246,7 @@ pub(super) fn build_radial(
     color_interpolation_method: &ColorInterpolationMethod,
     flags: GradientFlags,
     gradient_box: Size2D<f32, LayoutPixel>,
-    builder: &mut super::DisplayListBuilder,
-) -> WebRenderGradient {
+) -> GradientParts {
     let center = units::LayoutPoint::new(
         center
             .horizontal
@@ -287,16 +333,17 @@ pub(super) fn build_radial(
         gradient_items_to_color_stops(style, items, Au::from_f32_px(gradient_line_length));
     let stops = create_webrender_stops(&mut color_stops, color_interpolation_method, extend_mode);
 
-    WebRenderGradient::Radial(builder.wr().create_radial_gradient(
-        center,
-        radii,
+    GradientParts {
+        shape: GradientShape::Radial {
+            center,
+            radius: radii,
+        },
         stops,
         extend_mode,
-    ))
+    }
 }
 
 /// <https://drafts.csswg.org/css-images-4/#conic-gradients>
-#[expect(clippy::too_many_arguments)]
 fn build_conic(
     style: &ComputedValues,
     angle: Angle,
@@ -305,8 +352,7 @@ fn build_conic(
     items: &[GradientItem<Color, AngleOrPercentage>],
     flags: GradientFlags,
     gradient_box: Size2D<f32, LayoutPixel>,
-    builder: &mut super::DisplayListBuilder<'_>,
-) -> WebRenderGradient {
+) -> GradientParts {
     let center = units::LayoutPoint::new(
         center
             .horizontal
@@ -327,12 +373,14 @@ fn build_conic(
     let mut color_stops = conic_gradient_items_to_color_stops(style, items);
     let stops = create_webrender_stops(&mut color_stops, color_interpolation_method, extend_mode);
 
-    WebRenderGradient::Conic(builder.wr().create_conic_gradient(
-        center,
-        angle.radians(),
+    GradientParts {
+        shape: GradientShape::Conic {
+            center,
+            angle: angle.radians(),
+        },
         stops,
         extend_mode,
-    ))
+    }
 }
 
 fn conic_gradient_items_to_color_stops(

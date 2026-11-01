@@ -85,7 +85,9 @@ use webrender_api::units::{DevicePixel, LayoutVector2D};
 
 use crate::accessibility::{AccessibilityContext, AccessibilityDamageMap, AccessibilityTree};
 use crate::context::{CachedImageOrError, ImageResolver, LayoutContext};
-use crate::display_list::{DisplayListBuilder, HitTest, PaintTimingHandler, StackingContextTree};
+use crate::display_list::{
+    DisplayListBuilder, HitTest, MaskImages, PaintTimingHandler, StackingContextTree,
+};
 use crate::dom::NodeExt;
 use crate::query::{
     BoxAreaInclusion, find_character_offset_in_fragment_descendants, get_the_text_steps,
@@ -207,6 +209,9 @@ pub struct LayoutThread {
 
     /// Cross-process access to the `Paint` API.
     paint_api: CrossProcessPaintApi,
+
+    /// The composed images of CSS masks, kept from one display list to the next.
+    mask_images: RefCell<MaskImages>,
 
     /// Debug options, copied from configuration to this `LayoutThread` in order
     /// to avoid having to constantly access the thread-safe global options.
@@ -854,6 +859,7 @@ impl LayoutThread {
             box_tree: Default::default(),
             fragment_tree: Default::default(),
             stacking_context_tree: Default::default(),
+            mask_images: RefCell::new(MaskImages::new(config.paint_api.clone())),
             paint_api: config.paint_api,
             stylist: Stylist::new(device, QuirksMode::NoQuirks),
             resolved_images_cache: Default::default(),
@@ -1570,6 +1576,7 @@ impl LayoutThread {
             paint_timing_handler,
             reflow_statistics,
             reflow_request.frame_focused,
+            &mut self.mask_images.borrow_mut(),
         );
 
         stacking_context_tree.paint_info.paint_timing_info = reflow_request.paint_timing_info;

@@ -175,6 +175,7 @@ may use any of this and runs fully in a browser.
 | Gamepads | Chromium reads them itself. | The shell hands Servo the first pad in the standard mapping, named `Standard gamepad`. |
 | Text entry, Tab focus, wheel scrolling | Work. IME composition has not been checked. A held key's repeats report `repeat` false. A wheel notch scrolls 53 pixels on Linux and 44 on Windows. | Held keys report `repeat`. A wheel notch scrolls 53 pixels on both. |
 | Inline `<svg>` | Works. | Drawn as a picture of its markup: document stylesheets, `:hover`, `:focus`, inherited fonts and pointer events inside it do not apply; `focus()` and Tab reach an element with a `tabindex`. See [inline SVG](#inline-svg-in-the-window). |
+| CSS masks (`mask-image` and its longhands) | Work. | Drawn by the Engine's Servo ([servo-layout patch](../rust/vendor/servo-layout/RUSTY_PATCH.md)): image (`url()`, `data:`, SVG), gradient and colour layers, with `mask-mode`, `-origin`, `-clip`, `-size`, `-position`, `-repeat`, `-composite` and the `-webkit-` aliases (a `-webkit-mask-composite` takes the standard keywords, as in Servo's parser, not Chromium's legacy ones). Not drawn: a reference to an SVG `<mask>`, `mask-border`. A mask is composed on the CPU at device resolution, once for each distinct mask: a mask whose position or size animates is composed again every frame. `scripts/green-path/check.py --only mask` compares masked elements with canvas references from the window's pixels. |
 
 ### Inline SVG in the window
 

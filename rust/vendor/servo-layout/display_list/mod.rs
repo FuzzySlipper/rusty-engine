@@ -76,11 +76,13 @@ mod clip;
 mod conversions;
 mod gradient;
 mod hit_test;
+mod mask;
 mod paint_timing_handler;
 mod paint_traversal;
 mod stacking_context;
 
 pub(crate) use hit_test::{ClosestFragmentSearch, HitTest};
+pub(crate) use mask::MaskImages;
 pub(crate) use paint_timing_handler::PaintTimingHandler;
 pub(crate) use stacking_context::*;
 
@@ -132,6 +134,9 @@ pub(crate) struct DisplayListBuilder<'a> {
 
     /// Handler for all Paint Timings
     paint_timing_handler: &'a mut PaintTimingHandler,
+
+    /// The composed images of CSS masks, kept from one display list to the next.
+    mask_images: &'a mut MaskImages,
 
     /// Statistics collected about the reflow, in order to write tests for incremental layout.
     reflow_statistics: &'a mut ReflowStatistics,
@@ -197,6 +202,7 @@ impl DisplayListBuilder<'_> {
         paint_timing_handler: &mut PaintTimingHandler,
         reflow_statistics: &mut ReflowStatistics,
         frame_focused: bool,
+        mask_images: &mut MaskImages,
     ) -> BuiltDisplayList {
         // Build the rest of the display list which inclues all of the WebRender primitives.
         let paint_info = &mut stacking_context_tree.paint_info;
@@ -237,6 +243,7 @@ impl DisplayListBuilder<'_> {
             image_resolver,
             device_pixel_ratio,
             paint_timing_handler,
+            mask_images,
             reflow_statistics,
             largest_contentful_paint_enabled: pref!(largest_contentful_paint_enabled),
             shell_background_color,
@@ -267,6 +274,7 @@ impl DisplayListBuilder<'_> {
 
         PaintTraversal::traverse(&stacking_context_tree.root_stacking_context, &mut builder);
         builder.paint_dom_inspector_highlight();
+        builder.mask_images.finish_display_list();
 
         webrender_display_list_builder.end().1
     }
@@ -445,6 +453,8 @@ impl DisplayListBuilder<'_> {
         let mix_blend_mode;
         let mut filters: Vec<_>;
         let mut stacking_context_flags = StackingContextFlags::empty();
+        let spatial_id = self.spatial_id(stacking_context.scroll_tree_node_id);
+        let mut mask_clip = None;
         match &stacking_context.fragment {
             StackingContextFragments::Fragment(fragment) => {
                 let style = fragment.style();
@@ -464,6 +474,11 @@ impl DisplayListBuilder<'_> {
                 // instead of the root stacking context?
                 is_blend_container &= !fragment.base.flags.contains(FragmentFlags::IS_ROOT_ELEMENT);
 
+                let with_style = fragment.with_style();
+                let fragment_builder =
+                    BuilderForBoxFragment::new(&with_style, stacking_context.containing_block_origin);
+                mask_clip = self.mask_clip(&fragment_builder, spatial_id);
+
                 // WebRender only uses the stacking context to apply certain effects. If we don't
                 // actually need to create a stacking context, just avoid creating one.
                 if !is_blend_container &&
@@ -472,6 +487,7 @@ impl DisplayListBuilder<'_> {
                     effects.mix_blend_mode == ComputedMixBlendMode::Normal &&
                     !style.has_effective_transform_or_perspective(FragmentFlags::empty()) &&
                     style.get_svg().clip_path == ComputedClipPath::None &&
+                    mask_clip.is_none() &&
                     transform_style == TransformStyle::Flat
                 {
                     return false;
@@ -511,11 +527,13 @@ impl DisplayListBuilder<'_> {
         // should be used for primitives, but `None` is used for stacking contexts and
         // clip chains. We convert to the `Option<ClipChainId>` representation here. Just
         // passing Some(ClipChainId::INVALID) causes a panic.
-        let clip_chain_id = match stacking_context.clip_id {
+        let mut clip_chain_id = match stacking_context.clip_id {
             ClipId::INVALID => None,
             clip_id => Some(self.clip_chain_id(clip_id)),
         };
-        let spatial_id = self.spatial_id(stacking_context.scroll_tree_node_id);
+        if let Some(mask_clip) = mask_clip {
+            clip_chain_id = Some(self.wr().define_clip_chain(clip_chain_id, [mask_clip]));
+        }
 
         self.wr().push_stacking_context(
             spatial_id,
