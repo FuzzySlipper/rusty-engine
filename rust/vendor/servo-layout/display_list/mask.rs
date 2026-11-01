@@ -289,16 +289,19 @@ fn mask_hash(layers: &[Layer], origin: LayoutPoint, size: DeviceIntSize, scale: 
                 1u8.hash(&mut hasher);
                 match parts.shape {
                     GradientShape::Linear { start, end } => {
+                        0u8.hash(&mut hasher);
                         for value in [start.x, start.y, end.x, end.y] {
                             float(&mut hasher, value);
                         }
                     },
                     GradientShape::Radial { center, radius } => {
+                        1u8.hash(&mut hasher);
                         for value in [center.x, center.y, radius.width, radius.height] {
                             float(&mut hasher, value);
                         }
                     },
                     GradientShape::Conic { center, angle } => {
+                        2u8.hash(&mut hasher);
                         for value in [center.x, center.y, angle] {
                             float(&mut hasher, value);
                         }

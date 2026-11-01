@@ -13,13 +13,14 @@
      clears what lies beneath it, `url(mask), linear-gradient(#000,#000)` with
      `mask-composite: exclude`. B: mask-size, mask-position and mask-repeat.
      C: the -webkit- aliases. D: a gradient mask. E: an image mask
-     intersected with a gradient. The mask image is a 16x16 data: URL drawn
+     intersected with a gradient. F: a radial gradient mask whose shape has
+     D's numbers, drawn beside D. The mask image is a 16x16 data: URL drawn
      at whole multiples with image-rendering: pixelated, so both engines draw
      the same pixels. The check compares each element with its reference. -->
 <div id="cells"></div>
 <script>
 const report = (event, detail = {}) => fetch('/report', { method: 'POST', body: JSON.stringify({ event, ...detail }) });
-const SIZE = 16, CELL = 160, COLUMNS = [40, 240, 440, 640, 840];
+const SIZE = 16, CELL = 160, COLUMNS = [40, 240, 440, 640, 840, 1040];
 
 // The helm: opaque but for an arched opening, with a half-alpha brim.
 const alpha = [];
@@ -58,6 +59,9 @@ const cases = [
   { name: 'intersect', style: { 'mask-image': `${mask}, linear-gradient(#000 50%, transparent 50%)`, 'mask-size': `${CELL}px ${CELL}px, 100% 100%`,
                                 'mask-composite': 'intersect' },
     value: (u, v) => at(u, v, CELL) * (v < CELL / 2 ? 1 : 0) },
+  // Its shape's numbers are the gradient cell's (a line from (0, 80) to (160, 80)): it must still draw its own mask.
+  { name: 'radial', style: { 'mask-image': 'radial-gradient(ellipse 160px 80px at 0px 80px, transparent, #000)' },
+    value: (u, v) => Math.min(1, Math.hypot((u + 0.5) / CELL, (v + 0.5 - CELL / 2) / (CELL / 2))) },
 ];
 const cells = document.getElementById('cells');
 cases.forEach((c, i) => {

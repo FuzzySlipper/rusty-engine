@@ -990,7 +990,8 @@ class Check:
         """CSS masks judged from the window's pixels: each masked element
         against the canvas reference the page draws below it."""
         names = ['helm: image mask excluded from a full cover', 'mask-size, mask-position and mask-repeat',
-                 '-webkit- aliases', 'gradient mask', 'image mask intersected with a gradient']
+                 '-webkit- aliases', 'gradient mask', 'image mask intersected with a gradient',
+                 'radial mask beside a linear one with the same numbers']
         supports = self.runtime.eval('JSON.stringify(window.__maskSupports)').get('value')
         supports = json.loads(supports) if supports else {}
         self.record('mask', 'parsed: ' + ', '.join(supports), bool(supports) and all(supports.values()), f'{supports}')
