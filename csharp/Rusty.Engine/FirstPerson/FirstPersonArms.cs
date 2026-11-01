@@ -254,13 +254,13 @@ public sealed class FirstPersonArms : IDisposable
         (ride, sampled) = (null, null);
         if (lead.Led <= 0 || lead.Playing is not { } playing) return (mainHand.Grip, mainHand.Look);
         Prepare();
-        // The instance plays the clips as Lead laid them, however many are fading; before it is drawn, the model samples
-        // the playing clip over the one right under it.
+        // The instance plays the clips as Lead laid them, however many are fading. Before it exists, the model samples
+        // what Reach will create it playing: the rig's clip at its start with the playing clip laid over it as Layer
+        // lays it, so the first update rides the pose the instance then draws. (Clips fading under the playing one before
+        // the first Reach, which only a second Lead without a Reach between makes, are left out.)
         JointPose[] posed = (instance is not null
             ? engine.Animation.SampleJointPose(AnimationPoseSampleRequest.OfCurrentPlayback(instance, Unplaced, false))
-            : engine.Animation.SampleModelJointPose(lead.Under is [.., var from]
-                ? new(model, from.Clip, from.Time, playing.Clip, playing.Time, lead.Blend, true, Unplaced)
-                : AnimationModelPoseSampleRequest.OfClip(model, playing.Clip, playing.Time, Unplaced))).ToArray();
+            : engine.Animation.SampleModelJointPose(new(model, rig.Clip, 0, playing.Clip, playing.Time, lead.Led * lead.Blend, true, Unplaced))).ToArray();
         Transform placed = Placement();
         (Vector3 wrist, Vector3 pole, Quaternion kept, WristBend bend) = ClipHand(main, posed, mainHand.Pole);
         main.Bend = bend;

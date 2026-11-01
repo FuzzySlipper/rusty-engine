@@ -22,6 +22,7 @@ AClipBentPastTheWristIsHeldInRange();
 TheOffHandStaysOnItsGrip();
 CarryMovesTheArmsAndTheLook();
 FadesBetweenModesAndClipsDoNotPop();
+FreshArmsStartClipLedWithoutAPop();
 Console.WriteLine("first-person arms exercises passed");
 
 static void ThumbShapesReadBack(DigitFrames frames)
@@ -386,6 +387,26 @@ static void FadesBetweenModesAndClipsDoNotPop()
     last = still;
     Fades(null, "back to weapon-led");
     Require(arms.Clip.Led == 0 && Vector3.Distance(last, weaponLed) < 1e-5f, $"the arms are weapon-led again: {arms.Clip}");
+}
+
+// Arms that start clip-led part way into a fade ride, before the animation instance exists, the pose the instance then
+// draws: the same frame again with no time passing leaves the look where it was.
+static void FreshArmsStartClipLedWithoutAPop()
+{
+    FakeRig fake = new();
+    using FirstPersonArms arms = fake.Arms(Rig(DigitFrames.Measured, [], []));
+    HandAim main = Aim(new(0.15f, -0.25f, -0.45f), Quaternion.CreateFromAxisAngle(Vector3.UnitY, 0.3f)), off = Aim(new(-0.2f, -0.2f, -0.5f));
+    ArmClipFrame frame = new("guard", 0.5f, Fade: 0.2f);
+    arms.Lead(frame, 0.1f);
+    Require(arms.Clip.Led is > 0.4f and < 0.6f, $"the arms are half way into clip-led: {arms.Clip}");
+    (Vector3 first, Quaternion firstLook) = arms.Ride(main);
+    arms.Fact(true);
+    arms.Reach(main, off);
+    arms.Lead(frame, 0);
+    (Vector3 again, Quaternion againLook) = arms.Ride(main);
+    arms.Reach(main, off);
+    Require(Vector3.Distance(first, again) < 1e-5f && MathF.Abs(Quaternion.Dot(firstLook, againLook)) > 0.99999f,
+        $"with no time passing the look moved {Vector3.Distance(first, again)} m once the instance existed");
 }
 
 static HandAim Aim(Vector3 grip, Quaternion? look = null, float reach = 1) =>
