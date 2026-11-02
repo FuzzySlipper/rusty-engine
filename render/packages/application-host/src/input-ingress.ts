@@ -710,8 +710,17 @@ export function createRustyApplicationInputQueue(
     // by the caller. Keep this guard local as well so future call paths cannot
     // reopen an exhausted queue.
     if (terminal) return;
-    entries = entries.filter((entry) => BigInt(entry.sequence) >= authoritative);
-    if (sequence < authoritative) sequence = authoritative;
+    // Queued entries were never sent. A fact the cursor passed is dropped,
+    // but a claim is kept: the desktop window's own facts move the cursor
+    // while the page's claims wait here. What stays is renumbered from the
+    // cursor in order, never below a sequence the page already used.
+    const kept = entries.filter((entry) => 'intent' in entry || BigInt(entry.sequence) >= authoritative);
+    const first = kept[0];
+    let next = first === undefined || BigInt(first.sequence) < authoritative
+      ? authoritative
+      : BigInt(first.sequence);
+    entries = kept.map((entry) => Object.freeze({ ...entry, sequence: (next++).toString(10) }));
+    if (sequence < next) sequence = next;
   }
 }
 

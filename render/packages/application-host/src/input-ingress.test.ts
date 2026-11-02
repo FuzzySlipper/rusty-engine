@@ -356,6 +356,44 @@ void test('a control change keeps queued UI claims after its clear and a restart
   }]);
 });
 
+void test('a claim queued while the window moves the cursor survives that receipt and the release binding', () => {
+  const queue = createRustyApplicationInputQueue(8);
+  const routed = { instanceId: '7', generation: '3', controlRevision: '12' };
+  queue.bindRuntime({ runtime: routed, context: 'gameplay.default', nextSequence: '10' });
+  queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'pressed' });
+  queue.claim('menu.pause', { kind: 'digital', active: true });
+  // A window receipt reports its own facts through sequence 11.
+  assert.equal(queue.bindRuntime({ runtime: routed, context: 'gameplay.default', nextSequence: '12' }), false);
+  const returned = { instanceId: '7', generation: '3', controlRevision: '13' };
+  assert.equal(queue.bindRuntime({ runtime: returned, context: 'gameplay.default', nextSequence: '1' }), true);
+  assert.deepEqual(queue.drain(), [{
+    runtime: returned,
+    sequence: '1',
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'control-revision-change' },
+  }, {
+    runtime: returned,
+    sequence: '2',
+    context: 'gameplay.default',
+    intent: 'menu.pause',
+    value: { kind: 'digital', active: true },
+  }]);
+});
+
+void test('cursor reconciliation renumbers a kept claim from the cursor and drops passed facts', () => {
+  const queue = createRustyApplicationInputQueue(8);
+  const routed = { instanceId: '7', generation: '3', controlRevision: '12' };
+  queue.bindRuntime({ runtime: routed, context: 'gameplay.default', nextSequence: '10' });
+  queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'pressed' });
+  queue.claim('menu.pause', { kind: 'digital', active: true });
+  queue.bindRuntime({ runtime: routed, context: 'gameplay.default', nextSequence: '12' });
+  queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'released' });
+  assert.deepEqual(queue.drain().map((entry) => [entry.sequence, 'intent' in entry]), [
+    ['12', true],
+    ['13', false],
+  ]);
+});
+
 void test('managed interface events preserve a claimed product payload while releasing physical input', () => {
   const eventTarget = createListenerTarget();
   const documentTarget = createListenerTarget();
