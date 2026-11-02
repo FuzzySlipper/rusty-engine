@@ -133,7 +133,8 @@ The green path:
   capture. UI controls take DOM pointer events (`click`, `pointerdown`,
   `pointermove`, `pointerup`) and keyboard events.
 - **Escape and focus.** Escape ends a pointer lock or cursor confinement
-  first; the page sees the lock end, not the key. Drop held state and cancel
+  first; the page sees the lock end, not the key, and a claim it makes then
+  (a pause) reaches the product once. Drop held state and cancel
   drags on the window's `blur`.
 - **Menus and modals.** Draw them in the DOM; `<dialog>` with `showModal()`
   works everywhere. Never use `alert`, `confirm` or `prompt`: the window

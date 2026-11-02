@@ -868,9 +868,11 @@ export async function mountProductBrowserHostWithApplication(
     // focus changes and page blur cannot clear what it holds. The desktop
     // window holds the keyboard and mouse but reads no controller: the page
     // still sends its controller facts, which the runtime takes in order
-    // with the window's.
+    // with the window's, and its UI claims.
     if (inputClaim !== null) return;
-    const batch = windowInput ? input.filter(isControllerFact) : input;
+    const batch = windowInput
+      ? input.filter((event) => isControllerFact(event) || 'intent' in event)
+      : input;
     if (batch.length === 0) return;
     try {
       applyInputResult(await transport.input(batch));

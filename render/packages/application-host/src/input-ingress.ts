@@ -636,11 +636,18 @@ export function createRustyApplicationInputQueue(
         || previous.runtime.generation !== normalized.runtime.generation
         ? 'restart'
         : 'control-revision-change';
+      // A control change keeps the epoch, and the Engine keeps the claims it
+      // already admitted across it; claims still queued follow the clear
+      // under the new binding. A restart drops them with the epoch.
+      const claims = reason === 'control-revision-change'
+        ? entries.filter((entry): entry is RuntimeInputWireIntentClaim => 'intent' in entry)
+        : [];
       binding = normalized;
       sequence = normalized.nextSequence === undefined ? 0n : BigInt(normalized.nextSequence);
       terminal = false;
       entries = [];
       replaceQueuedWithClear(reason);
+      for (const claim of claims) appendClaim(claim.intent, claim.value);
       return true;
     },
     rebaseRuntime: (normalized) => {

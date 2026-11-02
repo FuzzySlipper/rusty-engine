@@ -867,6 +867,18 @@ pub struct CsharpProductRuntime {
     /// While it does, it reads the controller too; otherwise the page's
     /// controller facts still count.
     window_controller: bool,
+    /// The page's direct claims a window route change made stale, until the
+    /// page sends on the current binding while it holds input.
+    carried_page_claims: Option<CarriedPageClaims>,
+}
+
+/// Which of the page's claims on earlier control revisions still reach the
+/// product: those from `since` on, each once.
+struct CarriedPageClaims {
+    since: RuntimeInputBinding,
+    /// The last carried claim's control revision and sequence; a page sends
+    /// each binding's claims in sequence order.
+    through: Option<(runtime_lifecycle::RuntimeControlRevision, u64)>,
 }
 
 struct InputClaim {
@@ -1183,6 +1195,7 @@ impl CsharpProductRuntime {
             input_claim: None,
             window_input: false,
             window_controller: false,
+            carried_page_claims: None,
         })
     }
 
@@ -2858,8 +2871,46 @@ impl CsharpProductRuntime {
         self.input_lane
             .rebind(binding, standard_input_context(), reason)
             .map_err(input_error)?;
+        self.carried_page_claims = None;
         self.pending_inputs.clear();
         self.pending_inputs.push(clear_input_owned(binding, reason));
+        Ok(())
+    }
+
+    /// Admits the page's direct claims that a window route change made
+    /// stale, or that the page sends while the window holds input, as the
+    /// current binding's. Everything else in the batch is left to the usual
+    /// path, which drops these claims as stale or the window's.
+    fn carry_page_claims(
+        &mut self,
+        events: &[RuntimeInputEvent],
+    ) -> Result<(), runtime_input::RuntimeInputError> {
+        let current = input_binding(&self.lifecycle);
+        let Some(carried) = &mut self.carried_page_claims else {
+            return Ok(());
+        };
+        for event in events {
+            let RuntimeInputEvent::DirectIntent(claim) = event else {
+                continue;
+            };
+            let runtime = claim.runtime();
+            let position = (runtime.control_revision(), claim.sequence());
+            if runtime.instance_id() != carried.since.instance_id()
+                || runtime.generation() != carried.since.generation()
+                || runtime.control_revision() < carried.since.control_revision()
+                || (runtime == current && !self.window_input)
+                || carried.through.is_some_and(|through| position <= through)
+            {
+                continue;
+            }
+            self.input_lane.carry_direct_intent(claim)?;
+            carried.through = Some(position);
+        }
+        // Once the page sends on the current binding while it holds input,
+        // nothing older follows.
+        if !self.window_input && events.iter().any(|event| event.runtime() == current) {
+            self.carried_page_claims = None;
+        }
         Ok(())
     }
 
@@ -3426,6 +3477,14 @@ impl ProductHostRuntime for CsharpProductRuntime {
         // current binding join the window's in mailbox order; the rest of its
         // batch, and anything from before the window took input, is stale.
         // A window that reads the controller leaves the page nothing.
+        if matches!(
+            self.lifecycle.state(),
+            RuntimeState::Running | RuntimeState::Paused
+        ) {
+            if let Err(error) = self.carry_page_claims(batch.events()) {
+                return self.fence_refused_input(batch.events().len(), &error);
+            }
+        }
         if self.window_input && self.window_controller {
             return self.window_input(Vec::new());
         }
@@ -3497,11 +3556,25 @@ impl ProductHostRuntime for CsharpProductRuntime {
         }
         self.window_input = routed;
         self.window_controller = routed && controller;
+        let page = input_binding(&self.lifecycle);
         self.lifecycle
             .change_control(control)
             .map_err(|error| self.lifecycle_runtime_error(error))?;
-        self.rebind_input_in_place(InputClearReason::ControlRevisionChange)
-            .map_err(|error| self.runtime_error(error))?;
+        // Only physical input changes hands. The page's claims admitted
+        // before the change, and those it makes on the old binding until it
+        // adopts the new one (a pause claimed as the lock is lost), still
+        // reach the product once.
+        let binding = input_binding(&self.lifecycle);
+        let reason = InputClearReason::ControlRevisionChange;
+        self.input_lane
+            .rebind_keeping_direct_intents(binding, standard_input_context(), reason)
+            .map_err(|error| self.runtime_error(input_error(error)))?;
+        self.pending_inputs.clear();
+        self.pending_inputs.push(clear_input_owned(binding, reason));
+        self.carried_page_claims.get_or_insert(CarriedPageClaims {
+            since: page,
+            through: None,
+        });
         observe_product_runtime(&self.api, self.handle, self.lifecycle.readout());
         let outputs = self.rebind_in_place(Vec::new())?;
         self.receipt(operation, outputs)
@@ -9655,6 +9728,102 @@ mod tests {
                 .all(|input| input.kind != NativeInputEventKind::ControllerButton),
             "the page's controller does not count"
         );
+        drop(runtime);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn page_claims_made_as_the_window_takes_or_gives_back_input_reach_the_product_once() {
+        let _guard = DIRECT_INPUT_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let _drop_guard = DROP_FIXTURE_GATE
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let (mut runtime, root) = remapping_fixture_runtime("window-route-claims");
+        runtime
+            .lifecycle(ProductHostLifecycleOperation::Start)
+            .unwrap();
+        runtime.admit_manual_step().unwrap();
+        let claim = |binding, sequence| {
+            RuntimeInputEvent::DirectIntent(RuntimeDirectIntentClaim::new(
+                binding,
+                sequence,
+                standard_input_context(),
+                "fixture.attack",
+                RuntimeIntentValue::Digital { active: true },
+            ))
+        };
+        let delivered_claims = || {
+            let events = std::mem::take(
+                &mut *DIRECT_INPUT_CALLBACK_EVENTS
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner),
+            );
+            events
+                .iter()
+                .flatten()
+                .filter(|event| {
+                    event.provenance == NativeInputProvenance::DirectUi
+                        && event.intent == b"fixture.attack"
+                })
+                .count()
+        };
+        delivered_claims();
+
+        // A menu choice claims, then returns to play: the window takes the
+        // pointer. The claim admitted before the grab, one still on the old
+        // binding, and one made under the new binding while the window holds
+        // input all reach the product; a replayed batch adds nothing.
+        let page = runtime.binding();
+        let page_input = input_binding(&runtime.lifecycle);
+        runtime
+            .input(ProductHostInputBatch::new(vec![claim(page_input, 1)]))
+            .unwrap();
+        runtime.route_window_input(true, false).unwrap();
+        let routed = input_binding(&runtime.lifecycle);
+        assert_ne!(runtime.binding(), page);
+        for _ in 0..2 {
+            runtime
+                .input(ProductHostInputBatch::new(vec![claim(page_input, 2)]))
+                .unwrap();
+        }
+        runtime
+            .input(ProductHostInputBatch::new(vec![claim(routed, 1)]))
+            .unwrap();
+        runtime.admit_manual_step().unwrap();
+        assert_eq!(delivered_claims(), 3);
+
+        // Escape gives the pointer back; the page claims a pause in its
+        // pointerlockchange handler before it adopts the new binding. Its
+        // clear on adopting it keeps the claim, and its later claims follow
+        // the usual path.
+        runtime.route_window_input(false, false).unwrap();
+        let returned = input_binding(&runtime.lifecycle);
+        for _ in 0..2 {
+            runtime
+                .input(ProductHostInputBatch::new(vec![claim(routed, 2)]))
+                .unwrap();
+        }
+        runtime
+            .input(ProductHostInputBatch::new(vec![
+                RuntimeInputEvent::Physical(RuntimeInputIngress::new(
+                    returned,
+                    1,
+                    standard_input_context(),
+                    RuntimeInputFact::Clear {
+                        reason: InputClearReason::ControlRevisionChange,
+                    },
+                )),
+                claim(returned, 2),
+            ]))
+            .unwrap();
+        // Once the page sends under the new binding, nothing older counts.
+        runtime
+            .input(ProductHostInputBatch::new(vec![claim(routed, 3)]))
+            .unwrap();
+        runtime.admit_manual_step().unwrap();
+        assert_eq!(delivered_claims(), 2);
         drop(runtime);
         fs::remove_dir_all(root).unwrap();
     }

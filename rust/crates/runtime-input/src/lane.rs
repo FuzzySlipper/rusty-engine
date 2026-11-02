@@ -211,7 +211,10 @@ impl RuntimeInputLane {
         self.last_sequence = Some(event.sequence());
         let result = match event {
             RuntimeInputEvent::Physical(ingress) => self.ingest_physical(ingress),
-            RuntimeInputEvent::DirectIntent(claim) => self.ingest_direct(claim),
+            RuntimeInputEvent::DirectIntent(claim) => {
+                let sequence = claim.sequence();
+                self.queue_direct(&claim, sequence)
+            }
         };
         if result.is_err() {
             self.clear_state();
@@ -235,6 +238,53 @@ impl RuntimeInputLane {
             context,
             RuntimeInputFact::Clear { reason },
         )))
+    }
+
+    /// Rebinds like [`Self::rebind`] but keeps the direct product UI claims
+    /// already admitted, now under the new binding ahead of anything it
+    /// admits. A control change that only moves physical input (the desktop
+    /// window taking or giving back the pointer) must not lose what the page
+    /// claimed around it.
+    pub fn rebind_keeping_direct_intents(
+        &mut self,
+        binding: RuntimeInputBinding,
+        context: InputContext,
+        reason: InputClearReason,
+    ) -> Result<(), RuntimeInputError> {
+        let kept = std::mem::take(&mut self.pending_intents)
+            .into_iter()
+            .filter(|pending| pending.provenance == IntentProvenance::DirectUi)
+            .collect::<Vec<_>>();
+        self.rebind(binding, context, reason)?;
+        self.pending_intents = kept
+            .into_iter()
+            .map(|pending| PendingIntent {
+                sequence: 0,
+                ..pending
+            })
+            .collect();
+        Ok(())
+    }
+
+    /// Admits a direct product UI claim the page made under an earlier
+    /// control revision of this generation, as the current binding's, at the
+    /// cursor and without moving it. The caller decides which earlier
+    /// revisions still count and admits each claim once.
+    pub fn carry_direct_intent(
+        &mut self,
+        claim: &RuntimeDirectIntentClaim,
+    ) -> Result<(), RuntimeInputError> {
+        if self.disposed {
+            return Err(RuntimeInputError::Disposed);
+        }
+        let runtime = claim.runtime();
+        if runtime.instance_id() != self.binding.instance_id()
+            || runtime.generation() != self.binding.generation()
+            || runtime.control_revision() > self.binding.control_revision()
+        {
+            return Err(RuntimeInputError::BindingMismatch);
+        }
+        self.queue_direct(claim, self.last_sequence.unwrap_or(0))
     }
 
     /// Takes the direct product UI claims a paused runtime admitted, in
@@ -424,12 +474,15 @@ impl RuntimeInputLane {
             RuntimeInputFact::Clear { reason } => {
                 // Losing physical input within a context (opening a menu
                 // loses pointer lock and focus after it claims) releases held
-                // input but keeps the product UI's accepted claims.
+                // input but keeps the product UI's accepted claims. So does
+                // the page's clear on adopting a new control revision: the
+                // claims the lane kept or carried across it stay.
                 let physical_loss = matches!(
                     reason,
                     InputClearReason::InteractionModeLoss
                         | InputClearReason::PointerLockLoss
                         | InputClearReason::FocusLoss
+                        | InputClearReason::ControlRevisionChange
                 );
                 if physical_loss && ingress.context() == &self.context {
                     self.clear_physical_state();
@@ -470,7 +523,11 @@ impl RuntimeInputLane {
         Ok(())
     }
 
-    fn ingest_direct(&mut self, claim: RuntimeDirectIntentClaim) -> Result<(), RuntimeInputError> {
+    fn queue_direct(
+        &mut self,
+        claim: &RuntimeDirectIntentClaim,
+        sequence: u64,
+    ) -> Result<(), RuntimeInputError> {
         let descriptor = self
             .mappings
             .intent(claim.intent())
@@ -489,7 +546,7 @@ impl RuntimeInputLane {
             }
         }
         self.pending_intents.push(PendingIntent {
-            sequence: claim.sequence(),
+            sequence,
             order: usize::MAX,
             descriptor: descriptor.clone(),
             value: claim.value().clone(),

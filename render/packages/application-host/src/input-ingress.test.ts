@@ -326,6 +326,36 @@ void test('input ingress rebinding and context changes clear with the exact epoc
   }]);
 });
 
+void test('a control change keeps queued UI claims after its clear and a restart drops them', () => {
+  const queue = createRustyApplicationInputQueue(8);
+  queue.bindRuntime(INITIAL);
+  queue.enqueueFact({ kind: 'key', code: 'key-w', edge: 'pressed' });
+  queue.claim('menu.pause', { kind: 'digital', active: true });
+  const replaced = { instanceId: '7', generation: '3', controlRevision: '12' };
+  assert.equal(queue.bindRuntime({ runtime: replaced, context: 'gameplay.default', nextSequence: '1' }), true);
+  assert.deepEqual(queue.drain(), [{
+    runtime: replaced,
+    sequence: '1',
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'control-revision-change' },
+  }, {
+    runtime: replaced,
+    sequence: '2',
+    context: 'gameplay.default',
+    intent: 'menu.pause',
+    value: { kind: 'digital', active: true },
+  }]);
+  queue.claim('menu.pause', { kind: 'digital', active: true });
+  const restarted = { instanceId: '7', generation: '4', controlRevision: '13' };
+  assert.equal(queue.bindRuntime({ runtime: restarted, context: 'gameplay.default' }), true);
+  assert.deepEqual(queue.drain(), [{
+    runtime: restarted,
+    sequence: '0',
+    context: 'gameplay.default',
+    fact: { kind: 'clear', reason: 'restart' },
+  }]);
+});
+
 void test('managed interface events preserve a claimed product payload while releasing physical input', () => {
   const eventTarget = createListenerTarget();
   const documentTarget = createListenerTarget();

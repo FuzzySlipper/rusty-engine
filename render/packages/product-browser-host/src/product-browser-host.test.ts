@@ -399,7 +399,7 @@ test('while a harness holds input the page sends none and shows the claim', asyn
   });
 });
 
-test('while the desktop window holds input the page sends only its controller and shows no claim', async () => {
+test('while the desktop window holds input the page sends only its controller and claims and shows no claim', async () => {
   await withFakeRoot(async (root) => {
     const routed = { ...RUNNING, controlRevision: '3' } as const;
     const returned = { ...RUNNING, controlRevision: '4' } as const;
@@ -449,9 +449,14 @@ test('while the desktop window holds input the page sends only its controller an
       runtime: routed, sequence: '2', context: 'gameplay.default',
       fact: { kind: 'controller-button', button: 'button-0', edge: 'pressed' },
     };
-    pending = [key(routed), button];
+    // So does a UI claim: a choice made as the window takes the pointer.
+    const claim: RuntimeInputWireEvent = {
+      runtime: routed, sequence: '3', context: 'gameplay.default',
+      intent: 'menu.choose', value: { kind: 'digital', active: true },
+    };
+    pending = [key(routed), button, claim];
     await runCadence(cadence, 1);
-    assert.deepEqual(sent, [[button]], 'only the controller fact is sent');
+    assert.deepEqual(sent, [[button, claim]], 'only the controller fact and the claim are sent');
     sent.length = 0;
     // The window's input results reach the page too; they keep its hold.
     publish([{
