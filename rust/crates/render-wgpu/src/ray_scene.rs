@@ -196,9 +196,11 @@ pub struct RaySceneReadout {
     pub copies_in_reach: u32,
     pub copy_instances: u32,
     pub dropped_instances: u32,
-    /// The rows the instance buffer and TLAS hold; the rows past the last
-    /// written are inactive.
+    /// The rows the instance buffer and TLAS hold, and the rows the last
+    /// build took: the parts', and the copies' the frame before needed
+    /// with a margin. Rows past those written are inactive.
     pub capacity: u32,
+    pub built_rows: u32,
     /// BLAS built and TLAS builds since the ray scene was made.
     pub blas_builds: u64,
     pub tlas_builds: u64,
@@ -298,6 +300,7 @@ pub(crate) struct RayScene {
     reach_override: Option<f32>,
     reach: f32,
     part_rows: u32,
+    built_rows: u32,
     retired: Vec<(Arc<AtomicBool>, Retired)>,
     /// The TLAS build (instance pass and build) and the BLAS builds.
     timer: Option<crate::timing::PassTimer>,
@@ -355,6 +358,7 @@ impl RayScene {
             reach_override: None,
             reach: DEFAULT_REACH,
             part_rows: 0,
+            built_rows: 0,
             retired: Vec::new(),
             timer: crate::timing::PassTimer::new(gpu, "ray-scene"),
             blas_timer: crate::timing::PassTimer::new(gpu, "ray-blas"),
@@ -383,11 +387,10 @@ impl RayScene {
             reach: self.reach,
             part_instances: self.part_rows,
             copies_in_reach: self.counted[1],
-            copy_instances: self.counted[0].min(self.built.as_ref().map_or(0, |built| {
-                built.capacity - self.part_rows.min(built.capacity)
-            })),
+            copy_instances: self.counted[0] - self.counted[2],
             dropped_instances: self.counted[2],
             capacity: self.built.as_ref().map_or(0, |built| built.capacity),
+            built_rows: self.built_rows,
             blas_builds: self.blas_builds,
             tlas_builds: self.tlas_builds,
             blas_cpu_ms: self.blas_cpu_ms,
@@ -507,6 +510,7 @@ impl Renderer {
                 copy_instances: 0,
                 dropped_instances: 0,
                 capacity: 0,
+                built_rows: 0,
                 blas_builds: 0,
                 tlas_builds: 0,
                 blas_cpu_ms: 0.0,
@@ -856,8 +860,18 @@ impl Renderer {
         let Some(built) = scene.built.as_mut() else {
             return;
         };
-        let capacity = built.capacity;
-        let part_rows = part_rows.min(capacity);
+        // The build takes the rows the copies needed the frame before, and an
+        // eighth more: a build's cost follows its rows, written or inactive.
+        // A frame needing more drops the rest (counted), and the next takes
+        // them.
+        let copy_rows = scene.counted[0];
+        let rows_built = (u64::from(part_rows)
+            + u64::from(copy_rows)
+            + u64::from(copy_rows / 8)
+            + u64::from(WORKGROUP * 16))
+        .min(u64::from(built.capacity)) as u32;
+        scene.built_rows = rows_built;
+        let part_rows = part_rows.min(rows_built);
         let queue = &self.gpu.queue;
         let device = &self.gpu.device;
         if part_rows > 0 {
@@ -871,7 +885,7 @@ impl Renderer {
         params[..4].copy_from_slice(&[eye.x, eye.y, eye.z, scene.reach].map(f32::to_bits));
         params[4..8].copy_from_slice(&wind.map(f32::to_bits));
         let chunks = scene.runs.as_ref().map_or(0, |runs| runs.chunk_count);
-        params[8..12].copy_from_slice(&[chunks, ROW_CHUNKS, part_rows, capacity]);
+        params[8..12].copy_from_slice(&[chunks, ROW_CHUNKS, part_rows, rows_built]);
         params[12] = time.to_bits();
         queue.write_buffer(&scene.params, 0, bytemuck::cast_slice(&params));
 
@@ -880,11 +894,13 @@ impl Renderer {
             label: Some("render-wgpu ray instances"),
         });
         encoder.clear_buffer(&scene.counters, 0, None);
-        encoder.clear_buffer(
-            &built.instances,
-            u64::from(part_rows) * INSTANCE_BYTES,
-            None,
-        );
+        if rows_built > part_rows {
+            encoder.clear_buffer(
+                &built.instances,
+                u64::from(part_rows) * INSTANCE_BYTES,
+                Some(u64::from(rows_built - part_rows) * INSTANCE_BYTES),
+            );
+        }
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("render-wgpu ray instances"),
@@ -926,7 +942,7 @@ impl Renderer {
         let mut raw = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("render-wgpu ray tlas"),
         });
-        let recorded = record_tlas_build(&mut raw, built);
+        let recorded = record_tlas_build(&mut raw, built, rows_built);
         if recorded {
             // SAFETY: `record_tlas_build` built this TLAS, and only it, in
             // `raw`, from BLAS built in earlier submissions
@@ -1373,10 +1389,10 @@ fn scratch_buffer(device: &wgpu::Device, size: u64) -> Option<wgpu::Buffer> {
     }
 }
 
-/// Record the TLAS build from `built.instances` (all `capacity` rows: the
+/// Record the TLAS build from the first `rows` of `built.instances` (the
 /// rows past those written are zero, inactive) in `encoder`, through
 /// wgpu-hal. Returns whether it was recorded (a Vulkan device).
-fn record_tlas_build(encoder: &mut wgpu::CommandEncoder, built: &mut Built) -> bool {
+fn record_tlas_build(encoder: &mut wgpu::CommandEncoder, built: &mut Built, rows: u32) -> bool {
     use wgpu::hal::CommandEncoder as _;
     let Built {
         instances,
@@ -1384,6 +1400,7 @@ fn record_tlas_build(encoder: &mut wgpu::CommandEncoder, built: &mut Built) -> b
         scratch,
         capacity,
     } = built;
+    let rows = rows.min(*capacity);
     // The hal handles, one `as_hal` guard at a time: a guard holds the
     // device's snatch lock, which must not be taken twice on a thread.
     // SAFETY: each handle stays valid after its guard drops: `built` owns
@@ -1416,8 +1433,8 @@ fn record_tlas_build(encoder: &mut wgpu::CommandEncoder, built: &mut Built) -> b
     //   it lets go is retired until the GPU has finished all work submitted
     //   so far (`Retired`), so no TLAS a submitted command reads names a
     //   destroyed BLAS. A row whose address is 0 is inactive.
-    // - TLAS and scratch: made for `capacity` instances with the flags the
-    //   build uses (`made_for`); the barrier first orders the build after
+    // - TLAS and scratch: made for `capacity` instances, at least `rows`,
+    //   with the flags the build uses (`made_for`); the barrier first orders the build after
     //   any earlier reads of the TLAS and the previous build's scratch use,
     //   and the barrier after it makes the TLAS readable by shaders. Both
     //   are retired, not dropped, while a submitted build may use them.
@@ -1462,7 +1479,7 @@ fn record_tlas_build(encoder: &mut wgpu::CommandEncoder, built: &mut Built) -> b
                 wgpu::hal::AccelerationStructureInstances {
                     buffer: Some(instances),
                     offset: 0,
-                    count: *capacity,
+                    count: rows,
                 },
             );
             raw.build_acceleration_structures(

@@ -680,6 +680,7 @@ fn run() -> Result<(), String> {
             "copyInstances": ray_scene.copy_instances,
             "droppedInstances": ray_scene.dropped_instances,
             "capacity": ray_scene.capacity,
+            "builtRows": ray_scene.built_rows,
             "blasBuilds": ray_scene.blas_builds,
             "tlasBuilds": ray_scene.tlas_builds,
             "blasCpuMs": ray_scene.blas_cpu_ms,
