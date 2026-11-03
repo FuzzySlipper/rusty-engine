@@ -66,11 +66,21 @@ impl Gpu {
         Self::from_instance(instance, None)
     }
 
+    /// A headless device with ray queries, where the GPU has them, for the
+    /// ray-traced settings (`ray_scene.rs`). Asking for them costs some
+    /// devices startup time and memory (an RTX 3080: about 58 ms and
+    /// 38 MiB), so a device asks only when a ray-traced setting is selected
+    /// as it is made; selected later, the setting is refused.
+    pub fn headless_with_ray_queries() -> Result<Self, GpuError> {
+        let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        Self::from_instance_with(instance, None, None, None, true)
+    }
+
     /// A headless device whose storage bindings and buffers hold at most
     /// `bytes`: for tests of what passes a device's binding limit.
     pub fn headless_with_binding_limit(bytes: u64) -> Result<Self, GpuError> {
         let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        Self::from_instance_with(instance, None, Some(bytes), None)
+        Self::from_instance_with(instance, None, Some(bytes), None, false)
     }
 
     /// A headless device that binds at most `textures` sampled textures per
@@ -78,7 +88,7 @@ impl Gpu {
     /// refuses.
     pub fn headless_with_sampled_texture_limit(textures: u32) -> Result<Self, GpuError> {
         let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        Self::from_instance_with(instance, None, None, Some(textures))
+        Self::from_instance_with(instance, None, None, Some(textures), false)
     }
 
     /// A device and a presentation surface for one window, compatible with
@@ -165,7 +175,7 @@ impl Gpu {
         instance: wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
     ) -> Result<Self, GpuError> {
-        Self::from_instance_with(instance, surface, None, None)
+        Self::from_instance_with(instance, surface, None, None, false)
     }
 
     fn from_instance_with(
@@ -173,12 +183,13 @@ impl Gpu {
         surface: Option<&wgpu::Surface<'_>>,
         binding_limit: Option<u64>,
         texture_limit: Option<u32>,
+        ray_queries: bool,
     ) -> Result<Self, GpuError> {
         let adapter = pollster::block_on(wgpu::util::initialize_adapter_from_env_or_default(
             &instance, surface,
         ))
         .map_err(|error| GpuError::NoAdapter(error.to_string()))?;
-        let descriptor = wgpu::DeviceDescriptor {
+        let mut descriptor = wgpu::DeviceDescriptor {
             label: Some("render-wgpu"),
             // Timestamp queries time the renderer's GPU passes
             // (`timing.rs`); an adapter without them draws untimed. Indirect
@@ -195,6 +206,11 @@ impl Gpu {
             required_limits: limits(&adapter.limits(), binding_limit, texture_limit),
             ..Default::default()
         };
+        // Ray queries and the binding arrays the ray-traced settings read
+        // their scene through, where the GPU has them (`ray_scene.rs`).
+        if ray_queries {
+            crate::ray_scene::request(&adapter, &mut descriptor);
+        }
         #[cfg_attr(not(feature = "dlss"), allow(unused_variables))]
         let (device, queue, dlss) = request_device(&adapter, descriptor)?;
         let lost = Arc::new(Mutex::new(None));

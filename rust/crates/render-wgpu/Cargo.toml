@@ -3,8 +3,10 @@ name = "render-wgpu"
 version.workspace = true
 edition.workspace = true
 
-[lints]
-workspace = true
+# The workspace forbids unsafe code; here it is denied, and only the ray
+# scene module allows it (`src/ray_scene.rs`, `tests/unsafe_code.rs`).
+[lints.rust]
+unsafe_code = "deny"
 
 [dependencies]
 render-model.workspace = true

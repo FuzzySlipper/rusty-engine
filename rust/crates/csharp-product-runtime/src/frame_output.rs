@@ -774,6 +774,7 @@ impl FrameOutput {
             Some(SettingRefusal::InitializationFailed) => {
                 NativeRendererSettingRefusal::InitializationFailed
             }
+            Some(SettingRefusal::NoRayQueries) => NativeRendererSettingRefusal::NoRayQueries,
         };
         let mut effective = readout.effective;
         let vsync_refusal = if self.stream.is_some() && readout.requested.vsync {
@@ -1024,6 +1025,7 @@ fn settings_statistics(
         SettingRefusal::NotBuilt => "this build of the Engine does not have it",
         SettingRefusal::UnsupportedAdapter => "the adapter cannot run it",
         SettingRefusal::InitializationFailed => "it failed to start on this device",
+        SettingRefusal::NoRayQueries => "the adapter has no ray queries",
     };
     let mut effective = readout.effective;
     let mut refused = std::collections::BTreeMap::new();

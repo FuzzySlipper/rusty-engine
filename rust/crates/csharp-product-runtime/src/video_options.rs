@@ -174,6 +174,7 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         SettingRefusal::NotBuilt => "This build of the game does not include it.",
         SettingRefusal::UnsupportedAdapter => "This graphics device cannot run it.",
         SettingRefusal::InitializationFailed => "It failed to start on this graphics device.",
+        SettingRefusal::NoRayQueries => "This graphics device cannot trace rays.",
     })
 }
 

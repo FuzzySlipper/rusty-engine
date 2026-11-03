@@ -16,8 +16,12 @@
 //!
 //! Only this crate may depend on wgpu (`scripts/dependency_boundary_check.py`);
 //! no wgpu type appears in its public API.
+//!
+//! Unsafe code is denied everywhere but `ray_scene`, which holds the
+//! experimental ray-query opt-in and the wgpu-hal calls the ray scene needs
+//! (`tests/unsafe_code.rs`).
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 mod ambient_occlusion;
 mod animated;
@@ -55,6 +59,7 @@ mod post;
 mod precipitation;
 mod primitives;
 mod probes;
+mod ray_scene;
 mod resources;
 mod scatter;
 mod scatter_select;
@@ -115,6 +120,7 @@ pub use driver::{
 pub use frame::FrameStats;
 pub use impostor::ImpostorReadout;
 pub use occlusion::OcclusionReadout;
+pub use ray_scene::{ProbeHit, ProbeRay, RaySceneReadout};
 pub use scatter_select::ScatterSelectionReadout;
 pub use water::WaterReadout;
 
@@ -236,6 +242,8 @@ pub struct GpuReadout {
     pub dlss: Option<DlssRefusal>,
     /// Why the device was lost, once it has been ([`Gpu::lost`]).
     pub device_lost: Option<String>,
+    /// The ray scene, while it is asked for (`ray_scene.rs`).
+    pub ray_scene: Option<RaySceneReadout>,
 }
 
 /// The last primary frame's render and output resolutions, and its upscale
@@ -465,6 +473,9 @@ pub enum SettingRefusal {
     UnsupportedAdapter,
     /// The feature's library failed to start on this device (DLSS's NGX).
     InitializationFailed,
+    /// The adapter has no ray queries, or not the binding arrays the
+    /// ray-traced settings read materials through (`ray_scene.rs`).
+    NoRayQueries,
 }
 
 /// The settings in effect and what the device refused: what a product
@@ -659,6 +670,10 @@ pub struct Renderer {
     video: video::Video,
     /// The size of the window surface last presented, if any.
     surface_size: Option<(u32, u32)>,
+    /// The scene's acceleration structures, while something asks for them
+    /// (`ray_scene.rs`), and whether something does.
+    ray_scene: Option<ray_scene::RayScene>,
+    ray_scene_wanted: bool,
 }
 
 /// The water reflection's march at low and high quality: its steps and its
@@ -857,6 +872,8 @@ impl Renderer {
             sky_bind_group: None,
             water,
             surface_size: None,
+            ray_scene: None,
+            ray_scene_wanted: false,
             animation_time: 0.0,
             presentation_time: 0.0,
             animation_facts: Vec::new(),
@@ -1213,6 +1230,7 @@ impl Renderer {
                     self.upscale.timing(),
                     self.water.timing(),
                 ])
+                .chain(self.ray_scene.as_ref().map(ray_scene::RayScene::timing))
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
             distance_fields: self.distance_fields.readout(),
@@ -1231,6 +1249,7 @@ impl Renderer {
             upscale: self.upscaled,
             dlss: self.options.dlss.then(|| self.dlss_refusal()).flatten(),
             device_lost: self.gpu.lost(),
+            ray_scene: self.ray_scene_readout(),
         }
     }
 

@@ -2059,7 +2059,9 @@ impl Renderer {
         let device = &self.gpu.device;
         // Copied from too: the selected scatter copies draw from a pool of
         // their meshes (`mesh_pool.rs`). A mesh the device has no room for
-        // is refused, and what draws it draws nothing.
+        // is refused, and what draws it draws nothing. Built into the ray
+        // scene's acceleration structures on a device with ray queries.
+        let ray_input = crate::ray_scene::mesh_input(device);
         let (vertex_buffer, index_buffer) = crate::gpu::allocating(device, || {
             (
                 crate::gpu::buffer_init(
@@ -2067,7 +2069,9 @@ impl Renderer {
                     &wgpu::util::BufferInitDescriptor {
                         label: Some(label),
                         contents: bytemuck::cast_slice(vertices),
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC,
+                        usage: wgpu::BufferUsages::VERTEX
+                            | wgpu::BufferUsages::COPY_SRC
+                            | ray_input,
                     },
                 ),
                 crate::gpu::buffer_init(
@@ -2075,7 +2079,7 @@ impl Renderer {
                     &wgpu::util::BufferInitDescriptor {
                         label: Some(label),
                         contents: bytemuck::cast_slice(indices),
-                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC,
+                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC | ray_input,
                     },
                 ),
             )

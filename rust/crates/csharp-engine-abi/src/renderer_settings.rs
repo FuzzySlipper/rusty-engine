@@ -155,6 +155,8 @@ pub enum NativeRendererSettingRefusal {
     UnsupportedAdapter = 10,
     /// The feature's library failed to start on this device (DLSS).
     InitializationFailed = 11,
+    /// The adapter has no ray queries (the ray-traced settings).
+    NoRayQueries = 12,
 }
 
 /// What the renderer draws with: the last request (the manifest's values

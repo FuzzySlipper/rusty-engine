@@ -549,6 +549,7 @@ impl Renderer {
         if regrouped || !moved.is_empty() || layers_changed {
             self.cull_casters(&moved, false);
         }
+        self.prepare_ray_scene(regrouped || !moved.is_empty());
         uploaded
     }
 

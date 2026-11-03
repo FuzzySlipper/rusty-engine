@@ -6,7 +6,7 @@
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
 //!                    [--walk M] [--turn D] [--advance S] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R]
 //!                    [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]
-//!                    [--rerender-shadows] [--choose ID=VALUE]...
+//!                    [--rerender-shadows] [--ray-scene] [--choose ID=VALUE]...
 //! rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]
 //! ```
 //!
@@ -21,6 +21,8 @@
 //! compare on one scene. `--choose ID=VALUE` sets any video option of the
 //! renderer settings catalogue as a player's choice (`--choose
 //! antialiasing=off`), over the snapshot and the product's own settings.
+//! `--ray-scene` builds the scene's acceleration structures, as the
+//! ray-traced settings do, and reports their sizes and build cost.
 //! `--gallery DIR` draws the feature gallery instead: the scene as it is and
 //! once per feature it leaves off (docs/performance.md, "Feature gallery").
 //! Select the adapter as for any wgpu program (for example
@@ -42,7 +44,7 @@ use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
      [--frames N] [--walk M] [--turn D] [--advance S] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
-     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] \
+     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] [--ray-scene] \
      [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]] [--choose ID=VALUE]... \
      [--volumetric-fog-medium DENSITY[,ANISOTROPY]] [--motion OUT.png] [--last-frame OUT.png]\n\
        rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]";
@@ -92,6 +94,8 @@ struct Arguments {
     last_frame: Option<PathBuf>,
     /// Draw the feature gallery into this directory instead.
     gallery: Option<PathBuf>,
+    /// Build the ray scene and report it.
+    ray_scene: bool,
 }
 
 /// Parses the command line; `None` when it asked for help. A render scale is
@@ -117,6 +121,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut motion = None;
     let mut last_frame = None;
     let mut fog_medium = None;
+    let mut ray_scene = false;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
             arguments
@@ -176,6 +181,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                 indirect_light = Some(descriptor);
             }
             "--rerender-shadows" => rerender_shadows = true,
+            "--ray-scene" => ray_scene = true,
             "--choose" => {
                 let choice = arguments.next().unwrap_or_default();
                 let (id, value) = choice
@@ -312,6 +318,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         last_frame,
         gallery,
         fog_medium,
+        ray_scene,
     }))
 }
 
@@ -338,6 +345,7 @@ fn run() -> Result<(), String> {
         last_frame,
         gallery,
         fog_medium,
+        ray_scene,
     }) = parse(std::env::args().skip(1))?
     else {
         println!("{USAGE}");
@@ -371,7 +379,12 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let gpu = Gpu::headless().map_err(|error| format!("{error:?}"))?;
+    let gpu = if ray_scene {
+        Gpu::headless_with_ray_queries()
+    } else {
+        Gpu::headless()
+    }
+    .map_err(|error| format!("{error:?}"))?;
     let adapter = gpu.adapter_summary();
     let software_adapter = gpu.is_software();
     if software_adapter {
@@ -459,6 +472,7 @@ fn run() -> Result<(), String> {
                     ..render_model::VolumetricFogDescriptor::DEFAULT
                 });
             }
+            renderer.set_ray_scene(ray_scene);
             renderer.bake_indirect_light_now()
         })
         .0;
@@ -635,6 +649,23 @@ fn run() -> Result<(), String> {
         "levels": gpu_readout.scatter_selection.levels,
         "overLimit": gpu_readout.scatter_selection.over_limit,
     });
+    let ray_scene_report = gpu_readout.ray_scene.as_ref().map(|ray_scene| {
+        json!({
+            "refused": ray_scene.refused.as_ref().map(|(refusal, detail)| {
+                json!({ "refusal": format!("{refusal:?}"), "detail": detail })
+            }),
+            "blases": ray_scene.blases,
+            "triangles": ray_scene.triangles,
+            "blasBytes": ray_scene.blas_bytes,
+            "compacted": ray_scene.compacted,
+            "waiting": ray_scene.waiting,
+            "tlasInstances": ray_scene.tlas_instances,
+            "blasBuilds": ray_scene.blas_builds,
+            "tlasBuilds": ray_scene.tlas_builds,
+            "buildCpuMs": ray_scene.build_cpu_ms,
+            "buildCpuMsTotal": ray_scene.build_cpu_ms_total,
+        })
+    });
     let occlusion = json!({
         "enabled": gpu_readout.occlusion.enabled,
         "refused": gpu_readout.occlusion.refused,
@@ -746,6 +777,7 @@ fn run() -> Result<(), String> {
             },
             "scatterSelection": scatter_selection,
             "occlusion": occlusion,
+            "rayScene": ray_scene_report,
         },
     });
     println!(

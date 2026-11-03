@@ -1017,7 +1017,8 @@ impl Renderer {
                                         label: Some("render-wgpu skinned vertices"),
                                         size: mesh.vertices.size(),
                                         usage: wgpu::BufferUsages::VERTEX
-                                            | wgpu::BufferUsages::COPY_DST,
+                                            | wgpu::BufferUsages::COPY_DST
+                                            | crate::ray_scene::mesh_input(&gpu.device),
                                         mapped_at_creation: false,
                                     })
                                 })
@@ -1509,12 +1510,16 @@ impl Renderer {
         data: &[f32],
         dynamic: bool,
     ) -> Result<wgpu::Buffer, String> {
+        let device = &self.gpu.device;
+        // A rewritable stream may become a skinned mesh's vertices, which
+        // the ray scene builds from.
         let usage = if dynamic {
-            wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST
+            wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_DST
+                | crate::ray_scene::mesh_input(device)
         } else {
             wgpu::BufferUsages::VERTEX
         };
-        let device = &self.gpu.device;
         crate::gpu::allocating(device, || {
             crate::gpu::buffer_init(
                 device,
@@ -1537,6 +1542,7 @@ impl Renderer {
         indices: &[u32],
     ) -> Result<GpuMesh, String> {
         let device = &self.gpu.device;
+        let ray_input = crate::ray_scene::mesh_input(device);
         let (vertex_buffer, index_buffer) = crate::gpu::allocating(device, || {
             (
                 crate::gpu::buffer_init(
@@ -1544,7 +1550,9 @@ impl Renderer {
                     &wgpu::util::BufferInitDescriptor {
                         label: Some(label),
                         contents: bytemuck::cast_slice(vertices),
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                        usage: wgpu::BufferUsages::VERTEX
+                            | wgpu::BufferUsages::COPY_DST
+                            | ray_input,
                     },
                 ),
                 crate::gpu::buffer_init(
@@ -1552,7 +1560,7 @@ impl Renderer {
                     &wgpu::util::BufferInitDescriptor {
                         label: Some(label),
                         contents: bytemuck::cast_slice(indices),
-                        usage: wgpu::BufferUsages::INDEX,
+                        usage: wgpu::BufferUsages::INDEX | ray_input,
                     },
                 ),
             )

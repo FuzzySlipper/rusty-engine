@@ -453,6 +453,9 @@ pub enum Entry {
     /// picture gathered into a history at output resolution, and the
     /// history sharpened into the output.
     Upscale,
+    /// Rays traced against the ray scene for their closest hits
+    /// (`ray_probe.wgsl`, compute; needs ray queries).
+    RayProbe,
 }
 
 impl Entry {
@@ -517,6 +520,10 @@ impl Entry {
             ),
             Self::Hiz => ("shaders/hiz.wgsl", include_str!("shaders/hiz.wgsl")),
             Self::Upscale => ("shaders/upscale.wgsl", include_str!("shaders/upscale.wgsl")),
+            Self::RayProbe => (
+                "shaders/ray_probe.wgsl",
+                include_str!("shaders/ray_probe.wgsl"),
+            ),
         }
     }
 }
@@ -610,7 +617,11 @@ impl Default for Shaders {
 
 impl Shaders {
     pub fn new() -> Self {
-        let mut composer = Composer::default();
+        // Ray queries for the passes that trace the ray scene; a device
+        // without them never makes those pipelines.
+        let mut composer = Composer::default().with_capabilities(
+            naga::valid::Capabilities::default() | naga::valid::Capabilities::RAY_QUERY,
+        );
         for (path, source) in MODULES {
             if let Err(error) = composer.add_composable_module(ComposableModuleDescriptor {
                 source,
@@ -868,6 +879,7 @@ mod tests {
             Entry::ImpostorBake,
             Entry::Hiz,
             Entry::Upscale,
+            Entry::RayProbe,
         ] {
             compose_case(&mut shaders, entry, Features::default());
         }

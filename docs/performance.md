@@ -156,6 +156,11 @@ wind sways (in the motion too) and every run draws the same moments. A still sna
 `--rerender-shadows` renders them all in every extra frame, so `shadows` and
 the frame times show the uncached cost. The report's `shadows` gives the
 layers, pages, atlas bytes and the layers and casters the last frame rendered.
+`--ray-scene` draws on a device with ray queries and builds the scene's
+acceleration structures, as the ray-traced settings do; `gpu.rayScene`
+reports their BLAS, triangles and built bytes, the TLAS instances and the
+builds' CPU time, and the `ray-scene` pass their GPU time (the first frame's
+holds the initial BLAS builds).
 
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`
 in `product-host`) as UTF-8 JSON bytes through
