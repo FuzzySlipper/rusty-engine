@@ -2782,6 +2782,10 @@ impl Renderer {
             format: HDR_FORMAT,
             samples: view.target.samples,
             motion: view.motion.is_some(),
+            guides: view
+                .motion
+                .as_ref()
+                .is_some_and(|motion| motion.guides.is_some()),
         };
         let effects = self.prepare_effects(&view, hdr_format);
         let slot = view.layer as usize;
@@ -3188,9 +3192,17 @@ impl Renderer {
         // The opaque colour too where a water reads it or the view reflects
         // in its water.
         let scene_color = water && (reads_scene || self.water_reflection_march().is_some());
-        // The HDR colour, and the motion target beside it when there is one.
-        let attached = 1 + usize::from(view.motion.is_some());
+        // The HDR colour, and the motion target beside it when there is one,
+        // and the guide targets after it.
+        let attached = 1 + view
+            .motion
+            .as_ref()
+            .map_or(0, crate::motion::MotionPass::attached);
         {
+            let [diffuse, specular, normal] = view
+                .motion
+                .as_ref()
+                .map_or([None, None, None], |motion| motion.guide_attachments(whole));
             let attachments = [
                 Some(wgpu::RenderPassColorAttachment {
                     view: &hdr.color,
@@ -3206,6 +3218,9 @@ impl Renderer {
                     },
                 }),
                 view.motion.as_ref().map(|motion| motion.attachment(whole)),
+                diffuse,
+                specular,
+                normal,
             ];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(match view.layer {
@@ -3242,6 +3257,7 @@ impl Renderer {
                     view.target.samples,
                     view.start != PassStart::KeepDepth,
                     view.motion.as_ref().map(|motion| motion.clear),
+                    hdr_format.guides,
                 );
             }
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
@@ -3571,11 +3587,13 @@ impl Renderer {
 }
 
 /// The attachments of a later pass of a view: its HDR colour kept, and its
-/// motion target beside it when it has one.
+/// motion target beside it when it has one, and its guide targets.
 fn kept<'a>(
     hdr: &'a crate::finish::HdrViews,
     motion: Option<&'a crate::motion::MotionPass>,
-) -> [Option<wgpu::RenderPassColorAttachment<'a>>; 2] {
+) -> [Option<wgpu::RenderPassColorAttachment<'a>>; 5] {
+    let [diffuse, specular, normal] =
+        motion.map_or([None, None, None], |motion| motion.guide_attachments(false));
     [
         Some(wgpu::RenderPassColorAttachment {
             view: &hdr.color,
@@ -3587,6 +3605,9 @@ fn kept<'a>(
             },
         }),
         motion.map(crate::motion::MotionPass::kept),
+        diffuse,
+        specular,
+        normal,
     ]
 }
 

@@ -119,11 +119,16 @@ impl Features {
     /// into a world target that has a motion target (render-wgpu
     /// `motion.rs`). Entries other than the world take it too.
     pub const MOTION: Self = Self::bit(4194304);
-    /// Every material and mesh feature's bit: all but MOTION.
+    /// The opaque world pass also writes the guides a denoiser and the
+    /// ray-traced lighting read (render-wgpu `motion.rs`): diffuse albedo,
+    /// specular albedo, and the normal with the roughness, to locations 2
+    /// to 4 after the motion. A target's feature, as MOTION, with it.
+    pub const GUIDES: Self = Self::bit(8388608);
+    /// Every material and mesh feature's bit: all but MOTION and GUIDES.
     #[cfg(test)]
     const ALL_BITS: u32 = 4194303;
 
-    const DEFS: [(Self, &'static str); 23] = [
+    const DEFS: [(Self, &'static str); 24] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -147,6 +152,7 @@ impl Features {
         (Self::WATER_SCENE, "WATER_SCENE"),
         (Self::SKINNED, "SKINNED"),
         (Self::MOTION, "MOTION"),
+        (Self::GUIDES, "GUIDES"),
     ];
 
     const fn bit(bits: u32) -> Self {
@@ -863,6 +869,11 @@ mod tests {
         ] {
             compose_case(&mut shaders, Entry::World, features);
             compose_case(&mut shaders, Entry::World, features | Features::MOTION);
+            compose_case(
+                &mut shaders,
+                Entry::World,
+                features | Features::MOTION | Features::GUIDES,
+            );
             compose_case(&mut shaders, Entry::Shadow, features.caster());
         }
         for entry in [
@@ -915,6 +926,11 @@ mod tests {
                 FeatureCase::Material(features) => {
                     compose_case(shaders, Entry::World, features);
                     compose_case(shaders, Entry::World, features | Features::MOTION);
+                    compose_case(
+                        shaders,
+                        Entry::World,
+                        features | Features::MOTION | Features::GUIDES,
+                    );
                 }
                 FeatureCase::Caster(features) => {
                     compose_case(shaders, Entry::Shadow, features);

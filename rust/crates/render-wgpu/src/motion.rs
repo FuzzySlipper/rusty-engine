@@ -67,6 +67,14 @@
 //!   primary camera cuts or first draws, the observer comes or goes, the
 //!   render resolution changes or the renderer's options do.
 //!
+//! - **Guides.** While a frame asks for them (the guide inspection,
+//!   `OverlayShown::guide`), the opaque world and viewmodel passes also
+//!   write three guide targets beside the motion, for a denoiser and the
+//!   ray-traced lighting: diffuse albedo, specular albedo (the split-sum
+//!   reflectance at the view) and the normal with the roughness
+//!   (`GUIDES`, `world.wgsl` `OpaqueOut`). Everything else drawn in those
+//!   passes leaves them be; where nothing opaque drew they stay clear.
+//!
 //! With neither a temporal stage nor the inspection, nothing here runs:
 //! no attachment, no jitter, no previous rows. A reading beside the
 //! output's frames, a tool's capture, runs none of it either and leaves
@@ -85,6 +93,20 @@ use crate::{Gpu, RendererOptions};
 /// The motion target's format: x and y in render pixels, and the reactive
 /// mask (`rusty::motion`).
 pub(crate) const MOTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+
+/// The guide targets' formats, after the motion target: diffuse albedo,
+/// specular albedo, and the normal with the roughness in alpha.
+pub(crate) const GUIDE_FORMATS: [wgpu::TextureFormat; 3] = [
+    wgpu::TextureFormat::Rgba8Unorm,
+    wgpu::TextureFormat::Rgba8Unorm,
+    wgpu::TextureFormat::Rgba16Float,
+];
+
+/// The world pass's colour attachment bytes a sample with guides: each of
+/// the HDR colour, the motion and the three guides costs 8 (WebGPU counts
+/// an Rgba8Unorm target as 8), past the 32 every device grants; a device
+/// granting fewer draws no guides (`Gpu::guides_refusal`).
+pub(crate) const GUIDED_BYTES_PER_SAMPLE: u32 = 40;
 
 /// What the motion target holds where nothing drew motion of its own: the
 /// world pass's clear, before the sky's motion covers what the world
@@ -194,25 +216,41 @@ struct PreviousCamera {
 type ViewKey = (String, ViewLayer);
 
 /// The motion target at render resolution, at the world's samples, and its
-/// single-sample resolve when those are more than one.
+/// single-sample resolve when those are more than one; the guide targets
+/// likewise, when the frame asks for them.
 struct MotionTarget {
     size: (u32, u32),
     samples: u32,
     attachment: wgpu::TextureView,
     resolve: Option<wgpu::TextureView>,
+    guides: Option<[Attached; 3]>,
 }
 
-impl MotionTarget {
-    fn new(gpu: &Gpu, (width, height): (u32, u32), samples: u32) -> Self {
+/// A render target at the world's samples and its single-sample resolve
+/// when those are more than one.
+#[derive(Clone)]
+pub(crate) struct Attached {
+    pub attachment: wgpu::TextureView,
+    pub resolve: Option<wgpu::TextureView>,
+}
+
+impl Attached {
+    fn new(
+        gpu: &Gpu,
+        (width, height): (u32, u32),
+        samples: u32,
+        format: wgpu::TextureFormat,
+        label: &str,
+    ) -> Self {
         let texture = |samples| {
             gpu.device
                 .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("render-wgpu motion"),
+                    label: Some(label),
                     size: crate::target::extent(width, height),
                     mip_level_count: 1,
                     sample_count: samples,
                     dimension: wgpu::TextureDimension::D2,
-                    format: MOTION_FORMAT,
+                    format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                         | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
@@ -220,10 +258,44 @@ impl MotionTarget {
                 .create_view(&Default::default())
         };
         Self {
-            size: (width, height),
-            samples,
             attachment: texture(samples),
             resolve: (samples > 1).then(|| texture(1)),
+        }
+    }
+
+    /// The single-sample view: the resolve, or the attachment itself.
+    pub fn resolved(&self) -> &wgpu::TextureView {
+        self.resolve.as_ref().unwrap_or(&self.attachment)
+    }
+
+    fn color_attachment(
+        &self,
+        load: wgpu::LoadOp<wgpu::Color>,
+    ) -> wgpu::RenderPassColorAttachment<'_> {
+        wgpu::RenderPassColorAttachment {
+            view: &self.attachment,
+            depth_slice: None,
+            resolve_target: self.resolve.as_ref(),
+            ops: wgpu::Operations {
+                load,
+                store: wgpu::StoreOp::Store,
+            },
+        }
+    }
+}
+
+impl MotionTarget {
+    fn new(gpu: &Gpu, size: (u32, u32), samples: u32, guides: bool) -> Self {
+        let motion = Attached::new(gpu, size, samples, MOTION_FORMAT, "render-wgpu motion");
+        Self {
+            size,
+            samples,
+            attachment: motion.attachment,
+            resolve: motion.resolve,
+            guides: guides.then(|| {
+                GUIDE_FORMATS
+                    .map(|format| Attached::new(gpu, size, samples, format, "render-wgpu guide"))
+            }),
         }
     }
 }
@@ -233,6 +305,8 @@ impl MotionTarget {
 pub(crate) struct MotionPass {
     pub attachment: wgpu::TextureView,
     pub resolve: Option<wgpu::TextureView>,
+    /// The guide targets, while the frame draws them.
+    pub guides: Option<[Attached; 3]>,
     /// The world pass clears it; the viewmodel's adds to it.
     pub clear: bool,
     /// The view's `Motion` uniform (`motion.wgsl`).
@@ -274,6 +348,30 @@ impl MotionPass {
             },
         }
     }
+
+    /// The guide targets' attachments after the motion's, cleared as it is
+    /// (`attachment`), or kept with `whole` false; none without guides.
+    pub fn guide_attachments(
+        &self,
+        whole: bool,
+    ) -> [Option<wgpu::RenderPassColorAttachment<'_>>; 3] {
+        let load = if self.clear && whole {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        } else {
+            wgpu::LoadOp::Load
+        };
+        match &self.guides {
+            Some(guides) => guides
+                .each_ref()
+                .map(|guide| Some(guide.color_attachment(load))),
+            None => [None, None, None],
+        }
+    }
+
+    /// The colour attachments it adds after the HDR colour.
+    pub fn attached(&self) -> usize {
+        1 + if self.guides.is_some() { 3 } else { 0 }
+    }
 }
 
 /// What a primary frame drew for a temporal stage (`FrameStats::motion`).
@@ -293,6 +391,8 @@ pub struct MotionFrame {
 pub(crate) struct TemporalInputs<'a> {
     /// The motion target, single-sample.
     pub motion: &'a wgpu::TextureView,
+    /// The guide targets, single-sample, while the frame draws them.
+    pub guides: Option<[&'a wgpu::TextureView; 3]>,
     /// The frame's jitter, render pixels.
     pub jitter: Vec2,
     pub history_reset: bool,
@@ -525,8 +625,9 @@ impl Temporal {
     }
 
     /// Begin a primary frame. With `motion`, it draws the motion target at
-    /// `resolution`'s render size and `samples`, jittered with `jittering`;
-    /// `cut` when a primary camera cut or the observer came or went.
+    /// `resolution`'s render size and `samples`, jittered with `jittering`,
+    /// and the guide targets with `guides`; `cut` when a primary camera cut
+    /// or the observer came or went.
     /// Returns whether the frame bind group must be made again (the
     /// previous models' buffer changed).
     #[allow(clippy::too_many_arguments, reason = "one frame's temporal facts")]
@@ -535,6 +636,7 @@ impl Temporal {
         gpu: &Gpu,
         parts: &Parts,
         motion: bool,
+        guides: bool,
         jittering: bool,
         resolution: FrameResolution,
         samples: u32,
@@ -563,12 +665,10 @@ impl Temporal {
             }
         }
         let render = resolution.render;
-        if self
-            .target
-            .as_ref()
-            .is_none_or(|target| target.size != render || target.samples != samples)
-        {
-            self.target = Some(MotionTarget::new(gpu, render, samples));
+        if self.target.as_ref().is_none_or(|target| {
+            target.size != render || target.samples != samples || target.guides.is_some() != guides
+        }) {
+            self.target = Some(MotionTarget::new(gpu, render, samples, guides));
         }
         self.reset = cut
             || self
@@ -595,6 +695,7 @@ impl Temporal {
             target: MotionPass {
                 attachment: target.attachment.clone(),
                 resolve: target.resolve.clone(),
+                guides: target.guides.clone(),
                 clear: true,
                 uniform: [0.0; UNIFORM_FLOATS],
             },
@@ -699,6 +800,10 @@ impl Temporal {
         let frame = self.frame.as_ref()?;
         Some(TemporalInputs {
             motion: target.resolve.as_ref().unwrap_or(&target.attachment),
+            guides: target
+                .guides
+                .as_ref()
+                .map(|guides| guides.each_ref().map(Attached::resolved)),
             jitter: frame.jitter.unwrap_or(Vec2::ZERO),
             history_reset: self.shown.is_some_and(|shown| shown.history_reset) || self.reset,
         })
@@ -754,7 +859,7 @@ mod tests {
         };
         let frame = |temporal: &mut Temporal, options: &RendererOptions, x: f32, cut: bool| {
             temporal.begin_frame(
-                &gpu, &parts, true, true, resolution, 1, options, false, cut, 0.0,
+                &gpu, &parts, true, false, true, resolution, 1, options, false, cut, 0.0,
             );
             let pass = temporal
                 .view_pass("eye", ViewLayer::World, &at(x), viewport)
@@ -790,13 +895,13 @@ mod tests {
         assert!(!frame(&mut temporal, &scaled, 0.0, false).0.history_reset);
         // Another camera has no history of its own.
         temporal.begin_frame(
-            &gpu, &parts, true, true, resolution, 1, &scaled, false, false, 0.0,
+            &gpu, &parts, true, false, true, resolution, 1, &scaled, false, false, 0.0,
         );
         temporal.view_pass("other", ViewLayer::World, &at(0.0), viewport);
         assert!(temporal.end_frame().unwrap().history_reset, "a new camera");
         // A frame without motion draws none and drops the history.
         temporal.begin_frame(
-            &gpu, &parts, false, false, resolution, 1, &scaled, false, false, 0.0,
+            &gpu, &parts, false, false, false, resolution, 1, &scaled, false, false, 0.0,
         );
         assert!(temporal
             .view_pass("other", ViewLayer::World, &at(0.0), viewport)
@@ -908,6 +1013,7 @@ mod tests {
                     &gpu,
                     &renderer.tables.parts,
                     true,
+                    false,
                     true,
                     resolution,
                     1,

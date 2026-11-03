@@ -102,3 +102,49 @@ fn srgb_decoded(value: vec3<f32>) -> vec3<f32> {
 fn fs_motion_srgb(in: FullscreenOut) -> @location(0) vec4<f32> {
     return vec4<f32>(srgb_decoded(motion_shown(in.uv)), 1.0);
 }
+
+// The guide targets as inspection shows them (render-wgpu `motion.rs`): an
+// albedo as its colour, the normal's axes from -1 to 1 as 0 to 1, the
+// roughness (the normal target's alpha) as grey. The `_srgb` variants
+// write to an sRGB target the value that encodes as those fractions.
+fn guide_color(uv: vec2<f32>) -> vec3<f32> {
+    return textureSample(source, source_sampler, uv).rgb;
+}
+
+fn guide_normal(uv: vec2<f32>) -> vec3<f32> {
+    return clamp(textureSample(source, source_sampler, uv).xyz * 0.5 + 0.5, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn guide_roughness(uv: vec2<f32>) -> vec3<f32> {
+    return vec3<f32>(textureSample(source, source_sampler, uv).a);
+}
+
+@fragment
+fn fs_guide_color(in: FullscreenOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(guide_color(in.uv), 1.0);
+}
+
+@fragment
+fn fs_guide_color_srgb(in: FullscreenOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(srgb_decoded(guide_color(in.uv)), 1.0);
+}
+
+@fragment
+fn fs_guide_normal(in: FullscreenOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(guide_normal(in.uv), 1.0);
+}
+
+@fragment
+fn fs_guide_normal_srgb(in: FullscreenOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(srgb_decoded(guide_normal(in.uv)), 1.0);
+}
+
+@fragment
+fn fs_guide_roughness(in: FullscreenOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(guide_roughness(in.uv), 1.0);
+}
+
+@fragment
+fn fs_guide_roughness_srgb(in: FullscreenOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(srgb_decoded(guide_roughness(in.uv)), 1.0);
+}

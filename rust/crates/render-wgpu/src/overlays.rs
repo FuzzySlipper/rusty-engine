@@ -93,8 +93,24 @@ pub struct OverlayShown {
     /// The primary frame's motion target in place of its picture
     /// (`motion.rs`): the primary views draw their motion while it shows.
     pub motion: bool,
+    /// One of the primary frame's guide targets in place of its picture
+    /// (`motion.rs`): the primary views draw their guides while it shows.
+    pub guide: Option<Guide>,
     /// The retained collision scene's wires ([`Renderer::set_collision_lines`]).
     pub collision: Option<CollisionShown>,
+}
+
+/// A guide target as inspection shows it (`OverlayShown::guide`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Guide {
+    /// The diffuse albedo, as its colour.
+    DiffuseAlbedo,
+    /// The specular albedo, as its colour.
+    SpecularAlbedo,
+    /// The normal, each axis from -1 to 1 as 0 to 1.
+    Normal,
+    /// The roughness, as grey.
+    Roughness,
 }
 
 /// Where collision wires are read: within `radius` metres along each axis
@@ -129,6 +145,7 @@ impl OverlayShown {
             || !self.ik.is_empty()
             || !self.sets_in.is_empty()
             || self.motion
+            || self.guide.is_some()
             || self.collision.is_some()
     }
 

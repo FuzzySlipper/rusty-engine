@@ -21,9 +21,9 @@ struct FormatPipelines {
     format: wgpu::TextureFormat,
     clear: wgpu::RenderPipeline,
     blit: wgpu::RenderPipeline,
-    /// The motion target for inspection (`show_motion`), made when first
-    /// shown.
-    motion: Option<wgpu::RenderPipeline>,
+    /// The motion target, then each guide target, for inspection
+    /// (`show_motion`, `show_guide`), made when first shown.
+    shown: [Option<wgpu::RenderPipeline>; 5],
 }
 
 pub(crate) struct Compose {
@@ -37,7 +37,7 @@ pub(crate) struct Compose {
     clear_bind_group: wgpu::BindGroup,
     formats: Vec<FormatPipelines>,
     convert: Option<wgpu::RenderPipeline>,
-    /// Nearest texels of the motion target, for `show_motion`.
+    /// Nearest texels of the motion and guide targets, for inspection.
     nearest: wgpu::Sampler,
 }
 
@@ -191,7 +191,7 @@ impl Compose {
                 "fs_blit",
                 format.into(),
             ),
-            motion: None,
+            shown: Default::default(),
         };
         self.formats.push(set);
         self.formats.len() - 1
@@ -262,31 +262,64 @@ impl Compose {
     /// `output` as inspection shows it: x and y as red and green about
     /// grey (`compose.wgsl` `fs_motion`).
     pub fn show_motion(&mut self, gpu: &Gpu, output: &TargetView<'_>, motion: &wgpu::TextureView) {
+        self.show(gpu, output, motion, 0, "fs_motion");
+    }
+
+    /// Draw `texture`, the guide target `guide` (`motion.rs`), over the
+    /// whole of `output` as inspection shows it (`compose.wgsl`
+    /// `fs_guide_*`).
+    pub fn show_guide(
+        &mut self,
+        gpu: &Gpu,
+        output: &TargetView<'_>,
+        texture: &wgpu::TextureView,
+        guide: crate::Guide,
+    ) {
+        let (slot, fragment) = match guide {
+            crate::Guide::DiffuseAlbedo => (1, "fs_guide_color"),
+            crate::Guide::SpecularAlbedo => (2, "fs_guide_color"),
+            crate::Guide::Normal => (3, "fs_guide_normal"),
+            crate::Guide::Roughness => (4, "fs_guide_roughness"),
+        };
+        self.show(gpu, output, texture, slot, fragment);
+    }
+
+    /// Draw `source` over the whole of `output` with `fragment` (its
+    /// `_srgb` variant on an sRGB target, which writes the value that
+    /// encodes as the shown fraction), its pipeline kept in `slot`.
+    fn show(
+        &mut self,
+        gpu: &Gpu,
+        output: &TargetView<'_>,
+        source: &wgpu::TextureView,
+        slot: usize,
+        fragment: &str,
+    ) {
         let index = self.format_index(&gpu.device, output.format);
-        if self.formats[index].motion.is_none() {
+        if self.formats[index].shown[slot].is_none() {
             let fragment = if output.format.is_srgb() {
-                "fs_motion_srgb"
+                format!("{fragment}_srgb")
             } else {
-                "fs_motion"
+                fragment.to_owned()
             };
             let pipeline = self.pipeline(
                 &gpu.device,
-                "render-wgpu motion view",
+                "render-wgpu inspection view",
                 &self.blit_pipeline_layout,
-                fragment,
+                &fragment,
                 output.format.into(),
             );
-            self.formats[index].motion = Some(pipeline);
+            self.formats[index].shown[slot] = Some(pipeline);
         }
-        let group = self.blit_bind_group(&gpu.device, motion, &self.nearest);
+        let group = self.blit_bind_group(&gpu.device, source, &self.nearest);
         let mut encoder = gpu
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("render-wgpu motion view"),
+                label: Some("render-wgpu inspection view"),
             });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("render-wgpu motion view"),
+                label: Some("render-wgpu inspection view"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: output.color,
                     depth_slice: None,
@@ -301,7 +334,7 @@ impl Compose {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            if let Some(pipeline) = &self.formats[index].motion {
+            if let Some(pipeline) = &self.formats[index].shown[slot] {
                 pass.set_pipeline(pipeline);
             }
             pass.set_bind_group(0, &group, &[]);

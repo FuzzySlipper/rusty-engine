@@ -42,9 +42,10 @@ const CLOUDS: &str = "clouds";
 const BACKDROP: &str = "backdrop";
 const PRECIPITATION: &str = "precipitation";
 
-/// A viewport clear's samples, whether it clears depth, and beside a motion
-/// target whether it clears the motion (`Finish::clear_viewport`).
-type ClearKey = (u32, bool, Option<bool>);
+/// A viewport clear's samples, whether it clears depth, beside a motion
+/// target whether it clears the motion, and whether guide targets follow
+/// (`Finish::clear_viewport`).
+type ClearKey = (u32, bool, Option<bool>, bool);
 
 /// One size and sample count of HDR target: the colour the world draws
 /// into and the finish pass reads, and what bloom and auto exposure need of
@@ -680,7 +681,8 @@ impl Finish {
     /// Clear the viewport of a multisampled or single-sample HDR target to
     /// transparent and, with `depth`, its depth to the far plane. Beside a
     /// motion target (`motion`), clear its motion too with `Some(true)` and
-    /// keep it with `Some(false)`.
+    /// keep it with `Some(false)`; guide targets after it (`guides`) are
+    /// kept.
     pub fn clear_viewport(
         &mut self,
         device: &wgpu::Device,
@@ -688,11 +690,12 @@ impl Finish {
         samples: u32,
         depth: bool,
         motion: Option<bool>,
+        guides: bool,
     ) {
         let index = match self
             .clears
             .iter()
-            .position(|(key, _)| *key == (samples, depth, motion))
+            .position(|(key, _)| *key == (samples, depth, motion, guides))
         {
             Some(index) => index,
             None => {
@@ -735,6 +738,7 @@ impl Finish {
                             format: HDR_FORMAT,
                             samples,
                             motion: motion.is_some(),
+                            guides,
                         }
                         .targets(
                             HDR_FORMAT.into(),
@@ -748,7 +752,8 @@ impl Finish {
                     multiview_mask: None,
                     cache: None,
                 });
-                self.clears.push(((samples, depth, motion), pipeline));
+                self.clears
+                    .push(((samples, depth, motion, guides), pipeline));
                 self.clears.len() - 1
             }
         };

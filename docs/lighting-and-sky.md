@@ -374,6 +374,18 @@ the picture, the mask raising its blue
 `rusty-scene-render --frames N --motion OUT.png` writes a snapshot's; the
 motion is then drawn for the inspection alone, without a stage or jitter.
 
+Beside the motion, the opaque world can also write three guide targets, the
+per-pixel material a denoiser and ray-traced lighting read: diffuse albedo
+(base colour less metalness), specular albedo (the reflectance at that view,
+rising toward grazing angles) and the normal with the roughness. Blended
+parts, sprites and particles leave them be, an unlit surface writes no
+albedo, and a product shader's guides are the surface it was handed. They
+draw only while something asks for them; today that is
+`rusty-scene-render --frames N --guide diffuse|specular|normal|roughness
+OUT.png`, which writes one as an image. The world pass then writes
+40 bytes a sample to its colour targets, more than the 32 WebGPU
+guarantees: a device granting fewer draws no guides.
+
 Labels and overlay lines draw at render resolution, so below render scale 1
 they are as soft as the scale makes them. A tool's
 [capture](presentation-capture.md#captures) is a reading beside the

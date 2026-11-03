@@ -9,7 +9,9 @@
 // `rusty::shade`, and may place its vertices (PRODUCT_DISPLACES) and give
 // their normals (PRODUCT_DISPLACES_NORMAL).
 // With MOTION (a temporal stage's inputs, render-wgpu `motion.rs`) it also
-// writes each fragment's motion to location 1 (`rusty::motion`).
+// writes each fragment's motion to location 1 (`rusty::motion`). With GUIDES
+// as well, the opaque passes write the surface's guides to locations 2 to 4
+// (`OpaqueOut`).
 
 #import rusty::types::{texture_space_position, Vertex}
 #import rusty::view::{frame, parts, instances, copies, copy_row, selected_copy, impostor_card, fade_mask, mask_coverage, fade_toward_origin, morph_share, morph_normal, projected}
@@ -65,6 +67,9 @@
 #import rusty::types::Surface
 #import rusty::shade::standard_shade
 #import rusty::lighting::{weathered, snow_sunk, copy_open_sky}
+#ifdef GUIDES
+#import rusty::lighting::environment_brdf
+#endif
 #ifdef SCENE_COLOR
 #import rusty::lighting::water_reflection
 #endif
@@ -885,6 +890,11 @@ fn water_over_scene(color: vec4<f32>) -> vec4<f32> {
 #endif
 #endif
 
+#ifdef GUIDES
+// The surface the fragment shaded, for its guides (`OpaqueOut`).
+var<private> guided: Surface;
+#endif
+
 // `opaque`: the part draws in an opaque pass, so decals lay over it.
 fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> {
     var surface = standard_surface(in, front);
@@ -927,6 +937,9 @@ fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> 
     }
 #endif
 #endif
+#endif
+#ifdef GUIDES
+    guided = surface;
 #endif
 #ifdef PRODUCT_SHADER
     let shaded = shade(surface);
@@ -971,8 +984,32 @@ struct OpaqueOut {
 #ifdef MOTION
     @location(1) motion: vec4<f32>,
 #endif
+#ifdef GUIDES
+    // The surface's diffuse albedo, its specular albedo (the split-sum
+    // reflectance at this view), and its normal with the roughness in
+    // alpha. An unlit surface reflects nothing: all zero but its normal.
+    @location(2) diffuse_albedo: vec4<f32>,
+    @location(3) specular_albedo: vec4<f32>,
+    @location(4) normal_roughness: vec4<f32>,
+#endif
     @builtin(sample_mask) mask: u32,
 };
+
+#ifdef GUIDES
+fn write_guides(out: ptr<function, OpaqueOut>) {
+    let surface = guided;
+#ifdef UNLIT
+    (*out).diffuse_albedo = vec4<f32>(0.0);
+    (*out).specular_albedo = vec4<f32>(0.0);
+#else
+    let f0 = mix(vec3<f32>(0.04), surface.base.rgb, surface.metalness);
+    let n_dot_v = max(dot(surface.normal, normalize(frame.camera.xyz - surface.world_position)), 1e-4);
+    (*out).diffuse_albedo = vec4<f32>(surface.base.rgb * (1.0 - surface.metalness), 1.0);
+    (*out).specular_albedo = vec4<f32>(environment_brdf(f0, surface.roughness, n_dot_v), 1.0);
+#endif
+    (*out).normal_roughness = vec4<f32>(surface.normal, surface.roughness);
+}
+#endif
 
 // Opaque passes cover their pixel whatever the colour's alpha: the finish
 // pass composites the world over the background by its coverage. A masked
@@ -997,6 +1034,9 @@ fn fs_world_opaque(in: VsOut, @builtin(front_facing) front: bool) -> OpaqueOut {
 #endif
 #ifdef MOTION
     out.motion = motion_output(in.clip, in.previous, 1.0);
+#endif
+#ifdef GUIDES
+    write_guides(&out);
 #endif
     return out;
 }

@@ -47,7 +47,7 @@ const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] 
      [--frames N] [--walk M] [--turn D] [--advance S] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
      [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] [--ray-scene] [--ray-reach M] \
      [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]] [--choose ID=VALUE]... \
-     [--volumetric-fog-medium DENSITY[,ANISOTROPY]] [--motion OUT.png] [--last-frame OUT.png]\n\
+     [--volumetric-fog-medium DENSITY[,ANISOTROPY]] [--motion OUT.png] [--guide diffuse|specular|normal|roughness OUT.png] [--last-frame OUT.png]\n\
        rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]";
 
 /// Frames each gallery variant draws for its timings when `--frames` is not
@@ -90,6 +90,9 @@ struct Arguments {
     /// upscale stage has them drawn, and write the last frame's motion
     /// (`engine.inspect.overlay show motion`) here.
     motion: Option<PathBuf>,
+    /// Draw the timed frames with their guide targets and write the last
+    /// frame's guide of this kind here.
+    guide: Option<(render_wgpu::Guide, PathBuf)>,
     /// Write the last timed frame's picture here: what a temporal stage
     /// shows once it has gathered the frames before it.
     last_frame: Option<PathBuf>,
@@ -122,6 +125,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut choices = Vec::new();
     let mut gallery = None;
     let mut motion = None;
+    let mut guide = None;
     let mut last_frame = None;
     let mut fog_medium = None;
     let mut ray_scene = false;
@@ -231,6 +235,22 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                     ));
                 }
             }
+            "--guide" => {
+                let wanted = || {
+                    format!(
+                        "--guide needs diffuse, specular, normal or roughness and a path\n{USAGE}"
+                    )
+                };
+                let kind = match arguments.next().as_deref() {
+                    Some("diffuse") => render_wgpu::Guide::DiffuseAlbedo,
+                    Some("specular") => render_wgpu::Guide::SpecularAlbedo,
+                    Some("normal") => render_wgpu::Guide::Normal,
+                    Some("roughness") => render_wgpu::Guide::Roughness,
+                    _ => return Err(wanted()),
+                };
+                let path = arguments.next().ok_or_else(wanted)?;
+                guide = Some((kind, PathBuf::from(path)));
+            }
             "--motion" => {
                 motion = Some(PathBuf::from(
                     arguments
@@ -327,6 +347,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         rerender_shadows,
         choices,
         motion,
+        guide,
         last_frame,
         gallery,
         fog_medium,
@@ -355,6 +376,7 @@ fn run() -> Result<(), String> {
         rerender_shadows,
         choices,
         motion,
+        guide,
         last_frame,
         gallery,
         fog_medium,
@@ -515,15 +537,22 @@ fn run() -> Result<(), String> {
     if motion.is_some() && frames == 0 {
         return Err("--motion needs --frames: motion is drawn between frames".to_owned());
     }
+    if guide.is_some() && (frames == 0 || motion.is_some() || last_frame.is_some()) {
+        return Err(
+            "--guide needs --frames and draws the guide in place of the last frame or the motion"
+                .to_owned(),
+        );
+    }
     if motion.is_some() && last_frame.is_some() {
         return Err("--motion draws the motion in place of the last frame".to_owned());
     }
     if last_frame.is_some() && frames == 0 {
         return Err("--last-frame needs --frames".to_owned());
     }
-    if motion.is_some() {
+    if motion.is_some() || guide.is_some() {
         driver.set_overlay_shown(render_wgpu::OverlayShown {
-            motion: true,
+            motion: motion.is_some(),
+            guide: guide.as_ref().map(|(kind, _)| *kind),
             ..render_wgpu::OverlayShown::default()
         });
     }
@@ -607,6 +636,7 @@ fn run() -> Result<(), String> {
             "advanceSeconds": advance,
             "rerenderShadows": rerender_shadows,
             "motion": motion.is_some(),
+            "guide": guide.as_ref().map(|(kind, _)| format!("{kind:?}")),
             // The render resolution the views drew at and the stage that
             // brought it to the output, in the last frame; and how often a
             // temporal stage's history started again.
@@ -621,7 +651,7 @@ fn run() -> Result<(), String> {
             std::fs::write(path, encode_png(width, height, &pixels)?)
                 .map_err(|error| format!("{}: {error}", path.display()))?;
         }
-        if let Some(path) = &motion {
+        if let Some(path) = motion.as_ref().or(guide.as_ref().map(|(_, path)| path)) {
             std::fs::write(path, encode_png(width, height, &pixels)?)
                 .map_err(|error| format!("{}: {error}", path.display()))?;
         }

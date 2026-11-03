@@ -14,13 +14,14 @@ pub(crate) const OFFSCREEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg
 pub(crate) const PRIMARY_SAMPLES: u32 = 4;
 
 /// What a pipeline must match to draw into a target: colour format, sample
-/// count, and whether a motion target follows the colour (`motion.rs`).
-/// Pipeline caches are keyed by it.
+/// count, and whether a motion target follows the colour, and the guide
+/// targets the motion (`motion.rs`). Pipeline caches are keyed by it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct ColorTarget {
     pub format: wgpu::TextureFormat,
     pub samples: u32,
     pub motion: bool,
+    pub guides: bool,
 }
 
 impl ColorTarget {
@@ -30,6 +31,7 @@ impl ColorTarget {
             format,
             samples,
             motion: false,
+            guides: false,
         }
     }
 
@@ -41,7 +43,9 @@ impl ColorTarget {
     }
 
     /// The colour targets a pipeline drawing here declares: `color`, then
-    /// the motion target written as `motion` says, when there is one.
+    /// the motion target written as `motion` says, when there is one, then
+    /// the guide targets, unwritten (only the opaque world writes them,
+    /// `pipelines.rs`).
     pub fn targets(
         self,
         color: wgpu::ColorTargetState,
@@ -50,6 +54,15 @@ impl ColorTarget {
         let mut targets = vec![Some(color)];
         if self.motion {
             targets.push(Some(motion.target_state()));
+        }
+        if self.guides {
+            targets.extend(crate::motion::GUIDE_FORMATS.map(|format| {
+                Some(wgpu::ColorTargetState {
+                    format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::empty(),
+                })
+            }));
         }
         targets
     }

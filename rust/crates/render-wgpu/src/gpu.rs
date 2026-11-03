@@ -311,6 +311,19 @@ impl Gpu {
         })
     }
 
+    /// Why this device cannot draw the guide targets, if it cannot: the
+    /// world pass's colour, motion and guides take more bytes a sample than
+    /// WebGPU guarantees.
+    pub(crate) fn guides_refusal(&self) -> Option<String> {
+        let granted = self.device.limits().max_color_attachment_bytes_per_sample;
+        (granted < crate::motion::GUIDED_BYTES_PER_SAMPLE).then(|| {
+            format!(
+                "the device draws {granted} bytes a sample to its colour attachments; the world pass with guides draws {}",
+                crate::motion::GUIDED_BYTES_PER_SAMPLE
+            )
+        })
+    }
+
     /// Why this device cannot lay decals, if it cannot: the world pass binds
     /// three more textures with them than WebGPU guarantees.
     pub(crate) fn decals_refusal(&self) -> Option<String> {
@@ -395,9 +408,10 @@ impl Gpu {
 
 /// wgpu's default limits at the adapter's resolution, with the adapter's
 /// largest storage binding and buffer, so dense scatter holds as many
-/// copies as the device can bind (at most `binding_limit` bytes), and the
+/// copies as the device can bind (at most `binding_limit` bytes), the
 /// sampled textures a world pass with decals binds, when the adapter has
-/// them (at most `texture_limit`).
+/// them (at most `texture_limit`), and the adapter's colour attachment
+/// bytes a sample, which the guide targets pass (`motion.rs`).
 fn limits(
     adapter: &wgpu::Limits,
     binding_limit: Option<u64>,
@@ -408,6 +422,9 @@ fn limits(
     wgpu::Limits {
         max_storage_buffer_binding_size: adapter.max_storage_buffer_binding_size.min(cap),
         max_buffer_size: adapter.max_buffer_size.min(cap),
+        max_color_attachment_bytes_per_sample: adapter
+            .max_color_attachment_bytes_per_sample
+            .max(defaults.max_color_attachment_bytes_per_sample),
         max_sampled_textures_per_shader_stage: adapter
             .max_sampled_textures_per_shader_stage
             .min(crate::decals::WORLD_SAMPLED_TEXTURES)

@@ -71,6 +71,22 @@ pub(crate) fn mesh_buffers(
     buffers
 }
 
+/// `targets` with its guide targets written, when `write` (the opaque world
+/// pass beside guide targets, `ColorTarget::guides`): they are its last
+/// three.
+fn guided(
+    mut targets: Vec<Option<wgpu::ColorTargetState>>,
+    write: bool,
+) -> Vec<Option<wgpu::ColorTargetState>> {
+    if write {
+        let first = targets.len() - crate::motion::GUIDE_FORMATS.len();
+        for target in targets[first..].iter_mut().flatten() {
+            target.write_mask = wgpu::ColorWrites::ALL;
+        }
+    }
+    targets
+}
+
 /// A standard-family module, which always composes.
 pub(crate) fn standard(module: Result<wgpu::ShaderModule, String>) -> wgpu::ShaderModule {
     module.unwrap_or_else(|error| panic!("{error}"))
@@ -1023,10 +1039,12 @@ impl Layouts {
         if pipelines.world.contains_key(&(features, pass)) {
             return false;
         }
-        // Beside a motion target the variant writes motion too; without
-        // one, skinned vertices compile as any others.
+        // Beside a motion target the variant writes motion too, and an
+        // opaque one the guides beside guide targets; without one, skinned
+        // vertices compile as any others.
+        let opaque_guides = pipelines.target.guides && !pass.blends();
         let compiled = if pipelines.target.motion {
-            features | Features::MOTION
+            (features | Features::MOTION).with(Features::GUIDES, opaque_guides)
         } else {
             features.without(Features::SKINNED)
         };
@@ -1074,19 +1092,22 @@ impl Layouts {
                 // Opaque passes cover their pixel (`finish.rs`).
                 entry_point: Some(if blend { "fs_world" } else { "fs_world_opaque" }),
                 compilation_options: Default::default(),
-                targets: &pipelines.target.targets(
-                    wgpu::ColorTargetState {
-                        format: pipelines.target.format,
-                        blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    },
-                    // Water writes its own motion and the reactive mask
-                    // wherever it draws (`motion.rs`).
-                    if blend {
-                        MotionWrite::Blend
-                    } else {
-                        MotionWrite::Cover
-                    },
+                targets: &guided(
+                    pipelines.target.targets(
+                        wgpu::ColorTargetState {
+                            format: pipelines.target.format,
+                            blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        },
+                        // Water writes its own motion and the reactive mask
+                        // wherever it draws (`motion.rs`).
+                        if blend {
+                            MotionWrite::Blend
+                        } else {
+                            MotionWrite::Cover
+                        },
+                    ),
+                    opaque_guides,
                 ),
             }),
             multiview_mask: None,

@@ -46,7 +46,7 @@ impl Pass {
         }
     }
 
-    fn blends(self) -> bool {
+    pub fn blends(self) -> bool {
         self >= Self::Blend
     }
 

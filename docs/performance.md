@@ -140,7 +140,10 @@ choices apply first. `--motion OUT.png` draws the extra frames with their
 [motion target](lighting-and-sky.md#temporal-inputs), as a temporal upscale
 stage has them drawn, and writes the last frame's motion there; with
 `--walk` or `--turn` it shows the camera's motion, and its `world` median
-against a run without it is the target's cost. `--last-frame OUT.png`
+against a run without it is the target's cost. `--guide
+diffuse|specular|normal|roughness OUT.png` draws them with the
+[guide targets](lighting-and-sky.md#temporal-inputs) as well and writes the
+last frame's guide there. `--last-frame OUT.png`
 writes the last extra frame instead, as a temporal stage shows it once it
 has gathered the frames before it, and `timing` reports the frames' render
 and output resolutions, their `upscale` stage and how often its history

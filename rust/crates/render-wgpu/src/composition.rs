@@ -450,7 +450,8 @@ impl Renderer {
         // A temporal stage's jitter and motion, or the motion alone while
         // inspection shows it (`motion.rs`).
         let jittering = stage.is_some_and(UpscaleMethod::temporal);
-        let motion = jittering || self.overlays.shown.motion;
+        let guides = self.overlays.shown.guide.is_some() && self.gpu.guides_refusal().is_none();
+        let motion = jittering || self.overlays.shown.motion || guides;
         // A temporal stage's picture is single-sample whatever the output's
         // samples: it anti-aliases in MSAA's place.
         let samples = if jittering { 1 } else { output.samples };
@@ -463,6 +464,7 @@ impl Renderer {
                 &self.gpu,
                 &self.tables.parts,
                 motion,
+                guides,
                 jittering,
                 resolution,
                 samples,
@@ -636,14 +638,25 @@ impl Renderer {
         self.gpu.queue.submit([encoder.finish()]);
     }
 
-    /// The motion target over the whole of `output`, while inspection shows
-    /// it (`OverlayShown::motion`).
+    /// The motion target or a guide target over the whole of `output`,
+    /// while inspection shows it (`OverlayShown::motion`, `::guide`).
     fn show_motion(&mut self, output: &TargetView<'_>) {
-        if !self.overlays.shown.motion {
+        if !self.overlays.shown.motion && self.overlays.shown.guide.is_none() {
             return;
         }
-        if let Some(inputs) = self.temporal.inputs() {
+        let Some(inputs) = self.temporal.inputs() else {
+            return;
+        };
+        if self.overlays.shown.motion {
             self.compose.show_motion(&self.gpu, output, inputs.motion);
+        }
+        if let (Some(guide), Some(guides)) = (self.overlays.shown.guide, inputs.guides) {
+            let texture = match guide {
+                crate::Guide::DiffuseAlbedo => guides[0],
+                crate::Guide::SpecularAlbedo => guides[1],
+                crate::Guide::Normal | crate::Guide::Roughness => guides[2],
+            };
+            self.compose.show_guide(&self.gpu, output, texture, guide);
         }
     }
 
