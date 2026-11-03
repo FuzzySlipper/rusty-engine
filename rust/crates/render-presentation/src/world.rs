@@ -285,9 +285,13 @@ fn node_uses(kind: &NodeKind, use_: &mut dyn FnMut(Resource, &str)) {
             ..
         }) => {
             use_(Resource::Atlas, asset);
-            for texture in [&material.normal_texture, &material.depth_texture]
-                .into_iter()
-                .flatten()
+            for texture in [
+                &material.normal_texture,
+                &material.depth_texture,
+                &material.tint_mask,
+            ]
+            .into_iter()
+            .flatten()
             {
                 use_(Resource::Texture, texture);
             }
@@ -886,6 +890,7 @@ impl PresentationWorld {
                     atlases.insert(sprite.asset.as_str());
                     textures.extend(sprite.material.normal_texture.as_deref());
                     textures.extend(sprite.material.depth_texture.as_deref());
+                    textures.extend(sprite.material.tint_mask.as_deref());
                     continue;
                 }
                 NodeKind::Primitive(_) | NodeKind::Light(_) => continue,

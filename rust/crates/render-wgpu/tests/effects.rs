@@ -1,7 +1,7 @@
 //! Sprite and particle fixtures:
 //! - billboard modes, pixel size, viewport placement, atlas frames, tints and
 //!   alpha modes;
-//! - lit sprites;
+//! - lit sprites and tint masks;
 //! - particle bursts and emitters, aged on Engine time only.
 //!
 //! `RENDER_WGPU_BLESS=1 cargo test -p render-wgpu --test effects` rewrites the
@@ -1564,4 +1564,101 @@ fn scene_only(eye: &render_host_contracts::RendererCompositionCamera) -> Vec<u8>
     ops.extend(atlas_ops(&mut harness.resources));
     harness.apply(ops);
     harness.single(eye)
+}
+
+/// A 2 m grey sprite straight ahead, tinted a bright red, drawn alone or as
+/// a one-sprite batch, with or without a tint mask opaque over its left half.
+fn masked_tint_sprite(masked: bool, tint: [f32; 4], batch: bool) -> Vec<u8> {
+    let mut harness = Harness::new(RendererOptions::default());
+    let grey = [128, 128, 128, 255];
+    let (texture, _) = harness.resources.texture(
+        "texture/grey",
+        2,
+        1,
+        &[grey, grey].concat(),
+        TextureFilter::Nearest,
+    );
+    let (mask, _) = harness.resources.texture(
+        "texture/tint-mask",
+        2,
+        1,
+        &[[255, 255, 255, 255], [255, 255, 255, 0]].concat(),
+        TextureFilter::Nearest,
+    );
+    let mut ops = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        },
+        texture,
+        mask,
+        RenderDiff::DefineSpriteAtlas {
+            atlas: SpriteAtlasDescriptor {
+                id: "sprite/grey".into(),
+                texture: "texture/grey".into(),
+                frames: vec![SpriteFrameRect {
+                    frame: 0,
+                    uv_min: [0.0; 2],
+                    uv_max: [1.0; 2],
+                    size: None,
+                }],
+            },
+        },
+    ];
+    let mut shared = sprite(0, [0.0, 1.0, -4.0], BillboardMode::Spherical);
+    shared.asset = "sprite/grey".into();
+    shared.tint = tint;
+    shared.material.alpha = SpriteAlphaMode::Opaque;
+    shared.material.tint_mask = masked.then(|| "texture/tint-mask".into());
+    if batch {
+        ops.push(RenderDiff::CreateSpriteBatch {
+            handle: RenderHandle::new(3),
+            parent: None,
+            batch: SpriteBatchDescriptor {
+                sprite: shared,
+                instances: vec![SpriteBatchInstance {
+                    position: [0.0; 3],
+                    scale: 2.0,
+                    frame: 0,
+                }]
+                .into(),
+            },
+        });
+    } else {
+        shared.size = [2.0; 2];
+        ops.push(create(3, shared));
+    }
+    harness.apply(ops);
+    harness.single(&camera("eye", [0.0, 1.0, 0.0], 0.0, 0.0))
+}
+
+/// A tint mask recolours only where it is opaque: the masked half draws as
+/// the whole sprite tinted without a mask does, the clear half as the
+/// untinted sprite, for single sprites and batches alike. The tint's colour
+/// may exceed 1 (a brightness folded in) and is not clamped before it
+/// multiplies.
+#[test]
+fn a_tint_mask_recolours_only_where_it_is_opaque() {
+    let red = [1.3, 0.26, 0.26, 1.0];
+    let left = |rgba: &[u8]| pixel(rgba, WIDTH, WIDTH / 2 - 20, HEIGHT / 2);
+    let right = |rgba: &[u8]| pixel(rgba, WIDTH, WIDTH / 2 + 20, HEIGHT / 2);
+    for batch in [false, true] {
+        let untinted = masked_tint_sprite(false, [1.0; 4], batch);
+        let tinted = masked_tint_sprite(false, red, batch);
+        let masked = masked_tint_sprite(true, red, batch);
+        let [r, g, b, _] = left(&untinted);
+        assert!(r > 20 && r == g && g == b, "batch {batch}: untinted grey");
+        let [r, g, _, _] = left(&tinted);
+        assert!(r > g + 60, "batch {batch}: the tint reddens the sprite");
+        assert_eq!(left(&masked), left(&tinted), "batch {batch}: masked half");
+        assert_eq!(
+            right(&masked),
+            right(&untinted),
+            "batch {batch}: clear half"
+        );
+        let brighter = masked_tint_sprite(true, [1.0, 0.2, 0.2, 1.0], batch);
+        assert!(
+            left(&masked)[0] > left(&brighter)[0],
+            "batch {batch}: a tint above 1 brightens"
+        );
+    }
 }

@@ -432,6 +432,8 @@ pub(crate) struct SpriteRow {
     pub atlas: u32,
     /// Name id of an authored normal or depth texture, by lighting mode.
     pub detail: Option<u32>,
+    /// Name id of the texture whose alpha says where the tint's colour applies.
+    pub tint_mask: Option<u32>,
     /// A sprite batch's instances: the descriptor is what they share.
     pub batch: Option<SpriteBatchRows>,
 }

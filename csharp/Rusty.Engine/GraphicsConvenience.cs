@@ -424,7 +424,8 @@ internal static class GraphicsDefaults
         0.5f,
         SpriteShadowPolicy.None,
         SpriteBlendMode.Alpha,
-        0f);
+        0f,
+        default);
 }
 
 public readonly partial record struct SpriteMaterialDescriptor
@@ -439,7 +440,23 @@ public readonly partial record struct SpriteMaterialDescriptor
         SpriteAlphaMode AlphaMode,
         float AlphaCutoff,
         SpriteShadowPolicy Shadow)
-        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, SpriteBlendMode.Alpha, 0f)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, SpriteBlendMode.Alpha, 0f, default)
+    {
+    }
+
+    /// <summary>A sprite material whose tint applies to the whole sprite (no <see cref="TintMask"/>).</summary>
+    public SpriteMaterialDescriptor(
+        SpriteLightingMode Lighting,
+        RenderResourceReference NormalTexture,
+        RenderResourceReference DepthTexture,
+        float NormalStrength,
+        float NormalBias,
+        SpriteAlphaMode AlphaMode,
+        float AlphaCutoff,
+        SpriteShadowPolicy Shadow,
+        SpriteBlendMode Blend,
+        float SoftnessMetres)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, default)
     {
     }
 }

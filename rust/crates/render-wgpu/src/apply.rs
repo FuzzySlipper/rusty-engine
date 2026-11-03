@@ -405,6 +405,11 @@ impl Renderer {
                     atlas: self.tables.names.id(&sprite.asset),
                     detail: crate::effects::sprite_detail_texture(sprite)
                         .map(|name| self.tables.names.id(name)),
+                    tint_mask: sprite
+                        .material
+                        .tint_mask
+                        .as_deref()
+                        .map(|name| self.tables.names.id(name)),
                     descriptor: sprite.clone(),
                     batch: None,
                 };
@@ -431,6 +436,11 @@ impl Renderer {
                 let row = crate::tables::SpriteRow {
                     atlas: self.tables.names.id(&sprite.asset),
                     detail: crate::effects::sprite_detail_texture(sprite)
+                        .map(|name| self.tables.names.id(name)),
+                    tint_mask: sprite
+                        .material
+                        .tint_mask
+                        .as_deref()
                         .map(|name| self.tables.names.id(name)),
                     descriptor: sprite.clone(),
                     batch: Some(self.sprite_batch_rows(batch)),

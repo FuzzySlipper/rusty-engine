@@ -1332,6 +1332,12 @@ pub struct SpriteMaterialDescriptor {
     /// world behind it; 0 keeps the hard depth edge.
     #[serde(default)]
     pub softness_metres: f32,
+    /// A texture whose alpha says where the sprite's tint colour applies:
+    /// sampled at the colour texture's uv, so it has the colour texture's
+    /// layout. Where it is clear the colour stays untinted; the tint's alpha
+    /// applies everywhere. None tints the whole sprite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tint_mask: Option<String>,
 }
 
 /// How a blended sprite's colour reaches the frame: over what is behind it
@@ -1356,6 +1362,7 @@ impl Default for SpriteMaterialDescriptor {
             shadow: SpriteShadowPolicy::None,
             blend: SpriteBlendMode::Alpha,
             softness_metres: 0.0,
+            tint_mask: None,
         }
     }
 }
@@ -1385,6 +1392,10 @@ impl SpriteMaterialDescriptor {
                 .map_err(SpriteMaterialError::Texture)?;
         }
         if let Some(texture) = &self.depth_texture {
+            validate_asset_id(texture, RenderAssetKind::Texture)
+                .map_err(SpriteMaterialError::Texture)?;
+        }
+        if let Some(texture) = &self.tint_mask {
             validate_asset_id(texture, RenderAssetKind::Texture)
                 .map_err(SpriteMaterialError::Texture)?;
         }
@@ -1562,6 +1573,7 @@ mod tests {
             shadow: SpriteShadowPolicy::CastAndReceive,
             blend: SpriteBlendMode::Alpha,
             softness_metres: 0.0,
+            tint_mask: Some("texture/sprite-tint-mask".to_string()),
         };
         assert_eq!(authored.validate(), Ok(()));
 

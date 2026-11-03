@@ -308,6 +308,11 @@ pub struct NativeSpriteMaterialDescriptor {
     /// world behind it; 0 (the default) keeps the hard depth edge. A soft
     /// sprite draws after the world's blended parts rather than among them.
     pub softness_metres: f32,
+    /// A texture whose alpha says where the tint's colour applies, sampled at
+    /// the colour texture's uv: `rgb * mix(1, tint.rgb, mask.a)`. The tint's
+    /// alpha applies everywhere. A zero handle (the default) tints the whole
+    /// sprite.
+    pub tint_mask: NativeRenderResourceReference,
 }
 
 /// How a blended sprite's colour reaches the frame.
@@ -332,6 +337,7 @@ impl Default for NativeSpriteMaterialDescriptor {
             shadow: NativeSpriteShadowPolicy::None,
             blend: NativeSpriteBlendMode::Alpha,
             softness_metres: 0.0,
+            tint_mask: NativeRenderResourceReference::default(),
         }
     }
 }

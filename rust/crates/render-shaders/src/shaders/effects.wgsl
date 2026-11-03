@@ -49,6 +49,10 @@ struct SpriteOut {
 // The normal or height map; the colour texture again when there is none.
 @group(1) @binding(12) var sprite_detail: texture_2d<f32>;
 @group(1) @binding(13) var sprite_detail_sampler: sampler;
+// Where the tint's colour applies, by alpha, at the colour texture's uv;
+// 1×1 white (the tint everywhere) when the material has no mask.
+@group(1) @binding(14) var sprite_tint_mask: texture_2d<f32>;
+@group(1) @binding(15) var sprite_tint_mask_sampler: sampler;
 
 @vertex
 fn vs_sprite(in: SpriteIn) -> SpriteOut {
@@ -169,7 +173,10 @@ fn shaded_sprite(in: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
     // frame's share of the sheet.
     let cell0 = dpdx(in.cell);
     let cell1 = gl_dpdy2(in.cell);
-    let color = textureSample(sprite_color, sprite_color_sampler, in.uv) * in.tint;
+    let texel = textureSample(sprite_color, sprite_color_sampler, in.uv);
+    // An HDR tint (above 1) brightens unclamped.
+    let tinted = mix(vec3<f32>(1.0), in.tint.rgb, textureSample(sprite_tint_mask, sprite_tint_mask_sampler, in.uv).a);
+    let color = vec4<f32>(texel.rgb * tinted, texel.a * in.tint.a);
     let detail = textureSample(sprite_detail, sprite_detail_sampler, in.uv);
     let height_x = textureSample(sprite_detail, sprite_detail_sampler, in.uv + st0).x;
     let height_y = textureSample(sprite_detail, sprite_detail_sampler, in.uv + st1).x;

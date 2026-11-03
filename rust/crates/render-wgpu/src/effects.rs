@@ -74,10 +74,10 @@ struct SpriteState {
     batch: bool,
 }
 
-/// Colour texture id and detail (normal or height) texture id; `None` is the
-/// 1×1 white texture, or the colour texture again for the detail slot.
-/// (color, detail) texture name ids (`Tables::names`).
-type SpriteTextures = (Option<u32>, Option<u32>);
+/// Colour, detail (normal or height) and tint mask texture name ids
+/// (`Tables::names`); `None` is the 1×1 white texture, or the colour texture
+/// again for the detail slot. The white mask tints the whole sprite.
+type SpriteTextures = (Option<u32>, Option<u32>, Option<u32>);
 
 struct SpriteDraw {
     state: SpriteState,
@@ -313,6 +313,8 @@ impl Effects {
                 sampler_entry(11),
                 texture_entry(12),
                 sampler_entry(13),
+                texture_entry(14),
+                sampler_entry(15),
             ],
         });
         let particle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -420,7 +422,7 @@ impl Effects {
     /// Drop cached sprite bindings of a texture that was redefined or released.
     pub fn forget_texture(&mut self, id: u32) {
         self.sprite_bind_groups
-            .retain(|(color, detail), _| *color != Some(id) && *detail != Some(id));
+            .retain(|textures, _| ![textures.0, textures.1, textures.2].contains(&Some(id)));
     }
 
     fn format_index(&mut self, device: &wgpu::Device, format: ColorTarget) -> usize {
@@ -1532,7 +1534,7 @@ impl Renderer {
                 pass.batch_instances += buffers.count;
                 draws.push(SpriteDraw {
                     state,
-                    textures: (color, detail),
+                    textures: (color, detail, resolved.tint_mask),
                     render_order: sprite.render_order,
                     depth: node
                         .world
@@ -1580,7 +1582,7 @@ impl Renderer {
             ]);
             draws.push(SpriteDraw {
                 state,
-                textures: (color, detail),
+                textures: (color, detail, resolved.tint_mask),
                 render_order: sprite.render_order,
                 depth: model.w_axis.truncate().distance_squared(view.camera.eye),
                 row,
@@ -1610,6 +1612,7 @@ impl Renderer {
                     Some(_) => self.sprite_texture(draw.textures.1),
                     None => color,
                 };
+                let tint_mask = self.sprite_texture(draw.textures.2);
                 let bind_group = self
                     .gpu
                     .device
@@ -1632,6 +1635,14 @@ impl Renderer {
                             wgpu::BindGroupEntry {
                                 binding: 13,
                                 resource: wgpu::BindingResource::Sampler(&detail.sampler),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 14,
+                                resource: wgpu::BindingResource::TextureView(&tint_mask.view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 15,
+                                resource: wgpu::BindingResource::Sampler(&tint_mask.sampler),
                             },
                         ],
                     });

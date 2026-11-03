@@ -4991,6 +4991,7 @@ impl RuntimeAppearanceBridge {
                 NativeSpriteBlendMode::Additive => SpriteBlendMode::Additive,
             },
             softness_metres: value.softness_metres,
+            tint_mask: resolve_texture(value.tint_mask, "tint mask")?,
         };
         descriptor.validate().map_err(|error| {
             CsharpEngineServicesError::new(
@@ -5007,22 +5008,26 @@ impl RuntimeAppearanceBridge {
         &self,
         material: NativeSpriteMaterialDescriptor,
     ) -> Result<Vec<TextureDescriptor>, CsharpEngineServicesError> {
-        [material.normal_texture, material.depth_texture]
-            .into_iter()
-            .filter(|handle| handle.value != 0)
-            .map(|handle| {
-                // Descriptor validation has already established the resource kind.
-                self.resource(handle.value)?
-                    .texture()
-                    .cloned()
-                    .ok_or_else(|| {
-                        CsharpEngineServicesError::new(
-                            "CSHARP_SPRITE_MATERIAL_TEXTURE",
-                            "sprite material texture is unavailable",
-                        )
-                    })
-            })
-            .collect()
+        [
+            material.normal_texture,
+            material.depth_texture,
+            material.tint_mask,
+        ]
+        .into_iter()
+        .filter(|handle| handle.value != 0)
+        .map(|handle| {
+            // Descriptor validation has already established the resource kind.
+            self.resource(handle.value)?
+                .texture()
+                .cloned()
+                .ok_or_else(|| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_SPRITE_MATERIAL_TEXTURE",
+                        "sprite material texture is unavailable",
+                    )
+                })
+        })
+        .collect()
     }
 
     /// Installs a built sprite under the next appearance handle.
@@ -5073,7 +5078,11 @@ impl RuntimeAppearanceBridge {
             textures: self.sprite_material_textures(material)?,
             own_atlas: None,
             retained_atlas: Some(atlas.value),
-            held: resource_set([material.normal_texture.value, material.depth_texture.value]),
+            held: resource_set([
+                material.normal_texture.value,
+                material.depth_texture.value,
+                material.tint_mask.value,
+            ]),
         })
     }
 
@@ -5818,6 +5827,7 @@ impl RuntimeAppearanceBridge {
                 request.texture.value,
                 request.material.normal_texture.value,
                 request.material.depth_texture.value,
+                request.material.tint_mask.value,
             ]),
         })
     }
@@ -13980,6 +13990,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         let mut content = BTreeMap::new();
         content.insert("sprite.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         content.insert("normal.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
+        content.insert("mask.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         bridge.begin_call();
         let mut sprite_texture_request = resource_request("sprite.png");
@@ -13991,6 +14002,9 @@ fn shade(surface: Surface) -> vec4<f32> {
         let normal_texture = bridge
             .open_resource(&resource_request("normal.png"))
             .expect("selected normal texture");
+        let tint_mask = bridge
+            .open_resource(&resource_request("mask.png"))
+            .expect("tint mask texture");
         let frames = [NativeSpriteAtlasFrame {
             frame_id: 7,
             uv_min: NativeVec2::default(),
@@ -14021,12 +14035,20 @@ fn shade(surface: Surface) -> vec4<f32> {
             shadow: NativeSpriteShadowPolicy::CastAndReceive,
             blend: NativeSpriteBlendMode::Alpha,
             softness_metres: 0.0,
+            tint_mask: NativeRenderResourceReference {
+                value: tint_mask.handle.value,
+            },
         };
         let appearance = bridge
             .create_sprite_from_atlas(request)
             .expect("typed sprite material");
         let normal_identity = bridge
             .resource(normal_texture.handle.value)
+            .unwrap()
+            .asset_identity()
+            .to_owned();
+        let mask_identity = bridge
+            .resource(tint_mask.handle.value)
             .unwrap()
             .asset_identity()
             .to_owned();
@@ -14051,6 +14073,13 @@ fn shade(surface: Surface) -> vec4<f32> {
                 .any(|texture| texture.id == normal_identity),
             "normal map must be present in the retained resource baseline"
         );
+        assert!(
+            resources
+                .textures
+                .iter()
+                .any(|texture| texture.id == mask_identity),
+            "tint mask must be present in the retained resource baseline"
+        );
         let fact = appearance_fact(appearance);
         unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
         let call = bridge.take_staged_call();
@@ -14064,6 +14093,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert!(encoded.contains("sprite/atlas-1"));
         assert!(encoded.contains("authoredNormal"));
         assert!(encoded.contains("castAndReceive"));
+        assert!(encoded.contains(&format!("\"tintMask\":\"{mask_identity}\"")));
         bridge.commit(call);
         bridge.begin_call();
         unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
@@ -14071,6 +14101,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         bridge.destroy_sprite_atlas(atlas).unwrap();
         bridge.destroy_resource(sprite_texture.handle).unwrap();
         bridge.destroy_resource(normal_texture.handle).unwrap();
+        bridge.destroy_resource(tint_mask.handle).unwrap();
         let call = bridge.take_staged_call();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {

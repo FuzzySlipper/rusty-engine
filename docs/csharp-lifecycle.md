@@ -514,9 +514,17 @@ by its alpha and added to the frame, for glows) and `SoftnessMetres` (0, the
 default, keeps the hard depth edge; above it the sprite fades out over that
 many metres as it nears the opaque world behind it). A soft sprite draws after
 the world's blended parts, in the particle pass, rather than sorted among
-them, and needs its depth test on. Sprites and atlases keep the sampler
-selected when their texture was opened; the short constructors select opaque
-mesh and unlit/blended sprite defaults.
+them, and needs its depth test on. `TintMask` (a texture resource; the zero
+handle, the default, tints the whole sprite) limits where the tint's colour
+applies: the colour is `texture.rgb * mix(1, tint.rgb, mask.a)`, with the mask
+sampled at the colour texture's uv, so a mask has the layout and size of the
+sprite's texture or atlas. The tint's alpha still multiplies everywhere, and a
+tint channel above 1 brightens unclamped. Open the mask like any PNG texture;
+its alpha reads the same in either colour space. The mask applies to sprites
+from a texture or an atlas and to sprite batches. Sprites and atlases keep the
+sampler selected when their texture was opened; the short constructors select
+opaque mesh and unlit/blended sprite defaults, and the eight- and ten-argument
+`SpriteMaterialDescriptor` constructors leave out the later fields.
 
 `Graphics.CreateMeshResource(new MeshResourceCreateRequest(positions, normals,
 uvs, colors, indices, groups, bindings))` copies ordinary managed arrays into
