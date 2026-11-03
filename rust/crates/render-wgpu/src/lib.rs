@@ -1230,7 +1230,13 @@ impl Renderer {
                     self.upscale.timing(),
                     self.water.timing(),
                 ])
-                .chain(self.ray_scene.as_ref().map(ray_scene::RayScene::timing))
+                .chain(
+                    self.ray_scene
+                        .as_ref()
+                        .map(ray_scene::RayScene::timings)
+                        .into_iter()
+                        .flatten(),
+                )
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
             distance_fields: self.distance_fields.readout(),

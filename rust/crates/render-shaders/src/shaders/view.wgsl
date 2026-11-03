@@ -4,7 +4,7 @@
 // shadow caster pass binds `parts`, `instances`, `shadow_views` and `copies`
 // at the same numbers (`Layouts::casters`).
 
-#import rusty::types::{Frame, Part, Light, ShadowView, CloudRegion, ScatterCopy}
+#import rusty::types::{Frame, Part, Light, ShadowView, CloudRegion, ScatterCopy, copy_turn, copy_place}
 
 @group(0) @binding(0) var<uniform> frame: Frame;
 @group(0) @binding(1) var<storage, read> parts: array<Part>;
@@ -38,28 +38,6 @@
 // The copies of every scatter run; a SCATTER draw's instances index them.
 // The shadow caster pass binds them at the same number.
 @group(0) @binding(14) var<storage, read> copies: array<ScatterCopy>;
-
-// A copy's turn, the rotation of its unit quaternion.
-fn copy_turn(scattered: ScatterCopy) -> mat3x3<f32> {
-    let q = scattered.turn;
-    return mat3x3<f32>(
-        vec3<f32>(1.0 - 2.0 * (q.y * q.y + q.z * q.z), 2.0 * (q.x * q.y + q.w * q.z), 2.0 * (q.x * q.z - q.w * q.y)),
-        vec3<f32>(2.0 * (q.x * q.y - q.w * q.z), 1.0 - 2.0 * (q.x * q.x + q.z * q.z), 2.0 * (q.y * q.z + q.w * q.x)),
-        vec3<f32>(2.0 * (q.x * q.z + q.w * q.y), 2.0 * (q.y * q.z - q.w * q.x), 1.0 - 2.0 * (q.x * q.x + q.y * q.y)),
-    );
-}
-
-// A copy placed, turned and scaled in its part's model space.
-fn copy_place(scattered: ScatterCopy) -> mat4x4<f32> {
-    let turn = copy_turn(scattered);
-    let scale = scattered.place.w;
-    return mat4x4<f32>(
-        vec4<f32>(turn[0] * scale, 0.0),
-        vec4<f32>(turn[1] * scale, 0.0),
-        vec4<f32>(turn[2] * scale, 0.0),
-        vec4<f32>(scattered.place.xyz, 1.0),
-    );
-}
 
 // The part row a SCATTER instance draws with: its run's part, with the
 // copy placed, turned and scaled under the part's model.

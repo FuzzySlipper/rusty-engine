@@ -158,9 +158,12 @@ the frame times show the uncached cost. The report's `shadows` gives the
 layers, pages, atlas bytes and the layers and casters the last frame rendered.
 `--ray-scene` draws on a device with ray queries and builds the scene's
 acceleration structures, as the ray-traced settings do; `gpu.rayScene`
-reports their BLAS, triangles and built bytes, the TLAS instances and the
-builds' CPU time, and the `ray-scene` pass their GPU time (the first frame's
-holds the initial BLAS builds).
+reports their BLAS, triangles and built bytes, the parts' instances, the
+scatter copies within the reach and their instances, and the builds' CPU
+time, and the `ray-blas` and `ray-scene` passes the GPU time of the BLAS
+builds (the first frame's) and of each frame's TLAS build. `--ray-reach M`
+takes scatter copies within M metres of the camera into the TLAS instead
+of the sun's shadow reach.
 
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`
 in `product-host`) as UTF-8 JSON bytes through

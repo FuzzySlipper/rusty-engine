@@ -483,12 +483,13 @@ impl Renderer {
         let created = std::mem::take(&mut self.tables.parts.created);
         self.temporal.note_parts(&moved, &created);
         let former = std::mem::take(&mut self.tables.parts.former_bounds);
+        let runs_changed = std::mem::take(&mut self.tables.scatter_runs_changed);
         if self.tables.parts.selecting {
             // The selection gathers its runs again when they or their parts
             // change; the world's shadow layers draw its shadow list, so they
             // redraw when it changes while it casts or did, and when a
             // selected run moves.
-            let rebuilt = regrouped || std::mem::take(&mut self.tables.scatter_runs_changed);
+            let rebuilt = regrouped || runs_changed;
             let mut recast = false;
             if rebuilt {
                 recast = self.scatter_select.casts();
@@ -549,7 +550,7 @@ impl Renderer {
         if regrouped || !moved.is_empty() || layers_changed {
             self.cull_casters(&moved, false);
         }
-        self.prepare_ray_scene(regrouped || !moved.is_empty());
+        self.prepare_ray_scene(regrouped || runs_changed || !moved.is_empty());
         uploaded
     }
 
@@ -2769,6 +2770,8 @@ impl Renderer {
                 }
             }
             self.fit_cascades(&view.camera, None);
+            // The ray scene's TLAS, from the frame's first world view.
+            self.build_ray_tlas(eye);
         }
         let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
         // The world, sprites and particles draw into the view's HDR target,
@@ -3912,7 +3915,7 @@ fn moon_uniform(moon: Option<render_model::MoonDescriptor>) -> [f32; 12] {
 
 /// The frame uniform's wind row (`rusty::wind`): the unit direction over
 /// the ground, the strength and the gust share; all zero when still.
-fn wind_uniform(wind: Option<WindDescriptor>) -> [f32; 4] {
+pub(crate) fn wind_uniform(wind: Option<WindDescriptor>) -> [f32; 4] {
     match wind {
         Some(wind) if wind.strength > 0.0 => {
             let [x, z] = wind.unit_direction();

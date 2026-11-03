@@ -6,7 +6,7 @@
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
 //!                    [--walk M] [--turn D] [--advance S] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R]
 //!                    [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]
-//!                    [--rerender-shadows] [--ray-scene] [--choose ID=VALUE]...
+//!                    [--rerender-shadows] [--ray-scene] [--ray-reach M] [--choose ID=VALUE]...
 //! rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]
 //! ```
 //!
@@ -22,7 +22,8 @@
 //! renderer settings catalogue as a player's choice (`--choose
 //! antialiasing=off`), over the snapshot and the product's own settings.
 //! `--ray-scene` builds the scene's acceleration structures, as the
-//! ray-traced settings do, and reports their sizes and build cost.
+//! ray-traced settings do, and reports their sizes and build cost;
+//! `--ray-reach M` takes scatter copies within M metres into them.
 //! `--gallery DIR` draws the feature gallery instead: the scene as it is and
 //! once per feature it leaves off (docs/performance.md, "Feature gallery").
 //! Select the adapter as for any wgpu program (for example
@@ -44,7 +45,7 @@ use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
      [--frames N] [--walk M] [--turn D] [--advance S] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
-     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] [--ray-scene] \
+     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] [--ray-scene] [--ray-reach M] \
      [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]] [--choose ID=VALUE]... \
      [--volumetric-fog-medium DENSITY[,ANISOTROPY]] [--motion OUT.png] [--last-frame OUT.png]\n\
        rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]";
@@ -94,8 +95,10 @@ struct Arguments {
     last_frame: Option<PathBuf>,
     /// Draw the feature gallery into this directory instead.
     gallery: Option<PathBuf>,
-    /// Build the ray scene and report it.
+    /// Build the ray scene and report it, taking scatter copies within
+    /// this reach when given.
     ray_scene: bool,
+    ray_reach: Option<f32>,
 }
 
 /// Parses the command line; `None` when it asked for help. A render scale is
@@ -122,6 +125,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut last_frame = None;
     let mut fog_medium = None;
     let mut ray_scene = false;
+    let mut ray_reach = None;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
             arguments
@@ -182,6 +186,14 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
             }
             "--rerender-shadows" => rerender_shadows = true,
             "--ray-scene" => ray_scene = true,
+            "--ray-reach" => {
+                let reach = number("--ray-reach")? as f32;
+                if !(reach.is_finite() && reach >= 0.0) {
+                    return Err(format!("--ray-reach needs metres of at least 0\n{USAGE}"));
+                }
+                ray_scene = true;
+                ray_reach = Some(reach);
+            }
             "--choose" => {
                 let choice = arguments.next().unwrap_or_default();
                 let (id, value) = choice
@@ -319,6 +331,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         gallery,
         fog_medium,
         ray_scene,
+        ray_reach,
     }))
 }
 
@@ -346,6 +359,7 @@ fn run() -> Result<(), String> {
         gallery,
         fog_medium,
         ray_scene,
+        ray_reach,
     }) = parse(std::env::args().skip(1))?
     else {
         println!("{USAGE}");
@@ -473,6 +487,7 @@ fn run() -> Result<(), String> {
                 });
             }
             renderer.set_ray_scene(ray_scene);
+            renderer.set_ray_reach(ray_reach);
             renderer.bake_indirect_light_now()
         })
         .0;
@@ -659,10 +674,16 @@ fn run() -> Result<(), String> {
             "blasBytes": ray_scene.blas_bytes,
             "compacted": ray_scene.compacted,
             "waiting": ray_scene.waiting,
-            "tlasInstances": ray_scene.tlas_instances,
+            "reach": ray_scene.reach,
+            "partInstances": ray_scene.part_instances,
+            "copiesInReach": ray_scene.copies_in_reach,
+            "copyInstances": ray_scene.copy_instances,
+            "droppedInstances": ray_scene.dropped_instances,
+            "capacity": ray_scene.capacity,
             "blasBuilds": ray_scene.blas_builds,
             "tlasBuilds": ray_scene.tlas_builds,
-            "buildCpuMs": ray_scene.build_cpu_ms,
+            "blasCpuMs": ray_scene.blas_cpu_ms,
+            "tlasCpuMs": ray_scene.tlas_cpu_ms,
             "buildCpuMsTotal": ray_scene.build_cpu_ms_total,
         })
     });

@@ -15,7 +15,7 @@
 // outside MOTION they hold nothing a pass reads.
 
 #import rusty::types::ScatterCopy
-#import rusty::view::copy_place
+#import rusty::types::copy_place
 
 struct Motion {
     // The previous frame's projection of a point's offset from its camera:

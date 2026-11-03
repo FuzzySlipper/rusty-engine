@@ -68,7 +68,7 @@ pub(crate) const SHADOW_FAR: f32 = 500.0;
 pub(crate) const CASCADES: u32 = 4;
 /// How far from the camera a directional light's shadow reaches without a
 /// range.
-const DIRECTIONAL_SHADOW_DISTANCE: f32 = 100.0;
+pub(crate) const DIRECTIONAL_SHADOW_DISTANCE: f32 = 100.0;
 /// Split placement between logarithmic (1) and uniform (0).
 const CASCADE_SPLIT_LAMBDA: f32 = 0.75;
 const SKY_HALF_EXTENT: f32 = 32.0;

@@ -199,7 +199,7 @@ fn the_ray_scene_holds_the_drawn_parts_and_follows_new_payloads_and_poses() {
     let built = readout(&harness.renderer);
     assert_eq!(built.waiting, 0);
     assert!(built.blases >= 3, "{built:?}");
-    assert!(built.tlas_instances >= 3, "{built:?}");
+    assert!(built.part_instances >= 3, "{built:?}");
     assert!(built.triangles > 24 && built.blas_bytes > 0, "{built:?}");
 
     let probe = |renderer: &mut Renderer| {

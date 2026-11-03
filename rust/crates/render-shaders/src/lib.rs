@@ -456,6 +456,9 @@ pub enum Entry {
     /// Rays traced against the ray scene for their closest hits
     /// (`ray_probe.wgsl`, compute; needs ray queries).
     RayProbe,
+    /// The ray scene's scatter copies within the ray reach written as TLAS
+    /// instances (`ray_instances.wgsl`, compute).
+    RayInstances,
 }
 
 impl Entry {
@@ -523,6 +526,10 @@ impl Entry {
             Self::RayProbe => (
                 "shaders/ray_probe.wgsl",
                 include_str!("shaders/ray_probe.wgsl"),
+            ),
+            Self::RayInstances => (
+                "shaders/ray_instances.wgsl",
+                include_str!("shaders/ray_instances.wgsl"),
             ),
         }
     }
@@ -880,6 +887,7 @@ mod tests {
             Entry::Hiz,
             Entry::Upscale,
             Entry::RayProbe,
+            Entry::RayInstances,
         ] {
             compose_case(&mut shaders, entry, Features::default());
         }
