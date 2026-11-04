@@ -58,6 +58,12 @@
 //! - **DLSS** (`dlss.rs`): NVIDIA's temporal upscaler, from the same inputs.
 //!   `Antialiasing::Dlss` selects it, in builds with it, on adapters that
 //!   run it; where it is refused, TAAU draws.
+//! - **DLSS Ray Reconstruction** (`dlss.rs`): `Antialiasing::Dlss` with Ray
+//!   Reconstruction asked for (`Renderer::set_ray_reconstruction`). It runs
+//!   on the world's HDR inside the view, so this frame's other way round:
+//!   the picture is at output resolution, only the world draws at render
+//!   resolution, and every pass after RR draws at output size against a
+//!   copy of the world's depth (`Compose::carry_depth`).
 
 use render_shaders::{Entry, Features};
 
@@ -69,6 +75,7 @@ use crate::timing::{untimed, GpuPassTiming, PassTimer};
 use crate::{Gpu, RendererOptions};
 
 const PASS: &str = "upscale";
+const RECONSTRUCTION_PASS: &str = "ray-reconstruction";
 
 /// The history's format: colour and its frames.
 const HISTORY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
@@ -118,6 +125,10 @@ pub enum UpscaleMethod {
     Taau,
     /// NVIDIA DLSS super resolution, from the same jittered frames.
     Dlss,
+    /// NVIDIA DLSS Ray Reconstruction, which denoises and upscales the
+    /// world's HDR inside its view (`dlss.rs`): the picture is at output
+    /// resolution already, and the stage draws it across.
+    DlssRr,
 }
 
 impl UpscaleMethod {
@@ -147,7 +158,7 @@ impl UpscaleMethod {
     pub fn temporal(self) -> bool {
         match self {
             Self::Bilinear => false,
-            Self::Taau | Self::Dlss => true,
+            Self::Taau | Self::Dlss | Self::DlssRr => true,
         }
     }
 
@@ -157,6 +168,7 @@ impl UpscaleMethod {
             Self::Bilinear => "bilinear",
             Self::Taau => "taau",
             Self::Dlss => "dlss",
+            Self::DlssRr => "dlss-rr",
         }
     }
 }
@@ -347,6 +359,8 @@ pub(crate) struct Upscale {
     /// history, which a frame of the other breaks.
     last_temporal: Option<UpscaleMethod>,
     timer: Option<PassTimer>,
+    /// Ray Reconstruction's own stage, in its view.
+    reconstruction_timer: Option<PassTimer>,
 }
 
 impl Upscale {
@@ -362,7 +376,53 @@ impl Upscale {
             dlss: crate::dlss::Dlss::new(),
             last_temporal: None,
             timer: PassTimer::new(gpu, PASS),
+            reconstruction_timer: PassTimer::new(gpu, RECONSTRUCTION_PASS),
         }
+    }
+
+    /// The render resolution Ray Reconstruction draws from in a frame of
+    /// `resolution`, or None if it refused.
+    pub fn ray_reconstruction_size(
+        &mut self,
+        gpu: &Gpu,
+        resolution: FrameResolution,
+        render_scale: f32,
+    ) -> Option<(u32, u32)> {
+        self.dlss
+            .ray_reconstruction_size(gpu, resolution.output, resolution.render, render_scale)
+            .ok()
+    }
+
+    /// Why Ray Reconstruction does not draw, if it cannot.
+    pub fn ray_reconstruction_refusal(&self) -> Option<crate::DlssRefusal> {
+        self.dlss
+            .ray_reconstruction_refusal()
+            .map(|refused| crate::DlssRefusal {
+                refusal: refused.refusal,
+                detail: refused.detail,
+            })
+    }
+
+    /// Run Ray Reconstruction over `work`, finishing and submitting
+    /// `encoder`. Refused as it ran, the encoder comes back.
+    pub fn reconstruct(
+        &mut self,
+        gpu: &Gpu,
+        encoder: wgpu::CommandEncoder,
+        work: &crate::dlss::Reconstruction<'_>,
+    ) -> Result<(), wgpu::CommandEncoder> {
+        if let Some(timer) = &mut self.reconstruction_timer {
+            timer.collect(gpu);
+        }
+        self.dlss
+            .reconstruct(gpu, self.reconstruction_timer.as_mut(), encoder, work)
+            .map_err(|(_, encoder)| encoder)
+    }
+
+    /// The sampler that scales a picture, which a refused Ray
+    /// Reconstruction's frame scales the world's HDR with.
+    pub fn sampler(&self) -> &wgpu::Sampler {
+        &self.sampler
     }
 
     /// A primary frame drew without a temporal stage: their histories no
@@ -451,6 +511,11 @@ impl Upscale {
                     self.taau(gpu, shaders, picture, &inputs, render_scale, output);
                     UpscaleMethod::Taau
                 }
+            }
+            // The picture is at output resolution, reconstructed in its view.
+            (UpscaleMethod::DlssRr, _) => {
+                self.bilinear(gpu, compose, picture, output);
+                UpscaleMethod::DlssRr
             }
             // A temporal method without its inputs breaks its history; a
             // frame that chose bilinear has none (`Renderer::draw_primary`),
@@ -652,5 +717,12 @@ impl Upscale {
         self.timer
             .as_ref()
             .map_or_else(|| untimed(PASS), PassTimer::readout)
+    }
+
+    /// Ray Reconstruction's timing, for `gpu.passes`.
+    pub fn reconstruction_timing(&self) -> GpuPassTiming {
+        self.reconstruction_timer
+            .as_ref()
+            .map_or_else(|| untimed(RECONSTRUCTION_PASS), PassTimer::readout)
     }
 }

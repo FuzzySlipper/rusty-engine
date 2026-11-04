@@ -6,7 +6,7 @@
 //! rusty-scene-render <snapshot> <out.png> [--width W] [--height H] [--frames N]
 //!                    [--walk M] [--turn D] [--advance S] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R]
 //!                    [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S]
-//!                    [--rerender-shadows] [--ray-scene] [--ray-reach M] [--choose ID=VALUE]...
+//!                    [--rerender-shadows] [--ray-scene] [--ray-reach M] [--ray-reconstruction] [--choose ID=VALUE]...
 //! rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]
 //! ```
 //!
@@ -24,6 +24,8 @@
 //! `--ray-scene` builds the scene's acceleration structures, as the
 //! ray-traced settings do, and reports their sizes and build cost;
 //! `--ray-reach M` takes scatter copies within M metres into them.
+//! `--ray-reconstruction` draws `antialiasing=dlss` frames with DLSS Ray
+//! Reconstruction, on the plain forward picture.
 //! `--gallery DIR` draws the feature gallery instead: the scene as it is and
 //! once per feature it leaves off (docs/performance.md, "Feature gallery").
 //! Select the adapter as for any wgpu program (for example
@@ -45,7 +47,7 @@ use serde_json::json;
 
 const USAGE: &str = "usage: rusty-scene-render <snapshot> <out.png> [--width W] [--height H] \
      [--frames N] [--walk M] [--turn D] [--advance S] [--ambient-occlusion off|compute|raster|field] [--ambient-occlusion-strength S] [--ambient-occlusion-radius R] \
-     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] [--ray-scene] [--ray-reach M] \
+     [--clustered-lighting on|off] [--gpu-culling on|off] [--render-scale S] [--rerender-shadows] [--ray-scene] [--ray-reach M] [--ray-reconstruction] \
      [--indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]] [--choose ID=VALUE]... \
      [--volumetric-fog-medium DENSITY[,ANISOTROPY]] [--motion OUT.png] [--guide diffuse|specular|normal|roughness OUT.png] [--last-frame OUT.png]\n\
        rusty-scene-render <snapshot> --gallery DIR [--width W] [--height H] [--frames N]";
@@ -102,6 +104,7 @@ struct Arguments {
     /// this reach when given.
     ray_scene: bool,
     ray_reach: Option<f32>,
+    ray_reconstruction: bool,
 }
 
 /// Parses the command line; `None` when it asked for help. A render scale is
@@ -130,6 +133,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
     let mut fog_medium = None;
     let mut ray_scene = false;
     let mut ray_reach = None;
+    let mut ray_reconstruction = false;
     while let Some(argument) = arguments.next() {
         let mut number = |name: &str| -> Result<f64, String> {
             arguments
@@ -198,6 +202,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                 ray_scene = true;
                 ray_reach = Some(reach);
             }
+            "--ray-reconstruction" => ray_reconstruction = true,
             "--choose" => {
                 let choice = arguments.next().unwrap_or_default();
                 let (id, value) = choice
@@ -354,6 +359,7 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
         fog_medium,
         ray_scene,
         ray_reach,
+        ray_reconstruction,
     }))
 }
 
@@ -383,6 +389,7 @@ fn run() -> Result<(), String> {
         fog_medium,
         ray_scene,
         ray_reach,
+        ray_reconstruction,
     }) = parse(std::env::args().skip(1))?
     else {
         println!("{USAGE}");
@@ -515,6 +522,7 @@ fn run() -> Result<(), String> {
             }
             renderer.set_ray_scene(ray_scene);
             renderer.set_ray_reach(ray_reach);
+            renderer.set_ray_reconstruction(ray_reconstruction);
             renderer.bake_indirect_light_now()
         })
         .0;
@@ -655,6 +663,10 @@ fn run() -> Result<(), String> {
                 "output": last_stats.resolution.output,
             },
             "upscale": last_stats.upscale.map(render_wgpu::UpscaleMethod::name),
+            "rayReconstructionRefused": driver
+                .gpu_readout()
+                .ray_reconstruction
+                .map(|refused| refused.detail),
             "historyResets": history_resets,
         });
         if let Some(path) = &last_frame {

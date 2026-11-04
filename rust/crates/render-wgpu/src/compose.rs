@@ -39,6 +39,8 @@ pub(crate) struct Compose {
     convert: Option<wgpu::RenderPipeline>,
     /// Nearest texels of the motion and guide targets, for inspection.
     nearest: wgpu::Sampler,
+    /// `carry_depth`'s layout and pipeline, from the first time it runs.
+    carried_depth: Option<(wgpu::BindGroupLayout, wgpu::RenderPipeline)>,
 }
 
 fn entry(binding: u32, ty: wgpu::BindingType) -> wgpu::BindGroupLayoutEntry {
@@ -121,6 +123,7 @@ impl Compose {
         });
         Self {
             shader,
+            carried_depth: None,
             clear_pipeline_layout: pipeline_layout("render-wgpu compose clear", &clear_layout),
             blit_pipeline_layout: pipeline_layout("render-wgpu compose blit", &blit_layout),
             convert_pipeline_layout: pipeline_layout(
@@ -235,6 +238,88 @@ impl Compose {
                 },
             ],
         })
+    }
+
+    /// Write `source`, a depth of another size, over the whole of `depth`.
+    pub fn carry_depth(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+    ) {
+        let (layout, pipeline) = self.carried_depth.get_or_insert_with(|| {
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("render-wgpu compose depth"),
+                entries: &[entry(
+                    3,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                )],
+            });
+            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("render-wgpu compose depth"),
+                bind_group_layouts: &[Some(&layout)],
+                immediate_size: 0,
+            });
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("render-wgpu compose depth"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &self.shader,
+                    entry_point: Some("vs_fullscreen"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: crate::target::DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Always),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.shader,
+                    entry_point: Some("fs_carry_depth"),
+                    compilation_options: Default::default(),
+                    targets: &[],
+                }),
+                multiview_mask: None,
+                cache: None,
+            });
+            (layout, pipeline)
+        });
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render-wgpu compose depth"),
+            layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(source),
+            }],
+        });
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("render-wgpu compose depth"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, &group, &[]);
+        pass.draw(0..3, 0..1);
     }
 
     /// Make the presentation blit for `format` ready.

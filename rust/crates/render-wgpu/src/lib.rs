@@ -241,6 +241,8 @@ pub struct GpuReadout {
     pub upscale: UpscaleReadout,
     /// Why DLSS does not draw, while the settings ask for it.
     pub dlss: Option<DlssRefusal>,
+    /// Why Ray Reconstruction does not draw, while it is asked for.
+    pub ray_reconstruction: Option<DlssRefusal>,
     /// Why the device was lost, once it has been ([`Gpu::lost`]).
     pub device_lost: Option<String>,
     /// The ray scene, while it is asked for (`ray_scene.rs`).
@@ -629,6 +631,13 @@ pub struct Renderer {
     /// an upscale stage or an image effect runs, kept while its size and
     /// sample count hold.
     picture: Option<target::RenderPicture>,
+    /// Asked for Ray Reconstruction (`set_ray_reconstruction`), the render
+    /// picture the world draws into while it runs (the output-size picture
+    /// is `picture`), whether this frame takes it, and whether it ran.
+    ray_reconstruction: bool,
+    reconstruction_picture: Option<target::RenderPicture>,
+    reconstructing: bool,
+    reconstructed: bool,
     /// While a primary frame draws under a temporal stage, its picture's
     /// viewmodel depth, which the viewmodel passes draw against
     /// (`RenderPicture::viewmodel_depth`).
@@ -911,6 +920,10 @@ impl Renderer {
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             picture: None,
+            ray_reconstruction: false,
+            reconstruction_picture: None,
+            reconstructing: false,
+            reconstructed: false,
             viewmodel_depth: None,
             upscaled: UpscaleReadout::default(),
             upscale: upscale::Upscale::new(gpu),
@@ -1054,6 +1067,17 @@ impl Renderer {
         self.gpu
             .is_software()
             .then_some(SettingRefusal::SoftwareAdapter)
+    }
+
+    /// Draw `Antialiasing::Dlss` frames with Ray Reconstruction in place of
+    /// super resolution, where it can run. Not a product setting: global
+    /// illumination will select it. For tools and tests until then.
+    #[doc(hidden)]
+    pub fn set_ray_reconstruction(&mut self, wanted: bool) {
+        self.ray_reconstruction = wanted;
+        if wanted {
+            self.upscale.prepare_dlss(&self.gpu);
+        }
     }
 
     /// Why DLSS does not draw the temporal stage, if it cannot
@@ -1281,6 +1305,7 @@ impl Renderer {
                     self.sky_light.timing(),
                     self.image_effect.timing(),
                     self.upscale.timing(),
+                    self.upscale.reconstruction_timing(),
                     self.water.timing(),
                 ])
                 .chain(
@@ -1312,6 +1337,10 @@ impl Renderer {
             water: self.water.readout(),
             upscale: self.upscaled,
             dlss: self.options.dlss.then(|| self.dlss_refusal()).flatten(),
+            ray_reconstruction: self
+                .ray_reconstruction
+                .then(|| self.upscale.ray_reconstruction_refusal())
+                .flatten(),
             device_lost: self.gpu.lost(),
             ray_scene: self.ray_scene_readout(),
             guides_refused: self

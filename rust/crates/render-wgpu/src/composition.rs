@@ -423,6 +423,7 @@ impl Renderer {
     ) -> FrameStats {
         let reading = kind == PrimaryDraw::Reading;
         self.reading = reading;
+        self.reconstructed = false;
         // An image effect reads the whole picture, so the views draw into a
         // picture of their own first, as an upscale stage's do.
         let effect = self.image_effect.active();
@@ -436,6 +437,26 @@ impl Renderer {
         }
         let scale = stage.map_or(1.0, |_| self.options.render_scale);
         let mut resolution = FrameResolution::scaled((output.width, output.height), scale);
+        // Ray Reconstruction takes a frame of one whole view with its guides
+        // where it can; otherwise DLSS draws on.
+        let mut reconstruction = None;
+        if stage == Some(UpscaleMethod::Dlss)
+            && self.ray_reconstruction
+            && self.gpu.guides_refusal().is_none()
+            && self.upscale.ray_reconstruction_refusal().is_none()
+            && self.one_whole_view()
+        {
+            if let Some(render) = self.upscale.ray_reconstruction_size(
+                &self.gpu,
+                resolution,
+                self.options.render_scale,
+            ) {
+                resolution.render = render;
+                stage = Some(UpscaleMethod::DlssRr);
+                reconstruction = Some(render);
+            }
+        }
+        self.reconstructing = reconstruction.is_some();
         // DLSS draws from the input sizes its mode takes; refused as it
         // starts, TAAU draws.
         if stage == Some(UpscaleMethod::Dlss) {
@@ -450,7 +471,8 @@ impl Renderer {
         // A temporal stage's jitter and motion, or the motion alone while
         // inspection shows it (`motion.rs`).
         let jittering = stage.is_some_and(UpscaleMethod::temporal);
-        let guides = self.overlays.shown.guide.is_some() && self.gpu.guides_refusal().is_none();
+        let guides = (self.overlays.shown.guide.is_some() || reconstruction.is_some())
+            && self.gpu.guides_refusal().is_none();
         let motion = jittering || self.overlays.shown.motion || guides;
         // A temporal stage's picture is single-sample whatever the output's
         // samples: it anti-aliases in MSAA's place.
@@ -502,7 +524,18 @@ impl Renderer {
             self.reading = false;
             return stats;
         }
-        let (width, height) = resolution.render;
+        // Under Ray Reconstruction the picture is the output's, and the world
+        // draws into one of its own.
+        let (width, height) = match reconstruction {
+            Some(_) => resolution.output,
+            None => resolution.render,
+        };
+        if let Some((width, height)) = reconstruction {
+            self.reconstruction_picture = Some(match self.reconstruction_picture.take() {
+                Some(picture) if picture.matches(width, height, 1, false) => picture,
+                _ => RenderPicture::new(&self.gpu, width, height, 1, false),
+            });
+        }
         // A reading leaves the output's picture for the output's next frame.
         let (picture, output_picture) = match self.picture.take() {
             Some(picture) if picture.matches(width, height, samples, jittering) => (picture, None),
@@ -572,6 +605,13 @@ impl Renderer {
                 self.options.render_scale,
                 &target,
             );
+            // A frame whose Ray Reconstruction was refused as it ran drew
+            // the world scaled, and says so.
+            let drawn = if drawn == UpscaleMethod::DlssRr && !self.reconstructed {
+                UpscaleMethod::Bilinear
+            } else {
+                drawn
+            };
             // The stage that drew, which a DLSS frame refused as it ran
             // hands to TAAU.
             stats.upscale = Some(drawn);
@@ -610,6 +650,23 @@ impl Renderer {
         }
         self.reading = false;
         stats
+    }
+
+    /// Whether this frame's primary output is one view over all of it, as
+    /// Ray Reconstruction's one history needs.
+    fn one_whole_view(&self) -> bool {
+        let Some(composition) = &self.composition.composition else {
+            return true;
+        };
+        let mut primary = composition
+            .views
+            .iter()
+            .filter(|view| view.target == RendererViewTarget::Primary);
+        let whole = |view: &render_host_contracts::RendererCompositionView| {
+            let area = &view.viewport;
+            (area.x, area.y, area.width, area.height) == (0.0, 0.0, 1.0, 1.0)
+        };
+        primary.next().is_some_and(whole) && primary.next().is_none()
     }
 
     /// Clear `depth` to the far plane.
@@ -753,6 +810,27 @@ impl Renderer {
         overlays: bool,
     ) -> ViewStats {
         let clear = self.environment_clear();
+        // Under Ray Reconstruction the world alone draws at render
+        // resolution; what follows it is at the target's, unjittered and
+        // without motion: there is no stage after it to resolve those.
+        let source = self
+            .reconstruction_picture
+            .clone()
+            .filter(|_| self.reconstructing);
+        let world_target = source.as_ref().map_or(*target, RenderPicture::view);
+        let world_area = source.as_ref().map_or(area, |picture| {
+            let (width, height) = picture.size();
+            PixelRect {
+                x: 0,
+                y: 0,
+                width,
+                height,
+            }
+        });
+        let reconstruct = source.as_ref().map(|_| crate::frame::Reconstruct {
+            target: *target,
+            area,
+        });
         let world_camera = camera::camera_matrices(pose, &camera.projection, area.aspect());
         let viewmodel_camera = camera::viewmodel_matrices(
             &camera.projection,
@@ -769,13 +847,19 @@ impl Renderer {
         let jitter = self.temporal.frame().and_then(|frame| frame.jitter);
         let world_motion =
             self.temporal
-                .view_pass(&camera.id, ViewLayer::World, &world_camera, area);
-        let viewmodel_motion =
-            self.temporal
-                .view_pass(&camera.id, ViewLayer::Viewmodel, &viewmodel_camera, area);
+                .view_pass(&camera.id, ViewLayer::World, &world_camera, world_area);
+        let viewmodel_motion = self
+            .temporal
+            .view_pass(
+                &camera.id,
+                ViewLayer::Viewmodel,
+                &viewmodel_camera,
+                world_area,
+            )
+            .filter(|_| source.is_none());
         let world = self.encode_view(ViewPass {
-            target: *target,
-            viewport: area,
+            target: world_target,
+            viewport: world_area,
             camera: world_camera,
             layer: ViewLayer::World,
             start,
@@ -786,13 +870,18 @@ impl Renderer {
             overlays: overlays.then_some(crate::overlays::PLAYER_VIEW),
             jitter,
             motion: world_motion,
+            reconstruct,
         });
         self.capture_sky(&world_camera, Some(camera.id.as_str()), clear);
         // Depth-layer labels test the world's depth before the viewmodel
         // pass clears it. Under a temporal stage they mark the reactive
         // mask in the frame's motion target, which this view's picture
         // feeds (`motion.rs`).
-        let label_motion = self.temporal.single_sample_target().cloned();
+        let label_motion = self
+            .temporal
+            .single_sample_target()
+            .filter(|_| source.is_none())
+            .cloned();
         let depth_labels = self.draw_labels(
             target,
             area,
@@ -820,8 +909,9 @@ impl Renderer {
             backdrop: None,
             camera_id: None,
             overlays: overlays.then_some(crate::overlays::PLAYER_VIEW),
-            jitter,
+            jitter: jitter.filter(|_| source.is_none()),
             motion: viewmodel_motion,
+            reconstruct: None,
         });
         let top_labels = self.draw_labels(
             target,
@@ -923,6 +1013,7 @@ impl Renderer {
                     overlays: None,
                     jitter: None,
                     motion: None,
+                    reconstruct: None,
                 });
                 stats.offscreen_views += 1;
             }

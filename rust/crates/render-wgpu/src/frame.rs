@@ -345,6 +345,18 @@ pub(crate) struct ViewPass<'a> {
     pub jitter: Option<glam::Vec2>,
     /// The motion target a primary view's world or viewmodel pass writes.
     pub motion: Option<crate::motion::MotionPass>,
+    /// Ray Reconstruction takes this world view (`dlss.rs`).
+    pub reconstruct: Option<Reconstruct<'a>>,
+}
+
+/// Where a world view Ray Reconstruction takes goes on from: `target` at
+/// output resolution, over `area`. The pass's own target holds the world at
+/// render resolution; the background, RR's result and everything after it
+/// draw here.
+#[derive(Clone, Copy)]
+pub(crate) struct Reconstruct<'a> {
+    pub target: TargetView<'a>,
+    pub area: PixelRect,
 }
 
 impl ViewPass<'_> {
@@ -2365,6 +2377,7 @@ impl Renderer {
             overlays: None,
             jitter: view.jitter,
             motion: None,
+            reconstruct: None,
         })
     }
 
@@ -2443,6 +2456,7 @@ impl Renderer {
                 overlays: None,
                 jitter: None,
                 motion: None,
+                reconstruct: None,
             };
             self.submit_background(&face_view);
             if let Some(backdrop) = self.backdrop_camera(&face_camera, camera_id) {
@@ -2451,6 +2465,133 @@ impl Renderer {
         }
         self.sky_light
             .captured_faces(&self.gpu, &mut self.layouts.shaders, faces.end);
+    }
+
+    /// Ray Reconstruction over a world view's `hdr` (`dlss.rs`), through
+    /// `encoder`, into the HDR target at output size, then what reads that:
+    /// the world's depth carried across and the overlay lines. Refused as it
+    /// runs, the frame scales the world bilinearly instead. Returns the
+    /// lines drawn and the encoder to go on with.
+    fn reconstruct_view(
+        &mut self,
+        view: &ViewPass<'_>,
+        reconstruct: &Reconstruct<'_>,
+        hdr: &crate::finish::HdrViews,
+        (width, height, _): (u32, u32, u32),
+        encoder: wgpu::CommandEncoder,
+    ) -> (u32, wgpu::CommandEncoder) {
+        let output = (reconstruct.target.width, reconstruct.target.height);
+        let resolved = self.finish.target(&self.gpu, output.0, output.1, 1, true);
+        let ran = match self.temporal.inputs() {
+            Some(inputs) => self.upscale.reconstruct(
+                &self.gpu,
+                encoder,
+                &crate::dlss::Reconstruction {
+                    color: &hdr.color,
+                    depth: view.target.depth,
+                    render: (width, height),
+                    inputs: &inputs,
+                    output: &resolved.color,
+                    output_size: output,
+                    render_scale: self.options.render_scale,
+                },
+            ),
+            None => Err(encoder),
+        };
+        self.reconstructed = ran.is_ok();
+        let mut encoder = match ran {
+            Ok(()) => self
+                .gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("render-wgpu view after ray reconstruction"),
+                }),
+            Err(mut encoder) => {
+                // At render scale 1 the targets are one, and the world is
+                // there.
+                if (width, height) != output {
+                    self.scale_hdr(&mut encoder, &hdr.color, &resolved.color);
+                }
+                encoder
+            }
+        };
+        self.compose.carry_depth(
+            &self.gpu.device,
+            &mut encoder,
+            view.target.depth,
+            reconstruct.target.depth,
+        );
+        let mut lines = 0;
+        if let Some(key) = view.overlays {
+            if self.overlays.lines(view.layer, key) > 0 {
+                let target = ColorTarget {
+                    format: HDR_FORMAT,
+                    samples: 1,
+                    motion: false,
+                    guides: false,
+                    ray_shadows: false,
+                };
+                self.overlays.ensure_pipelines(&self.gpu.device, target);
+                self.overlays
+                    .write_camera(&self.gpu.queue, &view.camera.view_proj);
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("render-wgpu overlay lines after ray reconstruction"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &resolved.color,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: reconstruct.target.depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                lines = self.overlays.draw(&mut pass, view.layer, target, key);
+            }
+        }
+        (lines, encoder)
+    }
+
+    /// `source`, the world's HDR, over all of `output`: a refused Ray
+    /// Reconstruction's frame.
+    fn scale_hdr(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        source: &wgpu::TextureView,
+        output: &wgpu::TextureView,
+    ) {
+        self.compose.prepare_blit(&self.gpu.device, HDR_FORMAT);
+        let group = self
+            .compose
+            .blit_bind_group(&self.gpu.device, source, self.upscale.sampler());
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("render-wgpu refused ray reconstruction"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: output,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        self.compose.blit(&mut pass, HDR_FORMAT, &group);
     }
 
     /// A world view's background into its own image: the clear colour, the
@@ -2799,13 +2940,33 @@ impl Renderer {
             ViewLayer::Viewmodel => self.lights.viewmodel,
             ViewLayer::Backdrop => self.lights.backdrop,
         };
+        // Under Ray Reconstruction the background draws at output size, by
+        // the unjittered camera: RR takes only what the world drew.
+        let background = view.reconstruct.map(|reconstruct| ViewPass {
+            target: reconstruct.target,
+            viewport: reconstruct.area,
+            camera: view.camera,
+            layer: view.layer,
+            start: view.start,
+            clear: view.clear,
+            sky: view.sky,
+            backdrop: view.backdrop,
+            camera_id: view.camera_id,
+            overlays: None,
+            jitter: None,
+            motion: None,
+            reconstruct: None,
+        });
         // A world view's backdrop draws first, with the background, in
         // submissions of its own.
         let backdrop = if world_layer {
-            self.encode_backdrop(&view)
+            self.encode_backdrop(background.as_ref().unwrap_or(&view))
         } else {
             None
         };
+        if let Some(background) = background.as_ref().filter(|_| backdrop.is_none()) {
+            self.submit_background(background);
+        }
         let view_proj = view.camera.view_proj;
         let eye = view.camera.eye;
         if world_layer {
@@ -2857,8 +3018,11 @@ impl Renderer {
         };
         let effects = self.prepare_effects(&view, hdr_format);
         let slot = view.layer as usize;
+        // Ray Reconstruction would take lines for its picture: they draw
+        // after it.
         let overlay_lines = view
             .overlays
+            .filter(|_| view.reconstruct.is_none())
             .map_or(0, |key| self.overlays.lines(view.layer, key));
         if overlay_lines > 0 {
             self.overlays.ensure_pipelines(&self.gpu.device, hdr_format);
@@ -3213,7 +3377,7 @@ impl Renderer {
             );
             pass.set_scissor_rect(area.x, area.y, area.width, area.height);
         };
-        if world_layer && backdrop.is_none() {
+        if world_layer && backdrop.is_none() && view.reconstruct.is_none() {
             self.encode_background(&mut encoder, &view, sky_index);
         }
         // Under a motion target the world pass writes the sky's motion
@@ -3622,6 +3786,19 @@ impl Renderer {
         } else {
             None
         };
+        let instances =
+            list.drawn() + candidates.map_or(0, |candidates| candidates.list.instances());
+        // Ray Reconstruction takes the world's HDR here. Everything after
+        // goes on at output size, from its result.
+        let (finish_target, area, size, reconstructed_lines) = match view.reconstruct {
+            Some(reconstruct) => {
+                let (lines, next) = self.reconstruct_view(&view, &reconstruct, &hdr, size, encoder);
+                encoder = next;
+                let output = (reconstruct.target.width, reconstruct.target.height, 1);
+                (reconstruct.target, reconstruct.area, output, lines)
+            }
+            None => (view.target, area, size, 0),
+        };
         // The sun's glow for bloom, which adds it where the world leaves the
         // sky open. A world view with a backdrop drew it in the backdrop's
         // pass, kept where the backdrop leaves the sky open.
@@ -3658,7 +3835,7 @@ impl Renderer {
         self.finish.encode(
             &self.gpu,
             &mut encoder,
-            &view.target,
+            &finish_target,
             [area.x, area.y, area.width, area.height],
             &self.frame_buffer,
             FinishPost {
@@ -3713,8 +3890,6 @@ impl Renderer {
             self.culling.drew(multi_draws);
             self.culling.submitted();
         }
-        let instances =
-            list.drawn() + candidates.map_or(0, |candidates| candidates.list.instances());
         ViewStats {
             draws,
             instances,
@@ -3726,7 +3901,7 @@ impl Renderer {
             sprite_batch_instances: effects.batch_instances,
             pipeline_binds: parts.pipeline_binds + shadows.encoded.pipeline_binds,
             pipelines_created: pipelines_created + shadows.pipelines_created,
-            overlay_lines,
+            overlay_lines: overlay_lines + reconstructed_lines,
         }
     }
 }

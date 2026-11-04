@@ -312,8 +312,10 @@ impl Finish {
                     sample_count: samples,
                     dimension: wgpu::TextureDimension::D2,
                     format: HDR_FORMAT,
+                    // Copied into from Ray Reconstruction's result.
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                        | wgpu::TextureUsages::TEXTURE_BINDING
+                        | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 })
                 .create_view(&Default::default())

@@ -154,6 +154,7 @@ impl Renderer {
             overlays: Some(view.id.as_str()),
             jitter: None,
             motion: None,
+            reconstruct: None,
         });
         let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth, label_motion);
         let viewmodel = match primary_world {
@@ -177,6 +178,7 @@ impl Renderer {
                     overlays: Some(view.id.as_str()),
                     jitter: None,
                     motion: None,
+                    reconstruct: None,
                 })
             }
             None => ViewStats::default(),

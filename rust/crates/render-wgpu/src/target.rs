@@ -309,6 +309,7 @@ impl OffscreenTarget {
 /// sample count. Under a temporal stage the viewmodel passes draw against a
 /// depth of their own, so the world's depth survives the frame for the
 /// stage's motion dilation.
+#[derive(Clone)]
 pub(crate) struct RenderPicture {
     image: wgpu::TextureView,
     depth: wgpu::TextureView,

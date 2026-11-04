@@ -33,6 +33,16 @@ fn vs_fullscreen(@builtin(vertex_index) index: u32) -> FullscreenOut {
     return out;
 }
 
+// The world's depth carried to another size, nearest: what reads the world's
+// depth at output size under Ray Reconstruction (`Compose::carry_depth`).
+@group(0) @binding(3) var source_depth: texture_depth_2d;
+
+@fragment
+fn fs_carry_depth(in: FullscreenOut) -> @builtin(frag_depth) f32 {
+    let size = vec2<f32>(textureDimensions(source_depth));
+    return textureLoad(source_depth, vec2<i32>(in.uv * size), 0);
+}
+
 @fragment
 fn fs_clear() -> @location(0) vec4<f32> {
     return params.color;

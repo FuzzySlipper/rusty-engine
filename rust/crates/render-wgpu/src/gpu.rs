@@ -50,6 +50,9 @@ pub struct Gpu {
     /// The device has NGX's Vulkan extensions for DLSS.
     #[cfg(feature = "dlss")]
     pub(crate) dlss: bool,
+    /// NGX can run Ray Reconstruction on this device (`dlss.rs`).
+    #[cfg(feature = "dlss")]
+    pub(crate) ray_reconstruction: bool,
     /// NGX on this device, shared by every renderer on it: NGX starts and
     /// shuts down once per device (`dlss.rs`).
     #[cfg(feature = "dlss")]
@@ -239,7 +242,7 @@ impl Gpu {
             crate::ray_scene::request(&adapter, &mut descriptor);
         }
         #[cfg_attr(not(feature = "dlss"), allow(unused_variables))]
-        let (device, queue, dlss) = request_device(&adapter, descriptor)?;
+        let (device, queue, (dlss, ray_reconstruction)) = request_device(&adapter, descriptor)?;
         let lost = Arc::new(Mutex::new(None));
         let slot = Arc::clone(&lost);
         device.set_device_lost_callback(move |reason, message| {
@@ -268,6 +271,8 @@ impl Gpu {
             queue,
             #[cfg(feature = "dlss")]
             dlss,
+            #[cfg(feature = "dlss")]
+            ray_reconstruction,
             #[cfg(feature = "dlss")]
             ngx: Default::default(),
             lost,
@@ -507,12 +512,13 @@ fn instance(descriptor: wgpu::InstanceDescriptor) -> wgpu::Instance {
 }
 
 /// A device and queue on `adapter`, and whether it has NGX's Vulkan
-/// extensions for DLSS. The UI overlay adds what importing the UI page's
+/// extensions for DLSS super resolution and for Ray Reconstruction. The UI
+/// overlay adds what importing the UI page's
 /// frames needs.
 fn request_device(
     adapter: &wgpu::Adapter,
     #[allow(unused_mut)] mut descriptor: wgpu::DeviceDescriptor<'_>,
-) -> Result<(wgpu::Device, wgpu::Queue, bool), GpuError> {
+) -> Result<(wgpu::Device, wgpu::Queue, (bool, bool)), GpuError> {
     // The UI overlay imports the page's frames, D3D11 textures, with
     // `VK_KHR_external_memory_win32` (`Gpu::window_refusal`).
     #[cfg(all(feature = "ui-overlay", windows))]
@@ -548,6 +554,7 @@ fn request_device(
                     );
                     if registered.is_err() {
                         support.super_resolution_supported = false;
+                        support.ray_reconstruction_supported = false;
                     }
                 },
             )
@@ -563,18 +570,25 @@ fn request_device(
             .map_err(|error| error.to_string());
             // Without DLSS's extensions the device is made as usual.
             if let Ok((device, queue)) = made {
-                return Ok((device, queue, support.super_resolution_supported));
+                return Ok((
+                    device,
+                    queue,
+                    (
+                        support.super_resolution_supported,
+                        support.ray_reconstruction_supported,
+                    ),
+                ));
             }
         }
     }
     #[cfg(all(feature = "ui-overlay", target_os = "linux"))]
     if dmabuf {
         return welding::build_dmabuf_capable_device(adapter, &descriptor)
-            .map(|(device, queue)| (device, queue, false))
+            .map(|(device, queue)| (device, queue, (false, false)))
             .map_err(|error| GpuError::Device(error.to_string()));
     }
     pollster::block_on(adapter.request_device(&descriptor))
-        .map(|(device, queue)| (device, queue, false))
+        .map(|(device, queue)| (device, queue, (false, false)))
         .map_err(|error| GpuError::Device(error.to_string()))
 }
 

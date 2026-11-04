@@ -125,6 +125,7 @@ impl Renderer {
             overlays: None,
             jitter: None,
             motion: None,
+            reconstruct: None,
         });
         if request.viewmodel {
             self.encode_view(ViewPass {
@@ -140,6 +141,7 @@ impl Renderer {
                 overlays: None,
                 jitter: None,
                 motion: None,
+                reconstruct: None,
             });
         }
         Capture { color, depth }

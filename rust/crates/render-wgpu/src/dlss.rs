@@ -36,6 +36,19 @@
 //! cannot be one), which is then drawn into the output; the `upscale` pass
 //! times both.
 //!
+//! **Ray Reconstruction** (`UpscaleMethod::DlssRr`) is a second feature on
+//! the same NGX, for a frame that asks for it. It denoises and upscales the
+//! world's linear HDR before finish, from the guide targets (`motion.rs`), so
+//! it runs inside the world view (`frame.rs`), not as the output stage:
+//! bloom, exposure, finish, overlay lines, labels and the viewmodel draw
+//! after it at output size, unjittered. The background is not in the HDR
+//! target: the world's alpha carries through RR (`AlphaUpscaling`) and
+//! finish blends it over a background drawn at output size. Blended parts are
+//! in the colour and marked by the reactive mask, as the responsivity mask.
+//! RR takes no exposure. It is refused as DLSS is, and `UnsupportedAdapter`
+//! where NGX offers no RR; the frame then keeps super resolution. A frame
+//! whose RR fails as it evaluates scales the world bilinearly, once.
+//!
 //! The render scale picks the mode, as for TAAU: the named mode nearest it
 //! (`render_model::TEMPORAL_MODES`, 1 is DLAA). The feature is made for that
 //! mode at the output's size before the frame draws, and the frame draws at
@@ -63,12 +76,29 @@ pub(crate) const PROJECT_ID: uuid::Uuid =
 #[cfg(feature = "dlss")]
 pub(crate) const NVIDIA: u32 = 0x10de;
 
+/// What Ray Reconstruction reads and writes in a world view.
+#[cfg_attr(
+    not(feature = "dlss"),
+    allow(dead_code, reason = "read only by the built stage")
+)]
+pub(crate) struct Reconstruction<'a> {
+    /// The world's HDR and its depth, at render resolution.
+    pub color: &'a wgpu::TextureView,
+    pub depth: &'a wgpu::TextureView,
+    pub render: (u32, u32),
+    pub inputs: &'a crate::motion::TemporalInputs<'a>,
+    /// The HDR target at output resolution, which it fills.
+    pub output: &'a wgpu::TextureView,
+    pub output_size: (u32, u32),
+    pub render_scale: f32,
+}
+
 #[cfg(not(feature = "dlss"))]
 pub(crate) use unbuilt::Dlss;
 
 #[cfg(not(feature = "dlss"))]
 mod unbuilt {
-    use super::Refused;
+    use super::{Reconstruction, Refused};
     use crate::motion::TemporalInputs;
     use crate::target::{RenderPicture, TargetView};
     use crate::timing::PassTimer;
@@ -103,6 +133,44 @@ mod unbuilt {
         }
 
         pub fn forget_history(&mut self) {}
+
+        pub fn ray_reconstruction_refusal(&self) -> Option<Refused> {
+            self.refusal()
+        }
+
+        /// Tests only: under `failing`, RR takes the frame at `scaled`.
+        pub fn ray_reconstruction_size(
+            &mut self,
+            _gpu: &Gpu,
+            _output: (u32, u32),
+            scaled: (u32, u32),
+            _render_scale: f32,
+        ) -> Result<(u32, u32), Refused> {
+            #[cfg(test)]
+            if self.failing.is_some() {
+                return Ok(scaled);
+            }
+            let _ = scaled;
+            Err(self.refusal().expect("refused without the feature"))
+        }
+
+        pub fn reconstruct(
+            &mut self,
+            _gpu: &Gpu,
+            _timer: Option<&mut PassTimer>,
+            encoder: wgpu::CommandEncoder,
+            _work: &Reconstruction<'_>,
+        ) -> Result<(), (Refused, wgpu::CommandEncoder)> {
+            #[cfg(test)]
+            if let Some(failing) = &self.failing {
+                self.failed = Some(failing.clone());
+                return Err((failing.clone(), encoder));
+            }
+            Err((
+                self.refusal().expect("refused without the feature"),
+                encoder,
+            ))
+        }
 
         pub fn render_size(
             &mut self,
@@ -147,12 +215,17 @@ pub(crate) use built::{Dlss, Ngx};
 mod built {
     use std::sync::{Arc, Mutex, OnceLock};
 
+    use dlss_wgpu::ray_reconstruction::{
+        DlssRayReconstruction, DlssRayReconstructionDepthMode,
+        DlssRayReconstructionRenderParameters, DlssRayReconstructionRoughnessMode,
+        DlssRayReconstructionSpecularGuide,
+    };
     use dlss_wgpu::super_resolution::{
         DlssSuperResolution, DlssSuperResolutionExposure, DlssSuperResolutionRenderParameters,
     };
     use dlss_wgpu::{DlssError, DlssFeatureFlags, DlssPerfQualityMode, DlssSdk};
 
-    use super::{Refused, NVIDIA, PROJECT_ID};
+    use super::{Reconstruction, Refused, NVIDIA, PROJECT_ID};
     use crate::motion::TemporalInputs;
     use crate::target::{RenderPicture, TargetView};
     use crate::timing::PassTimer;
@@ -492,6 +565,14 @@ mod built {
         output: wgpu::TextureView,
     }
 
+    /// Ray Reconstruction for one output size and mode, and what it writes.
+    struct Reconstructor {
+        size: (u32, u32),
+        mode: DlssPerfQualityMode,
+        feature: DlssRayReconstruction,
+        output: wgpu::TextureView,
+    }
+
     pub(crate) struct Dlss {
         /// The device's NGX, from the first time DLSS is asked for, or why
         /// it refused.
@@ -499,6 +580,11 @@ mod built {
         /// Why the last feature could not be made or evaluated.
         failed: Option<Refused>,
         feature: Option<Feature>,
+        /// Ray Reconstruction, and why it could not be made or evaluated.
+        reconstructor: Option<Reconstructor>,
+        reconstruction_failed: Option<Refused>,
+        /// The next frame starts RR's history again.
+        reconstruction_fresh: bool,
         /// The depth pass, from the first frame with a viewmodel depth, and
         /// the reactive mask's, from the first frame.
         depth: Option<Input>,
@@ -516,6 +602,9 @@ mod built {
                 sdk: None,
                 failed: None,
                 feature: None,
+                reconstructor: None,
+                reconstruction_failed: None,
+                reconstruction_fresh: true,
                 depth: None,
                 bias: None,
                 output: None,
@@ -539,6 +628,220 @@ mod built {
 
         pub fn forget_history(&mut self) {
             self.fresh = true;
+            self.reconstruction_fresh = true;
+        }
+
+        /// Why Ray Reconstruction does not draw, if it cannot.
+        pub fn ray_reconstruction_refusal(&self) -> Option<Refused> {
+            match &self.sdk {
+                Some(Err(refused)) => Some(refused.clone()),
+                _ => self.reconstruction_failed.clone(),
+            }
+        }
+
+        /// The render resolution RR draws from for `output` in the mode
+        /// nearest `render_scale`. Makes the feature; on failure the refusal
+        /// stays.
+        pub fn ray_reconstruction_size(
+            &mut self,
+            gpu: &Gpu,
+            output: (u32, u32),
+            _scaled: (u32, u32),
+            render_scale: f32,
+        ) -> Result<(u32, u32), Refused> {
+            let result = self.reconstructor(gpu, output, render_scale).map(|made| {
+                let [width, height] = made.feature.render_resolution();
+                (width, height)
+            });
+            if let Err(refused) = &result {
+                self.reconstruction_failed = Some(refused.clone());
+                self.reconstructor = None;
+            }
+            result
+        }
+
+        /// RR for an output of `size` in the mode `render_scale` picks, made
+        /// again when either changes.
+        fn reconstructor(
+            &mut self,
+            gpu: &Gpu,
+            size: (u32, u32),
+            render_scale: f32,
+        ) -> Result<&mut Reconstructor, Refused> {
+            let sdk = match &self.sdk {
+                Some(Ok(sdk)) => Arc::clone(sdk),
+                Some(Err(refused)) => return Err(refused.clone()),
+                None => unreachable!("DLSS runs only once prepared"),
+            };
+            if !gpu.ray_reconstruction {
+                let info = gpu.adapter.get_info();
+                return Err(Refused {
+                    refusal: SettingRefusal::UnsupportedAdapter,
+                    detail: format!(
+                        "{} ({}) has no DLSS Ray Reconstruction",
+                        info.name, info.driver
+                    ),
+                });
+            }
+            let mode = mode(render_scale);
+            if self
+                .reconstructor
+                .as_ref()
+                .is_none_or(|made| made.size != size || made.mode != mode)
+            {
+                // The old feature goes first: NGX releases it on an idle
+                // device.
+                self.reconstructor = None;
+                let feature = DlssRayReconstruction::new(
+                    [size.0, size.1],
+                    mode,
+                    DlssFeatureFlags::HighDynamicRange
+                        | DlssFeatureFlags::LowResolutionMotionVectors
+                        | DlssFeatureFlags::AlphaUpscaling,
+                    DlssRayReconstructionRoughnessMode::Packed,
+                    DlssRayReconstructionDepthMode::Hardware,
+                    sdk,
+                    &gpu.device,
+                    &gpu.queue,
+                )
+                .map_err(|error| failed("Ray Reconstruction could not be made", error))?;
+                let output = gpu
+                    .device
+                    .create_texture(&wgpu::TextureDescriptor {
+                        label: Some("render-wgpu ray reconstruction"),
+                        size: crate::target::extent(size.0, size.1),
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: crate::finish::HDR_FORMAT,
+                        usage: wgpu::TextureUsages::STORAGE_BINDING
+                            | wgpu::TextureUsages::TEXTURE_BINDING
+                            | wgpu::TextureUsages::COPY_SRC,
+                        view_formats: &[],
+                    })
+                    .create_view(&Default::default());
+                self.reconstructor = Some(Reconstructor {
+                    size,
+                    mode,
+                    feature,
+                    output,
+                });
+                self.reconstruction_fresh = true;
+            }
+            Ok(self.reconstructor.as_mut().expect("made above"))
+        }
+
+        /// Denoise and upscale the world's HDR into `work.output`, finishing
+        /// and submitting `encoder` with it. On failure nothing is submitted
+        /// and the encoder comes back, the refusal staying.
+        pub fn reconstruct(
+            &mut self,
+            gpu: &Gpu,
+            timer: Option<&mut PassTimer>,
+            mut encoder: wgpu::CommandEncoder,
+            work: &Reconstruction<'_>,
+        ) -> Result<(), (Refused, wgpu::CommandEncoder)> {
+            if let Err(refused) = self.reconstructor(gpu, work.output_size, work.render_scale) {
+                self.reconstruction_failed = Some(refused.clone());
+                self.reconstructor = None;
+                return Err((refused, encoder));
+            }
+            let Some(guides) = work.inputs.guides else {
+                let refused = Refused {
+                    refusal: SettingRefusal::InitializationFailed,
+                    detail: "Ray Reconstruction ran without its guides".to_owned(),
+                };
+                return Err((refused, encoder));
+            };
+            let fresh = std::mem::replace(&mut self.reconstruction_fresh, false);
+            // The stage's first stamp, before RR's own commands.
+            if let Some(writes) = timer
+                .as_deref()
+                .and_then(|timer| timer.compute_writes_between(true, false))
+            {
+                encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("render-wgpu ray reconstruction begins"),
+                    timestamp_writes: Some(writes),
+                });
+            }
+            let responsivity = self
+                .bias
+                .get_or_insert_with(|| Input::bias(&gpu.device))
+                .draw(
+                    &gpu.device,
+                    &mut encoder,
+                    work.render,
+                    &[work.inputs.motion],
+                );
+            let made = self.reconstructor.as_mut().expect("made above");
+            let rendered = made.feature.render(
+                DlssRayReconstructionRenderParameters {
+                    diffuse_albedo: guides[0],
+                    specular_albedo: guides[1],
+                    normals: guides[2],
+                    roughness: None,
+                    color: work.color,
+                    depth: work.depth,
+                    motion_vectors: work.inputs.motion,
+                    // Forward shading reflects nothing RR must track apart:
+                    // reflections move as their surfaces do.
+                    specular_guide: DlssRayReconstructionSpecularGuide::SpecularMotionVectors(
+                        work.inputs.motion,
+                    ),
+                    transparency_overlay: None,
+                    color_before_transparency: None,
+                    screen_space_subsurface_scattering_guide: None,
+                    depth_of_field_guide: None,
+                    responsivity_mask: Some(responsivity),
+                    alpha: None,
+                    dlss_output_alpha: None,
+                    dlss_output: &made.output,
+                    reset: work.inputs.history_reset || fresh,
+                    jitter_offset: work.inputs.jitter.into(),
+                    partial_texture_size: Some([work.render.0, work.render.1]),
+                    motion_vector_scale: Some(MOTION_SCALE),
+                },
+                &mut encoder,
+                &gpu.adapter,
+            );
+            let commands = match rendered {
+                Ok(commands) => commands,
+                Err(error) => {
+                    let refused = failed("Ray Reconstruction could not evaluate", error);
+                    self.reconstruction_failed = Some(refused.clone());
+                    self.reconstructor = None;
+                    return Err((refused, encoder));
+                }
+            };
+            let mut after = gpu
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("render-wgpu ray reconstruction output"),
+                });
+            after.copy_texture_to_texture(
+                made.output.texture().as_image_copy(),
+                work.output.texture().as_image_copy(),
+                crate::target::extent(work.output_size.0, work.output_size.1),
+            );
+            if let Some(writes) = timer
+                .as_deref()
+                .and_then(|timer| timer.compute_writes_between(false, true))
+            {
+                after.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("render-wgpu ray reconstruction ends"),
+                    timestamp_writes: Some(writes),
+                });
+            }
+            if let Some(timer) = timer {
+                timer.resolve(&mut after);
+                gpu.queue
+                    .submit([encoder.finish(), commands, after.finish()]);
+                timer.submitted();
+            } else {
+                gpu.queue
+                    .submit([encoder.finish(), commands, after.finish()]);
+            }
+            Ok(())
         }
 
         /// Evaluate DLSS over `picture` into `output`; on failure, nothing
@@ -806,6 +1109,118 @@ mod tests {
 
     use super::Refused;
     use crate::{Gpu, OffscreenTarget, Renderer, RendererOptions, SettingRefusal, UpscaleMethod};
+
+    /// The scene a Ray Reconstruction frame is compared on: a sky-coloured
+    /// background behind a box.
+    fn renderer(gpu: &Gpu, settings: RendererSettingsDescriptor) -> Renderer {
+        let mut renderer = Renderer::new(gpu, RendererOptions::default().with_settings(&settings));
+        let mut world = render_presentation::PresentationWorld::default();
+        let delta = world
+            .apply(render_model::RenderFrameDiff {
+                publication: None,
+                ops: vec![
+                    render_model::RenderDiff::SetBackgroundColor {
+                        color: [0.1, 0.3, 0.7, 1.0],
+                    },
+                    render_model::RenderDiff::Create {
+                        handle: render_model::RenderHandle::new(1),
+                        parent: None,
+                        node: render_model::RenderNode::new(render_model::Geometry::Cube),
+                    },
+                ],
+            })
+            .expect("the fixture is admitted");
+        let issues = renderer.apply(&delta, &crate::NoResources);
+        assert!(issues.is_empty(), "{issues:?}");
+        renderer
+    }
+
+    fn camera() -> RendererCompositionCamera {
+        RendererCompositionCamera {
+            id: "camera".to_owned(),
+            pose: RendererCameraPose {
+                position: [0.0, 0.0, 3.0],
+                pitch_degrees: 0.0,
+                yaw_degrees: 0.0,
+            },
+            basis: None,
+            projection: RendererCameraProjection::Perspective {
+                fov_y_degrees: 60.0,
+                near: 0.1,
+                far: 100.0,
+            },
+            motion: None,
+            viewmodel_fov_y_degrees: 0.0,
+        }
+    }
+
+    /// A frame whose Ray Reconstruction fails as it evaluates takes its whole
+    /// path but RR itself: the world drawn at render resolution, the
+    /// background at output size, the HDR scaled, the depth carried, finish
+    /// at output size. It looks as a plain frame does, at either size, says
+    /// it scaled, and the refusal stays.
+    #[test]
+    fn a_ray_reconstruction_frame_refused_as_it_runs_draws_the_world_scaled() {
+        const SIZE: (u32, u32) = (128, 72);
+        let gpu = Gpu::headless().expect("a wgpu adapter");
+        if gpu.is_software() {
+            return;
+        }
+        let plain = {
+            let mut renderer = renderer(&gpu, RendererSettingsDescriptor::DEFAULT);
+            let target = OffscreenTarget::new(&gpu, SIZE.0, SIZE.1, renderer.samples());
+            renderer.render_offscreen(&camera(), &target);
+            target.read_rgba(&gpu)
+        };
+        let distinct: std::collections::HashSet<&[u8]> = plain.chunks(4).collect();
+        assert!(distinct.len() > 2, "the box stands out of the background");
+        for render_scale in [1.0, 0.67] {
+            let mut renderer = renderer(
+                &gpu,
+                RendererSettingsDescriptor {
+                    antialiasing: Antialiasing::Dlss,
+                    render_scale,
+                    ..RendererSettingsDescriptor::DEFAULT
+                },
+            );
+            let refused = Refused {
+                refusal: SettingRefusal::InitializationFailed,
+                detail: "injected".to_owned(),
+            };
+            renderer.upscale.dlss.failing = Some(refused.clone());
+            renderer.set_ray_reconstruction(true);
+            let target = OffscreenTarget::new(&gpu, SIZE.0, SIZE.1, renderer.samples());
+            // The refused frame scales the world; the next draws the world
+            // as any TAAU frame does, its render picture left behind.
+            for expected in [UpscaleMethod::Bilinear, UpscaleMethod::Taau] {
+                let stats = renderer.render_offscreen(&camera(), &target);
+                assert_eq!(stats.upscale, Some(expected), "{render_scale}");
+                let picture = target.read_rgba(&gpu);
+                let difference: u64 = picture
+                    .iter()
+                    .zip(&plain)
+                    .map(|(a, b)| u64::from(a.abs_diff(*b)))
+                    .sum();
+                let mean = difference as f64 / picture.len() as f64;
+                assert!(
+                    mean < 4.0,
+                    "scale {render_scale}, {expected:?}: differs by {mean}"
+                );
+            }
+            assert_eq!(
+                renderer
+                    .gpu_readout()
+                    .ray_reconstruction
+                    .map(|readout| readout.refusal),
+                Some(refused.refusal)
+            );
+            // A frame with no stage at all draws straight into its target.
+            renderer.set_options(RendererOptions::default());
+            let direct = OffscreenTarget::new(&gpu, SIZE.0, SIZE.1, renderer.samples());
+            renderer.render_offscreen(&camera(), &direct);
+            assert_eq!(direct.read_rgba(&gpu), plain, "scale {render_scale}");
+        }
+    }
 
     /// A frame DLSS takes and fails as it evaluates draws TAAU, and its
     /// statistics and the GPU readout name TAAU, while the settings readout
