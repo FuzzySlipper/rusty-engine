@@ -233,12 +233,14 @@ fn ray_clear(origin: vec3<f32>, direction: vec3<f32>, reach: f32) -> bool {
 }
 
 // Whether no solid part, nothing with a cut-out, stands along `direction`.
+// Forced opaque: a part with a product caster stage is solid here, though its
+// triangles reach a ray as candidates.
 fn ray_past_leaves(origin: vec3<f32>, direction: vec3<f32>) -> bool {
     var query: ray_query;
     rayQueryInitialize(
         &query,
         ray_scene,
-        RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, RAY_MASK_SOLID, 0.0, RAY_FAR, origin, direction),
+        RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | RAY_FLAG_FORCE_OPAQUE, RAY_MASK_SOLID, 0.0, RAY_FAR, origin, direction),
     );
     while rayQueryProceed(&query) {}
     return rayQueryGetCommittedIntersection(&query).kind == RAY_QUERY_INTERSECTION_NONE;

@@ -683,9 +683,32 @@ fn a_moving_reflection_stays_on_its_surface_under_ray_reconstruction() {
     assert!(error < RR_REFLECTION_ERROR, "reflection error {error}");
 }
 
+/// A shader whose caster stage casts everything: its material stays solid,
+/// though a ray's candidates on it are not marked opaque.
+const WHOLE_CASTER: &str = "
+#import rusty::types::{Caster, Surface}
+#import rusty::shade::standard_shade
+
+fn shade(surface: Surface) -> vec4<f32> {
+    return standard_shade(surface);
+}
+
+fn cast_shadow(caster: Caster) {
+}
+";
+
+/// The walls of `floor_under_leaves`.
+#[derive(Clone, Copy, PartialEq)]
+enum Walls {
+    None,
+    Solid,
+    /// Solid, under a product shader with a caster stage.
+    Cast,
+}
+
 /// The light on a floor under ambient rows, with a masked sheet at 3 m and
-/// `walled` a sealed box of solid walls around it all.
-fn floor_under_leaves(gpu: &Gpu, leaves: bool, walled: bool) -> f32 {
+/// `walls` a sealed box around it all.
+fn floor_under_leaves(gpu: &Gpu, leaves: bool, walls: Walls) -> f32 {
     let mut harness = Harness::on(gpu.clone(), options(GlobalIllumination::RayTraced));
     harness.renderer.set_ray_gi_without_denoiser(true);
     let texture = harness.resources.texture(
@@ -703,9 +726,24 @@ fn floor_under_leaves(gpu: &Gpu, leaves: bool, walled: bool) -> f32 {
             ..material("material/leaf", [1.0; 4], Some("texture/leaf"))
         },
     });
-    ops.push(RenderDiff::DefineMaterial {
-        material: material("material/box", [0.8, 0.8, 0.8, 1.0], None),
-    });
+    let mut walled = material("material/box", [0.8, 0.8, 0.8, 1.0], None);
+    if walls == Walls::Cast {
+        ops.push(RenderDiff::DefineShader {
+            shader: ShaderDescriptor {
+                id: "shader/caster".to_owned(),
+                path: "shaders/caster.wgsl".to_owned(),
+                source: WHOLE_CASTER.to_owned(),
+                keywords: Vec::new(),
+            },
+        });
+        walled.shader = Some(MaterialShaderDescriptor {
+            shader: "shader/caster".to_owned(),
+            parameters: [[0.0; 4]; 4],
+            textures: [None, None],
+            displacement_bound: 0.0,
+        });
+    }
+    ops.push(RenderDiff::DefineMaterial { material: walled });
     if leaves {
         ops.extend(solid(
             WALL,
@@ -715,7 +753,7 @@ fn floor_under_leaves(gpu: &Gpu, leaves: bool, walled: bool) -> f32 {
             [20.0, 3.05, 20.0],
         ));
     }
-    if walled {
+    if walls != Walls::None {
         for (index, (min, max)) in [
             ([-8.0, 6.0, -8.0], [8.0, 6.2, 8.0]),
             ([-8.2, 0.0, -8.2], [-8.0, 6.0, 8.2]),
@@ -756,14 +794,19 @@ fn ambient_light_passes_leaves_and_stops_at_solid_walls_around_them() {
     if render_wgpu_cannot_trace(&gpu) {
         return;
     }
-    let open = floor_under_leaves(&gpu, false, false);
-    let canopy = floor_under_leaves(&gpu, true, false);
-    let cave = floor_under_leaves(&gpu, true, true);
+    let open = floor_under_leaves(&gpu, false, Walls::None);
+    let canopy = floor_under_leaves(&gpu, true, Walls::None);
+    let cave = floor_under_leaves(&gpu, true, Walls::Solid);
+    let cast = floor_under_leaves(&gpu, true, Walls::Cast);
     assert!(
         canopy > open * 0.7,
         "the rows lit the floor to {open} open and {canopy} under leaves"
     );
     assert!(cave < 4.0, "the rows lit a sealed cave's floor to {cave}");
+    assert!(
+        cast < 4.0,
+        "the rows passed walls with a caster stage: {cast}"
+    );
 }
 
 /// On a device that cannot trace, global illumination refuses, and the
