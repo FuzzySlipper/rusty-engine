@@ -13,6 +13,10 @@ pub enum NativeAmbientOcclusionMode {
     /// occludes, on screen or off. Needs compute shaders; a device without
     /// them takes the screen-space pass.
     DistanceField = 2,
+    /// Short rays against the ray scene: everything shown occludes, on
+    /// screen or off. A device made without ray queries takes the
+    /// screen-space pass.
+    RayTraced = 3,
 }
 
 /// How the primary destination (the streamed frame or the window) smooths

@@ -185,6 +185,7 @@ pub enum SceneSnapshotAmbientOcclusionPath {
     Compute,
     Raster,
     DistanceField,
+    RayTraced,
 }
 
 impl Default for SceneSnapshotAmbientOcclusion {
@@ -207,6 +208,9 @@ impl From<SceneSnapshotAmbientOcclusion> for render_wgpu::AmbientOcclusion {
                 SceneSnapshotAmbientOcclusionPath::DistanceField => {
                     render_wgpu::AmbientOcclusionPath::DistanceField
                 }
+                SceneSnapshotAmbientOcclusionPath::RayTraced => {
+                    render_wgpu::AmbientOcclusionPath::RayTraced
+                }
             },
             strength: options.strength,
             radius: options.radius,
@@ -227,6 +231,9 @@ impl From<render_wgpu::AmbientOcclusion> for SceneSnapshotAmbientOcclusion {
                 }
                 render_wgpu::AmbientOcclusionPath::DistanceField => {
                     SceneSnapshotAmbientOcclusionPath::DistanceField
+                }
+                render_wgpu::AmbientOcclusionPath::RayTraced => {
+                    SceneSnapshotAmbientOcclusionPath::RayTraced
                 }
             },
             strength: options.strength,

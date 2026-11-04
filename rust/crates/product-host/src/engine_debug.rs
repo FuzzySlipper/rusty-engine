@@ -463,6 +463,7 @@ pub enum ProductHostAmbientOcclusionPath {
     Compute,
     Raster,
     DistanceField,
+    RayTraced,
 }
 
 /// One timed pass's GPU cost over the recent frames.

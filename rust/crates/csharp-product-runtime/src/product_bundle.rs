@@ -734,10 +734,11 @@ impl ProductRendererSettings {
                     "disabled" => AmbientOcclusionMode::Disabled,
                     "enabled" => AmbientOcclusionMode::ScreenSpace,
                     "distanceField" => AmbientOcclusionMode::DistanceField,
+                    "rayTraced" => AmbientOcclusionMode::RayTraced,
                     _ => {
                         return Err(field_error(
                             "renderer.lighting.ambientOcclusion.mode",
-                            "must be enabled, distanceField or disabled",
+                            "must be enabled, distanceField, rayTraced or disabled",
                         ))
                     }
                 };

@@ -402,6 +402,7 @@ impl RendererOptions {
                     // costs less on the GPUs measured (Den `compute-ao-9510`).
                     AmbientOcclusionMode::ScreenSpace => AmbientOcclusionPath::Raster,
                     AmbientOcclusionMode::DistanceField => AmbientOcclusionPath::DistanceField,
+                    AmbientOcclusionMode::RayTraced => AmbientOcclusionPath::RayTraced,
                 }
             },
             strength: settings.ambient_occlusion.strength,
@@ -436,6 +437,7 @@ impl RendererOptions {
                         AmbientOcclusionMode::ScreenSpace
                     }
                     AmbientOcclusionPath::DistanceField => AmbientOcclusionMode::DistanceField,
+                    AmbientOcclusionPath::RayTraced => AmbientOcclusionMode::RayTraced,
                 },
                 strength: self.ambient_occlusion.strength,
                 radius: self.ambient_occlusion.radius,
@@ -1116,13 +1118,18 @@ impl Renderer {
                 SettingRefusal::UnsupportedSampleCount
             })
         };
-        let ambient_occlusion = (requested.ambient_occlusion.mode
-            == AmbientOcclusionMode::DistanceField
-            && !self.distance_fields.available())
-        .then(|| {
+        let ambient_occlusion = match requested.ambient_occlusion.mode {
+            AmbientOcclusionMode::DistanceField if !self.distance_fields.available() => {
+                Some(SettingRefusal::NoComputeShaders)
+            }
+            AmbientOcclusionMode::RayTraced => {
+                ray_scene::refusal(&self.gpu).map(|(refusal, _)| refusal)
+            }
+            _ => None,
+        };
+        if ambient_occlusion.is_some() {
             effective.ambient_occlusion.mode = AmbientOcclusionMode::ScreenSpace;
-            SettingRefusal::NoComputeShaders
-        });
+        }
         let clustered_lighting = (requested.clustered_lighting
             && self.light_clusters.readout().refused.is_some())
         .then(|| {
@@ -1195,6 +1202,14 @@ impl Renderer {
             water_reflections,
             ray_traced_shadows,
         }
+    }
+
+    /// Whether ambient occlusion draws as rays (`ray_shadows.rs`): asked
+    /// for, on a device that traces rays.
+    pub(crate) fn ray_occlusion_drawn(&self) -> bool {
+        self.options.ambient_occlusion.path == AmbientOcclusionPath::RayTraced
+            && self.options.ambient_occlusion.strength > 0.0
+            && ray_scene::refusal(&self.gpu).is_none()
     }
 
     /// Whether the sun's shadows draw as rays (`ray_scene.rs`): asked for,

@@ -7,7 +7,7 @@
  */
 export type CanonicalU64 = string;
 
-export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster" | "distanceField";
+export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster" | "distanceField" | "rayTraced";
 
 /**
  * The screen-space ambient occlusion of the last world view.

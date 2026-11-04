@@ -2918,9 +2918,19 @@ impl Renderer {
         // batches with the pre-pass pipelines, which compile like the
         // caster pipelines.
         let occlusion = if world_layer {
+            // Rays occlude once a TLAS is built; the raster path until then
+            // and on a device that refuses them.
+            let mut options = self.options.ambient_occlusion;
+            let traceable = self
+                .ray_shadows
+                .as_ref()
+                .is_some_and(crate::ray_shadows::RayShadows::traceable);
+            if options.path == AmbientOcclusionPath::RayTraced && !traceable {
+                options.path = AmbientOcclusionPath::Raster;
+            }
             self.ambient_occlusion.begin_view(
                 &self.gpu,
-                self.options.ambient_occlusion,
+                options,
                 (view.target.width, view.target.height),
                 view.viewport,
                 &view.camera,
@@ -3127,11 +3137,28 @@ impl Renderer {
                     entries,
                 );
             }
+            if occlusion.path() == AmbientOcclusionPath::RayTraced {
+                let (depth, raw) = self.ambient_occlusion.view_textures(occlusion);
+                let (depth, raw) = (depth.clone(), raw.clone());
+                self.prepare_ray_occlusion(
+                    &view_proj,
+                    eye,
+                    self.options.ambient_occlusion.radius,
+                    occlusion.region(),
+                    &depth,
+                    &raw,
+                );
+            }
+            let (rays, region) = (&self.ray_shadows, occlusion.region());
             self.ambient_occlusion.encode(
                 &self.gpu,
                 &mut encoder,
                 occlusion,
                 &self.distance_fields,
+                |encoder, writes| {
+                    rays.as_ref()
+                        .map_or(0, |rays| rays.encode_occlusion(encoder, region, writes))
+                },
             );
         }
         if ray_mask {

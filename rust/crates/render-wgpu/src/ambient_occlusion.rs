@@ -25,7 +25,9 @@
 //! The `DistanceField` path (#5911) keeps the pre-pass and the blur but
 //! replaces the screen-space occlusion pass with a cone trace through the
 //! chunks' distance fields (`distance_fields.rs`), so occlusion comes from
-//! the world around a surface, not only what the view shows.
+//! the world around a surface, not only what the view shows. The
+//! `RayTraced` path replaces it the same way with short rays against the
+//! ray scene (`ray_shadows.rs`), so every shown part occludes.
 
 use crate::camera::CameraMatrices;
 use crate::distance_fields::DistanceFields;
@@ -36,7 +38,7 @@ use crate::Gpu;
 
 /// The occlusion textures: filterable and a storage texture, so both paths
 /// write it and the world pass samples it bilinearly.
-const OCCLUSION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+pub(crate) const OCCLUSION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// `@workgroup_size` of `cs_occlusion`.
 const WORKGROUP: u32 = 16;
 /// `TILE_APRON` in the shader: the largest sample radius in texels.
@@ -71,6 +73,9 @@ pub enum AmbientOcclusionPath {
     /// `cs_field_occlusion`: cones traced through the chunk distance fields
     /// (`distance_fields.rs`); the raster path where the device cannot.
     DistanceField,
+    /// `cs_occlusion` in `ray_mask.wgsl`: short rays against the ray scene
+    /// (`ray_shadows.rs`); the raster path where the device cannot.
+    RayTraced,
 }
 
 /// The host's ambient occlusion choice: the path, and the product's
@@ -527,13 +532,18 @@ impl AmbientOcclusionPass {
 
     /// The occlusion pass by the view's path, then the blur. On the
     /// `DistanceField` path `fields` has this view's lookup grid
-    /// (`DistanceFields::begin_view`).
+    /// (`DistanceFields::begin_view`); on the `RayTraced` path `trace`
+    /// encodes the occlusion pass, returning its workgroups.
     pub fn encode(
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
         view: &ViewOcclusion,
         fields: &DistanceFields,
+        trace: impl FnOnce(
+            &mut wgpu::CommandEncoder,
+            Option<wgpu::ComputePassTimestampWrites<'_>>,
+        ) -> u32,
     ) {
         if let Some(timer) = &mut self.prepass_timer {
             timer.resolve(encoder);
@@ -553,6 +563,14 @@ impl AmbientOcclusionPass {
         }
         let target = &self.targets[view.target];
         match (view.path, &self.compute, &target.compute) {
+            (AmbientOcclusionPath::RayTraced, _, _) => {
+                self.last_workgroups = trace(
+                    encoder,
+                    self.occlusion_timer
+                        .as_ref()
+                        .and_then(PassTimer::compute_writes),
+                );
+            }
             (AmbientOcclusionPath::DistanceField, _, _) => {
                 let (_, bind_group) = target.field.as_ref().expect("field group made above");
                 self.last_workgroups = fields.encode(
@@ -630,6 +648,13 @@ impl AmbientOcclusionPass {
         if let Some(timer) = &mut self.blur_timer {
             timer.resolve(encoder);
         }
+    }
+
+    /// The half-resolution depth a view's pre-pass draws and the occlusion
+    /// the pass before the blur writes.
+    pub fn view_textures(&self, view: &ViewOcclusion) -> (&wgpu::TextureView, &wgpu::TextureView) {
+        let target = &self.targets[view.target];
+        (&target.depth, &target.raw)
     }
 
     /// Group 2 of the world pass: the view's blurred occlusion, or the off

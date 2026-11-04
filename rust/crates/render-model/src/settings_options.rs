@@ -195,6 +195,10 @@ const AMBIENT_OCCLUSION_CHOICES: &[RendererSettingChoice] = &[
         value: "distanceField",
         label: "Distance field (voxel worlds)",
     },
+    RendererSettingChoice {
+        value: "rayTraced",
+        label: "Ray traced",
+    },
 ];
 
 const WINDOW_MODE_CHOICES: &[RendererSettingChoice] = &[
@@ -328,8 +332,8 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
             choices: AMBIENT_OCCLUSION_CHOICES,
         },
         restart: false,
-        cost: "Screen space 0.6 ms and distance field 0.25 to 0.9 ms at 1920×1080 on an RX 9070 XT, across a voxel canyon, a room and a hotel corridor.",
-        gallery: GalleryExperiment::Try { values: &["screenSpace", "distanceField"], alternatives: true, everything: Some("screenSpace"), requires: None, setup: None },
+        cost: "Screen space 0.6 ms and distance field 0.25 to 0.9 ms at 1920×1080 on an RX 9070 XT, across a voxel canyon, a room and a hotel corridor. Ray traced 3 to 5 ms and its ray scene 1 to 1.5 ms at 2560×1440 on an RTX 3080 in CraftSurvive's woods, with about 95 MB of acceleration structures.",
+        gallery: GalleryExperiment::Try { values: &["screenSpace", "distanceField", "rayTraced"], alternatives: true, everything: Some("screenSpace"), requires: None, setup: None },
     },
     RendererSettingOption {
         id: "ambientOcclusionStrength",
@@ -667,6 +671,7 @@ impl RendererSettingsOverrides {
                 self.ambient_occlusion = Some(match choice()? {
                     "screenSpace" => AmbientOcclusionMode::ScreenSpace,
                     "distanceField" => AmbientOcclusionMode::DistanceField,
+                    "rayTraced" => AmbientOcclusionMode::RayTraced,
                     _ => AmbientOcclusionMode::Disabled,
                 })
             }
@@ -833,6 +838,7 @@ pub fn renderer_setting_value(settings: &RendererSettingsDescriptor, id: &str) -
             AmbientOcclusionMode::Disabled => "disabled",
             AmbientOcclusionMode::ScreenSpace => "screenSpace",
             AmbientOcclusionMode::DistanceField => "distanceField",
+            AmbientOcclusionMode::RayTraced => "rayTraced",
         }),
         "ambientOcclusionStrength" => {
             Value::from(round_to(settings.ambient_occlusion.strength as f64, 0.01))

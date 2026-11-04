@@ -864,6 +864,10 @@ pub enum AmbientOcclusionMode {
     /// From the voxel chunks' distance fields: the world around a surface
     /// occludes, on screen or off.
     DistanceField,
+    /// Short rays against the ray scene: everything shown occludes, on
+    /// screen or off. Needs a device made for it, as
+    /// [`RendererSettingsDescriptor::ray_traced`] says.
+    RayTraced,
 }
 
 /// How finely volumetric fog is computed (`RendererSettingsDescriptor`):
@@ -1172,7 +1176,7 @@ impl RendererSettingsDescriptor {
     /// asks for ray queries, which some GPUs charge startup time and memory
     /// for, so a device made without them refuses these settings.
     pub fn ray_traced(&self) -> bool {
-        self.ray_traced_shadows
+        self.ray_traced_shadows || self.ambient_occlusion.mode == AmbientOcclusionMode::RayTraced
     }
 
     /// Valid occlusion values and a render scale within range.

@@ -361,7 +361,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      * A JSON u64 represented as canonical decimal text.
      */
     export type CanonicalU64 = string;
-    export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster" | "distanceField";
+    export type ProductHostAmbientOcclusionPath = "off" | "compute" | "raster" | "distanceField" | "rayTraced";
     /**
      * The screen-space ambient occlusion of the last world view.
      */

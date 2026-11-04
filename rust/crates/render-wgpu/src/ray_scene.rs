@@ -294,7 +294,7 @@ pub(crate) struct RayScene {
     built: Option<Built>,
     /// The parts' instances from the last walk of the parts.
     instances: Vec<Instance>,
-    /// The shown masked parts that cast, from the last walk
+    /// The shown masked parts rays meet, from the last walk
     /// (`ray_shadows.rs`).
     masked: Vec<crate::ray_shadows::Masked>,
     /// Counts the TLAS made, so what binds it knows when it is another.
@@ -403,7 +403,7 @@ impl RayScene {
         }
     }
 
-    /// The shown masked parts that cast, from the last walk.
+    /// The shown masked parts rays meet, from the last walk.
     pub fn masked(&self) -> &[crate::ray_shadows::Masked] {
         &self.masked
     }
@@ -527,13 +527,13 @@ impl Renderer {
     /// Make or drop the ray scene, and what the ray-traced settings bind
     /// beside it, as they and the tools ask.
     fn keep_ray_scene(&mut self) {
-        let shadows = self.ray_shadows_drawn();
-        if !(self.ray_scene_wanted || shadows) {
+        let traced = self.ray_shadows_drawn() || self.ray_occlusion_drawn();
+        if !(self.ray_scene_wanted || traced) {
             self.ray_scene = None;
         } else if self.ray_scene.is_none() && refusal(&self.gpu).is_none() {
             self.ray_scene = Some(RayScene::new(&self.gpu));
         }
-        if !shadows || self.ray_scene.is_none() {
+        if !traced || self.ray_scene.is_none() {
             self.ray_shadows = None;
         } else if self.ray_shadows.is_none() {
             self.ray_shadows = Some(crate::ray_shadows::RayShadows::new(&self.gpu));
@@ -551,7 +551,7 @@ impl Renderer {
 
     /// The ray scene's readout while it is asked for.
     pub(crate) fn ray_scene_readout(&self) -> Option<RaySceneReadout> {
-        if !(self.ray_scene_wanted || self.ray_shadows_drawn()) {
+        if !(self.ray_scene_wanted || self.ray_shadows_drawn() || self.ray_occlusion_drawn()) {
             return None;
         }
         Some(match (&self.ray_scene, refusal(&self.gpu)) {
@@ -668,11 +668,10 @@ impl Renderer {
             } else {
                 used.insert(key.clone());
             }
-            if mask & MASK_SHADOW != 0
-                && state
-                    .class
-                    .features
-                    .contains(crate::shaders::Features::MASK)
+            if state
+                .class
+                .features
+                .contains(crate::shaders::Features::MASK)
             {
                 masked.push(crate::ray_shadows::Masked {
                     part: id as PartId,

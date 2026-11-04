@@ -315,8 +315,8 @@ same one the Engine's [video options](#video-options) panel draws. Each
 
 `Choices` lists each choice setting's values and labels by option id.
 The request holds shadows on or off and their budget (0 for no limit),
-ambient occlusion (`Disabled`, `ScreenSpace` or `DistanceField`, with its
-strength and radius), antialiasing (`Off`, `Msaa2`, `Msaa4`, `Temporal`
+ambient occlusion (`Disabled`, `ScreenSpace`, `DistanceField` or
+`RayTraced`, with its strength and radius), antialiasing (`Off`, `Msaa2`, `Msaa4`, `Temporal`
 ([the temporal stage](#temporal-upscaling-taau)) or `Dlss`
 ([NVIDIA DLSS](#dlss))), the render scale (0.33 to
 1: the world, viewmodel, labels and effects draw at that fraction of the
@@ -587,6 +587,22 @@ its entry in `RENDERER_SETTING_OPTIONS`, its field and value mapping in
 one, in the runtime's video options. The panel and the feature gallery then
 offer it to every game on that pair.
 
+## Contact darkening: ray-traced ambient occlusion
+
+`AmbientOcclusionMode.RayTraced` (`rayTraced` in the manifest and the video
+options) replaces the occlusion pass below with two short rays a
+half-resolution texel against the renderer's
+[ray scene](#ray-traced-sun-shadows): each takes away as much ambient light
+as it falls short of the radius. Everything shown that is opaque occludes,
+on screen or off, a masked material through its clear texels, and the
+strength, radius, blur and what the world pass does with the result are the
+screen-space path's. Dense vegetation and deep relief darken far more than
+under the screen-space pass, which sees only what the view shows: lower the
+strength or the radius to suit. Noise changes each frame under a temporal
+stage and holds still otherwise. It needs a device made with ray queries, as
+[ray-traced shadows](#ray-traced-sun-shadows) do; refused (`NoRayQueries`,
+`SoftwareAdapter`), the screen-space pass draws, and the readout says why.
+
 ## Contact darkening: screen-space ambient occlusion
 
 The sky's shadow darkens at the scale of a cave; screen-space ambient
@@ -617,6 +633,7 @@ What each path is for:
 | --- | --- | --- |
 | Screen-space (`enabled`) | contact under anything drawn: props, foliage, characters, building pieces, terrain creases in view | occluders off screen; it darkens nothing a frame cannot see |
 | Distance field (`distanceField`) | voxel worlds that want occlusion from geometry out of view, out to half a chunk | props and foliage, which have no field |
+| Ray traced (`rayTraced`) | anything shown occluding, on screen or off, on a GPU made for it | software adapters and devices without ray queries, which take screen space |
 | Vertex occlusion (per voxel session) | voxel corners, crevices and cave walls at no per-frame cost, steady as the camera turns | anything that is not a voxel surface; coarse distant chunks |
 
 They combine: vertex occlusion bakes the lattice's corners and a pass adds

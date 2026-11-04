@@ -60,8 +60,10 @@ struct RayParams {
 // The fragment's pixel, which the world pass's fragment stage sets.
 var<private> ray_pixel: vec2<u32>;
 
-// The instance mask bit of what casts shadows (`ray_scene::MASK_SHADOW`).
+// The instance mask bits of what casts shadows and what is opaque
+// (`ray_scene::MASK_SHADOW`, `MASK_GI`).
 const RAY_MASK_SHADOW: u32 = 1u;
+const RAY_MASK_OPAQUE: u32 = 2u;
 const NO_TEXTURE: u32 = 0xffffffffu;
 // Floats in a pooled vertex, and where its uv and its colour's alpha are
 // (`pipelines.rs`).
@@ -136,6 +138,24 @@ fn ray_sun_visibility(pixel: vec2<u32>, position: vec3<f32>, normal: vec3<f32>, 
         }
     }
     return select(1.0, 0.0, rayQueryGetCommittedIntersection(&query).kind != RAY_QUERY_INTERSECTION_NONE);
+}
+
+// How far along `direction` from `origin` the nearest opaque surface lies,
+// `reach` when none is nearer.
+fn ray_distance(origin: vec3<f32>, direction: vec3<f32>, reach: f32) -> f32 {
+    var query: ray_query;
+    rayQueryInitialize(
+        &query,
+        ray_scene,
+        RayDesc(RAY_FLAG_NONE, RAY_MASK_OPAQUE, 0.0, reach, origin, direction),
+    );
+    while rayQueryProceed(&query) {
+        if ray_hit_opaque(rayQueryGetCandidateIntersection(&query)) {
+            rayQueryConfirmIntersection(&query);
+        }
+    }
+    let hit = rayQueryGetCommittedIntersection(&query);
+    return select(reach, hit.t, hit.kind != RAY_QUERY_INTERSECTION_NONE);
 }
 
 // How far a fragment may be from the mask's surface and still be it:

@@ -1179,7 +1179,9 @@ probes alone and says so in the `RendererSettings` readout.
 ### Screen-space ambient occlusion
 
 `RustyEngineProductAmbientOcclusion` turns ambient occlusion on world views
-`enabled` (screen-space), `distanceField` or `disabled` (the default);
+`enabled` (screen-space), `distanceField`, `rayTraced`
+([ray-traced occlusion](lighting-and-sky.md#contact-darkening-ray-traced-ambient-occlusion),
+asked for at start as ray-traced shadows are) or `disabled` (the default);
 `RustyEngineProductAmbientOcclusionStrength` scales how far it darkens the
 ambient and hemisphere light: `0` draws without it, `1` (the default) is the
 full occlusion. `RustyEngineProductAmbientOcclusionRadius` is how far a

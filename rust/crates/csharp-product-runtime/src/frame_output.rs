@@ -983,6 +983,7 @@ fn settings_statistics(
                 render_model::AmbientOcclusionMode::Disabled => "disabled",
                 render_model::AmbientOcclusionMode::ScreenSpace => "screenSpace",
                 render_model::AmbientOcclusionMode::DistanceField => "distanceField",
+                render_model::AmbientOcclusionMode::RayTraced => "rayTraced",
             }
             .to_owned(),
             ambient_occlusion_strength: settings.ambient_occlusion.strength,
@@ -1097,6 +1098,7 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
                 AmbientOcclusionPath::DistanceField => {
                     ProductHostAmbientOcclusionPath::DistanceField
                 }
+                AmbientOcclusionPath::RayTraced => ProductHostAmbientOcclusionPath::RayTraced,
             },
             compute_refused: ambient_occlusion.compute_refused,
             workgroups: ambient_occlusion.workgroups,

@@ -290,9 +290,10 @@ fn parse(arguments: impl IntoIterator<Item = String>) -> Result<Option<Arguments
                     Some("compute") => AmbientOcclusionPath::Compute,
                     Some("raster") => AmbientOcclusionPath::Raster,
                     Some("field") => AmbientOcclusionPath::DistanceField,
+                    Some("ray") => AmbientOcclusionPath::RayTraced,
                     _ => {
                         return Err(format!(
-                            "--ambient-occlusion needs off, compute, raster or field\n{USAGE}"
+                            "--ambient-occlusion needs off, compute, raster, field or ray\n{USAGE}"
                         ))
                     }
                 });

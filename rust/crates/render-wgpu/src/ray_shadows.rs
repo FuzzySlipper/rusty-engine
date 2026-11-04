@@ -1,6 +1,8 @@
 //! The sun's shadows traced as rays (`RendererOptions::ray_traced_shadows`,
 //! `rusty::ray`): the mask a world view traces, and what the rays bind as
-//! group 4 beside the ray scene's TLAS (`ray_scene.rs`).
+//! group 4 beside the ray scene's TLAS (`ray_scene.rs`). Ambient occlusion's
+//! `RayTraced` path (`ambient_occlusion.rs`) binds the same group for its
+//! pass (`ray_mask.wgsl` `cs_occlusion`).
 //!
 //! - **Mask:** a world view draws its opaque depth once more at full size
 //!   (the occlusion pre-pass's pipelines) and traces one ray per pixel from
@@ -209,6 +211,12 @@ pub(crate) struct RayShadows {
     unbound_mask: wgpu::TextureView,
     pass_layout: wgpu::BindGroupLayout,
     pipeline: Option<wgpu::ComputePipeline>,
+    /// Ambient occlusion's pass: its group 0's layout, its pipeline, what
+    /// a view's pass reads, and the view's group.
+    occlusion_layout: wgpu::BindGroupLayout,
+    occlusion_pipeline: Option<wgpu::ComputePipeline>,
+    occlusion_params: wgpu::Buffer,
+    occlusion_group: Option<wgpu::BindGroup>,
     masks: Vec<Mask>,
     timer: Option<crate::timing::PassTimer>,
     frames: u32,
@@ -259,10 +267,24 @@ impl RayShadows {
             unbound_mask,
             pass_layout: pass_layout(device),
             pipeline: None,
+            occlusion_layout: occlusion_layout(device),
+            occlusion_pipeline: None,
+            occlusion_params: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("render-wgpu ray occlusion params"),
+                size: MASK_PARAMS_BYTES,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            occlusion_group: None,
             masks: Vec::new(),
             timer: crate::timing::PassTimer::new(gpu, "ray-mask"),
             frames: 0,
         }
+    }
+
+    /// Whether a TLAS is built for this frame's rays.
+    pub fn traceable(&self) -> bool {
+        self.bound.is_some()
     }
 
     /// The group of the world pipelines that trace the sun's shadows in a
@@ -290,6 +312,36 @@ impl RayShadows {
 
     pub fn timer(&self) -> Option<&crate::timing::PassTimer> {
         self.timer.as_ref()
+    }
+
+    /// Trace a view's occlusion over `region`, as `prepare_ray_occlusion`
+    /// readied it. Returns its workgroups.
+    pub fn encode_occlusion(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        region: crate::frame::PixelRect,
+        timestamp_writes: Option<wgpu::ComputePassTimestampWrites<'_>>,
+    ) -> u32 {
+        let (Some(pipeline), Some(group), Some((_, trace))) = (
+            &self.occlusion_pipeline,
+            &self.occlusion_group,
+            &self.trace_group,
+        ) else {
+            return 0;
+        };
+        let workgroups = (
+            region.width.div_ceil(MASK_WORKGROUP),
+            region.height.div_ceil(MASK_WORKGROUP),
+        );
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("render-wgpu ray occlusion"),
+            timestamp_writes,
+        });
+        pass.set_pipeline(pipeline);
+        pass.set_bind_group(0, group, &[]);
+        pass.set_bind_group(4, trace, &[]);
+        pass.dispatch_workgroups(workgroups.0, workgroups.1, 1);
+        workgroups.0 * workgroups.1
     }
 
     /// After the view's encoder is submitted.
@@ -363,6 +415,63 @@ fn parts_buffer(device: &wgpu::Device, parts: u64) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+/// Group 0 of ambient occlusion's pass (`ray_mask.wgsl` `cs_occlusion`).
+fn occlusion_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let compute = wgpu::ShaderStages::COMPUTE;
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("render-wgpu ray occlusion"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: compute,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: compute,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: compute,
+                ty: wgpu::BindingType::StorageTexture {
+                    access: wgpu::StorageTextureAccess::WriteOnly,
+                    format: crate::ambient_occlusion::OCCLUSION_FORMAT,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+/// `MaskParams` in `ray_mask.wgsl`.
+fn mask_params(
+    view_proj: &glam::Mat4,
+    eye: glam::Vec3,
+    toward: glam::Vec3,
+    radius: f32,
+    viewport: crate::frame::PixelRect,
+) -> [u32; (MASK_PARAMS_BYTES / 4) as usize] {
+    let mut params = [0u32; (MASK_PARAMS_BYTES / 4) as usize];
+    params[..16].copy_from_slice(&view_proj.inverse().to_cols_array().map(f32::to_bits));
+    params[16..19].copy_from_slice(&eye.to_array().map(f32::to_bits));
+    params[20..23].copy_from_slice(&toward.to_array().map(f32::to_bits));
+    params[23] = radius.to_bits();
+    params[24..28].copy_from_slice(&[viewport.x, viewport.y, viewport.width, viewport.height]);
+    params
 }
 
 /// Group 4 of the world pipelines that trace the sun's shadows
@@ -664,9 +773,11 @@ impl Renderer {
             0.0
         };
         shadows.frames = (shadows.frames + 1) % (1 << 20);
+        // Without a temporal stage to gather it, noise that changes each
+        // frame would flicker.
         let params = [
             spread,
-            shadows.frames as f32,
+            if soft { shadows.frames as f32 } else { 0.0 },
             NORMAL_OFFSET,
             NORMAL_OFFSET_PER_METRE,
         ];
@@ -735,6 +846,93 @@ impl Renderer {
                     ],
                 }),
         )
+    }
+
+    /// The mask pass's and ambient occlusion's group 4, made again when
+    /// what it binds changed.
+    fn refresh_trace_group(&self, shadows: &mut RayShadows) {
+        let Some(bound) = shadows.bound else {
+            return;
+        };
+        if shadows
+            .trace_group
+            .as_ref()
+            .is_none_or(|(at, _)| *at != bound)
+        {
+            shadows.trace_group = self
+                .ray_group(shadows, &shadows.unbound_mask)
+                .map(|group| (bound, group));
+        }
+    }
+
+    /// Ready a view's ray-traced occlusion: its group over the pre-pass's
+    /// `depth` and the `occlusion` the pass writes, and what the pass reads
+    /// for `region` of them.
+    pub(crate) fn prepare_ray_occlusion(
+        &mut self,
+        view_proj: &glam::Mat4,
+        eye: glam::Vec3,
+        radius: f32,
+        region: crate::frame::PixelRect,
+        depth: &wgpu::TextureView,
+        occlusion: &wgpu::TextureView,
+    ) {
+        let Some(mut shadows) = self.ray_shadows.take() else {
+            return;
+        };
+        self.refresh_trace_group(&mut shadows);
+        let device = &self.gpu.device;
+        if shadows.occlusion_pipeline.is_none() {
+            let module = self
+                .layouts
+                .shaders
+                .module(device, crate::shaders::Entry::RayMask, Default::default())
+                .expect("the ray mask composes");
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("render-wgpu ray occlusion"),
+                bind_group_layouts: &[
+                    Some(&shadows.occlusion_layout),
+                    None,
+                    None,
+                    None,
+                    self.layouts.ray.as_ref(),
+                ],
+                immediate_size: 0,
+            });
+            shadows.occlusion_pipeline = Some(device.create_compute_pipeline(
+                &wgpu::ComputePipelineDescriptor {
+                    label: Some("render-wgpu ray occlusion"),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some("cs_occlusion"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                },
+            ));
+        }
+        let params = mask_params(view_proj, eye, glam::Vec3::ZERO, radius, region);
+        self.gpu
+            .queue
+            .write_buffer(&shadows.occlusion_params, 0, bytemuck::cast_slice(&params));
+        shadows.occlusion_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render-wgpu ray occlusion"),
+            layout: &shadows.occlusion_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(depth),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: shadows.occlusion_params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(occlusion),
+                },
+            ],
+        }));
+        self.ray_shadows = Some(shadows);
     }
 
     /// Make a world view of `size` its mask and its groups, and write what
@@ -817,15 +1015,7 @@ impl Renderer {
         let ready = match shadows.bound {
             None => false,
             Some(bound) => {
-                if shadows
-                    .trace_group
-                    .as_ref()
-                    .is_none_or(|(at, _)| *at != bound)
-                {
-                    shadows.trace_group = self
-                        .ray_group(&shadows, &shadows.unbound_mask)
-                        .map(|group| (bound, group));
-                }
+                self.refresh_trace_group(&mut shadows);
                 let at = shadows
                     .masks
                     .iter()
@@ -839,17 +1029,7 @@ impl Renderer {
                     let group = self.ray_group(&shadows, &shadows.masks[at].view);
                     shadows.masks[at].world = group.map(|group| (bound, group));
                 }
-                let mut params = [0u32; (MASK_PARAMS_BYTES / 4) as usize];
-                params[..16]
-                    .copy_from_slice(&view_proj.inverse().to_cols_array().map(f32::to_bits));
-                params[16..19].copy_from_slice(&eye.to_array().map(f32::to_bits));
-                params[20..23].copy_from_slice(&toward.to_array().map(f32::to_bits));
-                params[24..28].copy_from_slice(&[
-                    viewport.x,
-                    viewport.y,
-                    viewport.width,
-                    viewport.height,
-                ]);
+                let params = mask_params(view_proj, eye, toward, 0.0, viewport);
                 self.gpu.queue.write_buffer(
                     &shadows.masks[at].params,
                     0,

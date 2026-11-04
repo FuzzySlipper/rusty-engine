@@ -201,7 +201,7 @@ pub fn plan(
             ),
         );
     }
-    if variants.len() > 1 {
+    if variants.len() > 1 && !everything.is_empty() {
         variants.push(GalleryVariant {
             id: "everything".to_owned(),
             label: "Everything on".to_owned(),
@@ -570,6 +570,7 @@ mod tests {
                 "shadows-true",
                 "ambientOcclusion-screenSpace",
                 "ambientOcclusion-distanceField",
+                "ambientOcclusion-rayTraced",
                 "volumetricFog-low",
                 "volumetricClouds-low",
                 "waterReflections-low",
@@ -583,12 +584,22 @@ mod tests {
     }
 
     #[test]
-    fn a_scene_with_everything_on_offers_only_the_other_occlusion_path() {
-        // The occlusion paths are alternatives, not levels: a scene on
-        // either is offered the other.
-        for (mode, other) in [
-            (AmbientOcclusionMode::ScreenSpace, "distanceField"),
-            (AmbientOcclusionMode::DistanceField, "screenSpace"),
+    fn a_scene_with_everything_on_offers_only_the_other_occlusion_paths() {
+        // The occlusion paths are alternatives, not levels: a scene on one
+        // is offered the others.
+        for (mode, others) in [
+            (
+                AmbientOcclusionMode::ScreenSpace,
+                ["distanceField", "rayTraced"],
+            ),
+            (
+                AmbientOcclusionMode::DistanceField,
+                ["screenSpace", "rayTraced"],
+            ),
+            (
+                AmbientOcclusionMode::RayTraced,
+                ["screenSpace", "distanceField"],
+            ),
         ] {
             let mut settings = RendererSettingsDescriptor {
                 shadows: true,
@@ -604,17 +615,19 @@ mod tests {
             };
             settings.ambient_occlusion.mode = mode;
             let variants = plan(&settings, None, true, true);
-            assert_eq!(variants.len(), 1, "{mode:?}");
-            assert_eq!(variants[0].id, format!("ambientOcclusion-{other}"));
-            assert_eq!(
-                variants[0].args,
-                ["--choose".to_owned(), format!("ambientOcclusion={other}")]
-            );
+            assert_eq!(variants.len(), 2, "{mode:?}");
+            for (variant, other) in variants.iter().zip(others) {
+                assert_eq!(variant.id, format!("ambientOcclusion-{other}"));
+                assert_eq!(
+                    variant.args,
+                    ["--choose".to_owned(), format!("ambientOcclusion={other}")]
+                );
+            }
         }
     }
 
     #[test]
-    fn a_scene_without_occlusion_is_offered_both_paths() {
+    fn a_scene_without_occlusion_is_offered_every_path() {
         let variants = plan(&RendererSettingsDescriptor::DEFAULT, None, false, false);
         let occlusion: Vec<&str> = variants
             .iter()
@@ -625,7 +638,8 @@ mod tests {
             occlusion,
             [
                 "ambientOcclusion-screenSpace",
-                "ambientOcclusion-distanceField"
+                "ambientOcclusion-distanceField",
+                "ambientOcclusion-rayTraced"
             ]
         );
     }
