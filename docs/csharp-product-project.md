@@ -1143,6 +1143,13 @@ Engine choose which requesting lights cast, by `ShadowPriority` then distance
 [shadows](lighting-and-sky.md#shadows) for resolution, softness and the
 budget.
 
+`RustyEngineProductRayTracedShadows`, `disabled` (the default) or `enabled`
+(`renderer.lighting.rayTracedShadows`), traces the brightest casting sun's
+shadows as rays in place of its cascades, on a Vulkan GPU with ray queries
+([ray-traced sun shadows](lighting-and-sky.md#ray-traced-sun-shadows)).
+The device asks for ray queries only when the setting is selected at
+start, so a player choosing it later takes effect after a restart.
+
 ### Volumetric fog
 
 `RustyEngineProductVolumetricFog` is `off` (the default), `low` or `high`

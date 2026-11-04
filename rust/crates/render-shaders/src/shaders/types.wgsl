@@ -304,6 +304,11 @@ struct Caster {
 
 const PI: f32 = 3.141592653589793;
 
+// A directional light's shadow lane (`Light.extra.w`) when its shadows are
+// traced as rays (render-wgpu `ray_scene.rs`, `rusty::ray`) rather than
+// drawn into cascades.
+const RAY_SUN: u32 = 1048576u;
+
 // What the motion target holds where nothing drew motion of its own
 // (render-wgpu `motion.rs`): the world pass's clear, before the sky's
 // motion covers what the world leaves open. A temporal stage takes such a pixel as still

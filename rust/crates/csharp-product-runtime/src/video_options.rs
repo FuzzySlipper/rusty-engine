@@ -154,6 +154,7 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         "volumetricFog" => readout.volumetric_fog,
         "volumetricClouds" => readout.volumetric_clouds,
         "waterReflections" => readout.water_reflections,
+        "rayTracedShadows" => readout.ray_traced_shadows,
         _ => None,
     }?;
     Some(match refused {
@@ -208,6 +209,19 @@ fn apply_change(choices: &mut RendererSettingsOverrides, change: &Value) -> Resu
         }
         other => Err(format!("no change {other}")),
     }
+}
+
+/// `settings` with the player's choices stored under `persistence_root`
+/// over them: what the renderer starts with, which decides whether its
+/// device asks for ray queries (`RendererSettingsDescriptor::ray_traced`).
+pub fn startup_settings(
+    settings: &RendererSettingsDescriptor,
+    persistence_root: Option<&Path>,
+) -> RendererSettingsDescriptor {
+    let choices = persistence_root
+        .and_then(|root| read_store(&root.join(VIDEO_OPTIONS_FILE)).ok().flatten())
+        .unwrap_or_default();
+    choices.apply(*settings)
 }
 
 fn read_store(path: &Path) -> Result<Option<RendererSettingsOverrides>, String> {
@@ -361,6 +375,7 @@ mod tests {
             volumetric_fog: None,
             volumetric_clouds: None,
             water_reflections: None,
+            ray_traced_shadows: None,
         };
         let catalogue = options.catalogue(&readout);
         assert_eq!(catalogue["stored"], false);

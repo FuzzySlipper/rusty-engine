@@ -374,6 +374,10 @@ pub(crate) struct ShadowCandidate {
     /// The light's backdrop copy's row, when it also casts in the backdrop
     /// (its layers then end with `backdrop_cascades`).
     pub backdrop_row: Option<u32>,
+    /// How far its world cascades reached, when rays trace its shadows in
+    /// their place (`ray_shadows.rs`): its layers are then only its
+    /// backdrop cascades.
+    pub ray_reach: Option<f32>,
 }
 
 /// How much nearer a light that already casts counts, so the choice does
@@ -1159,6 +1163,7 @@ mod tests {
             priority,
             position: Some(Vec3::new(x, 0.0, 0.0)),
             backdrop_row: None,
+            ray_reach: None,
         };
         let candidates = [lamp(1, 10.0, 0), lamp(2, 3.0, 0), lamp(3, 20.0, 1)];
         let none = HashSet::new();

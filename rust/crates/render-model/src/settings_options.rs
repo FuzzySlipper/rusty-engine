@@ -228,6 +228,10 @@ const VOLUMETRIC_FOG_CHOICES: &[RendererSettingChoice] = &[
 ];
 
 /// Every renderer setting, in the order a menu shows them.
+/// Measured on CraftSurvive's forest and pond views (Den
+/// `evidence/rt-shadows-10313`).
+const RAY_TRACED_SHADOWS_COST: &str = "On CraftSurvive at 2560×1440 on an RTX 3080, a moving view's frame is 2 to 4 ms shorter than with the sun's shadow maps and a still view's 6 to 11 ms longer, since maps that have not moved cost nothing. The acceleration structures hold about 95 MB.";
+
 /// Measured on `render-wgpu` `tests/water.rs`'s still water before a wall.
 const WATER_REFLECTIONS_COST: &str = "With still water filling the lower view at 1920×1080 and 4× multisampling, Low about 0.17 ms and High about 0.30 ms on an RX 9070 XT, 0.04 ms of it the copy of the scene's colour. Nothing in views without water.";
 
@@ -394,6 +398,16 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         gallery: GalleryExperiment::Try { values: &["low"], alternatives: false, everything: Some("low"), requires: None, setup: Some(GallerySetup::Product("water materials (MaterialRequest.Water)")) },
     },
     RendererSettingOption {
+        id: "rayTracedShadows",
+        label: "Ray-traced sun shadows",
+        group: "Lighting",
+        description: "Traces the sun's shadows as rays: crisp contact shadows from every leaf and blade of grass, softened under temporal antialiasing, without the blurred, shimmering edges of shadow maps. Needs a graphics card with ray tracing and a restart.",
+        kind: RendererSettingKind::Toggle,
+        restart: true,
+        cost: RAY_TRACED_SHADOWS_COST,
+        gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: None, requires: None, setup: None },
+    },
+    RendererSettingOption {
         id: "clusteredLighting",
         label: "Clustered lighting",
         group: "Advanced",
@@ -486,6 +500,8 @@ pub struct RendererSettingsOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub water_reflections: Option<WaterReflectionsQuality>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub ray_traced_shadows: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub clustered_lighting: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_culling: Option<bool>,
@@ -562,6 +578,9 @@ impl RendererSettingsOverrides {
         if let Some(value) = self.water_reflections {
             settings.water_reflections = value;
         }
+        if let Some(value) = self.ray_traced_shadows {
+            settings.ray_traced_shadows = value;
+        }
         if let Some(value) = self.clustered_lighting {
             settings.clustered_lighting = value;
         }
@@ -590,6 +609,7 @@ impl RendererSettingsOverrides {
             "volumetricFog" => self.volumetric_fog.is_some(),
             "volumetricClouds" => self.volumetric_clouds.is_some(),
             "waterReflections" => self.water_reflections.is_some(),
+            "rayTracedShadows" => self.ray_traced_shadows.is_some(),
             "clusteredLighting" => self.clustered_lighting.is_some(),
             "gpuCulling" => self.gpu_culling.is_some(),
             "occlusionCulling" => self.occlusion_culling.is_some(),
@@ -680,6 +700,7 @@ impl RendererSettingsOverrides {
                 })
             }
             "clusteredLighting" => self.clustered_lighting = Some(toggle()?),
+            "rayTracedShadows" => self.ray_traced_shadows = Some(toggle()?),
             "gpuCulling" => self.gpu_culling = Some(toggle()?),
             "occlusionCulling" => self.occlusion_culling = Some(toggle()?),
             _ => return Err(format!("no renderer setting {id}")),
@@ -703,6 +724,7 @@ impl RendererSettingsOverrides {
             "volumetricFog" => self.volumetric_fog = None,
             "volumetricClouds" => self.volumetric_clouds = None,
             "waterReflections" => self.water_reflections = None,
+            "rayTracedShadows" => self.ray_traced_shadows = None,
             "clusteredLighting" => self.clustered_lighting = None,
             "gpuCulling" => self.gpu_culling = None,
             "occlusionCulling" => self.occlusion_culling = None,
@@ -785,6 +807,7 @@ impl RendererSettingsOverrides {
             volumetric_fog: preset.volumetric_fog.or(self.volumetric_fog),
             volumetric_clouds: preset.volumetric_clouds.or(self.volumetric_clouds),
             water_reflections: preset.water_reflections.or(self.water_reflections),
+            ray_traced_shadows: preset.ray_traced_shadows.or(self.ray_traced_shadows),
             clustered_lighting: preset.clustered_lighting.or(self.clustered_lighting),
             gpu_culling: preset.gpu_culling.or(self.gpu_culling),
             occlusion_culling: preset.occlusion_culling.or(self.occlusion_culling),
@@ -833,6 +856,7 @@ pub fn renderer_setting_value(settings: &RendererSettingsDescriptor, id: &str) -
             VolumetricFogQuality::High => "high",
         }),
         "clusteredLighting" => Value::from(settings.clustered_lighting),
+        "rayTracedShadows" => Value::from(settings.ray_traced_shadows),
         "gpuCulling" => Value::from(settings.gpu_culling),
         "occlusionCulling" => Value::from(settings.occlusion_culling),
         _ => return None,

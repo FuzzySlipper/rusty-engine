@@ -144,6 +144,9 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before water reflections draw without them.
     #[serde(default)]
     pub water_reflections: render_model::WaterReflectionsQuality,
+    /// Snapshots written before ray-traced shadows draw the cascades.
+    #[serde(default)]
+    pub ray_traced_shadows: bool,
 }
 
 fn default_render_scale() -> f32 {
@@ -254,6 +257,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             volumetric_fog: options.volumetric_fog,
             volumetric_clouds: options.volumetric_clouds,
             water_reflections: options.water_reflections,
+            ray_traced_shadows: options.ray_traced_shadows,
         }
     }
 }
@@ -278,6 +282,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             volumetric_fog: options.volumetric_fog,
             volumetric_clouds: options.volumetric_clouds,
             water_reflections: options.water_reflections,
+            ray_traced_shadows: options.ray_traced_shadows,
         }
     }
 }

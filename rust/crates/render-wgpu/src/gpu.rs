@@ -135,8 +135,9 @@ impl Gpu {
 
     /// A device for windows on `display`, before any window exists. Windows
     /// get their surfaces later from [`crate::WindowSurface::create`], so a
-    /// renderer can be built on this device first.
-    pub fn for_display<D>(display: D) -> Result<Self, GpuError>
+    /// renderer can be built on this device first. With `ray_queries`, as
+    /// [`Gpu::headless_with_ray_queries`].
+    pub fn for_display<D>(display: D, ray_queries: bool) -> Result<Self, GpuError>
     where
         D: wgpu::rwh::HasDisplayHandle + std::fmt::Debug + Send + Sync + 'static,
     {
@@ -147,10 +148,22 @@ impl Gpu {
         {
             descriptor.backends = wgpu::Backends::VULKAN;
         }
-        let gpu = Self::from_instance(instance(descriptor), None)?;
+        let gpu =
+            Self::from_instance_with(instance(descriptor), None, None, None, ray_queries, None)?;
         #[cfg(all(feature = "ui-overlay", windows))]
         gpu.window_refusal()?;
         Ok(gpu)
+    }
+
+    /// A headless device, with ray queries when `ray_queries`: for a
+    /// renderer whose settings at startup trace rays
+    /// (`RendererSettingsDescriptor::ray_traced`).
+    pub fn headless_for(ray_queries: bool) -> Result<Self, GpuError> {
+        if ray_queries {
+            Self::headless_with_ray_queries()
+        } else {
+            Self::headless()
+        }
     }
 
     /// Refuses, naming the reason, a device that cannot draw a window with

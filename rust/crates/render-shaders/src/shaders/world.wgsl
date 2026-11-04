@@ -74,6 +74,9 @@
 #ifdef SCENE_COLOR
 #import rusty::lighting::water_reflection
 #endif
+#ifdef RAY_SHADOWS
+#import rusty::ray::ray_pixel
+#endif
 #ifdef DECALS
 #import rusty::decals::decaled
 #endif
@@ -893,6 +896,10 @@ fn water_over_scene(color: vec4<f32>) -> vec4<f32> {
 
 // `opaque`: the part draws in an opaque pass, so decals lay over it.
 fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> {
+#ifdef RAY_SHADOWS
+    // Where the sun's traced shadow is read from (`rusty::ray`).
+    ray_pixel = vec2<u32>(in.clip.xy);
+#endif
     var surface = standard_surface(in, front);
 #ifdef WATER
     surface = water_surface(in, surface);

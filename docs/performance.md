@@ -167,6 +167,8 @@ time, and the `ray-blas` and `ray-scene` passes the GPU time of the BLAS
 builds (the first frame's) and of each frame's TLAS build. `--ray-reach M`
 takes scatter copies within M metres of the camera into the TLAS instead
 of the sun's shadow reach.
+A snapshot or `--choose` selecting a ray-traced setting
+(`--choose rayTracedShadows=true`) draws on a device with ray queries too.
 
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`
 in `product-host`) as UTF-8 JSON bytes through

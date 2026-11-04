@@ -415,12 +415,16 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let gpu = if ray_scene {
-        Gpu::headless_with_ray_queries()
-    } else {
-        Gpu::headless()
+    // A device for ray tracing when asked for, or when the snapshot's
+    // settings or the choices trace rays.
+    let mut starting = snapshot.metadata.player_settings;
+    for (id, value) in &choices {
+        starting.choose(id, value)?;
     }
-    .map_err(|error| format!("{error:?}"))?;
+    let traced = starting
+        .apply(render_wgpu::RendererOptions::from(snapshot.metadata.options).settings())
+        .ray_traced();
+    let gpu = Gpu::headless_for(ray_scene || traced).map_err(|error| format!("{error:?}"))?;
     let adapter = gpu.adapter_summary();
     let software_adapter = gpu.is_software();
     if software_adapter {

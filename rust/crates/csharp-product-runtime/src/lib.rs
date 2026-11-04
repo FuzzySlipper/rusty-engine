@@ -757,6 +757,7 @@ mod frame_output;
 mod render_output;
 pub mod scene_snapshot;
 mod video_options;
+pub use video_options::startup_settings;
 
 pub use product_host::ProductHostRenderOutput as RenderOutput;
 
@@ -955,6 +956,13 @@ impl CsharpProductRuntime {
         )
         .map_err(input_error)?;
         let persistence_root = prepare_persistence_root(config.persistence_root.as_deref())?;
+        // A stream's device asks for ray queries only when the settings it
+        // starts with trace rays; the window's was made so (`main.rs`).
+        let ray_queries = video_options::startup_settings(
+            &config.renderer_options.settings(),
+            persistence_root.as_deref(),
+        )
+        .ray_traced();
         let frame_output = config
             .render_output
             .map(|output| {
@@ -962,6 +970,7 @@ impl CsharpProductRuntime {
                     output,
                     config.renderer_options,
                     config.window_gpu.as_ref(),
+                    ray_queries,
                 )
             })
             .transpose()?;

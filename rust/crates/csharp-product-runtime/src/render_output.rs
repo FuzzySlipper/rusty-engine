@@ -32,7 +32,7 @@ impl OutputExecutor {
                         RenderOutputOperation::Glb { .. } => export_glb(&work.job, &resources),
                         RenderOutputOperation::Image { .. } => renderer
                             .get_or_insert_with(|| {
-                                Gpu::headless()
+                                Gpu::headless_for(options.settings().ray_traced())
                                     .map(|gpu| Renderer::new(&gpu, options))
                                     .map_err(|error| format!("capture: no wgpu adapter: {error}"))
                             })

@@ -91,6 +91,37 @@ the first time a layer has a dynamic caster (`staticCacheBytes`). A
 directional light's cascades, which follow the camera, and casters a
 product shader moves with time redraw whole.
 
+### Ray-traced sun shadows
+
+`RayTracedShadows` (`RustyEngineProductRayTracedShadows`) traces the
+brightest casting sun's shadows in the world as rays, one a pixel toward
+the sun from the view's opaque depth, in place of its four cascades; a
+blended part traces its own. `gpu.passes` times the depth and the rays as
+`ray-mask`. They reach as far as the cascades
+would (its `Range`), and are as sharp at 80 m as at 1 m: no texel steps, no
+cascade seams, no gap where an object meets its shadow. Under a temporal stage
+(`Temporal` or `Dlss` antialiasing) each pixel's ray leans to a point of the
+sun's disc that changes each frame (the atmosphere's `SunRadiusDegrees`, the
+real sun's 0.27° at least), and the stage gathers a penumbra that widens
+with the distance from the caster; with MSAA the shadows are hard. The
+other lights and the [backdrop](#the-backdrop) keep their shadow maps.
+
+The rays meet what the cascades would draw, from the renderer's
+[ray scene](performance.md#renderer-statistics): the scene layer's shown
+parts that cast, swaying with the wind, and the scatter copies within the
+sun's reach. A masked material casts where its base texture's alpha, times
+its part's and vertices' colour alpha, reaches the cutoff, read at the
+mesh's uv (a triplanar or voxel-surface material's projection is not
+followed). Per-vertex flutter, morph targets and a product shader's
+`displace` stage are not seen: rays meet rest geometry. A product shader's
+`cast_shadow` does not run; its parts cast whole.
+
+It draws on a GPU with ray queries on Vulkan. A device asks for them only
+when the setting is selected as it starts (the manifest or a saved player
+choice); selected later, it is refused with `NoRayQueries` until the next
+start, and the catalogue marks it `restart`. A software adapter refuses it
+(`SoftwareAdapter`). Refused, the sun's cascades draw.
+
 ## Dark caves: an ambient light's sky
 
 An ambient light reaches every surface alike, so on its own a cave is as
@@ -279,7 +310,7 @@ same one the Engine's [video options](#video-options) panel draws. Each
 - its Engine default, requested and drawn values, as text (`true`, `4x`,
   `none`, `0.75`);
 - its refusal;
-- whether a change needs a restart (none does);
+- whether a change needs a restart (only `RayTracedShadows` does);
 - its measured cost.
 
 `Choices` lists each choice setting's values and labels by option id.
@@ -314,7 +345,8 @@ window mode are moot) and
 so frames wait for its refresh with vsync off), `SoftwareAdapter` (a
 GPU-only feature on a software adapter, the temporal stage among them),
 `TooFewTextureBindings` (water reflections on a device without the colour
-copy), and for DLSS `NotBuilt`, `UnsupportedAdapter` and
+copy), `NoRayQueries` (a ray-traced setting on a device made without ray
+queries, or not on Vulkan), and for DLSS `NotBuilt`, `UnsupportedAdapter` and
 `InitializationFailed` ([DLSS](#dlss)). A refused
 setting is not an error: `Set` accepts any finite, non-negative strength, positive
 radius and render scale from 0.33 to 1, and refuses only values outside
@@ -539,7 +571,8 @@ water reflections (off, off, low, high), over the player's other choices. A sett
 same refusals the readout carries. The panel's route,
 `/__rusty/product/runtime/video-options`, answers `GET` with the catalogue
 (each option's `value` drawn, `requested`, `gameDefault`, `chosen` and
-`refused`, whether a change needs a `restart` (none does) and its measured
+`refused`, whether a change needs a `restart` (only `rayTracedShadows`
+does) and its measured
 `cost`, which the panel shows under the description) and `POST` with one change: `{"choose": {"id", "value"}}`,
 `{"forget": id}`, `{"forget": null}` for every choice, or
 `{"preset": id}`. A scene snapshot records the player's choices, and

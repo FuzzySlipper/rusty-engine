@@ -60,6 +60,7 @@ mod precipitation;
 mod primitives;
 mod probes;
 mod ray_scene;
+mod ray_shadows;
 mod resources;
 mod scatter;
 mod scatter_select;
@@ -348,6 +349,11 @@ pub struct RendererOptions {
     /// (`water.rs`). Off by default; a software adapter, or a device that
     /// cannot bind the copy, reflects the sky's light and the probes alone.
     pub water_reflections: render_model::WaterReflectionsQuality,
+    /// Trace the brightest shadowing sun's shadows as rays against the ray
+    /// scene in place of its cascades (`ray_scene.rs`, `rusty::ray`). Off
+    /// by default; a device without ray queries, or a software one, draws
+    /// the cascades.
+    pub ray_traced_shadows: bool,
 }
 
 impl Default for RendererOptions {
@@ -371,6 +377,7 @@ impl Default for RendererOptions {
             volumetric_fog: render_model::VolumetricFogQuality::Off,
             volumetric_clouds: render_model::VolumetricCloudsQuality::Off,
             water_reflections: render_model::WaterReflectionsQuality::Off,
+            ray_traced_shadows: false,
         }
     }
 }
@@ -412,6 +419,7 @@ impl RendererOptions {
         self.volumetric_fog = settings.volumetric_fog;
         self.volumetric_clouds = settings.volumetric_clouds;
         self.water_reflections = settings.water_reflections;
+        self.ray_traced_shadows = settings.ray_traced_shadows;
         self
     }
 
@@ -448,6 +456,7 @@ impl RendererOptions {
             volumetric_fog: self.volumetric_fog,
             volumetric_clouds: self.volumetric_clouds,
             water_reflections: self.water_reflections,
+            ray_traced_shadows: self.ray_traced_shadows,
         }
     }
 }
@@ -504,6 +513,7 @@ pub struct RendererSettingsReadout {
     pub volumetric_fog: Option<SettingRefusal>,
     pub volumetric_clouds: Option<SettingRefusal>,
     pub water_reflections: Option<SettingRefusal>,
+    pub ray_traced_shadows: Option<SettingRefusal>,
 }
 
 pub struct Renderer {
@@ -677,6 +687,11 @@ pub struct Renderer {
     /// (`ray_scene.rs`), and whether something does.
     ray_scene: Option<ray_scene::RayScene>,
     ray_scene_wanted: bool,
+    /// What the world pipelines bind to trace the sun's shadows, while
+    /// they do (`ray_shadows.rs`).
+    ray_shadows: Option<ray_shadows::RayShadows>,
+    /// Toward the sun whose shadows rays trace, while they do.
+    ray_sun_toward: Option<glam::Vec3>,
 }
 
 /// The water reflection's march at low and high quality: its steps and its
@@ -695,6 +710,7 @@ impl Renderer {
             device,
             gpu.decals_refusal().is_none(),
             gpu.scene_color_refusal().is_none(),
+            ray_scene::refusal(gpu).is_none(),
         );
         let frame_buffer = frame::frame_uniform_buffer(device);
         let cloud_regions_buffer = frame::storage_buffer(
@@ -877,6 +893,8 @@ impl Renderer {
             surface_size: None,
             ray_scene: None,
             ray_scene_wanted: false,
+            ray_shadows: None,
+            ray_sun_toward: None,
             animation_time: 0.0,
             presentation_time: 0.0,
             animation_facts: Vec::new(),
@@ -1153,6 +1171,14 @@ impl Renderer {
             .inspect(|_| {
                 effective.water_reflections = render_model::WaterReflectionsQuality::Off;
             });
+        let ray_traced_shadows = requested
+            .ray_traced_shadows
+            .then(|| ray_scene::refusal(&self.gpu))
+            .flatten()
+            .map(|(refusal, _)| {
+                effective.ray_traced_shadows = false;
+                refusal
+            });
         RendererSettingsReadout {
             requested,
             product: self.product_settings,
@@ -1167,7 +1193,16 @@ impl Renderer {
             volumetric_fog,
             volumetric_clouds,
             water_reflections,
+            ray_traced_shadows,
         }
+    }
+
+    /// Whether the sun's shadows draw as rays (`ray_scene.rs`): asked for,
+    /// with shadows on, on a device that traces rays.
+    pub(crate) fn ray_shadows_drawn(&self) -> bool {
+        self.options.ray_traced_shadows
+            && self.options.shadows
+            && ray_scene::refusal(&self.gpu).is_none()
     }
 
     /// Why water cannot reflect the view on this device, if it cannot: a
@@ -1239,6 +1274,11 @@ impl Renderer {
                         .map(ray_scene::RayScene::timings)
                         .into_iter()
                         .flatten(),
+                )
+                .chain(
+                    self.ray_shadows
+                        .as_ref()
+                        .map(ray_shadows::RayShadows::timing),
                 )
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),

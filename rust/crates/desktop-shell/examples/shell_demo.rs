@@ -169,7 +169,7 @@ fn main() -> Result<(), String> {
     };
     let url = args.next().ok_or("missing UI url")?;
     let seconds = args.next().and_then(|s| s.parse().ok()).unwrap_or(10);
-    let shell = DesktopShell::open()?;
+    let shell = DesktopShell::open(false)?;
     let scene = Arc::new(SpinningCube::build(shell.gpu(), seconds));
     let report = shell.run(
         DesktopShellConfig {

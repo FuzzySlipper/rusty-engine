@@ -1133,6 +1133,12 @@ pub struct RendererSettingsDescriptor {
     /// Settings written before it existed have it off.
     #[serde(default)]
     pub water_reflections: WaterReflectionsQuality,
+    /// The sun's shadows traced as rays against the scene in place of its
+    /// shadow cascades. Takes effect on a device made while it is on (a
+    /// GPU with ray queries); settings written before it existed have it
+    /// off.
+    #[serde(default)]
+    pub ray_traced_shadows: bool,
 }
 
 fn enabled() -> bool {
@@ -1159,7 +1165,15 @@ impl RendererSettingsDescriptor {
         volumetric_fog: VolumetricFogQuality::Off,
         volumetric_clouds: VolumetricCloudsQuality::Off,
         water_reflections: WaterReflectionsQuality::Off,
+        ray_traced_shadows: false,
     };
+
+    /// Whether a ray-traced setting is on: a device made for these settings
+    /// asks for ray queries, which some GPUs charge startup time and memory
+    /// for, so a device made without them refuses these settings.
+    pub fn ray_traced(&self) -> bool {
+        self.ray_traced_shadows
+    }
 
     /// Valid occlusion values and a render scale within range.
     pub fn valid(&self) -> bool {

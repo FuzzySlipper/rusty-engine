@@ -940,6 +940,54 @@ impl Renderer {
                 candidate.backdrop_row = Some(copy);
             }
         }
+        if self.ray_shadows_drawn() {
+            // Rays trace the brightest casting sun's shadows in the world
+            // in place of its cascades; its backdrop cascades stay.
+            let brightness = |candidate: &shadows::ShadowCandidate| {
+                world_rows[candidate.row as usize][..3]
+                    .iter()
+                    .copied()
+                    .fold(0.0, f32::max)
+            };
+            let world_cascade = |source: &shadows::LayerSource| match source {
+                shadows::LayerSource::Cascade {
+                    distance,
+                    backdrop: false,
+                    ..
+                } => Some(*distance),
+                _ => None,
+            };
+            let sun = candidates
+                .iter_mut()
+                .filter(|candidate| {
+                    candidate
+                        .layers
+                        .iter()
+                        .any(|source| world_cascade(source).is_some())
+                })
+                .reduce(|best, candidate| {
+                    if brightness(candidate) > brightness(best) {
+                        candidate
+                    } else {
+                        best
+                    }
+                });
+            self.ray_sun_toward = None;
+            if let Some(sun) = sun {
+                sun.ray_reach = sun.layers.iter().filter_map(world_cascade).reduce(f32::max);
+                self.ray_sun_toward = sun.layers.iter().find_map(|source| match source {
+                    shadows::LayerSource::Cascade {
+                        direction,
+                        backdrop: false,
+                        ..
+                    } => Some(-*direction),
+                    _ => None,
+                });
+                sun.layers.retain(|source| world_cascade(source).is_none());
+            }
+        } else {
+            self.ray_sun_toward = None;
+        }
         rows.extend(backdrop_rows.iter().flatten());
         self.retained_light_rows(&mut rows, ViewLayer::Backdrop, None);
         self.shadow_candidates = candidates;
@@ -1092,15 +1140,15 @@ impl Renderer {
             .iter()
             .zip(firsts)
             .flat_map(|(candidate, &first)| {
-                let backdrop = candidate.backdrop_row.map(|row| {
-                    let cascade = if first > 0.0 {
-                        first + shadows::CASCADES as f32
-                    } else {
-                        0.0
-                    };
-                    (row, cascade)
-                });
-                std::iter::once((candidate.row, first)).chain(backdrop)
+                // A sun whose world shadows rays trace has only its
+                // backdrop cascades.
+                let (world, cascade) = match (first > 0.0, candidate.ray_reach) {
+                    (false, _) => (0.0, 0.0),
+                    (true, Some(_)) => (crate::ray_shadows::RAY_SUN, first),
+                    (true, None) => (first, first + shadows::CASCADES as f32),
+                };
+                let backdrop = candidate.backdrop_row.map(|row| (row, cascade));
+                std::iter::once((candidate.row, world)).chain(backdrop)
             })
     }
 
@@ -1169,6 +1217,7 @@ impl Renderer {
                                     layers,
                                     priority: light.shadow_settings().priority,
                                     backdrop_row: None,
+                                    ray_reach: None,
                                     position: match light {
                                         LightDescriptor::Point { position, .. }
                                         | LightDescriptor::Spot { position, .. } => Some(
@@ -2770,9 +2819,27 @@ impl Renderer {
                 }
             }
             self.fit_cascades(&view.camera, None);
-            // The ray scene's TLAS, from the frame's first world view.
+            // The ray scene's TLAS, from the frame's first world view, and
+            // what the traced shadows bind beside it.
             self.build_ray_tlas(eye);
+            self.bind_ray_shadows(view.jitter.is_some());
         }
+        // A world view whose sun's shadows rays trace draws its opaque
+        // depth again at full size, traces a mask from it, and binds both
+        // (`ray_shadows.rs`).
+        let size = (view.target.width, view.target.height);
+        let ray_mask = match self.ray_sun_toward {
+            Some(toward) if world_layer => {
+                self.prepare_ray_mask(size, &view_proj, eye, toward, view.viewport)
+            }
+            _ => false,
+        };
+        let ray_shadows = self
+            .ray_shadows
+            .as_ref()
+            .and_then(|shadows| shadows.world_group(size))
+            .filter(|_| ray_mask)
+            .cloned();
         let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
         // The world, sprites and particles draw into the view's HDR target,
         // with the view's depth and its samples; the background and the
@@ -2786,6 +2853,7 @@ impl Renderer {
                 .motion
                 .as_ref()
                 .is_some_and(|motion| motion.guides.is_some()),
+            ray_shadows: ray_shadows.is_some(),
         };
         let effects = self.prepare_effects(&view, hdr_format);
         let slot = view.layer as usize;
@@ -2873,7 +2941,7 @@ impl Renderer {
             && self.tables.parts.selecting
             && !self.scatter_select.draws.is_empty();
         let occluding = selected && self.options.occlusion_culling && self.occlusion.available();
-        let prepass_batches: Vec<batch::Batch> = if occlusion.is_some() || occluding {
+        let prepass_batches: Vec<batch::Batch> = if occlusion.is_some() || occluding || ray_mask {
             pipelines_created += self.layouts.start_prepass(&self.gpu.device);
             // The CPU list's opaque batches: every one, or with GPU culling
             // its scatter runs beside the culled candidates.
@@ -2969,7 +3037,7 @@ impl Renderer {
                 this.layouts.prepass.get(pass, features)
             });
         };
-        if occlusion.is_some() || occluding {
+        if occlusion.is_some() || occluding || ray_mask {
             self.shadows.write_camera(&self.gpu.queue, &view_proj);
         }
         if occluding {
@@ -3065,6 +3133,46 @@ impl Renderer {
                 occlusion,
                 &self.distance_fields,
             );
+        }
+        if ray_mask {
+            let shadows = self.ray_shadows.as_ref().expect("prepared above");
+            let depth = shadows.mask_depth(size).expect("prepared above");
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("render-wgpu ray mask depth"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth,
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: shadows
+                        .timer()
+                        .and_then(|timer| timer.render_writes_between(true, false)),
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                let area = view.viewport;
+                pass.set_viewport(
+                    area.x as f32,
+                    area.y as f32,
+                    area.width as f32,
+                    area.height as f32,
+                    0.0,
+                    1.0,
+                );
+                pass.set_scissor_rect(area.x, area.y, area.width, area.height);
+                draw_opaque(self, &mut pass);
+                if selected {
+                    self.draw_selected(&mut pass, false, |pass, features| {
+                        self.layouts.prepass.get(pass, features)
+                    });
+                }
+            }
+            self.encode_ray_mask(&mut encoder, size, view.viewport);
         }
         let area = view.viewport;
         let in_viewport = |pass: &mut wgpu::RenderPass<'_>| {
@@ -3267,6 +3375,10 @@ impl Renderer {
             if let Some(decals) = self.decals.bind_group(world_layer) {
                 pass.set_bind_group(3, decals, &[]);
             }
+            // A world view whose sun's shadows rays trace binds them in 4.
+            if let Some(ray_shadows) = &ray_shadows {
+                pass.set_bind_group(4, ray_shadows, &[]);
+            }
             let mut encoded = match candidates {
                 Some(candidates) => {
                     let (encoded, runs) = self.draw_batches_indirect(
@@ -3351,6 +3463,9 @@ impl Renderer {
                 pass.set_bind_group(2, self.ambient_occlusion.apply_bind_group(None), &[]);
                 if let Some(decals) = self.decals.bind_group(world_layer) {
                     pass.set_bind_group(3, decals, &[]);
+                }
+                if let Some(ray_shadows) = &ray_shadows {
+                    pass.set_bind_group(4, ray_shadows, &[]);
                 }
             }
             // A water batch takes the depth copy in group 2; the others the
@@ -3540,6 +3655,9 @@ impl Renderer {
         self.gpu.queue.submit([encoder.finish()]);
         if fog.is_some() {
             self.volumetric_fog.submitted();
+        }
+        if let Some(shadows) = self.ray_shadows.as_mut().filter(|_| ray_mask) {
+            shadows.submitted();
         }
         if water {
             self.water.submitted();

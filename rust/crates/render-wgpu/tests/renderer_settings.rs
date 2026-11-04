@@ -31,6 +31,7 @@ fn settings() -> RendererSettingsDescriptor {
         volumetric_fog: render_model::VolumetricFogQuality::Off,
         volumetric_clouds: render_model::VolumetricCloudsQuality::Off,
         water_reflections: render_model::WaterReflectionsQuality::Off,
+        ray_traced_shadows: false,
     }
 }
 

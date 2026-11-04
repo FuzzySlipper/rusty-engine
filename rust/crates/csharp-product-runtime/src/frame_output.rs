@@ -299,6 +299,7 @@ impl FrameOutput {
         output: RenderOutput,
         options: RendererOptions,
         window_gpu: Option<&Gpu>,
+        ray_queries: bool,
     ) -> Result<Self, CsharpProductRuntimeError> {
         let error =
             |message: String| CsharpProductRuntimeError::new("CSHARP_RENDER_OUTPUT", message);
@@ -313,7 +314,7 @@ impl FrameOutput {
                 (SceneDriver::new(gpu.clone(), options), None)
             }
             RenderOutput::Stream => {
-                let gpu = Gpu::headless().map_err(|gpu| error(gpu.to_string()))?;
+                let gpu = Gpu::headless_for(ray_queries).map_err(|gpu| error(gpu.to_string()))?;
                 let driver = SceneDriver::new(gpu, options);
                 let frames = ProductHostFrameStream::new();
                 let streamer = FrameStreamer::start(Arc::clone(&driver), Arc::clone(&frames))
@@ -800,6 +801,7 @@ impl FrameOutput {
             volumetric_fog_refusal: refusal(readout.volumetric_fog),
             volumetric_clouds_refusal: refusal(readout.volumetric_clouds),
             water_reflections_refusal: refusal(readout.water_reflections),
+            ray_traced_shadows_refusal: refusal(readout.ray_traced_shadows),
         }
     }
 
@@ -1010,6 +1012,7 @@ fn settings_statistics(
                 render_model::WaterReflectionsQuality::High => "high",
             }
             .to_owned(),
+            ray_traced_shadows: settings.ray_traced_shadows,
         };
     let reason = |refusal: SettingRefusal| match refusal {
         SettingRefusal::NoComputeShaders => "the adapter has no compute shaders",
@@ -1039,6 +1042,7 @@ fn settings_statistics(
         ("volumetricFog", readout.volumetric_fog),
         ("volumetricClouds", readout.volumetric_clouds),
         ("waterReflections", readout.water_reflections),
+        ("rayTracedShadows", readout.ray_traced_shadows),
     ] {
         if let Some(refusal) = refusal {
             refused.insert(setting.to_owned(), reason(refusal).to_owned());
@@ -1345,8 +1349,13 @@ mod tests {
     /// it, even held and drawing on demand, where nothing else would draw.
     #[test]
     fn an_observer_command_draws_its_frame_after_what_follows_the_observer() {
-        let frames = FrameOutput::start(RenderOutput::Stream, RendererOptions::default(), None)
-            .expect("a headless frame output starts");
+        let frames = FrameOutput::start(
+            RenderOutput::Stream,
+            RendererOptions::default(),
+            None,
+            false,
+        )
+        .expect("a headless frame output starts");
         frames.driver().set_simulation(true, 1);
         frames
             .execute_inspection("engine.renderer.drawing on-demand", || {})

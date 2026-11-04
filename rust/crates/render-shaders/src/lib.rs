@@ -124,11 +124,22 @@ impl Features {
     /// specular albedo, and the normal with the roughness, to locations 2
     /// to 4 after the motion. A target's feature, as MOTION, with it.
     pub const GUIDES: Self = Self::bit(8388608);
-    /// Every material and mesh feature's bit: all but MOTION and GUIDES.
+    /// The sun's shadows are traced as rays against the ray scene
+    /// (`rusty::ray`, group 4) in place of its cascades: a target's feature,
+    /// set on every world pipeline while the renderer traces them
+    /// (render-wgpu `ray_shadows.rs`). The pipeline reads the mask pass's
+    /// result.
+    pub const RAY_SHADOWS: Self = Self::bit(16777216);
+    /// With RAY_SHADOWS, the fragment traces its own ray: the blended
+    /// pipelines only, which the mask does not hold. The opaque ones ran
+    /// three to five times slower with a ray in them.
+    pub const RAY_TRACE: Self = Self::bit(33554432);
+    /// Every material and mesh feature's bit: all but MOTION, GUIDES,
+    /// RAY_SHADOWS and RAY_TRACE.
     #[cfg(test)]
     const ALL_BITS: u32 = 4194303;
 
-    const DEFS: [(Self, &'static str); 24] = [
+    const DEFS: [(Self, &'static str); 26] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -153,6 +164,8 @@ impl Features {
         (Self::SKINNED, "SKINNED"),
         (Self::MOTION, "MOTION"),
         (Self::GUIDES, "GUIDES"),
+        (Self::RAY_SHADOWS, "RAY_SHADOWS"),
+        (Self::RAY_TRACE, "RAY_TRACE"),
     ];
 
     const fn bit(bits: u32) -> Self {
@@ -357,11 +370,12 @@ impl BitOr for Features {
 }
 
 /// Importable modules, each after the modules it imports.
-const MODULES: [(&str, &str); 13] = [
+const MODULES: [(&str, &str); 14] = [
     ("shaders/types.wgsl", include_str!("shaders/types.wgsl")),
     ("shaders/view.wgsl", include_str!("shaders/view.wgsl")),
     ("shaders/motion.wgsl", include_str!("shaders/motion.wgsl")),
     ("shaders/clouds.wgsl", include_str!("shaders/clouds.wgsl")),
+    ("shaders/ray.wgsl", include_str!("shaders/ray.wgsl")),
     (
         "shaders/material.wgsl",
         include_str!("shaders/material.wgsl"),
@@ -465,6 +479,9 @@ pub enum Entry {
     /// The ray scene's scatter copies within the ray reach written as TLAS
     /// instances (`ray_instances.wgsl`, compute).
     RayInstances,
+    /// The sun's traced shadow for a world view, one ray per pixel
+    /// (`ray_mask.wgsl`, compute; needs ray queries).
+    RayMask,
 }
 
 impl Entry {
@@ -536,6 +553,10 @@ impl Entry {
             Self::RayInstances => (
                 "shaders/ray_instances.wgsl",
                 include_str!("shaders/ray_instances.wgsl"),
+            ),
+            Self::RayMask => (
+                "shaders/ray_mask.wgsl",
+                include_str!("shaders/ray_mask.wgsl"),
             ),
         }
     }
@@ -630,10 +651,14 @@ impl Default for Shaders {
 
 impl Shaders {
     pub fn new() -> Self {
-        // Ray queries for the passes that trace the ray scene; a device
-        // without them never makes those pipelines.
+        // Ray queries and the binding arrays for the passes that trace the
+        // ray scene (`rusty::ray`); a device without them never makes those
+        // pipelines.
         let mut composer = Composer::default().with_capabilities(
-            naga::valid::Capabilities::default() | naga::valid::Capabilities::RAY_QUERY,
+            naga::valid::Capabilities::default()
+                | naga::valid::Capabilities::RAY_QUERY
+                | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY
+                | naga::valid::Capabilities::TEXTURE_AND_SAMPLER_BINDING_ARRAY_NON_UNIFORM_INDEXING,
         );
         for (path, source) in MODULES {
             if let Err(error) = composer.add_composable_module(ComposableModuleDescriptor {
@@ -874,6 +899,17 @@ mod tests {
                 Entry::World,
                 features | Features::MOTION | Features::GUIDES,
             );
+            compose_case(&mut shaders, Entry::World, features | Features::RAY_SHADOWS);
+            compose_case(
+                &mut shaders,
+                Entry::World,
+                features | Features::MOTION | Features::RAY_SHADOWS,
+            );
+            compose_case(
+                &mut shaders,
+                Entry::World,
+                features | Features::RAY_SHADOWS | Features::RAY_TRACE,
+            );
             compose_case(&mut shaders, Entry::Shadow, features.caster());
         }
         for entry in [
@@ -899,6 +935,7 @@ mod tests {
             Entry::Upscale,
             Entry::RayProbe,
             Entry::RayInstances,
+            Entry::RayMask,
         ] {
             compose_case(&mut shaders, entry, Features::default());
         }

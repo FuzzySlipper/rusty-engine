@@ -180,10 +180,11 @@ pub struct DesktopShell {
 }
 
 impl DesktopShell {
-    /// Must run on the main thread.
-    pub fn open() -> Result<Self, String> {
+    /// Must run on the main thread. With `ray_queries` the device asks for
+    /// them, for settings that trace rays at startup.
+    pub fn open(ray_queries: bool) -> Result<Self, String> {
         let event_loop = EventLoop::new().map_err(|error| error.to_string())?;
-        let gpu = Gpu::for_display(event_loop.owned_display_handle())
+        let gpu = Gpu::for_display(event_loop.owned_display_handle(), ray_queries)
             .map_err(|error| error.to_string())?;
         Ok(Self { event_loop, gpu })
     }

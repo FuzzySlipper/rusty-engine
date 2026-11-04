@@ -639,6 +639,9 @@ struct ManifestRendererLighting {
     /// `off`, `low` or `high`; absent is off.
     #[serde(default)]
     water_reflections: Option<String>,
+    /// `enabled` or `disabled`; absent is disabled.
+    #[serde(default)]
+    ray_traced_shadows: Option<String>,
     #[serde(default)]
     default_lights: ManifestDefaultLights,
 }
@@ -842,6 +845,10 @@ impl ProductRendererSettings {
                 volumetric_fog,
                 volumetric_clouds,
                 water_reflections,
+                ray_traced_shadows: switch(
+                    value.lighting.ray_traced_shadows.as_deref(),
+                    "renderer.lighting.rayTracedShadows",
+                )?,
             },
             world: ProductDefaultLights::parse(
                 value.lighting.default_lights.world,

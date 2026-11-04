@@ -22,6 +22,8 @@ pub(crate) struct ColorTarget {
     pub samples: u32,
     pub motion: bool,
     pub guides: bool,
+    /// World pipelines trace the sun's shadows (`RAY_SHADOWS`, group 4).
+    pub ray_shadows: bool,
 }
 
 impl ColorTarget {
@@ -32,6 +34,7 @@ impl ColorTarget {
             samples,
             motion: false,
             guides: false,
+            ray_shadows: false,
         }
     }
 

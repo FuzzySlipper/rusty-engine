@@ -20,7 +20,9 @@
 //!   part that casts or is opaque; a compute pass (`ray_instances.wgsl`)
 //!   appends a row per part of the level each scatter copy draws at, for
 //!   the copies within the ray reach of the eye (the sun's shadow reach,
-//!   [`DEFAULT_REACH`] without one). The 24-bit custom data is the part id;
+//!   [`DEFAULT_REACH`] without one). A build takes rows for the copies the
+//!   one before counted; the first waits for its count and builds again.
+//!   The 24-bit custom data is the part id;
 //!   the mask says what the instance is to a ray ([`MASK_SHADOW`],
 //!   [`MASK_GI`]). Rows past the last written are zero: inactive.
 //! - **Wind:** a part or copy whose material sways leans as the vertex
@@ -117,6 +119,15 @@ pub(crate) fn request(adapter: &wgpu::Adapter, descriptor: &mut wgpu::DeviceDesc
         .required_limits
         .max_binding_array_elements_per_shader_stage =
         granted.max_binding_array_elements_per_shader_stage;
+    // The traced shadows bind a fifth group, of four more storage buffers
+    // and the mask's texture (`ray_shadows.rs`).
+    let limits = &mut descriptor.required_limits;
+    limits.max_bind_groups = limits.max_bind_groups.max(5).min(granted.max_bind_groups);
+    limits.max_storage_buffers_per_shader_stage = (limits.max_storage_buffers_per_shader_stage + 4)
+        .min(granted.max_storage_buffers_per_shader_stage);
+    limits.max_sampled_textures_per_shader_stage = (limits.max_sampled_textures_per_shader_stage
+        + 1)
+    .min(granted.max_sampled_textures_per_shader_stage);
     descriptor
         .required_limits
         .max_binding_array_sampler_elements_per_shader_stage =
@@ -130,13 +141,14 @@ pub(crate) fn request(adapter: &wgpu::Adapter, descriptor: &mut wgpu::DeviceDesc
 }
 
 /// `BLAS_INPUT` on a device with ray queries, for the buffers meshes draw
-/// from; nothing otherwise.
+/// from, and `COPY_SRC`: the traced shadows copy masked meshes' uvs
+/// (`ray_shadows.rs`). Nothing otherwise.
 pub(crate) fn mesh_input(device: &wgpu::Device) -> wgpu::BufferUsages {
     if device
         .features()
         .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY)
     {
-        wgpu::BufferUsages::BLAS_INPUT
+        wgpu::BufferUsages::BLAS_INPUT | wgpu::BufferUsages::COPY_SRC
     } else {
         wgpu::BufferUsages::empty()
     }
@@ -282,6 +294,13 @@ pub(crate) struct RayScene {
     built: Option<Built>,
     /// The parts' instances from the last walk of the parts.
     instances: Vec<Instance>,
+    /// The shown masked parts that cast, from the last walk
+    /// (`ray_shadows.rs`).
+    masked: Vec<crate::ray_shadows::Masked>,
+    /// Counts the TLAS made, so what binds it knows when it is another.
+    generation: u64,
+    /// The TLAS has been built, so a ray may trace it.
+    traceable: bool,
     /// The scatter runs' tables, made again when the parts or the BLAS
     /// change.
     runs: Option<Runs>,
@@ -291,8 +310,10 @@ pub(crate) struct RayScene {
     counters: wgpu::Buffer,
     counters_readback: wgpu::Buffer,
     pending_counters: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
-    /// The last read-back counters.
+    /// The last read-back counters, and whether any have been: the first
+    /// build waits for its own.
     counted: [u32; COUNTERS],
+    counted_once: bool,
     /// The parts changed since the last walk (or ranges still wait).
     stale: bool,
     /// The TLAS was built this frame.
@@ -335,6 +356,9 @@ impl RayScene {
             blases: HashMap::new(),
             built: None,
             instances: Vec::new(),
+            masked: Vec::new(),
+            generation: 0,
+            traceable: false,
             runs: None,
             runs_stale: true,
             pipeline: None,
@@ -357,6 +381,7 @@ impl RayScene {
             ),
             pending_counters: None,
             counted: [0; COUNTERS],
+            counted_once: false,
             stale: true,
             built_this_frame: false,
             reach_override: None,
@@ -376,6 +401,22 @@ impl RayScene {
             tlas_cpu_ms: 0.0,
             build_cpu_ms_total: 0.0,
         }
+    }
+
+    /// The shown masked parts that cast, from the last walk.
+    pub fn masked(&self) -> &[crate::ray_shadows::Masked] {
+        &self.masked
+    }
+
+    /// Counts the walks of the parts.
+    pub fn walks(&self) -> u64 {
+        self.walks
+    }
+
+    /// The TLAS to trace and its generation, once one has been built.
+    pub fn traced(&self) -> Option<(&wgpu::Tlas, u64)> {
+        let built = self.built.as_ref().filter(|_| self.traceable)?;
+        Some((&built.tlas, self.generation))
     }
 
     pub fn readout(&self) -> RaySceneReadout {
@@ -475,16 +516,28 @@ pub struct ProbeHit {
 }
 
 impl Renderer {
-    /// Build the ray scene and keep it current, or with `false` drop it.
-    /// The ray-traced settings ask for it; tools and tests may too.
+    /// Build the ray scene and keep it current, or with `false` drop it
+    /// unless a ray-traced setting draws: for tools and tests.
     #[doc(hidden)]
     pub fn set_ray_scene(&mut self, wanted: bool) {
-        if !wanted {
+        self.ray_scene_wanted = wanted;
+        self.keep_ray_scene();
+    }
+
+    /// Make or drop the ray scene, and what the ray-traced settings bind
+    /// beside it, as they and the tools ask.
+    fn keep_ray_scene(&mut self) {
+        let shadows = self.ray_shadows_drawn();
+        if !(self.ray_scene_wanted || shadows) {
             self.ray_scene = None;
         } else if self.ray_scene.is_none() && refusal(&self.gpu).is_none() {
             self.ray_scene = Some(RayScene::new(&self.gpu));
         }
-        self.ray_scene_wanted = wanted;
+        if !shadows || self.ray_scene.is_none() {
+            self.ray_shadows = None;
+        } else if self.ray_shadows.is_none() {
+            self.ray_shadows = Some(crate::ray_shadows::RayShadows::new(&self.gpu));
+        }
     }
 
     /// Take scatter copies into the TLAS within `reach` metres of the eye,
@@ -498,7 +551,7 @@ impl Renderer {
 
     /// The ray scene's readout while it is asked for.
     pub(crate) fn ray_scene_readout(&self) -> Option<RaySceneReadout> {
-        if !self.ray_scene_wanted {
+        if !(self.ray_scene_wanted || self.ray_shadows_drawn()) {
             return None;
         }
         Some(match (&self.ray_scene, refusal(&self.gpu)) {
@@ -531,6 +584,7 @@ impl Renderer {
     /// removed or moved, or scatter runs changed. The TLAS is built at the
     /// frame's first world view, from its eye.
     pub(crate) fn prepare_ray_scene(&mut self, changed: bool) {
+        self.keep_ray_scene();
         let Some(mut scene) = self.ray_scene.take() else {
             return;
         };
@@ -559,6 +613,7 @@ impl Renderer {
             scene.runs_stale = true;
         }
         self.ray_scene = Some(scene);
+        self.prepare_ray_shadows();
     }
 
     /// Gather the shown parts' instances, and the BLAS to build this frame
@@ -568,6 +623,7 @@ impl Renderer {
     fn walk_parts(&self, scene: &mut RayScene) -> Vec<BlasKey> {
         let parts = &self.tables.parts;
         let mut instances = Vec::new();
+        let mut masked = Vec::new();
         let mut used = HashSet::new();
         // Ranges needing a build, with their triangles and since when.
         let mut wanted: Vec<(BlasKey, u64, u64)> = Vec::new();
@@ -612,6 +668,19 @@ impl Renderer {
             } else {
                 used.insert(key.clone());
             }
+            if mask & MASK_SHADOW != 0
+                && state
+                    .class
+                    .features
+                    .contains(crate::shaders::Features::MASK)
+            {
+                masked.push(crate::ray_shadows::Masked {
+                    part: id as PartId,
+                    mesh: part.mesh.clone(),
+                    first_index: part.first_index,
+                    index_count: part.index_count,
+                });
+            }
             if scattered {
                 continue;
             }
@@ -648,6 +717,7 @@ impl Renderer {
         }
         scene.waiting = wanted.len() as u32;
         scene.instances = instances;
+        scene.masked = masked;
         scene.stale = scene.waiting > 0;
         builds
     }
@@ -792,6 +862,18 @@ impl Renderer {
         if !scene.built_this_frame {
             scene.built_this_frame = true;
             self.encode_tlas(&mut scene, eye);
+            if !scene.counted_once {
+                // The first build has no count of the copies in reach to
+                // take rows for, so it dropped them: wait for the count it
+                // made and build again with room for them, so the first
+                // frame traced has its copies too.
+                let _ = self.gpu.device.poll(wgpu::PollType::wait_indefinitely());
+                scene.collect_counters();
+                scene.counted_once = true;
+                if scene.counted[0] > 0 {
+                    self.encode_tlas(&mut scene, eye);
+                }
+            }
         }
         self.ray_scene = Some(scene);
     }
@@ -846,6 +928,8 @@ impl Renderer {
                 scene.retire(&self.gpu.queue, Retired::Buffer(old.scratch));
             }
             scene.built = made_for(&self.gpu, capacity);
+            scene.generation += 1;
+            scene.traceable = false;
         }
         if scene.pipeline.is_none() {
             let module = self
@@ -998,14 +1082,20 @@ impl Renderer {
         }
         if recorded {
             scene.tlas_builds += 1;
+            scene.traceable = true;
         }
         scene.tlas_cpu_ms = started.elapsed().as_secs_f64() * 1e3;
         scene.build_cpu_ms_total += scene.tlas_cpu_ms;
     }
 
     /// How far the sun's cascades reach from the camera: the farthest of
-    /// the shadowing directional lights' (`shadows.rs`), or the default.
+    /// the shadowing directional lights' (`shadows.rs`), those rays trace
+    /// in place of their cascades included, or the default.
     fn sun_shadow_reach(&self) -> f32 {
+        let traced = self
+            .shadow_candidates
+            .iter()
+            .filter_map(|candidate| candidate.ray_reach);
         self.shadow_candidates
             .iter()
             .flat_map(|candidate| &candidate.layers)
@@ -1017,6 +1107,7 @@ impl Renderer {
                 } => Some(*distance),
                 _ => None,
             })
+            .chain(traced)
             .reduce(f32::max)
             .unwrap_or(DEFAULT_REACH)
     }

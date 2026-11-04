@@ -122,9 +122,18 @@ fn main() -> Result<std::process::ExitCode, String> {
         .map_or(csharp_product_runtime::RenderOutput::Stream, |product| {
             product.render_output
         });
+    // Ray queries cost some devices startup time and memory: the window's
+    // device asks for them only when the settings it starts with trace rays.
     #[cfg(feature = "desktop")]
     let desktop = desktop::Desktop::open_if_selected(
         render_output,
+        args.product.as_ref().is_some_and(|product| {
+            csharp_product_runtime::startup_settings(
+                &product.renderer_settings(),
+                args.persistence_root.as_deref(),
+            )
+            .ray_traced()
+        }),
         args.window_ui
             .or(args.product.as_ref().map(|product| product.window_ui))
             .unwrap_or(WindowUi::Servo),

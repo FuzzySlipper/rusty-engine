@@ -104,6 +104,12 @@ pub(crate) struct Layouts {
     /// The world layout for a water material: its group 2 is the opaque
     /// scene's copy (`water.rs`) rather than the view's occlusion.
     water: wgpu::PipelineLayout,
+    /// Group 4 of the world pipelines that trace the sun's shadows
+    /// (`RAY_SHADOWS`, `ray_scene.rs`), and the world and water layouts
+    /// with it; none on a device without ray queries.
+    pub ray: Option<wgpu::BindGroupLayout>,
+    world_ray: Option<wgpu::PipelineLayout>,
+    water_ray: Option<wgpu::PipelineLayout>,
     sky_pipeline: wgpu::PipelineLayout,
     /// The volumetric clouds' reduced march (`cloud_march.rs`): its group 2
     /// holds the view's history, and its pipeline draws into the reduced
@@ -329,7 +335,7 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 impl Layouts {
     /// `decals`: the device can bind the decals' textures beside the
     /// world pass's own (`Gpu::decals_refusal`).
-    pub fn new(device: &wgpu::Device, decals: bool, scene_color: bool) -> Self {
+    pub fn new(device: &wgpu::Device, decals: bool, scene_color: bool, ray: bool) -> Self {
         // The frame is visible to compute passes too, which light from it
         // (`volumetric_fog.rs`).
         let frame_entries = [
@@ -483,6 +489,29 @@ impl Layouts {
             bind_group_layouts: &[Some(&frame), Some(&material), Some(&water_depth)],
             immediate_size: 0,
         });
+        let ray = ray.then(|| crate::ray_shadows::layout(device));
+        let with_ray = |label, groups: [Option<&wgpu::BindGroupLayout>; 4]| {
+            ray.as_ref().map(|ray| {
+                device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some(label),
+                    bind_group_layouts: &[groups[0], groups[1], groups[2], groups[3], Some(ray)],
+                    immediate_size: 0,
+                })
+            })
+        };
+        let world_ray = with_ray(
+            "render-wgpu world ray",
+            [
+                Some(&frame),
+                Some(&material),
+                Some(&ambient_occlusion),
+                decals.as_ref(),
+            ],
+        );
+        let water_ray = with_ray(
+            "render-wgpu water ray",
+            [Some(&frame), Some(&material), Some(&water_depth), None],
+        );
         let sky_pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("render-wgpu sky"),
             bind_group_layouts: &[Some(&frame), Some(&sky)],
@@ -702,6 +731,9 @@ impl Layouts {
             casters,
             shadow_layer,
             world,
+            ray,
+            world_ray,
+            water_ray,
             sky_pipeline,
             cloud_march,
             cloud_march_pipeline,
@@ -1047,7 +1079,12 @@ impl Layouts {
             (features | Features::MOTION).with(Features::GUIDES, opaque_guides)
         } else {
             features.without(Features::SKINNED)
-        };
+        }
+        .with(Features::RAY_SHADOWS, pipelines.target.ray_shadows)
+        .with(
+            Features::RAY_TRACE,
+            pipelines.target.ray_shadows && pass.blends(),
+        );
         self.world_shader(device, compiled);
         let shader = &self.world_shaders[&compiled];
         let (topology, cull_mode, front_face, blend) = match pass {
@@ -1062,11 +1099,17 @@ impl Layouts {
         let buffers = mesh_buffers(compiled, true);
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu world"),
-            layout: Some(if features.contains(Features::WATER) {
-                &self.water
-            } else {
-                &self.world
-            }),
+            layout: Some(
+                match (
+                    features.contains(Features::WATER),
+                    pipelines.target.ray_shadows,
+                ) {
+                    (true, false) => &self.water,
+                    (false, false) => &self.world,
+                    (true, true) => self.water_ray.as_ref().expect("a ray device's layout"),
+                    (false, true) => self.world_ray.as_ref().expect("a ray device's layout"),
+                },
+            ),
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some("vs_world"),

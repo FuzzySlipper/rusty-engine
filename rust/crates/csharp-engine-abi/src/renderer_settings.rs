@@ -130,6 +130,9 @@ pub struct NativeRendererSettingsRequest {
     pub volumetric_clouds: NativeVolumetricCloudsQuality,
     /// Water materials reflect what the view shows, in screen space.
     pub water_reflections: NativeWaterReflectionsQuality,
+    /// The sun's shadows traced as rays in place of its shadow maps, on a
+    /// device made while it is on (a GPU with ray queries).
+    pub ray_traced_shadows: bool,
 }
 
 /// Why the device draws a setting differently from the request.
@@ -177,6 +180,7 @@ pub struct NativeRendererSettingsReadout {
     pub volumetric_fog_refusal: NativeRendererSettingRefusal,
     pub volumetric_clouds_refusal: NativeRendererSettingRefusal,
     pub water_reflections_refusal: NativeRendererSettingRefusal,
+    pub ray_traced_shadows_refusal: NativeRendererSettingRefusal,
 }
 
 /// How a renderer setting is chosen.

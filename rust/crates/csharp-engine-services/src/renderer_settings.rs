@@ -81,6 +81,7 @@ impl RuntimeRendererSettingsBridge {
                 volumetric_fog_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
                 volumetric_clouds_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
                 water_reflections_refusal: NativeRendererSettingRefusal::None,
+                ray_traced_shadows_refusal: NativeRendererSettingRefusal::None,
             },
             catalogue: DescribedCatalogue::default(),
             operation_diagnostics: Default::default(),
@@ -104,6 +105,7 @@ impl RuntimeRendererSettingsBridge {
             "volumetricFog" => readout.volumetric_fog_refusal,
             "volumetricClouds" => readout.volumetric_clouds_refusal,
             "waterReflections" => readout.water_reflections_refusal,
+            "rayTracedShadows" => readout.ray_traced_shadows_refusal,
             _ => NativeRendererSettingRefusal::None,
         };
         // The value texts first, then rows pointing into them: the strings'
@@ -265,6 +267,7 @@ pub(crate) fn renderer_settings_descriptor(
             NativeWaterReflectionsQuality::Low => WaterReflectionsQuality::Low,
             NativeWaterReflectionsQuality::High => WaterReflectionsQuality::High,
         },
+        ray_traced_shadows: request.ray_traced_shadows,
     }
 }
 
@@ -315,6 +318,7 @@ pub fn renderer_settings_request(
             WaterReflectionsQuality::Low => NativeWaterReflectionsQuality::Low,
             WaterReflectionsQuality::High => NativeWaterReflectionsQuality::High,
         },
+        ray_traced_shadows: settings.ray_traced_shadows,
     }
 }
 

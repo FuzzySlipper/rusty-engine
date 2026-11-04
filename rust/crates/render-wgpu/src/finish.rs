@@ -740,6 +740,7 @@ impl Finish {
                                 samples,
                                 motion: motion.is_some(),
                                 guides,
+                                ray_shadows: false,
                             }
                             .targets(
                                 HDR_FORMAT.into(),

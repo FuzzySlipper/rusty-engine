@@ -68,6 +68,7 @@ impl Desktop {
     /// thread, before any other thread starts.
     pub(crate) fn open_if_selected(
         output: csharp_product_runtime::RenderOutput,
+        ray_queries: bool,
         ui: WindowUi,
         windowed_size: Option<(u32, u32)>,
         cef_dir: Option<PathBuf>,
@@ -85,7 +86,7 @@ impl Desktop {
             );
         }
         Ok(Some(Self {
-            shell: DesktopShell::open()?,
+            shell: DesktopShell::open(ray_queries)?,
             ui,
             windowed_size,
             cef_dir,

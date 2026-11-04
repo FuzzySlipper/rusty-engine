@@ -4,7 +4,10 @@
 // F0 0.04 tinted by metalness) under the pass's light rows, in linear light
 // with no tone mapping; the sRGB target encodes the output.
 
-#import rusty::types::PI
+#import rusty::types::{PI, RAY_SUN}
+#ifdef RAY_SHADOWS
+#import rusty::ray::ray_sun_shadow
+#endif
 #import rusty::clouds::{cloud_light, cloud_noise}
 #import rusty::types::Surface
 #import rusty::view::{frame, world_equivalent, lights, shadow_maps, shadow_sampler, shadow_views, clusters, sky_specular, sky_sampler, sky_irradiance, probes, probes_sampler}
@@ -361,7 +364,15 @@ fn add_light(
             // A light that cannot reach the fragment needs no shadow lookup.
             let shadow = u32(light.extra.w);
             if shadow > 0u && attenuation * facing > 0.0 {
-                if kind == 2u {
+                if kind == 2u && shadow == RAY_SUN {
+                    // The sun whose shadows are traced as rays: its
+                    // cascades are not drawn. A pass that does not trace
+                    // (`RAY_SHADOWS`) sees it unshadowed.
+#ifdef RAY_SHADOWS
+                    attenuation = attenuation
+                        * ray_sun_shadow(world_position, normal, direction, distance(world_position, frame.camera.xyz));
+#endif
+                } else if kind == 2u {
                     attenuation = attenuation
                         * cascade_visibility(shadow - 1u, world_position, normal, light.position_range, light.extra.xyz);
                 } else {
