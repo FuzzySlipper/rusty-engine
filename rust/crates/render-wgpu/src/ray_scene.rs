@@ -73,7 +73,8 @@ pub(crate) const MASK_GI: u8 = 2;
 /// sun to take the reach from (`shadows.rs`).
 pub(crate) const DEFAULT_REACH: f32 = crate::shadows::DIRECTIONAL_SHADOW_DISTANCE;
 
-/// Triangles built into new BLAS per frame; the rest wait. A skinned mesh
+/// Triangles built into new BLAS per frame; the rest wait, the longest
+/// waiting first, and the first always builds however large. A skinned mesh
 /// whose new pose waits keeps its last BLAS meanwhile.
 const BUILD_TRIANGLES_PER_FRAME: u64 = 1 << 20;
 /// BLAS compacted per frame.
@@ -307,6 +308,9 @@ pub(crate) struct RayScene {
     blas_timer: Option<crate::timing::PassTimer>,
     probe: Option<wgpu::ComputePipeline>,
     waiting: u32,
+    /// Since which walk each range waiting for a build has waited.
+    waiting_since: HashMap<BlasKey, u64>,
+    walks: u64,
     blas_builds: u64,
     tlas_builds: u64,
     blas_cpu_ms: f64,
@@ -364,6 +368,8 @@ impl RayScene {
             blas_timer: crate::timing::PassTimer::new(gpu, "ray-blas"),
             probe: None,
             waiting: 0,
+            waiting_since: HashMap::new(),
+            walks: 0,
             blas_builds: 0,
             tlas_builds: 0,
             blas_cpu_ms: 0.0,
@@ -563,9 +569,10 @@ impl Renderer {
         let parts = &self.tables.parts;
         let mut instances = Vec::new();
         let mut used = HashSet::new();
-        let mut builds = Vec::new();
-        let mut budget = BUILD_TRIANGLES_PER_FRAME;
-        scene.waiting = 0;
+        // Ranges needing a build, with their triangles and since when.
+        let mut wanted: Vec<(BlasKey, u64, u64)> = Vec::new();
+        scene.walks += 1;
+        let walk = scene.walks;
         for (id, part) in parts.meta.iter().enumerate() {
             let Some(part) = part else { continue };
             let state = &parts.state[id];
@@ -600,13 +607,8 @@ impl Renderer {
                 .get(&key)
                 .is_some_and(|entry| ptr_eq(&entry.source, &mesh.cpu));
             if !current && used.insert(key.clone()) {
-                let triangles = u64::from(part.index_count / 3);
-                if triangles <= budget {
-                    budget -= triangles;
-                    builds.push(key.clone());
-                } else {
-                    scene.waiting += 1;
-                }
+                let since = *scene.waiting_since.entry(key.clone()).or_insert(walk);
+                wanted.push((key.clone(), u64::from(part.index_count / 3), since));
             } else {
                 used.insert(key.clone());
             }
@@ -636,6 +638,15 @@ impl Renderer {
                 scene.retire(&self.gpu.queue, Retired::Blas(entry.blas));
             }
         }
+        scene.waiting_since.retain(|key, _| used.contains(key));
+        let builds: Vec<BlasKey> = scheduled(&mut wanted, BUILD_TRIANGLES_PER_FRAME)
+            .into_iter()
+            .map(|(key, ..)| key)
+            .collect();
+        for key in &builds {
+            scene.waiting_since.remove(key);
+        }
+        scene.waiting = wanted.len() as u32;
         scene.instances = instances;
         scene.stale = scene.waiting > 0;
         builds
@@ -1536,6 +1547,25 @@ fn compact(gpu: &Gpu, scene: &mut RayScene) -> usize {
     count
 }
 
+/// The ranges from `wanted` (each with its triangles and the walk it has
+/// waited since) to build this frame: the longest waiting first, while they
+/// fit `budget`, and the first whatever its size, so a range larger than the
+/// budget builds alone and one rebuilt every frame (a posing character)
+/// cannot hold back a range waiting longer. The rest stay in `wanted`.
+fn scheduled<K>(wanted: &mut Vec<(K, u64, u64)>, budget: u64) -> Vec<(K, u64, u64)> {
+    wanted.sort_by_key(|(_, _, since)| *since);
+    let mut left = budget;
+    let mut taken = 0;
+    for (index, (_, triangles, _)) in wanted.iter().enumerate() {
+        if index > 0 && *triangles > left {
+            break;
+        }
+        left = left.saturating_sub(*triangles);
+        taken += 1;
+    }
+    wanted.drain(..taken).collect()
+}
+
 /// Whether `source` still names `current`: the weak reference keeps the
 /// allocation, so another geometry never takes its address.
 fn ptr_eq(source: &Weak<CpuGeometry>, current: &Arc<CpuGeometry>) -> bool {
@@ -1587,6 +1617,37 @@ fn built_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_range_larger_than_the_budget_builds_alone() {
+        let mut wanted = vec![("huge", 1_048_577, 1), ("small", 10, 1)];
+        let first = scheduled(&mut wanted, 1_048_576);
+        assert_eq!(first, [("huge", 1_048_577, 1)]);
+        assert_eq!(scheduled(&mut wanted, 1_048_576), [("small", 10, 1)]);
+    }
+
+    #[test]
+    fn a_range_rebuilt_every_frame_does_not_hold_back_one_waiting_longer() {
+        // A 600k-triangle skinned range, first in part order, has a new pose
+        // every walk; a 500k range waits from the first walk. Together they
+        // pass the budget, so one builds a walk.
+        let budget = 1_048_576;
+        let mut waiting = vec![("pose", 600_000, 1), ("chunk", 500_000, 1)];
+        let first: Vec<_> = scheduled(&mut waiting, budget)
+            .into_iter()
+            .map(|(key, ..)| key)
+            .collect();
+        assert_eq!(first, ["pose"]);
+        // Built, the pose changes again and waits from walk 2; the chunk,
+        // waiting since walk 1, builds first.
+        waiting.insert(0, ("pose", 600_000, 2));
+        let second: Vec<_> = scheduled(&mut waiting, budget)
+            .into_iter()
+            .map(|(key, ..)| key)
+            .collect();
+        assert_eq!(second, ["chunk"]);
+        assert_eq!(waiting, [("pose", 600_000, 2)]);
+    }
 
     #[test]
     fn a_swaying_transform_leans_by_height_along_the_wind() {
