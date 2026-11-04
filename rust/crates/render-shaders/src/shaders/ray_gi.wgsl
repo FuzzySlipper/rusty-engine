@@ -8,8 +8,8 @@
 // lit them with directly. Each frame the light tiles presample the light
 // rows and emissive parts, the world cache (a hash grid of irradiance over
 // the surfaces the paths reach) decays, compacts and updates, and each pixel
-// traces one path from the view's depth and guides, ending in the cache
-// where a wide lobe allows it. A pixel's first lobe is chosen from its guides
+// of a checkerboard traces one path from the view's depth and guides, ending
+// in the cache where a wide lobe allows it. A pixel's first lobe is chosen from its guides
 // and its light kept apart: `ray_gi_composite.wgsl` scales the diffuse by the
 // diffuse albedo and the specular by the specular albedo.
 //
@@ -1263,12 +1263,28 @@ fn trace_path(
     return result;
 }
 
+// A thread takes a pair of pixels side by side and traces one of them, the two
+// changing places each frame and each row, so a frame traces a checkerboard
+// and the composite fills the rest. A smooth surface traces both: its
+// reflection has no neighbours to borrow and its guides must hold from frame
+// to frame.
 @compute @workgroup_size(8, 8, 1)
 fn trace_pixels(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_invocation_id) id: vec3<u32>) {
-    if any(id.xy >= params.viewport.zw) {
-        return;
+    // The frame's seed is twice an odd number: its second bit turns each frame.
+    let traced = vec2<u32>(id.x * 2u + ((id.y + (params.state.x >> 1u)) & 1u), id.y);
+    let other = vec2<u32>(traced.x ^ 1u, id.y);
+    for (var turn = 0u; turn < 2u; turn++) {
+        let at = select(other, traced, turn == 0u);
+        if any(at >= params.viewport.zw) {
+            continue;
+        }
+        let roughness = textureLoad(normal_guide, at + params.viewport.xy, 0).w;
+        trace_pixel(at, turn == 0u || roughness * roughness <= SPECULAR_MOTION_ALPHA, workgroup_id.xy);
     }
-    let pixel = id.xy + params.viewport.xy;
+}
+
+fn trace_pixel(at: vec2<u32>, traced: bool, workgroup_id: vec2<u32>) {
+    let pixel = at + params.viewport.xy;
     let d = textureLoad(depth, pixel, 0);
     let diffuse = textureLoad(diffuse_guide, pixel, 0).rgb;
     let specular = textureLoad(specular_guide, pixel, 0).rgb;
@@ -1276,27 +1292,29 @@ fn trace_pixels(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_
     let specular_weight = luminance(specular);
     let normal_roughness = textureLoad(normal_guide, pixel, 0);
     var guides = PsrGuides(GUIDE_NONE, vec2<f32>(0.0), 0.0, diffuse, specular, normal_roughness);
-    // Nothing there, or a surface the guides call unlit.
-    if d >= 1.0 || diffuse_weight + specular_weight <= 0.0 {
+    // Nothing there, a surface the guides call unlit, or left to the
+    // composite. Alpha 0: nothing a neighbour may borrow.
+    if !traced || d >= 1.0 || diffuse_weight + specular_weight <= 0.0 {
         textureStore(irradiance_out, pixel, vec4<f32>(0.0));
         textureStore(specular_out, pixel, vec4<f32>(0.0));
         write_guides(pixel, guides);
         return;
     }
-    let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(params.viewport.zw);
+    let uv = (vec2<f32>(at) + 0.5) / vec2<f32>(params.viewport.zw);
     let clip = params.inverse_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0);
     let position = clip.xyz / clip.w;
     let wo = normalize(params.camera.xyz - position);
     // As the world shaded it, not toward the camera: grass and leaves carry
     // normals that face the sky however they are seen.
     let normal = normalize(normal_roughness.xyz);
-    var rng = id.x + id.y * params.viewport.z + params.state.x;
+    var rng = at.x + at.y * params.viewport.z + params.state.x;
     let share = specular_lobe_probability(specular_weight, diffuse_weight, normal_roughness.w);
     let fraction = specular_weight / max(specular_weight + diffuse_weight, 0.0001);
-    let path = trace_path(position, normal, wo, share, normal_roughness.w, fraction, guides, pixel, workgroup_id.xy, &rng);
-    let light = vec4<f32>(path.radiance, 0.0);
-    textureStore(irradiance_out, pixel, select(vec4<f32>(0.0), light, path.diffuse));
-    textureStore(specular_out, pixel, select(light, vec4<f32>(0.0), path.diffuse));
+    let path = trace_path(position, normal, wo, share, normal_roughness.w, fraction, guides, pixel, workgroup_id, &rng);
+    let light = vec4<f32>(path.radiance, 1.0);
+    let none = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    textureStore(irradiance_out, pixel, select(none, light, path.diffuse));
+    textureStore(specular_out, pixel, select(light, none, path.diffuse));
     write_guides(pixel, path.guides);
 }
 

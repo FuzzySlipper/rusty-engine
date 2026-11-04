@@ -10,7 +10,8 @@
 //! - **World cache:** a hash grid of irradiance over the surfaces paths
 //!   reach. Cells a path queried live on; each frame a share of the active
 //!   ones samples the lights and one bounce into the cache.
-//! - **Paths:** one per pixel from the view's depth and guides, in one of
+//! - **Paths:** one per pixel of a checkerboard that turns each frame, and
+//!   per smooth surface's pixel, from the view's depth and guides, in one of
 //!   the surface's lobes, ending in the cache where the lobe is wide. The
 //!   primary surface takes no light row: the forward pass drew those.
 //! - **Composite:** each lobe's light times its guide's albedo, added to
@@ -389,7 +390,7 @@ impl RayGi {
             groups(&mut pass);
             pass.set_pipeline(&pipelines.paths);
             pass.dispatch_workgroups(
-                self.region.width.div_ceil(PIXEL_WORKGROUP),
+                self.region.width.div_ceil(2 * PIXEL_WORKGROUP),
                 self.region.height.div_ceil(PIXEL_WORKGROUP),
                 1,
             );

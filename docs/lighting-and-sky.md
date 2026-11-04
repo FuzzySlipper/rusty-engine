@@ -250,10 +250,12 @@ draws exactly as before.
 `GlobalIllumination` (`RustyEngineProductGlobalIllumination`, `off` or
 `rayTraced`) traces the world's indirect light in place of the probe volume,
 the ambient and hemisphere rows and the sky's light. The opaque world draws
-direct light alone. Each pixel then traces one path from its depth and
-guides, its surface's diffuse and specular light are scaled by their albedos
-and added to the HDR picture, and DLSS Ray Reconstruction denoises it in place
-of super resolution. Blended parts and the viewmodel keep the probes and the
+direct light alone. Half the pixels then trace one path each from their depth
+and guides, in a checkerboard that turns each frame, the others taking their
+neighbours' light, and a smooth surface's pixels all trace. A surface's diffuse
+and specular light are scaled by their albedos and added to the HDR picture,
+and DLSS Ray Reconstruction denoises it in place of super resolution. Blended
+parts and the viewmodel keep the probes and the
 sky's light. It is a port of Bevy's Solari without its ReSTIR.
 
 - **Lights:** a path samples the light rows and the emissive parts through 128
@@ -305,7 +307,7 @@ lamp views:
 | [Ray-traced shadows](#ray-traced-sun-shadows) | Moving frames 2–4 ms shorter than the cascades', still frames 6–11 ms longer, 2–5 ms more CPU to draw |
 | [Ray-traced occlusion](#contact-darkening-ray-traced-ambient-occlusion) | 2.6–5.0 ms, against 0.2 ms screen-space and 0.5–0.6 ms distance field |
 | Ray Reconstruction | 9 ms at 1080p quality, 15.5 ms at 1440p quality, 18–30 ms at DLAA |
-| [Global illumination](#indirect-light-ray-traced-global-illumination) | 31–69 ms over a TAAU frame at DLSS quality, most among foliage: paths 15–56 ms, Ray Reconstruction 15 ms |
+| [Global illumination](#indirect-light-ray-traced-global-illumination) | 20–33 ms over a TAAU frame at DLSS quality, most among foliage: Ray Reconstruction 15.5 ms, paths 6–17 ms, world cache 1–2 ms |
 
 - **Rest geometry:** rays meet parts as they stand, swaying with the wind.
   Per-vertex flutter, morph targets and a product shader's `displace` stage are
