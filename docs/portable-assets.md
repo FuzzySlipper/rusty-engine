@@ -126,7 +126,10 @@ engine.Animation.AssociateAnimationClipPack(new(body, pack, producer, license));
 ReadOnlyMemory<AnimationClipInfo> clips = engine.Animation.ReadClips(body);
 ```
 
-Associate packs before creating an appearance or graph for the body.
+Associate packs before creating an appearance or graph for the body. Every
+open of one model is the same resource, so associating a pack it already
+carries changes nothing, and two owners can each open the model and its packs
+in turn; the first association keeps its producer and licence.
 `ReadClips` then lists the body's own clips followed by each pack's, in
 association order. `ClipPack` is 0 for the body's own clips and otherwise the
 pack's position from 1. Playback names any of these clips by id, and clip

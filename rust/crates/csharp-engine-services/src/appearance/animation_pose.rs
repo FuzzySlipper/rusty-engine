@@ -1506,6 +1506,96 @@ mod tests {
         assert_eq!(rotation(&cleared, arm), rotation(&run_now, arm), "cleared");
     }
 
+    /// Every open of one model is one resource. A second opener associates
+    /// the pack the first did, after the first's appearance closed association,
+    /// and either can go while the other plays the pack's clip.
+    #[test]
+    fn a_second_opener_of_a_model_shares_its_clip_pack() {
+        let open = |bridge: &mut RuntimeAppearanceBridge, object_id| {
+            let resource = bridge
+                .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                    path: utf8("body.glb"),
+                })
+                .unwrap();
+            let pack = bridge
+                .open_animation_clip_pack(&NativeAnimationClipPackResourceRequest {
+                    path: utf8("body.clips.glb"),
+                })
+                .unwrap();
+            bridge
+                .associate_animation_clip_pack(&NativeAnimationClipPackAssociationRequest {
+                    primary_mesh: resource,
+                    clip_pack: pack,
+                    producer: utf8("fixture"),
+                    license: utf8("CC0"),
+                })
+                .expect("the opener's pack is on the model");
+            let appearance = bridge
+                .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+                .unwrap();
+            let instance = bridge
+                .create_animation_instance(NativeAnimationInstanceRequest {
+                    appearance,
+                    object_id,
+                })
+                .unwrap();
+            (resource, pack, appearance, instance)
+        };
+        let wave = |bridge: &mut RuntimeAppearanceBridge, instance| {
+            bridge.set_animation_playback(&NativeAnimationPlaybackRequest {
+                instance,
+                kind: NativeAnimationPlaybackKind::Play,
+                clip: utf8("wave"),
+                loop_mode: NativeAnimationLoopMode::Repeat,
+                speed: 1.0,
+                weight: 1.0,
+                restart: true,
+                fade_seconds: 0.0,
+                has_fade: false,
+                normalized_time: 0.0,
+            })
+        };
+        for first_goes in [true, false] {
+            let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), {
+                let mut content = BTreeMap::new();
+                content.insert(
+                    "body.glb".to_owned(),
+                    crate::ContentBytes::from(CHARACTER_GLB),
+                );
+                content.insert(
+                    "body.clips.glb".to_owned(),
+                    crate::ContentBytes::from(CLIP_PACK_GLB),
+                );
+                content
+            });
+            bridge.begin_call();
+            let first = open(&mut bridge, 7);
+            let second = open(&mut bridge, 8);
+            assert_eq!(first.0.value, second.0.value, "one model, one resource");
+            wave(&mut bridge, first.3).expect("the first plays the pack's clip");
+            wave(&mut bridge, second.3).expect("the second plays the pack's clip");
+
+            let (gone, stays) = if first_goes {
+                (first, second)
+            } else {
+                (second, first)
+            };
+            bridge.destroy_animation_instance(gone.3).unwrap();
+            bridge.destroy_appearance(gone.2).unwrap();
+            bridge.destroy_resource(gone.0).unwrap();
+            bridge.destroy_resource(gone.1).unwrap();
+            wave(&mut bridge, stays.3).expect("the other plays on");
+
+            // With the last one gone, the next opener starts a fresh model.
+            bridge.destroy_animation_instance(stays.3).unwrap();
+            bridge.destroy_appearance(stays.2).unwrap();
+            bridge.destroy_resource(stays.0).unwrap();
+            bridge.destroy_resource(stays.1).unwrap();
+            let again = open(&mut bridge, 9);
+            wave(&mut bridge, again.3).expect("a fresh model carries the pack again");
+        }
+    }
+
     /// A decoded pose model lives with its resource: released with it, and
     /// decoded afresh when the model is opened again.
     #[test]

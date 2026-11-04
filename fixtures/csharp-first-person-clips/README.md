@@ -48,4 +48,6 @@ Live-debug commands:
 - `clips.scene <cycle|strike-quick|strike-slow|weapon|two-hand>` starts a scene.
 - `clips.at <seconds>` holds the scene at a time (negative runs it again).
 - `clips.bob <true|false>` turns head bob on or off.
+- `clips.swap` draws new arms from the same model and pack on the next update
+  and then disposes the old ones, as a product does between weapons.
 - `clips.reset` clears the worsts.

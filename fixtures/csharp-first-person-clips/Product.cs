@@ -15,7 +15,7 @@ namespace CsharpFirstPersonClips;
 /// </summary>
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
-    private const ulong ArmsId = 10521, LookId = 10522;
+    private const ulong ArmsId = 10521, LookId = 10522, SwappedArmsId = 10523;
     private const string Rest = "rest", Guard = "guard_idle", Idle = "knife_idle";
     private const string Pairs = "fixture.rides";
     /// <summary>The strike, its phases marked in the clip: drawn back to 0.3, the cut to 0.55, recovered by the end.</summary>
@@ -42,7 +42,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly RenderResource lookModel;
     private readonly Appearance look;
     private readonly HeldArms held;
-    private readonly FirstPersonArms arms;
+    private readonly ArmRig rig;
+    private FirstPersonArms arms;
+    private ulong armsObject = ArmsId;
+    private bool swapping;
     private readonly Vector3 hold;
     private string scene = "cycle";
     private double started, last = double.NaN;
@@ -68,7 +71,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         ArmJoints Arm(string s) => new($"upper_arm.{s}", $"forearm.{s}", $"hand.{s}",
             [.. new[] { "f_index", "f_middle", "f_ring", "f_pinky" }.Select(f => new[] { $"{f}.01.{s}", $"{f}.02.{s}", $"{f}.03.{s}" })],
             [$"thumb.01.{s}", $"thumb.02.{s}", $"thumb.03.{s}"]);
-        ArmRig rig = new("arms.glb", Rest, new(0, 180, 0), Arm("R"), Arm("L"), DigitFrames.Measured, new(0, 0.08f, -0.03f), new(HandShape.None))
+        rig = new("arms.glb", Rest, new(0, 180, 0), Arm("R"), Arm("L"), DigitFrames.Measured, new(0, 0.08f, -0.03f), new(HandShape.None))
         {
             Packs = [new("arms.knife.glb", "Drillimpact", "CC0-1.0")],
         };
@@ -100,6 +103,16 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         bool twoHanded = shown == "two-hand";
         (Vector3 scale, float gripAt) = twoHanded ? Staff : Knife;
 
+        // A swap draws new arms on a new object while the old ones still exist, as a product does between weapons.
+        FirstPersonArms? retired = null;
+        if (swapping)
+        {
+            retired = arms;
+            armsObject = armsObject == ArmsId ? SwappedArmsId : ArmsId;
+            arms = new FirstPersonArms(engine, held, rig, armsObject);
+            published = "";
+            swapping = false;
+        }
         arms.Lead(Frame(shown, into), delta);
         Vector3 carry = bob ? new(BobAcross * MathF.Sin(MathF.PI * BobSteps * t), BobUp * MathF.Sin(MathF.Tau * BobSteps * t), 0) : Vector3.Zero;
         arms.Carry = carry;
@@ -118,6 +131,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             arms.Fact(true),
             new(LookId, false, 0, new(at, drawnTurn, scale), look, true, RenderLayer.Viewmodel),
         ]);
+        retired?.Dispose();
         arms.Reach(main with { Grip = grip, Look = turn }, off);
         Measure(shown, into, grip, turn, twoHanded, scale, gripAt, fitTurn);
         return ProductUpdateResult.None;
@@ -202,6 +216,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string Bob(bool enabled)
     {
         bob = enabled;
+        return Inspect();
+    }
+
+    /// <summary>Draws new arms from the same model and pack on the next update, then disposes the old ones.</summary>
+    [DebugCommand("clips.swap")]
+    public string Swap()
+    {
+        swapping = true;
         return Inspect();
     }
 

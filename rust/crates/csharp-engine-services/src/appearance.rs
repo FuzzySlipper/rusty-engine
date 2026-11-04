@@ -5921,6 +5921,21 @@ impl RuntimeAppearanceBridge {
                 "clip-pack association requires an admitted animation clip-pack resource",
             ));
         }
+        let asset = format!(
+            "animation-clip-pack/{}",
+            pack.content_hash()
+                .strip_prefix("sha256:")
+                .expect("admitted clip-pack hashes use SHA-256")
+        );
+        // Every open of one model is the same resource, so a later opener
+        // associates what an earlier one did, and may do so once an appearance
+        // has closed association to anything new.
+        if primary
+            .animated_mesh()
+            .is_some_and(|mesh| mesh.clip_packs.iter().any(|carried| carried.asset == asset))
+        {
+            return Ok(());
+        }
         let primary_mesh = primary.animated_mesh().cloned().ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_ANIMATION_CLIP_PACK_PRIMARY",
@@ -5951,12 +5966,6 @@ impl RuntimeAppearanceBridge {
                 "primary animated mesh and clip-pack importer-derived rig signatures differ",
             ));
         }
-        let asset = format!(
-            "animation-clip-pack/{}",
-            pack.content_hash()
-                .strip_prefix("sha256:")
-                .expect("admitted clip-pack hashes use SHA-256")
-        );
         let clip_pack = AnimationClipPack {
             asset,
             runtime_format: pack_mesh.runtime_format,
