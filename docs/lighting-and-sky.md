@@ -293,6 +293,37 @@ selected later, it refuses `NoRayQueries` until a restart. It refuses
 `UnsupportedAdapter` or `InitializationFailed`, and `SoftwareAdapter`.
 Refused, the probes and the sky's light draw.
 
+## Ray-traced lighting: cost and limits
+
+Measured on an RTX 3080 at 2560×1440, on CraftSurvive's forest, pond, cave and
+lamp views:
+
+| What | Cost |
+| --- | --- |
+| Asking for ray queries at start | About 58 ms of device creation and 38 MiB |
+| The ray scene | 50–63 ms for its first build, then 1.1–1.5 ms a frame |
+| [Ray-traced shadows](#ray-traced-sun-shadows) | Moving frames 2–4 ms shorter than the cascades', still frames 6–11 ms longer, 2–5 ms more CPU to draw |
+| [Ray-traced occlusion](#contact-darkening-ray-traced-ambient-occlusion) | 2.6–5.0 ms, against 0.2 ms screen-space and 0.5–0.6 ms distance field |
+| Ray Reconstruction | 9 ms at 1080p quality, 15.5 ms at 1440p quality, 18–30 ms at DLAA |
+| [Global illumination](#indirect-light-ray-traced-global-illumination) | 31–69 ms over a TAAU frame at DLSS quality, most among foliage: paths 15–56 ms, Ray Reconstruction 15 ms |
+
+- **Rest geometry:** rays meet parts as they stand, swaying with the wind.
+  Per-vertex flutter, morph targets and a product shader's `displace` stage are
+  not seen.
+- **Reach:** scatter copies stand in the ray scene only within the sun's shadow
+  reach of the eye. Past it they neither shadow nor stop a ray.
+- **NVIDIA only for global illumination:** the Engine has no denoiser of its
+  own and no vendor-neutral one, so global illumination needs Ray
+  Reconstruction. Ray-traced shadows and occlusion draw on any hardware Vulkan
+  GPU with ray queries.
+- **Experimental ray queries:** wgpu's ray queries need an unsafe device
+  opt-in, it has no ray-tracing pipelines, and it cannot refit, so a skinned
+  mesh builds new geometry for each pose.
+- **Unsafe code:** the ray scene builds its TLAS through wgpu-hal. That code
+  is confined to `render-wgpu/src/ray_scene.rs`, and `tests/unsafe_code.rs`
+  fails on unsafe code anywhere else in the crate.
+- **Steam Deck:** its cost is unknown; nothing here has been measured on one.
+
 ## The sky's light
 
 The background can light the world: a sky panorama (or the two a blend
