@@ -12,7 +12,8 @@
 //!   the blended pipelines hold one (`RAY_TRACE`), for what the mask does
 //!   not hold.
 //! - **Masked geometry:** a ray that meets a masked material tests the base
-//!   texture's alpha where it hit, times the part's and the vertices'
+//!   texture's alpha where it hit, through the sampler its material binds
+//!   and a voxel surface's tiling, times the part's and the vertices'
 //!   colour alpha, against the cutoff, as the shadow pass's `fs_shadow`
 //!   does. The hit triangle's uvs come from a pool holding each masked
 //!   mesh's vertices and each masked range's indices, copied on the GPU
@@ -25,10 +26,10 @@
 //!   has its row cleared.
 //! - **Textures:** the masked materials' base textures, at most
 //!   [`RAY_TEXTURES`]; a material past them tests its colour alpha alone.
-//!   Triplanar, voxel-surface and stochastic sampling are not followed: a
-//!   ray reads the base texture at the mesh's uv.
+//!   Triplanar and stochastic sampling are not followed: a ray reads the
+//!   base texture at the mesh's uv.
 //! - **Shape:** under a temporal stage each ray leans within the sun's disc
-//!   by a noise that changes each frame, so the stage gathers a soft
+//!   by a blue noise (`BLUE_NOISE`) turned each frame, so the stage gathers a soft
 //!   penumbra; otherwise it aims at the sun's centre (hard shadows: MSAA
 //!   has nothing to gather noise with).
 //!
@@ -48,8 +49,11 @@ pub(crate) const RAY_TEXTURES: u32 = 256;
 /// A light row's shadow lane for the sun whose shadows are traced as rays
 /// (`rusty::types::RAY_SUN`).
 pub(crate) const RAY_SUN: f32 = 1_048_576.0;
-/// `RayPart` in `ray.wgsl`: three vectors.
-const PART_WORDS: usize = 12;
+/// `RayPart` in `ray.wgsl`: five vectors.
+const PART_WORDS: usize = 20;
+/// `ray_blue_noise` in `ray.wgsl`: a 64×64 tile, two bytes a texel, made by
+/// void and cluster.
+const BLUE_NOISE: &[u8; 8192] = include_bytes!("blue_noise.bin");
 const PART_BYTES: u64 = (PART_WORDS * 4) as u64;
 /// A part's texture slot when it has none (`ray.wgsl` `NO_TEXTURE`).
 const NO_TEXTURE: u32 = u32::MAX;
@@ -192,7 +196,7 @@ pub(crate) struct RayShadows {
     /// Each slot's texture id, in slot order.
     textures: Vec<String>,
     params: wgpu::Buffer,
-    sampler: wgpu::Sampler,
+    blue_noise: wgpu::Buffer,
     /// The scene generation and ray scene walk the rows were laid out for.
     prepared: Option<(u64, u64)>,
     /// Counts the changes to what the groups bind but the TLAS.
@@ -240,14 +244,14 @@ impl RayShadows {
                 usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
-            sampler: device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("render-wgpu ray shadows"),
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            }),
+            blue_noise: crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("render-wgpu ray blue noise"),
+                    contents: bytemuck::cast_slice(&blue_noise_words()),
+                    usage: wgpu::BufferUsages::STORAGE,
+                },
+            ),
             prepared: None,
             changes: 0,
             bound: None,
@@ -301,6 +305,16 @@ const MASK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// `MaskParams` in `ray_mask.wgsl`.
 const MASK_PARAMS_BYTES: u64 = 64 + 16 + 16 + 16;
 const MASK_WORKGROUP: u32 = 8;
+
+/// [`BLUE_NOISE`] as `ray_blue_noise` reads it: a word a texel.
+fn blue_noise_words() -> Vec<u32> {
+    BLUE_NOISE
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|[x, y]| u32::from(*x) | u32::from(*y) << 8)
+        .collect()
+}
 
 /// Group 0 of the mask pass (`ray_mask.wgsl`).
 fn pass_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -394,7 +408,7 @@ pub(crate) fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 binding: 5,
                 visibility: fragment,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                count: None,
+                count: std::num::NonZeroU32::new(RAY_TEXTURES),
             },
             // Storage, not uniform: a group with a binding array may hold
             // no uniform buffer.
@@ -409,6 +423,7 @@ pub(crate) fn layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 },
                 count: None,
             },
+            storage(8),
         ],
     })
 }
@@ -516,9 +531,14 @@ impl Renderer {
             let Some(row) = self.tables.materials.get(*material) else {
                 continue;
             };
-            let render_model::MaterialAlphaModeDescriptor::Mask { cutoff } =
-                row.descriptor.alpha_mode
-            else {
+            let size = row
+                .descriptor
+                .texture
+                .as_ref()
+                .and_then(|texture| self.tables.textures.get(texture))
+                .map(|texture| texture.size);
+            let params = crate::apply::MaterialParams::of(&row.descriptor, size);
+            let Some(cutoff) = params.alpha_cutoff else {
                 continue;
             };
             let slot = match &row.descriptor.texture {
@@ -540,6 +560,24 @@ impl Renderer {
                 .unwrap_or(crate::glb::UvTransform::IDENTITY)
                 .0
                 .map(f32::to_bits);
+            let (tile, rect) = params
+                .voxel_surface
+                .map_or(([0.0; 4], [0.0; 4]), |surface| {
+                    (
+                        [
+                            surface.tile_scale[0],
+                            surface.tile_scale[1],
+                            surface.tile_origin[0],
+                            surface.tile_origin[1],
+                        ],
+                        [
+                            surface.uv_min[0],
+                            surface.uv_min[1],
+                            surface.uv_max[0],
+                            surface.uv_max[1],
+                        ],
+                    )
+                });
             let colour_alpha = parts.gpu[entry.part as usize * crate::tables::PART_ROW_FLOATS + 31];
             rows.insert(
                 entry.part,
@@ -547,7 +585,7 @@ impl Renderer {
                     first_index,
                     first_vertex,
                     slot,
-                    1,
+                    if params.voxel_surface.is_some() { 2 } else { 1 },
                     a,
                     b,
                     c,
@@ -556,6 +594,14 @@ impl Renderer {
                     e,
                     f,
                     colour_alpha.to_bits(),
+                    tile[0].to_bits(),
+                    tile[1].to_bits(),
+                    tile[2].to_bits(),
+                    tile[3].to_bits(),
+                    rect[0].to_bits(),
+                    rect[1].to_bits(),
+                    rect[2].to_bits(),
+                    rect[3].to_bits(),
                 ],
             );
         }
@@ -636,16 +682,22 @@ impl Renderer {
     fn ray_group(&self, shadows: &RayShadows, mask: &wgpu::TextureView) -> Option<wgpu::BindGroup> {
         let layout = self.layouts.ray.as_ref()?;
         let (tlas, _) = self.ray_scene.as_ref()?.traced()?;
-        // Every slot holds a view; those past the textures repeat white.
-        let mut views: Vec<&wgpu::TextureView> = shadows
+        // Every slot holds a view and its sampler, as its material binds
+        // them; those past the textures repeat white.
+        let (mut views, mut samplers): (Vec<&wgpu::TextureView>, Vec<&wgpu::Sampler>) = shadows
             .textures
             .iter()
-            .map(|texture| match self.tables.textures.get(texture) {
-                Some(texture) => texture.material_binding().0,
-                None => &self.white.view,
+            .map(|texture| {
+                self.tables
+                    .textures
+                    .get(texture)
+                    .unwrap_or(&self.white)
+                    .material_binding()
             })
-            .collect();
-        views.resize(RAY_TEXTURES as usize, &self.white.view);
+            .unzip();
+        let (white_view, white_sampler) = self.white.material_binding();
+        views.resize(RAY_TEXTURES as usize, white_view);
+        samplers.resize(RAY_TEXTURES as usize, white_sampler);
         fn entry(binding: u32, buffer: &wgpu::Buffer) -> wgpu::BindGroupEntry<'_> {
             wgpu::BindGroupEntry {
                 binding,
@@ -672,13 +724,14 @@ impl Renderer {
                         },
                         wgpu::BindGroupEntry {
                             binding: 5,
-                            resource: wgpu::BindingResource::Sampler(&shadows.sampler),
+                            resource: wgpu::BindingResource::SamplerArray(&samplers),
                         },
                         entry(6, &shadows.params),
                         wgpu::BindGroupEntry {
                             binding: 7,
                             resource: wgpu::BindingResource::TextureView(mask),
                         },
+                        entry(8, &shadows.blue_noise),
                     ],
                 }),
         )
@@ -874,6 +927,42 @@ impl Renderer {
         }
         if let Some(timer) = &mut shadows.timer {
             timer.resolve(encoder);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Neighbours of blue noise differ by more than white noise's third of
+    /// the range (0.39 here), on both channels, and each channel holds every value
+    /// evenly: what a temporal stage gathers without clumps.
+    #[test]
+    fn the_noise_is_blue_and_even() {
+        const SIZE: usize = 64;
+        let texels = BLUE_NOISE.as_chunks::<2>().0;
+        for channel in 0..2 {
+            let value = |x: usize, y: usize| {
+                f32::from(texels[(y % SIZE) * SIZE + x % SIZE][channel]) / 255.0
+            };
+            let mut difference = 0.0;
+            for y in 0..SIZE {
+                for x in 0..SIZE {
+                    difference += (value(x, y) - value(x + 1, y)).abs();
+                    difference += (value(x, y) - value(x, y + 1)).abs();
+                }
+            }
+            let mean = difference / (2 * SIZE * SIZE) as f32;
+            assert!(
+                mean > 0.37,
+                "channel {channel}: neighbours differ by {mean}"
+            );
+            let mut counts = [0u32; 256];
+            texels
+                .iter()
+                .for_each(|texel| counts[usize::from(texel[channel])] += 1);
+            assert!(counts.iter().all(|count| *count == 16), "channel {channel}");
         }
     }
 }

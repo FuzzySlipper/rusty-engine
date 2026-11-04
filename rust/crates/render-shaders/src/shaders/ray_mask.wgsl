@@ -76,6 +76,6 @@ fn cs_mask(@builtin(global_invocation_id) id: vec3<u32>) {
     }
     // Facing the camera, as the surface the world pass shades does.
     normal = normalize(select(-normal, normal, dot(normal, to_camera) >= 0.0));
-    let visible = ray_sun_visibility(position, normal, params.toward.xyz, away);
+    let visible = ray_sun_visibility(pixel, position, normal, params.toward.xyz, away);
     textureStore(mask, pixel, vec4<f32>(select(-away, away, visible > 0.5)));
 }

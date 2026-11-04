@@ -101,7 +101,7 @@ blended part traces its own. `gpu.passes` times the depth and the rays as
 would (its `Range`), and are as sharp at 80 m as at 1 m: no texel steps, no
 cascade seams, no gap where an object meets its shadow. Under a temporal stage
 (`Temporal` or `Dlss` antialiasing) each pixel's ray leans to a point of the
-sun's disc that changes each frame (the atmosphere's `SunRadiusDegrees`, the
+sun's disc, by blue noise that turns each frame (the atmosphere's `SunRadiusDegrees`, the
 real sun's 0.27° at least), and the stage gathers a penumbra that widens
 with the distance from the caster; with MSAA the shadows are hard. The
 other lights and the [backdrop](#the-backdrop) keep their shadow maps.
@@ -111,8 +111,8 @@ The rays meet what the cascades would draw, from the renderer's
 parts that cast, swaying with the wind, and the scatter copies within the
 sun's reach. A masked material casts where its base texture's alpha, times
 its part's and vertices' colour alpha, reaches the cutoff, read at the
-mesh's uv (a triplanar or voxel-surface material's projection is not
-followed). Per-vertex flutter, morph targets and a product shader's
+mesh's uv through the sampler its material binds, a voxel surface's tiling
+included (a triplanar material's projection is not followed). Per-vertex flutter, morph targets and a product shader's
 `displace` stage are not seen: rays meet rest geometry. A product shader's
 `cast_shadow` does not run; its parts cast whole.
 

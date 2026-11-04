@@ -8,26 +8,32 @@ enable wgpu_binding_array;
 // materials pass a candidate loop that reads the hit triangle's uvs from
 // the scene's pooled geometry and its base texture's alpha, against its
 // cutoff, as the shadow pass's `fs_shadow` does. Under a temporal stage the
-// ray leans within the sun's disc by a noise that changes each frame, so
-// the stage gathers a soft penumbra; otherwise it aims at the sun's centre.
+// ray leans within the sun's disc by a blue noise that changes each frame,
+// so the stage gathers a soft penumbra; otherwise it aims at the sun's
+// centre.
 //
 // The mask pass (`ray_mask.wgsl`) traces one ray per pixel from the view's
 // opaque depth; the world pass reads it (`ray_sun_shadow`) where its
 // fragment is that surface, hidden behind it or beside it; only a blended
 // part, which the mask does not hold, traces its own ray (RAY_TRACE).
 
+#import rusty::surface::voxel_uv
+
 // A part a ray may hit, by part id (the instance's custom data). Only a
 // masked part's row is read.
 struct RayPart {
     // x: the first of its range's indices in `ray_indices`; y: its mesh's
     // first vertex in `ray_vertices`; z: its base texture's slot
-    // (`NO_TEXTURE`: none); w: 1 when its material is masked.
+    // (`NO_TEXTURE`: none); w: 1 when its material is masked, 2 when a voxel
+    // surface's mask, which tiles by `tile` and `sample_rect`.
     slots: vec4<u32>,
     // The base uv transform's rows (`rusty::surface::transform_uv`), then
     // the alpha cutoff (u.w) and the part's colour alpha (v.w), which
     // scales the vertices' and the texture's.
     uv_u: vec4<f32>,
     uv_v: vec4<f32>,
+    tile: vec4<f32>,
+    sample_rect: vec4<f32>,
 };
 
 struct RayParams {
@@ -42,11 +48,14 @@ struct RayParams {
 @group(4) @binding(2) var<storage, read> ray_vertices: array<f32>;
 @group(4) @binding(3) var<storage, read> ray_indices: array<u32>;
 @group(4) @binding(4) var ray_textures: binding_array<texture_2d<f32>, 256>;
-@group(4) @binding(5) var ray_sampler: sampler;
+// Each texture's own sampler, as its material binds it.
+@group(4) @binding(5) var ray_samplers: binding_array<sampler, 256>;
 @group(4) @binding(6) var<storage, read> ray_params: RayParams;
 // Per pixel, the distance from the camera to the opaque surface the mask
 // pass traced from, negative where the sun is hidden from it.
 @group(4) @binding(7) var ray_mask: texture_2d<f32>;
+// A 64×64 tile of two-channel blue noise, 8 bits a channel.
+@group(4) @binding(8) var<storage, read> ray_blue_noise: array<u32>;
 
 // The fragment's pixel, which the world pass's fragment stage sets.
 var<private> ray_pixel: vec2<u32>;
@@ -60,6 +69,7 @@ const VERTEX_FLOATS: u32 = 12u;
 const UV_FLOAT: u32 = 6u;
 const ALPHA_FLOAT: u32 = 11u;
 const RAY_FAR: f32 = 10000.0;
+const BLUE_NOISE_SIZE: u32 = 64u;
 
 // Whether a candidate hit on a masked triangle is opaque where it was hit.
 fn ray_hit_opaque(candidate: RayIntersection) -> bool {
@@ -79,28 +89,28 @@ fn ray_hit_opaque(candidate: RayIntersection) -> bool {
     }
     alpha *= part.uv_v.w;
     if part.slots.z != NO_TEXTURE {
-        let point = vec3<f32>(uv, 1.0);
+        let tiled = select(uv, voxel_uv(uv, part.tile, part.sample_rect), part.slots.w == 2u);
+        let point = vec3<f32>(tiled, 1.0);
         let at = vec2<f32>(dot(part.uv_u.xyz, point), dot(part.uv_v.xyz, point));
-        alpha *= textureSampleLevel(ray_textures[part.slots.z], ray_sampler, at, 0.0).a;
+        alpha *= textureSampleLevel(ray_textures[part.slots.z], ray_samplers[part.slots.z], at, 0.0).a;
     }
     return alpha >= part.uv_u.w;
 }
 
-// A number in [0, 1) from a position and the frame's index.
-fn ray_noise(position: vec3<f32>, salt: u32) -> f32 {
-    var x = bitcast<u32>(position.x) ^ (bitcast<u32>(position.y) * 0x9e3779b9u)
-        ^ (bitcast<u32>(position.z) * 0x85ebca6bu) ^ (u32(ray_params.shape.y) * 0xc2b2ae35u) ^ salt;
-    x ^= x >> 16u;
-    x *= 0x7feb352du;
-    x ^= x >> 15u;
-    x *= 0x846ca68bu;
-    x ^= x >> 16u;
-    return f32(x & 0xffffffu) / 16777216.0;
+// Two numbers in [0, 1) at `pixel`: its blue noise, turned each frame by a
+// low-discrepancy step (the R2 sequence, 16 bits) so a temporal stage
+// gathers every value while each frame stays blue.
+fn ray_noise(pixel: vec2<u32>) -> vec2<f32> {
+    let at = pixel % vec2<u32>(BLUE_NOISE_SIZE);
+    let texel = ray_blue_noise[at.y * BLUE_NOISE_SIZE + at.x];
+    let frame = u32(ray_params.shape.y);
+    let turn = vec2<u32>((frame * 49471u) & 0xffffu, (frame * 37345u) & 0xffffu);
+    return fract(vec2<f32>(f32(texel & 0xffu), f32((texel >> 8u) & 0xffu)) / 256.0 + vec2<f32>(turn) / 65536.0);
 }
 
 // How much of the sun reaches `position` (normal `normal`, `away` metres
-// from the camera) along `toward`.
-fn ray_sun_visibility(position: vec3<f32>, normal: vec3<f32>, toward: vec3<f32>, away: f32) -> f32 {
+// from the camera, at `pixel`) along `toward`.
+fn ray_sun_visibility(pixel: vec2<u32>, position: vec3<f32>, normal: vec3<f32>, toward: vec3<f32>, away: f32) -> f32 {
     var direction = toward;
     let spread = ray_params.shape.x;
     if spread > 0.0 {
@@ -108,8 +118,9 @@ fn ray_sun_visibility(position: vec3<f32>, normal: vec3<f32>, toward: vec3<f32>,
         let side = normalize(select(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), abs(toward.x) > 0.9));
         let across = normalize(cross(toward, side));
         let up = cross(across, toward);
-        let radius = spread * sqrt(ray_noise(position, 0x51u));
-        let angle = 6.2831853 * ray_noise(position, 0xa7u);
+        let noise = ray_noise(pixel);
+        let radius = spread * sqrt(noise.x);
+        let angle = 6.2831853 * noise.y;
         direction = normalize(toward + (across * cos(angle) + up * sin(angle)) * radius);
     }
     let origin = position + normal * (ray_params.shape.z + ray_params.shape.w * away);
@@ -143,7 +154,7 @@ const MASK_MATCH_PER_METRE: f32 = 0.02;
 // own pixel's.
 fn ray_sun_shadow(position: vec3<f32>, normal: vec3<f32>, toward: vec3<f32>, away: f32) -> f32 {
 #ifdef RAY_TRACE
-    return ray_sun_visibility(position, normal, toward, away);
+    return ray_sun_visibility(ray_pixel, position, normal, toward, away);
 #else
     let tolerance = MASK_MATCH + MASK_MATCH_PER_METRE * away;
     let stored = textureLoad(ray_mask, ray_pixel, 0).x;

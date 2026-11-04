@@ -201,10 +201,111 @@ fn rays_trace_the_suns_shadows_through_masked_texels_in_place_of_its_cascades() 
         (0.3..0.7).contains(&((half - none) as f32 / cast)),
         "a half-clear card casts {half} of {card_traced}, {none} without it"
     );
+    masks_sample_as_their_materials_do(&gpu, none);
     blended_parts_trace_their_own_shadow(&gpu);
     a_view_of_part_of_its_target_finds_its_surfaces(&gpu);
     a_temporal_stage_gathers_a_penumbra(&gpu);
     refused_without_ray_queries();
+}
+
+/// The right half's shadow pixels with a card of `material` in the scene.
+fn card_shadow(
+    gpu: &Gpu,
+    material: impl FnOnce(&mut Harness) -> (TextureDescriptor, RenderMaterialDescriptor),
+) -> usize {
+    let mut harness = Harness::on(gpu.clone(), options(true));
+    scene(&mut harness, None);
+    let (texture, material) = material(&mut harness);
+    let id = material.id.clone();
+    harness.apply(vec![
+        RenderDiff::DefineTexture { texture },
+        RenderDiff::DefineMaterial { material },
+        static_mesh(
+            "mesh/sampled-card",
+            box_mesh([-0.02, 0.2, -0.6], [0.02, 1.4, 0.6], |_| 0),
+            &id,
+        ),
+        instance(
+            CARD,
+            None,
+            "mesh/sampled-card",
+            transform([1.5, 0.0, -6.0], 0.0, [1.0; 3]),
+        ),
+    ]);
+    frame(&mut harness);
+    shadowed(&frame(&mut harness))[1]
+}
+
+/// A mask reads as its material does: a clamped texture holds its edge past
+/// 1, and a voxel surface's mask tests its own alpha rather than casting
+/// whole. `none` is the right half's shadow without a card.
+fn masks_sample_as_their_materials_do(gpu: &Gpu, none: usize) {
+    // Opaque then clear: repeated, 1.25 would land on the opaque texel.
+    let clamped = card_shadow(gpu, |harness| {
+        let texture = harness.resources.texture(
+            "texture/clamped",
+            2,
+            2,
+            &[[255, 255, 255, 255], [255, 255, 255, 0]]
+                .concat()
+                .repeat(2),
+            TextureWrap::Clamp,
+        );
+        let material = RenderMaterialDescriptor {
+            alpha_mode: MaterialAlphaModeDescriptor::Mask { cutoff: 0.5 },
+            double_sided: true,
+            texture_transform: Some(MaterialTextureTransformDescriptor {
+                scale: [1.0, 1.0],
+                offset: [1.25, 0.0],
+            }),
+            ..material("material/clamped", [0.9; 4], Some("texture/clamped"))
+        };
+        (texture, material)
+    });
+    assert!(
+        clamped.abs_diff(none) < 20,
+        "a clamped clear edge casts nothing: {clamped} vs {none}"
+    );
+
+    let voxel = |alpha: u8| {
+        card_shadow(gpu, |harness| {
+            let texture = harness.resources.texture(
+                "texture/voxel",
+                2,
+                2,
+                &[255, 255, 255, alpha].repeat(4),
+                TextureWrap::Repeat,
+            );
+            let surface = VoxelSurfaceDescriptor {
+                schema_version: 1,
+                filter: TextureFilter::Nearest,
+                wrap: TextureWrap::Repeat,
+                alpha_mode: VoxelSurfaceAlphaModeDescriptor::Mask { cutoff: 0.5 },
+                mapping: VoxelSurfaceMappingDescriptor::Repeat {
+                    texture: texture.id.clone(),
+                    texture_version: texture.version,
+                    texture_content_hash: texture.content_hash.clone().expect("admitted"),
+                    tile_scale_cells: [1.0, 1.0],
+                    tile_origin_cells: [0.0, 0.0],
+                },
+            };
+            let material = RenderMaterialDescriptor {
+                double_sided: true,
+                voxel_surface: Some(surface),
+                ..material("material/voxel", [0.9; 4], Some("texture/voxel"))
+            };
+            (texture, material)
+        })
+    };
+    let (clear, opaque) = (voxel(0), voxel(255));
+    assert!(
+        clear.abs_diff(none) < 20,
+        "a clear voxel surface casts nothing: {clear} vs {none}"
+    );
+    assert!(
+        opaque > none + 200,
+        "an opaque one casts: {opaque} vs {none}"
+    );
 }
 
 /// A glass slab half way up the box catches its shadow: the mask holds the

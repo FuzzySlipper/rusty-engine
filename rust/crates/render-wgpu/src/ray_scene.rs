@@ -119,11 +119,11 @@ pub(crate) fn request(adapter: &wgpu::Adapter, descriptor: &mut wgpu::DeviceDesc
         .required_limits
         .max_binding_array_elements_per_shader_stage =
         granted.max_binding_array_elements_per_shader_stage;
-    // The traced shadows bind a fifth group, of four more storage buffers
+    // The traced shadows bind a fifth group, of five more storage buffers
     // and the mask's texture (`ray_shadows.rs`).
     let limits = &mut descriptor.required_limits;
     limits.max_bind_groups = limits.max_bind_groups.max(5).min(granted.max_bind_groups);
-    limits.max_storage_buffers_per_shader_stage = (limits.max_storage_buffers_per_shader_stage + 4)
+    limits.max_storage_buffers_per_shader_stage = (limits.max_storage_buffers_per_shader_stage + 5)
         .min(granted.max_storage_buffers_per_shader_stage);
     limits.max_sampled_textures_per_shader_stage = (limits.max_sampled_textures_per_shader_stage
         + 1)

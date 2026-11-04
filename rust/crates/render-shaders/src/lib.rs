@@ -375,13 +375,13 @@ const MODULES: [(&str, &str); 14] = [
     ("shaders/view.wgsl", include_str!("shaders/view.wgsl")),
     ("shaders/motion.wgsl", include_str!("shaders/motion.wgsl")),
     ("shaders/clouds.wgsl", include_str!("shaders/clouds.wgsl")),
-    ("shaders/ray.wgsl", include_str!("shaders/ray.wgsl")),
     (
         "shaders/material.wgsl",
         include_str!("shaders/material.wgsl"),
     ),
     ("shaders/wind.wgsl", include_str!("shaders/wind.wgsl")),
     ("shaders/surface.wgsl", include_str!("shaders/surface.wgsl")),
+    ("shaders/ray.wgsl", include_str!("shaders/ray.wgsl")),
     (
         "shaders/lighting.wgsl",
         include_str!("shaders/lighting.wgsl"),
