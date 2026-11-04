@@ -1058,7 +1058,7 @@ engine.CameraView.SetToneMapping(new(ToneMappingOperator.AcesFilmic, exposure));
 engine.CameraView.SetFog(new(FogMode.Linear, fogColor, Start: 3, End: 30, Density: 0));
 engine.CameraView.SetFog(new(FogMode.Off, default, 0, 0, 0));
 engine.CameraView.SetBloom(new(Threshold: 1, Intensity: 0.6f));
-engine.CameraView.SetAutoExposure(new(Enabled: true, Speed: 1.5f, MinExposure: 0.25f, MaxExposure: 4, TargetLuminance: 0.18f));
+engine.CameraView.SetAutoExposure(new(Enabled: true, Speed: 1.5f, MinExposure: 0.25f, MaxExposure: 4));
 engine.CameraView.SetColorGrading(new(Temperature: -0.15f, Tint: 0, Contrast: 0.1f, Saturation: 0.2f));
 engine.CameraView.SetAtmosphere(new(FogBaseHeight: 20, FogFalloffHeight: 40, HazeColor: new(1f, 0.7f, 0.45f, 1),
     HazeExponent: 8, SunRadiusDegrees: 1.5f, SunHalo: 0.35f));
@@ -1089,8 +1089,9 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
   holds while the simulation is paused. The tone mapping exposure multiplies
   it, so it stays the product's brightness choice. The background is not
   exposed: choose a range that keeps the world in step with its sky (a dusk
-  world raised to middle grey reads as day under a dusk sky). 0.18 is middle
-  grey. A world tuned darker sets the target near its sunlit average, so
+  world raised to middle grey reads as day under a dusk sky). Left out, the
+  target is middle grey, 0.18. A world tuned darker sets it near its sunlit
+  average (a fifth argument, `TargetLuminance`), so
   sunlit views stay as they are and only what is darker adapts: on
   CraftSurvive 0.03 with a range of 1 to 4 lifts a forest under
   [global illumination](#indirect-light-ray-traced-global-illumination)

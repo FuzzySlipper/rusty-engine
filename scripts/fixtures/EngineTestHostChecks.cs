@@ -254,6 +254,16 @@ internal static class EngineTestHostChecks
 
         host.Call(engine =>
         {
+            // Auto exposure left without a target aims at middle grey, as it
+            // did before products could set one.
+            AutoExposureRequest grey = new(Enabled: true, Speed: 1.5f, MinExposure: 0.25f, MaxExposure: 4);
+            Require(grey.TargetLuminance == 0.18f, $"An omitted target was {grey.TargetLuminance}.");
+            engine.CameraView.SetAutoExposure(grey);
+            AutoExposureRequest set = new(true, 1.5f, 0.25f, 4, 0.03f);
+            Require(set.TargetLuminance == 0.03f, $"A set target was {set.TargetLuminance}.");
+            engine.CameraView.SetAutoExposure(set);
+            ExpectRefusal(() => engine.CameraView.SetAutoExposure(grey with { TargetLuminance = 0 }), "CSHARP_AUTO_EXPOSURE");
+
             // Gameplay time answers as the standard 60 Hz realtime runtime: a
             // request reads back within its call, and a refusal keeps the last
             // valid one.

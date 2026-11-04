@@ -23,6 +23,18 @@ public readonly partial record struct AtmosphereRequest
     }
 }
 
+public readonly partial record struct AutoExposureRequest
+{
+    /// <summary>The luminance a world is exposed to by photographic convention.</summary>
+    public const float MiddleGrey = 0.18f;
+
+    /// <summary>Auto exposure that brings the world's average luminance to middle grey.</summary>
+    public AutoExposureRequest(bool Enabled, float Speed, float MinExposure, float MaxExposure)
+        : this(Enabled, Speed, MinExposure, MaxExposure, MiddleGrey)
+    {
+    }
+}
+
 public readonly partial record struct MoonRequest
 {
     /// <summary>A moon that lights no clouds.</summary>
