@@ -1227,18 +1227,12 @@ fn trace_path(
             result.radiance += throughput * hit.emission * mis;
         }
         // Into the cache where the lobe was wide enough for its noise to be
-        // worth less than its error, and the ray cleared the cell: a short
-        // ray's cell may straddle an occluder and leak through a corner.
+        // worth less than its error. A short ray ends there too: among leaves
+        // most are short, and walking on doubled what a path cost.
         let wide = 1.0 / pdf >= CACHE_TERMINATION_MIN_SOLID_ANGLE;
         if wide || bounce == MAX_BOUNCES - 1u {
-            var rng_copy = *rng;
-            if ray.t > sqrt(3.0) * get_cell_size(hit.position, &rng_copy) {
-                let cached = query_world_cache(hit.position, hit.geometric_normal, WORLD_CACHE_CELL_LIFETIME, rng);
-                result.radiance += throughput * (hit.material.base_color / PI) * cached;
-                break;
-            }
-        }
-        if bounce == MAX_BOUNCES - 1u {
+            let cached = query_world_cache(hit.position, hit.geometric_normal, WORLD_CACHE_CELL_LIFETIME, rng);
+            result.radiance += throughput * (hit.material.base_color / PI) * cached;
             break;
         }
         let away = distance(params.camera.xyz, hit.position);
