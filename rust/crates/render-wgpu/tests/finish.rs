@@ -361,12 +361,37 @@ fn bloom_spreads_bright_light_past_its_surface_and_off_changes_nothing() {
 }
 
 #[test]
+fn auto_exposure_brings_the_world_to_its_target_luminance() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
+    let exposed = |target_luminance| {
+        let mut harness = Harness::new(RendererOptions::default());
+        box_ahead(&mut harness, [0.2, 0.2, 0.2, 1.0]);
+        move_box(&mut harness, -0.7);
+        harness.apply(vec![RenderDiff::SetAutoExposure {
+            auto_exposure: Some(AutoExposureDescriptor {
+                speed: 2.0,
+                min_exposure: 0.01,
+                max_exposure: 100.0,
+                target_luminance,
+            }),
+        }]);
+        pixel(&harness.render(&view).1, CENTER)[0]
+    };
+    let (dim, grey, bright) = (exposed(0.045), exposed(0.18), exposed(0.72));
+    assert!(
+        dim + 30 < grey && grey + 30 < bright,
+        "targets of 0.045, 0.18 and 0.72 drew {dim}, {grey} and {bright}"
+    );
+}
+
+#[test]
 fn auto_exposure_brings_bright_and_dim_worlds_toward_middle_grey_over_presentation_time() {
     let view = camera([0.0, 0.0, 0.0], 0.0, 0.0);
     let auto = AutoExposureDescriptor {
         speed: 2.0,
         min_exposure: 0.01,
         max_exposure: 100.0,
+        target_luminance: AutoExposureDescriptor::MIDDLE_GREY,
     };
     let lit = |harness: &mut Harness, color: f32| {
         // The box fills the view.
@@ -428,6 +453,7 @@ fn the_world_its_bloom_and_exposure_and_its_finish_are_timed() {
                 speed: 1.0,
                 min_exposure: 0.1,
                 max_exposure: 10.0,
+                target_luminance: AutoExposureDescriptor::MIDDLE_GREY,
             }),
         },
     ]);

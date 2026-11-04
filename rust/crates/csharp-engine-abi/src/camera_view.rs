@@ -352,7 +352,8 @@ pub struct NativeBloomRequest {
 }
 
 /// Auto exposure, when `enabled`: the exposure moves toward the one that
-/// brings the world's average luminance to middle grey, kept between
+/// brings the world's average luminance to `target_luminance` (0.18 is middle
+/// grey), kept between
 /// `min_exposure` and `max_exposure`, closing `1 - e^(-speed·t)` of the gap
 /// in `t` seconds of Engine presentation time (none while it is held). The
 /// tone mapping exposure multiplies it.
@@ -363,6 +364,7 @@ pub struct NativeAutoExposureRequest {
     pub speed: f32,
     pub min_exposure: f32,
     pub max_exposure: f32,
+    pub target_luminance: f32,
 }
 
 /// The air and the sun in the sky. The sky's sun is the brightest enabled

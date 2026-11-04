@@ -563,6 +563,7 @@ fn a_capture_keeps_the_scene_bloom_and_sky_light_but_its_own_exposure() {
             speed: 1.0,
             min_exposure: 4.0,
             max_exposure: 8.0,
+            target_luminance: AutoExposureDescriptor::MIDDLE_GREY,
         }),
     }]);
     assert_eq!(capture(&harness), plain);
@@ -670,6 +671,7 @@ fn auto_exposure_measures_only_the_view_it_adapts_at() {
                     speed: 1.0,
                     min_exposure: 0.01,
                     max_exposure: 100.0,
+                    target_luminance: AutoExposureDescriptor::MIDDLE_GREY,
                 }),
             },
         ]);

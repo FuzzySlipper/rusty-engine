@@ -7,7 +7,8 @@
 
 struct PostParams {
     // xy: the source's texel size; z: the bloom threshold; w: the soft knee
-    // (shafts: zw the sun's place in the view's uv).
+    // (shafts: zw the sun's place in the view's uv; auto exposure's
+    // adaptation: x the luminance it aims at).
     texel: vec4<f32>,
     // Auto exposure: x speed (per second), y the least and z the most
     // exposure, w the presentation seconds since the last adaptation (a
@@ -27,9 +28,6 @@ struct PostParams {
 // Auto exposure's last value (adaptation), or the sun's glow at the first
 // bloom mip's size (bloom's prefilter).
 @group(0) @binding(3) var previous: texture_2d<f32>;
-
-// The luminance auto exposure aims to bring to middle grey.
-const EXPOSURE_KEY: f32 = 0.18;
 
 struct FullscreenOut {
     @builtin(position) clip: vec4<f32>,
@@ -138,13 +136,13 @@ fn fs_luminance_down(in: FullscreenOut) -> @location(0) vec4<f32> {
 }
 
 // Move the exposure toward the one that brings the world's log-average
-// luminance to middle grey, within the product's range, by its speed.
+// luminance to the product's target, within its range, by its speed.
 @fragment
 fn fs_adapt() -> @location(0) vec4<f32> {
     let average = textureLoad(source, vec2<u32>(0u), 0);
     var target_exposure = 1.0;
     if average.g > 0.0 {
-        target_exposure = EXPOSURE_KEY / exp2(average.r / average.g);
+        target_exposure = params.texel.x / exp2(average.r / average.g);
     }
     target_exposure = clamp(target_exposure, params.adapt.y, params.adapt.z);
     let seconds = params.adapt.w;

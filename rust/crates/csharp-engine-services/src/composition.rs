@@ -2260,6 +2260,7 @@ mod tests {
             speed,
             min_exposure,
             max_exposure,
+            target_luminance: 0.05,
         };
         services.begin_call(binding());
         let api = services.api();
@@ -2291,6 +2292,7 @@ mod tests {
                     speed: 1.5,
                     min_exposure: 0.25,
                     max_exposure: 4.0,
+                    target_luminance: 0.05,
                 }),
             },
         ];

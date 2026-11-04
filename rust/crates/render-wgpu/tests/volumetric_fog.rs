@@ -361,6 +361,7 @@ fn a_capture_leaves_the_outputs_fog_and_exposure_alone() {
                 speed: 1.5,
                 min_exposure: 0.25,
                 max_exposure: 4.0,
+                target_luminance: AutoExposureDescriptor::MIDDLE_GREY,
             }),
         },
     ];

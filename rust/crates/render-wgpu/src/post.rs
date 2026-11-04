@@ -7,7 +7,8 @@
 //! resolution mip chain, then upsampled back with each level added onto the
 //! next larger. Auto exposure: coverage-weighted log luminance at 128²,
 //! averaged down to one texel, and an adaptation that moves a persistent
-//! exposure toward the one bringing it to middle grey over presentation time.
+//! exposure toward the one bringing it to the product's target over
+//! presentation time.
 //! Sun shafts: the sky's coverage around the sun at half resolution, blurred
 //! along rays toward the sun twice, the second time with a finer step.
 
@@ -691,7 +692,7 @@ impl Post {
             (&last, WHOLE),
             Some(&previous),
             [
-                0.0,
+                auto.target_luminance,
                 0.0,
                 0.0,
                 0.0,

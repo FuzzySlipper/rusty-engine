@@ -138,22 +138,37 @@ impl BloomDescriptor {
 }
 
 /// Auto exposure: the exposure scale moves toward the one that brings the
-/// world's log-average luminance to middle grey, within
+/// world's log-average luminance to `target_luminance`, within
 /// `min_exposure..=max_exposure`, closing `1 - e^(-speed·t)` of the gap in
-/// `t` presentation seconds. The tone mapping exposure multiplies it.
+/// `t` presentation seconds. The tone mapping exposure multiplies it. A
+/// world lit darker than middle grey by design sets a target near its own
+/// sunlit average, so only what is darker than that adapts.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AutoExposureDescriptor {
     pub speed: f32,
     pub min_exposure: f32,
     pub max_exposure: f32,
+    /// Snapshots written before it aim at middle grey.
+    #[serde(default = "AutoExposureDescriptor::middle_grey")]
+    pub target_luminance: f32,
 }
 
 impl AutoExposureDescriptor {
-    /// A finite positive speed and a finite positive, ordered range.
+    /// The luminance a world is exposed to by photographic convention.
+    pub const MIDDLE_GREY: f32 = 0.18;
+
+    fn middle_grey() -> f32 {
+        Self::MIDDLE_GREY
+    }
+
+    /// A finite positive speed and target, and a finite positive, ordered
+    /// range.
     pub fn valid(&self) -> bool {
         self.speed.is_finite()
             && self.speed > 0.0
+            && self.target_luminance.is_finite()
+            && self.target_luminance > 0.0
             && self.min_exposure.is_finite()
             && self.min_exposure > 0.0
             && self.max_exposure.is_finite()
@@ -1818,6 +1833,19 @@ pub enum RenderFrameError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_snapshot_written_before_auto_exposure_had_a_target_aims_at_middle_grey() {
+        let auto: AutoExposureDescriptor =
+            serde_json::from_str(r#"{"speed":0.05,"minExposure":1.0,"maxExposure":2.5}"#).unwrap();
+        assert_eq!(auto.target_luminance, AutoExposureDescriptor::MIDDLE_GREY);
+        assert!(auto.valid());
+        assert!(!AutoExposureDescriptor {
+            target_luminance: 0.0,
+            ..auto
+        }
+        .valid());
+    }
 
     #[test]
     fn camera_relative_viewmodel_layer_round_trips_without_backend_vocabulary() {

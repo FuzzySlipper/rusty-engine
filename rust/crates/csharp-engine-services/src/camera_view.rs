@@ -924,11 +924,12 @@ impl RuntimeCameraViewBridge {
             speed: request.speed,
             min_exposure: request.min_exposure,
             max_exposure: request.max_exposure,
+            target_luminance: request.target_luminance,
         };
         if request.enabled && !auto_exposure.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_AUTO_EXPOSURE",
-                "auto exposure speed must be positive and its exposure range positive and ordered",
+                "auto exposure speed and target must be positive and its exposure range positive and ordered",
             ));
         }
         self.staged_mut()?.auto_exposure = Some(request.enabled.then_some(auto_exposure));

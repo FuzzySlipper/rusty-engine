@@ -282,7 +282,8 @@ sky's light. It is a port of Bevy's Solari without its ReSTIR.
   them only where its rays get out, so a product tuned without rays looks
   darker wherever the sky is hidden, most of all under a closed canopy.
   Exposure and lights tuned for the forward pass need tuning again: an auto
-  exposure held at 1 cannot brighten there.
+  exposure held at 1 cannot brighten there, and its `TargetLuminance` lets
+  it adapt without moving sunlit views.
 
 It draws on a GPU with ray queries on Vulkan, under `Dlss` antialiasing with
 Ray Reconstruction running and one primary view over the whole output. A
@@ -1057,7 +1058,7 @@ engine.CameraView.SetToneMapping(new(ToneMappingOperator.AcesFilmic, exposure));
 engine.CameraView.SetFog(new(FogMode.Linear, fogColor, Start: 3, End: 30, Density: 0));
 engine.CameraView.SetFog(new(FogMode.Off, default, 0, 0, 0));
 engine.CameraView.SetBloom(new(Threshold: 1, Intensity: 0.6f));
-engine.CameraView.SetAutoExposure(new(Enabled: true, Speed: 1.5f, MinExposure: 0.25f, MaxExposure: 4));
+engine.CameraView.SetAutoExposure(new(Enabled: true, Speed: 1.5f, MinExposure: 0.25f, MaxExposure: 4, TargetLuminance: 0.18f));
 engine.CameraView.SetColorGrading(new(Temperature: -0.15f, Tint: 0, Contrast: 0.1f, Saturation: 0.2f));
 engine.CameraView.SetAtmosphere(new(FogBaseHeight: 20, FogFalloffHeight: 40, HazeColor: new(1f, 0.7f, 0.45f, 1),
     HazeExponent: 8, SunRadiusDegrees: 1.5f, SunHalo: 0.35f));
@@ -1083,12 +1084,17 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
   viewport.
 - **Auto exposure** scales the exposure toward the one that brings the
   world's log-average luminance (weighted by coverage, background excluded)
-  to middle grey, clamped to `MinExposure..MaxExposure`, closing
+  to `TargetLuminance`, clamped to `MinExposure..MaxExposure`, closing
   `1 - e^(-Speed × t)` of the gap in `t` seconds of presentation time, so it
   holds while the simulation is paused. The tone mapping exposure multiplies
   it, so it stays the product's brightness choice. The background is not
   exposed: choose a range that keeps the world in step with its sky (a dusk
-  world raised to middle grey reads as day under a dusk sky). The first
+  world raised to middle grey reads as day under a dusk sky). 0.18 is middle
+  grey. A world tuned darker sets the target near its sunlit average, so
+  sunlit views stay as they are and only what is darker adapts: on
+  CraftSurvive 0.03 with a range of 1 to 4 lifts a forest under
+  [global illumination](#indirect-light-ray-traced-global-illumination)
+  threefold and leaves open ground alone. The first
   frame after it is enabled takes its target at once. It is off by default;
   `Enabled: false` turns it off. It adapts once a frame, measuring the
   frame's first world view's viewport.
