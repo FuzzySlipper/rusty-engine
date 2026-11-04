@@ -73,14 +73,14 @@ impl Gpu {
     /// as it is made; selected later, the setting is refused.
     pub fn headless_with_ray_queries() -> Result<Self, GpuError> {
         let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        Self::from_instance_with(instance, None, None, None, true)
+        Self::from_instance_with(instance, None, None, None, true, None)
     }
 
     /// A headless device whose storage bindings and buffers hold at most
     /// `bytes`: for tests of what passes a device's binding limit.
     pub fn headless_with_binding_limit(bytes: u64) -> Result<Self, GpuError> {
         let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        Self::from_instance_with(instance, None, Some(bytes), None, false)
+        Self::from_instance_with(instance, None, Some(bytes), None, false, None)
     }
 
     /// A headless device that binds at most `textures` sampled textures per
@@ -88,7 +88,15 @@ impl Gpu {
     /// refuses.
     pub fn headless_with_sampled_texture_limit(textures: u32) -> Result<Self, GpuError> {
         let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        Self::from_instance_with(instance, None, None, Some(textures), false)
+        Self::from_instance_with(instance, None, None, Some(textures), false, None)
+    }
+
+    /// A headless device that draws at most `bytes` a sample to its colour
+    /// attachments: for tests of what a device at WebGPU's guarantee (32)
+    /// refuses.
+    pub fn headless_with_color_attachment_limit(bytes: u32) -> Result<Self, GpuError> {
+        let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        Self::from_instance_with(instance, None, None, None, false, Some(bytes))
     }
 
     /// A device and a presentation surface for one window, compatible with
@@ -175,7 +183,7 @@ impl Gpu {
         instance: wgpu::Instance,
         surface: Option<&wgpu::Surface<'_>>,
     ) -> Result<Self, GpuError> {
-        Self::from_instance_with(instance, surface, None, None, false)
+        Self::from_instance_with(instance, surface, None, None, false, None)
     }
 
     fn from_instance_with(
@@ -184,6 +192,7 @@ impl Gpu {
         binding_limit: Option<u64>,
         texture_limit: Option<u32>,
         ray_queries: bool,
+        color_bytes_limit: Option<u32>,
     ) -> Result<Self, GpuError> {
         let adapter = pollster::block_on(wgpu::util::initialize_adapter_from_env_or_default(
             &instance, surface,
@@ -203,7 +212,12 @@ impl Gpu {
                 & (wgpu::Features::TIMESTAMP_QUERY
                     | wgpu::Features::INDIRECT_FIRST_INSTANCE
                     | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES),
-            required_limits: limits(&adapter.limits(), binding_limit, texture_limit),
+            required_limits: limits(
+                &adapter.limits(),
+                binding_limit,
+                texture_limit,
+                color_bytes_limit,
+            ),
             ..Default::default()
         };
         // Ray queries and the binding arrays the ray-traced settings read
@@ -411,11 +425,13 @@ impl Gpu {
 /// copies as the device can bind (at most `binding_limit` bytes), the
 /// sampled textures a world pass with decals binds, when the adapter has
 /// them (at most `texture_limit`), and the adapter's colour attachment
-/// bytes a sample, which the guide targets pass (`motion.rs`).
+/// bytes a sample, which the guide targets pass (`motion.rs`; at most
+/// `color_bytes_limit`).
 fn limits(
     adapter: &wgpu::Limits,
     binding_limit: Option<u64>,
     texture_limit: Option<u32>,
+    color_bytes_limit: Option<u32>,
 ) -> wgpu::Limits {
     let cap = binding_limit.unwrap_or(u64::MAX);
     let defaults = wgpu::Limits::default();
@@ -424,7 +440,8 @@ fn limits(
         max_buffer_size: adapter.max_buffer_size.min(cap),
         max_color_attachment_bytes_per_sample: adapter
             .max_color_attachment_bytes_per_sample
-            .max(defaults.max_color_attachment_bytes_per_sample),
+            .max(defaults.max_color_attachment_bytes_per_sample)
+            .min(color_bytes_limit.unwrap_or(u32::MAX)),
         max_sampled_textures_per_shader_stage: adapter
             .max_sampled_textures_per_shader_stage
             .min(crate::decals::WORLD_SAMPLED_TEXTURES)

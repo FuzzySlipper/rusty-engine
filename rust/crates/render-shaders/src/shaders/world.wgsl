@@ -69,6 +69,7 @@
 #import rusty::lighting::{weathered, snow_sunk, copy_open_sky}
 #ifdef GUIDES
 #import rusty::lighting::environment_brdf
+#import rusty::shade::guided
 #endif
 #ifdef SCENE_COLOR
 #import rusty::lighting::water_reflection
@@ -888,11 +889,6 @@ fn water_over_scene(color: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(rgb, alpha);
 }
 #endif
-#endif
-
-#ifdef GUIDES
-// The surface the fragment shaded, for its guides (`OpaqueOut`).
-var<private> guided: Surface;
 #endif
 
 // `opaque`: the part draws in an opaque pass, so decals lay over it.

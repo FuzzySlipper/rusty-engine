@@ -225,3 +225,24 @@ struct ClearedMotion {
 fn fs_clear_motion() -> ClearedMotion {
     return ClearedMotion(vec4<f32>(0.0), vec4<f32>(NO_MOTION, NO_MOTION, 0.0, 0.0));
 }
+
+// The same with the guide targets after the motion, cleared to nothing as
+// the world pass clears them.
+struct ClearedGuides {
+    @location(0) color: vec4<f32>,
+    @location(1) motion: vec4<f32>,
+    @location(2) diffuse_albedo: vec4<f32>,
+    @location(3) specular_albedo: vec4<f32>,
+    @location(4) normal_roughness: vec4<f32>,
+};
+
+@fragment
+fn fs_clear_guides() -> ClearedGuides {
+    return ClearedGuides(
+        vec4<f32>(0.0),
+        vec4<f32>(NO_MOTION, NO_MOTION, 0.0, 0.0),
+        vec4<f32>(0.0),
+        vec4<f32>(0.0),
+        vec4<f32>(0.0),
+    );
+}

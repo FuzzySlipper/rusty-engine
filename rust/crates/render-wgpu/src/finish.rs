@@ -682,7 +682,7 @@ impl Finish {
     /// transparent and, with `depth`, its depth to the far plane. Beside a
     /// motion target (`motion`), clear its motion too with `Some(true)` and
     /// keep it with `Some(false)`; guide targets after it (`guides`) are
-    /// kept.
+    /// cleared and kept with the motion.
     pub fn clear_viewport(
         &mut self,
         device: &wgpu::Device,
@@ -728,25 +728,28 @@ impl Finish {
                     },
                     fragment: Some(wgpu::FragmentState {
                         module: &self.shader,
-                        entry_point: Some(if motion == Some(true) {
-                            "fs_clear_motion"
-                        } else {
-                            "fs_clear"
+                        entry_point: Some(match motion {
+                            Some(true) if guides => "fs_clear_guides",
+                            Some(true) => "fs_clear_motion",
+                            _ => "fs_clear",
                         }),
                         compilation_options: Default::default(),
-                        targets: &ColorTarget {
-                            format: HDR_FORMAT,
-                            samples,
-                            motion: motion.is_some(),
-                            guides,
-                        }
-                        .targets(
-                            HDR_FORMAT.into(),
-                            if motion == Some(true) {
-                                MotionWrite::Cover
-                            } else {
-                                MotionWrite::None
-                            },
+                        targets: &crate::pipelines::guided(
+                            ColorTarget {
+                                format: HDR_FORMAT,
+                                samples,
+                                motion: motion.is_some(),
+                                guides,
+                            }
+                            .targets(
+                                HDR_FORMAT.into(),
+                                if motion == Some(true) {
+                                    MotionWrite::Cover
+                                } else {
+                                    MotionWrite::None
+                                },
+                            ),
+                            guides && motion == Some(true),
                         ),
                     }),
                     multiview_mask: None,

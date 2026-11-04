@@ -171,3 +171,120 @@ fn guides_draw_under_a_temporal_stage() {
     let diffuse = view(&mut harness, Some(Guide::DiffuseAlbedo));
     near(at(&diffuse, [0.0, 0.0, -2.0]), [0.5, 0.5, 0.5], "the floor");
 }
+
+/// A box 4 m ahead of an eye at its height, over the background.
+fn lone_box(harness: &mut Harness, material: RenderMaterialDescriptor) {
+    let id = material.id.clone();
+    harness.apply(vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.2, 0.3, 0.5, 1.0],
+        },
+        RenderDiff::DefineMaterial { material },
+        RenderDiff::DefineStaticMesh {
+            asset: StaticMeshAsset {
+                asset: "mesh/box".to_owned(),
+                payload: cube(),
+                material_slots: vec![MeshMaterialSlot {
+                    slot: 0,
+                    material: id,
+                }],
+                collision: MeshCollisionPolicy::VisualOnly,
+            },
+        },
+        instance(1, None, "box", transform([0.0, 1.0, -4.0], 0.0, 1.0)),
+    ]);
+}
+
+fn plain(id: &str, color: [f32; 4]) -> RenderMaterialDescriptor {
+    let mut ops = coloured_mesh("unused", cube(), color);
+    let Some(RenderDiff::DefineMaterial { mut material }) = ops.drain(..1).next() else {
+        unreachable!()
+    };
+    material.id = id.to_owned();
+    material
+}
+
+#[test]
+fn a_view_over_part_of_the_output_clears_its_guides_each_frame() {
+    let mut harness = Harness::new(RendererOptions::default());
+    lone_box(&mut harness, plain("material/red", RED));
+    harness.renderer.set_overlay_shown(OverlayShown {
+        guide: Some(Guide::DiffuseAlbedo),
+        ..OverlayShown::default()
+    });
+    // One view over the left half: it does not cover the output, so it
+    // clears its viewport rather than the whole target.
+    harness.renderer.set_view_composition(
+        &composition(
+            vec![camera("eye", [0.0, 1.0, 0.0], 0.0, 0.0)],
+            vec![primary_view("main", "eye", viewport(0.0, 0.0, 0.5, 1.0), 0)],
+        ),
+        0.0,
+    );
+    let (_, drawn) = harness.composition(0.0);
+    let centre = (WIDTH / 4, HEIGHT / 2);
+    let red = pixel(&drawn, WIDTH, centre.0, centre.1);
+    assert!(red[0] > 150 && red[1] < 60, "the box's albedo: {red:?}");
+    // Hidden, the box leaves nothing behind in the guides.
+    harness.apply(vec![RenderDiff::Update {
+        handle: RenderHandle::new(1),
+        transform: None,
+        material: None,
+        visible: Some(false),
+        metadata: None,
+    }]);
+    let (_, cleared) = harness.composition(0.1);
+    assert_eq!(pixel(&cleared, WIDTH, centre.0, centre.1)[..3], [0, 0, 0]);
+}
+
+/// Shades a blue, smoother copy of its surface through the standard stage.
+const BLUE_COPY: &str = "#import rusty::types::Surface
+#import rusty::shade::standard_shade
+
+fn shade(surface: Surface) -> vec4<f32> {
+    var blue = surface;
+    blue.base = vec4<f32>(0.0, 0.0, 1.0, surface.base.a);
+    blue.roughness = 0.25;
+    return standard_shade(blue);
+}
+";
+
+#[test]
+fn a_product_shader_changing_its_surface_gets_guides_of_what_it_shaded() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut material = plain("material/shaded", RED);
+    material.shader = Some(MaterialShaderDescriptor {
+        shader: "shader/blue-copy".to_owned(),
+        parameters: [[0.0; 4]; 4],
+        textures: [None, None],
+        displacement_bound: 0.0,
+    });
+    harness.apply(vec![RenderDiff::DefineShader {
+        shader: ShaderDescriptor {
+            id: "shader/blue-copy".to_owned(),
+            path: "shaders/blue-copy.wgsl".to_owned(),
+            source: BLUE_COPY.to_owned(),
+            keywords: Vec::new(),
+        },
+    }]);
+    lone_box(&mut harness, material);
+    let look = |harness: &mut Harness, guide| {
+        harness.renderer.set_overlay_shown(OverlayShown {
+            guide: Some(guide),
+            ..OverlayShown::default()
+        });
+        let picture = harness.single(&camera("eye", [0.0, 1.0, 0.0], 0.0, 0.0));
+        let [r, g, b, _] = pixel(&picture, WIDTH, WIDTH / 2, HEIGHT / 2);
+        [r, g, b]
+    };
+    near(
+        look(&mut harness, Guide::DiffuseAlbedo),
+        [0.0, 0.0, 1.0],
+        "the blue it shaded",
+    );
+    near(
+        look(&mut harness, Guide::Roughness),
+        [0.25; 3],
+        "the roughness it shaded",
+    );
+}

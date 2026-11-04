@@ -556,6 +556,11 @@ fn run() -> Result<(), String> {
             ..render_wgpu::OverlayShown::default()
         });
     }
+    // A device that cannot draw the guides draws the picture alone: say so
+    // rather than writing it as the guide.
+    if let Some(refused) = driver.gpu_readout().guides_refused {
+        return Err(format!("--guide: {refused}"));
+    }
     if frames > 0 {
         let moving = walk != 0.0 || turn != 0.0;
         if moving && start.is_none() {

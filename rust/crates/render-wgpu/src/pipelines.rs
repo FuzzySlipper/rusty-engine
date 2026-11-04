@@ -72,9 +72,9 @@ pub(crate) fn mesh_buffers(
 }
 
 /// `targets` with its guide targets written, when `write` (the opaque world
-/// pass beside guide targets, `ColorTarget::guides`): they are its last
-/// three.
-fn guided(
+/// pass, or the world viewport's clear, beside guide targets,
+/// `ColorTarget::guides`): they are its last three.
+pub(crate) fn guided(
     mut targets: Vec<Option<wgpu::ColorTargetState>>,
     write: bool,
 ) -> Vec<Option<wgpu::ColorTargetState>> {

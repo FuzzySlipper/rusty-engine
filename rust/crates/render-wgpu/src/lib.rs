@@ -244,6 +244,9 @@ pub struct GpuReadout {
     pub device_lost: Option<String>,
     /// The ray scene, while it is asked for (`ray_scene.rs`).
     pub ray_scene: Option<RaySceneReadout>,
+    /// Why the guide targets inspection asks for (`OverlayShown::guide`)
+    /// are not drawn on this device, while it asks (`motion.rs`).
+    pub guides_refused: Option<String>,
 }
 
 /// The last primary frame's render and output resolutions, and its upscale
@@ -1256,6 +1259,11 @@ impl Renderer {
             dlss: self.options.dlss.then(|| self.dlss_refusal()).flatten(),
             device_lost: self.gpu.lost(),
             ray_scene: self.ray_scene_readout(),
+            guides_refused: self
+                .overlays
+                .shown
+                .guide
+                .and_then(|_| self.gpu.guides_refusal()),
         }
     }
 
