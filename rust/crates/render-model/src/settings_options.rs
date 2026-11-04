@@ -405,7 +405,7 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         kind: RendererSettingKind::Toggle,
         restart: true,
         cost: RAY_TRACED_SHADOWS_COST,
-        gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: None, requires: None, setup: None },
+        gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: None, requires: Some("shadows"), setup: None },
     },
     RendererSettingOption {
         id: "clusteredLighting",

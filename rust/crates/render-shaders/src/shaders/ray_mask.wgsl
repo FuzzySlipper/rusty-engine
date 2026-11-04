@@ -27,8 +27,8 @@ const NOTHING: f32 = 3.4e38;
 
 // The world position of the depth at `pixel`'s centre.
 fn surface_at(pixel: vec2<u32>, d: f32) -> vec3<f32> {
-    let size = vec2<f32>(textureDimensions(depth));
-    let uv = (vec2<f32>(pixel) + 0.5) / size;
+    // Clip space spans the viewport, not the whole target.
+    let uv = (vec2<f32>(pixel) + 0.5 - vec2<f32>(params.viewport.xy)) / vec2<f32>(params.viewport.zw);
     let clip = vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0);
     let world = params.inverse_view_proj * clip;
     return world.xyz / world.w;

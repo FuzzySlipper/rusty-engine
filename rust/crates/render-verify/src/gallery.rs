@@ -599,6 +599,7 @@ mod tests {
                 volumetric_fog: VolumetricFogQuality::High,
                 volumetric_clouds: VolumetricCloudsQuality::High,
                 water_reflections: WaterReflectionsQuality::High,
+                ray_traced_shadows: true,
                 ..RendererSettingsDescriptor::DEFAULT
             };
             settings.ambient_occlusion.mode = mode;

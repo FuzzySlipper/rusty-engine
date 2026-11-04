@@ -6,6 +6,7 @@
 
 mod support;
 
+use render_host_contracts::RendererViewport;
 use render_model::*;
 use render_wgpu::{Gpu, OffscreenTarget, RendererOptions, SettingRefusal};
 use support::*;
@@ -201,6 +202,7 @@ fn rays_trace_the_suns_shadows_through_masked_texels_in_place_of_its_cascades() 
         "a half-clear card casts {half} of {card_traced}, {none} without it"
     );
     blended_parts_trace_their_own_shadow(&gpu);
+    a_view_of_part_of_its_target_finds_its_surfaces(&gpu);
     a_temporal_stage_gathers_a_penumbra(&gpu);
     refused_without_ray_queries();
 }
@@ -235,6 +237,49 @@ fn blended_parts_trace_their_own_shadow(gpu: &Gpu) {
         left + right
     };
     near(render(true), render(false), "the shadow on the glass");
+}
+
+/// A view over the right half of its target draws the shadows its cascades
+/// draw: the mask finds each surface within the viewport.
+fn a_view_of_part_of_its_target_finds_its_surfaces(gpu: &Gpu) {
+    let render = |ray_traced: bool| {
+        let mut harness = Harness::on(gpu.clone(), options(ray_traced));
+        scene(&mut harness, None);
+        let mut view = composition_of(camera([0.0, 4.0, 0.0], 0.0, -40.0));
+        view.views[0].viewport = RendererViewport {
+            x: 0.5,
+            y: 0.0,
+            width: 0.5,
+            height: 1.0,
+        };
+        harness.renderer.set_view_composition(&view, 0.0);
+        harness
+            .renderer
+            .render_view_composition(&harness.target, 0.0);
+        harness
+            .renderer
+            .render_view_composition(&harness.target, 0.0);
+        harness.target.read_rgba(&harness.gpu)
+    };
+    let dark = |rgba: &[u8]| -> Vec<bool> {
+        let luma = |pixel: &[u8; 4]| pixel[..3].iter().map(|&c| u32::from(c)).sum::<u32>();
+        let pixels = rgba.as_chunks::<4>().0;
+        let lit = pixels.iter().map(luma).max().unwrap_or(0);
+        // The view's half: the other is left dark.
+        pixels
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index as u32 % WIDTH >= WIDTH / 2)
+            .map(|(_, pixel)| luma(pixel) * 2 < lit)
+            .collect()
+    };
+    let (traced, cascades) = (dark(&render(true)), dark(&render(false)));
+    let shadow = cascades.iter().filter(|dark| **dark).count();
+    let apart = traced.iter().zip(&cascades).filter(|(a, b)| a != b).count();
+    assert!(
+        shadow > 200 && apart * 8 < shadow,
+        "{apart} pixels differ of {shadow} in shadow"
+    );
 }
 
 /// Under a temporal stage each ray leans within the sun's disc, so a wide
