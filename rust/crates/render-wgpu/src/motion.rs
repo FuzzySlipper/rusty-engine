@@ -368,6 +368,13 @@ impl MotionPass {
         }
     }
 
+    /// The guide targets as a pass reads them, when drawn.
+    pub fn guides(&self) -> Option<[&wgpu::TextureView; 3]> {
+        self.guides
+            .as_ref()
+            .map(|guides| guides.each_ref().map(Attached::resolved))
+    }
+
     /// The colour attachments it adds after the HDR colour.
     pub fn attached(&self) -> usize {
         1 + if self.guides.is_some() { 3 } else { 0 }

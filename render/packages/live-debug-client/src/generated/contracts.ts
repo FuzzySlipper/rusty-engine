@@ -345,7 +345,7 @@ volumetricClouds: string,
 /**
  * `off`, `low` or `high`.
  */
-waterReflections: string, rayTracedShadows: boolean, };
+waterReflections: string, rayTracedShadows: boolean, globalIllumination: string, };
 
 /**
  * The renderer settings (`RendererSettings`): what the product or its

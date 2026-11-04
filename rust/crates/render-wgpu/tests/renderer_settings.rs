@@ -5,7 +5,7 @@
 mod support;
 
 use render_model::{
-    AmbientOcclusionMode, AmbientOcclusionSettings, Antialiasing, RenderDiff,
+    AmbientOcclusionMode, AmbientOcclusionSettings, Antialiasing, GlobalIllumination, RenderDiff,
     RendererSettingsDescriptor, RendererSettingsOverrides,
 };
 use render_wgpu::{OffscreenTarget, RendererOptions, SettingRefusal};
@@ -32,6 +32,7 @@ fn settings() -> RendererSettingsDescriptor {
         volumetric_clouds: render_model::VolumetricCloudsQuality::Off,
         water_reflections: render_model::WaterReflectionsQuality::Off,
         ray_traced_shadows: false,
+        global_illumination: GlobalIllumination::Off,
     }
 }
 

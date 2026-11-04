@@ -147,6 +147,9 @@ pub struct SceneSnapshotOptions {
     /// Snapshots written before ray-traced shadows draw the cascades.
     #[serde(default)]
     pub ray_traced_shadows: bool,
+    /// Snapshots written before global illumination draw the probes.
+    #[serde(default)]
+    pub global_illumination: render_model::GlobalIllumination,
 }
 
 fn default_render_scale() -> f32 {
@@ -265,6 +268,7 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             volumetric_clouds: options.volumetric_clouds,
             water_reflections: options.water_reflections,
             ray_traced_shadows: options.ray_traced_shadows,
+            global_illumination: options.global_illumination,
         }
     }
 }
@@ -290,6 +294,7 @@ impl From<render_wgpu::RendererOptions> for SceneSnapshotOptions {
             volumetric_clouds: options.volumetric_clouds,
             water_reflections: options.water_reflections,
             ray_traced_shadows: options.ray_traced_shadows,
+            global_illumination: options.global_illumination,
         }
     }
 }

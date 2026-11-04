@@ -269,19 +269,29 @@ if ((DESKTOP)); then
   fi
 fi
 
+# Global illumination's shaders adapt Bevy's Solari (render-shaders
+# `ray_gi.wgsl`).
+install -D -m 644 rust/crates/render-shaders/third-party/bevy/LICENSE-MIT "$STAGE/share/third-party/bevy/LICENSE-MIT"
+
 if [[ -n $DLSS_SDK_DIR ]]; then
   # NGX loads DLSS from the host's own directory. Its licence asks for the
   # SDK's licence and the notices of the programming guide's section 9.5.
   if [[ $TARGET == win-x64 ]]; then
     dlss_library=("$DLSS_SDK_DIR/lib/Windows_x86_64/rel/nvngx_dlss.dll")
+    reconstruction_library=("$DLSS_SDK_DIR/lib/Windows_x86_64/rel/nvngx_dlssd.dll")
   else
     dlss_library=("$DLSS_SDK_DIR"/lib/Linux_x86_64/rel/libnvidia-ngx-dlss.so.*)
+    reconstruction_library=("$DLSS_SDK_DIR"/lib/Linux_x86_64/rel/libnvidia-ngx-dlssd.so.*)
   fi
-  [[ ${#dlss_library[@]} == 1 && -f ${dlss_library[0]} ]] || {
-    echo "no single DLSS library in $DLSS_SDK_DIR for $TARGET: ${dlss_library[*]}" >&2
-    exit 1
-  }
-  install -m 755 "${dlss_library[0]}" "$STAGE/bin/$(basename "${dlss_library[0]}")"
+  for library in dlss_library reconstruction_library; do
+    declare -n found=$library
+    [[ ${#found[@]} == 1 && -f ${found[0]} ]] || {
+      echo "no single $library in $DLSS_SDK_DIR for $TARGET: ${found[*]}" >&2
+      exit 1
+    }
+    install -m 755 "${found[0]}" "$STAGE/bin/$(basename "${found[0]}")"
+    unset -n found
+  done
   install -D -m 644 "$DLSS_SDK_DIR/LICENSE.txt" "$STAGE/share/third-party/nvidia-dlss/LICENSE.txt"
   install -D -m 644 rust/crates/render-wgpu/dlss/NOTICES.txt "$STAGE/share/third-party/nvidia-dlss/NOTICES.txt"
 fi

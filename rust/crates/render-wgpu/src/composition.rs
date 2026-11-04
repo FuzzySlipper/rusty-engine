@@ -440,12 +440,8 @@ impl Renderer {
         // Ray Reconstruction takes a frame of one whole view with its guides
         // where it can; otherwise DLSS draws on.
         let mut reconstruction = None;
-        if stage == Some(UpscaleMethod::Dlss)
-            && self.ray_reconstruction
-            && self.gpu.guides_refusal().is_none()
-            && self.upscale.ray_reconstruction_refusal().is_none()
-            && self.one_whole_view()
-        {
+        let lit = self.ray_gi_wanted();
+        if stage == Some(UpscaleMethod::Dlss) && lit && self.one_whole_view() {
             if let Some(render) = self.upscale.ray_reconstruction_size(
                 &self.gpu,
                 resolution,
@@ -471,7 +467,9 @@ impl Renderer {
         // A temporal stage's jitter and motion, or the motion alone while
         // inspection shows it (`motion.rs`).
         let jittering = stage.is_some_and(UpscaleMethod::temporal);
-        let guides = (self.overlays.shown.guide.is_some() || reconstruction.is_some())
+        let guides = (self.overlays.shown.guide.is_some()
+            || reconstruction.is_some()
+            || (lit && self.ray_gi_without_denoiser))
             && self.gpu.guides_refusal().is_none();
         let motion = jittering || self.overlays.shown.motion || guides;
         // A temporal stage's picture is single-sample whatever the output's

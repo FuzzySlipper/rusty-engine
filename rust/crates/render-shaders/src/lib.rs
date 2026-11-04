@@ -134,12 +134,17 @@ impl Features {
     /// pipelines only, which the mask does not hold. The opaque ones ran
     /// three to five times slower with a ray in them.
     pub const RAY_TRACE: Self = Self::bit(33554432);
+    /// The opaque world draws direct light alone: rays bring the indirect
+    /// light after it (render-wgpu `ray_gi.rs`). A target's feature, as
+    /// RAY_SHADOWS, on the opaque pipelines; blended parts keep the probes
+    /// and the sky's light.
+    pub const RAY_GI: Self = Self::bit(67108864);
     /// Every material and mesh feature's bit: all but MOTION, GUIDES,
-    /// RAY_SHADOWS and RAY_TRACE.
+    /// RAY_SHADOWS, RAY_TRACE and RAY_GI.
     #[cfg(test)]
     const ALL_BITS: u32 = 4194303;
 
-    const DEFS: [(Self, &'static str); 26] = [
+    const DEFS: [(Self, &'static str); 27] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -166,6 +171,7 @@ impl Features {
         (Self::GUIDES, "GUIDES"),
         (Self::RAY_SHADOWS, "RAY_SHADOWS"),
         (Self::RAY_TRACE, "RAY_TRACE"),
+        (Self::RAY_GI, "RAY_GI"),
     ];
 
     const fn bit(bits: u32) -> Self {
@@ -482,6 +488,11 @@ pub enum Entry {
     /// The sun's traced shadow for a world view, one ray per pixel
     /// (`ray_mask.wgsl`, compute; needs ray queries).
     RayMask,
+    /// Ray-traced global illumination's light tiles, world cache and paths
+    /// (`ray_gi.wgsl`, compute; needs ray queries).
+    RayGi,
+    /// Its light added to the opaque world (`ray_gi_composite.wgsl`).
+    RayGiComposite,
 }
 
 impl Entry {
@@ -557,6 +568,11 @@ impl Entry {
             Self::RayMask => (
                 "shaders/ray_mask.wgsl",
                 include_str!("shaders/ray_mask.wgsl"),
+            ),
+            Self::RayGi => ("shaders/ray_gi.wgsl", include_str!("shaders/ray_gi.wgsl")),
+            Self::RayGiComposite => (
+                "shaders/ray_gi_composite.wgsl",
+                include_str!("shaders/ray_gi_composite.wgsl"),
             ),
         }
     }
@@ -910,6 +926,11 @@ mod tests {
                 Entry::World,
                 features | Features::RAY_SHADOWS | Features::RAY_TRACE,
             );
+            compose_case(
+                &mut shaders,
+                Entry::World,
+                features | Features::MOTION | Features::GUIDES | Features::RAY_GI,
+            );
             compose_case(&mut shaders, Entry::Shadow, features.caster());
         }
         for entry in [
@@ -936,6 +957,8 @@ mod tests {
             Entry::RayProbe,
             Entry::RayInstances,
             Entry::RayMask,
+            Entry::RayGi,
+            Entry::RayGiComposite,
         ] {
             compose_case(&mut shaders, entry, Features::default());
         }
@@ -1139,6 +1162,11 @@ fn cast_shadow(caster: Caster) {
         for (product, features) in [(dissolve, Features::MASK), (plain, Features::default())] {
             let features = features.with_product(product);
             compose_case(&mut shaders, Entry::World, features);
+            compose_case(
+                &mut shaders,
+                Entry::World,
+                features | Features::MOTION | Features::GUIDES | Features::RAY_GI,
+            );
             compose_case(&mut shaders, Entry::Shadow, features.caster());
         }
         // Any legal spelling of the declaration is a caster stage; one in a
@@ -1334,6 +1362,11 @@ fn shade(surface: Surface) -> vec4<f32> {
         ] {
             let features = material.with_product(waving);
             compose_case(&mut shaders, Entry::World, features);
+            compose_case(
+                &mut shaders,
+                Entry::World,
+                features | Features::MOTION | Features::GUIDES | Features::RAY_GI,
+            );
             compose_case(&mut shaders, Entry::Shadow, features.caster());
         }
         check_product_shader("shaders/waving.wgsl", WAVING, &[]).unwrap();

@@ -6,8 +6,8 @@
 use std::ffi::c_void;
 
 use csharp_engine_abi::{
-    NativeAmbientOcclusionMode, NativeAntialiasing, NativeOperationErrorReceipt,
-    NativeRendererSettingChoiceReadout, NativeRendererSettingKind,
+    NativeAmbientOcclusionMode, NativeAntialiasing, NativeGlobalIllumination,
+    NativeOperationErrorReceipt, NativeRendererSettingChoiceReadout, NativeRendererSettingKind,
     NativeRendererSettingOptionReadout, NativeRendererSettingRefusal, NativeRendererSettingsApi,
     NativeRendererSettingsCatalogueResult, NativeRendererSettingsReadout,
     NativeRendererSettingsRequest, NativeUtf8Slice, NativeVolumetricCloudsQuality,
@@ -15,8 +15,8 @@ use csharp_engine_abi::{
 };
 use render_model::{
     renderer_setting_value, AmbientOcclusionMode, AmbientOcclusionSettings, Antialiasing,
-    RendererSettingKind, RendererSettingsDescriptor, VolumetricCloudsQuality, VolumetricFogQuality,
-    WaterReflectionsQuality, WindowMode, RENDERER_SETTING_OPTIONS,
+    GlobalIllumination, RendererSettingKind, RendererSettingsDescriptor, VolumetricCloudsQuality,
+    VolumetricFogQuality, WaterReflectionsQuality, WindowMode, RENDERER_SETTING_OPTIONS,
 };
 
 use crate::composition::ABI_OK;
@@ -82,6 +82,7 @@ impl RuntimeRendererSettingsBridge {
                 volumetric_clouds_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
                 water_reflections_refusal: NativeRendererSettingRefusal::None,
                 ray_traced_shadows_refusal: NativeRendererSettingRefusal::None,
+                global_illumination_refusal: NativeRendererSettingRefusal::None,
             },
             catalogue: DescribedCatalogue::default(),
             operation_diagnostics: Default::default(),
@@ -106,6 +107,7 @@ impl RuntimeRendererSettingsBridge {
             "volumetricClouds" => readout.volumetric_clouds_refusal,
             "waterReflections" => readout.water_reflections_refusal,
             "rayTracedShadows" => readout.ray_traced_shadows_refusal,
+            "globalIllumination" => readout.global_illumination_refusal,
             _ => NativeRendererSettingRefusal::None,
         };
         // The value texts first, then rows pointing into them: the strings'
@@ -269,6 +271,10 @@ pub(crate) fn renderer_settings_descriptor(
             NativeWaterReflectionsQuality::High => WaterReflectionsQuality::High,
         },
         ray_traced_shadows: request.ray_traced_shadows,
+        global_illumination: match request.global_illumination {
+            NativeGlobalIllumination::Off => GlobalIllumination::Off,
+            NativeGlobalIllumination::RayTraced => GlobalIllumination::RayTraced,
+        },
     }
 }
 
@@ -321,6 +327,10 @@ pub fn renderer_settings_request(
             WaterReflectionsQuality::High => NativeWaterReflectionsQuality::High,
         },
         ray_traced_shadows: settings.ray_traced_shadows,
+        global_illumination: match settings.global_illumination {
+            GlobalIllumination::Off => NativeGlobalIllumination::Off,
+            GlobalIllumination::RayTraced => NativeGlobalIllumination::RayTraced,
+        },
     }
 }
 

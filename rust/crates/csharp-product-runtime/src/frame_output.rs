@@ -776,6 +776,7 @@ impl FrameOutput {
                 NativeRendererSettingRefusal::InitializationFailed
             }
             Some(SettingRefusal::NoRayQueries) => NativeRendererSettingRefusal::NoRayQueries,
+            Some(SettingRefusal::NeedsDlss) => NativeRendererSettingRefusal::NeedsDlss,
         };
         let mut effective = readout.effective;
         let vsync_refusal = if self.stream.is_some() && readout.requested.vsync {
@@ -802,6 +803,7 @@ impl FrameOutput {
             volumetric_clouds_refusal: refusal(readout.volumetric_clouds),
             water_reflections_refusal: refusal(readout.water_reflections),
             ray_traced_shadows_refusal: refusal(readout.ray_traced_shadows),
+            global_illumination_refusal: refusal(readout.global_illumination),
         }
     }
 
@@ -1014,6 +1016,11 @@ fn settings_statistics(
             }
             .to_owned(),
             ray_traced_shadows: settings.ray_traced_shadows,
+            global_illumination: match settings.global_illumination {
+                render_model::GlobalIllumination::Off => "off",
+                render_model::GlobalIllumination::RayTraced => "rayTraced",
+            }
+            .to_owned(),
         };
     let reason = |refusal: SettingRefusal| match refusal {
         SettingRefusal::NoComputeShaders => "the adapter has no compute shaders",
@@ -1030,6 +1037,7 @@ fn settings_statistics(
         SettingRefusal::UnsupportedAdapter => "the adapter cannot run it",
         SettingRefusal::InitializationFailed => "it failed to start on this device",
         SettingRefusal::NoRayQueries => "the adapter has no ray queries",
+        SettingRefusal::NeedsDlss => "it draws only under DLSS antialiasing",
     };
     let mut effective = readout.effective;
     let mut refused = std::collections::BTreeMap::new();
@@ -1044,6 +1052,7 @@ fn settings_statistics(
         ("volumetricClouds", readout.volumetric_clouds),
         ("waterReflections", readout.water_reflections),
         ("rayTracedShadows", readout.ray_traced_shadows),
+        ("globalIllumination", readout.global_illumination),
     ] {
         if let Some(refusal) = refusal {
             refused.insert(setting.to_owned(), reason(refusal).to_owned());

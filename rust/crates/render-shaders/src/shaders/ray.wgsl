@@ -20,12 +20,14 @@ enable wgpu_binding_array;
 #import rusty::surface::voxel_uv
 
 // A part a ray may hit, by part id (the instance's custom data). Only a
-// masked part's row is read.
+// masked part's row is read, or under ray-traced global illumination
+// (`ray_gi.wgsl`) every part's.
 struct RayPart {
     // x: the first of its range's indices in `ray_indices`; y: its mesh's
     // first vertex in `ray_vertices`; z: its base texture's slot
-    // (`NO_TEXTURE`: none); w: 1 when its material is masked, 2 when a voxel
-    // surface's mask, which tiles by `tile` and `sample_rect`.
+    // (`NO_TEXTURE`: none); w: `PART_MASKED` when its material is masked,
+    // and `PART_VOXEL` when a voxel surface, which tiles by `tile` and
+    // `sample_rect`.
     slots: vec4<u32>,
     // The base uv transform's rows (`rusty::surface::transform_uv`), then
     // the alpha cutoff (u.w) and the part's colour alpha (v.w), which
@@ -34,6 +36,13 @@ struct RayPart {
     uv_v: vec4<f32>,
     tile: vec4<f32>,
     sample_rect: vec4<f32>,
+    // Read by global illumination. rgb: its albedo factor, its material's
+    // mean colour where no slot holds its texture; w: its roughness.
+    surface: vec4<f32>,
+    // rgb: the radiance it leaves with; w: its metalness.
+    emission: vec4<f32>,
+    // x: its triangles when it is a light source, else 0.
+    source: vec4<u32>,
 };
 
 struct RayParams {
@@ -61,10 +70,14 @@ struct RayParams {
 var<private> ray_pixel: vec2<u32>;
 
 // The instance mask bits of what casts shadows and what is opaque
-// (`ray_scene::MASK_SHADOW`, `MASK_GI`).
+// (`ray_scene::MASK_SHADOW`, `MASK_GI`), and what a path stops at
+// (`MASK_PATH`).
 const RAY_MASK_SHADOW: u32 = 1u;
 const RAY_MASK_OPAQUE: u32 = 2u;
+const RAY_MASK_PATH: u32 = 4u;
 const NO_TEXTURE: u32 = 0xffffffffu;
+const PART_MASKED: u32 = 1u;
+const PART_VOXEL: u32 = 2u;
 // Floats in a pooled vertex, and where its uv and its colour's alpha are
 // (`pipelines.rs`).
 const VERTEX_FLOATS: u32 = 12u;
@@ -73,10 +86,17 @@ const ALPHA_FLOAT: u32 = 11u;
 const RAY_FAR: f32 = 10000.0;
 const BLUE_NOISE_SIZE: u32 = 64u;
 
+// Where `part`'s base texture is read at the mesh's `uv`.
+fn ray_voxel_uv(part: RayPart, uv: vec2<f32>) -> vec2<f32> {
+    let tiled = select(uv, voxel_uv(uv, part.tile, part.sample_rect), (part.slots.w & PART_VOXEL) != 0u);
+    let point = vec3<f32>(tiled, 1.0);
+    return vec2<f32>(dot(part.uv_u.xyz, point), dot(part.uv_v.xyz, point));
+}
+
 // Whether a candidate hit on a masked triangle is opaque where it was hit.
 fn ray_hit_opaque(candidate: RayIntersection) -> bool {
     let part = ray_parts[candidate.instance_custom_data];
-    if part.slots.w == 0u {
+    if (part.slots.w & PART_MASKED) == 0u {
         return true;
     }
     let first = part.slots.x + candidate.primitive_index * 3u;
@@ -91,9 +111,7 @@ fn ray_hit_opaque(candidate: RayIntersection) -> bool {
     }
     alpha *= part.uv_v.w;
     if part.slots.z != NO_TEXTURE {
-        let tiled = select(uv, voxel_uv(uv, part.tile, part.sample_rect), part.slots.w == 2u);
-        let point = vec3<f32>(tiled, 1.0);
-        let at = vec2<f32>(dot(part.uv_u.xyz, point), dot(part.uv_v.xyz, point));
+        let at = ray_voxel_uv(part, uv);
         alpha *= textureSampleLevel(ray_textures[part.slots.z], ray_samplers[part.slots.z], at, 0.0).a;
     }
     return alpha >= part.uv_u.w;
@@ -156,6 +174,63 @@ fn ray_distance(origin: vec3<f32>, direction: vec3<f32>, reach: f32) -> f32 {
     }
     let hit = rayQueryGetCommittedIntersection(&query);
     return select(reach, hit.t, hit.kind != RAY_QUERY_INTERSECTION_NONE);
+}
+
+// A ray's nearest hit, for a pass in another module: a `RayIntersection`
+// does not cross modules.
+struct RayHit {
+    hit: bool,
+    t: f32,
+    part: u32,
+    primitive: u32,
+    barycentrics: vec2<f32>,
+    object_to_world: mat4x3<f32>,
+    world_to_object: mat4x3<f32>,
+};
+
+// The nearest surface a path stops at along `direction`, within `reach`.
+// `flags` may
+// say `RAY_FLAG_FORCE_OPAQUE` to take masked parts as solid: what rays pay
+// for testing a cut-out's texels is most of what they cost among leaves.
+fn ray_closest(origin: vec3<f32>, direction: vec3<f32>, reach: f32, flags: u32) -> RayHit {
+    var query: ray_query;
+    rayQueryInitialize(
+        &query,
+        ray_scene,
+        RayDesc(flags, RAY_MASK_PATH, 0.0, reach, origin, direction),
+    );
+    while rayQueryProceed(&query) {
+        if ray_hit_opaque(rayQueryGetCandidateIntersection(&query)) {
+            rayQueryConfirmIntersection(&query);
+        }
+    }
+    let hit = rayQueryGetCommittedIntersection(&query);
+    return RayHit(
+        hit.kind != RAY_QUERY_INTERSECTION_NONE,
+        hit.t,
+        hit.instance_custom_data,
+        hit.primitive_index,
+        hit.barycentrics,
+        hit.object_to_world,
+        hit.world_to_object,
+    );
+}
+
+// Whether nothing that casts shadows stands along `direction` within
+// `reach`.
+fn ray_clear(origin: vec3<f32>, direction: vec3<f32>, reach: f32, flags: u32) -> bool {
+    var query: ray_query;
+    rayQueryInitialize(
+        &query,
+        ray_scene,
+        RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | flags, RAY_MASK_SHADOW, 0.0, reach, origin, direction),
+    );
+    while rayQueryProceed(&query) {
+        if ray_hit_opaque(rayQueryGetCandidateIntersection(&query)) {
+            rayQueryConfirmIntersection(&query);
+        }
+    }
+    return rayQueryGetCommittedIntersection(&query).kind == RAY_QUERY_INTERSECTION_NONE;
 }
 
 // How far a fragment may be from the mask's surface and still be it:

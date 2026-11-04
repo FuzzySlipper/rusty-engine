@@ -765,6 +765,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         waterReflections: string;
         rayTracedShadows: boolean;
+        globalIllumination: string;
     };
     /**
      * The renderer settings (`RendererSettings`): what the product or its

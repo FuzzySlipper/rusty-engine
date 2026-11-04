@@ -24,6 +24,8 @@ pub(crate) struct ColorTarget {
     pub guides: bool,
     /// World pipelines trace the sun's shadows (`RAY_SHADOWS`, group 4).
     pub ray_shadows: bool,
+    /// Opaque pipelines draw direct light alone (`RAY_GI`, `ray_gi.rs`).
+    pub ray_gi: bool,
 }
 
 impl ColorTarget {
@@ -35,6 +37,7 @@ impl ColorTarget {
             motion: false,
             guides: false,
             ray_shadows: false,
+            ray_gi: false,
         }
     }
 

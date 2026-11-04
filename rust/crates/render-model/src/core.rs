@@ -906,6 +906,17 @@ pub enum WaterReflectionsQuality {
     High,
 }
 
+/// Where indirect light comes from (`RendererSettingsDescriptor`): the
+/// probe volume and the sky's light, or rays traced from each pixel and
+/// denoised by DLSS Ray Reconstruction, in `Antialiasing::Dlss` frames.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum GlobalIllumination {
+    #[default]
+    Off,
+    RayTraced,
+}
+
 /// How the desktop window shows (`RendererSettingsDescriptor`): a window
 /// of its own size, maximized within the monitor's work area, or covering
 /// the monitor at the desktop's resolution with no frame (borderless
@@ -1143,6 +1154,12 @@ pub struct RendererSettingsDescriptor {
     /// off.
     #[serde(default)]
     pub ray_traced_shadows: bool,
+    /// Trace the world's indirect light in place of the probe volume and
+    /// the sky's light. Takes effect on a device made while it is on, in
+    /// frames DLSS Ray Reconstruction can denoise; settings written before
+    /// it existed have it off.
+    #[serde(default)]
+    pub global_illumination: GlobalIllumination,
 }
 
 fn enabled() -> bool {
@@ -1170,13 +1187,16 @@ impl RendererSettingsDescriptor {
         volumetric_clouds: VolumetricCloudsQuality::Off,
         water_reflections: WaterReflectionsQuality::Off,
         ray_traced_shadows: false,
+        global_illumination: GlobalIllumination::Off,
     };
 
     /// Whether a ray-traced setting is on: a device made for these settings
     /// asks for ray queries, which some GPUs charge startup time and memory
     /// for, so a device made without them refuses these settings.
     pub fn ray_traced(&self) -> bool {
-        self.ray_traced_shadows || self.ambient_occlusion.mode == AmbientOcclusionMode::RayTraced
+        self.ray_traced_shadows
+            || self.ambient_occlusion.mode == AmbientOcclusionMode::RayTraced
+            || self.global_illumination != GlobalIllumination::Off
     }
 
     /// Valid occlusion values and a render scale within range.

@@ -574,6 +574,7 @@ mod tests {
                 "volumetricFog-low",
                 "volumetricClouds-low",
                 "waterReflections-low",
+                "globalIllumination-rayTraced",
                 "clusteredLighting-true",
                 "gpuCulling-true",
                 "occlusionCulling-true",
@@ -611,6 +612,7 @@ mod tests {
                 volumetric_clouds: VolumetricCloudsQuality::High,
                 water_reflections: WaterReflectionsQuality::High,
                 ray_traced_shadows: true,
+                global_illumination: render_model::GlobalIllumination::RayTraced,
                 ..RendererSettingsDescriptor::DEFAULT
             };
             settings.ambient_occlusion.mode = mode;

@@ -169,14 +169,18 @@ takes scatter copies within M metres of the camera into the TLAS instead
 of the sun's shadow reach.
 A snapshot or `--choose` selecting a ray-traced setting
 (`--choose rayTracedShadows=true`) draws on a device with ray queries too.
-`--ray-reconstruction` draws `--choose antialiasing=dlss` frames with DLSS
-Ray Reconstruction instead of super resolution, in a build with DLSS, with
-`nvngx_dlssd` beside the tool. It is not a product setting. It denoises and
-upscales the world's HDR before finish, so `upscale` reports `dlss-rr` and
-the `ray-reconstruction` pass holds its GPU time; bloom, exposure, finish,
-overlay lines, labels and the viewmodel then draw at output size, unjittered.
-`rayReconstructionRefused` says why it did not draw, and the frame keeps super
-resolution or TAAU. It needs one primary view over the whole output.
+`--choose globalIllumination=rayTraced --choose antialiasing=dlss` draws
+ray-traced global illumination, denoised by DLSS Ray Reconstruction instead of
+super resolution, in a build with DLSS, with `nvngx_dlssd` beside the tool.
+Ray Reconstruction denoises and upscales the world's HDR before finish, so
+`upscale` reports `dlss-rr` and the `ray-reconstruction` pass holds its GPU
+time; bloom, exposure, finish, overlay lines, labels and the viewmodel then
+draw at output size, unjittered. `rayReconstructionRefused` says why it did
+not draw, and the frame keeps super resolution or TAAU. It needs one primary
+view over the whole output. `gi-light-tiles`, `gi-world-cache` and `gi-paths`
+hold the rays' GPU time, and `rayGi` the cache's live cells and the light
+sources. `--gi-without-denoiser` draws global illumination under any temporal
+stage, noisy, on a GPU without Ray Reconstruction.
 
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`
 in `product-host`) as UTF-8 JSON bytes through

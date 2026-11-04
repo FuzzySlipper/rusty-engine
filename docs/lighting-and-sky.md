@@ -245,6 +245,44 @@ draws exactly as before.
   --indirect-light cx,cy,cz,ex,ey,ez,spacing,bounces[,floor]` bakes a volume
   before its frames and reports it under `gpu.indirectLight`.
 
+## Indirect light: ray-traced global illumination
+
+`GlobalIllumination` (`RustyEngineProductGlobalIllumination`, `off` or
+`rayTraced`) traces the world's indirect light in place of the probe volume,
+the ambient and hemisphere rows and the sky's light. The opaque world draws
+direct light alone. Each pixel then traces one path from its depth and
+guides, its surface's diffuse and specular light are scaled by their albedos
+and added to the HDR picture, and DLSS Ray Reconstruction denoises it in place
+of super resolution. Blended parts and the viewmodel keep the probes and the
+sky's light. It is a port of Bevy's Solari without its ReSTIR.
+
+- **Lights:** a path samples the light rows and the emissive parts through 128
+  presampled tiles. A ray that leaves the scene meets the sky's prefiltered
+  cube, and the ambient and hemisphere rows as radiance. A cloud layer does
+  not shade the sun for a path.
+- **World cache:** a hash grid of irradiance over the surfaces paths reach, so
+  a path ends at its first wide bounce. `rayGi` in the statistics reports its
+  live cells and the light sources; `gi-light-tiles`, `gi-world-cache` and
+  `gi-paths` are its passes.
+- **What rays meet:** the opaque parts that cast shadows, the
+  [ray scene](performance.md#renderer-statistics)'s rest geometry and scatter
+  copies within the sun's reach. Grass that casts no shadow stops no path. A
+  hit reads its base texture at the mesh's uv, or its material's mean past 256
+  textures; a product shader's material reads as its mean. A pixel's first ray
+  tests masks, and the rays after it take masked parts as solid.
+- **Look:** light is what the scene lets through, so a product tuned on the
+  probes looks darker. Probes do not see scattered trees, and rays do: under a
+  closed canopy the floor is nearly black, and a leaf passes no light through
+  it. Exposure and lights tuned for the probes need tuning again.
+
+It draws on a GPU with ray queries on Vulkan, under `Dlss` antialiasing with
+Ray Reconstruction running and one primary view over the whole output. A
+device asks for ray queries when it starts with the setting selected;
+selected later, it refuses `NoRayQueries` until a restart. It refuses
+`NeedsDlss` under any other antialiasing, Ray Reconstruction's `NotBuilt`,
+`UnsupportedAdapter` or `InitializationFailed`, and `SoftwareAdapter`.
+Refused, the probes and the sky's light draw.
+
 ## The sky's light
 
 The background can light the world: a sky panorama (or the two a blend
@@ -310,7 +348,8 @@ same one the Engine's [video options](#video-options) panel draws. Each
 - its Engine default, requested and drawn values, as text (`true`, `4x`,
   `none`, `0.75`);
 - its refusal;
-- whether a change needs a restart (only `RayTracedShadows` does);
+- whether a change needs a restart (only `RayTracedShadows` and
+  `GlobalIllumination` do);
 - its measured cost.
 
 `Choices` lists each choice setting's values and labels by option id.
@@ -346,7 +385,8 @@ so frames wait for its refresh with vsync off), `SoftwareAdapter` (a
 GPU-only feature on a software adapter, the temporal stage among them),
 `TooFewTextureBindings` (water reflections on a device without the colour
 copy), `NoRayQueries` (a ray-traced setting on a device made without ray
-queries, or not on Vulkan), and for DLSS `NotBuilt`, `UnsupportedAdapter` and
+queries, or not on Vulkan), `NeedsDlss` (global illumination without `Dlss`
+antialiasing), and for DLSS `NotBuilt`, `UnsupportedAdapter` and
 `InitializationFailed` ([DLSS](#dlss)). A refused
 setting is not an error: `Set` accepts any finite, non-negative strength, positive
 radius and render scale from 0.33 to 1, and refuses only values outside
@@ -571,8 +611,8 @@ water reflections (off, off, low, high), over the player's other choices. A sett
 same refusals the readout carries. The panel's route,
 `/__rusty/product/runtime/video-options`, answers `GET` with the catalogue
 (each option's `value` drawn, `requested`, `gameDefault`, `chosen` and
-`refused`, whether a change needs a `restart` (only `rayTracedShadows`
-does) and its measured
+`refused`, whether a change needs a `restart` (only `rayTracedShadows` and
+`globalIllumination` do) and its measured
 `cost`, which the panel shows under the description) and `POST` with one change: `{"choose": {"id", "value"}}`,
 `{"forget": id}`, `{"forget": null}` for every choice, or
 `{"preset": id}`. A scene snapshot records the player's choices, and

@@ -68,8 +68,13 @@ const FEATURES: wgpu::Features = wgpu::Features::EXPERIMENTAL_RAY_QUERY
 
 /// Instance mask bit: the part casts shadows.
 pub(crate) const MASK_SHADOW: u8 = 1;
-/// Instance mask bit: the part is opaque, so indirect light bounces off it.
+/// Instance mask bit: the part is opaque, so a short ray's occlusion stops
+/// at it.
 pub(crate) const MASK_GI: u8 = 2;
+/// Instance mask bit: the part is opaque and casts shadows, so a path's ray
+/// stops at it. What casts no shadow from the sun (grass, say) would darken
+/// the ground beneath it past anything the forward pass shows.
+pub(crate) const MASK_PATH: u8 = 4;
 
 /// How far from the eye scatter copies are in the TLAS without a shadowing
 /// sun to take the reach from (`shadows.rs`).
@@ -120,14 +125,24 @@ pub(crate) fn request(adapter: &wgpu::Adapter, descriptor: &mut wgpu::DeviceDesc
         .max_binding_array_elements_per_shader_stage =
         granted.max_binding_array_elements_per_shader_stage;
     // The traced shadows bind a fifth group, of five more storage buffers
-    // and the mask's texture (`ray_shadows.rs`).
+    // and the mask's texture (`ray_shadows.rs`); global illumination's
+    // passes four more of each (`ray_gi.rs`).
     let limits = &mut descriptor.required_limits;
     limits.max_bind_groups = limits.max_bind_groups.max(5).min(granted.max_bind_groups);
-    limits.max_storage_buffers_per_shader_stage = (limits.max_storage_buffers_per_shader_stage + 5)
+    limits.max_storage_buffers_per_shader_stage = (limits.max_storage_buffers_per_shader_stage + 9)
         .min(granted.max_storage_buffers_per_shader_stage);
     limits.max_sampled_textures_per_shader_stage = (limits.max_sampled_textures_per_shader_stage
-        + 1)
+        + 5)
     .min(granted.max_sampled_textures_per_shader_stage);
+    // The world cache's scans and the light tiles run 1024 threads a group.
+    limits.max_compute_invocations_per_workgroup = limits
+        .max_compute_invocations_per_workgroup
+        .max(1024)
+        .min(granted.max_compute_invocations_per_workgroup);
+    limits.max_compute_workgroup_size_x = limits
+        .max_compute_workgroup_size_x
+        .max(1024)
+        .min(granted.max_compute_workgroup_size_x);
     descriptor
         .required_limits
         .max_binding_array_sampler_elements_per_shader_stage =
@@ -332,6 +347,9 @@ pub(crate) struct RayScene {
     /// Since which walk each range waiting for a build has waited.
     waiting_since: HashMap<BlasKey, u64>,
     walks: u64,
+    /// Every shown part's geometry and row is for rays to read, not only
+    /// the masked ones' (`ray_gi.rs`).
+    pool_all: bool,
     blas_builds: u64,
     tlas_builds: u64,
     blas_cpu_ms: f64,
@@ -383,6 +401,7 @@ impl RayScene {
             counted: [0; COUNTERS],
             counted_once: false,
             stale: true,
+            pool_all: false,
             built_this_frame: false,
             reach_override: None,
             reach: DEFAULT_REACH,
@@ -527,7 +546,8 @@ impl Renderer {
     /// Make or drop the ray scene, and what the ray-traced settings bind
     /// beside it, as they and the tools ask.
     fn keep_ray_scene(&mut self) {
-        let traced = self.ray_shadows_drawn() || self.ray_occlusion_drawn();
+        let lit = self.ray_gi_wanted();
+        let traced = self.ray_shadows_drawn() || self.ray_occlusion_drawn() || lit;
         if !(self.ray_scene_wanted || traced) {
             self.ray_scene = None;
         } else if self.ray_scene.is_none() && refusal(&self.gpu).is_none() {
@@ -537,6 +557,15 @@ impl Renderer {
             self.ray_shadows = None;
         } else if self.ray_shadows.is_none() {
             self.ray_shadows = Some(crate::ray_shadows::RayShadows::new(&self.gpu));
+        }
+        if !lit || self.ray_shadows.is_none() {
+            self.ray_gi = None;
+        } else if self.ray_gi.is_none() {
+            self.ray_gi = Some(crate::ray_gi::RayGi::new(&self.gpu));
+        }
+        if let Some(scene) = &mut self.ray_scene {
+            scene.stale |= scene.pool_all != lit;
+            scene.pool_all = lit;
         }
     }
 
@@ -668,11 +697,11 @@ impl Renderer {
             } else {
                 used.insert(key.clone());
             }
-            if state
+            let masks = state
                 .class
                 .features
-                .contains(crate::shaders::Features::MASK)
-            {
+                .contains(crate::shaders::Features::MASK);
+            if masks || (scene.pool_all && mask & MASK_PATH != 0) {
                 masked.push(crate::ray_shadows::Masked {
                     part: id as PartId,
                     mesh: part.mesh.clone(),
@@ -1370,6 +1399,9 @@ fn part_mask(state: &crate::tables::PartState) -> u8 {
     }
     if !state.class.blend {
         mask |= MASK_GI;
+    }
+    if mask == MASK_SHADOW | MASK_GI {
+        mask |= MASK_PATH;
     }
     mask
 }

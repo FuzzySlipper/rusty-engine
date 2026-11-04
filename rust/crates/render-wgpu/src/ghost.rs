@@ -340,6 +340,7 @@ impl Renderer {
                 volumetric_clouds: render_model::VolumetricCloudsQuality::Off,
                 water_reflections: render_model::WaterReflectionsQuality::Off,
                 ray_traced_shadows: false,
+                global_illumination: render_model::GlobalIllumination::Off,
             },
         ));
         source.set_animation_time(self.animation_time);

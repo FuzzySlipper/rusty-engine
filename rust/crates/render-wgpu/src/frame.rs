@@ -43,7 +43,7 @@ use crate::{
     NEUTRAL_KEY_POSITION, NEUTRAL_VIEWMODEL_KEY_POSITION,
 };
 
-const LIGHT_ROW_FLOATS: usize = 16;
+pub(crate) const LIGHT_ROW_FLOATS: usize = 16;
 /// Frame uniform (`rusty::types` `Frame`): two matrices, camera position,
 /// the camera-relative matrix, light count and first light; then exposure
 /// and fog distances, fog colour, and the tone mapping and fog modes; then
@@ -2491,6 +2491,15 @@ impl Renderer {
                     depth: view.target.depth,
                     render: (width, height),
                     inputs: &inputs,
+                    specular: self
+                        .ray_gi
+                        .as_ref()
+                        .and_then(crate::ray_gi::RayGi::hit_distance)
+                        .map(|hit_distance| crate::dlss::SpecularRays {
+                            hit_distance,
+                            world_to_view: view.camera.view.transpose().to_cols_array(),
+                            view_to_clip: view.camera.projection.transpose().to_cols_array(),
+                        }),
                     output: &resolved.color,
                     output_size: output,
                     render_scale: self.options.render_scale,
@@ -2530,6 +2539,7 @@ impl Renderer {
                     motion: false,
                     guides: false,
                     ray_shadows: false,
+                    ray_gi: false,
                 };
                 self.overlays.ensure_pipelines(&self.gpu.device, target);
                 self.overlays
@@ -3001,6 +3011,24 @@ impl Renderer {
             .and_then(|shadows| shadows.world_group(size))
             .filter(|_| ray_mask)
             .cloned();
+        // A world view under global illumination draws direct light alone
+        // while rays trace, and its light joins between the pass's halves.
+        let ray_gi = match view
+            .motion
+            .as_ref()
+            .and_then(crate::motion::MotionPass::guides)
+        {
+            Some(guides) if world_layer && self.ray_gi_draws(view.target.samples) => self
+                .prepare_ray_gi(
+                    size,
+                    &view.drawn_camera().view_proj,
+                    eye,
+                    view.viewport,
+                    view.target.depth,
+                    guides,
+                ),
+            _ => false,
+        };
         let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
         // The world, sprites and particles draw into the view's HDR target,
         // with the view's depth and its samples; the background and the
@@ -3015,6 +3043,7 @@ impl Renderer {
                 .as_ref()
                 .is_some_and(|motion| motion.guides.is_some()),
             ray_shadows: ray_shadows.is_some(),
+            ray_gi,
         };
         let effects = self.prepare_effects(&view, hdr_format);
         let slot = view.layer as usize;
@@ -3491,6 +3520,7 @@ impl Renderer {
         // The opaque colour too where a water reads it or the view reflects
         // in its water.
         let scene_color = water && (reads_scene || self.water_reflection_march().is_some());
+        let split = water || ray_gi;
         // The HDR colour, and the motion target beside it when there is one,
         // and the guide targets after it.
         let attached = 1 + view
@@ -3542,7 +3572,7 @@ impl Renderer {
                     }),
                     stencil_ops: None,
                 }),
-                timestamp_writes: self.finish.layer_writes_between(view.layer, true, !water),
+                timestamp_writes: self.finish.layer_writes_between(view.layer, true, !split),
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
@@ -3626,14 +3656,26 @@ impl Renderer {
             }
             self.effects
                 .draw_solid_sprites(&mut pass, hdr_format, &effects);
-            if water {
+            if split {
                 drop(pass);
-                self.water.capture(
-                    &self.gpu,
-                    &mut encoder,
-                    &view.target,
-                    scene_color.then_some(&hdr.color),
-                );
+                if ray_gi {
+                    let rays = self
+                        .ray_shadows
+                        .as_ref()
+                        .and_then(crate::ray_shadows::RayShadows::trace_group);
+                    if let (Some(gi), Some(rays)) = (self.ray_gi.as_mut(), rays) {
+                        gi.encode(&mut encoder, &self.frame_bind_group, rays);
+                        gi.composite(&mut encoder, &hdr.color);
+                    }
+                }
+                if water {
+                    self.water.capture(
+                        &self.gpu,
+                        &mut encoder,
+                        &view.target,
+                        scene_color.then_some(&hdr.color),
+                    );
+                }
                 pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("render-wgpu world blended"),
                     color_attachments: &kept(&hdr, view.motion.as_ref())[..attached],
@@ -3862,6 +3904,9 @@ impl Renderer {
         }
         if let Some(shadows) = self.ray_shadows.as_mut().filter(|_| ray_mask) {
             shadows.submitted();
+        }
+        if let Some(gi) = self.ray_gi.as_mut().filter(|_| ray_gi) {
+            gi.submitted();
         }
         if water {
             self.water.submitted();

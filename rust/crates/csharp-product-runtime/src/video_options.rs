@@ -155,6 +155,7 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         "volumetricClouds" => readout.volumetric_clouds,
         "waterReflections" => readout.water_reflections,
         "rayTracedShadows" => readout.ray_traced_shadows,
+        "globalIllumination" => readout.global_illumination,
         _ => None,
     }?;
     Some(match refused {
@@ -176,6 +177,7 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         SettingRefusal::UnsupportedAdapter => "This graphics device cannot run it.",
         SettingRefusal::InitializationFailed => "It failed to start on this graphics device.",
         SettingRefusal::NoRayQueries => "This graphics device cannot trace rays.",
+        SettingRefusal::NeedsDlss => "It needs DLSS antialiasing.",
     })
 }
 
@@ -376,6 +378,7 @@ mod tests {
             volumetric_clouds: None,
             water_reflections: None,
             ray_traced_shadows: None,
+            global_illumination: None,
         };
         let catalogue = options.catalogue(&readout);
         assert_eq!(catalogue["stored"], false);

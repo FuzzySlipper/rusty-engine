@@ -122,6 +122,7 @@ pub struct ProductHostRendererSettingValues {
     /// `off`, `low` or `high`.
     pub water_reflections: String,
     pub ray_traced_shadows: bool,
+    pub global_illumination: String,
 }
 
 /// The scene's shadow layers and which requesting lights cast.

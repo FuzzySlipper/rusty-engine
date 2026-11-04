@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    AmbientOcclusionMode, Antialiasing, RendererSettingsDescriptor, VolumetricCloudsQuality,
-    VolumetricFogQuality, WaterReflectionsQuality, WindowMode,
+    AmbientOcclusionMode, Antialiasing, GlobalIllumination, RendererSettingsDescriptor,
+    VolumetricCloudsQuality, VolumetricFogQuality, WaterReflectionsQuality, WindowMode,
 };
 
 /// One choice of a [`RendererSettingKind::Choice`] option.
@@ -201,6 +201,17 @@ const AMBIENT_OCCLUSION_CHOICES: &[RendererSettingChoice] = &[
     },
 ];
 
+const GLOBAL_ILLUMINATION_CHOICES: &[RendererSettingChoice] = &[
+    RendererSettingChoice {
+        value: "off",
+        label: "Off",
+    },
+    RendererSettingChoice {
+        value: "rayTraced",
+        label: "Ray traced",
+    },
+];
+
 const WINDOW_MODE_CHOICES: &[RendererSettingChoice] = &[
     RendererSettingChoice {
         value: "windowed",
@@ -235,6 +246,9 @@ const VOLUMETRIC_FOG_CHOICES: &[RendererSettingChoice] = &[
 /// Measured on CraftSurvive's forest and pond views (Den
 /// `evidence/rt-shadows-10313`).
 const RAY_TRACED_SHADOWS_COST: &str = "On CraftSurvive at 2560×1440 on an RTX 3080, a moving view's frame is 2 to 4 ms shorter than with the sun's shadow maps and a still view's 6 to 11 ms longer, since maps that have not moved cost nothing. The acceleration structures hold about 95 MB.";
+
+/// Measured on CraftSurvive's forest, pond, cave-mouth and night views.
+const GLOBAL_ILLUMINATION_COST: &str = "On CraftSurvive at 2560×1440 on an RTX 3080, at DLSS quality the rays take 6 to 22 ms and Ray Reconstruction 15.5 ms, for frames of 43 to 83 ms against 16 to 31 ms with TAAU; at native resolution the rays take 12 to 45 ms and Ray Reconstruction 26 to 30 ms. The world cache and light tiles hold 92 MiB, and every shown mesh's vertices are copied for the rays.";
 
 /// Measured on `render-wgpu` `tests/water.rs`'s still water before a wall.
 const WATER_REFLECTIONS_COST: &str = "With still water filling the lower view at 1920×1080 and 4× multisampling, Low about 0.17 ms and High about 0.30 ms on an RX 9070 XT, 0.04 ms of it the copy of the scene's colour. Nothing in views without water.";
@@ -412,6 +426,18 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: None, requires: Some("shadows"), setup: None },
     },
     RendererSettingOption {
+        id: "globalIllumination",
+        label: "Ray-traced global illumination",
+        group: "Lighting",
+        description: "Traces the light that bounces between surfaces, in place of the baked light volume: colour from a lit wall on the floor, a cave mouth's glow fading into the dark. Needs DLSS antialiasing on a graphics card with Ray Reconstruction, and a restart.",
+        kind: RendererSettingKind::Choice {
+            choices: GLOBAL_ILLUMINATION_CHOICES,
+        },
+        restart: true,
+        cost: GLOBAL_ILLUMINATION_COST,
+        gallery: GalleryExperiment::Try { values: &["rayTraced"], alternatives: false, everything: None, requires: None, setup: None },
+    },
+    RendererSettingOption {
         id: "clusteredLighting",
         label: "Clustered lighting",
         group: "Advanced",
@@ -506,6 +532,8 @@ pub struct RendererSettingsOverrides {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ray_traced_shadows: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub global_illumination: Option<GlobalIllumination>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub clustered_lighting: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gpu_culling: Option<bool>,
@@ -582,6 +610,9 @@ impl RendererSettingsOverrides {
         if let Some(value) = self.water_reflections {
             settings.water_reflections = value;
         }
+        if let Some(value) = self.global_illumination {
+            settings.global_illumination = value;
+        }
         if let Some(value) = self.ray_traced_shadows {
             settings.ray_traced_shadows = value;
         }
@@ -614,6 +645,7 @@ impl RendererSettingsOverrides {
             "volumetricClouds" => self.volumetric_clouds.is_some(),
             "waterReflections" => self.water_reflections.is_some(),
             "rayTracedShadows" => self.ray_traced_shadows.is_some(),
+            "globalIllumination" => self.global_illumination.is_some(),
             "clusteredLighting" => self.clustered_lighting.is_some(),
             "gpuCulling" => self.gpu_culling.is_some(),
             "occlusionCulling" => self.occlusion_culling.is_some(),
@@ -706,6 +738,12 @@ impl RendererSettingsOverrides {
             }
             "clusteredLighting" => self.clustered_lighting = Some(toggle()?),
             "rayTracedShadows" => self.ray_traced_shadows = Some(toggle()?),
+            "globalIllumination" => {
+                self.global_illumination = Some(match choice()? {
+                    "rayTraced" => GlobalIllumination::RayTraced,
+                    _ => GlobalIllumination::Off,
+                });
+            }
             "gpuCulling" => self.gpu_culling = Some(toggle()?),
             "occlusionCulling" => self.occlusion_culling = Some(toggle()?),
             _ => return Err(format!("no renderer setting {id}")),
@@ -730,6 +768,7 @@ impl RendererSettingsOverrides {
             "volumetricClouds" => self.volumetric_clouds = None,
             "waterReflections" => self.water_reflections = None,
             "rayTracedShadows" => self.ray_traced_shadows = None,
+            "globalIllumination" => self.global_illumination = None,
             "clusteredLighting" => self.clustered_lighting = None,
             "gpuCulling" => self.gpu_culling = None,
             "occlusionCulling" => self.occlusion_culling = None,
@@ -813,6 +852,7 @@ impl RendererSettingsOverrides {
             volumetric_clouds: preset.volumetric_clouds.or(self.volumetric_clouds),
             water_reflections: preset.water_reflections.or(self.water_reflections),
             ray_traced_shadows: preset.ray_traced_shadows.or(self.ray_traced_shadows),
+            global_illumination: preset.global_illumination.or(self.global_illumination),
             clustered_lighting: preset.clustered_lighting.or(self.clustered_lighting),
             gpu_culling: preset.gpu_culling.or(self.gpu_culling),
             occlusion_culling: preset.occlusion_culling.or(self.occlusion_culling),
@@ -863,6 +903,10 @@ pub fn renderer_setting_value(settings: &RendererSettingsDescriptor, id: &str) -
         }),
         "clusteredLighting" => Value::from(settings.clustered_lighting),
         "rayTracedShadows" => Value::from(settings.ray_traced_shadows),
+        "globalIllumination" => Value::from(match settings.global_illumination {
+            GlobalIllumination::Off => "off",
+            GlobalIllumination::RayTraced => "rayTraced",
+        }),
         "gpuCulling" => Value::from(settings.gpu_culling),
         "occlusionCulling" => Value::from(settings.occlusion_culling),
         _ => return None,

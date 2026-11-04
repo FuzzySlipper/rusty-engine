@@ -334,6 +334,7 @@ fn add_light(
         let kind = u32(light.color_kind.w);
         let color = light.color_kind.rgb;
         if kind == 0u {
+#ifndef RAY_GI
             let sky_layer = u32(light.extra.w);
             var sky = 1.0;
             if sky_layer > 0u {
@@ -344,9 +345,12 @@ fn add_light(
             if sky_layer > 0u {
                 *sky_open = min(*sky_open, sky);
             }
+#endif
         } else if kind == 1u {
+#ifndef RAY_GI
             *irradiance += mix(light.extra.rgb, color, 0.5 * normal.y + 0.5) * occlusion * probe_outside;
             *environment += mix(light.extra.rgb, color, 0.5 * reflected.y + 0.5) * occlusion * probe_outside;
+#endif
         } else {
             var direction = -normalize(light.direction_decay.xyz);
             var attenuation = 1.0;
@@ -454,8 +458,14 @@ fn standard_radiance(
     let reflected = reflect(-view, normal);
     // Inside the indirect light volume its probes stand in for the ambient
     // and hemisphere rows and the sky's light.
+#ifdef RAY_GI
+    // Rays bring the indirect light after this pass (`ray_gi.wgsl`): only
+    // the lights' direct light is drawn here.
+    let probe = ProbeLight(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, 0.0, 0.0);
+#else
     let environment_share = max(metalness, MIRRORS_ENVIRONMENT);
     let probe = probe_light(world_position, normal, reflected, environment_share > 0.0 || frame.sky_light.x > 0.0);
+#endif
     if frame.cluster_grid.w == 1u {
         // The global list, then the fragment's cluster.
         let global_base = frame.cluster_grid.x * frame.cluster_grid.y * frame.cluster_grid.z * CLUSTER_STRIDE;
@@ -476,6 +486,9 @@ fn standard_radiance(
                 probe.ambient, probe.outside, &irradiance, &specular, &environment, &sky_open);
         }
     }
+#ifdef RAY_GI
+    return albedo * (1.0 - metalness) * irradiance / PI + specular;
+#else
     irradiance += probe.diffuse * occlusion * probe.coverage;
     environment += probe.reflected * occlusion * probe.coverage;
     let n_dot_v = clamp(dot(normal, view), 0.0, 1.0);
@@ -493,6 +506,7 @@ fn standard_radiance(
         water_reflection.a);
 #endif
     return albedo * (1.0 - metalness) * irradiance / PI + specular + reflection;
+#endif
 }
 
 // How open the sky is above `position`: the least of the ambient lights'

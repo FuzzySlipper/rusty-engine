@@ -642,6 +642,7 @@ struct ManifestRendererLighting {
     /// `enabled` or `disabled`; absent is disabled.
     #[serde(default)]
     ray_traced_shadows: Option<String>,
+    global_illumination: Option<String>,
     #[serde(default)]
     default_lights: ManifestDefaultLights,
 }
@@ -817,6 +818,16 @@ impl ProductRendererSettings {
                 ))
             }
         };
+        let global_illumination = match value.lighting.global_illumination.as_deref() {
+            None | Some("off") => render_model::GlobalIllumination::Off,
+            Some("rayTraced") => render_model::GlobalIllumination::RayTraced,
+            Some(_) => {
+                return Err(field_error(
+                    "renderer.lighting.globalIllumination",
+                    "must be off or rayTraced",
+                ))
+            }
+        };
         let render_scale = value.render_scale.unwrap_or(1.0);
         if !render_scale.is_finite()
             || !(RendererSettingsDescriptor::MIN_RENDER_SCALE..=1.0).contains(&render_scale)
@@ -846,6 +857,7 @@ impl ProductRendererSettings {
                 volumetric_fog,
                 volumetric_clouds,
                 water_reflections,
+                global_illumination,
                 ray_traced_shadows: switch(
                     value.lighting.ray_traced_shadows.as_deref(),
                     "renderer.lighting.rayTracedShadows",

@@ -87,10 +87,24 @@ pub(crate) struct Reconstruction<'a> {
     pub depth: &'a wgpu::TextureView,
     pub render: (u32, u32),
     pub inputs: &'a crate::motion::TemporalInputs<'a>,
+    /// What global illumination's specular rays give it, once they trace.
+    pub specular: Option<SpecularRays<'a>>,
     /// The HDR target at output resolution, which it fills.
     pub output: &'a wgpu::TextureView,
     pub output_size: (u32, u32),
     pub render_scale: f32,
+}
+
+/// How far each pixel's specular ray went (`ray_gi.rs`), and the camera it
+/// left, each matrix by rows.
+#[cfg_attr(
+    not(feature = "dlss"),
+    allow(dead_code, reason = "read only by the built stage")
+)]
+pub(crate) struct SpecularRays<'a> {
+    pub hit_distance: &'a wgpu::TextureView,
+    pub world_to_view: [f32; 16],
+    pub view_to_clip: [f32; 16],
 }
 
 #[cfg(not(feature = "dlss"))]
@@ -783,11 +797,17 @@ mod built {
                     color: work.color,
                     depth: work.depth,
                     motion_vectors: work.inputs.motion,
-                    // Forward shading reflects nothing RR must track apart:
-                    // reflections move as their surfaces do.
-                    specular_guide: DlssRayReconstructionSpecularGuide::SpecularMotionVectors(
-                        work.inputs.motion,
-                    ),
+                    // Until rays trace, reflections move as their surfaces do.
+                    specular_guide: match &work.specular {
+                        Some(rays) => DlssRayReconstructionSpecularGuide::SpecularHitDistance {
+                            texture_view: rays.hit_distance,
+                            world_to_view_rows_array: rays.world_to_view,
+                            view_to_clip_rows_array: rays.view_to_clip,
+                        },
+                        None => DlssRayReconstructionSpecularGuide::SpecularMotionVectors(
+                            work.inputs.motion,
+                        ),
+                    },
                     transparency_overlay: None,
                     color_before_transparency: None,
                     screen_space_subsurface_scattering_guide: None,
@@ -1162,7 +1182,7 @@ mod tests {
     #[test]
     fn a_ray_reconstruction_frame_refused_as_it_runs_draws_the_world_scaled() {
         const SIZE: (u32, u32) = (128, 72);
-        let gpu = Gpu::headless().expect("a wgpu adapter");
+        let gpu = Gpu::headless_with_ray_queries().expect("a wgpu adapter");
         if gpu.is_software() {
             return;
         }
@@ -1179,6 +1199,7 @@ mod tests {
                 &gpu,
                 RendererSettingsDescriptor {
                     antialiasing: Antialiasing::Dlss,
+                    global_illumination: render_model::GlobalIllumination::RayTraced,
                     render_scale,
                     ..RendererSettingsDescriptor::DEFAULT
                 },
@@ -1188,7 +1209,6 @@ mod tests {
                 detail: "injected".to_owned(),
             };
             renderer.upscale.dlss.failing = Some(refused.clone());
-            renderer.set_ray_reconstruction(true);
             let target = OffscreenTarget::new(&gpu, SIZE.0, SIZE.1, renderer.samples());
             // The refused frame scales the world; the next draws the world
             // as any TAAU frame does, its render picture left behind.

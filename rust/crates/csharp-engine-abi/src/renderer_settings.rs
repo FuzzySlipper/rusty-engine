@@ -72,6 +72,16 @@ pub enum NativeWaterReflectionsQuality {
     High = 2,
 }
 
+/// Where indirect light comes from: the probe volume and the sky's light,
+/// or rays traced from each pixel and denoised by DLSS Ray Reconstruction.
+/// Refused, the probes and the sky's light draw.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeGlobalIllumination {
+    Off = 0,
+    RayTraced = 1,
+}
+
 /// How the desktop window shows: a window of its own size, maximized
 /// within the monitor's work area, or borderless fullscreen, covering the
 /// monitor at the desktop's resolution. Streamed output has no window.
@@ -137,6 +147,7 @@ pub struct NativeRendererSettingsRequest {
     /// The sun's shadows traced as rays in place of its shadow maps, on a
     /// device made while it is on (a GPU with ray queries).
     pub ray_traced_shadows: bool,
+    pub global_illumination: NativeGlobalIllumination,
 }
 
 /// Why the device draws a setting differently from the request.
@@ -164,6 +175,8 @@ pub enum NativeRendererSettingRefusal {
     InitializationFailed = 11,
     /// The adapter has no ray queries (the ray-traced settings).
     NoRayQueries = 12,
+    /// The feature draws only under DLSS antialiasing (global illumination).
+    NeedsDlss = 13,
 }
 
 /// What the renderer draws with: the last request (the manifest's values
@@ -185,6 +198,7 @@ pub struct NativeRendererSettingsReadout {
     pub volumetric_clouds_refusal: NativeRendererSettingRefusal,
     pub water_reflections_refusal: NativeRendererSettingRefusal,
     pub ray_traced_shadows_refusal: NativeRendererSettingRefusal,
+    pub global_illumination_refusal: NativeRendererSettingRefusal,
 }
 
 /// How a renderer setting is chosen.

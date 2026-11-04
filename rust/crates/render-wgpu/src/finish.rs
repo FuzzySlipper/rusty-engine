@@ -743,6 +743,7 @@ impl Finish {
                                 motion: motion.is_some(),
                                 guides,
                                 ray_shadows: false,
+                                ray_gi: false,
                             }
                             .targets(
                                 HDR_FORMAT.into(),

@@ -59,6 +59,7 @@ mod post;
 mod precipitation;
 mod primitives;
 mod probes;
+mod ray_gi;
 mod ray_scene;
 mod ray_shadows;
 mod resources;
@@ -121,6 +122,7 @@ pub use driver::{
 pub use frame::FrameStats;
 pub use impostor::ImpostorReadout;
 pub use occlusion::OcclusionReadout;
+pub use ray_gi::RayGiReadout;
 pub use ray_scene::{ProbeHit, ProbeRay, RaySceneReadout};
 pub use scatter_select::ScatterSelectionReadout;
 pub use water::WaterReadout;
@@ -247,6 +249,8 @@ pub struct GpuReadout {
     pub device_lost: Option<String>,
     /// The ray scene, while it is asked for (`ray_scene.rs`).
     pub ray_scene: Option<RaySceneReadout>,
+    /// Ray-traced global illumination, while it draws (`ray_gi.rs`).
+    pub ray_gi: Option<RayGiReadout>,
     /// Why the guide targets inspection asks for (`OverlayShown::guide`)
     /// are not drawn on this device, while it asks (`motion.rs`).
     pub guides_refused: Option<String>,
@@ -356,6 +360,9 @@ pub struct RendererOptions {
     /// by default; a device without ray queries, or a software one, draws
     /// the cascades.
     pub ray_traced_shadows: bool,
+    /// `RustyEngineProductGlobalIllumination`: trace the world's indirect
+    /// light (`ray_gi.rs`).
+    pub global_illumination: render_model::GlobalIllumination,
 }
 
 impl Default for RendererOptions {
@@ -380,6 +387,7 @@ impl Default for RendererOptions {
             volumetric_clouds: render_model::VolumetricCloudsQuality::Off,
             water_reflections: render_model::WaterReflectionsQuality::Off,
             ray_traced_shadows: false,
+            global_illumination: render_model::GlobalIllumination::Off,
         }
     }
 }
@@ -423,6 +431,7 @@ impl RendererOptions {
         self.volumetric_clouds = settings.volumetric_clouds;
         self.water_reflections = settings.water_reflections;
         self.ray_traced_shadows = settings.ray_traced_shadows;
+        self.global_illumination = settings.global_illumination;
         self
     }
 
@@ -461,6 +470,7 @@ impl RendererOptions {
             volumetric_clouds: self.volumetric_clouds,
             water_reflections: self.water_reflections,
             ray_traced_shadows: self.ray_traced_shadows,
+            global_illumination: self.global_illumination,
         }
     }
 }
@@ -492,6 +502,9 @@ pub enum SettingRefusal {
     /// The adapter has no ray queries, or not the binding arrays the
     /// ray-traced settings read materials through (`ray_scene.rs`).
     NoRayQueries,
+    /// The feature draws only in `Antialiasing::Dlss` frames: their Ray
+    /// Reconstruction denoises it.
+    NeedsDlss,
 }
 
 /// The settings in effect and what the device refused: what a product
@@ -518,6 +531,7 @@ pub struct RendererSettingsReadout {
     pub volumetric_clouds: Option<SettingRefusal>,
     pub water_reflections: Option<SettingRefusal>,
     pub ray_traced_shadows: Option<SettingRefusal>,
+    pub global_illumination: Option<SettingRefusal>,
 }
 
 pub struct Renderer {
@@ -631,10 +645,9 @@ pub struct Renderer {
     /// an upscale stage or an image effect runs, kept while its size and
     /// sample count hold.
     picture: Option<target::RenderPicture>,
-    /// Asked for Ray Reconstruction (`set_ray_reconstruction`), the render
-    /// picture the world draws into while it runs (the output-size picture
-    /// is `picture`), whether this frame takes it, and whether it ran.
-    ray_reconstruction: bool,
+    /// The render picture the world draws into while Ray Reconstruction runs
+    /// (the output-size picture is `picture`), whether this frame takes it,
+    /// and whether it ran.
     reconstruction_picture: Option<target::RenderPicture>,
     reconstructing: bool,
     reconstructed: bool,
@@ -701,6 +714,10 @@ pub struct Renderer {
     /// What the world pipelines bind to trace the sun's shadows, while
     /// they do (`ray_shadows.rs`).
     ray_shadows: Option<ray_shadows::RayShadows>,
+    /// Ray-traced global illumination, while it is selected and nothing
+    /// refuses it, and the tools' asking for it without its denoiser.
+    ray_gi: Option<ray_gi::RayGi>,
+    ray_gi_without_denoiser: bool,
     /// Toward the sun whose shadows rays trace, while they do.
     ray_sun_toward: Option<glam::Vec3>,
 }
@@ -904,6 +921,8 @@ impl Renderer {
             surface_size: None,
             ray_scene: None,
             ray_scene_wanted: false,
+            ray_gi: None,
+            ray_gi_without_denoiser: false,
             ray_shadows: None,
             ray_sun_toward: None,
             animation_time: 0.0,
@@ -920,7 +939,6 @@ impl Renderer {
             scene_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             picture: None,
-            ray_reconstruction: false,
             reconstruction_picture: None,
             reconstructing: false,
             reconstructed: false,
@@ -1069,15 +1087,12 @@ impl Renderer {
             .then_some(SettingRefusal::SoftwareAdapter)
     }
 
-    /// Draw `Antialiasing::Dlss` frames with Ray Reconstruction in place of
-    /// super resolution, where it can run. Not a product setting: global
-    /// illumination will select it. For tools and tests until then.
+    /// Draw global illumination under any temporal stage, noise and all,
+    /// though no Ray Reconstruction runs: for tools and tests on GPUs
+    /// without it.
     #[doc(hidden)]
-    pub fn set_ray_reconstruction(&mut self, wanted: bool) {
-        self.ray_reconstruction = wanted;
-        if wanted {
-            self.upscale.prepare_dlss(&self.gpu);
-        }
+    pub fn set_ray_gi_without_denoiser(&mut self, wanted: bool) {
+        self.ray_gi_without_denoiser = wanted;
     }
 
     /// Why DLSS does not draw the temporal stage, if it cannot
@@ -1210,6 +1225,13 @@ impl Renderer {
                 effective.ray_traced_shadows = false;
                 refusal
             });
+        let global_illumination = (requested.global_illumination
+            != render_model::GlobalIllumination::Off)
+            .then(|| self.ray_gi_refusal())
+            .flatten()
+            .inspect(|_| {
+                effective.global_illumination = render_model::GlobalIllumination::Off;
+            });
         RendererSettingsReadout {
             requested,
             product: self.product_settings,
@@ -1225,6 +1247,7 @@ impl Renderer {
             volumetric_clouds,
             water_reflections,
             ray_traced_shadows,
+            global_illumination,
         }
     }
 
@@ -1320,6 +1343,13 @@ impl Renderer {
                         .as_ref()
                         .map(ray_shadows::RayShadows::timing),
                 )
+                .chain(
+                    self.ray_gi
+                        .as_ref()
+                        .map(ray_gi::RayGi::timings)
+                        .into_iter()
+                        .flatten(),
+                )
                 .collect(),
             ambient_occlusion: self.ambient_occlusion.readout(),
             distance_fields: self.distance_fields.readout(),
@@ -1337,10 +1367,11 @@ impl Renderer {
             water: self.water.readout(),
             upscale: self.upscaled,
             dlss: self.options.dlss.then(|| self.dlss_refusal()).flatten(),
-            ray_reconstruction: self
-                .ray_reconstruction
+            ray_reconstruction: (self.options.global_illumination
+                != render_model::GlobalIllumination::Off)
                 .then(|| self.upscale.ray_reconstruction_refusal())
                 .flatten(),
+            ray_gi: self.ray_gi.as_ref().map(ray_gi::RayGi::readout),
             device_lost: self.gpu.lost(),
             ray_scene: self.ray_scene_readout(),
             guides_refused: self

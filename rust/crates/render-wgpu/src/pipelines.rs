@@ -1081,6 +1081,7 @@ impl Layouts {
             features.without(Features::SKINNED)
         }
         .with(Features::RAY_SHADOWS, pipelines.target.ray_shadows)
+        .with(Features::RAY_GI, pipelines.target.ray_gi && !pass.blends())
         .with(
             Features::RAY_TRACE,
             pipelines.target.ray_shadows && pass.blends(),

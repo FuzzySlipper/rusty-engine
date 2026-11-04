@@ -2041,6 +2041,7 @@ mod tests {
             volumetric_clouds: csharp_engine_abi::NativeVolumetricCloudsQuality::Off,
             water_reflections: csharp_engine_abi::NativeWaterReflectionsQuality::Off,
             ray_traced_shadows: false,
+            global_illumination: csharp_engine_abi::NativeGlobalIllumination::Off,
         };
         services.begin_call(binding());
         let api = services.api();
@@ -2070,6 +2071,7 @@ mod tests {
                 volumetric_clouds: render_model::VolumetricCloudsQuality::Off,
                 water_reflections: render_model::WaterReflectionsQuality::Off,
                 ray_traced_shadows: false,
+                global_illumination: render_model::GlobalIllumination::Off,
             },
         };
         assert_eq!(call.take_output().frames[0].ops, vec![selected.clone()]);
@@ -2098,6 +2100,7 @@ mod tests {
             volumetric_clouds_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
             water_reflections_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
             ray_traced_shadows_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
+            global_illumination_refusal: csharp_engine_abi::NativeRendererSettingRefusal::None,
         };
         readout.effective.ambient_occlusion = NativeAmbientOcclusionMode::ScreenSpace;
         services.ingest_renderer_settings(readout);

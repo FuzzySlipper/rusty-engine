@@ -51,14 +51,17 @@ pub(crate) const RAY_TEXTURES: u32 = 256;
 /// A light row's shadow lane for the sun whose shadows are traced as rays
 /// (`rusty::types::RAY_SUN`).
 pub(crate) const RAY_SUN: f32 = 1_048_576.0;
-/// `RayPart` in `ray.wgsl`: five vectors.
-const PART_WORDS: usize = 20;
+/// `RayPart` in `ray.wgsl`: eight vectors.
+const PART_WORDS: usize = 32;
 /// `ray_blue_noise` in `ray.wgsl`: a 64×64 tile, two bytes a texel, made by
 /// void and cluster.
 const BLUE_NOISE: &[u8; 8192] = include_bytes!("blue_noise.bin");
 const PART_BYTES: u64 = (PART_WORDS * 4) as u64;
 /// A part's texture slot when it has none (`ray.wgsl` `NO_TEXTURE`).
 const NO_TEXTURE: u32 = u32::MAX;
+/// `RayPart.slots.w` (`ray.wgsl` `PART_MASKED`, `PART_VOXEL`).
+const PART_MASKED: u32 = 1;
+const PART_VOXEL: u32 = 2;
 /// The ray's start off the surface along its normal at the camera, and how
 /// much it grows a metre away, metres: past self-intersection with the
 /// surface's own triangles at the depths the world pass draws.
@@ -121,10 +124,13 @@ impl Pool {
         masked: &Masked,
         mesh: &GpuMesh,
     ) -> Option<(u32, u32)> {
+        // A skinned mesh keeps the pose it was placed in: a hit reads its uvs
+        // and colours, which every pose shares.
+        let skinned = matches!(masked.mesh, MeshRef::AnimatedSkinned(..));
         let held = self
             .meshes
             .get(&masked.mesh)
-            .filter(|(source, ..)| std::ptr::eq(source.as_ptr(), Arc::as_ptr(&mesh.cpu)))
+            .filter(|(source, ..)| skinned || std::ptr::eq(source.as_ptr(), Arc::as_ptr(&mesh.cpu)))
             .map(|(_, first, _)| *first);
         let first_vertex = match held {
             Some(first) => first,
@@ -193,8 +199,10 @@ type Bound = (u64, u64);
 pub(crate) struct RayShadows {
     pool: Pool,
     parts: wgpu::Buffer,
-    /// Each masked part's row as last written.
+    /// Each pooled part's row as last written.
     rows: HashMap<PartId, [u32; PART_WORDS]>,
+    /// The emissive parts among them, for global illumination's light tiles.
+    emissive: Vec<crate::ray_gi::EmissivePart>,
     /// Each slot's texture id, in slot order.
     textures: Vec<String>,
     params: wgpu::Buffer,
@@ -245,6 +253,7 @@ impl RayShadows {
             pool: Pool::new(device, POOL_VERTICES, POOL_INDICES),
             parts: parts_buffer(device, 1),
             rows: HashMap::new(),
+            emissive: Vec::new(),
             textures: Vec::new(),
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("render-wgpu ray shadows params"),
@@ -295,6 +304,15 @@ impl RayShadows {
             .as_ref()
             .filter(|(bound, _)| Some(*bound) == self.bound)
             .map(|(_, group)| group)
+    }
+
+    /// What rays bind beside a pass's own groups, once a TLAS is built.
+    pub fn trace_group(&self) -> Option<&wgpu::BindGroup> {
+        self.trace_group.as_ref().map(|(_, group)| group)
+    }
+
+    pub fn emissive(&self) -> &[crate::ray_gi::EmissivePart] {
+        &self.emissive
     }
 
     /// The depth a view of `size` draws its pre-pass into.
@@ -595,7 +613,7 @@ impl Renderer {
             });
             placed = self.place_masked(&mut shadows.pool, &mut encoder, masked);
         }
-        let rows = self.masked_rows(&mut shadows, placed.unwrap_or_default());
+        let rows = self.pooled_rows(&mut shadows, placed.unwrap_or_default());
         self.write_ray_rows(&mut shadows, rows);
         self.gpu.queue.submit([encoder.finish()]);
         self.ray_shadows = Some(shadows);
@@ -620,100 +638,136 @@ impl Renderer {
         Some(placed)
     }
 
-    /// The masked parts' rows, and the texture slots they take (the group
-    /// is made again when those change).
-    fn masked_rows(
+    /// The pooled parts' rows, and the texture slots they take (the group
+    /// is made again when those change). Masked parts take theirs first:
+    /// without one they lose their cut-out, and the others a colour they
+    /// keep as a mean.
+    fn pooled_rows(
         &self,
         shadows: &mut RayShadows,
-        placed: Vec<(&Masked, u32, u32)>,
+        mut placed: Vec<(&Masked, u32, u32)>,
     ) -> HashMap<PartId, [u32; PART_WORDS]> {
         let parts = &self.tables.parts;
         let mut rows = HashMap::with_capacity(placed.len());
         let mut textures: Vec<String> = Vec::new();
+        let mut emissive = Vec::new();
+        placed.sort_by_key(|(entry, ..)| {
+            !parts.state[entry.part as usize]
+                .class
+                .features
+                .contains(crate::shaders::Features::MASK)
+        });
         for (entry, first_index, first_vertex) in placed {
             let Some(Some(part)) = parts.meta.get(entry.part as usize) else {
                 continue;
             };
-            let MaterialRef::Retained(material) = &part.material else {
-                continue;
-            };
-            let Some(row) = self.tables.materials.get(*material) else {
-                continue;
-            };
-            let size = row
-                .descriptor
-                .texture
-                .as_ref()
-                .and_then(|texture| self.tables.textures.get(texture))
-                .map(|texture| texture.size);
-            let params = crate::apply::MaterialParams::of(&row.descriptor, size);
-            let Some(cutoff) = params.alpha_cutoff else {
-                continue;
-            };
-            let slot = match &row.descriptor.texture {
-                Some(texture) if self.tables.textures.contains_key(texture) => {
-                    match textures.iter().position(|held| held == texture) {
-                        Some(slot) => slot as u32,
-                        None if textures.len() < RAY_TEXTURES as usize => {
-                            textures.push(texture.clone());
-                            textures.len() as u32 - 1
+            let at = entry.part as usize * crate::tables::PART_ROW_FLOATS;
+            let colour = &parts.gpu[at + 28..at + 32];
+            let emission = &parts.gpu[at + 32..at + 35];
+            let (mut row, mean) = match &part.material {
+                MaterialRef::Retained(material) => {
+                    let Some(row) = self.tables.materials.get(*material) else {
+                        continue;
+                    };
+                    let size = row
+                        .descriptor
+                        .texture
+                        .as_ref()
+                        .and_then(|texture| self.tables.textures.get(texture))
+                        .map(|texture| texture.size);
+                    let params = crate::apply::MaterialParams::of(&row.descriptor, size);
+                    let slot = match &row.descriptor.texture {
+                        Some(texture) if self.tables.textures.contains_key(texture) => {
+                            match textures.iter().position(|held| held == texture) {
+                                Some(slot) => slot as u32,
+                                None if textures.len() < RAY_TEXTURES as usize => {
+                                    textures.push(texture.clone());
+                                    textures.len() as u32 - 1
+                                }
+                                None => NO_TEXTURE,
+                            }
                         }
-                        None => NO_TEXTURE,
-                    }
+                        _ => NO_TEXTURE,
+                    };
+                    let [a, b, c, d, e, f] = row
+                        .maps
+                        .base
+                        .unwrap_or(crate::glb::UvTransform::IDENTITY)
+                        .0
+                        .map(f32::to_bits);
+                    let (tile, rect) =
+                        params
+                            .voxel_surface
+                            .map_or(([0.0; 4], [0.0; 4]), |surface| {
+                                (
+                                    [
+                                        surface.tile_scale[0],
+                                        surface.tile_scale[1],
+                                        surface.tile_origin[0],
+                                        surface.tile_origin[1],
+                                    ],
+                                    [
+                                        surface.uv_min[0],
+                                        surface.uv_min[1],
+                                        surface.uv_max[0],
+                                        surface.uv_max[1],
+                                    ],
+                                )
+                            });
+                    let kind = u32::from(params.alpha_cutoff.is_some()) * PART_MASKED
+                        + u32::from(params.voxel_surface.is_some()) * PART_VOXEL;
+                    let mut row_words = [0u32; PART_WORDS];
+                    row_words[..4].copy_from_slice(&[first_index, first_vertex, slot, kind]);
+                    row_words[4..8].copy_from_slice(&[
+                        a,
+                        b,
+                        c,
+                        params.alpha_cutoff.unwrap_or(0.0).to_bits(),
+                    ]);
+                    row_words[8..11].copy_from_slice(&[d, e, f]);
+                    row_words[12..16].copy_from_slice(&tile.map(f32::to_bits));
+                    row_words[16..20].copy_from_slice(&rect.map(f32::to_bits));
+                    row_words[23] = params.roughness.to_bits();
+                    row_words[27] = params.metalness.to_bits();
+                    let mean = (slot == NO_TEXTURE)
+                        .then(|| self.tables.material_means.get(&row.descriptor.id))
+                        .flatten()
+                        .copied()
+                        .unwrap_or([1.0; 3]);
+                    (row_words, mean)
                 }
-                _ => NO_TEXTURE,
+                // Lit but untextured, or flat: no texture, full roughness.
+                MaterialRef::LitFallback | MaterialRef::Unlit => {
+                    let mut row_words = [0u32; PART_WORDS];
+                    row_words[..4].copy_from_slice(&[first_index, first_vertex, NO_TEXTURE, 0]);
+                    row_words[23] = 1.0f32.to_bits();
+                    (row_words, [1.0; 3])
+                }
             };
-            let [a, b, c, d, e, f] = row
-                .maps
-                .base
-                .unwrap_or(crate::glb::UvTransform::IDENTITY)
-                .0
-                .map(f32::to_bits);
-            let (tile, rect) = params
-                .voxel_surface
-                .map_or(([0.0; 4], [0.0; 4]), |surface| {
-                    (
-                        [
-                            surface.tile_scale[0],
-                            surface.tile_scale[1],
-                            surface.tile_origin[0],
-                            surface.tile_origin[1],
-                        ],
-                        [
-                            surface.uv_min[0],
-                            surface.uv_min[1],
-                            surface.uv_max[0],
-                            surface.uv_max[1],
-                        ],
-                    )
+            row[11] = colour[3].to_bits();
+            for channel in 0..3 {
+                row[20 + channel] = (colour[channel] * mean[channel]).to_bits();
+                row[24 + channel] = emission[channel].to_bits();
+            }
+            // A part scattered in copies is found by rays alone: its row has
+            // no one transform to sample a light from.
+            if emission.iter().any(|channel| *channel > 0.0)
+                && parts.state[entry.part as usize].scatter_level.is_none()
+            {
+                let triangles = entry.index_count / 3;
+                row[28] = triangles;
+                let model = &parts.gpu[at..at + 16];
+                emissive.push(crate::ray_gi::EmissivePart {
+                    part: entry.part,
+                    rows: std::array::from_fn(|axis| {
+                        std::array::from_fn(|column| model[column * 4 + axis])
+                    }),
+                    triangles,
                 });
-            let colour_alpha = parts.gpu[entry.part as usize * crate::tables::PART_ROW_FLOATS + 31];
-            rows.insert(
-                entry.part,
-                [
-                    first_index,
-                    first_vertex,
-                    slot,
-                    if params.voxel_surface.is_some() { 2 } else { 1 },
-                    a,
-                    b,
-                    c,
-                    cutoff.to_bits(),
-                    d,
-                    e,
-                    f,
-                    colour_alpha.to_bits(),
-                    tile[0].to_bits(),
-                    tile[1].to_bits(),
-                    tile[2].to_bits(),
-                    tile[3].to_bits(),
-                    rect[0].to_bits(),
-                    rect[1].to_bits(),
-                    rect[2].to_bits(),
-                    rect[3].to_bits(),
-                ],
-            );
+            }
+            rows.insert(entry.part, row);
         }
+        shadows.emissive = emissive;
         if textures != shadows.textures {
             shadows.textures = textures;
             shadows.changes += 1;
@@ -846,6 +900,17 @@ impl Renderer {
                     ],
                 }),
         )
+    }
+
+    /// Ready the group 4 of a compute pass that traces. Whether it can.
+    pub(crate) fn refresh_ray_trace_group(&mut self) -> bool {
+        let Some(mut shadows) = self.ray_shadows.take() else {
+            return false;
+        };
+        self.refresh_trace_group(&mut shadows);
+        let ready = shadows.bound.is_some() && shadows.trace_group.is_some();
+        self.ray_shadows = Some(shadows);
+        ready
     }
 
     /// The mask pass's and ambient occlusion's group 4, made again when
