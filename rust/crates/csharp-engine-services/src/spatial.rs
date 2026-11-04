@@ -509,14 +509,23 @@ pub(crate) struct RuntimeSpatialBridge {
     distance_fields: bool,
 }
 
+/// A collision-derived grid standing beside the one published last.
+struct NavigationGrid {
+    navigation: NavigationState,
+    cache: Option<CollisionNavigationCache>,
+}
+
 pub(crate) struct SpatialSession {
     pub(crate) scene: Arc<VoxelCollisionScene>,
     pub(crate) world_origin: engine_spatial::WorldOriginState,
+    /// The grid published last, which a request naming no grid reads.
     navigation: Option<NavigationState>,
     navigation_revision: u64,
     /// The last collision-derived publication's columns and edges, kept so
     /// the next one derives only what moved or changed.
     collision_navigation: Option<CollisionNavigationCache>,
+    /// Other collision-derived grids, for agents of other sizes, by grid id.
+    grids_beside: BTreeMap<u64, NavigationGrid>,
     content: SpatialContentComposition,
     controller: CharacterControllerService,
     last_character_receipt: Option<CharacterControllerReceipt>,
@@ -649,6 +658,7 @@ impl SpatialSession {
         let replaced = (
             std::mem::replace(&mut self.content, composition),
             self.navigation.replace(navigation),
+            std::mem::take(&mut self.grids_beside),
         );
         // Freeing a large composition's navigation takes an update several
         // milliseconds, so a thread of its own does it; when none can be
@@ -744,8 +754,14 @@ impl SpatialSession {
     ) -> R {
         let before = SceneRevisions::of(&self.scene);
         let (result, regions) = change(Arc::make_mut(&mut self.scene));
-        if let Some(cache) = &mut self.collision_navigation {
-            cache.record_change(before, SceneRevisions::of(&self.scene), regions);
+        let after = SceneRevisions::of(&self.scene);
+        let beside = self.grids_beside.values_mut();
+        for cache in self
+            .collision_navigation
+            .iter_mut()
+            .chain(beside.filter_map(|grid| grid.cache.as_mut()))
+        {
+            cache.record_change(before, after, regions.clone());
         }
         result
     }
@@ -764,13 +780,133 @@ impl SpatialSession {
         self.scene = scene;
         let shift =
             [0, 1, 2].map(|axis| origin_before[axis].saturating_sub(origin_after[axis]) as f64);
-        if let Some(navigation) = &mut self.navigation {
+        let after = SceneRevisions::of(&self.scene);
+        let beside = self.grids_beside.values_mut();
+        let (navigations, caches): (Vec<_>, Vec<_>) = beside
+            .map(|grid| (&mut grid.navigation, grid.cache.as_mut()))
+            .unzip();
+        for navigation in self.navigation.iter_mut().chain(navigations) {
             for (origin, shift) in navigation.grid_origin.iter_mut().zip(shift) {
                 *origin += shift;
             }
         }
-        if let Some(cache) = &mut self.collision_navigation {
-            cache.rebase(before, SceneRevisions::of(&self.scene), shift);
+        for cache in self
+            .collision_navigation
+            .iter_mut()
+            .chain(caches.into_iter().flatten())
+        {
+            cache.rebase(before, after, shift);
+        }
+    }
+
+    /// The grid a request names; 0 is the one published last.
+    fn grid(&self, grid_id: u64) -> Option<&NavigationState> {
+        match self.navigation.as_ref() {
+            Some(latest) if grid_id == 0 || latest.grid_id() == grid_id => Some(latest),
+            _ => self.grids_beside.get(&grid_id).map(|grid| &grid.navigation),
+        }
+    }
+
+    fn grid_mut(&mut self, grid_id: u64) -> Option<&mut NavigationState> {
+        match self.navigation.as_mut() {
+            Some(latest) if grid_id == 0 || latest.grid_id() == grid_id => Some(latest),
+            _ => self
+                .grids_beside
+                .get_mut(&grid_id)
+                .map(|grid| &mut grid.navigation),
+        }
+    }
+
+    /// The columns and edges of the grid a request names.
+    fn grid_cache(&self, grid_id: u64) -> Option<&CollisionNavigationCache> {
+        let latest = self.navigation.as_ref();
+        if grid_id == 0 || latest.is_some_and(|latest| latest.grid_id() == grid_id) {
+            return self.collision_navigation.as_ref();
+        }
+        self.grids_beside.get(&grid_id)?.cache.as_ref()
+    }
+
+    /// Makes `grid_id` the latest for a collision-derived publication. The
+    /// grid that was latest stands beside it, unless another kind of
+    /// navigation, which holds a session alone.
+    fn bring_forward(&mut self, grid_id: u64) {
+        if self
+            .navigation
+            .as_ref()
+            .is_some_and(|latest| latest.grid_id() == grid_id)
+        {
+            return;
+        }
+        let forward = self.grids_beside.remove(&grid_id);
+        let stands_beside = self
+            .navigation
+            .as_ref()
+            .is_some_and(|latest| matches!(latest.source, NavigationSource::CollisionDerived));
+        if forward.is_none() && !stands_beside {
+            return;
+        }
+        let (navigation, cache) = match forward {
+            Some(grid) => (Some(grid.navigation), grid.cache),
+            None => (None, None),
+        };
+        let cache = std::mem::replace(&mut self.collision_navigation, cache);
+        if let Some(latest) = std::mem::replace(&mut self.navigation, navigation) {
+            if stands_beside {
+                self.grids_beside.insert(
+                    latest.grid_id(),
+                    NavigationGrid {
+                        navigation: latest,
+                        cache,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Clears one grid. When it was the latest, the highest grid left takes
+    /// its place.
+    fn clear_grid(&mut self, grid_id: u64) {
+        if self.grids_beside.remove(&grid_id).is_some() {
+            return;
+        }
+        if !self
+            .navigation
+            .as_ref()
+            .is_some_and(|latest| latest.grid_id() == grid_id)
+        {
+            return;
+        }
+        let next = self.grids_beside.pop_last().map(|(_, grid)| grid);
+        self.content = SpatialContentComposition::default();
+        match next {
+            Some(grid) => {
+                self.navigation = Some(grid.navigation);
+                self.collision_navigation = grid.cache;
+            }
+            None => self.navigation = None,
+        }
+    }
+
+    fn grid_info(&self, navigation: &NavigationState, latest: bool) -> NativeNavigationGridInfo {
+        let cache = self
+            .grid_cache(navigation.grid_id())
+            .filter(|_| matches!(navigation.source, NavigationSource::CollisionDerived));
+        let bounds = cache.map(CollisionNavigationCache::bounds);
+        let shape = cache.map(|cache| cache.key().policy.character.shape);
+        NativeNavigationGridInfo {
+            grid_id: navigation.grid_id(),
+            kind: navigation.kind(),
+            latest,
+            walkable_cell_count: navigation.projection.walkable_len() as u64,
+            projection_hash: navigation.projection_hash(),
+            navigation_revision: navigation.revision,
+            cell_size: navigation.projection.grid().voxel_size(),
+            agent_radius: shape.map_or(0.0, |shape| shape.radius),
+            agent_height: shape.map_or(0.0, |shape| shape.standing_height),
+            min_x: bounds.map_or(0, |bounds| bounds.min_x),
+            max_x: bounds.map_or(0, |bounds| bounds.max_x),
+            min_z: bounds.map_or(0, |bounds| bounds.min_z),
+            max_z: bounds.map_or(0, |bounds| bounds.max_z),
         }
     }
 }
@@ -978,6 +1114,10 @@ impl NavigationState {
 
     fn projection_hash(&self) -> u64 {
         self.projection_hash
+    }
+
+    fn grid_id(&self) -> u64 {
+        u64::from(self.projection.grid().id().raw())
     }
 
     fn kind(&self) -> NativeNavigationProjectionKind {
@@ -1544,6 +1684,7 @@ impl RuntimeSpatialBridge {
                 navigation: None,
                 navigation_revision: 0,
                 collision_navigation: None,
+                grids_beside: BTreeMap::new(),
                 content: SpatialContentComposition::default(),
                 controller: CharacterControllerService::default(),
                 last_character_receipt: None,
@@ -2088,6 +2229,7 @@ impl RuntimeSpatialBridge {
         composition.base = Some((identity, admitted));
         session.navigation_revision = navigation_revision;
         session.navigation = Some(navigation);
+        session.grids_beside.clear();
         session.content = composition;
         Ok(NativeSpatialContentArtifactReplaceReceipt {
             content_reference_value: identity.content_reference.value,
@@ -2319,6 +2461,7 @@ impl RuntimeSpatialBridge {
             projection_hash: projection.projection_hash(),
             navigation_revision,
         };
+        session.grids_beside.clear();
         session.navigation = Some(NavigationState {
             source: NavigationSource::HostWalkableCells,
             projection,
@@ -2385,6 +2528,7 @@ impl RuntimeSpatialBridge {
             projection_hash: projection.projection_hash(),
             navigation_revision,
         };
+        session.grids_beside.clear();
         session.navigation = Some(NavigationState {
             source: NavigationSource::VoxelDerived(scene),
             projection,
@@ -2499,17 +2643,22 @@ impl RuntimeSpatialBridge {
         };
         let session = self.session_mut(request.session)?;
         let started = std::time::Instant::now();
+        let previous = match session.grids_beside.get(&request.config.grid_id) {
+            Some(beside) => beside.cache.as_ref(),
+            None => session.collision_navigation.as_ref(),
+        };
         let delta = derive_collision_navigation(
             &session.scene,
             grid,
             [f64::from(world_min.y), f64::from(world_max.y)],
             navigation_policy,
             bounds,
-            session.collision_navigation.as_ref(),
+            previous,
         )
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_COLLISION_NAVIGATION_PROJECTION", error.code())
         })?;
+        session.bring_forward(request.config.grid_id);
         let (derived_columns, reused_columns, edge_tests) = (
             delta.derived_columns(),
             delta.reused_columns(),
@@ -2621,21 +2770,22 @@ impl RuntimeSpatialBridge {
                 CsharpEngineServicesError::new("CSHARP_NAVIGATION_TRAVERSAL", error.label())
             })?;
         let session = self.session_mut(request.session)?;
-        let navigation = session.navigation.as_mut().ok_or_else(|| {
+        let navigation_revision = session.navigation_revision + 1;
+        let navigation = session.grid_mut(request.grid_id).ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_NAVIGATION_TRAVERSAL",
                 "navigation projection is unavailable",
             )
         })?;
-        session.navigation_revision += 1;
-        let navigation_revision = session.navigation_revision;
         navigation.traversal = traversal;
         navigation.revision = navigation_revision;
-        Ok(NativeNavigationTraversalReplaceReceipt {
+        let receipt = NativeNavigationTraversalReplaceReceipt {
             traversal_cell_count: navigation.traversal.len() as u64,
             traversal_overlay_hash: navigation.traversal.overlay_hash(),
             navigation_revision,
-        })
+        };
+        session.navigation_revision = navigation_revision;
+        Ok(receipt)
     }
 
     fn clear_navigation_traversal(
@@ -2644,22 +2794,22 @@ impl RuntimeSpatialBridge {
     ) -> Result<NativeNavigationTraversalReplaceReceipt, CsharpEngineServicesError> {
         self.settle_deferred(request.session)?;
         let session = self.session_mut(request.session)?;
-        let navigation = session.navigation.as_mut().ok_or_else(|| {
+        let navigation_revision = session.navigation_revision + 1;
+        let navigation = session.grid_mut(request.grid_id).ok_or_else(|| {
             CsharpEngineServicesError::new(
                 "CSHARP_NAVIGATION_TRAVERSAL",
                 "navigation projection is unavailable",
             )
         })?;
-        let traversal = NavTraversalOverlay::empty();
-        session.navigation_revision += 1;
-        let navigation_revision = session.navigation_revision;
-        navigation.traversal = traversal;
+        navigation.traversal = NavTraversalOverlay::empty();
         navigation.revision = navigation_revision;
-        Ok(NativeNavigationTraversalReplaceReceipt {
+        let receipt = NativeNavigationTraversalReplaceReceipt {
             traversal_cell_count: 0,
             traversal_overlay_hash: navigation.traversal.overlay_hash(),
             navigation_revision,
-        })
+        };
+        session.navigation_revision = navigation_revision;
+        Ok(receipt)
     }
 
     fn replace_volumetric_navigation_traversal(
@@ -2683,8 +2833,7 @@ impl RuntimeSpatialBridge {
         }));
         let session = self.session_mut(request.session)?;
         let source_hash = session
-            .navigation
-            .as_ref()
+            .grid(request.grid_id)
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_NAVIGATION_VOLUMETRIC_TRAVERSAL",
@@ -2698,20 +2847,20 @@ impl RuntimeSpatialBridge {
                     "voxel-derived navigation is unavailable",
                 )
             })?;
-        session.navigation_revision += 1;
-        let navigation_revision = session.navigation_revision;
+        let navigation_revision = session.navigation_revision + 1;
         let navigation = session
-            .navigation
-            .as_mut()
+            .grid_mut(request.grid_id)
             .expect("navigation checked above");
         navigation.volumetric_traversal = traversal;
         navigation.revision = navigation_revision;
-        Ok(NativeNavigationVolumetricTraversalReplaceReceipt {
+        let receipt = NativeNavigationVolumetricTraversalReplaceReceipt {
             traversal_cell_count: navigation.volumetric_traversal.len() as u64,
             traversal_overlay_hash: navigation.volumetric_traversal.overlay_hash(),
             volumetric_source_hash: source_hash,
             navigation_revision,
-        })
+        };
+        session.navigation_revision = navigation_revision;
+        Ok(receipt)
     }
 
     fn clear_volumetric_navigation_traversal(
@@ -2721,8 +2870,7 @@ impl RuntimeSpatialBridge {
         self.settle_deferred(request.session)?;
         let session = self.session_mut(request.session)?;
         let source_hash = session
-            .navigation
-            .as_ref()
+            .grid(request.grid_id)
             .ok_or_else(|| {
                 CsharpEngineServicesError::new(
                     "CSHARP_NAVIGATION_VOLUMETRIC_TRAVERSAL",
@@ -2736,20 +2884,45 @@ impl RuntimeSpatialBridge {
                     "voxel-derived navigation is unavailable",
                 )
             })?;
-        session.navigation_revision += 1;
-        let navigation_revision = session.navigation_revision;
+        let navigation_revision = session.navigation_revision + 1;
         let navigation = session
-            .navigation
-            .as_mut()
+            .grid_mut(request.grid_id)
             .expect("navigation checked above");
         navigation.volumetric_traversal = VolumetricNavTraversalOverlay::empty();
         navigation.revision = navigation_revision;
-        Ok(NativeNavigationVolumetricTraversalReplaceReceipt {
+        let receipt = NativeNavigationVolumetricTraversalReplaceReceipt {
             traversal_cell_count: 0,
             traversal_overlay_hash: navigation.volumetric_traversal.overlay_hash(),
             volumetric_source_hash: source_hash,
             navigation_revision,
-        })
+        };
+        session.navigation_revision = navigation_revision;
+        Ok(receipt)
+    }
+
+    fn read_navigation_grids(
+        &mut self,
+        request: NativeNavigationGridsRequest,
+    ) -> Result<NativeNavigationGridsResult, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let beside = session.grids_beside.values();
+        let mut grids: Vec<_> = beside
+            .map(|grid| session.grid_info(&grid.navigation, false))
+            .chain(
+                session
+                    .navigation
+                    .iter()
+                    .map(|latest| session.grid_info(latest, true)),
+            )
+            .collect();
+        grids.sort_unstable_by_key(|grid| grid.grid_id);
+        let grids = grids.into_boxed_slice();
+        let result = NativeNavigationGridsResult {
+            grids: grids.as_ptr(),
+            grids_len: grids.len(),
+        };
+        self.borrowed.hold(grids);
+        Ok(result)
     }
 
     fn read_navigation_projection(
@@ -2757,7 +2930,7 @@ impl RuntimeSpatialBridge {
         request: NativeNavigationProjectionReadRequest,
     ) -> Result<NativeNavigationProjectionReadout, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
-        let Some(navigation) = session.navigation.as_ref() else {
+        let Some(navigation) = session.grid(request.grid_id) else {
             return Ok(NativeNavigationProjectionReadout {
                 navigation_revision: session.navigation_revision,
                 ..Default::default()
@@ -2782,7 +2955,7 @@ impl RuntimeSpatialBridge {
         request: NativeNavigationPathRequest,
     ) -> Result<NativeNavigationPathResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
-        let Some(navigation) = session.navigation.as_mut() else {
+        let Some(navigation) = session.grid_mut(request.grid_id) else {
             return Ok(NativeNavigationPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 ..Default::default()
@@ -2840,7 +3013,7 @@ impl RuntimeSpatialBridge {
         request: NativeNavigationWeightedPathRequest,
     ) -> Result<NativeNavigationWeightedPathResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
-        let Some(navigation) = session.navigation.as_mut() else {
+        let Some(navigation) = session.grid_mut(request.grid_id) else {
             return Ok(NativeNavigationWeightedPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 ..Default::default()
@@ -2912,7 +3085,7 @@ impl RuntimeSpatialBridge {
         request: NativeNavigationVolumetricPathRequest,
     ) -> Result<NativeNavigationPathResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
-        let Some(navigation) = session.navigation.as_mut() else {
+        let Some(navigation) = session.grid_mut(request.grid_id) else {
             return Ok(NativeNavigationPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 ..Default::default()
@@ -2977,7 +3150,7 @@ impl RuntimeSpatialBridge {
         request: NativeNavigationVolumetricWeightedPathRequest,
     ) -> Result<NativeNavigationVolumetricWeightedPathResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
-        let Some(navigation) = session.navigation.as_mut() else {
+        let Some(navigation) = session.grid_mut(request.grid_id) else {
             return Ok(NativeNavigationVolumetricWeightedPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 ..Default::default()
@@ -3054,7 +3227,12 @@ impl RuntimeSpatialBridge {
         self.settle_deferred(request.session)?;
         let session = self.session_mut(request.session)?;
         session.navigation_revision += 1;
+        if request.grid_id != 0 {
+            session.clear_grid(request.grid_id);
+            return Ok(());
+        }
         session.navigation = None;
+        session.grids_beside.clear();
         session.content = SpatialContentComposition::default();
         Ok(())
     }
@@ -3064,7 +3242,7 @@ impl RuntimeSpatialBridge {
         request: NativeNavigationStepRequest,
     ) -> Result<NativeNavigationStepResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
-        let Some(navigation) = session.navigation.as_ref() else {
+        let Some(navigation) = session.grid(request.grid_id) else {
             return Ok(NativeNavigationStepResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
                 ..Default::default()
@@ -3079,7 +3257,8 @@ impl RuntimeSpatialBridge {
         result.edges_len = edge_kinds.len();
         result.next_edge_kind = edge_kinds.get(1).map(|edge| edge.kind).unwrap_or_default();
         if result.next_edge_kind == NativeNavigationEdgeKind::Jump {
-            result.next_jump_departure = next_jump_departure(session, navigation, &path_cells)?;
+            result.next_jump_departure =
+                next_jump_departure(session, request.grid_id, navigation, &path_cells)?;
         }
         self.borrowed.hold((path, edge_kinds));
         Ok(result)
@@ -3090,10 +3269,11 @@ impl RuntimeSpatialBridge {
 /// the second after jumping, as the derivation's jump model plans it.
 fn next_jump_departure(
     session: &SpatialSession,
+    grid_id: u64,
     navigation: &NavigationState,
     path: &[VoxelCoord],
 ) -> Result<f32, CsharpEngineServicesError> {
-    let (Some(cache), [from, to, ..]) = (session.collision_navigation.as_ref(), path) else {
+    let (Some(cache), [from, to, ..]) = (session.grid_cache(grid_id), path) else {
         return Ok(0.0);
     };
     let support = |cell: &VoxelCoord| {
@@ -5170,6 +5350,25 @@ unsafe extern "C" fn clear_spatial_volumetric_navigation_traversal(
     }
 }
 
+unsafe extern "C" fn read_navigation_grids(
+    context: *mut c_void,
+    request: NativeNavigationGridsRequest,
+    result: *mut NativeNavigationGridsResult,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(error);
+    if context.is_null() || result.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_navigation_grids(request) {
+        Ok(value) => {
+            unsafe { *result = value };
+            ABI_OK
+        }
+        Err(refusal) => refuse(&refusal, error),
+    }
+}
+
 unsafe extern "C" fn read_navigation_projection(
     context: *mut c_void,
     request: NativeNavigationProjectionReadRequest,
@@ -5747,6 +5946,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         replace_volumetric_navigation_traversal: replace_spatial_volumetric_navigation_traversal,
         clear_volumetric_navigation_traversal: clear_spatial_volumetric_navigation_traversal,
         read_navigation_projection,
+        read_navigation_grids,
         read_map: inspection::read_map,
         default_collision_navigation_config: collision_navigation::default_config,
         explain_collision_navigation_column: collision_navigation::explain_column,
@@ -7572,6 +7772,7 @@ mod tests {
             },
             max_step_units: 0.5,
             max_visited,
+            grid_id: 0,
         }
     }
 
@@ -7687,6 +7888,7 @@ mod tests {
                         session,
                         cells: blocked.as_ptr(),
                         cells_len: blocked.len(),
+                        grid_id: 0,
                     },
                     &mut overlay,
                     std::ptr::null_mut(),
@@ -7842,6 +8044,7 @@ mod tests {
             start: NativePlanarNavCell { x: 0, y: 0, z: 0 },
             goal: NativePlanarNavCell { x: 2, y: 0, z: 0 },
             max_visited: 32,
+            grid_id: 0,
         };
         let path = bridge.request_navigation_path(request).unwrap();
         assert_eq!(path.outcome, NativeNavigationPathOutcome::Reached);
@@ -7851,6 +8054,7 @@ mod tests {
                 start: request.start,
                 goal: request.goal,
                 max_visited: request.max_visited,
+                grid_id: 0,
             })
             .unwrap();
         assert_eq!(weighted.outcome, NativeNavigationPathOutcome::Reached);
@@ -8167,6 +8371,7 @@ mod tests {
                 start: NativePlanarNavCell { x: 0, y: 0, z: 0 },
                 goal: NativePlanarNavCell { x: 2, y: 0, z: 0 },
                 max_visited: 32,
+                grid_id: 0,
             })
             .unwrap();
         assert_eq!(path.outcome, NativeNavigationPathOutcome::NoPath);
@@ -8176,6 +8381,7 @@ mod tests {
                 start: NativePlanarNavCell { x: 0, y: 0, z: 0 },
                 goal: NativePlanarNavCell { x: 2, y: 0, z: 0 },
                 max_visited: 32,
+                grid_id: 0,
             })
             .unwrap();
         assert_eq!(weighted.outcome, NativeNavigationPathOutcome::NoPath);
@@ -8538,6 +8744,7 @@ mod tests {
                         session,
                         cells: overlay_cells.as_ptr(),
                         cells_len: overlay_cells.len(),
+                        grid_id: 0,
                     },
                     &mut overlay_receipt,
                     std::ptr::null_mut(),
@@ -8568,6 +8775,7 @@ mod tests {
                                 NativeNavigationVolumetricVerticalPolicy::AllowVertical,
                             traversal_rule: NativeNavigationVolumetricTraversalRule::EmptyCells,
                         },
+                        grid_id: 0,
                     },
                     &mut readout,
                     std::ptr::null_mut(),
@@ -8592,7 +8800,10 @@ mod tests {
             unsafe {
                 (api.clear_volumetric_navigation_traversal)(
                     api.context,
-                    NativeNavigationVolumetricTraversalClearRequest { session },
+                    NativeNavigationVolumetricTraversalClearRequest {
+                        session,
+                        grid_id: 0,
+                    },
                     &mut clear_receipt,
                     std::ptr::null_mut(),
                 )
@@ -11112,6 +11323,7 @@ mod tests {
                     },
                     max_step_units: 0.5,
                     max_visited: 32,
+                    grid_id: 0,
                 })
                 .expect("step evaluates")
         };
@@ -11810,6 +12022,7 @@ mod tests {
                         target: vec3(target),
                         max_step_units: 0.5,
                         max_visited: 64,
+                        grid_id: 0,
                     },
                     &mut step,
                     std::ptr::null_mut(),
@@ -11965,6 +12178,7 @@ mod tests {
                         session,
                         cells: closed.as_ptr(),
                         cells_len: closed.len(),
+                        grid_id: 0,
                     },
                     &mut overlay,
                     std::ptr::null_mut(),

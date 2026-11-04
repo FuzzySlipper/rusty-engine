@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Numerics;
 using Rusty.Engine;
 
@@ -20,6 +21,18 @@ internal static class NavigationMappingChecks
     // mesh floors are after float rounding.
     private const float NoisyFloorRise = 1.0e-5f;
 
+    // A 26 by 13 m floor under a wall at z = 6 with gaps of 0.8, 1.4 and 2.5 m,
+    // for agents of radius 0.3, 0.6 and 1 on one-metre cells.
+    private const ulong GappedWallAsset = 9_303;
+    private const ulong GappedWallInstance = 9_304;
+    private const float GappedLength = 26;
+    private const float GappedDepth = 13;
+    private const float GappedWallZ = 6.2f;
+    private const float GappedWallHeight = 4;
+    private static readonly (float From, float To)[] WallRuns = [(0, 3.1f), (3.9f, 9.8f), (11.2f, 17.3f), (19.8f, GappedLength)];
+    private static readonly (ulong Grid, float Radius, float Height, long Column)[] GapAgents =
+        [(1, 0.3f, 1.6f, 3), (2, 0.6f, 2.4f, 10), (3, 1, 3.2f, 18)];
+
     private const int WallColumn = 3;
     private const int WallRow = 7;
 
@@ -29,6 +42,74 @@ internal static class NavigationMappingChecks
         CheckFloor(engine, new VoxelAddress(37, 4, -29));
         CheckNoisyMeshFloor(engine);
         CheckPolicyAndExplanations(engine);
+        CheckSeveralAgentSizes(engine);
+    }
+
+    // Each agent's grid routes through only the gaps it fits, a grid replaced or
+    // cleared leaves the others answering, and a request naming no grid reads the
+    // one published last.
+    private static void CheckSeveralAgentSizes(IEngineContext engine)
+    {
+        using SpatialSession session = engine.Spatial.CreateSession(new(1, 16, VoxelSurfaceMode.GreedyCubes));
+        List<Vector3> vertices = [new(0, 0, 0), new(GappedLength, 0, 0), new(0, 0, GappedDepth), new(GappedLength, 0, GappedDepth)];
+        List<Triangle> triangles = [new(0, 2, 1), new(1, 2, 3)];
+        foreach ((float from, float to) in WallRuns)
+        {
+            uint at = (uint)vertices.Count;
+            vertices.AddRange([new(from, 0, GappedWallZ), new(to, 0, GappedWallZ), new(from, GappedWallHeight, GappedWallZ), new(to, GappedWallHeight, GappedWallZ)]);
+            triangles.AddRange([new(at, at + 2, at + 1), new(at + 1, at + 2, at + 3)]);
+        }
+        engine.Spatial.ApplyCollisionResidency(new CollisionResidencyRequest(
+            session,
+            new[] { new StaticMeshAsset(GappedWallAsset, default, 0, (uint)vertices.Count, 0, (uint)triangles.Count) },
+            vertices.ToArray(),
+            triangles.ToArray(),
+            new[] { new StaticMeshInstance(GappedWallInstance, GappedWallAsset, new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One)) },
+            ReadOnlyMemory<ulong>.Empty,
+            ReadOnlyMemory<ulong>.Empty));
+        CollisionNavigationReplaceReceipt Publish((ulong Grid, float Radius, float Height, long Column) agent)
+        {
+            CollisionNavigationConfig defaults = engine.Spatial.DefaultCollisionNavigationConfig();
+            CollisionNavigationConfig config = defaults with
+            {
+                GridId = agent.Grid,
+                Character = defaults.Character with
+                {
+                    Shape = defaults.Character.Shape with
+                    {
+                        Radius = agent.Radius,
+                        StandingHeight = agent.Height,
+                        CrouchedHeight = (agent.Radius * 2 + agent.Height) / 2,
+                    },
+                },
+            };
+            return engine.Spatial.ReplaceCollisionNavigation(new(session, new(0, -1, 0), new(GappedLength, 5, GappedDepth), config));
+        }
+        long? Crossing(ulong grid)
+        {
+            NavigationStepResult step = engine.Spatial.EvaluateNavigationStep(
+                new(session, new(3.5f, FootClearance, 2.5f), new(3.5f, FootClearance, 10.5f), 1000, 4096, grid));
+            if (step.Outcome != NavigationPathOutcome.Reached) return null;
+            foreach (PlanarNavCell cell in step.Path.Span)
+                if (cell.Z == 6) return cell.X;
+            return null;
+        }
+        foreach (var agent in GapAgents) Publish(agent);
+        foreach (var agent in GapAgents)
+            Require(Crossing(agent.Grid) == agent.Column, $"grid {agent.Grid} crossed at {Crossing(agent.Grid)}, not {agent.Column}");
+        ReadOnlySpan<NavigationGridInfo> grids = engine.Spatial.ReadNavigationGrids(new(session)).Span;
+        Require(grids.Length == 3 && grids[0].GridId == 1 && grids[2].Latest && grids[2].AgentRadius == 1 && grids[2].MaxX == 25,
+            $"the session read {grids.Length} grids");
+
+        CollisionNavigationReplaceReceipt again = Publish(GapAgents[1]);
+        Require(again.DerivedColumnCount == 0, $"a grid published again derived {again.DerivedColumnCount} columns");
+        Require(Crossing(0) == GapAgents[1].Column, "a request naming no grid did not read the grid published last");
+        Require(Crossing(1) == GapAgents[0].Column && Crossing(3) == GapAgents[2].Column, "replacing one grid moved another");
+
+        engine.Spatial.ClearNavigation(new(session, 1));
+        Require(Crossing(1) is null && Crossing(3) == GapAgents[2].Column, "clearing one grid did not leave the others");
+        engine.Spatial.ClearNavigation(new(session));
+        Require(engine.Spatial.ReadNavigationGrids(new(session)).Length == 0, "clearing every grid left one");
     }
 
     // A 0.2-unit body on half-unit cells that steps and drops one cell.

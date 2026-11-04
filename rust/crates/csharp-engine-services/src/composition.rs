@@ -4277,7 +4277,10 @@ mod tests {
             unsafe {
                 (api.spatial.read_navigation_projection)(
                     api.spatial.context,
-                    NativeNavigationProjectionReadRequest { session },
+                    NativeNavigationProjectionReadRequest {
+                        session,
+                        grid_id: 0,
+                    },
                     &mut after_discard,
                     std::ptr::null_mut(),
                 )
@@ -4420,6 +4423,7 @@ mod tests {
                         },
                         max_step_units: 0.5,
                         max_visited: 32,
+                        grid_id: 0,
                     },
                     &mut step,
                     std::ptr::null_mut(),
@@ -4618,6 +4622,7 @@ mod tests {
                         },
                         max_step_units: 0.5,
                         max_visited: 32,
+                        grid_id: 0,
                     },
                     &mut removed,
                     std::ptr::null_mut(),
@@ -4739,6 +4744,7 @@ mod tests {
                             target: vec3(target),
                             max_step_units: 0.5,
                             max_visited: 32,
+                            grid_id: 0,
                         },
                         &mut step,
                         std::ptr::null_mut(),
@@ -4999,6 +5005,7 @@ mod tests {
                             target: vec3(target),
                             max_step_units: 0.5,
                             max_visited: 64,
+                            grid_id: 0,
                         },
                         &mut step,
                         std::ptr::null_mut(),
@@ -5529,6 +5536,7 @@ mod tests {
                             target: vec3(target),
                             max_step_units: 0.5,
                             max_visited: 64,
+                            grid_id: 0,
                         },
                         &mut step,
                         std::ptr::null_mut(),

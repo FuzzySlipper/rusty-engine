@@ -841,6 +841,8 @@ pub struct NativeNavigationTraversalReplaceRequest {
     pub session: NativeSpatialSessionHandle,
     pub cells: *const NativeNavigationTraversalCell,
     pub cells_len: usize,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 #[repr(C)]
@@ -855,6 +857,8 @@ pub struct NativeNavigationTraversalReplaceReceipt {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeNavigationTraversalClearRequest {
     pub session: NativeSpatialSessionHandle,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 /// One purpose-neutral traversal rule for volumetric navigation. Volumetric
@@ -876,6 +880,8 @@ pub struct NativeNavigationVolumetricTraversalReplaceRequest {
     pub session: NativeSpatialSessionHandle,
     pub cells: *const NativeNavigationVolumetricTraversalCell,
     pub cells_len: usize,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 #[repr(C)]
@@ -891,6 +897,8 @@ pub struct NativeNavigationVolumetricTraversalReplaceReceipt {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeNavigationVolumetricTraversalClearRequest {
     pub session: NativeSpatialSessionHandle,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 /// The admitted Engine-owned substrate for a navigation projection. Host cells
@@ -1055,6 +1063,8 @@ pub struct NativeCollisionNavigationColumnRequest {
     pub session: NativeSpatialSessionHandle,
     pub x: i64,
     pub z: i64,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 /// Borrowed until the next Spatial call. No samples means the column hit
@@ -1119,6 +1129,8 @@ pub struct NativeCollisionNavigationEdgeRequest {
     pub session: NativeSpatialSessionHandle,
     pub from: NativePlanarNavCell,
     pub to: NativePlanarNavCell,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 /// The edge evaluated against current collision with the published policy;
@@ -1171,6 +1183,8 @@ pub struct NativeCollisionNavigationReplaceReceipt {
 #[derive(Debug, Clone, Copy)]
 pub struct NativeNavigationProjectionReadRequest {
     pub session: NativeSpatialSessionHandle,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 #[repr(C)]
@@ -1188,6 +1202,51 @@ pub struct NativeNavigationProjectionReadout {
     pub traversal_overlay_hash: u64,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationGridsRequest {
+    pub session: NativeSpatialSessionHandle,
+}
+
+/// One navigation grid a session holds. The agent and what it covers are
+/// collision-derived navigation's; other kinds leave them zero.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeNavigationGridInfo {
+    pub grid_id: u64,
+    pub kind: NativeNavigationProjectionKind,
+    /// Requests naming no grid read this one.
+    pub latest: bool,
+    pub walkable_cell_count: u64,
+    pub projection_hash: u64,
+    pub navigation_revision: u64,
+    pub cell_size: f64,
+    pub agent_radius: f32,
+    pub agent_height: f32,
+    /// The columns it covers, inclusive.
+    pub min_x: i64,
+    pub max_x: i64,
+    pub min_z: i64,
+    pub max_z: i64,
+}
+
+/// Borrowed until the next Spatial call, lowest grid first.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeNavigationGridsResult {
+    pub grids: *const NativeNavigationGridInfo,
+    pub grids_len: usize,
+}
+
+impl Default for NativeNavigationGridsResult {
+    fn default() -> Self {
+        Self {
+            grids: std::ptr::null(),
+            grids_len: 0,
+        }
+    }
+}
+
 /// A bounded, full planar path request over the session's admitted projection.
 /// `max_visited` bounds both the owner search and the retained indexed result.
 #[repr(C)]
@@ -1197,6 +1256,8 @@ pub struct NativeNavigationPathRequest {
     pub start: NativePlanarNavCell,
     pub goal: NativePlanarNavCell,
     pub max_visited: u32,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 /// Borrowed result of one path request. `path` lists the path cells from
@@ -1246,6 +1307,8 @@ pub struct NativeNavigationWeightedPathRequest {
     pub start: NativePlanarNavCell,
     pub goal: NativePlanarNavCell,
     pub max_visited: u32,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 /// Borrowed result of one weighted planar path request; `path` is borrowed
@@ -1298,6 +1361,8 @@ pub struct NativeNavigationVolumetricWeightedPathRequest {
     pub goal: NativePlanarNavCell,
     pub max_visited: u32,
     pub config: NativeNavigationVolumetricConfig,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 /// Borrowed result of one weighted volumetric path request; `path` is
@@ -1378,12 +1443,16 @@ pub struct NativeNavigationVolumetricPathRequest {
     pub goal: NativePlanarNavCell,
     pub max_visited: u32,
     pub config: NativeNavigationVolumetricConfig,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeNavigationClearRequest {
     pub session: NativeSpatialSessionHandle,
+    /// The grid to clear; 0 clears every grid.
+    pub grid_id: u64,
 }
 
 /// The continuity facts the C# product retains between Engine-owned proposal calls.
@@ -1900,6 +1969,8 @@ pub struct NativeNavigationStepRequest {
     pub target: NativeVec3,
     pub max_step_units: f32,
     pub max_visited: u32,
+    /// The grid to read; 0 is the one published last.
+    pub grid_id: u64,
 }
 
 /// Borrowed result of one navigation step evaluation. `path` is the full

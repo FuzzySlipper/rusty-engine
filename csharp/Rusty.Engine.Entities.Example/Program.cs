@@ -746,6 +746,7 @@ sealed class SpatialServiceFake : ISpatialService
     public CollisionNavigationConfig DefaultCollisionNavigationConfig() => default;
     public CollisionNavigationColumnResult ExplainCollisionNavigationColumn(CollisionNavigationColumnRequest arg0) => throw new NotSupportedException();
     public CollisionNavigationEdgeReadout ExplainCollisionNavigationEdge(CollisionNavigationEdgeRequest arg0) => throw new NotSupportedException();
+    public ReadOnlyMemory<NavigationGridInfo> ReadNavigationGrids(NavigationGridsRequest arg0) => throw new NotSupportedException();
     public NavigationTraversalReplaceReceipt ReplaceNavigationTraversal(NavigationTraversalReplaceRequest arg0) => throw new NotSupportedException();
     public NavigationTraversalReplaceReceipt ClearNavigationTraversal(NavigationTraversalClearRequest arg0) => throw new NotSupportedException();
     public NavigationVolumetricTraversalReplaceReceipt ReplaceVolumetricNavigationTraversal(NavigationVolumetricTraversalReplaceRequest arg0) => throw new NotSupportedException();

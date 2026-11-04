@@ -68,6 +68,123 @@ public readonly partial record struct CollisionNavigationConfig
     }
 }
 
+public readonly partial record struct NavigationStepRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public NavigationStepRequest(SpatialSession session, Vector3 from, Vector3 target, float maxStepUnits, uint maxVisited)
+        : this(session, from, target, maxStepUnits, maxVisited, 0)
+    {
+    }
+}
+
+public readonly partial record struct NavigationPathRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public NavigationPathRequest(SpatialSession session, PlanarNavCell start, PlanarNavCell goal, uint maxVisited)
+        : this(session, start, goal, maxVisited, 0)
+    {
+    }
+}
+
+public readonly partial record struct NavigationWeightedPathRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public NavigationWeightedPathRequest(SpatialSession session, PlanarNavCell start, PlanarNavCell goal, uint maxVisited)
+        : this(session, start, goal, maxVisited, 0)
+    {
+    }
+}
+
+public readonly partial record struct NavigationVolumetricPathRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public NavigationVolumetricPathRequest(SpatialSession session, PlanarNavCell start, PlanarNavCell goal, uint maxVisited, NavigationVolumetricConfig config)
+        : this(session, start, goal, maxVisited, config, 0)
+    {
+    }
+}
+
+public readonly partial record struct NavigationVolumetricWeightedPathRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public NavigationVolumetricWeightedPathRequest(SpatialSession session, PlanarNavCell start, PlanarNavCell goal, uint maxVisited, NavigationVolumetricConfig config)
+        : this(session, start, goal, maxVisited, config, 0)
+    {
+    }
+}
+
+public readonly partial record struct NavigationProjectionReadRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public NavigationProjectionReadRequest(SpatialSession session)
+        : this(session, 0)
+    {
+    }
+}
+
+public readonly partial record struct NavigationTraversalReplaceRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public NavigationTraversalReplaceRequest(SpatialSession session, ReadOnlyMemory<NavigationTraversalCell> cells)
+        : this(session, cells, 0)
+    {
+    }
+}
+
+public readonly partial record struct NavigationTraversalClearRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public NavigationTraversalClearRequest(SpatialSession session)
+        : this(session, 0)
+    {
+    }
+}
+
+public readonly partial record struct NavigationVolumetricTraversalReplaceRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public NavigationVolumetricTraversalReplaceRequest(SpatialSession session, ReadOnlyMemory<NavigationVolumetricTraversalCell> cells)
+        : this(session, cells, 0)
+    {
+    }
+}
+
+public readonly partial record struct NavigationVolumetricTraversalClearRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public NavigationVolumetricTraversalClearRequest(SpatialSession session)
+        : this(session, 0)
+    {
+    }
+}
+
+public readonly partial record struct CollisionNavigationColumnRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public CollisionNavigationColumnRequest(SpatialSession session, long x, long z)
+        : this(session, x, z, 0)
+    {
+    }
+}
+
+public readonly partial record struct CollisionNavigationEdgeRequest
+{
+    /// <summary>A request of the grid published last.</summary>
+    public CollisionNavigationEdgeRequest(SpatialSession session, PlanarNavCell from, PlanarNavCell to)
+        : this(session, from, to, 0)
+    {
+    }
+}
+
+public readonly partial record struct NavigationClearRequest
+{
+    /// <summary>A request clearing every grid.</summary>
+    public NavigationClearRequest(SpatialSession session)
+        : this(session, 0)
+    {
+    }
+}
+
 public readonly partial record struct NavigationPathResult
 {
     /// <summary>A result without per-edge kinds, as before jump edges.</summary>

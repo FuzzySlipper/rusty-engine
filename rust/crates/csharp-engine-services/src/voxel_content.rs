@@ -2842,6 +2842,7 @@ mod tests {
                     spatial_api.context,
                     NativeNavigationClearRequest {
                         session: navigation_used_session,
+                        grid_id: 0,
                     },
                     std::ptr::null_mut(),
                 )

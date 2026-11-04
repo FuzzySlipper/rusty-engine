@@ -945,6 +945,29 @@ suggestion only: normal character collision and controls remain the authority
 for physical movement. Product door and hazard state belongs in the planar
 traversal overlay; read-only evaluation honors that overlay.
 
+An agent may be wider than a cell: every check is its capsule's own, so a cell
+is walkable only where the whole body fits, and a 2 m body routes on 1 m cells
+through a 2.5 m gap and not a 1.4 m one. A support moves at most three eighths
+of a cell to line up with an opening, so a gap with little to spare and centred
+on the boundary between two columns can be refused. That errs towards no route,
+never a route the body does not fit; a finer `CellSize` finds it.
+
+#### Several agent sizes
+
+A session holds one collision-derived grid per `GridId`, for agents of different
+sizes. `ReplaceCollisionNavigation` replaces only its own grid, and each grid
+keeps its own columns, so publishing several over a box that moved derives only
+each one's new columns. Every query names its grid: step and path requests,
+overlays, `ReadNavigationProjection` and the explanations take a trailing
+`GridId`. A request naming none reads the grid published last, so a product with
+one grid never names it, and a product with several must, or a later publication
+changes what it reads. `ClearNavigation` with a `GridId` clears that grid, and
+when it was the one published last the highest left takes its place; without
+one it clears them all. `ReadNavigationGrids` lists what the session holds: each
+grid's kind, cells, agent, and the columns it covers. `ReplaceNavigation`,
+`ReplaceVoxelNavigation` and content navigation hold a session alone: they
+replace every grid, and a collision-derived grid then replaces them.
+
 Start from `Spatial.DefaultCollisionNavigationConfig()` and change one option
 at a time with `with`:
 

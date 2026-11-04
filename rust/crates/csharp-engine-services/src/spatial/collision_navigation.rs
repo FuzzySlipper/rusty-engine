@@ -6,13 +6,15 @@
 
 use super::*;
 
-/// A scene change may reach one cell beyond its bounds: a standing capsule is
-/// narrower than a cell, a support stands at most three eighths of a cell
-/// from its column's centre and its placement looks no farther than half a
-/// cell and the capsule's radius, and an edge sweep stays within the two
-/// cells it joins and their sides, so re-deriving every column within one
-/// cell of a change is exact.
-const DIRTY_MARGIN_CELLS: f64 = 1.0;
+/// How far a scene change reaches: a support stands at most three eighths of
+/// a cell from its column's centre and its placement looks no farther than
+/// half a cell and the capsule's radius, and an edge sweep stays within the
+/// two cells it joins and their sides. That is within a cell for a capsule no
+/// wider than a cell, and a wider one reaches as much further as its radius
+/// exceeds half a cell, so re-deriving the columns this near a change is exact.
+fn dirty_margin(cell_size: f64, radius: f64) -> f64 {
+    cell_size + (radius - cell_size * 0.5).max(0.0)
+}
 /// Beyond this many recorded changes the next publication derives everything.
 const MAX_DIRTY_REGIONS: usize = 256;
 
@@ -70,11 +72,10 @@ impl CollisionNavigationPolicy {
             across: config.snap_across,
         };
         if !(config.cell_size.is_finite() && config.cell_size > 0.0)
-            || f64::from(character.shape.radius) * 2.0 > config.cell_size
             || character.surface.maximum_slope_radians > 89.0_f32.to_radians()
         {
             return Err(invalid(
-                "collision navigation needs a positive cell at least the agent's diameter and a slope of at most 89 degrees",
+                "collision navigation needs a positive cell and a slope of at most 89 degrees",
             ));
         }
         if ![config.maximum_drop, snap.above, snap.below, snap.across]
@@ -425,6 +426,10 @@ impl CollisionNavigationCache {
         self.installed = Some(revision);
     }
 
+    pub(super) fn bounds(&self) -> ColumnBounds {
+        self.bounds
+    }
+
     pub(super) fn key(&self) -> &DerivationKey {
         &self.key
     }
@@ -577,6 +582,7 @@ pub(super) fn derive_collision_navigation(
     };
     let revisions = SceneRevisions::of(scene);
     let previous = previous.filter(|cache| cache.key == key && cache.scene == revisions);
+    let radius = f64::from(policy.character.shape.radius);
     let mut to_derive = BTreeSet::new();
     let mut removed = Vec::new();
     match previous {
@@ -595,7 +601,7 @@ pub(super) fn derive_collision_navigation(
             match &cache.dirty {
                 Some(regions) => {
                     for region in regions {
-                        to_derive.extend(columns_near(grid, bounds, *region));
+                        to_derive.extend(columns_near(grid, bounds, *region, radius));
                     }
                 }
                 None => to_derive.extend(bounds.columns()),
@@ -724,9 +730,10 @@ fn columns_near(
     grid: VoxelGridSpec,
     bounds: ColumnBounds,
     [min_x, min_z, max_x, max_z]: [f64; 4],
+    radius: f64,
 ) -> impl Iterator<Item = Column> {
     let cell_size = grid.voxel_size();
-    let margin = cell_size * DIRTY_MARGIN_CELLS + COLLISION_NAVIGATION_CLEARANCE_EPSILON;
+    let margin = dirty_margin(cell_size, radius) + COLLISION_NAVIGATION_CLEARANCE_EPSILON;
     let low = grid.world_to_voxel(core_space::WorldPos::new(
         min_x - margin - cell_size,
         0.0,
@@ -1352,8 +1359,7 @@ impl RuntimeSpatialBridge {
     ) -> Result<NativeCollisionNavigationColumnResult, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
         let key = session
-            .collision_navigation
-            .as_ref()
+            .grid_cache(request.grid_id)
             .ok_or_else(unpublished)?
             .key();
         let mut samples = Vec::new();
@@ -1385,8 +1391,7 @@ impl RuntimeSpatialBridge {
     ) -> Result<NativeCollisionNavigationEdgeReadout, CsharpEngineServicesError> {
         let session = self.session_mut(request.session)?;
         let cache = session
-            .collision_navigation
-            .as_ref()
+            .grid_cache(request.grid_id)
             .ok_or_else(unpublished)?;
         let key = cache.key();
         let grid = key.policy.grid()?;
@@ -1838,6 +1843,9 @@ mod tests {
     #[test]
     fn a_whole_cell_rebase_keeps_every_column() {
         let (mut bridge, session) = bridge_with(Arc::new(terrain()));
+        let mut beside = request(session, 0.0);
+        beside.config.grid_id = 8;
+        bridge.replace_collision_navigation(&beside).unwrap();
         bridge
             .replace_collision_navigation(&request(session, 0.0))
             .unwrap();
@@ -1886,6 +1894,11 @@ mod tests {
             published(&bridge, session),
             from_scratch(&bridge, session, moved)
         );
+        // The grid beside it moved with it.
+        beside.world_min.x -= 8.0;
+        beside.world_max.x -= 8.0;
+        let receipt = bridge.replace_collision_navigation(&beside).unwrap();
+        assert_eq!(receipt.derived_column_count, 0);
     }
 
     #[test]
@@ -1964,6 +1977,7 @@ mod tests {
                 },
                 max_step_units: 1.0,
                 max_visited: 4096,
+                grid_id: 0,
             },
         );
         assert_eq!(step.outcome, NativeNavigationPathOutcome::Reached);
@@ -2003,6 +2017,7 @@ mod tests {
                 session,
                 from: cell(from),
                 to: cell(to),
+                grid_id: 0,
             })
             .unwrap();
         (readout.outcome, readout.admitted)
@@ -2019,11 +2034,331 @@ mod tests {
                 session,
                 x,
                 z,
+                grid_id: 0,
             })
             .unwrap();
         let samples =
             unsafe { std::slice::from_raw_parts(result.samples, result.samples_len) }.to_vec();
         (samples, result.budget_exhausted)
+    }
+
+    /// A floor 0.1 m thick and 26 by 13 m across, under a wall across it at
+    /// z = 6 with gaps between the X ranges given, in tenths of a metre.
+    fn gapped_wall(gaps: &[(i64, i64)]) -> VoxelCollisionScene {
+        let mut voxels = Vec::new();
+        for x in 0..260 {
+            for z in 0..130 {
+                voxels.push([x, 0, z]);
+            }
+            if gaps.iter().any(|&(from, to)| (from..to).contains(&x)) {
+                continue;
+            }
+            for z in 60..64 {
+                for y in 1..40 {
+                    voxels.push([x, y, z]);
+                }
+            }
+        }
+        VoxelCollisionScene::from_solid_voxels(0.1, 16, voxels).unwrap()
+    }
+
+    /// Publishes an agent on 1 m cells over the gapped wall.
+    fn publish_agent(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+        grid_id: u64,
+        radius: f64,
+        height: f64,
+    ) -> NativeCollisionNavigationReplaceReceipt {
+        let vec = |x, y, z| NativeVec3 { x, y, z };
+        let mut config = flat_config(1.0, 1, radius, height, 45.0);
+        config.grid_id = grid_id;
+        bridge
+            .replace_collision_navigation(&NativeCollisionNavigationReplaceRequest {
+                session,
+                world_min: vec(0.0, 0.0, 0.0),
+                world_max: vec(26.0, 5.0, 13.0),
+                config,
+            })
+            .unwrap()
+    }
+
+    /// The columns a step from one side of the wall to the other crosses it
+    /// at, on `grid_id`.
+    fn crossing(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+        grid_id: u64,
+        x: f32,
+    ) -> Option<Vec<i64>> {
+        let at = |z| NativeVec3 { x, y: 0.1, z };
+        let result = bridge
+            .evaluate_navigation(NativeNavigationStepRequest {
+                session,
+                from: at(2.5),
+                target: at(10.5),
+                max_step_units: 1000.0,
+                max_visited: 4096,
+                grid_id,
+            })
+            .unwrap();
+        if result.outcome != NativeNavigationPathOutcome::Reached {
+            return None;
+        }
+        let path = unsafe { std::slice::from_raw_parts(result.path, result.path_len) };
+        Some(
+            path.iter()
+                .filter(|cell| cell.z == 6)
+                .map(|cell| cell.x)
+                .collect(),
+        )
+    }
+
+    /// Gaps of 0.8, 1.4 and 2.5 m, each centred near a column.
+    const GAPS: [(i64, i64); 3] = [(31, 39), (98, 112), (173, 198)];
+    /// Agents that fit the first, second and third of them, on grids 1 to 3.
+    const AGENTS: [(u64, f64, f64); 3] = [(1, 0.3, 1.6), (2, 0.6, 2.4), (3, 1.0, 3.2)];
+
+    fn three_agents() -> (RuntimeSpatialBridge, NativeSpatialSessionHandle) {
+        let (mut bridge, session) = bridge_with(Arc::new(gapped_wall(&GAPS)));
+        for (grid, radius, height) in AGENTS {
+            publish_agent(&mut bridge, session, grid, radius, height);
+        }
+        (bridge, session)
+    }
+
+    fn grids(
+        bridge: &mut RuntimeSpatialBridge,
+        session: NativeSpatialSessionHandle,
+    ) -> Vec<NativeNavigationGridInfo> {
+        let result = bridge
+            .read_navigation_grids(NativeNavigationGridsRequest { session })
+            .unwrap();
+        unsafe { std::slice::from_raw_parts(result.grids, result.grids_len) }.to_vec()
+    }
+
+    #[test]
+    fn each_agent_routes_through_only_the_gaps_it_fits() {
+        let (mut bridge, session) = three_agents();
+        // From in front of the narrowest gap, each agent crosses at the
+        // nearest one it fits.
+        for (grid, column) in [(1, 3), (2, 10), (3, 18)] {
+            assert_eq!(
+                crossing(&mut bridge, session, grid, 3.5),
+                Some(vec![column]),
+                "grid {grid}"
+            );
+        }
+        // Nothing is wide enough for the widest agent anywhere else.
+        assert_eq!(crossing(&mut bridge, session, 3, 10.5), Some(vec![18]));
+    }
+
+    #[test]
+    fn replacing_or_clearing_one_grid_leaves_the_others_answering() {
+        let (mut bridge, session) = three_agents();
+        let hashes = |infos: &[NativeNavigationGridInfo]| {
+            infos
+                .iter()
+                .map(|info| info.projection_hash)
+                .collect::<Vec<_>>()
+        };
+        let before = grids(&mut bridge, session);
+        assert_eq!(
+            before
+                .iter()
+                .map(|info| (info.grid_id, info.latest))
+                .collect::<Vec<_>>(),
+            [(1, false), (2, false), (3, true)]
+        );
+        assert_eq!(before[2].agent_radius, 1.0);
+        assert_eq!(before[2].agent_height, 3.2);
+        assert_eq!(before[2].cell_size, 1.0);
+        assert_eq!((before[2].max_x, before[2].max_z), (25, 12));
+
+        // Publishing a grid again replaces that grid alone, from its own
+        // columns, and makes it the one a request naming no grid reads.
+        let receipt = publish_agent(&mut bridge, session, 2, 0.6, 2.4);
+        assert_eq!(receipt.derived_column_count, 0);
+        let after = grids(&mut bridge, session);
+        assert_eq!(hashes(&after), hashes(&before));
+        assert!(after[1].latest);
+        assert_eq!(crossing(&mut bridge, session, 0, 3.5), Some(vec![10]));
+        assert_eq!(crossing(&mut bridge, session, 1, 3.5), Some(vec![3]));
+        assert_eq!(crossing(&mut bridge, session, 3, 3.5), Some(vec![18]));
+
+        // A grid the session does not hold answers as no navigation does.
+        assert_eq!(crossing(&mut bridge, session, 9, 3.5), None);
+
+        let clear = |bridge: &mut RuntimeSpatialBridge, grid_id| {
+            bridge
+                .clear_navigation(NativeNavigationClearRequest { session, grid_id })
+                .unwrap()
+        };
+        clear(&mut bridge, 1);
+        assert_eq!(crossing(&mut bridge, session, 1, 3.5), None);
+        assert_eq!(crossing(&mut bridge, session, 3, 3.5), Some(vec![18]));
+        assert_eq!(crossing(&mut bridge, session, 0, 3.5), Some(vec![10]));
+
+        // Clearing the latest leaves the highest grid in its place.
+        clear(&mut bridge, 2);
+        assert_eq!(crossing(&mut bridge, session, 0, 3.5), Some(vec![18]));
+        let left = grids(&mut bridge, session);
+        assert_eq!(left.len(), 1);
+        assert!(left[0].latest);
+
+        publish_agent(&mut bridge, session, 1, 0.3, 1.6);
+        clear(&mut bridge, 0);
+        assert!(grids(&mut bridge, session).is_empty());
+    }
+
+    /// A projection of another kind holds a session alone.
+    #[test]
+    fn host_navigation_replaces_every_grid() {
+        let (mut bridge, session) = three_agents();
+        let cells = [NativePlanarNavCell { x: 0, y: 0, z: 0 }];
+        bridge
+            .replace_navigation(&NativeNavigationReplaceRequest {
+                session,
+                config: NativePlanarNavConfig {
+                    grid_id: 5,
+                    cell_size: 1.0,
+                    chunk_size: 16,
+                    max_step_cells: 1,
+                },
+                cells: cells.as_ptr(),
+                cells_len: cells.len(),
+            })
+            .unwrap();
+        let held = grids(&mut bridge, session);
+        assert_eq!(held.len(), 1);
+        assert_eq!(held[0].grid_id, 5);
+        assert_eq!(
+            held[0].kind,
+            NativeNavigationProjectionKind::HostWalkableCells
+        );
+        assert_eq!(held[0].agent_radius, 0.0);
+
+        // A collision-derived grid then replaces it, and stands alone too.
+        publish_agent(&mut bridge, session, 1, 0.3, 1.6);
+        assert_eq!(grids(&mut bridge, session).len(), 1);
+    }
+
+    /// Every grid a change reaches derives it, the ones standing beside the
+    /// latest included, and a wide agent's reach is its own.
+    #[test]
+    fn a_change_reaches_every_grid_as_far_as_its_agent_does() {
+        let (mut bridge, session) = three_agents();
+        // Wide enough that one cell around a change would not reach it.
+        let widest = (4, 2.0, 4.4);
+        publish_agent(&mut bridge, session, widest.0, widest.1, widest.2);
+        // At the widest agent's waist, where its capsule reaches furthest.
+        let edits = [NativeVoxelEdit {
+            state: 1,
+            kind: NativeVoxelEditKind::Set,
+            address: NativeVoxelAddress {
+                x: 105,
+                y: 22,
+                z: 30,
+            },
+            material_slot: 1,
+        }];
+        let voxel = crate::voxel::api(&mut bridge);
+        let mut edited = NativeVoxelEditReceipt::default();
+        let mut refusal = crate::operation_diagnostics::empty_receipt();
+        assert_eq!(
+            unsafe {
+                (voxel.apply_edits)(
+                    voxel.context,
+                    &NativeVoxelEditTransaction {
+                        session,
+                        edits: edits.as_ptr(),
+                        edits_len: edits.len(),
+                    },
+                    &mut edited,
+                    &mut refusal,
+                )
+            },
+            ABI_OK
+        );
+        for (grid, radius, height) in AGENTS.into_iter().chain([widest]) {
+            let receipt = publish_agent(&mut bridge, session, grid, radius, height);
+            assert!(
+                receipt.derived_column_count > 0 && receipt.reused_column_count > 0,
+                "grid {grid} derived {} and reused {}",
+                receipt.derived_column_count,
+                receipt.reused_column_count
+            );
+            let (mut fresh, fresh_session) =
+                bridge_with(Arc::clone(&bridge.sessions[&session.value].scene));
+            publish_agent(&mut fresh, fresh_session, grid, radius, height);
+            assert_eq!(
+                published(&bridge, session),
+                published(&fresh, fresh_session),
+                "grid {grid}"
+            );
+        }
+    }
+
+    /// What several agents cost against one, over the box #10597 measured.
+    /// `cargo test --release -p csharp-engine-services --lib measure_ -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "timing measurement"]
+    fn measure_several_agent_grids() {
+        let mut voxels = Vec::new();
+        for x in -8..96 {
+            for z in -8..72 {
+                let wave = ((x as f64 * 0.21).sin() + (z as f64 * 0.17).cos()) * 7.5;
+                for y in 0..(16.0 + wave).round() as i64 {
+                    voxels.push([x, y, z]);
+                }
+            }
+        }
+        let scene = Arc::new(VoxelCollisionScene::from_solid_voxels(1.0, 16, voxels).unwrap());
+        let publish = |bridge: &mut RuntimeSpatialBridge,
+                       session,
+                       (grid, radius, height): (u64, f64, f64),
+                       min_x: f32| {
+            let vec = |x, y, z| NativeVec3 { x, y, z };
+            let mut config = flat_config(1.0, 1, radius, height, 45.0);
+            config.grid_id = grid;
+            let started = Instant::now();
+            let receipt = bridge
+                .replace_collision_navigation(&NativeCollisionNavigationReplaceRequest {
+                    session,
+                    world_min: vec(min_x, 0.0, 0.0),
+                    world_max: vec(min_x + 64.0, 48.0, 64.0),
+                    config,
+                })
+                .unwrap();
+            (started.elapsed(), receipt)
+        };
+        for agent in AGENTS {
+            let (mut bridge, session) = bridge_with(Arc::clone(&scene));
+            let (first, receipt) = publish(&mut bridge, session, agent, 0.0);
+            println!(
+                "one grid r={}: {first:?}, {} cells",
+                agent.1, receipt.walkable_cell_count
+            );
+        }
+        let (mut bridge, session) = bridge_with(Arc::clone(&scene));
+        for (label, min_x) in [
+            ("all three", 0.0),
+            ("again, unmoved", 0.0),
+            ("moved 12 m", 12.0),
+        ] {
+            let started = Instant::now();
+            let mut derived = 0;
+            let mut reused = 0;
+            for agent in AGENTS {
+                let (_, receipt) = publish(&mut bridge, session, agent, min_x);
+                derived += receipt.derived_column_count;
+                reused += receipt.reused_column_count;
+            }
+            println!(
+                "{label}: {:?}, derived {derived}, reused {reused}",
+                started.elapsed()
+            );
+        }
     }
 
     /// A floor of 1 m voxels at height 1 rising by one block at x = 4, under a
@@ -2275,6 +2610,7 @@ mod tests {
                 target: at(7.5, 8.5),
                 max_step_units: 1.0,
                 max_visited: 4096,
+                grid_id: 0,
             },
         )
         .0
@@ -2367,6 +2703,7 @@ mod tests {
                 start: cell(start),
                 goal: cell(goal),
                 max_visited: 256,
+                grid_id: 0,
             })
             .unwrap();
         assert_eq!(result.edges_len, result.path_len);
@@ -2507,6 +2844,7 @@ mod tests {
                 },
                 max_step_units: 1.0,
                 max_visited: 256,
+                grid_id: 0,
             })
             .unwrap();
         assert_eq!(step.next_edge_kind, NativeNavigationEdgeKind::Jump);
@@ -2708,6 +3046,7 @@ mod tests {
                     target,
                     max_step_units: 1.0,
                     max_visited: 4096,
+                    grid_id: 0,
                 },
             )
             .0
@@ -3135,6 +3474,7 @@ mod tests {
                 },
                 max_step_units: 1.0,
                 max_visited: 4096,
+                grid_id: 0,
             },
         );
         assert_eq!(step.outcome, NativeNavigationPathOutcome::Reached);
@@ -3192,6 +3532,7 @@ mod tests {
                     target: to,
                     max_step_units: 1.0,
                     max_visited: 4096,
+                    grid_id: 0,
                 },
             )
             .0
@@ -3281,6 +3622,7 @@ mod tests {
                 },
                 max_step_units: 1.0,
                 max_visited: 4096,
+                grid_id: 0,
             },
         );
         assert_eq!(step.outcome, NativeNavigationPathOutcome::NoPath);

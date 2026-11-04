@@ -69,6 +69,9 @@ For cell size `s`, cell coordinates are `floor(worldX / s)`,
 `floor(supportHeight / s)`, `floor(worldZ / s)`, using mathematical floor for
 negative coordinates too. The Y level uses the standing surface, not the solid
 voxel below it or the character center. `ChunkSize` does not shift this grid.
+A session holds one such grid per `GridId`, for agents of different sizes, which
+may be wider than a cell. A request naming no `GridId` reads the grid published
+last, so a product with several grids names them.
 
 For live foot positions, `Spatial.EvaluateNavigationStep` resolves the nearest
 retained support within the configuration's snap distances (by default 0.101
