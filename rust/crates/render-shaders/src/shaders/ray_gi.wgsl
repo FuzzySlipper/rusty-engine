@@ -18,10 +18,16 @@
 // ends on, in place of the mirror (primary surface replacement). The
 // composite keeps the world's own guides, and `resolve_guides` merges depth
 // and motion once the world's blended parts have drawn.
+//
+// The ambient and hemisphere rows are what a ray meets when it leaves the
+// scene, and a leaf does not stop them: a ray that hits a masked part still
+// meets them if nothing solid stands beyond it (`rows_past_leaves`). They stand
+// for light a canopy scatters down, which its few layers of dark leaves
+// would not carry as a path; a cave keeps them out, plants and all.
 
 #import rusty::lighting::{brdf_ggx, distance_attenuation, environment_brdf}
 #import rusty::motion::{previous_pixel_from, previous_pixel_toward}
-#import rusty::ray::{ray_clear, ray_closest, ray_indices, ray_params, ray_parts, ray_samplers, ray_textures, ray_vertices, ray_voxel_uv, RayHit, NO_TEXTURE, VERTEX_FLOATS}
+#import rusty::ray::{ray_clear, ray_closest, ray_indices, ray_params, ray_past_leaves, ray_parts, ray_samplers, ray_textures, ray_vertices, ray_voxel_uv, RayHit, NO_TEXTURE, PART_MASKED, VERTEX_FLOATS}
 #import rusty::view::{frame, lights, sky_specular, sky_sampler}
 
 const PI: f32 = 3.14159265;
@@ -232,6 +238,7 @@ struct GiHit {
     geometric_normal: vec3<f32>,
     emission: vec3<f32>,
     material: GiMaterial,
+    masked: bool,
     triangle_area: f32,
     // The triangles of its part when it is a source, else 0.
     triangles: f32,
@@ -284,6 +291,7 @@ fn resolve_hit(hit: RayHit, origin: vec3<f32>, direction: vec3<f32>) -> GiHit {
         geometric,
         part.emission.rgb,
         GiMaterial(base, part.emission.w, roughness, roughness * roughness),
+        (part.slots.w & PART_MASKED) != 0u,
         0.5 * area,
         f32(part.source.x),
     );
@@ -312,11 +320,25 @@ fn ray_offset(away: f32) -> f32 {
     return ray_params.shape.z + ray_params.shape.w * away;
 }
 
+// What the ambient and hemisphere rows give a ray along `direction`.
+fn rows_radiance(direction: vec3<f32>) -> vec3<f32> {
+    return params.ambient.rgb
+        + mix(params.hemisphere_ground.rgb, params.hemisphere_sky.rgb, 0.5 * direction.y + 0.5);
+}
+
+// What the rows give a ray from `origin` that a leaf stopped.
+fn rows_past_leaves(origin: vec3<f32>, direction: vec3<f32>) -> vec3<f32> {
+    let rows = rows_radiance(direction);
+    if all(rows == vec3<f32>(0.0)) || !ray_past_leaves(origin, direction) {
+        return vec3<f32>(0.0);
+    }
+    return rows;
+}
+
 // What a ray that leaves the scene meets. `roughness` picks the sky's
 // prefiltered level: a wide lobe would only gather the sharper levels' noise.
 fn sky_radiance(direction: vec3<f32>, roughness: f32) -> vec3<f32> {
-    var radiance = params.ambient.rgb
-        + mix(params.hemisphere_ground.rgb, params.hemisphere_sky.rgb, 0.5 * direction.y + 0.5);
+    var radiance = rows_radiance(direction);
     if frame.sky_light.x > 0.0 {
         radiance += frame.sky_light.x
             * textureSampleLevel(sky_specular, sky_sampler, direction, roughness * frame.sky_light.y).rgb;
@@ -648,6 +670,9 @@ fn sample_gi(@builtin(global_invocation_id) active_cell_id: vec3<u32>) {
         let life = atomicLoad(&world_cache.life[cell_index]);
         let radiance = query_world_cache(hit.position, hit.geometric_normal, life, &rng);
         world_cache.active_cells_new_radiance[active_cell_id.x] += hit.material.base_color * radiance;
+        if hit.masked {
+            world_cache.active_cells_new_radiance[active_cell_id.x] += PI * rows_past_leaves(origin, direction);
+        }
     } else {
         // Cut short at the ray's reach: past it a surface may have stood.
         world_cache.active_cells_new_radiance[active_cell_id.x] += PI * sky_radiance(direction, 1.0);
@@ -1167,6 +1192,9 @@ fn trace_path(
             break;
         }
         let hit = resolve_hit(ray, origin, wi);
+        if hit.masked {
+            result.radiance += throughput * rows_past_leaves(origin, wi);
+        }
         if !psr.finished {
             if lobe_diffuse {
                 psr.finished = true;

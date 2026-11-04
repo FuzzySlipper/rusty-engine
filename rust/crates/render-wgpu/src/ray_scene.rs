@@ -75,6 +75,9 @@ pub(crate) const MASK_GI: u8 = 2;
 /// stops at it. What casts no shadow from the sun (grass, say) would darken
 /// the ground beneath it past anything the forward pass shows.
 pub(crate) const MASK_PATH: u8 = 4;
+/// Instance mask bit: a path's stop that no cut-out opens, so it hides the
+/// sky from a ray a leaf would only hide it from for a moment (`ray_gi.rs`).
+pub(crate) const MASK_SOLID: u8 = 8;
 
 /// How far from the eye scatter copies are in the TLAS without a shadowing
 /// sun to take the reach from (`shadows.rs`).
@@ -1407,6 +1410,13 @@ fn part_mask(state: &crate::tables::PartState) -> u8 {
     }
     if mask == MASK_SHADOW | MASK_GI {
         mask |= MASK_PATH;
+        if !state
+            .class
+            .features
+            .contains(crate::shaders::Features::MASK)
+        {
+            mask |= MASK_SOLID;
+        }
     }
     mask
 }

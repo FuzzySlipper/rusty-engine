@@ -76,6 +76,7 @@ var<private> ray_pixel: vec2<u32>;
 const RAY_MASK_SHADOW: u32 = 1u;
 const RAY_MASK_OPAQUE: u32 = 2u;
 const RAY_MASK_PATH: u32 = 4u;
+const RAY_MASK_SOLID: u32 = 8u;
 const NO_TEXTURE: u32 = 0xffffffffu;
 const PART_MASKED: u32 = 1u;
 const PART_VOXEL: u32 = 2u;
@@ -228,6 +229,18 @@ fn ray_clear(origin: vec3<f32>, direction: vec3<f32>, reach: f32) -> bool {
             rayQueryConfirmIntersection(&query);
         }
     }
+    return rayQueryGetCommittedIntersection(&query).kind == RAY_QUERY_INTERSECTION_NONE;
+}
+
+// Whether no solid part, nothing with a cut-out, stands along `direction`.
+fn ray_past_leaves(origin: vec3<f32>, direction: vec3<f32>) -> bool {
+    var query: ray_query;
+    rayQueryInitialize(
+        &query,
+        ray_scene,
+        RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, RAY_MASK_SOLID, 0.0, RAY_FAR, origin, direction),
+    );
+    while rayQueryProceed(&query) {}
     return rayQueryGetCommittedIntersection(&query).kind == RAY_QUERY_INTERSECTION_NONE;
 }
 

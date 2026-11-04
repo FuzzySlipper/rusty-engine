@@ -683,6 +683,89 @@ fn a_moving_reflection_stays_on_its_surface_under_ray_reconstruction() {
     assert!(error < RR_REFLECTION_ERROR, "reflection error {error}");
 }
 
+/// The light on a floor under ambient rows, with a masked sheet at 3 m and
+/// `walled` a sealed box of solid walls around it all.
+fn floor_under_leaves(gpu: &Gpu, leaves: bool, walled: bool) -> f32 {
+    let mut harness = Harness::on(gpu.clone(), options(GlobalIllumination::RayTraced));
+    harness.renderer.set_ray_gi_without_denoiser(true);
+    let texture = harness.resources.texture(
+        "texture/leaf",
+        2,
+        2,
+        &[40, 60, 30, 255].repeat(4),
+        TextureWrap::Clamp,
+    );
+    let mut ops = floor();
+    ops.push(RenderDiff::DefineTexture { texture });
+    ops.push(RenderDiff::DefineMaterial {
+        material: RenderMaterialDescriptor {
+            alpha_mode: MaterialAlphaModeDescriptor::Mask { cutoff: 0.5 },
+            ..material("material/leaf", [1.0; 4], Some("texture/leaf"))
+        },
+    });
+    ops.push(RenderDiff::DefineMaterial {
+        material: material("material/box", [0.8, 0.8, 0.8, 1.0], None),
+    });
+    if leaves {
+        ops.extend(solid(
+            WALL,
+            "mesh/leaf",
+            "material/leaf",
+            [-20.0, 3.0, -20.0],
+            [20.0, 3.05, 20.0],
+        ));
+    }
+    if walled {
+        for (index, (min, max)) in [
+            ([-8.0, 6.0, -8.0], [8.0, 6.2, 8.0]),
+            ([-8.2, 0.0, -8.2], [-8.0, 6.0, 8.2]),
+            ([8.0, 0.0, -8.2], [8.2, 6.0, 8.2]),
+            ([-8.2, 0.0, -8.2], [8.2, 6.0, -8.0]),
+            ([-8.2, 0.0, 8.0], [8.2, 6.0, 8.2]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let asset = format!("mesh/box-{index}");
+            ops.extend(solid(10 + index as u64, &asset, "material/box", min, max));
+        }
+    }
+    ops.push(RenderDiff::CreateLight {
+        handle: RenderHandle::new(SKY),
+        parent: None,
+        light: LightDescriptor::Ambient {
+            color: [1.0; 3],
+            intensity: 1.0,
+            enabled: true,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+            range: None,
+        },
+    });
+    harness.apply(ops);
+    let view = camera([0.0, 1.5, 0.0], 0.0, -45.0);
+    for _ in 0..SETTLING_FRAMES {
+        harness.render(&view);
+    }
+    mean(&harness.render(&view).1)[1]
+}
+
+#[test]
+fn ambient_light_passes_leaves_and_stops_at_solid_walls_around_them() {
+    let (_turn, gpu) = ray_gpu();
+    if render_wgpu_cannot_trace(&gpu) {
+        return;
+    }
+    let open = floor_under_leaves(&gpu, false, false);
+    let canopy = floor_under_leaves(&gpu, true, false);
+    let cave = floor_under_leaves(&gpu, true, true);
+    assert!(
+        canopy > open * 0.7,
+        "the rows lit the floor to {open} open and {canopy} under leaves"
+    );
+    assert!(cave < 4.0, "the rows lit a sealed cave's floor to {cave}");
+}
+
 /// On a device that cannot trace, global illumination refuses, and the
 /// frame draws as it would without it.
 fn render_wgpu_cannot_trace(gpu: &Gpu) -> bool {

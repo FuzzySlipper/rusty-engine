@@ -22,7 +22,10 @@
 //! under it past anything the forward pass shows. The pool holds those parts'
 //! vertices and each row their albedo, roughness and emission
 //! (`RayScene::pool_all`, `ray_shadows.rs`). A texture past the slots reads
-//! as its material's mean. Every ray tests masks.
+//! as its material's mean. Every ray tests masks. The ambient and hemisphere
+//! rows are what a ray meets leaving the scene, and a leaf does not stop them:
+//! past a masked part they count unless a solid part (`MASK_SOLID`) stands
+//! beyond it. Paths alone carry too little through a canopy's dark layers.
 //!
 //! One sample a pixel is noise: Ray Reconstruction denoises it, so global
 //! illumination draws only where it runs (`Renderer::ray_gi_refusal`).

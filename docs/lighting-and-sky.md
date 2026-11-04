@@ -258,8 +258,10 @@ sky's light. It is a port of Bevy's Solari without its ReSTIR.
 
 - **Lights:** a path samples the light rows and the emissive parts through 128
   presampled tiles. A ray that leaves the scene meets the sky's prefiltered
-  cube, and the ambient and hemisphere rows as radiance. A cloud layer does
-  not shade the sun for a path.
+  cube, and the ambient and hemisphere rows as radiance. A leaf does not stop
+  the rows: a ray that hits a masked part still meets them if nothing solid
+  stands beyond it, so they fill under a canopy and stay out of a cave, plants
+  and all. A cloud layer does not shade the sun for a path.
 - **World cache:** a hash grid of irradiance over the surfaces paths reach, so
   a path ends at its first wide bounce. `rayGi` in the statistics reports its
   live cells and the light sources; `gi-light-tiles`, `gi-world-cache` and
@@ -277,9 +279,10 @@ sky's light. It is a port of Bevy's Solari without its ReSTIR.
   sharp as it moves. A reflected scatter copy counts as standing still.
 - **Look:** light is what the scene lets through. A hemisphere light and the
   sky's light reach every surface in the forward pass; here a surface takes
-  them only where its rays reach the sky, so a product tuned without rays
-  looks darker wherever the sky is hidden. A leaf passes no light through it.
-  Exposure and lights tuned for the forward pass need tuning again.
+  them only where its rays get out, so a product tuned without rays looks
+  darker wherever the sky is hidden, most of all under a closed canopy.
+  Exposure and lights tuned for the forward pass need tuning again: an auto
+  exposure held at 1 cannot brighten there.
 
 It draws on a GPU with ray queries on Vulkan, under `Dlss` antialiasing with
 Ray Reconstruction running and one primary view over the whole output. A

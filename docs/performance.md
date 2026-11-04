@@ -180,7 +180,9 @@ not draw, and the frame keeps super resolution or TAAU. It needs one primary
 view over the whole output. `gi-light-tiles`, `gi-world-cache` and `gi-paths`
 hold the rays' GPU time, and `rayGi` the cache's live cells and the light
 sources. `--gi-without-denoiser` draws global illumination under any temporal
-stage, noisy, on a GPU without Ray Reconstruction.
+stage, noisy, on a GPU without Ray Reconstruction. Without `--advance`
+presentation time holds, so auto exposure stays at what the first frame
+measured: compare pictures of a scene that uses it with time advancing.
 
 Trusted product code reads the same statistics (`ProductHostRendererStatistics`
 in `product-host`) as UTF-8 JSON bytes through
