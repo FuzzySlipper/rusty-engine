@@ -765,6 +765,7 @@ impl Renderer {
                     triangles,
                 });
             }
+            row[29] = u32::from(parts.state[entry.part as usize].scatter_level.is_some());
             rows.insert(entry.part, row);
         }
         shadows.emissive = emissive;

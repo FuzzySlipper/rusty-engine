@@ -268,12 +268,18 @@ sky's light. It is a port of Bevy's Solari without its ReSTIR.
   [ray scene](performance.md#renderer-statistics)'s rest geometry and scatter
   copies within the sun's reach. Grass that casts no shadow stops no path. A
   hit reads its base texture at the mesh's uv, or its material's mean past 256
-  textures; a product shader's material reads as its mean. A pixel's first ray
-  tests masks, and the rays after it take masked parts as solid.
-- **Look:** light is what the scene lets through, so a product tuned on the
-  probes looks darker. Probes do not see scattered trees, and rays do: under a
-  closed canopy the floor is nearly black, and a leaf passes no light through
-  it. Exposure and lights tuned for the probes need tuning again.
+  textures; a product shader's material reads as its mean. Every ray tests
+  masks.
+- **Mirrors:** Ray Reconstruction reads what a path found, not the world's
+  guides: a smooth surface's reflection has motion of its own, and a mirror
+  (the smoothest surface the world pass draws) gives way in depth, motion and
+  guides to the surface its chain of mirrors ends on, so a reflection stays
+  sharp as it moves. A reflected scatter copy counts as standing still.
+- **Look:** light is what the scene lets through. A hemisphere light and the
+  sky's light reach every surface in the forward pass; here a surface takes
+  them only where its rays reach the sky, so a product tuned without rays
+  looks darker wherever the sky is hidden. A leaf passes no light through it.
+  Exposure and lights tuned for the forward pass need tuning again.
 
 It draws on a GPU with ray queries on Vulkan, under `Dlss` antialiasing with
 Ray Reconstruction running and one primary view over the whole output. A

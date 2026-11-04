@@ -41,7 +41,8 @@ struct RayPart {
     surface: vec4<f32>,
     // rgb: the radiance it leaves with; w: its metalness.
     emission: vec4<f32>,
-    // x: its triangles when it is a light source, else 0.
+    // x: its triangles when it is a light source, else 0; y: 1 for a part
+    // drawn in scatter copies, which has no one previous place.
     source: vec4<u32>,
 };
 
@@ -189,15 +190,12 @@ struct RayHit {
 };
 
 // The nearest surface a path stops at along `direction`, within `reach`.
-// `flags` may
-// say `RAY_FLAG_FORCE_OPAQUE` to take masked parts as solid: what rays pay
-// for testing a cut-out's texels is most of what they cost among leaves.
-fn ray_closest(origin: vec3<f32>, direction: vec3<f32>, reach: f32, flags: u32) -> RayHit {
+fn ray_closest(origin: vec3<f32>, direction: vec3<f32>, reach: f32) -> RayHit {
     var query: ray_query;
     rayQueryInitialize(
         &query,
         ray_scene,
-        RayDesc(flags, RAY_MASK_PATH, 0.0, reach, origin, direction),
+        RayDesc(RAY_FLAG_NONE, RAY_MASK_PATH, 0.0, reach, origin, direction),
     );
     while rayQueryProceed(&query) {
         if ray_hit_opaque(rayQueryGetCandidateIntersection(&query)) {
@@ -218,12 +216,12 @@ fn ray_closest(origin: vec3<f32>, direction: vec3<f32>, reach: f32, flags: u32) 
 
 // Whether nothing that casts shadows stands along `direction` within
 // `reach`.
-fn ray_clear(origin: vec3<f32>, direction: vec3<f32>, reach: f32, flags: u32) -> bool {
+fn ray_clear(origin: vec3<f32>, direction: vec3<f32>, reach: f32) -> bool {
     var query: ray_query;
     rayQueryInitialize(
         &query,
         ray_scene,
-        RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT | flags, RAY_MASK_SHADOW, 0.0, reach, origin, direction),
+        RayDesc(RAY_FLAG_TERMINATE_ON_FIRST_HIT, RAY_MASK_SHADOW, 0.0, reach, origin, direction),
     );
     while rayQueryProceed(&query) {
         if ray_hit_opaque(rayQueryGetCandidateIntersection(&query)) {

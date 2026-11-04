@@ -2491,15 +2491,7 @@ impl Renderer {
                     depth: view.target.depth,
                     render: (width, height),
                     inputs: &inputs,
-                    specular: self
-                        .ray_gi
-                        .as_ref()
-                        .and_then(crate::ray_gi::RayGi::hit_distance)
-                        .map(|hit_distance| crate::dlss::SpecularRays {
-                            hit_distance,
-                            world_to_view: view.camera.view.transpose().to_cols_array(),
-                            view_to_clip: view.camera.projection.transpose().to_cols_array(),
-                        }),
+                    rays: self.ray_gi.as_ref().and_then(crate::ray_gi::RayGi::guides),
                     output: &resolved.color,
                     output_size: output,
                     render_scale: self.options.render_scale,
@@ -3024,11 +3016,21 @@ impl Renderer {
                     &view.drawn_camera().view_proj,
                     eye,
                     view.viewport,
-                    view.target.depth,
-                    guides,
+                    crate::ray_gi::ViewSurfaces {
+                        depth: view.target.depth,
+                        guides,
+                        motion: view
+                            .motion
+                            .as_ref()
+                            .map(crate::motion::MotionPass::resolved)
+                            .expect("guides draw beside motion"),
+                    },
                 ),
             _ => false,
         };
+        if let Some(gi) = self.ray_gi.as_mut().filter(|_| world_layer && !ray_gi) {
+            gi.skipped();
+        }
         let instances_uploaded = self.update_view_list(&view_proj, eye, view.layer);
         // The world, sprites and particles draw into the view's HDR target,
         // with the view's depth and its samples; the background and the
@@ -3830,6 +3832,9 @@ impl Renderer {
         };
         let instances =
             list.drawn() + candidates.map_or(0, |candidates| candidates.list.instances());
+        if let Some(gi) = self.ray_gi.as_ref().filter(|_| ray_gi) {
+            gi.resolve(&mut encoder);
+        }
         // Ray Reconstruction takes the world's HDR here. Everything after
         // goes on at output size, from its result.
         let (finish_target, area, size, reconstructed_lines) = match view.reconstruct {

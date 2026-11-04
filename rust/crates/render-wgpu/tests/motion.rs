@@ -234,6 +234,23 @@ fn a_moved_part_moves_once_and_then_holds() {
     assert_eq!(moving(&held, 0, 0.2), (0, 0), "nothing moves");
 }
 
+#[test]
+fn a_part_moved_every_frame_keeps_its_motion() {
+    let mut harness = harness();
+    harness.apply(cube_ahead(3.0));
+    draw(&mut harness, &eye(0.0));
+    for step in 1..4 {
+        move_group(&mut harness, 0.1 * step as f32);
+        let (_, moved) = draw(&mut harness, &eye(0.0));
+        assert_close(
+            motion(&moved, CENTRE.0, CENTRE.1),
+            [FOCAL_PIXELS * 0.1 / 2.5, 0.0],
+            0.5,
+            "the moving cube",
+        );
+    }
+}
+
 /// The cube under group 5 drawn as its replaced payload, shifted `x` along x.
 fn reshape_cube(harness: &mut Harness, x: f32) {
     let mut shifted = cube();

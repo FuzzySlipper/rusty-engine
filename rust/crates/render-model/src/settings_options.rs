@@ -247,8 +247,8 @@ const VOLUMETRIC_FOG_CHOICES: &[RendererSettingChoice] = &[
 /// `evidence/rt-shadows-10313`).
 const RAY_TRACED_SHADOWS_COST: &str = "On CraftSurvive at 2560×1440 on an RTX 3080, a moving view's frame is 2 to 4 ms shorter than with the sun's shadow maps and a still view's 6 to 11 ms longer, since maps that have not moved cost nothing. The acceleration structures hold about 95 MB.";
 
-/// Measured on CraftSurvive's forest, pond, cave-mouth and night views.
-const GLOBAL_ILLUMINATION_COST: &str = "On CraftSurvive at 2560×1440 on an RTX 3080, at DLSS quality the rays take 6 to 22 ms and Ray Reconstruction 15.5 ms, for frames of 43 to 83 ms against 16 to 31 ms with TAAU; at native resolution the rays take 12 to 45 ms and Ray Reconstruction 26 to 30 ms. The world cache and light tiles hold 92 MiB, and every shown mesh's vertices are copied for the rays.";
+/// Measured on CraftSurvive's forest, pond, cave-mouth and lamp views.
+const GLOBAL_ILLUMINATION_COST: &str = "On CraftSurvive at 2560×1440 on an RTX 3080, at DLSS quality the rays take 12 to 44 ms and Ray Reconstruction 15 ms, for still frames of 51 to 86 ms against 20 to 31 ms with TAAU; at native resolution the rays take 25 to 81 ms and Ray Reconstruction 22 to 31 ms. The most foliage costs most. The world cache and light tiles hold 92 MiB, and every shown mesh's vertices are copied for the rays.";
 
 /// Measured on `render-wgpu` `tests/water.rs`'s still water before a wall.
 const WATER_REFLECTIONS_COST: &str = "With still water filling the lower view at 1920×1080 and 4× multisampling, Low about 0.17 ms and High about 0.30 ms on an RX 9070 XT, 0.04 ms of it the copy of the scene's colour. Nothing in views without water.";

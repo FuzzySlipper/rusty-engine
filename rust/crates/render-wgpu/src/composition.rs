@@ -702,10 +702,14 @@ impl Renderer {
         let Some(inputs) = self.temporal.inputs() else {
             return;
         };
+        // What the denoiser reads, where paths replaced a surface.
+        let rays = self.ray_gi.as_ref().and_then(crate::ray_gi::RayGi::guides);
         if self.overlays.shown.motion {
-            self.compose.show_motion(&self.gpu, output, inputs.motion);
+            let motion = rays.as_ref().map_or(inputs.motion, |rays| rays.motion);
+            self.compose.show_motion(&self.gpu, output, motion);
         }
-        if let (Some(guide), Some(guides)) = (self.overlays.shown.guide, inputs.guides) {
+        let guides = rays.map(|rays| rays.guides).or(inputs.guides);
+        if let (Some(guide), Some(guides)) = (self.overlays.shown.guide, guides) {
             let texture = match guide {
                 crate::Guide::DiffuseAlbedo => guides[0],
                 crate::Guide::SpecularAlbedo => guides[1],

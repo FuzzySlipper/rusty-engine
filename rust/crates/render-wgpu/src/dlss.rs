@@ -87,24 +87,13 @@ pub(crate) struct Reconstruction<'a> {
     pub depth: &'a wgpu::TextureView,
     pub render: (u32, u32),
     pub inputs: &'a crate::motion::TemporalInputs<'a>,
-    /// What global illumination's specular rays give it, once they trace.
-    pub specular: Option<SpecularRays<'a>>,
+    /// What global illumination's paths give it in place of the world's
+    /// guides, depth and motion, once they trace.
+    pub rays: Option<crate::ray_gi::RayGuides<'a>>,
     /// The HDR target at output resolution, which it fills.
     pub output: &'a wgpu::TextureView,
     pub output_size: (u32, u32),
     pub render_scale: f32,
-}
-
-/// How far each pixel's specular ray went (`ray_gi.rs`), and the camera it
-/// left, each matrix by rows.
-#[cfg_attr(
-    not(feature = "dlss"),
-    allow(dead_code, reason = "read only by the built stage")
-)]
-pub(crate) struct SpecularRays<'a> {
-    pub hit_distance: &'a wgpu::TextureView,
-    pub world_to_view: [f32; 16],
-    pub view_to_clip: [f32; 16],
 }
 
 #[cfg(not(feature = "dlss"))]
@@ -760,7 +749,8 @@ mod built {
                 self.reconstructor = None;
                 return Err((refused, encoder));
             }
-            let Some(guides) = work.inputs.guides else {
+            let rays = work.rays.as_ref();
+            let Some(guides) = rays.map(|rays| rays.guides).or(work.inputs.guides) else {
                 let refused = Refused {
                     refusal: SettingRefusal::InitializationFailed,
                     detail: "Ray Reconstruction ran without its guides".to_owned(),
@@ -795,19 +785,12 @@ mod built {
                     normals: guides[2],
                     roughness: None,
                     color: work.color,
-                    depth: work.depth,
-                    motion_vectors: work.inputs.motion,
+                    depth: rays.map_or(work.depth, |rays| rays.depth),
+                    motion_vectors: rays.map_or(work.inputs.motion, |rays| rays.motion),
                     // Until rays trace, reflections move as their surfaces do.
-                    specular_guide: match &work.specular {
-                        Some(rays) => DlssRayReconstructionSpecularGuide::SpecularHitDistance {
-                            texture_view: rays.hit_distance,
-                            world_to_view_rows_array: rays.world_to_view,
-                            view_to_clip_rows_array: rays.view_to_clip,
-                        },
-                        None => DlssRayReconstructionSpecularGuide::SpecularMotionVectors(
-                            work.inputs.motion,
-                        ),
-                    },
+                    specular_guide: DlssRayReconstructionSpecularGuide::SpecularMotionVectors(
+                        rays.map_or(work.inputs.motion, |rays| rays.specular_motion),
+                    ),
                     transparency_overlay: None,
                     color_before_transparency: None,
                     screen_space_subsurface_scattering_guide: None,

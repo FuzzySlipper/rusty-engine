@@ -134,6 +134,11 @@ pub(crate) fn request(adapter: &wgpu::Adapter, descriptor: &mut wgpu::DeviceDesc
     limits.max_sampled_textures_per_shader_stage = (limits.max_sampled_textures_per_shader_stage
         + 5)
     .min(granted.max_sampled_textures_per_shader_stage);
+    // The paths write eight targets' worth of light and guides.
+    limits.max_storage_textures_per_shader_stage = limits
+        .max_storage_textures_per_shader_stage
+        .max(8)
+        .min(granted.max_storage_textures_per_shader_stage);
     // The world cache's scans and the light tiles run 1024 threads a group.
     limits.max_compute_invocations_per_workgroup = limits
         .max_compute_invocations_per_workgroup

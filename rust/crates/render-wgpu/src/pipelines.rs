@@ -387,8 +387,9 @@ impl Layouts {
             if entry.binding >= 14 {
                 entry.visibility = wgpu::ShaderStages::VERTEX;
             }
+            // Paths place what they reflect where it stood (`ray_gi.wgsl`).
             if entry.binding == 15 {
-                entry.visibility |= wgpu::ShaderStages::FRAGMENT;
+                entry.visibility |= wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE;
             }
             // The sky's irradiance lights fragments and the fog's froxels:
             // its storage leaves the vertex stage room for the previous

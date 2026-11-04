@@ -22,14 +22,15 @@
 //! under it past anything the forward pass shows. The pool holds those parts'
 //! vertices and each row their albedo, roughness and emission
 //! (`RayScene::pool_all`, `ray_shadows.rs`). A texture past the slots reads
-//! as its material's mean. A pixel's first ray tests masks; the rays past it
-//! take masked parts as solid: it changed nothing to see, and among leaves
-//! the tests are most of what a ray costs.
+//! as its material's mean. Every ray tests masks.
 //!
 //! One sample a pixel is noise: Ray Reconstruction denoises it, so global
-//! illumination draws only where it runs (`Renderer::ray_gi_refusal`). It
-//! takes each pixel's specular ray length as its specular guide
-//! ([`RayGi::hit_distance`]).
+//! illumination draws only where it runs (`Renderer::ray_gi_refusal`).
+//! Paths write what it reads ([`RayGi::guides`]): on a smooth surface the
+//! motion of what it reflects, and on a mirror the surface its chain ends on,
+//! in place of the mirror, in textures of their own: the composite keeps the
+//! world's guides, and blended parts draw into the world's motion after the
+//! paths. `resolve_guides` merges them once those have drawn.
 
 use glam::{Mat4, Vec3};
 
@@ -54,13 +55,17 @@ const LIGHT_BYTES: u64 = 64;
 const SOURCE_WORDS: usize = 16;
 const SOURCE_BYTES: u64 = (SOURCE_WORDS * 4) as u64;
 /// `GiParams` in `ray_gi.wgsl`.
-const PARAMS_BYTES: u64 = 64 + 16 * 6;
+const PARAMS_BYTES: u64 = 64 * 2 + 16 * 6;
 const PIXEL_WORKGROUP: u32 = 8;
 /// The cache's dispatches and the scale of the frame's random seed.
 const CELL_WORKGROUP: u32 = 1024;
 const FRAME_SEED: u32 = 5_782_582;
 const IRRADIANCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
-const HIT_DISTANCE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+const GUIDE_RECORD_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+const ALBEDO_GUIDE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+const NORMAL_GUIDE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const MOTION_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 const TILES_PASS: &str = "gi-light-tiles";
 const CACHE_PASS: &str = "gi-world-cache";
 const PATHS_PASS: &str = "gi-paths";
@@ -111,7 +116,35 @@ struct Targets {
     size: (u32, u32),
     irradiance: wgpu::TextureView,
     specular: wgpu::TextureView,
-    hit_distance: wgpu::TextureView,
+    /// What each path said of its pixel for `resolve_guides`.
+    record: wgpu::TextureView,
+    /// What Ray Reconstruction reads in place of the world's. The specular
+    /// motion lasts: a pixel keeps it through frames its lobe says nothing.
+    diffuse_guide: wgpu::TextureView,
+    specular_guide: wgpu::TextureView,
+    normal_guide: wgpu::TextureView,
+    motion: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    specular_motion: wgpu::TextureView,
+}
+
+/// What a world view drew for paths to start from.
+pub(crate) struct ViewSurfaces<'a> {
+    pub depth: &'a wgpu::TextureView,
+    pub guides: [&'a wgpu::TextureView; 3],
+    pub motion: &'a wgpu::TextureView,
+}
+
+/// What Ray Reconstruction reads of a frame global illumination drew.
+#[cfg_attr(
+    not(feature = "dlss"),
+    allow(dead_code, reason = "read only by the built stage")
+)]
+pub(crate) struct RayGuides<'a> {
+    pub guides: [&'a wgpu::TextureView; 3],
+    pub motion: &'a wgpu::TextureView,
+    pub depth: &'a wgpu::TextureView,
+    pub specular_motion: &'a wgpu::TextureView,
 }
 
 struct Pipelines {
@@ -124,6 +157,7 @@ struct Pipelines {
     sample_gi: wgpu::ComputePipeline,
     blend: wgpu::ComputePipeline,
     paths: wgpu::ComputePipeline,
+    resolve: wgpu::ComputePipeline,
     composite: wgpu::RenderPipeline,
 }
 
@@ -139,11 +173,15 @@ pub(crate) struct RayGi {
     scene_layout: wgpu::BindGroupLayout,
     dispatch_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
+    resolve_layout: wgpu::BindGroupLayout,
     pipelines: Option<Pipelines>,
     targets: Option<Targets>,
     /// This view's groups, as `prepare_ray_gi` made them.
     view_group: Option<wgpu::BindGroup>,
     composite_group: Option<wgpu::BindGroup>,
+    resolve_group: Option<wgpu::BindGroup>,
+    /// Whether the last view drew: it holds what Ray Reconstruction reads.
+    drew: bool,
     scene_group: wgpu::BindGroup,
     dispatch_group: wgpu::BindGroup,
     region: PixelRect,
@@ -221,10 +259,13 @@ impl RayGi {
             scene_layout,
             dispatch_layout,
             composite_layout: composite_layout(device),
+            resolve_layout: resolve_layout(device),
             pipelines: None,
             targets: None,
             view_group: None,
             composite_group: None,
+            resolve_group: None,
+            drew: false,
             scene_group,
             dispatch_group,
             region: PixelRect {
@@ -268,10 +309,26 @@ impl RayGi {
         ]
     }
 
-    /// How far each pixel's specular ray went, the frame's guide for Ray
-    /// Reconstruction.
-    pub fn hit_distance(&self) -> Option<&wgpu::TextureView> {
-        self.targets.as_ref().map(|targets| &targets.hit_distance)
+    /// What Ray Reconstruction reads of the frame, when rays drew it.
+    pub fn guides(&self) -> Option<RayGuides<'_>> {
+        self.targets
+            .as_ref()
+            .filter(|_| self.drew)
+            .map(|targets| RayGuides {
+                guides: [
+                    &targets.diffuse_guide,
+                    &targets.specular_guide,
+                    &targets.normal_guide,
+                ],
+                motion: &targets.motion,
+                depth: &targets.depth,
+                specular_motion: &targets.specular_motion,
+            })
+    }
+
+    /// A view that does not draw leaves no guides for the frame.
+    pub fn skipped(&mut self) {
+        self.drew = false;
     }
 
     /// Trace the frame's light, in the view `prepare_ray_gi` readied, with
@@ -376,6 +433,25 @@ impl RayGi {
         pass.draw(0..3, 0..1);
     }
 
+    /// Merge what Ray Reconstruction reads, once the world's blended parts
+    /// have drawn.
+    pub fn resolve(&self, encoder: &mut wgpu::CommandEncoder) {
+        let (Some(pipelines), Some(group)) = (&self.pipelines, &self.resolve_group) else {
+            return;
+        };
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("render-wgpu ray gi guides"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipelines.resolve);
+        pass.set_bind_group(3, group, &[]);
+        pass.dispatch_workgroups(
+            self.region.width.div_ceil(PIXEL_WORKGROUP),
+            self.region.height.div_ceil(PIXEL_WORKGROUP),
+            1,
+        );
+    }
+
     /// After the view's encoder is submitted.
     pub fn submitted(&mut self) {
         for timer in self.timers.iter_mut().flatten() {
@@ -471,7 +547,13 @@ impl RayGi {
                 size,
                 irradiance: target("render-wgpu ray gi irradiance", IRRADIANCE_FORMAT),
                 specular: target("render-wgpu ray gi specular", IRRADIANCE_FORMAT),
-                hit_distance: target("render-wgpu ray gi hit distance", HIT_DISTANCE_FORMAT),
+                record: target("render-wgpu ray gi guide record", GUIDE_RECORD_FORMAT),
+                diffuse_guide: target("render-wgpu ray gi diffuse guide", ALBEDO_GUIDE_FORMAT),
+                specular_guide: target("render-wgpu ray gi specular guide", ALBEDO_GUIDE_FORMAT),
+                normal_guide: target("render-wgpu ray gi normal guide", NORMAL_GUIDE_FORMAT),
+                motion: target("render-wgpu ray gi motion", MOTION_FORMAT),
+                depth: target("render-wgpu ray gi depth", DEPTH_FORMAT),
+                specular_motion: target("render-wgpu ray gi specular motion", MOTION_FORMAT),
             });
         }
     }
@@ -573,17 +655,52 @@ fn view_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             texture_entry(3, compute),
             written_entry(4, IRRADIANCE_FORMAT),
             written_entry(5, IRRADIANCE_FORMAT),
-            written_entry(6, HIT_DISTANCE_FORMAT),
+            written_entry(6, GUIDE_RECORD_FORMAT),
+            params_entry(7),
+            written_entry(8, ALBEDO_GUIDE_FORMAT),
+            written_entry(9, ALBEDO_GUIDE_FORMAT),
+            written_entry(10, NORMAL_GUIDE_FORMAT),
+            storage_entry(11, true),
+        ],
+    })
+}
+
+fn params_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Uniform,
+            has_dynamic_offset: false,
+            min_binding_size: None,
+        },
+        count: None,
+    }
+}
+
+/// `resolve_guides`'s group 3 in `ray_gi.wgsl`.
+fn resolve_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    let compute = wgpu::ShaderStages::COMPUTE;
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("render-wgpu ray gi guides"),
+        entries: &[
             wgpu::BindGroupLayoutEntry {
-                binding: 7,
+                binding: 1,
                 visibility: compute,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
                 count: None,
             },
+            texture_entry(2, compute),
+            texture_entry(3, compute),
+            texture_entry(4, compute),
+            written_entry(5, MOTION_FORMAT),
+            written_entry(6, DEPTH_FORMAT),
+            written_entry(7, MOTION_FORMAT),
+            params_entry(8),
         ],
     })
 }
@@ -632,12 +749,13 @@ fn params_words(
 ) -> [u32; (PARAMS_BYTES / 4) as usize] {
     let mut words = [0u32; (PARAMS_BYTES / 4) as usize];
     words[..16].copy_from_slice(&view_proj.inverse().to_cols_array().map(f32::to_bits));
-    words[16..19].copy_from_slice(&eye.to_array().map(f32::to_bits));
-    words[20..24].copy_from_slice(&[region.x, region.y, region.width, region.height]);
-    words[24..28].copy_from_slice(&state);
-    words[28..31].copy_from_slice(&lights.ambient.map(f32::to_bits));
-    words[32..35].copy_from_slice(&lights.sky.map(f32::to_bits));
-    words[36..39].copy_from_slice(&lights.ground.map(f32::to_bits));
+    words[16..32].copy_from_slice(&view_proj.to_cols_array().map(f32::to_bits));
+    words[32..35].copy_from_slice(&eye.to_array().map(f32::to_bits));
+    words[36..40].copy_from_slice(&[region.x, region.y, region.width, region.height]);
+    words[40..44].copy_from_slice(&state);
+    words[44..47].copy_from_slice(&lights.ambient.map(f32::to_bits));
+    words[48..51].copy_from_slice(&lights.sky.map(f32::to_bits));
+    words[52..55].copy_from_slice(&lights.ground.map(f32::to_bits));
     words
 }
 
@@ -676,19 +794,23 @@ impl Renderer {
     }
 
     /// Ready a world view's light: `region` of a target of `size`, read from
-    /// its `depth` and `guides`. Whether it draws.
+    /// its `surfaces`. Whether it draws.
     pub(crate) fn prepare_ray_gi(
         &mut self,
         size: (u32, u32),
         view_proj: &Mat4,
         eye: Vec3,
         region: PixelRect,
-        depth: &wgpu::TextureView,
-        guides: [&wgpu::TextureView; 3],
+        surfaces: ViewSurfaces<'_>,
     ) -> bool {
         let Some(mut gi) = self.ray_gi.take() else {
             return false;
         };
+        let ViewSurfaces {
+            depth,
+            guides,
+            motion,
+        } = surfaces;
         let traceable = self.refresh_ray_trace_group();
         if traceable {
             gi.collect(&self.gpu);
@@ -730,9 +852,33 @@ impl Renderer {
                     view_entry(3, guides[2]),
                     view_entry(4, &targets.irradiance),
                     view_entry(5, &targets.specular),
-                    view_entry(6, &targets.hit_distance),
+                    view_entry(6, &targets.record),
                     wgpu::BindGroupEntry {
                         binding: 7,
+                        resource: gi.params.as_entire_binding(),
+                    },
+                    view_entry(8, &targets.diffuse_guide),
+                    view_entry(9, &targets.specular_guide),
+                    view_entry(10, &targets.normal_guide),
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: self.temporal.previous_models().as_entire_binding(),
+                    },
+                ],
+            });
+            let resolve_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("render-wgpu ray gi guides"),
+                layout: &gi.resolve_layout,
+                entries: &[
+                    view_entry(1, depth),
+                    view_entry(2, motion),
+                    view_entry(3, &targets.record),
+                    view_entry(4, guides[2]),
+                    view_entry(5, &targets.motion),
+                    view_entry(6, &targets.depth),
+                    view_entry(7, &targets.specular_motion),
+                    wgpu::BindGroupEntry {
+                        binding: 8,
                         resource: gi.params.as_entire_binding(),
                     },
                 ],
@@ -749,8 +895,10 @@ impl Renderer {
             });
             gi.view_group = Some(view_group);
             gi.composite_group = Some(composite_group);
+            gi.resolve_group = Some(resolve_group);
             self.make_ray_gi_pipelines(&mut gi);
         }
+        gi.drew = traceable;
         self.ray_gi = Some(gi);
         traceable
     }
@@ -780,6 +928,11 @@ impl Renderer {
         };
         let plain = layout(false);
         let compacting = layout(true);
+        let resolving = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-wgpu ray gi guides"),
+            bind_group_layouts: &[None, None, None, Some(&gi.resolve_layout)],
+            immediate_size: 0,
+        });
         let pipeline = |layout: &wgpu::PipelineLayout, entry: &str| {
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("render-wgpu ray gi"),
@@ -846,6 +999,7 @@ impl Renderer {
             sample_gi: pipeline(&plain, "sample_gi"),
             blend: pipeline(&plain, "blend_new_samples"),
             paths: pipeline(&plain, "trace_pixels"),
+            resolve: pipeline(&resolving, "resolve_guides"),
             composite,
         });
     }

@@ -368,6 +368,11 @@ impl MotionPass {
         }
     }
 
+    /// The motion as a pass reads it, single-sample.
+    pub fn resolved(&self) -> &wgpu::TextureView {
+        self.resolve.as_ref().unwrap_or(&self.attachment)
+    }
+
     /// The guide targets as a pass reads them, when drawn.
     pub fn guides(&self) -> Option<[&wgpu::TextureView; 3]> {
         self.guides
@@ -470,8 +475,11 @@ impl PreviousModels {
             }
         }
         self.carried.clear();
-        let moved: Vec<PartId> = self.moved.drain().collect();
-        for &id in moved.iter().chain(&self.settling) {
+        // A part moving every frame is in both: it steps once.
+        let moved = std::mem::take(&mut self.moved);
+        let settling = std::mem::take(&mut self.settling);
+        let settled = settling.iter().filter(|id| !moved.contains(id));
+        for &id in moved.iter().chain(settled) {
             let index = id as usize;
             if index >= count {
                 continue;
@@ -480,7 +488,7 @@ impl PreviousModels {
             self.drawn[index] = model(parts, index);
             dirty.push(id);
         }
-        self.settling = moved;
+        self.settling = moved.into_iter().collect();
         let grown = (count * MODEL_FLOATS * 4) as u64 > self.buffer.size();
         if grown {
             self.buffer = models_buffer(gpu, count.next_power_of_two());

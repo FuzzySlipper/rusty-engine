@@ -1,7 +1,7 @@
 // Adapted from Bevy's bevy_solari (https://github.com/bevyengine/bevy, MIT OR
 // Apache-2.0), commit 84e2d2cc5: `presample_light_tiles`, `world_cache_query`,
-// `world_cache_compact`, `world_cache_update`, `initial_path` and `no_restir`
-// in `realtime/`, `sampling` and `brdf` in `scene/`.
+// `world_cache_compact`, `world_cache_update`, `initial_path`, `no_restir` and
+// `resolve_dlss_rr_textures` in `realtime/`, `sampling` and `brdf` in `scene/`.
 //
 // Ray-traced global illumination (render-wgpu `ray_gi.rs`): the light a world
 // view's opaque surfaces receive from everything but what the forward pass
@@ -12,8 +12,15 @@
 // where a wide lobe allows it. A pixel's first lobe is chosen from its guides
 // and its light kept apart: `ray_gi_composite.wgsl` scales the diffuse by the
 // diffuse albedo and the specular by the specular albedo.
+//
+// A path also writes what Ray Reconstruction reads: on a smooth surface the
+// motion of what it reflects, and on a mirror the surface the mirror chain
+// ends on, in place of the mirror (primary surface replacement). The
+// composite keeps the world's own guides, and `resolve_guides` merges depth
+// and motion once the world's blended parts have drawn.
 
 #import rusty::lighting::{brdf_ggx, distance_attenuation, environment_brdf}
+#import rusty::motion::{previous_pixel_from, previous_pixel_toward}
 #import rusty::ray::{ray_clear, ray_closest, ray_indices, ray_params, ray_parts, ray_samplers, ray_textures, ray_vertices, ray_voxel_uv, RayHit, NO_TEXTURE, VERTEX_FLOATS}
 #import rusty::view::{frame, lights, sky_specular, sky_sampler}
 
@@ -21,8 +28,9 @@ const PI: f32 = 3.14159265;
 const PI_2: f32 = 6.28318531;
 
 struct GiParams {
-    // The world from the view's clip space.
+    // The world from the view's clip space, and back.
     inverse_view_proj: mat4x4<f32>,
+    view_proj: mat4x4<f32>,
     // xyz: the camera; w unused.
     camera: vec4<f32>,
     // The viewport's origin and size, pixels.
@@ -86,12 +94,28 @@ struct WorldCache {
 @group(1) @binding(3) var normal_guide: texture_2d<f32>;
 @group(1) @binding(4) var irradiance_out: texture_storage_2d<rgba16float, write>;
 @group(1) @binding(5) var specular_out: texture_storage_2d<rgba16float, write>;
-@group(1) @binding(6) var hit_distance_out: texture_storage_2d<r32float, write>;
+// x, y: the motion of what the pixel reflects; z: the depth a mirror's
+// replacing surface stands at; w: `GUIDE_*`.
+@group(1) @binding(6) var guide_record_out: texture_storage_2d<rgba32float, write>;
 @group(1) @binding(7) var<uniform> params: GiParams;
+// What Ray Reconstruction reads for the world's guides.
+@group(1) @binding(8) var diffuse_out: texture_storage_2d<rgba8unorm, write>;
+@group(1) @binding(9) var specular_guide_out: texture_storage_2d<rgba8unorm, write>;
+@group(1) @binding(10) var normal_out: texture_storage_2d<rgba16float, write>;
+@group(1) @binding(11) var<storage, read> previous_models: array<mat4x4<f32>>;
 @group(2) @binding(0) var<storage, read_write> world_cache: WorldCache;
 @group(2) @binding(1) var<storage, read_write> light_tiles: array<GiLight>;
 @group(2) @binding(2) var<storage, read> sources: array<GiSource>;
 @group(3) @binding(0) var<storage, read_write> active_cells_dispatch: vec3<u32>;
+// `resolve_guides`, which binds nothing else.
+@group(3) @binding(1) var resolve_depth: texture_depth_2d;
+@group(3) @binding(2) var resolve_motion: texture_2d<f32>;
+@group(3) @binding(3) var resolve_record: texture_2d<f32>;
+@group(3) @binding(4) var resolve_normal: texture_2d<f32>;
+@group(3) @binding(5) var motion_out: texture_storage_2d<rgba16float, write>;
+@group(3) @binding(6) var depth_out: texture_storage_2d<r32float, write>;
+@group(3) @binding(7) var specular_motion_out: texture_storage_2d<rgba16float, write>;
+@group(3) @binding(8) var<uniform> resolve_params: GiParams;
 
 const WORLD_CACHE_SIZE: u32 = 1048576u;
 const LIGHT_TILES: u32 = 128u;
@@ -103,14 +127,28 @@ const LIGHT_SPOT: u32 = 2u;
 const LIGHT_TRIANGLE: u32 = 3u;
 
 const RAY_T_MAX: f32 = 100000.0;
-const MIRROR_ROUGHNESS_THRESHOLD: f32 = 0.001;
+// The lobe width of the smoothest surface the world pass draws
+// (`world.wgsl` holds roughness to 0.0525): what counts as a mirror.
+const MIRROR_ROUGHNESS_THRESHOLD: f32 = 0.0028;
 const MAX_BOUNCES: u32 = 3u;
 const PRIMARY_DI_SAMPLES: u32 = 8u;
 const SECONDARY_DI_SAMPLES: u32 = 4u;
 const CACHE_TERMINATION_MIN_SOLID_ANGLE: f32 = PI;
-// The rays past a pixel's first take masked parts as solid.
-const SECONDARY_RAY_FLAGS: u32 = RAY_FLAG_FORCE_OPAQUE;
-const VISIBILITY_RAY_FLAGS: u32 = RAY_FLAG_FORCE_OPAQUE;
+
+// What a pixel's guide record holds.
+const GUIDE_NONE: f32 = 0.0;
+const GUIDE_SPECULAR_MOTION: f32 = 1.0;
+const GUIDE_REPLACED: f32 = 2.0;
+// A surface is replaced outright only when nearly all its reflectance leaves
+// through the delta lobe.
+const FULL_REPLACEMENT_FRACTION: f32 = 0.9;
+// How far a reflector's virtual image may shift between neighbouring pixels,
+// as a share of the virtual distance, before it counts as too curved.
+const MAX_VIRTUAL_DEPTH_JITTER: f32 = 0.002;
+// What a flat surface's normals measure between neighbours in half floats.
+const NORMAL_QUANTIZATION_FLOOR: f32 = 0.002;
+// The lobe width below which a surface's reflection has motion of its own.
+const SPECULAR_MOTION_ALPHA: f32 = 0.0625;
 
 // Frames a cell lives for without being queried, and the attempts to find a
 // cell past a hash collision.
@@ -266,7 +304,7 @@ fn trace_visibility(origin: vec3<f32>, place: vec4<f32>) -> f32 {
     if reach <= 0.0 {
         return 0.0;
     }
-    return select(0.0, 1.0, ray_clear(origin, direction, reach, VISIBILITY_RAY_FLAGS));
+    return select(0.0, 1.0, ray_clear(origin, direction, reach));
 }
 
 // A ray's start off a surface `away` metres from the camera.
@@ -604,7 +642,7 @@ fn sample_gi(@builtin(global_invocation_id) active_cell_id: vec3<u32>) {
     }
     let direction = sample_cosine_hemisphere(geometry.world_normal, &rng);
     let origin = geometry.world_position + geometry.world_normal * ray_offset(distance(params.camera.xyz, geometry.world_position));
-    let ray = ray_closest(origin, direction, WORLD_CACHE_MAX_GI_RAY_DISTANCE, SECONDARY_RAY_FLAGS);
+    let ray = ray_closest(origin, direction, WORLD_CACHE_MAX_GI_RAY_DISTANCE);
     if ray.hit {
         let hit = resolve_hit(ray, origin, direction);
         let life = atomicLoad(&world_cache.life[cell_index]);
@@ -756,6 +794,7 @@ struct BrdfSample {
     wi: vec3<f32>,
     throughput: vec3<f32>,
     pdf: f32,
+    diffuse: bool,
 };
 
 // The surface's response from `wi` toward `wo`, the cosine included.
@@ -791,7 +830,7 @@ fn evaluate_and_sample_brdf(
 ) -> BrdfSample {
     let n_dot_v = dot(normal, wo);
     if n_dot_v < 0.0001 {
-        return BrdfSample(vec3<f32>(0.0), vec3<f32>(0.0), 0.0);
+        return BrdfSample(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, false);
     }
     let rho = lobe_reflectances(material, n_dot_v);
     let specular_weight = specular_lobe_probability(luminance(rho.specular), luminance(rho.diffuse), material.roughness);
@@ -800,23 +839,24 @@ fn evaluate_and_sample_brdf(
     let wo_tangent = wo * basis;
     var wi: vec3<f32>;
     var wi_tangent: vec3<f32>;
-    if rand_f(rng) < diffuse_weight {
+    let diffuse_selected = rand_f(rng) < diffuse_weight;
+    if diffuse_selected {
         wi = sample_cosine_hemisphere(normal, rng);
         wi_tangent = wi * basis;
     } else {
         wi_tangent = sample_ggx_vndf(wo_tangent, material.alpha, rng);
         if !(wi_tangent.z > 0.0) {
-            return BrdfSample(vec3<f32>(0.0), vec3<f32>(0.0), 0.0);
+            return BrdfSample(vec3<f32>(0.0), vec3<f32>(0.0), 0.0, false);
         }
         wi = basis * wi_tangent;
         // A mirror's lobe is a delta function.
         if material.alpha <= MIRROR_ROUGHNESS_THRESHOLD {
-            return BrdfSample(wi, rho.specular / specular_weight, infinity());
+            return BrdfSample(wi, rho.specular / specular_weight, infinity(), false);
         }
     }
     let pdf = diffuse_weight * wi_tangent.z / PI
         + specular_weight * ggx_vndf_pdf(wo_tangent, wi_tangent, material.alpha);
-    return BrdfSample(wi, evaluate_brdf(wo, wi, normal, material) / max(pdf, 1e-12), pdf);
+    return BrdfSample(wi, evaluate_brdf(wo, wi, normal, material) / max(pdf, 1e-12), pdf, diffuse_selected);
 }
 
 // The chance of NEE on a surface, for lights rays can also hit: bright where
@@ -922,12 +962,134 @@ fn nee_radiance(
     return di.brdf_radiance * weight * mis / p_keep;
 }
 
+// A primary surface's walk along its mirror chain, by bounce.
+struct PsrState {
+    finished: bool,
+    // The surface gives way to what it reflects, or only says how that moves.
+    replace_fully: bool,
+    // The chain's reflections, as a rotor and the parity of their count.
+    mirror_rotor: vec4<f32>,
+    mirror_parity_odd: bool,
+    // The distance from the primary surface through every mirror.
+    reflection_length: f32,
+    // What the reflected surface's colour is scaled by on its way back.
+    throughput: vec3<f32>,
+};
+
+// What the guides say of a pixel once its path has walked.
+struct PsrGuides {
+    kind: f32,
+    motion: vec2<f32>,
+    depth: f32,
+    diffuse: vec3<f32>,
+    specular: vec3<f32>,
+    normal_roughness: vec4<f32>,
+};
+
+fn mirror_chain_rotor(plane_normal: vec3<f32>, parity_odd: bool) -> vec4<f32> {
+    if parity_odd {
+        return vec4<f32>(plane_normal.y, -plane_normal.x, 0.0, plane_normal.z);
+    }
+    return vec4<f32>(-plane_normal.y, plane_normal.x, 0.0, plane_normal.z);
+}
+
+fn quaternion_multiply(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
+    return vec4<f32>(a.w * b.xyz + b.w * a.xyz + cross(a.xyz, b.xyz), a.w * b.w - dot(a.xyz, b.xyz));
+}
+
+fn apply_mirror_chain(psr: PsrState, v: vec3<f32>) -> vec3<f32> {
+    var reflected = v;
+    if psr.mirror_parity_odd {
+        reflected.z = -reflected.z;
+    }
+    let t = 2.0 * cross(psr.mirror_rotor.xyz, reflected);
+    return reflected + psr.mirror_rotor.w * t + cross(psr.mirror_rotor.xyz, t);
+}
+
+fn is_delta_mirror(material: GiMaterial) -> bool {
+    if material.alpha > MIRROR_ROUGHNESS_THRESHOLD {
+        return false;
+    }
+    let rho = lobe_reflectances(material, 1.0);
+    let specular = luminance(rho.specular);
+    return specular / max(specular + luminance(rho.diffuse), 0.0001) >= FULL_REPLACEMENT_FRACTION;
+}
+
+// The angle the normal turns through over a pixel, from the world's guide.
+fn reflector_curvature(pixel: vec2<u32>, normal: vec3<f32>) -> f32 {
+    let last = params.viewport.xy + params.viewport.zw - vec2<u32>(1u);
+    let right = textureLoad(normal_guide, min(pixel + vec2<u32>(1u, 0u), last), 0).xyz;
+    let down = textureLoad(normal_guide, min(pixel + vec2<u32>(0u, 1u), last), 0).xyz;
+    let least = min(abs(dot(normal, normalize(right))), abs(dot(normal, normalize(down))));
+    return max(0.0, sqrt(max(0.0, 2.0 * (1.0 - least))) - NORMAL_QUANTIZATION_FLOOR);
+}
+
+// How far the point `previous` has moved on screen to the pixel showing it
+// now, as `rusty::motion::motion_at` measures it.
+fn pixel_motion(pixel: vec2<u32>, previous: vec4<f32>) -> vec2<f32> {
+    if previous.w <= 1e-6 {
+        return vec2<f32>(0.0);
+    }
+    return vec2<f32>(pixel) + 0.5 - previous.xy / previous.w;
+}
+
+// Where a path's hit stood in the previous frame. A scatter copy stands
+// still.
+fn previous_hit_position(ray: RayHit, position: vec3<f32>) -> vec3<f32> {
+    if ray_parts[ray.part].source.y != 0u {
+        return position;
+    }
+    let local = ray.world_to_object * vec4<f32>(position, 1.0);
+    return (previous_models[ray.part] * vec4<f32>(local, 1.0)).xyz;
+}
+
+// The surface a mirror chain ended on, seen through it: where it seems to
+// stand and how it seems to move, and, where the primary surface gives way
+// to it, its guides reflected into the mirror's virtual space.
+// https://developer.nvidia.com/blog/rendering-perfect-reflections-and-refractions-in-path-traced-games/#primary_surface_replacement
+fn replace_primary_surface(
+    pixel: vec2<u32>,
+    psr: PsrState,
+    ray: RayHit,
+    hit: GiHit,
+    primary_position: vec3<f32>,
+    primary_normal: vec3<f32>,
+    primary_wo: vec3<f32>,
+    guides: PsrGuides,
+    specular_fraction: f32,
+) -> PsrGuides {
+    var result = guides;
+    let path_length = distance(primary_position, params.camera.xyz) + psr.reflection_length;
+    // Too curved to follow: the pixel keeps its own surface's motion.
+    if psr.replace_fully
+        && 2.0 * reflector_curvature(pixel, primary_normal) * psr.reflection_length > MAX_VIRTUAL_DEPTH_JITTER * path_length {
+        return result;
+    }
+    let virtual_position = primary_position - primary_wo * psr.reflection_length;
+    let world_motion = previous_hit_position(ray, hit.position) - hit.position;
+    let virtual_previous = virtual_position + apply_mirror_chain(psr, world_motion);
+    let eye = params.camera.xyz;
+    result.motion = pixel_motion(pixel, previous_pixel_from(eye, virtual_previous - eye));
+    result.kind = GUIDE_SPECULAR_MOTION;
+    if !psr.replace_fully {
+        return result;
+    }
+    let wo = normalize(eye - virtual_position);
+    let virtual_normal = normalize(apply_mirror_chain(psr, hit.normal));
+    let clip = params.view_proj * vec4<f32>(virtual_position, 1.0);
+    let rho = lobe_reflectances(hit.material, max(dot(virtual_normal, wo), 0.0001));
+    result.kind = GUIDE_REPLACED;
+    result.depth = clip.z / clip.w;
+    result.diffuse = psr.throughput * rho.diffuse + guides.diffuse;
+    result.specular = mix(guides.specular, psr.throughput * rho.specular, specular_fraction);
+    result.normal_roughness = vec4<f32>(virtual_normal, hit.material.roughness);
+    return result;
+}
+
 struct GiPath {
     radiance: vec3<f32>,
     diffuse: bool,
-    // How far the specular lobe's ray went, 0 when the diffuse lobe was
-    // taken.
-    hit_distance: f32,
+    guides: PsrGuides,
 };
 
 // One path from a primary surface. It starts on one of the surface's lobes,
@@ -940,11 +1102,27 @@ fn trace_path(
     wo: vec3<f32>,
     specular_share: f32,
     roughness: f32,
+    specular_fraction: f32,
+    guides: PsrGuides,
+    pixel: vec2<u32>,
     workgroup_id: vec2<u32>,
     rng: ptr<function, u32>,
 ) -> GiPath {
-    var result = GiPath(vec3<f32>(0.0), rand_f(rng) >= specular_share, 0.0);
+    var result = GiPath(vec3<f32>(0.0), rand_f(rng) >= specular_share, guides);
     let alpha = roughness * roughness;
+    // The chain opens with the primary surface's own reflection.
+    var psr = PsrState(
+        result.diffuse || alpha > SPECULAR_MOTION_ALPHA,
+        alpha <= MIRROR_ROUGHNESS_THRESHOLD && specular_fraction >= FULL_REPLACEMENT_FRACTION,
+        mirror_chain_rotor(surface_normal, false),
+        true,
+        0.0,
+        vec3<f32>(1.0),
+    );
+    // The reflectance of the mirror the walk stands on, and whether the last
+    // lobe was diffuse.
+    var reflectance = guides.specular;
+    var lobe_diffuse = result.diffuse;
     var origin = position + surface_normal * ray_offset(distance(params.camera.xyz, position));
     var throughput = vec3<f32>(1.0 / select(specular_share, 1.0 - specular_share, result.diffuse));
     var wi: vec3<f32>;
@@ -978,17 +1156,36 @@ fn trace_path(
         lobe_roughness = roughness;
     }
     for (var bounce = 0u; bounce < MAX_BOUNCES; bounce++) {
-        let ray = ray_closest(origin, wi, RAY_T_MAX, select(SECONDARY_RAY_FLAGS, RAY_FLAG_NONE, bounce == 0u));
+        let ray = ray_closest(origin, wi, RAY_T_MAX);
         if !ray.hit {
             result.radiance += throughput * sky_radiance(wi, lobe_roughness);
-            if bounce == 0u && !result.diffuse {
-                result.hit_distance = RAY_T_MAX;
+            // The sky stands infinitely far along the view through the chain.
+            if !psr.finished && !lobe_diffuse {
+                result.guides.motion = pixel_motion(pixel, previous_pixel_toward(-wo));
+                result.guides.kind = GUIDE_SPECULAR_MOTION;
             }
             break;
         }
         let hit = resolve_hit(ray, origin, wi);
-        if bounce == 0u && !result.diffuse {
-            result.hit_distance = ray.t;
+        if !psr.finished {
+            if lobe_diffuse {
+                psr.finished = true;
+            } else {
+                psr.throughput *= reflectance;
+                psr.reflection_length += ray.t;
+                if alpha <= MIRROR_ROUGHNESS_THRESHOLD && is_delta_mirror(hit.material) {
+                    psr.mirror_rotor = quaternion_multiply(
+                        psr.mirror_rotor,
+                        mirror_chain_rotor(hit.normal, psr.mirror_parity_odd),
+                    );
+                    psr.mirror_parity_odd = !psr.mirror_parity_odd;
+                } else {
+                    psr.finished = true;
+                    result.guides = replace_primary_surface(
+                        pixel, psr, ray, hit, position, surface_normal, wo, result.guides, specular_fraction,
+                    );
+                }
+            }
         }
         // An emissive surface a ray found, weighted against NEE finding it.
         if any(hit.emission > vec3<f32>(0.0)) {
@@ -1027,6 +1224,8 @@ fn trace_path(
         throughput *= next.throughput;
         wi = next.wi;
         pdf = next.pdf;
+        lobe_diffuse = next.diffuse;
+        reflectance = lobe_reflectances(hit.material, max(dot(hit.normal, -wi), 0.0001)).specular;
         nee_samples = SECONDARY_DI_SAMPLES;
         p_nee = nee_probability(hit.material);
         lobe_roughness = hit.material.roughness;
@@ -1053,25 +1252,59 @@ fn trace_pixels(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_
     let specular = textureLoad(specular_guide, pixel, 0).rgb;
     let diffuse_weight = luminance(diffuse);
     let specular_weight = luminance(specular);
+    let normal_roughness = textureLoad(normal_guide, pixel, 0);
+    var guides = PsrGuides(GUIDE_NONE, vec2<f32>(0.0), 0.0, diffuse, specular, normal_roughness);
     // Nothing there, or a surface the guides call unlit.
     if d >= 1.0 || diffuse_weight + specular_weight <= 0.0 {
         textureStore(irradiance_out, pixel, vec4<f32>(0.0));
         textureStore(specular_out, pixel, vec4<f32>(0.0));
-        textureStore(hit_distance_out, pixel, vec4<f32>(0.0));
+        write_guides(pixel, guides);
         return;
     }
-    let normal_roughness = textureLoad(normal_guide, pixel, 0);
     let uv = (vec2<f32>(id.xy) + 0.5) / vec2<f32>(params.viewport.zw);
     let clip = params.inverse_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0);
     let position = clip.xyz / clip.w;
     let wo = normalize(params.camera.xyz - position);
-    var normal = normalize(normal_roughness.xyz);
-    normal = select(normal, -normal, dot(normal, wo) < 0.0);
+    // As the world shaded it, not toward the camera: grass and leaves carry
+    // normals that face the sky however they are seen.
+    let normal = normalize(normal_roughness.xyz);
     var rng = id.x + id.y * params.viewport.z + params.state.x;
     let share = specular_lobe_probability(specular_weight, diffuse_weight, normal_roughness.w);
-    let path = trace_path(position, normal, wo, share, normal_roughness.w, workgroup_id.xy, &rng);
+    let fraction = specular_weight / max(specular_weight + diffuse_weight, 0.0001);
+    let path = trace_path(position, normal, wo, share, normal_roughness.w, fraction, guides, pixel, workgroup_id.xy, &rng);
     let light = vec4<f32>(path.radiance, 0.0);
     textureStore(irradiance_out, pixel, select(vec4<f32>(0.0), light, path.diffuse));
     textureStore(specular_out, pixel, select(light, vec4<f32>(0.0), path.diffuse));
-    textureStore(hit_distance_out, pixel, vec4<f32>(path.hit_distance));
+    write_guides(pixel, path.guides);
+}
+
+fn write_guides(pixel: vec2<u32>, guides: PsrGuides) {
+    textureStore(guide_record_out, pixel, vec4<f32>(guides.motion, guides.depth, guides.kind));
+    textureStore(diffuse_out, pixel, vec4<f32>(guides.diffuse, 1.0));
+    textureStore(specular_guide_out, pixel, vec4<f32>(guides.specular, 1.0));
+    textureStore(normal_out, pixel, guides.normal_roughness);
+}
+
+// Ray Reconstruction's depth and motion, once the blended parts have added
+// theirs: the world's, but where a path replaced the surface. A pixel whose
+// lobe this frame found nothing to say keeps its reflection's last motion:
+// alternating with the surface's, the denoiser would blur the reflection.
+@compute @workgroup_size(8, 8, 1)
+fn resolve_guides(@builtin(global_invocation_id) id: vec3<u32>) {
+    if any(id.xy >= resolve_params.viewport.zw) {
+        return;
+    }
+    let pixel = id.xy + resolve_params.viewport.xy;
+    let surface_motion = textureLoad(resolve_motion, pixel, 0);
+    let record = textureLoad(resolve_record, pixel, 0);
+    let replaced = record.w == GUIDE_REPLACED;
+    let specular = vec4<f32>(record.xy, surface_motion.zw);
+    textureStore(motion_out, pixel, select(surface_motion, specular, replaced));
+    textureStore(depth_out, pixel, vec4<f32>(select(textureLoad(resolve_depth, pixel, 0), record.z, replaced)));
+    let roughness = textureLoad(resolve_normal, pixel, 0).w;
+    if record.w != GUIDE_NONE {
+        textureStore(specular_motion_out, pixel, specular);
+    } else if roughness * roughness > SPECULAR_MOTION_ALPHA {
+        textureStore(specular_motion_out, pixel, surface_motion);
+    }
 }
