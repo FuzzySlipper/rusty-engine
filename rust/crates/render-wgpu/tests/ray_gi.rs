@@ -20,6 +20,20 @@ const LAMP: u64 = 92;
 /// Frames that fill the world cache and let the temporal stage gather them.
 const SETTLING_FRAMES: u32 = 48;
 
+/// One device with ray queries per test binary, and one test on it at a
+/// time, as the other ray tests run: the Vulkan loader can crash when test
+/// threads make devices at once (`support::gpu`), and tests sharing a device
+/// at once hang on RADV.
+fn ray_gpu() -> (std::sync::MutexGuard<'static, ()>, Gpu) {
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static GPU: std::sync::OnceLock<Gpu> = std::sync::OnceLock::new();
+    let turn = TURN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let gpu = GPU.get_or_init(|| Gpu::headless_with_ray_queries().expect("a device"));
+    (turn, gpu.clone())
+}
+
 fn options(global_illumination: GlobalIllumination) -> RendererOptions {
     RendererOptions {
         default_world_lights: false,
@@ -131,7 +145,7 @@ fn settled(
 
 #[test]
 fn a_sunlit_wall_colours_the_floor_beside_it() {
-    let gpu = Gpu::headless_with_ray_queries().expect("a device");
+    let (_turn, gpu) = ray_gpu();
     if render_wgpu_cannot_trace(&gpu) {
         return;
     }
@@ -159,7 +173,7 @@ fn a_sunlit_wall_colours_the_floor_beside_it() {
 
 #[test]
 fn a_miss_meets_the_sky_and_a_closed_box_does_not() {
-    let gpu = Gpu::headless_with_ray_queries().expect("a device");
+    let (_turn, gpu) = ray_gpu();
     if render_wgpu_cannot_trace(&gpu) {
         return;
     }
@@ -216,7 +230,7 @@ fn a_miss_meets_the_sky_and_a_closed_box_does_not() {
 
 #[test]
 fn an_emissive_part_lights_what_faces_it() {
-    let gpu = Gpu::headless_with_ray_queries().expect("a device");
+    let (_turn, gpu) = ray_gpu();
     if render_wgpu_cannot_trace(&gpu) {
         return;
     }
@@ -259,7 +273,7 @@ fn an_emissive_part_lights_what_faces_it() {
 
 #[test]
 fn a_lamp_lights_past_the_wall_that_hides_it_by_its_bounce() {
-    let gpu = Gpu::headless_with_ray_queries().expect("a device");
+    let (_turn, gpu) = ray_gpu();
     if render_wgpu_cannot_trace(&gpu) {
         return;
     }
@@ -366,7 +380,7 @@ fn floor_through_card(gpu: &Gpu, alpha: u8) -> f32 {
 
 #[test]
 fn a_cut_out_passes_light_and_paths_where_clear_and_stops_them_where_opaque() {
-    let gpu = Gpu::headless_with_ray_queries().expect("a device");
+    let (_turn, gpu) = ray_gpu();
     if render_wgpu_cannot_trace(&gpu) {
         return;
     }
@@ -420,7 +434,7 @@ fn diffuse_guide(gpu: &Gpu, setting: GlobalIllumination, scene: Vec<RenderDiff>)
 
 #[test]
 fn a_mirror_gives_way_in_the_guides_to_what_its_chain_ends_on() {
-    let gpu = Gpu::headless_with_ray_queries().expect("a device");
+    let (_turn, gpu) = ray_gpu();
     if render_wgpu_cannot_trace(&gpu) {
         return;
     }
@@ -546,7 +560,7 @@ fn reflection_motion(gpu: &Gpu, setting: GlobalIllumination) -> (usize, f32) {
 
 #[test]
 fn a_mirror_moves_with_what_it_reflects_in_the_guides() {
-    let gpu = Gpu::headless_with_ray_queries().expect("a device");
+    let (_turn, gpu) = ray_gpu();
     if render_wgpu_cannot_trace(&gpu) {
         return;
     }
@@ -661,7 +675,7 @@ fn reconstructed_mirrors(gpu: &Gpu, x: f32, step: f32, name: &str) -> Vec<u8> {
 #[test]
 #[ignore = "needs DLSS Ray Reconstruction"]
 fn a_moving_reflection_stays_on_its_surface_under_ray_reconstruction() {
-    let gpu = Gpu::headless_with_ray_queries().expect("a device");
+    let (_turn, gpu) = ray_gpu();
     let moving = reconstructed_mirrors(&gpu, 1.0, 0.2, "moving");
     let still = reconstructed_mirrors(&gpu, 1.0, 0.0, "still");
     let error = reflection_error(&moving, &still);
@@ -683,7 +697,7 @@ fn render_wgpu_cannot_trace(gpu: &Gpu) -> bool {
 
 #[test]
 fn without_ray_reconstruction_it_refuses_and_the_probes_draw() {
-    let gpu = Gpu::headless_with_ray_queries().expect("a device");
+    let (_turn, gpu) = ray_gpu();
     let scene = || {
         let mut ops = floor();
         ops.push(sun());
