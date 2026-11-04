@@ -165,14 +165,11 @@ struct Playback {
     duration: Option<f64>,
     /// The descriptor's own rate, before the world rate scales it.
     pitch: f64,
-    /// What it plays, so a held advance can start it again elsewhere.
+    /// What it plays, so resuming can start it again at its held moment.
     descriptor: AudioSourceDescriptor,
     /// Where world time moved the sound while the device was suspended; the
     /// cursor until the device resumes.
     held_at: Option<f64>,
-    /// A static sound's held seek, which kira takes only once its track runs:
-    /// sent again on resume.
-    reseek_on_resume: bool,
     /// World time carried the sound past its end while suspended.
     ended: bool,
 }
@@ -226,6 +223,14 @@ impl Playback {
             }
         }
         Some(normalize_cursor(target, self.duration, looping))
+    }
+
+    /// Moves the suspended sound's cursor on. Nothing reaches kira until it
+    /// resumes, so a held step costs no decoder work.
+    fn advance_held(&mut self, world_seconds: f64, looping: bool) {
+        if let Some(target) = self.target(world_seconds, looping) {
+            self.held_at = Some(target);
+        }
     }
 
     /// Plays at the descriptor's rate scaled by the world's.
@@ -308,16 +313,16 @@ pub struct AudioRealizer<B: Backend = DefaultBackend> {
     facts: Vec<RealizedAudioFact>,
     /// The playing video's own sound, outside the Engine buses.
     soundtrack: Option<StreamingSoundHandle<FromFileError>>,
-    /// The soundtrack's own track, suspended with the buses, so a soundtrack
-    /// that starts while the world holds holds at its start.
-    soundtrack_track: TrackHandle,
-    /// The soundtrack's clip, so a held advance can start it again elsewhere.
+    /// The soundtrack's clip, so resuming can start it again at its held
+    /// moment.
     soundtrack_clip: Option<Arc<render_video::VideoClip>>,
     /// The soundtrack's position after a held advance, until it resumes.
     soundtrack_held_at: Option<f64>,
     /// How fast world time runs against realtime; every sound plays at this
     /// multiple of its own rate (see [`AudioRealizer::set_world_rate`]).
     world_rate: f64,
+    /// The device holds every sound (see [`AudioRealizer::set_suspended`]).
+    suspended: bool,
 }
 
 impl AudioRealizer<DefaultBackend> {
@@ -365,9 +370,6 @@ impl<B: Backend> AudioRealizer<B> {
                 .map_err(|error| error.to_string())
         };
         let buses = [bus()?, bus()?, bus()?, bus()?];
-        let soundtrack_track = manager
-            .add_sub_track(TrackBuilder::new())
-            .map_err(|error| error.to_string())?;
         Ok(Self {
             manager,
             listener,
@@ -379,10 +381,10 @@ impl<B: Backend> AudioRealizer<B> {
             released_one_shots: Vec::new(),
             facts: Vec::new(),
             soundtrack: None,
-            soundtrack_track,
             soundtrack_clip: None,
             soundtrack_held_at: None,
             world_rate: 1.0,
+            suspended: false,
         })
     }
 
@@ -475,39 +477,76 @@ impl<B: Backend> AudioRealizer<B> {
     }
 
     /// Follows the runtime lifecycle: a paused runtime advances no Engine
-    /// cursor, so the device holds every sound where it is.
-    pub fn set_suspended(&mut self, suspended: bool) {
-        for bus in &mut self.buses {
-            if suspended {
-                bus.pause(IMMEDIATE);
-            } else {
-                bus.resume(IMMEDIATE);
-            }
+    /// cursor, so the device holds every sound where it is. Sounds hold rather
+    /// than their tracks: a paused track processes nothing, so a sound stopped
+    /// on one would keep its streaming decoder thread until the track resumed.
+    pub fn set_suspended(
+        &mut self,
+        suspended: bool,
+        clips: &impl AudioClipSource,
+        entities: &impl AudioEntityPositions,
+    ) {
+        if suspended == self.suspended {
+            return;
         }
+        self.suspended = suspended;
         if suspended {
-            self.soundtrack_track.pause(IMMEDIATE);
-        } else {
-            self.soundtrack_track.resume(IMMEDIATE);
-        }
-        if !suspended {
-            // The held sounds stand at their targets (streaming ones were
-            // started there; static seeks are sent again for the now running
-            // tracks), so kira's positions are current again from here.
-            self.soundtrack_held_at = None;
             let voices = self
                 .voices
                 .values_mut()
+                .filter(|voice| voice.state == RealizedVoiceState::Playing)
                 .filter_map(|voice| voice.playback.as_mut());
             let one_shots = self
                 .one_shots
                 .iter_mut()
                 .map(|one_shot| &mut one_shot.playback);
             for playback in voices.chain(one_shots).chain(&mut self.released_one_shots) {
-                if let Some(position) = playback.held_at.take() {
-                    if std::mem::take(&mut playback.reseek_on_resume) {
-                        each_sound!(&mut playback.sound, handle => handle.seek_to(position));
-                    }
-                }
+                playback.pause();
+            }
+            if let Some(soundtrack) = &mut self.soundtrack {
+                soundtrack.pause(IMMEDIATE);
+            }
+            return;
+        }
+        let handles = self.voices.keys().copied().collect::<Vec<_>>();
+        for handle in handles {
+            let Some(voice) = self.voices.get_mut(&handle) else {
+                continue;
+            };
+            let playing = voice.state == RealizedVoiceState::Playing;
+            let Some(mut playback) = voice.playback.take() else {
+                continue;
+            };
+            // The voice's descriptor, with every admitted update, is what a
+            // restarted streaming sound plays.
+            playback.descriptor = voice.descriptor.clone();
+            let mut playback = self.stand_at_held_moment(playback, clips, entities);
+            if playing {
+                playback.resume();
+            } else {
+                playback.pause();
+            }
+            if let Some(voice) = self.voices.get_mut(&handle) {
+                voice.playback = Some(playback);
+            }
+        }
+        for mut one_shot in std::mem::take(&mut self.one_shots) {
+            one_shot.playback = self.stand_at_held_moment(one_shot.playback, clips, entities);
+            one_shot.playback.resume();
+            self.one_shots.push(one_shot);
+        }
+        for playback in std::mem::take(&mut self.released_one_shots) {
+            let mut playback = self.stand_at_held_moment(playback, clips, entities);
+            playback.resume();
+            self.released_one_shots.push(playback);
+        }
+        let restarted = match (self.soundtrack_held_at.take(), self.soundtrack_clip.clone()) {
+            (Some(position), Some(clip)) => self.start_soundtrack(clip, position).is_ok(),
+            _ => false,
+        };
+        if !restarted {
+            if let Some(soundtrack) = &mut self.soundtrack {
+                soundtrack.resume(IMMEDIATE);
             }
         }
     }
@@ -542,54 +581,30 @@ impl<B: Backend> AudioRealizer<B> {
     /// inspection advance runs world steps with the world held), so the device
     /// stands where the Engine's cursors do. A one-shot moved past its end
     /// completes as it would have.
-    pub fn advance_held(
-        &mut self,
-        world_seconds: f64,
-        clips: &impl AudioClipSource,
-        entities: &impl AudioEntityPositions,
-    ) {
+    pub fn advance_held(&mut self, world_seconds: f64) {
         if !world_seconds.is_finite() || world_seconds <= 0.0 {
             return;
         }
-        let handles = self.voices.keys().copied().collect::<Vec<_>>();
-        for handle in handles {
-            let Some(voice) = self.voices.get_mut(&handle) else {
-                continue;
-            };
+        for voice in self.voices.values_mut() {
             if voice.state != RealizedVoiceState::Playing {
                 continue;
             }
-            let looping = voice.descriptor.looping;
-            let Some(mut playback) = voice.playback.take() else {
-                continue;
-            };
-            // The voice's descriptor, with every admitted update, is what a
-            // restarted streaming sound plays.
-            playback.descriptor = voice.descriptor.clone();
-            let playback = self.advance_playback(playback, world_seconds, looping, clips, entities);
-            if let Some(voice) = self.voices.get_mut(&handle) {
-                voice.playback = Some(playback);
+            if let Some(playback) = voice.playback.as_mut() {
+                playback.advance_held(world_seconds, voice.descriptor.looping);
             }
         }
         // One-shots never loop.
-        for mut one_shot in std::mem::take(&mut self.one_shots) {
-            one_shot.playback =
-                self.advance_playback(one_shot.playback, world_seconds, false, clips, entities);
-            self.one_shots.push(one_shot);
+        for one_shot in &mut self.one_shots {
+            one_shot.playback.advance_held(world_seconds, false);
         }
-        for playback in std::mem::take(&mut self.released_one_shots) {
-            let playback = self.advance_playback(playback, world_seconds, false, clips, entities);
-            self.released_one_shots.push(playback);
+        for playback in &mut self.released_one_shots {
+            playback.advance_held(world_seconds, false);
         }
-        if let (Some(soundtrack), Some(clip)) = (&self.soundtrack, self.soundtrack_clip.clone()) {
-            let target = self
+        if let Some(soundtrack) = &self.soundtrack {
+            let held = self
                 .soundtrack_held_at
-                .unwrap_or_else(|| soundtrack.position())
-                + world_seconds;
-            // Started again at the target, as a streaming voice is.
-            if self.start_soundtrack(clip, target).is_ok() {
-                self.soundtrack_held_at = Some(target);
-            }
+                .unwrap_or_else(|| soundtrack.position());
+            self.soundtrack_held_at = Some(held + world_seconds);
         }
     }
 
@@ -614,14 +629,17 @@ impl<B: Backend> AudioRealizer<B> {
     ) -> Result<(), String> {
         let decoder = soundtrack::SoundtrackDecoder::new(Arc::clone(&clip))
             .map_err(|error| error.to_string())?;
-        let handle = self
-            .soundtrack_track
+        let mut handle = self
+            .manager
             .play(
                 StreamingSoundData::from_decoder(decoder)
                     .start_position(position)
                     .playback_rate(PlaybackRate(self.world_rate)),
             )
             .map_err(|error| error.to_string())?;
+        if self.suspended {
+            handle.pause(IMMEDIATE);
+        }
         if let Some(mut previous) = self.soundtrack.replace(handle) {
             previous.stop(IMMEDIATE);
         }
@@ -916,6 +934,7 @@ impl<B: Backend> AudioRealizer<B> {
         clips: &impl AudioClipSource,
         entities: &impl AudioEntityPositions,
     ) -> Result<(), OpError> {
+        let suspended = self.suspended;
         let voice = self.voices.get_mut(&handle).ok_or_else(unknown_handle)?;
         voice.sequence = sequence;
         let restart_at = match control {
@@ -930,7 +949,10 @@ impl<B: Backend> AudioRealizer<B> {
             }
             AudioVoiceControl::Resume => match (voice.state, voice.playback.as_mut()) {
                 (RealizedVoiceState::Paused, Some(playback)) => {
-                    playback.resume();
+                    // A suspended device resumes it with everything else.
+                    if !suspended {
+                        playback.resume();
+                    }
                     voice.state = RealizedVoiceState::Playing;
                     return Ok(());
                 }
@@ -1077,45 +1099,43 @@ impl<B: Backend> AudioRealizer<B> {
                 (Sound::Streaming(handle), duration)
             }
         };
-        Ok(Playback {
+        let mut playback = Playback {
             sound,
             spatial,
             duration,
             pitch,
             descriptor: descriptor.clone(),
             held_at: None,
-            reseek_on_resume: false,
             ended: false,
-        })
+        };
+        if self.suspended {
+            playback.pause();
+        }
+        Ok(playback)
     }
 
-    /// Moves one suspended playback on by `world_seconds` of world time. A
-    /// static sound seeks in place. A streaming sound seeks asynchronously and
-    /// would first play what its decoder buffered before the seek, so it
-    /// starts again at the target in its paused track and decodes from there.
-    fn advance_playback(
+    /// Puts a resuming sound at the moment world time carried it to. A static
+    /// sound seeks in place. A streaming sound seeks asynchronously and would
+    /// first play what its decoder buffered before the seek, so it starts again
+    /// there, once for the whole hold however many steps it lasted.
+    fn stand_at_held_moment(
         &mut self,
         mut playback: Playback,
-        world_seconds: f64,
-        looping: bool,
         clips: &impl AudioClipSource,
         entities: &impl AudioEntityPositions,
     ) -> Playback {
-        let Some(target) = playback.target(world_seconds, looping) else {
+        let Some(position) = playback.held_at.take() else {
             return playback;
         };
         if matches!(playback.sound, Sound::Streaming(_)) {
             let descriptor = playback.descriptor.clone();
-            if let Ok(mut replacement) = self.play(&descriptor, target, clips, entities) {
+            if let Ok(replacement) = self.play(&descriptor, position, clips, entities) {
                 playback.stop();
-                replacement.held_at = Some(target);
                 return replacement;
             }
         }
         // A static sound, or a streaming one that could not start again.
-        each_sound!(&mut playback.sound, handle => handle.seek_to(target));
-        playback.held_at = Some(target);
-        playback.reseek_on_resume = true;
+        each_sound!(&mut playback.sound, handle => handle.seek_to(position));
         playback
     }
 }

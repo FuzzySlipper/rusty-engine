@@ -2643,7 +2643,7 @@ impl CsharpProductRuntime {
         };
         match self.lifecycle.state() {
             RuntimeState::Shutdown => audio.silence(),
-            _ => audio.follow_world(!moves, rate),
+            _ => audio.follow_world(!moves, rate, &self.services),
         }
     }
 

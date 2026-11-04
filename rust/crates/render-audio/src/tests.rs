@@ -304,7 +304,7 @@ fn suspension_holds_playback_position() {
         )],
     );
     run(&mut realizer, 0.2);
-    realizer.set_suspended(true);
+    realizer.set_suspended(true, &Clips::fixtures(), &NoEntityPositions);
     run(&mut realizer, 0.05);
     let held = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
     run(&mut realizer, 0.5);
@@ -313,7 +313,7 @@ fn suspension_holds_playback_position() {
         (still - held).abs() < 1e-9,
         "suspended cursor moved {held} -> {still}"
     );
-    realizer.set_suspended(false);
+    realizer.set_suspended(false, &Clips::fixtures(), &NoEntityPositions);
     run(&mut realizer, 0.2);
     let moved = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
     assert!(moved > still + 0.1, "resumed cursor {moved}");
@@ -366,11 +366,11 @@ fn world_time_advanced_while_suspended_moves_every_sound_on() {
     );
     run(&mut realizer, 0.1);
     // Held (an inspection hold): the device stops where it is...
-    realizer.set_suspended(true);
+    realizer.set_suspended(true, &Clips::fixtures(), &NoEntityPositions);
     run(&mut realizer, 0.05);
     let held = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
     // ...and the inspection advance runs 0.4 s of world time.
-    realizer.advance_held(0.4, &Clips::fixtures(), &NoEntityPositions);
+    realizer.advance_held(0.4);
     run(&mut realizer, 0.05);
     let advanced = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
     assert!(
@@ -379,7 +379,7 @@ fn world_time_advanced_while_suspended_moves_every_sound_on() {
     );
     // A further 1 s carries the one-shot (about 1 s long) past its end: it
     // completes at that world moment, while the device is still held.
-    realizer.advance_held(1.0, &Clips::fixtures(), &NoEntityPositions);
+    realizer.advance_held(1.0);
     run(&mut realizer, 0.05);
     realizer.refresh(&NoEntityPositions);
     assert_eq!(
@@ -395,7 +395,7 @@ fn world_time_advanced_while_suspended_moves_every_sound_on() {
         "looping voice wraps: {advanced} -> {looped_on}"
     );
     // Resuming plays on from that world moment, not from where it held.
-    realizer.set_suspended(false);
+    realizer.set_suspended(false, &Clips::fixtures(), &NoEntityPositions);
     run(&mut realizer, 0.1);
     let resumed = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
     assert!(
@@ -459,10 +459,10 @@ fn a_held_advance_keeps_a_streaming_voices_updated_settings() {
         )],
     );
     run(&mut realizer, 0.05);
-    realizer.set_suspended(true);
-    // The held advance starts the streaming voice again at its target...
-    realizer.advance_held(0.5, &Clips::fixtures(), &NoEntityPositions);
-    realizer.set_suspended(false);
+    realizer.set_suspended(true, &Clips::fixtures(), &NoEntityPositions);
+    // Resuming starts the streaming voice again at its held moment...
+    realizer.advance_held(0.5);
+    realizer.set_suspended(false, &Clips::fixtures(), &NoEntityPositions);
     run(&mut realizer, 0.05);
     // ...with the settings it had, not the ones it was created with.
     let playback = realizer.voices[&AudioHandle::new(1)]
@@ -489,16 +489,16 @@ fn a_streaming_voice_resumes_from_its_held_advance_without_stale_audio() {
             run(&mut realizer, 0.05);
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        realizer.set_suspended(true);
+        realizer.set_suspended(true, &Clips::fixtures(), &NoEntityPositions);
         run(&mut realizer, 0.05);
         let held = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
-        realizer.advance_held(0.5, &Clips::fixtures(), &NoEntityPositions);
+        realizer.advance_held(0.5);
         let target = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
         assert!(
             (target - (held + 0.5) % 1.0).abs() < 1e-6,
             "{hash}: {held} -> {target}"
         );
-        realizer.set_suspended(false);
+        realizer.set_suspended(false, &Clips::fixtures(), &NoEntityPositions);
         plays_on_from(
             &mut realizer,
             target,
@@ -913,10 +913,10 @@ fn a_video_soundtrack_plays_pauses_with_the_runtime_and_stops() {
     };
     let playing = position(&mut realizer, 0.5);
     assert!(playing > 0.0, "{playing}");
-    realizer.set_suspended(true);
+    realizer.set_suspended(true, &Clips::fixtures(), &NoEntityPositions);
     let held = position(&mut realizer, 0.5);
     assert!((held - playing).abs() < 0.06, "{held} vs {playing}");
-    realizer.set_suspended(false);
+    realizer.set_suspended(false, &Clips::fixtures(), &NoEntityPositions);
     realizer.stop_soundtrack();
     assert_eq!(realizer.soundtrack_position(), None);
 }
@@ -933,19 +933,19 @@ fn a_soundtrack_started_while_held_waits_at_the_world_moment() {
         realizer.soundtrack_position().expect("not stopped")
     };
     // The world holds (an inspection hold) before an update starts the clip.
-    realizer.set_suspended(true);
+    realizer.set_suspended(true, &Clips::fixtures(), &NoEntityPositions);
     realizer.play_soundtrack(clip).expect("plays");
     let started = position(&mut realizer, 0.5);
     assert!(started < 1e-6, "a held soundtrack does not play: {started}");
     // The inspection advance then admits 0.3 s of world time.
-    realizer.advance_held(0.3, &Clips::fixtures(), &NoEntityPositions);
+    realizer.advance_held(0.3);
     let advanced = position(&mut realizer, 0.3);
     assert!((advanced - 0.3).abs() < 1e-6, "{advanced}");
     // Resumed, it plays on from that world moment: forward from 0.3, never
     // back to its start, and no further than the audio rendered since. The
     // decoder thread sets the pace, so wait for movement rather than for a
     // fixed amount of it.
-    realizer.set_suspended(false);
+    realizer.set_suspended(false, &Clips::fixtures(), &NoEntityPositions);
     plays_on_from(
         &mut realizer,
         advanced,
@@ -953,6 +953,90 @@ fn a_soundtrack_started_while_held_waits_at_the_world_moment() {
         "soundtrack",
     );
     realizer.stop_soundtrack();
+}
+
+/// A hold never restarts a sound per step, and a sound stopped while held
+/// stops then: each kira streaming sound holds a decoder thread polling every
+/// millisecond until kira has processed its stop.
+#[test]
+fn a_held_world_keeps_one_decoder_per_sound_however_long_it_advances() {
+    let mut realizer = realizer();
+    let mut looped = descriptor("sha256:ogg", true);
+    looped.clip.duration_seconds = Some(1.0);
+    apply(
+        &mut realizer,
+        &[restore(1, looped, AudioVoiceDesiredState::Playing, 0.0)],
+    );
+    run(&mut realizer, 0.05);
+    realizer.set_suspended(true, &Clips::fixtures(), &NoEntityPositions);
+    run(&mut realizer, 0.05);
+    let sfx = bus_index(AudioBus::Sfx);
+    assert_eq!(realizer.buses[sfx].num_sounds(), 1);
+    for _ in 0..600 {
+        realizer.advance_held(1.0 / 60.0);
+        run(&mut realizer, 0.001);
+    }
+    assert_eq!(realizer.buses[sfx].num_sounds(), 1);
+
+    // A one-shot played and carried past its end during the hold is gone
+    // before the world resumes.
+    apply(
+        &mut realizer,
+        &[emit(2, 2, descriptor("sha256:ogg", false))],
+    );
+    run(&mut realizer, 0.05);
+    assert_eq!(realizer.buses[sfx].num_sounds(), 2);
+    realizer.advance_held(60.0);
+    run(&mut realizer, 0.05);
+    run(&mut realizer, 0.05);
+    assert_eq!(realizer.buses[sfx].num_sounds(), 1);
+}
+
+/// A voice the product paused stays paused through a hold, and one it resumes
+/// during a hold waits for the device.
+#[test]
+fn a_hold_leaves_a_voices_own_pause_to_the_product() {
+    let mut realizer = realizer();
+    let wav = descriptor("sha256:wav", true);
+    apply(
+        &mut realizer,
+        &[
+            restore(1, wav.clone(), AudioVoiceDesiredState::Playing, 0.0),
+            restore(2, wav, AudioVoiceDesiredState::Playing, 0.0),
+        ],
+    );
+    run(&mut realizer, 0.05);
+    let control = |handle, control| {
+        op(
+            3,
+            AudioProjectionOp::VoiceControl {
+                handle: AudioHandle::new(handle),
+                control,
+            },
+        )
+    };
+    apply(&mut realizer, &[control(1, AudioVoiceControl::Pause)]);
+    run(&mut realizer, 0.05);
+    realizer.set_suspended(true, &Clips::fixtures(), &NoEntityPositions);
+    run(&mut realizer, 0.05);
+    apply(&mut realizer, &[control(2, AudioVoiceControl::Pause)]);
+    apply(&mut realizer, &[control(2, AudioVoiceControl::Resume)]);
+    run(&mut realizer, 0.05);
+    let held = realizer.voice_cursor(AudioHandle::new(2)).expect("voice");
+    run(&mut realizer, 0.2);
+    let still = realizer.voice_cursor(AudioHandle::new(2)).expect("voice");
+    assert!((still - held).abs() < 1e-9, "held voice moved to {still}");
+
+    realizer.set_suspended(false, &Clips::fixtures(), &NoEntityPositions);
+    run(&mut realizer, 0.05);
+    let paused = realizer.voice_cursor(AudioHandle::new(1)).expect("voice");
+    run(&mut realizer, 0.2);
+    assert!(
+        (realizer.voice_cursor(AudioHandle::new(1)).expect("voice") - paused).abs() < 1e-9,
+        "the product's paused voice resumed with the device"
+    );
+    let moving = realizer.voice_cursor(AudioHandle::new(2)).expect("voice");
+    assert!(moving > still, "voice 2 stayed held at {moving}");
 }
 
 /// The device plays a spatial voice at the descriptor's rolloff of its

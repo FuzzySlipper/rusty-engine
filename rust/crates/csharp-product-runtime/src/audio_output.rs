@@ -71,8 +71,8 @@ impl Realizer {
         fn stop_soundtrack(&mut self);
         fn play_soundtrack(&mut self, clip: &[u8]) -> Result<(), String>;
         fn set_listener_pose(&mut self, position: [f32; 3], forward: [f32; 3], up: [f32; 3]);
-        fn set_suspended(&mut self, suspended: bool);
         fn set_world_rate(&mut self, rate: f64);
+        fn advance_held(&mut self, world_seconds: f64);
         fn take_facts(&mut self) -> Vec<RealizedAudioFact>;
         fn retain_clips(&mut self, admitted: impl Fn(&str) -> bool);
     }
@@ -168,14 +168,7 @@ impl AudioOutput {
         let world_seconds = services.presentation_elapsed_seconds();
         let advanced = world_seconds - std::mem::replace(&mut self.world_seconds, world_seconds);
         if advanced > 0.0 && self.world.is_some_and(|(held, _)| held) {
-            let clips = |hash: &str| services.audio_clip_bytes(hash);
-            let entities = EngineEntities(services);
-            match &mut self.realizer {
-                Realizer::Device(realizer) => realizer.advance_held(advanced, &clips, &entities),
-                Realizer::Stream { realizer, .. } => {
-                    realizer.advance_held(advanced, &clips, &entities)
-                }
-            }
+            self.realizer.advance_held(advanced);
         }
         for output in outputs.iter() {
             if let RuntimePublication::ViewComposition(composition) = output {
@@ -272,12 +265,17 @@ impl AudioOutput {
     /// Plays world audio only while world time moves, at its rate: the
     /// Engine's audio cursors advance with admitted steps, so the device
     /// holds while the world does and slows with it.
-    pub(crate) fn follow_world(&mut self, held: bool, rate: f64) {
+    pub(crate) fn follow_world(&mut self, held: bool, rate: f64, services: &EngineServiceSet) {
         if self.world == Some((held, rate)) {
             return;
         }
         self.world = Some((held, rate));
-        self.realizer.set_suspended(held);
+        let clips = |hash: &str| services.audio_clip_bytes(hash);
+        let entities = EngineEntities(services);
+        match &mut self.realizer {
+            Realizer::Device(realizer) => realizer.set_suspended(held, &clips, &entities),
+            Realizer::Stream { realizer, .. } => realizer.set_suspended(held, &clips, &entities),
+        }
         self.realizer.set_world_rate(rate);
     }
 
@@ -520,7 +518,7 @@ mod tests {
         let mut outputs = crate::service_outputs(call.take_output()).expect("outputs");
         output.realize(&services, &mut outputs);
         // Playtest inspection holds the world: the device holds too.
-        output.follow_world(true, 1.0);
+        output.follow_world(true, 1.0, &services);
         let held = output
             .voice_cursor(AudioHandle::new(voice.value))
             .expect("voice");

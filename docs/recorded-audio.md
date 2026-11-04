@@ -50,9 +50,11 @@ motion. That resamples (pitch falls with the rate); there is no time stretch. Wo
 admitted while the device holds (a playtest inspection advance) moves every
 held sound, one-shot and soundtrack on by that much, so they resume at the
 world moment the advance reached, and a one-shot it carries past its end
-completes then. A streaming clip (Ogg, Opus, a soundtrack) is started again
-at that moment rather than sought, so it resumes without first playing what
-its decoder had buffered.
+completes then. Each sound holds on its own while its bus keeps running, so a
+sound stopped during a hold ends then, along with its decoder thread. On
+resume a streaming clip (Ogg, Opus, a soundtrack) is started again at that
+moment, once per hold, rather than sought, so it resumes without first playing
+what its decoder had buffered.
 All four buses are world audio, `Ui` included: a sound that must play while
 the world holds belongs to the product UI page. A binding change (Start,
 Restart, fault) replays the committed baseline, and Shutdown stops every
