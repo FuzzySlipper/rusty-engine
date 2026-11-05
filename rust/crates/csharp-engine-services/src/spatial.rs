@@ -2321,6 +2321,7 @@ impl RuntimeSpatialBridge {
             navigation_revision,
             touched,
         );
+        session.grids_beside.clear();
         session.navigation_revision = navigation_revision;
         Ok(session.content_residency_receipt(receipt.revision_before, 0))
     }
@@ -11128,6 +11129,77 @@ mod tests {
         assert_eq!(assert_whole(&bridge), 0);
         residency(&mut bridge, &[place(5, d, [5, 0, 5], 0, [0.0; 3])], &[]).unwrap();
         assert_eq!(assert_whole(&bridge), 1);
+    }
+
+    /// Content navigation holds a session alone, however it arrives: collision
+    /// grids published before it go, a grid id then stands in one place, and
+    /// naming that grid clears it.
+    #[test]
+    fn content_residency_replaces_every_collision_grid() {
+        let path = "spatial/a.json";
+        for (content_grid, deferred) in [(1, false), (7, false), (1, true), (7, true)] {
+            let mut content = crate::content::RuntimeContentBridge::new(BTreeMap::from([(
+                path.to_owned(),
+                spatial_artifact("a", 0.25, &[(0, 0, 0, 0.0), (1, 0, 0, 0.0)]),
+            )]));
+            let artifact = open_content(&mut content, path);
+            let mut bridge = RuntimeSpatialBridge::new();
+            bridge.bind_content(&content);
+            let session = create_session(&api(&mut bridge));
+            for grid_id in [1, 2] {
+                let mut publish = collision_navigation_request(session);
+                publish.config.grid_id = grid_id;
+                bridge.replace_collision_navigation(&publish).unwrap();
+            }
+            let admitted = [NativeSpatialContentArtifactInstance {
+                id: 1,
+                content: artifact,
+                column_offset: 0,
+                level_offset: 0,
+                row_offset: 0,
+                quarter_turns: 0,
+                translation: NativeVec3::default(),
+            }];
+            bridge
+                .apply_content_artifact_residency(&NativeSpatialContentArtifactResidencyRequest {
+                    session,
+                    admitted: admitted.as_ptr(),
+                    admitted_len: admitted.len(),
+                    removed: std::ptr::null(),
+                    removed_len: 0,
+                    navigation_grid_id: content_grid,
+                    navigation_chunk_size: 8,
+                    navigation_max_step_cells: 1,
+                    deferred,
+                })
+                .unwrap();
+            bridge.settle_deferred(session).unwrap();
+
+            let held = |bridge: &mut RuntimeSpatialBridge| {
+                let grids = bridge
+                    .read_navigation_grids(NativeNavigationGridsRequest { session })
+                    .unwrap();
+                unsafe { std::slice::from_raw_parts(grids.grids, grids.grids_len) }
+                    .iter()
+                    .map(|grid| grid.grid_id)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(held(&mut bridge), [content_grid], "deferred: {deferred}");
+            bridge
+                .clear_navigation(NativeNavigationClearRequest {
+                    session,
+                    grid_id: content_grid,
+                })
+                .unwrap();
+            assert!(held(&mut bridge).is_empty(), "deferred: {deferred}");
+            let projection = bridge
+                .read_navigation_projection(NativeNavigationProjectionReadRequest {
+                    session,
+                    grid_id: content_grid,
+                })
+                .unwrap();
+            assert!(!projection.present, "deferred: {deferred}");
+        }
     }
 
     #[test]
