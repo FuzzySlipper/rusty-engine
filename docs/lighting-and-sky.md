@@ -297,17 +297,17 @@ Refused, the probes and the sky's light draw.
 
 ## Ray-traced lighting: cost and limits
 
-Measured on an RTX 3080 at 2560×1440, on CraftSurvive's forest, pond, cave and
-lamp views:
+Measured on an RTX 3080 at full clocks and 2560×1440, on CraftSurvive's forest,
+pond, cave and lamp views:
 
 | What | Cost |
 | --- | --- |
-| Asking for ray queries at start | About 58 ms of device creation and 38 MiB |
-| The ray scene | 50–63 ms for its first build, then 1.1–1.5 ms a frame |
-| [Ray-traced shadows](#ray-traced-sun-shadows) | Moving frames 2–4 ms shorter than the cascades', still frames 6–11 ms longer, 2–5 ms more CPU to draw |
-| [Ray-traced occlusion](#contact-darkening-ray-traced-ambient-occlusion) | 2.6–5.0 ms, against 0.2 ms screen-space and 0.5–0.6 ms distance field |
-| Ray Reconstruction | 9 ms at 1080p quality, 15.5 ms at 1440p quality, 18–30 ms at DLAA |
-| [Global illumination](#indirect-light-ray-traced-global-illumination) | 20–33 ms over a TAAU frame at DLSS quality, most among foliage: Ray Reconstruction 15.5 ms, paths 6–17 ms, world cache 1–2 ms |
+| Asking for ray queries at start | About 52 ms of device creation and 37 MiB |
+| The ray scene | 34–39 ms for its first build, then 0.5–0.8 ms a frame |
+| [Ray-traced shadows](#ray-traced-sun-shadows) | Moving frames 0.5–3.3 ms shorter than the cascades', still frames 3.5–7 ms longer, 1–4 ms more CPU to draw |
+| [Ray-traced occlusion](#contact-darkening-ray-traced-ambient-occlusion) | 0.7–2.2 ms, against 0.1 ms screen-space and 0.2–0.3 ms distance field |
+| Ray Reconstruction | 4 ms at 1080p quality, 6.8 ms at 1440p quality, 7.7 ms at 1080p DLAA, 13.5 ms at 1440p DLAA |
+| [Global illumination](#indirect-light-ray-traced-global-illumination) | 9–15 ms over a TAAU frame at DLSS quality, most among foliage: Ray Reconstruction 6.8 ms, paths 2.4–7.5 ms, world cache 0.6–0.9 ms |
 
 - **Rest geometry:** rays meet parts as they stand, swaying with the wind.
   Per-vertex flutter, morph targets and a product shader's `displace` stage are
