@@ -243,12 +243,13 @@ const VOLUMETRIC_FOG_CHOICES: &[RendererSettingChoice] = &[
 ];
 
 /// Every renderer setting, in the order a menu shows them.
-/// Measured on CraftSurvive's forest and pond views (Den
-/// `evidence/rt-shadows-10313`).
-const RAY_TRACED_SHADOWS_COST: &str = "On CraftSurvive at 2560×1440 on an RTX 3080, a moving view's frame is 2 to 4 ms shorter than with the sun's shadow maps and a still view's 6 to 11 ms longer, since maps that have not moved cost nothing. The acceleration structures hold about 95 MB.";
+/// Measured on CraftSurvive's forest, pond, cave-mouth and lamp views (Den
+/// `evidence/rt-cost-10613`).
+const RAY_TRACED_SHADOWS_COST: &str = "On CraftSurvive at 2560×1440 on an RTX 3080, a moving view's frame is 0.5 to 3.3 ms shorter than with the sun's shadow maps and a still view's 3.5 to 7 ms longer, since maps that have not moved cost nothing. The acceleration structures hold about 95 MB.";
 
-/// Measured on CraftSurvive's forest, pond, cave-mouth and lamp views.
-const GLOBAL_ILLUMINATION_COST: &str = "On CraftSurvive at 2560×1440 on an RTX 3080, at DLSS quality the rays take 15 to 56 ms and Ray Reconstruction 15 ms, for still frames of 53 to 94 ms against 20 to 31 ms with TAAU; at native resolution the rays take 30 to 101 ms and Ray Reconstruction 20 to 31 ms. The most foliage costs most. The world cache and light tiles hold 92 MiB, and every shown mesh's vertices are copied for the rays.";
+/// Measured on CraftSurvive's forest, pond, cave-mouth and lamp views (Den
+/// `evidence/rt-cost-10613`).
+const GLOBAL_ILLUMINATION_COST: &str = "On CraftSurvive at 2560×1440 on an RTX 3080, at DLSS quality the rays take 2.4 to 7.5 ms and Ray Reconstruction 6.8 ms, for still frames of 24 to 31 ms against 13 to 18 ms with TAAU; at native resolution the rays take 5.5 to 16.5 ms and Ray Reconstruction 13.5 ms. The most foliage costs most. The world cache and light tiles hold 92 MiB, and every shown mesh's vertices are copied for the rays.";
 
 /// Measured on `render-wgpu` `tests/water.rs`'s still water before a wall.
 const WATER_REFLECTIONS_COST: &str = "With still water filling the lower view at 1920×1080 and 4× multisampling, Low about 0.17 ms and High about 0.30 ms on an RX 9070 XT, 0.04 ms of it the copy of the scene's colour. Nothing in views without water.";
@@ -346,7 +347,7 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
             choices: AMBIENT_OCCLUSION_CHOICES,
         },
         restart: false,
-        cost: "Screen space 0.6 ms and distance field 0.25 to 0.9 ms at 1920×1080 on an RX 9070 XT, across a voxel canyon, a room and a hotel corridor. Ray traced 3 to 5 ms and its ray scene 1 to 1.5 ms at 2560×1440 on an RTX 3080 in CraftSurvive's woods, with about 95 MB of acceleration structures.",
+        cost: "Screen space 0.6 ms and distance field 0.25 to 0.9 ms at 1920×1080 on an RX 9070 XT, across a voxel canyon, a room and a hotel corridor. Ray traced 0.7 to 2.2 ms and its ray scene 0.5 to 0.8 ms at 2560×1440 on an RTX 3080 across CraftSurvive's forest, pond, cave mouth and lamp, with about 95 MB of acceleration structures.",
         gallery: GalleryExperiment::Try { values: &["screenSpace", "distanceField", "rayTraced"], alternatives: true, everything: Some("screenSpace"), requires: None, setup: None },
     },
     RendererSettingOption {

@@ -71,8 +71,8 @@ impl Gpu {
 
     /// A headless device with ray queries, where the GPU has them, for the
     /// ray-traced settings (`ray_scene.rs`). Asking for them costs some
-    /// devices startup time and memory (an RTX 3080: about 58 ms and
-    /// 38 MiB), so a device asks only when a ray-traced setting is selected
+    /// devices startup time and memory (an RTX 3080: about 52 ms and
+    /// 37 MiB), so a device asks only when a ray-traced setting is selected
     /// as it is made; selected later, the setting is refused.
     pub fn headless_with_ray_queries() -> Result<Self, GpuError> {
         let instance = instance(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
