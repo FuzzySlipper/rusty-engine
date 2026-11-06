@@ -349,8 +349,9 @@ pub(crate) struct ViewPass<'a> {
     pub motion: Option<crate::motion::MotionPass>,
     /// Ray Reconstruction takes this world view (`dlss.rs`).
     pub reconstruct: Option<Reconstruct<'a>>,
-    /// This view's render pixels per output pixel: the frame's for a primary
-    /// view drawn below the output's size, else 1.
+    /// This view's render pixels per output pixel: `picture_scale` for a
+    /// view drawn into the frame's picture, 1 for one with a target of its
+    /// own, which no stage scales.
     pub render_scale: f32,
 }
 

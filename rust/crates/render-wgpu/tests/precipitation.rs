@@ -8,7 +8,7 @@ mod support;
 
 use render_host_contracts::*;
 use render_model::*;
-use render_wgpu::RendererOptions;
+use render_wgpu::{InspectionView, RendererOptions};
 use support::*;
 
 /// A dark ground lit by a hemisphere fill, so pale drops stand out, with
@@ -559,6 +559,78 @@ fn a_scaled_primary_view_keeps_its_blocks_in_output_pixels() {
     let (full, half) = (run(scaled_frame(1.0, &view)), run(scaled_frame(0.5, &view)));
     // Upscaling spreads a block's edges a pixel or two; a block of this size
     // in render pixels would double.
+    assert!(
+        half < full * 1.7,
+        "as wide on the output at half scale: {full} then {half}"
+    );
+}
+
+/// An anchored inspection view over the output's left half, with the same
+/// eye as the primary, at `render_scale`.
+fn anchored_frame(render_scale: f32) -> Vec<[u8; 4]> {
+    let mut harness = block_scene(RendererOptions {
+        samples: 1,
+        ..RendererOptions::default()
+    });
+    harness.apply(vec![
+        RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                render_scale,
+                antialiasing: Antialiasing::Off,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        },
+        blocks(
+            6_000,
+            PrecipitationShape::Flake,
+            [3.0, -9.0, 0.5],
+            BLOCK as f32,
+        ),
+    ]);
+    let eye = camera([0.0, 1.7, 0.0], 0.0, 0.0);
+    harness.renderer.set_animation_time(3.0);
+    harness
+        .renderer
+        .set_view_composition(&composition_of(eye.clone()), 0.0);
+    harness.renderer.set_inspection_views(vec![InspectionView {
+        id: "pane".to_owned(),
+        pose: eye.pose,
+        projection: eye.projection,
+        anchor: Some("pane".to_owned()),
+        focus: [0.0, 1.7, -1.0],
+    }]);
+    harness.renderer.set_viewport_anchors(
+        [(
+            "pane".to_owned(),
+            RendererViewport {
+                x: 0.0,
+                y: 0.0,
+                width: 0.5,
+                height: 1.0,
+            },
+        )]
+        .into(),
+    );
+    harness
+        .renderer
+        .render_view_composition(&harness.target, 0.0);
+    let frame = harness.target.read_rgba(&harness.gpu);
+    (0..(WIDTH / 2 * HEIGHT) as usize)
+        .map(|at| {
+            let half = WIDTH as usize / 2;
+            pixel(&frame, at % half, at / half)
+        })
+        .collect()
+}
+
+#[test]
+fn an_anchored_inspection_view_keeps_its_blocks_in_output_pixels() {
+    let half_width = WIDTH as usize / 2;
+    let (full, half) = (
+        mean_run(&anchored_frame(1.0), half_width),
+        mean_run(&anchored_frame(0.5), half_width),
+    );
+    // As in the primary: upscaling spreads an edge, a doubled block doubles.
     assert!(
         half < full * 1.7,
         "as wide on the output at half scale: {full} then {half}"

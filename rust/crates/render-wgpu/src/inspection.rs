@@ -31,6 +31,17 @@ pub struct InspectionView {
     pub focus: [f64; 3],
 }
 
+/// Where an inspection view draws: over `area` of `target`, marking the
+/// reactive mask in `label_motion`, at `render_scale`
+/// (`ViewPass::render_scale`).
+struct InspectionDestination<'a> {
+    target: &'a TargetView<'a>,
+    area: PixelRect,
+    start: PassStart,
+    label_motion: Option<&'a wgpu::TextureView>,
+    render_scale: f32,
+}
+
 impl Renderer {
     /// Replaces the inspection views; each draws from the next frame.
     pub fn set_inspection_views(&mut self, views: Vec<InspectionView>) {
@@ -69,15 +80,14 @@ impl Renderer {
             if area.width == 0 || area.height == 0 {
                 continue;
             }
-            stats = stats
-                + self.draw_inspection_view(
-                    primary,
-                    area,
-                    &view,
-                    primary_camera,
-                    PassStart::Viewport,
-                    label_motion.as_ref(),
-                );
+            let destination = InspectionDestination {
+                target: primary,
+                area,
+                start: PassStart::Viewport,
+                label_motion: label_motion.as_ref(),
+                render_scale: self.picture_scale(primary),
+            };
+            stats = stats + self.draw_inspection_view(destination, &view, primary_camera);
             self.drawn_inspection.push(view);
         }
         stats
@@ -107,14 +117,14 @@ impl Renderer {
         // reading: the view keeps none of the output's histories
         // (`Renderer::reading`).
         self.reading = true;
-        stats += self.draw_inspection_view(
-            &target_view,
+        let destination = InspectionDestination {
+            target: &target_view,
             area,
-            &view,
-            primary_camera,
-            PassStart::Target,
-            None,
-        );
+            start: PassStart::Target,
+            label_motion: None,
+            render_scale: 1.0,
+        };
+        stats += self.draw_inspection_view(destination, &view, primary_camera);
         self.reading = false;
         stats.parts_uploaded = uploaded;
         Some(stats)
@@ -122,13 +132,17 @@ impl Renderer {
 
     fn draw_inspection_view(
         &mut self,
-        target: &TargetView<'_>,
-        area: PixelRect,
+        destination: InspectionDestination<'_>,
         view: &InspectionView,
         primary_camera: Option<OverlayCamera>,
-        start: PassStart,
-        label_motion: Option<&wgpu::TextureView>,
     ) -> ViewStats {
+        let InspectionDestination {
+            target,
+            area,
+            start,
+            label_motion,
+            render_scale,
+        } = destination;
         let clear = self.environment_clear();
         let world_camera = camera::camera_matrices(
             camera::pose_from_degrees(&view.pose),
@@ -155,7 +169,7 @@ impl Renderer {
             jitter: None,
             motion: None,
             reconstruct: None,
-            render_scale: 1.0,
+            render_scale,
         });
         let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth, label_motion);
         let viewmodel = match primary_world {
@@ -180,7 +194,7 @@ impl Renderer {
                     jitter: None,
                     motion: None,
                     reconstruct: None,
-                    render_scale: 1.0,
+                    render_scale,
                 })
             }
             None => ViewStats::default(),

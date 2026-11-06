@@ -464,7 +464,7 @@ impl Renderer {
                 None => stage = Some(UpscaleMethod::Taau),
             }
         }
-        self.render_scale_drawn = resolution.render.1 as f32 / resolution.output.1.max(1) as f32;
+        self.output_height = resolution.output.1;
         // A temporal stage's jitter and motion, or the motion alone while
         // inspection shows it (`motion.rs`).
         let jittering = stage.is_some_and(UpscaleMethod::temporal);
@@ -803,6 +803,13 @@ impl Renderer {
         stats
     }
 
+    /// The render pixels per output pixel of `target`, a picture of the
+    /// frame: below 1 under an upscale stage, and 1 for an output-size one,
+    /// as Ray Reconstruction's is.
+    pub(crate) fn picture_scale(&self, target: &TargetView<'_>) -> f32 {
+        target.height as f32 / self.output_height.max(1) as f32
+    }
+
     fn draw_primary_view(
         &mut self,
         target: &TargetView<'_>,
@@ -874,7 +881,7 @@ impl Renderer {
             jitter,
             motion: world_motion,
             reconstruct,
-            render_scale: self.render_scale_drawn,
+            render_scale: self.picture_scale(&world_target),
         });
         self.capture_sky(&world_camera, Some(camera.id.as_str()), clear);
         // Depth-layer labels test the world's depth before the viewmodel
