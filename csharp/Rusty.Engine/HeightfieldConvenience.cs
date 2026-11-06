@@ -33,6 +33,24 @@ public readonly partial record struct HeightfieldFocus
     public static HeightfieldFocus At(double x, double z) => new(default, x, z);
 }
 
+public readonly partial record struct HeightfieldTileCommit
+{
+    /// <summary>A tile whose layer weights, if it has any, are its material's layers 0 to 3.</summary>
+    public HeightfieldTileCommit(
+        Heightfield Heightfield,
+        uint Ring,
+        long X,
+        long Z,
+        uint Revision,
+        ReadOnlyMemory<float> Heights,
+        ReadOnlyMemory<Color> Colors,
+        ReadOnlyMemory<Vector4> LayerWeights,
+        ReadOnlyMemory<uint> Materials)
+        : this(Heightfield, Ring, X, Z, Revision, Heights, Colors, LayerWeights, Materials, ReadOnlyMemory<uint>.Empty)
+    {
+    }
+}
+
 public readonly partial record struct HeightfieldTileRequest
 {
     /// <summary>Height samples along the tile's side: its vertices and one more each side.</summary>

@@ -65,10 +65,15 @@ index, its first vertex's place (`OriginX`, `OriginZ`), `CellSize`,
   drawn (the map's edge).
 - `Colors` (linear RGBA, drawn as given and multiplying the material's
   colour), or `LayerWeights` (a terrain layer material's first four layers,
-  as on [voxel ground](smooth-voxel-surfaces.md#blending-terrain-layers)), or
-  neither: `(TileCells + 1)²`, from vertex (0, 0). Every colour the
+  as on [voxel ground](smooth-voxel-surfaces.md#blending-terrain-layers), or
+  those of `LayerPalette`), or neither: `(TileCells + 1)²`, from vertex
+  (0, 0). Every colour the
   heightfield takes is linear: decode a palette's sRGB colours with
   `Color.FromSrgb` ([colours](csharp-lifecycle.md#colours)).
+- `LayerPalette`: the one to four of the material's 16 layers the weights
+  stand for, in their order, as a [mesh's](smooth-voxel-surfaces.md#blending-terrain-layers);
+  empty for layers 0 to 3. A tile draws at most four layers, so more ground
+  means a palette per tile. See [layers across tiles](#layers-across-tiles).
 - `Materials`: a material index per vertex, `(TileCells + 1)²`; 0 when
   empty. Every index used must be bound when the heightfield is made. A
   triangle draws with the index most of its corners have, or the highest of
@@ -82,6 +87,26 @@ and came back (revisions are unique to the heightfield). `Invalidate` asks
 again for every held tile overlapping a rectangle; each keeps drawing until
 its new samples land. A wrong count, colours and weights together, a value
 outside 0 to 1, or an unbound index is refused.
+
+### Layers across tiles
+
+A palette applies to its whole tile, and each palette in use costs one narrowed
+material, as a chunk's does. Neighbouring tiles and rings draw alike where they
+meet only if their weights name the same layers there, and that is the
+product's to arrange: give a tile's palette every layer its vertices weigh,
+edges included, and sample weights from the same function at every ring. Tiles
+on different palettes then match, whatever their order. A morph moves a
+vertex's height and normal, not its weights or colours, so where a blend bends
+between a coarser ring's vertices a tile changes a little as it changes ring.
+Keep a blend a few of the coarser ring's cells wide and that stays faint.
+
+A coarser tile covers more ground, so it is likelier to touch more than four
+layers. The Engine narrows nothing here: past four, the product chooses the four
+that tile draws and shares out the others' weight, as a voxel chunk does for
+itself. That coarser tile then draws different ground from the finer tiles
+within it, which shows as a change where it gives way to them, so keep each
+layer's ground wide against a coarse ring's tile, or give distant rings
+fewer layers.
 
 **`HeightfieldStreamer`** (`Rusty.Engine.Heightfields`) does this for a
 product: each `Update` commits at most `commitsPerUpdate` finished tiles (8

@@ -1636,17 +1636,13 @@ unsafe fn generated_mesh_payload(
         request.layer_palette_len,
         "mesh layer palette",
     )?;
-    if !palette.is_empty()
-        && (request.layer_weights_len == 0
-            || palette.len() > MESH_PALETTE_LAYERS
-            || palette
-                .iter()
-                .any(|&layer| layer as usize > render_model::MAX_MATERIAL_TERRAIN_LAYERS))
-    {
-        return Err(invalid(
-            "a mesh's layer palette needs layer weights, and names at most four layers, each 0 to 15",
-        ));
-    }
+    let palette = render_model::layer_palette(palette)
+        .filter(|palette| palette.is_empty() || request.layer_weights_len != 0)
+        .ok_or_else(|| {
+            invalid(
+                "a mesh's layer palette needs layer weights, and names at most four layers, each 0 to 15",
+            )
+        })?;
     let positions = borrowed_slice(request.positions, request.positions_len, "mesh positions")?;
     let normals = borrowed_slice(request.normals, request.normals_len, "mesh normals")?;
     let uvs = borrowed_slice(request.uvs, request.uvs_len, "mesh UVs")?;
@@ -1755,7 +1751,7 @@ unsafe fn generated_mesh_payload(
         },
         provenance: MeshProvenance::Generated,
         layer_weights: !weights.is_empty(),
-        layer_palette: palette.iter().map(|&layer| layer as u8).collect(),
+        layer_palette: palette,
         vertex_occlusion: false,
         morph: None,
     };
@@ -1865,8 +1861,6 @@ fn import_animated_glb_closure(
 /// and reads the index stream once so every index names a vertex: CPU users of
 /// the streams (ghost bounds, probe voxelization) index positions by them. The
 /// other streams are not read.
-/// A mesh's four weights name at most this many layers.
-const MESH_PALETTE_LAYERS: usize = 4;
 const STATIC_MESH_MAGIC: &[u8; 8] = b"RSTATMSH";
 
 type DecodedStaticMesh = (StaticMeshAsset, MeshPayloadDescriptor, CsharpRenderResource);

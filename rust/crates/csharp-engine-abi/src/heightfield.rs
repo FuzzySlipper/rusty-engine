@@ -23,8 +23,9 @@ pub struct NativeHeightfieldRing {
 
 /// The material a tile sample's material index draws with. A terrain
 /// layer material (`create_terrain_layer_material`) blends its first four
-/// layers by the samples' layer weights; any other draws its triangles
-/// whole, tinted by linear vertex colours if the samples have them.
+/// layers, or the tile's palette, by the samples' layer weights; any other
+/// draws its triangles whole, tinted by linear vertex colours if the samples
+/// have them.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeHeightfieldMaterial {
@@ -121,8 +122,9 @@ pub struct NativeHeightfieldRequestsResult {
 /// One tile's samples (`NativeHeightfieldTileRequest`). Heights are in
 /// heightfield units (NaN: no surface there). Colours are linear RGBA, drawn
 /// as given; layer weights are a terrain layer material's first four
-/// layers; a tile has one or the other or neither. Material indices default
-/// to 0. A commit whose revision is no longer the tile's (it was
+/// layers, or with `layer_palette` the one to four of its 16 layers they
+/// stand for, in their order, as a mesh's; a tile has one or the other or
+/// neither. Material indices default to 0. A commit whose revision is no longer the tile's (it was
 /// invalidated, or left every ring) is ignored.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -141,6 +143,8 @@ pub struct NativeHeightfieldTileCommit {
     pub layer_weights_len: usize,
     pub materials: *const u32,
     pub materials_len: usize,
+    pub layer_palette: *const u32,
+    pub layer_palette_len: usize,
 }
 
 #[repr(C)]

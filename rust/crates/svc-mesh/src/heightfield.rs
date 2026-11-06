@@ -256,6 +256,10 @@ pub struct TileSamples {
     pub heights: Vec<f32>,
     pub colors: Option<Vec<[f32; 4]>>,
     pub layer_weights: Option<Vec<[f32; 4]>>,
+    /// The layers `layer_weights` stand for, as a mesh's
+    /// (`render_model::MeshPayloadDescriptor::layer_palette`); empty: layers
+    /// 0 to 3.
+    pub layer_palette: Vec<u8>,
     pub materials: Option<Vec<u32>>,
 }
 
@@ -270,6 +274,7 @@ pub enum TileSamplesError {
         actual: usize,
     },
     ColorsAndWeights,
+    PaletteWithoutWeights,
     /// A colour or weight outside 0 to 1, or a height that is infinite.
     Value,
 }
@@ -288,6 +293,9 @@ impl TileSamples {
         }
         if self.colors.is_some() && self.layer_weights.is_some() {
             return Err(TileSamplesError::ColorsAndWeights);
+        }
+        if !self.layer_palette.is_empty() && self.layer_weights.is_none() {
+            return Err(TileSamplesError::PaletteWithoutWeights);
         }
         let expected = layout.side().pow(2);
         let lengths = [
@@ -454,6 +462,8 @@ pub struct TileMesh {
     /// Linear RGBA colours, or terrain layer weights (`layer_weights`).
     pub colors: Option<Vec<f32>>,
     pub layer_weights: bool,
+    /// The layers the weights stand for (`TileSamples::layer_palette`).
+    pub layer_palette: Vec<u8>,
     pub indices: Vec<u32>,
     /// (material index, first index, index count), by material.
     pub groups: Vec<(u32, u32, u32)>,
@@ -623,6 +633,7 @@ pub fn mesh_tile(
         uvs,
         colors,
         layer_weights: samples.layer_weights.is_some(),
+        layer_palette: samples.layer_palette.clone(),
         indices,
         groups,
         morph_range: ring.morph.filter(|_| morph.is_some()),

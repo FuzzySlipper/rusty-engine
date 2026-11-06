@@ -395,6 +395,16 @@ impl RuntimeHeightfieldBridge {
                 "heightfield materials",
             )?
         };
+        let palette = unsafe {
+            borrowed_slice(
+                request.layer_palette,
+                request.layer_palette_len,
+                "heightfield layer palette",
+            )?
+        };
+        let layer_palette = render_model::layer_palette(palette).ok_or_else(|| {
+            refused("a tile's layer palette names at most four layers, each 0 to 15")
+        })?;
         let retained = self.retained(request.heightfield)?;
         let rings = retained.tiles.layout().rings.len();
         let ring = u8::try_from(request.ring)
@@ -415,6 +425,7 @@ impl RuntimeHeightfieldBridge {
                 .then(|| colors.iter().map(|c| [c.r, c.g, c.b, c.a]).collect()),
             layer_weights: (!weights.is_empty())
                 .then(|| weights.iter().map(|w| [w.x, w.y, w.z, w.w]).collect()),
+            layer_palette,
             materials: (!materials.is_empty()).then(|| materials.to_vec()),
         };
         samples
@@ -668,6 +679,9 @@ fn samples_refusal(error: TileSamplesError) -> CsharpEngineServicesError {
         ),
         TileSamplesError::ColorsAndWeights => {
             "a tile has colours or layer weights, not both".to_owned()
+        }
+        TileSamplesError::PaletteWithoutWeights => {
+            "a tile's layer palette needs layer weights".to_owned()
         }
         TileSamplesError::Value => {
             "heights are finite or NaN, colours and weights 0 to 1".to_owned()

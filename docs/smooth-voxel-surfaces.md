@@ -176,6 +176,8 @@ or noise); the Engine only blends what it chose:
   same layers on both sides; that is the product's to arrange. A palette
   applies to the whole mesh, and an instance's override of a terrain layer
   material draws by it too.
+- **Heightfields.** A [heightfield tile](heightfield-terrain.md#layers-across-tiles)
+  takes the same `LayerPalette`, and draws the same narrowed materials.
 - **What stays.** Geometry, groups, material slots, collision, navigation and
   voxel readouts are unchanged: blending is drawn only. A slot outside the layers, bound to an
   ordinary material, draws as it would without layers.

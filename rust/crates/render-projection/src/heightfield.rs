@@ -352,7 +352,7 @@ fn tile_asset(
             },
             provenance: MeshProvenance::Generated,
             layer_weights: mesh.layer_weights,
-            layer_palette: Vec::new(),
+            layer_palette: mesh.layer_palette.clone(),
             vertex_occlusion: false,
             texture_space: Some(MeshTextureSpace {
                 cell_size: 1.0,

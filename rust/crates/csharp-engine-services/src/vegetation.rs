@@ -539,9 +539,8 @@ impl RuntimeVegetationBridge {
         let content = VegetationTileContent {
             samples: TileSamples {
                 heights: heights.to_vec(),
-                colors: None,
-                layer_weights: None,
                 materials: (!grounds.is_empty()).then(|| grounds.to_vec()),
+                ..TileSamples::default()
             },
             cover: (!cover.is_empty()).then(|| cover.to_vec()),
             records: records

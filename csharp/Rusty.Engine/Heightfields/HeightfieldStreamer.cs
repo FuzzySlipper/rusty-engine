@@ -45,8 +45,11 @@ public sealed class HeightfieldTileSamples
     /// <summary>Linear RGBA colours, <c>Side</c>² from vertex (0, 0), x fastest; null for none.</summary>
     public Color[]? Colors { get; private set; }
 
-    /// <summary>A terrain layer material's first four layers' weights; null for none.</summary>
+    /// <summary>A terrain layer material's first four layers' weights, or its <see cref="LayerPalette"/>'s; null for none.</summary>
     public Vector4[]? LayerWeights { get; private set; }
+
+    /// <summary>The one to four of the material's 16 layers the weights stand for, in their order; empty for layers 0 to 3.</summary>
+    public ReadOnlyMemory<uint> LayerPalette { get; set; }
 
     /// <summary>Material indices; null for index 0 everywhere.</summary>
     public uint[]? Materials { get; private set; }
@@ -132,7 +135,7 @@ public sealed class HeightfieldStreamer : IDisposable
             inFlight.Remove((tile.Ring, tile.X, tile.Z, tile.Revision));
             HeightfieldCommitReceipt receipt = engine.Heightfield.CommitTile(new HeightfieldTileCommit(heightfield, tile.Ring, tile.X,
                 tile.Z, tile.Revision, samples.Heights, samples.Colors ?? ReadOnlyMemory<Color>.Empty,
-                samples.LayerWeights ?? ReadOnlyMemory<Vector4>.Empty, samples.Materials ?? ReadOnlyMemory<uint>.Empty));
+                samples.LayerWeights ?? ReadOnlyMemory<Vector4>.Empty, samples.Materials ?? ReadOnlyMemory<uint>.Empty, samples.LayerPalette));
             if (receipt.Accepted) Committed++;
             else Ignored++;
         }

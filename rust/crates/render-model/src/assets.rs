@@ -370,6 +370,21 @@ pub struct RenderMaterialDescriptor {
 /// How many layers a material blends over its own.
 pub const MAX_MATERIAL_TERRAIN_LAYERS: usize = 15;
 
+/// How many of a terrain layer material's layers one mesh's four weights
+/// stand for.
+pub const MAX_LAYER_PALETTE: usize = 4;
+
+/// A product's layer palette (`MeshPayloadDescriptor::layer_palette`) as a
+/// mesh and a heightfield tile take it, or None when it names more layers
+/// than four weights hold or a layer no material has.
+pub fn layer_palette(layers: &[u32]) -> Option<Vec<u8>> {
+    (layers.len() <= MAX_LAYER_PALETTE
+        && layers
+            .iter()
+            .all(|&layer| layer as usize <= MAX_MATERIAL_TERRAIN_LAYERS))
+    .then(|| layers.iter().map(|&layer| layer as u8).collect())
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaterialTerrainLayersDescriptor {

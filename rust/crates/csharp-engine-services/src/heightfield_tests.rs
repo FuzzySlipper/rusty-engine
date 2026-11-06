@@ -186,6 +186,8 @@ fn commit(
                     layer_weights_len: 0,
                     materials: std::ptr::null(),
                     materials_len: 0,
+                    layer_palette: std::ptr::null(),
+                    layer_palette_len: 0,
                 },
                 &mut receipt,
                 std::ptr::null_mut(),
@@ -695,12 +697,46 @@ fn bad_layouts_unbound_materials_and_stale_samples_are_refused_or_ignored() {
         layer_weights_len: 0,
         materials: water.as_ptr(),
         materials_len: water.len(),
+        layer_palette: std::ptr::null(),
+        layer_palette_len: 0,
     };
     assert_eq!(
         unsafe { (terrain.commit_tile)(terrain.context, &unbound, &mut taken, &mut receipt) },
         0
     );
     assert_eq!(receipt_codes(&receipt), ["CSHARP_HEIGHTFIELD"]);
+    // A palette needs weights, four layers at most, each one a material has.
+    let weights = vec![
+        NativeVec4 {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+            w: 0.0
+        };
+        81
+    ];
+    let (five, beyond, fine) = ([0, 1, 2, 3, 4], [16], [2, 7]);
+    for (palette, weights) in [
+        (&five[..], &weights[..]),
+        (&beyond[..], &weights[..]),
+        (&fine[..], &[][..]),
+    ] {
+        let refused = NativeHeightfieldTileCommit {
+            materials: std::ptr::null(),
+            materials_len: 0,
+            layer_weights: weights.as_ptr(),
+            layer_weights_len: weights.len(),
+            layer_palette: palette.as_ptr(),
+            layer_palette_len: palette.len(),
+            ..unbound
+        };
+        let mut receipt = empty_receipt();
+        assert_eq!(
+            unsafe { (terrain.commit_tile)(terrain.context, &refused, &mut taken, &mut receipt) },
+            0
+        );
+        assert_eq!(receipt_codes(&receipt), ["CSHARP_HEIGHTFIELD"]);
+    }
     // Invalidated before it lands: ignored, and asked for again.
     let mut readout = NativeHeightfieldReadout::default();
     assert_eq!(
