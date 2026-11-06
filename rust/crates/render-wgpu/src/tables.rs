@@ -132,8 +132,9 @@ pub(crate) struct GpuMesh {
     /// Its vertex colours are terrain layer weights, not a tint: a voxel
     /// chunk meshed with terrain layers.
     pub layer_weights: bool,
-    /// The terrain layers its weights stand for, when its session has more
-    /// than four: its groups draw their materials narrowed to them.
+    /// The terrain layers its weights stand for, when its session or the
+    /// product has more than four: its groups draw their materials narrowed
+    /// to them.
     pub layer_palette: Vec<u8>,
     /// Its vertex colours' alpha is ambient occlusion: a voxel chunk meshed
     /// with vertex occlusion.

@@ -348,7 +348,21 @@ public readonly partial record struct MeshResourceCreateRequest
         ReadOnlyMemory<uint> Indices,
         ReadOnlyMemory<MeshGroup> Groups,
         ReadOnlyMemory<MeshMaterialBinding> Bindings)
-        : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, ReadOnlyMemory<Vector4>.Empty)
+        : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, ReadOnlyMemory<Vector4>.Empty, ReadOnlyMemory<uint>.Empty)
+    {
+    }
+
+    /// <summary>A mesh whose layer weights, if it has any, are its material's layers 0 to 3.</summary>
+    public MeshResourceCreateRequest(
+        ReadOnlyMemory<Vector3> Positions,
+        ReadOnlyMemory<Vector3> Normals,
+        ReadOnlyMemory<Vector2> Uvs,
+        ReadOnlyMemory<Color> Colors,
+        ReadOnlyMemory<uint> Indices,
+        ReadOnlyMemory<MeshGroup> Groups,
+        ReadOnlyMemory<MeshMaterialBinding> Bindings,
+        ReadOnlyMemory<Vector4> LayerWeights)
+        : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, LayerWeights, ReadOnlyMemory<uint>.Empty)
     {
     }
 }

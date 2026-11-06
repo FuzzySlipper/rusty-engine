@@ -168,7 +168,14 @@ or noise); the Engine only blends what it chose:
   the same materials by the weights it gives each vertex (its `LayerWeights`
   stream, [runtime-generated
   geometry](csharp-lifecycle.md#runtime-generated-geometry)): layers 0 to 3,
-  with no palette.
+  or, with a `LayerPalette`, the one to four of the material's 16 layers its
+  weights stand for, in their order. A mesh per cell picks the layers its cell
+  touches. Each palette in use costs one narrowed material, as a chunk's does.
+  Neighbouring meshes on different palettes match along a shared edge only
+  where their weights name the same layers there, so give a shared vertex the
+  same layers on both sides; that is the product's to arrange. A palette
+  applies to the whole mesh, and an instance's override of a terrain layer
+  material draws by it too.
 - **What stays.** Geometry, groups, material slots, collision, navigation and
   voxel readouts are unchanged: blending is drawn only. A slot outside the layers, bound to an
   ordinary material, draws as it would without layers.

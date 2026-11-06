@@ -831,6 +831,230 @@ fn static_mesh_vertex_colours_multiply_the_material_and_payloads_ignore_them() {
     );
 }
 
+/// A terrain layer material of six flat colours, one per layer, and the
+/// operations defining it as `id`, in a world of ambient π where a surface
+/// shows exactly its texture.
+fn six_layers(harness: &mut Harness, id: &str, colors: [[u8; 4]; 6]) -> Vec<RenderDiff> {
+    let mut ops = Vec::new();
+    let mut surfaces = Vec::new();
+    for (index, color) in colors.iter().enumerate() {
+        let texture = harness.resources.texture(
+            &format!("texture/{id}-{index}"),
+            4,
+            4,
+            &image(4, 4, |_, _| *color),
+            TextureWrap::Repeat,
+        );
+        let mapping = VoxelSurfaceMappingDescriptor::Repeat {
+            texture: texture.id.clone(),
+            texture_version: texture.version,
+            texture_content_hash: texture.content_hash.clone().unwrap(),
+            tile_scale_cells: [1.0, 1.0],
+            tile_origin_cells: [0.0, 0.0],
+        };
+        surfaces.push(voxel_material(0, [1.0; 4], Some(&texture), Some(mapping)));
+        ops.push(RenderDiff::DefineTexture { texture });
+    }
+    let mut ground = surfaces.remove(0);
+    ground.id = id.to_owned();
+    ground.terrain_layers = Some(MaterialTerrainLayersDescriptor {
+        layers: surfaces
+            .into_iter()
+            .map(|layer| MaterialTerrainLayerDescriptor {
+                voxel_surface: layer.voxel_surface.unwrap(),
+                normal_map: None,
+            })
+            .collect(),
+        contrast: 1.0,
+    });
+    ops.push(RenderDiff::DefineMaterial { material: ground });
+    ops
+}
+
+const SIX: [[u8; 4]; 6] = [
+    [220, 40, 40, 255],
+    [40, 220, 40, 255],
+    [40, 40, 220, 255],
+    [220, 220, 40, 255],
+    [40, 220, 220, 255],
+    [220, 40, 220, 255],
+];
+
+/// A panel from `left` to `right` metres across at 2.9 m, its weights moving
+/// from all of the first toward all of the second, on `palette`.
+fn palette_panel(left: f32, right: f32, palette: &[u8]) -> MeshPayloadDescriptor {
+    let mut panel = with_colors(
+        box_mesh([left, -0.8, -3.0], [right, 0.8, -2.9], |_| 0),
+        |p| {
+            let along = (p[0] - left) / (right - left);
+            [1.0 - along, along, 0.0, 0.0]
+        },
+    );
+    panel.layer_weights = true;
+    panel.layer_palette = palette.to_vec();
+    panel
+}
+
+fn ambient_pi() -> RenderDiff {
+    RenderDiff::CreateLight {
+        handle: RenderHandle::new(40),
+        parent: None,
+        light: LightDescriptor::Ambient {
+            color: [1.0; 3],
+            intensity: std::f32::consts::PI,
+            enabled: true,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+            range: None,
+        },
+    }
+}
+
+/// The middle row's pixel `x` metres across at the panels' distance.
+fn panel_pixel(pixels: &[u8], x: f32) -> [u8; 3] {
+    let column =
+        (WIDTH as f32 * 0.5 + x / 2.9 * (HEIGHT as f32 * 0.5) / 30f32.to_radians().tan()) as u32;
+    let at = ((HEIGHT / 2 * WIDTH + column) * 4) as usize;
+    [pixels[at], pixels[at + 1], pixels[at + 2]]
+}
+
+fn near(a: [u8; 3], b: [u8; 4], what: &str) {
+    for channel in 0..3 {
+        assert!(
+            a[channel].abs_diff(b[channel]) <= 14,
+            "{what}: {a:?} against {b:?}"
+        );
+    }
+}
+
+/// Two adjacent product meshes on different palettes of one material each
+/// draw their own layers, and match along the shared edge, where both weigh
+/// the same layer; a mesh with no palette draws layers 0 to 3.
+#[test]
+fn product_meshes_draw_the_palettes_they_name_and_match_where_their_weights_agree() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops = six_layers(&mut harness, "material/ground", SIX);
+    ops.extend([
+        ambient_pi(),
+        static_mesh(
+            "mesh/left",
+            palette_panel(-1.0, 0.0, &[1, 4]),
+            "material/ground",
+        ),
+        static_mesh(
+            "mesh/right",
+            palette_panel(0.0, 1.0, &[4, 5]),
+            "material/ground",
+        ),
+        instance(1, None, "mesh/left", Transform::IDENTITY),
+        instance(2, None, "mesh/right", Transform::IDENTITY),
+    ]);
+    harness.apply(ops);
+    let (_, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
+    near(
+        panel_pixel(&pixels, -0.98),
+        SIX[1],
+        "the left mesh's first layer",
+    );
+    near(
+        panel_pixel(&pixels, 0.98),
+        SIX[5],
+        "the right mesh's last layer",
+    );
+    let (edge_left, edge_right) = (panel_pixel(&pixels, -0.01), panel_pixel(&pixels, 0.01));
+    near(edge_left, SIX[4], "left of the shared edge");
+    near(edge_right, SIX[4], "right of the shared edge");
+
+    // No palette: the same weights are layers 0 and 1.
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops = six_layers(&mut harness, "material/ground", SIX);
+    ops.extend([
+        ambient_pi(),
+        static_mesh(
+            "mesh/plain",
+            palette_panel(-1.0, 1.0, &[]),
+            "material/ground",
+        ),
+        instance(1, None, "mesh/plain", Transform::IDENTITY),
+    ]);
+    harness.apply(ops);
+    let (_, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
+    near(panel_pixel(&pixels, -0.98), SIX[0], "layer 0");
+    near(panel_pixel(&pixels, 0.98), SIX[1], "layer 1");
+}
+
+/// A palette follows the material: redefining it redraws the narrowed mesh
+/// with the new layers, and an instance overriding its slot with another
+/// terrain layer material draws that material by the same palette.
+#[test]
+fn a_mesh_palette_follows_its_material_and_an_override() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops = six_layers(&mut harness, "material/ground", SIX);
+    ops.extend([
+        ambient_pi(),
+        static_mesh(
+            "mesh/panel",
+            palette_panel(-1.0, 1.0, &[3, 5]),
+            "material/ground",
+        ),
+        instance(1, None, "mesh/panel", Transform::IDENTITY),
+    ]);
+    harness.apply(ops);
+    let (_, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
+    near(panel_pixel(&pixels, -0.98), SIX[3], "layer 3 before");
+
+    let mut changed = SIX;
+    changed[3] = [120, 120, 120, 255];
+    let ops = six_layers(&mut harness, "material/ground", changed);
+    harness.apply(ops);
+    let (_, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
+    near(panel_pixel(&pixels, -0.98), changed[3], "layer 3 redefined");
+
+    let mut other = SIX;
+    other.reverse();
+    let mut ops = six_layers(&mut harness, "material/other", other);
+    let RenderDiff::CreateStaticMeshInstance { mut instance, .. } =
+        instance(2, None, "mesh/panel", Transform::IDENTITY)
+    else {
+        unreachable!("an instance");
+    };
+    instance.material_overrides = vec![MeshMaterialSlot {
+        slot: 0,
+        material: "material/other".to_owned(),
+    }];
+    ops.extend([
+        RenderDiff::Destroy {
+            handle: RenderHandle::new(1),
+        },
+        RenderDiff::CreateStaticMeshInstance {
+            handle: RenderHandle::new(2),
+            parent: None,
+            instance,
+        },
+    ]);
+    harness.apply(ops);
+    let (_, pixels) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
+    near(
+        panel_pixel(&pixels, -0.98),
+        other[3],
+        "the override's layer 3",
+    );
+    near(
+        panel_pixel(&pixels, 0.98),
+        other[5],
+        "the override's layer 5",
+    );
+}
+
 #[test]
 fn static_mesh_layer_weights_blend_a_terrain_layer_material_across_the_mesh() {
     const SAND: [u8; 4] = [230, 200, 80, 255];

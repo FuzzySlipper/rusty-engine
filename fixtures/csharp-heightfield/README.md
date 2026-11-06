@@ -16,6 +16,7 @@ The far grass thins with distance, its kept clumps growing so the hills stay as
 green, and trees draw a cheaper cone from 150 m and baked impostor cards from
 320 m, crossfading between levels (#10017).
 `generate-textures.py` writes `content/grass.png`, `content/rock.png`, the
+palette panels' `content/sand.png`, `snow.png`, `moss.png` and `dirt.png`, the
 decal atlas `content/marks.png`, and the coal atlas `content/coals.png` with
 the light it emits, `content/coals-emission.png`.
 
@@ -34,6 +35,9 @@ Live debug commands:
 - `heightfield.fly <0|1>`: hold the camera or fly on.
 - `heightfield.angle <radians>`: jump along the circle.
 - `heightfield.layers <0|1>`: vertex colours, or the two-layer material.
+- `heightfield.palette <0|1>`: three panels of one six-layer material (#10637),
+  sand into rock beside rock into snow on palettes that share rock along their
+  edge, and grass into rock with no palette.
 - `heightfield.invalidate <metres>`: sample again around the camera.
 - `vegetation.inspect`: both vegetation fields' tiles, patches, copies, budget
   and deferred work, the last call's placement, selection and publication

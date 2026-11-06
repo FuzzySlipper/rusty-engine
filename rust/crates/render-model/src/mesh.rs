@@ -244,9 +244,9 @@ pub struct MeshPayloadDescriptor {
     #[serde(default, skip_serializing_if = "is_false")]
     pub layer_weights: bool,
     /// The layer of a terrain layer material each weight stands for, when
-    /// the material has more than four (`svc_mesh::MeshPayload::layer_palette`):
-    /// the chunk draws as that material narrowed to these layers. Empty: the
-    /// weights are layers 0 to 3.
+    /// the material has more than four (`svc_mesh::MeshPayload::layer_palette`,
+    /// or a product mesh's own): the mesh draws as that material narrowed to
+    /// these layers. Empty: the weights are layers 0 to 3.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_palette: Vec<u8>,
     /// The vertex colours' alpha is ambient occlusion (a voxel chunk meshed

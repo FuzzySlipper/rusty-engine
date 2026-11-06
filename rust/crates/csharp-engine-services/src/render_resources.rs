@@ -1631,6 +1631,22 @@ unsafe fn generated_mesh_payload(
             "a mesh has vertex colours or layer weights, not both",
         ));
     }
+    let palette = borrowed_slice(
+        request.layer_palette,
+        request.layer_palette_len,
+        "mesh layer palette",
+    )?;
+    if !palette.is_empty()
+        && (request.layer_weights_len == 0
+            || palette.len() > MESH_PALETTE_LAYERS
+            || palette
+                .iter()
+                .any(|&layer| layer as usize > render_model::MAX_MATERIAL_TERRAIN_LAYERS))
+    {
+        return Err(invalid(
+            "a mesh's layer palette needs layer weights, and names at most four layers, each 0 to 15",
+        ));
+    }
     let positions = borrowed_slice(request.positions, request.positions_len, "mesh positions")?;
     let normals = borrowed_slice(request.normals, request.normals_len, "mesh normals")?;
     let uvs = borrowed_slice(request.uvs, request.uvs_len, "mesh UVs")?;
@@ -1739,7 +1755,7 @@ unsafe fn generated_mesh_payload(
         },
         provenance: MeshProvenance::Generated,
         layer_weights: !weights.is_empty(),
-        layer_palette: Vec::new(),
+        layer_palette: palette.iter().map(|&layer| layer as u8).collect(),
         vertex_occlusion: false,
         morph: None,
     };
@@ -1849,6 +1865,8 @@ fn import_animated_glb_closure(
 /// and reads the index stream once so every index names a vertex: CPU users of
 /// the streams (ghost bounds, probe voxelization) index positions by them. The
 /// other streams are not read.
+/// A mesh's four weights name at most this many layers.
+const MESH_PALETTE_LAYERS: usize = 4;
 const STATIC_MESH_MAGIC: &[u8; 8] = b"RSTATMSH";
 
 type DecodedStaticMesh = (StaticMeshAsset, MeshPayloadDescriptor, CsharpRenderResource);
@@ -2577,6 +2595,7 @@ pub(crate) mod tests {
             a: 1.0,
         }; 3];
         let indices = [0, 1, 2];
+        let palette = [2, 7, 15];
         let groups = [NativeMeshGroup {
             material_slot: 3,
             start: 0,
@@ -2603,10 +2622,13 @@ pub(crate) mod tests {
             bindings_len: bindings.len(),
             layer_weights: weights.as_ptr(),
             layer_weights_len: weights.len(),
+            layer_palette: palette.as_ptr(),
+            layer_palette_len: palette.len(),
         };
         let resource = admit_generated(&mut meshes, &request).unwrap();
         let payload = &meshes.resources[&resource.value].definition.payload;
         assert!(payload.layer_weights);
+        assert_eq!(payload.layer_palette, [2, 7, 15]);
         let MeshPayloadSource::Inline { colors: stream, .. } = &payload.source else {
             panic!("generated streams are retained inline");
         };
@@ -2614,6 +2636,31 @@ pub(crate) mod tests {
             stream.as_deref(),
             Some(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.5, 0.5, 0.0, 0.0][..])
         );
+        // A palette names at most four layers of a material's 16, for weights.
+        let five = [0, 1, 2, 3, 4];
+        let beyond = [16];
+        for refused in [
+            NativeMeshResourceCreateRequest {
+                layer_palette: five.as_ptr(),
+                layer_palette_len: five.len(),
+                ..request
+            },
+            NativeMeshResourceCreateRequest {
+                layer_palette: beyond.as_ptr(),
+                layer_palette_len: beyond.len(),
+                ..request
+            },
+            NativeMeshResourceCreateRequest {
+                layer_weights: std::ptr::null(),
+                layer_weights_len: 0,
+                ..request
+            },
+        ] {
+            assert_eq!(
+                admit_generated(&mut meshes, &refused).unwrap_err().code(),
+                "CSHARP_MESH_ADMISSION"
+            );
+        }
         // A mesh has colours or layer weights, not both.
         let both = NativeMeshResourceCreateRequest {
             colors: colors.as_ptr(),
@@ -2679,6 +2726,8 @@ pub(crate) mod tests {
             bindings_len: bindings.len(),
             layer_weights: std::ptr::null(),
             layer_weights_len: 0,
+            layer_palette: std::ptr::null(),
+            layer_palette_len: 0,
         };
         let resource = admit_generated(&mut meshes, &request).unwrap();
         positions[1].x = 99.0;
@@ -2727,6 +2776,8 @@ pub(crate) mod tests {
             bindings_len: 1,
             layer_weights: std::ptr::null(),
             layer_weights_len: 0,
+            layer_palette: std::ptr::null(),
+            layer_palette_len: 0,
         };
         assert_eq!(
             admit_generated(&mut meshes, &unrepresentable)
@@ -2803,6 +2854,8 @@ pub(crate) mod tests {
             bindings_len: bindings.len(),
             layer_weights: std::ptr::null(),
             layer_weights_len: 0,
+            layer_palette: std::ptr::null(),
+            layer_palette_len: 0,
         };
 
         let resource = admit_generated(&mut meshes, &request).unwrap();

@@ -91,3 +91,9 @@ def coals():
 coal_color, coal_emission = coals()
 coal_color.save(content / "coals.png")
 coal_emission.save(content / "coals-emission.png")
+
+# The ground beyond two layers, for the palette meshes (heightfield.palette).
+tile((196, 176, 122), 0.5, 10637).save(content / "sand.png")
+tile((226, 232, 238), 0.25, 10638).save(content / "snow.png")
+tile((64, 96, 72), 0.7, 10639).save(content / "moss.png")
+tile((112, 82, 56), 0.7, 10640).save(content / "dirt.png")

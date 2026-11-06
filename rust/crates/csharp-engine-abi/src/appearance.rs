@@ -1002,7 +1002,10 @@ pub struct NativeMeshPartitionPartRequest {
 /// gives each vertex the weights of a terrain layer material's first four
 /// layers (`create_terrain_layer_material`), which slots bound to such a
 /// material blend by; the uvs are then the layers' tile coordinates. A mesh
-/// has colours or layer weights, not both.
+/// has colours or layer weights, not both. `layer_palette` names the layers
+/// its four weights stand for instead, one to four of the material's 16 in
+/// the order of the weights, so one mesh picks the layers it touches; empty
+/// means layers 0 to 3. A layer the material lacks draws as its layer 0.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMeshResourceCreateRequest {
@@ -1023,6 +1026,8 @@ pub struct NativeMeshResourceCreateRequest {
     pub bindings_len: usize,
     pub layer_weights: *const NativeVec4,
     pub layer_weights_len: usize,
+    pub layer_palette: *const u32,
+    pub layer_palette_len: usize,
 }
 
 #[repr(C)]

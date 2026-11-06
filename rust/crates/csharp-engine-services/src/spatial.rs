@@ -7648,6 +7648,8 @@ mod tests {
                         bindings_len: bindings.len(),
                         layer_weights: std::ptr::null(),
                         layer_weights_len: 0,
+                        layer_palette: std::ptr::null(),
+                        layer_palette_len: 0,
                     },
                     &mut mesh,
                     std::ptr::null_mut(),

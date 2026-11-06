@@ -323,26 +323,42 @@ impl Renderer {
                 handle,
                 parent,
                 instance,
-            } => self.insert_node(
-                *handle,
-                *parent,
-                NodePlacement {
-                    local: crate::convert::transform_matrix(&instance.transform),
-                    visible: instance.visible,
-                    layer: instance.layer,
-                    shadow_casting: instance.shadow_casting,
-                    entity: instance.metadata.source_entity,
-                },
-                NodeKind::StaticMesh {
-                    asset: instance.asset.clone(),
-                    overrides: instance
-                        .material_overrides
-                        .iter()
-                        .map(|slot| (slot.slot, slot.material.clone()))
-                        .collect(),
-                    parameters: BTreeMap::new(),
-                },
-            ),
+            } => {
+                self.insert_node(
+                    *handle,
+                    *parent,
+                    NodePlacement {
+                        local: crate::convert::transform_matrix(&instance.transform),
+                        visible: instance.visible,
+                        layer: instance.layer,
+                        shadow_casting: instance.shadow_casting,
+                        entity: instance.metadata.source_entity,
+                    },
+                    NodeKind::StaticMesh {
+                        asset: instance.asset.clone(),
+                        overrides: instance
+                            .material_overrides
+                            .iter()
+                            .map(|slot| (slot.slot, slot.material.clone()))
+                            .collect(),
+                        parameters: BTreeMap::new(),
+                    },
+                );
+                // An override draws by the mesh's palette as a slot does.
+                let palette = crate::tables::named(
+                    &self.tables.names,
+                    &self.tables.static_meshes,
+                    &instance.asset,
+                )
+                .map(|(_, mesh)| mesh.layer_palette.clone())
+                .unwrap_or_default();
+                let overrides: Vec<String> = instance
+                    .material_overrides
+                    .iter()
+                    .map(|slot| slot.material.clone())
+                    .collect();
+                self.define_layer_variants(&palette, &overrides)?;
+            }
             RenderDiff::CreateScatterPatch {
                 handle,
                 parent,
@@ -620,29 +636,12 @@ impl Renderer {
                     .distance_field
                     .as_ref()
                     .map(|field| self.mesh_field(field));
-                let variants: Vec<(RenderMaterialDescriptor, Vec<u8>)> = mesh
+                let slots: Vec<String> = mesh
                     .groups
                     .iter()
-                    .filter(|_| !mesh.layer_palette.is_empty())
-                    .filter_map(|(slot, _, _)| {
-                        let name = format!("{PAYLOAD_SLOT_MATERIAL_PREFIX}{slot}");
-                        let (_, row) = crate::tables::named(
-                            &self.tables.names,
-                            &self.tables.materials,
-                            &name,
-                        )?;
-                        let defined = self
-                            .tables
-                            .layer_variants
-                            .get(&name)
-                            .is_some_and(|palettes| palettes.contains(&mesh.layer_palette));
-                        (row.descriptor.terrain_layers.is_some() && !defined)
-                            .then(|| (row.descriptor.clone(), mesh.layer_palette.clone()))
-                    })
+                    .map(|(slot, _, _)| format!("{PAYLOAD_SLOT_MATERIAL_PREFIX}{slot}"))
                     .collect();
-                for (base, palette) in variants {
-                    self.define_layer_variant(&base, &palette)?;
-                }
+                self.define_layer_variants(&mesh.layer_palette, &slots)?;
                 let deformed = matches!(
                     self.tables.nodes.get(handle).map(|node| &node.kind),
                     Some(NodeKind::StaticMesh { .. })
@@ -1039,9 +1038,15 @@ impl Renderer {
                     };
                     for (slot, start, count) in groups {
                         let material_id = overrides.get(slot).or_else(|| mesh.slots.get(slot));
-                        let (material_ref, color, emission) = match material_id
-                            .and_then(|id| wanted(names, materials, &mut used, id))
-                        {
+                        // A mesh with a terrain layer palette draws its
+                        // material narrowed to it.
+                        let variant = material_id
+                            .filter(|_| !mesh.layer_palette.is_empty())
+                            .map(|id| layer_variant_id(id, &mesh.layer_palette))
+                            .and_then(|variant| wanted(names, materials, &mut used, &variant));
+                        let row =
+                            material_id.and_then(|id| wanted(names, materials, &mut used, id));
+                        let (material_ref, color, emission) = match variant.or(row) {
                             Some((id, row)) => {
                                 let (color, emission) =
                                     instance_colors(&row.descriptor, parameters.get(slot));
@@ -1709,6 +1714,35 @@ impl Renderer {
         self.define_material_alone(variant)
     }
 
+    /// Define what `materials` draw as on a mesh of `palette`: those with
+    /// terrain layers, narrowed, unless they already are.
+    fn define_layer_variants(
+        &mut self,
+        palette: &[u8],
+        materials: &[String],
+    ) -> Result<(), String> {
+        if palette.is_empty() {
+            return Ok(());
+        }
+        for name in materials {
+            let Some((_, row)) =
+                crate::tables::named(&self.tables.names, &self.tables.materials, name)
+            else {
+                continue;
+            };
+            let defined = self
+                .tables
+                .layer_variants
+                .get(name)
+                .is_some_and(|palettes| palettes.iter().any(|known| known == palette));
+            if row.descriptor.terrain_layers.is_some() && !defined {
+                let base = row.descriptor.clone();
+                self.define_layer_variant(&base, palette)?;
+            }
+        }
+        Ok(())
+    }
+
     /// Whether `id` is a narrowed variant: its material redefines it.
     fn is_layer_variant(&self, id: &str) -> bool {
         self.tables
@@ -1735,11 +1769,40 @@ impl Renderer {
         released
     }
 
-    /// The terrain layer palettes of the payload meshes drawing `id` as a
-    /// slot material.
+    /// The terrain layer palettes of the meshes drawing `id`: payload meshes
+    /// by a slot material, and product meshes by a slot or an instance's
+    /// override.
     fn palettes_drawing(&self, id: &str) -> BTreeSet<Vec<u8>> {
         if !id.starts_with(PAYLOAD_SLOT_MATERIAL_PREFIX) {
-            return BTreeSet::new();
+            let mut palettes: BTreeSet<Vec<u8>> = self
+                .tables
+                .static_meshes
+                .values()
+                .filter(|mesh| {
+                    !mesh.layer_palette.is_empty()
+                        && mesh.slots.values().any(|material| material == id)
+                })
+                .map(|mesh| mesh.layer_palette.clone())
+                .collect();
+            for node in self.tables.nodes.values() {
+                if let NodeKind::StaticMesh {
+                    asset, overrides, ..
+                } = &node.kind
+                {
+                    if overrides.values().any(|material| material == id) {
+                        palettes.extend(
+                            crate::tables::named(
+                                &self.tables.names,
+                                &self.tables.static_meshes,
+                                asset,
+                            )
+                            .map(|(_, mesh)| mesh.layer_palette.clone())
+                            .filter(|palette| !palette.is_empty()),
+                        );
+                    }
+                }
+            }
+            return palettes;
         }
         let Some(id) = self.tables.names.get(id) else {
             return BTreeSet::new();
@@ -1941,8 +2004,14 @@ impl Renderer {
                 .collect(),
         )?;
         // A product mesh's colours can be terrain layer weights, as a voxel
-        // chunk's are: layers 0 to 3 of its slots' terrain layer materials.
+        // chunk's are: layers 0 to 3 of its slots' terrain layer materials,
+        // or the layers of its palette.
         mesh.layer_weights = asset.payload.layer_weights && streams.colors.is_some();
+        if mesh.layer_weights {
+            mesh.layer_palette = asset.payload.layer_palette.clone();
+        }
+        let slots: Vec<String> = mesh.slots.values().cloned().collect();
+        self.define_layer_variants(&mesh.layer_palette, &slots)?;
         mesh.texture_space = asset.payload.texture_space;
         self.attach_morph(&mut mesh, &asset.payload, &asset.asset)?;
         let id = self.tables.names.id(&asset.asset);

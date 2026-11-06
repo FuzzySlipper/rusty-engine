@@ -543,7 +543,8 @@ bindings.
 
 The eighth stream, `LayerWeights` (a `Vector4` per vertex), replaces the
 colours: it gives each vertex the weights of a terrain layer material's first
-four layers, so slots bound to a
+four layers, or of the up to four its `LayerPalette` names of the material's
+16 (`uint`s in the order of the weights), so slots bound to a
 [`CreateTerrainLayerMaterial`](smooth-voxel-surfaces.md#blending-terrain-layers)
 material blend their layers across the mesh as a voxel chunk does, by the
 material's `Contrast`. A mesh has colours or layer weights, not both. The uvs

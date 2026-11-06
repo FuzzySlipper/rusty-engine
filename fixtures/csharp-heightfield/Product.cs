@@ -56,6 +56,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly Camera camera;
     private readonly Material white, water, grass, rock, layered;
     private readonly RenderResource grassTexture, rockTexture;
+    private readonly Material sixLayers;
+    // Three panels (#10637) high over the hills, of one material of six layers: sand into rock beside rock into snow, on palettes that share rock at their edge, and grass into rock with no palette.
+    private const float PanelSide = 40, PanelHeight = 500, PanelTiles = 10, PaletteContrast = 1;
+    private const ulong PanelBaseId = 900;
+    private static readonly uint[] SandToRock = [2, 1], RockToSnow = [1, 3], NoPalette = [];
+    private static readonly Vector3 PanelEye = new(0, PanelHeight + 60, 30), PanelTarget = new(0, PanelHeight, 0);
+    private MeshResource[] panelMeshes = [];
+    private Appearance[] panelLooks = [];
     private readonly AuthoredCatalog catalog;
     private Heightfield? heightfield;
     private HeightfieldStreamer? streamer;
@@ -91,6 +99,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         grass = engine.Graphics.CreateAuthoredMaterial(new(catalog, GrassMaterial, grassTexture));
         rock = engine.Graphics.CreateAuthoredMaterial(new(catalog, RockMaterial, rockTexture));
         layered = engine.Graphics.CreateTerrainLayerMaterial(new(grass, new[] { rock }, LayerContrast));
+        Material[] grounds = PaletteGrounds
+            .Select(ground => engine.Graphics.CreateAuthoredMaterial(new(catalog, $"material/{ground.Name}",
+                engine.Graphics.OpenResource(new($"{ground.Name}.png", TextureFilter.Linear, TextureWrap.Repeat)).Handle)))
+            .ToArray();
+        sixLayers = engine.Graphics.CreateTerrainLayerMaterial(new(grass, new[] { rock }.Concat(grounds).ToArray(), PaletteContrast));
         camera = engine.CameraView.CreateCamera(Descriptor(new(0, 200, 0), 0));
         engine.CameraView.SetActiveCamera(camera);
         engine.CameraView.SetBackgroundColor(new(FogColor));
@@ -136,7 +149,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         double seconds = update.Facts.FixedDeltaSeconds * update.Facts.AdmittedStepCount;
         if (flying) angle += seconds * Speed / Radius;
-        Fly();
+        if (panelLooks.Length == 0) Fly();
         streamer!.Update();
         vegetation.Update();
         Cool(seconds);
@@ -170,13 +183,26 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private static CameraDescriptor Descriptor(Vector3 eye, double heading)
     {
         Vector3 ahead = new((float)Math.Cos(heading), -(float)Math.Tan(LookDown * Math.PI / 180), (float)Math.Sin(heading));
-        CameraQueries.TryLookAtPose(eye, eye + ahead, 0, out CameraPose pose);
+        return Toward(eye, eye + ahead);
+    }
+
+    private static CameraDescriptor Toward(Vector3 eye, Vector3 target)
+    {
+        CameraQueries.TryLookAtPose(eye, target, 0, out CameraPose pose);
         return new(pose, CameraBasisMode.Derived, default,
             new(CameraProjectionKind.Perspective, (float)FieldOfView, 0, (float)NearClip, (float)FarClip), CameraViewports.Full);
     }
 
     private const string GrassTexture = "texture/grass", RockTexture = "texture/rock";
     private const string GrassMaterial = "material/grass", RockMaterial = "material/rock";
+    // The ground beyond two layers (#10637): its id, file and SHA-256.
+    private static readonly (string Name, string Hash)[] PaletteGrounds =
+    [
+        ("sand", "02bd0585bc80e49e134bce5431a5f7a6d5b5c7f524756fa14f5a4257e718ad05"),
+        ("snow", "65e5fd6ae93de7c15385fc437b58eb486ebc9d6290aaf8e9aea61f85d7b3b9ef"),
+        ("moss", "21e101d108109ffa8a19d673b4bdc8f2e67533484c17732fea42e347f1aa6d4c"),
+        ("dirt", "26670b755fb9cf407f914043ebd5ada6638751975ee6bbbd6424d2d7baddf153"),
+    ];
     private const uint Version = 1, TextureSize = 64;
     // The textures' SHA-256, which pins the surfaces to them (`generate-textures.py` writes them).
     private const string GrassHash = "6e717ed4ecaf3f414922a895f44346c5a834c8a8f3d519ca745e9b9583b029c3", RockHash = "abccb3161941412ed498797508d3eac39bc13c79a041bcb3a68c0439a35b02ff";
@@ -195,17 +221,21 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         static AuthoredCatalogDependencyInput Uses(string owner, string reference, string hash) =>
             new(owner, reference, AssetVersionRequirementKind.Exact, Version, true, hash);
         return new(
-            new[] { Texture(GrassTexture, "grass.png", GrassHash), Texture(RockTexture, "rock.png", RockHash), Entry(GrassMaterial), Entry(RockMaterial) },
-            new[] { Uses(GrassMaterial, GrassTexture, GrassHash), Uses(RockMaterial, RockTexture, RockHash) },
-            new[] { Surface(GrassMaterial, GrassTexture, GrassHash), Surface(RockMaterial, RockTexture, RockHash) },
+            new[] { Texture(GrassTexture, "grass.png", GrassHash), Texture(RockTexture, "rock.png", RockHash), Entry(GrassMaterial), Entry(RockMaterial) }
+                .Concat(PaletteGrounds.SelectMany(ground => new[] { Texture($"texture/{ground.Name}", $"{ground.Name}.png", ground.Hash), Entry($"material/{ground.Name}") })).ToArray(),
+            new[] { Uses(GrassMaterial, GrassTexture, GrassHash), Uses(RockMaterial, RockTexture, RockHash) }
+                .Concat(PaletteGrounds.Select(ground => Uses($"material/{ground.Name}", $"texture/{ground.Name}", ground.Hash))).ToArray(),
+            new[] { Surface(GrassMaterial, GrassTexture, GrassHash), Surface(RockMaterial, RockTexture, RockHash) }
+                .Concat(PaletteGrounds.Select(ground => Surface($"material/{ground.Name}", $"texture/{ground.Name}", ground.Hash))).ToArray(),
             new AuthoredTextureInput[]
             {
                 new(GrassTexture, TextureSize, TextureSize, AuthoredTextureFilter.Linear, AuthoredTextureWrap.Repeat),
                 new(RockTexture, TextureSize, TextureSize, AuthoredTextureFilter.Linear, AuthoredTextureWrap.Repeat),
-            },
+            }.Concat(PaletteGrounds.Select(ground => new AuthoredTextureInput($"texture/{ground.Name}", TextureSize, TextureSize, AuthoredTextureFilter.Linear, AuthoredTextureWrap.Repeat))).ToArray(),
             ReadOnlyMemory<AuthoredVoxelAtlasInput>.Empty,
             ReadOnlyMemory<AuthoredAtlasRegionInput>.Empty,
-            new[] { Repeat(GrassMaterial, GrassTexture, GrassHash), Repeat(RockMaterial, RockTexture, RockHash) });
+            new[] { Repeat(GrassMaterial, GrassTexture, GrassHash), Repeat(RockMaterial, RockTexture, RockHash) }
+                .Concat(PaletteGrounds.Select(ground => Repeat($"material/{ground.Name}", $"texture/{ground.Name}", ground.Hash))).ToArray());
     }
 
     [DebugCommand("heightfield.inspect", Description = "Reports the rings' focus, tiles held, drawn and waiting, geometry, meshing time and the streamer's sampling.")]
@@ -268,6 +298,44 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         layers = on != 0;
         Build();
+        return Inspect();
+    }
+
+    /// <summary>One flat panel over the hills, its weights moving across it from its first layer to its second.</summary>
+    private MeshResourceCreateRequest Panel(float left, float right, float near, uint[] palette)
+    {
+        Vector3[] positions = [new(left, 0, near), new(right, 0, near), new(right, 0, near - PanelSide), new(left, 0, near - PanelSide)];
+        // Anchored in the world, so a layer shared along an edge continues across it.
+        Vector2[] uvs = positions.Select(position => new Vector2(position.X, position.Z) * (PanelTiles / PanelSide)).ToArray();
+        Vector4 first = Vector4.UnitX, second = Vector4.UnitY;
+        return new(positions, Enumerable.Repeat(Vector3.UnitY, positions.Length).ToArray(), uvs, ReadOnlyMemory<Color>.Empty,
+            new uint[] { 0, 1, 2, 0, 2, 3 }, new MeshGroup[] { new(0, 0, 6) }, new MeshMaterialBinding[] { new(0, sixLayers) },
+            new[] { first, second, second, first }, palette);
+    }
+
+    [DebugCommand("heightfield.palette", Description = "1 holds the camera over three panels of a six-layer material: two adjacent on palettes sharing rock at their edge, and one with no palette; 0 removes them.")]
+    public string Palette(float on)
+    {
+        if (on == 0)
+        {
+            engine.Graphics.PublishSnapshot([]);
+            foreach (Appearance look in panelLooks) look.Dispose();
+            foreach (MeshResource mesh in panelMeshes) mesh.Dispose();
+            panelLooks = [];
+            panelMeshes = [];
+            return Inspect();
+        }
+        if (panelLooks.Length > 0) return Inspect();
+        panelMeshes =
+        [
+            engine.Graphics.CreateMeshResource(Panel(-PanelSide, 0, 0, SandToRock)),
+            engine.Graphics.CreateMeshResource(Panel(0, PanelSide, 0, RockToSnow)),
+            engine.Graphics.CreateMeshResource(Panel(-PanelSide, PanelSide, -PanelSide, NoPalette)),
+        ];
+        panelLooks = panelMeshes.Select(mesh => engine.Graphics.CreateMeshAppearance(mesh)).ToArray();
+        engine.Graphics.PublishSnapshot(panelLooks.Select((look, index) => new AppearanceFact(PanelBaseId + (ulong)index, false, 0,
+            new Transform(new(0, PanelHeight, 0), Quaternion.Identity, Vector3.One), look, true, RenderLayer.Scene)).ToArray());
+        engine.CameraView.UpdateCamera(new(camera, Toward(PanelEye, PanelTarget)));
         return Inspect();
     }
 
