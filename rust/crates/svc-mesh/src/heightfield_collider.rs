@@ -76,13 +76,21 @@ pub struct ColliderGeometry {
     pub triangles: Vec<[u32; 3]>,
 }
 
+/// A tile as a batch carries it: its place and which tile stood there, since
+/// a tile that leaves and returns before its batch installs is a new one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CarriedTile {
+    pub tile: (i64, i64),
+    pub id: u64,
+}
+
 /// What has changed since the last batch: collision to install and remove,
 /// and the tiles to report back to [`ColliderTiles::finished`].
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ColliderBatch {
     pub geometry: Vec<ColliderGeometry>,
     pub removed: Vec<u64>,
-    pub tiles: Vec<(i64, i64)>,
+    pub tiles: Vec<CarriedTile>,
 }
 
 /// A tile waiting for samples.
@@ -292,8 +300,8 @@ impl ColliderTiles {
             match geometry {
                 Some(geometry) => {
                     held.submitted = true;
+                    batch.tiles.push(CarriedTile { tile, id: held.id });
                     batch.geometry.push(geometry);
-                    batch.tiles.push(tile);
                 }
                 None => {
                     if std::mem::take(&mut held.submitted) {
@@ -306,10 +314,15 @@ impl ColliderTiles {
         batch
     }
 
-    /// Batch `tiles` installed, or was refused.
-    pub fn finished(&mut self, tiles: &[(i64, i64)], installed: bool) {
-        for tile in tiles {
-            if let Some(held) = self.tiles.get_mut(tile) {
+    /// Batch `tiles` installed, or was refused. A tile retired since says
+    /// nothing of whatever stands in its place now.
+    pub fn finished(&mut self, tiles: &[CarriedTile], installed: bool) {
+        for carried in tiles {
+            if let Some(held) = self
+                .tiles
+                .get_mut(&carried.tile)
+                .filter(|held| held.id == carried.id)
+            {
                 held.live |= installed;
                 held.refused = !installed;
             }

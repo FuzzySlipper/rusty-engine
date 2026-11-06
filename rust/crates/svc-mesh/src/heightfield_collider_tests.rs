@@ -119,3 +119,34 @@ fn a_tile_of_holes_stands_with_no_collision_and_drops_what_it_had() {
     assert_eq!(batch.removed.len(), 1);
     assert!(tiles.ready([1.0, 1.0], 3.0));
 }
+
+#[test]
+fn a_batch_from_a_retired_tile_does_not_ready_its_replacement() {
+    let layout = ColliderLayout {
+        reach: 0.0,
+        ..LAYOUT
+    };
+    let mut tiles = ColliderTiles::new(layout, 100);
+    tiles.set_focuses(vec![[1.0, 1.0]]);
+    let request = tiles.requests(0)[0];
+    assert!(tiles.commit(request.tile, request.revision, &flat()));
+    let first = tiles.take_batch();
+    // Away past the margin and back before that batch installs: the tile is a
+    // new one, unsampled, and the old one's collision is on its way out.
+    tiles.set_focuses(vec![[100.0, 1.0]]);
+    tiles.set_focuses(vec![[1.0, 1.0]]);
+    let removal = tiles.take_batch();
+    assert_eq!(removal.removed.len(), 1);
+    tiles.finished(&first.tiles, true);
+    tiles.finished(&removal.tiles, true);
+    assert!(!tiles.ready([1.0, 1.0], 0.0), "nothing stands there");
+    assert_eq!(tiles.counts().pending, 1);
+    assert_eq!(tiles.counts().live, 0);
+
+    let again = tiles.requests(0)[0];
+    assert!(tiles.commit(again.tile, again.revision, &flat()));
+    let replacement = tiles.take_batch();
+    assert!(!tiles.ready([1.0, 1.0], 0.0));
+    tiles.finished(&replacement.tiles, true);
+    assert!(tiles.ready([1.0, 1.0], 0.0));
+}

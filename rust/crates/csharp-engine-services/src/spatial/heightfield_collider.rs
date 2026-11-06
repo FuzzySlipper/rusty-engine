@@ -11,7 +11,7 @@ use csharp_engine_abi::*;
 use engine_spatial::{
     StaticMeshAssetId, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
 };
-use svc_mesh::heightfield_collider::{ColliderLayout, ColliderTiles};
+use svc_mesh::heightfield_collider::{CarriedTile, ColliderLayout, ColliderTiles};
 
 use super::{borrowed_slice, static_deferred, RuntimeSpatialBridge, SpatialSession, ABI_OK};
 use crate::CsharpEngineServicesError;
@@ -31,7 +31,7 @@ struct HeightfieldCollider {
 }
 
 /// A collider's handle and the tiles a deferred batch carries for it.
-type BatchTiles = (u64, Vec<(i64, i64)>);
+type BatchTiles = (u64, Vec<CarriedTile>);
 
 /// A session's colliders, and the tiles each deferred batch carries.
 #[derive(Default)]
