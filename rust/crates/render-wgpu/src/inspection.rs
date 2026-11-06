@@ -155,6 +155,7 @@ impl Renderer {
             jitter: None,
             motion: None,
             reconstruct: None,
+            render_scale: 1.0,
         });
         let depth_labels = self.draw_labels(target, area, &labels, LabelPass::Depth, label_motion);
         let viewmodel = match primary_world {
@@ -179,6 +180,7 @@ impl Renderer {
                     jitter: None,
                     motion: None,
                     reconstruct: None,
+                    render_scale: 1.0,
                 })
             }
             None => ViewStats::default(),

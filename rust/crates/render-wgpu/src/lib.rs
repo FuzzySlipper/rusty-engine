@@ -664,7 +664,8 @@ pub struct Renderer {
     /// The last primary frame's resolutions and upscale stage, for the
     /// readout.
     upscaled: UpscaleReadout,
-    /// The frame's render pixels per output pixel.
+    /// The frame's render pixels per output pixel, for its primary views
+    /// (`ViewPass::render_scale`).
     render_scale_drawn: f32,
     /// The step from that picture to output resolution (`upscale.rs`).
     upscale: upscale::Upscale,

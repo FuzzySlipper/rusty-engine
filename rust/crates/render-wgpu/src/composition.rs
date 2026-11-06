@@ -874,6 +874,7 @@ impl Renderer {
             jitter,
             motion: world_motion,
             reconstruct,
+            render_scale: self.render_scale_drawn,
         });
         self.capture_sky(&world_camera, Some(camera.id.as_str()), clear);
         // Depth-layer labels test the world's depth before the viewmodel
@@ -915,6 +916,7 @@ impl Renderer {
             jitter: jitter.filter(|_| source.is_none()),
             motion: viewmodel_motion,
             reconstruct: None,
+            render_scale: 1.0,
         });
         let top_labels = self.draw_labels(
             target,
@@ -1017,6 +1019,7 @@ impl Renderer {
                     jitter: None,
                     motion: None,
                     reconstruct: None,
+                    render_scale: 1.0,
                 });
                 stats.offscreen_views += 1;
             }

@@ -349,6 +349,9 @@ pub(crate) struct ViewPass<'a> {
     pub motion: Option<crate::motion::MotionPass>,
     /// Ray Reconstruction takes this world view (`dlss.rs`).
     pub reconstruct: Option<Reconstruct<'a>>,
+    /// This view's render pixels per output pixel: the frame's for a primary
+    /// view drawn below the output's size, else 1.
+    pub render_scale: f32,
 }
 
 /// Where a world view Ray Reconstruction takes goes on from: `target` at
@@ -2441,6 +2444,7 @@ impl Renderer {
             jitter: view.jitter,
             motion: None,
             reconstruct: None,
+            render_scale: 1.0,
         })
     }
 
@@ -2520,6 +2524,7 @@ impl Renderer {
                 jitter: None,
                 motion: None,
                 reconstruct: None,
+                render_scale: 1.0,
             };
             self.submit_background(&face_view);
             if let Some(backdrop) = self.backdrop_camera(&face_camera, camera_id) {
@@ -3031,6 +3036,7 @@ impl Renderer {
             jitter: None,
             motion: None,
             reconstruct: None,
+            render_scale: 1.0,
         });
         // A world view's backdrop draws first, with the background, in
         // submissions of its own.
@@ -3855,7 +3861,7 @@ impl Renderer {
             .filter(|precipitation| precipitation.drops > 0 && world_layer);
         if let Some(precipitation) = raining {
             let drop_view = crate::precipitation::DropView {
-                scale: self.render_scale_drawn,
+                scale: view.render_scale,
                 size: [view.viewport.width as f32, view.viewport.height as f32],
                 jitter: view.jitter.unwrap_or_default().to_array(),
             };

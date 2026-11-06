@@ -6,6 +6,7 @@
 
 mod support;
 
+use render_host_contracts::*;
 use render_model::*;
 use render_wgpu::RendererOptions;
 use support::*;
@@ -415,6 +416,152 @@ fn pixel_drops_move_in_whole_blocks() {
     assert!(
         moved * 3 < lit_cells(&first).len(),
         "most hold their block between close frames: {moved} moved"
+    );
+}
+
+/// The output at `render_scale`, showing `composition` of blocks 4 pixels wide.
+fn scaled_frame(render_scale: f32, composition: &RendererViewComposition) -> Vec<u8> {
+    let mut harness = block_scene(RendererOptions {
+        samples: 1,
+        ..RendererOptions::default()
+    });
+    harness.apply(vec![
+        RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                render_scale,
+                antialiasing: Antialiasing::Off,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        },
+        blocks(
+            6_000,
+            PrecipitationShape::Flake,
+            [3.0, -9.0, 0.5],
+            BLOCK as f32,
+        ),
+    ]);
+    harness.renderer.set_animation_time(3.0);
+    harness.renderer.set_view_composition(composition, 0.0);
+    harness
+        .renderer
+        .render_view_composition(&harness.target, 0.0);
+    harness.target.read_rgba(&harness.gpu)
+}
+
+const INSET: u32 = 128;
+
+/// The primary view with an offscreen target shown beside it, pixel for
+/// pixel, from the output's bottom left.
+fn with_inset() -> RendererViewComposition {
+    let eye = camera([0.0, 1.7, 0.0], 0.0, 0.0);
+    let mut view = composition_of(eye.clone());
+    view.views.push(RendererCompositionView {
+        id: "inset".to_owned(),
+        camera_id: eye.id.clone(),
+        target: RendererViewTarget::Offscreen {
+            target_id: "inset".to_owned(),
+            target_revision: 1,
+        },
+        viewport: RendererViewport {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+        order: 1,
+        viewport_anchor: None,
+    });
+    view.targets.push(RendererCompositionTarget {
+        id: "inset".to_owned(),
+        revision: 1,
+        width: INSET,
+        height: INSET,
+        color: RendererTargetColor::Rgba8Srgb,
+        depth: RendererTargetDepth::Depth24,
+        sampling: RendererTargetSampling::Nearest,
+    });
+    view.presentations.push(RendererCompositionPresentation {
+        id: "inset".to_owned(),
+        source_target_id: "inset".to_owned(),
+        source_target_revision: 1,
+        destination: RendererPrimaryDestination {
+            kind: RendererPrimaryDestinationKind::Primary,
+            viewport: RendererViewport {
+                x: 0.0,
+                y: 0.0,
+                width: INSET as f64 / WIDTH as f64,
+                height: INSET as f64 / HEIGHT as f64,
+            },
+        },
+        order: 2,
+    });
+    view
+}
+
+/// The inset's pixels, from the output's bottom left.
+fn inset_of(frame: &[u8]) -> Vec<[u8; 4]> {
+    let top = (HEIGHT - INSET) as usize;
+    (0..(INSET * INSET) as usize)
+        .map(|at| pixel(frame, at % INSET as usize, top + at / INSET as usize))
+        .collect()
+}
+
+/// The mean width of a run of lit pixels along rows `width` wide.
+fn mean_run(pixels: &[[u8; 4]], width: usize) -> f64 {
+    let (mut runs, mut lit) = (0, 0);
+    for row in pixels.chunks_exact(width) {
+        let mut inside = false;
+        for pixel in row {
+            let now = pixel[1] > 60;
+            runs += usize::from(now && !inside);
+            lit += usize::from(now);
+            inside = now;
+        }
+    }
+    lit as f64 / runs.max(1) as f64
+}
+
+#[test]
+fn an_offscreen_view_keeps_its_block_size_whatever_the_primary_scale() {
+    let view = with_inset();
+    let full = inset_of(&scaled_frame(1.0, &view));
+    let side = INSET as usize;
+    assert!(
+        full.iter().any(|pixel| pixel[..3] != [0, 0, 0]),
+        "drops show in the inset"
+    );
+    for cell_y in 0..side / BLOCK {
+        for cell_x in 0..side / BLOCK {
+            let first = full[cell_y * BLOCK * side + cell_x * BLOCK];
+            for at in 0..BLOCK * BLOCK {
+                let (x, y) = (cell_x * BLOCK + at % BLOCK, cell_y * BLOCK + at / BLOCK);
+                assert_eq!(full[y * side + x], first, "a whole block at {x}, {y}");
+            }
+        }
+    }
+    // A presentation joins the primary picture, so a scaled primary resamples
+    // the inset; its blocks stay as wide, where half-size ones would halve.
+    let half = inset_of(&scaled_frame(0.5, &view));
+    let (full, half) = (mean_run(&full, side), mean_run(&half, side));
+    assert!(
+        half > full * 0.8,
+        "the primary's scale leaves the inset's blocks: {full} then {half}"
+    );
+}
+
+#[test]
+fn a_scaled_primary_view_keeps_its_blocks_in_output_pixels() {
+    let view = composition_of(camera([0.0, 1.7, 0.0], 0.0, 0.0));
+    let run = |frame: Vec<u8>| {
+        let pixels: Vec<[u8; 4]> = frame.as_chunks::<4>().0.to_vec();
+        mean_run(&pixels, WIDTH as usize)
+    };
+    let (full, half) = (run(scaled_frame(1.0, &view)), run(scaled_frame(0.5, &view)));
+    // Upscaling spreads a block's edges a pixel or two; a block of this size
+    // in render pixels would double.
+    assert!(
+        half < full * 1.7,
+        "as wide on the output at half scale: {full} then {half}"
     );
 }
 
