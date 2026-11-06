@@ -561,6 +561,22 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
         return Inspect();
     }
+    // The layer in cells of the given side and shades (0 draws it smooth), turning the camera at the given degrees a second to show the cells hold still against it.
+    [DebugCommand("lighting.clouds.pixels")]
+    public string CloudPixels(float coverage,float pixelMetres,uint shadeSteps,float degreesPerSecond)
+    {
+        engine.CameraView.SetClouds(new(Math.Clamp(coverage,0,1),CloudDrift,CloudAltitude,CloudScale,CloudTint,0,CloudKind.Cumulus,0,pixelMetres,shadeSteps));
+        cloudTurn = degreesPerSecond;
+        engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
+        return Inspect();
+    }
+    private void TurnClouds(float seconds)
+    {
+        cloudYaw += float.DegreesToRadians(cloudTurn)*seconds;
+        Vector3 toward = CloudsTarget-CloudsEye;
+        engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsEye+Vector3.Transform(toward,Quaternion.CreateFromAxisAngle(Vector3.UnitY,cloudYaw)))));
+    }
+    private float cloudTurn, cloudYaw;
     // An image effect over the view (content/flash.wgsl): a white flash of the given strength (0 to 1) and a rippling shimmer (0 to 1); both 0 removes it.
     [DebugCommand("lighting.flash")]
     public string Flash(float strength, float shimmer)
@@ -934,6 +950,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public ProductUpdateResult Update(ProductUpdate update)
     {
         if (lanternPlayback is not null) { engine.Graphics.AdvanceSpritePlayback(new(lanternPlayback)); PublishLantern(); }
+        if (cloudTurn != 0) TurnClouds((float)(update.Facts.FixedDeltaSeconds*update.Facts.AdmittedStepCount));
         return ProductUpdateResult.None;
     }
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}

@@ -81,6 +81,8 @@ fn layer(coverage: f32) -> RenderDiff {
             thickness: 0.0,
             kind: CloudKind::Cumulus,
             twilight_degrees: 0.0,
+            pixel_metres: 0.0,
+            shade_steps: 0,
         }),
     }
 }
@@ -323,6 +325,8 @@ fn a_sun_below_the_horizon_lights_the_side_of_a_tower_facing_it() {
             RenderDiff::SetClouds {
                 clouds: Some(CloudsDescriptor {
                     twilight_degrees: twilight,
+                    pixel_metres: 0.0,
+                    shade_steps: 0,
                     ..match layer(0.0) {
                         RenderDiff::SetClouds {
                             clouds: Some(clouds),
@@ -432,6 +436,8 @@ fn drifting() -> Harness {
             thickness: 0.0,
             kind: CloudKind::Cumulus,
             twilight_degrees: 0.0,
+            pixel_metres: 0.0,
+            shade_steps: 0,
         }),
     }]);
     harness

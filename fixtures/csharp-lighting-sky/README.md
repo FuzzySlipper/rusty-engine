@@ -27,6 +27,9 @@ bank and pier in it).
 `lighting.fog.medium <density> <anisotropy>` the fog medium, and
 `lighting.fog.volume <id> <x> <y> <z> <radius> <density> <glow>` and
 `lighting.fog.remove <id>` a drifting, glowing fog volume;
+`lighting.clouds.pixels <coverage> <metres> <steps> <degrees per second>` draws
+the layer in world-anchored cells of that side and that many shades, turning
+the camera to show they hold;
 `lighting.clouds.volumetric off|low|high` draws the cloud layer raymarched,
 and `lighting.clouds.region <id> <x> <z> <radius> <coverage> <darkness>` and
 `lighting.clouds.region.remove <id>` a drifting storm over the layer;

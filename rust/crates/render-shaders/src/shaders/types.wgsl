@@ -21,7 +21,8 @@ struct Frame {
     // z: colour grading (0 off, 1 on)
     modes: vec4<u32>,
     // x: the Engine's presentation time in seconds: it advances with the
-    // simulation, holds while it is paused, and is the same in every view.
+    // simulation, holds while it is paused, and is the same in every view;
+    // y: the angle one pixel of this view spans at its centre, radians.
     time: vec4<f32>,
     // Colour grading: xyz scale the white point in LMS (temperature and
     // tint).

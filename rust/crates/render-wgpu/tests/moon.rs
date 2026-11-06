@@ -213,6 +213,8 @@ fn clouds_and_the_world_cover_it_and_its_bloom() {
                     thickness: 0.0,
                     kind: CloudKind::Stratus,
                     twilight_degrees: 0.0,
+                    pixel_metres: 0.0,
+                    shade_steps: 0,
                 }),
             }]);
         }
@@ -283,6 +285,8 @@ fn an_overcast_covers_it_as_much_as_it_covers_the_sky() {
                     thickness: 0.0,
                     kind: CloudKind::Stratus,
                     twilight_degrees: 0.0,
+                    pixel_metres: 0.0,
+                    shade_steps: 0,
                 }),
             }]);
         }
@@ -333,6 +337,8 @@ fn it_changes_nothing_else() {
                     thickness: 0.0,
                     kind: CloudKind::Cumulus,
                     twilight_degrees: 0.0,
+                    pixel_metres: 0.0,
+                    shade_steps: 0,
                 }),
             },
         ]);
@@ -409,6 +415,8 @@ fn its_light_lights_the_clouds_at_night_toward_it_and_none_leaves_them_as_they_w
                     thickness: 0.0,
                     kind: CloudKind::Cumulus,
                     twilight_degrees: 8.0,
+                    pixel_metres: 0.0,
+                    shade_steps: 0,
                 }),
             },
             RenderDiff::SetMoon {

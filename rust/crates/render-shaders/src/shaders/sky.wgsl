@@ -10,7 +10,7 @@
 
 #import rusty::types::PI
 #import rusty::view::{frame, world_equivalent}
-#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, cloud_kind_detail, cloud_moonlight, cloud_sunlight, CLOUD_OCTAVES}
+#import rusty::clouds::{cloud_cover, cloud_coverage, cloud_density, cloud_detail, cloud_hash, cloud_kind_detail, cloud_moonlight, cloud_sunlight, CLOUD_OCTAVES}
 #import rusty::motion::{motion_at, previous_pixel_from, previous_pixel_toward, previous_time}
 
 struct SkyUniform {
@@ -20,7 +20,8 @@ struct SkyUniform {
     // size of one cloud, in metres.
     clouds: vec4<f32>,
     // xy: the layer's drift over the ground (world x, z), in metres per
-    // second.
+    // second; z the side of its cells, metres (0: smooth); w its shades
+    // (0: smooth).
     cloud_drift: vec4<f32>,
     // rgb: the tint of the light the clouds take.
     cloud_color: vec4<f32>,
@@ -85,6 +86,8 @@ const OVERCAST_SKY: f32 = 0.8;
 // the horizon). A camera at or above the altitude sees none overhead. The
 // camera stands at its world place in a backdrop pass too.
 struct FlatLayer {
+    // The ray the layer is read along: the view's, or its cell's.
+    direction: vec3<f32>,
     p: vec2<f32>,
     ground: vec2<f32>,
     coverage: vec4<f32>,
@@ -93,22 +96,74 @@ struct FlatLayer {
     alpha: f32,
 };
 
-fn flat_layer(direction: vec3<f32>) -> FlatLayer {
+fn flat_layer(view: vec3<f32>) -> FlatLayer {
     var layer: FlatLayer;
+    layer.direction = view;
     let camera = world_equivalent(frame.camera.xyz);
     let above = sky.clouds.y - camera.y;
     if above <= 0.0 {
         return layer;
     }
+    let direction = cell_direction(view, camera, above);
+    layer.direction = direction;
     let rise = max(direction.y, 0.02);
     layer.ground = camera.xz + direction.xz * (above / rise);
     layer.p = (layer.ground - sky.cloud_drift.xy * frame.time.x) / sky.clouds.z;
     // The layer's coverage raised by the regions over this point.
     layer.coverage = cloud_coverage(layer.ground);
     layer.detail = cloud_kind_detail(cloud_detail(direction.y), layer.coverage.w);
-    layer.cover = cloud_cover(layer.p, layer.detail, layer.coverage.x, CLOUD_OCTAVES);
+    layer.cover = stepped(cloud_cover(layer.p, layer.detail, layer.coverage.x, CLOUD_OCTAVES));
     layer.alpha = layer.cover * smoothstep(0.0, 0.25, direction.y);
     return layer;
+}
+
+// `value` (0 to 1) on the layer's shades (`SkyUniform.cloud_drift`).
+fn stepped(value: f32) -> f32 {
+    let steps = sky.cloud_drift.w;
+    if steps <= 0.0 {
+        return value;
+    }
+    let levels = max(steps - 1.0, 1.0);
+    return round(value * levels) / levels;
+}
+
+// The most times cells merge toward the horizon, each doubling their side,
+// and the pixels of the view a cell must span along it to stand alone.
+const CLOUD_CELL_MERGES: i32 = 8;
+const CLOUD_CELL_PIXELS: f32 = 4.0;
+
+// The ray through the centre of the cell `view` meets, so all the layer reads
+// along it is one flat colour for the whole cell. Cells are squares of the
+// drifting cloud plane, so they keep their shape as the camera turns and
+// travel with the clouds. Toward the horizon a cell foreshortens past a pixel
+// and would alias, so four neighbours merge into one twice the size, and
+// again, until they span `CLOUD_CELL_PIXELS` along the view. That depends
+// on where the cell lies from the camera and on the view's pixel size, never
+// on the camera's turn, and each parent cell picks its own threshold (half
+// to one and a half times it) so merges scatter rather than draw a ring
+// around the camera. The layer's horizon fade then takes the merged cells out.
+fn cell_direction(view: vec3<f32>, camera: vec3<f32>, above: f32) -> vec3<f32> {
+    let pixel = sky.cloud_drift.z;
+    if pixel <= 0.0 || view.y <= 0.0 {
+        return view;
+    }
+    let drift = sky.cloud_drift.xy * frame.time.x;
+    let drifted = camera.xz + view.xz * (above / max(view.y, 0.02)) - drift;
+    var size = pixel;
+    for (var merge = 0; merge < CLOUD_CELL_MERGES; merge++) {
+        let parent = size * 2.0;
+        let cell = floor(drifted / parent);
+        let across = (cell + 0.5) * parent + drift - camera.xz;
+        // A cell at distance d spans about size × above / d² along the view.
+        let spans = size * above / (dot(across, across) + above * above);
+        let threshold = CLOUD_CELL_PIXELS * frame.time.y * (0.5 + cloud_hash(vec2<i32>(cell) + vec2<i32>(merge * 7919)));
+        if spans >= threshold {
+            break;
+        }
+        size = parent;
+    }
+    let center = (floor(drifted / size) + 0.5) * size + drift - camera.xz;
+    return normalize(vec3<f32>(center.x, above, center.y));
 }
 
 // The cloud layer, blended over the background (premultiplied alpha), so
@@ -120,8 +175,8 @@ fn flat_layer(direction: vec3<f32>) -> FlatLayer {
 // camera sees directly, past the other clouds.
 @fragment
 fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
-    let direction = view_direction(in.ndc);
-    let layer = flat_layer(direction);
+    let layer = flat_layer(view_direction(in.ndc));
+    let direction = layer.direction;
     if layer.alpha <= 0.0 {
         return vec4<f32>(0.0);
     }
@@ -150,9 +205,9 @@ fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
 // light below the layer lights the undersides the camera sees directly.
 fn flat_direct(layer: FlatLayer, direction: vec3<f32>, toward: vec3<f32>, light: vec3<f32>) -> vec3<f32> {
     let across = toward.xz / max(length(toward.xz), 1e-3) * 0.35;
-    let shadowed = cloud_cover(layer.p + across * 0.75, layer.detail, layer.coverage.x, CLOUD_OCTAVES);
+    let shadowed = stepped(cloud_cover(layer.p + across * 0.75, layer.detail, layer.coverage.x, CLOUD_OCTAVES));
     let underlit = smoothstep(UNDERLIT_EDGE, -UNDERLIT_EDGE, toward.y);
-    let edge = 1.0 + 1.5 * pow(max(dot(direction, toward), 0.0), 8.0) * (1.0 - layer.cover);
+    let edge = 1.0 + 1.5 * stepped(pow(max(dot(direction, toward), 0.0), 8.0) * (1.0 - layer.cover));
     return light * mix(mix(1.0, 0.55, shadowed), 1.0, underlit) * edge;
 }
 

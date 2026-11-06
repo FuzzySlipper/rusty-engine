@@ -3827,6 +3827,8 @@ mod tests {
             thickness: 0.0,
             kind: NativeCloudKind::Cumulus,
             twilight_degrees: 0.0,
+            pixel_metres: 0.0,
+            shade_steps: 0,
         };
         services.begin_call(binding());
         let api = services.api();
@@ -3848,6 +3850,8 @@ mod tests {
                 thickness: 0.0,
                 kind: render_model::CloudKind::Cumulus,
                 twilight_degrees: 0.0,
+                pixel_metres: 0.0,
+                shade_steps: 0,
             }),
         };
         assert_eq!(
@@ -3875,6 +3879,10 @@ mod tests {
                 twilight_degrees: -1.0,
                 ..request(0.5, 8.0, 1500.0, 600.0, 1.0)
             },
+            NativeCloudsRequest {
+                pixel_metres: -1.0,
+                ..request(0.5, 8.0, 1500.0, 600.0, 1.0)
+            },
         ] {
             let mut refusal = empty_receipt();
             assert_eq!(set(refused, &mut refusal), 0);
@@ -3899,6 +3907,8 @@ mod tests {
                     thickness: 0.0,
                     kind: render_model::CloudKind::Cumulus,
                     twilight_degrees: 0.0,
+                    pixel_metres: 0.0,
+                    shade_steps: 0,
                 }),
             }]
         );

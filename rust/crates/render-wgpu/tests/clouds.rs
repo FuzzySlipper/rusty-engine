@@ -89,6 +89,8 @@ fn clouds_sized(coverage: f32, scale: f32) -> RenderDiff {
             thickness: 0.0,
             kind: CloudKind::Cumulus,
             twilight_degrees: 0.0,
+            pixel_metres: 0.0,
+            shade_steps: 0,
         }),
     }
 }
@@ -400,6 +402,8 @@ fn twilight_clouds(twilight_degrees: f32) -> RenderDiff {
             thickness: 0.0,
             kind: CloudKind::Cumulus,
             twilight_degrees,
+            pixel_metres: 0.0,
+            shade_steps: 0,
         }),
     }
 }
@@ -593,6 +597,8 @@ fn low_drifting(coverage: f32) -> RenderDiff {
             thickness: 0.0,
             kind: CloudKind::Cumulus,
             twilight_degrees: 0.0,
+            pixel_metres: 0.0,
+            shade_steps: 0,
         }),
     }
 }
@@ -658,4 +664,214 @@ fn drifting_clouds_move_on_a_still_camera_and_turn_with_the_sky() {
             "turned at the centre: {value}, about {expected}"
         );
     }
+}
+
+fn pixel(rgba: &[u8], (x, y): (usize, usize)) -> [i32; 3] {
+    let at = (y * WIDTH as usize + x) * 4;
+    [rgba[at] as i32, rgba[at + 1] as i32, rgba[at + 2] as i32]
+}
+
+/// The largest difference of any channel.
+fn distance(a: [i32; 3], b: [i32; 3]) -> i32 {
+    (0..3)
+        .map(|channel| (a[channel] - b[channel]).abs())
+        .max()
+        .unwrap_or(0)
+}
+
+/// A daylit panorama with a coverage of cloud in cells of `pixel_metres`
+/// and `shade_steps` shades, at the altitude and size a product would give
+/// them, drifting.
+fn pixel_sky(pixel_metres: f32, shade_steps: u32) -> Harness {
+    let mut harness = panorama(VolumetricCloudsQuality::Off, NOON_SKY);
+    harness.apply(vec![
+        RenderDiff::SetAtmosphere {
+            atmosphere: Some(AtmosphereDescriptor {
+                sky_sun_direction: NOON,
+                sky_sun_color: NOON_COLOR,
+                sky_sun_intensity: 1.5,
+                ..Default::default()
+            }),
+        },
+        RenderDiff::SetClouds {
+            clouds: Some(CloudsDescriptor {
+                coverage: 0.6,
+                drift: [12.0, 4.0],
+                altitude: 1500.0,
+                scale: 1600.0,
+                color: [1.0; 3],
+                thickness: 0.0,
+                kind: CloudKind::Cumulus,
+                twilight_degrees: 0.0,
+                pixel_metres,
+                shade_steps,
+            }),
+        },
+    ]);
+    harness
+}
+
+/// The pixel a view turned to `yaw` and `pitch` degrees shows `direction` at,
+/// if it shows it (the fixture camera's 60° view).
+fn seen_at(direction: [f32; 3], yaw: f32, pitch: f32) -> Option<(usize, usize)> {
+    let (yaw, pitch) = (yaw.to_radians(), pitch.to_radians());
+    let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let forward = [
+        yaw.sin() * pitch.cos(),
+        pitch.sin(),
+        -yaw.cos() * pitch.cos(),
+    ];
+    let right = [yaw.cos(), 0.0, yaw.sin()];
+    let up = [
+        right[1] * forward[2] - right[2] * forward[1],
+        right[2] * forward[0] - right[0] * forward[2],
+        right[0] * forward[1] - right[1] * forward[0],
+    ];
+    let depth = dot(direction, forward);
+    if depth <= 0.0 {
+        return None;
+    }
+    let half = HEIGHT as f32 / 2.0;
+    let focal = half / 30f32.to_radians().tan();
+    let x = WIDTH as f32 / 2.0 + dot(direction, right) / depth * focal;
+    let y = half - dot(direction, up) / depth * focal;
+    (x >= 0.0 && y >= 0.0 && x < WIDTH as f32 && y < HEIGHT as f32)
+        .then_some((x as usize, y as usize))
+}
+
+/// Directions over the sky between two elevations, degrees.
+fn sky_directions(low: f32, high: f32) -> Vec<[f32; 3]> {
+    let mut directions = Vec::new();
+    for row in 0..24 {
+        let elevation = (low + (high - low) * row as f32 / 23.0).to_radians();
+        for column in 0..48 {
+            let azimuth = ((column as f32 - 24.0) * 1.1).to_radians();
+            directions.push([
+                azimuth.sin() * elevation.cos(),
+                elevation.sin(),
+                -azimuth.cos() * elevation.cos(),
+            ]);
+        }
+    }
+    directions
+}
+
+/// The share of `directions` that draw differently (by more than rounding)
+/// in the two frames, among those both show.
+fn changed_share(
+    first: (&[u8], f32, f32),
+    second: (&[u8], f32, f32),
+    directions: &[[f32; 3]],
+) -> f32 {
+    let (mut seen, mut changed) = (0, 0);
+    for &direction in directions {
+        if let (Some(a), Some(b)) = (
+            seen_at(direction, first.1, first.2),
+            seen_at(direction, second.1, second.2),
+        ) {
+            seen += 1;
+            // Whole pixels place a direction to within one, so a sample by a
+            // cell's edge may land either side: it moved only if nothing
+            // around it matches.
+            let color = pixel(first.0, a);
+            let held = (-1..=1).any(|dy: isize| {
+                (-1..=1).any(|dx: isize| {
+                    let x = b.0.saturating_add_signed(dx).min(WIDTH as usize - 1);
+                    let y = b.1.saturating_add_signed(dy).min(HEIGHT as usize - 1);
+                    distance(color, pixel(second.0, (x, y))) <= 6
+                })
+            });
+            if !held {
+                changed += 1;
+            }
+        }
+    }
+    assert!(seen > 100, "the views share the sky: {seen}");
+    changed as f32 / seen as f32
+}
+
+/// The share of a frame's neighbouring pixels that are the same colour.
+fn flat_share(rgba: &[u8]) -> f32 {
+    let (mut same, mut total) = (0, 0);
+    for y in 10..HEIGHT as usize - 10 {
+        for x in 10..WIDTH as usize - 10 {
+            total += 1;
+            if pixel(rgba, (x, y)) == pixel(rgba, (x + 1, y)) {
+                same += 1;
+            }
+        }
+    }
+    same as f32 / total as f32
+}
+
+/// Overhead, cells draw one flat colour each where the smooth layer changes
+/// from pixel to pixel.
+#[test]
+fn pixel_clouds_draw_each_cell_one_colour() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 70.0);
+    let smooth = pixel_sky(0.0, 0).render(&view).1;
+    let cells = pixel_sky(160.0, 0).render(&view).1;
+    let (smooth, cells) = (flat_share(&smooth), flat_share(&cells));
+    assert!(cells > 0.8, "cells are flat: {cells}");
+    assert!(cells > smooth + 0.2, "{cells} against smooth {smooth}");
+}
+
+/// Cells belong to the sky, not the screen: a direction draws the same
+/// through a turn of the camera, up high and down toward the horizon.
+#[test]
+fn pixel_clouds_hold_their_cells_as_the_camera_turns() {
+    let mut harness = pixel_sky(160.0, 4);
+    let (yaw, turned) = (0.0, 9.0);
+    for (pitch, low, high) in [(60.0, 45.0, 75.0), (12.0, 2.0, 18.0)] {
+        let first = harness
+            .render(&camera([0.0, 0.0, 0.0], yaw as f64, pitch as f64))
+            .1;
+        let second = harness
+            .render(&camera([0.0, 0.0, 0.0], turned as f64, pitch as f64))
+            .1;
+        let share = changed_share(
+            (&first, yaw, pitch),
+            (&second, turned, pitch),
+            &sky_directions(low, high),
+        );
+        assert!(share < 0.02, "pitch {pitch}: {share} of the sky moved");
+    }
+}
+
+/// With the camera held, a drifting cell keeps its colour as it travels:
+/// the sky near the horizon changes only where a cell's edge passed.
+#[test]
+fn pixel_clouds_do_not_shimmer_near_the_horizon_as_they_drift() {
+    let view = camera([0.0, 0.0, 0.0], 0.0, 12.0);
+    let mut harness = pixel_sky(160.0, 4);
+    let mut previous = harness.render(&view).1;
+    let directions = sky_directions(1.0, 12.0);
+    for step in 1..=6 {
+        // Five seconds: 60 metres of drift, enough to flip a cell too small
+        // for the view, and well under a pixel of a merged one.
+        harness.at(f64::from(step) * 5.0);
+        let next = harness.render(&view).1;
+        let share = changed_share((&previous, 0.0, 12.0), (&next, 0.0, 12.0), &directions);
+        assert!(share < 0.003, "{share} of the low sky flickered");
+        previous = next;
+    }
+}
+
+/// Shades limit the layer to a few levels: far fewer colours in one frame
+/// than the smooth layer has.
+#[test]
+fn shade_steps_limit_the_clouds_to_a_few_shades() {
+    let colours = |rgba: &[u8]| {
+        let mut seen = std::collections::BTreeSet::new();
+        for y in (10..HEIGHT as usize - 10).step_by(3) {
+            for x in (10..WIDTH as usize - 10).step_by(3) {
+                seen.insert(pixel(rgba, (x, y)));
+            }
+        }
+        seen.len()
+    };
+    let view = camera([0.0, 0.0, 0.0], 0.0, 80.0);
+    let smooth = colours(&pixel_sky(160.0, 0).render(&view).1);
+    let stepped = colours(&pixel_sky(160.0, 3).render(&view).1);
+    assert!(stepped * 2 < smooth, "{stepped} against {smooth} colours");
 }

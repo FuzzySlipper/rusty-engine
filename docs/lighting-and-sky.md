@@ -1424,7 +1424,8 @@ engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
 product that leaves them out (`new(Coverage, Drift, Altitude, Scale, Color)`)
 gets cumulus six tenths of the altitude thick; a cloud region left without
 them is cumulus as thick as the layer. Leaving out `TwilightDegrees` lights
-the clouds only while the sun is up.
+the clouds only while the sun is up. Leaving out `PixelMetres` and
+`ShadeSteps` draws them smooth.
 
 - `Coverage` (0 to 1, clamped) is how much of the sky is cloud. 0 clears the
   layer, draws no `clouds` pass and leaves the sky exactly as without it (the
@@ -1441,6 +1442,24 @@ the clouds only while the sun is up.
   fade into the panorama. A camera at or above the altitude sees no flat
   layer overhead.
 - `Color` (linear) tints the light the clouds take.
+- `PixelMetres` (above 0) draws the flat layer in square cells of that side in
+  the cloud plane, each one flat colour, to sit with nearest-filtered pixel
+  art. The cells are anchored to the clouds, so they drift with them and hold
+  their shape as the camera turns, which a screen-space `SetImageEffect`
+  cannot do. Toward the horizon a cell foreshortens below a pixel and would
+  alias, so neighbours merge into cells of two, four and more times the side
+  until they span about four of the view's pixels. Which cells merge depends
+  on where they lie from the camera and on the view's resolution, not on its
+  turn, and each picks its own distance, so no ring follows the camera; the
+  layer's horizon fade then takes them out. A size near a tenth of `Scale`
+  reads as chunky pixels.
+- `ShadeSteps` (0, the default, for smooth; at least 2) limits the flat layer
+  to that many shades between lit and shadowed cloud and that many levels of
+  cover. It works with or without cells. The sky behind and the sun's colour
+  still vary slowly across the layer.
+- `PixelMetres` and `ShadeSteps` leave the [volumetric
+  clouds](#volumetric-clouds) and the shade on the ground as they are, so a
+  cell overhead and its shadow agree in place, not in outline.
 - The clouds take the sky's sun's colour and direction (the atmosphere's
   `SkySunDirection`, or the brightest directional light), less where more
   cloud lies between them and the sun, and brighter at their thin edges

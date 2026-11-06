@@ -765,11 +765,20 @@ pub struct CloudsDescriptor {
     pub kind: CloudKind,
     #[serde(default)]
     pub twilight_degrees: f32,
+    /// The side of the flat layer's cells, metres in the cloud plane, each
+    /// one flat colour moving with the clouds; 0 draws it smooth.
+    #[serde(default)]
+    pub pixel_metres: f32,
+    /// How many shades the flat layer takes between lit and shadowed cloud,
+    /// and between clear and full cover; 0 leaves them smooth.
+    #[serde(default)]
+    pub shade_steps: u32,
 }
 
 impl CloudsDescriptor {
     /// Coverage within `0..=1`, a finite drift, a finite altitude and scale
-    /// above 0, and a finite non-negative thickness, colour and twilight.
+    /// above 0, and a finite non-negative thickness, colour, twilight and
+    /// cell size.
     pub fn valid(&self) -> bool {
         (0.0..=1.0).contains(&self.coverage)
             && self.drift.iter().all(|value| value.is_finite())
@@ -778,6 +787,7 @@ impl CloudsDescriptor {
             && non_negative(self.thickness)
             && self.color.iter().all(|&channel| non_negative(channel))
             && non_negative(self.twilight_degrees)
+            && non_negative(self.pixel_metres)
     }
 }
 

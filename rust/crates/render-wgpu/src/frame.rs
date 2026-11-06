@@ -2056,13 +2056,18 @@ impl Renderer {
             None => (first, 0.0),
         };
         // The blend amount, then the cloud layer's coverage, altitude and
-        // size, drift and tint (`sky.wgsl` SkyUniform).
+        // size, drift, cells and shades, and tint (`sky.wgsl` SkyUniform).
         let clouds = drawn_clouds(self.tables.clouds, self.tables.cloud_regions.len());
         let mut values = [0.0f32; 16];
         values[0] = amount;
         if let Some(clouds) = clouds {
             values[4..7].copy_from_slice(&[clouds.coverage, clouds.altitude, clouds.scale]);
-            values[8..10].copy_from_slice(&clouds.drift);
+            values[8..12].copy_from_slice(&[
+                clouds.drift[0],
+                clouds.drift[1],
+                clouds.pixel_metres,
+                clouds.shade_steps as f32,
+            ]);
             values[12..15].copy_from_slice(&clouds.color);
         }
         let uniform: Vec<u8> = values
@@ -2347,6 +2352,7 @@ impl Renderer {
             &view.drawn_camera(),
             self.lights.world,
             view.target.samples,
+            view.viewport.height,
             None,
         );
         self.gpu.queue.write_buffer(&self.frame_buffer, 0, &bytes);
@@ -2792,6 +2798,7 @@ impl Renderer {
         camera: &CameraMatrices,
         lights: LightRange,
         samples: u32,
+        height: u32,
         backdrop: Option<[f32; 4]>,
     ) -> Vec<u8> {
         let mut uniform = Vec::with_capacity((FRAME_UNIFORM_BYTES / 4) as usize);
@@ -2814,8 +2821,10 @@ impl Renderer {
             self.tables.color_grading.is_some(),
         ));
         // The presentation time (`set_presentation_time`): it holds while
-        // the simulation does, so a held frame draws the same.
-        for value in [self.presentation_time as f32, 0.0, 0.0, 0.0] {
+        // the simulation does, so a held frame draws the same. Then the
+        // angle a pixel spans at the view's centre, from its projection.
+        let pixel_angle = 2.0 / (camera.projection.y_axis.y.abs() * height.max(1) as f32);
+        for value in [self.presentation_time as f32, pixel_angle, 0.0, 0.0] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         for value in grading_uniform(self.tables.color_grading.unwrap_or_default()) {
@@ -3083,6 +3092,7 @@ impl Renderer {
             &view.drawn_camera(),
             lights,
             view.target.samples,
+            view.viewport.height,
             view.backdrop,
         );
         // The cluster fields follow once the view's clusters are encoded.
@@ -4348,6 +4358,8 @@ pub(crate) fn drawn_clouds(
             thickness: 0.0,
             kind: render_model::CloudKind::Cumulus,
             twilight_degrees: 0.0,
+            pixel_metres: 0.0,
+            shade_steps: 0,
         }),
         _ => None,
     }

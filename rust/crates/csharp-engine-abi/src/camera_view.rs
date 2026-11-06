@@ -494,6 +494,13 @@ pub enum NativeCloudKind {
 /// (`SetAtmosphere`) still lights the clouds at the layer's altitude, from
 /// below, reddening as it sinks and then fading; higher cloud keeps it a
 /// little longer. 0 (the default) lights them only while the sun is up.
+/// `pixel_metres` above 0 draws the flat layer in square cells of that side,
+/// metres in the cloud plane, each one flat colour moving with the clouds, so
+/// they sit with pixel art; toward the horizon, where a cell would shrink
+/// past a few pixels, neighbours merge. `shade_steps` (0 for smooth) limits
+/// the flat layer to that many shades between lit and shadowed cloud and that
+/// many levels of cover, at least two. Both leave the volumetric clouds and
+/// the shade on the ground as they are.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCloudsRequest {
@@ -506,6 +513,8 @@ pub struct NativeCloudsRequest {
     pub thickness: f32,
     pub kind: NativeCloudKind,
     pub twilight_degrees: f32,
+    pub pixel_metres: f32,
+    pub shade_steps: u32,
 }
 
 /// How wet the scene's lit surfaces are, after rain. `wetness` (0 to 1,
