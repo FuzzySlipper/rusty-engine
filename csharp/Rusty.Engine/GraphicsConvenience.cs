@@ -425,6 +425,9 @@ internal static class GraphicsDefaults
         SpriteShadowPolicy.None,
         SpriteBlendMode.Alpha,
         0f,
+        default,
+        default,
+        0f,
         default);
 }
 
@@ -440,7 +443,7 @@ public readonly partial record struct SpriteMaterialDescriptor
         SpriteAlphaMode AlphaMode,
         float AlphaCutoff,
         SpriteShadowPolicy Shadow)
-        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, SpriteBlendMode.Alpha, 0f, default)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, SpriteBlendMode.Alpha, 0f, default, default, 0f, default)
     {
     }
 
@@ -456,7 +459,24 @@ public readonly partial record struct SpriteMaterialDescriptor
         SpriteShadowPolicy Shadow,
         SpriteBlendMode Blend,
         float SoftnessMetres)
-        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, default)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, default, default, 0f, default)
+    {
+    }
+
+    /// <summary>A sprite material that emits nothing (no <see cref="EmissionColor"/>).</summary>
+    public SpriteMaterialDescriptor(
+        SpriteLightingMode Lighting,
+        RenderResourceReference NormalTexture,
+        RenderResourceReference DepthTexture,
+        float NormalStrength,
+        float NormalBias,
+        SpriteAlphaMode AlphaMode,
+        float AlphaCutoff,
+        SpriteShadowPolicy Shadow,
+        SpriteBlendMode Blend,
+        float SoftnessMetres,
+        RenderResourceReference TintMask)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, TintMask, default, 0f, default)
     {
     }
 }

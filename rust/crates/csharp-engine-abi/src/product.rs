@@ -911,6 +911,11 @@ pub type NativeSetSpriteViewport = unsafe extern "C" fn(
     NativeSpriteViewportUpdateRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetSpriteEmission = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSpriteEmissionUpdateRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadSprite = unsafe extern "C" fn(
     *mut c_void,
     NativeAppearanceHandle,
@@ -1781,6 +1786,7 @@ pub struct NativeGraphicsApi {
     pub create_sprite_batch: NativeCreateSpriteBatch,
     pub set_sprite_frame: NativeSetSpriteFrame,
     pub set_sprite_viewport: NativeSetSpriteViewport,
+    pub set_sprite_emission: NativeSetSpriteEmission,
     pub read_sprite: NativeReadSprite,
     pub create_sprite_playback: NativeCreateSpritePlayback,
     pub destroy_sprite_playback: NativeDestroySpritePlayback,

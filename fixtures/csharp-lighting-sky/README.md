@@ -11,7 +11,8 @@ RustyEngineFixtureSdkVersion=<version> RestoreAdditionalProjectSources=<feed> \
 Run the staged bundle with the matching runtime pack. Debug commands and the
 bounded proof contract are in [lighting and skies](../../docs/lighting-and-sky.md).
 `generate-skies.py` regenerates the two small authored PNG fixture panoramas,
-and `generate-particles.py` the torch's flame flipbook, ember and smoke sprites.
+and `generate-particles.py` the torch's flame flipbook, ember and smoke sprites
+and the lantern's two-frame atlas and emission map.
 `content/tree.glb` is rusty-craftsurvive's normalized low-poly broadleaf tree
 (`content/map-models/broadleaf.glb`, a Tripo generation recorded in that
 repository's `content/map-models.sources.json`), the flat-shading pair's prop
@@ -29,6 +30,11 @@ bank and pier in it).
 `lighting.clouds.volumetric off|low|high` draws the cloud layer raymarched,
 and `lighting.clouds.region <id> <x> <z> <radius> <coverage> <darkness>` and
 `lighting.clouds.region.remove <id>` a drifting storm over the layer;
+`lighting.lantern <intensity>` lights a lit sprite and a sprite batch from one
+atlas by an emission map, the torch and the sun out and bloom on: only the
+flames stay bright, on the side the frame draws them, and calling it again
+changes the intensity while the playback runs (below 0 clears them);
+`lighting.torch true` then lights the iron around them;
 `lighting.moon <phase> <radiance>` puts the moon in the sky beside the sun;
 `lighting.stars <limit> <spin>` draws the star field (`content/sky.stars.json`
 with the `content/band.png` band, both from `generate-stars.py`) to that

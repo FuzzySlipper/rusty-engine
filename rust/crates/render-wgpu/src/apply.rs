@@ -410,6 +410,11 @@ impl Renderer {
                         .tint_mask
                         .as_deref()
                         .map(|name| self.tables.names.id(name)),
+                    emission_map: sprite
+                        .material
+                        .emission_map
+                        .as_deref()
+                        .map(|name| self.tables.names.id(name)),
                     descriptor: sprite.clone(),
                     batch: None,
                 };
@@ -440,6 +445,11 @@ impl Renderer {
                     tint_mask: sprite
                         .material
                         .tint_mask
+                        .as_deref()
+                        .map(|name| self.tables.names.id(name)),
+                    emission_map: sprite
+                        .material
+                        .emission_map
                         .as_deref()
                         .map(|name| self.tables.names.id(name)),
                     descriptor: sprite.clone(),
@@ -690,6 +700,7 @@ impl Renderer {
                 tint,
                 render_order,
                 visible,
+                emission_intensity,
             } => {
                 let node = self.node_mut(*handle)?;
                 if let NodeKind::Sprite(row) = &mut node.kind {
@@ -702,6 +713,9 @@ impl Renderer {
                     }
                     if let Some(render_order) = render_order {
                         sprite.render_order = *render_order;
+                    }
+                    if let Some(intensity) = emission_intensity {
+                        sprite.material.emission_intensity = *intensity;
                     }
                 }
                 if let Some(visible) = visible {

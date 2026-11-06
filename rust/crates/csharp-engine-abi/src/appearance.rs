@@ -245,6 +245,16 @@ pub struct NativeSpriteViewportUpdateRequest {
     pub fit: NativeSpriteViewportFit,
 }
 
+/// Changes the emission intensity of a retained sprite or sprite batch,
+/// leaving its playback, frame and everything else as they are: a lamp going
+/// out at dawn. Shown at the next publish.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSpriteEmissionUpdateRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub intensity: f32,
+}
+
 /// Explicit renderer material alpha semantics. Opaque is the stable ordinary
 /// default; a cutoff is used only for Mask.
 #[repr(u32)]
@@ -313,6 +323,19 @@ pub struct NativeSpriteMaterialDescriptor {
     /// alpha applies everywhere. A zero handle (the default) tints the whole
     /// sprite.
     pub tint_mask: NativeRenderResourceReference,
+    /// Light the sprite gives off, linear RGB, times `emission_intensity` and
+    /// the map: added after its lighting in every mode, untouched by the
+    /// tint's colour and masked by its alpha. Zero (the default) emits
+    /// nothing.
+    pub emission_color: NativeVec3,
+    /// May exceed 1, so the sprite blooms. `set_sprite_emission` changes it
+    /// on a retained sprite.
+    pub emission_intensity: f32,
+    /// A texture saying where and in what colour the sprite emits, by colour
+    /// times alpha, sampled at the colour texture's uv, so it has the layout
+    /// and size of the sprite's texture or atlas. A zero handle (the default)
+    /// emits over the whole sprite.
+    pub emission_map: NativeRenderResourceReference,
 }
 
 /// How a blended sprite's colour reaches the frame.
@@ -338,6 +361,9 @@ impl Default for NativeSpriteMaterialDescriptor {
             blend: NativeSpriteBlendMode::Alpha,
             softness_metres: 0.0,
             tint_mask: NativeRenderResourceReference::default(),
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            emission_map: NativeRenderResourceReference::default(),
         }
     }
 }

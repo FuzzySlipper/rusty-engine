@@ -885,16 +885,41 @@ fn sprite_playback_advances_repeated_frames_once_and_controls_lifetime() {
             .frame_id,
         9
     );
+    bridge
+        .set_sprite_emission(NativeSpriteEmissionUpdateRequest {
+            appearance,
+            intensity: 2.5,
+        })
+        .expect("retained emission");
+    assert_eq!(
+        bridge
+            .set_sprite_emission(NativeSpriteEmissionUpdateRequest {
+                appearance,
+                intensity: -1.0,
+            })
+            .expect_err("negative light")
+            .code(),
+        "CSHARP_SPRITE_EMISSION"
+    );
     unsafe { bridge.stage_snapshot(&appearance_fact, 1) }.expect("updated retained snapshot");
     let updated_call = bridge.take_staged_call();
-    assert!(updated_call.render_frames().iter().any(|frame| {
-        frame.ops.iter().any(|operation| {
-            matches!(
-                operation,
-                render_model::RenderDiff::UpdateSprite { frame: Some(9), .. }
-            )
-        })
-    }));
+    let ops: Vec<_> = updated_call
+        .render_frames()
+        .iter()
+        .flat_map(|frame| frame.ops.iter())
+        .collect();
+    assert!(ops.iter().any(|operation| matches!(
+        operation,
+        render_model::RenderDiff::UpdateSprite {
+            frame: Some(9),
+            emission_intensity: Some(2.5),
+            ..
+        }
+    )));
+    // The frame and the emission change the retained sprite: it stays.
+    assert!(!ops
+        .iter()
+        .any(|operation| matches!(operation, render_model::RenderDiff::CreateSprite { .. })));
     bridge.commit(updated_call);
     bridge.begin_update_call(realtime_sprite_update(3, 0.25));
     bridge
@@ -4992,6 +5017,9 @@ impl RuntimeAppearanceBridge {
             },
             softness_metres: value.softness_metres,
             tint_mask: resolve_texture(value.tint_mask, "tint mask")?,
+            emission_color: native_vec3_array(value.emission_color),
+            emission_intensity: value.emission_intensity,
+            emission_map: resolve_texture(value.emission_map, "emission map")?,
         };
         descriptor.validate().map_err(|error| {
             CsharpEngineServicesError::new(
@@ -5012,6 +5040,7 @@ impl RuntimeAppearanceBridge {
             material.normal_texture,
             material.depth_texture,
             material.tint_mask,
+            material.emission_map,
         ]
         .into_iter()
         .filter(|handle| handle.value != 0)
@@ -5082,6 +5111,7 @@ impl RuntimeAppearanceBridge {
                 material.normal_texture.value,
                 material.depth_texture.value,
                 material.tint_mask.value,
+                material.emission_map.value,
             ]),
         })
     }
@@ -5301,6 +5331,39 @@ impl RuntimeAppearanceBridge {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn set_sprite_emission(
+        &mut self,
+        request: NativeSpriteEmissionUpdateRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        if !request.intensity.is_finite() || request.intensity < 0.0 {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPRITE_EMISSION",
+                "sprite emission intensity must be finite and not negative",
+            ));
+        }
+        let staged = self.staged_mut()?;
+        let identity = staged
+            .state
+            .appearances
+            .get(&request.appearance.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new("CSHARP_APPEARANCE_HANDLE", "appearance is not live")
+            })?;
+        let sprite = match staged.state.projector.appearance_mut(&identity) {
+            Some(Appearance::Sprite { sprite }) => sprite,
+            Some(Appearance::SpriteBatch { batch }) => &mut batch.sprite,
+            _ => {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_SPRITE_EMISSION_APPEARANCE",
+                    "appearance is not a sprite",
+                ));
+            }
+        };
+        sprite.material.emission_intensity = request.intensity;
         Ok(())
     }
 
@@ -5828,6 +5891,7 @@ impl RuntimeAppearanceBridge {
                 request.material.normal_texture.value,
                 request.material.depth_texture.value,
                 request.material.tint_mask.value,
+                request.material.emission_map.value,
             ]),
         })
     }
@@ -8503,6 +8567,16 @@ pub(crate) unsafe extern "C" fn set_sprite_viewport(
 ) -> i32 {
     appearance_operation(context, operation_error, || {
         appearance_void(context, |bridge| bridge.set_sprite_viewport(request))
+    })
+}
+
+pub(crate) unsafe extern "C" fn set_sprite_emission(
+    context: *mut c_void,
+    request: NativeSpriteEmissionUpdateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.set_sprite_emission(request))
     })
 }
 
@@ -14000,6 +14074,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         content.insert("sprite.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         content.insert("normal.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         content.insert("mask.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
+        content.insert("glow.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         bridge.begin_call();
         let mut sprite_texture_request = resource_request("sprite.png");
@@ -14014,6 +14089,9 @@ fn shade(surface: Surface) -> vec4<f32> {
         let tint_mask = bridge
             .open_resource(&resource_request("mask.png"))
             .expect("tint mask texture");
+        let emission_map = bridge
+            .open_resource(&resource_request("glow.png"))
+            .expect("emission map texture");
         let frames = [NativeSpriteAtlasFrame {
             frame_id: 7,
             uv_min: NativeVec2::default(),
@@ -14047,6 +14125,15 @@ fn shade(surface: Surface) -> vec4<f32> {
             tint_mask: NativeRenderResourceReference {
                 value: tint_mask.handle.value,
             },
+            emission_color: NativeVec3 {
+                x: 1.0,
+                y: 0.5,
+                z: 0.25,
+            },
+            emission_intensity: 3.0,
+            emission_map: NativeRenderResourceReference {
+                value: emission_map.handle.value,
+            },
         };
         let appearance = bridge
             .create_sprite_from_atlas(request)
@@ -14058,6 +14145,11 @@ fn shade(surface: Surface) -> vec4<f32> {
             .to_owned();
         let mask_identity = bridge
             .resource(tint_mask.handle.value)
+            .unwrap()
+            .asset_identity()
+            .to_owned();
+        let emission_identity = bridge
+            .resource(emission_map.handle.value)
             .unwrap()
             .asset_identity()
             .to_owned();
@@ -14089,6 +14181,13 @@ fn shade(surface: Surface) -> vec4<f32> {
                 .any(|texture| texture.id == mask_identity),
             "tint mask must be present in the retained resource baseline"
         );
+        assert!(
+            resources
+                .textures
+                .iter()
+                .any(|texture| texture.id == emission_identity),
+            "emission map must be present in the retained resource baseline"
+        );
         let fact = appearance_fact(appearance);
         unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
         let call = bridge.take_staged_call();
@@ -14103,6 +14202,8 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert!(encoded.contains("authoredNormal"));
         assert!(encoded.contains("castAndReceive"));
         assert!(encoded.contains(&format!("\"tintMask\":\"{mask_identity}\"")));
+        assert!(encoded.contains(&format!("\"emissionMap\":\"{emission_identity}\"")));
+        assert!(encoded.contains("\"emissionIntensity\":3.0"));
         bridge.commit(call);
         bridge.begin_call();
         unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();
@@ -14111,6 +14212,7 @@ fn shade(surface: Surface) -> vec4<f32> {
         bridge.destroy_resource(sprite_texture.handle).unwrap();
         bridge.destroy_resource(normal_texture.handle).unwrap();
         bridge.destroy_resource(tint_mask.handle).unwrap();
+        bridge.destroy_resource(emission_map.handle).unwrap();
         let call = bridge.take_staged_call();
         for output in &call.outputs {
             if let RuntimeAppearanceCallOutput::Frame(frame) = output {

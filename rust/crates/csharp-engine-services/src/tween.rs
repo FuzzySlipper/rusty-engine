@@ -304,6 +304,7 @@ pub(crate) fn settle(staged: &mut RuntimeAppearanceCall) -> Result<(), CsharpEng
                         tint: Some(tint),
                         render_order: None,
                         visible: None,
+                        emission_intensity: None,
                     });
                 }
             }

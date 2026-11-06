@@ -29,6 +29,8 @@ struct SpriteIn {
     @location(8) params: vec4<f32>,
     // x: softness in metres (0 hard), y: 1 when added to the frame.
     @location(9) soft: vec4<f32>,
+    // xyz: emitted light before the emission map.
+    @location(10) emission: vec4<f32>,
 };
 
 struct SpriteOut {
@@ -42,6 +44,7 @@ struct SpriteOut {
     // whole-texture uv for a whole texture.
     @location(5) cell: vec2<f32>,
     @location(6) soft: vec4<f32>,
+    @location(7) emission: vec3<f32>,
 };
 
 @group(1) @binding(10) var sprite_color: texture_2d<f32>;
@@ -53,6 +56,10 @@ struct SpriteOut {
 // 1×1 white (the tint everywhere) when the material has no mask.
 @group(1) @binding(14) var sprite_tint_mask: texture_2d<f32>;
 @group(1) @binding(15) var sprite_tint_mask_sampler: sampler;
+// Where the sprite emits and in what colour, by colour times alpha, at the
+// colour texture's uv; 1×1 white (all of it) when the material has no map.
+@group(1) @binding(16) var sprite_emission_map: texture_2d<f32>;
+@group(1) @binding(17) var sprite_emission_sampler: sampler;
 
 @vertex
 fn vs_sprite(in: SpriteIn) -> SpriteOut {
@@ -73,6 +80,7 @@ fn vs_sprite(in: SpriteIn) -> SpriteOut {
     out.tint = in.tint;
     out.params = in.params;
     out.soft = in.soft;
+    out.emission = in.emission.xyz;
     return out;
 }
 
@@ -93,6 +101,8 @@ struct SpriteBatchIn {
     @location(6) center: vec4<f32>,
     @location(7) uv_rect: vec4<f32>,
     @location(8) quad: vec4<f32>,
+    // Shared like the tint: emitted light before the emission map.
+    @location(9) emission: vec4<f32>,
 };
 
 fn unproject(ndc: vec3<f32>) -> vec3<f32> {
@@ -147,6 +157,7 @@ fn vs_sprite_batch(in: SpriteBatchIn) -> SpriteOut {
     out.tint = in.tint;
     out.params = in.params;
     out.soft = vec4<f32>(in.soft.xy, 0.0, 0.0);
+    out.emission = in.emission.xyz;
     return out;
 }
 
@@ -177,6 +188,10 @@ fn shaded_sprite(in: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
     // An HDR tint (above 1) brightens unclamped.
     let tinted = mix(vec3<f32>(1.0), in.tint.rgb, textureSample(sprite_tint_mask, sprite_tint_mask_sampler, in.uv).a);
     let color = vec4<f32>(texel.rgb * tinted, texel.a * in.tint.a);
+    // Light of its own, added after its lighting: its alpha masks it as it
+    // does the rest of the sprite, and the tint's colour leaves it alone.
+    let map = textureSample(sprite_emission_map, sprite_emission_sampler, in.uv);
+    let emitted = in.emission * map.rgb * map.a;
     let detail = textureSample(sprite_detail, sprite_detail_sampler, in.uv);
     let height_x = textureSample(sprite_detail, sprite_detail_sampler, in.uv + st0).x;
     let height_y = textureSample(sprite_detail, sprite_detail_sampler, in.uv + st1).x;
@@ -192,7 +207,7 @@ fn shaded_sprite(in: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
     }
     let mode = u32(in.params.x + 0.5);
     if mode == 0u {
-        return finish(color, in.world_position);
+        return finish(vec4<f32>(color.rgb + emitted, color.a), in.world_position);
     }
     let strength = in.params.z;
     let q1_perp = cross(q1, normal);
@@ -228,7 +243,7 @@ fn shaded_sprite(in: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
     }
     let roughness = min(SPRITE_ROUGHNESS + geometry_roughness, 1.0);
     return finish(
-        vec4<f32>(standard_radiance(color.rgb, normal, in.world_position, roughness, 0.0, 1.0), color.a),
+        vec4<f32>(standard_radiance(color.rgb, normal, in.world_position, roughness, 0.0, 1.0) + emitted, color.a),
         in.world_position,
     );
 }

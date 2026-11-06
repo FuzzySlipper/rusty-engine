@@ -12,6 +12,11 @@ otherwise the default neutral rig lights it. Emissive material
 color makes a surface visible but does not emit light onto other surfaces. Pair
 a torch's emissive appearance with a retained point light when it should light
 its surroundings. Updating or disabling that light changes the same retained light.
+Sprites emit the same way, so a lantern's iron can take the night while its
+flame shines: [`SpriteMaterialDescriptor`](csharp-lifecycle.md#sprite-emission)
+takes `EmissionColor`, `EmissionIntensity` and an `EmissionMap`. The emission
+adds after the sprite's lighting in every lighting mode, before bloom and the
+tone operator, so above 1 it blooms as a material's does.
 
 Every colour on this page (lights, the hemisphere's ground, fog, haze, clouds,
 volumetric fog, precipitation, water, the background) is linear; decode an

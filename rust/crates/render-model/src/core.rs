@@ -1686,6 +1686,7 @@ pub enum RenderDiff {
         tint: Option<[f32; 4]>,
         render_order: Option<i32>,
         visible: Option<bool>,
+        emission_intensity: Option<f32>,
     },
     /// Many sprites from one atlas drawn as one node (`sprite_batch`):
     /// vegetation or crowds a product places as one unit.

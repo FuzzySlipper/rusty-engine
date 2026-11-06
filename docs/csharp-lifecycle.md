@@ -695,6 +695,27 @@ current gameplay hit, especially while moving close to objects. Products choose
 whether this tradeoff is appropriate. The runtime's renderer readout reports
 the cameras actually drawn separately from the authored `sourceCameras`.
 
+### Sprite emission
+
+`SpriteMaterialDescriptor.EmissionColor` (linear RGB) times `EmissionIntensity`
+is light the sprite gives off, added after its lighting in every lighting
+mode, so it stays bright in the dark. Intensity may exceed 1, which reaches
+bloom and the tone operator as a material's emission does. It lights nothing
+else: pair a retained point light for that. `EmissionMap` (a texture resource;
+the zero handle, the default, emits over the whole sprite) says where and in
+what colour: the emission multiplies `map.rgb * map.a`, so black and clear both
+emit nothing. It is sampled at the colour texture's uv, so a map has the layout
+and size of the sprite's texture or atlas and follows the frame under
+`SpritePlayback`. Open it with the filter the art has, in the sRGB default. The
+sprite's alpha still masks the emission, including the tint's alpha, while the
+tint's colour leaves it alone. Emission applies to sprites from a texture or an
+atlas and to sprite batches; the eight-, ten- and eleven-argument constructors
+emit nothing.
+
+`Graphics.SetSpriteEmission(new(appearance, intensity))` changes the intensity
+of a retained sprite or sprite batch at the next publish without replacing it,
+so a lamp goes out at dawn while its playback runs.
+
 ### Atlas sprite playback
 
 `Graphics.CreateSpritePlayback` retains one admitted sequence for an

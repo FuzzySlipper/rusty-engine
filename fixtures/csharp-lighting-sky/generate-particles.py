@@ -1,5 +1,6 @@
-"""Deterministic authored torch particle sprites: an eight-frame flame
-flipbook strip, an ember dot and a smoke puff; no runtime image generation."""
+"""Deterministic authored sprites: the torch's eight-frame flame flipbook
+strip, ember dot and smoke puff, and the lantern's two-frame atlas with its
+emission map; no runtime image generation."""
 import math, struct, zlib
 from pathlib import Path
 
@@ -52,7 +53,30 @@ def smoke(x,y):
     alpha = max(0.0,1-d*d)*lumps
     return (210,205,200,int(255*smooth(alpha)))
 
+LANTERN=32
+def lantern_parts(x,y):
+    """The frame, whether this texel is the lantern's iron, and whether it is
+    its flame, which stands left of centre in frame 0 and right in frame 1."""
+    frame,x = divmod(x,LANTERN)
+    cage = 8<=x<24 and 6<=y<28
+    iron = cage and (x in (8,23) or y in (6,27) or x==16)
+    centre = 12 if frame==0 else 19
+    flame = cage and not iron and abs(x-centre)<=2 and 12<=y<24
+    return frame,iron,flame
+
+def lantern(x,y):
+    _,iron,flame = lantern_parts(x,y)
+    if iron: return (120,112,104,255)
+    if flame: return (150,110,70,255)
+    return (0,0,0,0)
+
+def lantern_glow(x,y):
+    _,_,flame = lantern_parts(x,y)
+    return (255,255,255,255) if flame else (0,0,0,0)
+
 content = Path(__file__).parent/'content'
 png(content/'flame.png', FRAMES*FRAME, FRAME, flame)
 png(content/'ember.png', EMBER, EMBER, ember)
 png(content/'smoke.png', SMOKE, SMOKE, smoke)
+png(content/'lantern.png', LANTERN*2, LANTERN, lantern)
+png(content/'lantern-glow.png', LANTERN*2, LANTERN, lantern_glow)

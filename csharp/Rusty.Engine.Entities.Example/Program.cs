@@ -876,6 +876,7 @@ sealed class GraphicsServiceFake : IGraphicsService
     public Appearance CreateSpriteBatch(SpriteBatchRequest arg0) => throw new NotSupportedException();
     public void SetSpriteFrame(SpriteFrameUpdateRequest arg0) => throw new NotSupportedException();
     public void SetSpriteViewport(SpriteViewportUpdateRequest arg0) => throw new NotSupportedException();
+    public void SetSpriteEmission(SpriteEmissionUpdateRequest arg0) => throw new NotSupportedException();
     public SpriteReadout ReadSprite(Appearance arg0) => throw new NotSupportedException();
     public SpritePlayback CreateSpritePlayback(SpritePlaybackCreateRequest arg0) => throw new NotSupportedException();
     public SpritePlaybackReadout ControlSpritePlayback(SpritePlaybackControlRequest arg0) => throw new NotSupportedException();

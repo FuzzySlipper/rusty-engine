@@ -289,6 +289,7 @@ fn node_uses(kind: &NodeKind, use_: &mut dyn FnMut(Resource, &str)) {
                 &material.normal_texture,
                 &material.depth_texture,
                 &material.tint_mask,
+                &material.emission_map,
             ]
             .into_iter()
             .flatten()
@@ -891,6 +892,7 @@ impl PresentationWorld {
                     textures.extend(sprite.material.normal_texture.as_deref());
                     textures.extend(sprite.material.depth_texture.as_deref());
                     textures.extend(sprite.material.tint_mask.as_deref());
+                    textures.extend(sprite.material.emission_map.as_deref());
                     continue;
                 }
                 NodeKind::Primitive(_) | NodeKind::Light(_) => continue,
@@ -1605,6 +1607,7 @@ impl PresentationWorld {
                 tint,
                 render_order,
                 visible,
+                emission_intensity,
             } => {
                 let value = match &mut self.node_mut(*handle)?.kind {
                     NodeKind::Sprite(value) => value,
@@ -1623,6 +1626,9 @@ impl PresentationWorld {
                 }
                 if let Some(visible) = visible {
                     value.visible = *visible;
+                }
+                if let Some(intensity) = emission_intensity {
+                    value.material.emission_intensity = *intensity;
                 }
             }
             RenderDiff::ReleaseMaterial { id } => {

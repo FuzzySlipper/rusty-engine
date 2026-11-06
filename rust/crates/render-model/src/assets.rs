@@ -1338,6 +1338,20 @@ pub struct SpriteMaterialDescriptor {
     /// applies everywhere. None tints the whole sprite.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tint_mask: Option<String>,
+    /// Light the sprite gives off, linear RGB, times `emission_intensity` and
+    /// the emission map: added after its lighting, whatever its mode, and
+    /// masked by its alpha.
+    #[serde(default)]
+    pub emission_color: [f32; 3],
+    /// May exceed 1, so the sprite blooms. `UpdateSprite` changes it on a
+    /// retained sprite.
+    #[serde(default)]
+    pub emission_intensity: f32,
+    /// A texture saying where and in what colour the sprite emits, by colour
+    /// times alpha: sampled at the colour texture's uv, so it has the colour
+    /// texture's layout. None emits over the whole sprite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emission_map: Option<String>,
 }
 
 /// How a blended sprite's colour reaches the frame: over what is behind it
@@ -1363,6 +1377,9 @@ impl Default for SpriteMaterialDescriptor {
             blend: SpriteBlendMode::Alpha,
             softness_metres: 0.0,
             tint_mask: None,
+            emission_color: [0.0; 3],
+            emission_intensity: 0.0,
+            emission_map: None,
         }
     }
 }
@@ -1370,6 +1387,17 @@ impl Default for SpriteMaterialDescriptor {
 impl SpriteMaterialDescriptor {
     pub fn is_default(&self) -> bool {
         self == &Self::default()
+    }
+
+    /// Whether the two materials differ in more than their emission
+    /// intensity, the one thing a retained sprite changes in place.
+    pub fn differs_beyond_emission_intensity(&self, other: &Self) -> bool {
+        self != other
+            && *self
+                != Self {
+                    emission_intensity: self.emission_intensity,
+                    ..other.clone()
+                }
     }
 
     pub fn validate(&self) -> Result<(), SpriteMaterialError> {
@@ -1381,6 +1409,12 @@ impl SpriteMaterialDescriptor {
         }
         if !self.softness_metres.is_finite() || self.softness_metres < 0.0 {
             return Err(SpriteMaterialError::InvalidSoftness);
+        }
+        if !valid_color(self.emission_color)
+            || !self.emission_intensity.is_finite()
+            || self.emission_intensity < 0.0
+        {
+            return Err(SpriteMaterialError::InvalidEmission);
         }
         if let SpriteAlphaMode::Mask { cutoff } = self.alpha {
             if !cutoff.is_finite() || !(0.0..=1.0).contains(&cutoff) {
@@ -1396,6 +1430,10 @@ impl SpriteMaterialDescriptor {
                 .map_err(SpriteMaterialError::Texture)?;
         }
         if let Some(texture) = &self.tint_mask {
+            validate_asset_id(texture, RenderAssetKind::Texture)
+                .map_err(SpriteMaterialError::Texture)?;
+        }
+        if let Some(texture) = &self.emission_map {
             validate_asset_id(texture, RenderAssetKind::Texture)
                 .map_err(SpriteMaterialError::Texture)?;
         }
@@ -1427,6 +1465,7 @@ pub enum SpriteMaterialError {
     InvalidNormalBias,
     InvalidAlphaCutoff,
     InvalidSoftness,
+    InvalidEmission,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1574,6 +1613,9 @@ mod tests {
             blend: SpriteBlendMode::Alpha,
             softness_metres: 0.0,
             tint_mask: Some("texture/sprite-tint-mask".to_string()),
+            emission_color: [1.0, 0.6, 0.2],
+            emission_intensity: 2.0,
+            emission_map: Some("texture/sprite-emission".to_string()),
         };
         assert_eq!(authored.validate(), Ok(()));
 

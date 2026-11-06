@@ -1,7 +1,7 @@
 //! Sprite and particle fixtures:
 //! - billboard modes, pixel size, viewport placement, atlas frames, tints and
 //!   alpha modes;
-//! - lit sprites and tint masks;
+//! - lit sprites, tint masks and sprite emission;
 //! - particle bursts and emitters, aged on Engine time only.
 //!
 //! `RENDER_WGPU_BLESS=1 cargo test -p render-wgpu --test effects` rewrites the
@@ -178,6 +178,7 @@ fn sprites_face_the_camera_by_mode_and_place_in_the_viewport() {
         tint: None,
         render_order: None,
         visible: None,
+        emission_intensity: None,
     }]);
     assert_ne!(harness.single(&eye), pixels);
 }
@@ -1098,6 +1099,7 @@ fn blended_sprites_and_blended_meshes_share_one_back_to_front_order() {
         tint: None,
         render_order: Some(1),
         visible: None,
+        emission_intensity: None,
     }]);
     let ordered = centre(&mut harness);
     assert!(
@@ -1112,6 +1114,7 @@ fn blended_sprites_and_blended_meshes_share_one_back_to_front_order() {
             tint: None,
             render_order: Some(0),
             visible: None,
+            emission_intensity: None,
         },
         RenderDiff::Update {
             handle: RenderHandle::new(2),
@@ -1453,6 +1456,7 @@ fn a_sprite_batch_draws_what_its_sprites_would_in_one_draw() {
             tint: Some([0.2, 0.2, 1.0, 1.0]),
             render_order: None,
             visible: None,
+            emission_intensity: None,
         }]);
         assert_ne!(batched.single(&eye), pixels, "{billboard:?}: tinted");
         // Hidden, and gone with its node.
@@ -1738,5 +1742,300 @@ fn a_viewport_placed_sprite_lights_as_one_facing_the_camera() {
                 "{lighting:?}: {placed:?} against {unplaced:?}"
             );
         }
+    }
+}
+
+/// What the sprite emission tests draw: a dark grey sprite of two frames, its
+/// map lit on the left of frame 0 and the right of frame 1, in a world with no
+/// light at all.
+struct Emissive {
+    lighting: SpriteLightingMode,
+    color: [f32; 3],
+    intensity: f32,
+    mapped: bool,
+    batch: bool,
+    frame: u32,
+    alpha: SpriteAlphaMode,
+    tint: [f32; 4],
+}
+
+impl Default for Emissive {
+    fn default() -> Self {
+        Self {
+            lighting: SpriteLightingMode::Synthetic,
+            color: [1.0, 0.5, 0.25],
+            intensity: 1.0,
+            mapped: true,
+            batch: false,
+            frame: 0,
+            alpha: SpriteAlphaMode::Opaque,
+            tint: [1.0; 4],
+        }
+    }
+}
+
+const EMISSIVE_HANDLE: u64 = 3;
+
+fn emissive_harness(request: &Emissive) -> Harness {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let (dark, lit, clear) = ([40, 40, 40, 255], [255; 4], [255, 255, 255, 0]);
+    // Each frame is two texels wide; the last texel of frame 1 is clear.
+    let (texture, _) = harness.resources.texture(
+        "texture/dark",
+        4,
+        1,
+        &[dark, dark, dark, clear].concat(),
+        TextureFilter::Nearest,
+    );
+    // Black and clear both say no: the second frame's left texel is clear.
+    let (map, _) = harness.resources.texture(
+        "texture/emission",
+        4,
+        1,
+        &[lit, [0, 0, 0, 255], clear, lit].concat(),
+        TextureFilter::Nearest,
+    );
+    let frame = |frame, u0, u1| SpriteFrameRect {
+        frame,
+        uv_min: [u0, 0.0],
+        uv_max: [u1, 1.0],
+        size: None,
+    };
+    let mut ops = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        },
+        texture,
+        map,
+        RenderDiff::DefineSpriteAtlas {
+            atlas: SpriteAtlasDescriptor {
+                id: "sprite/dark".into(),
+                texture: "texture/dark".into(),
+                frames: vec![frame(0, 0.0, 0.5), frame(1, 0.5, 1.0)],
+            },
+        },
+    ];
+    let mut shared = sprite(request.frame, [0.0, 1.0, -4.0], BillboardMode::Spherical);
+    shared.asset = "sprite/dark".into();
+    shared.tint = request.tint;
+    shared.material.lighting = request.lighting;
+    shared.material.alpha = request.alpha;
+    shared.material.emission_color = request.color;
+    shared.material.emission_intensity = request.intensity;
+    shared.material.emission_map = request.mapped.then(|| "texture/emission".into());
+    if request.batch {
+        ops.push(RenderDiff::CreateSpriteBatch {
+            handle: RenderHandle::new(EMISSIVE_HANDLE),
+            parent: None,
+            batch: SpriteBatchDescriptor {
+                sprite: shared,
+                instances: vec![SpriteBatchInstance {
+                    position: [0.0; 3],
+                    scale: 2.0,
+                    frame: request.frame,
+                }]
+                .into(),
+            },
+        });
+    } else {
+        shared.size = [2.0; 2];
+        ops.push(create(EMISSIVE_HANDLE, shared));
+    }
+    harness.apply(ops);
+    harness
+}
+
+fn emissive_eye() -> render_host_contracts::RendererCompositionCamera {
+    camera("eye", [0.0, 1.0, 0.0], 0.0, 0.0)
+}
+
+fn emissive_sprite(request: Emissive) -> Vec<u8> {
+    emissive_harness(&request).single(&emissive_eye())
+}
+
+fn left(rgba: &[u8]) -> [u8; 4] {
+    pixel(rgba, WIDTH, WIDTH / 2 - 20, HEIGHT / 2)
+}
+
+fn right(rgba: &[u8]) -> [u8; 4] {
+    pixel(rgba, WIDTH, WIDTH / 2 + 20, HEIGHT / 2)
+}
+
+/// In the dark a lit sprite is black but for what its map emits, whatever its
+/// lighting mode, from single sprites and batches alike; with no map it emits
+/// over all of it. Unlit, its art stays and the emission adds to it.
+#[test]
+fn a_sprite_emits_where_its_map_does_and_needs_no_light() {
+    for batch in [false, true] {
+        for lighting in [
+            SpriteLightingMode::Synthetic,
+            SpriteLightingMode::DerivedGradient,
+        ] {
+            let name = format!("{lighting:?}, batch {batch}");
+            let mapped = emissive_sprite(Emissive {
+                lighting,
+                batch,
+                ..Default::default()
+            });
+            let [r, g, b, _] = left(&mapped);
+            assert!(r > g && g > b && b > 0, "{name}: the emission's colour");
+            assert_eq!(right(&mapped)[..3], [0; 3], "{name}: unmapped stays dark");
+
+            let whole = emissive_sprite(Emissive {
+                lighting,
+                batch,
+                mapped: false,
+                ..Default::default()
+            });
+            assert_eq!(left(&whole), left(&mapped), "{name}: no map emits on");
+            assert_eq!(right(&whole), left(&mapped), "{name}: all of the sprite");
+
+            let off = emissive_sprite(Emissive {
+                lighting,
+                batch,
+                intensity: 0.0,
+                ..Default::default()
+            });
+            assert_eq!(left(&off)[..3], [0; 3], "{name}: no intensity, no light");
+        }
+        let art = emissive_sprite(Emissive {
+            lighting: SpriteLightingMode::Unlit,
+            batch,
+            intensity: 0.0,
+            ..Default::default()
+        });
+        let glowing = emissive_sprite(Emissive {
+            lighting: SpriteLightingMode::Unlit,
+            batch,
+            ..Default::default()
+        });
+        assert!(right(&art)[0] > 0, "batch {batch}: unlit art shows");
+        assert_eq!(right(&glowing), right(&art), "batch {batch}: unmapped");
+        assert!(
+            left(&glowing)[0] > left(&art)[0],
+            "batch {batch}: adds to it"
+        );
+    }
+}
+
+/// The map shares the colour texture's uv, so it follows the frame: each
+/// frame shows its own part of the map, as a playback's frame updates do.
+#[test]
+fn a_sprite_emission_map_follows_the_atlas_frame() {
+    let mut harness = emissive_harness(&Emissive::default());
+    let first = harness.single(&emissive_eye());
+    assert!(left(&first)[0] > 0 && right(&first)[0] == 0, "frame 0");
+    harness.apply(vec![RenderDiff::UpdateSprite {
+        handle: RenderHandle::new(EMISSIVE_HANDLE),
+        frame: Some(1),
+        tint: None,
+        render_order: None,
+        visible: None,
+        emission_intensity: None,
+    }]);
+    let second = harness.single(&emissive_eye());
+    assert_eq!(left(&second)[..3], [0; 3], "frame 1: its clear texel");
+    // The frame's right texel is clear in the art, opaque under this alpha.
+    assert!(right(&second)[0] > 0, "frame 1: its lit texel");
+
+    // A batch's instances keep the frames they were placed with.
+    let batched = emissive_sprite(Emissive {
+        batch: true,
+        frame: 1,
+        ..Default::default()
+    });
+    assert_eq!(left(&batched)[..3], [0; 3], "batch frame 1: clear texel");
+    assert!(right(&batched)[0] > 0, "batch frame 1: lit texel");
+}
+
+/// The sprite's alpha masks what it emits: a cut texel emits nothing and a
+/// fading sprite's emission fades with it, while the tint's colour leaves it
+/// alone.
+#[test]
+fn a_sprite_alpha_masks_its_emission_and_its_tint_does_not_colour_it() {
+    let cut = emissive_sprite(Emissive {
+        alpha: SpriteAlphaMode::Mask { cutoff: 0.5 },
+        mapped: false,
+        frame: 1,
+        ..Default::default()
+    });
+    assert!(left(&cut)[0] > 0, "the opaque texel emits");
+    assert_eq!(right(&cut)[..3], [0; 3], "the cut texel does not");
+
+    let solid = left(&emissive_sprite(Emissive::default()));
+    let faded = left(&emissive_sprite(Emissive {
+        alpha: SpriteAlphaMode::Blend,
+        tint: [1.0, 1.0, 1.0, 0.5],
+        ..Default::default()
+    }));
+    assert!(
+        faded[0] < solid[0] && faded[0] > 0,
+        "{faded:?} under {solid:?}"
+    );
+
+    let tinted = left(&emissive_sprite(Emissive {
+        tint: [0.0, 0.0, 1.0, 1.0],
+        ..Default::default()
+    }));
+    assert_eq!(tinted, solid, "the tint's colour leaves emission alone");
+}
+
+/// Emission above 1 stays above 1 in the linear target, so it blooms past
+/// the sprite, more as it rises; well under the threshold nothing spreads.
+#[test]
+fn a_sprite_emission_above_one_blooms() {
+    let render = |intensity: f32| {
+        let request = Emissive {
+            color: [1.0, 1.0, 1.0],
+            intensity,
+            ..Default::default()
+        };
+        let mut harness = emissive_harness(&request);
+        harness.apply(vec![RenderDiff::SetBloom {
+            bloom: Some(BloomDescriptor {
+                intensity: 1.0,
+                threshold: 1.0,
+            }),
+        }]);
+        harness.single(&emissive_eye())
+    };
+    // Black background above the sprite's top edge.
+    let above = |rgba: &[u8]| pixel(rgba, WIDTH, WIDTH / 2 - 20, HEIGHT / 2 - 54);
+    assert_eq!(
+        above(&render(0.5))[..3],
+        [0; 3],
+        "under the knee, no spread"
+    );
+    let (at_one, above_one) = (above(&render(1.0))[0], above(&render(4.0))[0]);
+    assert!(above_one > at_one, "{above_one} spreads past {at_one}");
+}
+
+/// Changing a retained sprite's intensity keeps the node, its frame and its
+/// batch rows: a lamp goes out at dawn while its playback runs.
+#[test]
+fn a_retained_sprite_changes_its_emission_intensity_in_place() {
+    for batch in [false, true] {
+        let mut harness = emissive_harness(&Emissive {
+            batch,
+            ..Default::default()
+        });
+        let lit = harness.single(&emissive_eye());
+        let change = |intensity| {
+            vec![RenderDiff::UpdateSprite {
+                handle: RenderHandle::new(EMISSIVE_HANDLE),
+                frame: None,
+                tint: None,
+                render_order: None,
+                visible: None,
+                emission_intensity: Some(intensity),
+            }]
+        };
+        harness.apply(change(0.0));
+        assert_eq!(left(&harness.single(&emissive_eye()))[..3], [0; 3], "out");
+        harness.apply(change(1.0));
+        assert_eq!(harness.single(&emissive_eye()), lit, "lit again");
     }
 }

@@ -685,7 +685,9 @@ fn sprite_requires_recreate(
         || previous.depth != next.depth
         || previous.viewport_placement != next.viewport_placement
         || previous.shading != next.shading
-        || previous.material != next.material
+        || previous
+            .material
+            .differs_beyond_emission_intensity(&next.material)
         || previous.attachment != next.attachment
 }
 
@@ -979,10 +981,13 @@ fn append_sprite_updates(
         });
     }
     let frame = (frames && old.frame != new.frame).then_some(new.frame);
+    let emission_intensity = (old.material.emission_intensity != new.material.emission_intensity)
+        .then_some(new.material.emission_intensity);
     if frame.is_some()
         || old.tint != new.tint
         || old.render_order != new.render_order
         || visible.is_some()
+        || emission_intensity.is_some()
     {
         operations.push(RenderDiff::UpdateSprite {
             handle,
@@ -990,6 +995,7 @@ fn append_sprite_updates(
             tint: (old.tint != new.tint).then_some(new.tint),
             render_order: (old.render_order != new.render_order).then_some(new.render_order),
             visible,
+            emission_intensity,
         });
     }
 }

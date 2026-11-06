@@ -65,6 +65,16 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private static readonly Vector3 FireEye = new(3.4f,1.9f,5.2f), FireTarget = new(1.5f,1.45f,3.5f);
     private const float FlameSoftness = .3f, EmberSoftness = .1f, SmokeSoftness = .5f, FlameFramesPerSecond = 12;
     private const ushort FlameFrames = 8;
+    // The lantern (#10633): a lit two-frame sprite whose iron takes the room's light and whose flame shines by an emission map, and a batch of the same, with the torch out. Frame 0's flame stands left of the cage's bar, frame 1's right.
+    private const ulong LanternId = 60, LanternBatchId = 61;
+    private const double LanternFrameSeconds = .5;
+    private const float LanternSize = 1.2f, LanternBatchSpacing = 1.3f, LanternBloomThreshold = 1, LanternBloomIntensity = .6f;
+    private static readonly Vector3 LanternGlow = new(1,.62f,.28f), LanternAt = new(2.2f,2.2f,3.5f), LanternBatchAt = new(3.6f,1.6f,3.5f);
+    private static readonly Vector3 LanternEye = new(3.5f,2,6.9f), LanternTarget = new(3.5f,1.9f,3.5f);
+    private RenderResource? lanternTexture, lanternMap;
+    private SpriteAtlas? lanternAtlas;
+    private Appearance? lanternLook, lanternBatchLook;
+    private SpritePlayback? lanternPlayback;
     private readonly IEngineContext engine;
     private readonly SpatialSession scene;
     private readonly Material stone;
@@ -478,6 +488,50 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             new MeshGroup[]{new(0,0,(uint)indices.Count)},new MeshMaterialBinding[]{new(0,material)});
     }
     // Scale the burning fire's softness: 0 gives every sheet a hard depth edge, 1 the authored softness.
+    // Light the lantern and its batch at the given emission intensity, the torch and the sun out and bloom on; another call changes the intensity while the playback runs, and below 0 clears them. lighting.torch true then lights the iron around the flames.
+    [DebugCommand("lighting.lantern")]
+    public string Lantern(float intensity)
+    {
+        if (intensity < 0)
+        {
+            if (lanternLook is null) return Inspect();
+            engine.Graphics.PublishSnapshot([]);
+            engine.CameraView.SetBloom(new(0,0));
+            engine.Graphics.UpdateLight(new(sun,new(SunId,false,0,Sun(clock))));
+            lanternPlayback?.Dispose(); lanternLook.Dispose(); lanternBatchLook?.Dispose(); lanternAtlas?.Dispose(); lanternTexture?.Dispose(); lanternMap?.Dispose();
+            lanternPlayback = null; lanternLook = lanternBatchLook = null; lanternAtlas = null; lanternTexture = lanternMap = null;
+            return Inspect();
+        }
+        if (lanternLook is null)
+        {
+            SetTorch(false);
+            engine.Graphics.UpdateLight(new(sun,new(SunId,false,0,Sun(clock) with { Enabled = false })));
+            lanternTexture = engine.Graphics.OpenResource(new("lantern.png",TextureFilter.Nearest,TextureWrap.Clamp)).Handle;
+            lanternMap = engine.Graphics.OpenResource(new("lantern-glow.png",TextureFilter.Nearest,TextureWrap.Clamp)).Handle;
+            lanternAtlas = engine.Graphics.CreateSpriteAtlas(new(lanternTexture,new SpriteAtlasFrame[]{new(0,Vector2.Zero,new(.5f,1),false,default),new(1,new(.5f,0),Vector2.One,false,default)}));
+            SpriteMaterialDescriptor material = new(SpriteLightingMode.Synthetic,default,default,1,0,SpriteAlphaMode.Mask,.5f,SpriteShadowPolicy.None,SpriteBlendMode.Alpha,0,default,LanternGlow,intensity,lanternMap);
+            Vector2 pivot = new(.5f,.5f), size = new(LanternSize,LanternSize);
+            Color white = new(1,1,1,1);
+            lanternLook = engine.Graphics.CreateSpriteFromAtlas(new(lanternAtlas,0,pivot,size,BillboardMode.Spherical,SpriteSizeMode.World,0,SpriteDepthPolicy.Default,white,material));
+            lanternBatchLook = engine.Graphics.CreateSpriteBatch(new(lanternAtlas,new SpriteBatchInstance[]{new(Vector3.Zero,1,0),new(new(LanternBatchSpacing,0,0),1,1)},pivot,size,BillboardMode.Spherical,0,SpriteDepthPolicy.Default,white,material));
+            lanternPlayback = engine.Graphics.CreateSpritePlayback(new(lanternLook,lanternAtlas,new SpritePlaybackFrame[]{new(0,LanternFrameSeconds),new(1,LanternFrameSeconds)},ReadOnlyMemory<SpritePlaybackMarker>.Empty,SpritePlaybackLoopMode.Loop,1));
+            engine.Graphics.ControlSpritePlayback(new(lanternPlayback,SpritePlaybackControl.Start));
+            engine.CameraView.SetBloom(new(LanternBloomThreshold,LanternBloomIntensity));
+            engine.CameraView.UpdateCamera(new(camera,Camera(LanternEye,LanternTarget)));
+        }
+        else
+        {
+            engine.Graphics.SetSpriteEmission(new(lanternLook,intensity));
+            engine.Graphics.SetSpriteEmission(new(lanternBatchLook!,intensity));
+        }
+        PublishLantern();
+        return Inspect();
+    }
+    private void PublishLantern() => engine.Graphics.PublishSnapshot(new AppearanceFact[]
+    {
+        Fact(LanternId,lanternLook!,LanternAt,1),
+        Fact(LanternBatchId,lanternBatchLook!,LanternBatchAt,1),
+    });
     [DebugCommand("lighting.torch.softness")]
     public string Softness(float scale)
     {
@@ -877,9 +931,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return Settings();
     }
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar)=>registrar.Register(this);
-    public ProductUpdateResult Update(ProductUpdate update)=>ProductUpdateResult.None;
+    public ProductUpdateResult Update(ProductUpdate update)
+    {
+        if (lanternPlayback is not null) { engine.Graphics.AdvanceSpritePlayback(new(lanternPlayback)); PublishLantern(); }
+        return ProductUpdateResult.None;
+    }
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
-    public void Dispose(){engine.CameraView.ClearSkyBackground(default); engine.CameraView.SetStars(default); starCatalogue?.Dispose(); starBand?.Dispose(); Flame(false); Facets(false); Wind(-1); Water(-1); Backdrop(0); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
+    public void Dispose(){Lantern(-1); engine.CameraView.ClearSkyBackground(default); engine.CameraView.SetStars(default); starCatalogue?.Dispose(); starBand?.Dispose(); Flame(false); Facets(false); Wind(-1); Water(-1); Backdrop(0); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);

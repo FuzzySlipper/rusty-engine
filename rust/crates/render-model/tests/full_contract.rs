@@ -325,6 +325,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
             tint: Some([0.5, 1.0, 1.0, 1.0]),
             render_order: Some(4),
             visible: Some(true),
+            emission_intensity: Some(0.5),
         },
         RenderDiff::Destroy {
             handle: RenderHandle::new(5),

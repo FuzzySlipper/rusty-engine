@@ -45,7 +45,7 @@ use crate::{ApplyIssue, Gpu, Renderer};
 
 /// Particle billboards are drawn `size × 24` pixels across.
 const PARTICLE_PIXELS_PER_UNIT: f32 = 24.0;
-const SPRITE_ROW_FLOATS: usize = 36;
+const SPRITE_ROW_FLOATS: usize = 40;
 const PARTICLE_ROW_FLOATS: usize = 16;
 const CUBE_ROW_FLOATS: usize = 8;
 /// Beside a motion target, each particle row and cube row also holds where
@@ -54,8 +54,8 @@ const PREVIOUS_FLOATS: usize = 4;
 /// A sprite batch instance's row: world centre, atlas frame, quad.
 const BATCH_ROW_FLOATS: usize = 12;
 /// A sprite batch's corner vertex: corner, then what every instance shares
-/// (tint, lighting, softness and facing, the node's axes).
-const BATCH_CORNER_FLOATS: usize = 22;
+/// (tint, lighting, softness and facing, the node's axes, emission).
+const BATCH_CORNER_FLOATS: usize = 26;
 /// Viewport-placed sprites sit mid-depth (GL clip z 0).
 const PLACEMENT_DEPTH: f32 = 0.5;
 
@@ -74,10 +74,11 @@ struct SpriteState {
     batch: bool,
 }
 
-/// Colour, detail (normal or height) and tint mask texture name ids
-/// (`Tables::names`); `None` is the 1×1 white texture, or the colour texture
-/// again for the detail slot. The white mask tints the whole sprite.
-type SpriteTextures = (Option<u32>, Option<u32>, Option<u32>);
+/// Colour, detail (normal or height), tint mask and emission map texture
+/// name ids (`Tables::names`); `None` is the 1×1 white texture, or the colour
+/// texture again for the detail slot. The white mask tints the whole sprite,
+/// and the white map emits over all of it.
+type SpriteTextures = (Option<u32>, Option<u32>, Option<u32>, Option<u32>);
 
 struct SpriteDraw {
     state: SpriteState,
@@ -315,6 +316,8 @@ impl Effects {
                 sampler_entry(13),
                 texture_entry(14),
                 sampler_entry(15),
+                texture_entry(16),
+                sampler_entry(17),
             ],
         });
         let particle_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -421,8 +424,9 @@ impl Effects {
 
     /// Drop cached sprite bindings of a texture that was redefined or released.
     pub fn forget_texture(&mut self, id: u32) {
-        self.sprite_bind_groups
-            .retain(|textures, _| ![textures.0, textures.1, textures.2].contains(&Some(id)));
+        self.sprite_bind_groups.retain(|textures, _| {
+            ![textures.0, textures.1, textures.2, textures.3].contains(&Some(id))
+        });
     }
 
     fn format_index(&mut self, device: &wgpu::Device, format: ColorTarget) -> usize {
@@ -576,11 +580,11 @@ impl Effects {
         let instance = wgpu::vertex_attr_array![
             1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4,
             5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4,
-            9 => Float32x4
+            9 => Float32x4, 10 => Float32x4
         ];
         let batch_corner = wgpu::vertex_attr_array![
             0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
-            4 => Float32x4, 5 => Float32x4
+            4 => Float32x4, 5 => Float32x4, 9 => Float32x4
         ];
         let batch_instance =
             wgpu::vertex_attr_array![6 => Float32x4, 7 => Float32x4, 8 => Float32x4];
@@ -949,6 +953,14 @@ fn sprite_lighting(sprite: &SpriteRow, color: Option<u32>) -> ([f32; 3], Option<
     }
 }
 
+/// A sprite's emitted light before its map: `effects.wgsl`'s `emission`.
+fn sprite_emission(sprite: &SpriteInstanceDescriptor) -> [f32; 4] {
+    let material = &sprite.material;
+    (Vec3::from(material.emission_color) * material.emission_intensity)
+        .extend(0.0)
+        .to_array()
+}
+
 /// The authored detail texture a sprite's lighting mode samples, resolved to
 /// a name id when the sprite is created.
 pub(crate) fn sprite_detail_texture(sprite: &SpriteInstanceDescriptor) -> Option<&str> {
@@ -992,6 +1004,7 @@ fn batch_corners(
         ]);
         vertex[14..18].copy_from_slice(&right.extend(0.0).to_array());
         vertex[18..22].copy_from_slice(&up.extend(0.0).to_array());
+        vertex[22..26].copy_from_slice(&sprite_emission(sprite));
     }
     values
 }
@@ -1530,7 +1543,8 @@ impl Renderer {
                     .get_mut(handle)
                     .expect("a drawn batch has buffers");
                 if buffers.corner_values != corner_values {
-                    // A tint or lighting change: four vertices, not the rows.
+                    // A tint, lighting or emission change: four vertices,
+                    // not the rows.
                     self.gpu.queue.write_buffer(
                         &buffers.corners,
                         0,
@@ -1544,7 +1558,7 @@ impl Renderer {
                 pass.batch_instances += buffers.count;
                 draws.push(SpriteDraw {
                     state,
-                    textures: (color, detail, resolved.tint_mask),
+                    textures: (color, detail, resolved.tint_mask, resolved.emission_map),
                     render_order: sprite.render_order,
                     depth: node
                         .world
@@ -1590,9 +1604,10 @@ impl Renderer {
                 0.0,
                 0.0,
             ]);
+            row[36..40].copy_from_slice(&sprite_emission(sprite));
             draws.push(SpriteDraw {
                 state,
-                textures: (color, detail, resolved.tint_mask),
+                textures: (color, detail, resolved.tint_mask, resolved.emission_map),
                 render_order: sprite.render_order,
                 depth: model.w_axis.truncate().distance_squared(view.camera.eye),
                 row,
@@ -1623,6 +1638,7 @@ impl Renderer {
                     None => color,
                 };
                 let tint_mask = self.sprite_texture(draw.textures.2);
+                let emission_map = self.sprite_texture(draw.textures.3);
                 let bind_group = self
                     .gpu
                     .device
@@ -1653,6 +1669,14 @@ impl Renderer {
                             wgpu::BindGroupEntry {
                                 binding: 15,
                                 resource: wgpu::BindingResource::Sampler(&tint_mask.sampler),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 16,
+                                resource: wgpu::BindingResource::TextureView(&emission_map.view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 17,
+                                resource: wgpu::BindingResource::Sampler(&emission_map.sampler),
                             },
                         ],
                     });
