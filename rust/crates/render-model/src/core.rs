@@ -754,7 +754,8 @@ impl CloudKind {
     }
 }
 
-/// A cloud layer drawn over the sky panorama and lit by the sun. `coverage`
+/// A cloud layer drawn over the sky panorama or clear colour and lit by the
+/// sun. `coverage`
 /// (0 to 1) is how much of the sky it covers; `drift` is its velocity over
 /// the ground (world x, z) in metres per second; `altitude` is the height
 /// of the layer and `scale` the size of one cloud, both in metres, which

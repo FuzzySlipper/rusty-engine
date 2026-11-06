@@ -495,7 +495,8 @@ pub enum NativeCloudKind {
     Cumulonimbus = 2,
 }
 
-/// The sky's cloud layer, drawn over the sky panorama and lit by the sun.
+/// The sky's cloud layer, drawn over the sky panorama or clear colour and lit
+/// by the sun.
 /// `coverage` (0 to 1, clamped) is how much of the sky it covers, and 0
 /// (the default) draws no layer, though the layer still shapes and lights
 /// the cloud regions under it (`SetCloudRegion`); `drift` is its velocity

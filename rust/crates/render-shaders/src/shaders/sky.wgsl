@@ -25,6 +25,10 @@ struct SkyUniform {
     cloud_drift: vec4<f32>,
     // rgb: the tint of the light the clouds take.
     cloud_color: vec4<f32>,
+    // rgb: what the panoramas are multiplied by where the clouds read the sky
+    // behind them: 1, or over a clear colour, with white panoramas, that
+    // colour.
+    behind: vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> sky: SkyUniform;
@@ -56,6 +60,13 @@ fn vs_sky(@builtin(vertex_index) index: u32) -> SkyOut {
 fn view_direction(ndc: vec2<f32>) -> vec3<f32> {
     let far = frame.inv_view_proj * vec4<f32>(ndc, 1.0, 1.0);
     return normalize(far.xyz / far.w - frame.camera.xyz);
+}
+
+// The sky the clouds take their ambient light from at `uv`, at its coarsest
+// detail: the panoramas, or the clear colour.
+fn sky_behind(uv: vec2<f32>) -> vec3<f32> {
+    return sky.behind.rgb * mix(textureSampleLevel(sky_first, sky_first_sampler, uv, 0.0).rgb,
+        textureSampleLevel(sky_second, sky_second_sampler, uv, 0.0).rgb, sky.amount.x);
 }
 
 // Where `direction` falls on the panoramas.
@@ -172,7 +183,8 @@ fn cell_direction(view: vec3<f32>, camera: vec3<f32>, above: f32) -> vec3<f32> {
 }
 
 // The cloud layer, blended over the background (premultiplied alpha), so
-// clouds shrink toward the horizon, where they fade into the panorama. They
+// clouds shrink toward the horizon, where they fade into the panorama or
+// clear colour. They
 // take the sun's light (`cloud_sunlight`), less where more cloud lies
 // between them and a sun above the layer, and brighter at their thin edges
 // toward it; and the sky's colour behind them, so a dusk sky warms them and
@@ -194,8 +206,7 @@ fn fs_clouds(in: SkyOut) -> @location(0) vec4<f32> {
     // The sky a little above the cloud, read at its coarsest detail.
     let rise = max(direction.y, 0.02);
     let uv = panorama_uv(normalize(vec3<f32>(direction.x, rise + 0.2, direction.z)));
-    let behind = mix(textureSampleLevel(sky_first, sky_first_sampler, uv, 0.0).rgb,
-        textureSampleLevel(sky_second, sky_second_sampler, uv, 0.0).rgb, sky.amount.x);
+    let behind = sky_behind(uv);
     // The sky lights them too, but mostly as grey: their colour is the sun's.
     let grey = dot(behind, vec3<f32>(0.299, 0.587, 0.114));
     let ambient = mix(vec3<f32>(grey), behind, 0.5) * 0.5;
@@ -297,8 +308,7 @@ fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSamp
     let light_step = frame.clouds.w * 0.18;
     // The sky a little above the horizon, at its coarsest, lights them too.
     let uv = panorama_uv(normalize(vec3<f32>(direction.x, max(direction.y, 0.05) + 0.2, direction.z)));
-    let behind = mix(textureSampleLevel(sky_first, sky_first_sampler, uv, 0.0).rgb,
-        textureSampleLevel(sky_second, sky_second_sampler, uv, 0.0).rgb, sky.amount.x);
+    let behind = sky_behind(uv);
     let grey = dot(behind, vec3<f32>(0.299, 0.587, 0.114));
     let ambient = mix(vec3<f32>(grey), behind, 0.5) * 1.05;
     var transmittance = 1.0;

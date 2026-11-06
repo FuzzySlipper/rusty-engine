@@ -1,6 +1,7 @@
 //! The sky's cloud layer (`sky.wgsl` `fs_clouds`): it drifts over the
-//! panorama with presentation time, takes the sun's colour and direction,
-//! reports its pass, and coverage 0 draws the sky exactly as without it.
+//! panorama or a clear colour with presentation time, takes the sun's colour
+//! and direction, reports its pass, and coverage 0 draws the sky exactly as
+//! without it.
 //! Through a twilight the sky's sun lights it from below the horizon,
 //! reddening, flat and volumetric alike. Under a motion target the clouds
 //! move with their drift and the camera's turn. Same harness as
@@ -874,4 +875,82 @@ fn shade_steps_limit_the_clouds_to_a_few_shades() {
     let smooth = colours(&pixel_sky(160.0, 0).render(&view).1);
     let stepped = colours(&pixel_sky(160.0, 3).render(&view).1);
     assert!(stepped * 2 < smooth, "{stepped} against {smooth} colours");
+}
+
+/// A clear colour and no light, so the clouds show the sky's ambient alone.
+fn clear_sky(color: [f32; 4]) -> Harness {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    harness.apply(vec![RenderDiff::SetBackgroundColor { color }]);
+    harness
+}
+
+#[test]
+fn clouds_draw_over_a_clear_colour_and_take_its_light() {
+    let red = [0.6, 0.05, 0.05, 1.0];
+    let mut harness = clear_sky(red);
+    let bare = look_up(&mut harness, 2.0);
+    harness.apply(vec![clouds(0.8)]);
+    let reddish = look_up(&mut harness, 2.0);
+    let (mean, count) = clouded(&bare, &reddish);
+    assert!(count > 1000, "the layer draws: {count} pixels");
+    assert!(
+        harness
+            .renderer
+            .gpu_readout()
+            .passes
+            .iter()
+            .any(|timing| timing.pass == "clouds"),
+        "the pass is timed"
+    );
+    assert_ne!(
+        look_up(&mut harness, 40.0),
+        reddish,
+        "the layer drifts with time"
+    );
+
+    let mut harness = clear_sky([0.05, 0.05, 0.6, 1.0]);
+    let bare = look_up(&mut harness, 2.0);
+    harness.apply(vec![clouds(0.8)]);
+    let (blue, _) = clouded(&bare, &look_up(&mut harness, 2.0));
+    assert!(
+        mean[0] > blue[0] && mean[2] < blue[2],
+        "the clear colour lights them: over red {mean:?}, over blue {blue:?}"
+    );
+}
+
+#[test]
+fn clouds_fade_into_a_clear_colour_at_the_horizon() {
+    let color = [0.3, 0.32, 0.36, 1.0];
+    let mut harness = clear_sky(color);
+    let level = camera([0.0, 1.0, 0.0], 0.0, 0.0);
+    harness.renderer.set_animation_time(2.0);
+    let bare = harness.render(&level).1;
+    harness.apply(vec![clouds(1.0)]);
+    let frame = harness.render(&level).1;
+    assert_ne!(frame, bare, "the layer shows above the horizon");
+    // The rows at the horizon and below it hold the clear colour.
+    let row = (WIDTH * 4) as usize;
+    let horizon = (HEIGHT / 2 - 1) as usize * row;
+    let most = bare[horizon..]
+        .iter()
+        .zip(&frame[horizon..])
+        .map(|(a, b)| a.abs_diff(*b))
+        .max();
+    assert!(most <= Some(1), "the fade ends on the colour: {most:?}");
+}
+
+#[test]
+fn no_clouds_leave_a_clear_colour_as_it_was() {
+    let color = [0.2, 0.3, 0.5, 1.0];
+    let mut harness = clear_sky(color);
+    let bare = look_up(&mut harness, 2.0);
+    harness.apply(vec![clouds(0.0)]);
+    assert_eq!(look_up(&mut harness, 2.0), bare, "coverage 0");
+    harness.apply(vec![clouds(0.8)]);
+    assert_ne!(look_up(&mut harness, 2.0), bare);
+    harness.apply(vec![RenderDiff::SetClouds { clouds: None }]);
+    assert_eq!(look_up(&mut harness, 2.0), bare, "cleared");
 }

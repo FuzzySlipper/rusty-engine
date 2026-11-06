@@ -2078,25 +2078,42 @@ impl Renderer {
         }
     }
 
+    /// The sky's bind group, for the panorama or, under the clouds alone,
+    /// for white panoramas tinted the clear colour (`sky.wgsl` `sky_behind`).
     fn rebuild_sky(&mut self) {
         self.sky_bind_group = None;
-        let Environment::Sky(sky) = &self.tables.environment else {
-            return;
-        };
-        let Some(first) = self.tables.textures.get(&sky.texture) else {
-            return;
-        };
-        let (second, amount) = match &sky.blend {
-            Some(blend) => match self.tables.textures.get(&blend.texture) {
-                Some(second) => (second, blend.amount),
-                None => (first, 0.0),
-            },
-            None => (first, 0.0),
-        };
-        // The blend amount, then the cloud layer's coverage, altitude and
-        // size, drift, cells and shades, and tint (`sky.wgsl` SkyUniform).
+        self.sky_panorama = false;
         let clouds = drawn_clouds(self.tables.clouds, self.tables.cloud_regions.len());
-        let mut values = [0.0f32; 16];
+        let panorama = match &self.tables.environment {
+            Environment::Sky(sky) => self
+                .tables
+                .textures
+                .get(&sky.texture)
+                .map(|first| (sky, first)),
+            _ => None,
+        };
+        let (first, second, amount, behind) = match panorama {
+            Some((sky, first)) => {
+                let (second, amount) = match &sky.blend {
+                    Some(blend) => match self.tables.textures.get(&blend.texture) {
+                        Some(second) => (second, blend.amount),
+                        None => (first, 0.0),
+                    },
+                    None => (first, 0.0),
+                };
+                (first, second, amount, [1.0; 3])
+            }
+            None if clouds.is_some() => {
+                let [r, g, b, _] = self.environment_clear();
+                (&self.white, &self.white, 0.0, [r, g, b])
+            }
+            None => return,
+        };
+        let panorama = panorama.is_some();
+        // The blend amount, then the cloud layer's coverage, altitude and
+        // size, drift, cells and shades, tint, and what the panoramas are
+        // tinted (`sky.wgsl` SkyUniform).
+        let mut values = [0.0f32; 20];
         values[0] = amount;
         if let Some(clouds) = clouds {
             values[4..7].copy_from_slice(&[clouds.coverage, clouds.altitude, clouds.scale]);
@@ -2108,6 +2125,7 @@ impl Renderer {
             ]);
             values[12..15].copy_from_slice(&clouds.color);
         }
+        values[16..19].copy_from_slice(&behind);
         let uniform: Vec<u8> = values
             .iter()
             .flat_map(|value| value.to_le_bytes())
@@ -2150,6 +2168,7 @@ impl Renderer {
                     ],
                 }),
         );
+        self.sky_panorama = panorama;
     }
 
     /// What the sky's light is built from: the sky panorama (or the two it
@@ -2695,7 +2714,7 @@ impl Renderer {
         if !whole {
             self.compose.clear_viewport(&mut pass, target.format);
         }
-        if let (true, Some(sky)) = (view.sky, &self.sky_bind_group) {
+        if let (true, true, Some(sky)) = (view.sky, self.sky_panorama, &self.sky_bind_group) {
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             pass.set_pipeline(&self.pipelines[sky_index].sky);
             pass.set_bind_group(1, sky, &[]);
@@ -2750,8 +2769,8 @@ impl Renderer {
             }
         }
         drop(pass);
-        // The cloud layer over the panorama and the sun, in a pass of
-        // its own so `gpu.passes` times it. Without cover there is no
+        // The cloud layer over the sky or clear colour and the sun, in a
+        // pass of its own so `gpu.passes` times it. Without cover there is no
         // pass and the sky is drawn as before.
         let covered = drawn_clouds(self.tables.clouds, self.tables.cloud_regions.len()).is_some();
         let volumetric = self.volumetric_clouds_drawn();

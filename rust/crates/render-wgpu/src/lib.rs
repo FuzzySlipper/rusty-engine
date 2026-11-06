@@ -610,7 +610,11 @@ pub struct Renderer {
     reading: bool,
     frame_bind_group: wgpu::BindGroup,
     caster_bind_group: wgpu::BindGroup,
+    /// The panorama and the cloud layer's uniform, or with clouds over a clear
+    /// colour the uniform alone (`rebuild_sky`).
     sky_bind_group: Option<wgpu::BindGroup>,
+    /// `sky_bind_group` holds a panorama to draw behind the clouds.
+    sky_panorama: bool,
     /// Each moon's texture, or white, by slot.
     moon_bind_groups: [Option<wgpu::BindGroup>; render_model::MOON_SLOTS],
     /// The opaque depth (and colour) the blend pass's water surfaces read.
@@ -919,6 +923,7 @@ impl Renderer {
             frame_bind_group,
             caster_bind_group,
             sky_bind_group: None,
+            sky_panorama: false,
             moon_bind_groups: Default::default(),
             water,
             surface_size: None,

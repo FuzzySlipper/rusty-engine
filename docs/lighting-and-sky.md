@@ -1428,7 +1428,7 @@ engine.CameraView.SetStars(default); // no stars
 
 ## Clouds
 
-A cloud layer drifts over the sky panorama, lit by the sun:
+A cloud layer drifts over the sky panorama or the clear colour, lit by the sun:
 
 ```csharp
 engine.CameraView.SetClouds(new(Coverage: .6f, Drift: new Vector2(8, 3),
@@ -1455,8 +1455,8 @@ the clouds only while the sun is up. Leaving out `PixelMetres` and
   and the size of one cloud, in metres. `Altitude` is above the world's
   zero, not above the camera. The view ray meets a plane at that height, so
   clouds look larger overhead and shrink toward the horizon, where they
-  fade into the panorama. A camera at or above the altitude sees no flat
-  layer overhead.
+  fade into the panorama, or into the clear colour of `SetBackgroundColor`.
+  A camera at or above the altitude sees no flat layer overhead.
 - `Color` (linear) tints the light the clouds take.
 - `PixelMetres` (above 0) draws the flat layer in square cells of that side in
   the cloud plane, each one flat colour, to sit with nearest-filtered pixel
@@ -1511,7 +1511,8 @@ the clouds only while the sun is up. Leaving out `PixelMetres` and
   more of the scene. A light at or below the horizon is not shaded.
 - A heavy layer greys the panorama behind it: with the square of the
   coverage the sky loses up to 60 % of its colour toward a slightly darker
-  grey. Coverage 0 leaves the sky exactly as without clouds.
+  grey. A clear colour stays as it is, and lights the clouds as a panorama
+  of that colour would. Coverage 0 leaves the sky exactly as without clouds.
 - The [sky's light](#the-skys-light) and reflections see the layer while
   the sky's light is on: it is built from a capture of the sky as drawn.
 - The layer is retained camera-view state like the wind, and survives a
