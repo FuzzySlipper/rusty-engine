@@ -168,6 +168,19 @@ fn projected(p: vec3<f32>) -> vec4<f32> {
     return frame.relative_view_proj * vec4<f32>(p - frame.camera.xyz, 1.0);
 }
 
+// How far gusts shift the wind's lean per second.
+const GUST_RATE: f32 = 0.9;
+const GUST_RATE_2: f32 = 2.3;
+
+// The wind's lean at presentation time `time` on what stands at `origin`, per
+// unit of bend and metre of height: a steady share and a gusting share that
+// rises and falls with two slow waves, phased by its place in the world.
+fn wind_lean(origin: vec3<f32>, time: f32) -> f32 {
+    let place = dot(origin.xz, vec2<f32>(0.37, 0.61));
+    let gust = 0.5 + 0.5 * sin(time * GUST_RATE + place) * sin(time * GUST_RATE_2 + place * 1.7);
+    return frame.wind.z * mix(1.0, gust, frame.wind.w);
+}
+
 // Where `p` stands in the world: itself, or in a backdrop pass
 // (`Frame.backdrop`) the world point the backdrop's `p` stands for, so fog
 // and the cloud layer's shade reach the backdrop at its world-equivalent

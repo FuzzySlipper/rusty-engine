@@ -442,7 +442,9 @@ internal static class GraphicsDefaults
         default,
         default,
         0f,
-        default);
+        default,
+        0f,
+        false);
 }
 
 public readonly partial record struct SpriteMaterialDescriptor
@@ -457,7 +459,7 @@ public readonly partial record struct SpriteMaterialDescriptor
         SpriteAlphaMode AlphaMode,
         float AlphaCutoff,
         SpriteShadowPolicy Shadow)
-        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, SpriteBlendMode.Alpha, 0f, default, default, 0f, default)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, SpriteBlendMode.Alpha, 0f, default, default, 0f, default, 0f, false)
     {
     }
 
@@ -473,7 +475,7 @@ public readonly partial record struct SpriteMaterialDescriptor
         SpriteShadowPolicy Shadow,
         SpriteBlendMode Blend,
         float SoftnessMetres)
-        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, default, default, 0f, default)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, default, default, 0f, default, 0f, false)
     {
     }
 
@@ -490,7 +492,27 @@ public readonly partial record struct SpriteMaterialDescriptor
         SpriteBlendMode Blend,
         float SoftnessMetres,
         RenderResourceReference TintMask)
-        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, TintMask, default, 0f, default)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, TintMask, default, 0f, default, 0f, false)
+    {
+    }
+
+    /// <summary>A sprite material out of the wind (<see cref="WindBend"/> 0).</summary>
+    public SpriteMaterialDescriptor(
+        SpriteLightingMode Lighting,
+        RenderResourceReference NormalTexture,
+        RenderResourceReference DepthTexture,
+        float NormalStrength,
+        float NormalBias,
+        SpriteAlphaMode AlphaMode,
+        float AlphaCutoff,
+        SpriteShadowPolicy Shadow,
+        SpriteBlendMode Blend,
+        float SoftnessMetres,
+        RenderResourceReference TintMask,
+        Vector3 EmissionColor,
+        float EmissionIntensity,
+        RenderResourceReference EmissionMap)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, TintMask, EmissionColor, EmissionIntensity, EmissionMap, 0f, false)
     {
     }
 }

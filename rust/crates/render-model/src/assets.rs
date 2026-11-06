@@ -1352,6 +1352,15 @@ pub struct SpriteMaterialDescriptor {
     /// texture's layout. None emits over the whole sprite.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub emission_map: Option<String>,
+    /// How far the sprite's top leans per metre of its height at unit wind
+    /// (`SetWind`), as a material's bend does: its bottom row stays planted.
+    /// 0 keeps it out of the wind.
+    #[serde(default)]
+    pub wind_bend: f32,
+    /// Lean in whole texels, row by row, along the sprite's own width, for
+    /// nearest-filtered pixel art.
+    #[serde(default)]
+    pub wind_whole_texels: bool,
 }
 
 /// How a blended sprite's colour reaches the frame: over what is behind it
@@ -1380,6 +1389,8 @@ impl Default for SpriteMaterialDescriptor {
             emission_color: [0.0; 3],
             emission_intensity: 0.0,
             emission_map: None,
+            wind_bend: 0.0,
+            wind_whole_texels: false,
         }
     }
 }
@@ -1415,6 +1426,9 @@ impl SpriteMaterialDescriptor {
             || self.emission_intensity < 0.0
         {
             return Err(SpriteMaterialError::InvalidEmission);
+        }
+        if !self.wind_bend.is_finite() || self.wind_bend < 0.0 {
+            return Err(SpriteMaterialError::InvalidWindBend);
         }
         if let SpriteAlphaMode::Mask { cutoff } = self.alpha {
             if !cutoff.is_finite() || !(0.0..=1.0).contains(&cutoff) {
@@ -1466,6 +1480,7 @@ pub enum SpriteMaterialError {
     InvalidAlphaCutoff,
     InvalidSoftness,
     InvalidEmission,
+    InvalidWindBend,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1616,6 +1631,8 @@ mod tests {
             emission_color: [1.0, 0.6, 0.2],
             emission_intensity: 2.0,
             emission_map: Some("texture/sprite-emission".to_string()),
+            wind_bend: 0.0,
+            wind_whole_texels: false,
         };
         assert_eq!(authored.validate(), Ok(()));
 

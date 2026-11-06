@@ -2,6 +2,7 @@
 //! - billboard modes, pixel size, viewport placement, atlas frames, tints and
 //!   alpha modes;
 //! - lit sprites, tint masks and sprite emission;
+//! - sprites in the wind;
 //! - particle bursts and emitters, aged on Engine time only.
 //!
 //! `RENDER_WGPU_BLESS=1 cargo test -p render-wgpu --test effects` rewrites the
@@ -2038,4 +2039,239 @@ fn a_retained_sprite_changes_its_emission_intensity_in_place() {
         harness.apply(change(1.0));
         assert_eq!(harness.single(&emissive_eye()), lit, "lit again");
     }
+}
+
+/// A solid white standing sprite 2 m tall, its base at the view's centre
+/// line, over a dark clear colour; a whole-texture 8 texels wide and tall.
+fn windy_sprite(bend: f32, whole_texels: bool) -> SpriteInstanceDescriptor {
+    let mut standing = sprite(0, [0.0, -1.0, -4.0], BillboardMode::Cylindrical);
+    standing.pivot = [0.5, 0.0];
+    standing.size = [1.0, 2.0];
+    standing.material.alpha = SpriteAlphaMode::Mask { cutoff: 0.5 };
+    standing.material.wind_bend = bend;
+    standing.material.wind_whole_texels = whole_texels;
+    standing
+}
+
+/// The view of `ops` on a dark sky in a wind toward +x at `strength`, at
+/// presentation time `time`.
+fn windy(ops: Vec<RenderDiff>, strength: f32, time: f64) -> Vec<u8> {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        samples: 1,
+        ..RendererOptions::default()
+    });
+    let mut all = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        },
+        RenderDiff::SetWind {
+            wind: Some(WindDescriptor {
+                direction: [1.0, 0.0],
+                strength,
+                gust: 0.0,
+            }),
+        },
+    ];
+    all.extend(atlas_ops(&mut harness.resources));
+    all.extend(ops);
+    harness.apply(all);
+    harness.renderer.set_animation_time(time);
+    let eye = camera("eye", [0.0, 0.0, 0.0], 0.0, 0.0);
+    harness.renderer.render_offscreen(&eye, &harness.target);
+    harness.target.read_rgba(&harness.gpu)
+}
+
+/// The mean x of the lit pixels in a pixel row, if any.
+fn row_centre(rgba: &[u8], y: u32) -> Option<f32> {
+    let lit: Vec<u32> = (0..WIDTH)
+        .filter(|&x| {
+            pixel(rgba, WIDTH, x, y)[..3]
+                .iter()
+                .any(|&value| value > 24)
+        })
+        .collect();
+    (!lit.is_empty()).then(|| lit.iter().sum::<u32>() as f32 / lit.len() as f32)
+}
+
+/// The lowest and highest rows the sprite draws in.
+fn lit_rows(rgba: &[u8]) -> (u32, u32) {
+    let rows: Vec<u32> = (0..HEIGHT)
+        .filter(|&y| row_centre(rgba, y).is_some())
+        .collect();
+    (*rows.last().unwrap(), rows[0])
+}
+
+#[test]
+fn a_sprite_with_a_wind_bend_leans_from_its_base() {
+    let still = windy(vec![create(10, windy_sprite(0.0, false))], 2.0, 3.0);
+    let bent = windy(vec![create(10, windy_sprite(0.2, false))], 2.0, 3.0);
+    let (bottom, top) = lit_rows(&bent);
+    let base = row_centre(&bent, bottom).unwrap() - row_centre(&still, bottom).unwrap();
+    let lean = row_centre(&bent, top).unwrap() - row_centre(&still, top).unwrap();
+    assert!(base.abs() < 2.0, "the base stays planted: {base}");
+    assert!(lean > 8.0, "the top leans along the wind: {lean}");
+}
+
+#[test]
+fn sprite_batches_and_synthetic_sprites_lean_as_a_sprite_does() {
+    let batch = |sprite: SpriteInstanceDescriptor| {
+        vec![RenderDiff::CreateSpriteBatch {
+            handle: RenderHandle::new(10),
+            parent: None,
+            batch: SpriteBatchDescriptor {
+                sprite,
+                instances: vec![SpriteBatchInstance {
+                    position: [0.0; 3],
+                    scale: 1.0,
+                    frame: 0,
+                }]
+                .into(),
+            },
+        }]
+    };
+    // Lit by nothing here, so its emission shows where it draws.
+    let synthetic = |bend, whole_texels| {
+        let mut sprite = windy_sprite(bend, whole_texels);
+        sprite.material.lighting = SpriteLightingMode::Synthetic;
+        sprite.material.emission_color = [1.0; 3];
+        sprite.material.emission_intensity = 1.0;
+        sprite
+    };
+    for whole_texels in [false, true] {
+        for (what, still, bent) in [
+            (
+                "batch",
+                batch(windy_sprite(0.0, false)),
+                batch(windy_sprite(0.2, whole_texels)),
+            ),
+            (
+                "synthetic",
+                vec![create(10, synthetic(0.0, false))],
+                vec![create(10, synthetic(0.2, whole_texels))],
+            ),
+            (
+                "synthetic batch",
+                batch(synthetic(0.0, false)),
+                batch(synthetic(0.2, whole_texels)),
+            ),
+        ] {
+            let (still, bent) = (windy(still, 2.0, 3.0), windy(bent, 2.0, 3.0));
+            let (bottom, top) = lit_rows(&bent);
+            let base = row_centre(&bent, bottom).unwrap() - row_centre(&still, bottom).unwrap();
+            let lean = row_centre(&bent, top).unwrap() - row_centre(&still, top).unwrap();
+            assert!(
+                base.abs() < 2.0,
+                "{what}, whole texels {whole_texels}: the base stays: {base}"
+            );
+            assert!(
+                lean > 8.0,
+                "{what}, whole texels {whole_texels}: the top leans: {lean}"
+            );
+        }
+    }
+}
+
+#[test]
+fn no_wind_or_no_bend_draws_a_sprite_as_it_was() {
+    let unset = windy(vec![create(10, windy_sprite(0.0, false))], 2.0, 3.0);
+    assert_eq!(
+        windy(vec![create(10, windy_sprite(0.0, true))], 2.0, 3.0),
+        unset,
+        "an unset sprite ignores the wind"
+    );
+    assert_eq!(
+        windy(vec![create(10, windy_sprite(0.2, false))], 0.0, 3.0),
+        unset,
+        "zero wind draws an opted-in sprite as an unset one"
+    );
+    assert_eq!(
+        windy(vec![create(10, windy_sprite(0.2, true))], 0.0, 3.0),
+        unset,
+        "whole texels too"
+    );
+}
+
+#[test]
+fn neighbouring_sprites_lean_apart() {
+    let pair = |x: f32| {
+        let mut one = windy_sprite(0.2, false);
+        one.transform = transform([x, -1.0, -4.0], 0.0, 1.0);
+        one
+    };
+    let gusty = |one: SpriteInstanceDescriptor| {
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: false,
+            samples: 1,
+            ..RendererOptions::default()
+        });
+        let mut ops = vec![
+            RenderDiff::SetBackgroundColor {
+                color: [0.0, 0.0, 0.0, 1.0],
+            },
+            RenderDiff::SetWind {
+                wind: Some(WindDescriptor {
+                    direction: [1.0, 0.0],
+                    strength: 2.0,
+                    gust: 1.0,
+                }),
+            },
+        ];
+        ops.extend(atlas_ops(&mut harness.resources));
+        ops.push(create(10, one));
+        harness.apply(ops);
+        harness.renderer.set_animation_time(3.0);
+        let eye = camera("eye", [0.0, 0.0, 0.0], 0.0, 0.0);
+        harness.renderer.render_offscreen(&eye, &harness.target);
+        let rgba = harness.target.read_rgba(&harness.gpu);
+        let (bottom, top) = lit_rows(&rgba);
+        row_centre(&rgba, top).unwrap() - row_centre(&rgba, bottom).unwrap()
+    };
+    let (left, right) = (gusty(pair(-1.3)), gusty(pair(1.3)));
+    assert!((left - right).abs() > 2.0, "{left} against {right}");
+}
+
+/// The x of a sprite's left edge in each pixel row it draws in.
+fn left_edges(rgba: &[u8]) -> Vec<u32> {
+    (0..HEIGHT)
+        .filter_map(|y| {
+            (0..WIDTH).find(|&x| {
+                pixel(rgba, WIDTH, x, y)[..3]
+                    .iter()
+                    .any(|&value| value > 24)
+            })
+        })
+        .collect()
+}
+
+#[test]
+fn whole_texels_lean_row_by_row_in_whole_steps() {
+    let smooth = left_edges(&windy(vec![create(10, windy_sprite(0.2, false))], 2.0, 3.0));
+    let edges = left_edges(&windy(vec![create(10, windy_sprite(0.2, true))], 2.0, 3.0));
+    let steps = |edges: &[u32]| {
+        let mut runs = edges.to_vec();
+        runs.dedup();
+        runs.len()
+    };
+    let moved = edges.first().unwrap().abs_diff(*edges.last().unwrap());
+    assert!(moved > 8, "it leans: {moved} pixels");
+    assert!(
+        steps(&edges) * 2 < steps(&smooth),
+        "fewer, larger steps: {} against {}",
+        steps(&edges),
+        steps(&smooth)
+    );
+}
+
+#[test]
+fn a_small_change_of_wind_holds_whole_texels_where_a_smooth_lean_slides() {
+    let at = |whole_texels, strength| {
+        windy(
+            vec![create(10, windy_sprite(0.2, whole_texels))],
+            strength,
+            3.0,
+        )
+    };
+    assert_ne!(at(false, 2.0), at(false, 2.01), "a smooth lean slides");
+    assert_eq!(at(true, 2.0), at(true, 2.01), "whole texels hold");
 }

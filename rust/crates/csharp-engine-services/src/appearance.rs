@@ -5038,6 +5038,8 @@ impl RuntimeAppearanceBridge {
             emission_color: native_vec3_array(value.emission_color),
             emission_intensity: value.emission_intensity,
             emission_map: resolve_texture(value.emission_map, "emission map")?,
+            wind_bend: value.wind_bend,
+            wind_whole_texels: value.wind_whole_texels,
         };
         descriptor.validate().map_err(|error| {
             CsharpEngineServicesError::new(
@@ -14158,6 +14160,8 @@ fn shade(surface: Surface) -> vec4<f32> {
             emission_map: NativeRenderResourceReference {
                 value: emission_map.handle.value,
             },
+            wind_bend: 0.25,
+            wind_whole_texels: true,
         };
         let appearance = bridge
             .create_sprite_from_atlas(request)
@@ -14228,6 +14232,8 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert!(encoded.contains(&format!("\"tintMask\":\"{mask_identity}\"")));
         assert!(encoded.contains(&format!("\"emissionMap\":\"{emission_identity}\"")));
         assert!(encoded.contains("\"emissionIntensity\":3.0"));
+        assert!(encoded.contains("\"windBend\":0.25"));
+        assert!(encoded.contains("\"windWholeTexels\":true"));
         bridge.commit(call);
         bridge.begin_call();
         unsafe { bridge.stage_snapshot(std::ptr::null(), 0) }.unwrap();

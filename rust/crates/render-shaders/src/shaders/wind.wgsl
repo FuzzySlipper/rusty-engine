@@ -7,12 +7,10 @@
 // the part stands so neighbours differ, the flutter by where the vertex is.
 // The world and shadow passes call it alike, so shadows follow.
 
-#import rusty::view::frame
+#import rusty::view::{frame, wind_lean}
 #import rusty::material::material
 
-// How far gusts shift the lean per second, and the flutter's rates.
-const GUST_RATE: f32 = 0.9;
-const GUST_RATE_2: f32 = 2.3;
+// The flutter's rates.
 const FLUTTER_RATE: f32 = 7.0;
 const FLUTTER_RATE_2: f32 = 11.0;
 
@@ -31,11 +29,7 @@ fn wind_displace_at(world: vec3<f32>, origin: vec3<f32>, weight: f32, time: f32)
         return world;
     }
     let direction = vec3<f32>(frame.wind.x, 0.0, frame.wind.y);
-    // The lean: a steady share and a gusting share that rises and falls
-    // with two slow waves, phased by the part's place in the world.
-    let place = dot(origin.xz, vec2<f32>(0.37, 0.61));
-    let gust = 0.5 + 0.5 * sin(time * GUST_RATE + place) * sin(time * GUST_RATE_2 + place * 1.7);
-    let lean = strength * mix(1.0, gust, frame.wind.w) * material.wind.x * max(world.y - origin.y, 0.0);
+    let lean = wind_lean(origin, time) * material.wind.x * max(world.y - origin.y, 0.0);
     // The flutter: a small circling motion, phased by where the vertex is.
     let phase = dot(world, vec3<f32>(1.3, 0.7, 1.9));
     let flutter = strength * material.wind.y * weight;

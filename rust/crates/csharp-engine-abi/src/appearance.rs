@@ -336,6 +336,13 @@ pub struct NativeSpriteMaterialDescriptor {
     /// and size of the sprite's texture or atlas. A zero handle (the default)
     /// emits over the whole sprite.
     pub emission_map: NativeRenderResourceReference,
+    /// How far the sprite's top leans per metre of its height at unit wind,
+    /// as a material's bend does: its bottom row stays planted. 0 (the
+    /// default) keeps it out of the wind.
+    pub wind_bend: f32,
+    /// Lean in whole texels, row by row, along the sprite's own width, for
+    /// nearest-filtered pixel art.
+    pub wind_whole_texels: bool,
 }
 
 /// How a blended sprite's colour reaches the frame.
@@ -364,6 +371,8 @@ impl Default for NativeSpriteMaterialDescriptor {
             emission_color: NativeVec3::default(),
             emission_intensity: 0.0,
             emission_map: NativeRenderResourceReference::default(),
+            wind_bend: 0.0,
+            wind_whole_texels: false,
         }
     }
 }

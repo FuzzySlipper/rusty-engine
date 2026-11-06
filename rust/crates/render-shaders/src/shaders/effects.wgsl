@@ -3,7 +3,7 @@
 // and particle bindings at 20, so the two layouts never collide in this
 // module.
 
-#import rusty::view::{frame, mask_coverage}
+#import rusty::view::{frame, mask_coverage, wind_lean}
 #import rusty::lighting::standard_radiance
 #import rusty::finish::finish
 #ifdef MOTION
@@ -27,9 +27,10 @@ struct SpriteIn {
     // x: lighting (0 unlit, 1 synthetic, 2 normal map, 3 bump map),
     // y: alpha cutoff (0 for none), z: normal or bump strength, w: synthetic bias.
     @location(8) params: vec4<f32>,
-    // x: softness in metres (0 hard), y: 1 when added to the frame.
+    // x: softness in metres (0 hard), y: 1 when added to the frame, w: 1 when
+    // it leans in whole texels.
     @location(9) soft: vec4<f32>,
-    // xyz: emitted light before the emission map.
+    // xyz: emitted light before the emission map; w: its wind bend.
     @location(10) emission: vec4<f32>,
 };
 
@@ -45,6 +46,10 @@ struct SpriteOut {
     @location(5) cell: vec2<f32>,
     @location(6) soft: vec4<f32>,
     @location(7) emission: vec3<f32>,
+    // A sprite leaning in whole texels: x its top's lean as a share of its
+    // width (0: smooth, or still); y its frame's width in uv, negative when
+    // flipped; z its height.
+    @location(8) sway: vec3<f32>,
 };
 
 @group(1) @binding(10) var sprite_color: texture_2d<f32>;
@@ -61,17 +66,59 @@ struct SpriteOut {
 @group(1) @binding(16) var sprite_emission_map: texture_2d<f32>;
 @group(1) @binding(17) var sprite_emission_sampler: sampler;
 
+// The wind on a sprite (`SetWind`): its top's move in the world, its base
+// planted. A sprite leaning in whole texels keeps its shape instead, widened
+// on the side it leans by `share` of its width, its lean along its own width
+// alone, and `stepped` moves its rows. `origin` phases it, as a part's place
+// does; `right` is unit length, `wide` and `tall` the sprite's size in metres.
+struct SpriteSway {
+    top: vec3<f32>,
+    share: f32,
+};
+
+fn sprite_sway(origin: vec3<f32>, right: vec3<f32>, wide: f32, tall: f32, bend: f32, whole_texels: f32) -> SpriteSway {
+    var sway: SpriteSway;
+    if bend <= 0.0 {
+        return sway;
+    }
+    sway.top = vec3<f32>(frame.wind.x, 0.0, frame.wind.y) * wind_lean(origin, frame.time.x) * bend * tall;
+    if whole_texels > 0.5 {
+        sway.share = dot(sway.top, right) / max(wide, 1e-6);
+        sway.top = vec3<f32>(0.0);
+    }
+    return sway;
+}
+
+// How far across its quad a corner stands, widened for `share`.
+fn swayed_across(corner: f32, share: f32) -> f32 {
+    return corner * (1.0 + abs(share)) - max(-share, 0.0);
+}
+
+// A fragment's move in the texture for its row's lean, as a share of the
+// texture's width: whole texels, toward the base so a row stays on the quad.
+fn stepped(in: SpriteOut) -> f32 {
+    let size = vec2<f32>(textureDimensions(sprite_color));
+    let rows = max(in.sway.z * size.y, 1.0);
+    let lean = in.sway.x * abs(in.sway.y) * size.x;
+    let row = (floor((1.0 - in.cell.y) * rows) + 0.5) / rows;
+    return -trunc(row * lean) / size.x;
+}
+
 @vertex
 fn vs_sprite(in: SpriteIn) -> SpriteOut {
     let model = mat4x4<f32>(in.model0, in.model1, in.model2, in.model3);
-    let local = mix(in.quad.xy, in.quad.zw, in.corner);
-    let world = model * vec4<f32>(local, 0.0, 1.0);
+    let scale = vec2<f32>(length(in.model0.xyz), length(in.model1.xyz));
+    let size = (in.quad.zw - in.quad.xy) * scale;
+    let sway = sprite_sway(in.model3.xyz, in.model0.xyz / max(scale.x, 1e-6), size.x, size.y, in.emission.w, in.soft.w);
+    let across = swayed_across(in.corner.x, sway.share);
+    let local = mix(in.quad.xy, in.quad.zw, vec2<f32>(across, in.corner.y));
+    let world = model * vec4<f32>(local, 0.0, 1.0) + vec4<f32>(sway.top * in.corner.y, 0.0);
     var out: SpriteOut;
     out.clip = frame.view_proj * world;
     out.world_position = world.xyz / world.w;
     out.normal = normalize((model * vec4<f32>(0.0, 0.0, 1.0, 0.0)).xyz);
     out.uv = vec2<f32>(
-        mix(in.uv_rect.x, in.uv_rect.z, in.corner.x),
+        mix(in.uv_rect.x, in.uv_rect.z, across),
         mix(in.uv_rect.w, in.uv_rect.y, in.corner.y),
     );
     let frame_min = min(in.uv_rect.xy, in.uv_rect.zw);
@@ -81,6 +128,7 @@ fn vs_sprite(in: SpriteIn) -> SpriteOut {
     out.params = in.params;
     out.soft = in.soft;
     out.emission = in.emission.xyz;
+    out.sway = vec3<f32>(sway.share, in.uv_rect.z - in.uv_rect.x, abs(in.uv_rect.w - in.uv_rect.y));
     return out;
 }
 
@@ -93,7 +141,8 @@ struct SpriteBatchIn {
     @location(1) tint: vec4<f32>,
     @location(2) params: vec4<f32>,
     // x: softness in metres, y: 1 when added to the frame, z: facing
-    // (0 the node's axes, 1 spherical, 2 cylindrical).
+    // (0 the node's axes, 1 spherical, 2 cylindrical), w: 1 when it leans in
+    // whole texels.
     @location(3) soft: vec4<f32>,
     // The node's x and y axes, for a batch that does not face the camera.
     @location(4) right: vec4<f32>,
@@ -101,7 +150,8 @@ struct SpriteBatchIn {
     @location(6) center: vec4<f32>,
     @location(7) uv_rect: vec4<f32>,
     @location(8) quad: vec4<f32>,
-    // Shared like the tint: emitted light before the emission map.
+    // Shared like the tint: emitted light before the emission map; w its
+    // wind bend.
     @location(9) emission: vec4<f32>,
 };
 
@@ -141,14 +191,17 @@ fn vs_sprite_batch(in: SpriteBatchIn) -> SpriteOut {
             right = normalize(cross(up, toward));
         }
     }
-    let local = mix(in.quad.xy, in.quad.zw, in.corner);
-    let world = in.center.xyz + right * local.x + up * local.y;
+    let size = in.quad.zw - in.quad.xy;
+    let sway = sprite_sway(in.center.xyz, right, size.x, size.y, in.emission.w, in.soft.w);
+    let across = swayed_across(in.corner.x, sway.share);
+    let local = mix(in.quad.xy, in.quad.zw, vec2<f32>(across, in.corner.y));
+    let world = in.center.xyz + right * local.x + up * local.y + sway.top * in.corner.y;
     var out: SpriteOut;
     out.clip = frame.view_proj * vec4<f32>(world, 1.0);
     out.world_position = world;
     out.normal = normalize(cross(right, up));
     out.uv = vec2<f32>(
-        mix(in.uv_rect.x, in.uv_rect.z, in.corner.x),
+        mix(in.uv_rect.x, in.uv_rect.z, across),
         mix(in.uv_rect.w, in.uv_rect.y, in.corner.y),
     );
     let frame_min = min(in.uv_rect.xy, in.uv_rect.zw);
@@ -158,6 +211,7 @@ fn vs_sprite_batch(in: SpriteBatchIn) -> SpriteOut {
     out.params = in.params;
     out.soft = vec4<f32>(in.soft.xy, 0.0, 0.0);
     out.emission = in.emission.xyz;
+    out.sway = vec3<f32>(sway.share, in.uv_rect.z - in.uv_rect.x, abs(in.uv_rect.w - in.uv_rect.y));
     return out;
 }
 
@@ -174,7 +228,11 @@ fn gl_dpdy2(value: vec2<f32>) -> vec2<f32> {
     return -dpdy(value);
 }
 
-fn shaded_sprite(in: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
+fn shaded_sprite(drawn: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
+    var in = drawn;
+    let shift = stepped(in);
+    in.uv.x += sign(in.sway.y) * shift;
+    in.cell.x += shift / max(abs(in.sway.y), 1e-6);
     // Derivatives and samples first: they need uniform control flow.
     let q0 = dpdx(in.world_position);
     let q1 = gl_dpdy3(in.world_position);
@@ -201,6 +259,10 @@ fn shaded_sprite(in: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
     let normal_change = max(abs(dpdx(normal)), abs(dpdy(normal)));
     let geometry_roughness = max(max(normal_change.x, normal_change.y), normal_change.z);
 
+    // A row stepped past its frame's side shows nothing of the next frame.
+    if in.sway.x != 0.0 && (in.cell.x < 0.0 || in.cell.x > 1.0) {
+        discard;
+    }
     let cutoff = in.params.y;
     if masked && cutoff > 0.0 && color.a < cutoff {
         discard;

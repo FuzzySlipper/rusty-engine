@@ -1063,8 +1063,8 @@ same copy as absorption.
 
 `engine.CameraView.SetWind(new(Direction: new Vector2(1, 0.3f), Strength:
 1.5f, Gust: 0.6f))` blows a wind over the scene: materials with a wind bend or
-flutter ([the standard shader](#the-standard-shader)) sway in it, and product
-shaders read it in a displace stage ([product shaders](#product-shaders)).
+flutter ([the standard shader](#the-standard-shader)) and sprites with a wind
+bend sway in it, and product shaders read it in a displace stage ([product shaders](#product-shaders)).
 `Direction` is over the ground (world x, z; any length); `Strength` (0 or
 more) scales every material's bend and flutter, and 0 stills the scene (the
 default, and `SetWind` with strength 0); `Gust` (0 to 1, clamped) is the share
@@ -1076,6 +1076,19 @@ where it is. The wind is retained with the other environment settings and
 survives a runtime restart. A swaying material's shadow sways too: while one
 draws, the shadow maps redraw every frame, so give the wind feature to trees,
 grass and banners rather than to whole terrains.
+
+Sprites and sprite batches stay out of the wind until their
+`SpriteMaterialDescriptor` sets `WindBend` (0 or more, the lean per metre of the
+sprite's height at unit wind, as a material's bend). The bottom row stays
+planted and the lean grows toward the top, in every lighting mode, following
+`SetWind`'s direction, strength and gust, phased by where the sprite stands (in
+a batch, each instance), so a stand of trees does not move in lockstep. A
+camera-facing sprite leans along the wind in the world, so a wind toward the
+eye shows little. `WindWholeTexels` leans along the sprite's own width alone,
+each row of texels by a whole number of texels, so nearest-filtered pixel art
+moves in hard steps rather than sliding. Zero wind draws an opted-in sprite exactly as an unset one. A sprite
+placed in the viewport takes no wind. Sprites write no motion vectors, so a
+temporal stage does not follow their lean.
 
 ## Exposure, tone mapping and fog
 

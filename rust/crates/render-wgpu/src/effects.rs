@@ -953,11 +953,18 @@ fn sprite_lighting(sprite: &SpriteRow, color: Option<u32>) -> ([f32; 3], Option<
     }
 }
 
-/// A sprite's emitted light before its map: `effects.wgsl`'s `emission`.
+/// A sprite's emitted light before its map and its wind bend:
+/// `effects.wgsl`'s `emission`. A sprite placed in the viewport has no world
+/// to lean in.
 fn sprite_emission(sprite: &SpriteInstanceDescriptor) -> [f32; 4] {
     let material = &sprite.material;
+    let bend = if sprite.viewport_placement.is_some() {
+        0.0
+    } else {
+        material.wind_bend
+    };
     (Vec3::from(material.emission_color) * material.emission_intensity)
-        .extend(0.0)
+        .extend(bend)
         .to_array()
 }
 
@@ -1000,7 +1007,7 @@ fn batch_corners(
             sprite.material.softness_metres,
             f32::from(additive),
             facing,
-            0.0,
+            f32::from(sprite.material.wind_whole_texels),
         ]);
         vertex[14..18].copy_from_slice(&right.extend(0.0).to_array());
         vertex[18..22].copy_from_slice(&up.extend(0.0).to_array());
@@ -1602,7 +1609,7 @@ impl Renderer {
                 sprite.material.softness_metres,
                 f32::from(state.additive),
                 0.0,
-                0.0,
+                f32::from(sprite.material.wind_whole_texels),
             ]);
             row[36..40].copy_from_slice(&sprite_emission(sprite));
             draws.push(SpriteDraw {
