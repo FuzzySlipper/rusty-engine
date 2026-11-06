@@ -411,8 +411,11 @@ pub struct NativeAtmosphereRequest {
     pub sky_sun_intensity: f32,
 }
 
-/// The moon in the sky, apart from the sun, when `radiance` is above 0 (0,
-/// the default, takes it away). A disc of `radius_degrees` toward
+/// A moon in the sky, apart from the sun, when `radiance` is above 0 (0,
+/// the default, takes it away). `slot` (0 to 3; 0 the default) names which: a
+/// sky holds four, each set on its own, and a higher slot stands in front of
+/// a lower one, its whole disc hiding what lies behind it. A disc of
+/// `radius_degrees` toward
 /// `direction` (world space, toward the moon, any length), its lit part
 /// `radiance` (linear HDR) times `color` (linear). The sky shows it at up
 /// to full brightness, added over the sky so it reads as a pale disc by
@@ -425,9 +428,16 @@ pub struct NativeAtmosphereRequest {
 /// wide. `light_intensity` (0 for none) lights the cloud layer and regions
 /// from the moon in its colour, a second light beside the sky's sun with
 /// the same self-shadowing (a full moon's is about 0.2 to 0.3 against a
-/// sun's 1.5; a product scales it with the phase). The moon lights nothing
+/// sun's 1.5; a product scales it with the phase). Several moons light the
+/// clouds as one light: the sum of what each gives, from their directions
+/// weighted by it. The moon lights nothing
 /// else: the haze keeps the sky's sun, and a product lights the world with
-/// its own moonlight.
+/// its own moonlight. `texture` (a zero handle for none) draws an image on
+/// the disc, upright, sampled with the filter it was opened with; its colour
+/// and alpha multiply the disc, which `phase` still shades, and bloom still
+/// reads the plain disc. `uv_min` and `uv_max` pick its region, equal for the
+/// whole image, so a product with art per phase picks the frame and passes
+/// `phase` 1 to draw it as it is.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeMoonRequest {
@@ -440,6 +450,10 @@ pub struct NativeMoonRequest {
     pub earthshine: f32,
     pub halo: f32,
     pub light_intensity: f32,
+    pub slot: u32,
+    pub texture: NativeRenderResourceReference,
+    pub uv_min: NativeVec2,
+    pub uv_max: NativeVec2,
 }
 
 /// Sun shafts: the sky around the sun (the brightest enabled directional

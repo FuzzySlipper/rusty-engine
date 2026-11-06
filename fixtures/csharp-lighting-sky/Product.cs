@@ -829,6 +829,43 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.UpdateCamera(new(camera,Camera(SkyEye,SkyEye+toward*Horizon)));
         return Inspect();
     }
+    // Two moons (#10636): a large textured one in slot 0, nearest-filtered on the given frame of its phase art, and a small plain one in slot 1 crossing in front of it at the given degrees a second; 0 clears them.
+    [DebugCommand("lighting.moons")]
+    public string Moons(float degreesPerSecond,uint phaseFrame)
+    {
+        moonCrossing = degreesPerSecond;
+        if (degreesPerSecond <= 0)
+        {
+            engine.CameraView.SetMoon(default);
+            engine.CameraView.SetMoon(default(MoonRequest) with { Slot = CrossingMoonSlot });
+            moonFrames?.Dispose(); moonFrames = null;
+            return Inspect();
+        }
+        moonFrames ??= engine.Graphics.OpenResource(new("moon-phases.png",TextureFilter.Nearest,TextureWrap.Clamp)).Handle;
+        float left = phaseFrame==0 ? 0 : .5f;
+        engine.CameraView.SetMoon(new(MoonToward(0),LargeMoonRadiusDegrees,MoonColor,1,1,0,0,0,0,moonFrames,new(left,0),new(left+.5f,1)));
+        moonOffset = -CrossingMoonReach;
+        PublishCrossingMoon();
+        engine.CameraView.UpdateCamera(new(camera,Camera(SkyEye,SkyEye+MoonToward(0)*Horizon)));
+        return Inspect();
+    }
+    private void PublishCrossingMoon() => engine.CameraView.SetMoon(new(MoonToward(moonOffset),CrossingMoonRadiusDegrees,CrossingMoonColor,1,CrossingMoonPhase,MoonEarthshine,0,0,CrossingMoonSlot,default,default,default));
+    private void MoveCrossingMoon(float seconds)
+    {
+        moonOffset += moonCrossing*seconds;
+        if (moonOffset > CrossingMoonReach) moonOffset = -CrossingMoonReach;
+        PublishCrossingMoon();
+    }
+    private static Vector3 MoonToward(float degreesAcross)
+    {
+        float up = float.DegreesToRadians(MoonElevation), azimuth = float.DegreesToRadians(SunAzimuth+MoonAzimuthOffset+degreesAcross);
+        return new(MathF.Cos(up)*MathF.Sin(azimuth),MathF.Sin(up),MathF.Cos(up)*MathF.Cos(azimuth));
+    }
+    private const uint CrossingMoonSlot = 1;
+    private const float LargeMoonRadiusDegrees = 6, CrossingMoonRadiusDegrees = 2.5f, CrossingMoonReach = 14, CrossingMoonPhase = .6f;
+    private static readonly Vector3 CrossingMoonColor = new(.55f,.7f,1);
+    private RenderResource? moonFrames;
+    private float moonCrossing, moonOffset;
     [DebugCommand("lighting.twilight")]
     public string Twilight(float elevation, float radiance)
     {
@@ -950,11 +987,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public ProductUpdateResult Update(ProductUpdate update)
     {
         if (lanternPlayback is not null) { engine.Graphics.AdvanceSpritePlayback(new(lanternPlayback)); PublishLantern(); }
+        if (moonCrossing > 0) MoveCrossingMoon((float)(update.Facts.FixedDeltaSeconds*update.Facts.AdmittedStepCount));
         if (cloudTurn != 0) TurnClouds((float)(update.Facts.FixedDeltaSeconds*update.Facts.AdmittedStepCount));
         return ProductUpdateResult.None;
     }
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
-    public void Dispose(){Lantern(-1); engine.CameraView.ClearSkyBackground(default); engine.CameraView.SetStars(default); starCatalogue?.Dispose(); starBand?.Dispose(); Flame(false); Facets(false); Wind(-1); Water(-1); Backdrop(0); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
+    public void Dispose(){Lantern(-1); Moons(0,0); engine.CameraView.ClearSkyBackground(default); engine.CameraView.SetStars(default); starCatalogue?.Dispose(); starBand?.Dispose(); Flame(false); Facets(false); Wind(-1); Water(-1); Backdrop(0); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);

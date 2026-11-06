@@ -2438,6 +2438,10 @@ mod tests {
             earthshine: 0.05,
             halo: 0.2,
             light_intensity: 0.25,
+            slot: 0,
+            texture: NativeRenderResourceReference::default(),
+            uv_min: NativeVec2::default(),
+            uv_max: NativeVec2::default(),
         };
         services.begin_call(binding());
         let api = services.api();
@@ -2447,6 +2451,7 @@ mod tests {
         assert_eq!(set(request(4.0, 0.25), std::ptr::null_mut()), ABI_OK);
         let mut call = services.finish_call().expect("moon call");
         let selected = render_model::RenderDiff::SetMoon {
+            slot: 0,
             moon: Some(render_model::MoonDescriptor {
                 direction: [0.3, 0.4, -1.0],
                 radius_degrees: 1.2,
@@ -2456,6 +2461,7 @@ mod tests {
                 earthshine: 0.05,
                 halo: 0.2,
                 light_intensity: 0.25,
+                ..Default::default()
             }),
         };
         assert_eq!(
@@ -2481,7 +2487,11 @@ mod tests {
             },
             ..request(4.0, 0.5)
         };
-        for refused in [request(4.0, f32::NAN), request(-1.0, 0.5), nowhere] {
+        let no_slot = NativeMoonRequest {
+            slot: render_model::MOON_SLOTS as u32,
+            ..request(4.0, 0.5)
+        };
+        for refused in [request(4.0, f32::NAN), request(-1.0, 0.5), nowhere, no_slot] {
             let mut refusal = empty_receipt();
             assert_eq!(set(refused, &mut refusal), 0);
             assert_eq!(receipt_codes(&refusal), ["CSHARP_MOON"]);
@@ -2492,8 +2502,148 @@ mod tests {
         let mut call = services.finish_call().expect("off");
         assert_eq!(
             call.take_output().frames[0].ops,
-            [render_model::RenderDiff::SetMoon { moon: None }]
+            [render_model::RenderDiff::SetMoon {
+                slot: 0,
+                moon: None,
+            }]
         );
+    }
+
+    #[test]
+    fn a_moons_texture_is_defined_once_and_held_while_it_draws() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            BTreeMap::from([(
+                "moon.png".to_owned(),
+                crate::ContentBytes::from(crate::appearance::tests::RGBA_PNG),
+            )]),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        services.begin_call(binding());
+        let api = services.api();
+        let mut info = NativeRenderResourceInfo::default();
+        assert_eq!(
+            unsafe {
+                (api.graphics.open_resource)(
+                    api.graphics.context,
+                    &crate::appearance::tests::resource_request("moon.png"),
+                    &mut info,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let request = |slot, x: f32| NativeMoonRequest {
+            direction: NativeVec3 { x, y: 1.0, z: -1.0 },
+            radius_degrees: 2.0,
+            color: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            radiance: 1.0,
+            phase: 1.0,
+            earthshine: 0.0,
+            halo: 0.0,
+            light_intensity: 0.0,
+            slot,
+            texture: NativeRenderResourceReference {
+                value: info.handle.value,
+            },
+            uv_min: NativeVec2 { x: 0.5, y: 0.0 },
+            uv_max: NativeVec2 { x: 1.0, y: 1.0 },
+        };
+        let set = |request: NativeMoonRequest| {
+            assert_eq!(
+                unsafe {
+                    (api.camera_view.set_moon)(
+                        api.camera_view.context,
+                        &request,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+        };
+        set(request(1, 0.0));
+        // In use, the texture is not released.
+        let mut refusal = empty_receipt();
+        assert_eq!(
+            unsafe {
+                (api.graphics.destroy_resource)(api.graphics.context, info.handle, &mut refusal)
+            },
+            0
+        );
+        assert_eq!(receipt_codes(&refusal), ["CSHARP_RENDER_RESOURCE_IN_USE"]);
+        let mut call = services.finish_call().expect("moon call");
+        let ops = call.take_output().frames[0].ops.clone();
+        let Some(render_model::RenderDiff::SetMoon {
+            slot: 1,
+            moon: Some(moon),
+        }) = ops.last()
+        else {
+            panic!("the moon is published last: {ops:?}");
+        };
+        let texture = moon.texture.clone().expect("a texture");
+        assert_eq!(moon.uv_min, [0.5, 0.0]);
+        assert!(
+            ops.iter().any(|op| matches!(op,
+            render_model::RenderDiff::DefineTexture { texture: defined } if defined.id == texture))
+        );
+
+        // A moon moves every update: its texture goes out once.
+        services.begin_call(binding());
+        let api = services.api();
+        assert_eq!(
+            unsafe {
+                (api.camera_view.set_moon)(
+                    api.camera_view.context,
+                    &request(1, 0.5),
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("moved");
+        let ops = call.take_output().frames[0].ops.clone();
+        assert_eq!(ops.len(), 1, "only the moon: {ops:?}");
+        assert!(matches!(&ops[0], render_model::RenderDiff::SetMoon {
+            moon: Some(moon), ..
+        } if moon.texture.as_ref() == Some(&texture)));
+
+        // Radiance 0 clears its own slot and frees the texture.
+        services.begin_call(binding());
+        let api = services.api();
+        let off = NativeMoonRequest {
+            radiance: 0.0,
+            ..request(1, 0.0)
+        };
+        assert_eq!(
+            unsafe {
+                (api.camera_view.set_moon)(api.camera_view.context, &off, std::ptr::null_mut())
+            },
+            ABI_OK
+        );
+        assert_eq!(
+            unsafe {
+                (api.graphics.destroy_resource)(
+                    api.graphics.context,
+                    info.handle,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("off");
+        assert!(call.take_output().frames[0]
+            .ops
+            .contains(&render_model::RenderDiff::SetMoon {
+                slot: 1,
+                moon: None
+            }));
     }
 
     #[test]

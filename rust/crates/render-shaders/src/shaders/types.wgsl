@@ -3,6 +3,23 @@
 // Row layouts the renderer writes: the frame uniform (`frame.rs`), part rows
 // (`tables.rs`), light rows and the material uniform (`apply.rs`).
 
+// How many moons a sky holds (`render_model::MOON_SLOTS`).
+const MOON_SLOTS: u32 = 4u;
+
+// One moon of the sky (`sky.wgsl` `moon_seen`).
+struct Moon {
+    // xyz toward it, w its angular radius in radians (0: no moon).
+    toward: vec4<f32>,
+    // rgb: its linear colour; w: its radiance.
+    color: vec4<f32>,
+    // x: its lit fraction (0 new, 1 full); y: the earthshine on its dark
+    // part, a share of its radiance; z: its halo's strength.
+    shape: vec4<f32>,
+    // Its texture's region: xy the top left, zw the bottom right, image
+    // space; zero without a texture.
+    art: vec4<f32>,
+};
+
 struct Frame {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
@@ -41,15 +58,13 @@ struct Frame {
     atmosphere: vec4<f32>,
     // rgb: the linear haze colour; w: the sun halo's strength.
     haze: vec4<f32>,
-    // The moon (`sky.wgsl` `moon_seen`): xyz toward it, w its angular radius
-    // in radians (0: no moon).
-    moon: vec4<f32>,
-    // rgb: its linear colour; w: its radiance.
-    moon_color: vec4<f32>,
-    // x: its lit fraction (0 new, 1 full); y: the earthshine on its dark
-    // part, a share of its radiance; z: its halo's strength; w: its light's
-    // intensity on the clouds (0: none).
-    moon_shape: vec4<f32>,
+    // The moons by slot, a higher slot in front of a lower.
+    moons: array<Moon, MOON_SLOTS>,
+    // The moons' light on the clouds as one light (`cloud_moonlight`): xyz
+    // toward it.
+    moon_light: vec4<f32>,
+    // rgb: what they give together, already faded by the horizon.
+    moon_light_color: vec4<f32>,
     // The sky's light: x its intensity (0: off), y the specular cube's last
     // mip level (its roughest); z the sun disc's and halo's radiance (0: they
     // follow the light's intensity and do not bloom); w the least light bloom

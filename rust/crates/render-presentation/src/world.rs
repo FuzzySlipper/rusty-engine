@@ -140,7 +140,7 @@ struct RetainedGraphics {
     color_grading: Option<ColorGradingDescriptor>,
     atmosphere: Option<AtmosphereDescriptor>,
     sun_shafts: Option<SunShaftsDescriptor>,
-    moon: Option<MoonDescriptor>,
+    moons: [Option<MoonDescriptor>; render_model::MOON_SLOTS],
     stars: Option<StarsDescriptor>,
     wind: Option<WindDescriptor>,
     clouds: Option<CloudsDescriptor>,
@@ -515,7 +515,7 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetColorGrading { color_grading } if &self.retained.color_grading == color_grading)
                 || matches!(&op, RenderDiff::SetAtmosphere { atmosphere } if &self.retained.atmosphere == atmosphere)
                 || matches!(&op, RenderDiff::SetSunShafts { sun_shafts } if &self.retained.sun_shafts == sun_shafts)
-                || matches!(&op, RenderDiff::SetMoon { moon } if &self.retained.moon == moon)
+                || matches!(&op, RenderDiff::SetMoon { slot, moon } if self.retained.moons.get(*slot as usize) == Some(moon))
                 || matches!(&op, RenderDiff::SetStars { stars } if &self.retained.stars == stars)
                 || matches!(&op, RenderDiff::SetWind { wind } if &self.retained.wind == wind)
                 || matches!(&op, RenderDiff::SetClouds { clouds } if &self.retained.clouds == clouds)
@@ -810,7 +810,7 @@ impl PresentationWorld {
             color_grading,
             atmosphere,
             sun_shafts,
-            moon,
+            moons,
             stars,
             wind,
             clouds,
@@ -968,7 +968,7 @@ impl PresentationWorld {
                 color_grading: *color_grading,
                 atmosphere: *atmosphere,
                 sun_shafts: *sun_shafts,
-                moon: *moon,
+                moons: moons.clone(),
                 stars: stars.clone(),
                 wind: *wind,
                 clouds: *clouds,
@@ -1095,10 +1095,13 @@ impl PresentationWorld {
                 sun_shafts: self.retained.sun_shafts,
             });
         }
-        if self.retained.moon.is_some() {
-            ops.push(RenderDiff::SetMoon {
-                moon: self.retained.moon,
-            });
+        for (slot, moon) in self.retained.moons.iter().enumerate() {
+            if moon.is_some() {
+                ops.push(RenderDiff::SetMoon {
+                    slot: slot as u32,
+                    moon: moon.clone(),
+                });
+            }
         }
         if self.retained.stars.is_some() {
             ops.push(RenderDiff::SetStars {
@@ -1780,8 +1783,10 @@ impl PresentationWorld {
             RenderDiff::SetSunShafts { sun_shafts } => {
                 self.retained.sun_shafts = *sun_shafts;
             }
-            RenderDiff::SetMoon { moon } => {
-                self.retained.moon = *moon;
+            RenderDiff::SetMoon { slot, moon } => {
+                if let Some(retained) = self.retained.moons.get_mut(*slot as usize) {
+                    retained.clone_from(moon);
+                }
             }
             RenderDiff::SetStars { stars } => {
                 self.retained.stars = stars.clone();

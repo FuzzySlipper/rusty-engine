@@ -1786,6 +1786,24 @@ impl RuntimeAppearanceCall {
 
     /// The star field `request` asks for: its band's texture, when it has
     /// one, and the field naming its catalogue's resource.
+    /// The texture a moon draws, if it has one.
+    pub(crate) fn moon_texture(
+        &self,
+        texture: NativeRenderResourceReference,
+    ) -> Result<Option<TextureDescriptor>, CsharpEngineServicesError> {
+        if texture.value == 0 {
+            return Ok(None);
+        }
+        let resource = self.state.render_resources.resource(texture.value)?;
+        if resource.kind() != CsharpRenderResourceKind::Texture {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_MOON",
+                "a moon's texture must be a texture resource",
+            ));
+        }
+        Ok(resource.texture().cloned())
+    }
+
     pub(crate) fn star_field(
         &self,
         request: csharp_engine_abi::NativeStarsRequest,

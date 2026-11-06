@@ -96,6 +96,8 @@ pub(crate) struct Layouts {
     pub frame: wgpu::BindGroupLayout,
     pub material: wgpu::BindGroupLayout,
     pub sky: wgpu::BindGroupLayout,
+    /// A moon's texture (`sky.wgsl` `moon_texture`).
+    pub moon: wgpu::BindGroupLayout,
     /// Shadow caster pass: parts, instances, shadow views.
     pub casters: wgpu::BindGroupLayout,
     /// Shadow caster pass: the layer index (dynamic offset).
@@ -122,6 +124,7 @@ pub(crate) struct Layouts {
     cloud_composite_pipeline: wgpu::PipelineLayout,
     /// The sun pass over the background: the frame only.
     sun_pipeline: wgpu::PipelineLayout,
+    moon_pipeline: wgpu::PipelineLayout,
     /// The star field (`stars.rs`): its parameters and band in group 1.
     pub stars: wgpu::BindGroupLayout,
     stars_pipeline: wgpu::PipelineLayout,
@@ -523,6 +526,15 @@ impl Layouts {
             bind_group_layouts: &[Some(&frame)],
             immediate_size: 0,
         });
+        let moon = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("render-wgpu moon"),
+            entries: &[texture_entry(10), sampler_entry(11)],
+        });
+        let moon_pipeline = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-wgpu moon"),
+            bind_group_layouts: &[Some(&frame), Some(&moon)],
+            immediate_size: 0,
+        });
         let stars = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu stars"),
             entries: &[uniform_entry(0), texture_entry(1), sampler_entry(2)],
@@ -741,6 +753,8 @@ impl Layouts {
             cloud_composite,
             cloud_composite_pipeline,
             sun_pipeline,
+            moon_pipeline,
+            moon,
             stars,
             stars_pipeline,
             stars_shader,
@@ -790,13 +804,13 @@ impl Layouts {
 
     /// A target's pipeline set, before any world pipeline is prepared.
     pub fn pipelines(&self, device: &wgpu::Device, target: ColorTarget) -> Pipelines {
-        let background = |label, layout, fragment, blend| {
+        let background = |label, layout, (vertex, fragment), blend| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(layout),
                 vertex: wgpu::VertexState {
                     module: &self.sky_shader,
-                    entry_point: Some("vs_sky"),
+                    entry_point: Some(vertex),
                     compilation_options: Default::default(),
                     buffers: &[],
                 },
@@ -857,11 +871,16 @@ impl Layouts {
             };
         Pipelines {
             target,
-            sky: background("render-wgpu sky", &self.sky_pipeline, "fs_sky", None),
+            sky: background(
+                "render-wgpu sky",
+                &self.sky_pipeline,
+                ("vs_sky", "fs_sky"),
+                None,
+            ),
             sun: background(
                 "render-wgpu sun",
                 &self.sun_pipeline,
-                "fs_sun",
+                ("vs_sky", "fs_sun"),
                 Some(wgpu::BlendState {
                     color: added,
                     alpha: added,
@@ -869,8 +888,8 @@ impl Layouts {
             ),
             moon: background(
                 "render-wgpu moon",
-                &self.sun_pipeline,
-                "fs_moon",
+                &self.moon_pipeline,
+                ("vs_moon", "fs_moon"),
                 Some(wgpu::BlendState {
                     color: added,
                     alpha: added,
@@ -895,7 +914,7 @@ impl Layouts {
             clouds: background(
                 "render-wgpu clouds",
                 &self.sky_pipeline,
-                "fs_clouds",
+                ("vs_sky", "fs_clouds"),
                 Some(wgpu::BlendState {
                     color: wgpu::BlendComponent {
                         src_factor: wgpu::BlendFactor::One,
@@ -914,7 +933,7 @@ impl Layouts {
             clouds_composite: background(
                 "render-wgpu volumetric clouds",
                 &self.cloud_composite_pipeline,
-                "fs_clouds_composite",
+                ("vs_sky", "fs_clouds_composite"),
                 Some(wgpu::BlendState {
                     color: wgpu::BlendComponent {
                         src_factor: wgpu::BlendFactor::One,

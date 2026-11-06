@@ -39,7 +39,13 @@ public readonly partial record struct MoonRequest
 {
     /// <summary>A moon that lights no clouds.</summary>
     public MoonRequest(System.Numerics.Vector3 Direction, float RadiusDegrees, System.Numerics.Vector3 Color, float Radiance, float Phase, float Earthshine, float Halo)
-        : this(Direction, RadiusDegrees, Color, Radiance, Phase, Earthshine, Halo, 0)
+        : this(Direction, RadiusDegrees, Color, Radiance, Phase, Earthshine, Halo, 0, 0, default, default, default)
+    {
+    }
+
+    /// <summary>The moon in slot 0, a plain disc.</summary>
+    public MoonRequest(System.Numerics.Vector3 Direction, float RadiusDegrees, System.Numerics.Vector3 Color, float Radiance, float Phase, float Earthshine, float Halo, float LightIntensity)
+        : this(Direction, RadiusDegrees, Color, Radiance, Phase, Earthshine, Halo, LightIntensity, 0, default, default, default)
     {
     }
 }

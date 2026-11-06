@@ -163,13 +163,11 @@ fn cloud_sunlight(position: vec3<f32>) -> vec3<f32> {
     return sun * exp(-TWILIGHT_EXTINCTION * depth) * (1.0 - smoothstep(TWILIGHT_FADE, 1.0, depth));
 }
 
-// The moon's light on the clouds (`Frame.moon_shape.w` times its colour),
-// fading out as it reaches the horizon; none without a moon or its light.
+// The moons' light on the clouds, as one light (`Frame.moon_light`): each
+// gives its `light_intensity` times its colour, fading out as it reaches the
+// horizon; none without a moon or their light.
 fn cloud_moonlight() -> vec3<f32> {
-    if frame.moon.w <= 0.0 {
-        return vec3<f32>(0.0);
-    }
-    return frame.moon_color.rgb * frame.moon_shape.w * smoothstep(-0.05, 0.15, frame.moon.y);
+    return frame.moon_light_color.rgb;
 }
 
 // Smooth value noise in 3D, in [0, 1]: the volumetric clouds' billows.

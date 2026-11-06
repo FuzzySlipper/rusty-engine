@@ -1,6 +1,6 @@
 """Deterministic authored sprites: the torch's eight-frame flame flipbook
 strip, ember dot and smoke puff, and the lantern's two-frame atlas with its
-emission map; no runtime image generation."""
+emission map, and a moon's two phase frames; no runtime image generation."""
 import math, struct, zlib
 from pathlib import Path
 
@@ -74,9 +74,20 @@ def lantern_glow(x,y):
     _,_,flame = lantern_parts(x,y)
     return (255,255,255,255) if flame else (0,0,0,0)
 
+MOON=16
+def moon_phases(x,y):
+    """A full disc in frame 0 and a crescent in frame 1, in four flat shades."""
+    frame,x = divmod(x,MOON)
+    u,v = (x+0.5)/MOON*2-1,(y+0.5)/MOON*2-1
+    if u*u+v*v>1: return (0,0,0,0)
+    if frame==1 and (u-0.45)**2+v*v<0.8: return (0,0,0,0)
+    shade = (235,200,165,120)[(x//3+y//4)%4]
+    return (shade,shade,int(shade*0.9),255)
+
 content = Path(__file__).parent/'content'
 png(content/'flame.png', FRAMES*FRAME, FRAME, flame)
 png(content/'ember.png', EMBER, EMBER, ember)
 png(content/'smoke.png', SMOKE, SMOKE, smoke)
 png(content/'lantern.png', LANTERN*2, LANTERN, lantern)
 png(content/'lantern-glow.png', LANTERN*2, LANTERN, lantern_glow)
+png(content/'moon-phases.png', MOON*2, MOON, moon_phases)

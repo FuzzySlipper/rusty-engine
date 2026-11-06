@@ -1323,15 +1323,29 @@ them. The Engine owns GPU lifetime and panorama orientation.
 
 ## The moon
 
-A moon of its own stands in the sky beside the sun, with a phase:
+Up to four moons stand in the sky beside the sun, each with a phase:
 
 ```csharp
 engine.CameraView.SetMoon(new(Direction: towardMoon, RadiusDegrees: 0.8f,
     Color: new Vector3(1, 0.95f, 0.85f), Radiance: 2, Phase: 0.3f, Earthshine: 0.05f, Halo: 0.2f,
     LightIntensity: 0.25f * 0.3f));
-engine.CameraView.SetMoon(default); // no moon
+engine.CameraView.SetMoon(default); // no moon in slot 0
+engine.CameraView.SetMoon(new(towardSecond, 1.5f, Vector3.One, 2, 1, 0, 0, 0,
+    Slot: 1, Texture: moonFrames, UvMin: new(.5f, 0), UvMax: new(1, 1)));
 ```
 
+- `Slot` (0 to 3; 0 the default) names the moon, so each moves and changes on
+  its own and a request leaves the others alone. Radiance 0 clears that slot.
+  A higher slot stands in front of a lower one: its whole disc, its dark part
+  too, hides the moon behind it, so a crossing reads the same whichever way
+  they move.
+- `Texture` (the zero handle, the default, for a plain disc) draws an image on
+  the disc, upright with its top toward the zenith, sampled with the filter it
+  was opened with, so a nearest image stays crisp. Its colour and alpha
+  multiply the disc, which keeps its round edge. `UvMin` and `UvMax` pick a
+  region of it, equal for the whole image. `Phase` still shades a textured
+  moon; a product with art per phase picks the frame and passes `Phase` 1,
+  which draws the image as it is. Bloom reads the plain disc, not the image.
 - `Direction` (world space, toward the moon, any length) places it, and
   `RadiusDegrees` sizes its disc. `Color` (linear) and `Radiance` (0, the
   default, takes the moon away) light it. A product warms and enlarges a
@@ -1353,7 +1367,9 @@ engine.CameraView.SetMoon(default); // no moon
   threshold blooms as the sun's disc does, through the same pass: only
   where the world leaves the sky open, less what the clouds cover.
 - `LightIntensity` (0, the default, for none) lights the
-  [clouds](#clouds) from the moon in its colour: a second light beside the
+  [clouds](#clouds) from the moon in its colour. Several moons light them as
+  one light, the sum of what each gives from their directions weighted by it,
+  so a second moon adds no cost: a second light beside the
   sky's sun, layer and regions, flat and volumetric, with the same
   self-shadowing, fading as the moon nears the horizon. A full moon's is
   about 0.2 to 0.3 against a sun's 1.5. A product scales it with the phase.
@@ -1362,7 +1378,7 @@ engine.CameraView.SetMoon(default); // no moon
   second light ray a sample while it is on.
 - It lights nothing else: the haze and sun shafts keep the sky's sun, and a
   product lights its world at night with its own directional moonlight.
-- It is retained camera-view state, like the atmosphere. It costs one
+- It is retained camera-view state, like the atmosphere. Each moon costs one
   fullscreen draw in the background pass, as the sun's disc does, and with
   bloom a share of the sun's glow pass.
 

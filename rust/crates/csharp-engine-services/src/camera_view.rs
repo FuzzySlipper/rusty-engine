@@ -51,6 +51,8 @@ struct CameraState {
     /// The star field's catalogue and band, which may not be released while
     /// it draws them.
     stars: Option<NativeStarsRequest>,
+    /// The moons by slot, whose textures may not be released while they draw.
+    moons: [Option<NativeMoonRequest>; render_model::MOON_SLOTS],
     /// The wetness and snow in force (`ReadWetness`, `ReadSnow`), as the
     /// last `SetWetness` and `SetSnow` left them.
     wetness: Option<WetnessDescriptor>,
@@ -97,6 +99,26 @@ struct CameraTargetState {
     revision: u64,
 }
 
+/// A moon set in this call: its texture resolves when the call finishes.
+pub(crate) struct StagedMoon {
+    slot: u32,
+    moon: Option<render_model::MoonDescriptor>,
+    texture: NativeRenderResourceReference,
+    /// Whether its texture is new to the slot, so its definition goes out.
+    define: bool,
+}
+
+impl StagedMoon {
+    fn off(slot: u32) -> Self {
+        Self {
+            slot,
+            moon: None,
+            texture: NativeRenderResourceReference::default(),
+            define: false,
+        }
+    }
+}
+
 pub(crate) struct RuntimeCameraViewCall {
     state: CameraState,
     /// Whether a camera change this call publishes the composition.
@@ -113,7 +135,7 @@ pub(crate) struct RuntimeCameraViewCall {
     pub(crate) color_grading: Option<Option<ColorGradingDescriptor>>,
     pub(crate) atmosphere: Option<Option<AtmosphereDescriptor>>,
     pub(crate) sun_shafts: Option<Option<SunShaftsDescriptor>>,
-    pub(crate) moon: Option<Option<render_model::MoonDescriptor>>,
+    pub(crate) moons: Vec<StagedMoon>,
     /// The star field as the product asked for it; its resources are
     /// resolved when the frame is built.
     pub(crate) stars: Option<Option<NativeStarsRequest>>,
@@ -218,6 +240,7 @@ impl RuntimeCameraViewBridge {
                 active_camera: None,
                 background: CameraBackground::Default,
                 stars: None,
+                moons: Default::default(),
                 wetness: None,
                 snow: None,
                 decals: BTreeMap::new(),
@@ -332,7 +355,7 @@ impl RuntimeCameraViewBridge {
             color_grading: None,
             atmosphere: None,
             sun_shafts: None,
-            moon: None,
+            moons: Vec::new(),
             stars: None,
             wind: None,
             clouds: None,
@@ -373,6 +396,11 @@ impl RuntimeCameraViewBridge {
         let staged = self.staged_mut()?;
         staged.stars = Some(None);
         staged.state.stars = None;
+        for slot in 0..render_model::MOON_SLOTS {
+            if staged.state.moons[slot].take().is_some() {
+                staged.moons.push(StagedMoon::off(slot as u32));
+            }
+        }
         staged.decal_atlas = Some(None);
         staged.state.decal_atlas = None;
         Ok(())
@@ -389,12 +417,18 @@ impl RuntimeCameraViewBridge {
         let stars = state
             .stars
             .is_some_and(|stars| stars.catalogue.value == resource || stars.band.value == resource);
+        let moons = state
+            .moons
+            .iter()
+            .flatten()
+            .any(|moon| moon.texture.value == resource);
         let decals = state.decal_atlas.is_some_and(|atlas| {
             [atlas.color, atlas.normals, atlas.emission]
                 .iter()
                 .any(|texture| texture.value == resource)
         });
         stars
+            || moons
             || decals
             || match state.background {
                 CameraBackground::Sky(id) => id == resource,
@@ -1031,10 +1065,22 @@ impl RuntimeCameraViewBridge {
             earthshine: request.earthshine.clamp(0.0, 1.0),
             halo: request.halo,
             light_intensity: request.light_intensity,
+            texture: None,
+            uv_min: [request.uv_min.x, request.uv_min.y],
+            uv_max: [request.uv_max.x, request.uv_max.y],
         };
+        let slot = request.slot as usize;
+        if slot >= render_model::MOON_SLOTS {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_MOON",
+                "a moon's slot is 0 to 3",
+            ));
+        }
         // Radiance 0 (the default request) takes the moon away, whatever else.
         if request.radiance == 0.0 {
-            self.staged_mut()?.moon = Some(None);
+            let staged = self.staged_mut()?;
+            staged.state.moons[slot] = None;
+            staged.moons.push(StagedMoon::off(request.slot));
             return Ok(());
         }
         if !moon.valid() {
@@ -1043,7 +1089,17 @@ impl RuntimeCameraViewBridge {
                 "the moon needs a finite direction with some length, and finite values otherwise, all but the phase and earthshine non-negative",
             ));
         }
-        self.staged_mut()?.moon = Some(Some(moon));
+        let staged = self.staged_mut()?;
+        // A moon moves every update: its texture is defined once.
+        let define = staged.state.moons[slot]
+            .is_none_or(|previous| previous.texture.value != request.texture.value);
+        staged.state.moons[slot] = Some(request);
+        staged.moons.push(StagedMoon {
+            slot: request.slot,
+            moon: Some(moon),
+            texture: request.texture,
+            define,
+        });
         Ok(())
     }
 
@@ -2019,8 +2075,18 @@ pub(crate) fn environment_frame(
     if let Some(sun_shafts) = call.sun_shafts {
         operations.push(RenderDiff::SetSunShafts { sun_shafts });
     }
-    if let Some(moon) = call.moon {
-        operations.push(RenderDiff::SetMoon { moon });
+    for staged in &call.moons {
+        let mut moon = staged.moon.clone();
+        if let (Some(moon), Some(texture)) = (&mut moon, appearance.moon_texture(staged.texture)?) {
+            moon.texture = Some(texture.id.clone());
+            if staged.define {
+                operations.push(RenderDiff::DefineTexture { texture });
+            }
+        }
+        operations.push(RenderDiff::SetMoon {
+            slot: staged.slot,
+            moon,
+        });
     }
     if let Some(request) = call.stars {
         let stars = match request {

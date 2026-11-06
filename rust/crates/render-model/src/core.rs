@@ -279,8 +279,9 @@ impl SunShaftsDescriptor {
 /// lights the dark part by that share of the radiance, and `halo` adds a
 /// glow a few degrees wide of that strength. `light_intensity` lights the
 /// clouds from the moon in its colour, a second light beside the sky's sun;
-/// 0 lights nothing.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+/// 0 lights nothing. `texture` draws an image on the disc, by the region
+/// `uv_min` to `uv_max` (equal for the whole image).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MoonDescriptor {
     pub direction: [f32; 3],
@@ -292,7 +293,16 @@ pub struct MoonDescriptor {
     pub halo: f32,
     #[serde(default)]
     pub light_intensity: f32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub texture: Option<String>,
+    #[serde(default)]
+    pub uv_min: [f32; 2],
+    #[serde(default)]
+    pub uv_max: [f32; 2],
 }
+
+/// How many moons a sky holds. A higher slot stands in front of a lower one.
+pub const MOON_SLOTS: usize = 4;
 
 impl MoonDescriptor {
     /// A finite direction with some length, a phase and earthshine within
@@ -309,6 +319,11 @@ impl MoonDescriptor {
             && unit.contains(&self.earthshine)
             && non_negative(self.halo)
             && non_negative(self.light_intensity)
+            && self
+                .uv_min
+                .iter()
+                .chain(&self.uv_max)
+                .all(|value| value.is_finite())
     }
 }
 
@@ -1516,8 +1531,10 @@ pub enum RenderDiff {
     SetSunShafts {
         sun_shafts: Option<SunShaftsDescriptor>,
     },
-    /// Selects the moon in the sky; None takes it away.
+    /// Selects the moon in slot `slot` (below `MOON_SLOTS`); None takes it
+    /// away.
     SetMoon {
+        slot: u32,
         moon: Option<MoonDescriptor>,
     },
     /// Selects the star field in the sky; None takes it away.

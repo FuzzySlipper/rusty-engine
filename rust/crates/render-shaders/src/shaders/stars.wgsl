@@ -5,7 +5,7 @@
 // catalogue's frame turns into the world by `stars.orientation`. The moon's
 // whole disc (`Frame.moon`), its dark part too, hides what lies behind it.
 
-#import rusty::types::PI
+#import rusty::types::{MOON_SLOTS, PI}
 #import rusty::view::frame
 
 struct StarParams {
@@ -39,15 +39,20 @@ const TWINKLE_SWING: f32 = 0.45;
 const TWINKLE_RATE: f32 = 3.0;
 const TWINKLE_SPREAD: f32 = 4.0;
 
-// How much of the sky along `direction` the moon's disc hides: 1 inside it,
-// 0 outside, over `soft` radians at its rim; 0 without a moon.
-fn behind_moon(direction: vec3<f32>, soft: f32) -> f32 {
-    let radius = frame.moon.w;
-    if radius <= 0.0 {
-        return 0.0;
+// How much of the sky along `direction` the moons' discs hide: 1 inside one,
+// 0 outside them all, over `soft` of a moon's radius (and at least `rim`
+// radians) at its edge.
+fn behind_moons(direction: vec3<f32>, soft: f32, rim: f32) -> f32 {
+    var hidden = 0.0;
+    for (var slot = 0u; slot < MOON_SLOTS; slot++) {
+        let radius = frame.moons[slot].toward.w;
+        if radius > 0.0 {
+            let angle = acos(clamp(dot(direction, frame.moons[slot].toward.xyz), -1.0, 1.0));
+            let edge = max(radius * soft, rim);
+            hidden = max(hidden, 1.0 - smoothstep(radius - edge, radius + edge, angle));
+        }
     }
-    let angle = acos(clamp(dot(direction, frame.moon.xyz), -1.0, 1.0));
-    return 1.0 - smoothstep(radius - soft, radius + soft, angle);
+    return hidden;
 }
 
 // A star passing behind the moon's rim fades over this share of its radius.
@@ -90,7 +95,7 @@ fn vs_star(
     let twinkle = 1.0 + stars.look.w * TWINKLE_SWING
         * sin(frame.time.x * rate + 2.0 * PI * star_hash(index, 2u));
     let toward = turned(stars.orientation, direction);
-    let hidden = behind_moon(toward, frame.moon.w * OCCULTATION_SOFTNESS);
+    let hidden = behind_moons(toward, OCCULTATION_SOFTNESS, 0.0);
     let light = color * stars.look.y * pow(10.0, -0.4 * MAGNITUDE_CONTRAST * magnitude) * shown
         * twinkle * (1.0 - hidden);
     // A direction projects as a point at infinity.
@@ -150,6 +155,5 @@ fn fs_star_band(in: BandOut) -> @location(0) vec4<f32> {
         0.5 - asin(clamp(local.y, -1.0, 1.0)) / PI,
     );
     let color = textureSampleLevel(band, band_sampler, uv, 0.0).rgb;
-    let rim = max(fwidth(acos(clamp(dot(direction, frame.moon.xyz), -1.0, 1.0))), 1e-5);
-    return vec4<f32>(color * stars.look.z * (1.0 - behind_moon(direction, rim)), 0.0);
+    return vec4<f32>(color * stars.look.z * (1.0 - behind_moons(direction, 0.0, frame.time.y)), 0.0);
 }

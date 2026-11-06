@@ -611,6 +611,8 @@ pub struct Renderer {
     frame_bind_group: wgpu::BindGroup,
     caster_bind_group: wgpu::BindGroup,
     sky_bind_group: Option<wgpu::BindGroup>,
+    /// Each moon's texture, or white, by slot.
+    moon_bind_groups: [Option<wgpu::BindGroup>; render_model::MOON_SLOTS],
     /// The opaque depth (and colour) the blend pass's water surfaces read.
     water: water::WaterScene,
     /// The Engine presentation timeline animated poses advance on.
@@ -917,6 +919,7 @@ impl Renderer {
             frame_bind_group,
             caster_bind_group,
             sky_bind_group: None,
+            moon_bind_groups: Default::default(),
             water,
             surface_size: None,
             ray_scene: None,

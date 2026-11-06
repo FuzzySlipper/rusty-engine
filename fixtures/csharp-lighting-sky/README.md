@@ -39,6 +39,9 @@ flames stay bright, on the side the frame draws them, and calling it again
 changes the intensity while the playback runs (below 0 clears them);
 `lighting.torch true` then lights the iron around them;
 `lighting.moon <phase> <radiance>` puts the moon in the sky beside the sun;
+`lighting.moons <degrees per second> <frame>` shows two moons: a large one in
+slot 0 drawing that frame of `content/moon-phases.png` with nearest filtering,
+and a small plain blue one in slot 1 crossing in front of it (0 clears them);
 `lighting.stars <limit> <spin>` draws the star field (`content/sky.stars.json`
 with the `content/band.png` band, both from `generate-stars.py`) to that
 limiting magnitude, turned about its pole;

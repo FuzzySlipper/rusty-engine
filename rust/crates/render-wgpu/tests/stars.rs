@@ -398,6 +398,7 @@ fn the_moons_whole_disc_hides_the_stars_and_band_behind_it() {
                 }),
             },
             RenderDiff::SetMoon {
+                slot: 0,
                 moon: Some(MoonDescriptor {
                     direction: [0.0, 0.0, -1.0],
                     radius_degrees: 4.0,
@@ -407,6 +408,7 @@ fn the_moons_whole_disc_hides_the_stars_and_band_behind_it() {
                     earthshine: 0.0,
                     halo: 0.0,
                     light_intensity: 0.0,
+                    ..Default::default()
                 }),
             },
         ]);

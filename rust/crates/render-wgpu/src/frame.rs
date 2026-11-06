@@ -53,6 +53,8 @@ pub(crate) const LIGHT_ROW_FLOATS: usize = 16;
 /// layer, its drift and its shape, the surfaces' wetness and snow, the
 /// snow's colour, the puddles' ice and the backdrop's link; then the light
 /// cluster grid and depth range.
+/// Each moon's four rows, then their light on the clouds.
+const MOON_ROWS_FLOATS: usize = render_model::MOON_SLOTS * 16 + 8;
 const FRAME_UNIFORM_BYTES: u64 = (16
     + 16
     + 4
@@ -65,7 +67,7 @@ const FRAME_UNIFORM_BYTES: u64 = (16
     + 4
     + 4
     + 4 * 4
-    + 3 * 4
+    + MOON_ROWS_FLOATS as u64
     + 4
     + 4
     + 4
@@ -453,6 +455,7 @@ impl Renderer {
         }
         if self.tables.environment_dirty {
             self.rebuild_sky();
+            self.rebuild_moons();
             self.tables.environment_dirty = false;
         }
         // The sky's light follows the background while it is on, or its
@@ -1318,7 +1321,12 @@ impl Renderer {
             .atmosphere
             .is_some_and(|atmosphere| atmosphere.sun_radiance > 0.0)
             && self.sky_sun().is_some();
-        let moon = self.tables.moon.is_some_and(|moon| moon.radiance > 0.0);
+        let moon = self
+            .tables
+            .moons
+            .iter()
+            .flatten()
+            .any(|moon| moon.radiance > 0.0);
         self.tables.bloom.is_some_and(|bloom| bloom.intensity > 0.0) && (sun || moon)
     }
 
@@ -2040,6 +2048,36 @@ impl Renderer {
         encoded
     }
 
+    /// Bind each moon's texture, or white, with the filter it was opened
+    /// with: at a moon's change and a texture's.
+    pub(crate) fn rebuild_moons(&mut self) {
+        for (slot, moon) in self.tables.moons.iter().enumerate() {
+            self.moon_bind_groups[slot] = moon.as_ref().map(|moon| {
+                let texture = moon
+                    .texture
+                    .as_ref()
+                    .and_then(|texture| self.tables.textures.get(texture))
+                    .unwrap_or(&self.white);
+                self.gpu
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("render-wgpu moon"),
+                        layout: &self.layouts.moon,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 10,
+                                resource: wgpu::BindingResource::TextureView(&texture.view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 11,
+                                resource: wgpu::BindingResource::Sampler(&texture.sampler),
+                            },
+                        ],
+                    })
+            });
+        }
+    }
+
     fn rebuild_sky(&mut self) {
         self.sky_bind_group = None;
         let Environment::Sky(sky) = &self.tables.environment else {
@@ -2698,11 +2736,18 @@ impl Renderer {
             pass.set_pipeline(&self.pipelines[sky_index].sun);
             pass.draw(0..3, 0..1);
         }
-        // The moon over them, under the clouds, when it is set.
-        if view.sky && self.tables.moon.is_some() {
+        // The moons over them, under the clouds, each drawn as the instance
+        // of its slot.
+        if view.sky && self.moon_bind_groups.iter().any(Option::is_some) {
             pass.set_bind_group(0, &self.frame_bind_group, &[]);
             pass.set_pipeline(&self.pipelines[sky_index].moon);
-            pass.draw(0..3, 0..1);
+            for (slot, moon) in self.moon_bind_groups.iter().enumerate() {
+                if let Some(moon) = moon {
+                    let slot = slot as u32;
+                    pass.set_bind_group(1, moon, &[]);
+                    pass.draw(0..3, slot..slot + 1);
+                }
+            }
         }
         drop(pass);
         // The cloud layer over the panorama and the sun, in a pass of
@@ -2834,7 +2879,7 @@ impl Renderer {
         for value in atmosphere_uniform(atmosphere, self.sky_sun()) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
-        for value in moon_uniform(self.tables.moon) {
+        for value in moon_uniform(&self.tables.moons) {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
         // The sky's light, once its first build is in.
@@ -4290,29 +4335,65 @@ fn atmosphere_uniform(atmosphere: AtmosphereDescriptor, sun: Option<Sun>) -> [f3
     ]
 }
 
-/// The frame uniform's moon rows (`rusty::types::Frame`): toward it (unit)
-/// and its angular radius in radians (0: no moon); its colour and radiance;
-/// its phase, earthshine, halo and light on the clouds.
-fn moon_uniform(moon: Option<render_model::MoonDescriptor>) -> [f32; 12] {
-    let Some(moon) = moon else {
-        return [0.0; 12];
-    };
-    let toward = crate::convert::vec3(moon.direction).normalize_or_zero();
-    let [r, g, b] = moon.color;
-    [
-        toward.x,
-        toward.y,
-        toward.z,
-        moon.radius_degrees.to_radians(),
-        r,
-        g,
-        b,
-        moon.radiance,
-        moon.phase,
-        moon.earthshine,
-        moon.halo,
-        moon.light_intensity,
-    ]
+/// The frame uniform's moon rows (`rusty::types::Frame`), by slot: toward it
+/// (unit) and its angular radius in radians (0: no moon); its colour and
+/// radiance; its phase, earthshine and halo; its texture's region (zero
+/// without one). Then their light on the clouds as one light: their
+/// directions weighted by how much each gives, and the sum of what they give.
+/// A moon's light fades out as it nears the horizon.
+fn moon_uniform(
+    moons: &[Option<render_model::MoonDescriptor>; render_model::MOON_SLOTS],
+) -> [f32; MOON_ROWS_FLOATS] {
+    let mut rows = [0.0; MOON_ROWS_FLOATS];
+    let (mut toward_light, mut light) = (Vec3::ZERO, Vec3::ZERO);
+    for (slot, moon) in moons.iter().enumerate() {
+        let Some(moon) = moon else {
+            continue;
+        };
+        let toward = crate::convert::vec3(moon.direction).normalize_or_zero();
+        let [r, g, b] = moon.color;
+        let [u0, v0] = moon.uv_min;
+        let [u1, v1] = moon.uv_max;
+        let art = match (&moon.texture, moon.uv_min == moon.uv_max) {
+            (None, _) => [0.0; 4],
+            (Some(_), true) => [0.0, 0.0, 1.0, 1.0],
+            (Some(_), false) => [u0, v0, u1, v1],
+        };
+        rows[slot * 16..][..16].copy_from_slice(&[
+            toward.x,
+            toward.y,
+            toward.z,
+            moon.radius_degrees.to_radians(),
+            r,
+            g,
+            b,
+            moon.radiance,
+            moon.phase,
+            moon.earthshine,
+            moon.halo,
+            0.0,
+            art[0],
+            art[1],
+            art[2],
+            art[3],
+        ]);
+        let rise = ((toward.y + 0.05) / 0.2).clamp(0.0, 1.0);
+        let given = Vec3::new(r, g, b) * moon.light_intensity * (rise * rise * (3.0 - 2.0 * rise));
+        toward_light += toward * given.element_sum();
+        light += given;
+    }
+    let toward_light = toward_light.normalize_or_zero();
+    rows[render_model::MOON_SLOTS * 16..].copy_from_slice(&[
+        toward_light.x,
+        toward_light.y,
+        toward_light.z,
+        0.0,
+        light.x,
+        light.y,
+        light.z,
+        0.0,
+    ]);
+    rows
 }
 
 /// The frame uniform's wind row (`rusty::wind`): the unit direction over

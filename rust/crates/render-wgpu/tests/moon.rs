@@ -1,4 +1,4 @@
-//! The moon (`SetMoon`; `sky.wgsl` `fs_moon`): a disc of its own beside the
+//! The moons (`SetMoon`; `sky.wgsl` `fs_moon`): each a disc of its own beside the
 //! sun, lit by its phase with the lit limb toward the sky's sun, a pale disc
 //! over a day sky, covered by the clouds and the world, blooming at a
 //! radiance, and changing nothing else. Same harness as
@@ -65,6 +65,7 @@ fn scene(sky: [u8; 4]) -> Harness {
 fn moon(phase: f32, radiance: f32, earthshine: f32) -> RenderDiff {
     let up = MOON_UP.to_radians();
     RenderDiff::SetMoon {
+        slot: 0,
         moon: Some(MoonDescriptor {
             direction: [0.0, up.sin(), -up.cos()],
             radius_degrees: 4.0,
@@ -74,6 +75,7 @@ fn moon(phase: f32, radiance: f32, earthshine: f32) -> RenderDiff {
             earthshine,
             halo: 0.0,
             light_intensity: 0.0,
+            ..Default::default()
         }),
     }
 }
@@ -163,7 +165,10 @@ fn its_phase_lights_the_limb_toward_the_sun_and_earthshine_the_rest() {
     let mut harness = scene(NIGHT);
     harness.apply(vec![moon(1.0, 1.0, 0.0)]);
     look(&mut harness);
-    harness.apply(vec![RenderDiff::SetMoon { moon: None }]);
+    harness.apply(vec![RenderDiff::SetMoon {
+        slot: 0,
+        moon: None,
+    }]);
     assert_eq!(look(&mut harness), sky);
 }
 
@@ -262,6 +267,7 @@ fn an_overcast_covers_it_as_much_as_it_covers_the_sky() {
         let up = 40.0f32.to_radians();
         if moon_on {
             harness.apply(vec![RenderDiff::SetMoon {
+                slot: 0,
                 moon: Some(MoonDescriptor {
                     direction: [0.0, up.sin(), -up.cos()],
                     radius_degrees: 4.0,
@@ -271,6 +277,7 @@ fn an_overcast_covers_it_as_much_as_it_covers_the_sky() {
                     earthshine: 0.0,
                     halo: 0.0,
                     light_intensity: 0.0,
+                    ..Default::default()
                 }),
             }]);
         }
@@ -344,6 +351,7 @@ fn it_changes_nothing_else() {
         ]);
         if moon_on {
             harness.apply(vec![RenderDiff::SetMoon {
+                slot: 0,
                 moon: Some(MoonDescriptor {
                     direction: [0.0, 0.3, 1.0],
                     radius_degrees: 4.0,
@@ -353,6 +361,7 @@ fn it_changes_nothing_else() {
                     earthshine: 0.0,
                     halo: 0.5,
                     light_intensity: 0.0,
+                    ..Default::default()
                 }),
             }]);
         }
@@ -420,6 +429,7 @@ fn its_light_lights_the_clouds_at_night_toward_it_and_none_leaves_them_as_they_w
                 }),
             },
             RenderDiff::SetMoon {
+                slot: 0,
                 moon: Some(MoonDescriptor {
                     direction: [side * up.cos() * 0.7, up.sin(), -up.cos() * 0.7],
                     radius_degrees: 1.0,
@@ -429,6 +439,7 @@ fn its_light_lights_the_clouds_at_night_toward_it_and_none_leaves_them_as_they_w
                     earthshine: 0.0,
                     halo: 0.0,
                     light_intensity: light,
+                    ..Default::default()
                 }),
             },
         ]);
@@ -491,4 +502,231 @@ fn its_light_lights_the_clouds_at_night_toward_it_and_none_leaves_them_as_they_w
             gain(&on_right, left.clone())
         );
     }
+}
+
+/// A moon in `slot` 5° up, `offset` degrees to the right of straight ahead, of
+/// this radius and colour, full and bright.
+fn moon_at(slot: u32, offset: f32, radius_degrees: f32, color: [f32; 3]) -> RenderDiff {
+    let (up, right) = (MOON_UP.to_radians(), offset.to_radians());
+    RenderDiff::SetMoon {
+        slot,
+        moon: Some(MoonDescriptor {
+            direction: [right.sin() * up.cos(), up.sin(), -right.cos() * up.cos()],
+            radius_degrees,
+            color,
+            radiance: 1.0,
+            phase: 1.0,
+            ..Default::default()
+        }),
+    }
+}
+
+const RED: [f32; 3] = [1.0, 0.1, 0.1];
+const BLUE: [f32; 3] = [0.1, 0.2, 1.0];
+
+/// Each moon has its own size, colour, phase and place, and setting one
+/// leaves the others: slot 0 keeps its meaning for a product with one moon.
+#[test]
+fn moons_in_their_slots_stand_apart_and_move_on_their_own() {
+    let mut harness = scene(NIGHT);
+    let sky = pixel(&look(&mut harness), CENTRE);
+    harness.apply(vec![moon_at(0, -8.0, 3.0, RED), moon_at(1, 8.0, 2.0, BLUE)]);
+    let both = look(&mut harness);
+    // 8° across is 24 pixels at this view.
+    let (left, right) = ((CENTRE.0 - 24, CENTRE.1), (CENTRE.0 + 24, CENTRE.1));
+    let [r, _, b] = pixel(&both, left);
+    assert!(r > b + 60, "the red moon: {:?}", pixel(&both, left));
+    let [r, _, b] = pixel(&both, right);
+    assert!(b > r + 60, "the blue moon: {:?}", pixel(&both, right));
+    assert!(same(pixel(&both, CENTRE), sky), "the sky between them");
+
+    harness.apply(vec![moon_at(1, 0.0, 2.0, BLUE)]);
+    let moved = look(&mut harness);
+    assert!(same(pixel(&moved, right), sky), "the blue moon left");
+    assert!(above(pixel(&moved, CENTRE), sky, 40), "and stands ahead");
+    assert_eq!(pixel(&moved, left), pixel(&both, left), "the red one stays");
+
+    harness.apply(vec![RenderDiff::SetMoon {
+        slot: 0,
+        moon: None,
+    }]);
+    let cleared = look(&mut harness);
+    assert!(same(pixel(&cleared, left), sky), "slot 0 is gone");
+    assert_eq!(
+        pixel(&cleared, CENTRE),
+        pixel(&moved, CENTRE),
+        "slot 1 stays"
+    );
+}
+
+/// A higher slot stands in front, its whole disc hiding the moon behind it,
+/// the dark part of a new moon too; the sum of two added discs never shows.
+#[test]
+fn a_higher_slot_passes_in_front_of_a_lower_one() {
+    let render = |back: u32, front: u32| {
+        let mut harness = scene(NIGHT);
+        harness.apply(vec![
+            moon_at(back, 0.0, 4.0, RED),
+            moon_at(front, 0.0, 2.0, BLUE),
+        ]);
+        look(&mut harness)
+    };
+    let blue_ahead = render(0, 1);
+    let [r, _, b] = pixel(&blue_ahead, CENTRE);
+    assert!(b > r + 60, "the higher slot's blue shows: {r} {b}");
+    // Beyond the small disc, the larger one shows around it.
+    let ring = (CENTRE.0 + 9, CENTRE.1);
+    let [r, _, b] = pixel(&blue_ahead, ring);
+    assert!(r > b + 60, "the red ring shows around it: {r} {b}");
+
+    let red_ahead = render(1, 0);
+    let [r, _, b] = pixel(&red_ahead, CENTRE);
+    assert!(
+        r > b + 60,
+        "red in the higher slot covers the blue: {r} {b}"
+    );
+
+    let mut harness = scene(NIGHT);
+    let sky = pixel(&look(&mut harness), CENTRE);
+    let RenderDiff::SetMoon {
+        moon: Some(new), ..
+    } = moon_at(1, 0.0, 2.0, BLUE)
+    else {
+        unreachable!("a set moon");
+    };
+    harness.apply(vec![
+        moon_at(0, 0.0, 4.0, RED),
+        RenderDiff::SetMoon {
+            slot: 1,
+            moon: Some(MoonDescriptor { phase: 0.0, ..new }),
+        },
+    ]);
+    assert!(
+        same(pixel(&look(&mut harness), CENTRE), sky),
+        "a new moon's dark disc hides the moon behind it"
+    );
+}
+
+/// Four quadrants a texel each: red and green over blue and white.
+fn quadrants(harness: &mut Harness, filter: TextureFilter) -> RenderDiff {
+    let rgba: Vec<u8> = [
+        [255, 0, 0, 255],
+        [0, 255, 0, 255],
+        [0, 0, 255, 255],
+        [255, 255, 255, 255],
+    ]
+    .concat();
+    let mut texture = harness
+        .resources
+        .texture("texture/moon", 2, 2, &rgba, TextureWrap::Clamp);
+    texture.filter = filter;
+    RenderDiff::DefineTexture { texture }
+}
+
+fn textured(uv_min: [f32; 2], uv_max: [f32; 2], phase: f32) -> RenderDiff {
+    let RenderDiff::SetMoon {
+        moon: Some(moon), ..
+    } = moon_at(0, 0.0, 4.0, [1.0; 3])
+    else {
+        unreachable!("a set moon");
+    };
+    RenderDiff::SetMoon {
+        slot: 0,
+        moon: Some(MoonDescriptor {
+            phase,
+            texture: Some("texture/moon".to_owned()),
+            uv_min,
+            uv_max,
+            ..moon
+        }),
+    }
+}
+
+/// A texture stands upright on the disc, sampled with its own filter so
+/// nearest stays hard; a region picks a frame of an atlas, and `phase` 1 draws
+/// it as it is while a lesser phase still shades it.
+#[test]
+fn a_moons_texture_draws_upright_with_its_filter_and_a_chosen_frame() {
+    // 4° is 12 pixels at this view: the quadrants' centres are 5 away.
+    let (top_left, top_right, bottom_left, bottom_right) = (
+        (CENTRE.0 - 5, CENTRE.1 - 5),
+        (CENTRE.0 + 5, CENTRE.1 - 5),
+        (CENTRE.0 - 5, CENTRE.1 + 5),
+        (CENTRE.0 + 5, CENTRE.1 + 5),
+    );
+    let mut harness = scene(NIGHT);
+    let define = quadrants(&mut harness, TextureFilter::Nearest);
+    harness.apply(vec![define, textured([0.0; 2], [0.0; 2], 1.0)]);
+    let whole = look(&mut harness);
+    // A moon adds over the sky, so each texel lands on the night's colour.
+    let [red, green, blue] = [[255, 12, 25], [10, 255, 25], [10, 12, 255]];
+    assert_eq!(pixel(&whole, top_left), red, "red top left");
+    assert_eq!(pixel(&whole, top_right), green, "green top right");
+    assert_eq!(pixel(&whole, bottom_left), blue, "blue below it");
+    assert_eq!(pixel(&whole, bottom_right), [255; 3], "white bottom right");
+    // Nearest: the colour holds up to the seam, with nothing between.
+    let seam = |x| pixel(&whole, (x, top_left.1));
+    assert_eq!(seam(CENTRE.0 - 1), red, "left of the seam");
+    assert_eq!(seam(CENTRE.0 + 1), green, "right of the seam");
+
+    harness.apply(vec![textured([0.5, 0.5], [1.0, 1.0], 1.0)]);
+    let frame = look(&mut harness);
+    assert_eq!(
+        pixel(&frame, top_left),
+        [255; 3],
+        "the frame fills the disc"
+    );
+    assert_eq!(pixel(&frame, bottom_right), [255; 3], "all of it");
+
+    harness.apply(vec![textured([0.5, 0.5], [1.0, 1.0], 0.5)]);
+    let shaded = look(&mut harness);
+    let (lit, dark) = (pixel(&shaded, top_right), pixel(&shaded, top_left));
+    assert!(
+        lit[0] > dark[0] + 60,
+        "the phase shades it: {lit:?} {dark:?}"
+    );
+}
+
+/// The moons' light on the clouds is one light: two moons side by side give
+/// what one moon of their summed intensity gives from there.
+#[test]
+fn two_moons_light_the_clouds_as_their_sum() {
+    let lit = |moons: Vec<RenderDiff>| {
+        let mut harness = scene(NIGHT);
+        harness.apply(vec![RenderDiff::SetClouds {
+            clouds: Some(CloudsDescriptor {
+                coverage: 0.7,
+                drift: [0.0, 0.0],
+                altitude: 1500.0,
+                scale: 1500.0,
+                color: [1.0; 3],
+                thickness: 0.0,
+                kind: CloudKind::Cumulus,
+                twilight_degrees: 0.0,
+                pixel_metres: 0.0,
+                shade_steps: 0,
+            }),
+        }]);
+        harness.apply(moons);
+        look(&mut harness)
+    };
+    // No disc: only their light reaches the frame.
+    let RenderDiff::SetMoon {
+        moon: Some(moon), ..
+    } = moon_at(0, 0.0, 0.0, [1.0; 3])
+    else {
+        unreachable!("a set moon");
+    };
+    let shining = |slot, light_intensity| RenderDiff::SetMoon {
+        slot,
+        moon: Some(MoonDescriptor {
+            light_intensity,
+            ..moon.clone()
+        }),
+    };
+    let one = lit(vec![shining(0, 0.6)]);
+    let two = lit(vec![shining(0, 0.25), shining(1, 0.35)]);
+    let dim = lit(vec![shining(0, 0.25)]);
+    assert_eq!(one, two, "their light adds as one");
+    assert_ne!(dim, two, "and each gives its own");
 }

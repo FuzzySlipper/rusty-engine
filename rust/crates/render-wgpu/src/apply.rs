@@ -175,7 +175,20 @@ impl Renderer {
             RenderDiff::SetSunShafts { sun_shafts } => {
                 self.tables.sun_shafts = *sun_shafts;
             }
-            RenderDiff::SetMoon { moon } => self.tables.moon = *moon,
+            RenderDiff::SetMoon { slot, moon } => {
+                let retained = self
+                    .tables
+                    .moons
+                    .get_mut(*slot as usize)
+                    .ok_or_else(|| format!("no moon slot {slot}"))?;
+                let same_texture = retained.as_ref().map(|moon| &moon.texture)
+                    == moon.as_ref().map(|moon| &moon.texture);
+                retained.clone_from(moon);
+                // A moon moves every update; its binding goes with its texture.
+                if !same_texture {
+                    self.rebuild_moons();
+                }
+            }
             RenderDiff::SetStars { stars } => {
                 if let Some(stars) = stars {
                     self.star_field.load(&self.gpu, stars, resources)?;
