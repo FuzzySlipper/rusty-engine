@@ -221,6 +221,152 @@ pub struct NativeHeightfieldReadout {
     pub meshed_tiles: u32,
 }
 
+/// A heightfield collider: the product's height function as static collision
+/// in a Spatial session, resident about its focuses. Everything that reads the
+/// session's collision reads it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct NativeHeightfieldColliderHandle {
+    pub value: u64,
+}
+
+/// A new collider in `session`: tiles of `tile_cells` cells (1 to 256) of
+/// `cell_size` units, resident within `reach` units of a focus, its point
+/// (0, 0, 0) at the world point `anchor`, which holds through a world-origin
+/// rebase. One unit is one session unit. It has no focus until it is given one.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeHeightfieldColliderCreateRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub tile_cells: u32,
+    pub cell_size: f64,
+    pub reach: f64,
+    pub anchor: NativeWorldOriginGlobalPosition,
+}
+
+/// A point (x, z) of a collider, in its own units.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NativeHeightfieldColliderFocus {
+    pub x: f64,
+    pub z: f64,
+}
+
+/// Centre the collider on `focuses`, replacing those it had; its tiles are the
+/// union of what each reaches.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeHeightfieldColliderFocusRequest {
+    pub collider: NativeHeightfieldColliderHandle,
+    pub focuses: *const NativeHeightfieldColliderFocus,
+    pub focuses_len: usize,
+}
+
+/// The tiles waiting for samples, at most `max_requests` (0: all).
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeHeightfieldColliderRequestsRequest {
+    pub collider: NativeHeightfieldColliderHandle,
+    pub max_requests: u32,
+}
+
+/// One tile's heights, as a drawn tile's: `tile_cells + 3` a side from vertex
+/// (−1, −1), x fastest. NaN is no surface: cells touching it do not collide. A
+/// commit whose revision is no longer the tile's is ignored.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeHeightfieldColliderTileCommit {
+    pub collider: NativeHeightfieldColliderHandle,
+    pub x: i64,
+    pub z: i64,
+    pub revision: u32,
+    pub heights: *const f32,
+    pub heights_len: usize,
+}
+
+/// Every tile overlapping the rectangle, in the collider's units, is sampled
+/// again; each keeps its ground until its new heights install.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NativeHeightfieldColliderInvalidateRequest {
+    pub collider: NativeHeightfieldColliderHandle,
+    pub min_x: f64,
+    pub min_z: f64,
+    pub max_x: f64,
+    pub max_z: f64,
+}
+
+/// Read a collider, and whether there is ground about the point (x, z), out to
+/// `reach` units.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NativeHeightfieldColliderReadRequest {
+    pub collider: NativeHeightfieldColliderHandle,
+    pub x: f64,
+    pub z: f64,
+    pub reach: f64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeHeightfieldColliderReadout {
+    /// Every tile about the point asked of has its ground in the collision
+    /// scene, or is a hole: a product can hold an arrival until this is true.
+    pub ready: bool,
+    /// Tiles whose ground stands.
+    pub resident_tiles: u32,
+    /// Tiles a focus wants whose ground does not stand yet.
+    pub pending_tiles: u32,
+    /// Tiles whose collision was refused; the host log says why.
+    pub refused_tiles: u32,
+}
+
+pub type NativeCreateHeightfieldCollider = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: NativeHeightfieldColliderCreateRequest,
+    result: *mut NativeHeightfieldColliderHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeDestroyHeightfieldCollider = unsafe extern "C" fn(
+    context: *mut c_void,
+    collider: NativeHeightfieldColliderHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeSetHeightfieldColliderFocuses = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: *const NativeHeightfieldColliderFocusRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeReadHeightfieldColliderRequests = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: NativeHeightfieldColliderRequestsRequest,
+    result: *mut NativeHeightfieldRequestsResult,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeCommitHeightfieldColliderTile = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: *const NativeHeightfieldColliderTileCommit,
+    receipt: *mut NativeHeightfieldCommitReceipt,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeInvalidateHeightfieldCollider = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: NativeHeightfieldColliderInvalidateRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
+pub type NativeReadHeightfieldCollider = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: NativeHeightfieldColliderReadRequest,
+    readout: *mut NativeHeightfieldColliderReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativeCreateHeightfield = unsafe extern "C" fn(
     context: *mut c_void,
     request: *const NativeHeightfieldCreateRequest,

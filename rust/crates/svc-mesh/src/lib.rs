@@ -20,6 +20,7 @@ use texture_mapping::project_voxel_surface_tile_point;
 
 pub mod distance_field;
 pub mod heightfield;
+pub mod heightfield_collider;
 pub mod heightfield_tiles;
 mod occlusion;
 pub mod scatter;

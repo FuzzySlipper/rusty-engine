@@ -2,6 +2,7 @@ mod artifact_binary;
 mod collision_inspection;
 mod collision_navigation;
 mod contacts;
+mod heightfield_collider;
 mod inspection;
 mod static_deferred;
 
@@ -498,6 +499,7 @@ pub(crate) struct RuntimeSpatialBridge {
     content: Option<*const crate::content::RuntimeContentBridge>,
     admitted_content: AdmittedContentCache,
     next_session: u64,
+    next_heightfield_collider: u64,
     pub(crate) prepared_world_origins: BTreeMap<u64, crate::world_origin::PreparedWorldOriginOwner>,
     pub(crate) next_world_origin_prepared: u64,
     /// Backing of the latest borrowed Spatial, Kinematic or Voxel result.
@@ -541,6 +543,8 @@ pub(crate) struct SpatialSession {
     /// Deferred static collision and spatial content batches, prepared one
     /// at a time.
     static_deferred: static_deferred::StaticDeferred,
+    /// Heightfield colliders, whose tiles ride those batches.
+    heightfield_colliders: heightfield_collider::SessionColliders,
 }
 
 impl SpatialSession {
@@ -549,6 +553,7 @@ impl SpatialSession {
     /// follows. Callers republish the scene, as
     /// [`RuntimeSpatialBridge::edit_scene`] does.
     pub(crate) fn settle(&mut self) {
+        self.flush_heightfield_colliders();
         while let Some(rebuild) = self.deferred.pop_front() {
             self.install(rebuild);
         }
@@ -634,6 +639,8 @@ impl SpatialSession {
             eprintln!("CSHARP_COLLISION_RESIDENCY_DEFERRED: batch {number}: {error}");
         }
         self.static_deferred.finish(number, installed.is_err());
+        self.heightfield_colliders
+            .finished(number, installed.is_ok());
     }
 
     /// Install a content batch a worker admitted: its collision, then the
@@ -1444,6 +1451,7 @@ impl RuntimeSpatialBridge {
             content: None,
             admitted_content: AdmittedContentCache::default(),
             next_session: 1,
+            next_heightfield_collider: 1,
             prepared_world_origins: BTreeMap::new(),
             next_world_origin_prepared: 1,
             borrowed: Default::default(),
@@ -1521,6 +1529,7 @@ impl RuntimeSpatialBridge {
                     .front()
                     .is_some_and(|rebuild| rebuild.is_built())
                     || session.static_deferred.is_baked()
+                    || session.heightfield_colliders.has_batch()
             })
             .map(|(value, _)| NativeSpatialSessionHandle { value: *value })
             .collect();
@@ -1529,6 +1538,7 @@ impl RuntimeSpatialBridge {
             let _ = self.edit_scene_deferring(handle, |session| {
                 session.install_built();
                 session.install_built_collision();
+                session.flush_heightfield_colliders();
             });
             let duration_us = started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
             self.update_attribution.voxel_residency_duration_us = self
@@ -1694,6 +1704,7 @@ impl RuntimeSpatialBridge {
                 triggers: TriggerVolumeSystem::default(),
                 deferred: Default::default(),
                 static_deferred: Default::default(),
+                heightfield_colliders: Default::default(),
             },
         );
         self.publish_scene(NativeSpatialSessionHandle { value }, scene);
@@ -5936,6 +5947,13 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         replace_collision: replace_spatial_collision,
         apply_collision_residency,
         read_collision_residency,
+        create_heightfield_collider: heightfield_collider::create,
+        destroy_heightfield_collider: heightfield_collider::destroy,
+        set_heightfield_collider_focuses: heightfield_collider::set_focuses,
+        read_heightfield_collider_requests: heightfield_collider::read_requests,
+        commit_heightfield_collider_tile: heightfield_collider::commit_tile,
+        invalidate_heightfield_collider: heightfield_collider::invalidate,
+        read_heightfield_collider: heightfield_collider::read,
         replace_content_artifact: replace_spatial_content_artifact,
         read_content_artifact: read_spatial_content_artifact,
         apply_content_artifact_residency: apply_spatial_content_artifact_residency,
@@ -7140,6 +7158,8 @@ fn native_character_tether_fact(
 
 #[cfg(test)]
 mod tests {
+    mod heightfield_collider;
+
     use super::*;
 
     #[test]

@@ -325,6 +325,64 @@ impl TileSamples {
     }
 }
 
+/// Whether a cell of corners a (i, j), b (i+1, j), c (i, j+1), d (i+1, j+1)
+/// is split along a–d: the diagonal whose ends are nearer in height.
+fn falling_diagonal(a: f32, b: f32, c: f32, d: f32) -> bool {
+    (a - d).abs() <= (b - c).abs()
+}
+
+/// A surface's vertices and triangles.
+pub type SurfaceTriangles = (Vec<[f64; 3]>, Vec<[u32; 3]>);
+
+/// The triangles of a tile's surface as its finest ring draws them, unmorphed
+/// and without skirts: vertices in its own space and triangles wound upward,
+/// each cell split as drawn. `heights` is `(cells + 3)²` from vertex (−1, −1);
+/// cells touching NaN are holes. None where it is all holes.
+pub fn surface_triangles(
+    cells: usize,
+    cell_size: f64,
+    heights: &[f32],
+) -> Option<SurfaceTriangles> {
+    let height_side = cells + 3;
+    let side = cells + 1;
+    let height = |i: usize, j: usize| heights[(j + 1) * height_side + i + 1];
+    let mut grid = vec![u32::MAX; side * side];
+    let mut positions = Vec::new();
+    let mut triangles = Vec::new();
+    for j in 0..cells {
+        for i in 0..cells {
+            let corners = [(i, j), (i + 1, j), (i, j + 1), (i + 1, j + 1)];
+            if corners.iter().any(|(x, z)| height(*x, *z).is_nan()) {
+                continue;
+            }
+            let [a, b, c, d] = corners.map(|(x, z)| {
+                let index = &mut grid[z * side + x];
+                if *index == u32::MAX {
+                    *index = positions.len() as u32;
+                    positions.push([
+                        x as f64 * cell_size,
+                        f64::from(height(x, z)),
+                        z as f64 * cell_size,
+                    ]);
+                }
+                *index
+            });
+            let falling = falling_diagonal(
+                height(i, j),
+                height(i + 1, j),
+                height(i, j + 1),
+                height(i + 1, j + 1),
+            );
+            if falling {
+                triangles.extend([[a, c, d], [a, d, b]]);
+            } else {
+                triangles.extend([[a, c, b], [b, c, d]]);
+            }
+        }
+    }
+    (!triangles.is_empty()).then_some((positions, triangles))
+}
+
 /// A tile's samples with the normals its mesh is drawn with, which the
 /// finer ring's targets and picking read.
 #[derive(Debug, Clone, PartialEq)]
@@ -395,13 +453,12 @@ impl TileSurface {
     /// diagonal whose ends are nearer in height, so a ridge or a gully is
     /// not cut across.
     fn falling_diagonal(&self, i: usize, j: usize) -> bool {
-        let (a, b, c, d) = (
+        falling_diagonal(
             self.height(i, j),
             self.height(i + 1, j),
             self.height(i, j + 1),
             self.height(i + 1, j + 1),
-        );
-        (a - d).abs() <= (b - c).abs()
+        )
     }
 
     /// The drawn surface's height and (unnormalized) normal at tile-local

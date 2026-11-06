@@ -4,8 +4,9 @@
 map, an open far field) as rings of grid tiles about a focus. The product owns
 the height function and the world map and samples tiles when the Engine asks;
 the Engine owns residency, meshing (on its own threads), GPU resources, level
-of detail and the geomorph that hides it, and picks the drawn surface. A
-heightfield is drawn, not collided: collision and navigation stay with Spatial.
+of detail and the geomorph that hides it, and picks the drawn surface. A drawn
+heightfield does not collide; a [heightfield collider](#collision) gives the
+same height function to Spatial.
 
 ```csharp
 using Rusty.Engine.Heightfields;
@@ -172,6 +173,60 @@ morph included: the hit in the layer, its normal, its distance in layer units,
 and where it is in the heightfield (`X`, `Z`, `Height`) and on which ring.
 `MaxDistance` 0 reaches as far as the heightfield does. It walks only the cells
 the ray crosses in the tiles its bounds meet.
+
+## Collision
+
+A heightfield collider puts a height function into a Spatial session as static
+collision, so a product needs no second copy of its ground. Its reach is its
+own, unrelated to any drawn ring, and it needs no drawn heightfield at all.
+
+```csharp
+HeightfieldCollider collider = engine.Spatial.CreateHeightfieldCollider(
+    new(session, TileCells: 32, CellSize: 1, Reach: 96, Anchor: default));
+var ground = new HeightfieldColliderStreamer(engine, collider, new MySampler());
+// Each update:
+engine.Spatial.SetHeightfieldColliderFocuses(new(collider, focuses));
+ground.Update();
+```
+
+- **Sampling.** Requests, revisions and heights work as a drawn tile's do, and
+  `HeightfieldColliderStreamer` drives an `IHeightfieldSampler` as
+  `HeightfieldStreamer` does. A collider asks for heights alone, and a sampler
+  shared with a drawn heightfield serves both. `CellSize` is the product's to
+  state, one size for the whole collider.
+- **Focuses.** `SetHeightfieldColliderFocuses` names one or more points in the
+  collider's own units, each holding the tiles within `Reach` of it, rounded out
+  to whole tiles. A tile stays one tile past that, so a focus wavering on a
+  boundary samples nothing twice; beyond that its collision leaves the scene.
+- **The surface.** It is the true surface, never the geomorphed one: each cell
+  split along the diagonal the finest drawn ring chooses from the same heights.
+  With the same `TileCells` and `CellSize` as the finest ring, and the ring
+  unmorphed near its focus, feet and the drawn ground agree to within 0.01 units
+  (`spatial/tests/heightfield_collider.rs`). Past the morph's start the drawn
+  ground moves toward its coarser ring and the collider does not.
+- **What reads it.** It joins the session's static collision, so character
+  movement, spatial queries, contacts, Dynamics and collision navigation all
+  read it. Navigation derives from what is resident when it is asked for.
+- **Off the update.** The product samples on its workers. Committed tiles leave
+  together as a [deferred collision batch](csharp-lifecycle.md#deferred-collision-residency)
+  as the next call begins, and are live in a call after that.
+- **Waiting for ground.** `ReadHeightfieldCollider` takes a point and a reach, and
+  `Ready` says whether the ground stands on every tile there, so a product can
+  hold an arrival until there is something to stand on. Sampled is not ready;
+  installed is. `PendingTiles` counts what a focus still waits for, and
+  `RefusedTiles` what collision refused, which the host log explains.
+- **Invalidation.** `InvalidateHeightfieldCollider` asks again for every tile
+  overlapping a rectangle. Each keeps its old ground until its new heights
+  install.
+- **Rebasing.** `Anchor` is a world point, and a rebase moves the tiles with the
+  session's other collision. Tiles and focuses are in the collider's own units,
+  so a product changes nothing, though a focus it works out from a session's
+  local position needs the anchor taken away.
+- **Holes.** NaN is no surface, as when drawing: cells touching it do not collide,
+  and a tile that is all holes counts as ready.
+- **Limits.** One unit is one session unit, and a collider is never turned. Tile
+  collision takes ids from 2⁶³ up, so a product's own static collision ids stay
+  below that.
 
 ## Readout and cost
 

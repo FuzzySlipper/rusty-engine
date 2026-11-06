@@ -1971,6 +1971,133 @@ mod tests {
         }
     }
 
+    /// A heightfield collider is static collision, so a body lands on it.
+    #[test]
+    fn a_body_lands_on_a_heightfield_collider() {
+        let mut spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let api = crate::spatial::api(&mut spatial);
+        let mut session = NativeSpatialSessionHandle::default();
+        let mut collider = NativeHeightfieldColliderHandle::default();
+        let mut requests = NativeHeightfieldRequestsResult {
+            requests: std::ptr::null(),
+            requests_len: 0,
+        };
+        const GROUND: f32 = 1.5;
+        let heights = vec![GROUND; 11 * 11];
+        let tiles = unsafe {
+            (api.create_session)(
+                api.context,
+                NativeSpatialSessionConfig {
+                    collision_voxel_size: 1.0,
+                    collision_chunk_size: 8,
+                    voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                },
+                &mut session,
+                std::ptr::null_mut(),
+            );
+            (api.create_heightfield_collider)(
+                api.context,
+                NativeHeightfieldColliderCreateRequest {
+                    session,
+                    tile_cells: 8,
+                    cell_size: 1.0,
+                    reach: 6.0,
+                    anchor: Default::default(),
+                },
+                &mut collider,
+                std::ptr::null_mut(),
+            );
+            let focus = [NativeHeightfieldColliderFocus { x: 0.0, z: 0.0 }];
+            (api.set_heightfield_collider_focuses)(
+                api.context,
+                &NativeHeightfieldColliderFocusRequest {
+                    collider,
+                    focuses: focus.as_ptr(),
+                    focuses_len: focus.len(),
+                },
+                std::ptr::null_mut(),
+            );
+            (api.read_heightfield_collider_requests)(
+                api.context,
+                NativeHeightfieldColliderRequestsRequest {
+                    collider,
+                    max_requests: 0,
+                },
+                &mut requests,
+                std::ptr::null_mut(),
+            );
+            std::slice::from_raw_parts(requests.requests, requests.requests_len).to_vec()
+        };
+        assert!(!tiles.is_empty());
+        for tile in tiles {
+            let mut receipt = NativeHeightfieldCommitReceipt::default();
+            unsafe {
+                (api.commit_heightfield_collider_tile)(
+                    api.context,
+                    &NativeHeightfieldColliderTileCommit {
+                        collider,
+                        x: tile.x,
+                        z: tile.z,
+                        revision: tile.revision,
+                        heights: heights.as_ptr(),
+                        heights_len: heights.len(),
+                    },
+                    &mut receipt,
+                    std::ptr::null_mut(),
+                );
+            }
+            assert!(receipt.accepted);
+        }
+        spatial.edit_scene(session, |_| ()).unwrap();
+
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3 {
+                    x: 0.0,
+                    y: -9.81,
+                    z: 0.0,
+                },
+            })
+            .unwrap();
+        bridge
+            .bind_world_collision(NativeDynamicsWorldCollisionBindingRequest {
+                world,
+                spatial_session: session,
+            })
+            .unwrap();
+        let mut falling = body_config(NativeVec3 {
+            x: 0.5,
+            y: 4.0,
+            z: 0.5,
+        });
+        falling.properties.gravity_scale = 1.0;
+        let body = bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: falling,
+            })
+            .unwrap();
+        for _ in 0..180 {
+            bridge
+                .step(&NativeDynamicsStepRequest {
+                    world,
+                    step_seconds: ONE_SIXTIETH_SECOND,
+                    steps: 1,
+                    actions: std::ptr::null(),
+                    actions_len: 0,
+                })
+                .unwrap();
+        }
+        let landed = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+        assert!(
+            landed.transform.translation.y > GROUND
+                && landed.transform.translation.y < GROUND + 1.5
+                && landed.contact_count > 0,
+            "{landed:?}"
+        );
+    }
+
     #[test]
     fn chain_creation_removal_and_anchor_invalidation() {
         let spatial = crate::spatial::RuntimeSpatialBridge::new();

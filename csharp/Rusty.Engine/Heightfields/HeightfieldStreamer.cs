@@ -71,16 +71,75 @@ public sealed class HeightfieldTileSamples
 }
 
 /// <summary>
-/// Streams a heightfield's tiles: each <see cref="Update"/> reads the tiles the Engine asks for,
+/// Streams a heightfield's tiles: each <see cref="TileStreamer.Update"/> reads the tiles the Engine asks for,
 /// samples new ones with the product's <see cref="IHeightfieldSampler"/> on the thread pool, and
-/// commits at most <c>commitsPerUpdate</c> finished ones. Call <see cref="Update"/> from the
+/// commits at most <c>commitsPerUpdate</c> finished ones. Call <see cref="TileStreamer.Update"/> from the
 /// product's update; every Engine call happens there. Samples the Engine no longer wants (the
 /// tile was invalidated or left the rings) are ignored when committed.
 /// </summary>
-public sealed class HeightfieldStreamer : IDisposable
+public sealed class HeightfieldStreamer : TileStreamer
 {
     private readonly IEngineContext engine;
     private readonly Heightfield heightfield;
+
+    /// <param name="commitsPerUpdate">The most tiles committed an update: each costs its copy and,
+    /// as the call finishes, its share of the Engine's parallel meshing.</param>
+    /// <param name="maxInFlight">The most tiles sampled at once; 0 for twice the processors.</param>
+    public HeightfieldStreamer(IEngineContext engine, Heightfield heightfield, IHeightfieldSampler sampler,
+        int commitsPerUpdate = 8, int maxInFlight = 0)
+        : base(sampler, commitsPerUpdate, maxInFlight)
+    {
+        this.engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        this.heightfield = heightfield ?? throw new ArgumentNullException(nameof(heightfield));
+    }
+
+    private protected override bool Commit(HeightfieldTileSamples samples)
+    {
+        HeightfieldTileRequest tile = samples.Tile;
+        return engine.Heightfield.CommitTile(new HeightfieldTileCommit(heightfield, tile.Ring, tile.X,
+            tile.Z, tile.Revision, samples.Heights, samples.Colors ?? ReadOnlyMemory<Color>.Empty,
+            samples.LayerWeights ?? ReadOnlyMemory<Vector4>.Empty, samples.Materials ?? ReadOnlyMemory<uint>.Empty,
+            samples.LayerPalette)).Accepted;
+    }
+
+    private protected override ReadOnlyMemory<HeightfieldTileRequest> Read(uint maxRequests) =>
+        engine.Heightfield.ReadRequests(new HeightfieldRequestsRequest(heightfield, maxRequests));
+}
+
+/// <summary>
+/// Streams a heightfield collider's tiles as <see cref="HeightfieldStreamer"/> does a drawn
+/// heightfield's, taking only the heights its sampler fills. Call <see cref="TileStreamer.Update"/>
+/// from the product's update.
+/// </summary>
+public sealed class HeightfieldColliderStreamer : TileStreamer
+{
+    private readonly IEngineContext engine;
+    private readonly HeightfieldCollider collider;
+
+    /// <param name="commitsPerUpdate">The most tiles committed an update.</param>
+    /// <param name="maxInFlight">The most tiles sampled at once; 0 for twice the processors.</param>
+    public HeightfieldColliderStreamer(IEngineContext engine, HeightfieldCollider collider, IHeightfieldSampler sampler,
+        int commitsPerUpdate = 8, int maxInFlight = 0)
+        : base(sampler, commitsPerUpdate, maxInFlight)
+    {
+        this.engine = engine ?? throw new ArgumentNullException(nameof(engine));
+        this.collider = collider ?? throw new ArgumentNullException(nameof(collider));
+    }
+
+    private protected override bool Commit(HeightfieldTileSamples samples)
+    {
+        HeightfieldTileRequest tile = samples.Tile;
+        return engine.Spatial.CommitHeightfieldColliderTile(new HeightfieldColliderTileCommit(collider, tile.X, tile.Z,
+            tile.Revision, samples.Heights)).Accepted;
+    }
+
+    private protected override ReadOnlyMemory<HeightfieldTileRequest> Read(uint maxRequests) =>
+        engine.Spatial.ReadHeightfieldColliderRequests(new HeightfieldColliderRequestsRequest(collider, maxRequests));
+}
+
+/// <summary>What sampling tiles on the thread pool shares between a drawn heightfield and a collider.</summary>
+public abstract class TileStreamer : IDisposable
+{
     private readonly IHeightfieldSampler sampler;
     private readonly int commitsPerUpdate;
     private readonly int maxInFlight;
@@ -90,16 +149,10 @@ public sealed class HeightfieldStreamer : IDisposable
     private readonly CancellationTokenSource stopping = new();
     private long sampleTicks;
 
-    /// <param name="commitsPerUpdate">The most tiles committed an update: each costs its copy and,
-    /// as the call finishes, its share of the Engine's parallel meshing.</param>
-    /// <param name="maxInFlight">The most tiles sampled at once; 0 for twice the processors.</param>
-    public HeightfieldStreamer(IEngineContext engine, Heightfield heightfield, IHeightfieldSampler sampler,
-        int commitsPerUpdate = 8, int maxInFlight = 0)
+    private protected TileStreamer(IHeightfieldSampler sampler, int commitsPerUpdate, int maxInFlight)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(commitsPerUpdate);
         ArgumentOutOfRangeException.ThrowIfNegative(maxInFlight);
-        this.engine = engine ?? throw new ArgumentNullException(nameof(engine));
-        this.heightfield = heightfield ?? throw new ArgumentNullException(nameof(heightfield));
         this.sampler = sampler ?? throw new ArgumentNullException(nameof(sampler));
         this.commitsPerUpdate = commitsPerUpdate;
         this.maxInFlight = maxInFlight == 0 ? Environment.ProcessorCount * 2 : maxInFlight;
@@ -115,6 +168,10 @@ public sealed class HeightfieldStreamer : IDisposable
 
     /// <summary>Time the sampler has taken, summed over tiles (they sample in parallel).</summary>
     public double SampleMilliseconds => Stopwatch.GetElapsedTime(0, Interlocked.Read(ref sampleTicks)).TotalMilliseconds;
+
+    private protected abstract bool Commit(HeightfieldTileSamples samples);
+
+    private protected abstract ReadOnlyMemory<HeightfieldTileRequest> Read(uint maxRequests);
 
     /// <summary>
     /// Commit finished tiles and start sampling new ones. A sampler that threw on a worker throws
@@ -133,17 +190,13 @@ public sealed class HeightfieldStreamer : IDisposable
         {
             HeightfieldTileRequest tile = samples.Tile;
             inFlight.Remove((tile.Ring, tile.X, tile.Z, tile.Revision));
-            HeightfieldCommitReceipt receipt = engine.Heightfield.CommitTile(new HeightfieldTileCommit(heightfield, tile.Ring, tile.X,
-                tile.Z, tile.Revision, samples.Heights, samples.Colors ?? ReadOnlyMemory<Color>.Empty,
-                samples.LayerWeights ?? ReadOnlyMemory<Vector4>.Empty, samples.Materials ?? ReadOnlyMemory<uint>.Empty, samples.LayerPalette));
-            if (receipt.Accepted) Committed++;
+            if (Commit(samples)) Committed++;
             else Ignored++;
         }
 
         int free = maxInFlight - inFlight.Count;
         if (free <= 0) return;
-        ReadOnlyMemory<HeightfieldTileRequest> requests =
-            engine.Heightfield.ReadRequests(new HeightfieldRequestsRequest(heightfield, (uint)(maxInFlight * 2)));
+        ReadOnlyMemory<HeightfieldTileRequest> requests = Read((uint)(maxInFlight * 2));
         foreach (HeightfieldTileRequest tile in requests.Span)
         {
             if (free == 0) break;
