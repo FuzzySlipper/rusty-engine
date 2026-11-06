@@ -67,6 +67,7 @@ impl DeformedShape<'_> {
             provenance: MeshProvenance::Generated,
             layer_weights: false,
             layer_palette: Vec::new(),
+            billboard: false,
             vertex_occlusion: false,
             morph: None,
         }

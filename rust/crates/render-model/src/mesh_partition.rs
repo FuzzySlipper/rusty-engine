@@ -123,6 +123,7 @@ pub fn partition_mesh_spatially(
             provenance: mesh.provenance,
             layer_weights: mesh.layer_weights,
             layer_palette: mesh.layer_palette.clone(),
+            billboard: mesh.billboard,
             vertex_occlusion: mesh.vertex_occlusion,
             morph: mesh
                 .morph

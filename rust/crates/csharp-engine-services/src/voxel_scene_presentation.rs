@@ -2188,6 +2188,7 @@ mod tests {
             layer_weights_len: 0,
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
+            billboard: false,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(appearance, &request) }

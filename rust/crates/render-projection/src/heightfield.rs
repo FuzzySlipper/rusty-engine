@@ -353,6 +353,7 @@ fn tile_asset(
             provenance: MeshProvenance::Generated,
             layer_weights: mesh.layer_weights,
             layer_palette: mesh.layer_palette.clone(),
+            billboard: false,
             vertex_occlusion: false,
             texture_space: Some(MeshTextureSpace {
                 cell_size: 1.0,

@@ -240,6 +240,7 @@ pub fn payload(positions: Vec<f32>, normals: Vec<f32>, indices: Vec<u32>) -> Mes
         provenance: MeshProvenance::Generated,
         layer_weights: false,
         layer_palette: Vec::new(),
+        billboard: false,
         vertex_occlusion: false,
         morph: None,
     }

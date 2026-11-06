@@ -14,7 +14,7 @@
 // (`OpaqueOut`).
 
 #import rusty::types::{texture_space_position, Vertex}
-#import rusty::view::{frame, parts, instances, copies, copy_row, selected_copy, impostor_card, fade_mask, mask_coverage, fade_toward_origin, morph_share, morph_normal, projected}
+#import rusty::view::{frame, parts, instances, copies, copy_row, selected_copy, impostor_card, billboard, fade_mask, mask_coverage, fade_toward_origin, morph_share, morph_normal, projected}
 #ifdef WIND
 #import rusty::wind::wind_displace
 #endif
@@ -204,6 +204,12 @@ fn vs_world(
     let row = parts[part];
 #endif
 #endif
+#ifdef BILLBOARD
+    let quad = billboard(row, mesh_position, mesh_normal);
+    let position = mesh_position;
+    let normal = mesh_normal;
+    var world = fade_toward_origin(row, quad.world);
+#else
 #ifdef IMPOSTOR
     // A card facing the camera, showing the baked view nearest its direction.
     let card = impostor_card(row, mesh_position, material.parameters[0], material.parameters[1].x);
@@ -222,9 +228,13 @@ fn vs_world(
     var world = fade_toward_origin(row, (row.model * vec4<f32>(position, 1.0)).xyz);
 #endif
 #endif
+#endif
     var world_normal = mat3x3<f32>(row.normal_x.xyz, row.normal_y.xyz, row.normal_z.xyz) * normal;
 #ifdef IMPOSTOR
     world_normal = card.normal;
+#endif
+#ifdef BILLBOARD
+    world_normal = quad.normal;
 #endif
 #ifdef WIND
 #ifdef LAYER_WEIGHTS

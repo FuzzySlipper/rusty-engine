@@ -15,10 +15,13 @@ to the other one for one between 40 and 44 m; trees are placement records.
 The far grass thins with distance, its kept clumps growing so the hills stay as
 green, and trees draw a cheaper cone from 150 m and baked impostor cards from
 320 m, crossfading between levels (#10017).
+Flowers are a sprite grown as a billboard layer (#10660), facing the camera from
+every side out to 700 m.
 `generate-textures.py` writes `content/grass.png`, `content/rock.png`, the
 palette panels' `content/sand.png`, `snow.png`, `moss.png` and `dirt.png`, the
-decal atlas `content/marks.png`, and the coal atlas `content/coals.png` with
-the light it emits, `content/coals-emission.png`.
+decal atlas `content/marks.png`, the coal atlas `content/coals.png` with
+the light it emits, `content/coals-emission.png`, and the masked sprite
+`content/flower.png`.
 
 Stage with the exact SDK version and matching feed and runtime:
 

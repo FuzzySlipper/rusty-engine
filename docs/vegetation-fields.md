@@ -105,6 +105,45 @@ Each copy is turned at random about the vertical, leaned `Align` of the way
 onto the ground's normal, scaled between `ScaleMin` and `ScaleMax` and tinted
 between `TintLow` and `TintHigh`. A record keeps its own yaw and scale.
 
+## Sprites
+
+A layer or a level can draw a sprite atlas frame as a billboard: a flat that
+stands upright at its copy's origin and turns about the vertical to face the
+camera, so it never goes edge-on as a mesh or an impostor would.
+
+```csharp
+using VegetationSprite flower = new(engine, atlasTexture, frameUvMin, frameUvMax,
+    size: new(1, 2), pivot: new(.5f, 0), material);
+engine.Vegetation.SetLayer(new VegetationLayerRequest(field, Layer: 3, flower.Look,
+    default(OptionalMaterial), Density: .3f, Reach: 3000) with { Fade = 400 });
+```
+
+- **Everything a mesh copy takes.** `Look` is an ordinary mesh appearance, so
+  spots, `Records`, `Fade`, `Near`, thinning, handover between fields and levels,
+  budgets and the renderer's per-copy selection work as above. `VegetationLod.Mesh(flower.Look,
+  start)` makes it a farther level of a mesh, which is the way to go from a mesh
+  tree to a flat. A copy's scale and tint apply; `Align` and a random yaw do
+  not, since a billboard always stands upright facing the camera.
+- **Material.** `SpriteMaterialDescriptor` gives the lighting (`Unlit` or
+  `Synthetic`), the alpha mode (`Mask` or `Opaque`), emission (not with `Unlit`)
+  and `WindBend`. `VegetationSprite` refuses the rest: a copy writes depth and
+  draws in the world pass, so it hides what stands behind it and fog reaches it
+  by its depth, and it has no blended or map-lit form. `WindBend` sways it as a
+  material's does, smoothly: `WindWholeTexels` applies to sprites and sprite
+  batches, not here.
+- **Size.** `size` and `pivot` place the quad about the copy's origin; keep the
+  pivot on the frame's centre line so the quad turns about its middle, which the
+  selection's bounds expect.
+- **Shadows.** A billboard casts none, whatever `CastsShadows` says, so leave it
+  off: asked for, it still counts as a caster and redraws the shadow maps while
+  the eye moves. Ray-traced passes do not see it either.
+- **At a distance.** A masked frame only a pixel or two wide shimmers: nearest
+  sampling lands on different texels from frame to frame, and the copy pops
+  between covering a pixel and not. Multisampling softens that but does not
+  hold it. Two things do: open the atlas with mipmaps (`NearestMipmapped`), whose
+  alpha averages down, and let a layer's thinning trade far copies for larger
+  ones (`maxScale`), so fewer copies stay wider than a pixel or two.
+
 ## Layers, reach and handover
 
 `SetLayer` names a layer within its field; setting the key again replaces it

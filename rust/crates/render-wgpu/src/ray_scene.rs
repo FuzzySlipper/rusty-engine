@@ -677,6 +677,10 @@ impl Renderer {
                     .class
                     .features
                     .contains(crate::shaders::Features::IMPOSTOR)
+                || state
+                    .class
+                    .features
+                    .contains(crate::shaders::Features::BILLBOARD)
                 || (scattered && state.class.blend)
                 || part.wireframe
                 || part.index_count < 3

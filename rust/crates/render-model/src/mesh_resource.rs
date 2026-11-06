@@ -242,6 +242,7 @@ fn with_source(
         provenance,
         layer_weights,
         layer_palette,
+        billboard,
         vertex_occlusion,
         texture_space,
         distance_field,
@@ -255,6 +256,7 @@ fn with_source(
         provenance: *provenance,
         layer_weights: *layer_weights,
         layer_palette: layer_palette.clone(),
+        billboard: *billboard,
         vertex_occlusion: *vertex_occlusion,
         texture_space: *texture_space,
         distance_field: distance_field.clone(),
@@ -615,6 +617,7 @@ mod tests {
             provenance: MeshProvenance::VoxelObject,
             layer_weights: false,
             layer_palette: Vec::new(),
+            billboard: false,
             vertex_occlusion: false,
             morph: None,
         }

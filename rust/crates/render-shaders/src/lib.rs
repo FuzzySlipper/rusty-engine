@@ -139,12 +139,16 @@ impl Features {
     /// RAY_SHADOWS, on the opaque pipelines; blended parts keep the probes
     /// and the sky's light.
     pub const RAY_GI: Self = Self::bit(67108864);
+    /// A scattered copy of a billboard mesh: its quad stands upright at the
+    /// copy's origin and turns about the vertical to face the camera, its
+    /// normals in the quad's frame (`rusty::view::billboard`).
+    pub const BILLBOARD: Self = Self::bit(134217728);
     /// Every material and mesh feature's bit: all but MOTION, GUIDES,
     /// RAY_SHADOWS, RAY_TRACE and RAY_GI.
     #[cfg(test)]
     const ALL_BITS: u32 = 4194303;
 
-    const DEFS: [(Self, &'static str); 27] = [
+    const DEFS: [(Self, &'static str); 28] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -172,6 +176,7 @@ impl Features {
         (Self::RAY_SHADOWS, "RAY_SHADOWS"),
         (Self::RAY_TRACE, "RAY_TRACE"),
         (Self::RAY_GI, "RAY_GI"),
+        (Self::BILLBOARD, "BILLBOARD"),
     ];
 
     const fn bit(bits: u32) -> Self {
@@ -227,7 +232,8 @@ impl Features {
                     | Self::MORPH.bits
                     | Self::SCATTER.bits
                     | Self::SCATTER_SELECTED.bits
-                    | Self::IMPOSTOR.bits),
+                    | Self::IMPOSTOR.bits
+                    | Self::BILLBOARD.bits),
             product: if self.product & (PRODUCT_CASTS | PRODUCT_DISPLACES) != 0 {
                 self.product
             } else {
@@ -303,6 +309,9 @@ impl Features {
                     != 0,
             // Selected copies are a scatter run's, opaque.
             self.contains(Self::SCATTER_SELECTED) && !self.contains(Self::SCATTER),
+            // A billboard is a scattered copy, and an impostor's card its own.
+            self.contains(Self::BILLBOARD)
+                && (!self.contains(Self::SCATTER) || self.contains(Self::IMPOSTOR)),
             // An impostor is a selected copy's card with its baked atlas: a
             // masked, lit, plain material.
             self.contains(Self::IMPOSTOR)
@@ -850,6 +859,25 @@ mod tests {
                 let caster = features.caster();
                 if casters.insert(caster) {
                     cases.push(FeatureCase::Caster(caster));
+                }
+            }
+        }
+        // Billboards past the bits above: scattered copies, as a sprite's
+        // material leaves them.
+        for extra in [
+            Features::default(),
+            Features::MASK,
+            Features::UNLIT,
+            Features::MASK | Features::WIND,
+            Features::MASK | Features::UNLIT,
+            Features::MASK | Features::EMISSIVE_MAP,
+        ] {
+            for selected in [Features::default(), Features::SCATTER_SELECTED] {
+                let features = extra | selected | Features::SCATTER | Features::BILLBOARD;
+                assert!(features.occurs(), "{features:?}");
+                cases.push(FeatureCase::Material(features));
+                if include_casters && casters.insert(features.caster()) {
+                    cases.push(FeatureCase::Caster(features.caster()));
                 }
             }
         }

@@ -362,7 +362,22 @@ public readonly partial record struct MeshResourceCreateRequest
         ReadOnlyMemory<MeshGroup> Groups,
         ReadOnlyMemory<MeshMaterialBinding> Bindings,
         ReadOnlyMemory<Vector4> LayerWeights)
-        : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, LayerWeights, ReadOnlyMemory<uint>.Empty)
+        : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, LayerWeights, ReadOnlyMemory<uint>.Empty, false)
+    {
+    }
+
+    /// <summary>A mesh that does not face the camera.</summary>
+    public MeshResourceCreateRequest(
+        ReadOnlyMemory<Vector3> Positions,
+        ReadOnlyMemory<Vector3> Normals,
+        ReadOnlyMemory<Vector2> Uvs,
+        ReadOnlyMemory<Color> Colors,
+        ReadOnlyMemory<uint> Indices,
+        ReadOnlyMemory<MeshGroup> Groups,
+        ReadOnlyMemory<MeshMaterialBinding> Bindings,
+        ReadOnlyMemory<Vector4> LayerWeights,
+        ReadOnlyMemory<uint> LayerPalette)
+        : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, LayerWeights, LayerPalette, false)
     {
     }
 }

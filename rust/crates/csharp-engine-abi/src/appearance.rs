@@ -1037,6 +1037,11 @@ pub struct NativeMeshResourceCreateRequest {
     pub layer_weights_len: usize,
     pub layer_palette: *const u32,
     pub layer_palette_len: usize,
+    /// Copies of it in a vegetation layer stand upright and turn about the
+    /// vertical to face the camera: `positions` are a quad, x across and y up
+    /// from a copy's origin, and `normals` are in that quad's frame, z toward
+    /// the camera. They cast no shadow.
+    pub billboard: bool,
 }
 
 #[repr(C)]

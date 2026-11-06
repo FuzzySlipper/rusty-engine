@@ -13,11 +13,12 @@ namespace CsharpHeightfield;
 /// one for one, and thin with distance, the kept clumps growing so the hills stay as green (#10017).
 /// Trees are placement records the product chooses per far tile: the full cone near, a cheaper cone
 /// from <see cref="TreeMidMetres"/>, and from <see cref="TreeImpostorMetres"/> a card showing the full
-/// cone's baked view, crossfading between each.
+/// cone's baked view, crossfading between each. Flowers are a sprite grown as a billboard layer
+/// (#10660): each copy turns to face the camera, masked so it writes depth and fog reaches it.
 /// </summary>
 internal sealed class Vegetation : IDisposable
 {
-    private const uint GrassLayer = 1, TreeLayer = 2;
+    private const uint GrassLayer = 1, TreeLayer = 2, FlowerLayer = 3;
     private const uint GrassSeed = 7;
     private const double NearTileMetres = 32, FarTileMetres = 128;
     private const uint NearCells = 32, FarCells = 32;
@@ -30,16 +31,20 @@ internal sealed class Vegetation : IDisposable
     /// <summary>The far grass keeps every clump to the first distance, a third by the second, growing up to 1.7 times.</summary>
     private const float ThinFrom = 80, ThinTo = 400, ThinShare = .33f, ThinGrowth = 1.7f;
     private const uint Grassland = 0;
+    /// <summary>Flowers: a third of a square metre's worth, out to a far reach, fading over its last fifth.</summary>
+    private const float FlowerDensity = .35f, FlowerReach = 700, FlowerFade = .2f;
+    private const uint MaximumFlowers = 400_000, FlowerSeed = 11;
 
     private readonly IEngineContext engine;
     private readonly Camera camera;
     private readonly Material grassPaint, treePaint;
     private readonly MeshResource grassMesh, treeMesh, treeMidMesh;
     private readonly Appearance grassLook, treeLook, treeMidLook;
+    private readonly VegetationSprite flower;
     private VegetationField? near, far;
     private VegetationStreamer? nearStreamer, farStreamer;
 
-    internal Vegetation(IEngineContext engine, Camera camera)
+    internal Vegetation(IEngineContext engine, Camera camera, RenderResourceReference flowerTexture)
     {
         this.engine = engine;
         this.camera = camera;
@@ -61,6 +66,9 @@ internal sealed class Vegetation : IDisposable
         grassLook = engine.Graphics.CreateMeshAppearance(grassMesh);
         treeLook = engine.Graphics.CreateMeshAppearance(treeMesh);
         treeMidLook = engine.Graphics.CreateMeshAppearance(treeMidMesh);
+        flower = new VegetationSprite(engine, flowerTexture, Vector2.Zero, Vector2.One, new(.8f, .8f), new(.5f, 0),
+            new SpriteMaterialDescriptor(SpriteLightingMode.Synthetic, default, default, .6f, 0, SpriteAlphaMode.Mask, .5f,
+                SpriteShadowPolicy.None) with { WindBend = .1f });
     }
 
     internal float GrassDensity { get; private set; } = DefaultGrassDensity;
@@ -123,6 +131,13 @@ internal sealed class Vegetation : IDisposable
         });
         engine.Vegetation.SetLayerDetail(new VegetationLayerDetailRequest(far!, TreeLayer,
             new[] { VegetationLod.Mesh(treeMidLook, TreeMidMetres), VegetationLod.ImpostorOf(treeLook, TreeImpostorMetres) }, LodBand));
+        engine.Vegetation.SetLayer(new VegetationLayerRequest(far!, FlowerLayer, flower.Look, default(OptionalMaterial), FlowerDensity, FlowerReach) with
+        {
+            Grounds = VegetationLayerRequest.Ground(Grassland),
+            Seed = FlowerSeed,
+            Fade = FlowerReach * FlowerFade,
+            MaximumInstances = MaximumFlowers,
+        });
     }
 
     internal void Update()
@@ -163,6 +178,7 @@ internal sealed class Vegetation : IDisposable
         grassLook.Dispose();
         treeLook.Dispose();
         treeMidLook.Dispose();
+        flower.Dispose();
         grassMesh.Dispose();
         treeMesh.Dispose();
         treeMidMesh.Dispose();

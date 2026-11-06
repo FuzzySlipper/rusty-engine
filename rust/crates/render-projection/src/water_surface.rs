@@ -423,6 +423,7 @@ fn surface_asset(asset: &str, mesh: &WaterSurfaceMesh, material: &str) -> Static
             provenance: MeshProvenance::Generated,
             layer_weights: false,
             layer_palette: Vec::new(),
+            billboard: false,
             vertex_occlusion: false,
             texture_space: None,
             distance_field: None,

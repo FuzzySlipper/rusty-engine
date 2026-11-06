@@ -249,6 +249,12 @@ pub struct MeshPayloadDescriptor {
     /// these layers. Empty: the weights are layers 0 to 3.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub layer_palette: Vec<u8>,
+    /// A scattered copy of this mesh stands upright and turns about the
+    /// vertical to face the camera: its positions are a quad, x across and y
+    /// up from the copy's origin, and its normals are in that quad's frame.
+    /// It casts no shadow, and ray-traced passes do not see it.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub billboard: bool,
     /// The vertex colours' alpha is ambient occlusion (a voxel chunk meshed
     /// with vertex occlusion), scaling the ambient, hemisphere and sky light.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -1888,6 +1894,7 @@ mod tests {
             provenance: MeshProvenance::StaticAsset,
             layer_weights: false,
             layer_palette: Vec::new(),
+            billboard: false,
             vertex_occlusion: false,
             morph: None,
         }

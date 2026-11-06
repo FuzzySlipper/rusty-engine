@@ -1752,6 +1752,7 @@ unsafe fn generated_mesh_payload(
         provenance: MeshProvenance::Generated,
         layer_weights: !weights.is_empty(),
         layer_palette: palette,
+        billboard: request.billboard,
         vertex_occlusion: false,
         morph: None,
     };
@@ -2451,6 +2452,7 @@ pub(crate) mod tests {
                 provenance: MeshProvenance::StaticAsset,
                 layer_weights: false,
                 layer_palette: Vec::new(),
+                billboard: false,
                 vertex_occlusion: false,
                 morph: None,
             },
@@ -2618,6 +2620,7 @@ pub(crate) mod tests {
             layer_weights_len: weights.len(),
             layer_palette: palette.as_ptr(),
             layer_palette_len: palette.len(),
+            billboard: false,
         };
         let resource = admit_generated(&mut meshes, &request).unwrap();
         let payload = &meshes.resources[&resource.value].definition.payload;
@@ -2637,11 +2640,13 @@ pub(crate) mod tests {
             NativeMeshResourceCreateRequest {
                 layer_palette: five.as_ptr(),
                 layer_palette_len: five.len(),
+                billboard: false,
                 ..request
             },
             NativeMeshResourceCreateRequest {
                 layer_palette: beyond.as_ptr(),
                 layer_palette_len: beyond.len(),
+                billboard: false,
                 ..request
             },
             NativeMeshResourceCreateRequest {
@@ -2722,6 +2727,7 @@ pub(crate) mod tests {
             layer_weights_len: 0,
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
+            billboard: false,
         };
         let resource = admit_generated(&mut meshes, &request).unwrap();
         positions[1].x = 99.0;
@@ -2772,6 +2778,7 @@ pub(crate) mod tests {
             layer_weights_len: 0,
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
+            billboard: false,
         };
         assert_eq!(
             admit_generated(&mut meshes, &unrepresentable)
@@ -2850,6 +2857,7 @@ pub(crate) mod tests {
             layer_weights_len: 0,
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
+            billboard: false,
         };
 
         let resource = admit_generated(&mut meshes, &request).unwrap();

@@ -1,7 +1,8 @@
 //! Scattered copies (#9546): a scatter patch draws its copies where a static
 //! instance each would draw, as one instanced draw per mesh group culled by
 //! the patch's bounds; copies take their tint, shrink away over the fade
-//! distance, follow their parent and cast shadows only when asked.
+//! distance, follow their parent and cast shadows only when asked. A
+//! billboard mesh's copies stand upright and face the camera.
 
 mod common;
 
@@ -1726,4 +1727,301 @@ fn a_mesh_defined_anew_draws_anew_from_the_pool() {
     render(&mut fresh);
     let (_, expected) = render(&mut fresh);
     assert_eq!(frame, expected);
+}
+
+const FACING: &str = "facing";
+
+/// A quad 1 m wide and 2 m tall from its foot, as billboards are made.
+fn quad(billboard: bool) -> MeshPayloadDescriptor {
+    let mut quad = payload(
+        vec![-0.5, 0.0, 0.0, 0.5, 0.0, 0.0, 0.5, 2.0, 0.0, -0.5, 2.0, 0.0],
+        [0.0, 0.0, 1.0].repeat(4),
+        vec![0, 1, 2, 0, 2, 3],
+    );
+    quad.billboard = billboard;
+    quad
+}
+
+fn facing_patch(handle: u64, copies: Vec<ScatterInstance>, fade: ScatterFade) -> RenderDiff {
+    let mut created = patch(handle, 5, copies, fade, false);
+    if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+        patch.asset = format!("mesh/{FACING}");
+    }
+    created
+}
+
+/// A quad of `color` on black, in a world of ambient π.
+fn facing_stage(billboard: bool, color: [f32; 4]) -> Vec<RenderDiff> {
+    let mut ops = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        },
+        ground_node(5),
+    ];
+    ops.extend(coloured_mesh(FACING, quad(billboard), color));
+    ops.push(RenderDiff::CreateLight {
+        handle: RenderHandle::new(30),
+        parent: None,
+        light: LightDescriptor::Ambient {
+            color: [1.0; 3],
+            intensity: std::f32::consts::PI,
+            enabled: true,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+            range: None,
+        },
+    });
+    ops
+}
+
+/// The eye `distance` metres from `at`, looking at it from `bearing` degrees.
+fn looking_at(
+    at: [f32; 3],
+    bearing: f64,
+    distance: f64,
+) -> render_host_contracts::RendererCompositionCamera {
+    let radians = bearing.to_radians();
+    camera(
+        "eye",
+        [
+            f64::from(at[0]) + distance * radians.sin(),
+            f64::from(at[1]) + 1.0,
+            f64::from(at[2]) + distance * radians.cos(),
+        ],
+        -bearing,
+        0.0,
+    )
+}
+
+fn lit(frame: &[u8]) -> usize {
+    frame
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .filter(|pixel| pixel[1] > 100)
+        .count()
+}
+
+/// The quad's lit pixels at each bearing about it.
+fn from_every_side(billboard: bool) -> Vec<usize> {
+    let mut harness = harness(false);
+    let mut ops = facing_stage(billboard, [0.9, 0.9, 0.9, 1.0]);
+    ops.push(facing_patch(
+        20,
+        vec![copy([0.0; 3], [1.0; 3])],
+        ScatterFade::default(),
+    ));
+    harness.apply(ops);
+    [0.0, 45.0, 90.0, 135.0, 200.0, 270.0]
+        .into_iter()
+        .map(|bearing| {
+            let view = looking_at(GROUND_AT, bearing, 5.0);
+            harness.renderer.render_offscreen(&view, &harness.target);
+            lit(&harness.target.read_rgba(&harness.gpu))
+        })
+        .collect()
+}
+
+#[test]
+fn a_billboard_copy_faces_the_camera_from_every_side() {
+    let turned = from_every_side(true);
+    let (least, most) = (*turned.iter().min().unwrap(), *turned.iter().max().unwrap());
+    assert!(least > 500, "it shows: {turned:?}");
+    assert!(most - least < most / 20, "it keeps its face: {turned:?}");
+    let fixed = from_every_side(false);
+    assert!(
+        fixed[2] < fixed[0] / 10,
+        "a mesh quad goes edge-on: {fixed:?}"
+    );
+}
+
+#[test]
+fn a_billboard_copy_writes_depth_and_fog_reaches_it() {
+    let mut harness = harness(false);
+    let mut ops = facing_stage(true, [0.9, 0.9, 0.9, 1.0]);
+    ops.extend(coloured_mesh(RED_POST, quad(true), [0.9, 0.05, 0.05, 1.0]));
+    let mut behind = patch(
+        21,
+        5,
+        vec![copy([0.0, 0.0, -4.0], [1.0; 3])],
+        ScatterFade::default(),
+        false,
+    );
+    if let RenderDiff::CreateScatterPatch { patch, .. } = &mut behind {
+        patch.asset = format!("mesh/{RED_POST}");
+    }
+    ops.push(behind);
+    ops.push(facing_patch(
+        20,
+        vec![copy([0.0; 3], [1.0; 3])],
+        ScatterFade::default(),
+    ));
+    harness.apply(ops);
+    let (_, frame) = render(&mut harness);
+    let centre = pixel(&frame, WIDTH, WIDTH / 2, HEIGHT / 2);
+    assert!(centre[1] > 150, "the nearer copy hides it: {centre:?}");
+
+    harness.apply(vec![RenderDiff::SetFog {
+        fog: Some(FogDescriptor::Linear {
+            color: [0.0, 0.0, 1.0],
+            start: 0.0,
+            end: 8.0,
+        }),
+    }]);
+    let (_, fogged) = render(&mut harness);
+    let centre = pixel(&fogged, WIDTH, WIDTH / 2, HEIGHT / 2);
+    assert!(
+        centre[2] > centre[1],
+        "depth fogs it toward blue: {centre:?}"
+    );
+}
+
+#[test]
+fn billboard_copies_fade_at_reach_and_cast_no_shadow() {
+    let count = |fade: ScatterFade| {
+        let mut harness = harness(false);
+        let mut ops = facing_stage(true, [0.9, 0.9, 0.9, 1.0]);
+        ops.push(facing_patch(20, vec![copy([0.0; 3], [1.0; 3])], fade));
+        harness.apply(ops);
+        lit(&render(&mut harness).1)
+    };
+    let whole = count(ScatterFade::default());
+    let fading = count(ScatterFade {
+        start: 3.0,
+        end: 5.0,
+        ..ScatterFade::default()
+    });
+    let gone = count(ScatterFade {
+        start: 1.0,
+        end: 2.0,
+        ..ScatterFade::default()
+    });
+    assert!(whole > 500);
+    assert!(fading > 0 && fading < whole * 3 / 4, "{fading} of {whole}");
+    assert_eq!(gone, 0);
+
+    let frame = |billboard: bool, casts: bool| {
+        let mut harness = harness(true);
+        let mut ops = stage(true);
+        let mut facing = coloured_mesh(FACING, quad(billboard), [0.9, 0.9, 0.9, 1.0]);
+        // Double-sided, as a sprite's material is: one side casts nothing.
+        for op in &mut facing {
+            if let RenderDiff::DefineMaterial { material } = op {
+                material.double_sided = true;
+            }
+        }
+        ops.extend(facing);
+        let mut created = patch(
+            20,
+            5,
+            vec![copy([0.0; 3], [1.0; 3])],
+            ScatterFade::default(),
+            casts,
+        );
+        if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+            patch.asset = format!("mesh/{FACING}");
+        }
+        ops.push(created);
+        harness.apply(ops);
+        render(&mut harness).1
+    };
+    assert_ne!(frame(false, true), frame(false, false), "a mesh quad casts");
+    assert_eq!(
+        frame(true, true),
+        frame(true, false),
+        "a billboard does not"
+    );
+}
+
+#[test]
+fn a_mesh_level_hands_over_to_a_billboard_level() {
+    let mut harness = harness(false);
+    let mut ops = stage(false);
+    ops.extend(coloured_mesh(FACING, quad(true), [0.9, 0.05, 0.05, 1.0]));
+    let mut created = patch(20, 5, whole(), ScatterFade::default(), false);
+    if let RenderDiff::CreateScatterPatch { patch, .. } = &mut created {
+        patch.lods = vec![ScatterLod {
+            asset: format!("mesh/{FACING}"),
+            material_overrides: Vec::new(),
+            start: 1.0,
+            impostor: false,
+        }];
+        patch.lod_band = 0.0;
+    }
+    ops.push(created);
+    harness.apply(ops);
+    let (_, frame) = render(&mut harness);
+    assert!(red(&frame) > 200, "copies draw the facing level");
+    let selection = selection_counts(&mut harness);
+    assert_eq!(selection.drawn, 3);
+}
+
+#[test]
+fn hundreds_of_thousands_of_billboards_draw_through_the_selection() {
+    const SIDE: i32 = 600;
+    let copies: Vec<ScatterInstance> = (0..SIDE * SIDE)
+        .map(|index| {
+            let (x, z) = (index % SIDE - SIDE / 2, index / SIDE - SIDE - 2);
+            copy([x as f32 * 0.5, 0.0, z as f32 * 0.5], [1.0; 3])
+        })
+        .collect();
+    let mut harness = harness(false);
+    let mut ops = facing_stage(true, [0.9, 0.9, 0.9, 1.0]);
+    ops.push(facing_patch(
+        20,
+        copies,
+        ScatterFade {
+            start: 60.0,
+            end: 90.0,
+            ..ScatterFade::default()
+        },
+    ));
+    harness.apply(ops);
+    let selection = selection_counts(&mut harness);
+    assert_eq!(selection.tested, (SIDE * SIDE) as u32);
+    assert!(selection.drawn > 10_000, "{selection:?}");
+    assert!(
+        selection.drawn < selection.tested,
+        "copies past the fade and outside the view cost no vertex work: {selection:?}"
+    );
+}
+
+#[test]
+fn the_wind_leans_a_billboard_copy() {
+    let top_row = |wind: f32| {
+        let mut harness = harness(false);
+        let mut ops = facing_stage(true, [0.9, 0.9, 0.9, 1.0]);
+        for op in &mut ops {
+            if let RenderDiff::DefineMaterial { material } = op {
+                material.wind = Some(MaterialWindDescriptor {
+                    bend: 0.2,
+                    flutter: 0.0,
+                });
+            }
+        }
+        ops.push(RenderDiff::SetWind {
+            wind: Some(WindDescriptor {
+                direction: [1.0, 0.0],
+                strength: wind,
+                gust: 0.0,
+            }),
+        });
+        ops.push(facing_patch(
+            20,
+            vec![copy([0.0; 3], [1.0; 3])],
+            ScatterFade::default(),
+        ));
+        harness.apply(ops);
+        let (_, frame) = render(&mut harness);
+        let row = (0..HEIGHT)
+            .find(|&y| (0..WIDTH).any(|x| pixel(&frame, WIDTH, x, y)[1] > 100))
+            .unwrap();
+        (0..WIDTH)
+            .find(|&x| pixel(&frame, WIDTH, x, row)[1] > 100)
+            .unwrap()
+    };
+    assert!(
+        top_row(2.0) > top_row(0.0) + 5,
+        "the top leans along the wind"
+    );
 }

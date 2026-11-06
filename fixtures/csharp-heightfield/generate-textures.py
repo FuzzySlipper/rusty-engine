@@ -1,7 +1,8 @@
 """Writes content/grass.png and content/rock.png, 64x64 tileable noise for the fixture's two terrain layers,
 content/marks.png, a 64x64 decal atlas of four 32x32 marks: a footprint, a scorch, a splash and an ash ring,
 and content/coals.png with content/coals-emission.png, a 64x64 atlas of four 32x32 patches of char crossed by
-glowing seams and single-texel coals, and the light they emit laid out the same."""
+glowing seams and single-texel coals, and the light they emit laid out the same; and
+content/flower.png, a masked sprite for the billboard layer."""
 import math
 import random
 from pathlib import Path
@@ -97,3 +98,21 @@ tile((196, 176, 122), 0.5, 10637).save(content / "sand.png")
 tile((226, 232, 238), 0.25, 10638).save(content / "snow.png")
 tile((64, 96, 72), 0.7, 10639).save(content / "moss.png")
 tile((112, 82, 56), 0.7, 10640).save(content / "dirt.png")
+
+
+def flower():
+    """A hard-edged 16x16 flower on a stem, clear around it, for the billboard layer."""
+    image = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+    for y in range(7, 16):
+        image.putpixel((8, y), (58, 112, 46, 255))
+    for x, y in [(6, 11), (7, 11), (9, 13), (10, 13)]:
+        image.putpixel((x, y), (70, 128, 54, 255))
+    for y in range(1, 8):
+        for x in range(4, 13):
+            if (x - 8) ** 2 + (y - 4) ** 2 <= 12:
+                centre = (x - 8) ** 2 + (y - 4) ** 2 <= 2
+                image.putpixel((x, y), (240, 196, 60, 255) if centre else (214, 72, 96, 255))
+    return image
+
+
+flower().save(content / "flower.png")

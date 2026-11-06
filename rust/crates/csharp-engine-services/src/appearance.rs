@@ -4742,6 +4742,7 @@ impl RuntimeAppearanceBridge {
                 provenance: MeshProvenance::StaticAsset,
                 layer_weights: false,
                 layer_palette: Vec::new(),
+                billboard: false,
                 vertex_occlusion: false,
                 morph: None,
             },
@@ -11994,6 +11995,7 @@ pub(super) mod tests {
             layer_weights_len: 0,
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
+            billboard: false,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(&mut bridge, &request) }
@@ -12303,6 +12305,7 @@ pub(super) mod tests {
             layer_weights_len: 0,
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
+            billboard: false,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(&mut bridge, &request) }
@@ -12536,6 +12539,7 @@ pub(super) mod tests {
             layer_weights_len: 0,
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
+            billboard: false,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(&mut bridge, &request) }
@@ -14627,6 +14631,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 provenance: MeshProvenance::StaticAsset,
                 layer_weights: false,
                 layer_palette: Vec::new(),
+                billboard: false,
                 vertex_occlusion: false,
                 morph: None,
             },

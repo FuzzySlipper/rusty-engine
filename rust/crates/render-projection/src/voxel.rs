@@ -1316,6 +1316,7 @@ fn voxel_mesh_payload_with_material_slots(
         provenance: MeshProvenance::VoxelChunk,
         layer_weights: layered,
         layer_palette: chunk.layer_palette.clone(),
+        billboard: false,
         vertex_occlusion: occluded,
         texture_space: Some(MeshTextureSpace {
             cell_size: chunk.voxel_size,

@@ -1,0 +1,86 @@
+using System;
+using System.Numerics;
+
+namespace Rusty.Engine.VegetationTiles;
+
+/// <summary>
+/// One atlas frame made ready to grow in a vegetation layer: a billboard quad of the frame's size
+/// that stands upright and turns about the vertical to face the camera, and a material made from
+/// a sprite material. Pass <see cref="Look"/> as a layer's appearance, or a level's with
+/// <see cref="VegetationLod.Mesh"/>, with a <c>default</c> material; every copy then takes the
+/// layer's fade, thinning, handover and budgets as a mesh copy does. Keep this while the layer
+/// grows it.
+/// </summary>
+public sealed class VegetationSprite : IDisposable
+{
+    private const float SpriteRoughness = .82f;
+    private readonly Material paint;
+    private readonly MeshResource mesh;
+
+    /// <param name="engine">The product's Engine context.</param>
+    /// <param name="texture">The atlas's image.</param>
+    /// <param name="uvMin">The frame's top left in the image, 0 to 1.</param>
+    /// <param name="uvMax">The frame's bottom right.</param>
+    /// <param name="size">The frame's width and height in metres.</param>
+    /// <param name="pivot">Where a copy's origin stands in the frame, from its bottom left, 0 to 1.</param>
+    /// <param name="material">
+    /// Lighting <see cref="SpriteLightingMode.Unlit"/> or <see cref="SpriteLightingMode.Synthetic"/>;
+    /// alpha mode <see cref="SpriteAlphaMode.Mask"/> or <see cref="SpriteAlphaMode.Opaque"/>, so a copy
+    /// writes depth. Emission needs lighting, and <see cref="SpriteMaterialDescriptor.WindBend"/>
+    /// sways it, in smooth steps only.
+    /// </param>
+    public VegetationSprite(IEngineContext engine, RenderResourceReference texture, Vector2 uvMin, Vector2 uvMax,
+        Vector2 size, Vector2 pivot, SpriteMaterialDescriptor material)
+    {
+        ArgumentNullException.ThrowIfNull(engine);
+        bool unlit = material.Lighting == SpriteLightingMode.Unlit;
+        if (!unlit && material.Lighting != SpriteLightingMode.Synthetic)
+            throw new ArgumentException("A vegetation sprite is unlit or synthetic.", nameof(material));
+        if (material.AlphaMode == SpriteAlphaMode.Blend)
+            throw new ArgumentException("A vegetation sprite is masked or opaque, so it writes depth.", nameof(material));
+        if (unlit && material.EmissionIntensity > 0)
+            throw new ArgumentException("An unlit vegetation sprite cannot emit: use synthetic lighting.", nameof(material));
+
+        Color white = new(1, 1, 1, 1);
+        paint = engine.Graphics.CreateMaterial(new MaterialRequest(white, texture, SpriteRoughness, white,
+            material.EmissionColor, material.EmissionIntensity, true) with
+        {
+            AlphaMode = material.AlphaMode == SpriteAlphaMode.Mask ? MaterialAlphaMode.Mask : MaterialAlphaMode.Opaque,
+            AlphaCutoff = material.AlphaCutoff,
+            Unlit = unlit,
+            EmissionMap = material.EmissionMap,
+            WindBend = material.WindBend,
+        });
+        float left = -pivot.X * size.X, right = (1 - pivot.X) * size.X, bottom = -pivot.Y * size.Y, top = (1 - pivot.Y) * size.Y;
+        Vector3[] positions = [new(left, bottom, 0), new(right, bottom, 0), new(right, top, 0), new(left, top, 0)];
+        Vector2[] uvs = [new(uvMin.X, uvMax.Y), new(uvMax.X, uvMax.Y), new(uvMax.X, uvMin.Y), new(uvMin.X, uvMin.Y)];
+        Vector3[] normals = unlit
+            ? [Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ, Vector3.UnitZ]
+            : [Dome(-1, -1, material), Dome(1, -1, material), Dome(1, 1, material), Dome(-1, 1, material)];
+        mesh = engine.Graphics.CreateMeshResource(new MeshResourceCreateRequest(positions, normals, uvs,
+            ReadOnlyMemory<Color>.Empty, new uint[] { 0, 1, 2, 0, 2, 3 }, new MeshGroup[] { new(0, 0, 6) },
+            new MeshMaterialBinding[] { new(0, paint) }, ReadOnlyMemory<Vector4>.Empty, ReadOnlyMemory<uint>.Empty, true));
+        Look = engine.Graphics.CreateMeshAppearance(mesh);
+    }
+
+    /// <summary>The appearance a vegetation layer or level grows.</summary>
+    public Appearance Look { get; }
+
+    /// <summary>
+    /// The synthetic dome's normal at a corner, as a sprite's over its frame: interpolated across
+    /// the quad, its x and y run as the dome's do.
+    /// </summary>
+    private static Vector3 Dome(float x, float y, SpriteMaterialDescriptor material)
+    {
+        float radius = MathF.Max(.001f, 1 + material.NormalBias);
+        Vector2 across = new Vector2(x, y) * material.NormalStrength / radius;
+        return new(across, MathF.Sqrt(MathF.Max(.001f, 1 - MathF.Min(across.LengthSquared(), .999f))));
+    }
+
+    public void Dispose()
+    {
+        Look.Dispose();
+        mesh.Dispose();
+        paint.Dispose();
+    }
+}

@@ -1342,9 +1342,11 @@ impl Renderer {
                 MaterialRef::LitFallback => (None, Features::default()),
             };
             let impostor = part_impostors.get(index).copied().unwrap_or(false);
+            let billboard = mesh.billboard && scattered.is_some() && !impostor;
             let features = (features | mesh.features())
                 .with(Features::SCATTER, scattered.is_some())
-                .with(Features::IMPOSTOR, impostor);
+                .with(Features::IMPOSTOR, impostor)
+                .with(Features::BILLBOARD, billboard);
             let displacement = descriptor
                 .and_then(|descriptor| descriptor.shader.as_ref())
                 .map_or(0.0, |shader| shader.displacement_bound);
@@ -1353,6 +1355,7 @@ impl Renderer {
                 // An impostor card casts no shadow: its copies cast at the
                 // last mesh level (`scatter_select.wgsl`).
                 shadow: !impostor
+                    && !billboard
                     && descriptor.is_none_or(|descriptor| {
                         !blends(descriptor) || descriptor.translucent_shadow
                     }),
@@ -2007,6 +2010,7 @@ impl Renderer {
         // chunk's are: layers 0 to 3 of its slots' terrain layer materials,
         // or the layers of its palette.
         mesh.layer_weights = asset.payload.layer_weights && streams.colors.is_some();
+        mesh.billboard = asset.payload.billboard;
         if mesh.layer_weights {
             mesh.layer_palette = asset.payload.layer_palette.clone();
         }
@@ -2200,6 +2204,7 @@ impl Renderer {
             distance_field: None,
             layer_weights: false,
             layer_palette: Vec::new(),
+            billboard: false,
             vertex_occlusion: false,
             morph: None,
             skinned: None,

@@ -132,6 +132,8 @@ pub(crate) struct GpuMesh {
     /// Its vertex colours are terrain layer weights, not a tint: a voxel
     /// chunk meshed with terrain layers.
     pub layer_weights: bool,
+    /// Scattered copies face the camera (`MeshPayloadDescriptor::billboard`).
+    pub billboard: bool,
     /// The terrain layers its weights stand for, when its session or the
     /// product has more than four: its groups draw their materials narrowed
     /// to them.

@@ -6,7 +6,7 @@
 // product's `cast_shadow` may discard.
 
 #import rusty::types::{texture_space_position, Caster, Vertex}
-#import rusty::view::{parts, instances, copies, copy_row, selected_copy, impostor_card, shadow_views, fade_toward_origin, morph_share, morph_normal}
+#import rusty::view::{parts, instances, copies, copy_row, selected_copy, impostor_card, billboard, shadow_views, fade_toward_origin, morph_share, morph_normal}
 #import rusty::material::{material, albedo, albedo_sampler}
 #import rusty::surface::{transform_uv, voxel_uv, triplanar_uvs, triplanar_weights, hex_tiles, hex_texture}
 #ifdef WIND
@@ -65,6 +65,11 @@ fn vs_shadow(
     let row = parts[part];
 #endif
 #endif
+#ifdef BILLBOARD
+    let position = mesh_position;
+    let normal = mesh_normal;
+    var world = fade_toward_origin(row, billboard(row, mesh_position, mesh_normal).world);
+#else
 #ifdef IMPOSTOR
     // A card facing the camera, showing the baked view nearest its direction.
     let card = impostor_card(row, mesh_position, material.parameters[0], material.parameters[1].x);
@@ -81,6 +86,7 @@ fn vs_shadow(
     let position = mesh_position;
     let normal = mesh_normal;
     var world = fade_toward_origin(row, (row.model * vec4<f32>(position, 1.0)).xyz);
+#endif
 #endif
 #endif
 #ifdef LAYER_WEIGHTS

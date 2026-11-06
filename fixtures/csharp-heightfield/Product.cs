@@ -107,7 +107,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         camera = engine.CameraView.CreateCamera(Descriptor(new(0, 200, 0), 0));
         engine.CameraView.SetActiveCamera(camera);
         engine.CameraView.SetBackgroundColor(new(FogColor));
-        vegetation = new Vegetation(engine, camera);
+        vegetation = new Vegetation(engine, camera,
+            engine.Graphics.OpenResource(new("flower.png", TextureFilter.Nearest, TextureWrap.Clamp)).Handle);
     }
 
     public void Start() => Build();
