@@ -15,8 +15,18 @@ use crate::pipelines::standard;
 use crate::shaders::Shaders;
 use crate::target::ColorTarget;
 
-/// Bytes of `Precipitation` in `precipitation.wgsl`: five rows.
-const UNIFORM_BYTES: u64 = 5 * 16;
+/// Bytes of `Precipitation` in `precipitation.wgsl`: six rows.
+const UNIFORM_BYTES: u64 = 6 * 16;
+
+/// The view a frame's drops draw in, for their grid of hard blocks.
+pub(crate) struct DropView {
+    /// Render pixels per output pixel.
+    pub scale: f32,
+    /// The viewport's size, render pixels.
+    pub size: [f32; 2],
+    /// The projection's jitter, render pixels.
+    pub jitter: [f32; 2],
+}
 
 pub(crate) struct Precipitation {
     shader: wgpu::ShaderModule,
@@ -83,8 +93,15 @@ impl Precipitation {
         }
     }
 
-    /// Write the volume's parameters for presentation time `time` (seconds).
-    pub fn write(&self, gpu: &Gpu, precipitation: &PrecipitationDescriptor, time: f64) {
+    /// Write the volume's parameters for presentation time `time` (seconds)
+    /// and `view`, before the view's pass.
+    pub fn write(
+        &self,
+        gpu: &Gpu,
+        precipitation: &PrecipitationDescriptor,
+        time: f64,
+        view: DropView,
+    ) {
         let box_size = [
             precipitation.radius * 2.0,
             precipitation.height * 2.0,
@@ -100,7 +117,7 @@ impl Precipitation {
             PrecipitationShape::Flake => 1.0,
         };
         let [vx, vy, vz] = precipitation.velocity;
-        let values: [f32; 20] = [
+        let values: [f32; 24] = [
             box_size[0],
             box_size[1],
             box_size[2],
@@ -119,7 +136,11 @@ impl Precipitation {
             precipitation.color[3],
             if precipitation.additive { 1.0 } else { 0.0 },
             0.0,
-            0.0,
+            view.jitter[0],
+            view.jitter[1],
+            precipitation.pixel_size * view.scale,
+            view.size[0],
+            view.size[1],
             0.0,
         ];
         gpu.queue

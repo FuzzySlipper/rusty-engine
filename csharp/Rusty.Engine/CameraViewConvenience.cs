@@ -71,6 +71,15 @@ public readonly partial record struct CloudsRequest
     }
 }
 
+public readonly partial record struct PrecipitationRequest
+{
+    /// <summary>Smooth drops, not hard blocks.</summary>
+    public PrecipitationRequest(uint Drops, PrecipitationShape Shape, System.Numerics.Vector3 Velocity, float Size, float StreakSeconds, Color Color, bool Additive, float Radius, float Height)
+        : this(Drops, Shape, Velocity, Size, StreakSeconds, Color, Additive, Radius, Height, 0)
+    {
+    }
+}
+
 public readonly partial record struct WetnessRequest
 {
     /// <summary>Wet surfaces whose puddles are water, none frozen.</summary>

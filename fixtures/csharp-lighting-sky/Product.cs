@@ -591,14 +591,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return Inspect();
     }
     private RenderResource? flashShader;
-    // Rain (shape 0) or snow (shape 1) around the camera: the given number of drops (0 stops it). It does not fall in the room under its roof.
+    // Rain (shape 0) or snow (shape 1) around the camera: the given number of drops (0 stops it), as hard blocks of that many pixels (0 draws them smooth). It does not fall in the room under its roof.
     [DebugCommand("lighting.precipitation")]
-    public string Precipitation(uint drops, uint shape)
+    public string Precipitation(uint drops, uint shape, uint pixelSize)
     {
         bool snow = shape == 1;
         engine.CameraView.SetPrecipitation(new(Math.Min(drops,200_000u), snow ? PrecipitationShape.Flake : PrecipitationShape.Streak,
             snow ? SnowVelocity : RainVelocity, snow ? SnowSize : RainSize, snow ? 0f : RainStreakSeconds,
-            snow ? SnowColor : RainColor, false, PrecipitationRadius, PrecipitationHeight));
+            snow ? SnowColor : RainColor, false, PrecipitationRadius, PrecipitationHeight, pixelSize));
         return Inspect();
     }
     // Draw the backdrop at 1:scale behind the room (0 or less removes it), looking out of the doorway: walking 100 m moves its camera 100/scale units.

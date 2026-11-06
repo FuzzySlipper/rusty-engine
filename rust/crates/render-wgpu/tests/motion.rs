@@ -622,6 +622,7 @@ fn falling_rain_moves_down() {
                 additive: false,
                 radius: 6.0,
                 height: 6.0,
+                pixel_size: 0.0,
             }),
         },
     ]);
@@ -633,6 +634,78 @@ fn falling_rain_moves_down() {
     let (down, up) = moving(&fallen, 1, 0.5);
     assert!(down > 50, "drops fall: {down} pixels");
     assert!(up < down / 50, "none rise: {up} against {down}");
+}
+
+/// Flakes falling at `fall` metres per second, as hard blocks of `BLOCK`
+/// pixels.
+fn pixel_flakes(fall: f32) -> Vec<RenderDiff> {
+    vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.05, 0.05, 0.07, 1.0],
+        },
+        RenderDiff::SetPrecipitation {
+            precipitation: Some(PrecipitationDescriptor {
+                drops: 4_000,
+                shape: PrecipitationShape::Flake,
+                velocity: [0.0, fall, 0.0],
+                size: 0.05,
+                streak_seconds: 0.0,
+                color: [2.0, 2.0, 2.2, 1.0],
+                additive: false,
+                radius: 6.0,
+                height: 6.0,
+                pixel_size: BLOCK as f32,
+            }),
+        },
+    ]
+}
+
+const BLOCK: u32 = 4;
+
+#[test]
+fn pixel_drops_carry_their_fall_whole_over_a_block() {
+    let mut harness = harness();
+    harness.apply(pixel_flakes(-4.0));
+    let view = eye(0.0);
+    harness.renderer.set_animation_time(3.0);
+    draw(&mut harness, &view);
+    harness.renderer.set_animation_time(3.02);
+    let (_, fallen) = draw(&mut harness, &view);
+    let (down, up) = moving(&fallen, 1, 0.5);
+    assert!(down > 50, "drops fall: {down} pixels");
+    assert!(up < down / 50, "none rise: {up} against {down}");
+    let mut uneven = 0;
+    for cell_y in 0..HEIGHT / BLOCK {
+        for cell_x in 0..WIDTH / BLOCK {
+            let at = |index: u32| {
+                let (x, y) = (
+                    cell_x * BLOCK + index % BLOCK,
+                    cell_y * BLOCK + index / BLOCK,
+                );
+                (!no_motion(&fallen, x, y)).then(|| motion(&fallen, x, y))
+            };
+            let first = at(0);
+            uneven += usize::from((1..BLOCK * BLOCK).any(|index| match (first, at(index)) {
+                (Some(a), Some(b)) => (a[0] - b[0]).abs() + (a[1] - b[1]).abs() > 0.2,
+                (None, None) => false,
+                _ => true,
+            }));
+        }
+    }
+    assert_eq!(uneven, 0, "a block's pixels share one motion");
+}
+
+#[test]
+fn still_pixel_drops_have_no_motion() {
+    let mut harness = harness();
+    harness.apply(pixel_flakes(0.0));
+    let view = eye(0.0);
+    harness.renderer.set_animation_time(3.0);
+    draw(&mut harness, &view);
+    harness.renderer.set_animation_time(3.02);
+    let (_, held) = draw(&mut harness, &view);
+    assert_eq!(moving(&held, 1, 0.5), (0, 0));
+    assert_eq!(moving(&held, 0, 0.5), (0, 0));
 }
 
 #[test]

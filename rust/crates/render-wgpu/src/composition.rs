@@ -464,6 +464,7 @@ impl Renderer {
                 None => stage = Some(UpscaleMethod::Taau),
             }
         }
+        self.render_scale_drawn = resolution.render.1 as f32 / resolution.output.1.max(1) as f32;
         // A temporal stage's jitter and motion, or the motion alone while
         // inspection shows it (`motion.rs`).
         let jittering = stage.is_some_and(UpscaleMethod::temporal);

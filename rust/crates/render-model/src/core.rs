@@ -670,7 +670,9 @@ pub enum PrecipitationShape {
 /// long as it travels in `streak_seconds`. `color` is linear radiance (0
 /// or more a channel) and alpha (0 to 1), added to the frame when
 /// `additive`, else blended over it. No drop falls where an ambient light's
-/// sky layer says the sky is closed overhead.
+/// sky layer says the sky is closed overhead. `pixel_size` above 0 draws the
+/// drops as hard blocks of that many output pixels on a screen grid; 0 draws
+/// them smooth.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PrecipitationDescriptor {
@@ -683,6 +685,8 @@ pub struct PrecipitationDescriptor {
     pub additive: bool,
     pub radius: f32,
     pub height: f32,
+    #[serde(default)]
+    pub pixel_size: f32,
 }
 
 impl PrecipitationDescriptor {
@@ -691,7 +695,8 @@ impl PrecipitationDescriptor {
 
     /// Drops within `MAX_DROPS`; a finite velocity; a finite size above 0;
     /// a finite non-negative streak time and colour channels with alpha
-    /// within `0..=1`; and a finite radius and height of at least 1 m.
+    /// within `0..=1`; a finite radius and height of at least 1 m; and a
+    /// finite non-negative pixel size.
     pub fn valid(&self) -> bool {
         let extent = |value: f32| value.is_finite() && value >= 1.0;
         self.drops <= Self::MAX_DROPS
@@ -702,6 +707,7 @@ impl PrecipitationDescriptor {
             && (0.0..=1.0).contains(&self.color[3])
             && extent(self.radius)
             && extent(self.height)
+            && non_negative(self.pixel_size)
     }
 }
 

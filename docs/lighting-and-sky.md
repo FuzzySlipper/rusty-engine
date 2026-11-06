@@ -1791,6 +1791,16 @@ engine.CameraView.SetPrecipitation(new(Drops: 30_000, PrecipitationShape.Streak,
 - `Color` is linear radiance and alpha: scale it with the time of day, as the
   drops take no light of their own. `Additive` adds it to the frame (glints),
   otherwise it blends over it.
+- `PixelSize` (above 0) draws the drops as hard blocks of that many output
+  pixels on a screen grid, to sit with nearest-filtered pixel art as the
+  clouds' [`PixelMetres`](#clouds) does. A block has no soft edge: its alpha
+  is `Color`'s times the fades below, whole over the block, though the world
+  in front still cuts it. A flake is one block, or up to three across as it
+  nears the eye, by `Size` on the screen. A streak is a stepped line one block
+  wide along its projected travel, at most ten blocks long, and `StreakSeconds`
+  sets that length as before. Drops move a whole block at a time. Far drops
+  stay a block however small `Size`, so a block size suits larger `Size` and
+  fewer `Drops` than a smooth fall. 0 (the default) draws them smooth.
 - No drop falls where an ambient light's sky layer says the sky is closed
   overhead, so it does not rain under a roof or in a cave. Drops hide behind
   the world and fade softly into it, and fade out toward the box's sides.
@@ -2046,8 +2056,9 @@ reflections: the bank and the pier in the water), and
 the voxels around them, with the camera on the room's far corner), and
 `lighting.flash <strength> <shimmer>` (an image effect from
 `content/flash.wgsl`),
-`lighting.precipitation <drops> <shape>` (rain, shape 0, or snow, shape 1,
-around the camera; none in the room under its roof),
+`lighting.precipitation <drops> <shape> <pixelSize>` (rain, shape 0, or snow,
+shape 1, around the camera, as hard blocks of that many pixels or smooth at 0;
+none in the room under its roof),
 `lighting.wetness <wetness> <puddles>` (the room's surfaces wet after rain),
 `lighting.frozen <frozen>` (their puddles frozen, keeping the wetness in
 force),

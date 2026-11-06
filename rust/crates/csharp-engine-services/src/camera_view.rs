@@ -1624,11 +1624,12 @@ impl RuntimeCameraViewBridge {
             additive: request.additive,
             radius: request.radius,
             height: request.height,
+            pixel_size: request.pixel_size,
         };
         if !precipitation.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_PRECIPITATION",
-                "precipitation needs at most 200000 drops and finite values: a size above 0, a non-negative streak time and colour with alpha within 0 to 1, and a radius and height of at least 1 m",
+                "precipitation needs at most 200000 drops and finite values: a size above 0, a non-negative streak time and pixel size, colour with alpha within 0 to 1, and a radius and height of at least 1 m",
             ));
         }
         self.staged_mut()?.precipitation = Some((request.drops > 0).then_some(precipitation));

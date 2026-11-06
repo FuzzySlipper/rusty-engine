@@ -664,6 +664,8 @@ pub struct Renderer {
     /// The last primary frame's resolutions and upscale stage, for the
     /// readout.
     upscaled: UpscaleReadout,
+    /// The frame's render pixels per output pixel.
+    render_scale_drawn: f32,
     /// The step from that picture to output resolution (`upscale.rs`).
     upscale: upscale::Upscale,
     /// The jitter, motion target and history a temporal stage reads
@@ -952,6 +954,7 @@ impl Renderer {
             reconstructed: false,
             viewmodel_depth: None,
             upscaled: UpscaleReadout::default(),
+            render_scale_drawn: 1.0,
             upscale: upscale::Upscale::new(gpu),
             temporal,
             display_vsync_only: None,

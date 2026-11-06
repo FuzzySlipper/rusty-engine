@@ -7,12 +7,13 @@
 // Drops fade out toward the box's sides so the wrap never pops, are hidden
 // behind the world and fade softly into it (the world's depth in group 2),
 // and are not drawn where an ambient light's sky layer says the sky is
-// closed overhead.
+// closed overhead. With a block size (`Precipitation.grid`) a drop is hard
+// blocks on a screen grid instead (`block_drop`).
 
-#import rusty::view::frame
+#import rusty::view::{frame, projected}
 #import rusty::lighting::open_sky_filtered
 #ifdef MOTION
-#import rusty::motion::{previous_pixel, previous_time, motion_output}
+#import rusty::motion::{previous_pixel, previous_time, motion_output, target_pixel_of}
 #endif
 
 struct Precipitation {
@@ -27,8 +28,12 @@ struct Precipitation {
     phase: vec4<f32>,
     // rgb: linear radiance, a: alpha.
     color: vec4<f32>,
-    // x: 1 when the colour adds to the frame.
+    // x: 1 when the colour adds to the frame; zw: this frame's jitter, target
+    // pixels.
     params: vec4<f32>,
+    // x: the side of a block, target pixels (0: smooth drops); yz: the
+    // viewport's size, target pixels.
+    grid: vec4<f32>,
 };
 
 @group(1) @binding(0) var<uniform> precipitation: Precipitation;
@@ -44,6 +49,12 @@ const SOFTNESS_METRES: f32 = 0.3;
 // the eye would fill the view.
 const NEAREST_METRES: f32 = 0.5;
 const NEAR_FULL_METRES: f32 = 3.0;
+// The most blocks across a flake and along a streak: however near the eye,
+// a drop stays a few blocks.
+const FLAKE_BLOCKS: f32 = 3.0;
+const STREAK_BLOCKS: f32 = 10.0;
+// How far in front of the eye a block drop's ends must stand to be placed.
+const BLOCK_NEAREST_W: f32 = 0.05;
 
 struct DropOut {
     @builtin(position) clip: vec4<f32>,
@@ -56,6 +67,10 @@ struct DropOut {
     // fall (`rusty::motion`).
     @location(3) previous: vec4<f32>,
 #endif
+    // Block drops: the fragment's place on the grid, in blocks.
+    @location(4) cell: vec2<f32>,
+    // A block streak's tail (xy) and head (zw) blocks.
+    @location(5) @interpolate(flat) line: vec4<f32>,
 };
 
 // Three uniform values in [0, 1) for a drop's index (pcg3d).
@@ -69,6 +84,91 @@ fn drop_seed(index: u32) -> vec3<f32> {
     v.y += v.z * v.x;
     v.z += v.x * v.y;
     return vec3<f32>(v >> vec3<u32>(8u)) / 16777216.0;
+}
+
+// Whether drops draw as hard blocks.
+fn blocks() -> bool {
+    return precipitation.grid.x > 0.0;
+}
+
+// A clip position on the block grid, in blocks, without this frame's jitter,
+// so a still drop holds its block.
+fn grid_place(clip: vec4<f32>) -> vec2<f32> {
+    let ndc = clip.xy / clip.w;
+    let pixel = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * precipitation.grid.yz;
+    return (pixel - precipitation.params.zw) / precipitation.grid.x;
+}
+
+// The lowest and highest corners of a drop's blocks, and for a streak its
+// tail and head, in whole blocks. A flake is a square of blocks by its size
+// on the screen. A streak runs from the block of the drop back along its
+// projected travel, shortened to stand in front of the eye.
+struct DropBlocks {
+    low: vec2<f32>,
+    high: vec2<f32>,
+    line: vec4<f32>,
+};
+
+fn flake_blocks(head: vec2<f32>, position: vec3<f32>, toward: vec3<f32>) -> DropBlocks {
+    var right = cross(toward, vec3<f32>(0.0, 1.0, 0.0));
+    if length(right) < 1e-4 {
+        right = vec3<f32>(1.0, 0.0, 0.0);
+    }
+    let edge = grid_place(projected(position + normalize(right) * precipitation.phase.w));
+    let across = clamp(round(distance(edge, head)), 1.0, FLAKE_BLOCKS);
+    let low = floor(head) - floor((across - 1.0) * 0.5);
+    return DropBlocks(low, low + across, vec4<f32>(0.0));
+}
+
+fn streak_blocks(head: vec2<f32>, head_clip: vec4<f32>, position: vec3<f32>) -> DropBlocks {
+    let velocity = precipitation.velocity.xyz;
+    var tail_clip = projected(position - velocity * precipitation.velocity.w);
+    if tail_clip.w < BLOCK_NEAREST_W {
+        tail_clip = mix(head_clip, tail_clip, (head_clip.w - BLOCK_NEAREST_W) / (head_clip.w - tail_clip.w));
+    }
+    let run = grid_place(tail_clip) - head;
+    let longest = max(abs(run.x), abs(run.y));
+    let steps = round(run * min(STREAK_BLOCKS / max(longest, 1e-4), 1.0));
+    let front = floor(head);
+    let back = front + steps;
+    return DropBlocks(min(front, back), max(front, back) + 1.0, vec4<f32>(back, front));
+}
+
+// A drop as hard blocks: a quad over them on the screen grid at `position`'s
+// depth, the same on every corner but where it lies. The block grid is the
+// view's, so a drop moves a whole block at a time. Its motion is the drop's
+// own, whole over the quad.
+fn block_drop(uv: vec2<f32>, position: vec3<f32>, toward: vec3<f32>, fade: f32) -> DropOut {
+    var out: DropOut;
+    let head_clip = projected(position);
+    out.world_position = position;
+    if head_clip.w < BLOCK_NEAREST_W {
+        // Behind the eye: outside the view on every corner.
+        out.clip = vec4<f32>(2.0, 2.0, 0.0, 1.0);
+        return out;
+    }
+    let head = grid_place(head_clip);
+    var drop: DropBlocks;
+    if precipitation.box_shape.w < 0.5 {
+        drop = streak_blocks(head, head_clip, position);
+    } else {
+        drop = flake_blocks(head, position, toward);
+    }
+    out.cell = mix(drop.low, drop.high, uv);
+    out.line = drop.line;
+    let pixel = out.cell * precipitation.grid.x / precipitation.grid.yz;
+    out.clip = vec4<f32>(pixel.x * 2.0 - 1.0, 1.0 - pixel.y * 2.0, head_clip.z / head_clip.w, 1.0);
+    out.fade = fade;
+#ifdef MOTION
+    let was = previous_pixel(position - precipitation.velocity.xyz * (frame.time.x - previous_time()));
+    out.previous = was;
+    if was.w > 1e-6 {
+        let now = target_pixel_of(head_clip);
+        let corner = target_pixel_of(out.clip);
+        out.previous = vec4<f32>(was.xy / was.w + corner.xy / corner.w - now.xy / now.w, 0.0, 1.0);
+    }
+#endif
+    return out;
 }
 
 @vertex
@@ -86,6 +186,10 @@ fn vs_drop(@builtin(vertex_index) corner: u32, @builtin(instance_index) index: u
     let toward = normalize(select(from_camera, vec3<f32>(0.0, 0.0, 1.0), length(from_camera) < 1e-4));
     let size = precipitation.phase.w;
     let uv = vec2<f32>(f32(corner & 1u), f32((corner >> 1u) & 1u));
+    let drop_fade = side_fade * height_fade * smoothstep(NEAREST_METRES, NEAR_FULL_METRES, length(from_camera));
+    if blocks() {
+        return block_drop(uv, position, toward, drop_fade);
+    }
     var world = position;
     if precipitation.box_shape.w < 0.5 {
         // A streak: from where the drop was `velocity.w` seconds ago to
@@ -117,16 +221,43 @@ fn vs_drop(@builtin(vertex_index) corner: u32, @builtin(instance_index) index: u
 #endif
     out.local = vec2<f32>(uv.x * 2.0 - 1.0, uv.y);
     out.world_position = position;
-    out.fade = side_fade * height_fade * smoothstep(NEAREST_METRES, NEAR_FULL_METRES, length(from_camera));
+    out.fade = drop_fade;
     return out;
 }
 
+// Whether a block streak's stepped line misses the fragment's block: the
+// line takes one block per step along its longer axis.
+fn off_line(in: DropOut) -> bool {
+    if !blocks() || precipitation.box_shape.w >= 0.5 {
+        return false;
+    }
+    let cell = floor(in.cell);
+    let tail = in.line.xy;
+    let run = in.line.zw - tail;
+    if abs(run.x) >= abs(run.y) {
+        return run.x != 0.0 && cell.y != round(tail.y + run.y * (cell.x - tail.x) / run.x);
+    }
+    return cell.x != round(tail.x + run.x * (cell.y - tail.y) / run.y);
+}
+
+// The pixel a block takes its fade into the world at, its centre, so it
+// fades whole; a smooth drop's own. Within `size`, the depth target's.
+fn fade_pixel(in: DropOut, size: vec2<u32>) -> vec2<i32> {
+    if !blocks() {
+        return vec2<i32>(in.clip.xy);
+    }
+    let centre = in.clip.xy + (floor(in.cell) + 0.5 - in.cell) * precipitation.grid.x;
+    return clamp(vec2<i32>(centre), vec2<i32>(0), vec2<i32>(size) - 1);
+}
+
 // The drop's colour at a pixel, faded by `fade`: a streak thin and soft
-// across and brightest at its head, a flake a soft disc; premultiplied when
-// it adds to the frame.
+// across and brightest at its head, a flake a soft disc, a block solid;
+// premultiplied when it adds to the frame.
 fn drop_color(in: DropOut, fade: f32) -> vec4<f32> {
-    var shape = 0.0;
-    if precipitation.box_shape.w < 0.5 {
+    var shape = 1.0;
+    if blocks() {
+        // Solid.
+    } else if precipitation.box_shape.w < 0.5 {
         shape = (1.0 - in.local.x * in.local.x) * (0.35 + 0.65 * in.local.y);
     } else {
         let at = vec2<f32>(in.local.x, in.local.y * 2.0 - 1.0);
@@ -169,8 +300,12 @@ struct DropColor {
 
 @fragment
 fn fs_drop(in: DropOut) -> DropColor {
-    let fade = world_fade(in.clip.z, textureLoad(scene_depth, vec2<i32>(in.clip.xy), 0));
-    if fade <= 0.0 || in.fade <= 0.0 || sheltered(in) {
+    var fade = world_fade(in.clip.z, textureLoad(scene_depth, vec2<i32>(in.clip.xy), 0));
+    if blocks() && fade > 0.0 {
+        // The world in front still cuts a block; only its fade is whole.
+        fade = world_fade(in.clip.z, textureLoad(scene_depth, fade_pixel(in, textureDimensions(scene_depth)), 0));
+    }
+    if fade <= 0.0 || in.fade <= 0.0 || off_line(in) || sheltered(in) {
         discard;
     }
     let color = drop_color(in, fade);
@@ -195,7 +330,7 @@ struct DropMultisampledOut {
 
 @fragment
 fn fs_drop_multisampled(in: DropOut) -> DropMultisampledOut {
-    if in.fade <= 0.0 || sheltered(in) {
+    if in.fade <= 0.0 || off_line(in) || sheltered(in) {
         discard;
     }
     let samples = i32(textureNumSamples(scene_depth_multisampled));
@@ -213,7 +348,11 @@ fn fs_drop_multisampled(in: DropOut) -> DropMultisampledOut {
     if covered <= 0.0 {
         discard;
     }
-    let color = drop_color(in, fade / covered);
+    var shown = fade / covered;
+    if blocks() {
+        shown = world_fade(in.clip.z, textureLoad(scene_depth_multisampled, fade_pixel(in, textureDimensions(scene_depth_multisampled)), 0));
+    }
+    let color = drop_color(in, shown);
     if color.a <= 0.001 {
         discard;
     }

@@ -3854,8 +3854,13 @@ impl Renderer {
             .precipitation
             .filter(|precipitation| precipitation.drops > 0 && world_layer);
         if let Some(precipitation) = raining {
+            let drop_view = crate::precipitation::DropView {
+                scale: self.render_scale_drawn,
+                size: [view.viewport.width as f32, view.viewport.height as f32],
+                jitter: view.jitter.unwrap_or_default().to_array(),
+            };
             self.precipitation
-                .write(&self.gpu, &precipitation, self.presentation_time);
+                .write(&self.gpu, &precipitation, self.presentation_time, drop_view);
             if view.motion.is_some() {
                 self.precipitation
                     .prepare_motion(&self.gpu.device, &mut self.layouts.shaders);

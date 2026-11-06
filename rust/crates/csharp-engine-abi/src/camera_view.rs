@@ -808,6 +808,9 @@ pub struct NativePrecipitationRequest {
     pub additive: bool,
     pub radius: f32,
     pub height: f32,
+    /// Above 0, the drops draw as hard blocks of this many output pixels on a
+    /// screen grid; 0 (the default) draws them smooth.
+    pub pixel_size: f32,
 }
 
 /// Which light the ambient rows give inside an indirect light volume.

@@ -3159,6 +3159,7 @@ mod tests {
             additive: true,
             radius,
             height: 10.0,
+            pixel_size: 3.0,
         };
         services.begin_call(binding());
         let api = services.api();
@@ -3181,6 +3182,7 @@ mod tests {
                 additive: true,
                 radius: 20.0,
                 height: 10.0,
+                pixel_size: 3.0,
             }),
         };
         assert_eq!(
@@ -3203,6 +3205,10 @@ mod tests {
             request(5_000, f32::NAN, 0.1, 20.0),
             request(5_000, -1.5, 0.0, 20.0),
             request(5_000, -1.5, 0.1, 0.5),
+            NativePrecipitationRequest {
+                pixel_size: -1.0,
+                ..request(5_000, -1.5, 0.1, 20.0)
+            },
         ] {
             let mut refusal = empty_receipt();
             assert_eq!(set(refused, &mut refusal), 0);
