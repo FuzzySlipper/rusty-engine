@@ -1107,10 +1107,19 @@ engine.CameraView.SetSunShafts(new(Intensity: 0.8f, Length: 0));
 - **Operators.** `None` (the default) clamps at the target's range, so bright
   lights clip to white or a saturated primary. `Neutral` (Khronos PBR Neutral)
   keeps base colours true and compresses only highlights. `AcesFilmic` adds
-  film-like contrast and rolls highlights toward white. Choose one before
-  tuning light intensities: the same lights read differently under each.
+  film-like contrast and rolls highlights toward white. `Rolloff` changes
+  nothing below a linear value of 0.9 (243 of 255 in sRGB): it has no toe, so
+  dark art stays exact, where `Neutral`'s offset and `AcesFilmic`'s contrast
+  move it. Above that a colour eases toward 1 with its channels' shares kept,
+  so a saturated flame stays its colour rather than turning white or a primary.
+  Choose it for painted or pixel art whose palette should reach the screen
+  unchanged, with light above 1 from emission or bloom; `Neutral` or
+  `AcesFilmic` for lit, physically scaled scenes, where highlights should
+  desaturate. Choose one before tuning light intensities: the same lights read
+  differently under each.
   Emission and light above 1 are kept until the operator, so a lamp shade at
-  full emission rolls off under `Neutral` or `AcesFilmic` instead of clipping.
+  full emission rolls off under `Neutral`, `AcesFilmic` or `Rolloff` instead of
+  clipping.
 - **Bloom** spreads the world's light above `Threshold` (linear, before
   exposure, with a soft knee below it) through six half-resolution mips and
   adds it back at `Intensity` (0 or more) before exposure and the operator, so

@@ -301,6 +301,76 @@ fn tone_mapping_compresses_highlights_scales_by_exposure_and_leaves_the_backgrou
     assert_eq!(again, none);
 }
 
+/// What a box emitting exactly `emission`, with no light on it, draws to.
+fn emitted(operator: ToneMappingOperator, emission: [f32; 3]) -> [i32; 3] {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut glow = material("material/glow", [0.0, 0.0, 0.0, 1.0], None);
+    glow.emission_color = emission;
+    glow.emission_intensity = 1.0;
+    harness.apply(vec![
+        RenderDiff::SetBackgroundColor { color: BACKGROUND },
+        RenderDiff::DefineMaterial { material: glow },
+        static_mesh(
+            "mesh/glow",
+            box_mesh([-0.5, -0.5, -0.5], [0.5, 0.5, 0.5], |_| 0),
+            "material/glow",
+        ),
+        instance(
+            1,
+            None,
+            "mesh/glow",
+            transform([0.0, 0.0, -5.0], 0.0, [1.0; 3]),
+        ),
+    ]);
+    pixel(&tone(&mut harness, operator, 1.0), CENTER)
+}
+
+/// Below the knee the operator is `None` to the pixel, down to the darkest
+/// values a low-key palette holds.
+#[test]
+fn rolloff_leaves_a_dark_ramp_exact() {
+    for value in [0.0015, 0.005, 0.02, 0.06, 0.15, 0.3, 0.5, 0.7, 0.85, 0.895] {
+        for shade in [[1.0, 1.0, 1.0], [1.0, 0.55, 0.2], [0.1, 0.3, 1.0]] {
+            let emission = shade.map(|channel| channel * value);
+            assert_eq!(
+                emitted(ToneMappingOperator::Rolloff, emission),
+                emitted(ToneMappingOperator::None, emission),
+                "{emission:?}"
+            );
+        }
+    }
+}
+
+/// Above the knee a saturated emission keeps its channels' shares where
+/// `None` clips the peak and lets the others catch it up, and brighter stays
+/// brighter.
+#[test]
+fn rolloff_keeps_a_saturated_lights_hue_where_none_clips_it() {
+    let decode = |channel: i32| {
+        let value = channel as f32 / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let emission = [4.0, 1.0, 0.25];
+    let [_, g, _] = emitted(ToneMappingOperator::None, emission);
+    assert_eq!(g, 255, "None clips green too, turning the colour yellow");
+    let [r, g, b] = emitted(ToneMappingOperator::Rolloff, emission);
+    assert!(r < 256 && r > 245, "red rolls off toward 1: {r}");
+    let (green, blue) = (decode(g) / decode(r), decode(b) / decode(r));
+    assert!((green - 0.25).abs() < 0.01, "green's share: {green}");
+    assert!((blue - 0.0625).abs() < 0.01, "blue's share: {blue}");
+
+    let peak = |value: f32| emitted(ToneMappingOperator::Rolloff, [value, 0.0, 0.0])[0];
+    assert!(peak(1.0) < peak(1.4), "brighter stays brighter");
+    assert!(peak(0.95) < peak(1.0), "and the knee has no flat step");
+}
+
 /// A box straight ahead glowing far past white.
 fn glowing_box(harness: &mut Harness) {
     let mut glow = material("material/glow", [1.0, 0.8, 0.5, 1.0], None);

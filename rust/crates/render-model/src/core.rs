@@ -1238,6 +1238,8 @@ pub enum ToneMappingOperator {
     Neutral,
     /// ACES filmic (Stephen Hill's fit): film-like contrast and roll-off.
     AcesFilmic,
+    /// Exact below a knee; above it the colour rolls off with its hue kept.
+    Rolloff,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

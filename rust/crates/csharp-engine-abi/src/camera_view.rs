@@ -329,6 +329,10 @@ pub enum NativeToneMappingOperator {
     Neutral = 1,
     /// ACES filmic: film-like contrast, highlights roll toward white.
     AcesFilmic = 2,
+    /// Exact below a linear value of 0.9, with no toe, so a painted palette
+    /// reaches the screen as painted. Above it a colour rolls off toward 1
+    /// with its channels' shares kept, so a saturated light keeps its hue.
+    Rolloff = 3,
 }
 
 /// How lit colour reaches the output: a linear exposure multiplier (1 by

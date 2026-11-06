@@ -4172,6 +4172,7 @@ fn finish_uniform(
         ToneMappingOperator::None => 0,
         ToneMappingOperator::Neutral => 1,
         ToneMappingOperator::AcesFilmic => 2,
+        ToneMappingOperator::Rolloff => 3,
     };
     let (mode, start, end, density): (u32, f32, f32, f32) = match fog {
         None => (0, 0.0, 0.0, 0.0),

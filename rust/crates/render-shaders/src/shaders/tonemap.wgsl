@@ -39,3 +39,20 @@ fn neutral(input: vec3<f32>) -> vec3<f32> {
     let g = 1.0 - 1.0 / (desaturation * (peak - new_peak) + 1.0);
     return mix(compressed, vec3<f32>(new_peak), g);
 }
+
+// The peak channel below which `rolloff` changes nothing.
+const ROLLOFF_KNEE: f32 = 0.9;
+
+// Exact below the knee, with no toe, so a painted palette reaches the screen
+// as painted. Above it the peak channel eases toward 1, leaving the knee at
+// the slope it arrived with, and the others scale with it: every channel keeps
+// its share of the colour, so a saturated light keeps its hue and does not
+// whiten.
+fn rolloff(input: vec3<f32>) -> vec3<f32> {
+    let peak = max(input.r, max(input.g, input.b));
+    if peak <= ROLLOFF_KNEE {
+        return input;
+    }
+    let room = 1.0 - ROLLOFF_KNEE;
+    return input * ((1.0 - room * room / (peak - ROLLOFF_KNEE + room)) / peak);
+}

@@ -893,6 +893,7 @@ impl RuntimeCameraViewBridge {
                 NativeToneMappingOperator::None => ToneMappingOperator::None,
                 NativeToneMappingOperator::Neutral => ToneMappingOperator::Neutral,
                 NativeToneMappingOperator::AcesFilmic => ToneMappingOperator::AcesFilmic,
+                NativeToneMappingOperator::Rolloff => ToneMappingOperator::Rolloff,
             },
             exposure: request.exposure,
         });

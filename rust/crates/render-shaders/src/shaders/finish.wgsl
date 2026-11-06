@@ -9,10 +9,11 @@
 // fog colour equal to the background fades geometry into it exactly.
 
 #import rusty::view::{frame, world_equivalent}
-#import rusty::tonemap::{aces_filmic, neutral}
+#import rusty::tonemap::{aces_filmic, neutral, rolloff}
 
 const TONE_NEUTRAL: u32 = 1u;
 const TONE_ACES_FILMIC: u32 = 2u;
+const TONE_ROLLOFF: u32 = 3u;
 const FOG_LINEAR: u32 = 1u;
 const FOG_EXPONENTIAL: u32 = 2u;
 const FOG_EXPONENTIAL_SQUARED: u32 = 3u;
@@ -86,6 +87,8 @@ fn finish_linear(rgb: vec3<f32>, ray: vec3<f32>) -> vec3<f32> {
         toned = neutral(toned);
     } else if frame.modes.x == TONE_ACES_FILMIC {
         toned = aces_filmic(toned);
+    } else if frame.modes.x == TONE_ROLLOFF {
+        toned = rolloff(toned);
     }
     let fog = frame.modes.y;
     if fog == 0u || all(ray == vec3<f32>(0.0)) {
