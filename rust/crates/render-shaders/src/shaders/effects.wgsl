@@ -100,7 +100,8 @@ fn stepped(in: SpriteOut) -> f32 {
     let size = vec2<f32>(textureDimensions(sprite_color));
     let rows = max(in.sway.z * size.y, 1.0);
     let lean = in.sway.x * abs(in.sway.y) * size.x;
-    let row = (floor((1.0 - in.cell.y) * rows) + 0.5) / rows;
+    // The bottom row stays planted and the top row takes the whole lean.
+    let row = min(floor((1.0 - in.cell.y) * rows), rows - 1.0) / max(rows - 1.0, 1.0);
     return -trunc(row * lean) / size.x;
 }
 

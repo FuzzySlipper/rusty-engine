@@ -2263,6 +2263,54 @@ fn whole_texels_lean_row_by_row_in_whole_steps() {
     );
 }
 
+/// A lean of 16 texels at the top, far enough that a share of it given to the
+/// bottom row would be a whole texel.
+#[test]
+fn a_strong_whole_texel_lean_keeps_the_bottom_row_planted() {
+    let batch = |sprite: SpriteInstanceDescriptor| {
+        vec![RenderDiff::CreateSpriteBatch {
+            handle: RenderHandle::new(10),
+            parent: None,
+            batch: SpriteBatchDescriptor {
+                sprite,
+                instances: vec![SpriteBatchInstance {
+                    position: [0.0; 3],
+                    scale: 1.0,
+                    frame: 0,
+                }]
+                .into(),
+            },
+        }]
+    };
+    for (what, still, bent) in [
+        (
+            "sprite",
+            vec![create(10, windy_sprite(0.0, false))],
+            vec![create(10, windy_sprite(0.5, true))],
+        ),
+        (
+            "batch",
+            batch(windy_sprite(0.0, false)),
+            batch(windy_sprite(0.5, true)),
+        ),
+    ] {
+        let (still, bent) = (windy(still, 2.0, 3.0), windy(bent, 2.0, 3.0));
+        let (bottom, top) = lit_rows(&still);
+        // Every pixel row of the frame's bottom texel row stands where it
+        // stood.
+        let texel_row = (bottom - top) / 8;
+        for y in bottom - texel_row + 1..=bottom {
+            assert_eq!(
+                row_centre(&bent, y),
+                row_centre(&still, y),
+                "{what}: the bottom row at pixel row {y}"
+            );
+        }
+        let lean = row_centre(&bent, top).unwrap() - row_centre(&still, top).unwrap();
+        assert!(lean > 8.0, "{what}: the top leans: {lean}");
+    }
+}
+
 #[test]
 fn a_small_change_of_wind_holds_whole_texels_where_a_smooth_lean_slides() {
     let at = |whole_texels, strength| {
