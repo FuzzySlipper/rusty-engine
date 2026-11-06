@@ -1114,16 +1114,26 @@ fn sprite_quad(
             width * placement.minimum[0] + (target_width - quad_width) * placement.alignment[0];
         let bottom =
             height * placement.minimum[1] + (target_height - quad_height) * placement.alignment[1];
-        let ndc = Mat4::from_translation(Vec3::new(
+        // A rectangle at one depth in the view stays one in the world, so
+        // its matrix is affine like any sprite's: lit sprites read its
+        // normal and place from it.
+        let (x, y) = (
             (left + quad_width * 0.5) / width * 2.0 - 1.0,
             (bottom + quad_height * 0.5) / height * 2.0 - 1.0,
-            PLACEMENT_DEPTH,
-        )) * Mat4::from_scale(Vec3::new(
-            quad_width / width * 2.0,
-            quad_height / height * 2.0,
-            1.0,
-        ));
-        return Some((camera.view_proj.inverse() * ndc, [-0.5, -0.5, 0.5, 0.5]));
+        );
+        let (half_x, half_y) = (quad_width / width, quad_height / height);
+        let unproject = camera.view_proj.inverse();
+        let world = |x, y| unproject.project_point3(Vec3::new(x, y, PLACEMENT_DEPTH));
+        let right = world(x + half_x, y) - world(x - half_x, y);
+        let up = world(x, y + half_y) - world(x, y - half_y);
+        let facing = right.cross(up).try_normalize().unwrap_or(Vec3::Z);
+        let model = Mat4::from_cols(
+            right.extend(0.0),
+            up.extend(0.0),
+            facing.extend(0.0),
+            world(x, y).extend(1.0),
+        );
+        return Some((model, [-0.5, -0.5, 0.5, 0.5]));
     }
     let [w, h] = frame_size;
     let quad = [

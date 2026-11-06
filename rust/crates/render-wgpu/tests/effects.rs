@@ -1662,3 +1662,81 @@ fn a_tint_mask_recolours_only_where_it_is_opaque() {
         );
     }
 }
+
+/// The centre pixel of a lit sprite facing the camera, under a point light,
+/// drawn in `layer` at the viewport's centre or, unplaced, at a screen size.
+fn lit_hand(
+    lighting: SpriteLightingMode,
+    layer: RenderLayer,
+    placed: bool,
+    light_intensity: f32,
+) -> [u8; 4] {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.extend(atlas_ops(&mut harness.resources));
+    let mut hand = sprite(0, [0.0, 0.0, -4.0], BillboardMode::None);
+    hand.size = [64.0, 64.0];
+    hand.size_mode = SpriteSizeMode::Pixel;
+    hand.depth = SpriteDepthPolicy::DepthTestOff;
+    hand.layer = layer;
+    hand.material.lighting = lighting;
+    hand.material.alpha = SpriteAlphaMode::Opaque;
+    hand.viewport_placement = placed.then_some(SpriteViewportPlacement {
+        minimum: [0.25, 0.25],
+        size: [0.5, 0.5],
+        alignment: [0.0, 0.0],
+        fit: SpriteViewportFit::Stretch,
+    });
+    ops.push(create(3, hand));
+    ops.push(RenderDiff::CreateLight {
+        handle: RenderHandle::new(31),
+        parent: None,
+        light: LightDescriptor::Point {
+            enabled: true,
+            color: [1.0, 1.0, 1.0],
+            intensity: light_intensity,
+            position: [0.0, 1.0, 1.0],
+            range: None,
+            decay: 2.0,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+        },
+    });
+    harness.apply(ops);
+    let rgba = harness.single(&camera("eye", [0.0, 0.0, 0.0], 0.0, 0.0));
+    pixel(&rgba, WIDTH, WIDTH / 2, HEIGHT / 2)
+}
+
+/// A viewport-placed sprite is lit as any sprite of its layer: facing the
+/// camera, at its place in the view. Its normal used to be undefined, which
+/// drew it black in the world and white in the viewmodel.
+#[test]
+fn a_viewport_placed_sprite_lights_as_one_facing_the_camera() {
+    for lighting in [
+        SpriteLightingMode::Synthetic,
+        SpriteLightingMode::DerivedGradient,
+    ] {
+        let [dim, ..] = lit_hand(lighting, RenderLayer::Scene, true, 2.0);
+        let [r, g, b, _] = lit_hand(lighting, RenderLayer::Scene, true, 8.0);
+        assert!(r > dim && dim > 0, "{lighting:?}: follows its light");
+        assert!(
+            r > g + 40 && r > b + 40,
+            "{lighting:?}: keeps the art's red"
+        );
+
+        // The viewmodel rig lights it as it lights an unplaced sprite.
+        let placed = lit_hand(lighting, RenderLayer::Viewmodel, true, 2.0);
+        let unplaced = lit_hand(lighting, RenderLayer::Viewmodel, false, 2.0);
+        for channel in 0..3 {
+            assert!(
+                placed[channel].abs_diff(unplaced[channel]) <= 2,
+                "{lighting:?}: {placed:?} against {unplaced:?}"
+            );
+        }
+    }
+}

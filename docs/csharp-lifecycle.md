@@ -524,7 +524,12 @@ its alpha reads the same in either colour space. The mask applies to sprites
 from a texture or an atlas and to sprite batches. Sprites and atlases keep the
 sampler selected when their texture was opened; the short constructors select
 opaque mesh and unlit/blended sprite defaults, and the eight- and ten-argument
-`SpriteMaterialDescriptor` constructors leave out the later fields.
+`SpriteMaterialDescriptor` constructors leave out the later fields. A lit
+sprite placed with `SetSpriteViewport` faces the camera and takes the light at
+its place in the view, a little in front of the eye, from the lights of its
+layer: a `RenderLayer.Viewmodel` sprite takes the viewmodel lights, not the
+world's, so a hand that should dim with the day needs a retained light in that
+layer that the product dims.
 
 `Graphics.CreateMeshResource(new MeshResourceCreateRequest(positions, normals,
 uvs, colors, indices, groups, bindings))` copies ordinary managed arrays into
