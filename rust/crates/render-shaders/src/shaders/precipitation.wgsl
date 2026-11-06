@@ -128,7 +128,7 @@ fn streak_blocks(head: vec2<f32>, head_clip: vec4<f32>, position: vec3<f32>) -> 
     }
     let run = grid_place(tail_clip) - head;
     let longest = max(abs(run.x), abs(run.y));
-    let steps = round(run * min(STREAK_BLOCKS / max(longest, 1e-4), 1.0));
+    let steps = round(run * min((STREAK_BLOCKS - 1.0) / max(longest, 1e-4), 1.0));
     let front = floor(head);
     let back = front + steps;
     return DropBlocks(min(front, back), max(front, back) + 1.0, vec4<f32>(back, front));

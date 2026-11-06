@@ -269,6 +269,25 @@ fn spans(clump: &[(i32, i32)]) -> (i32, i32) {
     (span(|cell| cell.0), span(|cell| cell.1))
 }
 
+/// The clumps that are one streak: a block per step of their longer side,
+/// running one way. Streaks that touch make a clump that is neither.
+fn lines_of(clumps: &[Vec<(i32, i32)>]) -> Vec<&Vec<(i32, i32)>> {
+    clumps
+        .iter()
+        .filter(|clump| {
+            let (across, down) = spans(clump);
+            let mut cells = (*clump).clone();
+            cells.sort_by_key(|cell| cell.1);
+            let turns = |sign: i32| {
+                cells
+                    .windows(2)
+                    .any(|pair| (pair[1].0 - pair[0].0) * sign > 0)
+            };
+            clump.len() as i32 == across.max(down) && !(turns(1) && turns(-1))
+        })
+        .collect()
+}
+
 fn level(harness: &mut Harness, time: f64) -> Vec<u8> {
     harness.renderer.set_animation_time(time);
     harness.render(&camera([0.0, 1.7, 0.0], 0.0, 0.0)).1
@@ -337,14 +356,7 @@ fn a_pixel_streak_is_a_stepped_line_one_block_wide() {
         BLOCK as f32,
     )]);
     let clumps = clumps(lit_cells(&level(&mut harness, 3.0)));
-    // Streaks that touch make a clump of their own, so not every one is a line.
-    let lines: Vec<_> = clumps
-        .iter()
-        .filter(|clump| {
-            let (across, down) = spans(clump);
-            clump.len() as i32 == across.max(down)
-        })
-        .collect();
+    let lines = lines_of(&clumps);
     assert!(clumps.len() > 10, "streaks show: {}", clumps.len());
     assert!(
         lines.len() * 4 >= clumps.len() * 3,
@@ -358,10 +370,20 @@ fn a_pixel_streak_is_a_stepped_line_one_block_wide() {
             .any(|clump| spans(clump).1 >= 3 && spans(clump).0 >= 2),
         "a streak runs at its slant"
     );
-    assert!(
-        lines.iter().map(|clump| spans(clump).1).max() <= Some(11),
-        "its length is capped"
-    );
+}
+
+#[test]
+fn a_pixel_streak_is_at_most_ten_blocks_however_fast_it_falls() {
+    let mut harness = block_scene(RendererOptions::default());
+    harness.apply(vec![blocks(
+        60,
+        PrecipitationShape::Streak,
+        [10.0, -60.0, 0.0],
+        BLOCK as f32,
+    )]);
+    let clumps = clumps(lit_cells(&level(&mut harness, 3.0)));
+    let longest = lines_of(&clumps).iter().map(|clump| clump.len()).max();
+    assert_eq!(longest, Some(10));
 }
 
 #[test]
