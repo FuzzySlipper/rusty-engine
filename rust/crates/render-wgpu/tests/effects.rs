@@ -2365,6 +2365,18 @@ fn lit_look(
     billboard: Option<(MaterialBillboardLighting, Option<&str>)>,
     wind: f32,
 ) -> Vec<u8> {
+    look_in(material, billboard, wind, [1.0, 0.0], false)
+}
+
+/// `lit_look` with the wind toward `direction`, and with `occlusion` on a floor
+/// behind the copy, whose depth-only pass reads the copy's shape.
+fn look_in(
+    material: &SpriteMaterialDescriptor,
+    billboard: Option<(MaterialBillboardLighting, Option<&str>)>,
+    wind: f32,
+    direction: [f32; 2],
+    occlusion: bool,
+) -> Vec<u8> {
     let mut harness = Harness::new(RendererOptions {
         default_world_lights: false,
         samples: 1,
@@ -2389,12 +2401,36 @@ fn lit_look(
         },
         RenderDiff::SetWind {
             wind: Some(WindDescriptor {
-                direction: [1.0, 0.0],
+                direction,
                 strength: wind,
                 gust: 0.0,
             }),
         },
     ];
+    if occlusion {
+        ops.push(RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                ambient_occlusion: AmbientOcclusionSettings {
+                    mode: AmbientOcclusionMode::ScreenSpace,
+                    ..AmbientOcclusionSettings::DEFAULT
+                },
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        });
+        ops.extend(scene());
+        ops.push(RenderDiff::CreateLight {
+            handle: RenderHandle::new(41),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [1.0; 3],
+                intensity: 1.0,
+                enabled: true,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+                range: None,
+            },
+        });
+    }
     ops.extend(atlas_ops(&mut harness.resources));
     let (detail, _) = harness.resources.texture(
         "texture/detail",
@@ -2616,4 +2652,38 @@ fn a_billboard_copy_leans_in_whole_texels_as_a_sprite_does() {
     sprite.wind_whole_texels = true;
     let (difference, _) = lit_difference(&lit_look(&sprite, None, 2.0), &whole);
     assert!(difference < 3.0, "as the sprite leans: {difference}");
+}
+
+#[test]
+fn the_depth_pass_sees_a_whole_texel_lean_as_the_picture_does() {
+    let leaning = |strength: f32, direction: [f32; 2], alpha: SpriteAlphaMode| {
+        let mut material = masked(SpriteLightingMode::Unlit);
+        material.alpha = alpha;
+        material.wind_bend = 0.3;
+        material.wind_whole_texels = true;
+        look_in(
+            &material,
+            Some((MaterialBillboardLighting::Flat, None)),
+            strength,
+            direction,
+            true,
+        )
+    };
+    let mask = SpriteAlphaMode::Mask { cutoff: 0.5 };
+    // Toward the camera the picture does not move, so neither may its depth:
+    // a depth pass leaning smoothly would shade the floor behind differently.
+    assert_eq!(
+        leaning(2.0, [0.0, 1.0], mask),
+        leaning(0.0, [0.0, 1.0], mask),
+        "wind toward the eye"
+    );
+    // Across the view the rows hold between steps, and so does their depth,
+    // with a mask and without one.
+    for alpha in [mask, SpriteAlphaMode::Opaque] {
+        assert_eq!(
+            leaning(2.0, [1.0, 0.0], alpha),
+            leaning(2.01, [1.0, 0.0], alpha),
+            "wind across the view, {alpha:?}"
+        );
+    }
 }

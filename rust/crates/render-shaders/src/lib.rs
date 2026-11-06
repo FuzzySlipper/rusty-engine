@@ -242,10 +242,13 @@ impl Features {
         }
     }
 
-    /// Whether the caster pass has a fragment stage: the alpha mask, or a
-    /// product shader's caster stage, to discard.
+    /// Whether the caster pass has a fragment stage: the alpha mask, a
+    /// product shader's caster stage, or a billboard's rows stepped in the
+    /// wind, to discard.
     pub fn caster_fragment(self) -> bool {
-        self.contains(Self::MASK) || self.product & PRODUCT_CASTS != 0
+        self.contains(Self::MASK)
+            || self.product & PRODUCT_CASTS != 0
+            || self.contains(Self::BILLBOARD | Self::WIND)
     }
 
     /// Whether the vertices move with presentation time, so shadow maps
@@ -868,6 +871,7 @@ mod tests {
             Features::default(),
             Features::MASK,
             Features::UNLIT,
+            Features::WIND,
             Features::MASK | Features::WIND,
             Features::MASK | Features::UNLIT,
             Features::MASK | Features::EMISSIVE_MAP,

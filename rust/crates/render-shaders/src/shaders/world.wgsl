@@ -16,7 +16,7 @@
 #import rusty::types::{texture_space_position, Vertex}
 #import rusty::view::{frame, parts, instances, copies, copy_row, selected_copy, impostor_card, billboard, wind_lean, fade_mask, mask_coverage, fade_toward_origin, morph_share, morph_normal, projected}
 #ifdef WIND
-#import rusty::wind::wind_displace
+#import rusty::wind::{wind_displace, billboard_lean, billboard_row_uv, billboard_off_frame, billboard_whole_texels}
 #endif
 #ifdef MOTION
 #import rusty::motion::{previous_pixel, previous_model, previous_copy_model, motion_output, reactive_motion_output}
@@ -205,25 +205,15 @@ fn vs_world(
 #endif
 #endif
 #ifdef BILLBOARD
-    // A lean in whole texels widens the quad on the side it leans and draws
-    // nothing else moved: the fragment stage steps the rows. Smooth wind
-    // leans the quad below, as any part's.
-    let turned = billboard(row, mesh_position);
-    let scale = length(row.model[1].xyz);
-    var lean_share = 0.0;
     var quad_position = mesh_position;
     var quad_uv = uv;
-    if material.parameters[0].w > 0.5 {
-        let size = material.parameters[2].xy;
-        let frame_uv = material.parameters[1];
-        let top = vec3<f32>(frame.wind.x, 0.0, frame.wind.y)
-            * (wind_lean(row.model[3].xyz, frame.time.x) * material.wind.x * size.y * scale);
-        lean_share = dot(top, turned.right) / max(size.x * scale, 1e-6);
-        let across = (uv.x - frame_uv.x) / (frame_uv.z - frame_uv.x);
-        let widened = across * (1.0 + abs(lean_share)) - max(-lean_share, 0.0);
-        quad_position.x += (widened - across) * size.x;
-        quad_uv.x = mix(frame_uv.x, frame_uv.z, widened);
-    }
+    var lean_share = 0.0;
+#ifdef WIND
+    let lean = billboard_lean(row, mesh_position, uv, billboard(row, mesh_position).right);
+    quad_position = lean.position;
+    quad_uv = lean.uv;
+    lean_share = lean.share;
+#endif
     let quad = billboard(row, quad_position);
     let position = mesh_position;
     let normal = mesh_normal;
@@ -267,7 +257,7 @@ fn vs_world(
 #endif
     let unswayed = world;
 #ifdef BILLBOARD
-    if material.parameters[0].w < 0.5 {
+    if !billboard_whole_texels() {
         world = wind_displace(world, row.model[3].xyz, wind_weight);
     }
 #else
@@ -940,32 +930,14 @@ fn water_over_scene(color: vec4<f32>) -> vec4<f32> {
 #endif
 
 #ifdef BILLBOARD
-// A billboard fragment moved to its row's lean in whole texels (the material's
-// `parameters`, render-wgpu `billboard_parameters`), as a sprite's is
-// (`effects.wgsl` `stepped`): the bottom row stands and the top takes the whole
-// lean, toward the base so a row stays on the widened quad. `turn_y` carries the
-// lean's share of the width, since a billboard's up is the world's.
+// A billboard fragment moved to its row's lean in whole texels. `turn_y`
+// carries the lean's share of the width, since a billboard's up is the world's.
 fn billboard_row(drawn: VsOut) -> VsOut {
     var in = drawn;
-    let lean_share = in.turn_y.x;
-    if lean_share != 0.0 {
-        let frame_uv = material.parameters[1];
-        let size = vec2<f32>(textureDimensions(albedo));
-        let span = frame_uv.zw - frame_uv.xy;
-        let rows = max(abs(span.y) * size.y, 1.0);
-        let lean = lean_share * abs(span.x) * size.x;
-        let rise = 1.0 - (in.uv.y - frame_uv.y) / span.y;
-        let row = min(floor(rise * rows), rows - 1.0) / max(rows - 1.0, 1.0);
-        in.uv.x -= sign(span.x) * trunc(row * lean) / size.x;
-    }
+#ifdef WIND
+    in.uv = billboard_row_uv(in.uv, in.turn_y.x);
+#endif
     return in;
-}
-
-// Where a row stepped past its frame's side leaves nothing.
-fn billboard_off_frame(in: VsOut) -> bool {
-    let frame_uv = material.parameters[1];
-    let across = (in.uv.x - frame_uv.x) / (frame_uv.z - frame_uv.x);
-    return in.turn_y.x != 0.0 && (across < 0.0 || across > 1.0);
 }
 
 // A billboard's normal, by its lighting (`material.parameters[0].x`): flat, or
@@ -1027,9 +999,11 @@ fn world_color(drawn: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f3
 #endif
     var surface = standard_surface(in, front);
 #ifdef BILLBOARD
-    if billboard_off_frame(in) {
+#ifdef WIND
+    if billboard_off_frame(in.uv, in.turn_y.x) {
         discard;
     }
+#endif
 #endif
 #ifdef WATER
     surface = water_surface(in, surface);

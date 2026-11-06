@@ -10,7 +10,7 @@
 #import rusty::material::{material, albedo, albedo_sampler}
 #import rusty::surface::{transform_uv, voxel_uv, triplanar_uvs, triplanar_weights, hex_tiles, hex_texture}
 #ifdef WIND
-#import rusty::wind::wind_displace
+#import rusty::wind::{wind_displace, billboard_lean, billboard_row_uv, billboard_off_frame, billboard_whole_texels}
 #endif
 #ifdef SCATTER
 #import rusty::lighting::snow_sunk
@@ -34,6 +34,10 @@ struct VsOut {
     @location(1) @interpolate(flat) part: u32,
     @location(2) alpha: f32,
     @location(5) world_position: vec3<f32>,
+#ifdef BILLBOARD
+    // A lean in whole texels (`rusty::wind::billboard_lean`).
+    @location(6) @interpolate(flat) lean_share: f32,
+#endif
 #ifdef TRIPLANAR
     @location(3) texture_position: vec3<f32>,
     @location(4) texture_normal: vec3<f32>,
@@ -66,9 +70,19 @@ fn vs_shadow(
 #endif
 #endif
 #ifdef BILLBOARD
+    // As the world pass places it, so the depth is the picture's.
+    var quad_position = mesh_position;
+    var quad_uv = uv;
+    var lean_share = 0.0;
+#ifdef WIND
+    let lean = billboard_lean(row, mesh_position, uv, billboard(row, mesh_position).right);
+    quad_position = lean.position;
+    quad_uv = lean.uv;
+    lean_share = lean.share;
+#endif
     let position = mesh_position;
     let normal = mesh_normal;
-    var world = fade_toward_origin(row, billboard(row, mesh_position).world);
+    var world = fade_toward_origin(row, billboard(row, quad_position).world);
 #else
 #ifdef IMPOSTOR
     // A card facing the camera, showing the baked view nearest its direction.
@@ -101,7 +115,13 @@ fn vs_shadow(
 #endif
 #endif
 #ifdef WIND
+#ifdef BILLBOARD
+    if !billboard_whole_texels() {
+        world = wind_displace(world, row.model[3].xyz, alpha);
+    }
+#else
     world = wind_displace(world, row.model[3].xyz, alpha);
+#endif
 #endif
 #ifdef SCATTER
     // A sinking copy's shadow sinks with the snow's amount: the shadow
@@ -128,7 +148,12 @@ fn vs_shadow(
 #ifdef IMPOSTOR
     out.uv = card.uv;
 #else
+#ifdef BILLBOARD
+    out.uv = quad_uv;
+    out.lean_share = lean_share;
+#else
     out.uv = uv;
+#endif
 #endif
     out.part = part;
     out.alpha = alpha;
@@ -161,7 +186,19 @@ fn fs_shadow(in: VsOut) {
     let weights = triplanar_weights(in.texture_normal, material.factors.y);
     let texture_alpha = dot(vec3<f32>(base_alpha(planes[0]), base_alpha(planes[1]), base_alpha(planes[2])), weights);
 #else
+#ifdef BILLBOARD
+#ifdef WIND
+    let row_uv = billboard_row_uv(in.uv, in.lean_share);
+    if billboard_off_frame(row_uv, in.lean_share) {
+        discard;
+    }
+#else
+    let row_uv = in.uv;
+#endif
+    let texture_alpha = base_alpha(row_uv);
+#else
     let texture_alpha = base_alpha(in.uv);
+#endif
 #endif
     let alpha = parts[in.part].color.a * in.alpha * texture_alpha;
 #ifdef MASK
