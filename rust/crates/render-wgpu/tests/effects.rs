@@ -3,6 +3,7 @@
 //!   alpha modes;
 //! - lit sprites, tint masks and sprite emission;
 //! - sprites in the wind;
+//! - billboard copies lit and swayed as the same sprite;
 //! - particle bursts and emitters, aged on Engine time only.
 //!
 //! `RENDER_WGPU_BLESS=1 cargo test -p render-wgpu --test effects` rewrites the
@@ -2322,4 +2323,297 @@ fn a_small_change_of_wind_holds_whole_texels_where_a_smooth_lean_slides() {
     };
     assert_ne!(at(false, 2.0), at(false, 2.01), "a smooth lean slides");
     assert_eq!(at(true, 2.0), at(true, 2.01), "whole texels hold");
+}
+
+/// The atlas's frame 0, as a billboard material's and quad's uv.
+const FRAME: [f32; 4] = [0.0, 0.0, 0.5, 1.0];
+
+/// A surface on the atlas, its other fields a plain material's.
+fn flat_material() -> RenderMaterialDescriptor {
+    let mut ops = coloured_mesh("unused", cube(), [1.0; 4]);
+    let Some(RenderDiff::DefineMaterial { mut material }) = ops
+        .iter()
+        .position(|op| matches!(op, RenderDiff::DefineMaterial { .. }))
+        .map(|at| ops.remove(at))
+    else {
+        unreachable!()
+    };
+    material.id = "material/flat".to_owned();
+    material.texture = Some("texture/atlas".to_owned());
+    material
+}
+
+/// A quad 2 m tall on frame 0, as `VegetationSprite` makes one.
+fn billboard_quad() -> MeshPayloadDescriptor {
+    let mut quad = payload(
+        vec![-1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 2.0, 0.0, -1.0, 2.0, 0.0],
+        [0.0, 0.0, 1.0].repeat(4),
+        vec![0, 1, 2, 0, 2, 3],
+    );
+    quad.billboard = true;
+    let MeshPayloadSource::Inline { uvs, .. } = &mut quad.source else {
+        unreachable!()
+    };
+    *uvs = Some(vec![0.0, 1.0, 0.5, 1.0, 0.5, 0.0, 0.0, 0.0].into());
+    quad
+}
+
+/// One spot of `sprite`'s look: `sprite` standing there, or the billboard copy
+/// of it, in a light from the right, on black.
+fn lit_look(
+    material: &SpriteMaterialDescriptor,
+    billboard: Option<(MaterialBillboardLighting, Option<&str>)>,
+    wind: f32,
+) -> Vec<u8> {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        samples: 1,
+        ..RendererOptions::default()
+    });
+    let mut ops = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(40),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0; 3],
+                intensity: 3.0,
+                enabled: true,
+                direction: [-0.8, -0.1, -0.6],
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        },
+        RenderDiff::SetWind {
+            wind: Some(WindDescriptor {
+                direction: [1.0, 0.0],
+                strength: wind,
+                gust: 0.0,
+            }),
+        },
+    ];
+    ops.extend(atlas_ops(&mut harness.resources));
+    let (detail, _) = harness.resources.texture(
+        "texture/detail",
+        16,
+        8,
+        &(0..16 * 8)
+            .flat_map(|at: u32| {
+                // Texels of very different heights and normals.
+                let (x, y) = (at % 16, at / 16);
+                let (a, b) = ((x * 97 + y * 41) % 200, (x * 53 + y * 131) % 200);
+                [(a + 28) as u8, (b + 28) as u8, 200, 255]
+            })
+            .collect::<Vec<u8>>(),
+        TextureFilter::Nearest,
+    );
+    ops.push(detail);
+    match billboard {
+        None => {
+            let mut standing = sprite(0, [0.0, -1.0, -4.0], BillboardMode::Cylindrical);
+            standing.pivot = [0.5, 0.0];
+            standing.size = [2.0, 2.0];
+            standing.material = material.clone();
+            ops.push(create(10, standing));
+        }
+        Some((lighting, map)) => {
+            let mut paint = flat_material();
+            paint.roughness = 0.82;
+            paint.double_sided = true;
+            paint.unlit = material.lighting == SpriteLightingMode::Unlit;
+            paint.emission_color = material.emission_color;
+            paint.emission_intensity = material.emission_intensity;
+            paint.alpha_mode = match material.alpha {
+                SpriteAlphaMode::Mask { cutoff } => MaterialAlphaModeDescriptor::Mask { cutoff },
+                SpriteAlphaMode::Blend => MaterialAlphaModeDescriptor::Blend,
+                SpriteAlphaMode::Opaque => MaterialAlphaModeDescriptor::Opaque,
+            };
+            paint.normal_map = map.map(|texture| MaterialNormalMapDescriptor {
+                texture: texture.to_owned(),
+                scale: 1.0,
+            });
+            paint.wind = (material.wind_bend > 0.0).then_some(MaterialWindDescriptor {
+                bend: material.wind_bend,
+                flutter: 0.0,
+            });
+            paint.billboard = Some(MaterialBillboardDescriptor {
+                lighting,
+                normal_strength: material.normal_strength,
+                normal_bias: material.normal_bias,
+                size: [2.0, 2.0],
+                frame: FRAME,
+                whole_texels: material.wind_whole_texels,
+            });
+            ops.extend(coloured_mesh("flat", billboard_quad(), [1.0; 4]));
+            ops.push(RenderDiff::DefineMaterial { material: paint });
+            ops.push(RenderDiff::Create {
+                handle: RenderHandle::new(5),
+                parent: None,
+                node: RenderNode::new(Geometry::Group),
+            });
+            ops.push(RenderDiff::CreateScatterPatch {
+                handle: RenderHandle::new(11),
+                parent: Some(RenderHandle::new(5)),
+                patch: ScatterPatchDescriptor {
+                    asset: "mesh/flat".to_owned(),
+                    material_overrides: Vec::new(),
+                    instances: vec![ScatterInstance {
+                        translation: [0.0, -1.0, -4.0],
+                        rotation: [0.0, 0.0, 0.0, 1.0],
+                        scale: 1.0,
+                        tint: [1.0; 3],
+                        rank: 0.5,
+                    }],
+                    fade: ScatterFade::default(),
+                    shadow_casting: ShadowCasting::None,
+                    lods: Vec::new(),
+                    lod_band: 0.0,
+                    thinning: Default::default(),
+                },
+            });
+        }
+    }
+    harness.apply(ops);
+    harness.renderer.set_animation_time(3.0);
+    let eye = camera("eye", [0.0, 0.0, 0.0], 0.0, 0.0);
+    for _ in 0..3 {
+        harness.renderer.render_offscreen(&eye, &harness.target);
+    }
+    harness.target.read_rgba(&harness.gpu)
+}
+
+/// The mean difference per channel over pixels either frame lights.
+fn lit_difference(a: &[u8], b: &[u8]) -> (f64, usize) {
+    let (mut sum, mut count) = (0.0, 0);
+    for (a, b) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
+        if a[..3].iter().chain(&b[..3]).any(|&value| value > 8) {
+            sum += (0..3)
+                .map(|channel| f64::from(a[channel].abs_diff(b[channel])))
+                .sum::<f64>()
+                / 3.0;
+            count += 1;
+        }
+    }
+    (sum / count.max(1) as f64, count)
+}
+
+fn masked(lighting: SpriteLightingMode) -> SpriteMaterialDescriptor {
+    SpriteMaterialDescriptor {
+        lighting,
+        normal_strength: 0.9,
+        normal_texture: (lighting == SpriteLightingMode::AuthoredNormal)
+            .then(|| "texture/detail".to_owned()),
+        depth_texture: (lighting == SpriteLightingMode::AuthoredDepth)
+            .then(|| "texture/detail".to_owned()),
+        alpha: SpriteAlphaMode::Mask { cutoff: 0.5 },
+        ..SpriteMaterialDescriptor::default()
+    }
+}
+
+#[test]
+fn a_billboard_copy_lights_as_the_same_sprite_in_every_mode() {
+    use MaterialBillboardLighting as Billboard;
+    use SpriteLightingMode as Sprite;
+    for (mode, lighting, map) in [
+        (Sprite::Unlit, Billboard::Flat, None),
+        (Sprite::Synthetic, Billboard::Dome, None),
+        (
+            Sprite::AuthoredNormal,
+            Billboard::NormalMap,
+            Some("texture/detail"),
+        ),
+        (
+            Sprite::AuthoredDepth,
+            Billboard::Height,
+            Some("texture/detail"),
+        ),
+        (Sprite::DerivedGradient, Billboard::ColorHeight, None),
+    ] {
+        let material = masked(mode);
+        let sprite = lit_look(&material, None, 0.0);
+        let copy = lit_look(&material, Some((lighting, map)), 0.0);
+        let (difference, pixels) = lit_difference(&sprite, &copy);
+        assert!(pixels > 1_000, "{mode:?} draws: {pixels}");
+        assert!(difference < 3.0, "{mode:?}: mean difference {difference}");
+        if mode != Sprite::Unlit {
+            let flat = lit_look(&material, Some((Billboard::Flat, None)), 0.0);
+            let (shaped, _) = lit_difference(&flat, &copy);
+            // The atlas's flat colours leave a colour height few edges.
+            assert!(shaped > 1.0, "{mode:?} shapes the light: {shaped}");
+        }
+    }
+}
+
+#[test]
+fn an_unlit_billboard_copy_gives_off_its_light() {
+    let mut material = masked(SpriteLightingMode::Unlit);
+    material.emission_color = [0.0, 0.0, 1.0];
+    material.emission_intensity = 0.5;
+    let sprite = lit_look(&material, None, 0.0);
+    let copy = lit_look(
+        &material,
+        Some((MaterialBillboardLighting::Flat, None)),
+        0.0,
+    );
+    assert_ne!(
+        copy,
+        lit_look(
+            &masked(SpriteLightingMode::Unlit),
+            Some((MaterialBillboardLighting::Flat, None)),
+            0.0
+        )
+    );
+    let (difference, _) = lit_difference(&sprite, &copy);
+    assert!(difference < 3.0, "mean difference {difference}");
+}
+
+#[test]
+fn a_blended_billboard_copy_draws() {
+    let mut material = masked(SpriteLightingMode::Unlit);
+    material.alpha = SpriteAlphaMode::Blend;
+    let copy = lit_look(
+        &material,
+        Some((MaterialBillboardLighting::Flat, None)),
+        0.0,
+    );
+    let sprite = lit_look(&material, None, 0.0);
+    let (difference, pixels) = lit_difference(&sprite, &copy);
+    assert!(pixels > 1_000, "it draws: {pixels}");
+    assert!(difference < 3.0, "mean difference {difference}");
+}
+
+#[test]
+fn a_billboard_copy_leans_in_whole_texels_as_a_sprite_does() {
+    let leaning = |whole_texels: bool, strength: f32| {
+        let mut material = masked(SpriteLightingMode::Unlit);
+        material.wind_bend = 0.3;
+        material.wind_whole_texels = whole_texels;
+        lit_look(
+            &material,
+            Some((MaterialBillboardLighting::Flat, None)),
+            strength,
+        )
+    };
+    let still = leaning(true, 0.0);
+    let whole = leaning(true, 2.0);
+    let smooth = leaning(false, 2.0);
+    assert_ne!(whole, still, "it leans");
+    assert_eq!(leaning(true, 2.01), whole, "whole texels hold");
+    assert_ne!(leaning(false, 2.01), smooth, "a smooth lean slides");
+    let (bottom, top) = lit_rows(&still);
+    assert_eq!(
+        row_centre(&whole, bottom),
+        row_centre(&still, bottom),
+        "the bottom row stays planted"
+    );
+    let lean = row_centre(&whole, top).unwrap() - row_centre(&still, top).unwrap();
+    assert!(lean > 8.0, "the top leans: {lean}");
+    let mut sprite = masked(SpriteLightingMode::Unlit);
+    sprite.wind_bend = 0.3;
+    sprite.wind_whole_texels = true;
+    let (difference, _) = lit_difference(&lit_look(&sprite, None, 2.0), &whole);
+    assert!(difference < 3.0, "as the sprite leans: {difference}");
 }

@@ -2488,10 +2488,11 @@ impl MaterialParams {
                 .stochastic_tiling
                 .filter(|_| voxel_surface.is_none())
                 .map(|tiling| tiling.contrast),
-            parameters: descriptor
-                .shader
-                .as_ref()
-                .map_or([[0.0; 4]; 4], |shader| shader.parameters),
+            parameters: match (&descriptor.shader, &descriptor.billboard) {
+                (Some(shader), _) => shader.parameters,
+                (None, Some(billboard)) => billboard_parameters(billboard),
+                (None, None) => [[0.0; 4]; 4],
+            },
             // A water's foam and ripple textures take the shader slots.
             product_textures: {
                 let [a, b] = descriptor
@@ -3288,6 +3289,37 @@ impl Renderer {
     }
 }
 
+/// A billboard material's `material.parameters` (`rusty::view::billboard`):
+/// its lighting, strength, dome radius and whole texels; its frame; and its
+/// quad's size. The strength of a mapped lighting is as a sprite's.
+fn billboard_parameters(billboard: &render_model::MaterialBillboardDescriptor) -> [[f32; 4]; 4] {
+    use render_model::MaterialBillboardLighting as Lighting;
+    let (lighting, strength) = match billboard.lighting {
+        Lighting::Flat => (0.0, 0.0),
+        Lighting::Dome => (1.0, billboard.normal_strength),
+        lighting => {
+            let bias = (1.0 - billboard.normal_bias * 0.5).clamp(0.5, 1.5);
+            let mode = match lighting {
+                Lighting::NormalMap => 2.0,
+                Lighting::Height => 3.0,
+                _ => 4.0,
+            };
+            (mode, billboard.normal_strength * bias)
+        }
+    };
+    [
+        [
+            lighting,
+            strength,
+            (1.0 + billboard.normal_bias).max(0.001),
+            f32::from(billboard.whole_texels),
+        ],
+        billboard.frame,
+        [billboard.size[0], billboard.size[1], 0.0, 0.0],
+        [0.0; 4],
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use render_model::{MaterialAlphaModeDescriptor, MaterialUvStrategy, RenderMaterialDescriptor};
@@ -3321,6 +3353,7 @@ mod tests {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind: None,
             water: None,
             translucent_shadow: false,

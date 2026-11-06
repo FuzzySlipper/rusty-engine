@@ -851,6 +851,41 @@ pub struct NativeMaterialRequest {
     /// the snow's amount. False (the default) stands as it is; other parts
     /// drawn with it are not moved.
     pub sinks_under_snow: bool,
+    /// How copies of a billboard mesh drawn with it shade and sway as a
+    /// sprite does; none (the default) for any other material.
+    pub billboard: NativeMaterialBillboard,
+}
+
+/// How a billboard copy lights: none (the default) makes the material no
+/// billboard's. `Flat` takes the material's own surface, `Dome` a synthetic
+/// sprite's dome over its frame, `NormalMap` the material's normal map as a
+/// sprite reads one, `Height` a height in the normal map's slot, and
+/// `ColorHeight` a height in the base texture's red.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeBillboardLighting {
+    #[default]
+    None = 0,
+    Flat = 1,
+    Dome = 2,
+    NormalMap = 3,
+    Height = 4,
+    ColorHeight = 5,
+}
+
+/// A billboard material's sprite shading: `normal_strength` and `normal_bias`
+/// as a sprite material's; `size`, the quad's width and height in metres;
+/// the atlas frame's uv; and whether its wind bend leans in whole texels.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeMaterialBillboard {
+    pub lighting: NativeBillboardLighting,
+    pub normal_strength: f32,
+    pub normal_bias: f32,
+    pub size: NativeVec2,
+    pub frame_min: NativeVec2,
+    pub frame_max: NativeVec2,
+    pub whole_texels: bool,
 }
 
 /// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`),
@@ -1039,8 +1074,8 @@ pub struct NativeMeshResourceCreateRequest {
     pub layer_palette_len: usize,
     /// Copies of it in a vegetation layer stand upright and turn about the
     /// vertical to face the camera: `positions` are a quad, x across and y up
-    /// from a copy's origin, and `normals` are in that quad's frame, z toward
-    /// the camera. They cast no shadow.
+    /// from a copy's origin, and its material's `billboard` shades it. They
+    /// cast no shadow.
     pub billboard: bool,
 }
 

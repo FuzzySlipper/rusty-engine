@@ -4287,6 +4287,7 @@ mod tests {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),

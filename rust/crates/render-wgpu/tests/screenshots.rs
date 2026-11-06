@@ -286,6 +286,7 @@ fn material(id: &str, color: [f32; 4], texture: Option<&str>) -> RenderMaterialD
         flat_shading: false,
         keep_dry: false,
         sinks_under_snow: false,
+        billboard: Default::default(),
         wind: None,
         water: None,
         translucent_shadow: false,

@@ -43,7 +43,8 @@ public readonly partial record struct MaterialRequest
             0f,
             default,
             false,
-            false)
+            false,
+            default)
     {
     }
 
@@ -87,7 +88,8 @@ public readonly partial record struct MaterialRequest
             0f,
             default,
             false,
-            false)
+            false,
+            default)
     {
     }
 
@@ -132,7 +134,8 @@ public readonly partial record struct MaterialRequest
             0f,
             default,
             false,
-            false)
+            false,
+            default)
     {
     }
 
@@ -179,7 +182,8 @@ public readonly partial record struct MaterialRequest
             0f,
             default,
             false,
-            false)
+            false,
+            default)
     {
     }
 
@@ -227,7 +231,8 @@ public readonly partial record struct MaterialRequest
             0f,
             default,
             false,
-            false)
+            false,
+            default)
     {
     }
 
@@ -276,7 +281,8 @@ public readonly partial record struct MaterialRequest
             0f,
             default,
             false,
-            false)
+            false,
+            default)
     {
     }
 }

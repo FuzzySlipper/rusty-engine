@@ -14,7 +14,7 @@
 // (`OpaqueOut`).
 
 #import rusty::types::{texture_space_position, Vertex}
-#import rusty::view::{frame, parts, instances, copies, copy_row, selected_copy, impostor_card, billboard, fade_mask, mask_coverage, fade_toward_origin, morph_share, morph_normal, projected}
+#import rusty::view::{frame, parts, instances, copies, copy_row, selected_copy, impostor_card, billboard, wind_lean, fade_mask, mask_coverage, fade_toward_origin, morph_share, morph_normal, projected}
 #ifdef WIND
 #import rusty::wind::wind_displace
 #endif
@@ -205,7 +205,26 @@ fn vs_world(
 #endif
 #endif
 #ifdef BILLBOARD
-    let quad = billboard(row, mesh_position, mesh_normal);
+    // A lean in whole texels widens the quad on the side it leans and draws
+    // nothing else moved: the fragment stage steps the rows. Smooth wind
+    // leans the quad below, as any part's.
+    let turned = billboard(row, mesh_position);
+    let scale = length(row.model[1].xyz);
+    var lean_share = 0.0;
+    var quad_position = mesh_position;
+    var quad_uv = uv;
+    if material.parameters[0].w > 0.5 {
+        let size = material.parameters[2].xy;
+        let frame_uv = material.parameters[1];
+        let top = vec3<f32>(frame.wind.x, 0.0, frame.wind.y)
+            * (wind_lean(row.model[3].xyz, frame.time.x) * material.wind.x * size.y * scale);
+        lean_share = dot(top, turned.right) / max(size.x * scale, 1e-6);
+        let across = (uv.x - frame_uv.x) / (frame_uv.z - frame_uv.x);
+        let widened = across * (1.0 + abs(lean_share)) - max(-lean_share, 0.0);
+        quad_position.x += (widened - across) * size.x;
+        quad_uv.x = mix(frame_uv.x, frame_uv.z, widened);
+    }
+    let quad = billboard(row, quad_position);
     let position = mesh_position;
     let normal = mesh_normal;
     var world = fade_toward_origin(row, quad.world);
@@ -234,7 +253,7 @@ fn vs_world(
     world_normal = card.normal;
 #endif
 #ifdef BILLBOARD
-    world_normal = quad.normal;
+    world_normal = quad.toward;
 #endif
 #ifdef WIND
 #ifdef LAYER_WEIGHTS
@@ -247,7 +266,13 @@ fn vs_world(
 #endif
 #endif
     let unswayed = world;
+#ifdef BILLBOARD
+    if material.parameters[0].w < 0.5 {
+        world = wind_displace(world, row.model[3].xyz, wind_weight);
+    }
+#else
     world = wind_displace(world, row.model[3].xyz, wind_weight);
+#endif
 #endif
 #ifdef SCATTER
     // Grass and flowers sink into the snow where the sky is open over them.
@@ -314,11 +339,18 @@ fn vs_world(
     out.turn_y = card.turn[1];
     out.turn_z = card.turn[2];
 #else
+#ifdef BILLBOARD
+    out.uv = quad_uv;
+    out.turn_x = quad.right;
+    out.turn_y = vec3<f32>(lean_share, 0.0, 0.0);
+    out.turn_z = quad.toward;
+#else
     out.uv = uv;
 #ifdef SCATTER
     out.turn_x = row.normal_x.xyz;
     out.turn_y = row.normal_y.xyz;
     out.turn_z = row.normal_z.xyz;
+#endif
 #endif
 #endif
 #ifdef SCATTER
@@ -633,6 +665,9 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
     let baked = textureSample(normal_map, normal_sampler, in.uv).rgb * 2.0 - 1.0;
     normal = normalize(mat3x3<f32>(in.turn_x, in.turn_y, in.turn_z) * baked);
 #endif
+#ifdef BILLBOARD
+    normal = billboard_normal(in, geometric);
+#endif
     var facing = geometric;
     if !front {
         normal = -normal;
@@ -904,13 +939,98 @@ fn water_over_scene(color: vec4<f32>) -> vec4<f32> {
 #endif
 #endif
 
+#ifdef BILLBOARD
+// A billboard fragment moved to its row's lean in whole texels (the material's
+// `parameters`, render-wgpu `billboard_parameters`), as a sprite's is
+// (`effects.wgsl` `stepped`): the bottom row stands and the top takes the whole
+// lean, toward the base so a row stays on the widened quad. `turn_y` carries the
+// lean's share of the width, since a billboard's up is the world's.
+fn billboard_row(drawn: VsOut) -> VsOut {
+    var in = drawn;
+    let lean_share = in.turn_y.x;
+    if lean_share != 0.0 {
+        let frame_uv = material.parameters[1];
+        let size = vec2<f32>(textureDimensions(albedo));
+        let span = frame_uv.zw - frame_uv.xy;
+        let rows = max(abs(span.y) * size.y, 1.0);
+        let lean = lean_share * abs(span.x) * size.x;
+        let rise = 1.0 - (in.uv.y - frame_uv.y) / span.y;
+        let row = min(floor(rise * rows), rows - 1.0) / max(rows - 1.0, 1.0);
+        in.uv.x -= sign(span.x) * trunc(row * lean) / size.x;
+    }
+    return in;
+}
+
+// Where a row stepped past its frame's side leaves nothing.
+fn billboard_off_frame(in: VsOut) -> bool {
+    let frame_uv = material.parameters[1];
+    let across = (in.uv.x - frame_uv.x) / (frame_uv.z - frame_uv.x);
+    return in.turn_y.x != 0.0 && (across < 0.0 || across > 1.0);
+}
+
+// A billboard's normal, by its lighting (`material.parameters[0].x`): flat, or
+// as a sprite's over its frame (`effects.wgsl` `shaded_sprite`), z toward the
+// camera, x right and y down the frame.
+fn billboard_normal(in: VsOut, facing: vec3<f32>) -> vec3<f32> {
+    let frame_uv = material.parameters[1];
+    let cell = (in.uv - frame_uv.xy) / (frame_uv.zw - frame_uv.xy);
+    let strength = material.parameters[0].y;
+    let right = in.turn_x;
+    let toward = in.turn_z;
+    let down = vec3<f32>(0.0, -1.0, 0.0);
+    // Derivatives and samples first: they need uniform control flow.
+    let q0 = dpdx(in.world_position);
+    let q1 = -dpdy(in.world_position);
+    let st0 = dpdx(in.uv);
+    let st1 = -dpdy(in.uv);
+    let mapped = textureSample(normal_map, normal_sampler, in.uv);
+    let mapped_x = textureSample(normal_map, normal_sampler, in.uv + st0).x;
+    let mapped_y = textureSample(normal_map, normal_sampler, in.uv + st1).x;
+    let colored = textureSample(albedo, albedo_sampler, in.uv).x;
+    let colored_x = textureSample(albedo, albedo_sampler, in.uv + st0).x;
+    let colored_y = textureSample(albedo, albedo_sampler, in.uv + st1).x;
+    let mode = u32(material.parameters[0].x + 0.5);
+    if mode == 0u {
+        return facing;
+    }
+    if mode == 1u {
+        let xy = (cell * 2.0 - 1.0) * strength / material.parameters[0].z;
+        let z = sqrt(max(0.001, 1.0 - min(dot(xy, xy), 0.999)));
+        return normalize(right * xy.x + down * xy.y + toward * z);
+    }
+    if mode == 2u {
+        let local = mapped.xyz * 2.0 - 1.0;
+        return normalize(right * (local.x * strength) + down * (local.y * strength) + toward * local.z);
+    }
+    // A height, as a sprite's (perturbNormalArb).
+    let samples = select(vec3<f32>(colored, colored_x, colored_y), vec3<f32>(mapped.x, mapped_x, mapped_y), mode == 3u);
+    let height = strength * samples.x;
+    let gradient = vec2<f32>(strength * samples.y - height, strength * samples.z - height);
+    let q1_perp = cross(q1, facing);
+    let q0_perp = cross(facing, q0);
+    let determinant = dot(q0, q1_perp);
+    let direction = sign(determinant) * (gradient.x * q1_perp + gradient.y * q0_perp);
+    return normalize(abs(determinant) * facing - direction);
+}
+#endif
+
 // `opaque`: the part draws in an opaque pass, so decals lay over it.
-fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> {
+fn world_color(drawn: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> {
+#ifdef BILLBOARD
+    let in = billboard_row(drawn);
+#else
+    let in = drawn;
+#endif
 #ifdef RAY_SHADOWS
     // Where the sun's traced shadow is read from (`rusty::ray`).
     ray_pixel = vec2<u32>(in.clip.xy);
 #endif
     var surface = standard_surface(in, front);
+#ifdef BILLBOARD
+    if billboard_off_frame(in) {
+        discard;
+    }
+#endif
 #ifdef WATER
     surface = water_surface(in, surface);
 #endif
@@ -962,7 +1082,17 @@ fn world_color(in: VsOut, front: bool, masked: bool, opaque: bool) -> vec4<f32> 
 #ifdef WATER_SCENE
     return water_over_scene(shaded);
 #else
+#ifdef BILLBOARD
+#ifdef UNLIT
+    // An unlit sprite still gives off its light, masked by its map.
+    let map = textureSample(emissive_map, emissive_sampler, in.uv);
+    return vec4<f32>(shaded.rgb + parts[in.part].emission.rgb * map.rgb * map.a, shaded.a);
+#else
     return shaded;
+#endif
+#else
+    return shaded;
+#endif
 #endif
 }
 

@@ -68,7 +68,7 @@ fn vs_shadow(
 #ifdef BILLBOARD
     let position = mesh_position;
     let normal = mesh_normal;
-    var world = fade_toward_origin(row, billboard(row, mesh_position, mesh_normal).world);
+    var world = fade_toward_origin(row, billboard(row, mesh_position).world);
 #else
 #ifdef IMPOSTOR
     // A card facing the camera, showing the baked view nearest its direction.

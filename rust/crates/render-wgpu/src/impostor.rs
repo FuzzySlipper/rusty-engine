@@ -386,6 +386,7 @@ impl Renderer {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow,
+            billboard: None,
             wind: None,
             water: None,
             translucent_shadow: false,

@@ -318,6 +318,11 @@ pub struct RenderMaterialDescriptor {
     /// under a cover.
     #[serde(default, skip_serializing_if = "is_false")]
     pub sinks_under_snow: bool,
+    /// A billboard mesh's sprite shading (`MeshPayloadDescriptor::billboard`):
+    /// how a scattered copy drawn with this material lights and sways as a
+    /// sprite does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub billboard: Option<MaterialBillboardDescriptor>,
     /// Sway in the scene's wind (`WindDescriptor`; the standard shader's
     /// `WIND`): the part leans with height above its origin and its vertices
     /// flutter by their colour's alpha, in the shadow maps too.
@@ -365,6 +370,35 @@ pub struct RenderMaterialDescriptor {
     /// tiling are layer 0. Only a voxel surface material has layers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub terrain_layers: Option<MaterialTerrainLayersDescriptor>,
+}
+
+/// How a billboard copy lights, as `SpriteLightingMode` does: unlit or by the
+/// material's own surface, or by a dome over its frame, a normal map, or a
+/// height in the normal map's slot or the colour texture's red.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MaterialBillboardLighting {
+    #[default]
+    Flat,
+    Dome,
+    NormalMap,
+    Height,
+    ColorHeight,
+}
+
+/// A billboard copy's sprite shading: its lighting, with a sprite's normal
+/// strength and bias; `size`, the quad's width and height in metres; `frame`,
+/// the atlas frame's uv as min x, min y, max x, max y; and whether its wind
+/// bend leans in whole texels, row by row.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct MaterialBillboardDescriptor {
+    pub lighting: MaterialBillboardLighting,
+    pub normal_strength: f32,
+    pub normal_bias: f32,
+    pub size: [f32; 2],
+    pub frame: [f32; 4],
+    pub whole_texels: bool,
 }
 
 /// How many layers a material blends over its own.
@@ -1894,6 +1928,7 @@ mod tests {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind: None,
             water: None,
             translucent_shadow: false,
@@ -1958,6 +1993,7 @@ mod tests {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind: None,
             water: None,
             translucent_shadow: false,

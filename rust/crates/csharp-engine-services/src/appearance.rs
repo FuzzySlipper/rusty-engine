@@ -9721,6 +9721,34 @@ fn native_vec2(value: NativeVec2) -> [f32; 2] {
     [value.x, value.y]
 }
 
+/// A material request's billboard shading, when it has one.
+fn billboard_descriptor(
+    value: NativeMaterialBillboard,
+) -> Option<render_model::MaterialBillboardDescriptor> {
+    use render_model::MaterialBillboardLighting as Lighting;
+    let lighting = match value.lighting {
+        NativeBillboardLighting::None => return None,
+        NativeBillboardLighting::Flat => Lighting::Flat,
+        NativeBillboardLighting::Dome => Lighting::Dome,
+        NativeBillboardLighting::NormalMap => Lighting::NormalMap,
+        NativeBillboardLighting::Height => Lighting::Height,
+        NativeBillboardLighting::ColorHeight => Lighting::ColorHeight,
+    };
+    Some(render_model::MaterialBillboardDescriptor {
+        lighting,
+        normal_strength: value.normal_strength,
+        normal_bias: value.normal_bias,
+        size: [value.size.x, value.size.y],
+        frame: [
+            value.frame_min.x,
+            value.frame_min.y,
+            value.frame_max.x,
+            value.frame_max.y,
+        ],
+        whole_texels: value.whole_texels,
+    })
+}
+
 fn native_vec3_array(value: NativeVec3) -> [f32; 3] {
     [value.x, value.y, value.z]
 }
@@ -9987,6 +10015,7 @@ fn render_material(id: String, color: NativeColor) -> RenderMaterialDescriptor {
         flat_shading: false,
         keep_dry: false,
         sinks_under_snow: false,
+        billboard: Default::default(),
         wind: None,
         water: None,
         translucent_shadow: false,
@@ -10282,6 +10311,7 @@ fn material_descriptor(
         voxel_surface: None,
         normal_map,
         unlit: request.unlit,
+        billboard: billboard_descriptor(request.billboard),
         flat_shading: request.flat_shading,
         keep_dry: request.keep_dry,
         sinks_under_snow: request.sinks_under_snow,
@@ -11806,6 +11836,7 @@ pub(super) mod tests {
                 flat_shading: false,
                 keep_dry: false,
                 sinks_under_snow: false,
+                billboard: Default::default(),
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -11966,6 +11997,7 @@ pub(super) mod tests {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -12232,6 +12264,7 @@ pub(super) mod tests {
                 flat_shading: false,
                 keep_dry: false,
                 sinks_under_snow: false,
+                billboard: Default::default(),
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -12466,6 +12499,7 @@ pub(super) mod tests {
                 flat_shading: false,
                 keep_dry: false,
                 sinks_under_snow: false,
+                billboard: Default::default(),
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -13103,6 +13137,7 @@ pub(super) mod tests {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13168,6 +13203,7 @@ pub(super) mod tests {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13266,6 +13302,7 @@ pub(super) mod tests {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13438,6 +13475,7 @@ pub(super) mod tests {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13540,6 +13578,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13673,6 +13712,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -13906,6 +13946,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),
@@ -14065,6 +14106,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                     flat_shading: false,
                     keep_dry: false,
                     sinks_under_snow: false,
+                    billboard: Default::default(),
                     wind_bend: 0.0,
                     wind_flutter: 0.0,
                     water: Default::default(),
@@ -14365,6 +14407,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 flat_shading: false,
                 keep_dry: false,
                 sinks_under_snow: false,
+                billboard: Default::default(),
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -14471,6 +14514,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: NativeMaterialWater {
@@ -15590,6 +15634,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 flat_shading: false,
                 keep_dry: false,
                 sinks_under_snow: false,
+                billboard: Default::default(),
                 wind_bend: 0.0,
                 wind_flutter: 0.0,
                 water: Default::default(),
@@ -16193,6 +16238,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             flat_shading: false,
             keep_dry: false,
             sinks_under_snow: false,
+            billboard: Default::default(),
             wind_bend: 0.0,
             wind_flutter: 0.0,
             water: Default::default(),

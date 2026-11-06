@@ -871,6 +871,8 @@ mod tests {
             Features::MASK | Features::WIND,
             Features::MASK | Features::UNLIT,
             Features::MASK | Features::EMISSIVE_MAP,
+            Features::MASK | Features::NORMAL_MAP,
+            Features::MASK | Features::NORMAL_MAP | Features::WIND,
         ] {
             for selected in [Features::default(), Features::SCATTER_SELECTED] {
                 let features = extra | selected | Features::SCATTER | Features::BILLBOARD;

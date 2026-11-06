@@ -141,14 +141,14 @@ fn impostor_card(row: Part, corner: vec3<f32>, shape: vec4<f32>, frames: f32) ->
 
 // A billboard copy's vertex (BILLBOARD): its mesh's quad, x across and y up
 // from the copy's origin, standing upright at the copy's scale and turned
-// about the vertical to face the camera. Its normal is in the quad's frame,
-// z toward the camera, so a mesh gives its quad any shape of light.
+// about the vertical to face the camera, along `toward`.
 struct BillboardVertex {
     world: vec3<f32>,
-    normal: vec3<f32>,
+    right: vec3<f32>,
+    toward: vec3<f32>,
 };
 
-fn billboard(row: Part, corner: vec3<f32>, normal: vec3<f32>) -> BillboardVertex {
+fn billboard(row: Part, corner: vec3<f32>) -> BillboardVertex {
     let origin = row.model[3].xyz;
     var toward = vec3<f32>(frame.camera.x - origin.x, 0.0, frame.camera.z - origin.z);
     if dot(toward, toward) < 1e-8 {
@@ -157,10 +157,7 @@ fn billboard(row: Part, corner: vec3<f32>, normal: vec3<f32>) -> BillboardVertex
     toward = normalize(toward);
     let right = vec3<f32>(toward.z, 0.0, -toward.x);
     let up = vec3<f32>(0.0, 1.0, 0.0);
-    var vertex: BillboardVertex;
-    vertex.world = origin + (right * corner.x + up * corner.y) * length(row.model[1].xyz);
-    vertex.normal = right * normal.x + up * normal.y + toward * normal.z;
-    return vertex;
+    return BillboardVertex(origin + (right * corner.x + up * corner.y) * length(row.model[1].xyz), right, toward);
 }
 
 // The samples a crossfading copy covers at a pixel: `fade` of them (a

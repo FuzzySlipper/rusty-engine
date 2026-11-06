@@ -124,13 +124,16 @@ engine.Vegetation.SetLayer(new VegetationLayerRequest(field, Layer: 3, flower.Lo
   start)` makes it a farther level of a mesh, which is the way to go from a mesh
   tree to a flat. A copy's scale and tint apply; `Align` and a random yaw do
   not, since a billboard always stands upright facing the camera.
-- **Material.** `SpriteMaterialDescriptor` gives the lighting (`Unlit` or
-  `Synthetic`), the alpha mode (`Mask` or `Opaque`), emission (not with `Unlit`)
-  and `WindBend`. `VegetationSprite` refuses the rest: a copy writes depth and
-  draws in the world pass, so it hides what stands behind it and fog reaches it
-  by its depth, and it has no blended or map-lit form. `WindBend` sways it as a
-  material's does, smoothly: `WindWholeTexels` applies to sprites and sprite
-  batches, not here.
+- **Material.** `SpriteMaterialDescriptor` gives the lighting, alpha mode,
+  emission and wind, in every mode a sprite has, and a copy lights as the same
+  sprite does. `Mask` and `Opaque` copies write depth and draw in the world pass,
+  so they hide what stands behind them and fog reaches them by their depth. A
+  `Blend` copy writes no depth and draws through no per-copy selection (the
+  selection's copies are opaque), so its thinning and level crossfades do not
+  apply and a patch's copies are not sorted: keep it for a few, near. Additive
+  blending, softness and a tint mask are refused. `WindBend` leans it as a
+  sprite's does, and `WindWholeTexels` steps its rows in whole texels with the
+  bottom row planted.
 - **Size.** `size` and `pivot` place the quad about the copy's origin; keep the
   pivot on the frame's centre line so the quad turns about its middle, which the
   selection's bounds expect.

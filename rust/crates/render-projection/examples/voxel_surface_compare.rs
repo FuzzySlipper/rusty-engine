@@ -323,6 +323,7 @@ fn materials(
                 flat_shading: false,
                 keep_dry: false,
                 sinks_under_snow: false,
+                billboard: Default::default(),
                 wind: None,
                 water: None,
                 translucent_shadow: false,

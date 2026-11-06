@@ -251,8 +251,8 @@ pub struct MeshPayloadDescriptor {
     pub layer_palette: Vec<u8>,
     /// A scattered copy of this mesh stands upright and turns about the
     /// vertical to face the camera: its positions are a quad, x across and y
-    /// up from the copy's origin, and its normals are in that quad's frame.
-    /// It casts no shadow, and ray-traced passes do not see it.
+    /// up from the copy's origin. Its material's `billboard` shades it. It
+    /// casts no shadow, and ray-traced passes do not see it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub billboard: bool,
     /// The vertex colours' alpha is ambient occlusion (a voxel chunk meshed
