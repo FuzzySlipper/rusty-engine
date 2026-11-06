@@ -2646,6 +2646,186 @@ mod tests {
             }));
     }
 
+    /// A 1×1 image unlike `RGBA_PNG`: equal bytes open as one resource.
+    const OTHER_PNG: &[u8] = &[
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f,
+        0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xe0,
+        0x3a, 0x21, 0xf7, 0x1f, 0x00, 0x03, 0xc0, 0x01, 0xf0, 0xcf, 0x27, 0xb5, 0xa8, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    /// Services holding two moon textures opened in a call, and the moon a
+    /// slot draws with a texture.
+    fn moon_textures() -> (
+        EngineServiceSet,
+        NativeRenderResourceHandle,
+        NativeRenderResourceHandle,
+    ) {
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            BTreeMap::from([
+                (
+                    "one.png".to_owned(),
+                    crate::ContentBytes::from(crate::appearance::tests::RGBA_PNG),
+                ),
+                ("two.png".to_owned(), crate::ContentBytes::from(OTHER_PNG)),
+            ]),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        services.begin_call(binding());
+        let api = services.api();
+        let open = |path: &'static str| {
+            let mut info = NativeRenderResourceInfo::default();
+            let status = unsafe {
+                (api.graphics.open_resource)(
+                    api.graphics.context,
+                    &crate::appearance::tests::resource_request(path),
+                    &mut info,
+                    std::ptr::null_mut(),
+                )
+            };
+            assert_eq!(status, ABI_OK);
+            info.handle
+        };
+        let textures = (open("one.png"), open("two.png"));
+        assert_ne!(textures.0, textures.1, "two resources");
+        (services, textures.0, textures.1)
+    }
+
+    fn textured_moon(
+        slot: u32,
+        radiance: f32,
+        texture: NativeRenderResourceHandle,
+        x: f32,
+    ) -> NativeMoonRequest {
+        NativeMoonRequest {
+            direction: NativeVec3 { x, y: 1.0, z: -1.0 },
+            radius_degrees: 2.0,
+            color: NativeVec3 {
+                x: 1.0,
+                y: 1.0,
+                z: 1.0,
+            },
+            radiance,
+            phase: 1.0,
+            earthshine: 0.0,
+            halo: 0.0,
+            light_intensity: 0.0,
+            slot,
+            texture: NativeRenderResourceReference {
+                value: texture.value,
+            },
+            uv_min: NativeVec2::default(),
+            uv_max: NativeVec2::default(),
+        }
+    }
+
+    fn set_moon(services: &mut EngineServiceSet, request: NativeMoonRequest) {
+        let api = services.api();
+        assert_eq!(
+            unsafe {
+                (api.camera_view.set_moon)(api.camera_view.context, &request, std::ptr::null_mut())
+            },
+            ABI_OK
+        );
+    }
+
+    fn release(services: &mut EngineServiceSet, texture: NativeRenderResourceHandle) {
+        let api = services.api();
+        assert_eq!(
+            unsafe {
+                (api.graphics.destroy_resource)(api.graphics.context, texture, std::ptr::null_mut())
+            },
+            ABI_OK
+        );
+    }
+
+    /// A callback may set a moon, then clear or replace it and release what
+    /// it no longer draws: only each slot's last request is published, so the
+    /// released texture is not read again.
+    #[test]
+    fn a_superseded_moon_does_not_hold_the_texture_a_call_released() {
+        // Set, clear, release: the slot was empty and stays so.
+        let (mut services, one, _) = moon_textures();
+        set_moon(&mut services, textured_moon(1, 1.0, one, 0.0));
+        set_moon(&mut services, textured_moon(1, 0.0, one, 0.0));
+        release(&mut services, one);
+        let mut call = services.finish_call().expect("set, clear, release");
+        let ops = call.take_output().frames[0].ops.clone();
+        assert!(
+            !ops.iter().any(|op| matches!(
+                op,
+                render_model::RenderDiff::SetMoon { moon: Some(_), .. }
+                    | render_model::RenderDiff::DefineTexture { .. }
+            )),
+            "nothing of the released texture: {ops:?}"
+        );
+
+        // Set, replace, release.
+        let (mut services, one, two) = moon_textures();
+        set_moon(&mut services, textured_moon(1, 1.0, one, 0.0));
+        set_moon(&mut services, textured_moon(1, 1.0, two, 0.5));
+        release(&mut services, one);
+        let mut call = services.finish_call().expect("set, replace, release");
+        let ops = call.take_output().frames[0].ops.clone();
+        let moons: Vec<_> = ops
+            .iter()
+            .filter_map(|op| match op {
+                render_model::RenderDiff::SetMoon {
+                    slot,
+                    moon: Some(moon),
+                } => Some((*slot, moon)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(moons.len(), 1, "one moon, the last: {ops:?}");
+        assert_eq!(moons[0].0, 1);
+        assert_eq!(moons[0].1.direction[0], 0.5);
+        let texture = moons[0].1.texture.clone().expect("the second texture");
+        assert!(
+            ops.iter().any(|op| matches!(op,
+            render_model::RenderDiff::DefineTexture { texture: defined } if defined.id == texture))
+        );
+
+        // A moon a later call clears and releases publishes the slot empty.
+        services.begin_call(binding());
+        set_moon(&mut services, textured_moon(1, 0.0, two, 0.0));
+        release(&mut services, two);
+        let mut call = services.finish_call().expect("clear, release");
+        assert!(call.take_output().frames[0]
+            .ops
+            .contains(&render_model::RenderDiff::SetMoon {
+                slot: 1,
+                moon: None
+            }));
+    }
+
+    /// A moon set and moved in one callback still defines its texture: the
+    /// last request carries what the first would have sent.
+    #[test]
+    fn a_moon_moved_in_the_call_that_set_it_still_defines_its_texture() {
+        let (mut services, one, _) = moon_textures();
+        set_moon(&mut services, textured_moon(0, 1.0, one, 0.0));
+        set_moon(&mut services, textured_moon(0, 1.0, one, 0.5));
+        let mut call = services.finish_call().expect("set, moved");
+        let ops = call.take_output().frames[0].ops.clone();
+        let Some(render_model::RenderDiff::SetMoon {
+            moon: Some(moon), ..
+        }) = ops.last()
+        else {
+            panic!("the moon is published last: {ops:?}");
+        };
+        assert_eq!(moon.direction[0], 0.5);
+        let texture = moon.texture.clone().expect("a texture");
+        assert!(
+            ops.iter().any(|op| matches!(op,
+            render_model::RenderDiff::DefineTexture { texture: defined } if defined.id == texture))
+        );
+    }
+
     #[test]
     fn a_star_field_publishes_its_catalogue_and_band_and_holds_them_while_it_draws() {
         use crate::operation_diagnostics::{empty_receipt, receipt_codes};

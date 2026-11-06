@@ -99,7 +99,9 @@ struct CameraTargetState {
     revision: u64,
 }
 
-/// A moon set in this call: its texture resolves when the call finishes.
+/// The last moon set in a slot this call: its texture resolves when the call
+/// finishes. An earlier request's texture may be released by then, so only
+/// the last is kept.
 pub(crate) struct StagedMoon {
     slot: u32,
     moon: Option<render_model::MoonDescriptor>,
@@ -115,6 +117,14 @@ impl StagedMoon {
             moon: None,
             texture: NativeRenderResourceReference::default(),
             define: false,
+        }
+    }
+
+    /// Stage `moon` in place of any earlier request for its slot.
+    fn stage(moons: &mut Vec<Self>, moon: Self) {
+        match moons.iter_mut().find(|staged| staged.slot == moon.slot) {
+            Some(staged) => *staged = moon,
+            None => moons.push(moon),
         }
     }
 }
@@ -398,7 +408,7 @@ impl RuntimeCameraViewBridge {
         staged.state.stars = None;
         for slot in 0..render_model::MOON_SLOTS {
             if staged.state.moons[slot].take().is_some() {
-                staged.moons.push(StagedMoon::off(slot as u32));
+                StagedMoon::stage(&mut staged.moons, StagedMoon::off(slot as u32));
             }
         }
         staged.decal_atlas = Some(None);
@@ -1080,7 +1090,7 @@ impl RuntimeCameraViewBridge {
         if request.radiance == 0.0 {
             let staged = self.staged_mut()?;
             staged.state.moons[slot] = None;
-            staged.moons.push(StagedMoon::off(request.slot));
+            StagedMoon::stage(&mut staged.moons, StagedMoon::off(request.slot));
             return Ok(());
         }
         if !moon.valid() {
@@ -1090,16 +1100,25 @@ impl RuntimeCameraViewBridge {
             ));
         }
         let staged = self.staged_mut()?;
-        // A moon moves every update: its texture is defined once.
+        // A moon moves every update: its texture is defined once, by this
+        // request or by the one in this call it replaces.
         let define = staged.state.moons[slot]
-            .is_none_or(|previous| previous.texture.value != request.texture.value);
+            .is_none_or(|previous| previous.texture.value != request.texture.value)
+            || staged.moons.iter().any(|pending| {
+                pending.slot == request.slot
+                    && pending.define
+                    && pending.texture.value == request.texture.value
+            });
         staged.state.moons[slot] = Some(request);
-        staged.moons.push(StagedMoon {
-            slot: request.slot,
-            moon: Some(moon),
-            texture: request.texture,
-            define,
-        });
+        StagedMoon::stage(
+            &mut staged.moons,
+            StagedMoon {
+                slot: request.slot,
+                moon: Some(moon),
+                texture: request.texture,
+                define,
+            },
+        );
         Ok(())
     }
 
