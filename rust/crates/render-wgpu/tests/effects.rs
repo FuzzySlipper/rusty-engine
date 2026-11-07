@@ -2482,6 +2482,8 @@ fn look_in(
                 size: [2.0, 2.0],
                 frame: FRAME,
                 whole_texels: material.wind_whole_texels,
+                heading: false,
+                authored_facing: material.authored_facing,
             });
             ops.extend(coloured_mesh("flat", billboard_quad(), [1.0; 4]));
             ops.push(RenderDiff::DefineMaterial { material: paint });
@@ -2684,6 +2686,194 @@ fn the_depth_pass_sees_a_whole_texel_lean_as_the_picture_does() {
             leaning(2.0, [1.0, 0.0], alpha),
             leaning(2.01, [1.0, 0.0], alpha),
             "wind across the view, {alpha:?}"
+        );
+    }
+}
+
+/// Where an upright sprite turns: a single sprite, a batch of one, or a
+/// vegetation billboard copy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum UprightPath {
+    Single,
+    Batch,
+    Copy,
+}
+
+const UPRIGHT_AT: [f32; 3] = [1.2, -1.0, -4.0];
+
+/// One unlit, masked 2 m frame standing at `UPRIGHT_AT` on black, its node
+/// turned `yaw` degrees about world up, drawn along `path` in `billboard` mode
+/// keeping `keep` of its own facing, seen from `eye`.
+fn upright(
+    path: UprightPath,
+    billboard: BillboardMode,
+    keep: f32,
+    yaw: f32,
+    eye: &render_host_contracts::RendererCompositionCamera,
+) -> Vec<u8> {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        samples: 1,
+        ..RendererOptions::default()
+    });
+    let mut material = masked(SpriteLightingMode::Unlit);
+    material.authored_facing = keep;
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.extend(atlas_ops(&mut harness.resources));
+    let mut standing = sprite(0, UPRIGHT_AT, billboard);
+    standing.pivot = [0.5, 0.0];
+    standing.size = [2.0, 2.0];
+    standing.material = material.clone();
+    standing.transform = transform(UPRIGHT_AT, yaw, 1.0);
+    match path {
+        UprightPath::Single => ops.push(create(10, standing)),
+        UprightPath::Batch => ops.push(RenderDiff::CreateSpriteBatch {
+            handle: RenderHandle::new(10),
+            parent: None,
+            batch: SpriteBatchDescriptor {
+                sprite: standing,
+                instances: vec![SpriteBatchInstance {
+                    position: [0.0; 3],
+                    scale: 1.0,
+                    frame: 0,
+                }]
+                .into(),
+            },
+        }),
+        UprightPath::Copy => {
+            let mut paint = flat_material();
+            paint.double_sided = true;
+            paint.unlit = true;
+            paint.alpha_mode = MaterialAlphaModeDescriptor::Mask { cutoff: 0.5 };
+            paint.billboard = Some(MaterialBillboardDescriptor {
+                lighting: MaterialBillboardLighting::Flat,
+                normal_strength: material.normal_strength,
+                normal_bias: material.normal_bias,
+                size: [2.0, 2.0],
+                frame: [0.0, 0.0, 0.5, 1.0],
+                whole_texels: false,
+                heading: billboard == BillboardMode::CylindricalView,
+                authored_facing: keep,
+            });
+            ops.extend(coloured_mesh("flat", billboard_quad(), [1.0; 4]));
+            ops.push(RenderDiff::DefineMaterial { material: paint });
+            ops.push(RenderDiff::Create {
+                handle: RenderHandle::new(5),
+                parent: None,
+                node: RenderNode::new(Geometry::Group),
+            });
+            ops.push(RenderDiff::CreateScatterPatch {
+                handle: RenderHandle::new(11),
+                parent: Some(RenderHandle::new(5)),
+                patch: ScatterPatchDescriptor {
+                    asset: "mesh/flat".to_owned(),
+                    material_overrides: Vec::new(),
+                    instances: vec![ScatterInstance {
+                        translation: UPRIGHT_AT,
+                        rotation: transform(UPRIGHT_AT, yaw, 1.0).rotation,
+                        scale: 1.0,
+                        tint: [1.0; 3],
+                        rank: 0.5,
+                    }],
+                    fade: ScatterFade::default(),
+                    shadow_casting: ShadowCasting::None,
+                    lods: Vec::new(),
+                    lod_band: 0.0,
+                    thinning: Default::default(),
+                },
+            });
+        }
+    }
+    harness.apply(ops);
+    for _ in 0..3 {
+        harness.renderer.render_offscreen(eye, &harness.target);
+    }
+    harness.target.read_rgba(&harness.gpu)
+}
+
+/// The same frame with no billboard, its node turned `yaw` degrees.
+fn authored(yaw: f32, eye: &render_host_contracts::RendererCompositionCamera) -> Vec<u8> {
+    upright(UprightPath::Single, BillboardMode::None, 0.0, yaw, eye)
+}
+
+fn assert_looks_like(path: UprightPath, case: &str, drawn: &[u8], expected: &[u8]) {
+    let (difference, pixels) = lit_difference(drawn, expected);
+    assert!(pixels > 1_000, "{path:?} {case}: draws {pixels}");
+    assert!(
+        difference < 3.0,
+        "{path:?} {case}: mean difference {difference}"
+    );
+}
+
+fn assert_looks_unlike(path: UprightPath, case: &str, drawn: &[u8], other: &[u8]) {
+    let (difference, _) = lit_difference(drawn, other);
+    assert!(
+        difference > 10.0,
+        "{path:?} {case}: mean difference only {difference}"
+    );
+}
+
+#[test]
+fn a_heading_aligned_sprite_turns_with_the_view_not_with_the_eye() {
+    use BillboardMode::{Cylindrical, CylindricalView};
+    let ahead = camera("eye", [0.0, 0.0, 0.0], 0.0, 0.0);
+    let aside = camera("eye", [-1.5, 0.0, 0.0], 0.0, 0.0);
+    let yawed = camera("eye", [0.0, 0.0, 0.0], 25.0, 0.0);
+    // A camera turned +x by `yaw` looks along (sin, 0, -cos): a frame
+    // facing back along that is a node turned by minus the yaw.
+    let (still, side, turned) = (
+        authored(0.0, &ahead),
+        authored(0.0, &aside),
+        authored(-25.0, &yawed),
+    );
+    // Toward the eye from `UPRIGHT_AT` seen from `ahead`, in node yaw.
+    let toward_eye = (-UPRIGHT_AT[0]).atan2(-UPRIGHT_AT[2]).to_degrees();
+    for path in [UprightPath::Single, UprightPath::Batch, UprightPath::Copy] {
+        // Parallel to the screen wherever the eye stands; turning with it.
+        assert_looks_like(
+            path,
+            "ahead",
+            &upright(path, CylindricalView, 0.0, 0.0, &ahead),
+            &still,
+        );
+        let walked = upright(path, CylindricalView, 0.0, 0.0, &aside);
+        assert_looks_like(path, "aside", &walked, &side);
+        assert_looks_like(
+            path,
+            "yawed",
+            &upright(path, CylindricalView, 0.0, 70.0, &yawed),
+            &turned,
+        );
+        // A cylindrical one turns toward the eye as it walks past.
+        let facing_eye = upright(path, Cylindrical, 0.0, 0.0, &aside);
+        assert_looks_unlike(path, "cylindrical aside", &facing_eye, &walked);
+        assert_looks_like(
+            path,
+            "cylindrical ahead",
+            &upright(path, Cylindrical, 0.0, 0.0, &ahead),
+            &authored(toward_eye, &ahead),
+        );
+        // Part way: half of a 40 degree facing kept; the toward-eye turn
+        // halved; and a facing turned away shows its front.
+        assert_looks_like(
+            path,
+            "keep half",
+            &upright(path, CylindricalView, 0.5, 40.0, &ahead),
+            &authored(20.0, &ahead),
+        );
+        assert_looks_like(
+            path,
+            "cylindrical keep half",
+            &upright(path, Cylindrical, 0.5, 0.0, &ahead),
+            &authored(toward_eye * 0.5, &ahead),
+        );
+        assert_looks_like(
+            path,
+            "keep all, turned away",
+            &upright(path, CylindricalView, 1.0, 160.0, &ahead),
+            &authored(-20.0, &ahead),
         );
     }
 }

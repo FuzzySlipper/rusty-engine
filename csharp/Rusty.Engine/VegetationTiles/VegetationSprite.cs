@@ -5,8 +5,8 @@ namespace Rusty.Engine.VegetationTiles;
 
 /// <summary>
 /// One atlas frame made ready to grow in a vegetation layer: a billboard quad of the frame's size
-/// that stands upright and turns about the vertical to face the camera, and a material made from
-/// a sprite material. Pass <see cref="Look"/> as a layer's appearance, or a level's with
+/// that stands upright and turns about the vertical to face the camera, as an upright sprite's
+/// <see cref="BillboardMode"/> turns it, and a material made from a sprite material. Pass <see cref="Look"/> as a layer's appearance, or a level's with
 /// <see cref="VegetationLod.Mesh"/>, with a <c>default</c> material; every copy then takes the
 /// layer's fade, thinning, handover and budgets as a mesh copy does. Keep this while the layer
 /// grows it.
@@ -26,12 +26,20 @@ public sealed class VegetationSprite : IDisposable
     /// <param name="material">
     /// The lighting, alpha mode, emission and wind a sprite takes. A <see cref="SpriteAlphaMode.Blend"/>
     /// sprite draws through no per-copy selection and writes no depth. Additive blending, a tint mask
-    /// and softness are a blended sprite's own and are refused.
+    /// and softness are a blended sprite's own and are refused. Its
+    /// <see cref="SpriteMaterialDescriptor.AuthoredFacing"/> keeps that share of each copy's own yaw.
+    /// </param>
+    /// <param name="billboard">
+    /// <see cref="BillboardMode.Cylindrical"/> (the default) turns each copy toward the camera's
+    /// position; <see cref="BillboardMode.CylindricalView"/> turns every copy against the camera's
+    /// heading. A copy always stands upright, so the other modes are refused.
     /// </param>
     public VegetationSprite(IEngineContext engine, RenderResourceReference texture, Vector2 uvMin, Vector2 uvMax,
-        Vector2 size, Vector2 pivot, SpriteMaterialDescriptor material)
+        Vector2 size, Vector2 pivot, SpriteMaterialDescriptor material, BillboardMode billboard = BillboardMode.Cylindrical)
     {
         ArgumentNullException.ThrowIfNull(engine);
+        if (billboard is not (BillboardMode.Cylindrical or BillboardMode.CylindricalView))
+            throw new ArgumentOutOfRangeException(nameof(billboard), billboard, "A vegetation sprite stands upright.");
         if (material.Blend != SpriteBlendMode.Alpha || material.SoftnessMetres > 0 || material.TintMask.Value != 0)
             throw new ArgumentException("A vegetation sprite has no additive blending, softness or tint mask.", nameof(material));
         (BillboardLighting lighting, RenderResourceReference map) = material.Lighting switch
@@ -59,7 +67,8 @@ public sealed class VegetationSprite : IDisposable
             NormalMap = map,
             EmissionMap = material.EmissionMap,
             WindBend = material.WindBend,
-            Billboard = new(lighting, material.NormalStrength, material.NormalBias, size, uvMin, uvMax, material.WindWholeTexels),
+            Billboard = new(lighting, material.NormalStrength, material.NormalBias, size, uvMin, uvMax, material.WindWholeTexels,
+                billboard == BillboardMode.CylindricalView, material.AuthoredFacing),
         });
         float left = -pivot.X * size.X, right = (1 - pivot.X) * size.X, bottom = -pivot.Y * size.Y, top = (1 - pivot.Y) * size.Y;
         Vector3[] positions = [new(left, bottom, 0), new(right, bottom, 0), new(right, top, 0), new(left, top, 0)];

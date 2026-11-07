@@ -209,12 +209,12 @@ fn vs_world(
     var quad_uv = uv;
     var lean_share = 0.0;
 #ifdef WIND
-    let lean = billboard_lean(row, mesh_position, uv, billboard(row, mesh_position).right);
+    let lean = billboard_lean(row, mesh_position, uv, billboard(row, mesh_position, material.parameters[2].zw).right);
     quad_position = lean.position;
     quad_uv = lean.uv;
     lean_share = lean.share;
 #endif
-    let quad = billboard(row, quad_position);
+    let quad = billboard(row, quad_position, material.parameters[2].zw);
     let position = mesh_position;
     let normal = mesh_normal;
     var world = fade_toward_origin(row, quad.world);

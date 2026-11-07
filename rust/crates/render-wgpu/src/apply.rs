@@ -3291,7 +3291,9 @@ impl Renderer {
 
 /// A billboard material's `material.parameters` (`rusty::view::billboard`):
 /// its lighting, strength, dome radius and whole texels; its frame; and its
-/// quad's size. The strength of a mapped lighting is as a sprite's.
+/// quad's size, whether it turns against the camera's heading and the share
+/// of its own yaw it keeps. The strength of a mapped lighting is as a
+/// sprite's.
 fn billboard_parameters(billboard: &render_model::MaterialBillboardDescriptor) -> [[f32; 4]; 4] {
     use render_model::MaterialBillboardLighting as Lighting;
     let (lighting, strength) = match billboard.lighting {
@@ -3315,7 +3317,12 @@ fn billboard_parameters(billboard: &render_model::MaterialBillboardDescriptor) -
             f32::from(billboard.whole_texels),
         ],
         billboard.frame,
-        [billboard.size[0], billboard.size[1], 0.0, 0.0],
+        [
+            billboard.size[0],
+            billboard.size[1],
+            f32::from(billboard.heading),
+            billboard.authored_facing.clamp(0.0, 1.0),
+        ],
         [0.0; 4],
     ]
 }

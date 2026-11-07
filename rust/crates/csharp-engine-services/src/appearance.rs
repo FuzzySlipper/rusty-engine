@@ -5041,6 +5041,7 @@ impl RuntimeAppearanceBridge {
             emission_map: resolve_texture(value.emission_map, "emission map")?,
             wind_bend: value.wind_bend,
             wind_whole_texels: value.wind_whole_texels,
+            authored_facing: value.authored_facing,
         };
         descriptor.validate().map_err(|error| {
             CsharpEngineServicesError::new(
@@ -9746,6 +9747,8 @@ fn billboard_descriptor(
             value.frame_max.y,
         ],
         whole_texels: value.whole_texels,
+        heading: value.heading,
+        authored_facing: value.authored_facing,
     })
 }
 
@@ -9952,6 +9955,7 @@ fn sprite_instance_descriptor(
             NativeBillboardMode::None => BillboardMode::None,
             NativeBillboardMode::Spherical => BillboardMode::Spherical,
             NativeBillboardMode::Cylindrical => BillboardMode::Cylindrical,
+            NativeBillboardMode::CylindricalView => BillboardMode::CylindricalView,
         },
         tint: native_color(tint),
         render_order,
@@ -14208,6 +14212,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             },
             wind_bend: 0.25,
             wind_whole_texels: true,
+            authored_facing: 0.0,
         };
         let appearance = bridge
             .create_sprite_from_atlas(request)

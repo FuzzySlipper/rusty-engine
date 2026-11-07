@@ -388,8 +388,11 @@ pub enum MaterialBillboardLighting {
 
 /// A billboard copy's sprite shading: its lighting, with a sprite's normal
 /// strength and bias; `size`, the quad's width and height in metres; `frame`,
-/// the atlas frame's uv as min x, min y, max x, max y; and whether its wind
-/// bend leans in whole texels, row by row.
+/// the atlas frame's uv as min x, min y, max x, max y; whether its wind
+/// bend leans in whole texels, row by row; whether it turns against the
+/// camera's heading (`BillboardMode::CylindricalView`) rather than toward its
+/// position; and the share of the copy's own yaw it keeps
+/// (`SpriteMaterialDescriptor::authored_facing`).
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct MaterialBillboardDescriptor {
@@ -399,6 +402,10 @@ pub struct MaterialBillboardDescriptor {
     pub size: [f32; 2],
     pub frame: [f32; 4],
     pub whole_texels: bool,
+    #[serde(default)]
+    pub heading: bool,
+    #[serde(default)]
+    pub authored_facing: f32,
 }
 
 /// How many layers a material blends over its own.
@@ -1256,7 +1263,19 @@ pub enum BillboardMode {
     None,
     #[default]
     Spherical,
+    /// Upright, turned about world up toward the camera's position.
     Cylindrical,
+    /// Upright, turned about world up against the camera's heading (its
+    /// forward with the vertical part removed), the same for every sprite in
+    /// the view: walking past it does not turn it, turning the view does.
+    CylindricalView,
+}
+
+impl BillboardMode {
+    /// Whether the sprite stands upright and turns only about world up.
+    pub fn upright(self) -> bool {
+        matches!(self, Self::Cylindrical | Self::CylindricalView)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1410,6 +1429,14 @@ pub struct SpriteMaterialDescriptor {
     /// nearest-filtered pixel art.
     #[serde(default)]
     pub wind_whole_texels: bool,
+    /// The share of its own facing an upright sprite (`Cylindrical`,
+    /// `CylindricalView`) keeps: 0 turns it all the way to the view, 1 keeps
+    /// its node's facing, between turns it that share of the way short. The
+    /// turn is measured the short way round the quad's plane, so the sprite
+    /// shows its front and stays within `authored_facing * 90` degrees of the
+    /// full turn.
+    #[serde(default)]
+    pub authored_facing: f32,
 }
 
 /// How a blended sprite's colour reaches the frame: over what is behind it
@@ -1440,6 +1467,7 @@ impl Default for SpriteMaterialDescriptor {
             emission_map: None,
             wind_bend: 0.0,
             wind_whole_texels: false,
+            authored_facing: 0.0,
         }
     }
 }
@@ -1478,6 +1506,9 @@ impl SpriteMaterialDescriptor {
         }
         if !self.wind_bend.is_finite() || self.wind_bend < 0.0 {
             return Err(SpriteMaterialError::InvalidWindBend);
+        }
+        if !(0.0..=1.0).contains(&self.authored_facing) {
+            return Err(SpriteMaterialError::InvalidAuthoredFacing);
         }
         if let SpriteAlphaMode::Mask { cutoff } = self.alpha {
             if !cutoff.is_finite() || !(0.0..=1.0).contains(&cutoff) {
@@ -1530,6 +1561,7 @@ pub enum SpriteMaterialError {
     InvalidSoftness,
     InvalidEmission,
     InvalidWindBend,
+    InvalidAuthoredFacing,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -1682,6 +1714,7 @@ mod tests {
             emission_map: Some("texture/sprite-emission".to_string()),
             wind_bend: 0.0,
             wind_whole_texels: false,
+            authored_facing: 0.5,
         };
         assert_eq!(authored.validate(), Ok(()));
 

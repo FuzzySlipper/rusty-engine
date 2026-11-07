@@ -991,6 +991,7 @@ fn batch_corners(
         BillboardMode::None => 0.0,
         BillboardMode::Spherical => 1.0,
         BillboardMode::Cylindrical => 2.0,
+        BillboardMode::CylindricalView => 3.0,
     };
     let right = world.x_axis.truncate().try_normalize().unwrap_or(Vec3::X);
     let up = world.y_axis.truncate().try_normalize().unwrap_or(Vec3::Y);
@@ -1009,7 +1010,7 @@ fn batch_corners(
             facing,
             f32::from(sprite.material.wind_whole_texels),
         ]);
-        vertex[14..18].copy_from_slice(&right.extend(0.0).to_array());
+        vertex[14..18].copy_from_slice(&right.extend(sprite.material.authored_facing).to_array());
         vertex[18..22].copy_from_slice(&up.extend(0.0).to_array());
         vertex[22..26].copy_from_slice(&sprite_emission(sprite));
     }
@@ -1189,21 +1190,14 @@ fn sprite_quad(
     let rotation = match sprite.billboard {
         BillboardMode::None => authored,
         BillboardMode::Spherical => Quat::from_mat4(&camera_world),
-        BillboardMode::Cylindrical => {
-            let mut forward = if orthographic {
+        BillboardMode::Cylindrical | BillboardMode::CylindricalView => {
+            let toward = if orthographic || sprite.billboard == BillboardMode::CylindricalView {
                 camera_world.z_axis.truncate()
             } else {
                 camera.eye - position
             };
-            forward.y = 0.0;
-            if forward.length_squared() <= f32::EPSILON {
-                forward = authored * Vec3::Z;
-                forward.y = 0.0;
-                if forward.length_squared() <= f32::EPSILON {
-                    forward = Vec3::Z;
-                }
-            }
-            let forward = forward.normalize();
+            let forward =
+                upright_facing(toward, authored * Vec3::Z, sprite.material.authored_facing);
             let right = Vec3::Y.cross(forward).normalize();
             Quat::from_mat3(&Mat3::from_cols(right, Vec3::Y, forward))
         }
@@ -1212,6 +1206,34 @@ fn sprite_quad(
         Mat4::from_scale_rotation_translation(scale, rotation, position),
         quad,
     ))
+}
+
+/// The way an upright sprite faces, level and of unit length: `toward` (the
+/// eye, or against the view) with its height dropped, turned back toward
+/// `authored`, the node's own facing, by `keep` of the angle between them.
+/// The angle is taken the short way round the quad's plane, so the result
+/// stays within `keep` times 90 degrees of `toward` and the sprite shows its
+/// front. Looking straight up or down leaves no level `toward`, and the
+/// authored facing stands (`effects.wgsl` `upright_facing` is the same).
+pub(crate) fn upright_facing(toward: Vec3, authored: Vec3, keep: f32) -> Vec3 {
+    let level = |facing: Vec3| {
+        let facing = Vec3::new(facing.x, 0.0, facing.z);
+        (facing.length_squared() > f32::EPSILON).then(|| facing.normalize())
+    };
+    let authored = level(authored).unwrap_or(Vec3::Z);
+    let Some(toward) = level(toward) else {
+        return authored;
+    };
+    if keep <= 0.0 {
+        return toward;
+    }
+    let mut angle = toward.cross(authored).y.atan2(toward.dot(authored));
+    if angle > std::f32::consts::FRAC_PI_2 {
+        angle -= std::f32::consts::PI;
+    } else if angle < -std::f32::consts::FRAC_PI_2 {
+        angle += std::f32::consts::PI;
+    }
+    Quat::from_rotation_y(angle * keep.min(1.0)) * toward
 }
 
 impl Renderer {

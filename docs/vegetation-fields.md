@@ -109,11 +109,16 @@ between `TintLow` and `TintHigh`. A record keeps its own yaw and scale.
 
 A layer or a level can draw a sprite atlas frame as a billboard: a flat that
 stands upright at its copy's origin and turns about the vertical to face the
-camera, so it never goes edge-on as a mesh or an impostor would.
+camera, so it never goes edge-on as a mesh or an impostor would. It turns as an
+[upright sprite](csharp-capabilities.md#upright-sprites) does: toward the
+camera's position (`BillboardMode.Cylindrical`, the default), or against the
+camera's heading (`BillboardMode.CylindricalView`), so walking past a copy
+does not turn it.
 
 ```csharp
 using VegetationSprite flower = new(engine, atlasTexture, frameUvMin, frameUvMax,
-    size: new(1, 2), pivot: new(.5f, 0), material);
+    size: new(1, 2), pivot: new(.5f, 0), material with { AuthoredFacing = .3f },
+    BillboardMode.CylindricalView);
 engine.Vegetation.SetLayer(new VegetationLayerRequest(field, Layer: 3, flower.Look,
     default(OptionalMaterial), Density: .3f, Reach: 3000) with { Fade = 400 });
 ```
@@ -122,8 +127,10 @@ engine.Vegetation.SetLayer(new VegetationLayerRequest(field, Layer: 3, flower.Lo
   spots, `Records`, `Fade`, `Near`, thinning, handover between fields and levels,
   budgets and the renderer's per-copy selection work as above. `VegetationLod.Mesh(flower.Look,
   start)` makes it a farther level of a mesh, which is the way to go from a mesh
-  tree to a flat. A copy's scale and tint apply; `Align` and a random yaw do
-  not, since a billboard always stands upright facing the camera.
+  tree to a flat. A copy's scale and tint apply; `Align` does not, since a
+  billboard always stands upright. Its random yaw counts only by the material's
+  `AuthoredFacing`, the share of it the copy keeps, so copies need not all
+  share one facing.
 - **Material.** `SpriteMaterialDescriptor` gives the lighting, alpha mode,
   emission and wind, in every mode a sprite has, and a copy lights as the same
   sprite does. `Mask` and `Opaque` copies write depth and draw in the world pass,

@@ -156,6 +156,42 @@ plane has no finite projected size and contributes no pixels for that pass.
 Viewport placement overrides this sizing and authored transform, fitting the
 selected atlas frame instead.
 
+### Upright sprites
+
+A sprite's `BillboardMode` says how it faces the camera: `Spherical` turns it
+square to the view, `None` keeps its object's axes, and two modes keep it
+upright and turn it only about world up. `Cylindrical` turns each sprite
+toward the camera's position, so it swivels to follow an eye that walks past.
+`CylindricalView` turns every sprite in the view against the camera's
+heading, its forward with the vertical part dropped, so the sprites sit
+parallel to the screen: walking past one does not turn it, turning the view
+does. An orthographic camera turns `Cylindrical` sprites that way too. Looking
+straight up or down leaves no heading, and the sprite keeps its object's
+facing.
+
+`SpriteMaterialDescriptor.AuthoredFacing` keeps a share of the object's own
+yaw for either upright mode: 0 (the default) turns all the way to the view, 1
+keeps the object's facing, and between turns that share of the way short of
+the full turn. The share is of the angle taken the short way round the quad's
+plane, so a sprite always shows its front and stays within `AuthoredFacing`
+times 90 degrees of the full turn. Give a forest of flats random yaws and a
+share such as 0.3 so they do not all share one facing:
+
+```csharp
+SpriteMaterialDescriptor flat = new(SpriteLightingMode.Synthetic, default, default, 1, 0,
+    SpriteAlphaMode.Mask, .5f, SpriteShadowPolicy.None) with { AuthoredFacing = .3f };
+Appearance tree = engine.Graphics.CreateSpriteFromAtlas(new SpriteFromAtlasRequest(atlas, frame,
+    new(.5f, 0), new(2, 4), BillboardMode.CylindricalView, SpriteSizeMode.World, 0,
+    SpriteDepthPolicy.Default, white, flat));
+```
+
+Single sprites, sprite batches and [vegetation sprites](vegetation-fields.md#sprites)
+turn alike in every view, captures and inspection views included, and their
+lighting, normal, wind lean and depth (what ambient occlusion reads) follow
+the turned quad. A sprite casts no shadow map in any mode. The renderer
+works the turn out per view from what was published; nothing is sent while
+the camera moves.
+
 ### Sprite batches
 
 `Graphics.CreateSpriteBatch` makes one appearance that draws many sprites of
@@ -164,7 +200,7 @@ space, scale and frame: vegetation, scatter or a distant crowd. Publish it
 as one object; the renderer keeps one node and draws the batch in one
 instanced call, in the world pass with the other sprites (a soft, blended
 batch draws in the `particles` pass). The instances share pivot, frame
-size, billboard (spherical, cylindrical or the object's own axes), tint,
+size, billboard ([upright](#upright-sprites), spherical or the object's own axes), tint,
 render order, depth policy and material, and the object's transform moves,
 scales and hides them together. The rows are built when the batch is
 drawn first and again only when the object moves; a tint change rewrites

@@ -3,7 +3,7 @@
 // and particle bindings at 20, so the two layouts never collide in this
 // module.
 
-#import rusty::view::{frame, mask_coverage, wind_lean}
+#import rusty::view::{frame, mask_coverage, wind_lean, upright_facing}
 #import rusty::lighting::standard_radiance
 #import rusty::finish::finish
 #ifdef MOTION
@@ -142,10 +142,11 @@ struct SpriteBatchIn {
     @location(1) tint: vec4<f32>,
     @location(2) params: vec4<f32>,
     // x: softness in metres, y: 1 when added to the frame, z: facing
-    // (0 the node's axes, 1 spherical, 2 cylindrical), w: 1 when it leans in
-    // whole texels.
+    // (0 the node's axes, 1 spherical, 2 cylindrical, 3 cylindrical against
+    // the camera's heading), w: 1 when it leans in whole texels.
     @location(3) soft: vec4<f32>,
-    // The node's x and y axes, for a batch that does not face the camera.
+    // The node's x and y axes, for a batch that does not face the camera;
+    // right.w the share of the node's facing an upright batch keeps.
     @location(4) right: vec4<f32>,
     @location(5) up: vec4<f32>,
     @location(6) center: vec4<f32>,
@@ -174,20 +175,17 @@ fn vs_sprite_batch(in: SpriteBatchIn) -> SpriteOut {
         let camera_up = normalize(unproject(vec3<f32>(0.0, 1.0, 0.5)) - origin);
         right = camera_right;
         up = camera_up;
-        if facing == 2u {
+        if facing >= 2u {
             // Turn about world up toward the eye, or against the view
-            // direction for an orthographic camera.
+            // direction for an orthographic camera or a heading-aligned
+            // batch (3), keeping `in.right.w` of the node's own facing.
             let orthographic = frame.view_proj[0].w == 0.0 && frame.view_proj[1].w == 0.0
                 && frame.view_proj[2].w == 0.0;
             var toward = frame.camera.xyz - in.center.xyz;
-            if orthographic {
+            if orthographic || facing == 3u {
                 toward = cross(camera_right, camera_up);
             }
-            toward.y = 0.0;
-            if dot(toward, toward) <= 1e-12 {
-                toward = vec3<f32>(0.0, 0.0, 1.0);
-            }
-            toward = normalize(toward);
+            toward = upright_facing(toward, cross(in.right.xyz, in.up.xyz), in.right.w);
             up = vec3<f32>(0.0, 1.0, 0.0);
             right = normalize(cross(up, toward));
         }

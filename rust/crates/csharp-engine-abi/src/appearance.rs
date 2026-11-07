@@ -205,7 +205,12 @@ pub enum NativePrimitiveGeometry {
 pub enum NativeBillboardMode {
     None = 0,
     Spherical = 1,
+    /// Upright, turned about world up toward the camera's position.
     Cylindrical = 2,
+    /// Upright, turned about world up against the camera's heading (its
+    /// forward without the vertical part), the same for every sprite in the
+    /// view: walking past it does not turn it, turning the view does.
+    CylindricalView = 3,
 }
 
 #[repr(u32)]
@@ -343,6 +348,13 @@ pub struct NativeSpriteMaterialDescriptor {
     /// Lean in whole texels, row by row, along the sprite's own width, for
     /// nearest-filtered pixel art.
     pub wind_whole_texels: bool,
+    /// The share of its own facing an upright sprite (`Cylindrical`,
+    /// `CylindricalView`) keeps, 0 to 1: 0 (the default) turns it all the way
+    /// to the view, 1 keeps its node's facing, between turns it that share of
+    /// the way short. Taken the short way round the quad's plane, so the
+    /// sprite shows its front and stays within this times 90 degrees of the
+    /// full turn. A vegetation sprite keeps its copy's yaw by it.
+    pub authored_facing: f32,
 }
 
 /// How a blended sprite's colour reaches the frame.
@@ -373,6 +385,7 @@ impl Default for NativeSpriteMaterialDescriptor {
             emission_map: NativeRenderResourceReference::default(),
             wind_bend: 0.0,
             wind_whole_texels: false,
+            authored_facing: 0.0,
         }
     }
 }
@@ -875,7 +888,10 @@ pub enum NativeBillboardLighting {
 
 /// A billboard material's sprite shading: `normal_strength` and `normal_bias`
 /// as a sprite material's; `size`, the quad's width and height in metres;
-/// the atlas frame's uv; and whether its wind bend leans in whole texels.
+/// the atlas frame's uv; whether its wind bend leans in whole texels; whether
+/// it turns against the camera's heading (`CylindricalView`) rather than
+/// toward the eye; and the share of the copy's own yaw it keeps, as a sprite
+/// material's `authored_facing`.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativeMaterialBillboard {
@@ -886,6 +902,8 @@ pub struct NativeMaterialBillboard {
     pub frame_min: NativeVec2,
     pub frame_max: NativeVec2,
     pub whole_texels: bool,
+    pub heading: bool,
+    pub authored_facing: f32,
 }
 
 /// A product shader resource (`.wgsl`, `NativeRenderResourceKind::Shader`),

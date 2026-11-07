@@ -465,7 +465,8 @@ internal static class GraphicsDefaults
         0f,
         default,
         0f,
-        false);
+        false,
+        0f);
 }
 
 public readonly partial record struct SpriteMaterialDescriptor
@@ -480,7 +481,7 @@ public readonly partial record struct SpriteMaterialDescriptor
         SpriteAlphaMode AlphaMode,
         float AlphaCutoff,
         SpriteShadowPolicy Shadow)
-        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, SpriteBlendMode.Alpha, 0f, default, default, 0f, default, 0f, false)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, SpriteBlendMode.Alpha, 0f, default, default, 0f, default, 0f, false, 0f)
     {
     }
 
@@ -496,7 +497,7 @@ public readonly partial record struct SpriteMaterialDescriptor
         SpriteShadowPolicy Shadow,
         SpriteBlendMode Blend,
         float SoftnessMetres)
-        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, default, default, 0f, default, 0f, false)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, default, default, 0f, default, 0f, false, 0f)
     {
     }
 
@@ -513,7 +514,7 @@ public readonly partial record struct SpriteMaterialDescriptor
         SpriteBlendMode Blend,
         float SoftnessMetres,
         RenderResourceReference TintMask)
-        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, TintMask, default, 0f, default, 0f, false)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, TintMask, default, 0f, default, 0f, false, 0f)
     {
     }
 
@@ -533,7 +534,29 @@ public readonly partial record struct SpriteMaterialDescriptor
         Vector3 EmissionColor,
         float EmissionIntensity,
         RenderResourceReference EmissionMap)
-        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, TintMask, EmissionColor, EmissionIntensity, EmissionMap, 0f, false)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, TintMask, EmissionColor, EmissionIntensity, EmissionMap, 0f, false, 0f)
+    {
+    }
+
+    /// <summary>A sprite material whose upright sprite turns all the way to the view (<see cref="AuthoredFacing"/> 0).</summary>
+    public SpriteMaterialDescriptor(
+        SpriteLightingMode Lighting,
+        RenderResourceReference NormalTexture,
+        RenderResourceReference DepthTexture,
+        float NormalStrength,
+        float NormalBias,
+        SpriteAlphaMode AlphaMode,
+        float AlphaCutoff,
+        SpriteShadowPolicy Shadow,
+        SpriteBlendMode Blend,
+        float SoftnessMetres,
+        RenderResourceReference TintMask,
+        Vector3 EmissionColor,
+        float EmissionIntensity,
+        RenderResourceReference EmissionMap,
+        float WindBend,
+        bool WindWholeTexels)
+        : this(Lighting, NormalTexture, DepthTexture, NormalStrength, NormalBias, AlphaMode, AlphaCutoff, Shadow, Blend, SoftnessMetres, TintMask, EmissionColor, EmissionIntensity, EmissionMap, WindBend, WindWholeTexels, 0f)
     {
     }
 }

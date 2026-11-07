@@ -139,22 +139,70 @@ fn impostor_card(row: Part, corner: vec3<f32>, shape: vec4<f32>, frames: f32) ->
     return card;
 }
 
+// The way an upright sprite faces, level and of unit length: `toward` (the
+// eye, or against the view) with its height dropped, turned back toward
+// `authored`, its own facing, by `keep` of the angle between them, taken the
+// short way round the quad's plane so it shows its front. Looking straight up
+// or down leaves no level `toward`, and the authored facing stands
+// (render-wgpu `effects::upright_facing` is the same).
+fn upright_facing(toward: vec3<f32>, authored: vec3<f32>, keep: f32) -> vec3<f32> {
+    var own = vec3<f32>(authored.x, 0.0, authored.z);
+    if dot(own, own) <= 1.1920929e-7 {
+        own = vec3<f32>(0.0, 0.0, 1.0);
+    }
+    own = normalize(own);
+    var level = vec3<f32>(toward.x, 0.0, toward.z);
+    if dot(level, level) <= 1.1920929e-7 {
+        return own;
+    }
+    level = normalize(level);
+    if keep <= 0.0 {
+        return level;
+    }
+    var angle = atan2(cross(level, own).y, dot(level, own));
+    if angle > HALF_PI {
+        angle -= 2.0 * HALF_PI;
+    } else if angle < -HALF_PI {
+        angle += 2.0 * HALF_PI;
+    }
+    let turn = angle * min(keep, 1.0);
+    let c = cos(turn);
+    let s = sin(turn);
+    return vec3<f32>(level.x * c + level.z * s, 0.0, -level.x * s + level.z * c);
+}
+
+const HALF_PI: f32 = 1.5707963;
+
+// The camera's back axis (toward the viewer), from a plane between near and
+// far in either depth convention.
+fn view_back() -> vec3<f32> {
+    let unproject = frame.inv_view_proj;
+    let origin = unproject * vec4<f32>(0.0, 0.0, 0.5, 1.0);
+    let across = unproject * vec4<f32>(1.0, 0.0, 0.5, 1.0);
+    let above = unproject * vec4<f32>(0.0, 1.0, 0.5, 1.0);
+    let o = origin.xyz / origin.w;
+    return cross(across.xyz / across.w - o, above.xyz / above.w - o);
+}
+
 // A billboard copy's vertex (BILLBOARD): its mesh's quad, x across and y up
 // from the copy's origin, standing upright at the copy's scale and turned
-// about the vertical to face the camera, along `toward`.
+// about the vertical to face the camera, along `toward`. `facing` is its
+// material's (render-wgpu `billboard_parameters`): x 1 to turn against the
+// camera's heading rather than toward the eye, y the share of the copy's own
+// yaw it keeps.
 struct BillboardVertex {
     world: vec3<f32>,
     right: vec3<f32>,
     toward: vec3<f32>,
 };
 
-fn billboard(row: Part, corner: vec3<f32>) -> BillboardVertex {
+fn billboard(row: Part, corner: vec3<f32>, facing: vec2<f32>) -> BillboardVertex {
     let origin = row.model[3].xyz;
-    var toward = vec3<f32>(frame.camera.x - origin.x, 0.0, frame.camera.z - origin.z);
-    if dot(toward, toward) < 1e-8 {
-        toward = vec3<f32>(0.0, 0.0, 1.0);
+    var eye = frame.camera.xyz - origin;
+    if facing.x > 0.5 {
+        eye = view_back();
     }
-    toward = normalize(toward);
+    let toward = upright_facing(eye, row.model[2].xyz, facing.y);
     let right = vec3<f32>(toward.z, 0.0, -toward.x);
     let up = vec3<f32>(0.0, 1.0, 0.0);
     return BillboardVertex(origin + (right * corner.x + up * corner.y) * length(row.model[1].xyz), right, toward);
