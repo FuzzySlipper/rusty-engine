@@ -2821,6 +2821,12 @@ fn a_heading_aligned_sprite_turns_with_the_view_not_with_the_eye() {
     let ahead = camera("eye", [0.0, 0.0, 0.0], 0.0, 0.0);
     let aside = camera("eye", [-1.5, 0.0, 0.0], 0.0, 0.0);
     let yawed = camera("eye", [0.0, 0.0, 0.0], 25.0, 0.0);
+    let mut close_near = yawed.clone();
+    if let render_host_contracts::RendererCameraProjection::Perspective { near, .. } =
+        &mut close_near.projection
+    {
+        *near = 0.01;
+    }
     // A camera turned +x by `yaw` looks along (sin, 0, -cos): a frame
     // facing back along that is a node turned by minus the yaw.
     let (still, side, turned) = (
@@ -2828,6 +2834,7 @@ fn a_heading_aligned_sprite_turns_with_the_view_not_with_the_eye() {
         authored(0.0, &aside),
         authored(-25.0, &yawed),
     );
+    let turned_close = authored(-25.0, &close_near);
     // Toward the eye from `UPRIGHT_AT` seen from `ahead`, in node yaw.
     let toward_eye = (-UPRIGHT_AT[0]).atan2(-UPRIGHT_AT[2]).to_degrees();
     for path in [UprightPath::Single, UprightPath::Batch, UprightPath::Copy] {
@@ -2845,6 +2852,13 @@ fn a_heading_aligned_sprite_turns_with_the_view_not_with_the_eye() {
             "yawed",
             &upright(path, CylindricalView, 0.0, 70.0, &yawed),
             &turned,
+        );
+        // A near plane of 1 cm shrinks the projection's spans; the turn holds.
+        assert_looks_like(
+            path,
+            "yawed, near 1 cm",
+            &upright(path, CylindricalView, 0.0, 70.0, &close_near),
+            &turned_close,
         );
         // A cylindrical one turns toward the eye as it walks past.
         let facing_eye = upright(path, Cylindrical, 0.0, 0.0, &aside);

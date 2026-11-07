@@ -173,15 +173,17 @@ fn upright_facing(toward: vec3<f32>, authored: vec3<f32>, keep: f32) -> vec3<f32
 
 const HALF_PI: f32 = 1.5707963;
 
-// The camera's back axis (toward the viewer), from a plane between near and
-// far in either depth convention.
+// The camera's back axis (toward the viewer), of unit length, from a plane
+// between near and far in either depth convention. The plane's spans scale
+// with the projection (a near plane of 1 cm makes them millimetres), so the
+// axis is normalized before `upright_facing` measures its level part.
 fn view_back() -> vec3<f32> {
     let unproject = frame.inv_view_proj;
     let origin = unproject * vec4<f32>(0.0, 0.0, 0.5, 1.0);
     let across = unproject * vec4<f32>(1.0, 0.0, 0.5, 1.0);
     let above = unproject * vec4<f32>(0.0, 1.0, 0.5, 1.0);
     let o = origin.xyz / origin.w;
-    return cross(across.xyz / across.w - o, above.xyz / above.w - o);
+    return normalize(cross(across.xyz / across.w - o, above.xyz / above.w - o));
 }
 
 // A billboard copy's vertex (BILLBOARD): its mesh's quad, x across and y up
