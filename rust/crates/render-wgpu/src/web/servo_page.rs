@@ -135,27 +135,38 @@ impl ServoDelegate for RuntimeDelegate {
     }
 }
 
-/// The page writes the system clipboard and never reads it, as in Chromium,
-/// where the read's permission prompt is denied.
+/// The system clipboard, for the person's own copy, cut and paste in the
+/// page. A page reading it on its own (`navigator.clipboard.readText()`) is
+/// refused before it gets here, as in Chromium, where the read's permission
+/// prompt is denied (the vendored servo-script's `RUSTY_PATCH.md`), so every
+/// read that arrives is a paste.
 #[derive(Default)]
 struct PageClipboard {
     /// Kept: on Linux the copied text lives as long as its owner.
     clipboard: RefCell<Option<arboard::Clipboard>>,
 }
 
-impl ClipboardDelegate for PageClipboard {
-    fn get_text(&self, _: WebView, request: StringRequest) {
-        request.failure("the desktop window denies clipboard reads".to_owned());
-    }
-
-    fn set_text(&self, _: WebView, text: String) {
+impl PageClipboard {
+    fn with<T>(&self, use_it: impl FnOnce(&mut arboard::Clipboard) -> T) -> Option<T> {
         let mut clipboard = self.clipboard.borrow_mut();
         if clipboard.is_none() {
             *clipboard = arboard::Clipboard::new().ok();
         }
-        if let Some(clipboard) = clipboard.as_mut() {
-            let _ = clipboard.set_text(text);
+        clipboard.as_mut().map(use_it)
+    }
+}
+
+impl ClipboardDelegate for PageClipboard {
+    fn get_text(&self, _: WebView, request: StringRequest) {
+        match self.with(|clipboard| clipboard.get_text()) {
+            Some(Ok(text)) => request.success(text),
+            Some(Err(error)) => request.failure(error.to_string()),
+            None => request.failure("the system clipboard is unavailable".to_owned()),
         }
+    }
+
+    fn set_text(&self, _: WebView, text: String) {
+        let _ = self.with(|clipboard| clipboard.set_text(text));
     }
 }
 

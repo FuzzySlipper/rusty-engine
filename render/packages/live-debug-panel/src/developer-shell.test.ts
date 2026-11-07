@@ -116,3 +116,23 @@ test("the shell's own Close button closes it and tells the product once", async 
   shell.dispose();
   assert.equal(closed, 2, 'disposing an open shell closes it');
 });
+
+test("the console's command history outlives closing the shell", async () => {
+  const document = new FakeDocument();
+  const host = document.createElement('div');
+  const histories: { entries: readonly string[] }[] = [];
+  const shell = new DeveloperShell(host as unknown as HTMLElement, { panels: [{ kind: 'console' }] }, {
+    ...mounts([]),
+    console: async (_element, history) => {
+      histories.push(history);
+      return { dispose: () => {} };
+    },
+  });
+  await shell.open();
+  histories[0]!.entries = ['help', 'time.pause'];
+  shell.close();
+  await shell.open();
+  assert.equal(histories.length, 2);
+  assert.equal(histories[1], histories[0], 'the reopened console takes the same history');
+  assert.deepEqual(histories[1]!.entries, ['help', 'time.pause']);
+});

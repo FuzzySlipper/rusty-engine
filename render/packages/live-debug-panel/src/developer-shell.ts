@@ -1,5 +1,6 @@
 import type { LiveDebugTransport } from '@rusty-engine/live-debug-client';
 
+import type { LiveDebugHistory } from './live-debug-panel.js';
 import type { InspectionViewOptions } from './inspection-view-pane.js';
 import type { TunablesPanelOptions } from './tunables-panel.js';
 
@@ -96,7 +97,8 @@ export interface DeveloperShellMount {
 
 /** The Engine panels' mount functions; the browser entry passes its own. */
 export interface DeveloperShellMounts {
-  console(element: HTMLElement): Promise<Disposable>;
+  /** `history` is the shell's, so the console's commands outlive closing it. */
+  console(element: HTMLElement, history: LiveDebugHistory): Promise<Disposable>;
   tunables(element: HTMLElement, options: TunablesPanelOptions): Disposable;
   scene(element: HTMLElement, transport?: LiveDebugTransport): Disposable;
   view(element: HTMLElement, options: InspectionViewOptions): Disposable;
@@ -125,6 +127,7 @@ export class DeveloperShell implements DeveloperShellMount {
   #mounted: Disposable[] = [];
   #selected = 0;
   #disposed = false;
+  readonly #consoleHistory: LiveDebugHistory = { entries: [] };
 
   constructor(host: HTMLElement, options: DeveloperShellOptions, mounts: DeveloperShellMounts) {
     this.#host = host;
@@ -217,7 +220,7 @@ export class DeveloperShell implements DeveloperShellMount {
     const transport = this.#options.transport;
     switch (panel.kind) {
       case 'console':
-        return this.#mounts.console(element);
+        return this.#mounts.console(element, this.#consoleHistory);
       case 'tunables':
         return this.#mounts.tunables(element, { ...(transport ? { transport } : {}), ...panel.options });
       case 'scene':

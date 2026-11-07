@@ -106,21 +106,17 @@ impl ClipboardMethods<crate::DomTypeHolder> for Clipboard {
 
         // Step 3 Run the following steps in parallel:
 
-        // TODO Step 3.1 Let r be the result of running check clipboard read permission.
+        // Step 3.1 Let r be the result of running check clipboard read permission.
         // Step 3.2 If r is false, then:
         // Step 3.2.1 Queue a global task on the permission task source, given realm’s global object,
         // to reject p with "NotAllowedError" DOMException in realm.
         // Step 3.2.2 Abort these steps.
-
-        // Step 3.3 Let data be a copy of the system clipboard data.
-        let window = global.as_window();
-        let callback = callback_promise(&p, self, global.task_manager().clipboard_task_source());
-        window.send_to_embedder(EmbedderMsg::GetClipboardText(window.webview_id(), callback));
-
-        // Step 3.4 Queue a global task on the clipboard task source,
-        // given realm’s global object, to perform the below steps:
-        // NOTE: We queue the task inside route_promise and perform the steps inside handle_response
-
+        // Rusty Engine (#10661): a page never has the permission, as in a
+        // browser whose read prompt is denied, so the embedder's clipboard
+        // read serves only the person's own paste (`Ctrl+V`, the context
+        // menu's Paste) into what they are editing.
+        let _ = global;
+        p.reject_error(realm, Error::NotAllowed(None));
         p
     }
 

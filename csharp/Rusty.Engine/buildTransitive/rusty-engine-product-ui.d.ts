@@ -1271,6 +1271,17 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debu
         /** A packaged host can retain transport ownership by supplying one. */
         readonly transport: LiveDebugTransport | null;
         readonly presentation: LiveDebugPanelPresentation;
+        /**
+         * The command lines Up and Down step back through. A holder that outlives
+         * the panel keeps them when it is disposed and another mounts in its place,
+         * as a developer shell does across closing and opening; without one the
+         * panel keeps its own.
+         */
+        readonly history?: LiveDebugHistory;
+    }
+    /** Command lines run in a live-debug panel, oldest first; see `LiveDebugPanelOptions.history`. */
+    export interface LiveDebugHistory {
+        entries: readonly string[];
     }
     /**
      * Optional developer UI for the product-owned live-debug host. It has no
@@ -1589,6 +1600,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-
 }
 declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/developer-shell" {
     import type { LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
+    import type { LiveDebugHistory } from "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel";
     import type { InspectionViewOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-pane";
     import type { TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
     /** Something a panel mount gives back. */
@@ -1645,7 +1657,8 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/developer
     }
     /** The Engine panels' mount functions; the browser entry passes its own. */
     export interface DeveloperShellMounts {
-        console(element: HTMLElement): Promise<Disposable>;
+        /** `history` is the shell's, so the console's commands outlive closing it. */
+        console(element: HTMLElement, history: LiveDebugHistory): Promise<Disposable>;
         tunables(element: HTMLElement, options: TunablesPanelOptions): Disposable;
         scene(element: HTMLElement, transport?: LiveDebugTransport): Disposable;
         view(element: HTMLElement, options: InspectionViewOptions): Disposable;
@@ -1789,11 +1802,13 @@ declare module "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tre
 }
 declare module "@rusty-engine/live-debug" {
     import type { LiveDebugTransport } from "@rusty-engine/live-debug/internal/live-debug-client/src/index";
+    import { type LiveDebugHistory } from "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel";
     import type { LiveDebugPanelPresentation } from "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel-model";
     import { type DeveloperShellMount, type DeveloperShellOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/developer-shell";
     import { type InspectionViewOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-pane";
     import { type SceneTreePanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel";
     import { type TunablesPanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/tunables-panel";
+    export type { LiveDebugHistory } from "@rusty-engine/live-debug/internal/live-debug-panel/src/live-debug-panel";
     export type { DeveloperShellMount, DeveloperShellOptions, DeveloperShellPanel, } from "@rusty-engine/live-debug/internal/live-debug-panel/src/developer-shell";
     export type { InspectionViewOptions, InspectionViewport } from "@rusty-engine/live-debug/internal/live-debug-panel/src/inspection-view-pane";
     export type { SceneTreePanelOptions } from "@rusty-engine/live-debug/internal/live-debug-panel/src/scene-tree-panel";
@@ -1809,6 +1824,8 @@ declare module "@rusty-engine/live-debug" {
         readonly transport?: LiveDebugTransport;
         /** Controls only the panel's DOM presentation. */
         readonly presentation?: LiveDebugPanelPresentation;
+        /** Keeps the command history across panels; see `LiveDebugPanelOptions.history`. */
+        readonly history?: LiveDebugHistory;
     }
     /** Releases the panel's DOM and every request owned by this mounted panel. */
     export interface LiveDebugPanelMount {

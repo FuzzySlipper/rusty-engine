@@ -1,6 +1,6 @@
 import type { LiveDebugTransport } from '@rusty-engine/live-debug-client';
 
-import { LiveDebugPanel } from './live-debug-panel.js';
+import { LiveDebugPanel, type LiveDebugHistory } from './live-debug-panel.js';
 import type { LiveDebugPanelPresentation } from './live-debug-panel-model.js';
 import { DeveloperShell, type DeveloperShellMount, type DeveloperShellOptions } from './developer-shell.js';
 import { InspectionViewPane, type InspectionViewOptions } from './inspection-view-pane.js';
@@ -8,6 +8,7 @@ import { mountRendererMetricsWidget as mountMetrics } from './renderer-metrics-w
 import { SceneTreePanel, type SceneTreePanelOptions } from './scene-tree-panel.js';
 import { TunablesPanel, type TunablesPanelOptions } from './tunables-panel.js';
 
+export type { LiveDebugHistory } from './live-debug-panel.js';
 export type {
   DeveloperShellMount,
   DeveloperShellOptions,
@@ -51,6 +52,8 @@ export interface LiveDebugPanelMountOptions {
   readonly transport?: LiveDebugTransport;
   /** Controls only the panel's DOM presentation. */
   readonly presentation?: LiveDebugPanelPresentation;
+  /** Keeps the command history across panels; see `LiveDebugPanelOptions.history`. */
+  readonly history?: LiveDebugHistory;
 }
 
 /** Releases the panel's DOM and every request owned by this mounted panel. */
@@ -74,6 +77,7 @@ export async function mountLiveDebugPanel(
     enabled: options.enabled,
     transport: options.transport ?? null,
     presentation: options.presentation ?? 'inline',
+    ...(options.history ? { history: options.history } : {}),
   });
   host.appendChild(panel.element);
   return { dispose: () => panel.dispose() };
@@ -164,10 +168,11 @@ export function mountDeveloperShell(host: HTMLElement, options: DeveloperShellOp
     throw new TypeError('Developer shell mounting requires an HTMLElement host.');
   }
   return new DeveloperShell(host, options, {
-    console: (element) =>
+    console: (element, history) =>
       mountLiveDebugPanel(element, {
         enabled: true,
         presentation: 'inline',
+        history,
         ...(options.transport ? { transport: options.transport } : {}),
       }),
     tunables: (element, panelOptions) => mountTunablesPanel(element, panelOptions),

@@ -34,6 +34,18 @@ export interface LiveDebugPanelOptions {
   /** A packaged host can retain transport ownership by supplying one. */
   readonly transport: LiveDebugTransport | null;
   readonly presentation: LiveDebugPanelPresentation;
+  /**
+   * The command lines Up and Down step back through. A holder that outlives
+   * the panel keeps them when it is disposed and another mounts in its place,
+   * as a developer shell does across closing and opening; without one the
+   * panel keeps its own.
+   */
+  readonly history?: LiveDebugHistory;
+}
+
+/** Command lines run in a live-debug panel, oldest first; see `LiveDebugPanelOptions.history`. */
+export interface LiveDebugHistory {
+  entries: readonly string[];
 }
 
 const STYLE = `
@@ -74,7 +86,7 @@ export class LiveDebugPanel {
   #catalog: ProductHostDebugCatalog | null = null;
   #executing = false;
   #transcript: readonly LiveDebugTranscriptEntry[] = [];
-  #history: readonly string[] = [];
+  readonly #history: LiveDebugHistory;
   #historyCursor: number | null = null;
   #diagnosticCursor: string | undefined;
   /** Retained events whose age label follows the latest diagnostics read. */
@@ -106,6 +118,7 @@ export class LiveDebugPanel {
     this.#document = document;
     this.#enabled = options.enabled;
     this.#transport = options.transport;
+    this.#history = options.history ?? { entries: [] };
     const instance = nextLiveDebugPanelInstance++;
     const commandInputId = `rusty-live-debug-command-${instance}`;
     const commandHintId = `rusty-live-debug-hint-${instance}`;
@@ -221,8 +234,11 @@ export class LiveDebugPanel {
     if (!this.#enabled || this.#connection !== 'ready' || this.#executing || command.length === 0) return;
     this.#executing = true;
     this.#setError('');
-    this.#history = [...this.#history, command].slice(-LIVE_DEBUG_PANEL_MAX_HISTORY_ENTRIES);
+    this.#history.entries = [...this.#history.entries, command].slice(-LIVE_DEBUG_PANEL_MAX_HISTORY_ENTRIES);
     this.#historyCursor = null;
+    // The input is disabled while the command runs, which takes its focus;
+    // it gets it back after, so the next command can be typed at once.
+    const typing = this.#document.activeElement === this.#input;
     this.#input.value = '';
     this.#executeAbort?.abort();
     const abort = new AbortController();
@@ -237,6 +253,7 @@ export class LiveDebugPanel {
       if (abort.signal.aborted) return;
       this.#executing = false;
       this.#render();
+      if (typing && !this.#input.disabled) this.#input.focus();
     });
   }
 
@@ -379,7 +396,7 @@ export class LiveDebugPanel {
   #onCommandKeydown(event: KeyboardEvent): void {
     if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
       event.preventDefault();
-      const next = historyCommand(this.#history, this.#historyCursor, event.key === 'ArrowUp' ? -1 : 1);
+      const next = historyCommand(this.#history.entries, this.#historyCursor, event.key === 'ArrowUp' ? -1 : 1);
       this.#historyCursor = next.cursor;
       this.#input.value = next.command;
       this.#renderCommand();

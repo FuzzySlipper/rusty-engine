@@ -29,4 +29,12 @@ press had already brought about (in the desktop window, the UI projection of
 the panel the press opened), and the page then took the held button as a new
 press.
 
-Remove this vendored copy once a Servo release carries these fixes.
+Engine #10661 changes `dom/clipboard/clipboard.rs`: `navigator.clipboard.readText()`
+rejects with `NotAllowedError`, as a browser does when its read prompt is
+denied. Servo asks the embedder for the clipboard's text the same way for a
+page's read and for the person's own paste, so with the read refused there
+the desktop window can answer every request it gets with the system
+clipboard, and `Ctrl+V` pastes into a focused field.
+
+Remove this vendored copy once a Servo release carries these fixes (and the
+read refusal can be told apart by the embedder).
