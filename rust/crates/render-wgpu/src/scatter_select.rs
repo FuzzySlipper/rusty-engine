@@ -1,6 +1,7 @@
 //! Per-copy selection of scatter runs (#10017, `scatter_select.wgsl`).
 //!
 //! With compute and indirect draws, every scatter run a world view may see
+//! (and, with a selection of its own, every one a backdrop view may see)
 //! (a scatter node's copies and its parts by level of detail, `ScatterRun`)
 //! is selected copy by copy each view pass: within its patch's fade and past
 //! its near cut, kept by its thinning (and scaled up so its ground stays as
@@ -34,6 +35,7 @@ use crate::Gpu;
 
 const WORKGROUP: u32 = 64;
 const PASS: &str = "scatter-select";
+const BACKDROP_PASS: &str = "backdrop-scatter-select";
 /// The fixed shadow layers' spheres `Params` holds; more widen the eye's
 /// reach to take them in.
 const SPHERES: usize = 16;
@@ -77,7 +79,7 @@ pub(crate) struct SelectedDraw {
     pub run: u32,
 }
 
-/// The selection of the last world view pass, for diagnostics.
+/// The selection of the last world (or backdrop) view pass, for diagnostics.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScatterSelectionReadout {
     /// The last world view selected its scatter runs on the GPU.
@@ -145,10 +147,13 @@ pub(crate) struct ScatterSelect {
     pool_bytes: u64,
     last_eye: Option<Vec3>,
     eye_moved: bool,
+    /// The view layer whose runs it selects.
+    layer: ViewLayer,
 }
 
 impl ScatterSelect {
-    pub fn new(gpu: &Gpu, shader: wgpu::ShaderModule) -> Self {
+    /// The selection of the runs `layer` (World or Backdrop) draws.
+    pub fn new(gpu: &Gpu, shader: wgpu::ShaderModule, layer: ViewLayer) -> Self {
         let device = &gpu.device;
         let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
             binding,
@@ -282,7 +287,15 @@ impl ScatterSelect {
                     view_formats: &[],
                 })
                 .create_view(&Default::default()),
-            timer: PassTimer::new(gpu, PASS),
+            timer: PassTimer::new(
+                gpu,
+                if layer == ViewLayer::Backdrop {
+                    BACKDROP_PASS
+                } else {
+                    PASS
+                },
+            ),
+            layer,
             draws: Vec::new(),
             part_count: 0,
             casts_windy: false,
@@ -307,7 +320,8 @@ impl ScatterSelect {
 
     /// Place the draws' meshes in `pool` (each found by `mesh_of`) and
     /// number their runs: a run of draws sharing pass, features and
-    /// material, all pooled, is one command. After [`Self::build`].
+    /// material, all pooled, is one command. After [`Self::build`], between
+    /// the pool's `begin` and `finish`, which every selection shares.
     pub fn pool_meshes<'a>(
         &mut self,
         gpu: &Gpu,
@@ -319,7 +333,6 @@ impl ScatterSelect {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render-wgpu scatter mesh pool"),
             });
-        pool.begin();
         for draw in &mut self.draws {
             let placed = mesh_of(&draw.mesh)
                 .and_then(|mesh| pool.place(gpu, &mut encoder, &draw.mesh, mesh));
@@ -329,7 +342,6 @@ impl ScatterSelect {
                 draw.first_index += first_index;
             }
         }
-        pool.finish();
         gpu.queue.submit([encoder.finish()]);
         let mut run = 0;
         let mut commands = 0;
@@ -364,7 +376,7 @@ impl ScatterSelect {
         self.eye_moved
     }
 
-    /// Gather the world layer's runs and their parts again: after a regroup,
+    /// Gather its layer's runs and their parts again: after a regroup,
     /// or a run made, changed or removed. Their entries take at most
     /// `budget`; the runs made last are left out past it.
     pub fn build(&mut self, gpu: &Gpu, tables: &Tables, budget: u64) {
@@ -373,7 +385,7 @@ impl ScatterSelect {
             let state = &parts.state[id as usize];
             parts.meta[id as usize].is_some()
                 && state.shown
-                && ViewLayer::of(state.layer) == ViewLayer::World
+                && ViewLayer::of(state.layer) == self.layer
                 && !state.class.blend
         };
         let mut handles: Vec<_> = tables.scatter_runs.keys().copied().collect();

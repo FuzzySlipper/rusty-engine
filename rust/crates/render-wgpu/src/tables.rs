@@ -763,8 +763,8 @@ impl Parts {
     }
 
     /// Whether the CPU lists take a part: not a farther level of detail
-    /// (which only the selection draws), and while the world layer's runs
-    /// are selected, none of its opaque scatter parts.
+    /// (which only the selection draws), and while the world's and the
+    /// backdrop's runs are selected, none of their opaque scatter parts.
     pub fn listed(&self, id: PartId) -> bool {
         let state = &self.state[id as usize];
         match state.scatter_level {
@@ -773,7 +773,8 @@ impl Parts {
             Some(_) => {
                 !self.selecting
                     || state.class.blend
-                    || crate::frame::ViewLayer::of(state.layer) != crate::frame::ViewLayer::World
+                    || crate::frame::ViewLayer::of(state.layer)
+                        == crate::frame::ViewLayer::Viewmodel
             }
         }
     }

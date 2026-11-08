@@ -683,7 +683,8 @@ impl Renderer {
         // More casters leave the selection less room: gather it again within
         // what is left.
         if self.tables.parts.selecting
-            && u64::from(self.scatter_select.entries) > self.selection_budget()
+            && u64::from(self.scatter_select.entries + self.backdrop_select.entries)
+                > self.selection_budget()
         {
             self.select_runs();
             for layer in &mut self.shadows.layers {
@@ -695,18 +696,35 @@ impl Renderer {
         self.reserve_instances();
     }
 
-    /// Gather the selection's runs within the instance buffer's room, and
-    /// place their meshes in the pool.
+    /// Gather the world's and the backdrop's selections within the instance
+    /// buffer's room (the world's first), and place their meshes in the
+    /// pool.
     fn select_runs(&mut self) {
         let budget = self.selection_budget();
         self.scatter_select.build(&self.gpu, &self.tables, budget);
+        let left = budget.saturating_sub(u64::from(self.scatter_select.entries));
+        self.backdrop_select.build(&self.gpu, &self.tables, left);
         let (tables, builtins) = (&self.tables, &self.builtins);
+        let mesh_of = |mesh: &MeshRef| match mesh {
+            MeshRef::Static(asset) => tables.static_meshes.get(*asset),
+            MeshRef::Builtin(kind) => builtins.get(kind),
+            _ => None,
+        };
+        self.mesh_pool.begin();
         self.scatter_select
-            .pool_meshes(&self.gpu, &mut self.mesh_pool, |mesh| match mesh {
-                MeshRef::Static(asset) => tables.static_meshes.get(*asset),
-                MeshRef::Builtin(kind) => builtins.get(kind),
-                _ => None,
-            });
+            .pool_meshes(&self.gpu, &mut self.mesh_pool, mesh_of);
+        self.backdrop_select
+            .pool_meshes(&self.gpu, &mut self.mesh_pool, mesh_of);
+        self.mesh_pool.finish();
+    }
+
+    /// The selection of the scatter runs a view layer draws: the
+    /// backdrop's, or the world's.
+    fn selection(&self, layer: ViewLayer) -> &crate::scatter_select::ScatterSelect {
+        match layer {
+            ViewLayer::Backdrop => &self.backdrop_select,
+            _ => &self.scatter_select,
+        }
     }
 
     /// The most bytes the instance buffer may take: one storage binding's,
@@ -802,7 +820,8 @@ impl Renderer {
     }
 
     fn reserve_instances(&mut self) {
-        let words = 2 * (self.selection_base() + self.scatter_select.entries);
+        let words = 2
+            * (self.selection_base() + self.scatter_select.entries + self.backdrop_select.entries);
         let limit = self.instance_bytes_limit();
         let needed = (u64::from(words).max(1) * 4).min(limit);
         if needed > self.instances_buffer.size() {
@@ -1760,7 +1779,7 @@ impl Renderer {
             // follow the camera, so never into a static cache.
             let selected_into = |pass: &mut wgpu::RenderPass<'_>| {
                 if selected_shadows {
-                    self.draw_selected(pass, true, |pass, features| {
+                    self.draw_selected(pass, true, ViewLayer::World, |pass, features| {
                         self.layouts.shadow.get(pass, features)
                     })
                 } else {
@@ -1886,9 +1905,11 @@ impl Renderer {
         &'a self,
         pass: &mut wgpu::RenderPass<'_>,
         shadow: bool,
+        layer: ViewLayer,
         pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
     ) -> Encoded {
-        let draws = &self.scatter_select.draws;
+        let selection = self.selection(layer);
+        let draws = &selection.draws;
         let mut current: Option<(batch::Pass, Features)> = None;
         let mut pool_bound = false;
         let mut encoded = Encoded::default();
@@ -1942,9 +1963,9 @@ impl Renderer {
             let offset = crate::scatter_select::ScatterSelect::args_offset(first);
             let count = (end - index) as u32;
             if count > 1 {
-                pass.multi_draw_indexed_indirect(&self.scatter_select.args, offset, count);
+                pass.multi_draw_indexed_indirect(&selection.args, offset, count);
             } else {
-                pass.draw_indexed_indirect(&self.scatter_select.args, offset);
+                pass.draw_indexed_indirect(&selection.args, offset);
             }
             encoded.draws += 1;
             index = end;
@@ -3141,8 +3162,13 @@ impl Renderer {
             self.overlays
                 .write_camera(&self.gpu.queue, &view.camera.view_proj);
         }
-        // With GPU culling the opaque parts are candidates, not in the list.
+        // With GPU culling the opaque parts are candidates, not in the list;
+        // a backdrop's selected copies are in neither.
+        let backdrop_copies = view.layer == ViewLayer::Backdrop
+            && self.tables.parts.selecting
+            && !self.backdrop_select.draws.is_empty();
         if !world_layer
+            && !backdrop_copies
             && overlay_lines == 0
             && effects.draws() == 0
             && self.views[slot].as_ref().is_none_or(|cache| {
@@ -3220,13 +3246,14 @@ impl Renderer {
             .expect("view list is current")
             .candidates
             .is_some();
-        // The world's selected scatter copies, and whether the view first
-        // draws its opaque depth to drop those hidden behind it
-        // (`occlusion.rs`).
-        let selected = view.layer == ViewLayer::World
+        // The world's or the backdrop's selected scatter copies, and whether
+        // a world view first draws its opaque depth to drop those hidden
+        // behind it (`occlusion.rs`).
+        let selected = matches!(view.layer, ViewLayer::World | ViewLayer::Backdrop)
             && self.tables.parts.selecting
-            && !self.scatter_select.draws.is_empty();
-        let occluding = selected && self.options.occlusion_culling && self.occlusion.available();
+            && !self.selection(view.layer).draws.is_empty();
+        let occluding =
+            selected && world_layer && self.options.occlusion_culling && self.occlusion.available();
         let prepass_batches: Vec<batch::Batch> = if occlusion.is_some() || occluding || ray_mask {
             pipelines_created += self.layouts.start_prepass(&self.gpu.device);
             // The CPU list's opaque batches: every one, or with GPU culling
@@ -3348,7 +3375,7 @@ impl Renderer {
         }
         // The world's scatter runs, copy by copy, before anything draws them
         // (`scatter_select.rs`).
-        if selected {
+        if selected && world_layer {
             // `update_view_list` reserved the selection's region.
             let base = self.selection_base();
             self.scatter_select.encode(
@@ -3388,6 +3415,25 @@ impl Renderer {
                 }
             }
         }
+        // The backdrop's, from its camera, after the world's entries; they
+        // cast into no shadow layer and are tested against no occluders.
+        if selected && view.layer == ViewLayer::Backdrop {
+            let base = self.selection_base() + self.scatter_select.entries;
+            self.backdrop_select.encode(
+                &self.gpu,
+                &mut encoder,
+                [
+                    &self.parts_buffer,
+                    self.scatter_copies.buffer(),
+                    &self.instances_buffer,
+                ],
+                base,
+                &view_proj,
+                eye,
+                Vec::new(),
+                None,
+            );
+        }
         let shadows = match view.layer {
             ViewLayer::World => self.encode_shadows(&mut encoder, false),
             ViewLayer::Backdrop => self.encode_shadows(&mut encoder, true),
@@ -3398,7 +3444,7 @@ impl Renderer {
                 .encode_prepass(&mut encoder, occlusion, |pass| {
                     draw_opaque(self, pass);
                     if selected {
-                        self.draw_selected(pass, false, |pass, features| {
+                        self.draw_selected(pass, false, view.layer, |pass, features| {
                             self.layouts.prepass.get(pass, features)
                         });
                     }
@@ -3470,7 +3516,7 @@ impl Renderer {
                 pass.set_scissor_rect(area.x, area.y, area.width, area.height);
                 draw_opaque(self, &mut pass);
                 if selected {
-                    self.draw_selected(&mut pass, false, |pass, features| {
+                    self.draw_selected(&mut pass, false, view.layer, |pass, features| {
                         self.layouts.prepass.get(pass, features)
                     });
                 }
@@ -3705,7 +3751,7 @@ impl Renderer {
                 }),
             };
             if selected {
-                encoded += self.draw_selected(&mut pass, false, |pass, features| {
+                encoded += self.draw_selected(&mut pass, false, view.layer, |pass, features| {
                     pipelines.get(pass, features)
                 });
             }
@@ -4018,9 +4064,11 @@ impl Renderer {
         if clusters.grid[3] == 1 {
             self.light_clusters.submitted();
         }
-        if selected {
+        if selected && world_layer {
             self.scatter_select.submitted();
             self.occlusion.submitted();
+        } else if selected {
+            self.backdrop_select.submitted();
         }
         if culled {
             self.culling.drew(multi_draws);

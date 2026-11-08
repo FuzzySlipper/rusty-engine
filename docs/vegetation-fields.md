@@ -93,12 +93,14 @@ engine.Vegetation.SetLayer(new VegetationLayerRequest(far, Layer: 3, tree.Look,
   density, as between scene fields, when a field metre is a world metre:
   `Scale` times the link's `Scale` is 1, and `Origin` is where the world's
   origin stands in the backdrop.
-- **What it leaves out.** The backdrop's parts list on the CPU and are not
-  selected copy by copy: a backdrop layer's copies draw at their first level,
-  with no thinning, and every copy of a patch in view runs the vertex stage
-  (past the fade it collapses to a point). Keep backdrop layers to a level and
-  set their density for the distance. Occlusion culling does not test them.
-  Shadows from backdrop copies are not supported: leave `CastsShadows` off.
+- **Selection.** Backdrop copies are selected copy by copy as the scene's
+  are, from the backdrop camera: levels, crossfades, thinning and its
+  scale-up, fades and the view test all apply, measured in field units. The
+  backdrop's selection takes the instance room the world's leaves and has a
+  GPU pass of its own, `backdrop-scatter-select`; `gpu.scatterSelection`
+  stays the world's.
+- **What it leaves out.** Occlusion culling does not test backdrop copies,
+  and shadows from them are not supported: leave `CastsShadows` off.
 
 ## Sampling
 

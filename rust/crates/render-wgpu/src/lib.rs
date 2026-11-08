@@ -217,8 +217,10 @@ pub struct GpuReadout {
     pub distance_fields: DistanceFieldReadout,
     pub light_clusters: LightClusterReadout,
     pub gpu_culling: GpuCullingReadout,
-    /// The per-copy selection of scatter runs (`scatter_select.rs`).
+    /// The per-copy selection of scatter runs (`scatter_select.rs`): the
+    /// last world view's, and the last backdrop view's.
     pub scatter_selection: ScatterSelectionReadout,
+    pub backdrop_scatter_selection: ScatterSelectionReadout,
     /// The impostors baked (`impostor.rs`).
     pub impostors: ImpostorReadout,
     /// The occlusion test of selected scatter copies (`occlusion.rs`).
@@ -692,8 +694,10 @@ pub struct Renderer {
     field_entries: Option<(u64, Vec<distance_fields::FieldEntry>)>,
     light_clusters: light_clusters::LightClusters,
     culling: culling::GpuCulling,
-    /// Scatter runs selected copy by copy (`scatter_select.rs`).
+    /// Scatter runs selected copy by copy (`scatter_select.rs`): the
+    /// world's, and the backdrop's.
     scatter_select: scatter_select::ScatterSelect,
+    backdrop_select: scatter_select::ScatterSelect,
     /// Impostor levels' baked views (`impostor.rs`).
     impostors: impostor::Impostors,
     /// Selected scatter copies tested against the view's opaque depth
@@ -782,14 +786,19 @@ impl Renderer {
                     .module(device, Entry::Cull, Features::default()),
             ),
         );
-        let scatter_select = scatter_select::ScatterSelect::new(
-            gpu,
-            pipelines::standard(layouts.shaders.module(
-                device,
-                Entry::ScatterSelect,
-                Features::default(),
-            )),
-        );
+        let mut selection = |layer| {
+            scatter_select::ScatterSelect::new(
+                gpu,
+                pipelines::standard(layouts.shaders.module(
+                    device,
+                    Entry::ScatterSelect,
+                    Features::default(),
+                )),
+                layer,
+            )
+        };
+        let scatter_select = selection(frame::ViewLayer::World);
+        let backdrop_select = selection(frame::ViewLayer::Backdrop);
         let occlusion = occlusion::Occlusion::new(
             gpu,
             pipelines::standard(
@@ -969,6 +978,7 @@ impl Renderer {
             light_clusters,
             culling,
             scatter_select,
+            backdrop_select,
             impostors: impostor::Impostors::new(device),
             occlusion,
             mesh_pool: mesh_pool::MeshPool::new(gpu),
@@ -1337,6 +1347,7 @@ impl Renderer {
                     self.culling.timing(),
                     self.occlusion.timing(),
                     self.scatter_select.timing(),
+                    self.backdrop_select.timing(),
                     self.sky_light.timing(),
                     self.image_effect.timing(),
                     self.upscale.timing(),
@@ -1368,6 +1379,7 @@ impl Renderer {
             light_clusters: self.light_clusters.readout(),
             gpu_culling: self.culling.readout(),
             scatter_selection: self.scatter_select.readout(self.scatter_copies.refused),
+            backdrop_scatter_selection: self.backdrop_select.readout(0),
             impostors: self.impostors.readout(),
             occlusion: self.occlusion.readout(),
             indirect_light: self.probes.readout(),

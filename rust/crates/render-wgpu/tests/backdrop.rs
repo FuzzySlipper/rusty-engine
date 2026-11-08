@@ -982,3 +982,94 @@ fn backdrop_vegetation_draws_as_world_scale_copies_hidden_by_its_ridge_and_under
         "the world draws over them"
     );
 }
+
+/// A row of 24 trees from 3.4 to 3.6 km ahead, ranked across 0 to 1, that
+/// thin to half from 3.3 km (kept ones growing up to 1.4 times) and draw a
+/// red level from 3.5 km: in the backdrop at 1:1000, or at world scale.
+fn thinned_grove(layer: RenderLayer) -> Vec<RenderDiff> {
+    let units = if layer == RenderLayer::Backdrop {
+        1.0 / SCALE as f32
+    } else {
+        1.0
+    };
+    let trees: Vec<[f32; 3]> = (0..24)
+        .map(|index| {
+            let along = index as f32 / 23.0;
+            [-1200.0 + 2400.0 * along, 0.0, -3400.0 - 200.0 * along]
+        })
+        .collect();
+    let mut ops = grove(layer, &trees, false);
+    let mut far = ops
+        .iter()
+        .find_map(|operation| match operation {
+            RenderDiff::DefineStaticMesh { asset } => Some(asset.clone()),
+            _ => None,
+        })
+        .expect("the tree's mesh");
+    far.asset = "mesh/tree-far".to_owned();
+    far.material_slots[0].material = "material/tree-far".to_owned();
+    ops.insert(
+        0,
+        RenderDiff::DefineMaterial {
+            material: material("material/tree-far", [0.7, 0.1, 0.1, 1.0], None),
+        },
+    );
+    ops.insert(1, RenderDiff::DefineStaticMesh { asset: far });
+    for operation in &mut ops {
+        if let RenderDiff::CreateScatterPatch { patch, .. } = operation {
+            for (index, copy) in patch.instances.iter_mut().enumerate() {
+                copy.rank = (index * 7 % 24) as f32 / 24.0;
+            }
+            patch.lods = vec![ScatterLod {
+                asset: "mesh/tree-far".to_owned(),
+                material_overrides: Vec::new(),
+                start: 3_500.0 * units,
+                impostor: false,
+            }];
+            patch.thinning = ScatterThinning {
+                points: vec![[3_300.0 * units, 1.0], [3_400.0 * units, 0.5]],
+                max_scale: 1.4,
+            };
+        }
+    }
+    ops
+}
+
+#[test]
+fn backdrop_vegetation_is_selected_copy_by_copy_with_its_levels_and_thinning() {
+    let at = [0.0, 1.0, 0.0];
+    let mut world = scene();
+    world.apply(thinned_grove(RenderLayer::Scene));
+    look(&mut world, at, 0.0, FAR_FIELD);
+    let expected = look(&mut world, at, 0.0, FAR_FIELD);
+    let mut backdrop = scene();
+    backdrop.apply(thinned_grove(RenderLayer::Backdrop));
+    look(&mut backdrop, at, 0.0, NEAR_FIELD);
+    let drawn = look(&mut backdrop, at, 0.0, NEAR_FIELD);
+    keep("thinned-world", &expected);
+    keep("thinned-backdrop", &drawn);
+    let differs = changed(&expected, &drawn, 6);
+    assert!(
+        differs < 0.002,
+        "thinned and levelled as at world scale: {:.3}% differ",
+        differs * 100.0
+    );
+    let readout = backdrop.renderer.gpu_readout();
+    let selection = &readout.backdrop_scatter_selection;
+    assert!(selection.enabled, "{selection:?}");
+    assert_eq!(selection.copies, 24, "{selection:?}");
+    assert!(
+        selection.thinned > 0 && selection.levels[0] > 0,
+        "copies thin away and draw the farther level: {selection:?}"
+    );
+    assert!(selection.drawn > 0 && selection.drawn < 24, "{selection:?}");
+    assert!(
+        readout
+            .passes
+            .iter()
+            .any(|pass| pass.pass == "backdrop-scatter-select"),
+        "the backdrop's selection reports its cost"
+    );
+    // The world's selection is the world's alone.
+    assert_eq!(readout.scatter_selection.copies, 0);
+}
