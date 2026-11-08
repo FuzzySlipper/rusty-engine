@@ -32,6 +32,8 @@ in square tiles of `TileSize` metres, each sampled `TileCells` cells a side
 (1 to 256). With a session, the field's root stands at the world's origin in
 that session's frame and follows every world-origin rebase. Tile x and z are
 world metres, and a tile's first vertex stands at a multiple of `TileSize`.
+(`Origin` moves the root from there, and `Scale` makes a field unit other
+than a metre; both are for the backdrop, below.)
 
 `VegetationFocus.Following(camera)` centres the tiles on where that camera
 stands, measured as each call finishes; `VegetationFocus.At(x, y, z)` on a
@@ -42,7 +44,8 @@ so a focus wavering on the edge samples nothing twice.
 
 A product may make several fields. One lattice rarely suits every distance:
 a fine one near the walking ground and a coarse one matching a distant
-heightfield ring are two fields, and their layers hand over (below).
+heightfield ring are two fields, and their layers hand over (below). A field
+can also grow in the backdrop, over a backdrop heightfield (below).
 
 `SetVisible(new(field, false))` stops drawing a field, shadows included,
 for instance while the player is away in a separate space whose world
@@ -50,6 +53,52 @@ should not show. A hidden field keeps its tiles and patches and holds its
 focus where it was, asking for and placing nothing new as its camera moves;
 `SetVisible(new(field, true))` draws them again at once. The readout's
 `Visible` says which.
+
+## In the backdrop
+
+A field made with `Layer = RenderLayer.Backdrop` grows in the
+[backdrop](lighting-and-sky.md#the-backdrop), standing as a
+[backdrop heightfield](heightfield-terrain.md#drawing) does: its point
+(0, 0, 0) at `Origin` in the backdrop, one of its units spanning `Scale`
+backdrop units. Everything the field takes or reports is in its own units:
+tile size, focus, records, reach, fades, level starts, thinning distances and
+a sprite's size. Grown over ground sampled in metres at 1:1000, a field takes
+`Scale` 0.001 and stays in metres, so its layers read as a scene field's
+would.
+
+```csharp
+VegetationField far = engine.Vegetation.Create(new VegetationFieldCreateRequest(
+    default, TileSize: 256, TileCells: 8, VegetationFocus.Following(camera))
+    with { Layer = RenderLayer.Backdrop, Origin = farGroundOrigin, Scale = 0.001f });
+engine.Vegetation.SetLayer(new VegetationLayerRequest(far, Layer: 3, tree.Look,
+    default(OptionalMaterial), Density: 0.002f, Reach: 20_000)
+    with { Near = 3_000, NearFade = 300, Fade = 2_000 });
+```
+
+- **Focus.** `VegetationFocus.Following(camera)` measures where the camera
+  stands in the backdrop under its view's link, again every call, so the tiles
+  follow a world-origin rebase and a link change as the backdrop does.
+  `VegetationFocus.At` takes a point of the field.
+- **Sampling.** Tiles are asked for in field units: sample the far ground the
+  backdrop heightfield draws, at the same points, and copies stand on its
+  triangles when the lattices match.
+- **Drawing.** Copies draw in the backdrop's pass, depth-tested against the
+  backdrop heightfield, so a ridge hides what stands behind it. Fog reaches
+  them at their world-equivalent distance, and the world draws over them.
+  Sprite layers (`VegetationSprite`, either `BillboardMode`, `AuthoredFacing`,
+  `Mask`) work as in the scene. Wind leans a copy by its height as in the
+  scene, and its flutter is world-sized.
+- **Handover.** A scene field's layer fading out at the near ground's edge
+  hands over one for one to a backdrop layer of the same key, seed and
+  density, as between scene fields, when a field metre is a world metre:
+  `Scale` times the link's `Scale` is 1, and `Origin` is where the world's
+  origin stands in the backdrop.
+- **What it leaves out.** The backdrop's parts list on the CPU and are not
+  selected copy by copy: a backdrop layer's copies draw at their first level,
+  with no thinning, and every copy of a patch in view runs the vertex stage
+  (past the fade it collapses to a point). Keep backdrop layers to a level and
+  set their density for the distance. Occlusion culling does not test them.
+  Shadows from backdrop copies are not supported: leave `CastsShadows` off.
 
 ## Sampling
 

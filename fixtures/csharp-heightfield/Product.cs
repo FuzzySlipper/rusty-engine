@@ -108,7 +108,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         engine.CameraView.SetActiveCamera(camera);
         engine.CameraView.SetBackgroundColor(new(FogColor));
         vegetation = new Vegetation(engine, camera,
-            engine.Graphics.OpenResource(new("flower.png", TextureFilter.Nearest, TextureWrap.Clamp)).Handle);
+            engine.Graphics.OpenResource(new("flower.png", TextureFilter.Nearest, TextureWrap.Clamp)).Handle,
+            engine.Graphics.OpenResource(new("conifer.png", TextureFilter.NearestMipmapped, TextureWrap.Clamp)).Handle);
     }
 
     public void Start() => Build();
@@ -134,8 +135,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         }
 
         streamer = new HeightfieldStreamer(engine, heightfield, new Ground(layers, continent == 0 ? 1 : 25), CommitsPerUpdate);
-        // Grass and trees grow over the hills, not the continent.
+        // Grass and trees grow over the hills; woods of sprites in the backdrop over the continent.
         vegetation.Show(continent == 0);
+        vegetation.ShowForest(continent != 0);
         Settling();
     }
 
@@ -584,7 +586,7 @@ internal sealed class Ground(bool layers, double spread) : IHeightfieldSampler
     internal static double Unit(long x, long z, int salt) => Hash(x, z, salt + 100);
 
     /// <summary>The land at a place: the hills' shape spread and raised.</summary>
-    private double Lift(double x, double z) => rise * Height(x / spread, z / spread);
+    internal double Lift(double x, double z) => rise * Height(x / spread, z / spread);
 
     internal static double Height(double x, double z) =>
         Offset + (HillHeight * (Noise(x / HillScale, z / HillScale, 4) - .5) * 2)

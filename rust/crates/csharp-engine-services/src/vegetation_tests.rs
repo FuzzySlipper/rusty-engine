@@ -162,6 +162,8 @@ fn create(api: &NativeEngineApi, x: f64, z: f64) -> NativeVegetationFieldHandle 
                         y: 2.0,
                         z,
                     },
+                    scale: 1.0,
+                    ..Default::default()
                 },
                 &mut field,
                 std::ptr::null_mut(),
@@ -611,4 +613,151 @@ fn a_default_material_keeps_the_mesh_bindings_and_detail_adds_levels_and_thinnin
         .instances
         .iter()
         .all(|copy| (0.0..1.0).contains(&copy.rank)));
+}
+
+#[test]
+fn a_backdrop_field_focuses_where_the_camera_stands_in_the_backdrop_and_draws_there() {
+    let mut services = services();
+    services.begin_call(binding());
+    let api = services.api();
+    let paint = material(&api);
+    let look = blade(&api, paint);
+    let descriptor = |z: f32| NativeCameraDescriptor {
+        pose: NativeCameraPose {
+            position: NativeVec3 { x: 0.0, y: 1.0, z },
+            pitch_degrees: 0.0,
+            yaw_degrees: 0.0,
+        },
+        basis_mode: NativeCameraBasisMode::Derived,
+        basis: NativeCameraBasis::default(),
+        projection: NativeCameraProjection {
+            kind: NativeCameraProjectionKind::Perspective,
+            fov_y_degrees: 60.0,
+            vertical_size: 1.0,
+            near: 0.1,
+            far: 100.0,
+        },
+        viewport: NativeCameraViewport {
+            x: 0.0,
+            y: 0.0,
+            width: 1.0,
+            height: 1.0,
+        },
+        viewmodel_fov_y_degrees: 0.0,
+    };
+    let mut camera = NativeCameraHandle::default();
+    let mut field = NativeVegetationFieldHandle::default();
+    unsafe {
+        let view = &api.camera_view;
+        assert_eq!(
+            (view.create_camera)(
+                view.context,
+                &descriptor(0.0),
+                &mut camera,
+                std::ptr::null_mut()
+            ),
+            ABI_OK
+        );
+        assert_eq!(
+            (view.set_backdrop)(
+                view.context,
+                &NativeBackdropRequest {
+                    camera: NativeOptionalCamera::default(),
+                    session: NativeOptionalSpatialSession::default(),
+                    anchor: NativeWorldOriginGlobalPosition::default(),
+                    origin: NativeVec3::default(),
+                    scale: 1000.0,
+                },
+                std::ptr::null_mut()
+            ),
+            ABI_OK
+        );
+        // Sampled in world metres, drawn at 1:1000 in the backdrop.
+        let vegetation = &api.vegetation;
+        assert_eq!(
+            (vegetation.create)(
+                vegetation.context,
+                NativeVegetationFieldCreateRequest {
+                    tile_size: 16.0,
+                    tile_cells: 8,
+                    placements_per_call: 64,
+                    focus: NativeVegetationFocus {
+                        camera: NativeOptionalCamera { camera },
+                        ..Default::default()
+                    },
+                    layer: NativeRenderLayer::Backdrop,
+                    scale: 0.001,
+                    ..Default::default()
+                },
+                &mut field,
+                std::ptr::null_mut()
+            ),
+            ABI_OK
+        );
+    }
+    set_layer(
+        &api,
+        layer(
+            field,
+            GRASS,
+            look,
+            NativeOptionalMaterial { material: paint },
+            1.0,
+        ),
+    );
+    let first = ops(&mut services);
+    let root = first
+        .iter()
+        .find_map(|operation| match operation {
+            RenderDiff::Create {
+                parent: None, node, ..
+            } if node.layer == render_model::RenderLayer::Backdrop => Some(node),
+            _ => None,
+        })
+        .expect("the field's root in the backdrop");
+    assert_eq!(root.transform.scale, [0.001; 3]);
+
+    // The camera walks 2.5 km north: 2.5 backdrop units, 2,500 field metres.
+    services.begin_call(binding());
+    let api = services.api();
+    assert!(requests(&api, field)
+        .iter()
+        .all(|request| request.z.abs() <= 3));
+    unsafe {
+        let view = &api.camera_view;
+        assert_eq!(
+            (view.update_camera)(
+                view.context,
+                &NativeCameraUpdateRequest {
+                    camera,
+                    descriptor: descriptor(-2_500.0),
+                },
+                std::ptr::null_mut()
+            ),
+            ABI_OK
+        );
+    }
+    services.finish_call().expect("walk call");
+    services.begin_call(binding());
+    let api = services.api();
+    let waiting = requests(&api, field);
+    // Nearest first: the tile under the camera, at z -2,500 m.
+    assert!(
+        waiting[0].z == -157 && (-1..=0).contains(&waiting[0].x),
+        "{:?}",
+        waiting[0]
+    );
+    for request in &waiting {
+        assert!(commit(&api, field, request, 2.0));
+    }
+    let placed = ops(&mut services);
+    let patch = placed
+        .iter()
+        .find_map(|operation| match operation {
+            RenderDiff::CreateScatterPatch { patch, .. } => Some(patch),
+            _ => None,
+        })
+        .expect("copies grow there");
+    // Reach 30 and fade 4 field metres, in backdrop units.
+    assert!((patch.fade.start - 0.026).abs() < 1e-6 && (patch.fade.end - 0.03).abs() < 1e-6);
 }

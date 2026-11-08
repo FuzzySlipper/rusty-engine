@@ -21,7 +21,7 @@ public sealed class VegetationSprite : IDisposable
     /// <param name="texture">The atlas's image.</param>
     /// <param name="uvMin">The frame's top left in the image, 0 to 1.</param>
     /// <param name="uvMax">The frame's bottom right.</param>
-    /// <param name="size">The frame's width and height in metres.</param>
+    /// <param name="size">The frame's width and height in its field's units (metres in the scene).</param>
     /// <param name="pivot">Where a copy's origin stands in the frame, from its bottom left, 0 to 1.</param>
     /// <param name="material">
     /// The lighting, alpha mode, emission and wind a sprite takes. A <see cref="SpriteAlphaMode.Blend"/>

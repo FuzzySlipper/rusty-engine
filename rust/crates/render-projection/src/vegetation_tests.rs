@@ -8,6 +8,8 @@ fn layout() -> VegetationLayout {
     VegetationLayout {
         tile_size: 16.0,
         tile_cells: 8,
+        layer: RenderLayer::Scene,
+        scale: 1.0,
     }
 }
 
@@ -745,4 +747,58 @@ fn a_field_walked_in_small_steps_holds_what_a_field_settled_there_holds() {
     for tile in &walked {
         assert!(retained.flat_distance(end, *tile) <= reach, "{tile:?}");
     }
+}
+
+#[test]
+fn a_backdrop_field_roots_in_the_backdrop_scaled_and_gives_its_bands_in_layer_units() {
+    // Tiles, reach and fade in field units (metres), drawn at 1:1000.
+    let mut fields = VegetationFields::default();
+    fields
+        .create(
+            FIELD,
+            VegetationLayout {
+                layer: RenderLayer::Backdrop,
+                scale: 0.001,
+                ..layout()
+            },
+            1_000,
+        )
+        .unwrap();
+    let mut layer = grass();
+    layer.thinning = ScatterThinning {
+        points: vec![[10.0, 1.0], [30.0, 0.5]],
+        max_scale: 2.0,
+    };
+    fields.set_layer(FIELD, GRASS, layer).unwrap();
+    let mut operations = fields.settle(FIELD, [5.0, 0.0, 0.0], None).unwrap();
+    operations.extend(fill(&mut fields, [8.0, 2.0, 8.0], |_, _| 2.0));
+    let root = operations
+        .iter()
+        .find_map(|operation| match operation {
+            RenderDiff::Create {
+                parent: None, node, ..
+            } => Some(node),
+            _ => None,
+        })
+        .expect("the field's root");
+    assert_eq!(root.layer, RenderLayer::Backdrop);
+    assert_eq!(root.transform.scale, [0.001; 3]);
+    let patch = patches(&operations)[0];
+    // Reach 40 and fade 4 field units: 0.036 to 0.04 layer units.
+    assert!((patch.fade.start - 0.036).abs() < 1e-6, "{:?}", patch.fade);
+    assert!((patch.fade.end - 0.04).abs() < 1e-6, "{:?}", patch.fade);
+    let points = &patch.thinning.points;
+    assert!((points[0][0] - 0.01).abs() < 1e-6 && (points[1][0] - 0.03).abs() < 1e-6);
+    assert_eq!((points[1][1], patch.thinning.max_scale), (0.5, 2.0));
+    // A scale that is not above 0 leaves no field to draw.
+    assert!(fields
+        .create(
+            2,
+            VegetationLayout {
+                scale: 0.0,
+                ..layout()
+            },
+            1
+        )
+        .is_err());
 }

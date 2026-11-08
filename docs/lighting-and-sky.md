@@ -1895,8 +1895,10 @@ engine.CameraView.RemoveFogVolume(new(1));
 A second scene can stand behind the world, drawn by a camera linked to each
 world view: distant ranges on the skyline at the scale of a world map, or a
 miniature of space behind a ship. This is the multi-camera "3D skybox".
-Appearances placed in the `Backdrop` render layer, and voxel scene
-presentations moved there, stand in **backdrop units**. The product links
+Appearances placed in the `Backdrop` render layer, voxel scene
+presentations moved there, and heightfields and
+[vegetation fields](vegetation-fields.md#in-the-backdrop) made there stand in
+**backdrop units**. The product links
 the layer to the world's cameras:
 
 ```csharp

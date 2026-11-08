@@ -8,10 +8,26 @@ public readonly partial record struct VegetationFieldCreateRequest
     /// <summary>
     /// A field over <paramref name="Session"/>'s world (<c>default</c>: the scene's own space) in
     /// square tiles of <paramref name="TileSize"/> metres sampled <paramref name="TileCells"/> cells a
-    /// side, centred on <paramref name="Focus"/>, placing at most 64 tile layers a call.
+    /// side, centred on <paramref name="Focus"/>, placing at most 64 tile layers a call. Use
+    /// <c>with</c> to grow it in <see cref="RenderLayer.Backdrop"/> at an <c>Origin</c> and
+    /// <c>Scale</c>, as a backdrop heightfield stands.
     /// </summary>
     public VegetationFieldCreateRequest(OptionalSpatialSession Session, double TileSize, uint TileCells, VegetationFocus Focus)
         : this(Session, TileSize, TileCells, 64, Focus)
+    {
+    }
+
+    /// <summary>
+    /// A field in the scene as above, placing at most <paramref name="PlacementsPerCall"/> tile
+    /// layers a call.
+    /// </summary>
+    public VegetationFieldCreateRequest(
+        OptionalSpatialSession Session,
+        double TileSize,
+        uint TileCells,
+        uint PlacementsPerCall,
+        VegetationFocus Focus)
+        : this(Session, TileSize, TileCells, PlacementsPerCall, Focus, RenderLayer.Scene, Vector3.Zero, 1f)
     {
     }
 }
@@ -21,7 +37,7 @@ public readonly partial record struct VegetationFocus
     /// <summary>Centre the tiles on where <paramref name="camera"/> stands, measured as each call finishes.</summary>
     public static VegetationFocus Following(Camera camera) => new(camera, 0, 0, 0);
 
-    /// <summary>Centre the tiles on a world point.</summary>
+    /// <summary>Centre the tiles on a point of the field, in its own units (world metres in the scene).</summary>
     public static VegetationFocus At(double x, double y, double z) => new(default, x, y, z);
 }
 

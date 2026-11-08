@@ -7,7 +7,7 @@
 use std::{collections::BTreeMap, ffi::c_void};
 
 use csharp_engine_abi::*;
-use render_model::{RenderDiff, RenderFrameDiff, ShadowCasting};
+use render_model::{RenderDiff, RenderFrameDiff, RenderLayer, ShadowCasting};
 use render_projection::{
     VegetationError, VegetationFields, VegetationLayer, VegetationLayout, VegetationReadout,
     VegetationRecord, VegetationTileContent,
@@ -26,7 +26,7 @@ fn refused(message: impl Into<String>) -> CsharpEngineServicesError {
     CsharpEngineServicesError::new("CSHARP_VEGETATION", message)
 }
 
-/// What the tiles centre on: a camera (by handle), or a world point.
+/// What the tiles centre on: a camera (by handle), or a point of the field.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum Focus {
     Camera(u64),
@@ -37,6 +37,11 @@ enum Focus {
 struct RetainedField {
     /// The spatial session whose world it grows in (0: the scene's space).
     session: u64,
+    /// Where its (0, 0, 0) stands from the world's origin, and the layer
+    /// units a field unit spans.
+    origin: [f64; 3],
+    scale: f64,
+    layer: RenderLayer,
     focus: Focus,
     layers: BTreeMap<u32, RetainedLayer>,
 }
@@ -70,17 +75,23 @@ impl RetainedLayer {
 }
 
 impl RetainedField {
-    /// Where the world's origin stands in the scene now.
+    /// Where the field's (0, 0, 0) stands in its layer now.
     fn placement(&self, spatial: &SpatialCollisionSource) -> [f64; 3] {
         if self.session == 0 {
-            return [0.0; 3];
+            return self.origin;
         }
         let origin = spatial
             .world_origin(NativeSpatialSessionHandle {
                 value: self.session,
             })
             .unwrap_or(core_space::WorldOrigin::ZERO);
-        origin.cell().map(|cell| -(cell as f64))
+        let cell = origin.cell();
+        std::array::from_fn(|axis| self.origin[axis] - cell[axis] as f64)
+    }
+
+    /// A layer point in field units.
+    fn field_point(&self, placement: [f64; 3], point: [f64; 3]) -> [f64; 3] {
+        std::array::from_fn(|axis| (point[axis] - placement[axis]) / self.scale)
     }
 }
 
@@ -200,6 +211,20 @@ impl RuntimeVegetationBridge {
                 "the vegetation field names a spatial session that does not live",
             ));
         }
+        let layer = match request.layer {
+            NativeRenderLayer::Scene => RenderLayer::Scene,
+            NativeRenderLayer::Backdrop => RenderLayer::Backdrop,
+            _ => {
+                return Err(refused(
+                    "a vegetation field draws in the Scene or the Backdrop layer",
+                ))
+            }
+        };
+        let origin = [request.origin.x, request.origin.y, request.origin.z].map(f64::from);
+        if !origin.iter().all(|value| value.is_finite()) {
+            return Err(refused("the vegetation field's origin must be finite"));
+        }
+        let scale = f64::from(request.scale);
         let focus = focus_of(request.focus)?;
         let staged = self.staged_mut()?;
         let value = staged.state.next;
@@ -211,12 +236,14 @@ impl RuntimeVegetationBridge {
                 VegetationLayout {
                     tile_size: request.tile_size,
                     tile_cells: request.tile_cells,
+                    layer,
+                    scale,
                 },
                 request.placements_per_call,
             )
             .map_err(|_| {
                 refused(
-                    "a vegetation tile is finite and above 0 metres, with 1 to 256 cells a side",
+                    "a vegetation field's tile and scale are finite and above 0, with 1 to 256 cells a side",
                 )
             })?;
         staged.state.next += 1;
@@ -224,6 +251,9 @@ impl RuntimeVegetationBridge {
             value,
             RetainedField {
                 session: session.value,
+                origin,
+                scale,
+                layer,
                 focus,
                 layers: BTreeMap::new(),
             },
@@ -590,20 +620,23 @@ impl RuntimeVegetationBridge {
     }
 
     /// As a call finishes: resolve every field's place (a rebase moves its
-    /// root) and focus (`camera` gives a camera's position in the scene),
+    /// root) and focus (`camera` gives a camera's position in the scene, or
+    /// with `true` where it stands in the backdrop),
     /// then place, choose and project.
     pub(crate) fn settle(
         &mut self,
         call: &mut RuntimeVegetationCall,
-        camera: impl Fn(u64) -> Option<[f64; 3]>,
+        camera: impl Fn(u64, bool) -> Option<[f64; 3]>,
     ) -> Result<(), CsharpEngineServicesError> {
         let state = &mut call.state;
         let mut operations = Vec::new();
         for (handle, retained) in &state.fields {
             let placement = retained.placement(&self.spatial);
             let focus = match retained.focus {
-                Focus::Camera(camera_handle) => camera(camera_handle)
-                    .map(|eye| std::array::from_fn(|axis| eye[axis] - placement[axis])),
+                Focus::Camera(camera_handle) => {
+                    camera(camera_handle, retained.layer == RenderLayer::Backdrop)
+                        .map(|eye| retained.field_point(placement, eye))
+                }
                 Focus::Point(point) => Some(point),
             };
             operations.extend(

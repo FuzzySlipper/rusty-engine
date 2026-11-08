@@ -16,12 +16,16 @@ The far grass thins with distance, its kept clumps growing so the hills stay as
 green, and trees draw a cheaper cone from 150 m and baked impostor cards from
 320 m, crossfading between levels (#10017).
 Flowers are a sprite grown as a billboard layer (#10660), facing the camera from
-every side out to 700 m.
+every side out to 700 m. Over the continent (`heightfield.continent 1`), a
+backdrop vegetation field grows woods of conifer sprites at 1:1000 out to 16 km
+(#10672), sampled in metres as the backdrop heightfield is: the continent's
+ridges hide the trees behind them, fog reaches them and the world draws over
+them.
 `generate-textures.py` writes `content/grass.png`, `content/rock.png`, the
 palette panels' `content/sand.png`, `snow.png`, `moss.png` and `dirt.png`, the
 decal atlas `content/marks.png`, the coal atlas `content/coals.png` with
-the light it emits, `content/coals-emission.png`, and the masked sprite
-`content/flower.png`.
+the light it emits, `content/coals-emission.png`, and the masked sprites
+`content/flower.png` and `content/conifer.png`.
 
 Stage with the exact SDK version and matching feed and runtime:
 
@@ -44,7 +48,8 @@ Live debug commands:
 - `heightfield.invalidate <metres>`: sample again around the camera.
 - `vegetation.inspect`: both vegetation fields' tiles, patches, copies, budget
   and deferred work, the last call's placement, selection and publication
-  time, invalidations and sampling.
+  time, invalidations and sampling; over the continent, the backdrop forest
+  field's.
 - `vegetation.show <0|1>`, `vegetation.tune <grass per m²> <reach>`,
   `vegetation.invalidate <metres>`.
 - `heightfield.pick <x> <y> <z> <dx> <dy> <dz>`: pick the drawn ground.

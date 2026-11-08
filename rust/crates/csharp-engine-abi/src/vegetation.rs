@@ -12,7 +12,8 @@ pub struct NativeVegetationFieldHandle {
 }
 
 /// What the tiles centre on: a camera's position, measured as each call
-/// finishes, or with no camera a world point the product moves.
+/// finishes, or with no camera a point of the field (field units) the
+/// product moves.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct NativeVegetationFocus {
@@ -23,17 +24,25 @@ pub struct NativeVegetationFocus {
 }
 
 /// A new field over a spatial session's world (none: the scene's own
-/// space), in square tiles of `tile_size` metres sampled `tile_cells`
+/// space), in square tiles of `tile_size` field units sampled `tile_cells`
 /// cells a side (1 to 256). At most `placements_per_call` tile layers are
-/// placed each call; the rest wait, counted in the readout.
+/// placed each call; the rest wait, counted in the readout. It draws in
+/// `layer` (Scene or Backdrop), its point (0, 0, 0) at `origin` (with a
+/// session, that far from the world's origin in the session's frame), one
+/// field unit spanning `scale` layer units: its tiles, focus, reach, fades,
+/// levels and thinning are all in field units. A camera focus in the
+/// backdrop is where the camera stands in the backdrop under its link.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct NativeVegetationFieldCreateRequest {
     pub session: NativeOptionalSpatialSession,
     pub tile_size: f64,
     pub tile_cells: u32,
     pub placements_per_call: u32,
     pub focus: NativeVegetationFocus,
+    pub layer: NativeRenderLayer,
+    pub origin: NativeVec3,
+    pub scale: f32,
 }
 
 #[repr(C)]

@@ -2,7 +2,8 @@
 content/marks.png, a 64x64 decal atlas of four 32x32 marks: a footprint, a scorch, a splash and an ash ring,
 and content/coals.png with content/coals-emission.png, a 64x64 atlas of four 32x32 patches of char crossed by
 glowing seams and single-texel coals, and the light they emit laid out the same; and
-content/flower.png, a masked sprite for the billboard layer."""
+content/flower.png, a masked sprite for the billboard layer, and content/conifer.png, a masked tree sprite for the
+continent's backdrop forest."""
 import math
 import random
 from pathlib import Path
@@ -116,3 +117,20 @@ def flower():
 
 
 flower().save(content / "flower.png")
+
+
+def conifer():
+    """A hard-edged 16x32 conifer on a short trunk, clear around it, for the backdrop forest."""
+    image = Image.new("RGBA", (16, 32), (0, 0, 0, 0))
+    for y in range(27, 32):
+        for x in (7, 8):
+            image.putpixel((x, y), (72, 52, 34, 255))
+    for y in range(1, 28):
+        half = (y - 1) * 7 // 26 + 1
+        for x in range(8 - half, 8 + half):
+            shade = 1.0 if x < 8 else 0.78
+            image.putpixel((x, y), (int(36 * shade), int(84 * shade), int(40 * shade), 255))
+    return image
+
+
+conifer().save(content / "conifer.png")

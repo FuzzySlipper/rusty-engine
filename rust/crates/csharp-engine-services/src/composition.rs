@@ -991,24 +991,21 @@ impl EngineServiceSet {
         });
         self.voxel_scene_presentation
             .settle_level_of_detail(&mut calls.voxel_scene_presentation, viewer)?;
-        // Heightfields focused on a camera measure from where it stands now,
-        // in the backdrop under its link for one drawn there.
+        // Heightfields and vegetation fields focused on a camera measure
+        // from where it stands now, in the backdrop under its link for one
+        // drawn there; placing vegetation runs on worker threads here.
         let camera_view = &self.camera_view;
         let cameras = &calls.camera_view;
-        self.heightfield
-            .settle(&mut calls.heightfield, |camera, backdrop| {
-                let world = cameras.camera_position(camera)?;
-                if backdrop {
-                    camera_view.backdrop_eye(camera, world)
-                } else {
-                    Some(world)
-                }
-            })?;
-        // Vegetation fields focused on a camera measure from where it stands
-        // now; placing runs on worker threads here.
-        self.vegetation.settle(&mut calls.vegetation, |camera| {
-            cameras.camera_position(camera)
-        })?;
+        let eye = |camera, backdrop| {
+            let world = cameras.camera_position(camera)?;
+            if backdrop {
+                camera_view.backdrop_eye(camera, world)
+            } else {
+                Some(world)
+            }
+        };
+        self.heightfield.settle(&mut calls.heightfield, eye)?;
+        self.vegetation.settle(&mut calls.vegetation, eye)?;
         // Water fields take the time this call admitted and draw what their
         // workers last published.
         self.water_field.settle()?;

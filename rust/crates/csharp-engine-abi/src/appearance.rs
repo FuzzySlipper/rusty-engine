@@ -155,8 +155,9 @@ pub struct NativeLightReadout {
 /// ambient, hemisphere and directional lights without their shadows. Engine
 /// still owns the retained node and render pass realization.
 #[repr(u32)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeRenderLayer {
+    #[default]
     Scene = 0,
     Debug = 1,
     Ui = 2,

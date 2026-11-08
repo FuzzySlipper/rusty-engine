@@ -247,7 +247,7 @@ const GUST_RATE_2: f32 = 2.3;
 // unit of bend and metre of height: a steady share and a gusting share that
 // rises and falls with two slow waves, phased by its place in the world.
 fn wind_lean(origin: vec3<f32>, time: f32) -> f32 {
-    let place = dot(origin.xz, vec2<f32>(0.37, 0.61));
+    let place = dot(world_equivalent(origin).xz, vec2<f32>(0.37, 0.61));
     let gust = 0.5 + 0.5 * sin(time * GUST_RATE + place) * sin(time * GUST_RATE_2 + place * 1.7);
     return frame.wind.z * mix(1.0, gust, frame.wind.w);
 }

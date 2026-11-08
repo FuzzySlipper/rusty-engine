@@ -15,6 +15,8 @@ namespace CsharpHeightfield;
 /// from <see cref="TreeMidMetres"/>, and from <see cref="TreeImpostorMetres"/> a card showing the full
 /// cone's baked view, crossfading between each. Flowers are a sprite grown as a billboard layer
 /// (#10660): each copy turns to face the camera, masked so it writes depth and fog reaches it.
+/// Over the continent, a backdrop field grows woods of conifer sprites at 1:1000 (#10672), in
+/// metres as the backdrop heightfield is sampled, hidden behind its ridges.
 /// </summary>
 internal sealed class Vegetation : IDisposable
 {
@@ -34,17 +36,22 @@ internal sealed class Vegetation : IDisposable
     /// <summary>Flowers: a third of a square metre's worth, out to a far reach, fading over its last fifth.</summary>
     private const float FlowerDensity = .35f, FlowerReach = 700, FlowerFade = .2f;
     private const uint MaximumFlowers = 400_000, FlowerSeed = 11;
+    /// <summary>The continent's woods: 2 km tiles of 125 m cells, a tree to 2,500 m² out to 16 km, fading over its last 3 km.</summary>
+    private const double ForestTileMetres = 2_000, ContinentSpread = 25;
+    private const uint ForestCells = 16, ForestLayer = 4, ForestSeed = 13, MaximumForest = 400_000;
+    private const float ForestDensity = .0004f, ForestReach = 16_000, ForestFade = 3_000;
+    private static readonly Vector2 ConiferSize = new(12, 24);
 
     private readonly IEngineContext engine;
     private readonly Camera camera;
     private readonly Material grassPaint, treePaint;
     private readonly MeshResource grassMesh, treeMesh, treeMidMesh;
     private readonly Appearance grassLook, treeLook, treeMidLook;
-    private readonly VegetationSprite flower;
-    private VegetationField? near, far;
-    private VegetationStreamer? nearStreamer, farStreamer;
+    private readonly VegetationSprite flower, conifer;
+    private VegetationField? near, far, forest;
+    private VegetationStreamer? nearStreamer, farStreamer, forestStreamer;
 
-    internal Vegetation(IEngineContext engine, Camera camera, RenderResourceReference flowerTexture)
+    internal Vegetation(IEngineContext engine, Camera camera, RenderResourceReference flowerTexture, RenderResourceReference coniferTexture)
     {
         this.engine = engine;
         this.camera = camera;
@@ -69,6 +76,9 @@ internal sealed class Vegetation : IDisposable
         flower = new VegetationSprite(engine, flowerTexture, Vector2.Zero, Vector2.One, new(.8f, .8f), new(.5f, 0),
             new SpriteMaterialDescriptor(SpriteLightingMode.Synthetic, default, default, .6f, 0, SpriteAlphaMode.Mask, .5f,
                 SpriteShadowPolicy.None) with { WindBend = .1f });
+        conifer = new VegetationSprite(engine, coniferTexture, Vector2.Zero, Vector2.One, ConiferSize, new(.5f, 0),
+            new SpriteMaterialDescriptor(SpriteLightingMode.Synthetic, default, default, .6f, 0, SpriteAlphaMode.Mask, .5f,
+                SpriteShadowPolicy.None) with { WindBend = .02f, AuthoredFacing = .3f });
     }
 
     internal float GrassDensity { get; private set; } = DefaultGrassDensity;
@@ -86,6 +96,33 @@ internal sealed class Vegetation : IDisposable
         Layers();
         nearStreamer = new VegetationStreamer(engine, near, new Cover(false));
         farStreamer = new VegetationStreamer(engine, far, new Cover(true));
+    }
+
+    /// <summary>
+    /// Grows the continent's woods in the backdrop at 1:1000, as the backdrop heightfield stands, or
+    /// removes them.
+    /// </summary>
+    internal void ShowForest(bool show)
+    {
+        forestStreamer?.Dispose();
+        forest?.Dispose();
+        (forest, forestStreamer) = (null, null);
+        if (!show) return;
+        forest = engine.Vegetation.Create(new VegetationFieldCreateRequest(default, ForestTileMetres, ForestCells,
+            VegetationFocus.Following(camera)) with { Layer = RenderLayer.Backdrop, Origin = Vector3.Zero, Scale = 1f / 1000 });
+        engine.Vegetation.SetLayer(new VegetationLayerRequest(forest, ForestLayer, conifer.Look, default(OptionalMaterial), ForestDensity,
+            ForestReach) with
+        {
+            Grounds = VegetationLayerRequest.Ground(Grassland),
+            Seed = ForestSeed,
+            Fade = ForestFade,
+            ScaleMin = .7f,
+            ScaleMax = 1.3f,
+            TintLow = new(.8f, .9f, .8f),
+            TintHigh = new(1.1f, 1.1f, 1f),
+            MaximumInstances = MaximumForest,
+        });
+        forestStreamer = new VegetationStreamer(engine, forest, new Woods());
     }
 
     internal void Tune(float grassDensity, float reach)
@@ -144,6 +181,7 @@ internal sealed class Vegetation : IDisposable
     {
         nearStreamer?.Update();
         farStreamer?.Update();
+        forestStreamer?.Update();
     }
 
     internal void Invalidate(double x, double z, double metres)
@@ -155,6 +193,7 @@ internal sealed class Vegetation : IDisposable
 
     internal string Inspect()
     {
+        if (forest is not null) return Field("forest", engine.Vegetation.Read(forest), forestStreamer!);
         if (!Shown) return "vegetation=off";
         static string Field(string name, VegetationReadout r, VegetationStreamer streamer) => FormattableString.Invariant(
             $"{name}: tiles={r.Tiles} pending={r.PendingTiles} patches={r.Patches} copies={r.Instances} overBudget={r.OverBudget} deferred={r.Deferred} placedLast={r.Placed}/{r.PlacedInstances} placeMs={r.PlacementMicroseconds / 1e3:F2} selectMs={r.SelectionMicroseconds / 1e3:F2} publishMs={r.PublicationMicroseconds / 1e3:F2} invalidated={r.InvalidatedTiles} replaced={r.ReplacedPatches} sampleMB={r.SampleBytes / 1e6:F2} committed={streamer.Committed} sampleMs={streamer.SampleMilliseconds:F0}");
@@ -175,6 +214,8 @@ internal sealed class Vegetation : IDisposable
     public void Dispose()
     {
         Hide();
+        ShowForest(false);
+        conifer.Dispose();
         grassLook.Dispose();
         treeLook.Dispose();
         treeMidLook.Dispose();
@@ -239,6 +280,33 @@ internal sealed class Vegetation : IDisposable
         Array.Fill(colors, new Color(1, 1, 1, 1));
         return new MeshResourceCreateRequest(positions.ToArray(), normals.ToArray(), new Vector2[positions.Count], colors,
             indices.ToArray(), new MeshGroup[] { new(0, 0, (uint)indices.Count) }, new MeshMaterialBinding[] { new(0, material) });
+    }
+
+    /// <summary>
+    /// The continent as the backdrop heightfield draws it, in metres: its land spread 25 times wider
+    /// than the hills' and raised, wooded in broad patches of its grassland.
+    /// </summary>
+    private sealed class Woods : IVegetationSampler
+    {
+        private const uint Bare = 1;
+        private const double WoodsScale = 600 * ContinentSpread, WoodsFrom = .5;
+        private readonly Ground ground = new(false, ContinentSpread);
+
+        public void Sample(VegetationTileRequest tile, VegetationTileSamples samples)
+        {
+            for (int j = -1; j <= (int)tile.TileCells + 1; j++)
+            for (int i = -1; i <= (int)tile.TileCells + 1; i++)
+                samples.SetHeight(i, j, (float)Math.Max(ground.Lift(tile.SampleX(i), tile.SampleZ(j)), Ground.SeaLevelMetres));
+
+            for (int j = 0; j <= tile.TileCells; j++)
+            for (int i = 0; i <= tile.TileCells; i++)
+            {
+                double x = tile.SampleX(i), z = tile.SampleZ(j);
+                bool wooded = Ground.Woods(x / WoodsScale, z / WoodsScale) >= WoodsFrom
+                    && Ground.Grassland(x / ContinentSpread, z / ContinentSpread);
+                if (!wooded) samples.SetGround(i, j, Bare);
+            }
+        }
     }
 
     /// <summary>

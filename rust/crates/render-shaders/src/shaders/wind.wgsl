@@ -87,9 +87,10 @@ fn wind_displace_at(world: vec3<f32>, origin: vec3<f32>, weight: f32, time: f32)
     }
     let direction = vec3<f32>(frame.wind.x, 0.0, frame.wind.y);
     let lean = wind_lean(origin, time) * material.wind.x * max(world.y - origin.y, 0.0);
-    // The flutter: a small circling motion, phased by where the vertex is.
+    // The flutter: a small circling motion, phased by where the vertex is,
+    // of world metres (in a backdrop pass, `Frame.backdrop`, its units).
     let phase = dot(world, vec3<f32>(1.3, 0.7, 1.9));
-    let flutter = strength * material.wind.y * weight;
+    let flutter = strength * material.wind.y * weight / select(1.0, frame.backdrop.w, frame.backdrop.w > 0.0);
     let sway = vec3<f32>(
         sin(time * FLUTTER_RATE + phase),
         0.4 * sin(time * FLUTTER_RATE_2 + phase * 1.3),

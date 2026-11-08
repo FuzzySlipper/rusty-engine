@@ -33,8 +33,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use render_model::{
-    Geometry, MeshMaterialSlot, RenderDiff, RenderHandle, RenderNode, ScatterFade, ScatterInstance,
-    ScatterLod, ScatterPatchDescriptor, ScatterThinning, ShadowCasting, Transform,
+    Geometry, MeshMaterialSlot, RenderDiff, RenderHandle, RenderLayer, RenderNode, ScatterFade,
+    ScatterInstance, ScatterLod, ScatterPatchDescriptor, ScatterThinning, ShadowCasting, Transform,
     MAX_SCATTER_PATCH_INSTANCES,
 };
 use svc_mesh::heightfield::{HeightfieldLayout, HeightfieldRingSpec, TileSamples, TileSurface};
@@ -66,12 +66,17 @@ const COVER_SALT: u64 = 0xc07e_5a17;
 /// The keys a spot's copy is drawn from, as voxel scatter keys them.
 const KEY_SALT: u64 = 0x5ca7_7e7a;
 
-/// How a field is tiled: square tiles of `tile_size` metres, sampled every
-/// `tile_size / tile_cells` metres.
+/// How a field is tiled and placed: square tiles of `tile_size` field units,
+/// sampled every `tile_size / tile_cells`, drawn in `layer` with one field
+/// unit spanning `scale` layer units. Every distance a field is given or
+/// reports (tiles, focus, reach, fade, levels and thinning) is in field
+/// units; in the scene at scale 1 they are metres.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VegetationLayout {
     pub tile_size: f64,
     pub tile_cells: u32,
+    pub layer: RenderLayer,
+    pub scale: f64,
 }
 
 /// One kind of thing that grows. Distances are metres from the focus.
@@ -166,7 +171,8 @@ impl VegetationLayer {
         Ok(())
     }
 
-    fn fade_band(&self) -> ScatterFade {
+    /// The fade bands in layer units, `units` to a field unit.
+    fn fade_band(&self, units: f32) -> ScatterFade {
         let (start, end) = if self.fade > 0.0 {
             (self.reach - self.fade, self.reach)
         } else {
@@ -178,10 +184,10 @@ impl VegetationLayer {
             (0.0, 0.0)
         };
         ScatterFade {
-            start,
-            end,
-            near_start,
-            near_end,
+            start: start * units,
+            end: end * units,
+            near_start: near_start * units,
+            near_end: near_end * units,
         }
     }
 }
@@ -423,7 +429,11 @@ impl VegetationFields {
         layout: VegetationLayout,
         placements_per_settle: u32,
     ) -> Result<(), VegetationError> {
-        if !(layout.tile_size.is_finite() && layout.tile_size > 0.0) {
+        if !(layout.tile_size.is_finite()
+            && layout.tile_size > 0.0
+            && layout.scale.is_finite()
+            && layout.scale > 0.0)
+        {
             return Err(VegetationError::Layout);
         }
         let heightfield = HeightfieldLayout::new(
@@ -709,6 +719,7 @@ impl VegetationFields {
         let placement = placement.map(|value| value as f32);
         let transform = Transform {
             translation: placement,
+            scale: [retained.layout.scale as f32; 3],
             ..Transform::IDENTITY
         };
         match retained.root {
@@ -716,6 +727,7 @@ impl VegetationFields {
                 let handle = self.registry.allocate(NodeKey::Root(field))?;
                 let mut node = RenderNode::new(Geometry::Group);
                 node.transform = transform;
+                node.layer = retained.layout.layer;
                 node.visible = retained.visible;
                 operations.push(RenderDiff::Create {
                     handle,
@@ -1077,6 +1089,7 @@ impl VegetationFields {
                 }
             };
             let layer = &retained.layers[&key].0;
+            let units = layout.scale as f32;
             let handle = self.registry.allocate(NodeKey::Patch(field, x, z, key))?;
             tile.patches.insert(
                 key,
@@ -1093,11 +1106,27 @@ impl VegetationFields {
                     asset: layer.mesh.clone(),
                     material_overrides: layer.material_overrides.clone(),
                     instances,
-                    fade: layer.fade_band(),
+                    // The renderer measures from the camera in layer units.
+                    fade: layer.fade_band(units),
                     shadow_casting: layer.shadow_casting,
-                    lods: layer.lods.clone(),
-                    lod_band: layer.lod_band,
-                    thinning: layer.thinning.clone(),
+                    lods: layer
+                        .lods
+                        .iter()
+                        .map(|lod| ScatterLod {
+                            start: lod.start * units,
+                            ..lod.clone()
+                        })
+                        .collect(),
+                    lod_band: layer.lod_band * units,
+                    thinning: ScatterThinning {
+                        points: layer
+                            .thinning
+                            .points
+                            .iter()
+                            .map(|&[distance, share]| [distance * units, share])
+                            .collect(),
+                        ..layer.thinning.clone()
+                    },
                 },
             });
         }

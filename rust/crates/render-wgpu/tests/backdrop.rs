@@ -6,7 +6,9 @@
 //! and the anchor together leaves it where it was; without a link or
 //! without content nothing changes; the sun shadows it as it would the same
 //! range at world scale, and with backdrop shadows off it draws as without;
-//! a sun setting behind it does not bloom through it. Same harness as
+//! a sun setting behind it does not bloom through it; a backdrop vegetation
+//! field's billboard copies at 1:1000 draw as the same copies would at world
+//! scale, hidden behind a backdrop ridge and under the world. Same harness as
 //! `tests/screenshots.rs`.
 
 mod support;
@@ -810,4 +812,173 @@ fn a_sun_behind_the_backdrop_does_not_bloom_through_it() {
             "{layer:?}"
         );
     }
+}
+
+/// Billboard trees 120 m wide and 240 m tall in field metres, as a backdrop
+/// vegetation field at 1:1000 grows them (a root group in the backdrop
+/// scaled 0.001, its fade in layer units), or at world scale in the scene:
+/// two in front of a 300 m ridge 3.8 km ahead, one behind it, and one in
+/// the open to the left past the fade's end.
+fn grove(layer: RenderLayer, trees: &[[f32; 3]], ridge: bool) -> Vec<RenderDiff> {
+    let backdrop = layer == RenderLayer::Backdrop;
+    // Layer units per field metre.
+    let units = if backdrop { 1.0 / SCALE as f32 } else { 1.0 };
+    let mut quad = payload(
+        vec![
+            -60.0, 0.0, 0.0, 60.0, 0.0, 0.0, 60.0, 240.0, 0.0, -60.0, 240.0, 0.0,
+        ],
+        [0.0, 0.0, 1.0].repeat(4),
+        vec![0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0],
+        vec![0, 1, 2, 0, 2, 3],
+        &[(0, 6)],
+    );
+    quad.billboard = true;
+    let mut ops = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/tree", [0.15, 0.45, 0.12, 1.0], None),
+        },
+        static_mesh("mesh/tree", quad, "material/tree"),
+        RenderDiff::Create {
+            handle: RenderHandle::new(60),
+            parent: None,
+            node: RenderNode {
+                transform: transform([0.0; 3], 0.0, [units; 3]),
+                layer,
+                ..RenderNode::new(Geometry::Group)
+            },
+        },
+        RenderDiff::CreateScatterPatch {
+            handle: RenderHandle::new(61),
+            parent: Some(RenderHandle::new(60)),
+            patch: ScatterPatchDescriptor {
+                asset: "mesh/tree".to_owned(),
+                material_overrides: Vec::new(),
+                instances: trees
+                    .iter()
+                    .map(|&translation| ScatterInstance {
+                        translation,
+                        rotation: [0.0, 0.0, 0.0, 1.0],
+                        scale: 1.0,
+                        tint: [1.0; 3],
+                        rank: 0.5,
+                    })
+                    .collect(),
+                fade: ScatterFade {
+                    start: 5_500.0 * units,
+                    end: 6_000.0 * units,
+                    ..ScatterFade::default()
+                },
+                shadow_casting: ShadowCasting::None,
+                lods: Vec::new(),
+                lod_band: 0.0,
+                thinning: Default::default(),
+            },
+        },
+    ];
+    // A field makes no patch on a tile where nothing grows.
+    if trees.is_empty() {
+        ops.pop();
+    }
+    if ridge {
+        let s = units;
+        ops.push(static_mesh(
+            "mesh/grove-ridge",
+            box_mesh(
+                [-1500.0 * s, 0.0, -4000.0 * s],
+                [1500.0 * s, 300.0 * s, -3800.0 * s],
+                |_| 0,
+            ),
+            "material/rock",
+        ));
+        ops.push(placed(62, "mesh/grove-ridge", layer));
+    }
+    if backdrop {
+        ops.push(link([0.0; 3]));
+    }
+    ops
+}
+
+const FRONT: [[f32; 3]; 2] = [[-400.0, 0.0, -3000.0], [500.0, 0.0, -3200.0]];
+const BEHIND: [f32; 3] = [0.0, 0.0, -5000.0];
+const PAST_FADE: [f32; 3] = [-3500.0, 0.0, -6500.0];
+
+#[test]
+fn backdrop_vegetation_draws_as_world_scale_copies_hidden_by_its_ridge_and_under_the_world() {
+    let all = [FRONT[0], FRONT[1], BEHIND, PAST_FADE];
+    let at = [0.0, 1.0, 0.0];
+    let mut world = scene();
+    world.apply(grove(RenderLayer::Scene, &all, true));
+    let expected = look(&mut world, at, 0.0, FAR_FIELD);
+    let mut backdrop = scene();
+    backdrop.apply(grove(RenderLayer::Backdrop, &all, true));
+    let drawn = look(&mut backdrop, at, 0.0, NEAR_FIELD);
+    keep("grove-world", &expected);
+    keep("grove-backdrop", &drawn);
+    // Fog, the fade and the ridge's cover all come out as at world scale.
+    let differs = changed(&expected, &drawn, 6);
+    assert!(
+        differs < 0.002,
+        "the backdrop grove draws as the world-scale one: {:.3}% differ",
+        differs * 100.0
+    );
+    let mut bare = scene();
+    bare.apply(grove(RenderLayer::Backdrop, &[], true));
+    let ridge_only = look(&mut bare, at, 0.0, NEAR_FIELD);
+    assert!(
+        changed(&ridge_only, &drawn, 6) > 0.002,
+        "the trees in front show: {:.3}%",
+        changed(&ridge_only, &drawn, 6) * 100.0
+    );
+    // The tree behind the ridge and the one past the fade draw nothing.
+    let mut hidden = scene();
+    hidden.apply(grove(RenderLayer::Backdrop, &[BEHIND, PAST_FADE], true));
+    let behind = look(&mut hidden, at, 0.0, NEAR_FIELD);
+    keep("grove-ridge-only", &ridge_only);
+    keep("grove-hidden", &behind);
+    assert_eq!(
+        changed(&ridge_only, &behind, 0),
+        0.0,
+        "the ridge hides what stands behind it, and the fade what is past it"
+    );
+    // Without the ridge the one behind it shows.
+    let mut open = scene();
+    open.apply(grove(RenderLayer::Backdrop, &[BEHIND], false));
+    let open = look(&mut open, at, 0.0, NEAR_FIELD);
+    let mut empty = scene();
+    empty.apply(grove(RenderLayer::Backdrop, &[], false));
+    let empty = look(&mut empty, at, 0.0, NEAR_FIELD);
+    assert!(
+        changed(&empty, &open, 6) > 0.0003,
+        "the tree behind it is in view"
+    );
+    // A scene wall across the left half covers the trees there.
+    let wall = vec![
+        RenderDiff::DefineMaterial {
+            material: material("material/wall", [0.2, 0.7, 0.3, 1.0], None),
+        },
+        static_mesh(
+            "mesh/wall",
+            box_mesh([-20.0, -10.0, -5.5], [0.0, 10.0, -5.0], |_| 0),
+            "material/wall",
+        ),
+        instance(41, None, "mesh/wall", transform([0.0; 3], 0.0, [1.0; 3])),
+    ];
+    backdrop.apply(wall.clone());
+    let walled = look(&mut backdrop, at, 0.0, NEAR_FIELD);
+    bare.apply(wall);
+    let walled_bare = look(&mut bare, at, 0.0, NEAR_FIELD);
+    let left = |rgba: &[u8]| -> Vec<u8> {
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| (*index as u32 % WIDTH) < WIDTH / 2 - 4)
+            .flat_map(|(_, pixel)| *pixel)
+            .collect()
+    };
+    assert_eq!(
+        left(&walled),
+        left(&walled_bare),
+        "the world draws over them"
+    );
 }
