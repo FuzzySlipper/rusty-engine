@@ -342,8 +342,10 @@ struct Field {
     focus: Option<[f64; 3]>,
     placement: Option<[f32; 3]>,
     root: Option<RenderHandle>,
-    /// Whether its root, and so everything it grows, is drawn.
+    /// Whether its root, and so everything it grows, is drawn, and whether
+    /// the root was last drawn so (the settle brings it to `visible`).
     visible: bool,
+    shown: bool,
     next_revision: u32,
     next_generation: u64,
     readout: VegetationReadout,
@@ -456,6 +458,7 @@ impl VegetationFields {
                 placement: None,
                 root: None,
                 visible: true,
+                shown: true,
                 next_revision: 0,
                 next_generation: 0,
                 readout: VegetationReadout::default(),
@@ -490,29 +493,12 @@ impl VegetationFields {
         self.fields.get(&field).map(|field| field.layout)
     }
 
-    /// Draw the field or not, from its root down, shadows included. Its
-    /// tiles and patches stay as they are.
-    pub fn set_visible(
-        &mut self,
-        field: u64,
-        visible: bool,
-    ) -> Result<Vec<RenderDiff>, VegetationError> {
-        let field = self.field(field)?;
-        if field.visible == visible {
-            return Ok(Vec::new());
-        }
-        field.visible = visible;
-        Ok(field
-            .root
-            .map(|handle| RenderDiff::Update {
-                handle,
-                transform: None,
-                material: None,
-                visible: Some(visible),
-                metadata: None,
-            })
-            .into_iter()
-            .collect())
+    /// Draw the field or not, from its root down, shadows included, from
+    /// the next settle (so a field removed first changes nothing). Its tiles
+    /// and patches stay as they are.
+    pub fn set_visible(&mut self, field: u64, visible: bool) -> Result<(), VegetationError> {
+        self.field(field)?.visible = visible;
+        Ok(())
     }
 
     /// Set (or change) a layer; its copies are placed again as the settle's
@@ -736,17 +722,20 @@ impl VegetationFields {
                 });
                 retained.root = Some(handle);
             }
-            Some(handle) if retained.placement != Some(placement) => {
+            Some(handle)
+                if retained.placement != Some(placement) || retained.shown != retained.visible =>
+            {
                 operations.push(RenderDiff::Update {
                     handle,
-                    transform: Some(transform),
+                    transform: (retained.placement != Some(placement)).then_some(transform),
                     material: None,
-                    visible: None,
+                    visible: (retained.shown != retained.visible).then_some(retained.visible),
                     metadata: None,
                 });
             }
             Some(_) => {}
         }
+        retained.shown = retained.visible;
         retained.placement = Some(placement);
         // A hidden field holds still, so its tiles are there when it shows.
         if focus.is_some() && retained.visible {

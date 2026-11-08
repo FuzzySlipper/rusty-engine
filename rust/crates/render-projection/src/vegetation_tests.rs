@@ -579,37 +579,42 @@ fn a_hidden_field_hides_its_root_and_holds_its_tiles() {
     fill(&mut fields, [8.0, 2.0, 8.0], |_, _| 2.0);
     let root = fields.fields[&FIELD].root.unwrap();
     let held = held(&fields);
-    let hidden = fields.set_visible(FIELD, false).unwrap();
-    assert!(matches!(
-        hidden[..],
-        [RenderDiff::Update { handle, visible: Some(false), transform: None, .. }] if handle == root
-    ));
-    assert!(fields.set_visible(FIELD, false).unwrap().is_empty());
+    fields.set_visible(FIELD, false).unwrap();
+    fields.set_visible(FIELD, false).unwrap();
     assert!(!fields.readout(FIELD).unwrap().visible);
-    // Its focus 2 km below the ground: hidden, it holds still.
-    let operations = fields
+    // Its focus 2 km below the ground: hidden, it holds still, and the
+    // settle hides its root.
+    let hidden = fields
         .settle(FIELD, [0.0; 3], Some([8.0, -2048.0, 8.0]))
         .unwrap();
-    assert!(operations.is_empty(), "{operations:?}");
+    assert!(
+        matches!(
+            hidden[..],
+            [RenderDiff::Update { handle, visible: Some(false), transform: None, .. }] if handle == root
+        ),
+        "{hidden:?}"
+    );
     assert!(fields.requests(FIELD, 0).is_empty());
     assert_eq!(self::held(&fields), held);
     // Shown again, it draws what it held.
-    let shown = fields.set_visible(FIELD, true).unwrap();
-    assert!(matches!(
-        shown[..],
-        [RenderDiff::Update { handle, visible: Some(true), .. }] if handle == root
-    ));
-    let operations = fields
+    fields.set_visible(FIELD, true).unwrap();
+    let shown = fields
         .settle(FIELD, [0.0; 3], Some([8.0, 2.0, 8.0]))
         .unwrap();
-    assert!(operations.is_empty(), "{operations:?}");
+    assert!(
+        matches!(
+            shown[..],
+            [RenderDiff::Update { handle, visible: Some(true), transform: None, .. }] if handle == root
+        ),
+        "{shown:?}"
+    );
     assert!(fields.readout(FIELD).unwrap().visible);
 }
 
 #[test]
 fn a_field_hidden_before_it_settles_creates_its_root_hidden() {
     let mut fields = fields(1_000);
-    assert!(fields.set_visible(FIELD, false).unwrap().is_empty());
+    fields.set_visible(FIELD, false).unwrap();
     let operations = fields.settle(FIELD, [0.0; 3], None).unwrap();
     assert!(matches!(
         &operations[..],

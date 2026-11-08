@@ -761,3 +761,66 @@ fn a_backdrop_field_focuses_where_the_camera_stands_in_the_backdrop_and_draws_th
     // Reach 30 and fade 4 field metres, in backdrop units.
     assert!((patch.fade.start - 0.026).abs() < 1e-6 && (patch.fade.end - 0.03).abs() < 1e-6);
 }
+
+#[test]
+fn a_field_hidden_and_removed_in_one_call_leaves_the_world_whole() {
+    // Hiding a field, then removing it in the same call, names its root
+    // after its early removal no more (#10674).
+    let mut world = render_presentation::PresentationWorld::default();
+    let mut apply = |operations: Vec<RenderDiff>| {
+        world
+            .apply(render_model::RenderFrameDiff::from_ops(operations))
+            .expect("the presentation world takes the call's work");
+    };
+    let mut services = services();
+    services.begin_call(binding());
+    let api = services.api();
+    let paint = material(&api);
+    let look = blade(&api, paint);
+    let field = create(&api, 8.0, 8.0);
+    set_layer(
+        &api,
+        layer(
+            field,
+            GRASS,
+            look,
+            NativeOptionalMaterial { material: paint },
+            1.0,
+        ),
+    );
+    apply(ops(&mut services));
+    services.begin_call(binding());
+    let api = services.api();
+    for request in &requests(&api, field) {
+        assert!(commit(&api, field, request, 2.0));
+    }
+    apply(ops(&mut services));
+
+    services.begin_call(binding());
+    let api = services.api();
+    let vegetation = &api.vegetation;
+    let mut readout = NativeVegetationReadout::default();
+    unsafe {
+        assert_eq!(
+            (vegetation.set_visible)(
+                vegetation.context,
+                NativeVegetationVisibilityRequest {
+                    field,
+                    visible: false,
+                },
+                &mut readout,
+                std::ptr::null_mut(),
+            ),
+            ABI_OK
+        );
+        assert_eq!(
+            (vegetation.destroy)(vegetation.context, field, std::ptr::null_mut()),
+            ABI_OK
+        );
+    }
+    let removed = ops(&mut services);
+    assert!(removed
+        .iter()
+        .any(|operation| matches!(operation, RenderDiff::Destroy { .. })));
+    apply(removed);
+}

@@ -291,16 +291,11 @@ impl RuntimeVegetationBridge {
         &mut self,
         request: NativeVegetationVisibilityRequest,
     ) -> Result<NativeVegetationReadout, CsharpEngineServicesError> {
-        let operations = self
-            .retained(request.field)?
+        // The root shows or hides as the call settles.
+        self.retained(request.field)?
             .1
             .set_visible(request.field.value, request.visible)
             .map_err(vegetation_refusal)?;
-        if !operations.is_empty() {
-            self.staged_mut()?
-                .frames
-                .push(RenderFrameDiff::from_ops(operations));
-        }
         self.readout(request.field)
     }
 
