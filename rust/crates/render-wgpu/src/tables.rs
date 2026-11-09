@@ -31,7 +31,9 @@
 //! | `image_effect` | (single) | a product image effect over each primary view's picture | `SetImageEffect` |
 //! | `sky_light` | (single) | the sky's light: the background as an environment (`sky_light.rs`) | `SetSkyLight` |
 //!
-//! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` | `CreateSprite`, `Destroy` (subtree) |
+//! | `parts_rigs` | parts rig asset id (`names`) | each drawable's page, UVs, triangles and page region; the pages' texture name ids | `DefinePartsRig` / `ReleasePartsRig` |
+//!
+//! | `sprites` | `RenderHandle` | membership: the nodes of kind `Sprite` and `PartsRig` (`effects.rs`) | `CreateSprite`, `CreatePartsRig`, `Destroy` (subtree) |
 //!
 //! Animated meshes, voxel objects and sprites are nodes (they take part in the
 //! hierarchy, transforms and visibility) whose kind a family module realizes;
@@ -332,6 +334,9 @@ pub(crate) enum NodeKind {
     AnimatedMesh(Box<AnimatedMeshInstanceDescriptor>),
     VoxelObject(Box<VoxelObjectInstanceDescriptor>),
     Sprite(Box<SpriteRow>),
+    /// A parts rig (`parts_rigs.rs`): drawn by the effects family as sprites
+    /// are.
+    PartsRig(Box<crate::parts_rigs::PartsRigRow>),
     /// Scattered copies of a static mesh (`render_model::scatter`).
     Scatter(Box<render_model::ScatterPatchDescriptor>),
 }
@@ -911,7 +916,8 @@ pub(crate) struct Tables {
     pub static_meshes: Slots<GpuMesh>,
     pub payload_meshes: HashMap<RenderHandle, GpuMesh>,
     pub nodes: HashMap<RenderHandle, NodeRow>,
-    /// The sprite nodes, so sprite preparation visits sprites, not the scene.
+    /// The sprite and parts rig nodes, so sprite preparation visits them,
+    /// not the scene.
     pub sprites: BTreeSet<RenderHandle>,
     pub parts: Parts,
     /// Indexed by the atlas name's id in `names`.
@@ -919,6 +925,8 @@ pub(crate) struct Tables {
     pub names: Names,
     pub voxel_objects: Slots<VoxelObjectRow>,
     pub animated_assets: Slots<AnimatedAssetRow>,
+    /// Indexed by the parts rig asset name's id in `names`.
+    pub parts_rigs: Slots<crate::parts_rigs::PartsRigAssetRow>,
     pub animated: HashMap<RenderHandle, AnimatedInstance>,
     /// The nodes whose parts name each asset or material (`names` id),
     /// whether it is defined or not: defining, redefining or releasing it
@@ -1016,6 +1024,7 @@ impl Tables {
             names: Names::default(),
             voxel_objects: Slots::default(),
             animated_assets: Slots::default(),
+            parts_rigs: Slots::default(),
             animated: HashMap::new(),
             users: HashMap::new(),
             environment: Environment::Default,

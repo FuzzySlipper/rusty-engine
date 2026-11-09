@@ -29,6 +29,7 @@ enum NodeKind {
     /// A patch of scattered copies: drawn at its parent, never addressed by
     /// transform or metadata.
     Scatter(ScatterPatchDescriptor),
+    PartsRig(PartsRigInstanceDescriptor),
 }
 
 impl NodeKind {
@@ -40,6 +41,7 @@ impl NodeKind {
             Self::VoxelObject(instance) => Some(&instance.transform),
             Self::Sprite(instance) => Some(&instance.transform),
             Self::SpriteBatch(batch) => Some(&batch.sprite.transform),
+            Self::PartsRig(rig) => Some(&rig.transform),
             Self::Light(_) | Self::Scatter(_) => None,
         }
     }
@@ -56,6 +58,7 @@ impl NodeKind {
             Self::VoxelObject(instance) => Some(&instance.metadata),
             Self::Sprite(instance) => Some(&instance.metadata),
             Self::SpriteBatch(batch) => Some(&batch.sprite.metadata),
+            Self::PartsRig(rig) => Some(&rig.metadata),
             Self::Light(_) | Self::Scatter(_) => None,
         }
     }
@@ -75,6 +78,8 @@ struct PresentationNode {
     pose: render_model::AnimatedMeshPose,
     /// The pose the Engine last evaluated for an animated node.
     evaluated: Option<render_model::EvaluatedPose>,
+    /// The pose the Engine last evaluated for a parts rig.
+    rig_pose: Option<PartsRigPose>,
     /// The world revision that last created or changed the node.
     changed: u64,
 }
@@ -131,6 +136,7 @@ struct RetainedGraphics {
     static_meshes: BTreeMap<String, Arc<StaticMeshAsset>>,
     animated_meshes: BTreeMap<String, Arc<AnimatedMeshAsset>>,
     voxel_objects: BTreeMap<String, Arc<VoxelObjectRenderAsset>>,
+    parts_rigs: BTreeMap<String, Arc<PartsRigAsset>>,
     sky: Option<SkyBackgroundDescriptor>,
     background_color: Option<[f32; 4]>,
     fog: Option<FogDescriptor>,
@@ -250,10 +256,11 @@ enum Resource {
     StaticMesh,
     AnimatedMesh,
     VoxelObject,
+    PartsRig,
 }
 
 impl Resource {
-    const KINDS: usize = 7;
+    const KINDS: usize = 8;
 }
 
 /// The resources a node names.
@@ -298,6 +305,10 @@ fn node_uses(kind: &NodeKind, use_: &mut dyn FnMut(Resource, &str)) {
             }
             return;
         }
+        NodeKind::PartsRig(rig) => {
+            use_(Resource::PartsRig, &rig.asset);
+            return;
+        }
         NodeKind::Primitive(_) | NodeKind::Light(_) => return,
     };
     use_(asset.0, asset.1);
@@ -319,6 +330,13 @@ fn material_uses(material: &RenderMaterialDescriptor, use_: &mut dyn FnMut(Resou
     }
     if let Some(shader) = &material.shader {
         use_(Resource::Shader, &shader.shader);
+    }
+}
+
+/// The pages a parts rig draws from.
+fn rig_uses(rig: &PartsRigAsset, use_: &mut dyn FnMut(Resource, &str)) {
+    for page in &rig.pages {
+        use_(Resource::Texture, &page.texture);
     }
 }
 
@@ -373,6 +391,7 @@ fn group_node(node: &PresentationNode) -> PresentationNode {
         NodeKind::VoxelObject(value) => group!(value, RenderLayer::Scene),
         NodeKind::Sprite(value) => group!(value, value.layer),
         NodeKind::SpriteBatch(batch) => group!(batch.sprite, batch.sprite.layer),
+        NodeKind::PartsRig(value) => group!(value, value.layer),
         NodeKind::Scatter(_) => RenderNode::new(Geometry::Group),
         NodeKind::Light(_) => return node.clone(),
     };
@@ -387,6 +406,7 @@ fn group_node(node: &PresentationNode) -> PresentationNode {
         playback: node.playback.clone(),
         pose: Default::default(),
         evaluated: None,
+        rig_pose: None,
         changed: node.changed,
     }
 }
@@ -481,6 +501,14 @@ impl PresentationWorld {
             transform: node.kind.transform(),
             animated: matches!(node.kind, NodeKind::AnimatedMesh(_)),
         })
+    }
+
+    /// The retained parts rig node `handle`, if it is one.
+    pub fn parts_rig(&self, handle: RenderHandle) -> Option<&PartsRigInstanceDescriptor> {
+        match &self.retained.nodes.get(&handle)?.kind {
+            NodeKind::PartsRig(rig) => Some(rig),
+            _ => None,
+        }
     }
 
     /// Apply admitted graphics in order to the caller-owned candidate.
@@ -801,6 +829,7 @@ impl PresentationWorld {
             static_meshes: live_static_meshes,
             animated_meshes: live_animated_meshes,
             voxel_objects: live_voxel_objects,
+            parts_rigs: live_parts_rigs,
             sky,
             background_color,
             fog,
@@ -866,6 +895,7 @@ impl PresentationWorld {
         let mut animated = BTreeSet::new();
         let mut voxels = BTreeSet::new();
         let mut atlases = BTreeSet::new();
+        let mut rigs = BTreeSet::new();
         let mut materials = BTreeSet::new();
         let mut textures = BTreeSet::new();
         for node in nodes.values() {
@@ -895,6 +925,10 @@ impl PresentationWorld {
                     textures.extend(sprite.material.emission_map.as_deref());
                     continue;
                 }
+                NodeKind::PartsRig(rig) => {
+                    rigs.insert(rig.asset.as_str());
+                    continue;
+                }
                 NodeKind::Primitive(_) | NodeKind::Light(_) => continue,
             };
             materials.extend(overrides.iter().map(|slot| slot.material.as_str()));
@@ -903,6 +937,7 @@ impl PresentationWorld {
         let animated_meshes = pick(live_animated_meshes, &animated);
         let voxel_objects = pick(live_voxel_objects, &voxels);
         let atlases = pick(live_atlases, &atlases);
+        let parts_rigs = pick(live_parts_rigs, &rigs);
         let slots = static_meshes
             .values()
             .flat_map(|asset| &asset.material_slots)
@@ -930,6 +965,11 @@ impl PresentationWorld {
             }
         }
         textures.extend(atlases.values().map(|atlas| atlas.texture.as_str()));
+        textures.extend(
+            parts_rigs
+                .values()
+                .flat_map(|rig| rig.pages.iter().map(|page| page.texture.as_str())),
+        );
         let (sky, background_color) = if retain_background {
             (sky.clone(), *background_color)
         } else {
@@ -959,6 +999,7 @@ impl PresentationWorld {
                 static_meshes,
                 animated_meshes,
                 voxel_objects,
+                parts_rigs,
                 sky,
                 background_color,
                 fog: *fog,
@@ -1052,6 +1093,13 @@ impl PresentationWorld {
                 .values()
                 .map(|value| value.as_ref().clone())
                 .map(|asset| RenderDiff::DefineVoxelObject { asset }),
+        );
+        ops.extend(
+            self.retained
+                .parts_rigs
+                .values()
+                .map(|value| value.as_ref().clone())
+                .map(|asset| RenderDiff::DefinePartsRig { asset }),
         );
         if let Some(color) = self.retained.background_color {
             ops.push(RenderDiff::SetBackgroundColor { color });
@@ -1270,6 +1318,11 @@ impl PresentationWorld {
                 parent,
                 patch: patch.clone(),
             },
+            NodeKind::PartsRig(rig) => RenderDiff::CreatePartsRig {
+                handle,
+                parent,
+                rig: rig.clone(),
+            },
             NodeKind::Light(light) => RenderDiff::CreateLight {
                 handle,
                 parent,
@@ -1318,6 +1371,12 @@ impl PresentationWorld {
         }
         if let Some(pose) = &node.evaluated {
             ops.push(RenderDiff::SetEvaluatedPose {
+                handle,
+                pose: pose.clone(),
+            });
+        }
+        if let Some(pose) = &node.rig_pose {
+            ops.push(RenderDiff::SetPartsRigPose {
                 handle,
                 pose: pose.clone(),
             });
@@ -1372,6 +1431,7 @@ impl PresentationWorld {
                 material_parameters: BTreeMap::new(),
                 pose: Default::default(),
                 evaluated: None,
+                rig_pose: None,
                 changed: self.revision.saturating_add(1),
             }),
         );
@@ -1464,6 +1524,11 @@ impl PresentationWorld {
                 parent,
                 patch,
             } => self.insert(*handle, *parent, NodeKind::Scatter(patch.clone()))?,
+            RenderDiff::CreatePartsRig {
+                handle,
+                parent,
+                rig,
+            } => self.insert(*handle, *parent, NodeKind::PartsRig(rig.clone()))?,
             RenderDiff::CreateLight {
                 handle,
                 parent,
@@ -1525,6 +1590,9 @@ impl PresentationWorld {
                     }
                     NodeKind::SpriteBatch(batch) => {
                         update!(batch.sprite);
+                    }
+                    NodeKind::PartsRig(value) => {
+                        update!(value);
                     }
                     NodeKind::Light(_) | NodeKind::Scatter(_) => {
                         return Err(PresentationWorldError::WrongNodeKind(*handle))
@@ -1597,6 +1665,33 @@ impl PresentationWorld {
                     return Err(PresentationWorldError::WrongNodeKind(*handle));
                 }
                 node.evaluated = Some(pose.clone());
+            }
+            RenderDiff::SetPartsRigPose { handle, pose } => {
+                let node = self.node_mut(*handle)?;
+                if !matches!(node.kind, NodeKind::PartsRig(_)) {
+                    return Err(PresentationWorldError::WrongNodeKind(*handle));
+                }
+                node.rig_pose = Some(pose.clone());
+            }
+            RenderDiff::DefinePartsRig { asset } => {
+                let retained = &mut *self.retained;
+                retained.count(true, |use_| rig_uses(asset, use_));
+                if let Some(previous) = retained
+                    .parts_rigs
+                    .insert(asset.id.clone(), Arc::new(asset.clone()))
+                {
+                    retained.count(false, |use_| rig_uses(&previous, use_));
+                }
+            }
+            RenderDiff::ReleasePartsRig { asset } => {
+                let retained = &mut *self.retained;
+                if !retained.parts_rigs.contains_key(asset) {
+                    return Err(PresentationWorldError::UndefinedResource(asset.clone()));
+                }
+                retained.release_unused(Resource::PartsRig, asset)?;
+                if let Some(asset) = retained.parts_rigs.remove(asset) {
+                    retained.count(false, |use_| rig_uses(&asset, use_));
+                }
             }
             RenderDiff::SetVoxelObjectFrame { handle, frame } => {
                 match &mut self.node_mut(*handle)?.kind {

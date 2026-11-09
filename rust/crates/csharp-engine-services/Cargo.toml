@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 animation-pose.workspace = true
+animation-parts-rig.workspace = true
 asset-import.workspace = true
 asset-catalog.workspace = true
 authored-scene.workspace = true

@@ -2,6 +2,7 @@ use crate::composition::{borrowed_slice, borrowed_utf8, CsharpEngineServicesErro
 
 mod animation_pose;
 mod deformed;
+mod parts_rigs;
 pub(crate) use deformed::DeformedShape;
 #[cfg(test)]
 pub(crate) use deformed::{material_for_test, show_for_test};
@@ -1478,6 +1479,8 @@ pub(crate) struct RuntimeAppearanceData {
     /// What each animated render node plays, and its pose as the Engine
     /// last evaluated it for every realizer.
     pub(crate) poses: ::animation_pose::AnimatedScene,
+    /// The parts rigs the Engine poses, and their players.
+    pub(crate) parts_rigs: parts_rigs::PartsRigScene,
     /// The animation instance on each product object.
     animation_objects: BTreeMap<u64, u64>,
     /// Animation instances on each appearance, with how many.
@@ -1943,6 +1946,7 @@ impl RuntimeAppearanceBridge {
             animated_appearances: BTreeMap::new(),
             animation_instances: BTreeMap::new(),
             poses: Default::default(),
+            parts_rigs: Default::default(),
             animation_objects: BTreeMap::new(),
             appearance_animation_instances: BTreeMap::new(),
             animation_graphs: BTreeMap::new(),
@@ -7997,6 +8001,7 @@ pub(crate) fn push_extra_frame(
 ) {
     let now = staged.clock.0;
     staged.state.poses.observe_frame(&frame, now);
+    staged.state.parts_rigs.observe_frame(&frame);
     staged
         .outputs
         .push(RuntimeAppearanceCallOutput::Frame(frame));

@@ -81,6 +81,7 @@ pub enum BoneChannel {
 /// Each [`Player::advance`] moves the track by a step and poses the rig
 /// once from its setup pose: the clips, then the driven values, then the
 /// bones' world transforms and the constraints.
+#[derive(Clone)]
 pub struct Player {
     mixer: Mixer,
     working: Working,

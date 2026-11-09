@@ -1731,6 +1731,26 @@ pub enum RenderDiff {
         parent: Option<RenderHandle>,
         batch: crate::SpriteBatchDescriptor,
     },
+    /// Defines or replaces a parts rig's drawing (`parts_rig`).
+    DefinePartsRig {
+        asset: crate::PartsRigAsset,
+    },
+    ReleasePartsRig {
+        asset: String,
+    },
+    /// A parts rig drawn on one plane facing the camera; it draws nothing
+    /// until its first pose.
+    CreatePartsRig {
+        handle: RenderHandle,
+        parent: Option<RenderHandle>,
+        rig: crate::PartsRigInstanceDescriptor,
+    },
+    /// The pose the Engine evaluated for a parts rig, replacing the last
+    /// one: what realizers draw it in.
+    SetPartsRigPose {
+        handle: RenderHandle,
+        pose: crate::PartsRigPose,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -1833,7 +1853,11 @@ impl RenderFrameDiff {
                 | RenderDiff::SetVoxelObjectFrame { .. }
                 | RenderDiff::CreateSprite { .. }
                 | RenderDiff::CreateSpriteBatch { .. }
-                | RenderDiff::UpdateSprite { .. } => Vec::new(),
+                | RenderDiff::UpdateSprite { .. }
+                | RenderDiff::DefinePartsRig { .. }
+                | RenderDiff::ReleasePartsRig { .. }
+                | RenderDiff::CreatePartsRig { .. }
+                | RenderDiff::SetPartsRigPose { .. } => Vec::new(),
             };
             payloads
         })

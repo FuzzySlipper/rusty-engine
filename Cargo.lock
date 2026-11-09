@@ -1991,6 +1991,7 @@ version = "0.1.0"
 name = "csharp-engine-services"
 version = "0.1.0"
 dependencies = [
+ "animation-parts-rig",
  "animation-pose",
  "asset-catalog",
  "asset-import",
@@ -8607,6 +8608,7 @@ dependencies = [
 name = "render-wgpu"
 version = "0.1.0"
 dependencies = [
+ "animation-parts-rig",
  "animation-pose",
  "arboard",
  "asset-import",

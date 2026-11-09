@@ -2301,6 +2301,16 @@ impl Renderer {
             let Some(node) = self.tables.nodes.get(handle) else {
                 continue;
             };
+            if let (NodeKind::PartsRig(rig), true, ViewLayer::Backdrop) = (
+                &node.kind,
+                node.world_visible,
+                ViewLayer::of(node.world_layer),
+            ) {
+                let scale = node.world.x_axis.length().max(node.world.y_axis.length());
+                let radius = Vec3::splat(rig.reach() * rig.descriptor.scale * scale);
+                let center = node.world.w_axis.truncate();
+                reach(center - radius, center + radius);
+            }
             if let (NodeKind::Sprite(resolved), true, ViewLayer::Backdrop) = (
                 &node.kind,
                 node.world_visible,
@@ -2375,7 +2385,7 @@ impl Renderer {
         let sprite = || {
             self.tables.sprites.iter().any(|handle| {
                 self.tables.nodes.get(handle).is_some_and(|node| {
-                    matches!(node.kind, NodeKind::Sprite(_))
+                    matches!(node.kind, NodeKind::Sprite(_) | NodeKind::PartsRig(_))
                         && node.world_visible
                         && ViewLayer::of(node.world_layer) == ViewLayer::Backdrop
                 })

@@ -7,6 +7,10 @@
 //! retained descriptor, and `UpdateSprite` carries playback, which the Engine
 //! advances on update time.
 //!
+//! Parts rigs (`NodeKind::PartsRig`, `parts_rigs.rs`) draw as sprites do:
+//! each view places a rig's plane by a sprite row, and the rig's pieces,
+//! built into its own buffers once per pose, draw on it in runs.
+//!
 //! Particles are `PresentationOp::Particle` emitters simulated in
 //! [`crate::particles`] on Engine update time only.
 //!
@@ -25,8 +29,9 @@ use std::collections::HashMap;
 
 use glam::{Mat3, Mat4, Quat, Vec3, Vec4};
 use render_model::{
-    BillboardMode, RenderHandle, SpriteAlphaMode, SpriteBlendMode, SpriteDepthPolicy,
-    SpriteInstanceDescriptor, SpriteLightingMode, SpriteSizeMode, SpriteViewportFit,
+    BillboardMode, PartsRigBlend, PartsRigInstanceDescriptor, RenderHandle, SpriteAlphaMode,
+    SpriteBlendMode, SpriteDepthPolicy, SpriteInstanceDescriptor, SpriteLightingMode,
+    SpriteMaterialDescriptor, SpriteSizeMode, SpriteViewportFit,
 };
 use render_presentation::{
     ParticleBlendMode, ParticleSizeMode, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff,
@@ -37,6 +42,7 @@ use crate::camera::CameraMatrices;
 use crate::frame::{PixelRect, ViewLayer, ViewPass};
 use crate::motion::MotionWrite;
 use crate::particles::{EntityPositions, ParticleIssue};
+use crate::parts_rigs::{RigGeometry, RigRun, RIG_VERTEX_BYTES};
 use crate::pipelines::VERTEX_FLOATS;
 use crate::resources::{self, ResourceSource};
 use crate::tables::{GpuMesh, GpuTexture, NodeKind, SpriteRow};
@@ -74,6 +80,24 @@ struct SpriteState {
     batch: bool,
 }
 
+/// Pipeline state of one run of a parts rig's pieces.
+///
+/// A rig's pieces lie on one plane, but each triangle's depth is its own
+/// interpolation of it: on a plane turned from the view, a later piece can
+/// land a little behind an earlier one. So the pieces' colours are drawn
+/// without writing depth, in the pose's order, and a solid rig's depth is
+/// written after them by a pass of its normal pieces (`depth_write`) that
+/// leaves the colour as it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct RigState {
+    depth_test: bool,
+    /// The depth pass.
+    depth_write: bool,
+    /// Drawn as solid sprites are: normal pieces cover their pixels.
+    solid: bool,
+    blend: PartsRigBlend,
+}
+
 /// Colour, detail (normal or height), tint mask and emission map texture
 /// name ids (`Tables::names`); `None` is the 1×1 white texture, or the colour
 /// texture again for the detail slot. The white mask tints the whole sprite,
@@ -88,6 +112,8 @@ struct SpriteDraw {
     /// Unused by a batch, which draws its own rows.
     row: [f32; SPRITE_ROW_FLOATS],
     batch: Option<RenderHandle>,
+    /// A parts rig, placed by the row: its pieces draw from its buffers.
+    rig: Option<RenderHandle>,
 }
 
 /// What one view pass draws of this family, prepared before the pass.
@@ -129,6 +155,7 @@ struct BlendedSprite {
     depth: f32,
     instance: u32,
     batch: Option<RenderHandle>,
+    rig: Option<RenderHandle>,
 }
 
 /// One sprite's draw: its pipeline state, textures and row, or the batch
@@ -139,6 +166,20 @@ struct SpriteInstance {
     textures: SpriteTextures,
     instance: u32,
     batch: Option<RenderHandle>,
+    rig: Option<RenderHandle>,
+}
+
+/// A parts rig's buffers, built from its pose and drawing when either
+/// changes, not per view, and dropped with its node.
+struct RigBuffers {
+    /// The pose and drawing generation they were built from.
+    pose: u64,
+    generation: u64,
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+    runs: Vec<RigRun>,
+    /// Its vertices' bounds in rig units: min x, min y, max x, max y.
+    bounds: [f32; 4],
 }
 
 /// A sprite batch's buffers, built when the batch, its node's place or its
@@ -222,6 +263,7 @@ fn blend_index(blend: ParticleBlendMode) -> usize {
 struct FormatPipelines {
     format: ColorTarget,
     sprites: HashMap<SpriteState, wgpu::RenderPipeline>,
+    rigs: HashMap<RigState, wgpu::RenderPipeline>,
     /// Hard billboards, depth-tested by the world pass.
     billboard: BlendPipelines,
     /// Soft billboards, testing the world's depth themselves; made at the
@@ -263,6 +305,9 @@ pub(crate) struct Effects {
     sprite_bind_groups: HashMap<SpriteTextures, wgpu::BindGroup>,
     /// Sprite batches' buffers, by node.
     batches: HashMap<RenderHandle, BatchBuffers>,
+    /// Parts rigs' buffers, by node.
+    rigs: HashMap<RenderHandle, RigBuffers>,
+    rig_scratch: RigGeometry,
     /// Particle sprite textures by slot, and each content hash's slot. A slot
     /// lives while an emitter or live particle holds it (`Particles`), then
     /// its binding is dropped and the slot reused.
@@ -397,6 +442,8 @@ impl Effects {
             formats: Vec::new(),
             sprite_bind_groups: HashMap::new(),
             batches: HashMap::new(),
+            rigs: HashMap::new(),
+            rig_scratch: RigGeometry::default(),
             particle_textures: Vec::new(),
             particle_texture_ids: HashMap::new(),
             free_particle_slots: Vec::new(),
@@ -417,9 +464,11 @@ impl Effects {
         self.batches.clear();
     }
 
-    /// Drop a destroyed or replaced node's sprite batch buffers.
+    /// Drop a destroyed or replaced node's sprite batch or parts rig
+    /// buffers.
     pub fn forget_sprite_batch(&mut self, node: RenderHandle) {
         self.batches.remove(&node);
+        self.rigs.remove(&node);
     }
 
     /// Drop cached sprite bindings of a texture that was redefined or released.
@@ -427,6 +476,113 @@ impl Effects {
         self.sprite_bind_groups.retain(|textures, _| {
             ![textures.0, textures.1, textures.2, textures.3].contains(&Some(id))
         });
+    }
+
+    /// A parts rig's draw in this view: its buffers made ready for its pose,
+    /// and the row placing its plane. None when it has no pose, drawing or
+    /// piece to draw, or no size this view.
+    fn prepare_rig(
+        &mut self,
+        gpu: &Gpu,
+        handle: RenderHandle,
+        rig: &crate::parts_rigs::PartsRigRow,
+        assets: &crate::tables::Slots<crate::parts_rigs::PartsRigAssetRow>,
+        world: &Mat4,
+        (camera, viewport, pixel_ratio): (&CameraMatrices, PixelRect, f32),
+    ) -> Option<SpriteDraw> {
+        let asset = assets.get(rig.asset)?;
+        rig.pose.as_ref()?;
+        let stale = self.rigs.get(&handle).is_none_or(|buffers| {
+            buffers.pose != rig.pose_revision || buffers.generation != asset.generation
+        });
+        if stale {
+            let geometry = &mut self.rig_scratch;
+            crate::parts_rigs::build(asset, rig.pose.as_ref()?, geometry);
+            let vertices: &[u8] = bytemuck::cast_slice(&geometry.vertices);
+            let indices: &[u8] = bytemuck::cast_slice(&geometry.indices);
+            let fits = self.rigs.get(&handle).is_some_and(|buffers| {
+                buffers.vertices.size() >= vertices.len() as u64
+                    && buffers.indices.size() >= indices.len() as u64
+            });
+            if !fits {
+                let buffer = |label, bytes: usize, usage| {
+                    gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(label),
+                        size: (bytes.max(256) as u64).next_power_of_two(),
+                        usage: usage | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    })
+                };
+                self.rigs.insert(
+                    handle,
+                    RigBuffers {
+                        pose: 0,
+                        generation: 0,
+                        vertices: buffer(
+                            "render-wgpu parts rig vertices",
+                            vertices.len(),
+                            wgpu::BufferUsages::VERTEX,
+                        ),
+                        indices: buffer(
+                            "render-wgpu parts rig indices",
+                            indices.len(),
+                            wgpu::BufferUsages::INDEX,
+                        ),
+                        runs: Vec::new(),
+                        bounds: [0.0; 4],
+                    },
+                );
+            }
+            let buffers = self.rigs.get_mut(&handle)?;
+            if !vertices.is_empty() {
+                gpu.queue.write_buffer(&buffers.vertices, 0, vertices);
+                gpu.queue.write_buffer(&buffers.indices, 0, indices);
+            }
+            buffers.pose = rig.pose_revision;
+            buffers.generation = asset.generation;
+            buffers.runs.clone_from(&geometry.runs);
+            buffers.bounds = geometry.bounds;
+        }
+        let buffers = self.rigs.get(&handle)?;
+        let first_page = buffers.runs.first()?.texture;
+        let descriptor = &rig.descriptor;
+        let pixels =
+            (descriptor.size_mode == SpriteSizeMode::Pixel).then_some([descriptor.scale; 2]);
+        let placed = match pixels {
+            Some(_) => *world,
+            None => *world * Mat4::from_scale(Vec3::splat(descriptor.scale)),
+        };
+        let model = facing_model(
+            &placed,
+            descriptor.billboard,
+            pixels,
+            descriptor.material.authored_facing,
+            camera,
+            viewport,
+            pixel_ratio,
+        )?;
+        let (state, cutoff) = parts_rig_state(descriptor);
+        let material = &descriptor.material;
+        let ([mode, strength, bias], _) = material_lighting(material, None, Some(first_page));
+        let mut row = [0.0; SPRITE_ROW_FLOATS];
+        row[..16].copy_from_slice(&model.to_cols_array());
+        row[16] = descriptor.texel_snap;
+        row[20..24].copy_from_slice(&descriptor.tint);
+        row[28..32].copy_from_slice(&[mode, cutoff, strength, bias]);
+        row[36..39].copy_from_slice(
+            &(Vec3::from(material.emission_color) * material.emission_intensity).to_array(),
+        );
+        let [x0, y0, x1, y1] = buffers.bounds;
+        let center = model.transform_point3(Vec3::new((x0 + x1) * 0.5, (y0 + y1) * 0.5, 0.0));
+        Some(SpriteDraw {
+            state,
+            textures: rig_textures(first_page),
+            render_order: descriptor.render_order,
+            depth: center.distance_squared(camera.eye),
+            row,
+            batch: None,
+            rig: Some(handle),
+        })
     }
 
     fn format_index(&mut self, device: &wgpu::Device, format: ColorTarget) -> usize {
@@ -466,6 +622,7 @@ impl Effects {
         self.formats.push(FormatPipelines {
             format,
             sprites: HashMap::new(),
+            rigs: HashMap::new(),
             billboard,
             soft: None,
             cube,
@@ -668,6 +825,68 @@ impl Effects {
         self.formats[index].sprites.insert(state, pipeline);
     }
 
+    fn ensure_rig_pipeline(&mut self, device: &wgpu::Device, format: ColorTarget, state: RigState) {
+        let index = self.format_index(device, format);
+        if self.formats[index].rigs.contains_key(&state) {
+            return;
+        }
+        let vertex = wgpu::vertex_attr_array![
+            0 => Float32x2, 11 => Float32x2, 12 => Unorm8x4, 13 => Unorm8x4, 14 => Unorm16x4
+        ];
+        let instance = wgpu::vertex_attr_array![
+            1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4,
+            5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4,
+            9 => Float32x4, 10 => Float32x4
+        ];
+        let opaque = state.solid && state.blend == PartsRigBlend::Normal;
+        // The depth pass keeps the colour the pieces drew.
+        let keep = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Zero,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let blend = if state.depth_write {
+            Some(wgpu::BlendState {
+                color: keep,
+                alpha: keep,
+            })
+        } else {
+            (!opaque).then(|| rig_blend_state(state.blend))
+        };
+        let pipeline = self.pipeline(
+            device,
+            "render-wgpu parts rig",
+            &self.sprite_pipeline_layout,
+            (
+                "vs_parts_rig",
+                if opaque {
+                    "fs_parts_rig_opaque"
+                } else {
+                    "fs_parts_rig"
+                },
+            ),
+            &[
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: RIG_VERTEX_BYTES,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &vertex,
+                }),
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: (SPRITE_ROW_FLOATS * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &instance,
+                }),
+            ],
+            wgpu::PrimitiveTopology::TriangleList,
+            None,
+            format,
+            Some(depth_state(state.depth_test, state.depth_write)),
+            blend,
+            MotionWrite::None,
+        );
+        self.formats[index].rigs.insert(state, pipeline);
+    }
+
     #[allow(clippy::too_many_arguments, reason = "one pipeline description")]
     fn pipeline(
         &self,
@@ -752,6 +971,7 @@ impl Effects {
                     textures: sprite.textures,
                     instance: sprite.instance,
                     batch: sprite.batch,
+                    rig: sprite.rig,
                 },
             );
         }
@@ -779,6 +999,10 @@ impl Effects {
         let Some(set) = self.formats.iter().find(|set| set.format == format) else {
             return;
         };
+        if let Some(handle) = sprite.rig {
+            self.draw_rig(pass, set, sprite, handle);
+            return;
+        }
         let (Some(pipeline), Some(bind_group)) = (
             set.sprites.get(&sprite.state),
             self.sprite_bind_groups.get(&sprite.textures),
@@ -800,6 +1024,57 @@ impl Effects {
                 pass.set_vertex_buffer(0, self.corners.slice(..));
                 pass.set_vertex_buffer(1, self.sprite_rows.buffer.slice(..));
                 pass.draw(0..4, sprite.instance..sprite.instance + 1);
+            }
+        }
+    }
+
+    /// Draw a parts rig's runs in order, each with its page and blend mode,
+    /// on the plane its sprite row places.
+    fn draw_rig(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        set: &FormatPipelines,
+        sprite: &SpriteInstance,
+        handle: RenderHandle,
+    ) {
+        let Some(rig) = self.rigs.get(&handle) else {
+            return;
+        };
+        pass.set_vertex_buffer(0, rig.vertices.slice(..));
+        pass.set_vertex_buffer(1, self.sprite_rows.buffer.slice(..));
+        pass.set_index_buffer(rig.indices.slice(..), wgpu::IndexFormat::Uint32);
+        for run in &rig.runs {
+            let (Some(pipeline), Some(bind_group)) = (
+                set.rigs.get(&rig_state(sprite.state, run.blend)),
+                self.sprite_bind_groups.get(&rig_textures(run.texture)),
+            ) else {
+                continue;
+            };
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(1, bind_group, &[]);
+            pass.draw_indexed(
+                run.first..run.first + run.count,
+                0,
+                sprite.instance..sprite.instance + 1,
+            );
+        }
+        let Some(depth) = rig_depth_state(sprite.state).and_then(|state| set.rigs.get(&state))
+        else {
+            return;
+        };
+        pass.set_pipeline(depth);
+        for run in rig
+            .runs
+            .iter()
+            .filter(|run| run.blend == PartsRigBlend::Normal)
+        {
+            if let Some(bind_group) = self.sprite_bind_groups.get(&rig_textures(run.texture)) {
+                pass.set_bind_group(1, bind_group, &[]);
+                pass.draw_indexed(
+                    run.first..run.first + run.count,
+                    0,
+                    sprite.instance..sprite.instance + 1,
+                );
             }
         }
     }
@@ -909,6 +1184,77 @@ fn blend_state(blend: ParticleBlendMode) -> wgpu::BlendState {
     }
 }
 
+/// How a run of a rig's premultiplied pieces reaches the frame, by its slot
+/// blend mode; the frame's alpha keeps its coverage either way.
+fn rig_blend_state(blend: PartsRigBlend) -> wgpu::BlendState {
+    use wgpu::BlendFactor::{Dst, One, OneMinusSrc, OneMinusSrcAlpha};
+    let (src_factor, dst_factor) = match blend {
+        PartsRigBlend::Normal => (One, OneMinusSrcAlpha),
+        PartsRigBlend::Additive => (One, One),
+        PartsRigBlend::Multiply => (Dst, OneMinusSrcAlpha),
+        PartsRigBlend::Screen => (One, OneMinusSrc),
+    };
+    wgpu::BlendState {
+        color: wgpu::BlendComponent {
+            src_factor,
+            dst_factor,
+            operation: wgpu::BlendOperation::Add,
+        },
+        alpha: wgpu::BlendComponent {
+            src_factor: One,
+            dst_factor: OneMinusSrcAlpha,
+            operation: wgpu::BlendOperation::Add,
+        },
+    }
+}
+
+/// A run's colour pipeline state, from its rig's sprite state: solid when
+/// the rig is.
+fn rig_state(state: SpriteState, blend: PartsRigBlend) -> RigState {
+    RigState {
+        depth_test: state.depth_test,
+        depth_write: false,
+        solid: !state.blend,
+        blend,
+    }
+}
+
+/// The depth pass of a rig whose sprite state writes depth: a solid one.
+fn rig_depth_state(state: SpriteState) -> Option<RigState> {
+    (state.depth_write && !state.blend).then_some(RigState {
+        depth_test: state.depth_test,
+        depth_write: true,
+        solid: true,
+        blend: PartsRigBlend::Normal,
+    })
+}
+
+/// A rig page's sprite bindings: the page as the colour texture, and as the
+/// detail one for derived-gradient lighting.
+fn rig_textures(page: u32) -> SpriteTextures {
+    (Some(page), None, None, None)
+}
+
+/// A parts rig's alpha and depth state, as `sprite_state` gives a sprite's.
+fn parts_rig_state(rig: &PartsRigInstanceDescriptor) -> (SpriteState, f32) {
+    let (cutoff, alpha_write) = match rig.material.alpha {
+        SpriteAlphaMode::Opaque => (0.0, true),
+        SpriteAlphaMode::Mask { cutoff } => (cutoff, true),
+        SpriteAlphaMode::Blend => (0.0, false),
+    };
+    (
+        SpriteState {
+            depth_test: rig.depth != SpriteDepthPolicy::DepthTestOff,
+            depth_write: rig.depth != SpriteDepthPolicy::DepthWriteOff && alpha_write,
+            blend: rig.blended(),
+            additive: false,
+            soft: false,
+            batch: false,
+        },
+        cutoff,
+    )
+}
+
 struct ParticleTexture {
     content_hash: String,
     bind_group: wgpu::BindGroup,
@@ -940,15 +1286,22 @@ fn sprite_state(sprite: &SpriteInstanceDescriptor) -> (SpriteState, f32) {
 /// Lighting mode, strength and bias as `effects.wgsl` reads them, and the
 /// detail texture it samples.
 fn sprite_lighting(sprite: &SpriteRow, color: Option<u32>) -> ([f32; 3], Option<u32>) {
-    let material = &sprite.descriptor.material;
+    material_lighting(&sprite.descriptor.material, sprite.detail, color)
+}
+
+fn material_lighting(
+    material: &SpriteMaterialDescriptor,
+    detail: Option<u32>,
+    color: Option<u32>,
+) -> ([f32; 3], Option<u32>) {
     let effective = material.normal_strength * (1.0 - material.normal_bias * 0.5).clamp(0.5, 1.5);
     match material.lighting {
         SpriteLightingMode::Unlit => ([0.0, 0.0, 0.0], None),
         SpriteLightingMode::Synthetic => {
             ([1.0, material.normal_strength, material.normal_bias], None)
         }
-        SpriteLightingMode::AuthoredNormal => ([2.0, effective, 0.0], sprite.detail),
-        SpriteLightingMode::AuthoredDepth => ([3.0, effective, 0.0], sprite.detail),
+        SpriteLightingMode::AuthoredNormal => ([2.0, effective, 0.0], detail),
+        SpriteLightingMode::AuthoredDepth => ([3.0, effective, 0.0], detail),
         SpriteLightingMode::DerivedGradient => ([3.0, effective, 0.0], color),
     }
 }
@@ -1163,13 +1516,42 @@ fn sprite_quad(
         (1.0 - sprite.pivot[0]) * w,
         (1.0 - sprite.pivot[1]) * h,
     ];
-    if sprite.billboard == BillboardMode::None && sprite.size_mode == SpriteSizeMode::World {
-        return Some((*world, quad));
+    let pixels = (sprite.size_mode == SpriteSizeMode::Pixel)
+        .then(|| [sprite.size[0] / w, sprite.size[1] / h]);
+    let model = facing_model(
+        world,
+        sprite.billboard,
+        pixels,
+        sprite.material.authored_facing,
+        camera,
+        viewport,
+        pixel_ratio,
+    )?;
+    Some((model, quad))
+}
+
+/// The matrix that places a plane facing the camera by `billboard`, from
+/// its node's world matrix: x right and y up on the plane, z its facing.
+/// `pixels`, for a pixel-sized plane, is CSS pixels per plane unit across
+/// and up; otherwise the node's matrix sizes it. None when a pixel-sized
+/// plane lies behind the camera.
+fn facing_model(
+    world: &Mat4,
+    billboard: BillboardMode,
+    pixels: Option<[f32; 2]>,
+    authored_facing: f32,
+    camera: &CameraMatrices,
+    viewport: PixelRect,
+    pixel_ratio: f32,
+) -> Option<Mat4> {
+    let (width, height) = (viewport.width as f32, viewport.height as f32);
+    if billboard == BillboardMode::None && pixels.is_none() {
+        return Some(*world);
     }
     let (mut scale, authored, position) = world.to_scale_rotation_translation();
     let camera_world = camera.view.inverse();
     let orthographic = camera.projection.w_axis.w == 1.0;
-    if sprite.size_mode == SpriteSizeMode::Pixel {
+    if let Some([across, up]) = pixels {
         // World units per target pixel at the sprite's depth; the size is in
         // CSS pixels.
         let depth = if orthographic {
@@ -1184,27 +1566,25 @@ fn sprite_quad(
         };
         let per_pixel_x = 2.0 * depth / (camera.projection.x_axis.x * width);
         let per_pixel_y = 2.0 * depth / (camera.projection.y_axis.y * height);
-        scale.x *= sprite.size[0] * pixel_ratio * per_pixel_x / w;
-        scale.y *= sprite.size[1] * pixel_ratio * per_pixel_y / h;
+        scale.x *= across * pixel_ratio * per_pixel_x;
+        scale.y *= up * pixel_ratio * per_pixel_y;
     }
-    let rotation = match sprite.billboard {
+    let rotation = match billboard {
         BillboardMode::None => authored,
         BillboardMode::Spherical => Quat::from_mat4(&camera_world),
         BillboardMode::Cylindrical | BillboardMode::CylindricalView => {
-            let toward = if orthographic || sprite.billboard == BillboardMode::CylindricalView {
+            let toward = if orthographic || billboard == BillboardMode::CylindricalView {
                 camera_world.z_axis.truncate()
             } else {
                 camera.eye - position
             };
-            let forward =
-                upright_facing(toward, authored * Vec3::Z, sprite.material.authored_facing);
+            let forward = upright_facing(toward, authored * Vec3::Z, authored_facing);
             let right = Vec3::Y.cross(forward).normalize();
             Quat::from_mat3(&Mat3::from_cols(right, Vec3::Y, forward))
         }
     };
-    Some((
-        Mat4::from_scale_rotation_translation(scale, rotation, position),
-        quad,
+    Some(Mat4::from_scale_rotation_translation(
+        scale, rotation, position,
     ))
 }
 
@@ -1476,6 +1856,62 @@ impl Renderer {
 
     /// A sprite texture by name id. Only a bind-group cache miss asks, so the
     /// name lookup stays off the per-sprite path.
+    /// Make the bind group of a sprite's textures, or a rig page's, ready.
+    fn ensure_sprite_bindings(&mut self, textures: SpriteTextures) {
+        if self.effects.sprite_bind_groups.contains_key(&textures) {
+            return;
+        }
+        let color = self.sprite_texture(textures.0);
+        let detail = match textures.1 {
+            Some(_) => self.sprite_texture(textures.1),
+            None => color,
+        };
+        let tint_mask = self.sprite_texture(textures.2);
+        let emission_map = self.sprite_texture(textures.3);
+        let bind_group = self
+            .gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("render-wgpu sprite"),
+                layout: &self.effects.sprite_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: wgpu::BindingResource::TextureView(&color.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: wgpu::BindingResource::Sampler(&color.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: wgpu::BindingResource::TextureView(&detail.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: wgpu::BindingResource::Sampler(&detail.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: wgpu::BindingResource::TextureView(&tint_mask.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: wgpu::BindingResource::Sampler(&tint_mask.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 16,
+                        resource: wgpu::BindingResource::TextureView(&emission_map.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 17,
+                        resource: wgpu::BindingResource::Sampler(&emission_map.sampler),
+                    },
+                ],
+            });
+        self.effects.sprite_bind_groups.insert(textures, bind_group);
+    }
+
     fn sprite_texture(&self, id: Option<u32>) -> &GpuTexture {
         id.and_then(|id| self.tables.textures.get(self.tables.names.name(id)))
             .unwrap_or(&self.white)
@@ -1510,12 +1946,24 @@ impl Renderer {
             let Some(node) = self.tables.nodes.get(handle) else {
                 continue;
             };
-            let NodeKind::Sprite(resolved) = &node.kind else {
-                continue;
-            };
             if !node.world_visible || ViewLayer::of(node.world_layer) != view.layer {
                 continue;
             }
+            let resolved = match &node.kind {
+                NodeKind::Sprite(resolved) => resolved,
+                NodeKind::PartsRig(rig) => {
+                    draws.extend(self.effects.prepare_rig(
+                        &self.gpu,
+                        *handle,
+                        rig,
+                        &self.tables.parts_rigs,
+                        &node.world,
+                        (&view.camera, view.viewport, pixel_ratio),
+                    ));
+                    continue;
+                }
+                _ => continue,
+            };
             let sprite = &resolved.descriptor;
             let atlas = self.tables.atlases.get(resolved.atlas);
             if let Some(rows) = &resolved.batch {
@@ -1595,6 +2043,7 @@ impl Renderer {
                         .distance_squared(view.camera.eye),
                     row: [0.0; SPRITE_ROW_FLOATS],
                     batch: Some(*handle),
+                    rig: None,
                 });
                 continue;
             }
@@ -1641,6 +2090,7 @@ impl Renderer {
                 depth: model.w_axis.truncate().distance_squared(view.camera.eye),
                 row,
                 batch: None,
+                rig: None,
             });
         }
         // Solid front to back, blended back to front, each by render order.
@@ -1658,62 +2108,27 @@ impl Renderer {
         let mut rows = std::mem::take(&mut self.effects.row_scratch);
         rows.clear();
         for draw in &draws {
-            self.effects
-                .ensure_sprite_pipeline(&self.gpu.device, format, draw.state);
-            if !self.effects.sprite_bind_groups.contains_key(&draw.textures) {
-                let color = self.sprite_texture(draw.textures.0);
-                let detail = match draw.textures.1 {
-                    Some(_) => self.sprite_texture(draw.textures.1),
-                    None => color,
-                };
-                let tint_mask = self.sprite_texture(draw.textures.2);
-                let emission_map = self.sprite_texture(draw.textures.3);
-                let bind_group = self
-                    .gpu
-                    .device
-                    .create_bind_group(&wgpu::BindGroupDescriptor {
-                        label: Some("render-wgpu sprite"),
-                        layout: &self.effects.sprite_layout,
-                        entries: &[
-                            wgpu::BindGroupEntry {
-                                binding: 10,
-                                resource: wgpu::BindingResource::TextureView(&color.view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 11,
-                                resource: wgpu::BindingResource::Sampler(&color.sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 12,
-                                resource: wgpu::BindingResource::TextureView(&detail.view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 13,
-                                resource: wgpu::BindingResource::Sampler(&detail.sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 14,
-                                resource: wgpu::BindingResource::TextureView(&tint_mask.view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 15,
-                                resource: wgpu::BindingResource::Sampler(&tint_mask.sampler),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 16,
-                                resource: wgpu::BindingResource::TextureView(&emission_map.view),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 17,
-                                resource: wgpu::BindingResource::Sampler(&emission_map.sampler),
-                            },
-                        ],
-                    });
-                self.effects
-                    .sprite_bind_groups
-                    .insert(draw.textures, bind_group);
+            match draw.rig.and_then(|handle| self.effects.rigs.get(&handle)) {
+                Some(rig) => {
+                    for run in rig.runs.clone() {
+                        let state = rig_state(draw.state, run.blend);
+                        self.effects
+                            .ensure_rig_pipeline(&self.gpu.device, format, state);
+                        self.ensure_sprite_bindings(rig_textures(run.texture));
+                    }
+                    if let Some(depth) = rig_depth_state(draw.state) {
+                        self.effects
+                            .ensure_rig_pipeline(&self.gpu.device, format, depth);
+                    }
+                }
+                None => {
+                    self.effects
+                        .ensure_sprite_pipeline(&self.gpu.device, format, draw.state);
+                    self.ensure_sprite_bindings(draw.textures);
+                }
             }
             let instance = (rows.len() / SPRITE_ROW_FLOATS) as u32;
+            // A batch draws its own rows; a rig is placed by its row.
             if draw.batch.is_none() {
                 rows.extend_from_slice(&draw.row);
             }
@@ -1723,6 +2138,7 @@ impl Renderer {
                     textures: draw.textures,
                     instance,
                     batch: draw.batch,
+                    rig: draw.rig,
                 });
             } else if draw.state.blend {
                 pass.blended.push(BlendedSprite {
@@ -1732,6 +2148,7 @@ impl Renderer {
                     depth: draw.depth,
                     instance,
                     batch: draw.batch,
+                    rig: draw.rig,
                 });
             } else {
                 pass.solid.push(SpriteInstance {
@@ -1739,6 +2156,7 @@ impl Renderer {
                     textures: draw.textures,
                     instance,
                     batch: draw.batch,
+                    rig: draw.rig,
                 });
             }
         }

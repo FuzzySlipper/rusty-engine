@@ -1,0 +1,191 @@
+//! Parts rigs: 2D figures of posed pieces, drawn as one upright plane in the
+//! world the way a sprite is.
+//!
+//! A rig's drawing (`DefinePartsRig`) is what never changes: its pages, and
+//! each drawable's page UVs and triangles. An instance (`CreatePartsRig`) is
+//! a node that faces the camera by its billboard mode, with a sprite's
+//! lighting, alpha, depth and size options. Its pose (`SetPartsRigPose`) is
+//! what the Engine evaluated for it on a step: the pieces in draw order and
+//! their posed vertices, which realizers draw until the next pose replaces
+//! it.
+
+use std::sync::Arc;
+
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    valid_color, validate_asset_id, BillboardMode, RenderAssetError, RenderAssetKind, RenderLayer,
+    RenderMetadata, SpriteAlphaMode, SpriteDepthPolicy, SpriteLightingMode,
+    SpriteMaterialDescriptor, SpriteMaterialError, SpriteSizeMode, Transform,
+};
+
+/// One page a rig draws from: a texture, and whether its colour is
+/// premultiplied by its alpha.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PartsRigPage {
+    pub texture: String,
+    pub premultiplied: bool,
+}
+
+/// What one attachment frame draws with: its page, a page UV per vertex, and
+/// triangles over those vertices.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PartsRigDrawable {
+    pub page: u32,
+    /// Page UVs, 0 to 1 with v down, one per posed vertex.
+    pub uvs: Vec<[f32; 2]>,
+    pub triangles: Vec<u32>,
+}
+
+/// A rig's drawing: what its poses draw with.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PartsRigAsset {
+    pub id: String,
+    pub pages: Vec<PartsRigPage>,
+    /// Shared, so copies of the asset do not copy its geometry.
+    pub drawables: Arc<[PartsRigDrawable]>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PartsRigAssetError {
+    Asset(RenderAssetError),
+    Texture {
+        page: usize,
+        error: RenderAssetError,
+    },
+}
+
+impl PartsRigAsset {
+    /// The ids it is named by and names. Its drawables are the posing
+    /// core's, from a rig it read.
+    pub fn validate(&self) -> Result<(), PartsRigAssetError> {
+        validate_asset_id(&self.id, RenderAssetKind::PartsRig)
+            .map_err(PartsRigAssetError::Asset)?;
+        for (page, value) in self.pages.iter().enumerate() {
+            validate_asset_id(&value.texture, RenderAssetKind::Texture)
+                .map_err(|error| PartsRigAssetError::Texture { page, error })?;
+        }
+        Ok(())
+    }
+}
+
+/// How a slot's piece reaches what is drawn behind it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum PartsRigBlend {
+    #[default]
+    Normal,
+    Additive,
+    Multiply,
+    Screen,
+}
+
+/// One drawn piece of a pose, in draw order.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PartsRigPiece {
+    /// The asset's drawable it draws with: its posed vertices are the next
+    /// `uvs.len()` of the pose's, after the pieces before it.
+    pub drawable: u32,
+    pub blend: PartsRigBlend,
+    /// The slot's colour times its attachment's, RGBA from 0 to 1, as
+    /// authored (sRGB).
+    pub color: [f32; 4],
+    /// The slot's two-colour tint dark colour, as authored; black when it has
+    /// none, which leaves the colour alone.
+    pub dark: [f32; 3],
+}
+
+/// A rig's pose after one step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PartsRigPose {
+    /// The Engine presentation time the pose was evaluated at.
+    pub seconds: f64,
+    pub pieces: Arc<[PartsRigPiece]>,
+    /// Posed vertices in rig units, x right and y up from the rig's origin,
+    /// piece after piece.
+    pub vertices: Arc<[[f32; 2]]>,
+}
+
+/// One drawn parts rig: a node whose posed pieces lie on one plane through
+/// its origin, turned to the camera by `billboard` as a sprite is.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PartsRigInstanceDescriptor {
+    /// The rig's drawing (`DefinePartsRig`).
+    pub asset: String,
+    /// Metres per rig unit, or CSS pixels per rig unit for a pixel-sized
+    /// rig, before the node's scale.
+    pub scale: f32,
+    pub size_mode: SpriteSizeMode,
+    pub billboard: BillboardMode,
+    /// Multiplies every piece's colour, linear.
+    pub tint: [f32; 4],
+    pub render_order: i32,
+    pub depth: SpriteDepthPolicy,
+    #[serde(default)]
+    pub layer: RenderLayer,
+    /// A sprite's material: its lighting (unlit, synthetic or derived from
+    /// the pages), alpha, shadow policy, emission and authored facing. The
+    /// pages are the colour texture; texture maps, softness and wind are a
+    /// sprite's alone.
+    #[serde(default)]
+    pub material: SpriteMaterialDescriptor,
+    /// Rig units per texel of the grid the figure draws on, for pixel art:
+    /// each cell of the grid in the rig's plane shows the rig's colour at its
+    /// centre. 0 draws it smooth.
+    #[serde(default)]
+    pub texel_snap: f32,
+    pub visible: bool,
+    pub transform: Transform,
+    pub metadata: RenderMetadata,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum PartsRigError {
+    Asset(RenderAssetError),
+    Material(SpriteMaterialError),
+    NonPositiveScale,
+    InvalidTint,
+    InvalidTexelSnap,
+    /// A sprite material option a rig does not draw: authored normal or
+    /// depth lighting, a tint mask or emission map, softness or wind.
+    UnsupportedMaterial,
+}
+
+impl PartsRigInstanceDescriptor {
+    pub fn validate(&self) -> Result<(), PartsRigError> {
+        validate_asset_id(&self.asset, RenderAssetKind::PartsRig).map_err(PartsRigError::Asset)?;
+        if !(self.scale.is_finite() && self.scale > 0.0) {
+            return Err(PartsRigError::NonPositiveScale);
+        }
+        if !valid_color(self.tint) {
+            return Err(PartsRigError::InvalidTint);
+        }
+        if !(self.texel_snap.is_finite() && self.texel_snap >= 0.0) {
+            return Err(PartsRigError::InvalidTexelSnap);
+        }
+        let material = &self.material;
+        material.validate().map_err(PartsRigError::Material)?;
+        if matches!(
+            material.lighting,
+            SpriteLightingMode::AuthoredNormal | SpriteLightingMode::AuthoredDepth
+        ) || material.tint_mask.is_some()
+            || material.emission_map.is_some()
+            || material.softness_metres > 0.0
+            || material.wind_bend > 0.0
+        {
+            return Err(PartsRigError::UnsupportedMaterial);
+        }
+        Ok(())
+    }
+
+    /// Whether the rig draws over what is behind it rather than solid.
+    pub fn blended(&self) -> bool {
+        self.material.alpha == SpriteAlphaMode::Blend || self.tint[3] < 1.0
+    }
+}

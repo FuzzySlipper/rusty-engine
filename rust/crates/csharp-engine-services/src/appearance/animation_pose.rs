@@ -6,7 +6,8 @@
 //! A pose is retained on its instance and reaches the scene when the call
 //! settles, as one `SetAnimatedMeshPose` per changed instance or target.
 //! The scene's poses are evaluated once as each call settles
-//! ([`::animation_pose::AnimatedScene`], kept with the appearance state),
+//! ([`::animation_pose::AnimatedScene`], kept with the appearance state, and
+//! the parts rigs' [`super::parts_rigs::PartsRigScene`]),
 //! for realizers to draw and for joint reads, ragdolls and severed parts to
 //! read. A sample poses the mesh here through the same evaluator, so it
 //! answers within the call.
@@ -38,9 +39,14 @@ pub(crate) fn evaluate_poses(
 ) -> ::animation_pose::Settled {
     let state = &mut *call.state;
     let (poses, resources) = (&mut state.poses, &state.render_resources);
-    poses.settle(world.elapsed_seconds(), world, &|asset| {
+    let mut settled = poses.settle(world.elapsed_seconds(), world, &|asset| {
         decoded_model(resources, asset)
-    })
+    });
+    settled
+        .poses
+        .ops
+        .extend(state.parts_rigs.settle(world.elapsed_seconds(), world));
+    settled
 }
 
 /// The decoded mesh of an animated mesh asset a renderer change defines.

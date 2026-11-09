@@ -13,7 +13,8 @@
 //! keep their skins and every resolved clip.
 //!
 //! Some nodes fail the job, naming the node, where glTF has no counterpart:
-//! sprites, voxel-surface materials and voxel objects, and ambient lights.
+//! sprites, parts rigs, voxel-surface materials and voxel objects, and
+//! ambient lights.
 //! Hidden nodes are exported too.
 //! No GPU is involved: the geometry, decoding and slot colours come from
 //! render-wgpu's CPU-side vocabulary (`render_wgpu::cpu`), so the export
@@ -102,6 +103,7 @@ enum Kind {
     },
     VoxelObject,
     Sprite,
+    PartsRig,
     Light(LightDescriptor),
 }
 
@@ -233,6 +235,17 @@ impl Frozen {
                     batch.sprite.transform,
                     batch.sprite.metadata.label.clone(),
                     Kind::Sprite,
+                ),
+                RenderDiff::CreatePartsRig {
+                    handle,
+                    parent,
+                    rig,
+                } => (
+                    *handle,
+                    *parent,
+                    rig.transform,
+                    rig.metadata.label.clone(),
+                    Kind::PartsRig,
                 ),
                 RenderDiff::CreateLight {
                     handle,
@@ -628,6 +641,12 @@ impl<'a> Writer<'a> {
             Kind::Sprite => {
                 return Err(format!(
                     "exportGlb: sprite {} is not representable as a glTF node",
+                    handle.raw()
+                ))
+            }
+            Kind::PartsRig => {
+                return Err(format!(
+                    "exportGlb: parts rig {} is not representable as a glTF node",
                     handle.raw()
                 ))
             }

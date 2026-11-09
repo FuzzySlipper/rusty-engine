@@ -227,56 +227,65 @@ fn gl_dpdy2(value: vec2<f32>) -> vec2<f32> {
     return -dpdy(value);
 }
 
-fn shaded_sprite(drawn: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
-    var in = drawn;
-    let shift = stepped(in);
-    in.uv.x += sign(in.sway.y) * shift;
-    in.cell.x += shift / max(abs(in.sway.y), 1e-6);
-    // Derivatives and samples first: they need uniform control flow.
-    let q0 = dpdx(in.world_position);
-    let q1 = gl_dpdy3(in.world_position);
-    let st0 = dpdx(in.uv);
-    let st1 = gl_dpdy2(in.uv);
+// What a sprite's lighting reads at a fragment, taken where control flow is
+// still uniform: its place's and its frame's screen derivatives, and its
+// detail texture.
+struct SpriteSurface {
+    world_position: vec3<f32>,
+    // Toward the side the fragment is seen from: `face` (1 at the front, -1
+    // at the back) times the drawn normal.
+    normal: vec3<f32>,
+    face: f32,
+    // Where the fragment lies in its frame, in image orientation.
+    cell: vec2<f32>,
+    q0: vec3<f32>,
+    q1: vec3<f32>,
+    cell0: vec2<f32>,
+    cell1: vec2<f32>,
+    detail: vec4<f32>,
+    height_x: f32,
+    height_y: f32,
+    geometry_roughness: f32,
+};
+
+fn sprite_surface(world_position: vec3<f32>, normal: vec3<f32>, uv: vec2<f32>, cell: vec2<f32>, front: bool) -> SpriteSurface {
+    var surface: SpriteSurface;
+    surface.world_position = world_position;
+    surface.cell = cell;
+    surface.q0 = dpdx(world_position);
+    surface.q1 = gl_dpdy3(world_position);
+    let st0 = dpdx(uv);
+    let st1 = gl_dpdy2(uv);
     // The frame's own derivatives: the whole-texture uv's, whatever the
     // frame's share of the sheet.
-    let cell0 = dpdx(in.cell);
-    let cell1 = gl_dpdy2(in.cell);
-    let texel = textureSample(sprite_color, sprite_color_sampler, in.uv);
-    // An HDR tint (above 1) brightens unclamped.
-    let tinted = mix(vec3<f32>(1.0), in.tint.rgb, textureSample(sprite_tint_mask, sprite_tint_mask_sampler, in.uv).a);
-    let color = vec4<f32>(texel.rgb * tinted, texel.a * in.tint.a);
-    // Light of its own, added after its lighting: its alpha masks it as it
-    // does the rest of the sprite, and the tint's colour leaves it alone.
-    let map = textureSample(sprite_emission_map, sprite_emission_sampler, in.uv);
-    let emitted = in.emission * map.rgb * map.a;
-    let detail = textureSample(sprite_detail, sprite_detail_sampler, in.uv);
-    let height_x = textureSample(sprite_detail, sprite_detail_sampler, in.uv + st0).x;
-    let height_y = textureSample(sprite_detail, sprite_detail_sampler, in.uv + st1).x;
-    var normal = normalize(in.normal);
-    let face = select(-1.0, 1.0, front);
-    normal = normal * face;
-    let normal_change = max(abs(dpdx(normal)), abs(dpdy(normal)));
-    let geometry_roughness = max(max(normal_change.x, normal_change.y), normal_change.z);
+    surface.cell0 = dpdx(cell);
+    surface.cell1 = gl_dpdy2(cell);
+    surface.detail = textureSample(sprite_detail, sprite_detail_sampler, uv);
+    surface.height_x = textureSample(sprite_detail, sprite_detail_sampler, uv + st0).x;
+    surface.height_y = textureSample(sprite_detail, sprite_detail_sampler, uv + st1).x;
+    surface.face = select(-1.0, 1.0, front);
+    surface.normal = normalize(normal) * surface.face;
+    let normal_change = max(abs(dpdx(surface.normal)), abs(dpdy(surface.normal)));
+    surface.geometry_roughness = max(max(normal_change.x, normal_change.y), normal_change.z);
+    return surface;
+}
 
-    // A row stepped past its frame's side shows nothing of the next frame.
-    if in.sway.x != 0.0 && (in.cell.x < 0.0 || in.cell.x > 1.0) {
-        discard;
-    }
-    let cutoff = in.params.y;
-    if masked && cutoff > 0.0 && color.a < cutoff {
-        discard;
-    }
-    let mode = u32(in.params.x + 0.5);
+// `color` and `emitted` lit by the sprite's lighting mode (`params.x`).
+fn lit_sprite(surface: SpriteSurface, params: vec4<f32>, color: vec4<f32>, emitted: vec3<f32>) -> vec4<f32> {
+    let mode = u32(params.x + 0.5);
     if mode == 0u {
-        return finish(vec4<f32>(color.rgb + emitted, color.a), in.world_position);
+        return finish(vec4<f32>(color.rgb + emitted, color.a), surface.world_position);
     }
-    let strength = in.params.z;
+    let strength = params.z;
+    var normal = surface.normal;
+    let q0 = surface.q0;
+    let q1 = surface.q1;
     let q1_perp = cross(q1, normal);
     let q0_perp = cross(normal, q0);
     if mode == 1u || mode == 2u {
         // Tangent frame from screen derivatives (perturbNormal2Arb).
-        let tangent = q1_perp * cell0.x + q0_perp * cell1.x;
-        let bitangent = q1_perp * cell0.y + q0_perp * cell1.y;
+        let tangent = q1_perp * surface.cell0.x + q0_perp * surface.cell1.x;
+        let bitangent = q1_perp * surface.cell0.y + q0_perp * surface.cell1.y;
         let largest = max(dot(tangent, tangent), dot(bitangent, bitangent));
         var scale = 0.0;
         if largest > 0.0 {
@@ -286,27 +295,54 @@ fn shaded_sprite(drawn: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
         var local = vec3<f32>(0.0, 0.0, 1.0);
         if mode == 1u {
             // Synthetic dome over the sprite's atlas frame.
-            let radius = max(0.001, 1.0 + in.params.w);
-            let xy = (in.cell * 2.0 - 1.0) * strength / radius;
+            let radius = max(0.001, 1.0 + params.w);
+            let xy = (surface.cell * 2.0 - 1.0) * strength / radius;
             local = vec3<f32>(xy, sqrt(max(0.001, 1.0 - min(dot(xy, xy), 0.999))));
         } else {
-            local = detail.xyz * 2.0 - 1.0;
+            local = surface.detail.xyz * 2.0 - 1.0;
             local = vec3<f32>(local.xy * strength, local.z);
         }
         normal = normalize(tbn * local);
     } else {
         // Height map from red (perturbNormalArb).
-        let height = strength * detail.x;
-        let gradient = vec2<f32>(strength * height_x - height, strength * height_y - height);
-        let determinant = dot(q0, q1_perp) * face;
+        let height = strength * surface.detail.x;
+        let gradient = vec2<f32>(strength * surface.height_x - height, strength * surface.height_y - height);
+        let determinant = dot(q0, q1_perp) * surface.face;
         let direction = sign(determinant) * (gradient.x * q1_perp + gradient.y * q0_perp);
         normal = normalize(abs(determinant) * normal - direction);
     }
-    let roughness = min(SPRITE_ROUGHNESS + geometry_roughness, 1.0);
+    let roughness = min(SPRITE_ROUGHNESS + surface.geometry_roughness, 1.0);
     return finish(
-        vec4<f32>(standard_radiance(color.rgb, normal, in.world_position, roughness, 0.0, 1.0) + emitted, color.a),
-        in.world_position,
+        vec4<f32>(standard_radiance(color.rgb, normal, surface.world_position, roughness, 0.0, 1.0) + emitted, color.a),
+        surface.world_position,
     );
+}
+
+fn shaded_sprite(drawn: SpriteOut, front: bool, masked: bool) -> vec4<f32> {
+    var in = drawn;
+    let shift = stepped(in);
+    in.uv.x += sign(in.sway.y) * shift;
+    in.cell.x += shift / max(abs(in.sway.y), 1e-6);
+    // Derivatives and samples first: they need uniform control flow.
+    let surface = sprite_surface(in.world_position, in.normal, in.uv, in.cell, front);
+    let texel = textureSample(sprite_color, sprite_color_sampler, in.uv);
+    // An HDR tint (above 1) brightens unclamped.
+    let tinted = mix(vec3<f32>(1.0), in.tint.rgb, textureSample(sprite_tint_mask, sprite_tint_mask_sampler, in.uv).a);
+    let color = vec4<f32>(texel.rgb * tinted, texel.a * in.tint.a);
+    // Light of its own, added after its lighting: its alpha masks it as it
+    // does the rest of the sprite, and the tint's colour leaves it alone.
+    let map = textureSample(sprite_emission_map, sprite_emission_sampler, in.uv);
+    let emitted = in.emission * map.rgb * map.a;
+
+    // A row stepped past its frame's side shows nothing of the next frame.
+    if in.sway.x != 0.0 && (in.cell.x < 0.0 || in.cell.x > 1.0) {
+        discard;
+    }
+    let cutoff = in.params.y;
+    if masked && cutoff > 0.0 && color.a < cutoff {
+        discard;
+    }
+    return lit_sprite(surface, in.params, color, emitted);
 }
 
 // A sprite's colour at `fade` of its alpha, premultiplied when it adds to
@@ -338,6 +374,151 @@ struct OpaqueSpriteOut {
 fn fs_sprite_opaque(in: SpriteOut, @builtin(front_facing) front: bool) -> OpaqueSpriteOut {
     let cutoff = in.params.y;
     let color = shaded_sprite(in, front, false);
+    var mask = 0xffffffffu;
+    if cutoff > 0.0 {
+        mask = mask_coverage(color.a, cutoff);
+    }
+    return OpaqueSpriteOut(vec4<f32>(color.rgb, 1.0), mask);
+}
+
+// Parts rig: a posed figure's pieces on one plane, placed per view by a
+// sprite row (`model`, tint, lighting, emission) whose quad is unused. Each
+// vertex is in rig units on that plane, with its piece's page uv, colours
+// and page region. Pieces draw in the rig's draw order, each run of one page
+// and blend mode by one call (`parts_rigs.rs`).
+struct PartsRigIn {
+    // x right, y up, in rig units.
+    @location(0) position: vec2<f32>,
+    @location(1) model0: vec4<f32>,
+    @location(2) model1: vec4<f32>,
+    @location(3) model2: vec4<f32>,
+    @location(4) model3: vec4<f32>,
+    // x: rig units per texel of the grid it snaps to, 0 for none.
+    @location(5) snap: vec4<f32>,
+    @location(6) tint: vec4<f32>,
+    @location(7) quad: vec4<f32>,
+    @location(8) params: vec4<f32>,
+    @location(9) soft: vec4<f32>,
+    @location(10) emission: vec4<f32>,
+    @location(11) uv: vec2<f32>,
+    // The piece's colour, sRGB with linear alpha.
+    @location(12) light: vec4<f32>,
+    // The piece's dark colour, sRGB; a: 1 when its page is premultiplied.
+    @location(13) dark: vec4<f32>,
+    // The piece's page region: u0, v0, u1, v1.
+    @location(14) region: vec4<f32>,
+};
+
+struct PartsRigOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) world_position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
+    @location(3) tint: vec4<f32>,
+    @location(4) params: vec4<f32>,
+    @location(5) rig: vec2<f32>,
+    @location(6) light: vec4<f32>,
+    @location(7) dark: vec4<f32>,
+    @location(8) region: vec4<f32>,
+    @location(9) emission: vec3<f32>,
+    @location(10) snap: f32,
+};
+
+fn srgb_linear(value: vec3<f32>) -> vec3<f32> {
+    let low = value / 12.92;
+    let high = pow((value + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(high, low, value <= vec3<f32>(0.04045));
+}
+
+fn linear_srgb(value: vec3<f32>) -> vec3<f32> {
+    let low = value * 12.92;
+    let high = 1.055 * pow(value, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(high, low, value <= vec3<f32>(0.0031308));
+}
+
+@vertex
+fn vs_parts_rig(in: PartsRigIn) -> PartsRigOut {
+    let model = mat4x4<f32>(in.model0, in.model1, in.model2, in.model3);
+    let world = model * vec4<f32>(in.position, 0.0, 1.0);
+    var out: PartsRigOut;
+    out.clip = frame.view_proj * world;
+    out.world_position = world.xyz / world.w;
+    out.normal = normalize((model * vec4<f32>(0.0, 0.0, 1.0, 0.0)).xyz);
+    out.uv = in.uv;
+    out.tint = in.tint;
+    out.params = in.params;
+    out.rig = in.position;
+    out.light = vec4<f32>(srgb_linear(in.light.rgb), in.light.a);
+    out.dark = vec4<f32>(srgb_linear(in.dark.rgb), in.dark.a);
+    out.region = in.region;
+    out.emission = in.emission.xyz;
+    out.snap = in.snap.x;
+    return out;
+}
+
+// A rig piece's colour, straight alpha, lit; `masked` discards below the
+// alpha cutoff.
+fn shaded_parts_rig(in: PartsRigOut, front: bool, masked: bool) -> vec4<f32> {
+    // Derivatives and samples first: they need uniform control flow.
+    let rig_x = dpdx(in.rig);
+    let rig_y = dpdy(in.rig);
+    let uv_x = dpdx(in.uv);
+    let uv_y = dpdy(in.uv);
+    let extent = max(in.region.zw - in.region.xy, vec2<f32>(1e-6));
+    let surface = sprite_surface(in.world_position, in.normal, in.uv, (in.uv - in.region.xy) / extent, front);
+    var texel = textureSample(sprite_color, sprite_color_sampler, in.uv);
+    var outside = false;
+    if in.snap > 0.0 {
+        // The colour at the centre of the fragment's cell of the rig's
+        // texel grid: the page uv there by the piece's affine map from the
+        // rig's plane, which is the triangle's, taken from the screen
+        // derivatives. A centre off the piece's region draws nothing.
+        let centre = (floor(in.rig / in.snap) + 0.5) * in.snap;
+        var uv = in.uv;
+        let determinant = rig_x.x * rig_y.y - rig_x.y * rig_y.x;
+        if abs(determinant) > 1e-20 {
+            let to_rig = mat2x2<f32>(vec2<f32>(rig_y.y, -rig_x.y), vec2<f32>(-rig_y.x, rig_x.x)) * (1.0 / determinant);
+            uv = in.uv + mat2x2<f32>(uv_x, uv_y) * to_rig * (centre - in.rig);
+        }
+        outside = any(uv < in.region.xy) || any(uv > in.region.zw);
+        let size = textureDimensions(sprite_color);
+        let at = clamp(vec2<i32>(floor(uv * vec2<f32>(size))), vec2<i32>(0), vec2<i32>(size) - 1);
+        texel = textureLoad(sprite_color, at, 0);
+    }
+    // Straight colour, then the slot's two-colour tint (Spine's): the light
+    // colour multiplies the texel and the dark colour fills what it leaves.
+    // A premultiplied page was premultiplied in its encoded (sRGB) values,
+    // so it is divided there.
+    var straight = texel.rgb;
+    if in.dark.a > 0.5 {
+        straight = srgb_linear(min(linear_srgb(texel.rgb) / max(texel.a, 1e-6), vec3<f32>(1.0)));
+    }
+    let rgb = (1.0 - straight) * in.dark.rgb + straight * in.light.rgb;
+    let color = vec4<f32>(max(rgb, vec3<f32>(0.0)) * in.tint.rgb, texel.a * in.light.a * in.tint.a);
+
+    if outside {
+        discard;
+    }
+    let cutoff = in.params.y;
+    if masked && cutoff > 0.0 && color.a < cutoff {
+        discard;
+    }
+    return lit_sprite(surface, in.params, color, in.emission);
+}
+
+// Blended pieces, premultiplied: each slot blend mode is a blend state over
+// this (`parts_rigs.rs`).
+@fragment
+fn fs_parts_rig(in: PartsRigOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let color = shaded_parts_rig(in, front, true);
+    return vec4<f32>(color.rgb * color.a, color.a);
+}
+
+// Solid pieces, as solid sprites are drawn.
+@fragment
+fn fs_parts_rig_opaque(in: PartsRigOut, @builtin(front_facing) front: bool) -> OpaqueSpriteOut {
+    let cutoff = in.params.y;
+    let color = shaded_parts_rig(in, front, false);
     var mask = 0xffffffffu;
     if cutoff > 0.0 {
         mask = mask_coverage(color.a, cutoff);

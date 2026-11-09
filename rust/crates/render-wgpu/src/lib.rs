@@ -54,6 +54,7 @@ mod motion;
 mod occlusion;
 mod overlays;
 mod particles;
+mod parts_rigs;
 mod pipelines;
 mod post;
 mod precipitation;
@@ -648,6 +649,8 @@ pub struct Renderer {
     /// Counts applied deltas; offscreen composition targets re-render when
     /// it moves past the value they were drawn at.
     scene_generation: u64,
+    /// Counts parts rig definitions (`parts_rigs.rs`).
+    parts_rig_generation: u64,
     compose: compose::Compose,
     /// The picture the primary views draw into at render resolution while
     /// an upscale stage or an image effect runs, kept while its size and
@@ -957,6 +960,7 @@ impl Renderer {
             inspection_views: Vec::new(),
             drawn_inspection: Vec::new(),
             scene_generation: 0,
+            parts_rig_generation: 0,
             compose: compose::Compose::new(device, compose_shader),
             picture: None,
             reconstruction_picture: None,

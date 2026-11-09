@@ -156,6 +156,12 @@ impl Renderer {
                     self.tables.atlases.remove(id);
                 }
             }
+            RenderDiff::DefinePartsRig { asset } => self.define_parts_rig(asset),
+            RenderDiff::ReleasePartsRig { asset } => {
+                if let Some(id) = self.tables.names.get(asset) {
+                    self.tables.parts_rigs.remove(id);
+                }
+            }
             RenderDiff::SetBackgroundColor { color } => {
                 self.tables.environment = Environment::Color(*color);
                 self.tables.environment_dirty = true;
@@ -497,6 +503,30 @@ impl Renderer {
                     NodeKind::Sprite(Box::new(row)),
                 )
             }
+            RenderDiff::CreatePartsRig {
+                handle,
+                parent,
+                rig,
+            } => {
+                let asset = self.tables.names.id(&rig.asset);
+                self.insert_node(
+                    *handle,
+                    *parent,
+                    NodePlacement {
+                        local: crate::convert::transform_matrix(&rig.transform),
+                        visible: rig.visible,
+                        layer: rig.layer,
+                        shadow_casting: ShadowCasting::Cast,
+                        entity: rig.metadata.source_entity,
+                    },
+                    NodeKind::PartsRig(Box::new(crate::parts_rigs::PartsRigRow {
+                        asset,
+                        descriptor: rig.clone(),
+                        pose: None,
+                        pose_revision: 0,
+                    })),
+                )
+            }
             RenderDiff::CreateLight {
                 handle,
                 parent,
@@ -759,6 +789,12 @@ impl Renderer {
             RenderDiff::SetEvaluatedPose { handle, pose } => {
                 self.set_evaluated_pose(*handle, pose)?
             }
+            RenderDiff::SetPartsRigPose { handle, pose } => {
+                if let NodeKind::PartsRig(row) = &mut self.node_mut(*handle)?.kind {
+                    row.pose = Some(pose.clone());
+                    row.pose_revision += 1;
+                }
+            }
         }
         Ok(())
     }
@@ -808,7 +844,7 @@ impl Renderer {
         if let Some(parent) = parent.and_then(|parent| self.tables.nodes.get_mut(&parent)) {
             parent.children.push(handle);
         }
-        if matches!(kind, NodeKind::Sprite(_)) {
+        if matches!(kind, NodeKind::Sprite(_) | NodeKind::PartsRig(_)) {
             self.tables.sprites.insert(handle);
         }
         self.tables.nodes.insert(
@@ -1272,7 +1308,7 @@ impl Renderer {
                     }
                 }
             }
-            NodeKind::Group | NodeKind::Light(_) | NodeKind::Sprite(_) => {}
+            NodeKind::Group | NodeKind::Light(_) | NodeKind::Sprite(_) | NodeKind::PartsRig(_) => {}
         }
         let (world, shown, layer) = (node.world, node.world_visible, node.world_layer);
         let casts = node.shadow_casting.is_cast();
@@ -3148,6 +3184,10 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetMorphFocus { .. } => "setMorphFocus",
         RenderDiff::Create { .. } => "create",
         RenderDiff::CreateSpriteBatch { .. } => "createSpriteBatch",
+        RenderDiff::DefinePartsRig { .. } => "definePartsRig",
+        RenderDiff::ReleasePartsRig { .. } => "releasePartsRig",
+        RenderDiff::CreatePartsRig { .. } => "createPartsRig",
+        RenderDiff::SetPartsRigPose { .. } => "setPartsRigPose",
         RenderDiff::Update { .. } => "update",
         RenderDiff::Destroy { .. } => "destroy",
         RenderDiff::ReplaceMeshPayload { .. } => "replaceMeshPayload",

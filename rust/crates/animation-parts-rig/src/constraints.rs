@@ -129,7 +129,7 @@ impl Bones {
 }
 
 /// The lists one pass of the constraints works in, kept between steps.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Scratch {
     changed: Vec<usize>,
     below: Vec<usize>,

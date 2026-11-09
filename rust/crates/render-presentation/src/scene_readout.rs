@@ -124,6 +124,7 @@ pub enum SceneObjectDescription<'a> {
     VoxelObject(&'a VoxelObjectInstanceDescriptor),
     Sprite(&'a SpriteInstanceDescriptor),
     SpriteBatch(&'a SpriteBatchDescriptor),
+    PartsRig(&'a PartsRigInstanceDescriptor),
     Light(&'a LightDescriptor),
     /// A scatter patch's copies are not listed; how many there are is.
     Scatter {
@@ -206,6 +207,7 @@ impl PresentationWorld {
                 NodeKind::VoxelObject(value) => SceneObjectDescription::VoxelObject(value),
                 NodeKind::Sprite(value) => SceneObjectDescription::Sprite(value),
                 NodeKind::SpriteBatch(value) => SceneObjectDescription::SpriteBatch(value),
+                NodeKind::PartsRig(value) => SceneObjectDescription::PartsRig(value),
                 NodeKind::Light(value) => SceneObjectDescription::Light(value),
                 NodeKind::Scatter(value) => SceneObjectDescription::Scatter {
                     copies: value.instances.len(),
@@ -280,6 +282,12 @@ impl PresentationWorld {
             "voxelObject",
             users(Resource::VoxelObject),
             retained.voxel_objects.keys(),
+        );
+        list(
+            &mut resources,
+            "partsRig",
+            users(Resource::PartsRig),
+            retained.parts_rigs.keys(),
         );
         resources
     }
@@ -506,6 +514,7 @@ fn kind_name(kind: &NodeKind) -> &'static str {
         NodeKind::VoxelObject(_) => "voxelObject",
         NodeKind::Sprite(_) => "sprite",
         NodeKind::SpriteBatch(_) => "spriteBatch",
+        NodeKind::PartsRig(_) => "partsRig",
         NodeKind::Light(_) => "light",
         NodeKind::Scatter(_) => "scatter",
     }
@@ -518,6 +527,7 @@ fn layer(kind: &NodeKind) -> RenderLayer {
         NodeKind::AnimatedMesh(instance) => instance.layer,
         NodeKind::Sprite(sprite) => sprite.layer,
         NodeKind::SpriteBatch(batch) => batch.sprite.layer,
+        NodeKind::PartsRig(rig) => rig.layer,
         NodeKind::VoxelObject(_) | NodeKind::Light(_) | NodeKind::Scatter(_) => RenderLayer::Scene,
     }
 }
@@ -530,6 +540,7 @@ fn visible(kind: &NodeKind) -> Option<bool> {
         NodeKind::VoxelObject(instance) => Some(instance.visible),
         NodeKind::Sprite(sprite) => Some(sprite.visible),
         NodeKind::SpriteBatch(batch) => Some(batch.sprite.visible),
+        NodeKind::PartsRig(rig) => Some(rig.visible),
         NodeKind::Light(_) | NodeKind::Scatter(_) => None,
     }
 }
@@ -542,6 +553,7 @@ fn resource(kind: &NodeKind) -> Option<&str> {
         NodeKind::Sprite(sprite) => Some(&sprite.asset),
         NodeKind::SpriteBatch(batch) => Some(&batch.sprite.asset),
         NodeKind::Scatter(patch) => Some(&patch.asset),
+        NodeKind::PartsRig(rig) => Some(&rig.asset),
         NodeKind::Primitive(_) | NodeKind::Light(_) => None,
     }
 }

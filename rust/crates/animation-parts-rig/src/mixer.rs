@@ -26,6 +26,7 @@ const ATTACH_SETUP: u8 = 1;
 const ATTACH_RETAIN: u8 = 2;
 
 /// One clip on the track, playing or fading out.
+#[derive(Clone)]
 pub(crate) struct Entry {
     /// `None` is the empty clip a stop fades to.
     pub animation: Option<usize>,
@@ -114,6 +115,7 @@ pub(crate) struct SlotState {
 
 /// The pose the clips write into: bones' local values and slots' states,
 /// reset to setup each step.
+#[derive(Clone)]
 pub(crate) struct Working {
     pub locals: Vec<Local>,
     pub slots: Vec<SlotState>,
@@ -198,7 +200,7 @@ impl Working {
 }
 
 /// The track: the playing entry first, then each entry it fades from.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Mixer {
     pub chain: Vec<Entry>,
     changed: bool,
