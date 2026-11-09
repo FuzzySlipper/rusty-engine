@@ -3,8 +3,8 @@
 use std::ops::Range;
 
 use crate::clip::{self, Cut, Plan};
-use crate::constraints::{self, ConstraintKind};
-use crate::mixer::{Mixer, Working};
+use crate::constraints::{self, ConstraintKind, Pass, SliderApplication, SlotEvent};
+use crate::mixer::{apply_slider_colour, Mixer, Working};
 use crate::physics::Physics;
 use crate::rig::{AnimationData, BlendMode, Geometry, Rig, TimelineKind, VertexData};
 use crate::timeline::{key_index_at, order_of, sequence_frame_at};
@@ -161,9 +161,30 @@ pub struct Player {
     driven: Vec<(usize, BoneChannel, f64)>,
     scratch: constraints::Scratch,
     physics: Physics,
+    /// Each path constraint's slot-bone event under the skin.
+    plan: Vec<Option<SlotEvent>>,
+    /// The bones as the last step left them, kept when a path reads a slot
+    /// bone nothing in its pass brings up to date.
+    previous: Option<Vec<BoneWorld>>,
+    /// The sliders that ran this step, in order.
+    sliders: Vec<SliderApplication>,
+    /// Each slot's sequence frame, where a slider set or cleared it.
+    frames: Vec<Frame>,
     /// A slot's world vertices as doubles, before they are cut or stored.
     world: Vec<[f64; 2]>,
     clipping: clip::Scratch,
+    deform: (Vec<f64>, Vec<f64>),
+}
+
+/// The sequence frame a slot draws.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Frame {
+    /// The playing clip's.
+    Clip,
+    /// The attachment's setup frame: a slider switched the slot to it.
+    Setup,
+    /// A slider's sequence key.
+    At(usize),
 }
 
 impl Player {
@@ -179,8 +200,13 @@ impl Player {
             driven: Vec::new(),
             scratch: constraints::Scratch::default(),
             physics: Physics::new(rig.constraints.len()),
+            plan: Vec::new(),
+            previous: None,
+            sliders: Vec::new(),
+            frames: Vec::new(),
             world: Vec::new(),
             clipping: clip::Scratch::default(),
+            deform: (Vec::new(), Vec::new()),
         };
         player.set_skin(rig, None);
         player
@@ -219,6 +245,12 @@ impl Player {
                 .enumerate()
                 .map(|(i, b)| !b.skin_required || reached[i]),
         );
+        self.plan = constraints::slot_bone_plan(rig, &w.active, &self.applied, &w.lookup);
+        let stale = self.plan.iter().enumerate().any(|(i, e)| {
+            e.is_none()
+                && matches!(&rig.constraints[i].kind, ConstraintKind::Path(p) if p.offset_rotation != 0.0)
+        });
+        self.previous = stale.then(Vec::new);
     }
 
     pub fn skin(&self) -> Option<usize> {
@@ -279,7 +311,8 @@ impl Player {
     /// over what the clips posed and before the world transforms and the
     /// constraints read it, as rig-c's `adjust` does; `None` lets the clips
     /// pose it again. A product's driving value, such as a `turn` bone that
-    /// transform constraints read.
+    /// transform constraints read, or the dial a slider reads its
+    /// animation's time off.
     pub fn drive(&mut self, bone: usize, channel: BoneChannel, value: Option<f64>) {
         self.driven.retain(|d| (d.0, d.1) != (bone, channel));
         if let Some(value) = value {
@@ -347,19 +380,44 @@ impl Player {
         }
 
         world_transforms(&w.locals, &self.parents, &w.active, &mut pose.bones);
+        self.sliders.clear();
         if !rig.constraints.is_empty() {
             constraints::apply(
                 rig,
-                &w.constraints,
-                &self.applied,
-                &mut w.locals,
-                &mut pose.bones,
-                &w.active,
+                Pass {
+                    values: &mut w.constraints,
+                    applied: &self.applied,
+                    locals: &mut w.locals,
+                    world: &mut pose.bones,
+                    active: &w.active,
+                    slots: &w.slots,
+                    lookup: &w.lookup,
+                    plan: &self.plan,
+                    previous: self.previous.as_deref().unwrap_or_default(),
+                    sliders: &mut self.sliders,
+                },
                 &mut self.scratch,
                 &mut self.physics,
             );
         }
         self.physics.resetting = false;
+        if let Some(previous) = &mut self.previous {
+            previous.clone_from(&pose.bones);
+        }
+        // Every slot draws its clip's frame unless a slider ran.
+        self.frames.clear();
+        if !self.sliders.is_empty() {
+            self.frames.resize(rig.slots.len(), Frame::Clip);
+        }
+        for app in &self.sliders {
+            apply_slider_slots(
+                rig,
+                w,
+                app,
+                &mut self.frames,
+                (&mut self.deform.0, &mut self.deform.1),
+            );
+        }
         let w = &self.working;
 
         // Draw order and sequence frames follow track 0's playing clip.
@@ -373,6 +431,13 @@ impl Player {
             None => {
                 self.order.clear();
                 self.order.extend(0..rig.slots.len());
+            }
+        }
+        // A slider's draw-order key, after the clip's, at any mix but 0.
+        for app in &self.sliders {
+            let a = &rig.animations[app.animation];
+            if let Some(i) = key_index_at(a.draw_order.iter().map(|k| k.time), app.at) {
+                order_of(rig.slots.len(), &a.draw_order[i].moves, &mut self.order);
             }
         }
 
@@ -414,6 +479,7 @@ impl Player {
                 let shape = Shape {
                     playing,
                     animation_time,
+                    frame: self.frames.get(slot).copied().unwrap_or(Frame::Clip),
                     clip: active.as_ref().map(|a| &a.1),
                 };
                 draw(
@@ -461,6 +527,7 @@ impl Player {
 struct Shape<'a> {
     playing: Option<&'a AnimationData>,
     animation_time: f64,
+    frame: Frame,
     clip: Option<&'a Plan>,
 }
 
@@ -481,7 +548,9 @@ fn draw(
         return;
     }
     let mut frame = a.setup_frame;
-    if let Some(animation) = shape.playing {
+    if let Frame::At(f) = shape.frame {
+        frame = f;
+    } else if let (Frame::Clip, Some(animation)) = (shape.frame, shape.playing) {
         let identity = a.deform_identity;
         let count = rig.attachments[identity].frames.max(1);
         for (target, keys) in &animation.sequences {
@@ -520,7 +589,7 @@ fn draw(
                 world,
             );
         }
-        Geometry::Inert => return,
+        Geometry::Path(_) | Geometry::Inert => return,
     }
     let drawable = a.drawables + frame;
     let start = pose.vertices.len();
@@ -567,8 +636,104 @@ fn draw(
     });
 }
 
+/// What a slider's animation keys on the slots, after the clips' and the
+/// sliders' before it, at the time and mix it ran with (rig-c's
+/// `applySliderSlots` and `attachmentStates`): each slot on an active bone
+/// switches attachment at any mix but 0, a switch to another placeholder
+/// dropping the deform and sequence frame the slot had; its colours move
+/// toward the keyed ones by the mix; then the deforms and sequence frames
+/// of what it shows.
+fn apply_slider_slots(
+    rig: &Rig,
+    w: &mut Working,
+    app: &SliderApplication,
+    frames: &mut [Frame],
+    (target, scratch): (&mut Vec<f64>, &mut Vec<f64>),
+) {
+    let animation = &rig.animations[app.animation];
+    let live = |w: &Working, slot: usize| w.active[rig.slots[slot].bone];
+    for tl in &animation.timelines {
+        match &tl.kind {
+            TimelineKind::Attachment { slot, keys } => {
+                let slot = *slot;
+                if !live(w, slot) {
+                    continue;
+                }
+                if let Some(i) = key_index_at(keys.iter().map(|k| k.0), app.at) {
+                    let next = keys[i].1;
+                    let s = &mut w.slots[slot];
+                    if next != s.placeholder {
+                        s.deform = None;
+                        frames[slot] = Frame::Setup;
+                        s.placeholder = next;
+                    }
+                }
+            }
+            TimelineKind::Colour { slot, .. } => {
+                if live(w, *slot) {
+                    apply_slider_colour(&mut w.slots[*slot], tl, app.at, app.alpha);
+                }
+            }
+            TimelineKind::Deform { identity, keys } => {
+                let Some(mesh) = rig.attachments[*identity].geometry.deformed() else {
+                    continue;
+                };
+                let weighted = mesh.vertices.weighted();
+                for slot in 0..w.slots.len() {
+                    if !live(w, slot) {
+                        continue;
+                    }
+                    let shown = w.resolve(rig, slot, w.slots[slot].placeholder);
+                    let Some(shown) = shown.map(|a| &rig.attachments[a]) else {
+                        continue;
+                    };
+                    if shown.deform_identity != *identity
+                        || shown.geometry.deformed().is_none()
+                            && !matches!(shown.geometry, Geometry::Linked { .. })
+                    {
+                        continue;
+                    }
+                    if !keys.at(&mesh.setup, weighted, app.at, target, scratch) {
+                        continue;
+                    }
+                    let s = &mut w.slots[slot];
+                    let (alpha, additive) = (app.alpha, app.additive);
+                    if alpha == 1.0 && (!additive || s.deform.is_none()) {
+                        s.deform = Some(target.clone());
+                        continue;
+                    }
+                    let current = s.deform.get_or_insert_with(|| mesh.setup.clone());
+                    for ((c, t), setup) in current.iter_mut().zip(target.iter()).zip(&mesh.setup) {
+                        *c += if additive {
+                            (t - setup) * alpha
+                        } else {
+                            (t - *c) * alpha
+                        };
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    for (identity, keys) in &animation.sequences {
+        let count = rig.attachments[*identity].frames.max(1);
+        let Some(f) = sequence_frame_at(keys, count, app.at) else {
+            continue;
+        };
+        for (slot, frame) in frames.iter_mut().enumerate() {
+            if !live(w, slot) {
+                continue;
+            }
+            let shown = w.resolve(rig, slot, w.slots[slot].placeholder);
+            if shown.is_some_and(|a| rig.attachments[a].deform_identity == *identity) {
+                *frame = Frame::At(f);
+            }
+        }
+    }
+}
+
 /// rig-c's `worldVertices` / `deformedWorldVertices`, as doubles.
-fn mesh_vertices(
+pub(crate) fn mesh_vertices(
     vertices: &VertexData,
     deform: Option<&[f64]>,
     bone: &BoneWorld,
@@ -675,7 +840,9 @@ mod tests {
                         && match c.kind {
                             ConstraintKind::Transform(_) => true,
                             ConstraintKind::Physics(_) => k == WIND || k == GRAVITY,
-                            ConstraintKind::Ik(_) => false,
+                            ConstraintKind::Ik(_)
+                            | ConstraintKind::Path(_)
+                            | ConstraintKind::Slider(_) => false,
                         };
                     let want = if adds { b * 1.5 } else { *b };
                     assert!(

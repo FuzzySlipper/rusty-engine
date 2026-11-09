@@ -1,0 +1,740 @@
+{
+ "spec": "rigc-motion/1",
+ "archetype": "sliders",
+ "cut": "sliders",
+ "easings": {
+  "smooth": [
+   0.25,
+   0,
+   0.75,
+   1
+  ]
+ },
+ "animations": {
+  "face": {
+   "duration": 1.2,
+   "loop": false,
+   "tracks": [
+    {
+     "bone": "t1",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        40
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        -20
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "t2",
+     "property": "scale",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1,
+        1
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        1.5,
+        -1
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "t3",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        30,
+        -40
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "t4",
+     "property": "shear",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        20,
+        -10
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "shared",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        90
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_t2",
+     "property": "rgba",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1,
+        1,
+        1,
+        1
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0.2,
+        0.4,
+        1,
+        0.5
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_eyes",
+     "property": "attachment",
+     "keys": [
+      {
+       "t": 0,
+       "v": "eyes"
+      },
+      {
+       "t": 0.5,
+       "v": "eyes_shut"
+      }
+     ]
+    }
+   ],
+   "deform": [
+    {
+     "slot": "s_ball",
+     "attachment": "ball",
+     "keys": [
+      {
+       "t": 0
+      },
+      {
+       "t": 1.2,
+       "transform": {
+        "kind": "affine",
+        "scale": [
+         1.4,
+         0.6
+        ]
+       }
+      }
+     ]
+    }
+   ],
+   "drawOrder": [
+    {
+     "t": 0.6,
+     "offsets": [
+      {
+       "slot": "s_t1",
+       "offset": 3
+      }
+     ]
+    }
+   ]
+  },
+  "wave": {
+   "duration": 1.0,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "t1",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.5,
+       "v": [
+        30
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "shared",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        -60
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "t2",
+     "property": "scalex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        2
+       ]
+      }
+     ]
+    }
+   ],
+   "deform": [
+    {
+     "slot": "s_weighted",
+     "attachment": "leg",
+     "keys": [
+      {
+       "t": 0
+      },
+      {
+       "t": 1,
+       "vertices": [
+        10,
+        5,
+        -4,
+        3,
+        6,
+        -6
+       ],
+       "offset": 2
+      }
+     ]
+    }
+   ]
+  },
+  "pulse": {
+   "duration": 1.0,
+   "loop": false,
+   "tracks": [
+    {
+     "bone": "t2",
+     "property": "scale",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.5,
+        2
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        1.5,
+        -1.5
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "tin",
+     "property": "inherit",
+     "keys": [
+      {
+       "t": 0.2,
+       "v": "noScale"
+      }
+     ]
+    },
+    {
+     "bone": "t3",
+     "property": "translatex",
+     "keys": [
+      {
+       "t": 0.5,
+       "v": [
+        20
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        -20
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_eyes",
+     "property": "attachment",
+     "keys": [
+      {
+       "t": 0.5,
+       "v": null
+      }
+     ]
+    }
+   ]
+  },
+  "gusty": {
+   "duration": 1.0,
+   "loop": false,
+   "tracks": [
+    {
+     "physics": "hair2",
+     "property": "wind",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        3
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        -2
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "hair2",
+     "property": "mass",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        2
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        0.5
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "*",
+     "property": "gravity",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        3
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "hair2",
+     "property": "damping",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.5
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "alt_pose": {
+   "duration": 1.0,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "t4",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        45
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "drive": {
+   "duration": 2.0,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "dial",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -30
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1,
+       "v": [
+        30
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 2,
+       "v": [
+        -30
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "wparent",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        60
+       ]
+      },
+      {
+       "t": 2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "wdial",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 2,
+       "v": [
+        350
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "base",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        20
+       ]
+      },
+      {
+       "t": 2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "slider": "pulse",
+     "property": "time",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -0.2
+       ]
+      },
+      {
+       "t": 2,
+       "v": [
+        1.5
+       ]
+      }
+     ]
+    },
+    {
+     "slider": "pulse",
+     "property": "mix",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.5
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        1
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.5,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 2,
+       "v": [
+        0.5
+       ]
+      }
+     ]
+    },
+    {
+     "slider": "gust",
+     "property": "time",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 2,
+       "v": [
+        1
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "idle": {
+   "duration": 1.0,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.5,
+       "v": [
+        -15
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "t1",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.5,
+       "v": [
+        25
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        0
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "wave_x": {
+   "duration": 1.0,
+   "loop": false,
+   "tracks": [
+    {
+     "slot": "s_t3",
+     "property": "rgb2",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1,
+        1,
+        1,
+        0.1,
+        0.2,
+        0.3
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        0.3,
+        0.9,
+        0.5,
+        0.8,
+        0.1,
+        0
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "pulse_x": {
+   "duration": 1.0,
+   "loop": false,
+   "tracks": [
+    {
+     "slot": "s_t4",
+     "property": "alpha",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.9
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        0.2
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "face_x": {
+   "duration": 0.3,
+   "loop": false,
+   "tracks": [],
+   "sequence": [
+    {
+     "slot": "s_seq",
+     "attachment": "blink",
+     "keys": [
+      {
+       "t": 0.3,
+       "mode": "loop",
+       "delay": 0.2
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

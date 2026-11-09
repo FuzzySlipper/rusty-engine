@@ -15,7 +15,7 @@ use std::path::Path;
 use animation_parts_rig::{BlendMode, BoneChannel, Layer, Play, Player, Pose, Rig};
 use serde_json::Value;
 
-const FIXTURES: [&str; 12] = [
+const FIXTURES: [&str; 15] = [
     "squash",
     "turned",
     "flex",
@@ -26,8 +26,11 @@ const FIXTURES: [&str; 12] = [
     "constraints",
     "townsperson",
     "physics",
-    "whip",
     "clipping",
+    "look",
+    "ride",
+    "paths",
+    "sliders",
 ];
 
 fn fixture(name: &str) -> String {
@@ -407,7 +410,7 @@ fn a_named_skin_activates_its_bone_and_slot() {
 }
 
 #[test]
-fn other_versions_and_unevaluated_constraints_are_refused_by_name() {
+fn other_versions_and_unposed_sliders_are_refused_by_name() {
     let text = fixture("squash.model.json");
     let older = text.replacen("\"rigc-compiled/3\"", "\"rigc-compiled/2\"", 1);
     let error = Rig::from_json(&older).err().unwrap().to_string();
@@ -416,17 +419,21 @@ fn other_versions_and_unevaluated_constraints_are_refused_by_name() {
         "{error}"
     );
 
-    let mut doc: Value = serde_json::from_str(&fixture("constraints.model.json")).unwrap();
-    let list = doc["constraints"].as_array_mut().unwrap();
-    list.push(serde_json::json!({ "kind": "slider", "name": "look", "animation": "hold" }));
-    list.push(serde_json::json!({ "kind": "path", "name": "rail", "bones": ["tw"] }));
+    // A slider whose animation keys another slider's timeline writes a later
+    // constraint's pose, which rig-c's core does not pose either.
+    let mut doc: Value = serde_json::from_str(&fixture("sliders.model.json")).unwrap();
+    let pulse = doc["animations"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|a| a["name"] == "pulse")
+        .unwrap();
+    pulse["constraints"]["slider"] = serde_json::json!([
+        { "name": "gust", "timelines": [{ "name": "mix", "keys": [{ "time": 0, "value": 0.5 }] }] }
+    ]);
     let error = Rig::from_json(&doc.to_string()).err().unwrap().to_string();
     assert!(
-        error.contains("slider \"look\"")
-            && error.contains("path \"rail\"")
-            && !error.contains("ik")
-            && !error.contains("transform")
-            && !error.contains("physics"),
+        error.contains("slider \"pulse\"") && !error.contains("gust"),
         "{error}"
     );
 }

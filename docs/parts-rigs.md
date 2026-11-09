@@ -40,10 +40,11 @@ gallery rig whose clip fires events with a second clip added over it.
 bundle) and each page it names from the file beside it. `Filter` is how the
 pages are sampled: `Nearest` for pixel art. It returns the rig with its bone,
 slot, clip, skin and page counts. A document of another `rigc-compiled`
-version is refused by name, and so is a rig declaring a path or slider
-constraint, which the Engine does not evaluate yet. IK, transform and
-physics constraints and clipping attachments are evaluated as rig-c's core
-does.
+version is refused by name. IK, transform, path, physics and slider
+constraints and clipping attachments are evaluated as rig-c's core does. A
+rig whose slider animation keys another constraint's timelines, or deforms a
+path a path constraint walks, is refused by name: rig-c's core does not pose
+those either.
 
 Disposing a `PartsRig` frees its pages; it is refused while an appearance
 shows the rig.
@@ -107,8 +108,9 @@ track's clip fires its events. Draw order and sequence frames follow track
 - `DriveBone`: hold one of a bone's local values (rotation, x, y, scale or
   shear) over what the clips pose and before the constraints read it, in
   every view whose rig has the bone: a product's driving value such as
-  Dagger's `turn` bone, which transform constraints read for the head turn.
-  `Release` lets the clips pose it again.
+  Dagger's `turn` bone, which transform constraints read for the head turn,
+  or a slider's dial, whose value picks the time its animation applies at
+  (rig-c's value-driven face turn). `Release` lets the clips pose it again.
 
 An object's motion in the world swings its physics (hair, cloth): what it
 moved since the last call along its own x and y axes, in rig units, moves
@@ -145,5 +147,8 @@ time, so reads describe the pose of the previous call.
 
 Each view is posed every call that moves time, so a figure of four views
 costs four poses. A rusty-dagger prototype townsperson rig (122 bones, 26
-transform constraints) poses in about 8 µs on den-agents. An unchanged pose
-is not sent again, and each reading draws one view per figure.
+transform constraints) poses in about 8 µs on den-agents. On rig-c's
+gallery rigs a path constraint on one bone adds about 0.5 µs a pose, and
+`look`'s two sliders, each applying a clip of 16 bones and mesh deforms,
+about 3 µs. An unchanged pose is not sent again, and each reading draws one
+view per figure.

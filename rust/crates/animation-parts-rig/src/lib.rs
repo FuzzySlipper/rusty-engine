@@ -13,19 +13,22 @@
 //! colour, blend mode and page. What each slot draws with (its page UVs and
 //! triangles) is the rig's, in [`Rig::drawable`].
 //!
-//! IK, transform and physics constraints are applied in the document's
-//! order after the bones' world transforms. Physics carries its state from
-//! step to step on the player, which takes the rig's own motion
-//! ([`Player::translate_physics`]) and the wind and gravity it answers
-//! ([`Player::set_physics_environment`]). Clipping attachments cut the
-//! pieces they cover, which then carry their own UVs and triangles
-//! ([`Piece::clipped`]). Path and slider constraints are not evaluated yet,
-//! and a rig that declares either is refused by name.
+//! IK, transform, path, physics and slider constraints are applied in the
+//! document's order after the bones' world transforms. A path places bones
+//! along the path attachment its slot shows, as deformed. A slider applies
+//! an animation at the time a dial bone's property gives (or at its own
+//! keyed time), so a product moves a face by driving the dial
+//! ([`Player::drive`]). Physics carries its state from step to step on the
+//! player, which takes the rig's own motion ([`Player::translate_physics`])
+//! and the wind and gravity it answers ([`Player::set_physics_environment`]).
+//! Clipping attachments cut the pieces they cover, which then carry their
+//! own UVs and triangles ([`Piece::clipped`]).
 
 mod clip;
 mod constraints;
 mod document;
 mod mixer;
+mod path;
 mod physics;
 mod pose;
 mod rig;

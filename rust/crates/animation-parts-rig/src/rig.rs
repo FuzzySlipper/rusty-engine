@@ -6,10 +6,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use crate::constraints::{
-    Bones, ConstraintData, ConstraintKind, ConstraintValues, IkData, IkScaleY, TransformData,
-    TransformFrom, TransformTo, BEND_POSITIVE, COMPRESS, STRETCH,
+    Bones, ConstraintData, ConstraintKind, ConstraintValues, IkData, IkScaleY, SliderData,
+    TransformData, TransformFrom, TransformTo, BEND_POSITIVE, COMPRESS, SLIDER_MIX, SLIDER_TIME,
+    STRETCH,
 };
 use crate::document::{self, Document};
+use crate::path::{PathData, PathGeometry, PositionMode, RotateMode, SpacingMode};
 use crate::physics::{self, PhysicsData};
 use crate::timeline::{
     f32r, DeformKey, DeformKeys, DrawOrderKey, EventKey, Keys, SequenceKey, SequenceMode,
@@ -27,8 +29,9 @@ pub enum RigError {
     Json(String),
     /// The document is another version of rig-c's model, or none.
     Spec(Option<String>),
-    /// The rig declares constraints of kinds the core does not evaluate yet
-    /// (path, physics, slider), as `(kind, name)`.
+    /// The rig declares constraints in shapes the core does not pose, as
+    /// `(kind, name)`: a slider whose animation keys constraint timelines
+    /// other than physics, or deforms a path a path constraint walks.
     Constraints(Vec<(String, String)>),
     /// A name the document uses and does not declare.
     Unresolved(String),
@@ -51,7 +54,7 @@ impl fmt::Display for RigError {
             RigError::Constraints(list) => {
                 write!(
                     f,
-                    "the rig declares constraints the parts-rig core does not evaluate yet:"
+                    "the rig declares constraints in shapes the parts-rig core does not pose:"
                 )?;
                 for (i, (kind, name)) in list.iter().enumerate() {
                     write!(f, "{} {kind} \"{name}\"", if i == 0 { "" } else { "," })?;
@@ -157,8 +160,22 @@ pub(crate) enum Geometry {
     Linked {
         source: usize,
     },
-    /// Bounding boxes and paths: posed by nothing here, drawn by nothing.
+    /// A path attachment: walked by path constraints, drawn by nothing.
+    Path(PathGeometry),
+    /// Bounding boxes and points: posed by nothing here, drawn by nothing.
     Inert,
+}
+
+impl Geometry {
+    /// The vertices a deform timeline moves: a mesh's (a clip's too) or a
+    /// path's.
+    pub fn deformed(&self) -> Option<&MeshData> {
+        match self {
+            Geometry::Mesh(mesh) => Some(mesh),
+            Geometry::Path(path) => Some(&path.vertices),
+            _ => None,
+        }
+    }
 }
 
 pub(crate) struct MeshData {
@@ -191,7 +208,7 @@ pub(crate) struct AttachmentData {
 
 impl AttachmentData {
     pub fn drawn(&self) -> bool {
-        self.clip.is_none() && !matches!(self.geometry, Geometry::Inert)
+        self.clip.is_none() && !matches!(self.geometry, Geometry::Inert | Geometry::Path(_))
     }
 }
 
@@ -244,10 +261,12 @@ pub(crate) enum TimelineKind {
         keys: DeformKeys,
     },
     Events(Vec<EventKey>),
-    /// An ik constraint's mix and softness, or a transform's six mixes; an
-    /// ik's flags per key.
+    /// An ik constraint's mix and softness, a transform's six mixes, a
+    /// path's position, spacing or three mixes, or a slider's time or mix:
+    /// its values from `first` on; an ik's flags per key.
     Constraint {
         constraint: usize,
+        first: usize,
         keys: Keys,
         flags: Vec<[bool; 3]>,
     },
@@ -284,7 +303,8 @@ pub(crate) enum Property {
     Attachment(usize),
     Deform(usize, usize),
     Event,
-    Constraint(usize),
+    /// A constraint and the first of the values a timeline keys.
+    Constraint(usize, usize),
     /// A physics constraint and one of its values.
     Physics(usize, usize),
 }
@@ -465,26 +485,55 @@ impl Names<'_> {
 impl Rig {
     /// Reads a `rigc-compiled/3` model document.
     ///
-    /// A document of another version and a rig with path or slider
-    /// constraints are refused by name.
+    /// A document of another version is refused by name, and so is a slider
+    /// whose animation keys ik, transform, path or slider timelines, or
+    /// deforms a path a path constraint walks: rig-c's core does not pose
+    /// those either.
     pub fn from_json(text: &str) -> Result<Rig, RigError> {
         let doc: Document =
             serde_json::from_str(text).map_err(|e| RigError::Json(e.to_string()))?;
         if doc.spec.as_deref() != Some(MODEL_SPEC) {
             return Err(RigError::Spec(doc.spec));
         }
-        let mut later = Vec::new();
-        for raw in &doc.constraints {
-            let head: document::ConstraintHead = serde_json::from_str(raw.get())
-                .map_err(|e| RigError::Json(format!("constraint {}: {e}", raw.get())))?;
-            if !matches!(head.kind.as_str(), "ik" | "transform" | "physics") {
-                later.push((head.kind, head.name));
+        let rig = Self::read(&doc)?;
+        let refused = rig.unposed_sliders(&doc);
+        if !refused.is_empty() {
+            return Err(RigError::Constraints(refused));
+        }
+        Ok(rig)
+    }
+
+    /// rig-c's `sliderBonesWhy`: the sliders whose animation writes a later
+    /// constraint's pose or deforms a curve a path constraint walks.
+    fn unposed_sliders(&self, doc: &Document) -> Vec<(String, String)> {
+        let walked: Vec<usize> = self
+            .constraints
+            .iter()
+            .filter_map(|c| match &c.kind {
+                ConstraintKind::Path(p) => Some(p.slot),
+                _ => None,
+            })
+            .collect();
+        let mut out = Vec::new();
+        for c in &self.constraints {
+            let ConstraintKind::Slider(s) = &c.kind else {
+                continue;
+            };
+            let a = &doc.animations[s.animation];
+            let keys_constraints = !a.constraints.ik.is_empty()
+                || !a.constraints.transform.is_empty()
+                || a.constraints.path.iter().any(|p| !p.timelines.is_empty())
+                || a.constraints.slider.iter().any(|p| !p.timelines.is_empty());
+            let deforms_walked = self.animations[s.animation].timelines.iter().any(|t| {
+                matches!(&t.kind, TimelineKind::Deform { identity, .. }
+                    if matches!(self.attachments[*identity].geometry, Geometry::Path(_))
+                        && t.properties.iter().any(|p| matches!(p, Property::Deform(slot, _) if walked.contains(slot))))
+            });
+            if keys_constraints || deforms_walked {
+                out.push(("slider".to_owned(), c.name.clone()));
             }
         }
-        if !later.is_empty() {
-            return Err(RigError::Constraints(later));
-        }
-        Self::read(&doc)
+        out
     }
 
     fn read(doc: &Document) -> Result<Rig, RigError> {
@@ -547,6 +596,12 @@ impl Rig {
             constraints.push(if head.kind == "physics" {
                 let c = serde_json::from_str(raw.get()).map_err(json)?;
                 read_physics(&c, &names, reference_scale)?
+            } else if head.kind == "path" {
+                let c = serde_json::from_str(raw.get()).map_err(json)?;
+                read_path(&c, &names, doc)?
+            } else if head.kind == "slider" {
+                let c = serde_json::from_str(raw.get()).map_err(json)?;
+                read_slider(&c, &names, doc)?
             } else {
                 let c = serde_json::from_str(raw.get()).map_err(json)?;
                 read_constraint(&c, &names)?
@@ -640,8 +695,14 @@ impl Rig {
             for name in &skin.constraints.transform {
                 listed.push(constraint_index(&constraints, "transform", name, &what)?);
             }
+            for name in &skin.constraints.path {
+                listed.push(constraint_index(&constraints, "path", name, &what)?);
+            }
             for name in &skin.constraints.physics {
                 listed.push(constraint_index(&constraints, "physics", name, &what)?);
+            }
+            for name in &skin.constraints.slider {
+                listed.push(constraint_index(&constraints, "slider", name, &what)?);
             }
             skins.push(SkinData {
                 name: skin.name.clone(),
@@ -777,6 +838,29 @@ impl Rig {
                     let setup = vertices.setup_array();
                     Geometry::Mesh(MeshData { vertices, setup })
                 }
+                "path" => {
+                    let vertices = vertex_data(r.vertices.as_ref(), &names, &what)?;
+                    let count = match &vertices {
+                        VertexData::Unweighted(xy) => xy.len() / 2,
+                        VertexData::Weighted { counts, .. } => counts.len(),
+                    };
+                    if count % 3 != 0
+                        || count < if r.closed { 3 } else { 6 }
+                        || r.lengths.len() != count / 3
+                    {
+                        return Err(RigError::Unresolved(format!(
+                            "{what}: a path of {count} points and {} lengths is not knots and handles in threes",
+                            r.lengths.len()
+                        )));
+                    }
+                    let setup = vertices.setup_array();
+                    Geometry::Path(PathGeometry {
+                        vertices: MeshData { vertices, setup },
+                        closed: r.closed,
+                        constant_speed: r.constant_speed.unwrap_or(true),
+                        lengths: r.lengths.clone(),
+                    })
+                }
                 _ => Geometry::Inert,
             };
             attachments.push(AttachmentData {
@@ -817,6 +901,13 @@ impl Rig {
                 &event_index,
                 &constraints,
             )?);
+        }
+        // A slider's keyed bones are its animation's, read after the
+        // animations.
+        for c in &mut constraints {
+            if let ConstraintKind::Slider(s) = &mut c.kind {
+                s.keyed = keyed_bones(&animations[s.animation]);
+            }
         }
         let constraint_bones = Bones::new(
             bones.iter().map(|b| b.parent).collect(),
@@ -974,7 +1065,9 @@ fn constraint_index(
                     (&c.kind, kind),
                     (ConstraintKind::Ik(_), "ik")
                         | (ConstraintKind::Transform(_), "transform")
+                        | (ConstraintKind::Path(_), "path")
                         | (ConstraintKind::Physics(_), "physics")
+                        | (ConstraintKind::Slider(_), "slider")
                 )
         })
         .ok_or_else(|| RigError::Unresolved(format!("{what}: no {kind} constraint \"{name}\"")))
@@ -994,6 +1087,148 @@ fn scale_y_mode(v: Option<&serde_json::Value>, what: &str) -> Result<IkScaleY, R
             "{what}: scaleY {v} is none of none, uniform, volume"
         ))),
     }
+}
+
+/// rig-c's `readPathRecord`, with the parser's value for each absent field.
+fn read_path(
+    c: &document::PathConstraint,
+    names: &Names<'_>,
+    doc: &Document,
+) -> Result<ConstraintData, RigError> {
+    let what = format!("path constraint \"{}\"", c.name);
+    let mut bones = Vec::with_capacity(c.bones.len());
+    for b in &c.bones {
+        bones.push(names.bone(b, &what)?);
+    }
+    if bones.is_empty() {
+        return Err(RigError::Unresolved(format!("{what}: it names no bone")));
+    }
+    let slot = names.slot(&c.slot, &what)?;
+    let slot_bone = names.bone(&doc.slots[slot].bone, &what)?;
+    let mode = |stated: &Option<String>, field: &str, modes: &[&str]| -> Result<usize, RigError> {
+        let Some(stated) = stated else {
+            return Ok(0);
+        };
+        let folded = fold(stated, true);
+        modes.iter().position(|m| *m == folded).ok_or_else(|| {
+            RigError::Unresolved(format!(
+                "{what}: {field} \"{stated}\" is none of {}",
+                modes.join(", ")
+            ))
+        })
+    };
+    let position_mode = match mode(&c.position_mode, "positionMode", &["percent", "fixed"])? {
+        0 => PositionMode::Percent,
+        _ => PositionMode::Fixed,
+    };
+    let spacing_mode = match mode(
+        &c.spacing_mode,
+        "spacingMode",
+        &["length", "fixed", "percent", "proportional"],
+    )? {
+        0 => SpacingMode::Length,
+        1 => SpacingMode::Fixed,
+        2 => SpacingMode::Percent,
+        _ => SpacingMode::Proportional,
+    };
+    let rotate_mode = match mode(
+        &c.rotate_mode,
+        "rotateMode",
+        &["tangent", "chain", "chainScale"],
+    )? {
+        0 => RotateMode::Tangent,
+        1 => RotateMode::Chain,
+        _ => RotateMode::ChainScale,
+    };
+    let mix_x = c.mix_x.unwrap_or(1.0);
+    Ok(ConstraintData {
+        name: c.name.clone(),
+        skin_required: c.skin,
+        kind: ConstraintKind::Path(PathData {
+            bones,
+            slot,
+            slot_bone,
+            position_mode,
+            spacing_mode,
+            rotate_mode,
+            offset_rotation: c.rotation,
+        }),
+        setup: ConstraintValues {
+            values: [
+                c.position,
+                c.spacing,
+                c.mix_rotate.unwrap_or(1.0),
+                mix_x,
+                c.mix_y.unwrap_or(mix_x),
+                0.0,
+                0.0,
+            ],
+            flags: [false; 3],
+        },
+    })
+}
+
+/// rig-c's `readSliderRecord`, with the parser's value for each absent
+/// field. Its keyed bones are filled once the animations are read.
+fn read_slider(
+    c: &document::SliderConstraint,
+    names: &Names<'_>,
+    doc: &Document,
+) -> Result<ConstraintData, RigError> {
+    let what = format!("slider constraint \"{}\"", c.name);
+    let animation = doc
+        .animations
+        .iter()
+        .position(|a| a.name == c.animation)
+        .ok_or_else(|| RigError::Unresolved(format!("{what}: no animation \"{}\"", c.animation)))?;
+    let bone = match &c.bone {
+        Some(b) => Some(names.bone(b, &what)?),
+        None => None,
+    };
+    let property = match &c.property {
+        Some(p) => TRANSFORM_PROPERTIES
+            .iter()
+            .position(|n| n == p)
+            .ok_or_else(|| RigError::Unresolved(format!("{what}: \"{p}\" is no property")))?,
+        None => 0,
+    };
+    Ok(ConstraintData {
+        name: c.name.clone(),
+        skin_required: c.skin,
+        kind: ConstraintKind::Slider(SliderData {
+            animation,
+            additive: c.additive,
+            looping: c.looping,
+            bone,
+            property,
+            from: c.from,
+            to: c.to,
+            scale: c.scale.unwrap_or(1.0),
+            local: c.local,
+            keyed: Vec::new(),
+        }),
+        setup: ConstraintValues {
+            values: [c.time, c.mix.unwrap_or(1.0), 0.0, 0.0, 0.0, 0.0, 0.0],
+            flags: [false; 3],
+        },
+    })
+}
+
+/// The bones an animation keys, each with its bone and inherit timelines,
+/// in the animation's order.
+fn keyed_bones(a: &AnimationData) -> Vec<(usize, Vec<usize>)> {
+    let mut out: Vec<(usize, Vec<usize>)> = Vec::new();
+    for (i, t) in a.timelines.iter().enumerate() {
+        let bone = match &t.kind {
+            TimelineKind::Bone { bone, .. } | TimelineKind::Inherit { bone, .. } => *bone,
+            _ => continue,
+        };
+        match out.iter_mut().find(|(b, _)| *b == bone) {
+            Some((_, list)) => list.push(i),
+            None => out.push((bone, vec![i])),
+        }
+    }
+    out
 }
 
 /// rig-c's `readPhysicsRecord`, with the parser's value for each absent
@@ -1391,15 +1626,79 @@ fn read_animation(
             };
             let kind = TimelineKind::Constraint {
                 constraint,
+                first: 0,
                 keys,
                 flags,
             };
             times.extend(timeline_times(&kind));
             timelines.push(Timeline {
                 kind,
-                properties: vec![Property::Constraint(constraint)],
+                properties: vec![Property::Constraint(constraint, 0)],
                 instant: false,
             });
+        }
+    }
+
+    // rig-c's `readPathTimelines` and `readSliderTimelines`: a path's
+    // `position` and `spacing` (absent reading 0) and its three mixes
+    // (absent reading 1, `mixY` its own `mixX`); a slider's `time` and `mix`
+    // (absent reading 1).
+    for (kind, list) in [
+        ("path", &a.constraints.path),
+        ("slider", &a.constraints.slider),
+    ] {
+        for entry in list {
+            let constraint = constraint_index(constraints, kind, &entry.name, &what)?;
+            for tl in &entry.timelines {
+                let get = |k: &KeyMap, f: &str, default: f64| {
+                    k.get(f)
+                        .and_then(serde_json::Value::as_f64)
+                        .unwrap_or(default)
+                };
+                let (first, keys) = match (kind, tl.name.as_str()) {
+                    ("path", "position") => (
+                        crate::path::POSITION,
+                        number_keys(&tl.keys, |k| Ok(vec![get(k, "value", 0.0)]))?,
+                    ),
+                    ("path", "spacing") => (
+                        crate::path::SPACING,
+                        number_keys(&tl.keys, |k| Ok(vec![get(k, "value", 0.0)]))?,
+                    ),
+                    ("path", "mix") => (
+                        crate::path::MIX_ROTATE,
+                        number_keys(&tl.keys, |k| {
+                            let x = get(k, "mixX", 1.0);
+                            Ok(vec![get(k, "mixRotate", 1.0), x, get(k, "mixY", x)])
+                        })?,
+                    ),
+                    ("slider", "time") => (
+                        SLIDER_TIME,
+                        number_keys(&tl.keys, |k| Ok(vec![get(k, "value", 1.0)]))?,
+                    ),
+                    ("slider", "mix") => (
+                        SLIDER_MIX,
+                        number_keys(&tl.keys, |k| Ok(vec![get(k, "value", 1.0)]))?,
+                    ),
+                    (_, name) => {
+                        return Err(RigError::Unresolved(format!(
+                            "{what} {kind} \"{}\": no timeline \"{name}\"",
+                            entry.name
+                        )))
+                    }
+                };
+                let kind = TimelineKind::Constraint {
+                    constraint,
+                    first,
+                    keys,
+                    flags: Vec::new(),
+                };
+                times.extend(timeline_times(&kind));
+                timelines.push(Timeline {
+                    kind,
+                    properties: vec![Property::Constraint(constraint, first)],
+                    instant: false,
+                });
+            }
         }
     }
 
@@ -1491,7 +1790,7 @@ fn read_animation(
                     ))
                 })?;
                 if let Some(keys) = &entry.deform {
-                    if let Geometry::Mesh(_) = attachments[identity].geometry {
+                    if attachments[identity].geometry.deformed().is_some() {
                         let curves: Vec<Option<Vec<f64>>> = keys
                             .iter()
                             .map(|k| curve_numbers(k.curve.as_ref()))

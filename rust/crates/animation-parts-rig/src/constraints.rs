@@ -1,6 +1,7 @@
-//! IK, transform and physics constraints, applied in the document's order
-//! after the bones' world transforms (rig-c's `src/core/constraints.ts`;
-//! physics in [`crate::physics`]).
+//! IK, transform, path, physics and slider constraints, applied in the
+//! document's order after the bones' world transforms (rig-c's
+//! `src/core/constraints.ts`; path in [`crate::path`], physics in
+//! [`crate::physics`], slider after rig-c's `constraints_slider.ts`).
 //!
 //! After each constraint, a bone it moved in world space has its local
 //! values read back from that world transform, and every bone below a bone
@@ -8,14 +9,25 @@
 //! earlier ones left them. Every constant and every order of operations
 //! here is rig-c's, which holds them to its oracle to the bit.
 //!
+//! A slider applies an animation at a time its dial bone (or its own `time`)
+//! gives: the bones that animation keys move in local values, from the pose
+//! the constraints before it left. What it keys on slots (colours,
+//! attachments, deforms, sequence frames) and the draw order is applied
+//! after every constraint, in the order the sliders ran
+//! ([`SliderApplication`]).
+//!
 //! An ik over a bone the skin leaves inactive reads the frame above it as
 //! this pass has it, where rig-c reads zeros when the runtime's update order
 //! would not have reached it yet. That changes only the inactive bone's
 //! local values, which nothing draws; rig-c refuses the rigs in which a
 //! drawn bone reads them, and this core does not look for them.
 
-use crate::physics::{self, Physics, PhysicsData};
-use crate::rig::Rig;
+use crate::mixer::{resolve, SlotState};
+use crate::path::{self, PathData};
+use crate::physics::{self, Physics, PhysicsData, GRAVITY, MASS_INVERSE, WIND};
+use crate::pose::mesh_vertices;
+use crate::rig::{BoneTimeline, Geometry, Rig, TimelineKind};
+use crate::timeline::key_index_at;
 use crate::world::{
     no_scale_direction, pose_bone, BoneWorld, Inherit, Local, DEG, M2, RAD, RUNTIME_PI,
 };
@@ -62,10 +74,46 @@ pub(crate) struct TransformData {
     pub offsets: [f64; 6],
 }
 
+/// A slider: an animation applied at a time a dial bone's property gives
+/// (`to + (value - from) * scale`), or at its own keyed `time`.
+pub(crate) struct SliderData {
+    pub animation: usize,
+    pub additive: bool,
+    pub looping: bool,
+    /// The dial; None applies the animation at the slider's `time`.
+    pub bone: Option<usize>,
+    /// The dial's property, as a transform's source reads it.
+    pub property: usize,
+    pub from: f64,
+    pub to: f64,
+    pub scale: f64,
+    /// Whether the dial is read in local values.
+    pub local: bool,
+    /// The bones its animation keys, each with its timelines (indices into
+    /// the animation's timelines), in the animation's order.
+    pub keyed: Vec<(usize, Vec<usize>)>,
+}
+
+/// The values a slider's timelines key.
+pub(crate) const SLIDER_TIME: usize = 0;
+pub(crate) const SLIDER_MIX: usize = 1;
+
 pub(crate) enum ConstraintKind {
     Ik(IkData),
     Transform(TransformData),
+    Path(PathData),
     Physics(PhysicsData),
+    Slider(SliderData),
+}
+
+/// A slider as it ran in one pass: its animation is applied to the slots
+/// and draw order at `at` with alpha `alpha` once the constraints are done.
+#[derive(Clone, Copy)]
+pub(crate) struct SliderApplication {
+    pub animation: usize,
+    pub at: f64,
+    pub alpha: f64,
+    pub additive: bool,
 }
 
 pub(crate) struct ConstraintData {
@@ -79,7 +127,9 @@ pub(crate) struct ConstraintData {
 
 /// The values a constraint's timelines key: an ik's mix and softness, then
 /// its `bendPositive`, `compress` and `stretch`; a transform's six mixes; a
-/// physics constraint's seven values (`crate::physics::INERTIA` on).
+/// path's position, spacing and three mixes (`crate::path::POSITION` on); a
+/// physics constraint's seven values (`crate::physics::INERTIA` on); a
+/// slider's time and mix.
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct ConstraintValues {
     pub values: [f64; 7],
@@ -138,6 +188,21 @@ pub(crate) struct Scratch {
     changed: Vec<usize>,
     below: Vec<usize>,
     visit: Vec<usize>,
+    points: Vec<[f64; 2]>,
+    path: path::Scratch,
+    /// Each path constraint's slot bone world, as a constraint before it
+    /// left it (`SlotEvent`).
+    snapshots: Vec<BoneWorld>,
+    values: Vec<f64>,
+}
+
+/// When a pass last brought a path constraint's slot bone up to date before
+/// the constraint runs: while constraint `at` ordered its bones, `before` it
+/// ran or (`!before`) as it left them. rig-c's `SlotBoneEvent`.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) struct SlotEvent {
+    pub at: usize,
+    pub before: bool,
 }
 
 /// What the solver reads and writes: every bone's local values and world
@@ -166,24 +231,53 @@ impl State<'_> {
     }
 }
 
-/// Applies every constraint of the rig that `applied` keeps, in order, with
-/// the values `values` holds for each, to the bones' locals and world
-/// transforms, stepping the physics constraints on `physics`.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn apply(
-    rig: &Rig,
-    values: &[ConstraintValues],
-    applied: &[bool],
-    locals: &mut [Local],
-    world: &mut [BoneWorld],
-    active: &[bool],
-    scratch: &mut Scratch,
-    physics: &mut Physics,
-) {
+/// What one pass of the constraints reads and writes, beside the rig.
+pub(crate) struct Pass<'a> {
+    /// Each constraint's keyed values. A slider's physics keys write here,
+    /// for the physics constraints after it in this pass.
+    pub values: &'a mut [ConstraintValues],
+    /// Which constraints the skin applies.
+    pub applied: &'a [bool],
+    pub locals: &'a mut [Local],
+    pub world: &'a mut [BoneWorld],
+    pub active: &'a [bool],
+    /// What each slot shows, and the skins it resolves through: a path
+    /// walks the path its slot shows, as the slot's deform leaves it.
+    pub slots: &'a [SlotState],
+    pub lookup: &'a [usize],
+    /// Each path constraint's [`SlotEvent`], by constraint.
+    pub plan: &'a [Option<SlotEvent>],
+    /// The bones' world transforms as the previous pass left them, for a
+    /// path's slot bone nothing in this pass has brought up to date.
+    pub previous: &'a [BoneWorld],
+    /// The sliders that ran, in order.
+    pub sliders: &'a mut Vec<SliderApplication>,
+}
+
+/// Applies every constraint of the rig that the pass's `applied` keeps, in
+/// order, with the values the pass holds for each, to the bones' locals and
+/// world transforms, stepping the physics constraints on `physics`.
+pub(crate) fn apply(rig: &Rig, pass: Pass<'_>, scratch: &mut Scratch, physics: &mut Physics) {
+    let Pass {
+        values,
+        applied,
+        locals,
+        world,
+        active,
+        slots,
+        lookup,
+        plan,
+        previous,
+        sliders,
+    } = pass;
     let Scratch {
         changed,
         below,
         visit,
+        points,
+        path: path_scratch,
+        snapshots,
+        values: slider_values,
     } = scratch;
     let mut state = State {
         bones: &rig.constraint_bones,
@@ -193,7 +287,25 @@ pub(crate) fn apply(
         below,
         visit,
     };
+    let planned = plan.iter().any(Option::is_some);
+    if planned {
+        snapshots.clear();
+        snapshots.resize(rig.constraints.len(), BoneWorld::default());
+    }
+    // rig-c's `snap`: the slot bones of the paths whose event is `i`.
+    let snap = |state: &State<'_>, snapshots: &mut Vec<BoneWorld>, i: usize, before: bool| {
+        for (k, e) in plan.iter().enumerate() {
+            if let (Some(e), ConstraintKind::Path(p)) = (e, &rig.constraints[k].kind) {
+                if e.at == i && e.before == before && !(k == i && before) {
+                    snapshots[k] = state.world[p.slot_bone];
+                }
+            }
+        }
+    };
     for (i, c) in rig.constraints.iter().enumerate() {
+        if planned {
+            snap(&state, snapshots, i, true);
+        }
         if !applied[i] {
             continue;
         }
@@ -201,16 +313,20 @@ pub(crate) fn apply(
         match &c.kind {
             // An ik whose target is inactive is not applied.
             ConstraintKind::Ik(ik) => {
-                if v.values[0] == 0.0 || !active[ik.target] {
+                if !active[ik.target] {
                     continue;
                 }
-                let moved = match ik.bones.as_slice() {
-                    [] => continue,
-                    [bone] => solve_one(&mut state, ik, *bone, v, ik.scale_y, v.flags[COMPRESS]),
-                    [parent, child, ..] => solve_two(&mut state, ik, *parent, *child, v),
-                };
-                if let Some(bone) = moved {
-                    repose(&mut state, &[bone], &[]);
+                if v.values[0] != 0.0 {
+                    let moved = match ik.bones.as_slice() {
+                        [] => None,
+                        [bone] => {
+                            solve_one(&mut state, ik, *bone, v, ik.scale_y, v.flags[COMPRESS])
+                        }
+                        [parent, child, ..] => solve_two(&mut state, ik, *parent, *child, v),
+                    };
+                    if let Some(bone) = moved {
+                        repose(&mut state, &[bone], &[]);
+                    }
                 }
             }
             // A transform is applied when its source is active, to every bone
@@ -230,6 +346,41 @@ pub(crate) fn apply(
                     repose(&mut state, changed, in_world);
                 }
             }
+            // A path is applied when its slot's bone is active, and walks the
+            // path the slot shows; showing none, it does nothing.
+            ConstraintKind::Path(p) => {
+                if !active[p.slot_bone] {
+                    continue;
+                }
+                let shown = resolve(rig, lookup, p.slot, slots[p.slot].placeholder);
+                if let Some(Geometry::Path(g)) = shown.map(|a| &rig.attachments[a].geometry) {
+                    points.clear();
+                    mesh_vertices(
+                        &g.vertices.vertices,
+                        slots[p.slot].deform.as_deref(),
+                        &state.world[p.slot_bone],
+                        state.world,
+                        points,
+                    );
+                    let slot_world = match plan.get(i).copied().flatten() {
+                        Some(e) if e.at == i => state.world[p.slot_bone],
+                        Some(_) => snapshots[i],
+                        None => previous.get(p.slot_bone).copied().unwrap_or_default(),
+                    };
+                    if path::solve(
+                        state.world,
+                        &state.bones.lengths,
+                        p,
+                        &v.values,
+                        g,
+                        points,
+                        &slot_world,
+                        path_scratch,
+                    ) {
+                        repose(&mut state, &p.bones, &p.bones);
+                    }
+                }
+            }
             // A physics constraint steps when its bone is active, and moves
             // its bone in world space.
             ConstraintKind::Physics(p) => {
@@ -246,8 +397,190 @@ pub(crate) fn apply(
                     repose(&mut state, &[p.bone], &[p.bone]);
                 }
             }
+            // A slider is applied when its dial is active, and not at all at
+            // a mix of 0.
+            ConstraintKind::Slider(s) => {
+                if s.bone.is_some_and(|b| !active[b]) {
+                    continue;
+                }
+                if v.values[SLIDER_MIX] != 0.0 {
+                    let own = v.values;
+                    let app = apply_slider(&mut state, rig, s, &own, slider_values);
+                    apply_slider_physics(rig, &app, values, applied, active);
+                    sliders.push(app);
+                    // Every bone its animation keys is posed again, whether
+                    // or not a timeline wrote it.
+                    changed.clear();
+                    changed.extend(s.keyed.iter().map(|(b, _)| *b));
+                    if !changed.is_empty() {
+                        repose(&mut state, changed, &[]);
+                    }
+                }
+            }
+        }
+        if planned {
+            snap(&state, snapshots, i, false);
         }
     }
+}
+
+/// The bones the runtime brings up to date for a path's slot before it
+/// runs: the bones a weighted path the slot can show is bound to, or the
+/// slot's bone for an unweighted one, under the skins `lookup` resolves
+/// through.
+fn slot_deps(rig: &Rig, lookup: &[usize], p: &PathData, out: &mut Vec<usize>) {
+    for &skin in lookup {
+        let mut entries: Vec<_> = rig.skins[skin]
+            .table
+            .iter()
+            .filter(|((slot, _), _)| *slot == p.slot)
+            .map(|(_, a)| *a)
+            .collect();
+        entries.sort_unstable();
+        for a in entries {
+            let Geometry::Path(g) = &rig.attachments[a].geometry else {
+                continue;
+            };
+            match &g.vertices.vertices {
+                crate::rig::VertexData::Unweighted(_) => out.push(p.slot_bone),
+                crate::rig::VertexData::Weighted { bindings, .. } => {
+                    out.extend(bindings.iter().map(|b| b.0));
+                }
+            }
+        }
+    }
+}
+
+/// rig-c's `slotBonePlan`: for each path constraint that turns by an offset
+/// rotation, the last event of the pass that set its slot bone's world
+/// before it runs, or None when nothing in the pass does and the bone holds
+/// the previous pass's. The runtime orders its update before it poses: each
+/// constraint in turn brings up to date the bones it reads and moves (a
+/// bone after its parents, once until a constraint moves a bone above it).
+/// Empty when no path reads its slot bone.
+pub(crate) fn slot_bone_plan(
+    rig: &Rig,
+    active: &[bool],
+    applied: &[bool],
+    lookup: &[usize],
+) -> Vec<Option<SlotEvent>> {
+    let reads = rig
+        .constraints
+        .iter()
+        .any(|c| matches!(&c.kind, ConstraintKind::Path(p) if p.offset_rotation != 0.0));
+    if !reads {
+        return Vec::new();
+    }
+    let parents = &rig.constraint_bones.parents;
+    let mut children = vec![Vec::new(); parents.len()];
+    for (b, p) in parents.iter().enumerate() {
+        if let Some(p) = p {
+            children[*p].push(b);
+        }
+    }
+    let mut ordered: Vec<bool> = active.iter().map(|a| !a).collect();
+    let mut last: Vec<Option<SlotEvent>> = vec![None; parents.len()];
+    fn order(
+        b: usize,
+        at: usize,
+        parents: &[Option<usize>],
+        ordered: &mut [bool],
+        last: &mut [Option<SlotEvent>],
+    ) {
+        if ordered[b] {
+            return;
+        }
+        if let Some(p) = parents[b] {
+            order(p, at, parents, ordered, last);
+        }
+        ordered[b] = true;
+        last[b] = Some(SlotEvent { at, before: true });
+    }
+    fn unorder(names: &[usize], children: &[Vec<usize>], active: &[bool], ordered: &mut [bool]) {
+        for &n in names {
+            if !active[n] {
+                continue;
+            }
+            if ordered[n] {
+                unorder(&children[n], children, active, ordered);
+            }
+            ordered[n] = false;
+        }
+    }
+    let mut plan = vec![None; rig.constraints.len()];
+    let mut deps = Vec::new();
+    for (m, c) in rig.constraints.iter().enumerate() {
+        let skipped = !applied[m]
+            || match &c.kind {
+                ConstraintKind::Ik(ik) => !active[ik.target],
+                ConstraintKind::Transform(t) => !active[t.source],
+                ConstraintKind::Path(p) => !active[p.slot_bone],
+                ConstraintKind::Physics(p) => !active[p.bone],
+                ConstraintKind::Slider(s) => s.bone.is_some_and(|b| !active[b]),
+            };
+        if skipped {
+            continue;
+        }
+        let moved: Vec<usize> = match &c.kind {
+            ConstraintKind::Slider(s) => {
+                let keyed: Vec<usize> = s.keyed.iter().map(|(b, _)| *b).collect();
+                unorder(&keyed, &children, active, &mut ordered);
+                continue;
+            }
+            ConstraintKind::Ik(ik) if ik.bones.is_empty() => continue,
+            ConstraintKind::Ik(ik) => {
+                let (first, last_bone) = (ik.bones[0], ik.bones[ik.bones.len() - 1]);
+                order(ik.target, m, parents, &mut ordered, &mut last);
+                order(first, m, parents, &mut ordered, &mut last);
+                if ik.bones.len() > 1 {
+                    order(last_bone, m, parents, &mut ordered, &mut last);
+                }
+                unorder(&children[first], &children, active, &mut ordered);
+                if ik.bones.len() > 1 {
+                    ordered[last_bone] = true;
+                }
+                ik.bones.clone()
+            }
+            kind => {
+                let moved = match kind {
+                    ConstraintKind::Physics(p) => vec![p.bone],
+                    ConstraintKind::Transform(t) => {
+                        order(t.source, m, parents, &mut ordered, &mut last);
+                        t.bones.clone()
+                    }
+                    ConstraintKind::Path(p) => {
+                        deps.clear();
+                        slot_deps(rig, lookup, p, &mut deps);
+                        for &d in &deps {
+                            order(d, m, parents, &mut ordered, &mut last);
+                        }
+                        p.bones.clone()
+                    }
+                    _ => Vec::new(),
+                };
+                for &b in &moved {
+                    order(b, m, parents, &mut ordered, &mut last);
+                }
+                if let ConstraintKind::Path(p) = kind {
+                    plan[m] = last[p.slot_bone];
+                }
+                for &b in &moved {
+                    unorder(&children[b], &children, active, &mut ordered);
+                }
+                for &b in &moved {
+                    ordered[b] = true;
+                }
+                moved
+            }
+        };
+        for b in moved {
+            last[b] = Some(SlotEvent {
+                at: m,
+                before: false,
+            });
+        }
+    }
+    plan
 }
 
 /// rig-c's `repose`: the bones moved in world space read back into local
@@ -668,9 +1001,20 @@ fn solve_two(
 /// rig-c's `sourceValue`: the source's value of a property, offset by the
 /// constraint's.
 fn source_value(state: &State<'_>, t: &TransformData, property: usize) -> f64 {
-    let o = &t.offsets;
-    if t.local_source {
-        let s = &state.locals[t.source];
+    read_source(state, t.source, t.local_source, &t.offsets, property)
+}
+
+/// A bone's value of a property, as a transform reads its source and a
+/// slider its dial (with no offsets).
+fn read_source(
+    state: &State<'_>,
+    source: usize,
+    local: bool,
+    o: &[f64; 6],
+    property: usize,
+) -> f64 {
+    if local {
+        let s = &state.locals[source];
         return match property {
             ROTATE => s.rotation + o[ROTATE],
             X => s.x + o[X],
@@ -680,7 +1024,7 @@ fn source_value(state: &State<'_>, t: &TransformData, property: usize) -> f64 {
             _ => s.shear_y + o[SHEAR_Y],
         };
     }
-    let w = &state.world[t.source];
+    let w = &state.world[source];
     match property {
         ROTATE => {
             // The offset is negated unless the determinant is above 0.
@@ -696,6 +1040,175 @@ fn source_value(state: &State<'_>, t: &TransformData, property: usize) -> f64 {
         SCALE_X => (w.a * w.a + w.c * w.c).sqrt() + o[SCALE_X],
         SCALE_Y => (w.b * w.b + w.d * w.d).sqrt() + o[SCALE_Y],
         _ => (w.d.atan2(w.b) - w.c.atan2(w.a)) * DEG - 90.0 + o[SHEAR_Y],
+    }
+}
+
+/// JavaScript's `Math.sign`.
+fn sign(v: f64) -> f64 {
+    if v > 0.0 {
+        1.0
+    } else if v < 0.0 {
+        -1.0
+    } else {
+        v
+    }
+}
+
+/// rig-c's `sliderTime`: the time a slider applies its animation at, before
+/// the animation's own loop wrap.
+fn slider_time(state: &State<'_>, s: &SliderData, time: f64, duration: f64) -> f64 {
+    let Some(bone) = s.bone else {
+        return time;
+    };
+    let value = read_source(state, bone, s.local, &[0.0; 6], s.property);
+    let time = s.to + (value - s.from) * s.scale;
+    // Looping over a duration of 0 is not a number in the runtime, which
+    // applies the keys: every key of such an animation sits at 0.
+    if s.looping && duration == 0.0 {
+        return 0.0;
+    }
+    if s.looping {
+        duration + (time % duration)
+    } else if time > 0.0 || time.is_nan() {
+        time
+    } else {
+        0.0
+    }
+}
+
+/// rig-c's `applySlider` on the bones: each bone its animation keys moves
+/// from the pose the constraints before it left, toward the setup value
+/// plus the keyed one by the mix, or by the keyed one times the mix when
+/// additive; a scale moves toward the setup scale times the keyed one.
+/// Before a timeline's first key it writes nothing.
+fn apply_slider(
+    state: &mut State<'_>,
+    rig: &Rig,
+    s: &SliderData,
+    values: &[f64; 7],
+    v: &mut Vec<f64>,
+) -> SliderApplication {
+    let animation = &rig.animations[s.animation];
+    let d = animation.duration;
+    let time = slider_time(state, s, values[SLIDER_TIME], d);
+    let at = if s.looping && d != 0.0 {
+        time % d
+    } else {
+        time
+    };
+    let alpha = values[SLIDER_MIX];
+    for (bone, timelines) in &s.keyed {
+        let setup = &rig.bones[*bone].setup;
+        let b = &mut state.locals[*bone];
+        for &t in timelines {
+            match &animation.timelines[t].kind {
+                TimelineKind::Inherit { keys, .. } => {
+                    if let Some(i) = key_index_at(keys.iter().map(|k| k.0), at) {
+                        b.inherit = keys[i].1;
+                    }
+                }
+                TimelineKind::Bone { kind, keys, .. } => {
+                    let Some(i) = keys.index_at(at) else {
+                        continue;
+                    };
+                    v.clear();
+                    v.extend((0..keys.keys[i].values.len()).map(|c| keys.channel(i, c, at)));
+                    let add = |current: f64, setup: f64, v: f64| {
+                        if s.additive {
+                            current + v * alpha
+                        } else {
+                            current + (setup + v - current) * alpha
+                        }
+                    };
+                    let times = |current: f64, setup: f64, v: f64| {
+                        if s.additive {
+                            return current + (v * setup - setup) * alpha;
+                        }
+                        let target = setup * v;
+                        if alpha == 1.0 {
+                            return target;
+                        }
+                        let from = current.abs() * sign(target);
+                        from + (target - from) * alpha
+                    };
+                    match kind {
+                        BoneTimeline::Rotate => b.rotation = add(b.rotation, setup.rotation, v[0]),
+                        BoneTimeline::Translate => {
+                            b.x = add(b.x, setup.x, v[0]);
+                            b.y = add(b.y, setup.y, v[1]);
+                        }
+                        BoneTimeline::TranslateX => b.x = add(b.x, setup.x, v[0]),
+                        BoneTimeline::TranslateY => b.y = add(b.y, setup.y, v[0]),
+                        BoneTimeline::Shear => {
+                            b.shear_x = add(b.shear_x, setup.shear_x, v[0]);
+                            b.shear_y = add(b.shear_y, setup.shear_y, v[1]);
+                        }
+                        BoneTimeline::ShearX => b.shear_x = add(b.shear_x, setup.shear_x, v[0]),
+                        BoneTimeline::ShearY => b.shear_y = add(b.shear_y, setup.shear_y, v[0]),
+                        BoneTimeline::Scale => {
+                            b.scale_x = times(b.scale_x, setup.scale_x, v[0]);
+                            b.scale_y = times(b.scale_y, setup.scale_y, v[1]);
+                        }
+                        BoneTimeline::ScaleX => b.scale_x = times(b.scale_x, setup.scale_x, v[0]),
+                        BoneTimeline::ScaleY => b.scale_y = times(b.scale_y, setup.scale_y, v[0]),
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    SliderApplication {
+        animation: s.animation,
+        at,
+        alpha,
+        additive: s.additive,
+    }
+}
+
+/// rig-c's `applySliderPhysics`: a slider's physics keys write this pass's
+/// values of the physics constraints they name, for those after it. Under
+/// `additive` wind and gravity add; every other value, and every value of a
+/// slider that is not additive, moves toward the key by the mix, a mass as
+/// a mass. A `reset` key fires nothing: the slider applies its animation at
+/// one time.
+fn apply_slider_physics(
+    rig: &Rig,
+    app: &SliderApplication,
+    values: &mut [ConstraintValues],
+    applied: &[bool],
+    active: &[bool],
+) {
+    for tl in &rig.animations[app.animation].timelines {
+        let TimelineKind::Physics {
+            targets,
+            value,
+            keys,
+        } = &tl.kind
+        else {
+            continue;
+        };
+        let Some(i) = keys.index_at(app.at) else {
+            continue;
+        };
+        let v = keys.channel(i, 0, app.at);
+        let adds = app.additive && (*value == WIND || *value == GRAVITY);
+        for &c in targets {
+            let ConstraintKind::Physics(p) = &rig.constraints[c].kind else {
+                continue;
+            };
+            if !applied[c] || !active[p.bone] {
+                continue;
+            }
+            let current = &mut values[c].values[*value];
+            *current = if *value == MASS_INVERSE {
+                let m = 1.0 / *current;
+                1.0 / (m + (v - m) * app.alpha)
+            } else if adds {
+                *current + v * app.alpha
+            } else {
+                *current + (v - *current) * app.alpha
+            };
+        }
     }
 }
 

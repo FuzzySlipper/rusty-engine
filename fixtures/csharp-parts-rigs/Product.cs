@@ -11,12 +11,13 @@ namespace CsharpPartsRigs;
 /// prototype rigs (front, side, back and the side mirrored); the Engine draws the view each camera
 /// sees, and every view walks on one clip time. Over the walk, the rig's `idle` breathing is added
 /// on track 1. Beside it, rig-c's gallery `features` rig plays a clip that keys events, with its
-/// `b` clip added over it on track 1 at part alpha. The product chooses clips, tracks, alphas,
-/// crossfades, the `turn` value and the camera.
+/// `b` clip added over it on track 1 at part alpha, and rig-c's gallery `look` turns its face as a
+/// slider reads the dial bone the product drives. The product chooses clips, tracks, alphas,
+/// crossfades, the `turn` and dial values and the camera.
 /// </summary>
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
-    private const ulong TownspersonId = 1, FeaturesId = 2, FloorId = 3, MarkerId = 4;
+    private const ulong TownspersonId = 1, FeaturesId = 2, FloorId = 3, MarkerId = 4, LookId = 5;
     // The townsperson's rigs stand 896 units tall, feet at 0; a person about 1.75 m.
     private const float TownspersonMetresPerUnit = 1.75f / 896;
     private const string FrontModel = "people/townsperson/front/skeleton.model.json";
@@ -25,6 +26,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const string FeaturesModel = "people/features/skeleton.model.json";
     private const float FeaturesMetresPerUnit = .0012f;
     private static readonly Vector3 FeaturesPosition = new(1.4f, 0, -.6f);
+    private const string LookModel = "people/look/skeleton.model.json";
+    // The look rig stands 880 units tall: a head and shoulders about a metre high.
+    private const float LookMetresPerUnit = .0012f;
+    private static readonly Vector3 LookPosition = new(-1.4f, 0, -.6f);
+    // Its `yaw` slider reads this dial's local rotation, -19 to 19 degrees, as a time in clip
+    // `turn`: -19 faces one way, 0 ahead, 19 the other. `nose` shows where the face turned.
+    private const string YawDial = "yaw_dial", NoseBone = "nose";
     // The side rig faces its page's right: a camera at the person's left (-x) sees it as drawn.
     private const float FrontHeading = 0, SideHeading = -MathF.PI / 2, BackHeading = MathF.PI, MirroredSideHeading = MathF.PI / 2;
     private const string WalkClip = "walk", FeaturesClip = "a", TurnBone = "turn", HeadBone = "head";
@@ -46,13 +54,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const int RecentEventLimit = 6;
 
     private readonly IEngineContext engine;
-    private readonly PartsRig front, side, back, features;
-    private readonly Appearance townspersonLook, featuresLook, floorLook, markerLook;
+    private readonly PartsRig front, side, back, features, look;
+    private readonly Appearance townspersonLook, featuresLook, lookLook, floorLook, markerLook;
     private readonly Camera camera;
     private string attachedBone = HeadBone;
     private PartsRigBoneReadout attached;
     private float orbitDegrees = OrbitStartDegrees, spinDegreesPerSecond;
-    private float? turn;
+    private float? turn, yaw;
     private readonly Dictionary<string, int> eventCounts = [];
     private readonly Queue<string> recentEvents = new();
 
@@ -64,6 +72,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         side = rigs.Load(new PartsRigLoadRequest(SideModel, TextureFilter.Linear)).Rig;
         back = rigs.Load(new PartsRigLoadRequest(BackModel, TextureFilter.Linear)).Rig;
         features = rigs.Load(new PartsRigLoadRequest(FeaturesModel, TextureFilter.Linear)).Rig;
+        look = rigs.Load(new PartsRigLoadRequest(LookModel, TextureFilter.Linear)).Rig;
         townspersonLook = rigs.CreateAppearance(new PartsRigAppearanceRequest(new PartsRigView[]
         {
             new(front, FrontHeading, false),
@@ -73,6 +82,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         }, TownspersonMetresPerUnit));
         featuresLook = rigs.CreateAppearance(new PartsRigAppearanceRequest(
             new PartsRigView[] { new(features, 0, false) }, FeaturesMetresPerUnit));
+        lookLook = rigs.CreateAppearance(new PartsRigAppearanceRequest(
+            new PartsRigView[] { new(look, 0, false) }, LookMetresPerUnit));
         floorLook = engine.Graphics.CreatePrimitive(new(PrimitiveGeometry.Cube, false, FloorColor));
         markerLook = engine.Graphics.CreatePrimitive(new(PrimitiveGeometry.Cube, false, MarkerColor));
         engine.Graphics.PublishSnapshot(
@@ -80,6 +91,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             Fact(FloorId, floorLook, new Vector3(0, -FloorThickness / 2, 0), new Vector3(FloorHalfSize * 2, FloorThickness, FloorHalfSize * 2)),
             Fact(TownspersonId, townspersonLook, Vector3.Zero, Vector3.One),
             Fact(FeaturesId, featuresLook, FeaturesPosition, Vector3.One),
+            Fact(LookId, lookLook, LookPosition, Vector3.One),
         ]);
         rigs.Play(new PartsRigPlayRequest(TownspersonId, WalkClip, StartCrossfadeSeconds));
         rigs.Play(new PartsRigPlayRequest(FeaturesId, FeaturesClip, StartCrossfadeSeconds));
@@ -120,12 +132,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         camera.Dispose();
         townspersonLook.Dispose();
         featuresLook.Dispose();
+        lookLook.Dispose();
         floorLook.Dispose();
         markerLook.Dispose();
         front.Dispose();
         side.Dispose();
         back.Dispose();
         features.Dispose();
+        look.Dispose();
     }
 
     private CameraDescriptor CameraDescriptor()
@@ -161,10 +175,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         RigState person = Rig(TownspersonId);
         RigState gallery = Rig(FeaturesId);
         PartsRigBoneReadout bone = engine.PartsRigs.ReadBone(new PartsRigBoneRequest(TownspersonId, attachedBone, camera));
+        PartsRigBoneReadout dial = engine.PartsRigs.ReadBone(new PartsRigBoneRequest(LookId, YawDial, camera));
+        PartsRigBoneReadout nose = engine.PartsRigs.ReadBone(new PartsRigBoneRequest(LookId, NoseBone, camera));
         return JsonSerializer.Serialize(new RigFacts(
             person, gallery, orbitDegrees, spinDegreesPerSecond, (int)bone.View, turn,
             new BoneFacts(attachedBone, bone.Position.X, bone.Position.Y, bone.World.X, bone.World.Y, bone.World.Z,
                 attached.World.X, attached.World.Y, attached.World.Z),
+            new LookFacts(yaw, dial.RotationDegrees, nose.Position.X, nose.Position.Y),
             eventCounts, [.. recentEvents]), RigJsonContext.Default.RigFacts);
 
         RigState Rig(ulong objectId)
@@ -240,6 +257,22 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return Observe();
     }
 
+    [DebugCommand("rigs.yaw", Description = "Hold the look rig's yaw dial at a rotation in degrees (-19 to 19); its slider turns the face to match.")]
+    public string Yaw(float degrees)
+    {
+        engine.PartsRigs.DriveBone(PartsRigDriveRequest.Hold(LookId, YawDial, PartsRigBoneChannel.Rotation, degrees));
+        yaw = degrees;
+        return Observe();
+    }
+
+    [DebugCommand("rigs.yaw.release", Description = "Let the look rig's dial rest where its clips pose it again.")]
+    public string ReleaseYaw()
+    {
+        engine.PartsRigs.DriveBone(PartsRigDriveRequest.Release(LookId, YawDial, PartsRigBoneChannel.Rotation));
+        yaw = null;
+        return Observe();
+    }
+
     [DebugCommand("rigs.orbit", Description = "Put the camera at a bearing about the townsperson, in degrees from in front of it toward its left (+x).")]
     public string Orbit(float degrees)
     {
@@ -283,6 +316,8 @@ internal sealed record RigState(uint Views, TrackState?[] Tracks, float Speed, b
 internal sealed record BoneFacts(string Bone, float RigX, float RigY, float WorldX, float WorldY, float WorldZ,
     float MarkerX, float MarkerY, float MarkerZ);
 
+internal sealed record LookFacts(float? Yaw, float DialDegrees, float NoseX, float NoseY);
+
 internal sealed record RigFacts(
     RigState Townsperson,
     RigState Features,
@@ -291,6 +326,7 @@ internal sealed record RigFacts(
     int ViewSeen,
     float? Turn,
     BoneFacts Attached,
+    LookFacts Look,
     Dictionary<string, int> EventCounts,
     string[] RecentEvents);
 

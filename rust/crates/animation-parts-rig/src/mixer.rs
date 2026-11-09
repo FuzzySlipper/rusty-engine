@@ -181,10 +181,7 @@ impl Working {
 
     /// The attachment a slot shows under a placeholder.
     pub fn resolve(&self, rig: &Rig, slot: usize, placeholder: Option<u32>) -> Option<usize> {
-        let placeholder = placeholder?;
-        self.lookup
-            .iter()
-            .find_map(|&skin| rig.skins[skin].table.get(&(slot, placeholder)).copied())
+        resolve(rig, &self.lookup, slot, placeholder)
     }
 
     fn slot_live(&self, rig: &Rig, slot: usize) -> bool {
@@ -204,7 +201,7 @@ impl Working {
             a.filter(|&a| {
                 matches!(
                     rig.attachments[a].geometry,
-                    Geometry::Mesh(_) | Geometry::Linked { .. }
+                    Geometry::Mesh(_) | Geometry::Linked { .. } | Geometry::Path(_)
                 )
             })
         };
@@ -215,6 +212,21 @@ impl Working {
         }
     }
 }
+
+/// The attachment a slot shows under a placeholder, through the skins
+/// `lookup` names in order.
+pub(crate) fn resolve(
+    rig: &Rig,
+    lookup: &[usize],
+    slot: usize,
+    placeholder: Option<u32>,
+) -> Option<usize> {
+    let placeholder = placeholder?;
+    lookup
+        .iter()
+        .find_map(|&skin| rig.skins[skin].table.get(&(slot, placeholder)).copied())
+}
+
 /// The tracks, by index: each the playing entry first, then each entry it
 /// fades from. A track plays over the tracks below it.
 #[derive(Clone, Default)]
@@ -995,6 +1007,43 @@ fn clamp01(v: f64) -> f64 {
     v.clamp(0.0, 1.0)
 }
 
+/// A slider's colour timeline on a slot (rig-c's `applySliderSlots`): each
+/// channel it keys moves from the slot's current value toward the key's by
+/// the mix and is clamped to [0, 1]; at a mix of exactly 1 it is the key's.
+/// Before the first key it writes nothing; a dark channel is written only on
+/// a slot with a dark colour.
+pub(crate) fn apply_slider_colour(s: &mut SlotState, tl: &Timeline, time: f64, alpha: f64) {
+    let TimelineKind::Colour { kind, keys, .. } = &tl.kind else {
+        return;
+    };
+    let mut v = [0.0; 7];
+    if !keys.values_at(time, &mut v) {
+        return;
+    }
+    // Each keyed value's channel: 0-3 light, 4-6 dark.
+    let channels: &[usize] = match kind {
+        ColourTimeline::Rgba => &[0, 1, 2, 3],
+        ColourTimeline::Rgb => &[0, 1, 2],
+        ColourTimeline::Alpha => &[3],
+        ColourTimeline::Rgba2 => &[0, 1, 2, 3, 4, 5, 6],
+        ColourTimeline::Rgb2 => &[0, 1, 2, 4, 5, 6],
+    };
+    let blend = |current: f64, v: f64| {
+        clamp01(if alpha == 1.0 {
+            v
+        } else {
+            current + (v - current) * alpha
+        })
+    };
+    for (i, &at) in channels.iter().enumerate() {
+        if at < 4 {
+            s.light[at] = blend(s.light[at], v[i]);
+        } else if let Some(d) = s.dark.as_mut() {
+            d[at - 4] = blend(d[at - 4], v[i]);
+        }
+    }
+}
+
 fn apply_colour(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha: f64, from: u8) {
     let TimelineKind::Colour { slot, kind, keys } = &tl.kind else {
         return;
@@ -1154,7 +1203,7 @@ fn apply_deform(
     let TimelineKind::Deform { identity, keys } = &tl.kind else {
         return;
     };
-    let Geometry::Mesh(mesh) = &rig.attachments[*identity].geometry else {
+    let Some(mesh) = rig.attachments[*identity].geometry.deformed() else {
         return;
     };
     let weighted = mesh.vertices.weighted();
@@ -1168,8 +1217,10 @@ fn apply_deform(
             continue;
         };
         let shown = &rig.attachments[shown];
-        if !matches!(shown.geometry, Geometry::Mesh(_) | Geometry::Linked { .. })
-            || shown.deform_identity != *identity
+        if !matches!(
+            shown.geometry,
+            Geometry::Mesh(_) | Geometry::Linked { .. } | Geometry::Path(_)
+        ) || shown.deform_identity != *identity
         {
             continue;
         }
@@ -1319,6 +1370,7 @@ fn apply_constraint(
 ) {
     let TimelineKind::Constraint {
         constraint,
+        first,
         keys,
         flags,
     } = &tl.kind
@@ -1327,13 +1379,18 @@ fn apply_constraint(
     };
     let setup = rig.constraints[*constraint].setup;
     let current = &mut pose.constraints[*constraint];
+    let channels = keys.keys.first().map_or(0, |k| k.values.len());
+    let range = *first..*first + channels;
     let mut v = [0.0; 7];
     let Some(index) = keys.index_at(time) else {
         match from {
-            SETUP => *current = setup,
+            SETUP => {
+                current.values[range.clone()].copy_from_slice(&setup.values[range]);
+                current.flags = setup.flags;
+            }
             FIRST => {
-                for (c, s) in current.values.iter_mut().zip(setup.values) {
-                    *c += (s - *c) * alpha;
+                for k in range {
+                    current.values[k] += (setup.values[k] - current.values[k]) * alpha;
                 }
                 current.flags = setup.flags;
             }
@@ -1342,8 +1399,7 @@ fn apply_constraint(
         return;
     };
     keys.values_at(time, &mut v);
-    let channels = keys.keys[index].values.len();
-    for (k, value) in v.iter().enumerate().take(channels) {
+    for (k, value) in range.zip(v) {
         let base = if from == SETUP {
             setup.values[k]
         } else {

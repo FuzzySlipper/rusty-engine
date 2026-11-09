@@ -81,14 +81,15 @@ pub(crate) struct Skin {
 pub(crate) struct SkinConstraints {
     pub ik: Vec<String>,
     pub transform: Vec<String>,
+    pub path: Vec<String>,
     pub physics: Vec<String>,
+    pub slider: Vec<String>,
 }
 
 /// What every constraint states, whatever its kind.
 #[derive(Deserialize)]
 pub(crate) struct ConstraintHead {
     pub kind: String,
-    pub name: String,
 }
 
 /// An ik or transform constraint (rig-c's `readConstraintRecord`). `scaleY`
@@ -200,6 +201,56 @@ pub(crate) struct PhysicsConstraint {
     pub mix_global: bool,
 }
 
+/// A path constraint (rig-c's `readPathRecord`). The modes are read with
+/// their first letter in either case.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PathConstraint {
+    pub name: String,
+    pub bones: Vec<String>,
+    pub slot: String,
+    #[serde(default)]
+    pub skin: bool,
+    pub position_mode: Option<String>,
+    pub spacing_mode: Option<String>,
+    pub rotate_mode: Option<String>,
+    #[serde(default)]
+    pub rotation: f64,
+    #[serde(default)]
+    pub position: f64,
+    #[serde(default)]
+    pub spacing: f64,
+    pub mix_rotate: Option<f64>,
+    pub mix_x: Option<f64>,
+    pub mix_y: Option<f64>,
+}
+
+/// A slider constraint (rig-c's `readSliderRecord`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SliderConstraint {
+    pub name: String,
+    pub animation: String,
+    #[serde(default)]
+    pub skin: bool,
+    #[serde(default)]
+    pub additive: bool,
+    #[serde(default, rename = "loop")]
+    pub looping: bool,
+    pub mix: Option<f64>,
+    #[serde(default)]
+    pub time: f64,
+    pub bone: Option<String>,
+    pub property: Option<String>,
+    #[serde(default)]
+    pub from: f64,
+    #[serde(default)]
+    pub to: f64,
+    pub scale: Option<f64>,
+    #[serde(default)]
+    pub local: bool,
+}
+
 #[derive(Deserialize)]
 pub(crate) struct TransformFrom {
     #[serde(default)]
@@ -300,6 +351,14 @@ pub(crate) struct Attachment {
     pub inverse: bool,
     #[serde(default)]
     pub convex: bool,
+    /// A path attachment's shape: closed, walked at constant speed (absent
+    /// reads true), and its curves' lengths as stated.
+    #[serde(default)]
+    pub closed: bool,
+    #[serde(default)]
+    pub constant_speed: Option<bool>,
+    #[serde(default)]
+    pub lengths: Vec<f64>,
 }
 
 #[derive(Deserialize, Clone, Copy)]
@@ -371,19 +430,21 @@ pub(crate) struct Animation {
     pub constraints: ConstraintTimelines,
 }
 
-/// An animation's ik, transform and physics timelines, by constraint name.
+/// An animation's constraint timelines, by constraint name.
 #[derive(Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct ConstraintTimelines {
     pub ik: Vec<Timeline>,
     pub transform: Vec<Timeline>,
-    pub physics: Vec<PhysicsTimelines>,
+    pub path: Vec<NamedTimelines>,
+    pub physics: Vec<NamedTimelines>,
+    pub slider: Vec<NamedTimelines>,
 }
 
-/// One physics constraint's timelines, or (`*`) those of the timeline that
-/// names none.
+/// One constraint's timelines, each named for the value it keys; for
+/// physics, `*` names no constraint.
 #[derive(Deserialize)]
-pub(crate) struct PhysicsTimelines {
+pub(crate) struct NamedTimelines {
     pub name: String,
     pub timelines: Vec<Timeline>,
 }

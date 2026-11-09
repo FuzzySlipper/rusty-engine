@@ -12,7 +12,9 @@ tracks 1 and 2 at partial alphas over track 0, crossfades on each track
 under and over the others, alphas changed while they play, the layers
 stopped, and track 0 itself below full alpha and additive. A rig with a
 bone named `turn` also gets its first clip with `turn`'s x driven to 24 and
-then -24 (rig-c's `adjust`). A rig with physics constraints also gets its
+then -24 (rig-c's `adjust`), and a rig whose slider reads a dial bone gets its
+first clip with the first such dial's property driven inside and below the
+slider's range. A rig with physics constraints also gets its
 first clip walked while the rig moves, `move` units a step to the right for
 a third of the steps, then held, under a gust: a sideways wind from the
 second third on, turned off for the last (rig-c's `physicsTranslate` and
@@ -116,10 +118,20 @@ for name, model in rigs:
     mixable = [
         a["name"] for a in doc["animations"]
         if not a["drawOrder"] and not any("sequence" in at for sk in a["attachments"] for sl in sk["slots"] for at in sl["attachments"])
-        and not any(a.get("constraints", {}).get(k) for k in ("ik", "transform", "physics"))
+        and not any(a.get("constraints", {}).get(k) for k in ("ik", "transform", "path", "physics", "slider"))
     ]
     turn = any(b["name"] == "turn" for b in doc["bones"])
     physics = any(c["kind"] == "physics" for c in doc["constraints"])
+    # The first slider dial: its bone, the local channel its property is,
+    # and a value inside the slider's range and one below it.
+    dial = next((c for c in doc["constraints"] if c["kind"] == "slider" and "bone" in c), None)
+    if dial is not None:
+        low = dial.get("from", 0)
+        high = dial.get("max") or low + 20
+        channel = {"rotate": "rotation", "shearY": "shearY"}.get(dial.get("property", "rotate"), dial.get("property"))
+        dials = [[[dial["bone"], channel, round(low + 0.7 * (high - low), 3)]], [[dial["bone"], channel, low - 5]]]
+    else:
+        dials = []
     for skin in skins:
         for i, anim in enumerate(anims):
             duration = max([0.0] + [k["time"] for t in doc["animations"][i]["bones"] for tl in t["timelines"] for k in tl["keys"]])
@@ -128,6 +140,8 @@ for name, model in rigs:
             if turn and i == 0:
                 for x in (24, -24):
                     cases.append(track(model, skin, anim, steps, regions, f"{anim} with turn at {x}", [["turn", "x", x]]))
+            for drive in dials if i == 0 else []:
+                cases.append(track(model, skin, anim, steps, regions, f"{anim} with {drive[0][0]} at {drive[0][2]}", drive))
             if physics and i == 0:
                 third = max(1, len(steps) // 3)
                 before = {str(k + 1): {"move": [MOVE, 0.0]} for k in range(third)}

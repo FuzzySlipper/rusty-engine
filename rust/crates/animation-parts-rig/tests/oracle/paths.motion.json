@@ -1,0 +1,488 @@
+{
+ "spec": "rigc-motion/1",
+ "archetype": "paths",
+ "cut": "paths",
+ "easings": {
+  "smooth": [
+   0.25,
+   0,
+   0.75,
+   1
+  ],
+  "snap": [
+   0.1,
+   0.7,
+   0.3,
+   1
+  ]
+ },
+ "animations": {
+  "walk": {
+   "duration": 1.2,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        25
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "w2",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        -30
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "flip",
+     "property": "scalex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        0.6
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        1
+       ]
+      }
+     ]
+    },
+    {
+     "path": "chain",
+     "property": "position",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.05
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        0.5
+       ],
+       "ease": "snap"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0.05
+       ]
+      }
+     ]
+    },
+    {
+     "path": "chain",
+     "property": "spacing",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        5
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        -20
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        5
+       ]
+      }
+     ]
+    },
+    {
+     "path": "tangent",
+     "property": "position",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -40
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        320
+       ]
+      }
+     ]
+    },
+    {
+     "path": "loop",
+     "property": "mix",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.6,
+        0.8,
+        0.5
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        1,
+        1,
+        1
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0.6,
+        0.8,
+        0.5
+       ]
+      }
+     ]
+    },
+    {
+     "path": "loop",
+     "property": "position",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.1
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        1.6
+       ]
+      }
+     ]
+    },
+    {
+     "path": "stated",
+     "property": "position",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.2
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        0.9
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0.2
+       ]
+      }
+     ]
+    },
+    {
+     "path": "weighted",
+     "property": "position",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.3
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        0.7
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0.3
+       ]
+      }
+     ]
+    }
+   ],
+   "deform": [
+    {
+     "slot": "s_rail",
+     "attachment": "rail_path",
+     "keys": [
+      {
+       "t": 0,
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "vertices": [
+        0,
+        40,
+        30,
+        -20,
+        0,
+        0,
+        -30,
+        60
+       ],
+       "offset": 6
+      },
+      {
+       "t": 1.2
+      }
+     ]
+    },
+    {
+     "skin": "alt",
+     "slot": "s_wpath",
+     "attachment": "w_path",
+     "keys": [
+      {
+       "t": 0
+      },
+      {
+       "t": 0.6,
+       "vertices": [
+        20,
+        -10,
+        0,
+        30
+       ],
+       "offset": 2
+      },
+      {
+       "t": 1.2
+      }
+     ]
+    }
+   ]
+  },
+  "sway": {
+   "duration": 0.8,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -20
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.4,
+       "v": [
+        30
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.8,
+       "v": [
+        -20
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "w1",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ]
+      },
+      {
+       "t": 0.4,
+       "v": [
+        40,
+        -30
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        0,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "flip",
+     "property": "scaley",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1
+       ]
+      },
+      {
+       "t": 0.4,
+       "v": [
+        -1.2
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        1
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "bob": {
+   "duration": 1.0,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.5,
+       "v": [
+        -60,
+        40
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1,
+       "v": [
+        0,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "c1",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.5,
+       "v": [
+        60
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "base",
+     "property": "scale",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1,
+        1
+       ]
+      },
+      {
+       "t": 0.5,
+       "v": [
+        1.3,
+        0.7
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        1,
+        1
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

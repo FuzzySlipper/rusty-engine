@@ -1,0 +1,597 @@
+{
+ "spec": "rigc-rig/1",
+ "name": "paths",
+ "images": "parts",
+ "skeleton": {
+  "x": 0,
+  "y": 0,
+  "width": 1000,
+  "height": 800
+ },
+ "bones": [
+  {
+   "name": "root"
+  },
+  {
+   "name": "base",
+   "parent": "root",
+   "x": 400,
+   "y": 300,
+   "rotation": 10,
+   "scaleX": 1.2,
+   "scaleY": 0.8,
+   "shearX": 5,
+   "shearY": -3
+  },
+  {
+   "name": "flip",
+   "parent": "base",
+   "x": 30,
+   "scaleX": -1
+  },
+  {
+   "name": "railbase",
+   "parent": "base"
+  },
+  {
+   "name": "rail",
+   "parent": "railbase",
+   "x": -200,
+   "y": 0
+  },
+  {
+   "name": "c1",
+   "parent": "base",
+   "x": -180,
+   "y": 20,
+   "length": 40
+  },
+  {
+   "name": "c2",
+   "parent": "c1",
+   "x": 40,
+   "length": 40
+  },
+  {
+   "name": "c3",
+   "parent": "c2",
+   "x": 40,
+   "length": 40,
+   "rotation": 10
+  },
+  {
+   "name": "c4",
+   "parent": "c3",
+   "x": 40,
+   "length": 30
+  },
+  {
+   "name": "tg",
+   "parent": "root",
+   "x": 100,
+   "y": 100,
+   "length": 50
+  },
+  {
+   "name": "k1",
+   "parent": "root",
+   "length": 30
+  },
+  {
+   "name": "k2",
+   "parent": "k1",
+   "x": 30,
+   "length": 20
+  },
+  {
+   "name": "k3",
+   "parent": "k2",
+   "x": 20
+  },
+  {
+   "name": "n1",
+   "parent": "root",
+   "length": 25
+  },
+  {
+   "name": "n2",
+   "parent": "root",
+   "length": 25,
+   "scaleX": 1.5
+  },
+  {
+   "name": "w1",
+   "parent": "base",
+   "x": -150,
+   "y": -60
+  },
+  {
+   "name": "w2",
+   "parent": "w1",
+   "y": 60,
+   "rotation": 10
+  },
+  {
+   "name": "e1",
+   "parent": "root",
+   "length": 40
+  },
+  {
+   "name": "e2",
+   "parent": "e1",
+   "x": 40,
+   "length": 40
+  }
+ ],
+ "slots": [
+  {
+   "name": "s_rail",
+   "bone": "rail",
+   "attachment": "rail_path"
+  },
+  {
+   "name": "s_bpath",
+   "bone": "flip",
+   "attachment": "b_path"
+  },
+  {
+   "name": "s_loop",
+   "bone": "base",
+   "attachment": "loop_path"
+  },
+  {
+   "name": "s_stated",
+   "bone": "root",
+   "attachment": "stated_path"
+  },
+  {
+   "name": "s_wpath",
+   "bone": "rail",
+   "attachment": "w_path"
+  },
+  {
+   "name": "s_c1",
+   "bone": "c1",
+   "attachment": "p"
+  },
+  {
+   "name": "s_c2",
+   "bone": "c2",
+   "attachment": "p"
+  },
+  {
+   "name": "s_c3",
+   "bone": "c3",
+   "attachment": "p"
+  },
+  {
+   "name": "s_c4",
+   "bone": "c4",
+   "attachment": "p"
+  },
+  {
+   "name": "s_tg",
+   "bone": "tg",
+   "attachment": "p"
+  },
+  {
+   "name": "s_k1",
+   "bone": "k1",
+   "attachment": "p"
+  },
+  {
+   "name": "s_k2",
+   "bone": "k2",
+   "attachment": "p"
+  },
+  {
+   "name": "s_k3",
+   "bone": "k3",
+   "attachment": "p"
+  },
+  {
+   "name": "s_n1",
+   "bone": "n1",
+   "attachment": "p"
+  },
+  {
+   "name": "s_n2",
+   "bone": "n2",
+   "attachment": "p"
+  },
+  {
+   "name": "s_e1",
+   "bone": "e1",
+   "attachment": "p"
+  },
+  {
+   "name": "s_e2",
+   "bone": "e2",
+   "attachment": "p"
+  }
+ ],
+ "constraints": [
+  {
+   "name": "chain",
+   "type": "path",
+   "bones": [
+    "c1",
+    "c2",
+    "c3",
+    "c4"
+   ],
+   "slot": "s_rail",
+   "positionMode": "percent",
+   "spacingMode": "length",
+   "rotateMode": "chain",
+   "position": 0.05,
+   "spacing": 5
+  },
+  {
+   "name": "mirror",
+   "type": "transform",
+   "bones": [
+    "railbase"
+   ],
+   "source": "tg",
+   "localSource": true,
+   "localTarget": true,
+   "properties": {
+    "scaleX": {
+     "to": {
+      "scaleX": {
+       "offset": -2
+      }
+     }
+    }
+   }
+  },
+  {
+   "name": "tangent",
+   "type": "path",
+   "bones": [
+    "tg"
+   ],
+   "slot": "s_bpath",
+   "positionMode": "fixed",
+   "spacingMode": "fixed",
+   "rotateMode": "tangent",
+   "rotation": 15,
+   "position": 60
+  },
+  {
+   "name": "loop",
+   "type": "path",
+   "bones": [
+    "k1",
+    "k2",
+    "k3"
+   ],
+   "slot": "s_loop",
+   "positionMode": "percent",
+   "spacingMode": "proportional",
+   "rotateMode": "chainScale",
+   "spacing": 1,
+   "position": 0.1,
+   "mixRotate": 0.6,
+   "mixX": 0.8,
+   "mixY": 0.5
+  },
+  {
+   "name": "stated",
+   "type": "path",
+   "bones": [
+    "n1",
+    "n2"
+   ],
+   "slot": "s_stated",
+   "positionMode": "percent",
+   "spacingMode": "percent",
+   "rotateMode": "tangent",
+   "position": 0.2,
+   "spacing": 0.3,
+   "rotation": -30
+  },
+  {
+   "name": "weighted",
+   "type": "path",
+   "bones": [
+    "e1",
+    "e2"
+   ],
+   "slot": "s_wpath",
+   "spacingMode": "fixed",
+   "rotateMode": "chain",
+   "spacing": 30,
+   "position": 0.3,
+   "rotation": -20,
+   "skin": true
+  }
+ ],
+ "skins": {
+  "default": {
+   "s_c1": {
+    "p": {
+     "image": "leg_l.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_c2": {
+    "p": {
+     "image": "leg_r.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_c3": {
+    "p": {
+     "image": "arm_b.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_c4": {
+    "p": {
+     "image": "arm_f.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_tg": {
+    "p": {
+     "image": "head.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_k1": {
+    "p": {
+     "image": "ear_l.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_k2": {
+    "p": {
+     "image": "ear_r.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_k3": {
+    "p": {
+     "image": "hand_f.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_n1": {
+    "p": {
+     "image": "scarf_tail.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_n2": {
+    "p": {
+     "image": "scarf_knot.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_e1": {
+    "p": {
+     "image": "torso.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_e2": {
+    "p": {
+     "image": "plate.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3,
+     "x": 10,
+     "y": 5
+    }
+   },
+   "s_rail": {
+    "rail_path": {
+     "type": "path",
+     "vertexCount": 9,
+     "vertices": [
+      -20,
+      -10,
+      0,
+      0,
+      60,
+      80,
+      140,
+      -60,
+      200,
+      0,
+      260,
+      60,
+      330,
+      90,
+      400,
+      0,
+      420,
+      -20
+     ]
+    }
+   },
+   "s_bpath": {
+    "b_path": {
+     "type": "path",
+     "vertexCount": 6,
+     "vertices": [
+      -10,
+      0,
+      0,
+      0,
+      50,
+      100,
+      150,
+      -100,
+      200,
+      0,
+      210,
+      0
+     ]
+    }
+   },
+   "s_loop": {
+    "loop_path": {
+     "type": "path",
+     "vertexCount": 6,
+     "closed": true,
+     "vertices": [
+      -50,
+      -60,
+      0,
+      -60,
+      50,
+      -60,
+      50,
+      60,
+      0,
+      60,
+      -50,
+      60
+     ]
+    }
+   },
+   "s_stated": {
+    "stated_path": {
+     "type": "path",
+     "vertexCount": 9,
+     "constantSpeed": false,
+     "lengths": [
+      100,
+      220,
+      300
+     ],
+     "vertices": [
+      480,
+      540,
+      500,
+      550,
+      540,
+      620,
+      600,
+      480,
+      650,
+      550,
+      700,
+      620,
+      760,
+      600,
+      800,
+      540,
+      820,
+      520
+     ]
+    }
+   }
+  },
+  "alt": {
+   "attachments": {
+    "s_wpath": {
+     "w_path": {
+      "type": "path",
+      "vertexCount": 6,
+      "weights": [
+       [
+        {
+         "bone": "w1",
+         "x": -20,
+         "y": 0,
+         "weight": 1
+        }
+       ],
+       [
+        {
+         "bone": "w1",
+         "x": 0,
+         "y": 0,
+         "weight": 1
+        }
+       ],
+       [
+        {
+         "bone": "w1",
+         "x": 40,
+         "y": 60,
+         "weight": 0.7
+        },
+        {
+         "bone": "w2",
+         "x": 40,
+         "y": 0,
+         "weight": 0.3
+        }
+       ],
+       [
+        {
+         "bone": "w2",
+         "x": 80,
+         "y": 40,
+         "weight": 1
+        }
+       ],
+       [
+        {
+         "bone": "w2",
+         "x": 120,
+         "y": 80,
+         "weight": 0.5
+        },
+        {
+         "bone": "w1",
+         "x": 120,
+         "y": 140,
+         "weight": 0.5
+        }
+       ],
+       [
+        {
+         "bone": "w2",
+         "x": 140,
+         "y": 100,
+         "weight": 1
+        }
+       ]
+      ]
+     }
+    }
+   },
+   "path": [
+    "weighted"
+   ]
+  }
+ }
+}
