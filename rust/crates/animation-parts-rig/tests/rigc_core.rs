@@ -60,6 +60,34 @@ fn blend_name(blend: BlendMode) -> &'static str {
     }
 }
 
+/// Clipped pieces' UVs and triangles fill `Pose::uvs` and
+/// `Pose::triangles` in piece order with nothing between or after them, so
+/// a realizer reading them by each piece's counts finds each piece's own.
+fn packed(pose: &Pose, at: &str) {
+    let (mut uvs, mut triangles) = (0, 0);
+    for piece in &pose.pieces {
+        if let Some(clipped) = &piece.clipped {
+            assert_eq!(clipped.uvs.start, uvs, "{at}: clipped uvs packed");
+            assert_eq!(
+                clipped.triangles.start, triangles,
+                "{at}: clipped triangles packed"
+            );
+            assert_eq!(
+                clipped.uvs.len(),
+                piece.vertices.len(),
+                "{at}: a uv per vertex"
+            );
+            (uvs, triangles) = (clipped.uvs.end, clipped.triangles.end);
+        }
+    }
+    assert_eq!(pose.uvs.len(), uvs, "{at}: no uvs past the clipped pieces'");
+    assert_eq!(
+        pose.triangles.len(),
+        triangles,
+        "{at}: no triangles past the clipped pieces'"
+    );
+}
+
 struct Worst {
     bone: f64,
     vertex: f64,
@@ -105,6 +133,7 @@ fn compare(
         names(&mut pose.pieces.iter().map(|p| rig.slot_name(p.slot).to_owned())),
         names(&mut drawn.iter().map(|d| d[0].as_str().unwrap().to_owned())),
     );
+    packed(pose, at);
     for (piece, d) in pose.pieces.iter().zip(drawn) {
         let key = d[0].as_str().unwrap();
         let mut parts = key.split('|');
@@ -511,5 +540,45 @@ fn the_wind_a_product_sets_blows_the_hair() {
     assert!(
         (right - calm).signum() != (left - calm).signum(),
         "calm {calm}, right {right}, left {left}"
+    );
+}
+
+/// A piece a clip covers and leaves whole (the ball wholly inside the
+/// window) followed by pieces it cuts: the cut pieces' UVs and triangles
+/// still start where the pieces before them end, as the services publish
+/// them and render-wgpu reads them, by count.
+#[test]
+fn an_uncut_covered_piece_leaves_nothing_in_the_clipped_buffers() {
+    let rig = Rig::from_json(&fixture("clipping.model.json")).unwrap();
+    let (ball, torso) = (
+        rig.find_slot("s_ball").unwrap(),
+        rig.find_slot("s_torso").unwrap(),
+    );
+    let mut player = Player::new(&rig);
+    player.play(
+        rig.find_animation("a").unwrap(),
+        Play {
+            looping: true,
+            crossfade: 0.0,
+        },
+    );
+    let mut pose = Pose::default();
+    let mut seen = 0;
+    for step in 0..72 {
+        player.advance(&rig, if step == 0 { 0.0 } else { 1.0 / 60.0 }, &mut pose);
+        packed(&pose, &format!("step {step}"));
+        let clipped = |slot| {
+            pose.pieces
+                .iter()
+                .find(|p| p.slot == slot)
+                .map(|p| p.clipped.is_some())
+        };
+        if clipped(ball) == Some(false) && clipped(torso) == Some(true) {
+            seen += 1;
+        }
+    }
+    assert!(
+        seen > 0,
+        "some step leaves the ball whole and cuts the torso"
     );
 }

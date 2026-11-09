@@ -481,7 +481,9 @@ fn cut_walked(
     out: Cut<'_>,
     decide: bool,
 ) -> bool {
-    let (start_v, start_t) = (out.vertices.len(), out.triangles.len());
+    // Each buffer rolls back to its own length: the pose's UVs and
+    // triangles hold clipped pieces only, its vertices every piece.
+    let (start_v, start_uv, start_t) = (out.vertices.len(), out.uvs.len(), out.triangles.len());
     let Scratch {
         points,
         half,
@@ -640,7 +642,7 @@ fn cut_walked(
     }
     if !clipped {
         out.vertices.truncate(start_v);
-        out.uvs.truncate(start_v);
+        out.uvs.truncate(start_uv);
         out.triangles.truncate(start_t);
     }
     clipped
