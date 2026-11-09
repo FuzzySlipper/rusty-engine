@@ -18,12 +18,13 @@ Package-consumer fixture for [parts rigs](../../docs/parts-rigs.md).
 
 - In the lower left, rig-c's gallery `portrait` (MIT, `content/people/portrait`,
   the same rig as `animation-parts-rig`'s fixture) is a dialogue bust: the
-  UI draws a frame with a window, and the product places the rig there with
-  `SetViewport`, fitting a 127-texel square of the rig (`TexelSnap` 640/127
-  units) into a square of 127 CSS pixels times the largest whole scale up
-  to 3 that the window allows, again on each resize. It loops `idle`
-  (breathing and blinks) in `RenderLayer.Viewmodel`, published far off and
-  turned to show the transform is not read.
+  UI draws a frame and anchors its window as `bust`, and the product places
+  the rig with `SetViewport` and `SetViewportAnchor`, fitting a 127-texel
+  square of the rig (`TexelSnap` 640/127 units). The page's layout moves and
+  sizes it on each resize with no product call: the window is 127 CSS pixels
+  times the largest whole scale up to 3 that the window allows. It loops
+  `idle` (breathing and blinks) in `RenderLayer.Viewmodel`, published far off
+  and turned to show the transform is not read.
 
 The model documents are rig-c's `skeleton.model.json` with whitespace
 removed, beside the pages they name.
@@ -57,9 +58,12 @@ Live-debug commands:
 - `rigs.bust.play <clip> <crossfade seconds>` plays `idle`, `gaze` or
   `turn` on the bust; `rigs.layer bust ...` layers over it. `rigs.bust.frame
   square|setup` fits the 127-texel square or the setup pose's bounds (the
-  whole plate). `rigs.fog <density>` sets exponential fog over the scene,
+  whole plate). `rigs.bust.anchor false` places it by the product's own
+  square, computed from the window's CSS size and placed again on each
+  resize; `true` follows the UI's window again. `rigs.fog <density>` sets exponential fog over the scene,
   which the bust does not take. `rigs.observe` reports the bust's tracks and
-  its placement (CSS pixels a texel, side, window size).
+  its placement (the product's square: CSS pixels a texel, side, window
+  size, how many times it placed it, and whether it is anchored).
 - `rigs.orbit <degrees>` puts the camera at a bearing about it, from in
   front toward its left; `rigs.spin <degrees per second>` orbits it (0
   stops). Front is 0, the drawn side -90, the back 180 and the mirrored side

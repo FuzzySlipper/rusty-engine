@@ -31,7 +31,7 @@ use glam::{Mat3, Mat4, Quat, Vec3, Vec4};
 use render_model::{
     BillboardMode, PartsRigBlend, PartsRigInstanceDescriptor, RenderHandle, SpriteAlphaMode,
     SpriteBlendMode, SpriteDepthPolicy, SpriteInstanceDescriptor, SpriteLightingMode,
-    SpriteMaterialDescriptor, SpriteSizeMode, SpriteViewportFit,
+    SpriteMaterialDescriptor, SpriteSizeMode, SpriteViewportFit, SpriteViewportPlacement,
 };
 use render_presentation::{
     ParticleBlendMode, ParticleSizeMode, ParticleSpriteRef, ParticleVisual, PresentationFrameDiff,
@@ -498,7 +498,8 @@ impl Effects {
     /// A parts rig's draw in this view: the rig view nearest the bearing
     /// the camera sees it from, its buffers made ready for its pose, and the
     /// row placing its plane. None when that view has no pose, drawing or
-    /// piece to draw, or no size this view.
+    /// piece to draw, or no size this view. `anchored` is a placed rig's
+    /// rectangle at the rect its UI anchor reports, while the page reports it.
     fn prepare_rig(
         &mut self,
         gpu: &Gpu,
@@ -506,7 +507,12 @@ impl Effects {
         rig: &crate::parts_rigs::PartsRigRow,
         assets: &crate::tables::Slots<crate::parts_rigs::PartsRigAssetRow>,
         world: &Mat4,
-        (camera, viewport, pixel_ratio): (&CameraMatrices, PixelRect, f32),
+        (camera, viewport, pixel_ratio, anchored): (
+            &CameraMatrices,
+            PixelRect,
+            f32,
+            Option<SpriteViewportPlacement>,
+        ),
     ) -> Option<SpriteDraw> {
         let descriptor = &rig.descriptor;
         let index = descriptor.view_seen(&world.to_cols_array_2d(), &rig_camera(camera));
@@ -575,9 +581,14 @@ impl Effects {
         let first = *buffers.runs.first()?;
         let mirror = if view.mirror { -1.0 } else { 1.0 };
         let model = match &descriptor.viewport_placement {
-            Some(placement) => {
-                rig_viewport_model(placement, mirror, descriptor.texel_snap, camera, viewport)
-            }
+            Some(placement) => rig_viewport_model(
+                anchored.unwrap_or(placement.rectangle),
+                placement.frame,
+                mirror,
+                descriptor.texel_snap,
+                camera,
+                viewport,
+            ),
             None => {
                 let pixels = (descriptor.size_mode == SpriteSizeMode::Pixel)
                     .then_some([descriptor.scale; 2]);
@@ -1589,13 +1600,15 @@ fn sprite_quad(
 /// The matrix that draws a viewport-placed rig's plane for `camera`: from
 /// rig units (mirrored for a mirrored view, as `effects.wgsl` mirrors them)
 /// to the world, a little in front of the eye, so that its frame fits its
-/// rectangle of `viewport` (`PartsRigViewportPlacement`). With a texel snap,
+/// rectangle of `viewport` (`PartsRigViewportPlacement`), or the rectangle
+/// its anchor reports (`anchored_rectangle`). With a texel snap,
 /// each texel is a whole number of the viewport's pixels (where at least
 /// one fits) and the rig's origin, on which its texel grid lies, is on a
 /// pixel corner, so each pixel's centre lies in exactly one texel. It draws
 /// only inside its frame (`effects.wgsl` `shaded_parts_rig`).
 fn rig_viewport_model(
-    placement: &render_model::PartsRigViewportPlacement,
+    rectangle: SpriteViewportPlacement,
+    frame: [f32; 4],
     mirror: f32,
     texel_snap: f32,
     camera: &CameraMatrices,
@@ -1605,8 +1618,7 @@ fn rig_viewport_model(
     /// as it: a 381-pixel square over 127 texels is 3, not 2.9999998.
     const WHOLE_PIXELS: f32 = 1e-3;
     let (width, height) = (viewport.width as f32, viewport.height as f32);
-    let rectangle = placement.rectangle;
-    let [x0, y0, x1, y1] = placement.frame;
+    let [x0, y0, x1, y1] = frame;
     let (x0, x1) = if mirror < 0.0 { (-x1, -x0) } else { (x0, x1) };
     let (frame_width, frame_height) = (x1 - x0, y1 - y0);
     let (target_width, target_height) = (width * rectangle.size[0], height * rectangle.size[1]);
@@ -1656,6 +1668,36 @@ fn rig_viewport_model(
         facing.extend(0.0),
         at.extend(1.0),
     )
+}
+
+/// `rectangle` at the rect an anchor reports (normalized to the target with a
+/// bottom-left origin, as a camera viewport is), taken in `viewport`, the
+/// view's rect of a `size` target: the rectangle's minimum and size, its
+/// alignment and fit kept.
+fn anchored_rectangle(
+    rectangle: SpriteViewportPlacement,
+    anchor: &render_host_contracts::RendererViewport,
+    viewport: PixelRect,
+    (width, height): (u32, u32),
+) -> SpriteViewportPlacement {
+    let (width, height) = (f64::from(width), f64::from(height));
+    let (view_width, view_height) = (f64::from(viewport.width), f64::from(viewport.height));
+    // The view's lower left in target pixels from the target's lower left.
+    let (left, bottom) = (
+        f64::from(viewport.x),
+        height - f64::from(viewport.y) - view_height,
+    );
+    SpriteViewportPlacement {
+        minimum: [
+            ((anchor.x * width - left) / view_width) as f32,
+            ((anchor.y * height - bottom) / view_height) as f32,
+        ],
+        size: [
+            (anchor.width * width / view_width) as f32,
+            (anchor.height * height / view_height) as f32,
+        ],
+        ..rectangle
+    }
 }
 
 /// `camera` as a parts rig's placement reads it.
@@ -2073,13 +2115,26 @@ impl Renderer {
             let resolved = match &node.kind {
                 NodeKind::Sprite(resolved) => resolved,
                 NodeKind::PartsRig(rig) => {
+                    let anchored =
+                        rig.descriptor
+                            .viewport_placement
+                            .as_ref()
+                            .and_then(|placement| {
+                                let anchor = self.viewport_anchor(placement.anchor.as_deref()?)?;
+                                Some(anchored_rectangle(
+                                    placement.rectangle,
+                                    &anchor,
+                                    view.viewport,
+                                    (view.target.width, view.target.height),
+                                ))
+                            });
                     draws.extend(self.effects.prepare_rig(
                         &self.gpu,
                         *handle,
                         rig,
                         &self.tables.parts_rigs,
                         &node.world,
-                        (&view.camera, view.viewport, pixel_ratio),
+                        (&view.camera, view.viewport, pixel_ratio, anchored),
                     ));
                     continue;
                 }

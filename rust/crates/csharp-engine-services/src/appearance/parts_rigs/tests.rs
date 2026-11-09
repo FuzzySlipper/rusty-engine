@@ -631,6 +631,7 @@ fn placement(bridge: &RuntimeAppearanceBridge) -> Option<render_model::PartsRigV
     bridge.staged_ref().unwrap().state.parts_rigs.instances[&OBJECT]
         .rig
         .viewport_placement
+        .clone()
 }
 
 /// A rig placed in the viewport fits the setup pose's bounds unless the
@@ -725,6 +726,22 @@ fn a_rig_placed_in_the_viewport_fits_a_fixed_frame_and_plays_as_before() {
         b"a",
         "the recreated node keeps playing"
     );
+
+    // An anchor it follows while the page reports it; a new rectangle keeps
+    // it, and an empty name lets it go.
+    bridge.set_parts_rig_viewport_anchor(bust, "bust").unwrap();
+    bridge
+        .set_parts_rig_viewport(viewport(bust, true, [-64.0, 0.0], [127.0, 127.0]))
+        .unwrap();
+    publish(&mut bridge);
+    end(&mut bridge, &mut world, STEP);
+    bridge.begin_call();
+    assert_eq!(placement(&bridge).unwrap().anchor.as_deref(), Some("bust"));
+    bridge.set_parts_rig_viewport_anchor(bust, "").unwrap();
+    publish(&mut bridge);
+    end(&mut bridge, &mut world, STEP);
+    bridge.begin_call();
+    assert_eq!(placement(&bridge).unwrap().anchor, None);
     bridge
         .set_parts_rig_viewport(viewport(bust, false, [0.0; 2], [0.0; 2]))
         .unwrap();
@@ -732,5 +749,13 @@ fn a_rig_placed_in_the_viewport_fits_a_fixed_frame_and_plays_as_before() {
     end(&mut bridge, &mut world, STEP);
     bridge.begin_call();
     assert_eq!(placement(&bridge), None);
+    assert_eq!(
+        bridge
+            .set_parts_rig_viewport_anchor(bust, "bust")
+            .unwrap_err()
+            .code(),
+        "CSHARP_PARTS_RIG_VIEWPORT_ANCHOR",
+        "an unplaced rig has no rectangle to follow an anchor"
+    );
     bridge.end_call();
 }

@@ -80,7 +80,9 @@ viewport, as [sprite viewport placement](csharp-capabilities.md#sprite-viewport-
 places a sprite: a lower-left `Minimum`, a `Size` and an `Alignment` in
 CSS-viewport units (0 to 1), with `Stretch` or `Contain` fitting. A dialogue
 portrait drawn live inside a DOM frame is the use: the UI leaves a window in
-its frame and the product places the rig there.
+its frame and the rig is fitted to it, either by following the window
+itself ([anchored](#following-a-ui-element)) or at a rectangle the product
+computes.
 
 ```csharp
 // A 127-texel bust in a 381 CSS-pixel square, 32 pixels in from the lower left,
@@ -125,7 +127,31 @@ engine.Graphics.PublishChanges(new([new(BustId, false, 0, anywhere, bust, true, 
 call is shown at the next publish. The rectangle is in CSS-viewport units, so
 a product that wants a size in CSS pixels divides by the surface's CSS size
 (`CameraView.ReadSurface`) and places the rig again when the surface's
-`Revision` changes.
+`Revision` changes, unless it follows a UI element.
+
+### Following a UI element
+
+`SetViewportAnchor(new(appearance, "bust"))` makes a placed rig's rectangle
+follow the UI element the product UI anchors under the same name with
+`context.viewport.anchor("bust", element)`, the anchor a camera's views
+follow ([views that follow the product UI](csharp-lifecycle.md#views-that-follow-the-product-ui)).
+The shell reports the element's rect on every layout change and the renderer
+fits the rig's frame to it at once, in stream and window output alike, with
+no product call: a resize runs no product code. The alignment, fit, frame
+and texel snap still apply, so a 127-texel bust in a 381-pixel element is 3
+pixels a texel and in a 254-pixel one 2. The `SetViewport` rectangle stands
+while no page reports the element (a snapshot or offline render, or before
+the page lays out), and again after `SetViewportAnchor(new(appearance, ""))`;
+a later `SetViewport` keeps the anchor. A rig not placed with `SetViewport`
+is refused. Anchor the window inside the frame, not the bordered frame, so
+the rect is the window's: a child filling the frame's content box does.
+
+```javascript
+const bustWindow = document.createElement('div');
+bustWindow.style.cssText = 'position:absolute;inset:0';
+frame.append(bustWindow);
+const unanchor = context.viewport.anchor('bust', bustWindow);
+```
 
 ## Playing
 

@@ -110,6 +110,20 @@ pub struct NativePartsRigViewportRequest {
     pub frame_size: NativeVec2,
 }
 
+/// Makes a placed rig appearance's rectangle follow the product UI element
+/// anchored under `anchor` (`viewport.anchor(name, element)` in the UI
+/// context), as an anchored camera's views do: while the page reports that
+/// element's rect, the rig is fitted there, on resize and layout change, with
+/// no product call. Its `SetViewport` rectangle stands while no page reports
+/// it, and again after an empty `anchor`. Refused for an appearance not
+/// placed with `SetViewport`. Shown at the next publish.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePartsRigViewportAnchorRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub anchor: NativeUtf8Slice,
+}
+
 /// Play a clip on one track of a published rig object, from its start,
 /// fading in over what that track played before. Every view's rig needs a
 /// clip of that name.
@@ -341,6 +355,12 @@ pub type NativeSetPartsRigViewport = unsafe extern "C" fn(
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32;
 
+pub type NativeSetPartsRigViewportAnchor = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: *const NativePartsRigViewportAnchorRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativeReadPartsRig = unsafe extern "C" fn(
     context: *mut c_void,
     request: NativePartsRigTrackRequest,
@@ -380,4 +400,5 @@ pub struct NativePartsRigsApi {
     pub read_events: NativeReadPartsRigEvents,
     pub read_bone: NativeReadPartsRigBone,
     pub set_viewport: NativeSetPartsRigViewport,
+    pub set_viewport_anchor: NativeSetPartsRigViewportAnchor,
 }

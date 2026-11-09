@@ -1,8 +1,10 @@
 // The fixture's label, and a dialogue frame in the lower left: a bordered
-// box whose window the product's bust is drawn in (Product.cs PlaceBust), and
-// the dialogue panel beside it. The window is 127 CSS pixels times the
-// largest whole scale, at most 3, within 60% of the window's height and 45%
-// of its width, 32 pixels in from the lower left: the product's rule.
+// box whose window the bust is drawn in, and the dialogue panel beside it.
+// The window is anchored as `bust`, so the Engine fits the bust to it on
+// every layout change. It is 127 CSS pixels times the largest whole scale, at
+// most 3, within 60% of the window's height and 45% of its width, 32 pixels
+// in from the lower left: the rule the product's fallback square also uses
+// (Product.cs PlaceBust, `rigs.bust.anchor false`).
 const BUST_TEXELS = 127;
 const BUST_MAX_SCALE = 3;
 const BUST_HEIGHT_SHARE = 0.6;
@@ -10,8 +12,9 @@ const BUST_WIDTH_SHARE = 0.45;
 const BUST_INSET = 32;
 const FRAME_BORDER = 10;
 const PANEL_WIDTH = 420;
+const BUST_ANCHOR = 'bust';
 
-export function mountProductUi(root) {
+export function mountProductUi(root, context) {
   const label = document.createElement('output');
   label.textContent = 'Parts rigs fixture: the Engine draws the view of the townsperson each camera sees; live debug rigs.orbit, rigs.spin, rigs.play, rigs.turn. Lower left: a bust placed in the frame\'s window.';
   label.style.cssText = 'position:absolute;top:8px;left:8px;color:white;pointer-events:none;font:14px system-ui,sans-serif';
@@ -19,6 +22,9 @@ export function mountProductUi(root) {
   const frame = document.createElement('div');
   frame.style.cssText = `position:absolute;box-sizing:content-box;border:${FRAME_BORDER}px solid #6b4a2b;`
     + 'outline:2px solid #2a1a0c;pointer-events:none';
+  const bustWindow = document.createElement('div');
+  bustWindow.style.cssText = 'position:absolute;inset:0';
+  frame.append(bustWindow);
   const panel = document.createElement('div');
   panel.style.cssText = 'position:absolute;box-sizing:border-box;padding:16px;background:#2a1d12;color:#f2e6d0;'
     + `border:${FRAME_BORDER}px solid #6b4a2b;border-left:none;font:16px system-ui,sans-serif;pointer-events:none`;
@@ -44,8 +50,10 @@ export function mountProductUi(root) {
   layout();
   window.addEventListener('resize', layout);
   root.append(label, frame, panel);
+  const unanchor = context?.viewport?.anchor(BUST_ANCHOR, bustWindow) ?? (() => {});
   return {
     dispose: () => {
+      unanchor();
       window.removeEventListener('resize', layout);
       label.remove();
       frame.remove();

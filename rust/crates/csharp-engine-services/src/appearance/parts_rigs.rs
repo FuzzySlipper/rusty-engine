@@ -915,6 +915,13 @@ impl RuntimeAppearanceBridge {
                     minimum[1] + size[1],
                 ]
             };
+            let anchor = match state.projector.appearance_mut(&identity) {
+                Some(Appearance::PartsRig { rig }) => rig
+                    .viewport_placement
+                    .as_ref()
+                    .and_then(|placement| placement.anchor.clone()),
+                _ => None,
+            };
             let placement = render_model::PartsRigViewportPlacement {
                 rectangle: render_model::SpriteViewportPlacement {
                     minimum: native_vec2(request.minimum),
@@ -930,6 +937,7 @@ impl RuntimeAppearanceBridge {
                     },
                 },
                 frame,
+                anchor,
             };
             placement
                 .validate()
@@ -941,6 +949,39 @@ impl RuntimeAppearanceBridge {
         if let Some(Appearance::PartsRig { rig }) = state.projector.appearance_mut(&identity) {
             rig.viewport_placement = placement;
         }
+        Ok(())
+    }
+
+    /// Makes a placed appearance's rectangle follow the UI element anchored
+    /// under `anchor`, or its own rectangle again with an empty name.
+    fn set_parts_rig_viewport_anchor(
+        &mut self,
+        appearance: NativeAppearanceHandle,
+        anchor: &str,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let staged = self.staged_mut()?;
+        let identity = staged
+            .state
+            .appearances
+            .get(&appearance.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new("CSHARP_APPEARANCE_HANDLE", "appearance is not live")
+            })?;
+        let Some(Appearance::PartsRig { rig }) = staged.state.projector.appearance_mut(&identity)
+        else {
+            return Err(parts_rig_error(
+                "CSHARP_PARTS_RIG_VIEWPORT_APPEARANCE",
+                "appearance is not a parts rig",
+            ));
+        };
+        let placement = rig.viewport_placement.as_mut().ok_or_else(|| {
+            parts_rig_error(
+                "CSHARP_PARTS_RIG_VIEWPORT_ANCHOR",
+                "the appearance is not placed in the viewport: place it with SetViewport first",
+            )
+        })?;
+        placement.anchor = (!anchor.is_empty()).then(|| anchor.to_owned());
         Ok(())
     }
 
@@ -1199,6 +1240,27 @@ unsafe extern "C" fn set_viewport(
     })
 }
 
+unsafe extern "C" fn set_viewport_anchor(
+    context: *mut c_void,
+    request: *const NativePartsRigViewportAnchorRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        // SAFETY: the request and its borrowed name are read before the
+        // direct call returns.
+        let request = unsafe { *request };
+        appearance_void(context, |bridge| {
+            let anchor =
+                unsafe { borrowed_utf8(request.anchor.bytes, request.anchor.len, "anchor")? }
+                    .to_owned();
+            bridge.set_parts_rig_viewport_anchor(request.appearance, &anchor)
+        })
+    })
+}
+
 unsafe extern "C" fn set_skin(
     context: *mut c_void,
     request: *const NativePartsRigSkinRequest,
@@ -1298,6 +1360,7 @@ pub(crate) fn api(bridge: &mut RuntimeAppearanceBridge) -> NativePartsRigsApi {
         read_events,
         read_bone,
         set_viewport,
+        set_viewport_anchor,
     }
 }
 

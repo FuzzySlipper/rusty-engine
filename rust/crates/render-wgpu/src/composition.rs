@@ -339,6 +339,12 @@ impl Renderer {
         state.revision += 1;
     }
 
+    /// The rect the product UI reports for the element anchored under
+    /// `name`, normalized to the presentation with a bottom-left origin.
+    pub(crate) fn viewport_anchor(&self, name: &str) -> Option<RendererViewport> {
+        self.composition.anchors.get(name).copied()
+    }
+
     /// Draw each anchored view at the rect its anchor names, or at its
     /// committed viewport while `anchors` has none for it. Host
     /// presentation facts, like the pixel ratio: the product's composition

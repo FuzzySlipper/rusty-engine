@@ -10,7 +10,8 @@
 //! - pixel art snapped to the rig's texel grid;
 //! - pixel art placed in a rectangle of the viewport: whole pixels per
 //!   texel, a pose moving inside its fixed frame and clipped by it, and over
-//!   a fogged scene;
+//!   a fogged scene; and following a UI anchor's rect as the page reports
+//!   it;
 //! - a snapshot of the world drawing the same rigs;
 //! - a rig of several views, each camera drawing the view nearest its
 //!   bearing, and a mirrored view drawn flipped.
@@ -864,6 +865,7 @@ fn a_rig_placed_in_the_viewport_draws_whole_pixel_texels_in_a_steady_frame_over_
             fit: SpriteViewportFit::Contain,
         },
         frame: [0.0, 0.0, 12.0, 12.0],
+        anchor: None,
     });
     ops.extend(create(10, rig.clone(), &checker_pose(0.0, 0.0)));
     harness.apply(ops);
@@ -981,6 +983,91 @@ fn a_rig_placed_in_the_viewport_draws_whole_pixel_texels_in_a_steady_frame_over_
         }
     }
     assert_screenshot("parts_rigs_viewport", WIDTH, HEIGHT, &fogged);
+}
+
+/// The lower-left corner (from the top) of the snapped checker's 3-pixel
+/// texel grid in `frame`: the first row and column it draws.
+fn checker_corner(frame: &[u8]) -> Option<(u32, u32)> {
+    let drawn = |x, y| pixel(frame, WIDTH, x, y)[..3] != [0, 0, 0];
+    let left = (0..WIDTH).find(|&x| (0..HEIGHT).any(|y| drawn(x, y)))?;
+    let top = (0..HEIGHT).find(|&y| (0..WIDTH).any(|x| drawn(x, y)))?;
+    Some((left, top))
+}
+
+#[test]
+fn a_placed_rig_follows_its_ui_anchor_while_the_page_reports_it() {
+    use render_host_contracts::{RendererViewport, RendererViewportAnchors};
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.extend(checker_ops(&mut harness));
+    let mut rig = figure(BillboardMode::None, [0.0; 3], 0.0);
+    rig.views[0].asset = "parts-rig/checker".to_owned();
+    rig.layer = RenderLayer::Viewmodel;
+    rig.texel_snap = 1.0;
+    // The rectangle stands while no page reports `bust`: 36 pixels at
+    // (100, 50) from the lower left.
+    rig.viewport_placement = Some(PartsRigViewportPlacement {
+        rectangle: SpriteViewportPlacement {
+            minimum: [100.0 / WIDTH as f32, 50.0 / HEIGHT as f32],
+            size: [36.0 / WIDTH as f32, 36.0 / HEIGHT as f32],
+            alignment: [0.5, 0.5],
+            fit: SpriteViewportFit::Contain,
+        },
+        frame: [0.0, 0.0, 12.0, 12.0],
+        anchor: Some("bust".to_owned()),
+    });
+    ops.extend(create(10, rig, &checker_pose(0.0, 0.0)));
+    harness.apply(ops);
+    let eye = camera("eye", [0.0, 1.0, 1.0], 0.0, -10.0);
+    // The checker's coloured texels start 2 in: 6 pixels at 3 a texel.
+    let at_rectangle = harness.single(&eye);
+    assert_eq!(checker_corner(&at_rectangle), Some((106, 100)));
+
+    let report = |harness: &mut Harness, x: f64, y: f64, side: f64| {
+        let mut anchors = RendererViewportAnchors::new();
+        anchors.insert(
+            "bust".to_owned(),
+            RendererViewport {
+                x: x / f64::from(WIDTH),
+                y: y / f64::from(HEIGHT),
+                width: side / f64::from(WIDTH),
+                height: side / f64::from(HEIGHT),
+            },
+        );
+        harness.renderer.set_viewport_anchors(anchors);
+        harness.single(&eye)
+    };
+    // The page reports the element at (200, 20), 24 pixels: 2 a texel. With
+    // no product op, the rig draws there; then the element moves and grows
+    // to 48 pixels at (10, 90), 4 a texel.
+    for (x, y, side, per) in [(200.0, 20.0, 24.0, 2), (10.0, 90.0, 48.0, 4)] {
+        let frame = report(&mut harness, x, y, side);
+        let top = HEIGHT - y as u32 - side as u32;
+        assert_eq!(
+            checker_corner(&frame),
+            Some((x as u32 + 2 * per, top + 2 * per)),
+            "at the anchor's {side}-pixel rect"
+        );
+        for j in 2..10 {
+            for i in 2..10 {
+                let (px, py) = (x as u32 + i * per, top + j * per);
+                let first = pixel(&frame, WIDTH, px, py);
+                assert!(
+                    (0..per).all(
+                        |dy| (0..per).all(|dx| pixel(&frame, WIDTH, px + dx, py + dy) == first)
+                    ),
+                    "texel ({i}, {j}) is a whole {per} × {per} block"
+                );
+            }
+        }
+    }
+    // Reported no more, it is at its rectangle again.
+    harness
+        .renderer
+        .set_viewport_anchors(RendererViewportAnchors::new());
+    assert_eq!(harness.single(&eye), at_rectangle);
 }
 
 #[test]

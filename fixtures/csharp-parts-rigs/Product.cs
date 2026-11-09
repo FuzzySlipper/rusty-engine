@@ -14,8 +14,8 @@ namespace CsharpPartsRigs;
 /// `b` clip added over it on track 1 at part alpha, and rig-c's gallery `look` turns its face as a
 /// slider reads the dial bone the product drives. In the lower left, rig-c's gallery `portrait`
 /// is a dialogue bust placed in a screen square of whole pixels per texel, inside a frame the UI
-/// draws. The product chooses clips, tracks, alphas, crossfades, the `turn` and dial values, the
-/// bust's square and the camera.
+/// draws and anchors, so the page's layout places it. The product chooses clips, tracks, alphas,
+/// crossfades, the `turn` and dial values, the bust's fallback square and the camera.
 /// </summary>
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
@@ -70,6 +70,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const int BustMaxScale = 3;
     private const double BustHeightShare = .6, BustWidthShare = .45, BustInset = 32;
     private const string FrameSetup = "setup", FrameSquare = "square";
+    // The UI anchors its frame's window under this name (product-ui/main.js): while anchored, the
+    // bust follows that element as the page lays it out, and the product's square is its fallback.
+    private const string BustAnchor = "bust";
 
     private readonly IEngineContext engine;
     private readonly PartsRig front, side, back, features, look, portrait;
@@ -82,7 +85,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly Dictionary<string, int> eventCounts = [];
     private readonly Queue<string> recentEvents = new();
     private ulong surfaceRevision = ulong.MaxValue;
-    private BustPlacement bust = new(0, 0, 0, 0, 0, FrameSquare);
+    private BustPlacement bust = new(0, 0, 0, 0, 0, FrameSquare, true);
 
     public Product(ProductCreateContext context)
     {
@@ -123,6 +126,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         rigs.Play(PartsRigPlayRequest.Layer(TownspersonId, LayerTrack, BreathingClip, BreathingAlpha, true, StartCrossfadeSeconds));
         rigs.Play(PartsRigPlayRequest.Layer(FeaturesId, LayerTrack, FeaturesLayerClip, FeaturesLayerAlpha, true, StartCrossfadeSeconds));
         rigs.Play(new PartsRigPlayRequest(BustId, BustClip, StartCrossfadeSeconds));
+        PlaceBust(true);
         camera = engine.CameraView.CreateCamera(CameraDescriptor());
         engine.CameraView.SetActiveCamera(camera);
     }
@@ -149,13 +153,19 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     }
 
     /// <summary>
-    /// Fits the bust's square to the window as the page reports it: a new square on a resize, or
-    /// when <paramref name="force"/> asks after the frame changes.
+    /// Fits the bust's square to the window as the page reports it: a new square on a resize while
+    /// it is not anchored, or when <paramref name="force"/> asks after the frame or anchor changes.
+    /// Anchored, the UI's window places it and a resize runs nothing here.
     /// </summary>
     private void PlaceBust(bool force)
     {
         CameraSurfaceReadout surface = engine.CameraView.ReadSurface();
-        if (!surface.Reported || (!force && surface.Revision == surfaceRevision)) return;
+        if (!force && (bust.Anchored || surface.Revision == surfaceRevision)) return;
+        if (!surface.Reported)
+        {
+            // No page yet: a placement to anchor, its square sized for the largest scale.
+            surface = surface with { CssWidth = BustTexels * BustMaxScale / BustWidthShare, CssHeight = BustTexels * BustMaxScale / BustHeightShare };
+        }
         surfaceRevision = surface.Revision;
         double fits = Math.Min(surface.CssHeight * BustHeightShare, surface.CssWidth * BustWidthShare);
         int scale = Math.Clamp((int)(fits / BustTexels), 1, BustMaxScale);
@@ -168,6 +178,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             ? new PartsRigViewportRequest(bustLook, minimum, size, alignment, SpriteViewportFit.Contain)
             : new PartsRigViewportRequest(bustLook, minimum, size, alignment, SpriteViewportFit.Contain,
                 BustFrameMinimum, new Vector2(BustFrameUnits)));
+        engine.PartsRigs.SetViewportAnchor(new PartsRigViewportAnchorRequest(bustLook, bust.Anchored ? BustAnchor : ""));
         bust = bust with { Placements = bust.Placements + 1 };
         engine.Graphics.PublishChanges(new(
             new[] { BustFact() }, ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<MeshJointAttachment>.Empty));
@@ -318,6 +329,14 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return Observe();
     }
 
+    [DebugCommand("rigs.bust.anchor", Description = "Place the bust by the UI frame's anchored window (on: the page's layout moves it, no product call) or by the product's square from the window size (off).")]
+    public string BustAnchored(bool anchored)
+    {
+        bust = bust with { Anchored = anchored };
+        PlaceBust(true);
+        return Observe();
+    }
+
     [DebugCommand("rigs.fog", Description = "Exponential distance fog of the given density per metre over the scene (0 for none); the bust stays as drawn.")]
     public string Fog(float density)
     {
@@ -402,8 +421,11 @@ internal sealed record BoneFacts(string Bone, float RigX, float RigY, float Worl
 
 internal sealed record LookFacts(float? Yaw, float DialDegrees, float NoseX, float NoseY);
 
-/// <summary>Where the bust was last placed: CSS pixels a texel, the square's side and the window's size.</summary>
-internal sealed record BustPlacement(int Scale, double SideCss, double CssWidth, double CssHeight, int Placements, string Frame);
+/// <summary>
+/// Where the product last placed the bust: CSS pixels a texel, the square's side and the window's size, how
+/// many times, the frame, and whether it follows the UI's anchored window instead.
+/// </summary>
+internal sealed record BustPlacement(int Scale, double SideCss, double CssWidth, double CssHeight, int Placements, string Frame, bool Anchored);
 
 internal sealed record RigFacts(
     RigState Townsperson,

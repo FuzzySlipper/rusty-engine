@@ -178,19 +178,26 @@ pub struct PartsRigView {
 /// 381-pixel square draws each texel as 3 by 3 pixels. A frame whose corners
 /// lie on the rig's texel grid (whole texels from its origin) shows whole
 /// texels at its edges.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PartsRigViewportPlacement {
     pub rectangle: SpriteViewportPlacement,
     /// Rig units, x right and y up from the rig's origin: min x, min y,
     /// max x, max y.
     pub frame: [f32; 4],
+    /// A product UI element the rectangle follows: while the page reports a
+    /// rect under this name (`RendererViewportAnchors`, as for an anchored
+    /// camera view), that rect, taken in the view, is the rectangle's
+    /// minimum and size; `rectangle` stands otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anchor: Option<String>,
 }
 
 impl PartsRigViewportPlacement {
     pub fn validate(&self) -> Result<(), PartsRigError> {
         let [x0, y0, x1, y1] = self.frame;
         if self.rectangle.validate().is_err()
+            || self.anchor.as_ref().is_some_and(|name| name.is_empty())
             || !self.frame.iter().all(|value| value.is_finite())
             || x1 <= x0
             || y1 <= y0
