@@ -12,12 +12,14 @@ namespace CsharpPartsRigs;
 /// sees, and every view walks on one clip time. Over the walk, the rig's `idle` breathing is added
 /// on track 1. Beside it, rig-c's gallery `features` rig plays a clip that keys events, with its
 /// `b` clip added over it on track 1 at part alpha, and rig-c's gallery `look` turns its face as a
-/// slider reads the dial bone the product drives. The product chooses clips, tracks, alphas,
-/// crossfades, the `turn` and dial values and the camera.
+/// slider reads the dial bone the product drives. In the lower left, rig-c's gallery `portrait`
+/// is a dialogue bust placed in a screen square of whole pixels per texel, inside a frame the UI
+/// draws. The product chooses clips, tracks, alphas, crossfades, the `turn` and dial values, the
+/// bust's square and the camera.
 /// </summary>
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
-    private const ulong TownspersonId = 1, FeaturesId = 2, FloorId = 3, MarkerId = 4, LookId = 5;
+    private const ulong TownspersonId = 1, FeaturesId = 2, FloorId = 3, MarkerId = 4, LookId = 5, BustId = 6;
     // The townsperson's rigs stand 896 units tall, feet at 0; a person about 1.75 m.
     private const float TownspersonMetresPerUnit = 1.75f / 896;
     private const string FrontModel = "people/townsperson/front/skeleton.model.json";
@@ -41,7 +43,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const uint LayerTrack = 1, ReadTrackCount = 3;
     private const string BreathingClip = "idle", FeaturesLayerClip = "b";
     private const float BreathingAlpha = 1, FeaturesLayerAlpha = .6f;
-    private const string PersonRig = "person", FeaturesRig = "features";
+    private const string PersonRig = "person", FeaturesRig = "features", BustRig = "bust";
+    private static readonly Color FogColor = new(.62f, .66f, .72f, 1);
     // A marker the product keeps on a bone every view has, where the camera draws it.
     private const float MarkerSize = .06f;
     private static readonly Color MarkerColor = new(.95f, .15f, .1f, 1);
@@ -52,10 +55,25 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const float FloorHalfSize = 4, FloorThickness = .1f;
     private static readonly Color FloorColor = new(.28f, .3f, .27f, 1);
     private const int RecentEventLimit = 6;
+    // The dialogue bust: rig-c's `portrait`, 640 units wide on a plate 880 tall. Its square frame is
+    // 127 texels of 640/127 units, 47 texels up from the rig's origin, where its texel grid starts, so
+    // the frame's edges are texel edges; the UI's frame leaves a window that size (product-ui/main.js
+    // lays it out by the same rule).
+    private const string BustModel = "people/portrait/skeleton.model.json";
+    private const int BustTexels = 127, BustFrameTexelsUp = 47;
+    private const float BustFrameUnits = 640;
+    private const float BustTexelSnap = BustFrameUnits / BustTexels;
+    private static readonly Vector2 BustFrameMinimum = new(0, BustFrameTexelsUp * BustTexelSnap);
+    private const string BustClip = "idle";
+    // The square is 127 CSS pixels times the largest whole scale, at most 3, within 60% of the
+    // window's height and 45% of its width, 32 pixels in from the lower left.
+    private const int BustMaxScale = 3;
+    private const double BustHeightShare = .6, BustWidthShare = .45, BustInset = 32;
+    private const string FrameSetup = "setup", FrameSquare = "square";
 
     private readonly IEngineContext engine;
-    private readonly PartsRig front, side, back, features, look;
-    private readonly Appearance townspersonLook, featuresLook, lookLook, floorLook, markerLook;
+    private readonly PartsRig front, side, back, features, look, portrait;
+    private readonly Appearance townspersonLook, featuresLook, lookLook, floorLook, markerLook, bustLook;
     private readonly Camera camera;
     private string attachedBone = HeadBone;
     private PartsRigBoneReadout attached;
@@ -63,6 +81,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private float? turn, yaw;
     private readonly Dictionary<string, int> eventCounts = [];
     private readonly Queue<string> recentEvents = new();
+    private ulong surfaceRevision = ulong.MaxValue;
+    private BustPlacement bust = new(0, 0, 0, 0, 0, FrameSquare);
 
     public Product(ProductCreateContext context)
     {
@@ -73,6 +93,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         back = rigs.Load(new PartsRigLoadRequest(BackModel, TextureFilter.Linear)).Rig;
         features = rigs.Load(new PartsRigLoadRequest(FeaturesModel, TextureFilter.Linear)).Rig;
         look = rigs.Load(new PartsRigLoadRequest(LookModel, TextureFilter.Linear)).Rig;
+        portrait = rigs.Load(new PartsRigLoadRequest(BustModel, TextureFilter.Nearest)).Rig;
         townspersonLook = rigs.CreateAppearance(new PartsRigAppearanceRequest(new PartsRigView[]
         {
             new(front, FrontHeading, false),
@@ -84,6 +105,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             new PartsRigView[] { new(features, 0, false) }, FeaturesMetresPerUnit));
         lookLook = rigs.CreateAppearance(new PartsRigAppearanceRequest(
             new PartsRigView[] { new(look, 0, false) }, LookMetresPerUnit));
+        // Its scale is not read once it is placed in the viewport.
+        bustLook = rigs.CreateAppearance(new PartsRigAppearanceRequest(
+            new PartsRigView[] { new(portrait, 0, false) }, 1) with { TexelSnap = BustTexelSnap });
         floorLook = engine.Graphics.CreatePrimitive(new(PrimitiveGeometry.Cube, false, FloorColor));
         markerLook = engine.Graphics.CreatePrimitive(new(PrimitiveGeometry.Cube, false, MarkerColor));
         engine.Graphics.PublishSnapshot(
@@ -92,11 +116,13 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             Fact(TownspersonId, townspersonLook, Vector3.Zero, Vector3.One),
             Fact(FeaturesId, featuresLook, FeaturesPosition, Vector3.One),
             Fact(LookId, lookLook, LookPosition, Vector3.One),
+            BustFact(),
         ]);
         rigs.Play(new PartsRigPlayRequest(TownspersonId, WalkClip, StartCrossfadeSeconds));
         rigs.Play(new PartsRigPlayRequest(FeaturesId, FeaturesClip, StartCrossfadeSeconds));
         rigs.Play(PartsRigPlayRequest.Layer(TownspersonId, LayerTrack, BreathingClip, BreathingAlpha, true, StartCrossfadeSeconds));
         rigs.Play(PartsRigPlayRequest.Layer(FeaturesId, LayerTrack, FeaturesLayerClip, FeaturesLayerAlpha, true, StartCrossfadeSeconds));
+        rigs.Play(new PartsRigPlayRequest(BustId, BustClip, StartCrossfadeSeconds));
         camera = engine.CameraView.CreateCamera(CameraDescriptor());
         engine.CameraView.SetActiveCamera(camera);
     }
@@ -118,8 +144,39 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             engine.CameraView.UpdateCamera(new CameraUpdateRequest(camera, CameraDescriptor()));
         }
         Attach();
+        PlaceBust(false);
         return ProductUpdateResult.None;
     }
+
+    /// <summary>
+    /// Fits the bust's square to the window as the page reports it: a new square on a resize, or
+    /// when <paramref name="force"/> asks after the frame changes.
+    /// </summary>
+    private void PlaceBust(bool force)
+    {
+        CameraSurfaceReadout surface = engine.CameraView.ReadSurface();
+        if (!surface.Reported || (!force && surface.Revision == surfaceRevision)) return;
+        surfaceRevision = surface.Revision;
+        double fits = Math.Min(surface.CssHeight * BustHeightShare, surface.CssWidth * BustWidthShare);
+        int scale = Math.Clamp((int)(fits / BustTexels), 1, BustMaxScale);
+        double side = BustTexels * scale;
+        bust = bust with { Scale = scale, SideCss = side, CssWidth = surface.CssWidth, CssHeight = surface.CssHeight };
+        var minimum = new Vector2((float)(BustInset / surface.CssWidth), (float)(BustInset / surface.CssHeight));
+        var size = new Vector2((float)(side / surface.CssWidth), (float)(side / surface.CssHeight));
+        var alignment = new Vector2(.5f, .5f);
+        engine.PartsRigs.SetViewport(bust.Frame == FrameSetup
+            ? new PartsRigViewportRequest(bustLook, minimum, size, alignment, SpriteViewportFit.Contain)
+            : new PartsRigViewportRequest(bustLook, minimum, size, alignment, SpriteViewportFit.Contain,
+                BustFrameMinimum, new Vector2(BustFrameUnits)));
+        bust = bust with { Placements = bust.Placements + 1 };
+        engine.Graphics.PublishChanges(new(
+            new[] { BustFact() }, ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<MeshJointAttachment>.Empty));
+    }
+
+    // Published away from everything, and turned: the placement, not the transform, puts it on screen.
+    private AppearanceFact BustFact() =>
+        new(BustId, false, 0, new Transform(new Vector3(40, -3, -60), Quaternion.CreateFromAxisAngle(Vector3.UnitY, 1),
+            new Vector3(5)), bustLook, true, RenderLayer.Viewmodel);
 
     public void Pause() { }
     public void Resume() { }
@@ -133,6 +190,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         townspersonLook.Dispose();
         featuresLook.Dispose();
         lookLook.Dispose();
+        bustLook.Dispose();
         floorLook.Dispose();
         markerLook.Dispose();
         front.Dispose();
@@ -140,6 +198,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         back.Dispose();
         features.Dispose();
         look.Dispose();
+        portrait.Dispose();
     }
 
     private CameraDescriptor CameraDescriptor()
@@ -182,7 +241,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             new BoneFacts(attachedBone, bone.Position.X, bone.Position.Y, bone.World.X, bone.World.Y, bone.World.Z,
                 attached.World.X, attached.World.Y, attached.World.Z),
             new LookFacts(yaw, dial.RotationDegrees, nose.Position.X, nose.Position.Y),
-            eventCounts, [.. recentEvents]), RigJsonContext.Default.RigFacts);
+            Rig(BustId), bust, eventCounts, [.. recentEvents]), RigJsonContext.Default.RigFacts);
 
         RigState Rig(ulong objectId)
         {
@@ -238,8 +297,33 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         PersonRig => TownspersonId,
         FeaturesRig => FeaturesId,
-        _ => throw new ArgumentException($"no rig `{rig}`: {PersonRig} or {FeaturesRig}", nameof(rig)),
+        BustRig => BustId,
+        _ => throw new ArgumentException($"no rig `{rig}`: {PersonRig}, {FeaturesRig} or {BustRig}", nameof(rig)),
     };
+
+    [DebugCommand("rigs.bust.play", Description = "Play a looping clip on the bust's base track: idle (breathing and blinks), gaze or turn, with a crossfade in seconds.")]
+    public string PlayBust(string clip, float crossfadeSeconds)
+    {
+        engine.PartsRigs.Play(new PartsRigPlayRequest(BustId, clip, crossfadeSeconds));
+        return Observe();
+    }
+
+    [DebugCommand("rigs.bust.frame", Description = "Fit the bust by its 127-texel square (square) or by its setup pose's bounds (setup), which takes the whole plate.")]
+    public string BustFrame(string frame)
+    {
+        if (frame is not (FrameSetup or FrameSquare))
+            throw new ArgumentException($"no frame `{frame}`: {FrameSquare} or {FrameSetup}", nameof(frame));
+        bust = bust with { Frame = frame };
+        PlaceBust(true);
+        return Observe();
+    }
+
+    [DebugCommand("rigs.fog", Description = "Exponential distance fog of the given density per metre over the scene (0 for none); the bust stays as drawn.")]
+    public string Fog(float density)
+    {
+        engine.CameraView.SetFog(new FogRequest(density > 0 ? FogMode.Exponential : FogMode.Off, FogColor, 0, 0, density));
+        return Observe();
+    }
 
     [DebugCommand("rigs.turn", Description = "Hold the townsperson's turn bone's x at a value (about -24 to 24 turns the head); its transform constraints follow.")]
     public string Turn(float value)
@@ -318,6 +402,9 @@ internal sealed record BoneFacts(string Bone, float RigX, float RigY, float Worl
 
 internal sealed record LookFacts(float? Yaw, float DialDegrees, float NoseX, float NoseY);
 
+/// <summary>Where the bust was last placed: CSS pixels a texel, the square's side and the window's size.</summary>
+internal sealed record BustPlacement(int Scale, double SideCss, double CssWidth, double CssHeight, int Placements, string Frame);
+
 internal sealed record RigFacts(
     RigState Townsperson,
     RigState Features,
@@ -327,6 +414,8 @@ internal sealed record RigFacts(
     float? Turn,
     BoneFacts Attached,
     LookFacts Look,
+    RigState Bust,
+    BustPlacement BustPlacement,
     Dictionary<string, int> EventCounts,
     string[] RecentEvents);
 

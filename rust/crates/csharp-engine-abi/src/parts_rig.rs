@@ -12,8 +12,8 @@ use std::ffi::c_void;
 use crate::{
     NativeAnimationFeedbackText, NativeAppearanceHandle, NativeBillboardMode, NativeCameraHandle,
     NativeColor, NativeOperationErrorReceipt, NativeSpriteDepthPolicy,
-    NativeSpriteMaterialDescriptor, NativeSpriteSizeMode, NativeTextureFilter, NativeUtf8Slice,
-    NativeVec2, NativeVec3,
+    NativeSpriteMaterialDescriptor, NativeSpriteSizeMode, NativeSpriteViewportFit,
+    NativeTextureFilter, NativeUtf8Slice, NativeVec2, NativeVec3,
 };
 
 /// A rig the Engine read from product content, with its pages.
@@ -83,6 +83,31 @@ pub struct NativePartsRigAppearanceRequest {
     /// Rig units per texel of the grid the figure draws on, for pixel art;
     /// 0 draws it smooth.
     pub texel_snap: f32,
+}
+
+/// Places a rig appearance in a rectangle of each reading's viewport, as a
+/// sprite's viewport placement does, or with `enabled` false returns it to
+/// the world. `minimum` (the lower-left corner), `size` and `alignment` are
+/// a sprite's, in CSS-viewport units (0 to 1). The rig's frame, a fixed
+/// rectangle of its plane in rig units, is fitted into the rectangle and its
+/// poses move inside it, drawn only inside it; a `frame_size` of zero takes
+/// the bounds of the first view's setup pose. The placement owns where the rig draws and how
+/// big: the object's transform, the scale, size mode and billboard mode are
+/// not read, the first view draws, and it draws over its layer without
+/// depth. With a texel snap, each texel is a whole number of pixels where
+/// one fits. Shown at the next publish.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePartsRigViewportRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub enabled: bool,
+    pub minimum: NativeVec2,
+    pub size: NativeVec2,
+    pub alignment: NativeVec2,
+    pub fit: NativeSpriteViewportFit,
+    /// The frame's lower-left corner in rig units, x right and y up.
+    pub frame_minimum: NativeVec2,
+    pub frame_size: NativeVec2,
 }
 
 /// Play a clip on one track of a published rig object, from its start,
@@ -310,6 +335,12 @@ pub type NativeSetPartsRigTrackAlpha = unsafe extern "C" fn(
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32;
 
+pub type NativeSetPartsRigViewport = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: NativePartsRigViewportRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativeReadPartsRig = unsafe extern "C" fn(
     context: *mut c_void,
     request: NativePartsRigTrackRequest,
@@ -348,4 +379,5 @@ pub struct NativePartsRigsApi {
     pub read: NativeReadPartsRig,
     pub read_events: NativeReadPartsRigEvents,
     pub read_bone: NativeReadPartsRigBone,
+    pub set_viewport: NativeSetPartsRigViewport,
 }

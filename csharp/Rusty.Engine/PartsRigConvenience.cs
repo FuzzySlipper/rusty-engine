@@ -1,4 +1,5 @@
 using System;
+using System.Numerics;
 
 namespace Rusty.Engine;
 
@@ -14,6 +15,36 @@ public readonly partial record struct PartsRigAppearanceRequest
             new Color(1, 1, 1, 1), GraphicsDefaults.SpriteMaterial with { AlphaMode = SpriteAlphaMode.Mask }, 0f)
     {
     }
+}
+
+public readonly partial record struct PartsRigViewportRequest
+{
+    /// <summary>
+    /// Places <paramref name="appearance"/> in the viewport rectangle from <paramref name="minimum"/> (its
+    /// lower-left corner) of <paramref name="size"/>, in CSS-viewport units, fitting the bounds of its first
+    /// view's setup pose.
+    /// </summary>
+    public PartsRigViewportRequest(Appearance appearance, Vector2 minimum, Vector2 size, Vector2 alignment,
+        SpriteViewportFit fit)
+        : this(appearance, true, minimum, size, alignment, fit, Vector2.Zero, Vector2.Zero)
+    {
+    }
+
+    /// <summary>
+    /// Places <paramref name="appearance"/> in the viewport rectangle from <paramref name="minimum"/> of
+    /// <paramref name="size"/>, fitting the rig-unit frame from <paramref name="frameMinimum"/> of
+    /// <paramref name="frameSize"/>: a bust's fixed square, which breathing and sway move inside.
+    /// </summary>
+    public PartsRigViewportRequest(Appearance appearance, Vector2 minimum, Vector2 size, Vector2 alignment,
+        SpriteViewportFit fit, Vector2 frameMinimum, Vector2 frameSize)
+        : this(appearance, true, minimum, size, alignment, fit, frameMinimum, frameSize)
+    {
+    }
+
+    /// <summary>Returns <paramref name="appearance"/> to the world, placed by its object again.</summary>
+    public static PartsRigViewportRequest InWorld(Appearance appearance) =>
+        new(appearance, false, Vector2.Zero, Vector2.Zero, Vector2.Zero, SpriteViewportFit.Contain, Vector2.Zero,
+            Vector2.Zero);
 }
 
 public readonly partial record struct PartsRigPlayRequest

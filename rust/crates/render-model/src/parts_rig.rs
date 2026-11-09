@@ -19,7 +19,8 @@ use serde::{Deserialize, Serialize};
 use crate::{
     valid_color, validate_asset_id, BillboardMode, RenderAssetError, RenderAssetKind, RenderLayer,
     RenderMetadata, SpriteAlphaMode, SpriteDepthPolicy, SpriteLightingMode,
-    SpriteMaterialDescriptor, SpriteMaterialError, SpriteSizeMode, Transform,
+    SpriteMaterialDescriptor, SpriteMaterialError, SpriteSizeMode, SpriteViewportPlacement,
+    Transform,
 };
 
 /// One page a rig draws from: a texture, and whether its colour is
@@ -162,6 +163,44 @@ pub struct PartsRigView {
     pub mirror: bool,
 }
 
+/// A parts rig placed in a rectangle of each reading's viewport, as a sprite
+/// is (`SpriteViewportPlacement`): its `frame`, a fixed rectangle of the
+/// rig's plane, is fitted into `rectangle`, and its pose moves inside the
+/// frame without refitting it. It draws only inside its frame, as through a
+/// window. The placement owns the rig's place and size
+/// on screen: the node's transform, the rig's scale and size mode and its
+/// billboard mode are not read, and it draws its first view, facing the
+/// camera.
+///
+/// With a texel snap, the fit is the largest whole number of the target's
+/// pixels per texel that fits (the exact fit where that is below one), and
+/// the texel grid's lines land on pixel edges, so a 127-texel frame in a
+/// 381-pixel square draws each texel as 3 by 3 pixels. A frame whose corners
+/// lie on the rig's texel grid (whole texels from its origin) shows whole
+/// texels at its edges.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PartsRigViewportPlacement {
+    pub rectangle: SpriteViewportPlacement,
+    /// Rig units, x right and y up from the rig's origin: min x, min y,
+    /// max x, max y.
+    pub frame: [f32; 4],
+}
+
+impl PartsRigViewportPlacement {
+    pub fn validate(&self) -> Result<(), PartsRigError> {
+        let [x0, y0, x1, y1] = self.frame;
+        if self.rectangle.validate().is_err()
+            || !self.frame.iter().all(|value| value.is_finite())
+            || x1 <= x0
+            || y1 <= y0
+        {
+            return Err(PartsRigError::InvalidViewportPlacement);
+        }
+        Ok(())
+    }
+}
+
 /// One drawn parts rig: a node whose posed pieces lie on one plane through
 /// its origin, turned to the camera by `billboard` as a sprite is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -192,6 +231,9 @@ pub struct PartsRigInstanceDescriptor {
     /// centre. 0 draws it smooth.
     #[serde(default)]
     pub texel_snap: f32,
+    /// Placed in a rectangle of the viewport rather than in the world.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub viewport_placement: Option<PartsRigViewportPlacement>,
     pub visible: bool,
     pub transform: Transform,
     pub metadata: RenderMetadata,
@@ -206,6 +248,9 @@ pub enum PartsRigError {
     NonPositiveScale,
     InvalidTint,
     InvalidTexelSnap,
+    /// A viewport rectangle a sprite's placement refuses, or a frame that
+    /// is not finite with a positive width and height.
+    InvalidViewportPlacement,
     /// A sprite material option a rig does not draw: a texture (normal,
     /// depth, tint mask or emission map), softness or wind.
     UnsupportedMaterial,
@@ -231,6 +276,9 @@ impl PartsRigInstanceDescriptor {
         }
         if !(self.texel_snap.is_finite() && self.texel_snap >= 0.0) {
             return Err(PartsRigError::InvalidTexelSnap);
+        }
+        if let Some(placement) = &self.viewport_placement {
+            placement.validate()?;
         }
         let material = &self.material;
         if material.normal_texture.is_some()
@@ -408,7 +456,7 @@ impl PartsRigInstanceDescriptor {
     }
 
     fn view_from(&self, frame: &NodeFrame, camera: &PartsRigCamera) -> usize {
-        if self.views.len() < 2 {
+        if self.views.len() < 2 || self.viewport_placement.is_some() {
             return 0;
         }
         let toward = self.toward(frame.position, camera);
@@ -420,7 +468,7 @@ impl PartsRigInstanceDescriptor {
 
     /// The view `camera`'s reading draws, with the node at `world` (a
     /// column-major matrix): the one whose heading is nearest the bearing
-    /// it sees the node from.
+    /// it sees the node from, or the first for a rig placed in the viewport.
     pub fn view_seen(&self, world: &[[f32; 4]; 4], camera: &PartsRigCamera) -> usize {
         self.view_from(&NodeFrame::new(world, 1.0), camera)
     }
@@ -429,15 +477,18 @@ impl PartsRigInstanceDescriptor {
     /// authored) lies in the world as `camera`'s reading draws the rig, with
     /// its node at `world` (a column-major matrix): the view that reading
     /// picks, that view's mirror, and the plane turned by the billboard
-    /// mode, as realizers place it. None for a pixel-sized rig, whose size
-    /// follows the reading's viewport.
+    /// mode, as realizers place it. None for a pixel-sized rig or one placed
+    /// in the viewport, whose size follows the reading's viewport.
     pub fn place_point(
         &self,
         world: &[[f32; 4]; 4],
         camera: &PartsRigCamera,
         point: [f32; 2],
     ) -> Option<PartsRigPlacedPoint> {
-        if self.size_mode == SpriteSizeMode::Pixel || self.views.is_empty() {
+        if self.size_mode == SpriteSizeMode::Pixel
+            || self.viewport_placement.is_some()
+            || self.views.is_empty()
+        {
             return None;
         }
         let frame = NodeFrame::new(world, self.scale);

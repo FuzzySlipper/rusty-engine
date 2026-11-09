@@ -8,6 +8,9 @@
 //! - slot blend modes, the two-colour tint, premultiplied pages and draw
 //!   order, against their arithmetic;
 //! - pixel art snapped to the rig's texel grid;
+//! - pixel art placed in a rectangle of the viewport: whole pixels per
+//!   texel, a pose moving inside its fixed frame and clipped by it, and over
+//!   a fogged scene;
 //! - a snapshot of the world drawing the same rigs;
 //! - a rig of several views, each camera drawing the view nearest its
 //!   bearing, and a mirrored view drawn flipped.
@@ -155,6 +158,7 @@ fn figure(billboard: BillboardMode, translation: [f32; 3], yaw: f32) -> PartsRig
             ..Default::default()
         },
         texel_snap: 0.0,
+        viewport_placement: None,
         visible: true,
         transform: transform(translation, yaw, 1.0),
         metadata: RenderMetadata::default(),
@@ -801,6 +805,182 @@ fn texel_snapped_rigs_draw_whole_cells_of_their_grid() {
         "the smooth rig splits cells: {smooth_split} ({smooth_whole} whole)"
     );
     assert_screenshot("parts_rigs_texel_snap", WIDTH, HEIGHT, &frame);
+}
+
+/// The checker page's rig drawing: one piece, the whole page.
+fn checker_ops(harness: &mut Harness) -> Vec<RenderDiff> {
+    let (page, _) = harness.resources.texture(
+        "texture/checker",
+        12,
+        12,
+        &checker_page(),
+        TextureFilter::Nearest,
+    );
+    vec![
+        page,
+        RenderDiff::DefinePartsRig {
+            asset: PartsRigAsset {
+                id: "parts-rig/checker".to_owned(),
+                pages: vec![PartsRigPage {
+                    texture: "texture/checker".to_owned(),
+                    premultiplied: false,
+                    detail: None,
+                }],
+                drawables: vec![PartsRigDrawable {
+                    page: 0,
+                    uvs: vec![[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+                    triangles: vec![0, 1, 2, 2, 3, 0],
+                }]
+                .into(),
+            },
+        },
+    ]
+}
+
+/// The checker's 12 texels at 1 rig unit each, from rig unit (`x`, `y`).
+fn checker_pose(x: f32, y: f32) -> PartsRigPose {
+    pose(vec![(piece(0, PartsRigBlend::Normal), square(x, y, 12.0))])
+}
+
+#[test]
+fn a_rig_placed_in_the_viewport_draws_whole_pixel_texels_in_a_steady_frame_over_the_scene() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.extend(checker_ops(&mut harness));
+    // A 37-pixel square of the 320 × 180 view at (100, 50) from its lower
+    // left, over a 12-unit frame snapped at a texel a unit: 3 whole pixels
+    // a texel (36 pixels, centred), wherever the node stands.
+    let mut rig = figure(BillboardMode::None, [40.0, -3.0, -500.0], 70.0);
+    rig.views[0].asset = "parts-rig/checker".to_owned();
+    rig.layer = RenderLayer::Viewmodel;
+    rig.texel_snap = 1.0;
+    rig.viewport_placement = Some(PartsRigViewportPlacement {
+        rectangle: SpriteViewportPlacement {
+            minimum: [100.0 / WIDTH as f32, 50.0 / HEIGHT as f32],
+            size: [37.0 / WIDTH as f32, 37.0 / HEIGHT as f32],
+            alignment: [0.5, 0.5],
+            fit: SpriteViewportFit::Contain,
+        },
+        frame: [0.0, 0.0, 12.0, 12.0],
+    });
+    ops.extend(create(10, rig.clone(), &checker_pose(0.0, 0.0)));
+    harness.apply(ops);
+    let eye = camera("eye", [0.0, 1.0, 1.0], 0.0, -10.0);
+    let frame = harness.single(&eye);
+
+    // The frame's left edge is at 100.5 pixels, rounded to 101, its bottom
+    // at 51 (row 129 from the top). The page's coloured texels are 2 to 9
+    // of 12, so the checker covers columns 107 to 130 and rows 99 to 122.
+    let cell = |frame: &[u8], i: u32, j: u32| {
+        let (x, y) = (101 + 3 * i, 93 + 3 * j);
+        let first = pixel(frame, WIDTH, x, y);
+        let whole = (0..3).all(|dy| (0..3).all(|dx| pixel(frame, WIDTH, x + dx, y + dy) == first));
+        whole.then_some(first)
+    };
+    for j in 0..12 {
+        for i in 0..12 {
+            let colour = cell(&frame, i, j)
+                .unwrap_or_else(|| panic!("texel ({i}, {j}) is a whole 3 × 3 block"));
+            let inside = (2..10).contains(&i) && (2..10).contains(&j);
+            assert_eq!(colour[..3] != [0, 0, 0], inside, "texel ({i}, {j})");
+            if inside && i > 2 {
+                assert_ne!(
+                    cell(&frame, i - 1, j),
+                    Some(colour),
+                    "the checker alternates"
+                );
+            }
+        }
+    }
+    for y in 0..HEIGHT {
+        for x in [106, 131] {
+            assert_eq!(
+                pixel(&frame, WIDTH, x, y)[..3],
+                [0, 0, 0],
+                "outside at ({x}, {y})"
+            );
+        }
+    }
+
+    // A pose reaching past the frame moves inside it: the same texels, 2
+    // units right and 1 up, 6 pixels right and 3 up.
+    harness.apply(vec![RenderDiff::SetPartsRigPose {
+        handle: RenderHandle::new(10),
+        view: 0,
+        pose: checker_pose(2.0, 1.0),
+    }]);
+    let moved = harness.single(&eye);
+    for y in 99..123 {
+        for x in 107..131 {
+            assert_eq!(
+                pixel(&moved, WIDTH, x + 6, y - 3),
+                pixel(&frame, WIDTH, x, y),
+                "({x}, {y}) moved with the pose, not the frame"
+            );
+        }
+    }
+
+    // It draws only inside its frame: moved 6 units right, the checker's
+    // last 4 columns would lie past it (columns 137 to 148).
+    harness.apply(vec![RenderDiff::SetPartsRigPose {
+        handle: RenderHandle::new(10),
+        view: 0,
+        pose: checker_pose(6.0, 0.0),
+    }]);
+    let past = harness.single(&eye);
+    assert_ne!(
+        pixel(&past, WIDTH, 136, 110)[..3],
+        [0, 0, 0],
+        "inside the frame"
+    );
+    for y in 90..135 {
+        for x in 137..152 {
+            assert_eq!(
+                pixel(&past, WIDTH, x, y)[..3],
+                [0, 0, 0],
+                "({x}, {y}) is past the frame"
+            );
+        }
+    }
+
+    // Over a floor in thick fog, every texel draws as it did.
+    let mut ops = coloured_mesh("floor", floor(40.0), [0.7, 0.6, 0.5, 1.0]);
+    ops.push(instance(
+        1,
+        None,
+        "floor",
+        transform([0.0, 0.0, -10.0], 0.0, 1.0),
+    ));
+    ops.push(RenderDiff::SetFog {
+        fog: Some(FogDescriptor::Exponential {
+            color: [0.6, 0.7, 0.85],
+            density: 0.5,
+        }),
+    });
+    ops.push(RenderDiff::SetPartsRigPose {
+        handle: RenderHandle::new(10),
+        view: 0,
+        pose: checker_pose(0.0, 0.0),
+    });
+    harness.apply(ops);
+    let fogged = harness.single(&eye);
+    assert_ne!(
+        pixel(&fogged, WIDTH, 20, 170),
+        pixel(&frame, WIDTH, 20, 170),
+        "the floor drew"
+    );
+    for y in 99..123 {
+        for x in 107..131 {
+            assert_eq!(
+                pixel(&fogged, WIDTH, x, y),
+                pixel(&frame, WIDTH, x, y),
+                "({x}, {y}) is unfogged and over the floor"
+            );
+        }
+    }
+    assert_screenshot("parts_rigs_viewport", WIDTH, HEIGHT, &fogged);
 }
 
 #[test]

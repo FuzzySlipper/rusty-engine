@@ -15,7 +15,8 @@
 //! A rig node's motion in the world moves its physics: what the node moved
 //! since the last settle along its own x and y axes, in rig units, is every
 //! view's `translate_physics` before its step (mirrored for a mirrored
-//! view). A pixel-sized rig has no world unit, and takes none.
+//! view). A pixel-sized rig or one placed in the viewport has no world
+//! unit, and takes none.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -146,6 +147,20 @@ impl PartsRigScene {
         }
         self.rigs.insert(id, rig);
         asset
+    }
+
+    /// The bounds of asset `id`'s setup pose in rig units (min x, min y,
+    /// max x, max y), its default skin: what a placed rig fits by default.
+    /// None when it draws nothing.
+    fn setup_bounds(&self, id: &str) -> Option<[f32; 4]> {
+        let rig = self.rigs.get(id)?;
+        let mut pose = Pose::default();
+        Player::new(rig).advance(rig, 0.0, &mut pose);
+        let mut vertices = pose.vertices.iter();
+        let [x, y] = *vertices.next()?;
+        Some(vertices.fold([x, y, x, y], |[x0, y0, x1, y1], [x, y]| {
+            [x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y)]
+        }))
     }
 
     /// Forget asset `id`'s rig; views showing it hold their last pose.
@@ -435,6 +450,14 @@ impl PartsRigScene {
                 ),
             ));
         }
+        if rig.viewport_placement.is_some() {
+            return Err(parts_rig_error(
+                "CSHARP_PARTS_RIG_VIEWPORT_PLACED",
+                format!(
+                    "object {object_id} is placed in the viewport: where it draws follows each reading's viewport"
+                ),
+            ));
+        }
         let view = rig.view_seen(&world, camera);
         let missing = || {
             parts_rig_error(
@@ -506,10 +529,9 @@ impl PartsRigScene {
                 (world.parts_rig(handle), world.scene_world_matrix(handle))
             {
                 let origin = [m[3][0], m[3][1], m[3][2]];
-                if let Some(from) = instance
-                    .origin
-                    .filter(|_| node.size_mode == SpriteSizeMode::World)
-                {
+                if let Some(from) = instance.origin.filter(|_| {
+                    node.size_mode == SpriteSizeMode::World && node.viewport_placement.is_none()
+                }) {
                     let moved = [0, 1, 2].map(|k| f64::from(origin[k]) - f64::from(from[k]));
                     // Along an axis of world length `l` per node unit, one
                     // rig unit is `scale * l` long.
@@ -830,6 +852,7 @@ impl RuntimeAppearanceBridge {
             layer: sprite.layer,
             material: sprite.material,
             texel_snap: request.texel_snap,
+            viewport_placement: None,
             visible: true,
             transform: Transform::IDENTITY,
             metadata: RenderMetadata::default(),
@@ -845,6 +868,80 @@ impl RuntimeAppearanceBridge {
             }
         }
         Ok(appearance)
+    }
+
+    fn set_parts_rig_viewport(
+        &mut self,
+        request: NativePartsRigViewportRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let refused = |message: String| parts_rig_error("CSHARP_PARTS_RIG_VIEWPORT", message);
+        let staged = self.staged_mut()?;
+        let identity = staged
+            .state
+            .appearances
+            .get(&request.appearance.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new("CSHARP_APPEARANCE_HANDLE", "appearance is not live")
+            })?;
+        let state = &mut staged.state;
+        let first = match state.projector.appearance_mut(&identity) {
+            Some(Appearance::PartsRig { rig }) => rig.views[0].asset.clone(),
+            _ => {
+                return Err(parts_rig_error(
+                    "CSHARP_PARTS_RIG_VIEWPORT_APPEARANCE",
+                    "appearance is not a parts rig",
+                ))
+            }
+        };
+        let placement = if request.enabled {
+            let (minimum, size) = (
+                native_vec2(request.frame_minimum),
+                native_vec2(request.frame_size),
+            );
+            let frame = if size == [0.0, 0.0] {
+                state
+                    .parts_rigs
+                    .setup_bounds(&first)
+                    .filter(|[x0, y0, x1, y1]| x1 > x0 && y1 > y0)
+                    .ok_or_else(|| {
+                        refused("the first view's setup pose has no area to fit".to_owned())
+                    })?
+            } else {
+                [
+                    minimum[0],
+                    minimum[1],
+                    minimum[0] + size[0],
+                    minimum[1] + size[1],
+                ]
+            };
+            let placement = render_model::PartsRigViewportPlacement {
+                rectangle: render_model::SpriteViewportPlacement {
+                    minimum: native_vec2(request.minimum),
+                    size: native_vec2(request.size),
+                    alignment: native_vec2(request.alignment),
+                    fit: match request.fit {
+                        NativeSpriteViewportFit::Stretch => {
+                            render_model::SpriteViewportFit::Stretch
+                        }
+                        NativeSpriteViewportFit::Contain => {
+                            render_model::SpriteViewportFit::Contain
+                        }
+                    },
+                },
+                frame,
+            };
+            placement
+                .validate()
+                .map_err(|error| refused(format!("{error:?}")))?;
+            Some(placement)
+        } else {
+            None
+        };
+        if let Some(Appearance::PartsRig { rig }) = state.projector.appearance_mut(&identity) {
+            rig.viewport_placement = placement;
+        }
+        Ok(())
     }
 
     fn play_parts_rig(
@@ -1092,6 +1189,16 @@ unsafe extern "C" fn set_track_alpha(
     })
 }
 
+unsafe extern "C" fn set_viewport(
+    context: *mut c_void,
+    request: NativePartsRigViewportRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.set_parts_rig_viewport(request))
+    })
+}
+
 unsafe extern "C" fn set_skin(
     context: *mut c_void,
     request: *const NativePartsRigSkinRequest,
@@ -1190,6 +1297,7 @@ pub(crate) fn api(bridge: &mut RuntimeAppearanceBridge) -> NativePartsRigsApi {
         read,
         read_events,
         read_bone,
+        set_viewport,
     }
 }
 

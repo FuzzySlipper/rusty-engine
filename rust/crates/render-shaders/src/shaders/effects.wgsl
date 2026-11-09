@@ -382,7 +382,9 @@ fn fs_sprite_opaque(in: SpriteOut, @builtin(front_facing) front: bool) -> Opaque
 }
 
 // Parts rig: a posed figure's pieces on one plane, placed per view by a
-// sprite row (`model`, tint, lighting, emission) whose quad is unused. Each
+// sprite row (`model`, tint, lighting, emission) whose quad is the frame it
+// draws inside, in its plane's units: a viewport-placed rig's frame, or
+// everywhere. Each
 // vertex is in rig units on that plane, with its piece's page uv, colours
 // and page region. Pieces draw in the rig's draw order, each run of one page
 // and blend mode by one call (`parts_rigs.rs`).
@@ -397,6 +399,7 @@ struct PartsRigIn {
     // a mirrored view, else 1.
     @location(5) snap: vec4<f32>,
     @location(6) tint: vec4<f32>,
+    // The frame it draws inside: min x, min y, max x, max y.
     @location(7) quad: vec4<f32>,
     @location(8) params: vec4<f32>,
     @location(9) soft: vec4<f32>,
@@ -425,6 +428,7 @@ struct PartsRigOut {
     @location(9) emission: vec3<f32>,
     // Rig units per texel, and the view's mirror sign.
     @location(10) snap: vec2<f32>,
+    @location(11) bounds: vec4<f32>,
 };
 
 fn srgb_linear(value: vec3<f32>) -> vec3<f32> {
@@ -457,6 +461,7 @@ fn vs_parts_rig(in: PartsRigIn) -> PartsRigOut {
     out.region = in.region;
     out.emission = in.emission.xyz;
     out.snap = in.snap.xy;
+    out.bounds = in.quad;
     return out;
 }
 
@@ -478,7 +483,8 @@ fn shaded_parts_rig(in: PartsRigOut, front: bool, masked: bool) -> vec4<f32> {
         surface.detail = vec4<f32>(0.5, 0.5, 1.0, 1.0);
     }
     var texel = textureSample(sprite_color, sprite_color_sampler, in.uv);
-    var outside = false;
+    // Outside its frame, nothing.
+    var outside = any(in.rig < in.bounds.xy) || any(in.rig > in.bounds.zw);
     if in.snap.x > 0.0 {
         // The colour at the centre of the fragment's cell of the rig's
         // texel grid: the page uv there by the piece's affine map from the
@@ -491,7 +497,7 @@ fn shaded_parts_rig(in: PartsRigOut, front: bool, masked: bool) -> vec4<f32> {
             let to_rig = mat2x2<f32>(vec2<f32>(rig_y.y, -rig_x.y), vec2<f32>(-rig_y.x, rig_x.x)) * (1.0 / determinant);
             uv = in.uv + mat2x2<f32>(uv_x, uv_y) * to_rig * (centre - in.rig);
         }
-        outside = any(uv < in.region.xy) || any(uv > in.region.zw);
+        outside = outside || any(uv < in.region.xy) || any(uv > in.region.zw);
         let size = textureDimensions(sprite_color);
         let at = clamp(vec2<i32>(floor(uv * vec2<f32>(size))), vec2<i32>(0), vec2<i32>(size) - 1);
         texel = textureLoad(sprite_color, at, 0);
@@ -525,14 +531,17 @@ fn fs_parts_rig(in: PartsRigOut, @builtin(front_facing) front: bool) -> @locatio
     return vec4<f32>(color.rgb * color.a, color.a);
 }
 
-// Solid pieces, as solid sprites are drawn.
+// Solid pieces, as solid sprites are drawn. A texel-snapped rig's alpha
+// steps at its cells' edges, so its cutoff is hard: smoothed by the alpha's
+// screen derivative, a pixel beside a cell edge would take part coverage.
 @fragment
 fn fs_parts_rig_opaque(in: PartsRigOut, @builtin(front_facing) front: bool) -> OpaqueSpriteOut {
     let cutoff = in.params.y;
     let color = shaded_parts_rig(in, front, false);
+    let edge = mask_coverage(color.a, cutoff);
     var mask = 0xffffffffu;
     if cutoff > 0.0 {
-        mask = mask_coverage(color.a, cutoff);
+        mask = select(edge, select(0u, 0xffffffffu, color.a >= cutoff), in.snap.x > 0.0);
     }
     return OpaqueSpriteOut(vec4<f32>(color.rgb, 1.0), mask);
 }

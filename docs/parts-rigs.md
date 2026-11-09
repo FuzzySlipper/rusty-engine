@@ -31,8 +31,9 @@ engine.PartsRigs.DriveBone(PartsRigDriveRequest.Hold(PersonId, "turn", PartsRigB
 ```
 
 See `fixtures/csharp-parts-rigs` for a townsperson of four views walking in
-place with its breathing added over the walk and an orbiting camera, and a
-gallery rig whose clip fires events with a second clip added over it.
+place with its breathing added over the walk and an orbiting camera, a
+gallery rig whose clip fires events with a second clip added over it, and a
+dialogue bust placed in a DOM frame's window.
 
 ## Loading
 
@@ -71,6 +72,60 @@ view is drawn flipped across the rig's vertical axis, so one side's rig shows
 the other side.
 
 One view shows from every side.
+
+## Placing in the viewport
+
+`SetViewport` places a rig appearance in a rectangle of each reading's
+viewport, as [sprite viewport placement](csharp-capabilities.md#sprite-viewport-placement)
+places a sprite: a lower-left `Minimum`, a `Size` and an `Alignment` in
+CSS-viewport units (0 to 1), with `Stretch` or `Contain` fitting. A dialogue
+portrait drawn live inside a DOM frame is the use: the UI leaves a window in
+its frame and the product places the rig there.
+
+```csharp
+// A 127-texel bust in a 381 CSS-pixel square, 32 pixels in from the lower left,
+// its frame 47 texels up from the rig's origin (TexelSnap = texel).
+CameraSurfaceReadout surface = engine.CameraView.ReadSurface();
+engine.PartsRigs.SetViewport(new PartsRigViewportRequest(bust,
+    new Vector2(32 / (float)surface.CssWidth, 32 / (float)surface.CssHeight),
+    new Vector2(381 / (float)surface.CssWidth, 381 / (float)surface.CssHeight),
+    new Vector2(.5f, .5f), SpriteViewportFit.Contain,
+    frameMinimum: new Vector2(0, 47 * texel), frameSize: new Vector2(127 * texel)));
+var anywhere = new Transform(Vector3.Zero, Quaternion.Identity, Vector3.One);
+engine.Graphics.PublishChanges(new([new(BustId, false, 0, anywhere, bust, true, RenderLayer.Viewmodel)],
+    ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<MeshJointAttachment>.Empty));
+```
+
+- **A steady frame.** What is fitted is a fixed rectangle of the rig's
+  plane in rig units, not each pose's bounds, so breathing and sway move
+  inside the frame rather than rescaling it, and it draws only inside the
+  frame, as through a window. The short constructor fits the
+  bounds of the first view's setup pose (default skin); the long one fits
+  the frame the product gives, such as a bust's square.
+- **The placement owns the place.** The object's transform, the
+  appearance's scale, size mode and billboard mode are not read. The rig
+  faces the camera and draws its first view. It draws without depth: over
+  everything in its layer, in render order. Publish it in
+  `RenderLayer.Viewmodel` to draw it over the scene, unfogged and untouched
+  by the scene's depth, in every reading (the window, the stream, captures).
+  An object placed this way takes no physics swing from its object's motion,
+  and `ReadBone` refuses it, as it does a `Pixel`-sized rig.
+- **Pixel art.** With a `TexelSnap`, the fit is the largest whole number of
+  the target's pixels per texel that fits (the exact fit when not even one
+  does), and the texel grid lies on pixel edges. A 127-texel frame in a
+  381-pixel square draws each texel as exactly 3 × 3 CSS pixels; at a pixel
+  ratio of 2, 6 × 6 device pixels. The grid starts at the rig's origin, so a
+  frame whose corners are whole texels from the origin shows whole texels at
+  its edges. Load the pages with `TextureFilter.Nearest`.
+  A texel-snapped rig's alpha cutoff is hard, so its edge pixels are whole.
+- **Playing.** Clips, layered tracks, skins and `DriveBone` work as they do
+  in the world.
+
+`PartsRigViewportRequest.InWorld(appearance)` returns it to the world. Each
+call is shown at the next publish. The rectangle is in CSS-viewport units, so
+a product that wants a size in CSS pixels divides by the surface's CSS size
+(`CameraView.ReadSurface`) and places the rig again when the surface's
+`Revision` changes.
 
 ## Playing
 

@@ -573,28 +573,47 @@ impl Effects {
         );
         let buffers = &*buffers;
         let first = *buffers.runs.first()?;
-        let pixels =
-            (descriptor.size_mode == SpriteSizeMode::Pixel).then_some([descriptor.scale; 2]);
-        let placed = match pixels {
-            Some(_) => *world,
-            None => *world * Mat4::from_scale(Vec3::splat(descriptor.scale)),
+        let mirror = if view.mirror { -1.0 } else { 1.0 };
+        let model = match &descriptor.viewport_placement {
+            Some(placement) => {
+                rig_viewport_model(placement, mirror, descriptor.texel_snap, camera, viewport)
+            }
+            None => {
+                let pixels = (descriptor.size_mode == SpriteSizeMode::Pixel)
+                    .then_some([descriptor.scale; 2]);
+                let placed = match pixels {
+                    Some(_) => *world,
+                    None => *world * Mat4::from_scale(Vec3::splat(descriptor.scale)),
+                };
+                facing_model(
+                    &placed,
+                    descriptor.billboard,
+                    pixels,
+                    descriptor.material.authored_facing,
+                    camera,
+                    viewport,
+                    pixel_ratio,
+                )?
+            }
         };
-        let model = facing_model(
-            &placed,
-            descriptor.billboard,
-            pixels,
-            descriptor.material.authored_facing,
-            camera,
-            viewport,
-            pixel_ratio,
-        )?;
         let (state, cutoff) = parts_rig_state(descriptor);
         let material = &descriptor.material;
         let ([mode, strength, bias], _) = material_lighting(material, first.detail, None);
         let mut row = [0.0; SPRITE_ROW_FLOATS];
         row[..16].copy_from_slice(&model.to_cols_array());
-        let mirror = if view.mirror { -1.0 } else { 1.0 };
         row[16..18].copy_from_slice(&[descriptor.texel_snap, mirror]);
+        // The frame it draws inside, in its plane's (mirrored) units.
+        row[24..28].copy_from_slice(&match &descriptor.viewport_placement {
+            Some(placement) => {
+                let [x0, y0, x1, y1] = placement.frame;
+                if view.mirror {
+                    [-x1, y0, -x0, y1]
+                } else {
+                    [x0, y0, x1, y1]
+                }
+            }
+            None => [f32::MIN, f32::MIN, f32::MAX, f32::MAX],
+        });
         row[20..24].copy_from_slice(&descriptor.tint);
         row[28..32].copy_from_slice(&[mode, cutoff, strength, bias]);
         row[36..39].copy_from_slice(
@@ -1270,16 +1289,19 @@ fn rig_textures(run: &RigRun, detail: bool) -> SpriteTextures {
 }
 
 /// A parts rig's alpha and depth state, as `sprite_state` gives a sprite's.
+/// A rig placed in the viewport draws over its layer without depth, so the
+/// finish pass, which fogs by depth, leaves it as drawn.
 fn parts_rig_state(rig: &PartsRigInstanceDescriptor) -> (SpriteState, f32) {
     let (cutoff, alpha_write) = match rig.material.alpha {
         SpriteAlphaMode::Opaque => (0.0, true),
         SpriteAlphaMode::Mask { cutoff } => (cutoff, true),
         SpriteAlphaMode::Blend => (0.0, false),
     };
+    let placed = rig.viewport_placement.is_some();
     (
         SpriteState {
-            depth_test: rig.depth != SpriteDepthPolicy::DepthTestOff,
-            depth_write: rig.depth != SpriteDepthPolicy::DepthWriteOff && alpha_write,
+            depth_test: rig.depth != SpriteDepthPolicy::DepthTestOff && !placed,
+            depth_write: rig.depth != SpriteDepthPolicy::DepthWriteOff && alpha_write && !placed,
             blend: rig.blended(),
             additive: false,
             soft: false,
@@ -1562,6 +1584,78 @@ fn sprite_quad(
         pixel_ratio,
     )?;
     Some((model, quad))
+}
+
+/// The matrix that draws a viewport-placed rig's plane for `camera`: from
+/// rig units (mirrored for a mirrored view, as `effects.wgsl` mirrors them)
+/// to the world, a little in front of the eye, so that its frame fits its
+/// rectangle of `viewport` (`PartsRigViewportPlacement`). With a texel snap,
+/// each texel is a whole number of the viewport's pixels (where at least
+/// one fits) and the rig's origin, on which its texel grid lies, is on a
+/// pixel corner, so each pixel's centre lies in exactly one texel. It draws
+/// only inside its frame (`effects.wgsl` `shaded_parts_rig`).
+fn rig_viewport_model(
+    placement: &render_model::PartsRigViewportPlacement,
+    mirror: f32,
+    texel_snap: f32,
+    camera: &CameraMatrices,
+    viewport: PixelRect,
+) -> Mat4 {
+    /// How far below a whole number of pixels per texel a fit still counts
+    /// as it: a 381-pixel square over 127 texels is 3, not 2.9999998.
+    const WHOLE_PIXELS: f32 = 1e-3;
+    let (width, height) = (viewport.width as f32, viewport.height as f32);
+    let rectangle = placement.rectangle;
+    let [x0, y0, x1, y1] = placement.frame;
+    let (x0, x1) = if mirror < 0.0 { (-x1, -x0) } else { (x0, x1) };
+    let (frame_width, frame_height) = (x1 - x0, y1 - y0);
+    let (target_width, target_height) = (width * rectangle.size[0], height * rectangle.size[1]);
+    // Pixels per rig unit, across and up.
+    let mut scale = match rectangle.fit {
+        SpriteViewportFit::Stretch => [target_width / frame_width, target_height / frame_height],
+        SpriteViewportFit::Contain => {
+            [(target_width / frame_width).min(target_height / frame_height); 2]
+        }
+    };
+    if texel_snap > 0.0 {
+        scale = scale.map(|scale| {
+            let per_texel = scale * texel_snap;
+            if per_texel + WHOLE_PIXELS >= 1.0 {
+                (per_texel + WHOLE_PIXELS).floor() / texel_snap
+            } else {
+                scale
+            }
+        });
+    }
+    let (quad_width, quad_height) = (frame_width * scale[0], frame_height * scale[1]);
+    let left = width * rectangle.minimum[0] + (target_width - quad_width) * rectangle.alignment[0];
+    let bottom =
+        height * rectangle.minimum[1] + (target_height - quad_height) * rectangle.alignment[1];
+    // The rig's origin in pixels from the viewport's lower left.
+    let mut origin = [left - x0 * scale[0], bottom - y0 * scale[1]];
+    if texel_snap > 0.0 {
+        origin = origin.map(f32::round);
+    }
+    // A rectangle at one depth in the view stays one in the world, so the
+    // matrix is affine like a placed sprite's.
+    let unproject = camera.view_proj.inverse();
+    let world = |[x, y]: [f32; 2]| {
+        unproject.project_point3(Vec3::new(
+            x / width * 2.0 - 1.0,
+            y / height * 2.0 - 1.0,
+            PLACEMENT_DEPTH,
+        ))
+    };
+    let at = world(origin);
+    let right = (world([origin[0] + scale[0] * frame_width, origin[1]]) - at) / frame_width;
+    let up = (world([origin[0], origin[1] + scale[1] * frame_height]) - at) / frame_height;
+    let facing = right.cross(up).try_normalize().unwrap_or(Vec3::Z);
+    Mat4::from_cols(
+        right.extend(0.0),
+        up.extend(0.0),
+        facing.extend(0.0),
+        at.extend(1.0),
+    )
 }
 
 /// `camera` as a parts rig's placement reads it.
@@ -2343,6 +2437,7 @@ mod tests {
                 ..Default::default()
             },
             texel_snap: 0.0,
+            viewport_placement: None,
             visible: true,
             transform: Default::default(),
             metadata: Default::default(),

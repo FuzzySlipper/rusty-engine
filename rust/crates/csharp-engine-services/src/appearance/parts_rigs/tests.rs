@@ -607,3 +607,130 @@ fn an_additive_track_layers_over_the_base_in_every_view() {
     assert_eq!(scene_vertices(&bridge, 0), alone);
     bridge.end_call();
 }
+
+fn viewport(
+    appearance: NativeAppearanceHandle,
+    enabled: bool,
+    frame_minimum: [f32; 2],
+    frame_size: [f32; 2],
+) -> NativePartsRigViewportRequest {
+    let vec2 = |[x, y]: [f32; 2]| NativeVec2 { x, y };
+    NativePartsRigViewportRequest {
+        appearance,
+        enabled,
+        minimum: vec2([0.6, 0.1]),
+        size: vec2([0.3, 0.5]),
+        alignment: vec2([1.0, 0.0]),
+        fit: NativeSpriteViewportFit::Contain,
+        frame_minimum: vec2(frame_minimum),
+        frame_size: vec2(frame_size),
+    }
+}
+
+fn placement(bridge: &RuntimeAppearanceBridge) -> Option<render_model::PartsRigViewportPlacement> {
+    bridge.staged_ref().unwrap().state.parts_rigs.instances[&OBJECT]
+        .rig
+        .viewport_placement
+}
+
+/// A rig placed in the viewport fits the setup pose's bounds unless the
+/// product gives a frame, plays as a rig in the world does, and has no world
+/// place for a bone read; disabled, it returns to the world.
+#[test]
+fn a_rig_placed_in_the_viewport_fits_a_fixed_frame_and_plays_as_before() {
+    let (mut bridge, mut world) = (bridge(), PresentationWorld::default());
+    bridge.begin_call();
+    let rig = load(&mut bridge);
+    let bust = appearance(
+        &mut bridge,
+        &[NativePartsRigView {
+            rig: rig.rig,
+            heading: 0.0,
+            mirror: false,
+        }],
+    )
+    .unwrap();
+    bridge
+        .set_parts_rig_viewport(viewport(bust, true, [0.0; 2], [0.0; 2]))
+        .expect("a rig appearance takes a placement");
+    let publish = |bridge: &mut RuntimeAppearanceBridge| {
+        let facts = [fact(bust, NativeRenderLayer::Viewmodel)];
+        unsafe { bridge.stage_snapshot(facts.as_ptr(), facts.len()) }.unwrap();
+    };
+    publish(&mut bridge);
+    end(&mut bridge, &mut world, 0.0);
+
+    let model = Rig::from_json(FEATURES).unwrap();
+    let mut setup = Pose::default();
+    Player::new(&model).advance(&model, 0.0, &mut setup);
+    let bounds = setup.vertices.iter().fold(
+        [f32::MAX, f32::MAX, f32::MIN, f32::MIN],
+        |[x0, y0, x1, y1], [x, y]| [x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y)],
+    );
+    bridge.begin_call();
+    let placed = placement(&bridge).expect("the published node is placed");
+    assert_eq!(placed.frame, bounds, "the setup pose's bounds");
+    assert_eq!(placed.rectangle.minimum, [0.6, 0.1]);
+
+    // It plays as before: a clip poses it at each call.
+    bridge.play_parts_rig(play("a", 0.0, 1.0)).unwrap();
+    publish(&mut bridge);
+    end(&mut bridge, &mut world, STEP);
+    for _ in 0..3 {
+        bridge.begin_call();
+        publish(&mut bridge);
+        assert_eq!(
+            end(&mut bridge, &mut world, STEP),
+            vec![0],
+            "it poses each call"
+        );
+    }
+    bridge.begin_call();
+    let clip = read(&bridge).clip;
+    assert_eq!(&clip.bytes[..clip.len as usize], b"a");
+    let camera = PartsRigCamera {
+        eye: [0.0, 1.0, 5.0],
+        right: [1.0, 0.0, 0.0],
+        up: [0.0, 1.0, 0.0],
+        forward: [0.0, 0.0, -1.0],
+        orthographic: false,
+    };
+    let bone = bridge
+        .staged_ref()
+        .unwrap()
+        .state
+        .parts_rigs
+        .read_bone(OBJECT, "root", &camera);
+    assert_eq!(
+        bone.map(|_| ()).unwrap_err().code(),
+        "CSHARP_PARTS_RIG_VIEWPORT_PLACED"
+    );
+
+    // A frame the product gives, a frame with no area, and back to the
+    // world.
+    bridge
+        .set_parts_rig_viewport(viewport(bust, true, [-64.0, 0.0], [127.0, 127.0]))
+        .unwrap();
+    let refused = bridge
+        .set_parts_rig_viewport(viewport(bust, true, [0.0; 2], [10.0, -1.0]))
+        .unwrap_err();
+    assert_eq!(refused.code(), "CSHARP_PARTS_RIG_VIEWPORT");
+    publish(&mut bridge);
+    end(&mut bridge, &mut world, STEP);
+    bridge.begin_call();
+    assert_eq!(placement(&bridge).unwrap().frame, [-64.0, 0.0, 63.0, 127.0]);
+    let clip = read(&bridge).clip;
+    assert_eq!(
+        &clip.bytes[..clip.len as usize],
+        b"a",
+        "the recreated node keeps playing"
+    );
+    bridge
+        .set_parts_rig_viewport(viewport(bust, false, [0.0; 2], [0.0; 2]))
+        .unwrap();
+    publish(&mut bridge);
+    end(&mut bridge, &mut world, STEP);
+    bridge.begin_call();
+    assert_eq!(placement(&bridge), None);
+    bridge.end_call();
+}
