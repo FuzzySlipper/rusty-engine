@@ -1,0 +1,481 @@
+{
+ "spec": "rigc-rig/1",
+ "name": "clipping",
+ "images": "parts",
+ "skeleton": {
+  "x": 0,
+  "y": 0,
+  "width": 800,
+  "height": 720
+ },
+ "bones": [
+  {
+   "name": "root"
+  },
+  {
+   "name": "base",
+   "parent": "root",
+   "x": 400,
+   "y": 360
+  },
+  {
+   "name": "win1",
+   "parent": "base",
+   "x": -260,
+   "y": 150
+  },
+  {
+   "name": "win2",
+   "parent": "base",
+   "x": -120,
+   "y": 150
+  },
+  {
+   "name": "mover",
+   "parent": "base",
+   "x": -190,
+   "y": 150
+  },
+  {
+   "name": "lbone",
+   "parent": "base",
+   "x": 180,
+   "y": 150
+  },
+  {
+   "name": "lcontent",
+   "parent": "base",
+   "x": 180,
+   "y": 150
+  },
+  {
+   "name": "inv",
+   "parent": "base",
+   "x": -200,
+   "y": -170
+  },
+  {
+   "name": "plate_b",
+   "parent": "base",
+   "x": -200,
+   "y": -170
+  },
+  {
+   "name": "hullb",
+   "parent": "base",
+   "x": 40,
+   "y": -170
+  },
+  {
+   "name": "eye",
+   "parent": "base",
+   "x": 220,
+   "y": -170
+  },
+  {
+   "name": "iris",
+   "parent": "eye",
+   "x": 0,
+   "y": 0
+  }
+ ],
+ "slots": [
+  {
+   "name": "s_head",
+   "bone": "base",
+   "attachment": "head"
+  },
+  {
+   "name": "c_window",
+   "bone": "win1",
+   "attachment": "window"
+  },
+  {
+   "name": "s_arm",
+   "bone": "mover",
+   "attachment": "arm"
+  },
+  {
+   "name": "c_nested",
+   "bone": "base",
+   "attachment": "nested"
+  },
+  {
+   "name": "s_ball",
+   "bone": "mover",
+   "attachment": "ball"
+  },
+  {
+   "name": "s_free",
+   "bone": "mover",
+   "attachment": "ear"
+  },
+  {
+   "name": "c_concave",
+   "bone": "lbone",
+   "attachment": "ell"
+  },
+  {
+   "name": "s_torso",
+   "bone": "lcontent",
+   "attachment": "torso"
+  },
+  {
+   "name": "c_inverse",
+   "bone": "inv",
+   "attachment": "hole"
+  },
+  {
+   "name": "s_plate",
+   "bone": "plate_b",
+   "attachment": "plate"
+  },
+  {
+   "name": "c_hull",
+   "bone": "hullb",
+   "attachment": "arrow"
+  },
+  {
+   "name": "s_hand",
+   "bone": "hullb",
+   "attachment": "hand"
+  },
+  {
+   "name": "s_socket",
+   "bone": "eye",
+   "attachment": "socket"
+  },
+  {
+   "name": "c_eye",
+   "bone": "base",
+   "attachment": "aperture"
+  },
+  {
+   "name": "s_iris",
+   "bone": "iris",
+   "attachment": "iris"
+  },
+  {
+   "name": "c_open",
+   "bone": "base",
+   "attachment": "open"
+  },
+  {
+   "name": "s_knot",
+   "bone": "base",
+   "attachment": "knot"
+  }
+ ],
+ "skins": {
+  "default": {
+   "s_head": {
+    "head": {
+     "image": "head.png",
+     "y": 230,
+     "scaleX": 0.8,
+     "scaleY": 0.8
+    }
+   },
+   "c_window": {
+    "window": {
+     "type": "clipping",
+     "end": "s_ball",
+     "vertexCount": 6,
+     "weights": [
+      [
+       {
+        "bone": "win1",
+        "x": -40,
+        "y": 60,
+        "weight": 1
+       }
+      ],
+      [
+       {
+        "bone": "win1",
+        "x": -80,
+        "y": 0,
+        "weight": 1
+       }
+      ],
+      [
+       {
+        "bone": "win1",
+        "x": -40,
+        "y": -60,
+        "weight": 1
+       }
+      ],
+      [
+       {
+        "bone": "win1",
+        "x": 100,
+        "y": -70,
+        "weight": 0.5
+       },
+       {
+        "bone": "win2",
+        "x": -40,
+        "y": -70,
+        "weight": 0.5
+       }
+      ],
+      [
+       {
+        "bone": "win2",
+        "x": 70,
+        "y": 0,
+        "weight": 1
+       }
+      ],
+      [
+       {
+        "bone": "win1",
+        "x": 100,
+        "y": 70,
+        "weight": 0.3
+       },
+       {
+        "bone": "win2",
+        "x": -40,
+        "y": 70,
+        "weight": 0.7
+       }
+      ]
+     ]
+    }
+   },
+   "s_arm": {
+    "arm": {
+     "image": "arm_b.png",
+     "rotation": 90
+    }
+   },
+   "c_nested": {
+    "nested": {
+     "type": "clipping",
+     "end": "s_ball",
+     "vertexCount": 3,
+     "vertices": [
+      -200,
+      150,
+      -190,
+      160,
+      -180,
+      150
+     ]
+    }
+   },
+   "s_ball": {
+    "ball": {
+     "type": "mesh",
+     "image": "ball.png",
+     "hull": 8,
+     "uvs": [
+      0.958333,
+      0.5,
+      0.824092,
+      0.175908,
+      0.5,
+      0.0416667,
+      0.175908,
+      0.175908,
+      0.0416667,
+      0.5,
+      0.175908,
+      0.824092,
+      0.5,
+      0.958333,
+      0.824092,
+      0.824092,
+      0.5,
+      0.5
+     ],
+     "vertices": [
+      55,
+      0,
+      38.890499999999996,
+      38.890499999999996,
+      0,
+      55,
+      -38.890499999999996,
+      38.890499999999996,
+      -55,
+      0,
+      -38.890499999999996,
+      -38.890499999999996,
+      0,
+      -55,
+      38.890499999999996,
+      -38.890499999999996,
+      0,
+      0
+     ],
+     "triangles": [
+      8,
+      0,
+      1,
+      8,
+      1,
+      2,
+      8,
+      2,
+      3,
+      8,
+      3,
+      4,
+      8,
+      4,
+      5,
+      8,
+      5,
+      6,
+      8,
+      6,
+      7,
+      8,
+      7,
+      0
+     ]
+    }
+   },
+   "s_free": {
+    "ear": {
+     "image": "ear_l.png",
+     "y": -110
+    }
+   },
+   "c_concave": {
+    "ell": {
+     "type": "clipping",
+     "end": "s_torso",
+     "vertexCount": 6,
+     "vertices": [
+      -80,
+      -80,
+      80,
+      -80,
+      80,
+      -20,
+      -20,
+      -20,
+      -20,
+      80,
+      -80,
+      80
+     ]
+    }
+   },
+   "s_torso": {
+    "torso": {
+     "image": "torso.png"
+    }
+   },
+   "c_inverse": {
+    "hole": {
+     "type": "clipping",
+     "end": "s_plate",
+     "inverse": true,
+     "vertexCount": 4,
+     "vertices": [
+      0,
+      60,
+      -60,
+      0,
+      0,
+      -60,
+      60,
+      0
+     ]
+    }
+   },
+   "s_plate": {
+    "plate": {
+     "image": "plate.png",
+     "scaleX": 0.3,
+     "scaleY": 0.3
+    }
+   },
+   "c_hull": {
+    "arrow": {
+     "type": "clipping",
+     "end": "s_hand",
+     "convex": true,
+     "vertexCount": 7,
+     "vertices": [
+      -60,
+      -30,
+      0,
+      -30,
+      0,
+      -80,
+      70,
+      0,
+      0,
+      80,
+      0,
+      30,
+      -60,
+      30
+     ]
+    }
+   },
+   "s_hand": {
+    "hand": {
+     "image": "hand_f.png",
+     "scaleX": 2,
+     "scaleY": 2
+    }
+   },
+   "s_socket": {
+    "socket": {
+     "image": "socket.png"
+    }
+   },
+   "c_eye": {
+    "aperture": {
+     "type": "clipping",
+     "end": "s_iris",
+     "alphaClip": {
+      "skin": "default",
+      "slot": "s_socket",
+      "attachment": "socket",
+      "alpha": 128,
+      "tolerance": 1.5,
+      "maxVertices": 64
+     }
+    }
+   },
+   "s_iris": {
+    "iris": {
+     "image": "ball.png",
+     "scaleX": 0.35,
+     "scaleY": 0.35
+    }
+   },
+   "c_open": {
+    "open": {
+     "type": "clipping",
+     "vertexCount": 4,
+     "vertices": [
+      -140,
+      -330,
+      140,
+      -330,
+      140,
+      -260,
+      -140,
+      -260
+     ]
+    }
+   },
+   "s_knot": {
+    "knot": {
+     "image": "scarf_knot.png",
+     "x": 60,
+     "y": -300
+    }
+   }
+  }
+ }
+}

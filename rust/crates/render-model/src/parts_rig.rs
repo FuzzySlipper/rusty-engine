@@ -7,7 +7,7 @@
 //! lighting, alpha, depth and size options. Its pose (`SetPartsRigPose`) is
 //! what the Engine evaluated for it on a step: the pieces in draw order and
 //! their posed vertices, which realizers draw until the next pose replaces
-//! it.
+//! it. A piece a clipping attachment cut carries its own UVs and triangles.
 
 use std::sync::Arc;
 
@@ -91,13 +91,29 @@ pub enum PartsRigBlend {
     Screen,
 }
 
+/// A piece a clipping attachment cut: it draws its own UVs and triangles
+/// rather than its drawable's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PartsRigClipped {
+    /// Its vertices: the next this many of the pose's vertices and of its
+    /// `uvs`, after the clipped pieces before it.
+    pub vertices: u32,
+    /// Its triangle indices, over its own vertices: the next this many of
+    /// the pose's `triangles`. 0 when the clip cut it all away.
+    pub triangles: u32,
+}
+
 /// One drawn piece of a pose, in draw order.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PartsRigPiece {
-    /// The asset's drawable it draws with: its posed vertices are the next
-    /// `uvs.len()` of the pose's, after the pieces before it.
+    /// The asset's drawable it draws with, and the page it draws from: its
+    /// posed vertices are the next `uvs.len()` of the pose's, after the
+    /// pieces before it, unless it is clipped.
     pub drawable: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clipped: Option<PartsRigClipped>,
     pub blend: PartsRigBlend,
     /// The slot's colour times its attachment's, RGBA from 0 to 1, as
     /// authored (sRGB).
@@ -117,6 +133,12 @@ pub struct PartsRigPose {
     /// Posed vertices in rig units, x right and y up from the rig's origin,
     /// piece after piece.
     pub vertices: Arc<[[f32; 2]]>,
+    /// The page UVs of clipped pieces' vertices, piece after piece.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    pub uvs: Arc<[[f32; 2]]>,
+    /// The triangles of clipped pieces, piece after piece.
+    #[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+    pub triangles: Arc<[u32]>,
 }
 
 /// One drawn parts rig: a node whose posed pieces lie on one plane through

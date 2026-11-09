@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use ::animation_parts_rig::{BlendMode, Play, Player, Pose, Rig};
 use render_model::{
-    PartsRigAsset, PartsRigBlend, PartsRigDrawable, PartsRigPage, PartsRigPiece, PartsRigPose,
-    RenderDiff, RenderFrameDiff, RenderHandle, SpriteSizeMode,
+    PartsRigAsset, PartsRigBlend, PartsRigClipped, PartsRigDrawable, PartsRigPage, PartsRigPiece,
+    PartsRigPose, RenderDiff, RenderFrameDiff, RenderHandle, SpriteSizeMode,
 };
 
 /// The parts rigs the Engine poses, and their players.
@@ -245,6 +245,10 @@ impl PartsRigScene {
                 .iter()
                 .map(|piece| PartsRigPiece {
                     drawable: piece.drawable as u32,
+                    clipped: piece.clipped.as_ref().map(|c| PartsRigClipped {
+                        vertices: c.uvs.len() as u32,
+                        triangles: c.triangles.len() as u32,
+                    }),
                     blend: match piece.blend {
                         BlendMode::Normal => PartsRigBlend::Normal,
                         BlendMode::Additive => PartsRigBlend::Additive,
@@ -255,8 +259,12 @@ impl PartsRigScene {
                     dark: piece.dark.unwrap_or_default(),
                 })
                 .collect();
+            let posed = &instance.pose;
             let unchanged = instance.published.as_ref().is_some_and(|published| {
-                *published.pieces == *pieces && *published.vertices == *instance.pose.vertices
+                *published.pieces == *pieces
+                    && *published.vertices == *posed.vertices
+                    && *published.uvs == *posed.uvs
+                    && *published.triangles == *posed.triangles
             });
             if unchanged {
                 continue;
@@ -264,7 +272,9 @@ impl PartsRigScene {
             let pose = PartsRigPose {
                 seconds: now,
                 pieces,
-                vertices: instance.pose.vertices.as_slice().into(),
+                vertices: posed.vertices.as_slice().into(),
+                uvs: posed.uvs.as_slice().into(),
+                triangles: posed.triangles.as_slice().into(),
             };
             instance.published = Some(pose.clone());
             ops.push(RenderDiff::SetPartsRigPose {

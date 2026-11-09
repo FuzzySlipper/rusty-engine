@@ -1,0 +1,508 @@
+{
+ "spec": "rigc-motion/1",
+ "archetype": "clipping",
+ "cut": "clipping",
+ "easings": {
+  "smooth": [
+   0.25,
+   0,
+   0.75,
+   1
+  ]
+ },
+ "animations": {
+  "a": {
+   "duration": 1.2,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "mover",
+     "property": "translatex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -90
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        90
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        -90
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "win2",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        35
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "win1",
+     "property": "translatey",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        -30
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "lbone",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        40
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "inv",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -50,
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        50,
+        30
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        -50,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "hullb",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        -60
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "eye",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -15
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        15
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        -15
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "eye",
+     "property": "scalex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        1.3
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        1
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "iris",
+     "property": "translatex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -75
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        75
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        -75
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "c_inverse",
+     "property": "attachment",
+     "keys": [
+      {
+       "t": 0.8,
+       "v": null
+      },
+      {
+       "t": 1.0,
+       "v": "hole"
+      }
+     ]
+    }
+   ],
+   "deform": [
+    {
+     "slot": "c_concave",
+     "attachment": "ell",
+     "keys": [
+      {
+       "t": 0,
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "fromVertex": 3,
+       "vertices": [
+        30,
+        30
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2
+      }
+     ]
+    }
+   ],
+   "drawOrder": [
+    {
+     "t": 0.3,
+     "offsets": [
+      {
+       "slot": "s_free",
+       "offset": -1
+      }
+     ]
+    },
+    {
+     "t": 0.9
+    }
+   ]
+  },
+  "b": {
+   "duration": 0.8,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "mover",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        60,
+        -40
+       ]
+      },
+      {
+       "t": 0.4,
+       "v": [
+        -60,
+        40
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        60,
+        -40
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "win1",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        -25
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "iris",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        150,
+        30
+       ]
+      },
+      {
+       "t": 0.4,
+       "v": [
+        -150,
+        -30
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        150,
+        30
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "lcontent",
+     "property": "translatex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        -70
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "eye",
+     "property": "scaley",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1
+       ]
+      },
+      {
+       "t": 0.4,
+       "v": [
+        0.6
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        1
+       ]
+      }
+     ]
+    }
+   ],
+   "deform": [
+    {
+     "slot": "c_concave",
+     "attachment": "ell",
+     "keys": [
+      {
+       "t": 0
+      },
+      {
+       "t": 0.4,
+       "fromVertex": 0,
+       "vertices": [
+        -30,
+        -30
+       ]
+      },
+      {
+       "t": 0.8
+      }
+     ]
+    }
+   ]
+  },
+  "c": {
+   "duration": 1.0,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.5,
+       "v": [
+        8
+       ]
+      },
+      {
+       "t": 1.0,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "plate_b",
+     "property": "translatey",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 1.0,
+       "v": [
+        40
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "win2",
+     "property": "translatex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.5,
+       "v": [
+        -60
+       ]
+      },
+      {
+       "t": 1.0,
+       "v": [
+        0
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

@@ -6,14 +6,15 @@
 //! crossfade script). Bones are compared as doubles, drawn vertices as the
 //! float32 the pose holds. A physics rig's case may move the rig and change
 //! the wind and gravity before a step, as `physicsTranslate` and
-//! `setEnvironment` do.
+//! `setEnvironment` do. A slot a clip cut is compared with what rig-c's core
+//! cut it into: vertices, page UVs and triangles.
 
 use std::path::Path;
 
 use animation_parts_rig::{BlendMode, BoneChannel, Play, Player, Pose, Rig};
 use serde_json::Value;
 
-const FIXTURES: [&str; 11] = [
+const FIXTURES: [&str; 12] = [
     "squash",
     "turned",
     "flex",
@@ -25,6 +26,7 @@ const FIXTURES: [&str; 11] = [
     "townsperson",
     "physics",
     "whip",
+    "clipping",
 ];
 
 fn fixture(name: &str) -> String {
@@ -134,8 +136,42 @@ fn compare(
         for (i, uv) in drawable.uvs.iter().flatten().enumerate() {
             close(&format!("{at} uv {i}"), f64::from(*uv), uvs[i], 1e-7, 0.0);
         }
-        let vertices = numbers(&d[1]);
+        let cut = d.get(5);
+        let vertices = numbers(cut.map_or(&d[1], |c| &c[0]));
         let posed = &pose.vertices[piece.vertices.clone()];
+        match (&piece.clipped, cut) {
+            (None, None) => {}
+            (Some(clipped), Some(c)) => {
+                let uvs = numbers(&c[1]);
+                let got = &pose.uvs[clipped.uvs.clone()];
+                assert_eq!(got.len() * 2, uvs.len(), "{at}: clipped uv count");
+                for (i, uv) in got.iter().flatten().enumerate() {
+                    close(
+                        &format!("{at} clipped uv {i}"),
+                        f64::from(*uv),
+                        uvs[i],
+                        1e-7,
+                        0.0,
+                    );
+                }
+                let triangles: Vec<u32> = c[2]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|t| t.as_u64().unwrap() as u32)
+                    .collect();
+                assert_eq!(
+                    pose.triangles[clipped.triangles.clone()],
+                    triangles,
+                    "{at}: clipped triangles"
+                );
+            }
+            (got, _) => panic!(
+                "{at}: clipped {}, rig-c's core {}",
+                got.is_some(),
+                cut.is_some()
+            ),
+        }
         assert_eq!(posed.len() * 2, vertices.len(), "{at}: vertex count");
         for (i, v) in posed.iter().flatten().enumerate() {
             let (got, want) = (f64::from(*v), vertices[i]);

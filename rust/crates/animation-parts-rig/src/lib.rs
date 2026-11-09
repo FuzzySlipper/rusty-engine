@@ -15,10 +15,12 @@
 //! order after the bones' world transforms. Physics carries its state from
 //! step to step on the player, which takes the rig's own motion
 //! ([`Player::translate_physics`]) and the wind and gravity it answers
-//! ([`Player::set_physics_environment`]). Path and slider constraints and
-//! clipping are not evaluated yet, and a rig that declares any of them is
-//! refused by name.
+//! ([`Player::set_physics_environment`]). Clipping attachments cut the
+//! pieces they cover, which then carry their own UVs and triangles
+//! ([`Piece::clipped`]). Path and slider constraints are not evaluated yet,
+//! and a rig that declares either is refused by name.
 
+mod clip;
 mod constraints;
 mod document;
 mod mixer;
@@ -28,6 +30,6 @@ mod rig;
 mod timeline;
 mod world;
 
-pub use pose::{BoneChannel, FiredEvent, Piece, Play, Player, Pose};
+pub use pose::{BoneChannel, Clipped, FiredEvent, Piece, Play, Player, Pose};
 pub use rig::{BlendMode, Drawable, Page, Rig, RigError, MODEL_SPEC};
 pub use world::BoneWorld;

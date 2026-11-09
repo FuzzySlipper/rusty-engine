@@ -30,9 +30,6 @@ pub enum RigError {
     /// The rig declares constraints of kinds the core does not evaluate yet
     /// (path, physics, slider), as `(kind, name)`.
     Constraints(Vec<(String, String)>),
-    /// A clipping attachment, as `(skin, slot, placeholder)`; clipping is not
-    /// evaluated yet.
-    Clipping(String, String, String),
     /// A name the document uses and does not declare.
     Unresolved(String),
     /// A drawable attachment whose region no page holds, or whose region
@@ -47,19 +44,20 @@ impl fmt::Display for RigError {
             RigError::Spec(spec) => write!(
                 f,
                 "model document spec is {}, and this core reads only \"{MODEL_SPEC}\"",
-                spec.as_deref().map(|s| format!("\"{s}\"")).unwrap_or_else(|| "absent".to_owned())
+                spec.as_deref()
+                    .map(|s| format!("\"{s}\""))
+                    .unwrap_or_else(|| "absent".to_owned())
             ),
             RigError::Constraints(list) => {
-                write!(f, "the rig declares constraints the parts-rig core does not evaluate yet:")?;
+                write!(
+                    f,
+                    "the rig declares constraints the parts-rig core does not evaluate yet:"
+                )?;
                 for (i, (kind, name)) in list.iter().enumerate() {
                     write!(f, "{} {kind} \"{name}\"", if i == 0 { "" } else { "," })?;
                 }
                 Ok(())
             }
-            RigError::Clipping(skin, slot, placeholder) => write!(
-                f,
-                "skin \"{skin}\" slot \"{slot}\" attachment \"{placeholder}\" is a clipping attachment, which the parts-rig core does not evaluate yet"
-            ),
             RigError::Unresolved(what) => write!(f, "{what}"),
             RigError::Region(what) => write!(f, "{what}"),
         }
@@ -169,6 +167,14 @@ pub(crate) struct MeshData {
     pub setup: Vec<f64>,
 }
 
+/// A clipping attachment: its polygon is its mesh geometry.
+pub(crate) struct ClipData {
+    /// The last slot it clips; None clips every slot drawn after it.
+    pub end: Option<usize>,
+    pub inverse: bool,
+    pub convex: bool,
+}
+
 pub(crate) struct AttachmentData {
     pub name: String,
     pub color: [f64; 4],
@@ -180,11 +186,12 @@ pub(crate) struct AttachmentData {
     pub drawables: usize,
     pub frames: usize,
     pub setup_frame: usize,
+    pub clip: Option<ClipData>,
 }
 
 impl AttachmentData {
     pub fn drawn(&self) -> bool {
-        !matches!(self.geometry, Geometry::Inert)
+        self.clip.is_none() && !matches!(self.geometry, Geometry::Inert)
     }
 }
 
@@ -458,8 +465,8 @@ impl Names<'_> {
 impl Rig {
     /// Reads a `rigc-compiled/3` model document.
     ///
-    /// A document of another version, a rig with path or slider constraints
-    /// and a rig with clipping attachments are refused by name.
+    /// A document of another version and a rig with path or slider
+    /// constraints are refused by name.
     pub fn from_json(text: &str) -> Result<Rig, RigError> {
         let doc: Document =
             serde_json::from_str(text).map_err(|e| RigError::Json(e.to_string()))?;
@@ -612,13 +619,6 @@ impl Rig {
                                 "{what} slot \"{slot_name}\" attachment \"{placeholder}\": {e}"
                             ))
                         })?;
-                    if record.kind == "clipping" {
-                        return Err(RigError::Clipping(
-                            skin.name.clone(),
-                            slot_name.clone(),
-                            placeholder.clone(),
-                        ));
-                    }
                     let id = names.placeholder(placeholder);
                     table.insert((slot, id), raws.len());
                     raws.push(Raw {
@@ -687,6 +687,7 @@ impl Rig {
             };
             let first = drawables.len();
             let mut deform_identity = index;
+            let mut clip = None;
             let geometry = match r.kind.as_str() {
                 "region" => {
                     let rects: Vec<document::AtlasRect> = match (&r.sequence, r.atlas) {
@@ -763,6 +764,19 @@ impl Rig {
                     }
                     geometry
                 }
+                "clipping" => {
+                    clip = Some(ClipData {
+                        end: match &r.end {
+                            Some(end) => Some(names.slot(end, &what)?),
+                            None => None,
+                        },
+                        inverse: r.inverse,
+                        convex: r.convex,
+                    });
+                    let vertices = vertex_data(r.vertices.as_ref(), &names, &what)?;
+                    let setup = vertices.setup_array();
+                    Geometry::Mesh(MeshData { vertices, setup })
+                }
                 _ => Geometry::Inert,
             };
             attachments.push(AttachmentData {
@@ -773,6 +787,7 @@ impl Rig {
                 drawables: first,
                 frames: if drawables.len() > first { frames } else { 0 },
                 setup_frame,
+                clip,
             });
         }
 

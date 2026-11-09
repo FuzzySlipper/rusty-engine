@@ -13,7 +13,8 @@ first clip walked while the rig moves, `move` units a step to the right for
 a third of the steps, then held, under a gust: a sideways wind from the
 second third on, turned off for the last (rig-c's `physicsTranslate` and
 `setEnvironment`). A rig named `turned` gets one two-pose case instead: it
-is a page-UV variant. Bones keep full doubles;
+is a page-UV variant. A slot a clip cut also carries what the cut drew: its
+vertices, page UVs and triangles. Bones keep full doubles;
 vertices are written to 8 significant digits, UVs and colours to 9.
 """
 import json
@@ -55,6 +56,14 @@ def keep(regions, d):
     return key
 
 
+def clipped(d):
+    """What a clip cut a drawn slot into: its vertices, page UVs and triangles."""
+    c = d.get("clip")
+    if c is None:
+        return []
+    return [[[g(v, 8) for v in c["vertices"]], [g(v) for v in c["uvs"]], c["triangles"]]]
+
+
 def compact(poses, regions):
     return [
         {
@@ -68,6 +77,7 @@ def compact(poses, regions):
                     None if d["dark"] is None else [g(v) for v in d["dark"]],
                     d["blend"],
                 ]
+                + clipped(d)
                 for d in p["drawn"]
                 if d["active"]
             ],

@@ -115,23 +115,39 @@ fn unorm16(value: f32) -> u16 {
     (value.clamp(0.0, 1.0) * 65535.0).round() as u16
 }
 
-/// Build `pose`'s geometry over `asset` into `out`. A piece naming a
-/// drawable the drawing does not have, or vertices past the pose's, draws
-/// nothing: a pose evaluated for a drawing since replaced.
+/// Build `pose`'s geometry over `asset` into `out`. A clipped piece draws
+/// its own UVs and triangles from the pose. A piece naming a drawable the
+/// drawing does not have, or geometry past the pose's, draws nothing: a pose
+/// evaluated for a drawing since replaced.
 pub(crate) fn build(asset: &PartsRigAssetRow, pose: &PartsRigPose, out: &mut RigGeometry) {
     out.vertices.clear();
     out.indices.clear();
     out.runs.clear();
     let mut bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
-    let mut next = 0usize;
+    let (mut next, mut next_uv, mut next_triangle) = (0usize, 0usize, 0usize);
     for piece in pose.pieces.iter() {
         let Some(drawable) = asset.drawables.get(piece.drawable as usize) else {
             break;
         };
-        let vertices = next..next + drawable.uvs.len();
+        let (count, uvs, triangles) = match piece.clipped {
+            None => (
+                drawable.uvs.len(),
+                Some(&drawable.uvs[..]),
+                Some(&drawable.triangles[..]),
+            ),
+            Some(clipped) => {
+                let uvs = next_uv..next_uv + clipped.vertices as usize;
+                let triangles = next_triangle..next_triangle + clipped.triangles as usize;
+                (next_uv, next_triangle) = (uvs.end, triangles.end);
+                (uvs.len(), pose.uvs.get(uvs), pose.triangles.get(triangles))
+            }
+        };
+        let vertices = next..next + count;
         next = vertices.end;
-        let (Some(positions), Some(page)) = (
+        let (Some(positions), Some(uvs), Some(triangles), Some(page)) = (
             pose.vertices.get(vertices),
+            uvs,
+            triangles,
             asset.pages.get(drawable.page as usize),
         ) else {
             break;
@@ -143,7 +159,7 @@ pub(crate) fn build(asset: &PartsRigAssetRow, pose: &PartsRigPose, out: &mut Rig
         let flags = if page.premultiplied { PREMULTIPLIED } else { 0 }
             | if page.detail.is_some() { DETAIL } else { 0 };
         let dark = [r, g, b, flags];
-        for (position, uv) in positions.iter().zip(&drawable.uvs) {
+        for (position, uv) in positions.iter().zip(uvs) {
             bounds = [
                 bounds[0].min(position[0]),
                 bounds[1].min(position[1]),
@@ -158,10 +174,13 @@ pub(crate) fn build(asset: &PartsRigAssetRow, pose: &PartsRigPose, out: &mut Rig
                 region,
             });
         }
+        if triangles.is_empty() {
+            continue;
+        }
         let first = out.indices.len() as u32;
         out.indices
-            .extend(drawable.triangles.iter().map(|index| base + index));
-        let count = drawable.triangles.len() as u32;
+            .extend(triangles.iter().map(|index| base + index));
+        let count = triangles.len() as u32;
         match out.runs.last_mut() {
             Some(run)
                 if run.texture == page.texture

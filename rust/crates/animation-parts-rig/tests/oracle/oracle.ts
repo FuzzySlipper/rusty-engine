@@ -20,8 +20,32 @@ const doc = plan.skin === null ? core.underNoSkin(read) : core.underSkin(read, p
 const lookup = core.documentPageLookup(doc.pages);
 const sequences = core.readUvSequences(JSON.parse(text));
 
+// The clip over each slot of the draw order: the core's walk (`poseClipped`),
+// as rig-c's render restates it (`clipCover` in src/render_core.ts).
+function clipCover(pose: any, active: Map<string, boolean>): Map<string, any> {
+  const polygons = new Map(pose.clips.map((c: any) => [c[0], { end: c[2], polygon: c[3] }]));
+  const kinds = new Map(pose.shown.map((s: any) => [s.slot, s]));
+  const cover = new Map<string, any>();
+  let current: any = null;
+  for (const slot of pose.drawOrder) {
+    const shown: any = kinds.get(slot);
+    const g = shown?.geometry;
+    const clip: any = g?.kind === 'clipping' ? polygons.get(slot) : undefined;
+    if (clip !== undefined) {
+      if (current !== null && current.end === slot) current = null;
+      if (active.get(shown.bone) && current === null) current = { end: clip.end, shape: { polygon: clip.polygon, inverse: g.inverse, convex: g.convex } };
+      continue;
+    }
+    if (current !== null) cover.set(slot, current.shape);
+    if (current !== null && current.end === slot) current = null;
+  }
+  return cover;
+}
+
 function row(pose: any) {
   const active = new Map(pose.bones.map((b: any) => [b.name, b.active]));
+  const cover = clipCover(pose, active as Map<string, boolean>);
+  const clippedRows = new Map(pose.clipped.map((c: any) => [c[0], c]));
   const slotRows = new Map(pose.slots.map((s: any) => [s[0], s]));
   const { drawn: regions } = core.drawnRegions(doc, pose.shown, pose.drawOrder, { lookup, sequences });
   const bySlot = new Map((regions ?? []).map((r: any) => [r.slot, r]));
@@ -34,6 +58,18 @@ function row(pose: any) {
       const slotBone = doc.slots.find((x: any) => x.name === d.slot).bone;
       const r: any = bySlot.get(d.slot);
       const uvs = r.art === null ? core.regionPageUvs(r.found.region, r.found.page) : core.meshPageUvs(r.found.region, r.found.page, r.art);
+      // A slot under a clip is cut again over its page UVs, as rig-c's render
+      // cuts it, and held to the core's own row for the slot.
+      const shape = cover.get(d.slot);
+      let clip: any = null;
+      if (shape !== undefined) {
+        const cut = core.clipThrough(shape, d.vertices, d.triangles, uvs);
+        const own: any = clippedRows.get(d.slot);
+        if (cut === null || own === undefined || (own[2] === 1) !== cut.clipped || own[3].join() !== cut.vertices.join() || own[5].join() !== cut.triangles.join()) {
+          throw new Error(`slot ${d.slot}: the page-UV cut is not the core's clipped row`);
+        }
+        if (cut.clipped) clip = { vertices: cut.vertices, uvs: cut.uvs, triangles: cut.triangles };
+      }
       return {
         slot: d.slot,
         attachment: d.attachment,
@@ -46,6 +82,7 @@ function row(pose: any) {
         color: [s[2] * d.colour[0], s[3] * d.colour[1], s[4] * d.colour[2], s[5] * d.colour[3]],
         dark: s[6],
         blend: s[8],
+        clip,
       };
     }),
     events: pose.events.map((e: any) => [e[0], e[1], e[2], e[3], e[4]]),

@@ -2,14 +2,18 @@
 //! - rig-c's gallery `squash`, posed by `animation-parts-rig`, standing in
 //!   the world by each billboard mode and seen from three sides;
 //! - a front-on orthographic view of it against `rigc render --poser core`;
+//! - the same for a rig of clipping attachments: convex and weighted,
+//!   concave, inverse, a concave one as its hull, and an alpha-derived
+//!   aperture;
 //! - slot blend modes, the two-colour tint, premultiplied pages and draw
 //!   order, against their arithmetic;
 //! - pixel art snapped to the rig's texel grid;
 //! - a snapshot of the world drawing the same rigs.
 //!
 //! `RENDER_WGPU_BLESS=1 cargo test -p render-wgpu --test parts_rigs` rewrites
-//! the references. `parts_rigs/` holds rig-c's packed `squash` page and its
-//! `rigc render --poser core` frame (README there).
+//! the references. `parts_rigs/` holds rig-c's packed `squash` and
+//! `clipping` pages and their `rigc render --poser core` frames (README
+//! there).
 
 mod common;
 
@@ -22,6 +26,9 @@ use render_wgpu::{decode_png_rgba, OffscreenTarget, RendererOptions};
 const SQUASH: &str = include_str!("../../animation-parts-rig/tests/fixtures/squash.model.json");
 const SQUASH_PAGE: &[u8] = include_bytes!("parts_rigs/squash.png");
 const SQUASH_RIGC: &[u8] = include_bytes!("parts_rigs/squash-bounce-f0005.rigc.png");
+const CLIPPING: &str = include_str!("../../animation-parts-rig/tests/fixtures/clipping.model.json");
+const CLIPPING_PAGE: &[u8] = include_bytes!("parts_rigs/clipping.png");
+const CLIPPING_RIGC: &[u8] = include_bytes!("parts_rigs/clipping-a-f0004.rigc.png");
 const RIG: &str = "parts-rig/squash";
 const PAGE: &str = "texture/squash";
 /// Metres per rig unit: squash and its plate stand about 1.3 m.
@@ -62,6 +69,10 @@ fn rig_pose(pose: &Pose) -> PartsRigPose {
             .iter()
             .map(|piece| PartsRigPiece {
                 drawable: piece.drawable as u32,
+                clipped: piece.clipped.as_ref().map(|c| PartsRigClipped {
+                    vertices: c.uvs.len() as u32,
+                    triangles: c.triangles.len() as u32,
+                }),
                 blend: match piece.blend {
                     BlendMode::Normal => PartsRigBlend::Normal,
                     BlendMode::Additive => PartsRigBlend::Additive,
@@ -73,14 +84,21 @@ fn rig_pose(pose: &Pose) -> PartsRigPose {
             })
             .collect(),
         vertices: pose.vertices.as_slice().into(),
+        uvs: pose.uvs.as_slice().into(),
+        triangles: pose.triangles.as_slice().into(),
     }
 }
 
 /// `squash` playing `bounce`, posed after `steps` steps of 1/12 s, as
 /// `rigc render` at 12 fps walks it.
 fn squash_pose(rig: &Rig, steps: usize) -> PartsRigPose {
+    rigc_pose(rig, "bounce", steps)
+}
+
+/// `rig` playing `clip`, posed after `steps` steps of 1/12 s.
+fn rigc_pose(rig: &Rig, clip: &str, steps: usize) -> PartsRigPose {
     let mut player = Player::new(rig);
-    let bounce = rig.find_animation("bounce").expect("squash plays bounce");
+    let bounce = rig.find_animation(clip).expect("the rig plays the clip");
     player.play(
         bounce,
         Play {
@@ -97,11 +115,23 @@ fn squash_pose(rig: &Rig, steps: usize) -> PartsRigPose {
 }
 
 fn squash_ops(resources: &mut Resources) -> (Rig, Vec<RenderDiff>) {
-    let rig = Rig::from_json(SQUASH).expect("squash reads");
-    let (width, height, rgba) = decode_png_rgba(SQUASH_PAGE).expect("squash page");
-    let (page, _) = resources.texture(PAGE, width, height, &rgba, TextureFilter::Linear);
-    let asset = rig_asset(&rig, RIG, &[PAGE]);
-    (rig, vec![page, RenderDiff::DefinePartsRig { asset }])
+    rig_ops(resources, SQUASH, SQUASH_PAGE, RIG, PAGE)
+}
+
+/// A rig read from its model document, and the ops defining its one page
+/// and its drawing.
+fn rig_ops(
+    resources: &mut Resources,
+    model: &str,
+    png: &[u8],
+    id: &str,
+    page: &str,
+) -> (Rig, Vec<RenderDiff>) {
+    let rig = Rig::from_json(model).expect("the rig reads");
+    let (width, height, rgba) = decode_png_rgba(png).expect("the rig's page");
+    let (texture, _) = resources.texture(page, width, height, &rgba, TextureFilter::Linear);
+    let asset = rig_asset(&rig, id, &[page]);
+    (rig, vec![texture, RenderDiff::DefinePartsRig { asset }])
 }
 
 fn figure(billboard: BillboardMode, translation: [f32; 3], yaw: f32) -> PartsRigInstanceDescriptor {
@@ -248,36 +278,54 @@ fn shown_alone(
     pixels
 }
 
-/// `rigc render --candidate squash --poser core --animation bounce --max 256`
-/// frame 5: its viewport, x -32, y -32, 864 × 784 rig units at 256/864 pixels
-/// a unit, over (232, 232, 232).
-#[test]
-fn a_front_on_orthographic_rig_matches_rig_c_core_render() {
-    let (width, height, expected) = decode_png_rgba(SQUASH_RIGC).expect("rigc frame");
-    assert_eq!((width, height), (256, 232));
+/// A `rigc render` frame's viewport (its `frames.json`): the lower left
+/// corner and size in rig units, and pixels per rig unit. The image's top
+/// row is the viewport's top.
+struct Viewport {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    scale: f64,
+}
+
+/// The Engine's front-on orthographic view of rig `id` posed in `pose`, over
+/// a `rigc render --poser core` frame's viewport and background (232 grey),
+/// compared with that frame: rigc composites every piece over what is
+/// behind it by its alpha. Writes the frame and the count to
+/// `PARTS_RIG_EVIDENCE` when it is set; returns the fraction of pixels that
+/// differ by more than `CHANNEL_TOLERANCE` in a channel.
+fn compare_with_rigc(
+    rig_ops: impl FnOnce(&mut Resources) -> (Rig, Vec<RenderDiff>),
+    id: &str,
+    pose: impl FnOnce(&Rig) -> PartsRigPose,
+    frame: &[u8],
+    viewport: Viewport,
+    name: &str,
+) -> f64 {
+    let (width, height, expected) = decode_png_rgba(frame).expect("rigc frame");
     let mut harness = Harness::new(RendererOptions::default());
     harness.target = OffscreenTarget::new(&harness.gpu, width, height, 1);
     let background = ((232.0f32 / 255.0 + 0.055) / 1.055).powf(2.4);
     let mut ops = vec![RenderDiff::SetBackgroundColor {
         color: [background, background, background, 1.0],
     }];
-    let (rig, squash) = squash_ops(&mut harness.resources);
-    ops.extend(squash);
-    // rigc composites every piece over what is behind it by its alpha.
+    let (rig, defined) = rig_ops(&mut harness.resources);
+    ops.extend(defined);
     let mut rig_figure = figure(BillboardMode::None, [0.0; 3], 0.0);
+    rig_figure.asset = id.to_owned();
     rig_figure.scale = 1.0;
     rig_figure.material.alpha = SpriteAlphaMode::Blend;
-    ops.extend(create(10, rig_figure, &squash_pose(&rig, 5)));
+    ops.extend(create(10, rig_figure, &pose(&rig)));
     harness.apply(ops);
-    let scale = 256.0 / 864.000_018_044_288_3;
-    let (min_x, max_y) = (
-        -32.000_017_375_981_37,
-        -32.000_000_668_306_974 + 784.000_001_336_613_8,
-    );
-    let tall = f64::from(height) / scale;
+    let tall = f64::from(height) / viewport.scale;
     let mut eye = camera(
         "rigc",
-        [min_x + 432.000_009, max_y - tall * 0.5, 100.0],
+        [
+            viewport.x + viewport.width * 0.5,
+            viewport.y + viewport.height - tall * 0.5,
+            100.0,
+        ],
         0.0,
         0.0,
     );
@@ -293,12 +341,12 @@ fn a_front_on_orthographic_rig_matches_rig_c_core_render() {
         let out = std::path::PathBuf::from(out);
         std::fs::create_dir_all(&out).unwrap();
         std::fs::write(
-            out.join("squash-bounce-f0005.engine.png"),
+            out.join(format!("{name}.engine.png")),
             render_wgpu::encode_png(width, height, &actual).unwrap(),
         )
         .unwrap();
         std::fs::write(
-            out.join("squash-bounce-f0005.compare.txt"),
+            out.join(format!("{name}.compare.txt")),
             format!(
                 "{differing} of {} pixels differ by more than {CHANNEL_TOLERANCE} in a channel ({:.3}%)\n",
                 width * height,
@@ -307,9 +355,69 @@ fn a_front_on_orthographic_rig_matches_rig_c_core_render() {
         )
         .unwrap();
     }
+    fraction
+}
+
+/// `rigc render --candidate squash --poser core --animation bounce --max 256`
+/// frame 5: its viewport, x -32, y -32, 864 × 784 rig units at 256/864 pixels
+/// a unit.
+#[test]
+fn a_front_on_orthographic_rig_matches_rig_c_core_render() {
+    let width = 864.000_018_044_288_3;
+    let fraction = compare_with_rigc(
+        squash_ops,
+        RIG,
+        |rig| squash_pose(rig, 5),
+        SQUASH_RIGC,
+        Viewport {
+            x: -32.000_017_375_981_37,
+            y: -32.000_000_668_306_974,
+            width,
+            height: 784.000_001_336_613_8,
+            scale: 256.0 / width,
+        },
+        "squash-bounce-f0005",
+    );
     assert!(
         fraction < 0.01,
-        "{differing} pixels ({:.2}%) differ from rigc's frame by more than {CHANNEL_TOLERANCE}",
+        "{:.2}% of pixels differ from rigc's frame by more than {CHANNEL_TOLERANCE}",
+        fraction * 100.0
+    );
+}
+
+/// `rigc render --candidate clipping --poser core --animation a --max 512`
+/// frame 4: a hexagon weighted to two bones cutting a bar, a ball and an ear
+/// the draw order moved under it, with a second clip inside it ignored; a
+/// concave L cutting a torso; an inverse diamond cutting a hole in a plate;
+/// a concave arrow clipping by its hull; an iris inside an aperture traced
+/// from its socket's alpha; and a clip with no end slot.
+#[test]
+fn clipped_pieces_match_rig_c_core_render() {
+    let fraction = compare_with_rigc(
+        |resources| {
+            rig_ops(
+                resources,
+                CLIPPING,
+                CLIPPING_PAGE,
+                "parts-rig/clipping",
+                "texture/clipping",
+            )
+        },
+        "parts-rig/clipping",
+        |rig| rigc_pose(rig, "a", 4),
+        CLIPPING_RIGC,
+        Viewport {
+            x: -20.000_019_457_014_85,
+            y: -12.324_840_324_946_727,
+            width: 864.000_021_603_022_9,
+            height: 739.819_127_231_513_6,
+            scale: 0.592_592_577_775_704_8,
+        },
+        "clipping-a-f0004",
+    );
+    assert!(
+        fraction < 0.01,
+        "{:.2}% of pixels differ from rigc's frame by more than {CHANNEL_TOLERANCE}",
         fraction * 100.0
     );
 }
@@ -361,6 +469,7 @@ fn square(x: f32, y: f32, size: f32) -> [[f32; 2]; 4] {
 fn piece(drawable: u32, blend: PartsRigBlend) -> PartsRigPiece {
     PartsRigPiece {
         drawable,
+        clipped: None,
         blend,
         color: [1.0; 4],
         dark: [0.0; 3],
@@ -376,6 +485,8 @@ fn pose(pieces: Vec<(PartsRigPiece, [[f32; 2]; 4])>) -> PartsRigPose {
             .collect::<Vec<_>>()
             .into(),
         pieces: pieces.into_iter().map(|(piece, _)| piece).collect(),
+        uvs: Default::default(),
+        triangles: Default::default(),
     }
 }
 
@@ -634,6 +745,8 @@ fn texel_snapped_rigs_draw_whole_cells_of_their_grid() {
         seconds: 0.0,
         pieces: vec![piece(0, PartsRigBlend::Normal)].into(),
         vertices: corners.into(),
+        uvs: Default::default(),
+        triangles: Default::default(),
     };
     let mut rig = figure(BillboardMode::None, [0.0; 3], 0.0);
     rig.asset = "parts-rig/checker".to_owned();

@@ -293,6 +293,13 @@ pub(crate) struct Attachment {
     pub slot: Option<String>,
     #[serde(default)]
     pub timelines: Option<bool>,
+    /// A clipping attachment's last slot.
+    #[serde(default)]
+    pub end: Option<String>,
+    #[serde(default)]
+    pub inverse: bool,
+    #[serde(default)]
+    pub convex: bool,
 }
 
 #[derive(Deserialize, Clone, Copy)]

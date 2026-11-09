@@ -2,10 +2,11 @@
 
 use std::ops::Range;
 
+use crate::clip::{self, Cut, Plan};
 use crate::constraints::{self, ConstraintKind};
 use crate::mixer::{Mixer, Working};
 use crate::physics::Physics;
-use crate::rig::{BlendMode, Geometry, Rig, TimelineKind, VertexData};
+use crate::rig::{AnimationData, BlendMode, Geometry, Rig, TimelineKind, VertexData};
 use crate::timeline::{key_index_at, order_of, sequence_frame_at};
 use crate::world::{world_transforms, BoneWorld};
 
@@ -16,17 +17,32 @@ pub struct Piece {
     /// The attachment the slot shows.
     pub attachment: usize,
     /// What it draws with: [`Rig::drawable`] gives its page, UVs and
-    /// triangles, which never change.
+    /// triangles, which never change, unless a clip cut it.
     pub drawable: usize,
     /// The page it draws from.
     pub page: usize,
     /// Its posed vertices in [`Pose::vertices`], one per UV.
     pub vertices: Range<usize>,
+    /// Where a clipping attachment cut it, its own UVs and triangles in
+    /// place of its drawable's: [`Pose::uvs`] and [`Pose::triangles`] over
+    /// its vertices, which are what the cut left. None when no clip covers
+    /// it, or the clip over it cut nothing.
+    pub clipped: Option<Clipped>,
     pub blend: BlendMode,
     /// The slot's colour times the attachment's, RGBA from 0 to 1.
     pub color: [f32; 4],
     /// The slot's two-colour tint dark colour, when it has one.
     pub dark: Option<[f32; 3]>,
+}
+
+/// A piece's geometry as a clip cut it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Clipped {
+    /// Page UVs in [`Pose::uvs`], one per vertex of the piece.
+    pub uvs: Range<usize>,
+    /// Indices into the piece's own vertices, three per triangle, in
+    /// [`Pose::triangles`]. Empty when the clip cut it all away.
+    pub triangles: Range<usize>,
 }
 
 /// An event a step's clip time passed.
@@ -51,6 +67,10 @@ pub struct Pose {
     pub bones: Vec<BoneWorld>,
     pub pieces: Vec<Piece>,
     pub vertices: Vec<[f32; 2]>,
+    /// The page UVs of clipped pieces ([`Piece::clipped`]).
+    pub uvs: Vec<[f32; 2]>,
+    /// The triangles of clipped pieces ([`Piece::clipped`]).
+    pub triangles: Vec<u32>,
     pub events: Vec<FiredEvent>,
     /// The playing clip's time, in seconds.
     pub animation_time: f64,
@@ -98,6 +118,9 @@ pub struct Player {
     driven: Vec<(usize, BoneChannel, f64)>,
     scratch: constraints::Scratch,
     physics: Physics,
+    /// A slot's world vertices as doubles, before they are cut or stored.
+    world: Vec<[f64; 2]>,
+    clipping: clip::Scratch,
 }
 
 impl Player {
@@ -113,6 +136,8 @@ impl Player {
             driven: Vec::new(),
             scratch: constraints::Scratch::default(),
             physics: Physics::new(rig.constraints.len()),
+            world: Vec::new(),
+            clipping: clip::Scratch::default(),
         };
         player.set_skin(rig, None);
         player
@@ -276,81 +301,57 @@ impl Player {
 
         pose.pieces.clear();
         pose.vertices.clear();
+        pose.uvs.clear();
+        pose.triangles.clear();
         pose.animation_time = animation_time;
+        // The clip over the walk: rig-c's draw walk (`poseClipped`). A clip
+        // starts at its slot when its bone is active and no clip is, and ends
+        // after its end slot is walked, whatever that slot shows.
+        let mut active: Option<(Option<usize>, Plan)> = None;
         for &slot in &self.order {
             let data = &rig.slots[slot];
-            if !w.active[data.bone] {
-                continue;
-            }
             let state = &w.slots[slot];
-            let Some(attachment) = w.resolve(rig, slot, state.placeholder) else {
-                continue;
-            };
-            let a = &rig.attachments[attachment];
-            if !a.drawn() {
-                continue;
-            }
-            let mut frame = a.setup_frame;
-            if let Some(animation) = playing {
-                let identity = a.deform_identity;
-                let count = rig.attachments[identity].frames.max(1);
-                for (target, keys) in &animation.sequences {
-                    if *target == identity {
-                        if let Some(f) = sequence_frame_at(keys, count, animation_time) {
-                            frame = f;
-                        }
-                    }
+            let shown = w.resolve(rig, slot, state.placeholder);
+            if let Some(clip) = shown.and_then(|a| rig.attachments[a].clip.as_ref()) {
+                if active.as_ref().is_some_and(|(end, _)| *end == Some(slot)) {
+                    active = None;
                 }
-            }
-            let frame = frame.min(a.frames - 1);
-            let bone = &pose.bones[data.bone];
-            let start = pose.vertices.len();
-            match &a.geometry {
-                Geometry::Region(corners) => {
-                    for c in corners[frame].as_chunks::<2>().0 {
-                        let (x, y) = (
-                            bone.a * c[0] + bone.b * c[1] + bone.x,
-                            bone.c * c[0] + bone.d * c[1] + bone.y,
-                        );
-                        pose.vertices.push([x as f32, y as f32]);
-                    }
-                }
-                Geometry::Mesh(_) | Geometry::Linked { .. } => {
-                    let source = match a.geometry {
-                        Geometry::Linked { source } => source,
-                        _ => attachment,
-                    };
-                    let Geometry::Mesh(mesh) = &rig.attachments[source].geometry else {
-                        continue;
-                    };
+                let geometry = shown.map(|a| &rig.attachments[a].geometry);
+                if let (true, None, Some(Geometry::Mesh(mesh))) =
+                    (w.active[data.bone], &active, geometry)
+                {
+                    self.world.clear();
                     mesh_vertices(
                         &mesh.vertices,
                         state.deform.as_deref(),
-                        bone,
+                        &pose.bones[data.bone],
                         &pose.bones,
-                        &mut pose.vertices,
+                        &mut self.world,
                     );
+                    let polygon: Vec<f64> = self.world.iter().flatten().copied().collect();
+                    active = Some((clip.end, clip::plan(&polygon, clip.inverse, clip.convex)));
                 }
-                Geometry::Inert => continue,
+                continue;
             }
-            let drawable = a.drawables + frame;
-            let l = state.light;
-            let c = a.color;
-            pose.pieces.push(Piece {
-                slot,
-                attachment,
-                drawable,
-                page: rig.drawables[drawable].page,
-                vertices: start..pose.vertices.len(),
-                blend: data.blend,
-                color: [
-                    (l[0] * c[0]) as f32,
-                    (l[1] * c[1]) as f32,
-                    (l[2] * c[2]) as f32,
-                    (l[3] * c[3]) as f32,
-                ],
-                dark: state.dark.map(|d| [d[0] as f32, d[1] as f32, d[2] as f32]),
-            });
+            if let Some(attachment) = shown.filter(|_| w.active[data.bone]) {
+                let shape = Shape {
+                    playing,
+                    animation_time,
+                    clip: active.as_ref().map(|a| &a.1),
+                };
+                draw(
+                    rig,
+                    w,
+                    slot,
+                    attachment,
+                    &shape,
+                    (&mut self.world, &mut self.clipping),
+                    pose,
+                );
+            }
+            if active.as_ref().is_some_and(|(end, _)| *end == Some(slot)) {
+                active = None;
+            }
         }
 
         pose.events.clear();
@@ -378,13 +379,124 @@ impl Player {
     }
 }
 
-/// rig-c's `worldVertices` / `deformedWorldVertices`.
+/// What a step draws a slot by: the playing clip and its time, and the clip
+/// over the slot.
+struct Shape<'a> {
+    playing: Option<&'a AnimationData>,
+    animation_time: f64,
+    clip: Option<&'a Plan>,
+}
+
+/// One slot's piece, appended to `pose`, cut by the clip over it.
+fn draw(
+    rig: &Rig,
+    w: &Working,
+    slot: usize,
+    attachment: usize,
+    shape: &Shape<'_>,
+    (world, scratch): (&mut Vec<[f64; 2]>, &mut clip::Scratch),
+    pose: &mut Pose,
+) {
+    let data = &rig.slots[slot];
+    let state = &w.slots[slot];
+    let a = &rig.attachments[attachment];
+    if !a.drawn() {
+        return;
+    }
+    let mut frame = a.setup_frame;
+    if let Some(animation) = shape.playing {
+        let identity = a.deform_identity;
+        let count = rig.attachments[identity].frames.max(1);
+        for (target, keys) in &animation.sequences {
+            if *target == identity {
+                if let Some(f) = sequence_frame_at(keys, count, shape.animation_time) {
+                    frame = f;
+                }
+            }
+        }
+    }
+    let frame = frame.min(a.frames - 1);
+    let bone = &pose.bones[data.bone];
+    world.clear();
+    match &a.geometry {
+        Geometry::Region(corners) => {
+            for c in corners[frame].as_chunks::<2>().0 {
+                world.push([
+                    bone.a * c[0] + bone.b * c[1] + bone.x,
+                    bone.c * c[0] + bone.d * c[1] + bone.y,
+                ]);
+            }
+        }
+        Geometry::Mesh(_) | Geometry::Linked { .. } => {
+            let source = match a.geometry {
+                Geometry::Linked { source } => source,
+                _ => attachment,
+            };
+            let Geometry::Mesh(mesh) = &rig.attachments[source].geometry else {
+                return;
+            };
+            mesh_vertices(
+                &mesh.vertices,
+                state.deform.as_deref(),
+                bone,
+                &pose.bones,
+                world,
+            );
+        }
+        Geometry::Inert => return,
+    }
+    let drawable = a.drawables + frame;
+    let start = pose.vertices.len();
+    let (uvs, triangles) = (pose.uvs.len(), pose.triangles.len());
+    let cut = shape.clip.is_some_and(|plan| {
+        let d = &rig.drawables[drawable];
+        clip::cut(
+            plan,
+            world,
+            &d.uvs,
+            &d.triangles,
+            scratch,
+            Cut {
+                vertices: &mut pose.vertices,
+                uvs: &mut pose.uvs,
+                triangles: &mut pose.triangles,
+            },
+        )
+    });
+    if !cut {
+        pose.vertices
+            .extend(world.iter().map(|[x, y]| [*x as f32, *y as f32]));
+    }
+    let l = state.light;
+    let c = a.color;
+    pose.pieces.push(Piece {
+        slot,
+        attachment,
+        drawable,
+        page: rig.drawables[drawable].page,
+        vertices: start..pose.vertices.len(),
+        clipped: cut.then_some(Clipped {
+            uvs: uvs..pose.uvs.len(),
+            triangles: triangles..pose.triangles.len(),
+        }),
+        blend: data.blend,
+        color: [
+            (l[0] * c[0]) as f32,
+            (l[1] * c[1]) as f32,
+            (l[2] * c[2]) as f32,
+            (l[3] * c[3]) as f32,
+        ],
+        dark: state.dark.map(|d| [d[0] as f32, d[1] as f32, d[2] as f32]),
+    });
+}
+
+/// rig-c's `worldVertices` / `deformedWorldVertices`, as doubles.
 fn mesh_vertices(
     vertices: &VertexData,
     deform: Option<&[f64]>,
     bone: &BoneWorld,
     world: &[BoneWorld],
-    out: &mut Vec<[f32; 2]>,
+    out: &mut Vec<[f64; 2]>,
 ) {
     match vertices {
         VertexData::Unweighted(xy) => {
@@ -392,8 +504,8 @@ fn mesh_vertices(
             for p in xy.as_chunks::<2>().0 {
                 let (x, y) = (p[0], p[1]);
                 out.push([
-                    (x * bone.a + y * bone.b + bone.x) as f32,
-                    (x * bone.c + y * bone.d + bone.y) as f32,
+                    x * bone.a + y * bone.b + bone.x,
+                    x * bone.c + y * bone.d + bone.y,
                 ]);
             }
         }
@@ -411,7 +523,7 @@ fn mesh_vertices(
                     wx += (x * t.a + y * t.b + t.x) * weight;
                     wy += (x * t.c + y * t.d + t.y) * weight;
                 }
-                out.push([wx as f32, wy as f32]);
+                out.push([wx, wy]);
             }
         }
     }
