@@ -835,45 +835,23 @@ fn detail_page(tilt: i32, heights: bool) -> Vec<u8> {
         .collect()
 }
 
-#[test]
-fn authored_normal_and_depth_lighting_read_the_pages_detail_maps() {
-    let mut harness = Harness::new(RendererOptions {
-        default_world_lights: false,
-        ..RendererOptions::default()
-    });
-    let mut ops = vec![RenderDiff::SetBackgroundColor {
-        color: [0.0, 0.0, 0.0, 1.0],
-    }];
-    ops.push(blends_rig(&mut harness, "parts-rig/flat"));
-    for (id, tilt, heights) in [
-        ("texture/left", -90, false),
-        ("texture/right", 90, false),
-        ("texture/ramp", 0, true),
-    ] {
-        let (mut detail, _) =
-            harness
-                .resources
-                .texture(id, 8, 8, &detail_page(tilt, heights), TextureFilter::Linear);
-        if let RenderDiff::DefineTexture { texture } = &mut detail {
-            if let Some(payload) = texture.payload.as_mut() {
-                payload.color_space = TextureColorSpace::Linear;
-            }
+/// A detail page (`detail_page`) as a linear texture.
+fn detail_texture(harness: &mut Harness, id: &str, tilt: i32, heights: bool) -> RenderDiff {
+    let (mut detail, _) =
+        harness
+            .resources
+            .texture(id, 8, 8, &detail_page(tilt, heights), TextureFilter::Linear);
+    if let RenderDiff::DefineTexture { texture } = &mut detail {
+        if let Some(payload) = texture.payload.as_mut() {
+            payload.color_space = TextureColorSpace::Linear;
         }
-        ops.push(detail);
-        ops.push(RenderDiff::DefinePartsRig {
-            asset: PartsRigAsset {
-                id: format!("parts-rig/{}", &id["texture/".len()..]),
-                pages: vec![PartsRigPage {
-                    texture: "texture/straight".to_owned(),
-                    premultiplied: false,
-                    detail: Some(id.to_owned()),
-                }],
-                drawables: (0..4).map(|q| quadrant(0, q)).collect::<Vec<_>>().into(),
-            },
-        });
     }
-    // Light from the left and in front, and a dim ambient.
-    for (handle, light) in [
+    detail
+}
+
+/// Light from the left and in front, and a dim ambient.
+fn side_lights() -> [RenderDiff; 2] {
+    [
         (
             30,
             LightDescriptor::Directional {
@@ -897,22 +875,56 @@ fn authored_normal_and_depth_lighting_read_the_pages_detail_maps() {
                 range: None,
             },
         ),
-    ] {
-        ops.push(RenderDiff::CreateLight {
-            handle: RenderHandle::new(handle),
-            parent: None,
-            light,
-        });
-    }
-    // Grey squares (drawable 3), lit by authored normals tilted left, flat
-    // (a page with no detail map) and tilted right, by authored depth over
-    // a ramp, and by authored depth over no map (its colour's gradient).
-    let lit = |lighting| SpriteMaterialDescriptor {
+    ]
+    .map(|(handle, light)| RenderDiff::CreateLight {
+        handle: RenderHandle::new(handle),
+        parent: None,
+        light,
+    })
+}
+
+/// Grey squares lit by `lighting`, masked.
+fn lit(lighting: SpriteLightingMode) -> SpriteMaterialDescriptor {
+    SpriteMaterialDescriptor {
         lighting,
         normal_strength: 1.0,
         alpha: SpriteAlphaMode::Mask { cutoff: 0.5 },
         ..Default::default()
-    };
+    }
+}
+
+#[test]
+fn authored_normal_and_depth_lighting_read_the_pages_detail_maps() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.push(blends_rig(&mut harness, "parts-rig/flat"));
+    for (id, tilt, heights) in [
+        ("texture/left", -90, false),
+        ("texture/right", 90, false),
+        ("texture/ramp", 0, true),
+    ] {
+        ops.push(detail_texture(&mut harness, id, tilt, heights));
+        ops.push(RenderDiff::DefinePartsRig {
+            asset: PartsRigAsset {
+                id: format!("parts-rig/{}", &id["texture/".len()..]),
+                pages: vec![PartsRigPage {
+                    texture: "texture/straight".to_owned(),
+                    premultiplied: false,
+                    detail: Some(id.to_owned()),
+                }],
+                drawables: (0..4).map(|q| quadrant(0, q)).collect::<Vec<_>>().into(),
+            },
+        });
+    }
+    ops.extend(side_lights());
+    // Grey squares (drawable 3), lit by authored normals tilted left, flat
+    // (a page with no detail map) and tilted right, by authored depth over
+    // a ramp, and by authored depth over no map (its colour's gradient).
     for (handle, asset, lighting, x) in [
         (
             10,
@@ -967,4 +979,60 @@ fn authored_normal_and_depth_lighting_read_the_pages_detail_maps() {
         "heights rising away from the light turn the square toward it: ramp {ramp}, no map {plain}"
     );
     assert_screenshot("parts_rigs_authored_lighting", WIDTH, HEIGHT, &frame);
+}
+
+/// Two pages share one colour texture and differ in their normal maps:
+/// consecutive pieces from them each light by their own page's map.
+#[test]
+fn pages_sharing_a_colour_texture_light_by_their_own_detail_maps() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.push(blends_rig(&mut harness, "parts-rig/flat"));
+    ops.push(detail_texture(&mut harness, "texture/left", -90, false));
+    ops.push(detail_texture(&mut harness, "texture/right", 90, false));
+    ops.push(RenderDiff::DefinePartsRig {
+        asset: PartsRigAsset {
+            id: "parts-rig/two-pages".to_owned(),
+            pages: ["texture/left", "texture/right"]
+                .map(|detail| PartsRigPage {
+                    texture: "texture/straight".to_owned(),
+                    premultiplied: false,
+                    detail: Some(detail.to_owned()),
+                })
+                .to_vec(),
+            drawables: vec![quadrant(0, 3), quadrant(1, 3)].into(),
+        },
+    });
+    ops.extend(side_lights());
+    let posed = pose(vec![
+        (piece(0, PartsRigBlend::Normal), square(3.0, 3.0, 2.5)),
+        (piece(1, PartsRigBlend::Normal), square(9.0, 3.0, 2.5)),
+    ]);
+    ops.extend(create(
+        10,
+        flat_rig(
+            "parts-rig/two-pages",
+            0.0,
+            lit(SpriteLightingMode::AuthoredNormal),
+        ),
+        &posed,
+    ));
+    harness.apply(ops);
+    let frame = harness.single(&flat_camera());
+    let brightness = |x: f32| {
+        at(&frame, x, 4.25)[..3]
+            .iter()
+            .map(|c| u32::from(*c))
+            .sum::<u32>()
+    };
+    let (left, right) = (brightness(4.25), brightness(10.25));
+    assert!(
+        left > right + 60,
+        "the left-tilted page shades brighter than the right-tilted one: {left}, {right}"
+    );
 }

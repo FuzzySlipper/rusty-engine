@@ -85,7 +85,8 @@ const PREMULTIPLIED: u8 = 1;
 /// A vertex's page has a detail map.
 const DETAIL: u8 = 2;
 
-/// Pieces drawn by one indexed call: they share a page and a blend mode.
+/// Pieces drawn by one indexed call: they share a page texture, a detail
+/// map and a blend mode.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct RigRun {
     /// The page's texture name id, and its detail map's.
@@ -162,7 +163,11 @@ pub(crate) fn build(asset: &PartsRigAssetRow, pose: &PartsRigPose, out: &mut Rig
             .extend(drawable.triangles.iter().map(|index| base + index));
         let count = drawable.triangles.len() as u32;
         match out.runs.last_mut() {
-            Some(run) if run.texture == page.texture && run.blend == piece.blend => {
+            Some(run)
+                if run.texture == page.texture
+                    && run.detail == page.detail
+                    && run.blend == piece.blend =>
+            {
                 run.count += count
             }
             _ => out.runs.push(RigRun {
