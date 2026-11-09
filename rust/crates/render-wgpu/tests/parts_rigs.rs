@@ -8,6 +8,9 @@
 //! - slot blend modes, the two-colour tint, premultiplied pages and draw
 //!   order, against their arithmetic;
 //! - pixel art snapped to the rig's texel grid;
+//! - a sparse, wide region attachment beside an opaque atlas neighbour,
+//!   snapped in the world and placed in the viewport, cell for cell against
+//!   its page;
 //! - pixel art placed in a rectangle of the viewport: whole pixels per
 //!   texel, a pose moving inside its fixed frame and clipped by it, over a
 //!   fogged scene, and its pages' colours over an exposed, graded and tone
@@ -1113,6 +1116,163 @@ fn a_placed_rig_follows_its_ui_anchor_while_the_page_reports_it() {
         .renderer
         .set_viewport_anchors(RendererViewportAnchors::new());
     assert_eq!(harness.single(&eye), at_rectangle);
+}
+
+/// Page width and height of the sparse region's atlas.
+const SPARSE_PAGE: (u32, u32) = (48, 13);
+/// The sparse region: x, y, width, height in page texels; an opaque
+/// neighbour lies 2 texels right of it, a clear gutter between.
+const SPARSE_REGION: [u32; 4] = [1, 1, 35, 11];
+const SPARSE_WIRE: [u8; 4] = [70, 30, 20, 255];
+/// What its clear texels hold: red, as a painting's matte might.
+const SPARSE_CLEAR: [u8; 4] = [220, 20, 20, 0];
+
+/// An atlas page holding a wide, sparse region, like a pair of
+/// spectacles: wire texels with alpha (two lens rims and a bridge, some at
+/// alpha 200, one at 100, under a 0.5 cutoff), clear red elsewhere, and an
+/// opaque green neighbour region beside it.
+fn sparse_page() -> Vec<u8> {
+    let (width, height) = SPARSE_PAGE;
+    let [rx, ry, rw, rh] = SPARSE_REGION;
+    let mut rgba = Vec::new();
+    for y in 0..height {
+        for x in 0..width {
+            let (u, v) = (x as i32 - rx as i32, y as i32 - ry as i32);
+            let inside = (0..rw as i32).contains(&u) && (0..rh as i32).contains(&v);
+            let rim = |left: i32| {
+                (u == left || u == left + 11) && (2..9).contains(&v)
+                    || (v == 2 || v == 8) && (left..=left + 11).contains(&u)
+            };
+            let texel = if inside && (rim(2) || rim(21) || (v == 4 && (13..21).contains(&u))) {
+                if (u + v) % 5 == 0 {
+                    [70, 30, 20, 200]
+                } else if u == 13 {
+                    [70, 30, 20, 100]
+                } else {
+                    SPARSE_WIRE
+                }
+            } else if x >= rx + rw + 2 {
+                [40, 200, 60, 255]
+            } else {
+                SPARSE_CLEAR
+            };
+            rgba.extend_from_slice(&texel);
+        }
+    }
+    rgba
+}
+
+#[test]
+fn a_sparse_regions_quad_draws_only_its_own_texels_under_texel_snap() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let (width, height) = SPARSE_PAGE;
+    let page = sparse_page();
+    let (texture, _) = harness.resources.texture(
+        "texture/sparse",
+        width,
+        height,
+        &page,
+        TextureFilter::Nearest,
+    );
+    let [rx, ry, rw, rh] = SPARSE_REGION.map(|value| value as f32);
+    let (u0, v0) = (rx / width as f32, ry / height as f32);
+    let (u1, v1) = ((rx + rw) / width as f32, (ry + rh) / height as f32);
+    let mut ops = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        },
+        texture,
+        RenderDiff::DefinePartsRig {
+            asset: PartsRigAsset {
+                id: "parts-rig/sparse".to_owned(),
+                pages: vec![PartsRigPage {
+                    texture: "texture/sparse".to_owned(),
+                    premultiplied: false,
+                    detail: None,
+                }],
+                drawables: vec![PartsRigDrawable {
+                    page: 0,
+                    // A region attachment's quad: bottom left, bottom right,
+                    // top right, top left (v down), split on its diagonal.
+                    uvs: vec![[u0, v1], [u1, v1], [u1, v0], [u0, v0]],
+                    triangles: vec![0, 1, 2, 2, 3, 0],
+                }]
+                .into(),
+            },
+        },
+    ];
+    // The region at a texel a rig unit, turned 2° about its centre at rig
+    // unit (17.6, 5.7), so the quad's diagonal crosses the grid's cells at
+    // every phase.
+    let turn = 2f32.to_radians();
+    let centre = [17.6f32, 5.7];
+    let corners = [[0.0, 0.0], [rw, 0.0], [rw, rh], [0.0, rh]].map(|[x, y]| {
+        let (x, y) = (x - rw / 2.0, y - rh / 2.0);
+        [
+            x * turn.cos() - y * turn.sin() + centre[0],
+            x * turn.sin() + y * turn.cos() + centre[1],
+        ]
+    });
+    let posed = pose(vec![(piece(0, PartsRigBlend::Normal), corners)]);
+    // In the world: 3 pixels a rig unit under `flat_camera` (20 a metre),
+    // its origin on a pixel corner, 160 pixels across and 20 up.
+    let mut world = figure(BillboardMode::None, [8.0, 1.0, 0.0], 0.0);
+    world.views[0].asset = "parts-rig/sparse".to_owned();
+    world.scale = 0.15;
+    world.texel_snap = 1.0;
+    ops.extend(create(10, world.clone(), &posed));
+    // Placed: its frame, 40 by 19 texels from rig unit (-2, -4), fits
+    // 120 by 57 pixels from (20, 20), 3 pixels a texel, its origin 6 and 12
+    // pixels in.
+    let mut placed = world;
+    placed.layer = RenderLayer::Viewmodel;
+    placed.viewport_placement = Some(PartsRigViewportPlacement {
+        rectangle: SpriteViewportPlacement {
+            minimum: [20.0 / WIDTH as f32, 20.0 / HEIGHT as f32],
+            size: [120.0 / WIDTH as f32, 57.0 / HEIGHT as f32],
+            alignment: [0.5, 0.5],
+            fit: SpriteViewportFit::Contain,
+        },
+        frame: [-2.0, -4.0, 38.0, 15.0],
+        anchor: None,
+    });
+    ops.extend(create(11, placed, &posed));
+    harness.apply(ops);
+    let frame = harness.single(&flat_camera());
+
+    // The page texel at each cell centre of the rig's grid, by the quad's
+    // map from rig units to the page: the region's own texel, or nothing
+    // past it or below the cutoff.
+    let (sin, cos) = turn.sin_cos();
+    let sampled = |cx: f32, cy: f32| -> Option<[u8; 3]> {
+        let (x, y) = (cx - centre[0], cy - centre[1]);
+        let (x, y) = (x * cos + y * sin + rw / 2.0, -x * sin + y * cos + rh / 2.0);
+        if !(0.0..rw).contains(&x) || !(0.0..rh).contains(&y) {
+            return None;
+        }
+        let (px, py) = ((rx + x).floor() as u32, (ry + rh - y).floor() as u32);
+        let texel = &page[((py * width + px) * 4) as usize..][..4];
+        (texel[3] >= 128).then(|| [texel[0], texel[1], texel[2]])
+    };
+    let mut wire = 0;
+    for (name, (left, bottom)) in [("in the world", (160, 20)), ("placed", (26, 32))] {
+        let mut wrong = Vec::new();
+        for l in -2..15 {
+            for k in -2..38 {
+                let expected = sampled(k as f32 + 0.5, l as f32 + 0.5);
+                let x = (left + 3 * k + 1) as u32;
+                let y = HEIGHT - 1 - (bottom + 3 * l + 1) as u32;
+                let drawn = pixel(&frame, WIDTH, x, y);
+                wire += usize::from(expected.is_some());
+                if drawn[..3] != expected.unwrap_or([0, 0, 0]) {
+                    wrong.push((k, l, drawn, expected));
+                }
+            }
+        }
+        assert!(wrong.is_empty(), "{name}: cells unlike the page: {wrong:?}");
+    }
+    assert!(wire > 100, "the wire draws: {wire} cells");
+    assert_screenshot("parts_rigs_sparse_region", WIDTH, HEIGHT, &frame);
 }
 
 #[test]
