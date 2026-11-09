@@ -11,6 +11,8 @@ use serde::Deserialize;
 #[serde(default)]
 pub(crate) struct Document {
     pub spec: Option<String>,
+    #[serde(rename = "referenceScale")]
+    pub reference_scale: Option<f64>,
     pub bones: Vec<Bone>,
     pub slots: Vec<Slot>,
     pub skins: Vec<Skin>,
@@ -79,6 +81,7 @@ pub(crate) struct Skin {
 pub(crate) struct SkinConstraints {
     pub ik: Vec<String>,
     pub transform: Vec<String>,
+    pub physics: Vec<String>,
 }
 
 /// What every constraint states, whatever its kind.
@@ -148,6 +151,53 @@ pub(crate) struct Constraint {
     pub mix_scale_y: Option<f64>,
     #[serde(default)]
     pub mix_shear_y: Option<f64>,
+}
+
+/// A physics constraint (rig-c's `readPhysicsRecord`).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PhysicsConstraint {
+    pub name: String,
+    pub bone: String,
+    #[serde(default)]
+    pub skin: bool,
+    #[serde(default)]
+    pub scale_y: Option<serde_json::Value>,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    #[serde(default)]
+    pub rotate: f64,
+    #[serde(default)]
+    pub scale_x: f64,
+    #[serde(default)]
+    pub shear_x: f64,
+    pub limit: Option<f64>,
+    pub fps: Option<f64>,
+    pub inertia: Option<f64>,
+    pub strength: Option<f64>,
+    pub damping: Option<f64>,
+    pub mass: Option<f64>,
+    #[serde(default)]
+    pub wind: f64,
+    #[serde(default)]
+    pub gravity: f64,
+    pub mix: Option<f64>,
+    #[serde(default)]
+    pub inertia_global: bool,
+    #[serde(default)]
+    pub strength_global: bool,
+    #[serde(default)]
+    pub damping_global: bool,
+    #[serde(default)]
+    pub mass_global: bool,
+    #[serde(default)]
+    pub wind_global: bool,
+    #[serde(default)]
+    pub gravity_global: bool,
+    #[serde(default)]
+    pub mix_global: bool,
 }
 
 #[derive(Deserialize)]
@@ -314,12 +364,21 @@ pub(crate) struct Animation {
     pub constraints: ConstraintTimelines,
 }
 
-/// An animation's ik and transform timelines, by constraint name.
+/// An animation's ik, transform and physics timelines, by constraint name.
 #[derive(Deserialize, Default)]
 #[serde(default)]
 pub(crate) struct ConstraintTimelines {
     pub ik: Vec<Timeline>,
     pub transform: Vec<Timeline>,
+    pub physics: Vec<PhysicsTimelines>,
+}
+
+/// One physics constraint's timelines, or (`*`) those of the timeline that
+/// names none.
+#[derive(Deserialize)]
+pub(crate) struct PhysicsTimelines {
+    pub name: String,
+    pub timelines: Vec<Timeline>,
 }
 
 #[derive(Deserialize)]

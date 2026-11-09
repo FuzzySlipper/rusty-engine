@@ -3,7 +3,10 @@
 //
 // bun oracle.ts <core-entry.ts> <plan.json>  → JSON on stdout
 //
-// plan: { model, skin: string|null, mode: "track", animation, loop, steps: [dt…], drive?: [[bone, channel, value]…] }
+// plan: { model, skin: string|null, mode: "track", animation, loop, steps: [dt…], drive?: [[bone, channel, value]…],
+//          before?: { "<step>": { wind?: [x, y], gravity?: [x, y], move?: [x, y] } } }
+//    (`before` acts on the live track before step n, counted from 1: the physics environment, x right and y down,
+//     and a physicsTranslate, y up)
 //    or { model, skin, mode: "tracks", ops: [{play, loop, mix} | {stop} | {step}] }
 //    (the first step of "tracks" is the start, at dt 0)
 import { readFileSync } from 'node:fs';
@@ -57,8 +60,19 @@ if (plan.mode === 'track') {
     for (const [bone, channel, value] of drive) locals.bone(bone)[channel] = value;
   };
   const track = core.openTrack(doc, plan.animation, { loop: plan.loop, reset: 'animation', adjust });
+  const before = plan.before ?? {};
   poses.push(row(track.first));
-  for (const dt of plan.steps) poses.push(row(track.step(dt)));
+  plan.steps.forEach((dt: number, i: number) => {
+    const b = before[String(i + 1)];
+    if (b !== undefined) {
+      const env: any = {};
+      if (b.wind !== undefined) env.wind = b.wind;
+      if (b.gravity !== undefined) env.gravity = b.gravity;
+      if (Object.keys(env).length > 0) track.setEnvironment(env);
+      if (b.move !== undefined) track.physicsTranslate(b.move[0], b.move[1]);
+    }
+    poses.push(row(track.step(dt)));
+  });
 } else {
   const tracks = core.openTracks(doc, { reset: 'animation' });
   let started = false;

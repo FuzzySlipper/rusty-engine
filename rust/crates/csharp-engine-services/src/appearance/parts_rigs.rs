@@ -6,6 +6,11 @@
 //! call settles, every player advances to the Engine's presentation time
 //! and its pose is published as `SetPartsRigPose`, once per change: a pose
 //! equal to the one last published sends nothing.
+//!
+//! A rig node's motion in the world moves its physics: what the node moved
+//! since the last settle along its own x and y axes, in rig units, is the
+//! rig's `translate_physics` before its step. A pixel-sized rig has no world
+//! unit, and takes none.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -13,7 +18,7 @@ use std::sync::Arc;
 use ::animation_parts_rig::{BlendMode, Play, Player, Pose, Rig};
 use render_model::{
     PartsRigAsset, PartsRigBlend, PartsRigDrawable, PartsRigPage, PartsRigPiece, PartsRigPose,
-    RenderDiff, RenderFrameDiff, RenderHandle,
+    RenderDiff, RenderFrameDiff, RenderHandle, SpriteSizeMode,
 };
 
 /// The parts rigs the Engine poses, and their players.
@@ -35,6 +40,8 @@ struct RigInstance {
     /// Played, stopped or reskinned since it was last posed.
     dirty: bool,
     published: Option<PartsRigPose>,
+    /// The node's world origin at the last settle.
+    origin: Option<[f32; 3]>,
 }
 
 #[allow(
@@ -113,6 +120,7 @@ impl PartsRigScene {
                             posed_at: None,
                             dirty: true,
                             published: None,
+                            origin: None,
                         },
                     );
                 }
@@ -196,6 +204,34 @@ impl PartsRigScene {
             else {
                 continue;
             };
+            if let (Some(node), Some(m)) =
+                (world.parts_rig(*handle), world.scene_world_matrix(*handle))
+            {
+                let origin = [m[3][0], m[3][1], m[3][2]];
+                if let Some(from) = instance
+                    .origin
+                    .filter(|_| node.size_mode == SpriteSizeMode::World)
+                {
+                    let moved = [0, 1, 2].map(|k| f64::from(origin[k]) - f64::from(from[k]));
+                    // Along an axis of world length `l` per node unit, one
+                    // rig unit is `scale * l` long.
+                    let along = |axis: [f32; 4]| {
+                        let axis = [0, 1, 2].map(|k| f64::from(axis[k]));
+                        let squared: f64 = axis.iter().map(|a| a * a).sum();
+                        let dot: f64 = (0..3).map(|k| moved[k] * axis[k]).sum();
+                        if squared > 0.0 {
+                            dot / (f64::from(node.scale) * squared)
+                        } else {
+                            0.0
+                        }
+                    };
+                    let (x, y) = (along(m[0]), along(m[1]));
+                    if x != 0.0 || y != 0.0 {
+                        player.translate_physics(x, y);
+                    }
+                }
+                instance.origin = Some(origin);
+            }
             let step = instance.posed_at.map_or(0.0, |at| (now - at).max(0.0));
             if step == 0.0 && !instance.dirty {
                 continue;
@@ -393,5 +429,52 @@ mod tests {
         );
         assert!(scene.pose(RenderHandle::new(1)).is_none());
         assert!(!scene.stop(RenderHandle::new(1), 0.0));
+    }
+
+    const PHYSICS: &str =
+        include_str!("../../../animation-parts-rig/tests/fixtures/physics.model.json");
+
+    /// A rig node carried across the world swings its hair; one left
+    /// standing beside it does not.
+    #[test]
+    fn a_moving_rig_node_swings_its_physics() {
+        let rig = Arc::new(Rig::from_json(PHYSICS).expect("physics reads"));
+        let link = rig.find_bone("h1").expect("h1");
+        let (mut scene, mut world) = (PartsRigScene::default(), PresentationWorld::default());
+        let define = scene.define(
+            RIG.to_owned(),
+            rig,
+            vec![("texture/physics".to_owned(), None)],
+        );
+        call(
+            &mut scene,
+            &mut world,
+            vec![define, create(1), create(2)],
+            0.0,
+        );
+        let angle = |scene: &PartsRigScene, handle: u64| {
+            let b = scene.pose(RenderHandle::new(handle)).unwrap().bones[link];
+            b.c.atan2(b.a).to_degrees()
+        };
+        let mut widest = 0.0f64;
+        for n in 1..=60 {
+            // 0.002 m per rig unit: 0.008 m a step is 4 rig units.
+            let moved = RenderDiff::Update {
+                handle: RenderHandle::new(1),
+                transform: Some(Transform {
+                    translation: [0.008 * n.min(30) as f32, 0.0, 0.0],
+                    ..Transform::default()
+                }),
+                material: None,
+                visible: None,
+                metadata: None,
+            };
+            call(&mut scene, &mut world, vec![moved], 1.0 / 60.0);
+            widest = widest.max((angle(&scene, 1) - angle(&scene, 2)).abs());
+        }
+        assert!(
+            widest > 10.0,
+            "the moved rig's hair swings {widest} degrees"
+        );
     }
 }

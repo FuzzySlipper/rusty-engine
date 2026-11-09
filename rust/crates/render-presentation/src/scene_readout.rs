@@ -300,6 +300,11 @@ impl PresentationWorld {
         Some([world[3][0], world[3][1], world[3][2]])
     }
 
+    /// `handle`'s world matrix by columns, composed through its parents.
+    pub fn scene_world_matrix(&self, handle: RenderHandle) -> Option<[[f32; 4]; 4]> {
+        self.composed(handle)
+    }
+
     /// `handle`'s world matrix, composed through its parents.
     fn composed(&self, handle: RenderHandle) -> Option<Mat4> {
         let mut world = IDENTITY;

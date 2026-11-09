@@ -8,8 +8,12 @@ Each rig gets, under no skin and under each named skin, one looping case per
 clip (rig-c's `openTrack`) and one crossfade script over its first two clips
 without draw-order, sequence or constraint keys (`openTracks`). A rig with a
 bone named `turn` also gets its first clip with `turn`'s x driven to 24 and
-then -24 (rig-c's `adjust`). A rig named `turned` gets one two-pose case
-instead: it is a page-UV variant. Bones keep full doubles;
+then -24 (rig-c's `adjust`). A rig with physics constraints also gets its
+first clip walked while the rig moves, `move` units a step to the right for
+a third of the steps, then held, under a gust: a sideways wind from the
+second third on, turned off for the last (rig-c's `physicsTranslate` and
+`setEnvironment`). A rig named `turned` gets one two-pose case instead: it
+is a page-UV variant. Bones keep full doubles;
 vertices are written to 8 significant digits, UVs and colours to 9.
 """
 import json
@@ -23,6 +27,11 @@ bun, entry, oracle, out_dir, dt, cap = sys.argv[1:7]
 dt = float(dt)
 cap = int(cap)
 rigs = [a.split("=", 1) for a in sys.argv[7:]]
+# The physics case: rig units the rig moves right per step, and the gust's
+# wind and gravity (x right, y down).
+MOVE = 3.0
+GUST = {"wind": [4.0, 0.0], "gravity": [0.0, 1.5]}
+CALM = {"wind": [0.0, 0.0], "gravity": [0.0, 1.0]}
 out = Path(out_dir)
 out.mkdir(parents=True, exist_ok=True)
 
@@ -68,11 +77,13 @@ def compact(poses, regions):
     ]
 
 
-def track(model, skin, anim, steps, regions, name, drive=None):
+def track(model, skin, anim, steps, regions, name, drive=None, before=None):
     plan = {"model": model, "skin": skin, "mode": "track", "animation": anim, "loop": True, "steps": steps}
     case = {"name": name, "skin": skin, "mode": "track", "animation": anim, "loop": True, "steps": steps}
     if drive:
         plan["drive"] = case["drive"] = drive
+    if before:
+        plan["before"] = case["before"] = before
     case["poses"] = compact(run(plan), regions)
     return case
 
@@ -91,9 +102,10 @@ for name, model in rigs:
     mixable = [
         a["name"] for a in doc["animations"]
         if not a["drawOrder"] and not any("sequence" in at for sk in a["attachments"] for sl in sk["slots"] for at in sl["attachments"])
-        and not any(a.get("constraints", {}).get(k) for k in ("ik", "transform"))
+        and not any(a.get("constraints", {}).get(k) for k in ("ik", "transform", "physics"))
     ]
     turn = any(b["name"] == "turn" for b in doc["bones"])
+    physics = any(c["kind"] == "physics" for c in doc["constraints"])
     for skin in skins:
         for i, anim in enumerate(anims):
             duration = max([0.0] + [k["time"] for t in doc["animations"][i]["bones"] for tl in t["timelines"] for k in tl["keys"]])
@@ -102,6 +114,12 @@ for name, model in rigs:
             if turn and i == 0:
                 for x in (24, -24):
                     cases.append(track(model, skin, anim, steps, regions, f"{anim} with turn at {x}", [["turn", "x", x]]))
+            if physics and i == 0:
+                third = max(1, len(steps) // 3)
+                before = {str(k + 1): {"move": [MOVE, 0.0]} for k in range(third)}
+                before.setdefault(str(third + 1), {}).update(GUST)
+                before.setdefault(str(2 * third + 1), {}).update(CALM)
+                cases.append(track(model, skin, anim, steps, regions, f"{anim} moving in a gust", before=before))
         if mixable:
             a, b = mixable[0], mixable[min(1, len(mixable) - 1)]
 

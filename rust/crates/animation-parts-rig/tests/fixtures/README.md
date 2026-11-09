@@ -13,12 +13,16 @@ gave for the same steps.
 | `walk` | rig-c's gallery `walk`: two two-bone iks keyed by ik timelines |
 | `constraints` | `../oracle/constraints.rig.json` and `constraints.motion.json` over the same art as `features`: one-bone iks under each inherit mode with compress, stretch and both `scaleY` modes; uniform and non-uniform two-bone iks with softness, stretch and both bends; world, local, additive and clamped transforms with offsets and cross mappings onto bones of each inherit mode; a skin-listed transform; ik and transform timelines; a `turn` bone |
 | `townsperson` | rusty-dagger's prototype `local/evidence/10670-townsperson/walk/front-build`: 26 additive transforms from its `turn` bone |
+| `physics` | `../oracle/physics.rig.json` and `physics.motion.json` over the same art as `features`: physics constraints driving rotation, shear (one negative), scale with both `scaleY` modes, and position at 30, 45 and 60 fps under a tight limit, on bones under a reflection and in `noScale`; mass, a constraint muted until a key, a skin-listed one, the `…Global` flags; every value timeline, named and `*`, and `reset` keys of both |
+| `whip` | rig-c's gallery `look` made by `../oracle/whip.py`: its sliders removed and its `turn` clip alone, so the ahoge's `whip` physics swings under the head turn |
 
 The model documents are rig-c's output with whitespace removed. rig-c's code,
 gallery rigs and art are MIT-licensed, Copyright (c) 2026 firejune (Joon
 Kyoung); the licence is [`../../LICENSE-rig-c`](../../LICENSE-rig-c).
 `townsperson` is rusty-dagger's own art. A rig with a `turn` bone also has its
-first clip posed with `turn`'s x driven to 24 and -24.
+first clip posed with `turn`'s x driven to 24 and -24. A rig with physics
+also has its first clip posed while it moves and a gust blows
+(`physicsTranslate` and `setEnvironment`).
 
 ## Regenerating
 
@@ -35,11 +39,14 @@ from a directory holding the two `features.*.json` specs as `rig.json` and
 `motion.json` beside a `parts/` directory: the gallery's
 `squash/parts`, plus `blink_01.png`, `blink_02.png` and `blink_03.png` copied
 from its `eyes.png`, `eyes_shut.png` and `scarf_knot.png`; `constraints` the
-same way, over the same `parts/`. Make `turned` with `turn.py` from the packed
-`squash`. Then write the fixtures:
+same way, over the same `parts/`, and `physics`. Make `turned` with `turn.py`
+from the packed `squash`, and `whip` with `whip.py` from the built `look`.
+Then write the fixtures:
 
 ```bash
 python3 -I ../oracle/expect.py <bun> <rigc>/node_modules/@rig-c/core/src/core/entry.ts \
   ../oracle/oracle.ts <out> 0.1371 4 squash=<squash>/skeleton.model.json turned=… flex=… portrait=… nod=… features=… townsperson=…
 python3 -I ../oracle/expect.py <bun> <entry.ts> ../oracle/oracle.ts <out> 0.1371 12 walk=… constraints=…
+python3 -I ../oracle/expect.py <bun> <entry.ts> ../oracle/oracle.ts <out> 0.0413 30 physics=…
+python3 -I ../oracle/expect.py <bun> <entry.ts> ../oracle/oracle.ts <out> 0.03333333333333333 24 whip=…
 ```

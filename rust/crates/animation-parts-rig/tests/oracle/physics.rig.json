@@ -1,0 +1,382 @@
+{
+ "spec": "rigc-rig/1",
+ "name": "physics",
+ "images": "parts",
+ "skeleton": {
+  "x": 0,
+  "y": 0,
+  "width": 800,
+  "height": 720
+ },
+ "bones": [
+  {
+   "name": "root"
+  },
+  {
+   "name": "base",
+   "parent": "root",
+   "x": 400,
+   "y": 300,
+   "rotation": 10,
+   "scaleX": 1.1,
+   "scaleY": 0.9,
+   "shearX": 3,
+   "shearY": -2
+  },
+  {
+   "name": "flip",
+   "parent": "base",
+   "x": 20,
+   "scaleX": -1
+  },
+  {
+   "name": "h1",
+   "parent": "base",
+   "x": -40,
+   "y": 60,
+   "rotation": 90,
+   "length": 60
+  },
+  {
+   "name": "h2",
+   "parent": "h1",
+   "x": 60,
+   "length": 50
+  },
+  {
+   "name": "h3",
+   "parent": "h2",
+   "x": 50,
+   "length": 40
+  },
+  {
+   "name": "p_xy",
+   "parent": "base",
+   "x": 60,
+   "y": -30,
+   "rotation": -60,
+   "length": 40
+  },
+  {
+   "name": "p_xy_c",
+   "parent": "p_xy",
+   "x": 40,
+   "length": 30
+  },
+  {
+   "name": "p_sx",
+   "parent": "flip",
+   "x": 30,
+   "y": 20,
+   "rotation": -30,
+   "length": 50
+  },
+  {
+   "name": "p_ns",
+   "parent": "flip",
+   "x": -60,
+   "y": -40,
+   "rotation": 45,
+   "length": 45,
+   "inherit": "noScale"
+  },
+  {
+   "name": "p_g",
+   "parent": "base",
+   "x": 90,
+   "y": 70,
+   "rotation": 120,
+   "length": 55
+  },
+  {
+   "name": "p_mute",
+   "parent": "base",
+   "x": -90,
+   "y": -60,
+   "rotation": -120,
+   "length": 35
+  },
+  {
+   "name": "p_s",
+   "parent": "base",
+   "x": 0,
+   "y": 110,
+   "rotation": 80,
+   "length": 40
+  }
+ ],
+ "slots": [
+  {
+   "name": "s_base",
+   "bone": "base",
+   "attachment": "p"
+  },
+  {
+   "name": "s_h1",
+   "bone": "h1",
+   "attachment": "p"
+  },
+  {
+   "name": "s_h2",
+   "bone": "h2",
+   "attachment": "p"
+  },
+  {
+   "name": "s_h3",
+   "bone": "h3",
+   "attachment": "p"
+  },
+  {
+   "name": "s_p_xy",
+   "bone": "p_xy",
+   "attachment": "p"
+  },
+  {
+   "name": "s_p_xy_c",
+   "bone": "p_xy_c",
+   "attachment": "p"
+  },
+  {
+   "name": "s_p_sx",
+   "bone": "p_sx",
+   "attachment": "p"
+  },
+  {
+   "name": "s_p_ns",
+   "bone": "p_ns",
+   "attachment": "p"
+  },
+  {
+   "name": "s_p_g",
+   "bone": "p_g",
+   "attachment": "p"
+  },
+  {
+   "name": "s_p_mute",
+   "bone": "p_mute",
+   "attachment": "p"
+  },
+  {
+   "name": "s_p_s",
+   "bone": "p_s",
+   "attachment": "p"
+  }
+ ],
+ "constraints": [
+  {
+   "name": "hair1",
+   "type": "physics",
+   "bone": "h1",
+   "rotate": 1,
+   "inertia": 0.6,
+   "strength": 60,
+   "damping": 0.8,
+   "wind": 0.4,
+   "gravity": 0.3,
+   "windGlobal": true,
+   "strengthGlobal": true
+  },
+  {
+   "name": "hair2",
+   "type": "physics",
+   "bone": "h2",
+   "rotate": 1,
+   "shearX": -0.3,
+   "strength": 80,
+   "damping": 0.75,
+   "wind": 0.6,
+   "windGlobal": true
+  },
+  {
+   "name": "hair3",
+   "type": "physics",
+   "bone": "h3",
+   "rotate": 0.5,
+   "shearX": 0.5,
+   "scaleX": 0.3,
+   "scaleY": "volume",
+   "strength": 120,
+   "damping": 0.7,
+   "wind": 0.9,
+   "gravity": 0.2,
+   "mixGlobal": true
+  },
+  {
+   "name": "bob",
+   "type": "physics",
+   "bone": "p_xy",
+   "x": 1,
+   "y": 0.8,
+   "fps": 30,
+   "limit": 400,
+   "inertia": 0.9,
+   "strength": 40,
+   "damping": 0.6,
+   "mass": 1.5,
+   "gravity": 0.5,
+   "wind": 0.2
+  },
+  {
+   "name": "stretch",
+   "type": "physics",
+   "bone": "p_sx",
+   "scaleX": 1,
+   "scaleY": "uniform",
+   "strength": 90,
+   "damping": 0.8,
+   "wind": 0.3,
+   "gravity": -0.4,
+   "fps": 45
+  },
+  {
+   "name": "flap",
+   "type": "physics",
+   "bone": "p_ns",
+   "rotate": 0.8,
+   "shearX": 0.4,
+   "mass": 2,
+   "strength": 70,
+   "inertia": 0.4
+  },
+  {
+   "name": "pull",
+   "type": "physics",
+   "bone": "p_g",
+   "rotate": 1,
+   "x": 0.5,
+   "gravity": 0.6,
+   "inertiaGlobal": true,
+   "strengthGlobal": true,
+   "dampingGlobal": true,
+   "massGlobal": true,
+   "windGlobal": true,
+   "gravityGlobal": true,
+   "mixGlobal": true
+  },
+  {
+   "name": "mute",
+   "type": "physics",
+   "bone": "p_mute",
+   "rotate": 1,
+   "mix": 0,
+   "strength": 50
+  },
+  {
+   "name": "skinned",
+   "type": "physics",
+   "bone": "p_s",
+   "rotate": 1,
+   "strength": 45,
+   "skin": true
+  }
+ ],
+ "skins": {
+  "default": {
+   "s_base": {
+    "p": {
+     "image": "torso.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   },
+   "s_h1": {
+    "p": {
+     "image": "leg_l.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   },
+   "s_h2": {
+    "p": {
+     "image": "leg_r.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   },
+   "s_h3": {
+    "p": {
+     "image": "arm_b.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   },
+   "s_p_xy": {
+    "p": {
+     "image": "arm_f.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   },
+   "s_p_xy_c": {
+    "p": {
+     "image": "ear_l.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   },
+   "s_p_sx": {
+    "p": {
+     "image": "ear_r.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   },
+   "s_p_ns": {
+    "p": {
+     "image": "hand_f.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   },
+   "s_p_g": {
+    "p": {
+     "image": "scarf_tail.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   },
+   "s_p_mute": {
+    "p": {
+     "image": "scarf_knot.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   },
+   "s_p_s": {
+    "p": {
+     "image": "plate.png",
+     "x": 10,
+     "y": 5,
+     "scaleX": 0.4,
+     "scaleY": 0.4
+    }
+   }
+  },
+  "alt": {
+   "attachments": {},
+   "physics": [
+    "skinned"
+   ]
+  }
+ }
+}

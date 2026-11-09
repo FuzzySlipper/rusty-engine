@@ -1,5 +1,6 @@
-//! IK and transform constraints, applied in the document's order after the
-//! bones' world transforms (rig-c's `src/core/constraints.ts`).
+//! IK, transform and physics constraints, applied in the document's order
+//! after the bones' world transforms (rig-c's `src/core/constraints.ts`;
+//! physics in [`crate::physics`]).
 //!
 //! After each constraint, a bone it moved in world space has its local
 //! values read back from that world transform, and every bone below a bone
@@ -13,6 +14,7 @@
 //! local values, which nothing draws; rig-c refuses the rigs in which a
 //! drawn bone reads them, and this core does not look for them.
 
+use crate::physics::{self, Physics, PhysicsData};
 use crate::rig::Rig;
 use crate::world::{
     no_scale_direction, pose_bone, BoneWorld, Inherit, Local, DEG, M2, RAD, RUNTIME_PI,
@@ -63,6 +65,7 @@ pub(crate) struct TransformData {
 pub(crate) enum ConstraintKind {
     Ik(IkData),
     Transform(TransformData),
+    Physics(PhysicsData),
 }
 
 pub(crate) struct ConstraintData {
@@ -75,10 +78,11 @@ pub(crate) struct ConstraintData {
 }
 
 /// The values a constraint's timelines key: an ik's mix and softness, then
-/// its `bendPositive`, `compress` and `stretch`; a transform's six mixes.
+/// its `bendPositive`, `compress` and `stretch`; a transform's six mixes; a
+/// physics constraint's seven values (`crate::physics::INERTIA` on).
 #[derive(Clone, Copy, PartialEq)]
 pub(crate) struct ConstraintValues {
-    pub values: [f64; 6],
+    pub values: [f64; 7],
     pub flags: [bool; 3],
 }
 
@@ -164,7 +168,8 @@ impl State<'_> {
 
 /// Applies every constraint of the rig that `applied` keeps, in order, with
 /// the values `values` holds for each, to the bones' locals and world
-/// transforms.
+/// transforms, stepping the physics constraints on `physics`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn apply(
     rig: &Rig,
     values: &[ConstraintValues],
@@ -173,6 +178,7 @@ pub(crate) fn apply(
     world: &mut [BoneWorld],
     active: &[bool],
     scratch: &mut Scratch,
+    physics: &mut Physics,
 ) {
     let Scratch {
         changed,
@@ -222,6 +228,22 @@ pub(crate) fn apply(
                 if !changed.is_empty() {
                     let in_world: &[usize] = if t.local_target { &[] } else { changed };
                     repose(&mut state, changed, in_world);
+                }
+            }
+            // A physics constraint steps when its bone is active, and moves
+            // its bone in world space.
+            ConstraintKind::Physics(p) => {
+                if !active[p.bone] {
+                    continue;
+                }
+                let mut w = state.world[p.bone];
+                let length = state.bones.lengths[p.bone];
+                let mut s = std::mem::take(&mut physics.states[i]);
+                let moved = physics::step(p, &v.values, &mut s, &mut w, length, physics);
+                physics.states[i] = s;
+                if moved {
+                    state.world[p.bone] = w;
+                    repose(&mut state, &[p.bone], &[p.bone]);
                 }
             }
         }
@@ -782,7 +804,7 @@ fn solve_transform(
     state: &mut State<'_>,
     t: &TransformData,
     bone: usize,
-    mixes: &[f64; 6],
+    mixes: &[f64; 7],
 ) -> bool {
     let mut w = state.world[bone];
     let mut applied = false;

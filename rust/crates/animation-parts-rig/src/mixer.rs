@@ -9,6 +9,7 @@
 //! property the incoming clip keys is held under it until it takes over.
 
 use crate::constraints::ConstraintValues;
+use crate::physics::MASS_INVERSE;
 use crate::rig::{
     AnimationData, BoneTimeline, ColourTimeline, Geometry, Property, Rig, Timeline, TimelineKind,
 };
@@ -127,6 +128,9 @@ pub(crate) struct Working {
     pub lookup: Vec<usize>,
     /// Each constraint's keyed values.
     pub constraints: Vec<ConstraintValues>,
+    /// The physics constraints a `reset` key this step crossed resets:
+    /// one, or (`None`) every one.
+    pub resets: Vec<Option<usize>>,
     target: Vec<f64>,
     scratch: Vec<f64>,
 }
@@ -140,6 +144,7 @@ impl Working {
             events: Vec::new(),
             lookup: Vec::new(),
             constraints: Vec::new(),
+            resets: Vec::new(),
             target: Vec::new(),
             scratch: Vec::new(),
         }
@@ -157,6 +162,7 @@ impl Working {
             attachment_state: ATTACH_NONE,
         }));
         self.events.clear();
+        self.resets.clear();
         self.constraints.clear();
         self.constraints
             .extend(rig.constraints.iter().map(|c| c.setup));
@@ -558,6 +564,13 @@ fn apply_timeline(
         TimelineKind::Colour { .. } => apply_colour(rig, pose, tl, time, alpha, from),
         TimelineKind::Deform { .. } => apply_deform(rig, pose, tl, time, alpha, from),
         TimelineKind::Constraint { .. } => apply_constraint(rig, pose, tl, time, alpha, from, out),
+        TimelineKind::Physics { .. } => apply_physics(rig, pose, tl, time, alpha, from),
+        // A reset key is crossed as an event is fired: by the playing clip.
+        TimelineKind::PhysicsReset { constraint, times } => {
+            if fire && crossed(times.iter().copied(), last, time) {
+                pose.resets.push(*constraint);
+            }
+        }
         TimelineKind::Events(keys) => {
             if fire {
                 let Some(animation) = animation else { return };
@@ -1043,6 +1056,50 @@ fn apply_deform(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha: 
     pose.scratch = scratch;
 }
 
+/// Whether a step from clip time `last` to `time` crosses a key: one in
+/// `(last, time]`, or across a wrap (`time` below `last`) one after `last`
+/// or at or before `time`.
+fn crossed(mut keys: impl Iterator<Item = f64>, last: f64, time: f64) -> bool {
+    if time < last {
+        keys.any(|k| k > last || k <= time)
+    } else {
+        keys.any(|k| k > last && k <= time)
+    }
+}
+
+/// A physics value timeline, on each constraint it writes: from setup (or
+/// from what the clips under it left) toward the keyed value by `alpha`. At
+/// full alpha from setup this is rig-c's `setup + (value - setup)`; a mass
+/// blends as a mass and is held as its inverse.
+fn apply_physics(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha: f64, from: u8) {
+    let TimelineKind::Physics {
+        targets,
+        value,
+        keys,
+    } = &tl.kind
+    else {
+        return;
+    };
+    let index = keys.index_at(time);
+    let keyed = index.map(|i| keys.channel(i, 0, time));
+    let mass = *value == MASS_INVERSE;
+    for &c in targets {
+        let setup = rig.constraints[c].setup.values[*value];
+        let current = &mut pose.constraints[c].values[*value];
+        let Some(keyed) = keyed else {
+            *current = before_first_key(from, alpha, *current, setup);
+            continue;
+        };
+        let base = if from == SETUP { setup } else { *current };
+        *current = if mass {
+            let base = 1.0 / base;
+            1.0 / (base + (keyed - base) * alpha)
+        } else {
+            base + (keyed - base) * alpha
+        };
+    }
+}
+
 /// A constraint timeline: its values from setup (or from what the clips
 /// under it left) toward the keyed ones by `alpha`. At full alpha from setup
 /// this is rig-c's `setup + (value - setup) * 1`; the stepped ik flags are
@@ -1066,7 +1123,7 @@ fn apply_constraint(
     };
     let setup = rig.constraints[*constraint].setup;
     let current = &mut pose.constraints[*constraint];
-    let mut v = [0.0; 6];
+    let mut v = [0.0; 7];
     let Some(index) = keys.index_at(time) else {
         match from {
             SETUP => *current = setup,

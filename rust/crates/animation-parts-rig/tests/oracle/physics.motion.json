@@ -1,0 +1,418 @@
+{
+ "spec": "rigc-motion/1",
+ "archetype": "physics",
+ "cut": "physics",
+ "easings": {
+  "smooth": [
+   0.25,
+   0,
+   0.75,
+   1
+  ],
+  "snap": [
+   0.1,
+   0.7,
+   0.3,
+   1
+  ]
+ },
+ "animations": {
+  "swing": {
+   "duration": 1.2,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.3,
+       "v": [
+        -25
+       ],
+       "ease": "snap"
+      },
+      {
+       "t": 0.7,
+       "v": [
+        30
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "base",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ]
+      },
+      {
+       "t": 0.4,
+       "v": [
+        -60,
+        20
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.8,
+       "v": [
+        80,
+        -30
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "flip",
+     "property": "scalex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -1
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        -1.3
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        -1
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "hair1",
+     "property": "strength",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        60
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        20
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        60
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "hair2",
+     "property": "damping",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.75
+       ]
+      },
+      {
+       "t": 0.5,
+       "v": [
+        0.5
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "bob",
+     "property": "mass",
+     "keys": [
+      {
+       "t": 0.2,
+       "v": [
+        1.5
+       ]
+      },
+      {
+       "t": 0.7,
+       "v": [
+        3
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "bob",
+     "property": "inertia",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.9
+       ]
+      },
+      {
+       "t": 0.9,
+       "v": [
+        0.3
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "bob",
+     "property": "reset",
+     "keys": [
+      {
+       "t": 0.45,
+       "v": null
+      }
+     ]
+    },
+    {
+     "physics": "flap",
+     "property": "gravity",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        1.2
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "stretch",
+     "property": "wind",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.3
+       ]
+      },
+      {
+       "t": 0.4,
+       "v": [
+        1.5
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.0,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "mute",
+     "property": "mix",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.3,
+       "v": [
+        0
+       ],
+       "ease": "stepped"
+      },
+      {
+       "t": 0.35,
+       "v": [
+        1
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "*",
+     "property": "wind",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.2
+       ]
+      },
+      {
+       "t": 0.5,
+       "v": [
+        1.0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.1,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "*",
+     "property": "mix",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1
+       ]
+      },
+      {
+       "t": 0.9,
+       "v": [
+        0.6
+       ]
+      }
+     ]
+    },
+    {
+     "physics": "*",
+     "property": "reset",
+     "keys": [
+      {
+       "t": 0.95,
+       "v": null
+      }
+     ]
+    }
+   ]
+  },
+  "drift": {
+   "duration": 1.0,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ]
+      },
+      {
+       "t": 0.5,
+       "v": [
+        120,
+        40
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.0,
+       "v": [
+        0,
+        0
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "sway": {
+   "duration": 0.8,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.4,
+       "v": [
+        35
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.8,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "root",
+     "property": "translatey",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.2,
+       "v": [
+        25
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        0
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

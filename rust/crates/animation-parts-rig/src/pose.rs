@@ -2,8 +2,9 @@
 
 use std::ops::Range;
 
-use crate::constraints;
+use crate::constraints::{self, ConstraintKind};
 use crate::mixer::{Mixer, Working};
+use crate::physics::Physics;
 use crate::rig::{BlendMode, Geometry, Rig, TimelineKind, VertexData};
 use crate::timeline::{key_index_at, order_of, sequence_frame_at};
 use crate::world::{world_transforms, BoneWorld};
@@ -81,6 +82,10 @@ pub enum BoneChannel {
 /// Each [`Player::advance`] moves the track by a step and poses the rig
 /// once from its setup pose: the clips, then the driven values, then the
 /// bones' world transforms and the constraints.
+///
+/// Physics constraints carry their state from step to step: a pose depends
+/// on every step taken since the player was made, so a player advanced by
+/// the same steps poses the same. The player's first step resets them.
 #[derive(Clone)]
 pub struct Player {
     mixer: Mixer,
@@ -92,6 +97,7 @@ pub struct Player {
     applied: Vec<bool>,
     driven: Vec<(usize, BoneChannel, f64)>,
     scratch: constraints::Scratch,
+    physics: Physics,
 }
 
 impl Player {
@@ -106,6 +112,7 @@ impl Player {
             applied: Vec::new(),
             driven: Vec::new(),
             scratch: constraints::Scratch::default(),
+            physics: Physics::new(rig.constraints.len()),
         };
         player.set_skin(rig, None);
         player
@@ -173,6 +180,26 @@ impl Player {
         }
     }
 
+    /// Sets the directions every physics constraint's own `wind` and
+    /// `gravity` act along, in the rig's space (y up), from the next step
+    /// on. Until set, wind blows toward +x and gravity pulls toward −y:
+    /// `[1, 0]` and `[0, -1]`, rig-c's own. A gust is the product varying
+    /// `wind` from step to step; a constraint whose `wind` is 0 does not
+    /// feel it.
+    pub fn set_physics_environment(&mut self, wind: [f64; 2], gravity: [f64; 2]) {
+        // rig-c's environment is y down; `0 - y` keeps a 0 positive.
+        self.physics.wind = [wind[0], 0.0 - wind[1]];
+        self.physics.gravity = [gravity[0], 0.0 - gravity[1]];
+    }
+
+    /// The rig moved by `(x, y)` rig units (y up) since the last step: every
+    /// physics constraint's next step sees its bone move that much, so what
+    /// hangs from a figure walking across the world trails it (rig-c's
+    /// `physicsTranslate`).
+    pub fn translate_physics(&mut self, x: f64, y: f64) {
+        self.physics.translate(x, y);
+    }
+
     /// The playing clip, if any.
     pub fn playing(&self) -> Option<usize> {
         self.mixer.chain.first().and_then(|e| e.animation)
@@ -181,6 +208,8 @@ impl Player {
     /// Moves the track by `dt` seconds and poses the rig into `pose`. The
     /// first step of a clip is usually `dt = 0`, which poses its start.
     pub fn advance(&mut self, rig: &Rig, dt: f64, pose: &mut Pose) {
+        let before = self.physics.time;
+        self.physics.time += dt;
         self.mixer.update(dt);
         self.working.reset(rig);
         let animation_time = self.mixer.apply(rig, &mut self.working);
@@ -198,6 +227,18 @@ impl Player {
             } = value;
         }
 
+        // A crossed reset key resets each active constraint it names at the
+        // clock before this step.
+        for reset in &w.resets {
+            for (i, c) in rig.constraints.iter().enumerate() {
+                if let ConstraintKind::Physics(p) = &c.kind {
+                    if reset.is_none_or(|r| r == i) && self.applied[i] && w.active[p.bone] {
+                        self.physics.states[i].reset(before);
+                    }
+                }
+            }
+        }
+
         world_transforms(&w.locals, &self.parents, &w.active, &mut pose.bones);
         if !rig.constraints.is_empty() {
             constraints::apply(
@@ -208,8 +249,10 @@ impl Player {
                 &mut pose.bones,
                 &w.active,
                 &mut self.scratch,
+                &mut self.physics,
             );
         }
+        self.physics.resetting = false;
         let w = &self.working;
 
         // Draw order and sequence frames follow the playing clip.

@@ -11,14 +11,18 @@
 //! colour, blend mode and page. What each slot draws with (its page UVs and
 //! triangles) is the rig's, in [`Rig::drawable`].
 //!
-//! IK and transform constraints are applied in the document's order after
-//! the bones' world transforms. Path, physics and slider constraints and
+//! IK, transform and physics constraints are applied in the document's
+//! order after the bones' world transforms. Physics carries its state from
+//! step to step on the player, which takes the rig's own motion
+//! ([`Player::translate_physics`]) and the wind and gravity it answers
+//! ([`Player::set_physics_environment`]). Path and slider constraints and
 //! clipping are not evaluated yet, and a rig that declares any of them is
 //! refused by name.
 
 mod constraints;
 mod document;
 mod mixer;
+mod physics;
 mod pose;
 mod rig;
 mod timeline;

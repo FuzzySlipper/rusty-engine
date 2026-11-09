@@ -4,14 +4,16 @@
 //! output; its `<rig>.expected.json` holds the poses `@rig-c/core` gave for
 //! the same steps (`openTrack` for one looping clip, `openTracks` for a
 //! crossfade script). Bones are compared as doubles, drawn vertices as the
-//! float32 the pose holds.
+//! float32 the pose holds. A physics rig's case may move the rig and change
+//! the wind and gravity before a step, as `physicsTranslate` and
+//! `setEnvironment` do.
 
 use std::path::Path;
 
 use animation_parts_rig::{BlendMode, BoneChannel, Play, Player, Pose, Rig};
 use serde_json::Value;
 
-const FIXTURES: [&str; 9] = [
+const FIXTURES: [&str; 11] = [
     "squash",
     "turned",
     "flex",
@@ -21,6 +23,8 @@ const FIXTURES: [&str; 9] = [
     "walk",
     "constraints",
     "townsperson",
+    "physics",
+    "whip",
 ];
 
 fn fixture(name: &str) -> String {
@@ -259,7 +263,22 @@ fn poses_match_rigc_core() {
                     },
                 );
                 check(&mut player, 0.0, &mut pose);
-                for dt in numbers(&case["steps"]) {
+                // rig-c's environment is y down, the player's y up.
+                let (mut wind, mut gravity) = ([1.0, 0.0], [0.0, -1.0]);
+                for (n, dt) in numbers(&case["steps"]).into_iter().enumerate() {
+                    if let Some(before) = case["before"].get((n + 1).to_string()) {
+                        if let Some(w) = before.get("wind") {
+                            wind = [w[0].as_f64().unwrap(), -w[1].as_f64().unwrap()];
+                        }
+                        if let Some(g) = before.get("gravity") {
+                            gravity = [g[0].as_f64().unwrap(), -g[1].as_f64().unwrap()];
+                        }
+                        player.set_physics_environment(wind, gravity);
+                        if let Some(m) = before.get("move") {
+                            player
+                                .translate_physics(m[0].as_f64().unwrap(), m[1].as_f64().unwrap());
+                        }
+                    }
                     check(&mut player, dt, &mut pose);
                 }
             } else {
@@ -325,16 +344,15 @@ fn other_versions_and_unevaluated_constraints_are_refused_by_name() {
 
     let mut doc: Value = serde_json::from_str(&fixture("constraints.model.json")).unwrap();
     let list = doc["constraints"].as_array_mut().unwrap();
-    list.push(serde_json::json!({ "kind": "physics", "name": "hair", "bone": "src", "x": 1 }));
     list.push(serde_json::json!({ "kind": "slider", "name": "look", "animation": "hold" }));
     list.push(serde_json::json!({ "kind": "path", "name": "rail", "bones": ["tw"] }));
     let error = Rig::from_json(&doc.to_string()).err().unwrap().to_string();
     assert!(
-        error.contains("physics \"hair\"")
-            && error.contains("slider \"look\"")
+        error.contains("slider \"look\"")
             && error.contains("path \"rail\"")
             && !error.contains("ik")
-            && !error.contains("transform"),
+            && !error.contains("transform")
+            && !error.contains("physics"),
         "{error}"
     );
 }
@@ -392,4 +410,70 @@ fn constraint_timelines_fade_out_with_their_clip() {
         player.advance(&rig, dt, &mut pose);
     }
     assert_eq!(pose.bones, alone.bones);
+}
+
+/// The angle in degrees of the hair chain's first link, which springs in
+/// rotation alone, of a player stepped at 60 Hz from rest, `before` acting
+/// on it before each step.
+fn hair_angles(steps: usize, before: impl Fn(usize, &mut Player)) -> Vec<f64> {
+    let rig = Rig::from_json(&fixture("physics.model.json")).unwrap();
+    let link = rig.find_bone("h1").unwrap();
+    let mut player = Player::new(&rig);
+    let mut pose = Pose::default();
+    player.advance(&rig, 0.0, &mut pose);
+    (0..steps)
+        .map(|n| {
+            before(n, &mut player);
+            player.advance(&rig, 1.0 / 60.0, &mut pose);
+            let b = &pose.bones[link];
+            b.c.atan2(b.a).to_degrees()
+        })
+        .collect()
+}
+
+/// A rig carried sideways trails its hair, which swings back and settles
+/// once the rig stops, where a rig left standing never moves it.
+#[test]
+fn a_moving_rig_swings_its_hair_and_it_settles() {
+    let still = hair_angles(240, |_, _| {});
+    let moving = hair_angles(240, |n, player| {
+        if n < 30 {
+            player.translate_physics(4.0, 0.0);
+        }
+    });
+    let swing: Vec<f64> = moving.iter().zip(&still).map(|(m, s)| m - s).collect();
+    let (trail, back) = swing
+        .iter()
+        .fold((0.0f64, 0.0f64), |(t, b), d| (t.max(*d), b.min(*d)));
+    assert!(trail > 10.0, "the hair trails by {trail} degrees");
+    assert!(
+        back < -0.2,
+        "the hair swings back past rest by {back} degrees"
+    );
+    assert!(swing[239].abs() < 1e-3, "settled to {} degrees", swing[239]);
+    assert_eq!(
+        still,
+        hair_angles(240, |_, _| {}),
+        "the same steps pose the same"
+    );
+}
+
+/// Wind blows the hair the way it is set, against its gravity, and a calm
+/// lets it hang.
+#[test]
+fn the_wind_a_product_sets_blows_the_hair() {
+    let under = |wind: [f64; 2]| {
+        hair_angles(180, move |_, player| {
+            player.set_physics_environment(wind, [0.0, -1.0])
+        })[179]
+    };
+    let (calm, right, left) = (under([0.0, 0.0]), under([3.0, 0.0]), under([-3.0, 0.0]));
+    assert!(
+        (right - calm).abs() > 0.5 && (left - calm).abs() > 0.5,
+        "calm {calm}, right {right}, left {left}"
+    );
+    assert!(
+        (right - calm).signum() != (left - calm).signum(),
+        "calm {calm}, right {right}, left {left}"
+    );
 }
