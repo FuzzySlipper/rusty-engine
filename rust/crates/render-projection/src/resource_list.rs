@@ -8,8 +8,8 @@ use std::{
 };
 
 use render_model::{
-    AnimatedMeshAsset, RenderMaterialDescriptor, ShaderDescriptor, SpriteAtlasDescriptor,
-    StaticMeshAsset, TextureDescriptor,
+    AnimatedMeshAsset, PartsRigAsset, RenderMaterialDescriptor, ShaderDescriptor,
+    SpriteAtlasDescriptor, StaticMeshAsset, TextureDescriptor,
 };
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -45,6 +45,12 @@ impl CatalogEntry for SpriteAtlasDescriptor {
 impl CatalogEntry for Arc<StaticMeshAsset> {
     fn catalog_id(&self) -> &str {
         &self.asset
+    }
+}
+
+impl CatalogEntry for Arc<PartsRigAsset> {
+    fn catalog_id(&self) -> &str {
+        &self.id
     }
 }
 

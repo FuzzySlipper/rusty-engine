@@ -393,7 +393,8 @@ struct PartsRigIn {
     @location(2) model1: vec4<f32>,
     @location(3) model2: vec4<f32>,
     @location(4) model3: vec4<f32>,
-    // x: rig units per texel of the grid it snaps to, 0 for none.
+    // x: rig units per texel of the grid it snaps to, 0 for none; y: -1 for
+    // a mirrored view, else 1.
     @location(5) snap: vec4<f32>,
     @location(6) tint: vec4<f32>,
     @location(7) quad: vec4<f32>,
@@ -422,7 +423,8 @@ struct PartsRigOut {
     @location(7) dark: vec4<f32>,
     @location(8) region: vec4<f32>,
     @location(9) emission: vec3<f32>,
-    @location(10) snap: f32,
+    // Rig units per texel, and the view's mirror sign.
+    @location(10) snap: vec2<f32>,
 };
 
 fn srgb_linear(value: vec3<f32>) -> vec3<f32> {
@@ -440,7 +442,8 @@ fn linear_srgb(value: vec3<f32>) -> vec3<f32> {
 @vertex
 fn vs_parts_rig(in: PartsRigIn) -> PartsRigOut {
     let model = mat4x4<f32>(in.model0, in.model1, in.model2, in.model3);
-    let world = model * vec4<f32>(in.position, 0.0, 1.0);
+    let position = vec2<f32>(in.position.x * in.snap.y, in.position.y);
+    let world = model * vec4<f32>(position, 0.0, 1.0);
     var out: PartsRigOut;
     out.clip = frame.view_proj * world;
     out.world_position = world.xyz / world.w;
@@ -448,12 +451,12 @@ fn vs_parts_rig(in: PartsRigIn) -> PartsRigOut {
     out.uv = in.uv;
     out.tint = in.tint;
     out.params = in.params;
-    out.rig = in.position;
+    out.rig = position;
     out.light = vec4<f32>(srgb_linear(in.light.rgb), in.light.a);
     out.dark = vec4<f32>(srgb_linear(in.dark.rgb), in.dark.a);
     out.region = in.region;
     out.emission = in.emission.xyz;
-    out.snap = in.snap.x;
+    out.snap = in.snap.xy;
     return out;
 }
 
@@ -466,7 +469,9 @@ fn shaded_parts_rig(in: PartsRigOut, front: bool, masked: bool) -> vec4<f32> {
     let uv_x = dpdx(in.uv);
     let uv_y = dpdy(in.uv);
     let extent = max(in.region.zw - in.region.xy, vec2<f32>(1e-6));
-    var surface = sprite_surface(in.world_position, in.normal, in.uv, (in.uv - in.region.xy) / extent, front);
+    // A mirrored view's triangles turn over with it; they face as they did.
+    let facing = front == (in.snap.y > 0.0);
+    var surface = sprite_surface(in.world_position, in.normal, in.uv, (in.uv - in.region.xy) / extent, facing);
     let flags = u32(in.dark.a * 255.0 + 0.5);
     // Authored normals from a page without a normal map: flat.
     if (flags & 2u) == 0u && u32(in.params.x + 0.5) == 2u {
@@ -474,12 +479,12 @@ fn shaded_parts_rig(in: PartsRigOut, front: bool, masked: bool) -> vec4<f32> {
     }
     var texel = textureSample(sprite_color, sprite_color_sampler, in.uv);
     var outside = false;
-    if in.snap > 0.0 {
+    if in.snap.x > 0.0 {
         // The colour at the centre of the fragment's cell of the rig's
         // texel grid: the page uv there by the piece's affine map from the
         // rig's plane, which is the triangle's, taken from the screen
         // derivatives. A centre off the piece's region draws nothing.
-        let centre = (floor(in.rig / in.snap) + 0.5) * in.snap;
+        let centre = (floor(in.rig / in.snap.x) + 0.5) * in.snap.x;
         var uv = in.uv;
         let determinant = rig_x.x * rig_y.y - rig_x.y * rig_y.x;
         if abs(determinant) > 1e-20 {

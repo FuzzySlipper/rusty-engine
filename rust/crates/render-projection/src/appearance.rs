@@ -9,10 +9,10 @@ use std::{
 use render_model::{
     AnimatedMeshAsset, AnimatedMeshInstanceDescriptor, AnimatedMeshPlaybackCommand, Geometry,
     LightDescriptor, Material, MaterialInstanceParameters, MeshMaterialSlot, MeshPayloadDescriptor,
-    RenderDiff, RenderHandle, RenderLayer, RenderMaterialDescriptor, RenderMetadata, RenderNode,
-    ShaderDescriptor, ShadowCasting, SpriteAtlasDescriptor, SpriteBatchDescriptor,
-    SpriteInstanceDescriptor, StaticMeshAsset, StaticMeshInstanceDescriptor, TextureDescriptor,
-    Transform,
+    PartsRigAsset, PartsRigInstanceDescriptor, RenderDiff, RenderHandle, RenderLayer,
+    RenderMaterialDescriptor, RenderMetadata, RenderNode, ShaderDescriptor, ShadowCasting,
+    SpriteAtlasDescriptor, SpriteBatchDescriptor, SpriteInstanceDescriptor, StaticMeshAsset,
+    StaticMeshInstanceDescriptor, TextureDescriptor, Transform,
 };
 
 use crate::resource_list::ResourceChanges;
@@ -65,6 +65,10 @@ pub enum Appearance {
     SpriteBatch {
         batch: SpriteBatchDescriptor,
     },
+    /// A parts rig the Engine poses, drawn on one plane facing the camera.
+    PartsRig {
+        rig: PartsRigInstanceDescriptor,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -85,6 +89,9 @@ pub struct AppearanceResources {
     pub static_meshes: ResourceList<Arc<StaticMeshAsset>>,
     #[serde(default)]
     pub animated_meshes: ResourceList<Arc<AnimatedMeshAsset>>,
+    /// Parts rigs' drawings, shared as mesh bodies are.
+    #[serde(default)]
+    pub parts_rigs: ResourceList<Arc<PartsRigAsset>>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -95,7 +102,8 @@ pub(crate) struct ResourceSnapshot {
     pub(crate) atlases: BTreeMap<String, SpriteAtlasDescriptor>,
     pub(crate) static_meshes: BTreeMap<String, Arc<StaticMeshAsset>>,
     pub(crate) animated_meshes: BTreeMap<String, Arc<AnimatedMeshAsset>>,
-    /// How many retained materials and atlases name each texture.
+    pub(crate) parts_rigs: BTreeMap<String, Arc<PartsRigAsset>>,
+    /// How many retained materials, atlases and rig pages name each texture.
     texture_users: BTreeMap<String, u32>,
     /// How many retained meshes' slots name each material.
     material_users: BTreeMap<String, u32>,
@@ -111,6 +119,7 @@ pub(crate) struct ResourceUpdate {
     atlases: Vec<(String, Option<SpriteAtlasDescriptor>)>,
     static_meshes: Vec<(String, Option<Arc<StaticMeshAsset>>)>,
     animated_meshes: Vec<(String, Option<Arc<AnimatedMeshAsset>>)>,
+    parts_rigs: Vec<(String, Option<Arc<PartsRigAsset>>)>,
 }
 
 impl AppearanceResources {
@@ -122,6 +131,7 @@ impl AppearanceResources {
         self.sprite_atlases.mark_whole();
         self.static_meshes.mark_whole();
         self.animated_meshes.mark_whole();
+        self.parts_rigs.mark_whole();
     }
 
     /// The projection holds every change so far.
@@ -132,6 +142,7 @@ impl AppearanceResources {
         self.sprite_atlases.clear_changes();
         self.static_meshes.clear_changes();
         self.animated_meshes.clear_changes();
+        self.parts_rigs.clear_changes();
     }
 }
 
@@ -193,6 +204,12 @@ fn apply_changes(
         &input.animated_meshes,
         &mut retained.animated_meshes,
         &mut update.animated_meshes,
+        |a, b| unchanged(Some(a), b),
+    );
+    apply_kind(
+        &input.parts_rigs,
+        &mut retained.parts_rigs,
+        &mut update.parts_rigs,
         |a, b| unchanged(Some(a), b),
     );
 }
@@ -260,6 +277,19 @@ impl ResourceUpdate {
             }
             if let Some(texture) = &next {
                 adjust(&mut retained.texture_users, texture, add);
+            }
+        }
+        for (id, previous) in &self.parts_rigs {
+            let pages = |rig: Option<&Arc<PartsRigAsset>>| -> Vec<String> {
+                rig.into_iter()
+                    .flat_map(|rig| rig.pages.iter().map(|page| page.texture.clone()))
+                    .collect()
+            };
+            for texture in pages(previous.as_ref()) {
+                adjust(&mut retained.texture_users, &texture, !add);
+            }
+            for texture in pages(retained.parts_rigs.get(id)) {
+                adjust(&mut retained.texture_users, &texture, add);
             }
         }
         let slots = |slots: Option<&[MeshMaterialSlot]>| -> Vec<String> {
@@ -333,6 +363,7 @@ impl ResourceUpdate {
         restore(&mut retained.atlases, self.atlases);
         restore(&mut retained.static_meshes, self.static_meshes);
         restore(&mut retained.animated_meshes, self.animated_meshes);
+        restore(&mut retained.parts_rigs, self.parts_rigs);
     }
 
     /// Meshes whose definition changed while staying retained: their
@@ -391,6 +422,18 @@ fn check_references(
             });
         }
     }
+    for (id, _) in &update.parts_rigs {
+        if let Some(texture) = retained.parts_rigs.get(id).and_then(|rig| {
+            rig.pages
+                .iter()
+                .find(|page| !retained.textures.contains_key(&page.texture))
+        }) {
+            return Err(AppearanceProjectionError::MissingTexture {
+                owner: id.clone(),
+                texture: texture.texture.clone(),
+            });
+        }
+    }
     for (id, _) in &update.textures {
         if !retained.textures.contains_key(id) && retained.texture_users.contains_key(id) {
             // Refused, so the owner is found the slow way.
@@ -405,6 +448,13 @@ fn check_references(
                         .values()
                         .find(|atlas| &atlas.texture == id)
                         .map(|atlas| atlas.id.clone())
+                })
+                .or_else(|| {
+                    retained
+                        .parts_rigs
+                        .values()
+                        .find(|rig| rig.pages.iter().any(|page| &page.texture == id))
+                        .map(|rig| rig.id.clone())
                 })
                 .unwrap_or_default();
             return Err(AppearanceProjectionError::MissingTexture {
@@ -528,6 +578,19 @@ pub(crate) fn check_appearance_references(
             }
             Ok(())
         }
+        Appearance::PartsRig { rig } => {
+            if let Some(view) = rig
+                .views
+                .iter()
+                .find(|view| !resources.parts_rigs.contains_key(&view.asset))
+            {
+                return Err(AppearanceProjectionError::MissingPartsRig {
+                    id,
+                    asset: view.asset.clone(),
+                });
+            }
+            Ok(())
+        }
     }
 }
 
@@ -581,6 +644,13 @@ pub(crate) fn resource_diffs(
             });
         }
     }
+    for (id, _) in &update.parts_rigs {
+        if let Some(rig) = retained.parts_rigs.get(id) {
+            operations.push(RenderDiff::DefinePartsRig {
+                asset: PartsRigAsset::clone(rig),
+            });
+        }
+    }
     // Replacements may stop referring to a removed dependency. Install them
     // before releasing old definitions, then retire dependents before sources.
     fn released<'a, T, U>(
@@ -603,6 +673,10 @@ pub(crate) fn resource_diffs(
     operations.extend(
         released(&update.atlases, &retained.atlases)
             .map(|id| RenderDiff::ReleaseSpriteAtlas { id }),
+    );
+    operations.extend(
+        released(&update.parts_rigs, &retained.parts_rigs)
+            .map(|asset| RenderDiff::ReleasePartsRig { asset }),
     );
     operations.extend(
         released(&update.materials, &retained.materials)
@@ -668,6 +742,11 @@ pub(crate) fn requires_recreate(previous: &Appearance, next: &Appearance) -> boo
         (Appearance::SpriteBatch { batch: previous }, Appearance::SpriteBatch { batch: next }) => {
             sprite_requires_recreate(&previous.sprite, &next.sprite)
                 || previous.instances != next.instances
+        }
+        // The node's own values (transform, visibility) update in place;
+        // the rig's do not, and its players carry over to the new node.
+        (Appearance::PartsRig { rig: previous }, Appearance::PartsRig { rig: next }) => {
+            previous != next
         }
         _ => true,
     }
@@ -782,6 +861,18 @@ pub(crate) fn create_node(
                 handle,
                 parent,
                 batch,
+            }
+        }
+        Appearance::PartsRig { rig } => {
+            let mut rig = rig.clone();
+            rig.transform = node.transform;
+            rig.visible = node.visible;
+            rig.layer = node.layer;
+            rig.metadata = metadata;
+            RenderDiff::CreatePartsRig {
+                handle,
+                parent,
+                rig,
             }
         }
     }
@@ -956,6 +1047,17 @@ pub(crate) fn append_node_updates(
                 false,
             );
         }
+        (Appearance::PartsRig { .. }, Appearance::PartsRig { .. }) => {
+            if transform.is_some() || visible.is_some() || metadata.is_some() {
+                operations.push(RenderDiff::Update {
+                    handle,
+                    transform,
+                    material: None,
+                    visible,
+                    metadata,
+                });
+            }
+        }
         _ => unreachable!("appearance kind changes require recreation"),
     }
 }
@@ -1035,6 +1137,10 @@ pub enum AppearanceProjectionError {
         asset: String,
     },
     MissingSpriteAtlas {
+        id: u64,
+        asset: String,
+    },
+    MissingPartsRig {
         id: u64,
         asset: String,
     },

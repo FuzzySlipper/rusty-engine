@@ -297,6 +297,7 @@ sealed class ExampleEngineContext : IEngineContext
     public IGraphicsService Graphics => throw new NotSupportedException();
     public IPresentationService Presentation => throw new NotSupportedException();
     public ITweenService Tween => throw new NotSupportedException();
+    public IPartsRigsService PartsRigs => throw new NotSupportedException();
     public IAnimationService Animation => throw new NotSupportedException();
     public IRandomService Random => throw new NotSupportedException();
     public ICameraViewService CameraView => throw new NotSupportedException();

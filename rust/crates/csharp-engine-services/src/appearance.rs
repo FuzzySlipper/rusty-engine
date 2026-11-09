@@ -6,6 +6,7 @@ mod parts_rigs;
 pub(crate) use deformed::DeformedShape;
 #[cfg(test)]
 pub(crate) use deformed::{material_for_test, show_for_test};
+pub(crate) use parts_rigs::api as parts_rigs_api;
 mod model_surface;
 pub(crate) use animation_pose::evaluate_poses;
 pub(crate) use animation_pose::RagdollSource;
@@ -1461,6 +1462,7 @@ pub(crate) struct RuntimeAppearanceData {
     animation_clip_pack_resources: HeldResources,
     billboard_resources: HeldResources,
     emitter_resources: HeldResources,
+    parts_rig_resources: HeldResources,
     sprite_atlases: BTreeMap<u64, RuntimeSpriteAtlas>,
     sprite_atlas_appearances: BTreeMap<u64, BTreeSet<u64>>,
     sprite_appearance_atlases: BTreeMap<u64, u64>,
@@ -1933,6 +1935,7 @@ impl RuntimeAppearanceBridge {
             animation_clip_pack_resources: HeldResources::default(),
             billboard_resources: HeldResources::default(),
             emitter_resources: HeldResources::default(),
+            parts_rig_resources: HeldResources::default(),
             sprite_atlases: BTreeMap::new(),
             sprite_atlas_appearances: BTreeMap::new(),
             sprite_appearance_atlases: BTreeMap::new(),
@@ -2103,6 +2106,9 @@ impl RuntimeAppearanceBridge {
                 clock,
                 admitted_update.is_some(),
             );
+        }
+        if admitted_update.is_some() {
+            parts_rigs::begin_update(&mut state);
         }
         self.staged = Some(RuntimeAppearanceCall {
             state,
@@ -4271,6 +4277,9 @@ impl RuntimeAppearanceBridge {
                     .textures
                     .remove(&format!("texture/native-{suffix}"));
                 resources.sprite_atlases.remove(&sprite.asset);
+            }
+            Some(Appearance::PartsRig { .. }) => {
+                staged.state.forget_parts_rig_appearance(appearance.value);
             }
             _ => {}
         }
@@ -10089,6 +10098,7 @@ enum Holder {
     AnimationClipPack,
     Billboard,
     Emitter,
+    PartsRig,
 }
 
 /// The resources each holder of one kind holds.
@@ -10145,6 +10155,7 @@ impl RuntimeAppearanceData {
             Holder::AnimationClipPack => &mut self.animation_clip_pack_resources,
             Holder::Billboard => &mut self.billboard_resources,
             Holder::Emitter => &mut self.emitter_resources,
+            Holder::PartsRig => &mut self.parts_rig_resources,
         };
         (held, &mut self.render_resources)
     }
@@ -10190,6 +10201,7 @@ fn resource_live_owner(state: &RuntimeAppearanceState, handle: u64) -> Option<&'
         ),
         (&state.billboard_resources, "billboard"),
         (&state.emitter_resources, "particle emitter"),
+        (&state.parts_rig_resources, "parts rig"),
     ]
     .into_iter()
     .find_map(|(holders, owner)| holders.holds(handle).then_some(owner))

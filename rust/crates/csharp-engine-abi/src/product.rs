@@ -2138,6 +2138,7 @@ pub struct NativeEngineApi {
     pub graphics: NativeGraphicsApi,
     pub presentation: NativePresentationApi,
     pub tween: NativeTweenApi,
+    pub parts_rigs: NativePartsRigsApi,
     pub animation: NativeAnimationApi,
     pub audio: NativeAudioApi,
     pub video: NativeVideoApi,

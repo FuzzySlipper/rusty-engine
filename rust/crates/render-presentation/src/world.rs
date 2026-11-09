@@ -78,8 +78,8 @@ struct PresentationNode {
     pose: render_model::AnimatedMeshPose,
     /// The pose the Engine last evaluated for an animated node.
     evaluated: Option<render_model::EvaluatedPose>,
-    /// The pose the Engine last evaluated for a parts rig.
-    rig_pose: Option<PartsRigPose>,
+    /// The pose the Engine last evaluated for each view of a parts rig.
+    rig_poses: Vec<Option<PartsRigPose>>,
     /// The world revision that last created or changed the node.
     changed: u64,
 }
@@ -306,7 +306,9 @@ fn node_uses(kind: &NodeKind, use_: &mut dyn FnMut(Resource, &str)) {
             return;
         }
         NodeKind::PartsRig(rig) => {
-            use_(Resource::PartsRig, &rig.asset);
+            for view in &rig.views {
+                use_(Resource::PartsRig, &view.asset);
+            }
             return;
         }
         NodeKind::Primitive(_) | NodeKind::Light(_) => return,
@@ -409,7 +411,7 @@ fn group_node(node: &PresentationNode) -> PresentationNode {
         playback: node.playback.clone(),
         pose: Default::default(),
         evaluated: None,
-        rig_pose: None,
+        rig_poses: Vec::new(),
         changed: node.changed,
     }
 }
@@ -443,7 +445,12 @@ pub enum PresentationWorldError {
     InvalidPlayback,
     UnknownNode(RenderHandle),
     WrongNodeKind(RenderHandle),
-    InvalidParentJoint { handle: RenderHandle, joint: String },
+    /// A pose for a view the parts rig does not have.
+    UnknownPartsRigView(RenderHandle),
+    InvalidParentJoint {
+        handle: RenderHandle,
+        joint: String,
+    },
     UndefinedStaticMesh(String),
     UndefinedResource(String),
     ReferencedResource(String),
@@ -929,7 +936,7 @@ impl PresentationWorld {
                     continue;
                 }
                 NodeKind::PartsRig(rig) => {
-                    rigs.insert(rig.asset.as_str());
+                    rigs.extend(rig.views.iter().map(|view| view.asset.as_str()));
                     continue;
                 }
                 NodeKind::Primitive(_) | NodeKind::Light(_) => continue,
@@ -1378,11 +1385,14 @@ impl PresentationWorld {
                 pose: pose.clone(),
             });
         }
-        if let Some(pose) = &node.rig_pose {
-            ops.push(RenderDiff::SetPartsRigPose {
-                handle,
-                pose: pose.clone(),
-            });
+        for (view, pose) in node.rig_poses.iter().enumerate() {
+            if let Some(pose) = pose {
+                ops.push(RenderDiff::SetPartsRigPose {
+                    handle,
+                    view: view as u32,
+                    pose: pose.clone(),
+                });
+            }
         }
         emitted.insert(handle);
     }
@@ -1434,7 +1444,7 @@ impl PresentationWorld {
                 material_parameters: BTreeMap::new(),
                 pose: Default::default(),
                 evaluated: None,
-                rig_pose: None,
+                rig_poses: Vec::new(),
                 changed: self.revision.saturating_add(1),
             }),
         );
@@ -1669,12 +1679,17 @@ impl PresentationWorld {
                 }
                 node.evaluated = Some(pose.clone());
             }
-            RenderDiff::SetPartsRigPose { handle, pose } => {
+            RenderDiff::SetPartsRigPose { handle, view, pose } => {
                 let node = self.node_mut(*handle)?;
-                if !matches!(node.kind, NodeKind::PartsRig(_)) {
+                let NodeKind::PartsRig(rig) = &node.kind else {
                     return Err(PresentationWorldError::WrongNodeKind(*handle));
+                };
+                let (view, views) = (*view as usize, rig.views.len());
+                if view >= views {
+                    return Err(PresentationWorldError::UnknownPartsRigView(*handle));
                 }
-                node.rig_pose = Some(pose.clone());
+                node.rig_poses.resize(views, None);
+                node.rig_poses[view] = Some(pose.clone());
             }
             RenderDiff::DefinePartsRig { asset } => {
                 let retained = &mut *self.retained;

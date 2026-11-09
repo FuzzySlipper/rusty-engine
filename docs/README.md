@@ -63,6 +63,8 @@ The root [README](../README.md) is the repository landing page and
   over loose files and bundles.
 - [Appearance tweens](appearance-tweens.md): Engine-played hops, squash and
   stretch, punches, shakes and fades over published objects.
+- [Parts rigs](parts-rigs.md): rig-c 2D rigs played by the Engine and drawn
+  as upright pieces in the world, with a view per heading.
 - [First-person held weapons and arms](first-person-held.md): authored held
   motion played as tweens, sway and head bob, and arms that reach and hold
   by rig profile, or play baked arm clips with the look riding the hand.

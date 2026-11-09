@@ -4,10 +4,13 @@
 //! A rig's drawing (`DefinePartsRig`) is what never changes: its pages, and
 //! each drawable's page UVs and triangles. An instance (`CreatePartsRig`) is
 //! a node that faces the camera by its billboard mode, with a sprite's
-//! lighting, alpha, depth and size options. Its pose (`SetPartsRigPose`) is
-//! what the Engine evaluated for it on a step: the pieces in draw order and
-//! their posed vertices, which realizers draw until the next pose replaces
-//! it. A piece a clipping attachment cut carries its own UVs and triangles.
+//! lighting, alpha, depth and size options. It holds one or more views, each
+//! a drawing seen from one heading, and each reading draws the view nearest
+//! the bearing its camera sees the node from. A view's pose
+//! (`SetPartsRigPose`) is what the Engine evaluated for it on a step: the
+//! pieces in draw order and their posed vertices, which realizers draw until
+//! the next pose of that view replaces it. A piece a clipping attachment cut
+//! carries its own UVs and triangles.
 
 use std::sync::Arc;
 
@@ -141,13 +144,31 @@ pub struct PartsRigPose {
     pub triangles: Arc<[u32]>,
 }
 
+/// One view of a parts rig node: the drawing it shows from one heading.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PartsRigView {
+    /// The view's drawing (`DefinePartsRig`).
+    pub asset: String,
+    /// The bearing it is seen from, in radians about the node's up axis from
+    /// its +z toward its +x: 0 is a camera in front of the node. Each
+    /// reading draws the view whose heading is nearest the bearing of its
+    /// camera, the way the node's billboard mode faces it (the eye, or
+    /// against the view's heading for an orthographic or `CylindricalView`
+    /// camera).
+    pub heading: f32,
+    /// Drawn mirrored across the rig's vertical axis, as a negative x scale
+    /// on the plane: one side's rig shows the other side.
+    pub mirror: bool,
+}
+
 /// One drawn parts rig: a node whose posed pieces lie on one plane through
 /// its origin, turned to the camera by `billboard` as a sprite is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct PartsRigInstanceDescriptor {
-    /// The rig's drawing (`DefinePartsRig`).
-    pub asset: String,
+    /// What it shows from each heading; one view is shown from every side.
+    pub views: Vec<PartsRigView>,
     /// Metres per rig unit, or CSS pixels per rig unit for a pixel-sized
     /// rig, before the node's scale.
     pub scale: f32,
@@ -178,7 +199,9 @@ pub struct PartsRigInstanceDescriptor {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum PartsRigError {
+    NoViews,
     Asset(RenderAssetError),
+    InvalidHeading,
     Material(SpriteMaterialError),
     NonPositiveScale,
     InvalidTint,
@@ -190,7 +213,16 @@ pub enum PartsRigError {
 
 impl PartsRigInstanceDescriptor {
     pub fn validate(&self) -> Result<(), PartsRigError> {
-        validate_asset_id(&self.asset, RenderAssetKind::PartsRig).map_err(PartsRigError::Asset)?;
+        if self.views.is_empty() {
+            return Err(PartsRigError::NoViews);
+        }
+        for view in &self.views {
+            validate_asset_id(&view.asset, RenderAssetKind::PartsRig)
+                .map_err(PartsRigError::Asset)?;
+            if !view.heading.is_finite() {
+                return Err(PartsRigError::InvalidHeading);
+            }
+        }
         if !(self.scale.is_finite() && self.scale > 0.0) {
             return Err(PartsRigError::NonPositiveScale);
         }
@@ -229,5 +261,53 @@ impl PartsRigInstanceDescriptor {
     /// Whether the rig draws over what is behind it rather than solid.
     pub fn blended(&self) -> bool {
         self.material.alpha == SpriteAlphaMode::Blend || self.tint[3] < 1.0
+    }
+}
+
+/// The view of `views` a camera seeing the node from `bearing` (radians
+/// about its up axis from its +z toward its +x) draws: the one whose heading
+/// is nearest, the first of equally near ones.
+pub fn parts_rig_view(views: &[PartsRigView], bearing: f32) -> usize {
+    let distance = |heading: f32| {
+        let turn = (bearing - heading).rem_euclid(std::f32::consts::TAU);
+        turn.min(std::f32::consts::TAU - turn)
+    };
+    let mut nearest = 0;
+    for (index, view) in views.iter().enumerate().skip(1) {
+        if distance(view.heading) < distance(views[nearest].heading) {
+            nearest = index;
+        }
+    }
+    nearest
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn view(heading: f32) -> PartsRigView {
+        PartsRigView {
+            asset: "parts-rig/a".to_owned(),
+            heading,
+            mirror: false,
+        }
+    }
+
+    #[test]
+    fn a_camera_draws_the_view_nearest_its_bearing_the_short_way_round() {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let views = [view(0.0), view(FRAC_PI_2), view(PI), view(-FRAC_PI_2)];
+        assert_eq!(parts_rig_view(&views, 0.2), 0);
+        assert_eq!(parts_rig_view(&views, -0.2), 0);
+        assert_eq!(parts_rig_view(&views, 1.4), 1);
+        assert_eq!(parts_rig_view(&views, 3.0), 2);
+        assert_eq!(parts_rig_view(&views, -3.0), 2);
+        assert_eq!(parts_rig_view(&views, 4.8), 3, "past a full half turn");
+        assert_eq!(parts_rig_view(&views, -1.7), 3);
+        assert_eq!(
+            parts_rig_view(&views[..1], 2.0),
+            0,
+            "one view shows from every side"
+        );
     }
 }

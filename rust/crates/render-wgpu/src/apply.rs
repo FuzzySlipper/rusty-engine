@@ -508,7 +508,15 @@ impl Renderer {
                 parent,
                 rig,
             } => {
-                let asset = self.tables.names.id(&rig.asset);
+                let views = rig
+                    .views
+                    .iter()
+                    .map(|view| crate::parts_rigs::PartsRigViewRow {
+                        asset: self.tables.names.id(&view.asset),
+                        pose: None,
+                        pose_revision: 0,
+                    })
+                    .collect();
                 self.insert_node(
                     *handle,
                     *parent,
@@ -520,10 +528,8 @@ impl Renderer {
                         entity: rig.metadata.source_entity,
                     },
                     NodeKind::PartsRig(Box::new(crate::parts_rigs::PartsRigRow {
-                        asset,
                         descriptor: rig.clone(),
-                        pose: None,
-                        pose_revision: 0,
+                        views,
                     })),
                 )
             }
@@ -789,10 +795,12 @@ impl Renderer {
             RenderDiff::SetEvaluatedPose { handle, pose } => {
                 self.set_evaluated_pose(*handle, pose)?
             }
-            RenderDiff::SetPartsRigPose { handle, pose } => {
+            RenderDiff::SetPartsRigPose { handle, view, pose } => {
                 if let NodeKind::PartsRig(row) = &mut self.node_mut(*handle)?.kind {
-                    row.pose = Some(pose.clone());
-                    row.pose_revision += 1;
+                    if let Some(row) = row.views.get_mut(*view as usize) {
+                        row.pose = Some(pose.clone());
+                        row.pose_revision += 1;
+                    }
                 }
             }
         }

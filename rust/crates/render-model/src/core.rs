@@ -1745,10 +1745,12 @@ pub enum RenderDiff {
         parent: Option<RenderHandle>,
         rig: crate::PartsRigInstanceDescriptor,
     },
-    /// The pose the Engine evaluated for a parts rig, replacing the last
-    /// one: what realizers draw it in.
+    /// The pose the Engine evaluated for one view of a parts rig (its index
+    /// in the rig's `views`), replacing that view's last one: what realizers
+    /// draw the view in.
     SetPartsRigPose {
         handle: RenderHandle,
+        view: u32,
         pose: crate::PartsRigPose,
     },
 }

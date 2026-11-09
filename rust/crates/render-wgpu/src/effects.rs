@@ -112,8 +112,9 @@ struct SpriteDraw {
     /// Unused by a batch, which draws its own rows.
     row: [f32; SPRITE_ROW_FLOATS],
     batch: Option<RenderHandle>,
-    /// A parts rig, placed by the row: its pieces draw from its buffers.
-    rig: Option<RenderHandle>,
+    /// A parts rig's view, placed by the row: its pieces draw from its
+    /// buffers.
+    rig: Option<RigKey>,
     /// A solid rig whose pose has additive, multiply or screen pieces: they
     /// blend over what is behind them, so it draws with the blended draws,
     /// back to front after everything solid, still solid itself.
@@ -126,6 +127,9 @@ impl SpriteDraw {
         self.state.blend || self.blends_over
     }
 }
+
+/// One view of a parts rig node: the node and the view's index.
+type RigKey = (RenderHandle, u32);
 
 /// What one view pass draws of this family, prepared before the pass.
 #[derive(Default)]
@@ -166,7 +170,7 @@ struct BlendedSprite {
     depth: f32,
     instance: u32,
     batch: Option<RenderHandle>,
-    rig: Option<RenderHandle>,
+    rig: Option<RigKey>,
 }
 
 /// One sprite's draw: its pipeline state, textures and row, or the batch
@@ -177,7 +181,7 @@ struct SpriteInstance {
     textures: SpriteTextures,
     instance: u32,
     batch: Option<RenderHandle>,
-    rig: Option<RenderHandle>,
+    rig: Option<RigKey>,
 }
 
 /// A parts rig's buffers, built from its pose and drawing when either
@@ -318,8 +322,8 @@ pub(crate) struct Effects {
     sprite_bind_groups: HashMap<SpriteTextures, wgpu::BindGroup>,
     /// Sprite batches' buffers, by node.
     batches: HashMap<RenderHandle, BatchBuffers>,
-    /// Parts rigs' buffers, by node.
-    rigs: HashMap<RenderHandle, RigBuffers>,
+    /// Parts rigs' buffers, by node and view.
+    rigs: HashMap<RigKey, RigBuffers>,
     rig_scratch: RigGeometry,
     /// Particle sprite textures by slot, and each content hash's slot. A slot
     /// lives while an emitter or live particle holds it (`Particles`), then
@@ -481,7 +485,7 @@ impl Effects {
     /// buffers.
     pub fn forget_sprite_batch(&mut self, node: RenderHandle) {
         self.batches.remove(&node);
-        self.rigs.remove(&node);
+        self.rigs.retain(|(handle, _), _| *handle != node);
     }
 
     /// Drop cached sprite bindings of a texture that was redefined or released.
@@ -491,8 +495,9 @@ impl Effects {
         });
     }
 
-    /// A parts rig's draw in this view: its buffers made ready for its pose,
-    /// and the row placing its plane. None when it has no pose, drawing or
+    /// A parts rig's draw in this view: the rig view nearest the bearing
+    /// the camera sees it from, its buffers made ready for its pose, and the
+    /// row placing its plane. None when that view has no pose, drawing or
     /// piece to draw, or no size this view.
     fn prepare_rig(
         &mut self,
@@ -503,17 +508,28 @@ impl Effects {
         world: &Mat4,
         (camera, viewport, pixel_ratio): (&CameraMatrices, PixelRect, f32),
     ) -> Option<SpriteDraw> {
-        let asset = assets.get(rig.asset)?;
-        rig.pose.as_ref()?;
-        let stale = self.rigs.get(&handle).is_none_or(|buffers| {
-            buffers.pose != rig.pose_revision || buffers.generation != asset.generation
+        let descriptor = &rig.descriptor;
+        let index = if descriptor.views.len() > 1 {
+            render_model::parts_rig_view(
+                &descriptor.views,
+                rig_bearing(world, descriptor.billboard, camera),
+            )
+        } else {
+            0
+        };
+        let (view, row_view) = (&descriptor.views[index], rig.views.get(index)?);
+        let key = (handle, index as u32);
+        let asset = assets.get(row_view.asset)?;
+        let pose = row_view.pose.as_ref()?;
+        let stale = self.rigs.get(&key).is_none_or(|buffers| {
+            buffers.pose != row_view.pose_revision || buffers.generation != asset.generation
         });
         if stale {
             let geometry = &mut self.rig_scratch;
-            crate::parts_rigs::build(asset, rig.pose.as_ref()?, geometry);
+            crate::parts_rigs::build(asset, pose, geometry);
             let vertices: &[u8] = bytemuck::cast_slice(&geometry.vertices);
             let indices: &[u8] = bytemuck::cast_slice(&geometry.indices);
-            let fits = self.rigs.get(&handle).is_some_and(|buffers| {
+            let fits = self.rigs.get(&key).is_some_and(|buffers| {
                 buffers.vertices.size() >= vertices.len() as u64
                     && buffers.indices.size() >= indices.len() as u64
             });
@@ -527,7 +543,7 @@ impl Effects {
                     })
                 };
                 self.rigs.insert(
-                    handle,
+                    key,
                     RigBuffers {
                         pose: 0,
                         generation: 0,
@@ -547,18 +563,17 @@ impl Effects {
                     },
                 );
             }
-            let buffers = self.rigs.get_mut(&handle)?;
+            let buffers = self.rigs.get_mut(&key)?;
             if !vertices.is_empty() {
                 gpu.queue.write_buffer(&buffers.vertices, 0, vertices);
                 gpu.queue.write_buffer(&buffers.indices, 0, indices);
             }
-            buffers.pose = rig.pose_revision;
+            buffers.pose = row_view.pose_revision;
             buffers.generation = asset.generation;
             buffers.runs.clone_from(&geometry.runs);
             buffers.bounds = geometry.bounds;
         }
-        let descriptor = &rig.descriptor;
-        let buffers = self.rigs.get_mut(&handle)?;
+        let buffers = self.rigs.get_mut(&key)?;
         buffers.detail = matches!(
             descriptor.material.lighting,
             SpriteLightingMode::AuthoredNormal | SpriteLightingMode::AuthoredDepth
@@ -585,14 +600,16 @@ impl Effects {
         let ([mode, strength, bias], _) = material_lighting(material, first.detail, None);
         let mut row = [0.0; SPRITE_ROW_FLOATS];
         row[..16].copy_from_slice(&model.to_cols_array());
-        row[16] = descriptor.texel_snap;
+        let mirror = if view.mirror { -1.0 } else { 1.0 };
+        row[16..18].copy_from_slice(&[descriptor.texel_snap, mirror]);
         row[20..24].copy_from_slice(&descriptor.tint);
         row[28..32].copy_from_slice(&[mode, cutoff, strength, bias]);
         row[36..39].copy_from_slice(
             &(Vec3::from(material.emission_color) * material.emission_intensity).to_array(),
         );
         let [x0, y0, x1, y1] = buffers.bounds;
-        let center = model.transform_point3(Vec3::new((x0 + x1) * 0.5, (y0 + y1) * 0.5, 0.0));
+        let center =
+            model.transform_point3(Vec3::new((x0 + x1) * 0.5 * mirror, (y0 + y1) * 0.5, 0.0));
         Some(SpriteDraw {
             state,
             textures: rig_textures(&first, buffers.detail),
@@ -600,7 +617,7 @@ impl Effects {
             depth: center.distance_squared(camera.eye),
             row,
             batch: None,
-            rig: Some(handle),
+            rig: Some(key),
             blends_over: buffers
                 .runs
                 .iter()
@@ -1022,8 +1039,8 @@ impl Effects {
         let Some(set) = self.formats.iter().find(|set| set.format == format) else {
             return;
         };
-        if let Some(handle) = sprite.rig {
-            self.draw_rig(pass, set, sprite, handle);
+        if let Some(key) = sprite.rig {
+            self.draw_rig(pass, set, sprite, key);
             return;
         }
         let (Some(pipeline), Some(bind_group)) = (
@@ -1058,9 +1075,9 @@ impl Effects {
         pass: &mut wgpu::RenderPass<'_>,
         set: &FormatPipelines,
         sprite: &SpriteInstance,
-        handle: RenderHandle,
+        key: RigKey,
     ) {
-        let Some(rig) = self.rigs.get(&handle) else {
+        let Some(rig) = self.rigs.get(&key) else {
             return;
         };
         pass.set_vertex_buffer(0, rig.vertices.slice(..));
@@ -1552,6 +1569,23 @@ fn sprite_quad(
         pixel_ratio,
     )?;
     Some((model, quad))
+}
+
+/// The bearing `camera` sees a parts rig placed at `world` from, in radians
+/// about the node's up axis from its +z toward its +x: toward the eye, or
+/// against the view's heading where `billboard` faces the plane that way (an
+/// orthographic camera, `CylindricalView`).
+fn rig_bearing(world: &Mat4, billboard: BillboardMode, camera: &CameraMatrices) -> f32 {
+    let (_, rotation, position) = world.to_scale_rotation_translation();
+    let camera_world = camera.view.inverse();
+    let orthographic = camera.projection.w_axis.w == 1.0;
+    let toward = if orthographic || billboard == BillboardMode::CylindricalView {
+        camera_world.z_axis.truncate()
+    } else {
+        camera.eye - position
+    };
+    let local = rotation.inverse() * toward;
+    local.x.atan2(local.z)
 }
 
 /// The matrix that places a plane facing the camera by `billboard`, from
@@ -2133,7 +2167,7 @@ impl Renderer {
         let mut rows = std::mem::take(&mut self.effects.row_scratch);
         rows.clear();
         for draw in &draws {
-            match draw.rig.and_then(|handle| self.effects.rigs.get(&handle)) {
+            match draw.rig.and_then(|key| self.effects.rigs.get(&key)) {
                 Some(rig) => {
                     let detail = rig.detail;
                     for run in rig.runs.clone() {

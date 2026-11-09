@@ -558,7 +558,8 @@ fn resource(kind: &NodeKind) -> Option<&str> {
         NodeKind::Sprite(sprite) => Some(&sprite.asset),
         NodeKind::SpriteBatch(batch) => Some(&batch.sprite.asset),
         NodeKind::Scatter(patch) => Some(&patch.asset),
-        NodeKind::PartsRig(rig) => Some(&rig.asset),
+        // The first view names the rig.
+        NodeKind::PartsRig(rig) => rig.views.first().map(|view| view.asset.as_str()),
         NodeKind::Primitive(_) | NodeKind::Light(_) => None,
     }
 }

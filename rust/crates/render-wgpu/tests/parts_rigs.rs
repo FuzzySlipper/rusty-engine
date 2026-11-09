@@ -8,7 +8,9 @@
 //! - slot blend modes, the two-colour tint, premultiplied pages and draw
 //!   order, against their arithmetic;
 //! - pixel art snapped to the rig's texel grid;
-//! - a snapshot of the world drawing the same rigs.
+//! - a snapshot of the world drawing the same rigs;
+//! - a rig of several views, each camera drawing the view nearest its
+//!   bearing, and a mirrored view drawn flipped.
 //!
 //! `RENDER_WGPU_BLESS=1 cargo test -p render-wgpu --test parts_rigs` rewrites
 //! the references. `parts_rigs/` holds rig-c's packed `squash` and
@@ -136,7 +138,11 @@ fn rig_ops(
 
 fn figure(billboard: BillboardMode, translation: [f32; 3], yaw: f32) -> PartsRigInstanceDescriptor {
     PartsRigInstanceDescriptor {
-        asset: RIG.to_owned(),
+        views: vec![PartsRigView {
+            asset: RIG.to_owned(),
+            heading: 0.0,
+            mirror: false,
+        }],
         scale: RIG_SCALE,
         size_mode: SpriteSizeMode::World,
         billboard,
@@ -165,6 +171,7 @@ fn create(handle: u64, rig: PartsRigInstanceDescriptor, pose: &PartsRigPose) -> 
         },
         RenderDiff::SetPartsRigPose {
             handle,
+            view: 0,
             pose: pose.clone(),
         },
     ]
@@ -313,7 +320,7 @@ fn compare_with_rigc(
     let (rig, defined) = rig_ops(&mut harness.resources);
     ops.extend(defined);
     let mut rig_figure = figure(BillboardMode::None, [0.0; 3], 0.0);
-    rig_figure.asset = id.to_owned();
+    rig_figure.views[0].asset = id.to_owned();
     rig_figure.scale = 1.0;
     rig_figure.material.alpha = SpriteAlphaMode::Blend;
     ops.extend(create(10, rig_figure, &pose(&rig)));
@@ -596,7 +603,7 @@ fn slot_blend_modes_dark_tint_premultiplied_pages_and_draw_order_follow_their_ar
         },
     });
     let mut rig = figure(BillboardMode::None, [0.0; 3], 0.0);
-    rig.asset = "parts-rig/blends".to_owned();
+    rig.views[0].asset = "parts-rig/blends".to_owned();
     rig.scale = 1.0;
     rig.material.alpha = SpriteAlphaMode::Blend;
     // Over a grey square: red (drawable 0) under each blend mode, a grey
@@ -671,6 +678,7 @@ fn slot_blend_modes_dark_tint_premultiplied_pages_and_draw_order_follow_their_ar
     second.swap(8, 9);
     harness.apply(vec![RenderDiff::SetPartsRigPose {
         handle: RenderHandle::new(10),
+        view: 0,
         pose: pose(second),
     }]);
     assert_near(
@@ -749,7 +757,7 @@ fn texel_snapped_rigs_draw_whole_cells_of_their_grid() {
         triangles: Default::default(),
     };
     let mut rig = figure(BillboardMode::None, [0.0; 3], 0.0);
-    rig.asset = "parts-rig/checker".to_owned();
+    rig.views[0].asset = "parts-rig/checker".to_owned();
     rig.scale = 0.25;
     rig.texel_snap = 1.0;
     ops.extend(create(10, rig.clone(), &posed));
@@ -832,6 +840,7 @@ fn a_rig_without_a_pose_or_drawing_draws_nothing() {
     assert_eq!(drawn(&empty), 0, "no pose");
     harness.apply(vec![RenderDiff::SetPartsRigPose {
         handle: RenderHandle::new(10),
+        view: 0,
         pose: pose.clone(),
     }]);
     assert_eq!(drawn(&harness.single(&eye)), 0, "no drawing");
@@ -864,7 +873,7 @@ fn blends_rig(harness: &mut Harness, id: &str) -> RenderDiff {
 
 fn flat_rig(id: &str, z: f32, material: SpriteMaterialDescriptor) -> PartsRigInstanceDescriptor {
     let mut rig = figure(BillboardMode::None, [0.0, 0.0, z], 0.0);
-    rig.asset = id.to_owned();
+    rig.views[0].asset = id.to_owned();
     rig.scale = 1.0;
     rig.material = material;
     rig
@@ -1147,5 +1156,136 @@ fn pages_sharing_a_colour_texture_light_by_their_own_detail_maps() {
     assert!(
         left > right + 60,
         "the left-tilted page shades brighter than the right-tilted one: {left}, {right}"
+    );
+}
+
+/// An orthographic camera `distance` from the origin at `bearing` degrees
+/// about up from +z toward +x, looking at the point `right` units to its
+/// right and `up` units up from the origin.
+fn orbit(bearing: f64, right: f64, up: f64) -> render_host_contracts::RendererCompositionCamera {
+    let (sin, cos) = bearing.to_radians().sin_cos();
+    let distance = 600.0;
+    let mut eye = camera(
+        "orbit",
+        [
+            sin * distance + cos * right,
+            up,
+            cos * distance - sin * right,
+        ],
+        -bearing,
+        0.0,
+    );
+    eye.projection = RendererCameraProjection::Orthographic {
+        vertical_size: 1000.0,
+        near: 1.0,
+        far: 2000.0,
+    };
+    eye
+}
+
+#[test]
+fn each_camera_draws_the_rig_view_nearest_its_bearing_and_mirrored_views_flip() {
+    use std::f32::consts::{FRAC_PI_2, PI};
+    let mut harness = Harness::new(RendererOptions::default());
+    let (rig, mut ops) = squash_ops(&mut harness.resources);
+    // Four views of one drawing, told apart by their poses.
+    let poses = [0, 3, 6, 9].map(|steps| squash_pose(&rig, steps));
+    let views = [
+        (0.0, false),
+        (FRAC_PI_2, false),
+        (PI, false),
+        (-FRAC_PI_2, true),
+    ];
+    let shown = |views: Vec<PartsRigView>| {
+        let mut rig = figure(BillboardMode::Cylindrical, [0.0; 3], 0.0);
+        rig.scale = 1.0;
+        rig.views = views;
+        rig
+    };
+    let view = |(heading, mirror): (f32, bool)| PartsRigView {
+        asset: RIG.to_owned(),
+        heading,
+        mirror,
+    };
+    ops.push(RenderDiff::CreatePartsRig {
+        handle: RenderHandle::new(10),
+        parent: None,
+        rig: shown(views.iter().copied().map(view).collect()),
+    });
+    for (index, pose) in poses.iter().enumerate() {
+        ops.push(RenderDiff::SetPartsRigPose {
+            handle: RenderHandle::new(10),
+            view: index as u32,
+            pose: pose.clone(),
+        });
+    }
+    harness.apply(ops);
+    let alone = |harness: &mut Harness,
+                 view: Option<(PartsRigView, &PartsRigPose)>,
+                 eye: &render_host_contracts::RendererCompositionCamera| {
+        let mut ops = vec![RenderDiff::Update {
+            handle: RenderHandle::new(10),
+            transform: None,
+            material: None,
+            visible: Some(view.is_none()),
+            metadata: None,
+        }];
+        if let Some((view, pose)) = &view {
+            ops.extend(create(20, shown(vec![view.clone()]), pose));
+        }
+        harness.apply(ops);
+        let pixels = harness.single(eye);
+        if view.is_some() {
+            harness.apply(vec![RenderDiff::Destroy {
+                handle: RenderHandle::new(20),
+            }]);
+        }
+        pixels
+    };
+    // Seen from near each heading, the set draws that view's pose.
+    let mut references = Vec::new();
+    for (index, bearing) in [10.0, 80.0, 190.0, -100.0].into_iter().enumerate() {
+        let eye = orbit(bearing, 0.0, 360.0);
+        let set = alone(&mut harness, None, &eye);
+        let expected = alone(
+            &mut harness,
+            Some((view(views[index]), &poses[index])),
+            &eye,
+        );
+        assert!(drawn(&set) > 2_000, "bearing {bearing} draws the rig");
+        assert_eq!(
+            differing_pixels(&set, &expected),
+            0,
+            "bearing {bearing} draws view {index}"
+        );
+        references.push(expected);
+    }
+    assert!(
+        differing_pixels(&references[0], &references[1]) > 500,
+        "the views' poses differ"
+    );
+    // A mirrored view is its unmirrored drawing flipped about the rig's
+    // origin, which the camera centres.
+    let eye = orbit(-100.0, 0.0, 360.0);
+    let plain = alone(
+        &mut harness,
+        Some((view((-FRAC_PI_2, false)), &poses[3])),
+        &eye,
+    );
+    let flipped: Vec<u8> = plain
+        .as_chunks::<4>()
+        .0
+        .chunks(WIDTH as usize)
+        .flat_map(|row| row.iter().rev().flatten().copied())
+        .collect();
+    let differing = differing_pixels(&references[3], &flipped);
+    let covered = drawn(&plain);
+    assert!(
+        differing_pixels(&references[3], &plain) * 10 > covered,
+        "the mirror changes the drawing"
+    );
+    assert!(
+        differing * 50 < covered,
+        "{differing} of {covered} drawn pixels differ from the flipped drawing"
     );
 }

@@ -1,11 +1,14 @@
 //! Parts rigs: posed 2D figures drawn as their pieces on one upright plane.
 //!
 //! A rig's drawing (`DefinePartsRig`) is kept as each drawable's page, UVs,
-//! triangles and page region. A rig node (`CreatePartsRig`) holds the pose
-//! the Engine last evaluated for it (`SetPartsRigPose`); from that pose and
-//! the drawing, the effects family (`effects.rs`) builds the node's vertex
-//! and index buffers once per pose, not per view, and each view pass places
-//! them on the plane its camera turns the rig to, as it places a sprite.
+//! triangles and page region. A rig node (`CreatePartsRig`) holds, for each
+//! of its views, the pose the Engine last evaluated for it
+//! (`SetPartsRigPose`). Each view pass picks the node's view nearest the
+//! bearing its camera sees the node from (`render_model::parts_rig_view`);
+//! from that view's pose and drawing, the effects family (`effects.rs`)
+//! builds its vertex and index buffers once per pose, not per pass, and
+//! places them on the plane its camera turns the rig to, as it places a
+//! sprite, mirrored for a mirrored view.
 //!
 //! Pieces draw in the pose's order on one plane, so they meet the depth
 //! test at one depth and later pieces draw over earlier ones. Consecutive
@@ -40,10 +43,16 @@ pub(crate) struct RigPage {
     pub detail: Option<u32>,
 }
 
-/// A rig node's descriptor and the pose it draws.
+/// A rig node's descriptor and the poses its views draw.
 pub(crate) struct PartsRigRow {
     pub descriptor: PartsRigInstanceDescriptor,
-    /// Name id of the rig's drawing.
+    /// One per descriptor view, in its order.
+    pub views: Vec<PartsRigViewRow>,
+}
+
+/// One view of a rig node: its drawing and the pose it draws.
+pub(crate) struct PartsRigViewRow {
+    /// Name id of the view's drawing.
     pub asset: u32,
     pub pose: Option<PartsRigPose>,
     /// Counts its poses, so buffers built from an earlier one are built
@@ -52,13 +61,13 @@ pub(crate) struct PartsRigRow {
 }
 
 impl PartsRigRow {
-    /// How far from the rig's origin its pose reaches, in rig units.
+    /// How far from the rig's origin its views' poses reach, in rig units.
     pub fn reach(&self) -> f32 {
-        self.pose.as_ref().map_or(0.0, |pose| {
-            pose.vertices
-                .iter()
-                .fold(0.0f32, |reach, [x, y]| reach.max(x.hypot(*y)))
-        })
+        self.views
+            .iter()
+            .filter_map(|view| view.pose.as_ref())
+            .flat_map(|pose| pose.vertices.iter())
+            .fold(0.0f32, |reach, [x, y]| reach.max(x.hypot(*y)))
     }
 }
 
