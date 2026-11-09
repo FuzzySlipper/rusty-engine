@@ -1536,8 +1536,7 @@ impl Renderer {
         let dependents: Vec<RenderMaterialDescriptor> = self
             .tables
             .materials
-            .values()
-            .filter(|row| row.descriptor.textures().any(|used| *used == texture.id))
+            .sampling(&texture.id)
             .map(|row| row.descriptor.clone())
             .collect();
         // A narrowed variant samples its material's textures: the material

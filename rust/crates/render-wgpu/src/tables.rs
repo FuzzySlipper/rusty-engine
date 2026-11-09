@@ -415,6 +415,70 @@ impl<T> Slots<T> {
     }
 }
 
+/// Material rows by `Names` id, with the materials sampling each texture: a
+/// texture defined again rebinds those materials alone, rather than walking
+/// a row for every name the renderer has ever seen.
+#[derive(Default)]
+pub(crate) struct Materials {
+    rows: Slots<MaterialRow>,
+    sampling: HashMap<String, BTreeSet<u32>>,
+}
+
+/// Reads go to the rows; writes go through `Materials`, which keeps the index.
+impl std::ops::Deref for Materials {
+    type Target = Slots<MaterialRow>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.rows
+    }
+}
+
+impl Materials {
+    /// The row to change in place; its descriptor's textures stay as they were inserted.
+    pub fn get_mut(&mut self, id: u32) -> Option<&mut MaterialRow> {
+        self.rows.get_mut(id)
+    }
+
+    /// Insert or replace the row, returning the one it replaced.
+    pub fn insert(&mut self, id: u32, row: MaterialRow) -> Option<MaterialRow> {
+        let textures: Vec<String> = row.descriptor.textures().cloned().collect();
+        let replaced = self.rows.insert(id, row);
+        if let Some(old) = &replaced {
+            self.forget(id, &old.descriptor);
+        }
+        for texture in textures {
+            self.sampling.entry(texture).or_default().insert(id);
+        }
+        replaced
+    }
+
+    pub fn remove(&mut self, id: u32) -> Option<MaterialRow> {
+        let removed = self.rows.remove(id)?;
+        self.forget(id, &removed.descriptor);
+        Some(removed)
+    }
+
+    /// The materials sampling `texture`, in id order.
+    pub fn sampling<'a>(&'a self, texture: &str) -> impl Iterator<Item = &'a MaterialRow> + 'a {
+        self.sampling
+            .get(texture)
+            .into_iter()
+            .flatten()
+            .filter_map(|id| self.rows.get(*id))
+    }
+
+    fn forget(&mut self, id: u32, descriptor: &RenderMaterialDescriptor) {
+        for texture in descriptor.textures() {
+            if let Some(materials) = self.sampling.get_mut(texture) {
+                materials.remove(&id);
+                if materials.is_empty() {
+                    self.sampling.remove(texture);
+                }
+            }
+        }
+    }
+}
+
 /// A row by name, with its id: apply-time lookups. A free function, so
 /// callers holding another table mutably keep the borrows disjoint.
 pub(crate) fn named<'a, T>(names: &Names, rows: &'a Slots<T>, name: &str) -> Option<(u32, &'a T)> {
@@ -839,7 +903,7 @@ pub(crate) struct Tables {
     /// Product shaders by id, with the composer id materials shaded by
     /// them take (`Shaders::product`).
     pub shaders: HashMap<String, (render_model::ShaderDescriptor, u32)>,
-    pub materials: Slots<MaterialRow>,
+    pub materials: Materials,
     /// The palettes each terrain layer material of more than four layers
     /// has a narrowed variant for (`apply.rs` `define_layer_variant`), by
     /// material id.
@@ -941,7 +1005,7 @@ impl Tables {
             texture_thumbs: HashMap::new(),
             material_means: HashMap::new(),
             shaders: HashMap::new(),
-            materials: Slots::default(),
+            materials: Materials::default(),
             static_meshes: Slots::default(),
             payload_meshes: HashMap::new(),
             layer_variants: HashMap::new(),

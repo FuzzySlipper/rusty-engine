@@ -881,3 +881,79 @@ fn view_materials_on_static_meshes_are_reported_and_the_rest_applies() {
     let (stats, _) = harness.render(&camera([0.0, 0.0, 0.0], 0.0, 0.0));
     assert_eq!(stats.draws, 0, "the visibility in the same update applied");
 }
+
+#[test]
+fn a_texture_defined_again_rebinds_the_materials_sampling_it_and_no_others() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let solid = |rgba: [u8; 4]| rgba.repeat(4 * 4);
+    let mut floor = material("material/floor", [1.0; 4], Some("texture/one"));
+    floor.unlit = true;
+    // The material arrives before its texture, as streamed content can.
+    harness.apply(vec![
+        RenderDiff::DefineMaterial {
+            material: floor.clone(),
+        },
+        static_mesh("mesh/floor", floor_mesh(), "material/floor"),
+        instance(10, None, "mesh/floor", Transform::IDENTITY),
+    ]);
+    let centre = |harness: &mut Harness| {
+        let (_, pixels) = harness.render(&camera([0.0, 3.0, 0.01], 0.0, -89.0));
+        let at = ((HEIGHT / 2 * WIDTH + WIDTH / 2) * 4) as usize;
+        [pixels[at], pixels[at + 1], pixels[at + 2]]
+    };
+    let one = harness.resources.texture(
+        "texture/one",
+        4,
+        4,
+        &solid([220, 20, 20, 255]),
+        TextureWrap::Repeat,
+    );
+    harness.apply(vec![one]);
+    let red = centre(&mut harness);
+    assert!(
+        red[0] > 150 && red[1] < 60 && red[2] < 60,
+        "the texture arriving binds the material waiting for it: {red:?}"
+    );
+
+    let two = harness.resources.texture(
+        "texture/two",
+        4,
+        4,
+        &solid([20, 20, 220, 255]),
+        TextureWrap::Repeat,
+    );
+    let mut moved = floor.clone();
+    moved.texture = Some("texture/two".to_owned());
+    harness.apply(vec![two, RenderDiff::DefineMaterial { material: moved }]);
+    let one_again = harness.resources.texture(
+        "texture/one",
+        4,
+        4,
+        &solid([20, 220, 20, 255]),
+        TextureWrap::Repeat,
+    );
+    harness.apply(vec![one_again]);
+    let blue = centre(&mut harness);
+    assert!(
+        blue[2] > 150 && blue[0] < 60 && blue[1] < 60,
+        "a texture the material no longer samples leaves it alone: {blue:?}"
+    );
+
+    let two_again = harness.resources.texture(
+        "texture/two",
+        4,
+        4,
+        &solid([220, 220, 20, 255]),
+        TextureWrap::Repeat,
+    );
+    harness.apply(vec![two_again]);
+    let yellow = centre(&mut harness);
+    assert!(
+        yellow[0] > 150 && yellow[1] > 150 && yellow[2] < 60,
+        "the texture it now samples rebinds it: {yellow:?}"
+    );
+}
+
+fn floor_mesh() -> MeshPayloadDescriptor {
+    floor(12.0, 1.0)
+}
