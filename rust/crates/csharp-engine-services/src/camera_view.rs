@@ -418,6 +418,17 @@ impl RuntimeCameraViewBridge {
 
     /// Appearance resource release must observe a sky selected earlier in the
     /// same product callback as well as the committed retained selection.
+    /// A live camera as the call leaves it, as realizers are given it.
+    pub(crate) fn renderer_camera(&self, camera: u64) -> Option<RendererCompositionCamera> {
+        let state = self
+            .staged
+            .as_ref()
+            .map(|staged| &staged.state)
+            .unwrap_or(&self.state);
+        let entry = state.cameras.get(&camera)?;
+        Some(composition_camera(String::new(), entry))
+    }
+
     pub(crate) fn uses_sky_texture(&self, resource: u64) -> bool {
         let state = self
             .staged

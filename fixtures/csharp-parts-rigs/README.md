@@ -21,9 +21,9 @@ RustyEngineFixtureSdkVersion=<version> RestoreAdditionalProjectSources=<feed> \
 Live-debug commands:
 
 - `rigs.observe` is read-only. It reports each rig's clip, clip time, speed
-  and views; the camera's bearing and the view it sees; the townsperson's
-  `head` bone in that view; the held `turn` value; and the events read so
-  far.
+  and views; the camera's bearing and the view it draws; the attached bone
+  in that view and where the camera draws it, beside where the marker was
+  published; the held `turn` value; and the events read so far.
 - `rigs.play <clip> <crossfade seconds> <speed>` plays `walk` or `idle` on
   the townsperson, looping.
 - `rigs.stop <crossfade seconds>` fades it back to its setup pose.
@@ -33,3 +33,8 @@ Live-debug commands:
   front toward its left; `rigs.spin <degrees per second>` orbits it (0
   stops). Front is 0, the drawn side -90, the back 180 and the mirrored side
   90.
+- A red marker stays on a bone of the townsperson: each update the product
+  reads the bone for its camera (`ReadBone`) and publishes the marker where
+  that camera draws it. `rigs.attach <bone>` picks a bone every view has
+  (`head` by default, `neck`, `foot_r`, `leg_l1`, ...); `rigs.place <x> <z>
+  <yaw degrees>` moves and turns the townsperson.

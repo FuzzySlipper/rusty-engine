@@ -349,6 +349,36 @@ mod tests {
         assert!(pose.orientation.angle_between(other.orientation) < 1e-3);
     }
 
+    /// The contract's `axes`, which the services place parts-rig bones
+    /// by, are the axes views are drawn with.
+    #[test]
+    fn contract_axes_are_the_drawn_axes() {
+        for (yaw, pitch) in [(0.0, 0.0), (90.0, 30.0), (-135.0, -50.0), (200.0, 80.0)] {
+            let mut from_yaw = camera([1.0, 2.0, 3.0], yaw, None);
+            from_yaw.pose.pitch_degrees = pitch;
+            let mut from_basis = from_yaw.clone();
+            from_basis.basis = Some(RendererCameraBasis {
+                forward: [0.3, -0.2, -0.9],
+                right: [1.0, 0.0, 0.3],
+                up: [0.1, 1.0, 0.0],
+            });
+            for camera in [from_yaw, from_basis] {
+                let pose = descriptor_pose(&camera);
+                let [right, up, forward] = camera.axes().map(|a| Vec3::from(a.map(|c| c as f32)));
+                for (drawn, axis) in [
+                    (pose.orientation * Vec3::X, right),
+                    (pose.orientation * Vec3::Y, up),
+                    (pose.orientation * Vec3::NEG_Z, forward),
+                ] {
+                    assert!(
+                        (drawn - axis).length() < 1e-4,
+                        "{yaw} {pitch}: {drawn} vs {axis}"
+                    );
+                }
+            }
+        }
+    }
+
     #[test]
     fn motion_interpolates_on_the_host_clock_and_holds_the_last_sample() {
         let mut motion = CameraMotion::default();

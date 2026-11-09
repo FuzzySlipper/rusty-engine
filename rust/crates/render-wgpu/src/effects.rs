@@ -509,14 +509,7 @@ impl Effects {
         (camera, viewport, pixel_ratio): (&CameraMatrices, PixelRect, f32),
     ) -> Option<SpriteDraw> {
         let descriptor = &rig.descriptor;
-        let index = if descriptor.views.len() > 1 {
-            render_model::parts_rig_view(
-                &descriptor.views,
-                rig_bearing(world, descriptor.billboard, camera),
-            )
-        } else {
-            0
-        };
+        let index = descriptor.view_seen(&world.to_cols_array_2d(), &rig_camera(camera));
         let (view, row_view) = (&descriptor.views[index], rig.views.get(index)?);
         let key = (handle, index as u32);
         let asset = assets.get(row_view.asset)?;
@@ -1571,21 +1564,16 @@ fn sprite_quad(
     Some((model, quad))
 }
 
-/// The bearing `camera` sees a parts rig placed at `world` from, in radians
-/// about the node's up axis from its +z toward its +x: toward the eye, or
-/// against the view's heading where `billboard` faces the plane that way (an
-/// orthographic camera, `CylindricalView`).
-fn rig_bearing(world: &Mat4, billboard: BillboardMode, camera: &CameraMatrices) -> f32 {
-    let (_, rotation, position) = world.to_scale_rotation_translation();
+/// `camera` as a parts rig's placement reads it.
+pub(crate) fn rig_camera(camera: &CameraMatrices) -> render_model::PartsRigCamera {
     let camera_world = camera.view.inverse();
-    let orthographic = camera.projection.w_axis.w == 1.0;
-    let toward = if orthographic || billboard == BillboardMode::CylindricalView {
-        camera_world.z_axis.truncate()
-    } else {
-        camera.eye - position
-    };
-    let local = rotation.inverse() * toward;
-    local.x.atan2(local.z)
+    render_model::PartsRigCamera {
+        eye: camera.eye.to_array(),
+        right: camera_world.x_axis.truncate().to_array(),
+        up: camera_world.y_axis.truncate().to_array(),
+        forward: (-camera_world.z_axis.truncate()).to_array(),
+        orthographic: camera.projection.w_axis.w == 1.0,
+    }
 }
 
 /// The matrix that places a plane facing the camera by `billboard`, from
@@ -1646,32 +1634,13 @@ fn facing_model(
     ))
 }
 
-/// The way an upright sprite faces, level and of unit length: `toward` (the
-/// eye, or against the view) with its height dropped, turned back toward
-/// `authored`, the node's own facing, by `keep` of the angle between them.
-/// The angle is taken the short way round the quad's plane, so the result
-/// stays within `keep` times 90 degrees of `toward` and the sprite shows its
-/// front. Looking straight up or down leaves no level `toward`, and the
-/// authored facing stands (`effects.wgsl` `upright_facing` is the same).
+/// [`render_model::upright_facing`] over glam vectors.
 pub(crate) fn upright_facing(toward: Vec3, authored: Vec3, keep: f32) -> Vec3 {
-    let level = |facing: Vec3| {
-        let facing = Vec3::new(facing.x, 0.0, facing.z);
-        (facing.length_squared() > f32::EPSILON).then(|| facing.normalize())
-    };
-    let authored = level(authored).unwrap_or(Vec3::Z);
-    let Some(toward) = level(toward) else {
-        return authored;
-    };
-    if keep <= 0.0 {
-        return toward;
-    }
-    let mut angle = toward.cross(authored).y.atan2(toward.dot(authored));
-    if angle > std::f32::consts::FRAC_PI_2 {
-        angle -= std::f32::consts::PI;
-    } else if angle < -std::f32::consts::FRAC_PI_2 {
-        angle += std::f32::consts::PI;
-    }
-    Quat::from_rotation_y(angle * keep.min(1.0)) * toward
+    Vec3::from(render_model::upright_facing(
+        toward.to_array(),
+        authored.to_array(),
+        keep,
+    ))
 }
 
 impl Renderer {
@@ -2339,5 +2308,140 @@ impl Renderer {
         }
         self.effects.row_scratch = rows;
         pass
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::camera::{camera_matrices, CameraPose};
+    use render_host_contracts::RendererCameraProjection;
+    use render_model::{PartsRigInstanceDescriptor, PartsRigView};
+
+    fn rig(billboard: BillboardMode, authored_facing: f32) -> PartsRigInstanceDescriptor {
+        let view = |heading: f32, mirror| PartsRigView {
+            asset: "parts-rig/a".to_owned(),
+            heading,
+            mirror,
+        };
+        PartsRigInstanceDescriptor {
+            views: vec![
+                view(0.0, false),
+                view(-std::f32::consts::FRAC_PI_2, false),
+                view(std::f32::consts::PI, false),
+                view(std::f32::consts::FRAC_PI_2, true),
+            ],
+            scale: 0.002,
+            size_mode: SpriteSizeMode::World,
+            billboard,
+            tint: [1.0; 4],
+            render_order: 0,
+            depth: SpriteDepthPolicy::Default,
+            layer: Default::default(),
+            material: render_model::SpriteMaterialDescriptor {
+                authored_facing,
+                ..Default::default()
+            },
+            texel_snap: 0.0,
+            visible: true,
+            transform: Default::default(),
+            metadata: Default::default(),
+        }
+    }
+
+    /// `place_point`, which the services answer bone reads with, puts a
+    /// rig point where the pass draws it: the view `prepare_rig` picks, its
+    /// mirror (`effects.wgsl` negates x) and `facing_model`'s plane.
+    #[test]
+    fn a_placed_rig_point_is_where_the_pass_draws_it() {
+        let worlds = [
+            Mat4::from_translation(Vec3::new(1.0, 0.5, -2.0)),
+            Mat4::from_scale_rotation_translation(
+                Vec3::new(1.5, 0.8, 1.2),
+                Quat::from_rotation_y(0.7),
+                Vec3::new(-3.0, 0.0, 4.0),
+            ),
+            Mat4::from_scale_rotation_translation(
+                Vec3::new(-1.0, 1.0, 1.0),
+                Quat::from_rotation_y(-2.0),
+                Vec3::new(0.0, 1.0, 0.0),
+            ),
+        ];
+        let projections = [
+            RendererCameraProjection::Perspective {
+                fov_y_degrees: 50.0,
+                near: 0.1,
+                far: 100.0,
+            },
+            RendererCameraProjection::Orthographic {
+                vertical_size: 6.0,
+                near: 0.1,
+                far: 100.0,
+            },
+        ];
+        let viewport = PixelRect {
+            x: 0,
+            y: 0,
+            width: 640,
+            height: 360,
+        };
+        let point = [37.0, 412.0];
+        let mut views = std::collections::BTreeSet::new();
+        for billboard in [
+            BillboardMode::None,
+            BillboardMode::Spherical,
+            BillboardMode::Cylindrical,
+            BillboardMode::CylindricalView,
+        ] {
+            for keep in [0.0, 0.4] {
+                let rig = rig(billboard, keep);
+                for world in &worlds {
+                    for projection in &projections {
+                        for bearing in [0.0f32, 70.0, 135.0, 200.0, 290.0] {
+                            let (sin, cos) = bearing.to_radians().sin_cos();
+                            let eye =
+                                world.w_axis.truncate() + Vec3::new(sin * 6.0, 2.0, cos * 6.0);
+                            let look = (world.w_axis.truncate() - eye).normalize();
+                            let orientation = Quat::from_rotation_arc(Vec3::NEG_Z, look);
+                            let camera = camera_matrices(
+                                CameraPose {
+                                    position: eye,
+                                    orientation,
+                                },
+                                projection,
+                                16.0 / 9.0,
+                            );
+                            let placed = rig
+                                .place_point(&world.to_cols_array_2d(), &rig_camera(&camera), point)
+                                .expect("a world-sized rig places its points");
+                            let view =
+                                rig.view_seen(&world.to_cols_array_2d(), &rig_camera(&camera));
+                            assert_eq!(placed.view, view);
+                            views.insert(view);
+                            let model = facing_model(
+                                &(*world * Mat4::from_scale(Vec3::splat(rig.scale))),
+                                billboard,
+                                None,
+                                keep,
+                                &camera,
+                                viewport,
+                                1.0,
+                            )
+                            .unwrap();
+                            let mirror = if rig.views[view].mirror { -1.0 } else { 1.0 };
+                            let drawn =
+                                model.transform_point3(Vec3::new(point[0] * mirror, point[1], 0.0));
+                            let error = (drawn - Vec3::from(placed.world)).length();
+                            assert!(
+                                error < 1e-4,
+                                "{billboard:?} keep {keep} bearing {bearing}: {drawn} vs {:?}",
+                                placed.world
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(views.len(), 4, "every view is seen: {views:?}");
     }
 }

@@ -10,9 +10,10 @@
 use std::ffi::c_void;
 
 use crate::{
-    NativeAnimationFeedbackText, NativeAppearanceHandle, NativeBillboardMode, NativeColor,
-    NativeOperationErrorReceipt, NativeSpriteDepthPolicy, NativeSpriteMaterialDescriptor,
-    NativeSpriteSizeMode, NativeTextureFilter, NativeUtf8Slice, NativeVec2, NativeVec3,
+    NativeAnimationFeedbackText, NativeAppearanceHandle, NativeBillboardMode, NativeCameraHandle,
+    NativeColor, NativeOperationErrorReceipt, NativeSpriteDepthPolicy,
+    NativeSpriteMaterialDescriptor, NativeSpriteSizeMode, NativeTextureFilter, NativeUtf8Slice,
+    NativeVec2, NativeVec3,
 };
 
 /// A rig the Engine read from product content, with its pages.
@@ -184,31 +185,35 @@ pub struct NativePartsRigEventResult {
     pub events_len: usize,
 }
 
-/// A named bone of one view of a published rig object.
+/// A named bone of a published rig object, as one camera's reading draws
+/// it.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePartsRigBoneRequest {
     pub object_id: u64,
     pub bone: NativeUtf8Slice,
-    /// The view's index in the appearance's views.
-    pub view: u32,
+    /// The camera whose reading places it: the view it draws, that view's
+    /// mirror and the plane its billboard mode turns to the camera.
+    pub camera: NativeCameraHandle,
 }
 
-/// A bone as the rig object was last posed.
+/// A bone as the rig object was last posed, in the view the camera draws.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativePartsRigBoneReadout {
-    /// In rig units, x right and y up from the rig's origin, as authored
-    /// (before the view's mirror).
+    /// The view the camera's reading draws, by its index in the
+    /// appearance's views.
+    pub view: u32,
+    /// In rig units, x right and y up from the rig's origin, as that view's
+    /// rig authors it (before its mirror).
     pub position: NativeVec2,
     /// The bone's x axis, degrees counter-clockwise, as authored.
     pub rotation_degrees: f32,
     /// The lengths of its x and y axes.
     pub scale: NativeVec2,
-    /// Where it lies in the object's space on the rig's unturned plane
-    /// (facing the object's +z), in the units of the appearance's scale and
-    /// with the view's mirror: metres for a world-sized rig.
-    pub offset: NativeVec3,
+    /// Where the camera's reading draws it in the world, with the object
+    /// where it was last posed: to attach something to it.
+    pub world: NativeVec3,
 }
 
 pub type NativeLoadPartsRig = unsafe extern "C" fn(

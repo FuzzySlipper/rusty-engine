@@ -107,10 +107,14 @@ time, so reads describe the pose of the previous call.
   update, object by object in time order: name (cut to 96 bytes), key time,
   int and float values, volume and balance. A view set fires its first
   view's events. Events' string values are not carried.
-- `ReadBone`: a named bone of one view: its position, rotation and scale in
-  rig units as authored, and its offset in the object's space on the rig's
-  plane facing the object's +z, with the view's mirror. Attach something to
-  a hand by that offset.
+- `ReadBone`: a named bone as one camera's reading draws it: the view that
+  camera draws, the bone's position, rotation and scale in that view's rig
+  units as authored, and its world position with the view's mirror and the
+  plane turned to that camera by the billboard mode, the object where it
+  was last posed. Publish an attachment there each update to keep it on the
+  bone in that camera's view (the fixture keeps a marker on the head). The
+  camera is taken as the call leaves it. A `Pixel`-sized rig is refused: its
+  size follows each reading's viewport.
 
 ## Cost
 

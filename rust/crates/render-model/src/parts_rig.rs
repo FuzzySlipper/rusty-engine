@@ -281,6 +281,195 @@ pub fn parts_rig_view(views: &[PartsRigView], bearing: f32) -> usize {
     nearest
 }
 
+/// A camera as a parts rig's placement reads it: where its eye is and its
+/// axes in the world (right, up, and the way it looks), and whether it is
+/// orthographic.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PartsRigCamera {
+    pub eye: [f32; 3],
+    pub right: [f32; 3],
+    pub up: [f32; 3],
+    pub forward: [f32; 3],
+    pub orthographic: bool,
+}
+
+/// A point of a world-sized parts rig as one camera's reading draws it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PartsRigPlacedPoint {
+    /// The view that reading draws.
+    pub view: usize,
+    pub world: [f32; 3],
+}
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn scaled(a: [f32; 3], by: f32) -> [f32; 3] {
+    a.map(|v| v * by)
+}
+
+fn length(a: [f32; 3]) -> f32 {
+    dot(a, a).sqrt()
+}
+
+/// The way an upright plane faces, level and of unit length: `toward` (the
+/// eye, or against the view) with its height dropped, turned back toward
+/// `authored`, the node's own facing, by `keep` of the angle between them.
+/// The angle is taken the short way round the plane, so the result stays
+/// within `keep` times 90 degrees of `toward` and the plane shows its front.
+/// Looking straight up or down leaves no level `toward`, and the authored
+/// facing stands. Sprites and parts rigs turn by it (render-wgpu, and
+/// `effects.wgsl` `upright_facing`, which is the same).
+pub fn upright_facing(toward: [f32; 3], authored: [f32; 3], keep: f32) -> [f32; 3] {
+    let level = |facing: [f32; 3]| {
+        let facing = [facing[0], 0.0, facing[2]];
+        let length = length(facing);
+        (length * length > f32::EPSILON).then(|| scaled(facing, 1.0 / length))
+    };
+    let authored = level(authored).unwrap_or([0.0, 0.0, 1.0]);
+    let Some(toward) = level(toward) else {
+        return authored;
+    };
+    if keep <= 0.0 {
+        return toward;
+    }
+    let mut angle = cross(toward, authored)[1].atan2(dot(toward, authored));
+    if angle > std::f32::consts::FRAC_PI_2 {
+        angle -= std::f32::consts::PI;
+    } else if angle < -std::f32::consts::FRAC_PI_2 {
+        angle += std::f32::consts::PI;
+    }
+    // Turned about +y by `angle * keep`.
+    let (sin, cos) = (angle * keep.min(1.0)).sin_cos();
+    [
+        cos * toward[0] + sin * toward[2],
+        toward[1],
+        -sin * toward[0] + cos * toward[2],
+    ]
+}
+
+/// A node matrix taken apart as realizers do: the plane's axes scaled by
+/// the rig's scale, the position, the signed scale (a reflection is a
+/// negative x) and the rotation's x and z axes.
+struct NodeFrame {
+    position: [f32; 3],
+    c0: [f32; 3],
+    c1: [f32; 3],
+    scale: [f32; 3],
+    r0: [f32; 3],
+    r2: [f32; 3],
+}
+
+impl NodeFrame {
+    fn new(world: &[[f32; 4]; 4], rig_scale: f32) -> NodeFrame {
+        let column = |k: usize| scaled([world[k][0], world[k][1], world[k][2]], rig_scale);
+        let (c0, c1, c2) = (column(0), column(1), column(2));
+        let sign = if dot(cross(c0, c1), c2) < 0.0 {
+            -1.0
+        } else {
+            1.0
+        };
+        let scale = [sign * length(c0), length(c1), length(c2)];
+        let axis = |c: [f32; 3], s: f32| if s == 0.0 { c } else { scaled(c, 1.0 / s) };
+        NodeFrame {
+            position: [world[3][0], world[3][1], world[3][2]],
+            c0,
+            c1,
+            scale,
+            r0: axis(c0, scale[0]),
+            r2: axis(c2, scale[2]),
+        }
+    }
+}
+
+impl PartsRigInstanceDescriptor {
+    /// The direction `camera` sees a node at `position` from, the way the
+    /// billboard mode turns to it: toward the eye, or against the view for
+    /// an orthographic camera or `CylindricalView`.
+    fn toward(&self, position: [f32; 3], camera: &PartsRigCamera) -> [f32; 3] {
+        if self.billboard == BillboardMode::CylindricalView || camera.orthographic {
+            scaled(camera.forward, -1.0)
+        } else {
+            sub(camera.eye, position)
+        }
+    }
+
+    fn view_from(&self, frame: &NodeFrame, camera: &PartsRigCamera) -> usize {
+        if self.views.len() < 2 {
+            return 0;
+        }
+        let toward = self.toward(frame.position, camera);
+        parts_rig_view(
+            &self.views,
+            dot(toward, frame.r0).atan2(dot(toward, frame.r2)),
+        )
+    }
+
+    /// The view `camera`'s reading draws, with the node at `world` (a
+    /// column-major matrix): the one whose heading is nearest the bearing
+    /// it sees the node from.
+    pub fn view_seen(&self, world: &[[f32; 4]; 4], camera: &PartsRigCamera) -> usize {
+        self.view_from(&NodeFrame::new(world, 1.0), camera)
+    }
+
+    /// Where `point` of the rig's plane (rig units, x right and y up, as
+    /// authored) lies in the world as `camera`'s reading draws the rig, with
+    /// its node at `world` (a column-major matrix): the view that reading
+    /// picks, that view's mirror, and the plane turned by the billboard
+    /// mode, as realizers place it. None for a pixel-sized rig, whose size
+    /// follows the reading's viewport.
+    pub fn place_point(
+        &self,
+        world: &[[f32; 4]; 4],
+        camera: &PartsRigCamera,
+        point: [f32; 2],
+    ) -> Option<PartsRigPlacedPoint> {
+        if self.size_mode == SpriteSizeMode::Pixel || self.views.is_empty() {
+            return None;
+        }
+        let frame = NodeFrame::new(world, self.scale);
+        let NodeFrame {
+            position,
+            c0,
+            c1,
+            scale,
+            r2,
+            ..
+        } = frame;
+        let view = self.view_from(&frame, camera);
+        let mirror = if self.views[view].mirror { -1.0 } else { 1.0 };
+        let [x, y] = [point[0] * mirror, point[1]];
+        let (right, up) = match self.billboard {
+            BillboardMode::None => {
+                let world = [0, 1, 2].map(|k| position[k] + c0[k] * x + c1[k] * y);
+                return Some(PartsRigPlacedPoint { view, world });
+            }
+            BillboardMode::Spherical => (camera.right, camera.up),
+            BillboardMode::Cylindrical | BillboardMode::CylindricalView => {
+                let toward = self.toward(position, camera);
+                let forward = upright_facing(toward, r2, self.material.authored_facing);
+                let right = cross([0.0, 1.0, 0.0], forward);
+                (scaled(right, 1.0 / length(right)), [0.0, 1.0, 0.0])
+            }
+        };
+        let world = [0, 1, 2].map(|k| position[k] + right[k] * scale[0] * x + up[k] * scale[1] * y);
+        Some(PartsRigPlacedPoint { view, world })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

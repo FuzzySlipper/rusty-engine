@@ -259,13 +259,39 @@ fn views_share_one_clip_time_and_each_view_poses_once_per_change() {
             instance.views[0].pose.vertices, instance.views[1].pose.vertices,
             "one rig twice: the same pose"
         );
-        // A mirrored view's bone lies on the other side of the object.
-        let front_bone = scene.read_bone(OBJECT, "w1", 0).unwrap();
-        let side_bone = scene.read_bone(OBJECT, "w1", 1).unwrap();
-        assert_ne!(front_bone.position.x, 0.0);
-        assert_eq!(front_bone.position.x, side_bone.position.x);
-        assert_eq!(front_bone.offset.x, -side_bone.offset.x);
-        assert!((front_bone.offset.x - front_bone.position.x * 0.01).abs() < 1e-6);
+        // Each camera reads the bone in the view it draws, where it draws
+        // it: from the front, view 0 on a plane facing +z; from +x, the
+        // mirrored view 1 on a plane facing +x.
+        let camera = |eye: [f32; 3], forward: [f32; 3]| PartsRigCamera {
+            eye,
+            right: [0.0; 3],
+            up: [0.0; 3],
+            forward,
+            orthographic: false,
+        };
+        let front = scene
+            .read_bone(OBJECT, "w1", &camera([0.0, 1.0, 5.0], [0.0, 0.0, -1.0]))
+            .unwrap();
+        let side = scene
+            .read_bone(OBJECT, "w1", &camera([5.0, 1.0, 0.0], [-1.0, 0.0, 0.0]))
+            .unwrap();
+        assert_eq!((front.view, side.view), (0, 1));
+        let [x, y] = [front.position.x, front.position.y];
+        assert_ne!(x, 0.0);
+        let near = |a: NativeVec3, b: [f32; 3]| {
+            (a.x - b[0]).abs() + (a.y - b[1]).abs() + (a.z - b[2]).abs() < 1e-5
+        };
+        assert!(
+            near(front.world, [x * 0.01, y * 0.01, 0.0]),
+            "{:?}",
+            front.world
+        );
+        // Mirrored and turned to face +x: rig x runs along +z.
+        assert!(
+            near(side.world, [0.0, y * 0.01, x * 0.01]),
+            "{:?}",
+            side.world
+        );
     }
 
     // Refusals leave it playing.

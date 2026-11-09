@@ -87,6 +87,42 @@ pub struct RendererCompositionCamera {
     pub viewmodel_fov_y_degrees: f64,
 }
 
+impl RendererCompositionCamera {
+    /// The camera's axes in the world: right, up, and the way it looks.
+    /// Yaw 0 looks down -z, positive yaw turns toward +x and positive pitch
+    /// looks up; an explicit basis overrides yaw and pitch. Realizers place
+    /// their views by the same axes.
+    pub fn axes(&self) -> [[f64; 3]; 3] {
+        fn normalized(v: [f64; 3]) -> Option<[f64; 3]> {
+            let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            (length > 1e-12).then(|| v.map(|c| c / length))
+        }
+        fn cross(a: [f64; 3], b: [f64; 3]) -> [f64; 3] {
+            [
+                a[1] * b[2] - a[2] * b[1],
+                a[2] * b[0] - a[0] * b[2],
+                a[0] * b[1] - a[1] * b[0],
+            ]
+        }
+        match &self.basis {
+            Some(basis) => {
+                let forward = normalized(basis.forward).unwrap_or([0.0, 0.0, -1.0]);
+                let right = normalized(cross(forward, basis.up)).unwrap_or([1.0, 0.0, 0.0]);
+                [right, cross(right, forward), forward]
+            }
+            None => {
+                let (sin_yaw, cos_yaw) = self.pose.yaw_degrees.to_radians().sin_cos();
+                let (sin_pitch, cos_pitch) = self.pose.pitch_degrees.to_radians().sin_cos();
+                [
+                    [cos_yaw, 0.0, sin_yaw],
+                    [-sin_pitch * sin_yaw, cos_pitch, sin_pitch * cos_yaw],
+                    [sin_yaw * cos_pitch, sin_pitch, -cos_yaw * cos_pitch],
+                ]
+            }
+        }
+    }
+}
+
 fn is_zero(value: &f64) -> bool {
     *value == 0.0
 }

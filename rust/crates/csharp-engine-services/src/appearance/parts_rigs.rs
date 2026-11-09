@@ -21,8 +21,9 @@ use std::sync::Arc;
 
 use ::animation_parts_rig::{BlendMode, BoneChannel, Play, Player, Pose, Rig};
 use render_model::{
-    PartsRigAsset, PartsRigBlend, PartsRigClipped, PartsRigDrawable, PartsRigPage, PartsRigPiece,
-    PartsRigPose, RenderDiff, RenderFrameDiff, RenderHandle, SpriteSizeMode,
+    PartsRigAsset, PartsRigBlend, PartsRigCamera, PartsRigClipped, PartsRigDrawable,
+    PartsRigInstanceDescriptor, PartsRigPage, PartsRigPiece, PartsRigPose, RenderDiff,
+    RenderFrameDiff, RenderHandle, SpriteSizeMode,
 };
 
 use super::*;
@@ -58,8 +59,10 @@ struct RigInstance {
     /// None between a destroy and the create that replaces it.
     handle: Option<RenderHandle>,
     views: Vec<ViewPlayer>,
-    /// Rig units to the object's units.
-    scale: f32,
+    /// The node's rig: its views, scale and how it faces the camera.
+    rig: PartsRigInstanceDescriptor,
+    /// The node's world matrix (columns) at the last settle.
+    world: Option<[[f32; 4]; 4]>,
     speed: f64,
     /// The presentation time it was last posed at; None before its first
     /// pose.
@@ -182,7 +185,7 @@ impl PartsRigScene {
                             player.mirror = view.mirror;
                             player.published = None;
                         }
-                        instance.scale = rig.scale;
+                        instance.rig = rig.clone();
                         instance.dirty = true;
                     } else {
                         let instance = RigInstance {
@@ -192,7 +195,8 @@ impl PartsRigScene {
                                 .iter()
                                 .map(|view| ViewPlayer::new(&view.asset, view.mirror, &self.rigs))
                                 .collect(),
-                            scale: rig.scale,
+                            rig: rig.clone(),
+                            world: None,
                             speed: 1.0,
                             posed_at: None,
                             dirty: true,
@@ -372,40 +376,61 @@ impl PartsRigScene {
         })
     }
 
-    /// Bone `bone` of view `view` of `object_id`, as last posed.
+    /// Bone `bone` of `object_id`, as last posed, in the view `camera`'s
+    /// reading draws and where that reading draws it.
     pub(crate) fn read_bone(
         &self,
         object_id: u64,
         bone: &str,
-        view: u32,
+        camera: &PartsRigCamera,
     ) -> Result<NativePartsRigBoneReadout, CsharpEngineServicesError> {
+        let instance = self.live(object_id)?;
+        let world = instance.world.ok_or_else(|| {
+            parts_rig_error(
+                "CSHARP_PARTS_RIG_NOT_POSED",
+                format!("object {object_id} has not been posed yet"),
+            )
+        })?;
+        let rig = &instance.rig;
+        if rig.size_mode == SpriteSizeMode::Pixel {
+            return Err(parts_rig_error(
+                "CSHARP_PARTS_RIG_PIXEL_SIZED",
+                format!(
+                    "object {object_id} is sized in pixels: where it draws follows each reading's viewport"
+                ),
+            ));
+        }
+        let view = rig.view_seen(&world, camera);
         let missing = || {
             parts_rig_error(
                 "CSHARP_PARTS_RIG_BONE",
                 format!("view {view} of object {object_id} has no posed bone `{bone}`"),
             )
         };
-        let instance = self.live(object_id)?;
-        let player = instance.views.get(view as usize).ok_or_else(missing)?;
+        let player = &instance.views[view];
         let index = self
             .rigs
             .get(&player.asset)
             .and_then(|rig| rig.find_bone(bone))
             .ok_or_else(missing)?;
-        let world = player.pose.bones.get(index).ok_or_else(missing)?;
-        let mirror = if player.mirror { -1.0 } else { 1.0 };
-        let (x, y) = (world.x as f32, world.y as f32);
+        let bone = player.pose.bones.get(index).ok_or_else(missing)?;
+        let (x, y) = (bone.x as f32, bone.y as f32);
+        let placed = rig
+            .place_point(&world, camera, [x, y])
+            .expect("a world-sized rig places its points");
+        let [wx, wy, wz] = placed.world;
         Ok(NativePartsRigBoneReadout {
+            view: view as u32,
             position: NativeVec2 { x, y },
-            rotation_degrees: world.c.atan2(world.a).to_degrees() as f32,
+            rotation_degrees: bone.c.atan2(bone.a).to_degrees() as f32,
             scale: NativeVec2 {
-                x: world.a.hypot(world.c) as f32,
-                y: world.b.hypot(world.d) as f32,
+                x: bone.a.hypot(bone.c) as f32,
+                y: bone.b.hypot(bone.d) as f32,
             },
-            offset: NativeVec3 {
-                x: x * instance.scale * mirror,
-                y: y * instance.scale,
-                z: 0.0,
+            world: NativeVec3 {
+                x: wx,
+                y: wy,
+                z: wz,
             },
         })
     }
@@ -474,6 +499,7 @@ impl PartsRigScene {
                     }
                 }
                 instance.origin = Some(origin);
+                instance.world = Some(m);
             }
             let elapsed = instance.posed_at.map_or(0.0, |at| (now - at).max(0.0));
             if elapsed == 0.0 && !instance.dirty {
@@ -842,6 +868,25 @@ impl RuntimeAppearanceBridge {
         )
     }
 
+    /// A live camera as parts-rig placement reads it.
+    fn parts_rig_camera(&self, camera: u64) -> Result<PartsRigCamera, CsharpEngineServicesError> {
+        let camera = self
+            .camera_view
+            .and_then(|views| unsafe { &*views }.renderer_camera(camera))
+            .ok_or_else(|| parts_rig_error("CSHARP_PARTS_RIG_CAMERA", "camera is not live"))?;
+        let [right, up, forward] = camera.axes().map(|axis| axis.map(|c| c as f32));
+        Ok(PartsRigCamera {
+            eye: camera.pose.position.map(|c| c as f32),
+            right,
+            up,
+            forward,
+            orthographic: matches!(
+                camera.projection,
+                render_host_contracts::RendererCameraProjection::Orthographic { .. }
+            ),
+        })
+    }
+
     fn read_parts_rig_events(
         &mut self,
     ) -> Result<NativePartsRigEventResult, CsharpEngineServicesError> {
@@ -1040,11 +1085,12 @@ unsafe extern "C" fn read_bone(
             // SAFETY: the borrowed name is read before the direct call returns.
             let bone =
                 unsafe { borrowed_utf8(request.bone.bytes, request.bone.len, "parts rig bone")? };
+            let camera = bridge.parts_rig_camera(request.camera.value)?;
             bridge
                 .staged_ref()?
                 .state
                 .parts_rigs
-                .read_bone(request.object_id, bone, request.view)
+                .read_bone(request.object_id, bone, &camera)
         })
     })
 }

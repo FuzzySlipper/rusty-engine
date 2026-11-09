@@ -14,7 +14,7 @@ namespace CsharpPartsRigs;
 /// </summary>
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
-    private const ulong TownspersonId = 1, FeaturesId = 2, FloorId = 3;
+    private const ulong TownspersonId = 1, FeaturesId = 2, FloorId = 3, MarkerId = 4;
     // The townsperson's rigs stand 896 units tall, feet at 0; a person about 1.75 m.
     private const float TownspersonMetresPerUnit = 1.75f / 896;
     private const string FrontModel = "people/townsperson/front/skeleton.model.json";
@@ -26,6 +26,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // The side rig faces its page's right: a camera at the person's left (-x) sees it as drawn.
     private const float FrontHeading = 0, SideHeading = -MathF.PI / 2, BackHeading = MathF.PI, MirroredSideHeading = MathF.PI / 2;
     private const string WalkClip = "walk", FeaturesClip = "a", TurnBone = "turn", HeadBone = "head";
+    // A marker the product keeps on a bone every view has, where the camera draws it.
+    private const float MarkerSize = .06f;
+    private static readonly Color MarkerColor = new(.95f, .15f, .1f, 1);
     private const float StartCrossfadeSeconds = 0;
     // Camera orbit about the townsperson.
     private const float OrbitDistance = 3.6f, OrbitHeight = 1.3f, OrbitStartDegrees = 20;
@@ -36,9 +39,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     private readonly IEngineContext engine;
     private readonly PartsRig front, side, back, features;
-    private readonly Appearance townspersonLook, featuresLook, floorLook;
+    private readonly Appearance townspersonLook, featuresLook, floorLook, markerLook;
     private readonly Camera camera;
-    private readonly float[] headings = [FrontHeading, SideHeading, BackHeading, MirroredSideHeading];
+    private string attachedBone = HeadBone;
+    private PartsRigBoneReadout attached;
     private float orbitDegrees = OrbitStartDegrees, spinDegreesPerSecond;
     private float? turn;
     private readonly Dictionary<string, int> eventCounts = [];
@@ -62,6 +66,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         featuresLook = rigs.CreateAppearance(new PartsRigAppearanceRequest(
             new PartsRigView[] { new(features, 0, false) }, FeaturesMetresPerUnit));
         floorLook = engine.Graphics.CreatePrimitive(new(PrimitiveGeometry.Cube, false, FloorColor));
+        markerLook = engine.Graphics.CreatePrimitive(new(PrimitiveGeometry.Cube, false, MarkerColor));
         engine.Graphics.PublishSnapshot(
         [
             Fact(FloorId, floorLook, new Vector3(0, -FloorThickness / 2, 0), new Vector3(FloorHalfSize * 2, FloorThickness, FloorHalfSize * 2)),
@@ -90,6 +95,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             orbitDegrees = (orbitDegrees + spinDegreesPerSecond * seconds) % 360;
             engine.CameraView.UpdateCamera(new CameraUpdateRequest(camera, CameraDescriptor()));
         }
+        Attach();
         return ProductUpdateResult.None;
     }
 
@@ -105,6 +111,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         townspersonLook.Dispose();
         featuresLook.Dispose();
         floorLook.Dispose();
+        markerLook.Dispose();
         front.Dispose();
         side.Dispose();
         back.Dispose();
@@ -120,22 +127,17 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             new CameraProjection(CameraProjectionKind.Perspective, 50, 0, .05, 100), CameraViewports.Full, 0);
     }
 
-    /// <summary>The view the camera's bearing on the townsperson picks: the nearest heading, as the Engine picks it.</summary>
-    private int ViewSeen()
+    /// <summary>
+    /// Puts the marker where the camera draws the attached bone, in the view it draws, as the
+    /// townsperson was last posed.
+    /// </summary>
+    private void Attach()
     {
-        float bearing = orbitDegrees * MathF.PI / 180;
-        int nearest = 0;
-        for (int index = 1; index < headings.Length; index++)
-        {
-            if (Distance(bearing, headings[index]) < Distance(bearing, headings[nearest])) nearest = index;
-        }
-        return nearest;
-
-        static float Distance(float a, float b)
-        {
-            float turn = ((a - b) % MathF.Tau + MathF.Tau) % MathF.Tau;
-            return MathF.Min(turn, MathF.Tau - turn);
-        }
+        attached = engine.PartsRigs.ReadBone(new PartsRigBoneRequest(TownspersonId, attachedBone, camera));
+        engine.Graphics.PublishChanges(new(
+            new[] { Fact(MarkerId, markerLook, attached.World, new Vector3(MarkerSize)) },
+            ReadOnlyMemory<ulong>.Empty,
+            ReadOnlyMemory<MeshJointAttachment>.Empty));
     }
 
     private static AppearanceFact Fact(ulong id, Appearance appearance, Vector3 position, Vector3 scale) =>
@@ -143,16 +145,16 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
 
-    [DebugCommand("rigs.observe", Description = "Read-only: each rig's clip, clip time and speed, the townsperson's head in the view the camera sees, the camera bearing and the events read.")]
+    [DebugCommand("rigs.observe", Description = "Read-only: each rig's clip, clip time and speed, the view the camera sees, the attached bone where it draws, the camera bearing and the events read.")]
     public string Observe()
     {
         PartsRigReadout person = engine.PartsRigs.Read(TownspersonId);
         PartsRigReadout gallery = engine.PartsRigs.Read(FeaturesId);
-        int view = ViewSeen();
-        PartsRigBoneReadout head = engine.PartsRigs.ReadBone(new PartsRigBoneRequest(TownspersonId, HeadBone, (uint)view));
+        PartsRigBoneReadout bone = engine.PartsRigs.ReadBone(new PartsRigBoneRequest(TownspersonId, attachedBone, camera));
         return JsonSerializer.Serialize(new RigFacts(
-            Rig(person), Rig(gallery), orbitDegrees, spinDegreesPerSecond, view, turn,
-            new BoneFacts(head.Position.X, head.Position.Y, head.Offset.X, head.Offset.Y),
+            Rig(person), Rig(gallery), orbitDegrees, spinDegreesPerSecond, (int)bone.View, turn,
+            new BoneFacts(attachedBone, bone.Position.X, bone.Position.Y, bone.World.X, bone.World.Y, bone.World.Z,
+                attached.World.X, attached.World.Y, attached.World.Z),
             eventCounts, [.. recentEvents]), RigJsonContext.Default.RigFacts);
 
         static RigState Rig(PartsRigReadout readout) =>
@@ -198,6 +200,25 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         return Observe();
     }
 
+    [DebugCommand("rigs.attach", Description = "Keep the red marker on a named bone of the townsperson (one every view has: head, neck, foot_r, foot_l, leg_r1, ...).")]
+    public string AttachTo(string bone)
+    {
+        attachedBone = bone;
+        Attach();
+        return Observe();
+    }
+
+    [DebugCommand("rigs.place", Description = "Move the townsperson to x, z and turn it to a yaw in degrees; the marker follows.")]
+    public string Place(float x, float z, float yawDegrees)
+    {
+        engine.Graphics.PublishChanges(new(
+            new[] { new AppearanceFact(TownspersonId, false, 0, new Transform(new Vector3(x, 0, z),
+                Quaternion.CreateFromAxisAngle(Vector3.UnitY, yawDegrees * MathF.PI / 180), Vector3.One), townspersonLook, true, RenderLayer.Scene) },
+            ReadOnlyMemory<ulong>.Empty,
+            ReadOnlyMemory<MeshJointAttachment>.Empty));
+        return Observe();
+    }
+
     [DebugCommand("rigs.spin", Description = "Orbit the camera about the townsperson at the given degrees per second of world time (0 stops).")]
     public string Spin(float degreesPerSecond)
     {
@@ -208,7 +229,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
 internal sealed record RigState(uint Views, string? Clip, double ClipSeconds, float Speed, bool Posed);
 
-internal sealed record BoneFacts(float RigX, float RigY, float OffsetX, float OffsetY);
+internal sealed record BoneFacts(string Bone, float RigX, float RigY, float WorldX, float WorldY, float WorldZ,
+    float MarkerX, float MarkerY, float MarkerZ);
 
 internal sealed record RigFacts(
     RigState Townsperson,
@@ -217,7 +239,7 @@ internal sealed record RigFacts(
     float SpinDegreesPerSecond,
     int ViewSeen,
     float? Turn,
-    BoneFacts Head,
+    BoneFacts Attached,
     Dictionary<string, int> EventCounts,
     string[] RecentEvents);
 
