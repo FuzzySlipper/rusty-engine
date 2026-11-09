@@ -1595,12 +1595,15 @@ impl Renderer {
         // chunks name the material as well as their variant, so defining it
         // rebinds them to it, and each variant defined then to the variant.
         self.release_layer_variants(&descriptor.id);
+        // Only a terrain layer material has variants, so only it looks for
+        // the meshes drawing it: the search walks every mesh and node.
+        if descriptor.terrain_layers.is_none() {
+            return self.define_material_alone(descriptor);
+        }
         let palettes = self.palettes_drawing(&descriptor.id);
         self.define_material_alone(descriptor.clone())?;
-        if descriptor.terrain_layers.is_some() {
-            for palette in palettes {
-                self.define_layer_variant(&descriptor, &palette)?;
-            }
+        for palette in palettes {
+            self.define_layer_variant(&descriptor, &palette)?;
         }
         Ok(())
     }
