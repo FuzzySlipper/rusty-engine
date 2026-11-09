@@ -1,0 +1,781 @@
+{
+ "spec": "rigc-motion/1",
+ "archetype": "features",
+ "cut": "features",
+ "easings": {
+  "smooth": [
+   0.25,
+   0,
+   0.75,
+   1
+  ],
+  "snap": [
+   0.1,
+   0.7,
+   0.3,
+   1
+  ]
+ },
+ "animations": {
+  "a": {
+   "duration": 1.2,
+   "loop": true,
+   "events": [
+    {
+     "t": 0,
+     "name": "step"
+    },
+    {
+     "t": 0.5,
+     "name": "cue",
+     "int": 7
+    },
+    {
+     "t": 1.1,
+     "name": "step"
+    }
+   ],
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        25
+       ],
+       "ease": "snap"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "base",
+     "property": "shear",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        10,
+        -6
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "flip",
+     "property": "scale",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1,
+        1
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        1.3,
+        0.7
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        1,
+        1
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "c_normal",
+     "property": "scalex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1
+       ],
+       "ease": "stepped"
+      },
+      {
+       "t": 0.4,
+       "v": [
+        1.5
+       ],
+       "ease": "stepped"
+      },
+      {
+       "t": 0.8,
+       "v": [
+        0.7
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "c_only",
+     "property": "translatex",
+     "keys": [
+      {
+       "t": 0.2,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.9,
+       "v": [
+        40
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "c_only",
+     "property": "inherit",
+     "keys": [
+      {
+       "t": 0,
+       "v": "onlyTranslation"
+      },
+      {
+       "t": 0.6,
+       "v": "normal"
+      }
+     ]
+    },
+    {
+     "bone": "c_norot",
+     "property": "sheary",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        20
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "c_noscale",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        30,
+        -20
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "c_noscalerefl",
+     "property": "scaley",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        -1.4
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        1
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "w2",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        -40
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_normal",
+     "property": "rgba2",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1,
+        1,
+        1,
+        1,
+        0.1,
+        0.2,
+        0.3
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        1,
+        0.5,
+        0.25,
+        0.5,
+        0.8,
+        0.1,
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        1,
+        1,
+        1,
+        1,
+        0.1,
+        0.2,
+        0.3
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_ball",
+     "property": "rgb2",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1,
+        1,
+        1,
+        0,
+        0,
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        0.2,
+        0.6,
+        1,
+        0.3,
+        0.3,
+        0
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        1,
+        1,
+        1,
+        0,
+        0,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_only",
+     "property": "alpha",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.75
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        0.1
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0.75
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_norot",
+     "property": "rgb",
+     "keys": [
+      {
+       "t": 0.3,
+       "v": [
+        1,
+        0,
+        0
+       ],
+       "ease": "stepped"
+      },
+      {
+       "t": 0.9,
+       "v": [
+        0,
+        1,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_noscale",
+     "property": "rgba",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1,
+        1,
+        1,
+        1
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0,
+        0,
+        1,
+        0.5
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_eyes",
+     "property": "attachment",
+     "keys": [
+      {
+       "t": 0,
+       "v": "eyes"
+      },
+      {
+       "t": 0.3,
+       "v": "eyes_shut"
+      },
+      {
+       "t": 0.45,
+       "v": null
+      },
+      {
+       "t": 0.7,
+       "v": "eyes"
+      }
+     ]
+    }
+   ],
+   "deform": [
+    {
+     "slot": "s_ball",
+     "attachment": "ball",
+     "keys": [
+      {
+       "t": 0,
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "transform": {
+        "kind": "affine",
+        "scale": [
+         1.3,
+         0.7
+        ]
+       },
+       "ease": "snap"
+      },
+      {
+       "t": 1.2
+      }
+     ]
+    },
+    {
+     "slot": "s_weighted",
+     "attachment": "leg",
+     "keys": [
+      {
+       "t": 0
+      },
+      {
+       "t": 0.6,
+       "vertices": [
+        10,
+        5,
+        -4,
+        3,
+        6,
+        -6
+       ],
+       "ease": "smooth",
+       "offset": 2
+      },
+      {
+       "t": 1.2
+      }
+     ]
+    }
+   ]
+  },
+  "b": {
+   "duration": 0.8,
+   "loop": true,
+   "events": [
+    {
+     "t": 0.4,
+     "name": "cue"
+    }
+   ],
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -30
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.4,
+       "v": [
+        200
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.8,
+       "v": [
+        -30
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "c_noscale",
+     "property": "shearx",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        30
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "flip",
+     "property": "scalex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0.8
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        1.1
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "w2",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        30
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        -10
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "c_only",
+     "property": "inherit",
+     "keys": [
+      {
+       "t": 0.2,
+       "v": "noScale"
+      }
+     ]
+    },
+    {
+     "slot": "s_noscale",
+     "property": "rgba",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1,
+        0,
+        0,
+        1
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        1,
+        1,
+        0,
+        1
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_only",
+     "property": "alpha",
+     "keys": [
+      {
+       "t": 0.1,
+       "v": [
+        0.3
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        1
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_eyes",
+     "property": "attachment",
+     "keys": [
+      {
+       "t": 0,
+       "v": "eyes_shut"
+      },
+      {
+       "t": 0.5,
+       "v": "eyes"
+      }
+     ]
+    }
+   ],
+   "deform": [
+    {
+     "slot": "s_ball",
+     "attachment": "ball",
+     "keys": [
+      {
+       "t": 0
+      },
+      {
+       "t": 0.4,
+       "transform": {
+        "kind": "affine",
+        "scale": [
+         0.8,
+         1.25
+        ]
+       },
+       "ease": "smooth"
+      },
+      {
+       "t": 0.8
+      }
+     ]
+    }
+   ]
+  },
+  "order": {
+   "duration": 1.0,
+   "loop": true,
+   "drawOrder": [
+    {
+     "t": 0.25,
+     "offsets": [
+      {
+       "slot": "s_normal",
+       "offset": 5
+      },
+      {
+       "slot": "s_eyes",
+       "offset": -4
+      }
+     ]
+    },
+    {
+     "t": 0.5,
+     "offsets": [
+      {
+       "slot": "s_weighted",
+       "offset": -7
+      }
+     ]
+    },
+    {
+     "t": 0.75
+    }
+   ],
+   "events": [
+    {
+     "t": 0.25,
+     "name": "step"
+    },
+    {
+     "t": 0.75,
+     "name": "step"
+    }
+   ],
+   "tracks": [
+    {
+     "bone": "base",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ]
+      },
+      {
+       "t": 0.5,
+       "v": [
+        20,
+        10
+       ]
+      },
+      {
+       "t": 1,
+       "v": [
+        0,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "slot": "s_eyes",
+     "property": "attachment",
+     "keys": [
+      {
+       "t": 0.6,
+       "v": "eyes_shut"
+      }
+     ]
+    }
+   ],
+   "sequence": [
+    {
+     "slot": "s_seq",
+     "attachment": "blink",
+     "keys": [
+      {
+       "t": 0.1,
+       "mode": "loop",
+       "delay": 0.1
+      },
+      {
+       "t": 0.6,
+       "mode": "pingpongReverse",
+       "index": 2,
+       "delay": 0.07
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

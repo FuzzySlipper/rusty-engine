@@ -254,6 +254,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "animation-parts-rig"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "animation-pose"
 version = "0.1.0"
 dependencies = [

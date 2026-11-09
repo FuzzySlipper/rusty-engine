@@ -1,0 +1,393 @@
+{
+ "spec": "rigc-rig/1",
+ "name": "features",
+ "images": "parts",
+ "skeleton": {
+  "x": 0,
+  "y": 0,
+  "width": 800,
+  "height": 720
+ },
+ "bones": [
+  {
+   "name": "root"
+  },
+  {
+   "name": "base",
+   "parent": "root",
+   "x": 400,
+   "y": 300,
+   "rotation": 10,
+   "scaleX": 1.2,
+   "scaleY": 0.8,
+   "shearX": 5,
+   "shearY": -3
+  },
+  {
+   "name": "flip",
+   "parent": "base",
+   "x": 30,
+   "scaleX": -1
+  },
+  {
+   "name": "c_normal",
+   "parent": "flip",
+   "x": 50,
+   "y": 10,
+   "rotation": 20,
+   "inherit": "normal"
+  },
+  {
+   "name": "c_only",
+   "parent": "flip",
+   "x": -40,
+   "y": 60,
+   "rotation": 15,
+   "inherit": "onlyTranslation"
+  },
+  {
+   "name": "c_norot",
+   "parent": "flip",
+   "x": 80,
+   "y": -40,
+   "rotation": 25,
+   "shearX": 4,
+   "inherit": "noRotationOrReflection"
+  },
+  {
+   "name": "c_noscale",
+   "parent": "flip",
+   "x": -90,
+   "y": -30,
+   "rotation": -30,
+   "scaleY": 1.3,
+   "inherit": "noScale"
+  },
+  {
+   "name": "c_noscalerefl",
+   "parent": "flip",
+   "x": 120,
+   "y": 90,
+   "rotation": 40,
+   "inherit": "NoScaleOrReflection"
+  },
+  {
+   "name": "w1",
+   "parent": "base",
+   "x": -150,
+   "y": -60
+  },
+  {
+   "name": "w2",
+   "parent": "w1",
+   "y": 60,
+   "rotation": 10
+  },
+  {
+   "name": "extra",
+   "parent": "root",
+   "x": 100,
+   "y": 600,
+   "skin": true
+  }
+ ],
+ "slots": [
+  {
+   "name": "s_normal",
+   "bone": "c_normal",
+   "attachment": "head",
+   "dark": "203040",
+   "blend": "additive"
+  },
+  {
+   "name": "s_only",
+   "bone": "c_only",
+   "attachment": "ear_l",
+   "color": "ff8080c0"
+  },
+  {
+   "name": "s_norot",
+   "bone": "c_norot",
+   "attachment": "ear_r",
+   "blend": "multiply"
+  },
+  {
+   "name": "s_noscale",
+   "bone": "c_noscale",
+   "attachment": "arm_b",
+   "blend": "screen"
+  },
+  {
+   "name": "s_noscalerefl",
+   "bone": "c_noscalerefl",
+   "attachment": "arm_f"
+  },
+  {
+   "name": "s_ball",
+   "bone": "base",
+   "attachment": "ball",
+   "dark": "000000"
+  },
+  {
+   "name": "s_link",
+   "bone": "base",
+   "attachment": "link"
+  },
+  {
+   "name": "s_weighted",
+   "bone": "w1",
+   "attachment": "leg"
+  },
+  {
+   "name": "s_eyes",
+   "bone": "base",
+   "attachment": "eyes"
+  },
+  {
+   "name": "s_skin",
+   "bone": "extra",
+   "attachment": "hand"
+  },
+  {
+   "name": "s_seq",
+   "bone": "base",
+   "attachment": "blink"
+  }
+ ],
+ "skins": {
+  "default": {
+   "s_normal": {
+    "head": {
+     "image": "head.png",
+     "y": 40,
+     "rotation": 5,
+     "scaleX": 0.5,
+     "scaleY": 0.6
+    }
+   },
+   "s_only": {
+    "ear_l": {
+     "image": "ear_l.png",
+     "y": 30
+    }
+   },
+   "s_norot": {
+    "ear_r": {
+     "image": "ear_r.png",
+     "x": -5,
+     "y": 30
+    }
+   },
+   "s_noscale": {
+    "arm_b": {
+     "image": "arm_b.png",
+     "y": -50
+    }
+   },
+   "s_noscalerefl": {
+    "arm_f": {
+     "image": "arm_f.png",
+     "y": -30,
+     "color": "c0ffc0ff"
+    }
+   },
+   "s_ball": {
+    "ball": {
+     "type": "mesh",
+     "image": "ball.png",
+     "hull": 8,
+     "uvs": [
+      0.958333,
+      0.5,
+      0.824092,
+      0.175908,
+      0.5,
+      0.0416667,
+      0.175908,
+      0.175908,
+      0.0416667,
+      0.5,
+      0.175908,
+      0.824092,
+      0.5,
+      0.958333,
+      0.824092,
+      0.824092,
+      0.5,
+      0.5
+     ],
+     "vertices": [
+      110,
+      0,
+      77.782,
+      77.782,
+      0,
+      110,
+      -77.782,
+      77.782,
+      -110,
+      0,
+      -77.782,
+      -77.782,
+      0,
+      -110,
+      77.782,
+      -77.782,
+      0,
+      0
+     ],
+     "triangles": [
+      8,
+      0,
+      1,
+      8,
+      1,
+      2,
+      8,
+      2,
+      3,
+      8,
+      3,
+      4,
+      8,
+      4,
+      5,
+      8,
+      5,
+      6,
+      8,
+      6,
+      7,
+      8,
+      7,
+      0
+     ]
+    }
+   },
+   "s_link": {
+    "link": {
+     "type": "linkedmesh",
+     "image": "shadow.png",
+     "source": "ball",
+     "slot": "s_ball"
+    }
+   },
+   "s_weighted": {
+    "leg": {
+     "type": "mesh",
+     "image": "leg_l.png",
+     "hull": 4,
+     "uvs": [
+      0,
+      0,
+      1,
+      0,
+      1,
+      1,
+      0,
+      1
+     ],
+     "triangles": [
+      0,
+      1,
+      2,
+      2,
+      3,
+      0
+     ],
+     "weights": [
+      [
+       {
+        "bone": "w2",
+        "x": -30,
+        "y": 62,
+        "weight": 1
+       }
+      ],
+      [
+       {
+        "bone": "w2",
+        "x": 30,
+        "y": 62,
+        "weight": 0.75
+       },
+       {
+        "bone": "w1",
+        "x": 30,
+        "y": 122,
+        "weight": 0.25
+       }
+      ],
+      [
+       {
+        "bone": "w1",
+        "x": 30,
+        "y": -62,
+        "weight": 1
+       }
+      ],
+      [
+       {
+        "bone": "w1",
+        "x": -30,
+        "y": -62,
+        "weight": 0.6
+       },
+       {
+        "bone": "w2",
+        "x": -30,
+        "y": -122,
+        "weight": 0.4
+       }
+      ]
+     ]
+    }
+   },
+   "s_eyes": {
+    "eyes": {
+     "image": "eyes.png",
+     "y": 150
+    },
+    "eyes_shut": {
+     "image": "eyes_shut.png",
+     "y": 150
+    }
+   },
+   "s_seq": {
+    "blink": {
+     "path": "blink_",
+     "sequence": {
+      "count": 3,
+      "start": 1,
+      "digits": 2,
+      "setup": 1
+     },
+     "x": -120,
+     "y": 200,
+     "width": 200,
+     "height": 90
+    }
+   }
+  },
+  "alt": {
+   "attachments": {
+    "s_skin": {
+     "hand": {
+      "image": "hand_f.png"
+     }
+    }
+   },
+   "bones": [
+    "extra"
+   ]
+  }
+ },
+ "events": {
+  "step": {},
+  "cue": {
+   "int": 3,
+   "float": 0.5,
+   "string": "hi"
+  }
+ }
+}

@@ -1,0 +1,11 @@
+[package]
+name = "animation-parts-rig"
+version.workspace = true
+edition.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
