@@ -13,7 +13,7 @@
 //! them all at once; a finer tile draws only where every coarser tile above
 //! it has given way, so nothing overlaps and nothing goes missing.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -68,6 +68,8 @@ pub struct HeightfieldTiles {
     drawn: BTreeSet<TileKey>,
     next_revision: u32,
     changes: HeightfieldChanges,
+    /// What is drawn may have changed since the last redraw.
+    stale: bool,
     /// The last meshing's summed time and tile count.
     pub mesh_microseconds: u64,
     pub meshed_tiles: u32,
@@ -82,6 +84,7 @@ impl HeightfieldTiles {
             drawn: BTreeSet::new(),
             next_revision: 1,
             changes: HeightfieldChanges::default(),
+            stale: false,
             mesh_microseconds: 0,
             meshed_tiles: 0,
         }
@@ -120,11 +123,18 @@ impl HeightfieldTiles {
         if focus == self.focus {
             return;
         }
+        let before = self.focus.map(|focus| self.regions(focus));
         self.focus = focus;
         let Some(focus) = focus else {
             return;
         };
         let regions = self.regions(focus);
+        // What is held, wanted and drawn reads the focus only through the
+        // regions.
+        if before.as_ref() == Some(&regions) {
+            return;
+        }
+        self.stale = true;
         for (ring, region) in regions.iter().enumerate() {
             for (x, z) in region.tiles() {
                 let key = TileKey {
@@ -173,12 +183,7 @@ impl HeightfieldTiles {
             return Vec::new();
         };
         let mut waiting: Vec<(std::cmp::Reverse<u8>, f64, HeightfieldRequest)> = self
-            .tiles
-            .iter()
-            .filter(|(key, tile)| {
-                self.wanted(**key)
-                    && tile.surface.as_ref().map(|(revision, _)| *revision) != Some(tile.revision)
-            })
+            .waiting()
             .map(|(key, tile)| {
                 let size = self.layout.rings[usize::from(key.ring)].tile_size;
                 let origin = self.layout.origin(*key);
@@ -223,6 +228,7 @@ impl HeightfieldTiles {
             Arc::new(TileSurface::new(&self.layout, ring, samples)),
         ));
         tile.remesh = true;
+        self.stale = true;
         let children: Vec<TileKey> = self.layout.children(key).collect();
         for child in children {
             if let Some(child) = self.tiles.get_mut(&child) {
@@ -291,6 +297,7 @@ impl HeightfieldTiles {
             )
         });
         self.meshed_tiles = results.len() as u32;
+        self.stale |= !results.is_empty();
         self.mesh_microseconds = results.iter().map(|result| result.2).sum();
         for (key, mesh, _) in results {
             if let Some(tile) = self.tiles.get_mut(&key) {
@@ -302,54 +309,68 @@ impl HeightfieldTiles {
         self.redraw();
     }
 
-    /// Every finer tile within `key` is meshed (or is a hole).
-    fn complete(&self, key: TileKey) -> bool {
-        self.layout.children(key).all(|child| {
-            self.tiles
-                .get(&child)
-                .is_some_and(|tile| tile.mesh.is_some() || (tile.surface.is_some() && !tile.remesh))
-        })
-    }
-
-    /// Whether `key` hands its square down to its finer tiles: the finer
-    /// ring's region covers it, they are all meshed, and every coarser tile
-    /// above it hands down too. Otherwise the nearest coarser tile that does
-    /// not draws there, and nothing finer may.
-    fn handed_down(&self, key: TileKey, regions: &[TileRect]) -> bool {
-        let ring = usize::from(key.ring);
-        ring > 0
-            && {
-                let k = self.layout.rings[ring - 1].per_parent;
-                let finer = &regions[ring - 1];
-                finer.contains(key.x * k, key.z * k)
-                    && finer.contains(key.x * k + k - 1, key.z * k + k - 1)
-            }
-            && self.complete(key)
-            && self
-                .layout
-                .parent(key)
-                .is_none_or(|parent| self.handed_down(parent, regions))
-    }
-
+    /// Draw each meshed tile of its ring's region unless a coarser tile
+    /// above it still draws, or it hands its square down: the finer ring's
+    /// region covers it, every finer tile within it is meshed (or is a
+    /// hole), and every coarser tile above it hands down too. Nothing to do
+    /// when nothing it reads has changed.
     fn redraw(&mut self) {
+        if !self.stale {
+            return;
+        }
         let Some(focus) = self.focus else {
             return;
         };
+        self.stale = false;
         let regions = self.regions(focus);
-        let mut drawn = BTreeSet::new();
+        // How many of each coarser tile's finer tiles are ready.
+        let mut ready: HashMap<TileKey, i64> = HashMap::new();
         for (key, tile) in &self.tiles {
-            let ring = usize::from(key.ring);
-            if tile.mesh.is_none() || !regions[ring].contains(key.x, key.z) {
-                continue;
-            }
-            let exposed = self
-                .layout
-                .parent(*key)
-                .is_none_or(|parent| self.handed_down(parent, &regions));
-            if exposed && !self.handed_down(*key, &regions) {
-                drawn.insert(*key);
+            if tile.mesh.is_some() || (tile.surface.is_some() && !tile.remesh) {
+                if let Some(parent) = self.layout.parent(*key) {
+                    *ready.entry(parent).or_default() += 1;
+                }
             }
         }
+        let mut whole: Vec<TileKey> = ready
+            .into_iter()
+            .filter(|(key, count)| {
+                let k = self.layout.rings[usize::from(key.ring) - 1].per_parent;
+                *count == k * k
+            })
+            .map(|(key, _)| key)
+            .collect();
+        // Coarsest first, so each tile reads whether the one above hands down.
+        whole.sort_unstable_by_key(|key| std::cmp::Reverse(key.ring));
+        let mut handed = HashSet::new();
+        for key in whole {
+            let ring = usize::from(key.ring);
+            let k = self.layout.rings[ring - 1].per_parent;
+            let finer = &regions[ring - 1];
+            if finer.contains(key.x * k, key.z * k)
+                && finer.contains(key.x * k + k - 1, key.z * k + k - 1)
+                && self
+                    .layout
+                    .parent(key)
+                    .is_none_or(|parent| handed.contains(&parent))
+            {
+                handed.insert(key);
+            }
+        }
+        let drawn: BTreeSet<TileKey> = self
+            .tiles
+            .iter()
+            .filter(|(key, tile)| {
+                tile.mesh.is_some()
+                    && regions[usize::from(key.ring)].contains(key.x, key.z)
+                    && !handed.contains(*key)
+                    && self
+                        .layout
+                        .parent(**key)
+                        .is_none_or(|parent| handed.contains(&parent))
+            })
+            .map(|(key, _)| *key)
+            .collect();
         self.changes
             .shown
             .extend(drawn.difference(&self.drawn).copied());
@@ -389,10 +410,22 @@ impl HeightfieldTiles {
             .count()
     }
 
+    /// Wanted tiles without current samples.
+    pub fn pending(&self) -> usize {
+        self.waiting().count()
+    }
+
+    fn waiting(&self) -> impl Iterator<Item = (&TileKey, &Tile)> + '_ {
+        self.tiles.iter().filter(|(key, tile)| {
+            self.wanted(**key)
+                && tile.surface.as_ref().map(|(revision, _)| *revision) != Some(tile.revision)
+        })
+    }
+
     /// Every wanted tile has current samples and nothing waits to mesh.
     pub fn settled(&self) -> bool {
         self.focus.is_some()
-            && self.requests(1).is_empty()
+            && self.waiting().next().is_none()
             && !self
                 .tiles
                 .iter()

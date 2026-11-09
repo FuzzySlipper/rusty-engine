@@ -629,7 +629,7 @@ fn readout(retained: &RetainedHeightfield) -> NativeHeightfieldReadout {
         focus_z: focus.map_or(0.0, |focus| focus[1]),
         resident_tiles: tiles.resident() as u32,
         drawn_tiles: tiles.drawn().count() as u32,
-        pending_tiles: tiles.requests(0).len() as u32,
+        pending_tiles: tiles.pending() as u32,
         settled: tiles.settled(),
         vertices: footprint.vertices,
         indices: footprint.indices,
