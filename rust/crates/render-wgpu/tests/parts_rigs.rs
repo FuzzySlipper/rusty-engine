@@ -9,9 +9,9 @@
 //!   order, against their arithmetic;
 //! - pixel art snapped to the rig's texel grid;
 //! - pixel art placed in a rectangle of the viewport: whole pixels per
-//!   texel, a pose moving inside its fixed frame and clipped by it, and over
-//!   a fogged scene; and following a UI anchor's rect as the page reports
-//!   it;
+//!   texel, a pose moving inside its fixed frame and clipped by it, over a
+//!   fogged scene, and its pages' colours over an exposed, graded and tone
+//!   mapped one; and following a UI anchor's rect as the page reports it;
 //! - a snapshot of the world drawing the same rigs;
 //! - a rig of several views, each camera drawing the view nearest its
 //!   bearing, and a mirrored view drawn flipped.
@@ -980,6 +980,51 @@ fn a_rig_placed_in_the_viewport_draws_whole_pixel_texels_in_a_steady_frame_over_
                 pixel(&frame, WIDTH, x, y),
                 "({x}, {y}) is unfogged and over the floor"
             );
+        }
+    }
+
+    // Exposed four times, bloomed, graded and tone mapped by ACES, the
+    // scene changes and every texel is still its page's colour: the rig
+    // draws after the finish.
+    harness.apply(vec![
+        RenderDiff::SetToneMapping {
+            tone_mapping: ToneMappingDescriptor {
+                operator: ToneMappingOperator::AcesFilmic,
+                exposure: 4.0,
+            },
+        },
+        RenderDiff::SetColorGrading {
+            color_grading: Some(ColorGradingDescriptor {
+                temperature: 0.4,
+                tint: -0.2,
+                contrast: 1.3,
+                saturation: 0.6,
+            }),
+        },
+        RenderDiff::SetBloom {
+            bloom: Some(BloomDescriptor {
+                threshold: 0.5,
+                intensity: 1.0,
+            }),
+        },
+    ]);
+    let finished = harness.single(&eye);
+    assert!(
+        differing_pixels(
+            &finished[..WIDTH as usize * 4 * 90],
+            &fogged[..WIDTH as usize * 4 * 90]
+        ) > 1000,
+        "the scene is finished"
+    );
+    let page = checker_page();
+    for j in 0..12 {
+        for i in 0..12 {
+            let texel = &page[((j * 12 + i) * 4) as usize..][..4];
+            if texel[3] == 255 {
+                let colour = cell(&finished, i, j)
+                    .unwrap_or_else(|| panic!("texel ({i}, {j}) is a whole 3 × 3 block"));
+                assert_eq!(colour[..3], texel[..3], "texel ({i}, {j}) is its page's");
+            }
         }
     }
     assert_screenshot("parts_rigs_viewport", WIDTH, HEIGHT, &fogged);

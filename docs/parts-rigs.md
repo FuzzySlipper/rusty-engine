@@ -106,12 +106,19 @@ engine.Graphics.PublishChanges(new([new(BustId, false, 0, anywhere, bust, true, 
   the frame the product gives, such as a bust's square.
 - **The placement owns the place.** The object's transform, the
   appearance's scale, size mode and billboard mode are not read. The rig
-  faces the camera and draws its first view. It draws without depth: over
-  everything in its layer, in render order. Publish it in
-  `RenderLayer.Viewmodel` to draw it over the scene, unfogged and untouched
-  by the scene's depth, in every reading (the window, the stream, captures).
-  An object placed this way takes no physics swing from its object's motion,
-  and `ReadBone` refuses it, as it does a `Pixel`-sized rig.
+  faces the camera and draws its first view. An object placed this way
+  takes no physics swing from its object's motion, and `ReadBone` refuses
+  it, as it does a `Pixel`-sized rig.
+- **UI art, after the finish.** A placed rig draws after its layer's
+  finish, into the finished image without depth, over everything in its
+  layer in render order, one sample a pixel. Its pages' colours reach the
+  screen as authored: not fogged, exposed (auto exposure included),
+  bloomed, graded or tone mapped, whatever the camera's finish does to the
+  scene. Its material's lighting still applies; an `Unlit` bust shows its
+  texels exactly. Publish it in `RenderLayer.Viewmodel` to draw it over the
+  scene in every reading (the window, the stream, captures). Under a
+  temporal stage it marks the reactive mask, as labels do, so it never
+  smears with what moves behind it.
 - **Pixel art.** With a `TexelSnap`, the fit is the largest whole number of
   the target's pixels per texel that fits (the exact fit when not even one
   does), and the texel grid lies on pixel edges. A 127-texel frame in a

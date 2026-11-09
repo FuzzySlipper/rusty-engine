@@ -45,6 +45,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const float BreathingAlpha = 1, FeaturesLayerAlpha = .6f;
     private const string PersonRig = "person", FeaturesRig = "features", BustRig = "bust";
     private static readonly Color FogColor = new(.62f, .66f, .72f, 1);
+    // A lit scene's finish for `rigs.finish`: ACES with a warm, contrasty grade and some bloom,
+    // and auto exposure allowed above 1, as a night scene lifts; the bust takes none of it.
+    private static readonly ColorGradingRequest FinishGrading = new(.35f, -.1f, .3f, -.2f);
+    private static readonly BloomRequest FinishBloom = new(.8f, .6f);
+    private const float FinishAdaptSpeed = 2, FinishMinExposure = 1, FinishMaxExposure = 4;
     // A marker the product keeps on a bone every view has, where the camera draws it.
     private const float MarkerSize = .06f;
     private static readonly Color MarkerColor = new(.95f, .15f, .1f, 1);
@@ -341,6 +346,17 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string Fog(float density)
     {
         engine.CameraView.SetFog(new FogRequest(density > 0 ? FogMode.Exponential : FogMode.Off, FogColor, 0, 0, density));
+        return Observe();
+    }
+
+    [DebugCommand("rigs.finish", Description = "Finish the scene as a lit one is: ACES at the given exposure, graded, bloomed and auto exposed up to 4 (0 for none of it); the bust keeps its pages' colours.")]
+    public string Finish(float exposure)
+    {
+        bool on = exposure > 0;
+        engine.CameraView.SetToneMapping(new(on ? ToneMappingOperator.AcesFilmic : ToneMappingOperator.None, on ? exposure : 1));
+        engine.CameraView.SetColorGrading(on ? FinishGrading : default);
+        engine.CameraView.SetBloom(on ? FinishBloom : default);
+        engine.CameraView.SetAutoExposure(new AutoExposureRequest(on, FinishAdaptSpeed, FinishMinExposure, FinishMaxExposure));
         return Observe();
     }
 

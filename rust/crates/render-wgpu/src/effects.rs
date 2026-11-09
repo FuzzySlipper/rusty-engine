@@ -9,7 +9,10 @@
 //!
 //! Parts rigs (`NodeKind::PartsRig`, `parts_rigs.rs`) draw as sprites do:
 //! each view places a rig's plane by a sprite row, and the rig's pieces,
-//! built into its own buffers once per pose, draw on it in runs.
+//! built into its own buffers once per pose, draw on it in runs. A rig placed
+//! in the viewport is UI art: it draws after its view's finish, into the
+//! finished image without depth, one sample a pixel, so its pages' colours
+//! reach the screen as authored, not fogged, exposed, graded or tone mapped.
 //!
 //! Particles are `PresentationOp::Particle` emitters simulated in
 //! [`crate::particles`] on Engine update time only.
@@ -96,6 +99,9 @@ struct RigState {
     /// Drawn as solid sprites are: normal pieces cover their pixels.
     solid: bool,
     blend: PartsRigBlend,
+    /// A viewport-placed rig's, drawn into its view's finished image after
+    /// the finish, without depth (`EffectsPass::finished`).
+    finished: bool,
 }
 
 /// Colour, detail (normal or height), tint mask and emission map texture
@@ -119,6 +125,8 @@ struct SpriteDraw {
     /// blend over what is behind them, so it draws with the blended draws,
     /// back to front after everything solid, still solid itself.
     blends_over: bool,
+    /// A rig placed in the viewport: drawn after the finish.
+    finished: bool,
 }
 
 impl SpriteDraw {
@@ -140,6 +148,10 @@ pub(crate) struct EffectsPass {
     solid: Vec<SpriteInstance>,
     blended: Vec<BlendedSprite>,
     soft_sprites: Vec<SpriteInstance>,
+    /// Rigs placed in the viewport, in draw order: they draw after the
+    /// view's finish, into its finished image, as their pages' colours
+    /// are, unexposed, ungraded and not tone mapped (`draw_finished`).
+    finished: Vec<SpriteInstance>,
     cubes: u32,
     /// Runs into the particle rows: hard billboards, then soft ones.
     billboards: Vec<BillboardRun>,
@@ -221,9 +233,17 @@ impl EffectsPass {
     }
 
     pub fn draws(&self) -> u32 {
-        (self.solid.len() + self.blended.len() + self.soft_sprites.len() + self.billboards.len())
-            as u32
+        (self.solid.len()
+            + self.blended.len()
+            + self.soft_sprites.len()
+            + self.finished.len()
+            + self.billboards.len()) as u32
             + u32::from(self.cubes > 0)
+    }
+
+    /// Whether rigs placed in the viewport draw after the finish.
+    pub fn finishes(&self) -> bool {
+        !self.finished.is_empty()
     }
 
     /// Whether any sprite or billboard needs the particle pass after the world's.
@@ -645,6 +665,7 @@ impl Effects {
                 .runs
                 .iter()
                 .any(|run| run.blend != PartsRigBlend::Normal),
+            finished: descriptor.viewport_placement.is_some(),
         })
     }
 
@@ -902,6 +923,42 @@ impl Effects {
             9 => Float32x4, 10 => Float32x4
         ];
         let opaque = state.solid && state.blend == PartsRigBlend::Normal;
+        if state.finished {
+            let pipeline = self.pipeline(
+                device,
+                "render-wgpu finished parts rig",
+                &self.sprite_pipeline_layout,
+                (
+                    "vs_parts_rig",
+                    match (opaque, format.motion) {
+                        (true, false) => "fs_parts_rig_finished_solid",
+                        (false, false) => "fs_parts_rig_finished",
+                        (true, true) => "fs_parts_rig_finished_solid_reactive",
+                        (false, true) => "fs_parts_rig_finished_reactive",
+                    },
+                ),
+                &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: RIG_VERTEX_BYTES,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &vertex,
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: (SPRITE_ROW_FLOATS * 4) as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &instance,
+                    }),
+                ],
+                wgpu::PrimitiveTopology::TriangleList,
+                None,
+                format,
+                None,
+                Some(rig_blend_state(state.blend)),
+                MotionWrite::Reactive,
+            );
+            self.formats[index].rigs.insert(state, pipeline);
+            return;
+        }
         // The depth pass keeps the colour the pieces drew.
         let keep = wgpu::BlendComponent {
             src_factor: wgpu::BlendFactor::Zero,
@@ -1063,7 +1120,7 @@ impl Effects {
             return;
         };
         if let Some(key) = sprite.rig {
-            self.draw_rig(pass, set, sprite, key);
+            self.draw_rig(pass, set, sprite, key, false);
             return;
         }
         let (Some(pipeline), Some(bind_group)) = (
@@ -1099,6 +1156,7 @@ impl Effects {
         set: &FormatPipelines,
         sprite: &SpriteInstance,
         key: RigKey,
+        finished: bool,
     ) {
         let Some(rig) = self.rigs.get(&key) else {
             return;
@@ -1108,7 +1166,7 @@ impl Effects {
         pass.set_index_buffer(rig.indices.slice(..), wgpu::IndexFormat::Uint32);
         for run in &rig.runs {
             let (Some(pipeline), Some(bind_group)) = (
-                set.rigs.get(&rig_state(sprite.state, run.blend)),
+                set.rigs.get(&rig_state(sprite.state, run.blend, finished)),
                 self.sprite_bind_groups.get(&rig_textures(run, rig.detail)),
             ) else {
                 continue;
@@ -1138,6 +1196,25 @@ impl Effects {
                     0,
                     sprite.instance..sprite.instance + 1,
                 );
+            }
+        }
+    }
+
+    /// Draw the rigs placed in the viewport into the view's finished image,
+    /// after its finish, in a pass of their own over it (`finished` its
+    /// format): no depth, one sample a pixel.
+    pub fn draw_finished(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        finished: ColorTarget,
+        effects: &EffectsPass,
+    ) {
+        let Some(set) = self.formats.iter().find(|set| set.format == finished) else {
+            return;
+        };
+        for sprite in &effects.finished {
+            if let Some(key) = sprite.rig {
+                self.draw_rig(pass, set, sprite, key, true);
             }
         }
     }
@@ -1272,13 +1349,14 @@ fn rig_blend_state(blend: PartsRigBlend) -> wgpu::BlendState {
 }
 
 /// A run's colour pipeline state, from its rig's sprite state: solid when
-/// the rig is.
-fn rig_state(state: SpriteState, blend: PartsRigBlend) -> RigState {
+/// the rig is; `finished` for a rig placed in the viewport.
+fn rig_state(state: SpriteState, blend: PartsRigBlend, finished: bool) -> RigState {
     RigState {
         depth_test: state.depth_test,
         depth_write: false,
         solid: !state.blend,
         blend,
+        finished,
     }
 }
 
@@ -1289,6 +1367,7 @@ fn rig_depth_state(state: SpriteState) -> Option<RigState> {
         depth_write: true,
         solid: true,
         blend: PartsRigBlend::Normal,
+        finished: false,
     })
 }
 
@@ -1300,8 +1379,8 @@ fn rig_textures(run: &RigRun, detail: bool) -> SpriteTextures {
 }
 
 /// A parts rig's alpha and depth state, as `sprite_state` gives a sprite's.
-/// A rig placed in the viewport draws over its layer without depth, so the
-/// finish pass, which fogs by depth, leaves it as drawn.
+/// A rig placed in the viewport draws over its layer without depth, after
+/// the finish.
 fn parts_rig_state(rig: &PartsRigInstanceDescriptor) -> (SpriteState, f32) {
     let (cutoff, alpha_write) = match rig.material.alpha {
         SpriteAlphaMode::Opaque => (0.0, true),
@@ -2082,11 +2161,14 @@ impl Renderer {
 
     /// Build this view pass's sprite and particle rows and make their
     /// pipelines and bindings ready. Runs before the pass is encoded.
-    /// `format` is the world's HDR target the view draws effects into.
+    /// `format` is the world's HDR target the view draws effects into,
+    /// `finished` the finished image rigs placed in the viewport draw into
+    /// after the finish.
     pub(crate) fn prepare_effects(
         &mut self,
         view: &ViewPass<'_>,
         format: ColorTarget,
+        finished: ColorTarget,
     ) -> EffectsPass {
         let mut pass = EffectsPass::default();
         if format.motion && self.effects.motion_shader.is_none() {
@@ -2102,6 +2184,7 @@ impl Renderer {
         let backdrop = view.layer == ViewLayer::Backdrop;
         let takes_particles = view.layer != ViewLayer::Viewmodel;
         let pixel_ratio = self.pixel_ratio();
+        let drawn = view.drawn_camera();
         let mut draws = std::mem::take(&mut self.effects.sprite_scratch);
         draws.clear();
         for handle in &self.tables.sprites {
@@ -2128,13 +2211,20 @@ impl Renderer {
                                     (view.target.width, view.target.height),
                                 ))
                             });
+                    // A placed rig is placed by the projection the pass draws
+                    // with, jittered under a temporal stage, so it lands on
+                    // the same whole pixels every frame.
+                    let camera = match &rig.descriptor.viewport_placement {
+                        Some(_) => &drawn,
+                        None => &view.camera,
+                    };
                     draws.extend(self.effects.prepare_rig(
                         &self.gpu,
                         *handle,
                         rig,
                         &self.tables.parts_rigs,
                         &node.world,
-                        (&view.camera, view.viewport, pixel_ratio, anchored),
+                        (camera, view.viewport, pixel_ratio, anchored),
                     ));
                     continue;
                 }
@@ -2221,6 +2311,7 @@ impl Renderer {
                     batch: Some(*handle),
                     rig: None,
                     blends_over: false,
+                    finished: false,
                 });
                 continue;
             }
@@ -2269,6 +2360,7 @@ impl Renderer {
                 batch: None,
                 rig: None,
                 blends_over: false,
+                finished: false,
             });
         }
         // Solid front to back, blended back to front, each by render order.
@@ -2288,8 +2380,9 @@ impl Renderer {
             match draw.rig.and_then(|key| self.effects.rigs.get(&key)) {
                 Some(rig) => {
                     let detail = rig.detail;
+                    let format = if draw.finished { finished } else { format };
                     for run in rig.runs.clone() {
-                        let state = rig_state(draw.state, run.blend);
+                        let state = rig_state(draw.state, run.blend, draw.finished);
                         self.effects
                             .ensure_rig_pipeline(&self.gpu.device, format, state);
                         self.ensure_sprite_bindings(rig_textures(&run, detail));
@@ -2310,7 +2403,15 @@ impl Renderer {
             if draw.batch.is_none() {
                 rows.extend_from_slice(&draw.row);
             }
-            if draw.state.soft {
+            if draw.finished {
+                pass.finished.push(SpriteInstance {
+                    state: draw.state,
+                    textures: draw.textures,
+                    instance,
+                    batch: draw.batch,
+                    rig: draw.rig,
+                });
+            } else if draw.state.soft {
                 pass.soft_sprites.push(SpriteInstance {
                     state: draw.state,
                     textures: draw.textures,

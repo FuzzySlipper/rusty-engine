@@ -3158,7 +3158,20 @@ impl Renderer {
             ray_shadows: ray_shadows.is_some(),
             ray_gi,
         };
-        let effects = self.prepare_effects(&view, hdr_format);
+        // Rigs placed in the viewport draw after the finish, into the image
+        // it finished, one sample a pixel; a primary pass's beside the
+        // frame's motion target when a temporal stage reads that image,
+        // marking its reactive mask as labels do (`labels.rs`).
+        let finished_motion = self
+            .temporal
+            .single_sample_target()
+            .filter(|_| view.motion.is_some() && view.reconstruct.is_none())
+            .cloned();
+        let finished_format = ColorTarget {
+            motion: finished_motion.is_some(),
+            ..view.reconstruct.map_or(view.target, |r| r.target).key()
+        };
+        let effects = self.prepare_effects(&view, hdr_format, finished_format);
         let slot = view.layer as usize;
         // Ray Reconstruction would take lines for its picture: they draw
         // after it.
@@ -4045,6 +4058,43 @@ impl Renderer {
             &self.volumetric_fog.sampler,
             world_layer,
         );
+        if effects.finishes() {
+            let kept = |view| {
+                Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })
+            };
+            let attachments = [
+                kept(finish_target.color),
+                finished_motion.as_ref().and_then(kept),
+            ];
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("render-wgpu finished parts rigs"),
+                color_attachments: &attachments[..1 + usize::from(finished_motion.is_some())],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(
+                area.x as f32,
+                area.y as f32,
+                area.width as f32,
+                area.height as f32,
+                0.0,
+                1.0,
+            );
+            pass.set_scissor_rect(area.x, area.y, area.width, area.height);
+            pass.set_bind_group(0, &self.frame_bind_group, &[]);
+            self.effects
+                .draw_finished(&mut pass, finished_format, &effects);
+        }
         self.gpu.queue.submit([encoder.finish()]);
         if fog.is_some() {
             self.volumetric_fog.submitted();

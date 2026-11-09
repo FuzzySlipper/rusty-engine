@@ -6,6 +6,7 @@
 #import rusty::view::{frame, mask_coverage, wind_lean, upright_facing}
 #import rusty::lighting::standard_radiance
 #import rusty::finish::finish
+#import rusty::types::REACTIVE_OVERLAY
 #ifdef MOTION
 #import rusty::motion::{previous_clip, target_pixel_of, previous_pixel, motion_output}
 #endif
@@ -544,6 +545,49 @@ fn fs_parts_rig_opaque(in: PartsRigOut, @builtin(front_facing) front: bool) -> O
         mask = select(edge, select(0u, 0xffffffffu, color.a >= cutoff), in.snap.x > 0.0);
     }
     return OpaqueSpriteOut(vec4<f32>(color.rgb, 1.0), mask);
+}
+
+// A rig placed in the viewport draws after its view's finish, into the
+// finished image, one sample a pixel: its pages' colours as they are, not
+// exposed, graded or tone mapped (`effects.rs`). Solid pieces cover their
+// pixel from the cutoff up; blended ones are premultiplied as
+// `fs_parts_rig`'s.
+fn finished_parts_rig(in: PartsRigOut, front: bool, solid: bool) -> vec4<f32> {
+    let color = shaded_parts_rig(in, front, true);
+    if solid {
+        return vec4<f32>(color.rgb, 1.0);
+    }
+    return vec4<f32>(color.rgb * color.a, color.a);
+}
+
+@fragment
+fn fs_parts_rig_finished(in: PartsRigOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return finished_parts_rig(in, front, false);
+}
+
+@fragment
+fn fs_parts_rig_finished_solid(in: PartsRigOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return finished_parts_rig(in, front, true);
+}
+
+// Beside a temporal stage's motion target it also marks the reactive mask
+// by its opacity, as labels do (`labels.wgsl`): the stage keeps none of its
+// history there, so it never smears with what moves behind it.
+struct ReactivePartsRig {
+    @location(0) color: vec4<f32>,
+    @location(1) mask: vec4<f32>,
+};
+
+@fragment
+fn fs_parts_rig_finished_reactive(in: PartsRigOut, @builtin(front_facing) front: bool) -> ReactivePartsRig {
+    let color = finished_parts_rig(in, front, false);
+    return ReactivePartsRig(color, vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, color.a));
+}
+
+@fragment
+fn fs_parts_rig_finished_solid_reactive(in: PartsRigOut, @builtin(front_facing) front: bool) -> ReactivePartsRig {
+    let color = finished_parts_rig(in, front, true);
+    return ReactivePartsRig(color, vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, 1.0));
 }
 
 // Particle billboard: a screen-aligned quad, of constant pixel size

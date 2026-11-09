@@ -24,7 +24,8 @@ Package-consumer fixture for [parts rigs](../../docs/parts-rigs.md).
   sizes it on each resize with no product call: the window is 127 CSS pixels
   times the largest whole scale up to 3 that the window allows. It loops
   `idle` (breathing and blinks) in `RenderLayer.Viewmodel`, published far off
-  and turned to show the transform is not read.
+  and turned to show the transform is not read. It draws after the scene's
+  finish, so its pages' colours reach the screen unexposed and ungraded.
 
 The model documents are rig-c's `skeleton.model.json` with whitespace
 removed, beside the pages they name.
@@ -61,7 +62,9 @@ Live-debug commands:
   whole plate). `rigs.bust.anchor false` places it by the product's own
   square, computed from the window's CSS size and placed again on each
   resize; `true` follows the UI's window again. `rigs.fog <density>` sets exponential fog over the scene,
-  which the bust does not take. `rigs.observe` reports the bust's tracks and
+  which the bust does not take; `rigs.finish <exposure>` finishes the scene
+  as a lit one is (ACES at that exposure, graded, bloomed, auto exposed up
+  to 4; 0 for none), and the bust still shows its pages' colours. `rigs.observe` reports the bust's tracks and
   its placement (the product's square: CSS pixels a texel, side, window
   size, how many times it placed it, and whether it is anchored).
 - `rigs.orbit <degrees>` puts the camera at a bearing about it, from in
