@@ -145,7 +145,7 @@ impl RuntimeAppearanceBridge {
                 *deformed = Some(Arc::new(shape.payload()));
                 // Published as the call ends, whether or not the product
                 // publishes its facts again.
-                staged.resource_releases_pending = true;
+                staged.reconcile_resources = true;
                 Ok(true)
             }
             _ => Ok(false),

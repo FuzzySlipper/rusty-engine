@@ -2670,6 +2670,176 @@ mod tests {
 
     /// Services holding two moon textures opened in a call, and the moon a
     /// slot draws with a texture.
+    /// A texture opened deferred is published in the call that opens it, so
+    /// the renderer prepares it with that call's batch before anything
+    /// samples it; a material made later defines nothing new.
+    #[test]
+    fn a_texture_opened_deferred_is_published_in_its_call_before_any_material_samples_it() {
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            BTreeMap::from([(
+                "one.png".to_owned(),
+                crate::ContentBytes::from(crate::appearance::tests::RGBA_PNG),
+            )]),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        let ops = |call: &mut CsharpEngineCall| -> Vec<render_model::RenderDiff> {
+            call.take_output()
+                .appearance
+                .into_iter()
+                .filter_map(|output| match output {
+                    CsharpAppearanceCallOutput::Frame(frame) => Some(frame.ops),
+                    CsharpAppearanceCallOutput::Presentation(_) => None,
+                })
+                .flatten()
+                .collect()
+        };
+        let read = |services: &mut EngineServiceSet| {
+            let api = services.api();
+            let mut readout = csharp_engine_abi::NativeResourcePreparationReadout::default();
+            assert_eq!(
+                unsafe {
+                    (api.graphics.read_resource_preparation)(
+                        api.graphics.context,
+                        &mut readout,
+                        std::ptr::null_mut(),
+                    )
+                },
+                ABI_OK
+            );
+            readout
+        };
+
+        services.begin_call(binding());
+        let content = services.appearance.content_path("one.png").unwrap();
+        let info = services
+            .appearance
+            .admit_resource(
+                content,
+                NativeTextureFilter::Nearest,
+                NativeTextureWrap::Repeat,
+                NativeTextureColorSpace::Srgb,
+                &[],
+                true,
+            )
+            .unwrap();
+        assert_eq!(read(&mut services).last_batch, 1);
+        let mut call = services.finish_call().expect("the opening call");
+        let published = ops(&mut call);
+        let texture = published
+            .iter()
+            .find_map(|op| match op {
+                render_model::RenderDiff::DefineTexture { texture } if texture.deferred => {
+                    Some(texture.id.clone())
+                }
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("published deferred in its own call: {published:?}"));
+        assert_eq!(services.preparation_batch(), 1);
+
+        services.begin_call(binding());
+        let api = services.api();
+        let white = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        let request = NativeMaterialRequest {
+            texture_scale: NativeVec2::default(),
+            texture_offset: NativeVec2::default(),
+            stochastic_tiling: 0.0,
+            shader: Default::default(),
+            triplanar_sharpness: 0.0,
+            color: white,
+            texture: NativeRenderResourceReference {
+                value: info.handle.value,
+            },
+            roughness: 1.0,
+            texture_tint: white,
+            emission_color: NativeVec3::default(),
+            emission_intensity: 0.0,
+            double_sided: false,
+            alpha_mode: NativeMaterialAlphaMode::Opaque,
+            alpha_cutoff: 0.5,
+            metalness: 0.0,
+            normal_map: NativeRenderResourceReference::default(),
+            normal_scale: 1.0,
+            unlit: false,
+            emission_map: NativeRenderResourceReference::default(),
+            occlusion_map: NativeRenderResourceReference::default(),
+            orm_map: Default::default(),
+            occlusion_strength: 0.0,
+            flat_shading: false,
+            keep_dry: false,
+            sinks_under_snow: false,
+            billboard: Default::default(),
+            wind_bend: 0.0,
+            wind_flutter: 0.0,
+            water: Default::default(),
+            translucent_shadow: false,
+        };
+        let mut material = NativeMaterialHandle::default();
+        assert_eq!(
+            unsafe {
+                (api.graphics.create_material)(
+                    api.graphics.context,
+                    request,
+                    &mut material,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut call = services.finish_call().expect("the material's call");
+        let published = ops(&mut call);
+        let resources = services.appearance.state.projector.resources();
+        assert!(
+            resources
+                .materials
+                .iter()
+                .any(|material| material.texture.as_ref() == Some(&texture)),
+            "the material samples it"
+        );
+        assert_eq!(resources.textures.iter().count(), 1, "retained once");
+        assert!(
+            !published
+                .iter()
+                .any(|op| matches!(op, render_model::RenderDiff::DefineTexture { .. })),
+            "nothing is prepared again: {published:?}"
+        );
+        assert_eq!(services.preparation_batch(), 1);
+    }
+
+    #[test]
+    fn a_renderer_rebuilt_from_the_world_does_not_reopen_a_finished_batch() {
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).unwrap(),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .unwrap();
+        let preparation = |completed_batch| {
+            Some(crate::RendererPreparation {
+                completed_batch,
+                pending: 0,
+                failed: 0,
+            })
+        };
+        services.ingest_renderer_preparation(preparation(3));
+        services.ingest_renderer_preparation(preparation(2));
+        assert_eq!(
+            services
+                .appearance
+                .renderer_preparation
+                .map(|readout| readout.completed_batch),
+            Some(3)
+        );
+    }
+
     fn moon_textures() -> (
         EngineServiceSet,
         NativeRenderResourceHandle,

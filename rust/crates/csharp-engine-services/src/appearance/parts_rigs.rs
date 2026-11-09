@@ -798,7 +798,7 @@ impl RuntimeAppearanceBridge {
         }
         state.release_held(Holder::PartsRig, rig.value);
         release_unowned_internal_resources(state);
-        staged.resource_releases_pending = true;
+        staged.reconcile_resources = true;
         Ok(())
     }
 

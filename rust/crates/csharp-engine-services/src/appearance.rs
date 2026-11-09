@@ -1578,7 +1578,10 @@ struct SpritePlaybackUpdateIdentity {
 pub(crate) struct RuntimeAppearanceCall {
     pub(crate) state: RuntimeAppearanceState,
     admitted_update: Option<NativeProductUpdateFacts>,
-    resource_releases_pending: bool,
+    /// The retained resources changed outside an object publication (a
+    /// release, a deferred admission): they are reconciled, and their
+    /// definitions and releases published, when the call ends.
+    reconcile_resources: bool,
     pub(crate) release_error: Option<CsharpEngineServicesError>,
     /// Typed renderer realization work in the order the C# product invoked the
     /// owning appearance APIs. This remains call-local: it is not a general
@@ -1911,7 +1914,7 @@ pub(crate) struct RuntimeAppearanceBridge {
     presentation_clock: (f64, f64),
     /// How far the renderer's deferred preparation is, as it last reported;
     /// `None` while no renderer reports, when nothing waits for one.
-    renderer_preparation: Option<crate::RendererPreparation>,
+    pub(crate) renderer_preparation: Option<crate::RendererPreparation>,
 }
 
 impl RuntimeAppearanceBridge {
@@ -2032,7 +2035,7 @@ impl RuntimeAppearanceBridge {
             })
     }
 
-    fn content_path(
+    pub(crate) fn content_path(
         &self,
         path: &str,
     ) -> Result<crate::content::RetainedContent, CsharpEngineServicesError> {
@@ -2123,7 +2126,7 @@ impl RuntimeAppearanceBridge {
         self.staged = Some(RuntimeAppearanceCall {
             state,
             admitted_update,
-            resource_releases_pending: false,
+            reconcile_resources: false,
             release_error: None,
             outputs: Vec::new(),
             presentation_frames: 0,
@@ -2198,9 +2201,9 @@ impl RuntimeAppearanceBridge {
         let pending = self
             .staged
             .as_mut()
-            .is_some_and(|call| std::mem::take(&mut call.resource_releases_pending));
+            .is_some_and(|call| std::mem::take(&mut call.reconcile_resources));
         if pending {
-            if let Err(error) = self.publish_resource_releases() {
+            if let Err(error) = self.reconcile_resources_now() {
                 self.staged
                     .as_mut()
                     .expect("every product call begins an appearance call")
@@ -3002,7 +3005,7 @@ impl RuntimeAppearanceBridge {
         if held {
             // The mesh is defined with the catalog's pending changes, which
             // publish with this call even when no snapshot does.
-            staged.resource_releases_pending = true;
+            staged.reconcile_resources = true;
         }
         let holds = &mut staged.state.scatter_appearances;
         if held {
@@ -3039,7 +3042,7 @@ impl RuntimeAppearanceBridge {
             // The surface's meshes name the material, defined with the
             // catalog's pending changes, which publish with this call even
             // when no snapshot does.
-            staged.resource_releases_pending = true;
+            staged.reconcile_resources = true;
         }
         let holds = &mut staged.state.engine_surface_materials;
         if held {
@@ -3622,12 +3625,23 @@ impl RuntimeAppearanceBridge {
         let mut resource =
             self.imports
                 .file(content, filter, wrap, color_space, shader_keywords)?;
-        if deferred && resource.defer() {
+        let deferred = deferred && resource.defer();
+        if deferred {
             self.join_preparation_batch()?;
         }
-        let resources = &mut self.staged_mut()?.state.render_resources;
-        let handle = resources.admit(resource)?;
-        resources.info(handle)
+        let state = &mut self.staged_mut()?.state;
+        let handle = state.render_resources.admit(resource)?;
+        let info = state.render_resources.info(handle)?;
+        if deferred {
+            // Published when this call ends, so the renderer prepares it with
+            // this call's batch, before anything samples it. Removing the
+            // resource releases it.
+            if let Some(texture) = state.render_resources.resource(handle)?.texture().cloned() {
+                retain_texture_descriptor(&mut state.projector.resources_mut().textures, texture);
+            }
+            self.staged_mut()?.reconcile_resources = true;
+        }
+        Ok(info)
     }
 
     fn destroy_resource(
@@ -3655,7 +3669,7 @@ impl RuntimeAppearanceBridge {
             ));
         }
         remove_resource(&mut staged.state, handle)?;
-        staged.resource_releases_pending = true;
+        staged.reconcile_resources = true;
         Ok(())
     }
 
@@ -4184,7 +4198,7 @@ impl RuntimeAppearanceBridge {
         let resources = staged.state.projector.resources_mut();
         resources.materials.remove(&id);
         staged.state.release_held(Holder::Material, material.value);
-        staged.resource_releases_pending = true;
+        staged.reconcile_resources = true;
         Ok(())
     }
 
@@ -4300,7 +4314,7 @@ impl RuntimeAppearanceBridge {
             _ => {}
         }
         release_unowned_internal_resources(&mut staged.state);
-        staged.resource_releases_pending = true;
+        staged.reconcile_resources = true;
         Ok(())
     }
 
@@ -4651,7 +4665,7 @@ impl RuntimeAppearanceBridge {
             .remove(&asset);
         staged.state.generated_meshes.remove(resource.value);
         // The release is published with the call's other resource changes.
-        staged.resource_releases_pending = true;
+        staged.reconcile_resources = true;
         Ok(())
     }
 
@@ -4853,7 +4867,16 @@ impl RuntimeAppearanceBridge {
         &mut self,
         preparation: Option<crate::RendererPreparation>,
     ) {
-        self.renderer_preparation = preparation;
+        // A batch once drawn stays drawn: a renderer rebuilt from the
+        // committed world prepares its deferred resources again without
+        // reopening finished batches.
+        let completed = self
+            .renderer_preparation
+            .map_or(0, |previous| previous.completed_batch);
+        self.renderer_preparation = preparation.map(|preparation| crate::RendererPreparation {
+            completed_batch: preparation.completed_batch.max(completed),
+            ..preparation
+        });
     }
 
     fn resource_preparation(&self) -> csharp_engine_abi::NativeResourcePreparationReadout {
@@ -4911,6 +4934,9 @@ impl RuntimeAppearanceBridge {
             self.join_preparation_batch()?;
         }
         let staged = self.staged_mut()?;
+        // A deferred mesh is published when this call ends, with its batch,
+        // whether or not an object shows it yet.
+        staged.reconcile_resources |= deferred;
         let resource = staged.state.render_resources.stage(resource)?;
         let resources = staged.state.projector.resources_mut();
         resources.materials.extend(materials);
@@ -5048,7 +5074,7 @@ impl RuntimeAppearanceBridge {
         let resources = staged.state.projector.resources_mut();
         resources.sprite_atlases.remove(&entry.asset);
         resources.textures.remove(&entry.texture_asset);
-        staged.resource_releases_pending = true;
+        staged.reconcile_resources = true;
         Ok(())
     }
 
@@ -7635,7 +7661,7 @@ impl RuntimeAppearanceBridge {
 
     /// Publishes the call's resource releases and any appearance changes
     /// still pending in the projector.
-    fn publish_resource_releases(&mut self) -> Result<(), CsharpEngineServicesError> {
+    fn reconcile_resources_now(&mut self) -> Result<(), CsharpEngineServicesError> {
         let staged = self.staged_mut()?;
         let frame = staged.state.projector.reconcile().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_RESOURCE_RELEASE", format!("{error:?}"))

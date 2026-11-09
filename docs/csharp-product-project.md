@@ -706,6 +706,10 @@ samples a texture being prepared. Nothing appears half-built or with a fallback
 colour. Other users of a texture still being prepared, such as a sky, a sprite
 or a decal, draw as they would before it was defined.
 
+A deferred texture or mesh is published when the call that opens it ends, so
+preparation starts then, whether or not anything samples or shows it yet. A
+product can open a location's resources ahead of building it.
+
 Each product call that opens anything deferred is a preparation batch,
 numbered in order. A batch is drawn once every texture and mesh in it has been
 taken in:
@@ -725,7 +729,9 @@ bool drawn = engine.Graphics.ReadResourcePreparation().CompletedBatch >= batch;
 
 - `LastBatch`: the latest batch, including the current call's once it has
   opened something deferred.
-- `CompletedBatch`: every batch numbered up to it is drawn, or has failed.
+- `CompletedBatch`: every batch numbered up to it is drawn, or has failed. It
+  never goes back, even when the renderer is rebuilt and prepares the committed
+  world again.
 - `PendingResources`: the deferred textures and meshes the renderer had not
   taken in as of the start of this call.
 - `FailedResources`: those that could not be prepared, for example a PNG that

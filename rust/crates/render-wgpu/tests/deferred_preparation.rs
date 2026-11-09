@@ -180,3 +180,33 @@ fn a_deferred_texture_that_does_not_decode_fails_and_its_batch_completes() {
     let readout = harness.renderer.preparation_readout();
     assert_eq!((readout.completed_batch, readout.failed), (1, 1));
 }
+
+#[test]
+fn a_texture_prepared_before_anything_samples_it_draws_when_a_material_does() {
+    let mut harness = Harness::new(RendererOptions::default());
+    harness.renderer.set_preparation_batch(1);
+    let mut texture =
+        harness
+            .resources
+            .texture("texture/red", 2, 2, &RED.repeat(4), TextureWrap::Clamp);
+    texture.deferred = true;
+    harness.apply(vec![RenderDiff::DefineTexture { texture }]);
+    assert_eq!(harness.renderer.preparation_readout().pending, 1);
+    assert!(harness.renderer.settle_prepared().is_empty());
+    harness.renderer.set_preparation_batch(2);
+    let prepared = harness.renderer.preparation_readout();
+    assert_eq!((prepared.completed_batch, prepared.installed), (2, 1));
+
+    // A later call makes the material and the box: nothing is prepared again.
+    let mut ops = textured_box(&mut harness, false, false);
+    ops.remove(0);
+    harness.apply(ops);
+    assert_eq!(harness.renderer.preparation_readout(), prepared);
+    let (stats, pixels) = harness.render(&view());
+    assert!(stats.instances > 0, "the box draws");
+    assert!(
+        reddish(centre(&pixels)),
+        "with its texture: {:?}",
+        centre(&pixels)
+    );
+}
