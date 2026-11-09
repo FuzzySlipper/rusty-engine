@@ -77,6 +77,8 @@ impl From<SceneSnapshotState> for SceneState {
             step: state.step,
             held: state.held,
             lead: None,
+            // A snapshot is written settled: nothing it holds is pending.
+            preparation_batch: 0,
         }
     }
 }
@@ -575,6 +577,7 @@ mod tests {
                     payload: inline_mesh(),
                     material_slots: Vec::new(),
                     collision: Default::default(),
+                    deferred: false,
                 },
             }],
         };

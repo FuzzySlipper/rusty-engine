@@ -102,11 +102,9 @@ impl Renderer {
 
     fn apply_op(&mut self, op: &RenderDiff, resources: &dyn ResourceSource) -> Result<(), String> {
         match op {
-            RenderDiff::DefineTexture { texture } => {
-                self.define_texture(texture, resources)?;
-                self.decals.texture_changed(&texture.id);
-            }
+            RenderDiff::DefineTexture { texture } => self.define_texture(texture, resources)?,
             RenderDiff::ReleaseTexture { id } => {
+                self.preparation.forget(id);
                 self.tables.textures.remove(id);
                 self.decals.texture_changed(id);
                 if let Some(id) = self.tables.names.get(id) {
@@ -133,6 +131,7 @@ impl Renderer {
             }
             RenderDiff::DefineStaticMesh { asset } => self.define_static_mesh(asset, resources)?,
             RenderDiff::ReleaseStaticMesh { asset } => {
+                self.preparation.forget(asset);
                 self.impostors.forget(asset);
                 if let Some(id) = self.tables.names.get(asset) {
                     self.tables.static_meshes.remove(id);
@@ -662,7 +661,12 @@ impl Renderer {
                     BTreeMap::new(),
                 )?;
                 mesh.texture_space = payload.texture_space;
-                self.attach_morph(&mut mesh, payload, &format!("payload {}", handle.raw()))?;
+                attach_morph(
+                    &self.gpu,
+                    &mut mesh,
+                    payload,
+                    &format!("payload {}", handle.raw()),
+                )?;
                 mesh.layer_weights = layer_weights;
                 if layer_weights {
                     mesh.layer_palette = payload.layer_palette.clone();
@@ -1318,6 +1322,26 @@ impl Renderer {
             }
             NodeKind::Group | NodeKind::Light(_) | NodeKind::Sprite(_) | NodeKind::PartsRig(_) => {}
         }
+        // A node draws nothing while a texture one of its materials samples
+        // is being prepared (`prepare.rs`): the material is defined again
+        // when it is taken in, which rebuilds the node.
+        let preparation = &self.preparation;
+        let waits = !preparation.is_idle()
+            && parts.iter().any(|(part, _)| match part.material {
+                MaterialRef::Retained(id) => materials.get(id).is_some_and(|row| {
+                    row.descriptor
+                        .textures()
+                        .any(|texture| preparation.pending(texture))
+                }),
+                _ => false,
+            });
+        if waits {
+            parts.clear();
+            part_levels.clear();
+            part_impostors.clear();
+            level_starts.clear();
+            scattered = None;
+        }
         let (world, shown, layer) = (node.world, node.world_visible, node.world_layer);
         let casts = node.shadow_casting.is_cast();
         let mut ids = Vec::with_capacity(parts.len());
@@ -1550,18 +1574,63 @@ impl Renderer {
         texture: &TextureDescriptor,
         resources: &dyn ResourceSource,
     ) -> Result<(), String> {
-        let image = resources::texture_image(texture, resources)?;
-        if let Some(image) = image.as_ref() {
-            let srgb = texture
-                .payload
-                .as_ref()
-                .is_none_or(|payload| payload.color_space == TextureColorSpace::Srgb);
-            self.tables.texture_thumbs.insert(
+        if texture.deferred && texture.payload.is_some() {
+            // The work holds the encoded bytes, shared or copied; it decodes
+            // and uploads.
+            let held =
+                match resources::held_resource(resources::texture_resource(texture), resources) {
+                    Some(shared) => resources::Held::Shared(shared),
+                    None => resources::Held::Copied(
+                        resources::texture_bytes(texture, resources)?.into_owned(),
+                    ),
+                };
+            let gpu = self.gpu.clone();
+            let descriptor = texture.clone();
+            self.preparation.start(
                 texture.id.clone(),
-                crate::probes::Thumb::of(&image.rgba, image.width, image.height, srgb),
+                crate::prepare::Definition::Texture(texture.clone()),
+                Box::new(move || {
+                    let bytes = match &held {
+                        resources::Held::Shared(shared) => {
+                            resources::texture_bytes(&descriptor, shared)?
+                        }
+                        resources::Held::Copied(bytes) => {
+                            std::borrow::Cow::Borrowed(bytes.as_slice())
+                        }
+                    };
+                    let image = resources::decode_texture(&bytes)?;
+                    Ok(crate::prepare::Prepared::Texture {
+                        thumb: thumb_of(&descriptor, &image),
+                        texture: upload_texture(&gpu, &descriptor, Some(&image)),
+                    })
+                }),
             );
+            return Ok(());
         }
-        let uploaded = self.upload_texture(texture, image.as_ref());
+        self.preparation.forget(&texture.id);
+        let image = resources::texture_image(texture, resources)?;
+        let thumb = image.as_ref().map(|image| thumb_of(texture, image));
+        let uploaded = upload_texture(&self.gpu, texture, image.as_ref());
+        self.install_texture(texture, thumb, uploaded);
+        match image {
+            Some(_) => Ok(()),
+            None => Err(format!(
+                "{} has no payload; drawn with the colour fallback",
+                texture.id
+            )),
+        }
+    }
+
+    /// Take in a texture decoded and uploaded: what samples it binds it.
+    fn install_texture(
+        &mut self,
+        texture: &TextureDescriptor,
+        thumb: Option<crate::probes::Thumb>,
+        uploaded: GpuTexture,
+    ) {
+        if let Some(thumb) = thumb {
+            self.tables.texture_thumbs.insert(texture.id.clone(), thumb);
+        }
         self.tables.textures.insert(texture.id.clone(), uploaded);
         // The materials sampling it are defined again below, which rebakes
         // their parts' bricks; a sky showing it lights every brick.
@@ -1576,7 +1645,8 @@ impl Renderer {
         if let Some(id) = self.tables.names.get(&texture.id) {
             self.effects.forget_texture(id);
         }
-        // Materials sampling this texture and a sky showing it bind the new view.
+        // Materials sampling this texture and a sky showing it bind the new
+        // view; a node waiting on it is rebuilt with its material.
         let dependents: Vec<RenderMaterialDescriptor> = self
             .tables
             .materials
@@ -1594,42 +1664,67 @@ impl Renderer {
             let _ = self.define_material(descriptor);
         }
         self.tables.environment_dirty = true;
-        match image {
-            Some(_) => Ok(()),
-            None => Err(format!(
-                "{} has no payload; drawn with the colour fallback",
-                texture.id
-            )),
-        }
+        self.decals.texture_changed(&texture.id);
     }
 
-    /// Upload decoded pixels with the descriptor's colour space and sampler
-    /// modes; a metadata-only descriptor becomes a 1×1 white texture.
-    fn upload_texture(
-        &self,
-        descriptor: &TextureDescriptor,
-        image: Option<&resources::DecodedImage>,
-    ) -> GpuTexture {
-        let label = descriptor.id.as_str();
-        let srgb = descriptor
-            .payload
-            .as_ref()
-            .is_none_or(|payload| payload.color_space == TextureColorSpace::Srgb);
-        let (width, height, pixels) = match image {
-            Some(image) => (image.width, image.height, image.rgba.as_slice()),
-            None => (1, 1, &[255u8; 4][..]),
-        };
-        upload_rgba_texture(
-            &self.gpu,
-            label,
-            width,
-            height,
-            pixels,
-            srgb,
-            descriptor.filter != TextureFilter::Linear,
-            descriptor.wrap == TextureWrap::Repeat,
-            descriptor.filter != TextureFilter::Nearest,
-        )
+    /// The batch the deferred definitions applied next belong to: the
+    /// Engine numbers one for each call that makes any (`prepare.rs`).
+    pub fn set_preparation_batch(&mut self, batch: u64) {
+        self.preparation.set_batch(batch);
+    }
+
+    /// How far deferred preparation is.
+    pub fn preparation_readout(&self) -> crate::PreparationReadout {
+        self.preparation.readout()
+    }
+
+    /// Take in the deferred textures and meshes workers have prepared, at
+    /// the start of a committed call. Returns those that failed.
+    pub fn take_prepared(&mut self) -> Vec<ApplyIssue> {
+        self.install_prepared(false)
+    }
+
+    /// Wait for every deferred texture and mesh being prepared and take
+    /// them in: what a reading that must show the whole committed scene
+    /// does first (a snapshot, an offline render).
+    pub fn settle_prepared(&mut self) -> Vec<ApplyIssue> {
+        self.install_prepared(true)
+    }
+
+    /// Take in what workers have prepared (`prepare.rs`); with `wait`,
+    /// everything being prepared. Returns the definitions that failed.
+    fn install_prepared(&mut self, wait: bool) -> Vec<ApplyIssue> {
+        let mut issues = Vec::new();
+        for (definition, result) in self.preparation.take_finished(wait) {
+            match (definition, result) {
+                (
+                    crate::prepare::Definition::Texture(texture),
+                    Ok(crate::prepare::Prepared::Texture {
+                        thumb,
+                        texture: uploaded,
+                    }),
+                ) => self.install_texture(&texture, Some(thumb), uploaded),
+                (
+                    crate::prepare::Definition::Mesh(asset),
+                    Ok(crate::prepare::Prepared::Mesh(mesh)),
+                ) => {
+                    if let Err(detail) = self.install_static_mesh(&asset, mesh) {
+                        issues.push(ApplyIssue {
+                            op: "defineStaticMesh",
+                            detail,
+                        });
+                    }
+                }
+                (definition, result) => issues.push(ApplyIssue {
+                    op: match definition {
+                        crate::prepare::Definition::Texture(_) => "defineTexture",
+                        crate::prepare::Definition::Mesh(_) => "defineStaticMesh",
+                    },
+                    detail: result.err().unwrap_or_default(),
+                }),
+            }
+        }
+        issues
     }
 
     fn define_material(&mut self, descriptor: RenderMaterialDescriptor) -> Result<(), String> {
@@ -2035,35 +2130,50 @@ impl Renderer {
         asset: &StaticMeshAsset,
         resources: &dyn ResourceSource,
     ) -> Result<(), String> {
-        let streams = resources::mesh_streams(&asset.payload, resources)?;
-        let mut mesh = self.upload_mesh(
-            &asset.asset,
-            &streams,
-            Topology::Triangles,
-            asset
-                .payload
-                .groups
-                .iter()
-                .map(|group| (group.material_slot, group.start, group.count))
-                .collect(),
-            asset
-                .material_slots
-                .iter()
-                .map(|slot| (slot.slot, slot.material.clone()))
-                .collect(),
-        )?;
-        // A product mesh's colours can be terrain layer weights, as a voxel
-        // chunk's are: layers 0 to 3 of its slots' terrain layer materials,
-        // or the layers of its palette.
-        mesh.layer_weights = asset.payload.layer_weights && streams.colors.is_some();
-        mesh.billboard = asset.payload.billboard;
-        if mesh.layer_weights {
-            mesh.layer_palette = asset.payload.layer_palette.clone();
+        if asset.deferred {
+            // The work holds the resource, or the streams the call read when
+            // it is not shared; it reads, interleaves and uploads.
+            let held =
+                match resources::held_resource(resources::mesh_resource(&asset.payload), resources)
+                {
+                    Some(shared) => resources::Held::Shared(shared),
+                    None => {
+                        resources::Held::Copied(resources::mesh_streams(&asset.payload, resources)?)
+                    }
+                };
+            let gpu = self.gpu.clone();
+            let prepared = asset.clone();
+            self.preparation.start(
+                asset.asset.clone(),
+                crate::prepare::Definition::Mesh(Box::new(asset.clone())),
+                Box::new(move || {
+                    let streams = match held {
+                        resources::Held::Shared(shared) => {
+                            resources::mesh_streams(&prepared.payload, &shared)?
+                        }
+                        resources::Held::Copied(streams) => streams,
+                    };
+                    upload_static_mesh(&gpu, &prepared, &streams)
+                        .map(crate::prepare::Prepared::Mesh)
+                }),
+            );
+            return Ok(());
         }
+        self.preparation.forget(&asset.asset);
+        let streams = resources::mesh_streams(&asset.payload, resources)?;
+        let mesh = upload_static_mesh(&self.gpu, asset, &streams)?;
+        self.install_static_mesh(asset, mesh)
+    }
+
+    /// Take in an uploaded static mesh: its instances and scatter patches
+    /// draw it, including those that arrived before it.
+    fn install_static_mesh(
+        &mut self,
+        asset: &StaticMeshAsset,
+        mesh: GpuMesh,
+    ) -> Result<(), String> {
         let slots: Vec<String> = mesh.slots.values().cloned().collect();
         self.define_layer_variants(&mesh.layer_palette, &slots)?;
-        mesh.texture_space = asset.payload.texture_space;
-        self.attach_morph(&mut mesh, &asset.payload, &asset.asset)?;
         let id = self.tables.names.id(&asset.asset);
         self.tables.static_meshes.insert(id, mesh);
         // Its instances and scatter patches draw it, including those that
@@ -2071,46 +2181,6 @@ impl Renderer {
         // frames than the mesh's appearance), and its impostors bake again.
         self.impostors.forget(&asset.asset);
         self.rebuild_users(&[id]);
-        Ok(())
-    }
-
-    /// Upload a payload's morph targets as the mesh's second stream, its
-    /// bounds grown to hold every target.
-    fn attach_morph(
-        &self,
-        mesh: &mut GpuMesh,
-        payload: &render_model::MeshPayloadDescriptor,
-        label: &str,
-    ) -> Result<(), String> {
-        let Some(morph) = &payload.morph else {
-            return Ok(());
-        };
-        let device = &self.gpu.device;
-        let targets = crate::gpu::allocating(device, || {
-            crate::gpu::buffer_init(
-                device,
-                &wgpu::util::BufferInitDescriptor {
-                    label: Some(label),
-                    contents: bytemuck::cast_slice(&morph.targets),
-                    usage: wgpu::BufferUsages::VERTEX,
-                },
-            )
-        })
-        .map_err(|error| format!("{label}'s morph targets could not be uploaded: {error}"))?;
-        for (position, target) in mesh
-            .cpu
-            .positions
-            .iter()
-            .zip(morph.targets.as_chunks::<3>().0)
-        {
-            mesh.bounds
-                .include(*position + Vec3::new(0.0, target[0], 0.0));
-        }
-        mesh.morph = Some(crate::tables::MorphStream {
-            targets,
-            start: morph.start,
-            end: morph.end,
-        });
         Ok(())
     }
 
@@ -2165,32 +2235,7 @@ impl Renderer {
         groups: Vec<(u16, u32, u32)>,
         slots: BTreeMap<u16, String>,
     ) -> Result<GpuMesh, String> {
-        let vertex_count = streams.positions.len() / 3;
-        let mut vertices = Vec::with_capacity(vertex_count * VERTEX_FLOATS);
-        for vertex in 0..vertex_count {
-            vertices.extend_from_slice(&streams.positions[vertex * 3..vertex * 3 + 3]);
-            match streams.normals.get(vertex * 3..vertex * 3 + 3) {
-                Some(normal) => vertices.extend_from_slice(normal),
-                None => vertices.extend_from_slice(&[0.0, 1.0, 0.0]),
-            }
-            match streams
-                .uvs
-                .as_ref()
-                .and_then(|uvs| uvs.get(vertex * 2..vertex * 2 + 2))
-            {
-                Some(uv) => vertices.extend_from_slice(uv),
-                None => vertices.extend_from_slice(&[0.0, 0.0]),
-            }
-            match streams
-                .colors
-                .as_ref()
-                .and_then(|colors| colors.get(vertex * 4..vertex * 4 + 4))
-            {
-                Some(color) => vertices.extend_from_slice(color),
-                None => vertices.extend_from_slice(&[1.0; 4]),
-            }
-        }
-        self.upload_vertices(label, &vertices, &streams.indices, topology, groups, slots)
+        upload_mesh(&self.gpu, label, streams, topology, groups, slots)
     }
 
     pub(crate) fn upload_vertices(
@@ -2202,65 +2247,233 @@ impl Renderer {
         groups: Vec<(u16, u32, u32)>,
         slots: BTreeMap<u16, String>,
     ) -> Result<GpuMesh, String> {
-        let device = &self.gpu.device;
-        // Copied from too: the selected scatter copies draw from a pool of
-        // their meshes (`mesh_pool.rs`). A mesh the device has no room for
-        // is refused, and what draws it draws nothing. Built into the ray
-        // scene's acceleration structures on a device with ray queries.
-        let ray_input = crate::ray_scene::mesh_input(device);
-        let (vertex_buffer, index_buffer) = crate::gpu::allocating(device, || {
-            (
-                crate::gpu::buffer_init(
-                    device,
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some(label),
-                        contents: bytemuck::cast_slice(vertices),
-                        usage: wgpu::BufferUsages::VERTEX
-                            | wgpu::BufferUsages::COPY_SRC
-                            | ray_input,
-                    },
-                ),
-                crate::gpu::buffer_init(
-                    device,
-                    &wgpu::util::BufferInitDescriptor {
-                        label: Some(label),
-                        contents: bytemuck::cast_slice(indices),
-                        usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC | ray_input,
-                    },
-                ),
-            )
-        })
-        .map_err(|error| format!("{label} could not be uploaded: {error}"))?;
-        let mut bounds = Aabb::EMPTY;
-        let mut positions = Vec::with_capacity(vertices.len() / VERTEX_FLOATS);
-        for vertex in vertices.as_chunks::<VERTEX_FLOATS>().0 {
-            let position = Vec3::new(vertex[0], vertex[1], vertex[2]);
-            bounds.include(position);
-            positions.push(position);
-        }
-        Ok(GpuMesh {
-            bounds,
-            cpu: std::sync::Arc::new(crate::tables::CpuGeometry {
-                positions,
-                indices: indices.to_vec(),
-            }),
-            edges: Default::default(),
-            extra: None,
-            texture_space: None,
-            distance_field: None,
-            layer_weights: false,
-            layer_palette: Vec::new(),
-            billboard: false,
-            vertex_occlusion: false,
-            morph: None,
-            skinned: None,
-            vertices: vertex_buffer,
-            indices: index_buffer,
-            topology,
-            groups,
-            slots,
-        })
+        upload_vertices(&self.gpu, label, vertices, indices, topology, groups, slots)
     }
+}
+
+/// Upload decoded pixels with the descriptor's colour space and sampler
+/// modes; a metadata-only descriptor becomes a 1×1 white texture.
+fn upload_texture(
+    gpu: &crate::Gpu,
+    descriptor: &TextureDescriptor,
+    image: Option<&resources::DecodedImage>,
+) -> GpuTexture {
+    let label = descriptor.id.as_str();
+    let srgb = descriptor
+        .payload
+        .as_ref()
+        .is_none_or(|payload| payload.color_space == TextureColorSpace::Srgb);
+    let (width, height, pixels) = match image {
+        Some(image) => (image.width, image.height, image.rgba.as_slice()),
+        None => (1, 1, &[255u8; 4][..]),
+    };
+    upload_rgba_texture(
+        gpu,
+        label,
+        width,
+        height,
+        pixels,
+        srgb,
+        descriptor.filter != TextureFilter::Linear,
+        descriptor.wrap == TextureWrap::Repeat,
+        descriptor.filter != TextureFilter::Nearest,
+    )
+}
+
+/// The texture's colours as the indirect light reads them.
+fn thumb_of(texture: &TextureDescriptor, image: &resources::DecodedImage) -> crate::probes::Thumb {
+    let srgb = texture
+        .payload
+        .as_ref()
+        .is_none_or(|payload| payload.color_space == TextureColorSpace::Srgb);
+    crate::probes::Thumb::of(&image.rgba, image.width, image.height, srgb)
+}
+
+/// A static mesh's streams uploaded as it draws them.
+fn upload_static_mesh(
+    gpu: &crate::Gpu,
+    asset: &StaticMeshAsset,
+    streams: &resources::MeshStreams,
+) -> Result<GpuMesh, String> {
+    let mut mesh = upload_mesh(
+        gpu,
+        &asset.asset,
+        streams,
+        Topology::Triangles,
+        asset
+            .payload
+            .groups
+            .iter()
+            .map(|group| (group.material_slot, group.start, group.count))
+            .collect(),
+        asset
+            .material_slots
+            .iter()
+            .map(|slot| (slot.slot, slot.material.clone()))
+            .collect(),
+    )?;
+    // A product mesh's colours can be terrain layer weights, as a voxel
+    // chunk's are: layers 0 to 3 of its slots' terrain layer materials, or
+    // the layers of its palette.
+    mesh.layer_weights = asset.payload.layer_weights && streams.colors.is_some();
+    mesh.billboard = asset.payload.billboard;
+    if mesh.layer_weights {
+        mesh.layer_palette = asset.payload.layer_palette.clone();
+    }
+    mesh.texture_space = asset.payload.texture_space;
+    attach_morph(gpu, &mut mesh, &asset.payload, &asset.asset)?;
+    Ok(mesh)
+}
+
+/// Upload a payload's morph targets as the mesh's second stream, its
+/// bounds grown to hold every target.
+fn attach_morph(
+    gpu: &crate::Gpu,
+    mesh: &mut GpuMesh,
+    payload: &render_model::MeshPayloadDescriptor,
+    label: &str,
+) -> Result<(), String> {
+    let Some(morph) = &payload.morph else {
+        return Ok(());
+    };
+    let device = &gpu.device;
+    let targets = crate::gpu::allocating(device, || {
+        crate::gpu::buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(&morph.targets),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        )
+    })
+    .map_err(|error| format!("{label}'s morph targets could not be uploaded: {error}"))?;
+    for (position, target) in mesh
+        .cpu
+        .positions
+        .iter()
+        .zip(morph.targets.as_chunks::<3>().0)
+    {
+        mesh.bounds
+            .include(*position + Vec3::new(0.0, target[0], 0.0));
+    }
+    mesh.morph = Some(crate::tables::MorphStream {
+        targets,
+        start: morph.start,
+        end: morph.end,
+    });
+    Ok(())
+}
+
+pub(crate) fn upload_mesh(
+    gpu: &crate::Gpu,
+    label: &str,
+    streams: &resources::MeshStreams,
+    topology: Topology,
+    groups: Vec<(u16, u32, u32)>,
+    slots: BTreeMap<u16, String>,
+) -> Result<GpuMesh, String> {
+    let vertex_count = streams.positions.len() / 3;
+    let mut vertices = Vec::with_capacity(vertex_count * VERTEX_FLOATS);
+    for vertex in 0..vertex_count {
+        vertices.extend_from_slice(&streams.positions[vertex * 3..vertex * 3 + 3]);
+        match streams.normals.get(vertex * 3..vertex * 3 + 3) {
+            Some(normal) => vertices.extend_from_slice(normal),
+            None => vertices.extend_from_slice(&[0.0, 1.0, 0.0]),
+        }
+        match streams
+            .uvs
+            .as_ref()
+            .and_then(|uvs| uvs.get(vertex * 2..vertex * 2 + 2))
+        {
+            Some(uv) => vertices.extend_from_slice(uv),
+            None => vertices.extend_from_slice(&[0.0, 0.0]),
+        }
+        match streams
+            .colors
+            .as_ref()
+            .and_then(|colors| colors.get(vertex * 4..vertex * 4 + 4))
+        {
+            Some(color) => vertices.extend_from_slice(color),
+            None => vertices.extend_from_slice(&[1.0; 4]),
+        }
+    }
+    upload_vertices(
+        gpu,
+        label,
+        &vertices,
+        &streams.indices,
+        topology,
+        groups,
+        slots,
+    )
+}
+
+pub(crate) fn upload_vertices(
+    gpu: &crate::Gpu,
+    label: &str,
+    vertices: &[f32],
+    indices: &[u32],
+    topology: Topology,
+    groups: Vec<(u16, u32, u32)>,
+    slots: BTreeMap<u16, String>,
+) -> Result<GpuMesh, String> {
+    let device = &gpu.device;
+    // Copied from too: the selected scatter copies draw from a pool of
+    // their meshes (`mesh_pool.rs`). A mesh the device has no room for
+    // is refused, and what draws it draws nothing. Built into the ray
+    // scene's acceleration structures on a device with ray queries.
+    let ray_input = crate::ray_scene::mesh_input(device);
+    let (vertex_buffer, index_buffer) = crate::gpu::allocating(device, || {
+        (
+            crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(vertices),
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_SRC | ray_input,
+                },
+            ),
+            crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(indices),
+                    usage: wgpu::BufferUsages::INDEX | wgpu::BufferUsages::COPY_SRC | ray_input,
+                },
+            ),
+        )
+    })
+    .map_err(|error| format!("{label} could not be uploaded: {error}"))?;
+    let mut bounds = Aabb::EMPTY;
+    let mut positions = Vec::with_capacity(vertices.len() / VERTEX_FLOATS);
+    for vertex in vertices.as_chunks::<VERTEX_FLOATS>().0 {
+        let position = Vec3::new(vertex[0], vertex[1], vertex[2]);
+        bounds.include(position);
+        positions.push(position);
+    }
+    Ok(GpuMesh {
+        bounds,
+        cpu: std::sync::Arc::new(crate::tables::CpuGeometry {
+            positions,
+            indices: indices.to_vec(),
+        }),
+        edges: Default::default(),
+        extra: None,
+        texture_space: None,
+        distance_field: None,
+        layer_weights: false,
+        layer_palette: Vec::new(),
+        billboard: false,
+        vertex_occlusion: false,
+        morph: None,
+        skinned: None,
+        vertices: vertex_buffer,
+        indices: index_buffer,
+        topology,
+        groups,
+        slots,
+    })
 }
 
 /// Upload RGBA8 pixels (sRGB or linear) with nearest or linear magnification

@@ -469,10 +469,21 @@ impl FrameOutput {
             .is_none_or(|(_, route)| route.watching())
     }
 
+    /// How far the renderer's deferred preparation is.
+    pub(crate) fn preparation(&self) -> csharp_engine_services::RendererPreparation {
+        let readout = self.driver.preparation_readout();
+        csharp_engine_services::RendererPreparation {
+            completed_batch: readout.completed_batch,
+            pending: readout.pending,
+            failed: readout.failed,
+        }
+    }
+
     /// Reports what the renderer observed since the last call, drawn or not.
     /// Call between product calls.
     pub(crate) fn report(&mut self, services: &mut EngineServiceSet) {
         services.ingest_renderer_settings(self.settings_readout());
+        services.ingest_renderer_preparation(Some(self.preparation()));
         let facts: Vec<_> = self
             .driver
             .take_animation_facts()
@@ -909,6 +920,12 @@ impl ResourceSource for EngineResources<'_> {
             .borrowed_renderer_resource(identity)
             .map(|resource| Cow::Borrowed(resource.bytes()))
     }
+
+    fn shared(&self, identity: &str) -> Option<render_wgpu::SharedBytes> {
+        self.0.borrowed_renderer_resource(identity).map(|resource| {
+            std::sync::Arc::new(resource.shared_bytes()) as render_wgpu::SharedBytes
+        })
+    }
 }
 
 /// The simulation step a frame shows, whether time is held, and how
@@ -944,6 +961,7 @@ pub(crate) fn scene_state(services: &EngineServiceSet, simulation: Simulation) -
         step: simulation.step,
         held: simulation.held,
         lead: simulation.lead,
+        preparation_batch: services.preparation_batch(),
     }
 }
 

@@ -189,6 +189,7 @@ fn lone_box(harness: &mut Harness, material: RenderMaterialDescriptor) {
                     material: id,
                 }],
                 collision: MeshCollisionPolicy::VisualOnly,
+                deferred: false,
             },
         },
         instance(1, None, "box", transform([0.0, 1.0, -4.0], 0.0, 1.0)),

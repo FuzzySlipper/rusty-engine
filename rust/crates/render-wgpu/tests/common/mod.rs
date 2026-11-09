@@ -325,6 +325,7 @@ pub fn coloured_mesh(
                 payload,
                 material_slots: vec![MeshMaterialSlot { slot: 0, material }],
                 collision: MeshCollisionPolicy::VisualOnly,
+                deferred: false,
             },
         },
     ]

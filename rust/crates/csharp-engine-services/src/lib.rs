@@ -44,6 +44,15 @@ pub use appearance::{
     LandmarkSetReport,
 };
 pub use audio::AudioRealizationFact;
+
+/// How far a renderer's deferred preparation is (`render_wgpu`'s
+/// `PreparationReadout`), as the runtime reports it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RendererPreparation {
+    pub completed_batch: u64,
+    pub pending: u32,
+    pub failed: u64,
+}
 pub use composition::{
     parse_runtime_appearance_catalog, CsharpAppearanceCallOutput, CsharpAppearanceCatalog,
     CsharpEngineCallOutput, CsharpEngineServicesError, EngineServiceSet,

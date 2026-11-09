@@ -113,6 +113,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
                 encoded_bytes: texture_bytes,
             },
         }),
+        deferred: false,
     };
     let atlas = SpriteAtlasDescriptor {
         id: "sprite/sparks".to_string(),
@@ -132,6 +133,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
             material: "material/plain".to_string(),
         }],
         collision: MeshCollisionPolicy::AabbFallback,
+        deferred: false,
     };
     let animated_mesh = AnimatedMeshAsset {
         asset: "mesh-animation/character".to_string(),

@@ -1012,6 +1012,10 @@ pub struct TextureDescriptor {
     /// color-fallback meaning. New retained textures use this exact PNG source.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload: Option<TexturePayloadDescriptor>,
+    /// Decoded and uploaded off the thread that defines it: what samples it
+    /// draws once it is ready (`render_wgpu`'s deferred preparation).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferred: bool,
 }
 
 impl TextureDescriptor {
@@ -1073,6 +1077,7 @@ impl TextureDescriptor {
                 byte_length,
                 source: TexturePayloadSource::Resource { resource },
             }),
+            deferred: false,
         }
     }
 
@@ -1792,6 +1797,7 @@ mod tests {
                     encoded_bytes: CHECKER_PNG.to_vec(),
                 },
             }),
+            deferred: false,
         };
         assert_eq!(texture.validate(), Ok(()));
 
@@ -1878,6 +1884,7 @@ mod tests {
                     resource: format!("texture-resource/{}", &CHECKER_HASH[7..]),
                 },
             }),
+            deferred: false,
         };
         assert_eq!(descriptor.validate(), Ok(()));
 

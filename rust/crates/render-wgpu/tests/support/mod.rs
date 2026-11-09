@@ -26,20 +26,25 @@ const CHANNEL_TOLERANCE: u8 = 12;
 const DIFFERING_PIXEL_FRACTION: f64 = 0.002;
 
 #[derive(Default)]
-pub struct Resources(HashMap<String, Vec<u8>>);
+pub struct Resources(HashMap<String, Arc<[u8]>>);
 
 impl ResourceSource for Resources {
     fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
+        self.0.get(identity).map(|bytes| Cow::Borrowed(&bytes[..]))
+    }
+
+    /// Shared, as the runtime's resources are.
+    fn shared(&self, identity: &str) -> Option<render_wgpu::SharedBytes> {
         self.0
             .get(identity)
-            .map(|bytes| Cow::Borrowed(bytes.as_slice()))
+            .map(|bytes| Arc::new(Arc::clone(bytes)) as render_wgpu::SharedBytes)
     }
 }
 
 impl Resources {
     /// Hold resource bytes under their runtime identity.
     pub fn insert(&mut self, identity: &str, bytes: Vec<u8>) {
-        self.0.insert(identity.to_owned(), bytes);
+        self.0.insert(identity.to_owned(), bytes.into());
     }
 
     /// Admit an RGBA8 image as a resource-backed texture, as the runtime does.
@@ -63,7 +68,7 @@ impl Resources {
         if let Some(TexturePayloadSource::Resource { resource }) =
             texture.payload.as_ref().map(|payload| &payload.source)
         {
-            self.0.insert(resource.clone(), png);
+            self.0.insert(resource.clone(), png.into());
         }
         texture
     }
@@ -429,6 +434,7 @@ pub fn static_mesh(asset: &str, payload: MeshPayloadDescriptor, material: &str) 
                 material: material.to_owned(),
             }],
             collision: MeshCollisionPolicy::VisualOnly,
+            deferred: false,
         },
     }
 }

@@ -689,6 +689,61 @@ anything else with `CSHARP_UI_FONT_FORMAT`, and `font.Url()` is a same-origin
 URL for a CSS `@font-face` `src`, served with the font's content type until
 the font is disposed.
 
+### Deferred textures and meshes
+
+A texture opened with `Graphics.OpenResourceFromContent` and a mesh created
+with `Graphics.CreateStaticMeshFromContentReference` are decoded and uploaded
+in the call that publishes them. A world that brings many in at once, such as a
+location arriving in a streaming window, can set `Deferred` on either request
+instead. The renderer then decodes the PNG, reads the mesh's streams and uploads
+both on its own workers, off the update. It takes them in at the start of a
+later product call, so the window, the stream and a capture all show them from
+the same call on.
+
+Until then, whatever draws them draws nothing. An object whose static mesh is
+being prepared is not drawn, and neither is an object with a material that
+samples a texture being prepared. Nothing appears half-built or with a fallback
+colour. Other users of a texture still being prepared, such as a sky, a sprite
+or a decal, draw as they would before it was defined.
+
+Each product call that opens anything deferred is a preparation batch,
+numbered in order. A batch is drawn once every texture and mesh in it has been
+taken in:
+
+```csharp
+using ContentReference reference = content.ResolveReference(new(path, sha256));
+RenderResourceInfo texture = engine.Graphics.OpenResourceFromContent(
+    new RenderResourceContentRequest(reference, TextureFilter.Nearest, TextureWrap.Repeat,
+        TextureColorSpace.Srgb, "", Deferred: true));
+// ... the location's other textures, materials and meshes, Deferred: true ...
+ulong batch = engine.Graphics.ReadResourcePreparation().LastBatch;
+// Later, in any call:
+bool drawn = engine.Graphics.ReadResourcePreparation().CompletedBatch >= batch;
+```
+
+`ReadResourcePreparation` reports:
+
+- `LastBatch`: the latest batch, including the current call's once it has
+  opened something deferred.
+- `CompletedBatch`: every batch numbered up to it is drawn, or has failed.
+- `PendingResources`: the deferred textures and meshes the renderer had not
+  taken in as of the start of this call.
+- `FailedResources`: those that could not be prepared, for example a PNG that
+  does not decode. The renderer's skipped ops name why, and whatever draws a
+  failed resource draws as it would for one the renderer could not realize.
+
+A batch is usually drawn one or two updates after it is opened. A product that
+needs a location visible before the player reaches it can wait for its batch.
+Without a renderer (no window or stream), nothing is prepared or drawn, so
+`CompletedBatch` equals `LastBatch` straight away.
+
+A deferred resource keeps its usual ownership. Disposing it, or a mesh
+appearance, before its batch is drawn drops the work. Opening a texture that is
+already open, with the same sampling, returns the open one, deferred or not. A scene snapshot
+(`engine.renderer.snapshot`) first takes in everything still being prepared,
+so the live scene and the snapshot show the same thing from then on. An
+offline image render waits for the deferred resources in its frozen scene.
+
 ### Binary static meshes
 
 A large static mesh can skip the JSON parse. The same call admits a binary

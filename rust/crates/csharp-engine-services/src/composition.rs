@@ -171,6 +171,7 @@ fn engine_api(
             read_presentation,
             create_authored_material: crate::appearance::create_authored_material,
             create_terrain_layer_material: crate::appearance::create_terrain_layer_material,
+            read_resource_preparation: crate::appearance::read_resource_preparation,
         },
         presentation: NativePresentationApi {
             context: (appearance_bridge as *mut RuntimeAppearanceBridge).cast(),
@@ -635,6 +636,20 @@ impl EngineServiceSet {
         viewport_anchors: render_host_contracts::RendererViewportAnchors,
     ) {
         self.camera_view.set_surface(surface, viewport_anchors);
+    }
+
+    /// How far the renderer's deferred preparation is, as
+    /// `Graphics.ReadResourcePreparation` reports it during the next product
+    /// call; `None` without a renderer, when nothing waits for one.
+    pub fn ingest_renderer_preparation(&mut self, preparation: Option<crate::RendererPreparation>) {
+        self.appearance.ingest_renderer_preparation(preparation);
+    }
+
+    /// The latest batch of deferred textures and meshes, which the renderer
+    /// numbers what a committed call defines by
+    /// (`render_wgpu::SceneState::preparation_batch`).
+    pub fn preparation_batch(&self) -> u64 {
+        self.appearance.preparation_batch()
     }
 
     /// The renderer's settings in effect and what the device refused, as

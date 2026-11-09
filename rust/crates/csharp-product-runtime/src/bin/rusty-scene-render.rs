@@ -505,6 +505,9 @@ fn run() -> Result<(), String> {
         &|entity| world.entity_world_position(entity),
         snapshot.metadata.state.into(),
     );
+    // A snapshot's deferred textures and meshes were drawn when it was
+    // written: the frames wait for them.
+    driver.settle_prepared();
     let apply_ms = ms(applied);
     // The indirect light volume, the snapshot's or the flag's, bakes before
     // the frames so they draw with it.

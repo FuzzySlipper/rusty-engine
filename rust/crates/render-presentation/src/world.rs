@@ -2036,6 +2036,7 @@ mod tests {
                 material: "material/plain".to_string(),
             }],
             collision: MeshCollisionPolicy::VisualOnly,
+            deferred: false,
         }
     }
 
@@ -2376,6 +2377,7 @@ mod tests {
             content_hash: None,
             version: 1,
             payload: None,
+            deferred: false,
         }
     }
 

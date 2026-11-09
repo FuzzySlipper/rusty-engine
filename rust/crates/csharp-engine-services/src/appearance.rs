@@ -1433,6 +1433,9 @@ impl std::ops::DerefMut for RuntimeAppearanceState {
 #[derive(Clone)]
 pub(crate) struct RuntimeAppearanceData {
     pub(crate) projector: RuntimeAppearanceProjector,
+    /// The latest batch of deferred textures and meshes: one per call that
+    /// opens any (`NativeResourcePreparationReadout`).
+    pub(crate) preparation_batch: u64,
     appearances: BTreeMap<u64, String>,
     next_appearance: u64,
     pub(crate) generated_meshes: GeneratedMeshes,
@@ -1587,6 +1590,8 @@ pub(crate) struct RuntimeAppearanceCall {
     /// The presentation timeline at the call's start, which its outputs
     /// take effect at, and at its end, which its poses are evaluated at.
     clock: (f64, f64),
+    /// This call opened a deferred resource: `state.preparation_batch` is its.
+    preparation_batched: bool,
 }
 
 #[derive(Clone)]
@@ -1904,6 +1909,9 @@ pub(crate) struct RuntimeAppearanceBridge {
     /// The presentation timeline when the next call starts, and how far that
     /// call advances it (`set_presentation_clock`).
     presentation_clock: (f64, f64),
+    /// How far the renderer's deferred preparation is, as it last reported;
+    /// `None` while no renderer reports, when nothing waits for one.
+    renderer_preparation: Option<crate::RendererPreparation>,
 }
 
 impl RuntimeAppearanceBridge {
@@ -1913,6 +1921,7 @@ impl RuntimeAppearanceBridge {
     ) -> Self {
         let state = RuntimeAppearanceState::from(RuntimeAppearanceData {
             projector: RuntimeAppearanceProjector::new(catalog),
+            preparation_batch: 0,
             appearances: BTreeMap::new(),
             next_appearance: 1,
             generated_meshes: GeneratedMeshes::default(),
@@ -1992,6 +2001,7 @@ impl RuntimeAppearanceBridge {
             reported_recoverable_codes: BTreeSet::new(),
             tween_owed_seconds: 0.0,
             presentation_clock: (0.0, 0.0),
+            renderer_preparation: None,
         }
     }
 
@@ -2118,6 +2128,7 @@ impl RuntimeAppearanceBridge {
             outputs: Vec::new(),
             presentation_frames: 0,
             clock: self.presentation_clock,
+            preparation_batched: false,
         });
         self.operation_error = None;
     }
@@ -3595,6 +3606,7 @@ impl RuntimeAppearanceBridge {
             request.wrap,
             request.color_space,
             &keywords,
+            false,
         )
     }
 
@@ -3605,10 +3617,14 @@ impl RuntimeAppearanceBridge {
         wrap: NativeTextureWrap,
         color_space: NativeTextureColorSpace,
         shader_keywords: &[String],
+        deferred: bool,
     ) -> Result<NativeRenderResourceInfo, CsharpEngineServicesError> {
-        let resource = self
-            .imports
-            .file(content, filter, wrap, color_space, shader_keywords)?;
+        let mut resource =
+            self.imports
+                .file(content, filter, wrap, color_space, shader_keywords)?;
+        if deferred && resource.defer() {
+            self.join_preparation_batch()?;
+        }
         let resources = &mut self.staged_mut()?.state.render_resources;
         let handle = resources.admit(resource)?;
         resources.info(handle)
@@ -4761,6 +4777,7 @@ impl RuntimeAppearanceBridge {
             },
             material_slots: material_slots.clone(),
             collision: MeshCollisionPolicy::VisualOnly,
+            deferred: false,
         };
         // Admission: the projection retains catalog meshes as they are.
         asset.validate().map_err(|error| {
@@ -4809,13 +4826,59 @@ impl RuntimeAppearanceBridge {
             .to_owned()
         };
         let content = self.content_path(&requested_path)?;
-        self.admit_static_mesh(content, request.color)
+        self.admit_static_mesh(content, request.color, false)
+    }
+
+    /// This call's deferred textures and meshes form its preparation batch.
+    fn join_preparation_batch(&mut self) -> Result<(), CsharpEngineServicesError> {
+        let call = self.staged_mut()?;
+        if !call.preparation_batched {
+            call.preparation_batched = true;
+            call.state.preparation_batch += 1;
+        }
+        Ok(())
+    }
+
+    /// The latest preparation batch, the current call's included.
+    pub(crate) fn preparation_batch(&self) -> u64 {
+        self.staged
+            .as_ref()
+            .map_or(&self.state, |call| &call.state)
+            .preparation_batch
+    }
+
+    /// How far the renderer's deferred preparation is; `None` without a
+    /// renderer.
+    pub(crate) fn ingest_renderer_preparation(
+        &mut self,
+        preparation: Option<crate::RendererPreparation>,
+    ) {
+        self.renderer_preparation = preparation;
+    }
+
+    fn resource_preparation(&self) -> csharp_engine_abi::NativeResourcePreparationReadout {
+        let last_batch = self.preparation_batch();
+        match self.renderer_preparation {
+            Some(renderer) => csharp_engine_abi::NativeResourcePreparationReadout {
+                completed_batch: renderer.completed_batch.min(last_batch),
+                last_batch,
+                pending_resources: renderer.pending,
+                failed_resources: renderer.failed,
+            },
+            // Nothing prepares or draws them, so nothing waits.
+            None => csharp_engine_abi::NativeResourcePreparationReadout {
+                completed_batch: last_batch,
+                last_batch,
+                ..Default::default()
+            },
+        }
     }
 
     fn admit_static_mesh(
         &mut self,
         content: crate::content::RetainedContent,
         color: NativeColor,
+        deferred: bool,
     ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
         let (payload, source_material_slots, resource) = self.imports.static_mesh(content)?;
         // Admission, before anything is retained: the product's colour, and
@@ -4839,10 +4902,14 @@ impl RuntimeAppearanceBridge {
             payload,
             material_slots,
             collision: MeshCollisionPolicy::VisualOnly,
+            deferred,
         };
         asset.validate().map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_STATIC_MESH_LAYOUT", format!("{error:?}"))
         })?;
+        if deferred {
+            self.join_preparation_batch()?;
+        }
         let staged = self.staged_mut()?;
         let resource = staged.state.render_resources.stage(resource)?;
         let resources = staged.state.projector.resources_mut();
@@ -9120,6 +9187,21 @@ pub(crate) unsafe extern "C" fn read_presentation(
     })
 }
 
+pub(crate) unsafe extern "C" fn read_resource_preparation(
+    context: *mut c_void,
+    result: *mut csharp_engine_abi::NativeResourcePreparationReadout,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || result.is_null() {
+            return 0;
+        }
+        let bridge = unsafe { &*context.cast::<RuntimeAppearanceBridge>() };
+        unsafe { *result = bridge.resource_preparation() };
+        ABI_OK
+    })
+}
+
 pub(crate) fn animation_result<T: Copy>(
     context: *mut c_void,
     result: *mut T,
@@ -10689,6 +10771,7 @@ pub(crate) unsafe extern "C" fn open_render_resource_from_content(
                     request.wrap,
                     request.color_space,
                     &keywords,
+                    request.deferred,
                 )
             }) {
             Ok(value) => {
@@ -10716,7 +10799,7 @@ pub(crate) unsafe extern "C" fn create_static_mesh_from_content_reference(
         let request = unsafe { *request };
         appearance_result(context, result, |bridge| {
             let content = bridge.content_reference(request.content)?;
-            bridge.admit_static_mesh(content, request.color)
+            bridge.admit_static_mesh(content, request.color, request.deferred)
         })
     })
 }
@@ -11298,6 +11381,164 @@ pub(super) mod tests {
                 a: 1.0,
             },
         }
+    }
+
+    /// A one-triangle static mesh document.
+    fn triangle_mesh_json() -> Vec<u8> {
+        let attribute = |name, components| render_model::MeshAttribute {
+            name,
+            components,
+            kind: render_model::MeshAttributeKind::F32,
+        };
+        serde_json::to_vec(&StaticMeshAsset {
+            asset: "mesh/triangle".to_owned(),
+            payload: render_model::MeshPayloadDescriptor {
+                texture_space: None,
+                distance_field: None,
+                layout: render_model::MeshBufferLayout {
+                    vertex_count: 3,
+                    index_count: 3,
+                    index_width: render_model::MeshIndexWidth::U32,
+                    attributes: vec![
+                        attribute(render_model::MeshAttributeName::Position, 3),
+                        attribute(render_model::MeshAttributeName::Normal, 3),
+                    ],
+                },
+                groups: vec![render_model::MeshGroupDescriptor {
+                    material_slot: 0,
+                    start: 0,
+                    count: 3,
+                }],
+                bounds: render_model::MeshBoundsDescriptor {
+                    min: [0.0; 3],
+                    max: [1.0, 1.0, 0.0],
+                },
+                source: render_model::MeshPayloadSource::Inline {
+                    positions: vec![0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0].into(),
+                    normals: [0.0_f32, 0.0, 1.0].repeat(3).into(),
+                    uvs: None,
+                    colors: None,
+                    indices: vec![0, 1, 2].into(),
+                },
+                provenance: render_model::MeshProvenance::StaticAsset,
+                layer_weights: false,
+                layer_palette: Vec::new(),
+                billboard: false,
+                vertex_occlusion: false,
+                morph: None,
+            },
+            material_slots: vec![MeshMaterialSlot {
+                slot: 0,
+                material: "material/triangle".to_owned(),
+            }],
+            collision: MeshCollisionPolicy::VisualOnly,
+            deferred: false,
+        })
+        .expect("a mesh document")
+    }
+
+    #[test]
+    fn deferred_textures_and_meshes_form_one_preparation_batch_per_call() {
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert("a.png".to_owned(), crate::ContentBytes::from(RGBA_PNG));
+        content_resources.insert(
+            "triangle.json".to_owned(),
+            crate::ContentBytes::from(triangle_mesh_json()),
+        );
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        // Each sampling is its own texture; the same one opened again is the
+        // one already open, deferred or not.
+        let open_texture = |bridge: &mut RuntimeAppearanceBridge, deferred, wrap| {
+            let content = bridge.content_path("a.png").expect("content");
+            bridge
+                .admit_resource(
+                    content,
+                    NativeTextureFilter::Nearest,
+                    wrap,
+                    NativeTextureColorSpace::Srgb,
+                    &[],
+                    deferred,
+                )
+                .expect("a texture")
+                .handle
+        };
+        let white = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+
+        // A call opening nothing deferred numbers no batch.
+        bridge.begin_call();
+        open_texture(&mut bridge, false, NativeTextureWrap::Clamp);
+        assert_eq!(bridge.resource_preparation().last_batch, 0);
+        bridge.end_call();
+
+        // Without a renderer nothing prepares them, so nothing waits.
+        bridge.begin_call();
+        let mesh = bridge.content_path("triangle.json").expect("content");
+        bridge
+            .admit_static_mesh(mesh, white, true)
+            .expect("a static mesh");
+        let mesh = bridge.content_path("triangle.json").expect("content");
+        bridge
+            .admit_static_mesh(mesh, white, true)
+            .expect("a static mesh");
+        assert_eq!(
+            bridge.resource_preparation(),
+            csharp_engine_abi::NativeResourcePreparationReadout {
+                completed_batch: 1,
+                last_batch: 1,
+                ..Default::default()
+            }
+        );
+        let deferred_meshes = bridge
+            .staged_ref()
+            .expect("a call")
+            .state
+            .projector
+            .resources()
+            .static_meshes
+            .iter()
+            .filter(|asset| asset.deferred)
+            .count();
+        assert_eq!(deferred_meshes, 2);
+        bridge.end_call();
+
+        // A renderer reports how far it is; a call that defers joins the
+        // next batch, once however much it opens.
+        bridge.ingest_renderer_preparation(Some(crate::RendererPreparation {
+            completed_batch: 0,
+            pending: 2,
+            failed: 0,
+        }));
+        bridge.begin_call();
+        let texture = open_texture(&mut bridge, true, NativeTextureWrap::Repeat);
+        assert!(
+            bridge
+                .resource(texture.value)
+                .expect("the texture")
+                .texture()
+                .is_some_and(|texture| texture.deferred),
+            "a texture opened deferred is prepared off the update"
+        );
+        let mesh = bridge.content_path("triangle.json").expect("content");
+        bridge
+            .admit_static_mesh(mesh, white, true)
+            .expect("a static mesh");
+        assert_eq!(
+            bridge.resource_preparation(),
+            csharp_engine_abi::NativeResourcePreparationReadout {
+                completed_batch: 0,
+                last_batch: 2,
+                pending_resources: 2,
+                failed_resources: 0,
+            }
+        );
+        bridge.end_call();
+        assert_eq!(bridge.preparation_batch(), 2);
     }
 
     #[test]
@@ -14706,6 +14947,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 material: "material/test".to_owned(),
             }],
             collision: MeshCollisionPolicy::VisualOnly,
+            deferred: false,
         }
     }
 

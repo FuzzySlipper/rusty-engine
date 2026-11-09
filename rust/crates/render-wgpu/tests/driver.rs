@@ -38,6 +38,7 @@ fn state(step: u64, held: bool) -> SceneState {
         step,
         held,
         lead: None,
+        preparation_batch: 0,
     }
 }
 

@@ -253,11 +253,18 @@ public sealed class ProductContentMixedBundleChecks : IDisposable
 
     private Appearance OpenStaticMesh(ProductContentBundle bundle)
     {
-        // The binary encoding of the same triangle admits through the same call.
+        // The binary encoding of the same triangle admits through the same
+        // call, here uploaded off the update: the call joins a preparation
+        // batch, which is done once the renderer took it in (or at once
+        // without a renderer). Released before then, it is never drawn.
+        ulong before = engine.Graphics.ReadResourcePreparation().LastBatch;
         using (ContentReference binary = bundle.OpenReference("triangle.rstatmsh"))
         using (engine.Graphics.CreateStaticMeshFromContentReference(new StaticMeshContentReferenceRequest(
-            binary, new Color(0.3f, 0.6f, 0.9f, 1))))
+            binary, new Color(0.3f, 0.6f, 0.9f, 1), Deferred: true)))
         {
+            ResourcePreparationReadout preparation = engine.Graphics.ReadResourcePreparation();
+            Require(preparation.LastBatch == before + 1 && preparation.CompletedBatch <= preparation.LastBatch,
+                "a call opening a deferred resource numbers its preparation batch");
         }
         using ContentReference reference = bundle.OpenReference("triangle.static-mesh.json");
         return engine.Graphics.CreateStaticMeshFromContentReference(new StaticMeshContentReferenceRequest(

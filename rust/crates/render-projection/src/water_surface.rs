@@ -434,6 +434,7 @@ fn surface_asset(asset: &str, mesh: &WaterSurfaceMesh, material: &str) -> Static
             material: material.to_owned(),
         }],
         collision: MeshCollisionPolicy::VisualOnly,
+        deferred: false,
     }
 }
 

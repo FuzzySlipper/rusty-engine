@@ -2813,6 +2813,7 @@ fn multi_material_mesh(
                 })
                 .collect(),
             collision: MeshCollisionPolicy::VisualOnly,
+            deferred: false,
         },
     }
 }

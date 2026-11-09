@@ -108,6 +108,7 @@ impl RuntimeAppearanceBridge {
                 material: material_id,
             }],
             collision: MeshCollisionPolicy::VisualOnly,
+            deferred: false,
         };
         asset
             .validate()

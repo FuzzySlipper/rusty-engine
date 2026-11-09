@@ -47,6 +47,9 @@ pub struct SceneState {
     /// How presentation time runs on past `elapsed_seconds` until the next
     /// call, while the world runs; `None` holds it there.
     pub lead: Option<PresentationLead>,
+    /// The batch the call's deferred textures and meshes belong to
+    /// ([`Renderer::set_preparation_batch`]).
+    pub preparation_batch: u64,
 }
 
 /// How a running world's presentation time moves between committed calls:
@@ -694,6 +697,26 @@ impl SceneDriver {
         (scene.skipped_ops.clone(), scene.last_skip.clone())
     }
 
+    /// How far deferred preparation is ([`Renderer::preparation_readout`]).
+    pub fn preparation_readout(&self) -> crate::PreparationReadout {
+        self.scene().renderer.preparation_readout()
+    }
+
+    /// Waits for every deferred texture and mesh being prepared and takes
+    /// them in, so the scene shows everything committed: what a snapshot
+    /// does before it is written. Every reading shows them from then on.
+    pub fn settle_prepared(&self) {
+        let mut scene = self.scene();
+        let before = scene.renderer.preparation_readout();
+        let issues = scene.renderer.settle_prepared();
+        scene.record_issues(issues);
+        if scene.renderer.preparation_readout() != before {
+            scene.changed = true;
+            drop(scene);
+            self.wake.notify_all();
+        }
+    }
+
     /// The device the renderer draws with.
     pub fn gpu(&self) -> &Gpu {
         &self.gpu
@@ -746,7 +769,13 @@ impl Scene {
         state: SceneState,
         now: f64,
     ) -> bool {
-        let mut applied = false;
+        // What workers prepared since the last call is taken in first, so
+        // every reading shows it from this call on.
+        self.renderer.set_preparation_batch(state.preparation_batch);
+        let installed = self.renderer.preparation_readout();
+        let issues = self.renderer.take_prepared();
+        self.record_issues(issues);
+        let mut applied = self.renderer.preparation_readout() != installed;
         for change in changes {
             let issues = match change {
                 SceneChange::Frame(frame) => self.renderer.apply(frame, resources),

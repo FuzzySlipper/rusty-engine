@@ -1086,6 +1086,7 @@ impl CsharpProductRuntime {
         }
         if let Some(frames) = &frame_output {
             services.ingest_renderer_settings(frames.settings_readout());
+            services.ingest_renderer_preparation(Some(frames.preparation()));
         }
         let host_exit = frame_output
             .as_ref()
@@ -2668,6 +2669,12 @@ impl CsharpProductRuntime {
         }
         let baseline = service_outputs(self.services.snapshot_outputs(ui_binding(&self.lifecycle)))
             .map_err(|error| format!("{}: {}", error.code(), error.detail()))?;
+        // The snapshot draws everything it holds, so the live scene takes in
+        // what is still being prepared first and shows it from now on: the
+        // two agree.
+        if let Some(frames) = &self.frame_output {
+            frames.driver().settle_prepared();
+        }
         let metadata = scene_snapshot::SceneSnapshotMetadata {
             product: self.product.clone(),
             host: scene_snapshot::SceneSnapshotHost {

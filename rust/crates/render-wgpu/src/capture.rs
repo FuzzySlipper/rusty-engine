@@ -63,7 +63,10 @@ impl Renderer {
         resources: &dyn ResourceSource,
     ) -> (Renderer, Vec<ApplyIssue>) {
         let mut isolated = Renderer::new(&self.gpu, self.options);
-        let issues = isolated.apply(frame, resources);
+        let mut issues = isolated.apply(frame, resources);
+        // An offline render draws the whole frozen scene: it waits for its
+        // deferred textures and meshes.
+        issues.extend(isolated.settle_prepared());
         (isolated, issues)
     }
 

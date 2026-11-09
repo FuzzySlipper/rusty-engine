@@ -372,5 +372,6 @@ fn tile_asset(
         },
         material_slots,
         collision: MeshCollisionPolicy::VisualOnly,
+        deferred: false,
     }
 }

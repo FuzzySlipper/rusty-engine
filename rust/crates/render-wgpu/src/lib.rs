@@ -58,6 +58,7 @@ mod parts_rigs;
 mod pipelines;
 mod post;
 mod precipitation;
+mod prepare;
 mod primitives;
 mod probes;
 mod ray_gi;
@@ -123,6 +124,7 @@ pub use driver::{
 pub use frame::FrameStats;
 pub use impostor::ImpostorReadout;
 pub use occlusion::OcclusionReadout;
+pub use prepare::PreparationReadout;
 pub use ray_gi::RayGiReadout;
 pub use ray_scene::{ProbeHit, ProbeRay, RaySceneReadout};
 pub use scatter_select::ScatterSelectionReadout;
@@ -150,7 +152,7 @@ pub use overlays::{
 };
 pub use particles::EntityPositions;
 pub use probes::IndirectLightReadout;
-pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource};
+pub use resources::{decode_png_rgba, encode_png, NoResources, ResourceSource, SharedBytes};
 pub use surface::{PresentSkip, SurfaceFrame, WindowSurface};
 pub use target::OffscreenTarget;
 pub use timing::GpuPassTiming;
@@ -736,6 +738,9 @@ pub struct Renderer {
     ray_gi_without_denoiser: bool,
     /// Toward the sun whose shadows rays trace, while they do.
     ray_sun_toward: Option<glam::Vec3>,
+    /// Deferred textures and meshes being decoded and uploaded on workers
+    /// (`prepare.rs`).
+    preparation: prepare::Preparation,
 }
 
 /// The water reflection's march at low and high quality: its steps and its
@@ -948,6 +953,7 @@ impl Renderer {
             ray_gi_without_denoiser: false,
             ray_shadows: None,
             ray_sun_toward: None,
+            preparation: prepare::Preparation::default(),
             animation_time: 0.0,
             presentation_time: 0.0,
             animation_facts: Vec::new(),

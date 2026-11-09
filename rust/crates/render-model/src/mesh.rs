@@ -815,6 +815,10 @@ pub struct StaticMeshAsset {
     pub payload: MeshPayloadDescriptor,
     pub material_slots: Vec<MeshMaterialSlot>,
     pub collision: MeshCollisionPolicy,
+    /// Read and uploaded off the thread that defines it: what draws it
+    /// draws once it is ready (`render_wgpu`'s deferred preparation).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub deferred: bool,
 }
 
 impl StaticMeshAsset {
@@ -1912,6 +1916,7 @@ mod tests {
                 material: "material/plain".to_string(),
             }],
             collision: MeshCollisionPolicy::AabbFallback,
+            deferred: false,
         };
         assert_eq!(asset.validate(), Ok(()));
         assert!(matches!(
@@ -2061,6 +2066,7 @@ mod tests {
                 material: "material/plain".to_string(),
             }],
             collision: MeshCollisionPolicy::Trimesh,
+            deferred: false,
         };
         assert_eq!(asset.validate(), Ok(()));
         assert_eq!(

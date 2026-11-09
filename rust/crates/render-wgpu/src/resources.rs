@@ -12,6 +12,26 @@ use render_model::{
 /// admitted render-output resources; tests implement it over files.
 pub trait ResourceSource {
     fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>>;
+
+    /// The same bytes, held for a worker preparing a deferred texture or
+    /// mesh (`prepare.rs`) past this call, when the source can share its
+    /// storage. Without, the call copies what the worker reads: a texture's
+    /// encoded bytes, a mesh's streams.
+    fn shared(&self, _identity: &str) -> Option<SharedBytes> {
+        None
+    }
+}
+
+/// Resource bytes a worker holds.
+pub type SharedBytes = std::sync::Arc<dyn AsRef<[u8]> + Send + Sync>;
+
+/// One resource's bytes, as the source a worker reads them from.
+pub(crate) struct HeldResource(pub(crate) String, pub(crate) SharedBytes);
+
+impl ResourceSource for HeldResource {
+    fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
+        (identity == self.0).then(|| Cow::Borrowed((*self.1).as_ref()))
+    }
 }
 
 /// A source with no resources, for scenes that carry everything inline.
@@ -33,17 +53,66 @@ pub(crate) fn texture_image(
     texture: &TextureDescriptor,
     resources: &dyn ResourceSource,
 ) -> Result<Option<DecodedImage>, String> {
-    let Some(payload) = &texture.payload else {
+    if texture.payload.is_none() {
         // Metadata-only legacy descriptor: realized as the colour fallback.
         return Ok(None);
-    };
-    let bytes = match &payload.source {
-        TexturePayloadSource::Inline { encoded_bytes } => Cow::Borrowed(encoded_bytes.as_slice()),
-        TexturePayloadSource::Resource { resource } => resources
+    }
+    decode_texture(&texture_bytes(texture, resources)?).map(Some)
+}
+
+/// What a worker reads a deferred definition from: the source's shared
+/// resource, or what the call read from it.
+pub(crate) enum Held<T> {
+    Shared(HeldResource),
+    Copied(T),
+}
+
+/// The resource a worker reads, held from `resources` when it shares it.
+pub(crate) fn held_resource(
+    identity: Option<&str>,
+    resources: &dyn ResourceSource,
+) -> Option<HeldResource> {
+    let identity = identity?;
+    resources
+        .shared(identity)
+        .map(|bytes| HeldResource(identity.to_owned(), bytes))
+}
+
+/// The resource a texture's payload names, if it is not inline.
+pub(crate) fn texture_resource(texture: &TextureDescriptor) -> Option<&str> {
+    match texture.payload.as_ref().map(|payload| &payload.source) {
+        Some(TexturePayloadSource::Resource { resource }) => Some(resource),
+        _ => None,
+    }
+}
+
+/// The resource a mesh payload names, if it is not inline.
+pub(crate) fn mesh_resource(payload: &MeshPayloadDescriptor) -> Option<&str> {
+    match &payload.source {
+        MeshPayloadSource::Resource { resource, .. } => Some(resource),
+        MeshPayloadSource::Inline { .. } => None,
+    }
+}
+
+/// A texture's encoded bytes (it has a payload).
+pub(crate) fn texture_bytes<'a>(
+    texture: &'a TextureDescriptor,
+    resources: &'a dyn ResourceSource,
+) -> Result<Cow<'a, [u8]>, String> {
+    match texture.payload.as_ref().map(|payload| &payload.source) {
+        Some(TexturePayloadSource::Inline { encoded_bytes }) => {
+            Ok(Cow::Borrowed(encoded_bytes.as_slice()))
+        }
+        Some(TexturePayloadSource::Resource { resource }) => resources
             .bytes(resource)
-            .ok_or_else(|| format!("resource {resource} is not available"))?,
-    };
-    decode_png(&bytes).map(Some)
+            .ok_or_else(|| format!("resource {resource} is not available")),
+        None => Err(format!("{} has no payload", texture.id)),
+    }
+}
+
+/// A texture's pixels from its encoded bytes.
+pub(crate) fn decode_texture(bytes: &[u8]) -> Result<DecodedImage, String> {
+    decode_png(bytes)
 }
 
 pub(crate) fn decode_png(bytes: &[u8]) -> Result<DecodedImage, String> {

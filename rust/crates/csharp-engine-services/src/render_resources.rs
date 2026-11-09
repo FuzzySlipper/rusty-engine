@@ -433,6 +433,14 @@ impl CsharpRenderResource {
     pub(crate) fn texture(&self) -> Option<&TextureDescriptor> {
         self.texture.as_ref()
     }
+    /// Has the renderer prepare a texture off the update
+    /// (`TextureDescriptor::deferred`); false for other resources.
+    pub(crate) fn defer(&mut self) -> bool {
+        self.texture
+            .as_mut()
+            .map(|texture| texture.deferred = true)
+            .is_some()
+    }
     pub(crate) fn animated_mesh(&self) -> Option<&AnimatedMeshAsset> {
         self.animated_mesh.as_ref()
     }
@@ -1311,6 +1319,7 @@ impl GeneratedMeshes {
             payload,
             material_slots,
             collision: MeshCollisionPolicy::VisualOnly,
+            deferred: false,
         };
         definition
             .validate()
@@ -1370,6 +1379,7 @@ impl GeneratedMeshes {
                         .cloned()
                         .collect(),
                     collision: MeshCollisionPolicy::VisualOnly,
+                    deferred: false,
                 }))
             })
             .collect();
@@ -2461,6 +2471,7 @@ pub(crate) mod tests {
                 material: "material/charing".to_owned(),
             }],
             collision: MeshCollisionPolicy::VisualOnly,
+            deferred: false,
         };
         let json = serde_json::to_vec(&asset).unwrap();
         let mut packed = pack_mesh_resources(

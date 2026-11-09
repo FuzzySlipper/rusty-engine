@@ -1002,6 +1002,11 @@ pub type NativeReadLight = unsafe extern "C" fn(
     *mut NativeLightReadout,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeReadResourcePreparation = unsafe extern "C" fn(
+    *mut c_void,
+    *mut NativeResourcePreparationReadout,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadPresentation = unsafe extern "C" fn(
     *mut c_void,
     *mut NativePresentationReadout,
@@ -1815,6 +1820,7 @@ pub struct NativeGraphicsApi {
     pub read_presentation: NativeReadPresentation,
     pub create_authored_material: NativeCreateAuthoredMaterial,
     pub create_terrain_layer_material: NativeCreateTerrainLayerMaterial,
+    pub read_resource_preparation: NativeReadResourcePreparation,
 }
 
 /// Named renderer-neutral facts. Handles identify product-owned billboard and

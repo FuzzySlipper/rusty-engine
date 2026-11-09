@@ -254,6 +254,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
             })
             .collect(),
         collision: collision_policy(source, &context.settings),
+        deferred: false,
     };
     if let Err(error) = static_mesh.validate() {
         diagnostics.push(ImportDiagnostic::error(

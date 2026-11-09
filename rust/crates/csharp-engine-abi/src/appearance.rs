@@ -1211,6 +1211,10 @@ pub struct NativeRenderResourceContentRequest {
     pub color_space: NativeTextureColorSpace,
     /// As in `NativeRenderResourceRequest`.
     pub shader_keywords: NativeUtf8Slice,
+    /// A texture is decoded and uploaded off the update, and what samples
+    /// it draws once it is ready: it joins this call's preparation batch
+    /// (`NativeResourcePreparationReadout`). Ignored for other resources.
+    pub deferred: bool,
 }
 
 #[repr(C)]
@@ -1225,6 +1229,32 @@ pub struct NativeStaticMeshContentReferenceRequest {
     pub content: NativeContentReferenceHandle,
     /// Linear RGBA: the plain material the mesh's slots draw with.
     pub color: NativeColor,
+    /// The mesh is uploaded off the update, and its appearance draws once
+    /// it is ready: it joins this call's preparation batch
+    /// (`NativeResourcePreparationReadout`).
+    pub deferred: bool,
+}
+
+/// How far the textures and meshes opened `deferred` are. Each product call
+/// that opens any is a batch, numbered in order; a batch is drawn once every
+/// texture and mesh in it is prepared and taken in, which happens at the
+/// start of a later call, so every reading of the scene shows it from then
+/// on. Until then what draws them draws nothing.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeResourcePreparationReadout {
+    /// Every batch numbered up to this one is drawn, or failed.
+    pub completed_batch: u64,
+    /// The latest batch: this call's, once it has opened a deferred
+    /// resource. 0 before any.
+    pub last_batch: u64,
+    /// Deferred textures and meshes the renderer has not yet taken in, as
+    /// of this call's start.
+    pub pending_resources: u32,
+    /// Deferred textures and meshes that could not be prepared; the
+    /// renderer's skipped ops say why. What draws them draws as for a
+    /// resource the renderer could not realize.
+    pub failed_resources: u64,
 }
 
 /// Joint binding for one changed child object. The child's parent_object_id

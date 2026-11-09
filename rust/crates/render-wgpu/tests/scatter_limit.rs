@@ -207,6 +207,7 @@ fn a_patch_whose_groups_do_not_all_fit_is_refused_whole() {
                     MeshMaterialSlot { slot: 1, material },
                 ],
                 collision: MeshCollisionPolicy::VisualOnly,
+                deferred: false,
             },
         },
         patch(20, copies(6_000), 0),

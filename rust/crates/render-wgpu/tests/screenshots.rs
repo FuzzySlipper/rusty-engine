@@ -303,6 +303,7 @@ fn static_mesh(asset: &str, payload: MeshPayloadDescriptor, material: &str) -> R
                 material: material.to_owned(),
             }],
             collision: MeshCollisionPolicy::VisualOnly,
+            deferred: false,
         },
     }
 }
