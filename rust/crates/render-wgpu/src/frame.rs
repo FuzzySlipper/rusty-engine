@@ -124,6 +124,10 @@ pub struct FrameStats {
     /// Pipelines bound for part draws across view passes and shadow layers:
     /// one per run of draws sharing a pass and material features.
     pub pipeline_binds: u32,
+    /// The calls those passes' and layers' part batches took: a multi-draw
+    /// of pooled batches sharing a pipeline and material (`draw_args.rs`),
+    /// or of GPU-culled batches, is one.
+    pub draw_calls: u32,
     /// World, caster and pre-pass pipelines compiled while rendering: the
     /// feature sets in use, made for a target the world first draws into
     /// and when shadows or ambient occlusion first draw; 0 otherwise.
@@ -158,6 +162,7 @@ pub(crate) struct ViewStats {
     pub sprite_candidates: u32,
     pub sprite_batch_instances: u32,
     pub pipeline_binds: u32,
+    pub draw_calls: u32,
     pub pipelines_created: u32,
     pub overlay_lines: u32,
 }
@@ -176,6 +181,7 @@ impl Add for ViewStats {
             sprite_candidates: self.sprite_candidates + other.sprite_candidates,
             sprite_batch_instances: self.sprite_batch_instances + other.sprite_batch_instances,
             pipeline_binds: self.pipeline_binds + other.pipeline_binds,
+            draw_calls: self.draw_calls + other.draw_calls,
             pipelines_created: self.pipelines_created + other.pipelines_created,
             overlay_lines: self.overlay_lines + other.overlay_lines,
         }
@@ -193,6 +199,7 @@ impl AddAssign<ViewStats> for FrameStats {
         self.sprite_candidates += view.sprite_candidates;
         self.sprite_batch_instances += view.sprite_batch_instances;
         self.pipeline_binds += view.pipeline_binds;
+        self.draw_calls += view.draw_calls;
         self.pipelines_created += view.pipelines_created;
         self.overlay_lines += view.overlay_lines;
     }
@@ -201,14 +208,86 @@ impl AddAssign<ViewStats> for FrameStats {
 /// What a run of batches encoded.
 #[derive(Clone, Copy, Default)]
 struct Encoded {
+    /// Batches drawn.
     draws: u32,
+    /// The calls that drew them: a multi-draw is one.
+    draw_calls: u32,
     pipeline_binds: u32,
 }
 
 impl AddAssign for Encoded {
     fn add_assign(&mut self, other: Self) {
         self.draws += other.draws;
+        self.draw_calls += other.draw_calls;
         self.pipeline_binds += other.pipeline_binds;
+    }
+}
+
+/// A draw list's runs of pooled batches (`Renderer::draw_list`): the
+/// arguments of the run being gathered, after those of the runs drawn
+/// before it, and the list's region of the frame's arguments
+/// (`draw_args.rs`), taken at its first multi-draw.
+#[derive(Default)]
+struct Runs {
+    args: Vec<wgpu::util::DrawIndexedIndirectArgs>,
+    /// Where the gathering run starts in `args`.
+    start: usize,
+    region: Option<crate::draw_args::Region>,
+}
+
+impl Runs {
+    fn add(&mut self, args: wgpu::util::DrawIndexedIndirectArgs) {
+        self.args.push(args);
+    }
+
+    /// Draw the gathered run: one batch directly, more as one multi-draw
+    /// from the list's region, which holds at most `batches` arguments.
+    fn end(
+        &mut self,
+        renderer: &Renderer,
+        pass: &mut wgpu::RenderPass<'_>,
+        batches: usize,
+        encoded: &mut Encoded,
+    ) {
+        let count = self.args.len() - self.start;
+        match count {
+            0 => return,
+            1 => {
+                let args = self.args.pop().expect("one gathered batch");
+                pass.draw_indexed(
+                    args.first_index..args.first_index + args.index_count,
+                    args.base_vertex,
+                    args.first_instance..args.first_instance + args.instance_count,
+                );
+            }
+            _ => {
+                let region = self.region.get_or_insert_with(|| {
+                    renderer
+                        .draw_args
+                        .as_ref()
+                        .expect("runs gather only with indirect arguments")
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .reserve(&renderer.gpu, batches as u64)
+                });
+                let offset = region.offset + self.start as u64 * crate::draw_args::ARGS_BYTES;
+                pass.multi_draw_indexed_indirect(&region.buffer, offset, count as u32);
+                self.start = self.args.len();
+            }
+        }
+        encoded.draw_calls += 1;
+    }
+
+    /// Write the list's multi-draws' arguments, before its encoder is
+    /// submitted.
+    fn write(&self, renderer: &Renderer) {
+        if let Some(region) = &self.region {
+            renderer.gpu.queue.write_buffer(
+                &region.buffer,
+                region.offset,
+                bytemuck::cast_slice(&self.args),
+            );
+        }
     }
 }
 
@@ -433,6 +512,12 @@ impl Renderer {
 
     /// Bring GPU rows up to date with the tables. Returns rows uploaded.
     pub(crate) fn prepare(&mut self) -> u32 {
+        if let Some(args) = &mut self.draw_args {
+            args.get_mut()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .begin_frame();
+        }
+        self.place_static_meshes();
         self.propagate_transforms();
         self.realize_poses();
         self.advance_video();
@@ -571,6 +656,54 @@ impl Renderer {
         }
         self.prepare_ray_scene(regrouped || runs_changed || !moved.is_empty());
         uploaded
+    }
+
+    /// Copy the static meshes defined since the last frame into the static
+    /// pool, before anything lists their parts; once released meshes hold
+    /// most of it, lay every static mesh out anew.
+    fn place_static_meshes(&mut self) {
+        if std::mem::take(&mut self.static_pool_released) && self.static_pool.wasteful() {
+            self.static_pool.clear();
+            self.static_pool_pending = self.tables.static_meshes.ids().collect();
+            // The GPU cull's arguments hold the old places: every list is
+            // built again.
+            self.views = Default::default();
+            self.culling.invalidate();
+        }
+        if self.static_pool_pending.is_empty() {
+            return;
+        }
+        // A device whose draws may ignore their base vertex (OpenGL ES
+        // before 3.2) keeps every mesh in its own buffers.
+        if !self
+            .gpu
+            .adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::BASE_VERTEX)
+        {
+            self.static_pool_pending.clear();
+            return;
+        }
+        let mut encoder = self
+            .gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-wgpu static mesh pool"),
+            });
+        for id in std::mem::take(&mut self.static_pool_pending) {
+            let at = MeshRef::Static(id);
+            let Some(mesh) = self.tables.static_meshes.get(id) else {
+                continue;
+            };
+            let place = self.static_pool.place(&self.gpu, &mut encoder, &at, mesh);
+            let index = id as usize;
+            if self.static_pool_places.len() <= index {
+                self.static_pool_places.resize(index + 1, None);
+            }
+            self.static_pool_places[index] = place;
+        }
+        self.gpu.queue.submit([encoder.finish()]);
     }
 
     /// Cull shadow layers' casters to their views and their lights' reach:
@@ -1543,13 +1676,15 @@ impl Renderer {
                     self.batch_time += started.elapsed();
                     uploaded += self.upload_instances(base, &list.ids);
                     let candidates = CandidateList::new(list, visible_base, |batch| {
-                        let part = self.tables.parts.meta[batch.part as usize]
-                            .as_ref()
-                            .expect("a listed part is live");
-                        if part.wireframe {
-                            (part.first_index * 2, part.index_count * 2)
-                        } else {
-                            (part.first_index, part.index_count)
+                        let (part, ..) = self.drawn_part(batch.part);
+                        match (part.wireframe, self.pooled(&part.mesh)) {
+                            (true, _) => (part.first_index * 2, part.index_count * 2, 0),
+                            (false, Some((base_vertex, first_index))) => (
+                                first_index + part.first_index,
+                                part.index_count,
+                                base_vertex as i32,
+                            ),
+                            (false, None) => (part.first_index, part.index_count, 0),
                         }
                     });
                     self.culling
@@ -1589,58 +1724,85 @@ impl Renderer {
 
     /// Draw a candidate list's batches from the GPU cull's arguments: one
     /// indirect draw per batch, or one multi-draw per run of batches sharing
-    /// a pipeline, material and mesh. Returns what was encoded and the
-    /// multi-draws issued.
+    /// a pipeline, material and buffers: one mesh, or the static pool
+    /// (`mesh_pool.rs`), whose places the arguments hold. A `depth_only`
+    /// pass keeps the bound material where the caster shader reads none
+    /// (`draw_depth`). Returns what was encoded and the multi-draws issued.
     fn draw_batches_indirect<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'_>,
         layer: ViewLayer,
         candidates: &CandidateList,
+        depth_only: bool,
         pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
     ) -> (Encoded, u32) {
         let args = self.culling.args(layer);
         let batches = &candidates.list.batches;
-        let mut current: Option<(batch::Pass, Features)> = None;
+        let mut current: Option<&wgpu::RenderPipeline> = None;
+        let mut material_bound: Option<&wgpu::BindGroup> = None;
+        let mut pool_bound = false;
         let mut encoded = Encoded::default();
         let mut multi_draws = 0;
         let mut index = 0;
+        // The buffers a batch draws from: the static pool, or its own mesh's.
+        let source = |part: &Part| {
+            (part.wireframe || self.pooled(&part.mesh).is_none()).then(|| part.mesh.clone())
+        };
         while index < batches.len() {
             let draw = &batches[index];
             let (part, mesh, material, features) = self.drawn_part(draw.part);
-            if current != Some((draw.pass, features)) {
-                pass.set_pipeline(pipeline(draw.pass, features));
-                current = Some((draw.pass, features));
+            let selected = pipeline(draw.pass, features);
+            if current.is_none_or(|current| current != selected) {
+                pass.set_pipeline(selected);
+                current = Some(selected);
+                material_bound = None;
                 encoded.pipeline_binds += 1;
             }
-            let indices = if part.wireframe {
-                mesh.edges.get().expect("a wireframe part's edges")
+            let reads_material = !depth_only || features.caster() != Features::default();
+            if material_bound.is_none_or(|bound| reads_material && bound != material) {
+                pass.set_bind_group(1, material, &[]);
+                material_bound = Some(material);
+            }
+            let drawn_from = source(part);
+            if drawn_from.is_none() {
+                if !pool_bound {
+                    pass.set_vertex_buffer(0, self.static_pool.vertices.slice(..));
+                    pass.set_index_buffer(
+                        self.static_pool.indices.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    pool_bound = true;
+                }
             } else {
-                &mesh.indices
-            };
-            pass.set_bind_group(1, material, &[]);
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
-            if let Some(second) = mesh.second_stream() {
-                pass.set_vertex_buffer(1, second.slice(..));
+                let indices = if part.wireframe {
+                    mesh.edges.get().expect("a wireframe part's edges")
+                } else {
+                    &mesh.indices
+                };
+                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                if let Some(second) = mesh.second_stream() {
+                    pass.set_vertex_buffer(1, second.slice(..));
+                }
+                if let Some(previous) = mesh.previous_stream() {
+                    pass.set_vertex_buffer(mesh.previous_slot(), previous.slice(..));
+                }
+                pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+                pool_bound = false;
             }
-            if let Some(previous) = mesh.previous_stream() {
-                pass.set_vertex_buffer(mesh.previous_slot(), previous.slice(..));
-            }
-            pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
-            // Following batches with the same pipeline, material and mesh
+            // Following batches with the same pipeline, material and buffers
             // draw in the same call.
             let mut run = 1;
             if self.culling.multi_draw() {
                 while index + run < batches.len() {
                     let next = &batches[index + run];
-                    let next_part = self.tables.parts.meta[next.part as usize]
-                        .as_ref()
-                        .expect("a listed part is live");
-                    // One mesh and one material: one mesh, one bind group and
-                    // one feature set.
+                    let (next_part, _, next_material, next_features) = self.drawn_part(next.part);
+                    // One pipeline reads materials alike: depth-only by its
+                    // caster features.
                     let same = next.pass == draw.pass
+                        && pipeline(next.pass, next_features) == selected
+                        && (!reads_material || next_material == material)
                         && next_part.wireframe == part.wireframe
-                        && next_part.mesh == part.mesh
-                        && next_part.material == part.material;
+                        && source(next_part) == drawn_from;
                     if !same {
                         break;
                     }
@@ -1655,6 +1817,7 @@ impl Renderer {
                 pass.draw_indexed_indirect(args, offset);
             }
             encoded.draws += run as u32;
+            encoded.draw_calls += 1;
             index += run;
         }
         (encoded, multi_draws)
@@ -1770,7 +1933,7 @@ impl Renderer {
                     &self.shadows.layer_bind_group,
                     &[ShadowMaps::layer_offset(layer_index)],
                 );
-                self.draw_batches(pass, &list.batches, |pass, features| {
+                self.draw_depth(pass, &list.batches, |pass, features| {
                     self.layouts.shadow.get(pass, features)
                 })
             };
@@ -1871,6 +2034,15 @@ impl Renderer {
         drawn
     }
 
+    /// Where a mesh is in the static pool (`mesh_pool.rs`): its base vertex
+    /// and first index there.
+    fn pooled(&self, mesh: &MeshRef) -> Option<(u32, u32)> {
+        match mesh {
+            MeshRef::Static(id) => self.static_pool_places.get(*id as usize).copied().flatten(),
+            _ => None,
+        }
+    }
+
     /// A listed part, its mesh, its material's bind group and the features
     /// it draws with. A listed part is live, and its mesh and material are
     /// defined: their release re-derives the part (`Tables::users`).
@@ -1968,6 +2140,7 @@ impl Renderer {
                 pass.draw_indexed_indirect(&selection.args, offset);
             }
             encoded.draws += 1;
+            encoded.draw_calls += 1;
             index = end;
         }
         encoded
@@ -1981,7 +2154,19 @@ impl Renderer {
         batches: &[batch::Batch],
         pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
     ) -> Encoded {
-        self.draw_batches_bound(pass, batches, pipeline, |_, _| {})
+        self.draw_list(pass, batches, false, pipeline, |_, _| {})
+    }
+
+    /// `draw_batches` for a depth-only pass (shadow casters, the pre-pass,
+    /// occluders), whose caster shaders read no material for parts with no
+    /// caster features: those keep whatever material is bound.
+    fn draw_depth<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        batches: &[batch::Batch],
+        pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
+    ) -> Encoded {
+        self.draw_list(pass, batches, true, pipeline, |_, _| {})
     }
 
     /// `draw_batches`, with `bind` called after each pipeline change to
@@ -1993,16 +2178,73 @@ impl Renderer {
         pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
         bind: impl Fn(&mut wgpu::RenderPass<'_>, Features),
     ) -> Encoded {
-        let mut current: Option<(batch::Pass, Features)> = None;
+        self.draw_list(pass, batches, false, pipeline, bind)
+    }
+
+    /// Draw batches, binding only what changes between them: a batch of a
+    /// pooled mesh (`mesh_pool.rs`) draws from the static pool's buffers at
+    /// its place there, so a run of one pipeline and material binds nothing
+    /// between its batches, whatever their meshes, and draws as one
+    /// multi-draw over arguments the list writes (`draw_args.rs`). Opaque
+    /// lists order batches by material within a pipeline (`batch.rs`).
+    fn draw_list<'a>(
+        &'a self,
+        pass: &mut wgpu::RenderPass<'_>,
+        batches: &[batch::Batch],
+        depth_only: bool,
+        pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
+        bind: impl Fn(&mut wgpu::RenderPass<'_>, Features),
+    ) -> Encoded {
+        let mut current: Option<&wgpu::RenderPipeline> = None;
+        let mut material_bound: Option<&wgpu::BindGroup> = None;
+        let mut pool_bound = false;
         let mut encoded = Encoded::default();
+        let mut runs = Runs::default();
         for draw in batches {
             let (part, mesh, material, features) = self.drawn_part(draw.part);
-            if current != Some((draw.pass, features)) {
-                pass.set_pipeline(pipeline(draw.pass, features));
-                current = Some((draw.pass, features));
+            let selected = pipeline(draw.pass, features);
+            if current.is_none_or(|current| current != selected) {
+                runs.end(self, pass, batches.len(), &mut encoded);
+                pass.set_pipeline(selected);
+                current = Some(selected);
                 bind(pass, features);
+                material_bound = None;
                 encoded.pipeline_binds += 1;
             }
+            let reads_material = !depth_only || features.caster() != Features::default();
+            if material_bound.is_none_or(|bound| reads_material && bound != material) {
+                runs.end(self, pass, batches.len(), &mut encoded);
+                pass.set_bind_group(1, material, &[]);
+                material_bound = Some(material);
+            }
+            encoded.draws += 1;
+            let pooled = if part.wireframe {
+                None
+            } else {
+                self.pooled(&part.mesh)
+            };
+            if let Some((base_vertex, first_index)) = pooled {
+                if !pool_bound {
+                    pass.set_vertex_buffer(0, self.static_pool.vertices.slice(..));
+                    pass.set_index_buffer(
+                        self.static_pool.indices.slice(..),
+                        wgpu::IndexFormat::Uint32,
+                    );
+                    pool_bound = true;
+                }
+                runs.add(wgpu::util::DrawIndexedIndirectArgs {
+                    index_count: part.index_count,
+                    instance_count: draw.instances,
+                    first_index: first_index + part.first_index,
+                    base_vertex: base_vertex as i32,
+                    first_instance: draw.first_instance,
+                });
+                if self.draw_args.is_none() {
+                    runs.end(self, pass, batches.len(), &mut encoded);
+                }
+                continue;
+            }
+            runs.end(self, pass, batches.len(), &mut encoded);
             // A wireframe part draws its triangles' edges: two edge indices
             // per triangle index.
             let (indices, range) = if part.wireframe {
@@ -2013,7 +2255,6 @@ impl Renderer {
                 let (first, count) = (part.first_index, part.index_count);
                 (&mesh.indices, first..first + count)
             };
-            pass.set_bind_group(1, material, &[]);
             pass.set_vertex_buffer(0, mesh.vertices.slice(..));
             if let Some(second) = mesh.second_stream() {
                 pass.set_vertex_buffer(1, second.slice(..));
@@ -2022,13 +2263,16 @@ impl Renderer {
                 pass.set_vertex_buffer(mesh.previous_slot(), previous.slice(..));
             }
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
+            pool_bound = false;
             pass.draw_indexed(
                 range,
                 0,
                 draw.first_instance..draw.first_instance + draw.instances,
             );
-            encoded.draws += 1;
+            encoded.draw_calls += 1;
         }
+        runs.end(self, pass, batches.len(), &mut encoded);
+        runs.write(self);
         encoded
     }
 
@@ -3308,8 +3552,14 @@ impl Renderer {
                         && !features.contains(Features::SCATTER)
                 })
                 .collect();
+            // The list groups batches by pass and features: each set once.
+            let mut prepared = None;
             for draw in &occluders {
                 let features = self.tables.parts.state[draw.part as usize].class.features;
+                if prepared == Some((features, draw.pass)) {
+                    continue;
+                }
+                prepared = Some((features, draw.pass));
                 pipelines_created += u32::from(self.layouts.prepare_occluder(
                     &self.gpu.device,
                     features,
@@ -3365,11 +3615,11 @@ impl Renderer {
                 .as_ref()
                 .and_then(|cache| cache.candidates.as_ref())
             {
-                this.draw_batches_indirect(pass, view.layer, candidates, |pass, features| {
+                this.draw_batches_indirect(pass, view.layer, candidates, true, |pass, features| {
                     this.layouts.prepass.get(pass, features)
                 });
             }
-            this.draw_batches(pass, &prepass_batches, |pass, features| {
+            this.draw_depth(pass, &prepass_batches, |pass, features| {
                 this.layouts.prepass.get(pass, features)
             });
         };
@@ -3388,7 +3638,7 @@ impl Renderer {
                     let camera_offset = ShadowMaps::layer_offset(self.shadows.camera_slot());
                     pass.set_bind_group(0, &self.caster_bind_group, &[]);
                     pass.set_bind_group(2, &self.shadows.layer_bind_group, &[camera_offset]);
-                    self.draw_batches(pass, &occluders, |pass, features| {
+                    self.draw_depth(pass, &occluders, |pass, features| {
                         self.layouts.prepass.sampled(pass, features, samples)
                     });
                 });
@@ -3758,6 +4008,7 @@ impl Renderer {
                         &mut pass,
                         view.layer,
                         candidates,
+                        false,
                         |pass, features| pipelines.get(pass, features),
                     );
                     multi_draws = runs;
@@ -4144,6 +4395,7 @@ impl Renderer {
             sprite_candidates: effects.sprite_candidates,
             sprite_batch_instances: effects.batch_instances,
             pipeline_binds: parts.pipeline_binds + shadows.encoded.pipeline_binds,
+            draw_calls: parts.draw_calls + shadows.encoded.draw_calls,
             pipelines_created: pipelines_created + shadows.pipelines_created,
             overlay_lines: overlay_lines + reconstructed_lines,
         }

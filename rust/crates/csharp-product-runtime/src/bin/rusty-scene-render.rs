@@ -588,6 +588,7 @@ fn run() -> Result<(), String> {
         let mut costs = Vec::with_capacity(frames as usize);
         let mut draw_costs = Vec::with_capacity(frames as usize);
         let (mut draws, mut instances, mut batch_us) = (Vec::new(), Vec::new(), Vec::new());
+        let mut draw_calls = Vec::new();
         let mut history_resets = 0u32;
         let mut last_stats = render_wgpu::FrameStats::default();
         // With `--advance` the frames' presentation time runs on from the
@@ -633,6 +634,7 @@ fn run() -> Result<(), String> {
             target.read_rgba_into(driver.gpu(), &mut pixels);
             costs.push(ms(started));
             draws.push(stats.draws);
+            draw_calls.push(stats.draw_calls);
             instances.push(stats.instances);
             batch_us.push(stats.cpu_batch_us);
             history_resets += u32::from(stats.motion.is_some_and(|motion| motion.history_reset));
@@ -648,9 +650,12 @@ fn run() -> Result<(), String> {
             // The draw call alone, before the readback waits for the GPU:
             // the renderer's CPU work a frame (the GPU idle when it starts).
             "drawMedianMs": draw_costs[draw_costs.len() / 2],
-            // Per frame, the median: draw calls, the parts they covered, and
-            // the CPU microseconds building draw lists (`FrameStats`).
+            // Per frame, the median: draws (instanced batches and blended
+            // parts), the calls that drew the part batches (a multi-draw is
+            // one), the parts they covered, and the CPU microseconds building
+            // draw lists (`FrameStats`).
             "draws": median(&mut draws),
+            "drawCalls": median(&mut draw_calls),
             "instances": median(&mut instances),
             "cpuBatchUs": median(&mut batch_us),
             "walkMetres": walk,

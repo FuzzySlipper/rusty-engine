@@ -77,6 +77,18 @@ pipeline switches, clustered lighting pays once many ranged lights are in
 view at the same time (with few, the light loop is as fast or faster), and
 GPU culling buys nothing while the CPU draw list is cheap, which it is up to
 a few thousand parts in view.
+
+A draw list's cost follows its materials, not its meshes. Every static
+mesh is also copied into one shared vertex and index buffer when it is
+defined, and opaque batches are ordered by material within a pipeline, so a
+run of batches sharing a pipeline and material binds nothing between them
+and draws as one multi-draw whatever their meshes. Shadow casters and the
+depth pre-passes run across materials too, where the caster shader reads
+none. Nothing is asked of the product. The shared buffer holds a second copy
+of the static meshes' GPU bytes (`static_pool_bytes` in `rusty-scene-render`'s
+`meshMemory`). A device without indirect first instance draws the runs one
+batch at a time, and one whose draws may ignore their base vertex (OpenGL ES
+before 3.2) keeps each mesh in its own buffers.
 Where the adapter has timestamp queries, `gpu.passes` gives the median GPU
 milliseconds of each renderer pass that is timed, in the frames that draw it,
 with the adapter's compute limits beside them:
@@ -123,8 +135,10 @@ rusty-scene-render scene.rscene out.png --width 1920 --height 1080 --frames 600
 ```
 
 It prints the adapter, the time to open and apply the snapshot, the mean
-and median milliseconds of the extra frames, each with readback, the
-median draw calls, instances and CPU microseconds spent building draw lists
+and median milliseconds of the extra frames, each with readback, and of
+their draw call alone (`drawMedianMs`, the renderer's CPU work), the
+median draws (instanced batches), the calls that drew them (`drawCalls`),
+instances and CPU microseconds spent building draw lists
 per frame, the `gpu` pass medians, and the renderer `settings` drawn (the snapshot's,
 changed by the flags below) with what the adapter refused. `--ambient-occlusion off|compute|raster|field` draws the
 snapshot with that ambient occlusion path (`field` cone-traces the voxel

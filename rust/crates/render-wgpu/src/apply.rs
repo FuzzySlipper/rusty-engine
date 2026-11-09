@@ -135,6 +135,11 @@ impl Renderer {
                 self.impostors.forget(asset);
                 if let Some(id) = self.tables.names.get(asset) {
                     self.tables.static_meshes.remove(id);
+                    self.static_pool.forget(&MeshRef::Static(id));
+                    if let Some(place) = self.static_pool_places.get_mut(id as usize) {
+                        *place = None;
+                    }
+                    self.static_pool_released = true;
                     self.rebuild_users(&[id]);
                 }
             }
@@ -2176,6 +2181,7 @@ impl Renderer {
         self.define_layer_variants(&mesh.layer_palette, &slots)?;
         let id = self.tables.names.id(&asset.asset);
         self.tables.static_meshes.insert(id, mesh);
+        self.static_pool_pending.push(id);
         // Its instances and scatter patches draw it, including those that
         // arrived before it (scatter patches come from another service's
         // frames than the mesh's appearance), and its impostors bake again.

@@ -18,7 +18,7 @@ use render_model::RenderLayer;
 
 use crate::frame::ViewLayer;
 use crate::shaders::Features;
-use crate::tables::{Aabb, PartClass, PartId, Parts};
+use crate::tables::{Aabb, PartClass, PartId, PartState, Parts};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) enum Pass {
@@ -128,8 +128,9 @@ impl Frustum {
 
 /// The parts a view pass sees: shown, in its view layer (`ViewLayer::of`),
 /// inside the frustum.
-/// Opaque parts are grouped by pass, features and batch key; blended parts are sorted
-/// back to front from `eye`. Instance ids are offset by `base`.
+/// Opaque parts are grouped by pass, features, material and batch key;
+/// blended parts are sorted back to front from `eye`. Instance ids are
+/// offset by `base`.
 pub(crate) fn view_list(
     parts: &Parts,
     layer: ViewLayer,
@@ -154,10 +155,10 @@ pub(crate) fn view_list(
             let center = (bounds.min + bounds.max) * 0.5;
             (
                 Features::default(),
-                u32::MAX - center.distance_squared(eye).to_bits(),
+                farthest_first(center.distance_squared(eye)),
             )
         } else {
-            (state.class.features, state.key)
+            (state.class.features, by_material(state))
         };
         entries.push((pass.bucket(), features, order, id as PartId, pass));
     }
@@ -166,7 +167,19 @@ pub(crate) fn view_list(
 
 /// (sort bucket, features (opaque passes), order within the bucket, part,
 /// pass the part draws with)
-type Entry = (Pass, Features, u32, PartId, Pass);
+type Entry = (Pass, Features, u64, PartId, Pass);
+
+/// Opaque order within a pipeline: by material, so batches sharing one bind
+/// nothing between them when their meshes are pooled (`mesh_pool.rs`),
+/// then by batch key.
+fn by_material(state: &PartState) -> u64 {
+    (u64::from(state.material) << 32) | u64::from(state.key)
+}
+
+/// Blended order: larger squared distances sort earlier.
+fn farthest_first(distance_squared: f32) -> u64 {
+    u64::from(u32::MAX - distance_squared.to_bits())
+}
 
 /// The opaque parts a view layer may draw, grouped as `view_list` groups
 /// them but not culled: the GPU cull (`culling.rs`) tests each against the
@@ -188,7 +201,13 @@ pub(crate) fn opaque_candidates(parts: &Parts, layer: ViewLayer, base: u32) -> D
         if pass.blends() {
             continue;
         }
-        entries.push((pass, state.class.features, state.key, id as PartId, pass));
+        entries.push((
+            pass,
+            state.class.features,
+            by_material(state),
+            id as PartId,
+            pass,
+        ));
     }
     group(parts, entries, base)
 }
@@ -221,7 +240,7 @@ pub(crate) fn cpu_list(
         entries.push((
             pass.bucket(),
             Features::default(),
-            u32::MAX - center.distance_squared(eye).to_bits(),
+            farthest_first(center.distance_squared(eye)),
             id as PartId,
             pass,
         ));
@@ -293,7 +312,13 @@ pub(crate) fn caster_list(
             ..state.class
         };
         let pass = Pass::of(opaque, state.mirrored);
-        entries.push((pass, state.class.features.caster(), state.key, id, pass));
+        entries.push((
+            pass,
+            state.class.features.caster(),
+            by_material(state),
+            id,
+            pass,
+        ));
     }
     group(parts, entries, base)
 }

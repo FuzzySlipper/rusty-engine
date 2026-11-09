@@ -1,11 +1,20 @@
-//! The meshes the selected scatter copies draw, in one vertex buffer and one
-//! index buffer (#10033). Each mesh is copied in once (again when it is
-//! defined anew), and a selected draw's indirect arguments name its place
-//! by first index and base vertex, so every draw of one pass, pipeline and
-//! material binds the same buffers and the run of them is one multi-draw
-//! (`scatter_select.rs`, `frame.rs` `draw_selected`). A mesh with a second
-//! vertex stream, or one that would grow the pool past the device's buffer
-//! size, is not pooled; its draws keep its own buffers.
+//! Meshes in one vertex buffer and one index buffer, so draws of different
+//! meshes bind the same buffers and name a mesh by its first index and base
+//! vertex. Each mesh is copied in once (again when it is defined anew).
+//!
+//! Two pools use it. The scatter pool holds the meshes the selected scatter
+//! copies draw (#10033): every draw of one pass, pipeline and material binds
+//! the same buffers and the run of them is one multi-draw
+//! (`scatter_select.rs`, `frame.rs` `draw_selected`). The static pool holds
+//! every static mesh from the frame after its definition (#10697), so a
+//! draw list's batches of one pipeline and material bind nothing between
+//! them, whatever their meshes, and draw as one multi-draw (`frame.rs`
+//! `draw_list`, `draw_args.rs`); it is laid out anew once released meshes
+//! hold most of it. A device whose draws may ignore their base vertex keeps
+//! no static pool.
+//!
+//! A mesh with a second vertex stream, or one that would grow the pool past
+//! the device's buffer size, is not pooled; its draws keep its own buffers.
 
 use std::collections::HashMap;
 
@@ -39,10 +48,11 @@ pub(crate) struct MeshPool {
     vertex_end: u32,
     index_end: u32,
     entries: HashMap<MeshRef, Entry>,
+    label: &'static str,
 }
 
 impl MeshPool {
-    pub fn new(gpu: &Gpu) -> Self {
+    pub fn new(gpu: &Gpu, label: &'static str) -> Self {
         let ceiling = |bytes: u64| (gpu.max_buffer_size() / bytes).min(u64::from(u32::MAX)) as u32;
         let (vertex_ceiling, index_ceiling) = (ceiling(VERTEX_BYTES), ceiling(INDEX_BYTES));
         let (vertex_capacity, index_capacity) = (
@@ -50,8 +60,8 @@ impl MeshPool {
             INITIAL_INDICES.min(index_ceiling),
         );
         Self {
-            vertices: vertex_buffer(gpu, vertex_capacity),
-            indices: index_buffer(gpu, index_capacity),
+            vertices: vertex_buffer(gpu, label, vertex_capacity),
+            indices: index_buffer(gpu, label, index_capacity),
             vertex_capacity,
             index_capacity,
             vertex_ceiling,
@@ -59,6 +69,7 @@ impl MeshPool {
             vertex_end: 0,
             index_end: 0,
             entries: HashMap::new(),
+            label,
         }
     }
 
@@ -136,17 +147,37 @@ impl MeshPool {
     /// dropped held more than the kept.
     pub fn finish(&mut self) {
         self.entries.retain(|_, entry| entry.used);
-        let kept: u64 = self
-            .entries
+        if self.wasteful() {
+            // Laid out anew as the next selection places its meshes.
+            self.clear();
+        }
+    }
+
+    /// Drop a released mesh. Its space comes back when the pool is laid out
+    /// anew (`Self::wasteful`).
+    pub fn forget(&mut self, at: &MeshRef) {
+        self.entries.remove(at);
+    }
+
+    /// More of the pool's vertices belong to meshes released or defined anew
+    /// than to the meshes it holds: time to lay it out anew.
+    pub fn wasteful(&self) -> bool {
+        u64::from(self.vertex_end) > 2 * self.kept().max(1)
+    }
+
+    /// Empty the pool, keeping its buffers, to lay it out anew: every mesh is
+    /// copied in again at its next placement.
+    pub fn clear(&mut self) {
+        self.entries.clear();
+        self.vertex_end = 0;
+        self.index_end = 0;
+    }
+
+    fn kept(&self) -> u64 {
+        self.entries
             .values()
             .map(|entry| u64::from(entry.vertices))
-            .sum();
-        if u64::from(self.vertex_end) > 2 * kept.max(1) {
-            // Laid out anew as the next selection places its meshes.
-            self.entries.clear();
-            self.vertex_end = 0;
-            self.index_end = 0;
-        }
+            .sum()
     }
 
     /// Room for `vertices` and `indices` more, the buffers grown (their
@@ -172,7 +203,8 @@ impl MeshPool {
                 .checked_next_power_of_two()
                 .unwrap_or(u32::MAX)
                 .min(self.vertex_ceiling);
-            let Ok(grown) = crate::gpu::allocating(&gpu.device, || vertex_buffer(gpu, capacity))
+            let Ok(grown) =
+                crate::gpu::allocating(&gpu.device, || vertex_buffer(gpu, self.label, capacity))
             else {
                 return false;
             };
@@ -192,7 +224,8 @@ impl MeshPool {
                 .checked_next_power_of_two()
                 .unwrap_or(u32::MAX)
                 .min(self.index_ceiling);
-            let Ok(grown) = crate::gpu::allocating(&gpu.device, || index_buffer(gpu, capacity))
+            let Ok(grown) =
+                crate::gpu::allocating(&gpu.device, || index_buffer(gpu, self.label, capacity))
             else {
                 return false;
             };
@@ -210,9 +243,9 @@ impl MeshPool {
     }
 }
 
-fn vertex_buffer(gpu: &Gpu, vertices: u32) -> wgpu::Buffer {
+fn vertex_buffer(gpu: &Gpu, label: &str, vertices: u32) -> wgpu::Buffer {
     gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("render-wgpu scatter mesh pool vertices"),
+        label: Some(&format!("render-wgpu {label} mesh pool vertices")),
         size: u64::from(vertices) * VERTEX_BYTES,
         usage: wgpu::BufferUsages::VERTEX
             | wgpu::BufferUsages::COPY_DST
@@ -221,9 +254,9 @@ fn vertex_buffer(gpu: &Gpu, vertices: u32) -> wgpu::Buffer {
     })
 }
 
-fn index_buffer(gpu: &Gpu, indices: u32) -> wgpu::Buffer {
+fn index_buffer(gpu: &Gpu, label: &str, indices: u32) -> wgpu::Buffer {
     gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("render-wgpu scatter mesh pool indices"),
+        label: Some(&format!("render-wgpu {label} mesh pool indices")),
         size: u64::from(indices) * INDEX_BYTES,
         usage: wgpu::BufferUsages::INDEX
             | wgpu::BufferUsages::COPY_DST

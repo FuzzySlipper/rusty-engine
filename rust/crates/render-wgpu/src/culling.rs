@@ -142,21 +142,22 @@ pub(crate) struct GpuCulling {
 
 impl CandidateList {
     /// Arguments for `list`'s batches over `meshes`: each batch's index
-    /// range and its visible run.
+    /// range, the base vertex its mesh starts at in the buffers it draws
+    /// from, and its visible run.
     pub fn new(
         list: DrawList,
         visible_base: u32,
-        index_range: impl Fn(&Batch) -> (u32, u32),
+        index_range: impl Fn(&Batch) -> (u32, u32, i32),
     ) -> Self {
         let mut template = Vec::with_capacity(list.batches.len() * ARGS_BYTES as usize);
         for batch in &list.batches {
-            let (first_index, index_count) = index_range(batch);
+            let (first_index, index_count, base_vertex) = index_range(batch);
             template.extend_from_slice(
                 wgpu::util::DrawIndexedIndirectArgs {
                     index_count,
                     instance_count: 0,
                     first_index,
-                    base_vertex: 0,
+                    base_vertex,
                     first_instance: visible_base + (batch.first_instance - list_base(&list)),
                 }
                 .as_bytes(),

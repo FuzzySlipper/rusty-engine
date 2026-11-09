@@ -318,6 +318,17 @@ pub(crate) enum MaterialRef {
     LitFallback,
 }
 
+impl MaterialRef {
+    /// One number per material bind group, for ordering draws by material.
+    pub fn order(&self) -> u32 {
+        match self {
+            Self::Retained(id) => *id,
+            Self::Unlit => u32::MAX,
+            Self::LitFallback => u32::MAX - 1,
+        }
+    }
+}
+
 pub(crate) enum NodeKind {
     Group,
     Primitive {
@@ -413,6 +424,14 @@ impl<T> Slots<T> {
 
     pub fn values(&self) -> impl Iterator<Item = &T> {
         self.rows.iter().flatten()
+    }
+
+    pub fn ids(&self) -> impl Iterator<Item = u32> + '_ {
+        self.rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| row.is_some())
+            .map(|(id, _)| id as u32)
     }
 
     pub fn len(&self) -> usize {
@@ -585,6 +604,10 @@ pub(crate) struct PartState {
     pub class: PartClass,
     /// Parts with equal keys (mesh, index range, material) batch together.
     pub key: u32,
+    /// Its material, as opaque lists order batches within a pipeline
+    /// (`MaterialRef::order`): batches of one material draw one after
+    /// another.
+    pub material: u32,
     pub local_bounds: Aabb,
     pub world_bounds: Aabb,
     /// How far its material's displace stage may move a vertex, in metres
@@ -710,6 +733,7 @@ impl Parts {
         let state = PartState {
             class,
             key,
+            material: part.material.order(),
             local_bounds: bounds,
             world_bounds: Aabb::EMPTY,
             displacement,

@@ -37,6 +37,7 @@ mod culling;
 mod decals;
 mod distance_fields;
 mod dlss;
+mod draw_args;
 mod driver;
 mod effects;
 mod finish;
@@ -710,6 +711,20 @@ pub struct Renderer {
     occlusion: occlusion::Occlusion,
     /// The meshes the selected scatter copies draw, pooled (`mesh_pool.rs`).
     mesh_pool: mesh_pool::MeshPool,
+    /// Every static mesh, pooled so draw lists bind no mesh between batches
+    /// (`mesh_pool.rs`); the static meshes defined since the last frame, to
+    /// copy in; and whether one was released since.
+    static_pool: mesh_pool::MeshPool,
+    /// Each static mesh's place in the static pool, by its `names` id: its
+    /// base vertex and first index there. None until the frame after its
+    /// definition, and for a mesh the pool does not take.
+    static_pool_places: Vec<Option<(u32, u32)>>,
+    static_pool_pending: Vec<u32>,
+    static_pool_released: bool,
+    /// The frame's indirect arguments for runs of pooled batches
+    /// (`draw_args.rs`); None where indirect draws cannot name their first
+    /// instance.
+    draw_args: Option<std::sync::Mutex<draw_args::DrawArgs>>,
     composition: composition::ViewComposition,
     effects: effects::Effects,
     /// Rain or snow around the camera (`precipitation.rs`).
@@ -991,7 +1006,12 @@ impl Renderer {
             backdrop_select,
             impostors: impostor::Impostors::new(device),
             occlusion,
-            mesh_pool: mesh_pool::MeshPool::new(gpu),
+            mesh_pool: mesh_pool::MeshPool::new(gpu, "scatter"),
+            static_pool: mesh_pool::MeshPool::new(gpu, "static"),
+            static_pool_places: Vec::new(),
+            static_pool_pending: Vec::new(),
+            static_pool_released: false,
+            draw_args: draw_args::DrawArgs::new(gpu).map(std::sync::Mutex::new),
             composition: Default::default(),
             effects,
             precipitation,
@@ -1499,6 +1519,7 @@ impl Renderer {
             .flat_map(|row| row.meshes.iter())
             .for_each(&mut count);
         self.for_each_animated_mesh(&mut count);
+        memory.static_pool_bytes = self.static_pool.bytes();
         memory
     }
 
@@ -1576,6 +1597,10 @@ pub struct MeshMemory {
     pub meshes: usize,
     pub cpu_geometry_bytes: u64,
     pub gpu_bytes: u64,
+    /// The static pool's buffers (`mesh_pool.rs`): a second copy of every
+    /// static mesh's GPU bytes, which lets draws of different meshes share
+    /// one binding.
+    pub static_pool_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
