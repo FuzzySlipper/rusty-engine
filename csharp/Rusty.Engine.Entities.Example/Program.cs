@@ -902,6 +902,7 @@ sealed class GraphicsServiceFake : IGraphicsService
     public Light ReplaceLight(LightUpdateRequest arg0) => throw new NotSupportedException();
     public LightReadout ReadLight(Light arg0) => throw new NotSupportedException();
     public PresentationReadout ReadPresentation() => throw new NotSupportedException();
+    public ResourcePreparationReadout ReadResourcePreparation() => throw new NotSupportedException();
     public void UpdateStaticMeshMaterialFactors(StaticMeshMaterialFactorsRequest arg0) => throw new NotSupportedException();
     public Material CreateTerrainLayerMaterial(TerrainLayerMaterialRequest arg0) => throw new NotSupportedException();
 }
