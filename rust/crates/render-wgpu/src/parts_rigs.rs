@@ -23,14 +23,21 @@ use crate::Renderer;
 /// A rig's drawing, with its names resolved at apply.
 pub(crate) struct PartsRigAssetRow {
     pub drawables: Arc<[PartsRigDrawable]>,
-    /// Each page's texture name id (`Tables::names`) and whether it is
-    /// premultiplied.
-    pub pages: Vec<(u32, bool)>,
+    pub pages: Vec<RigPage>,
     /// Each drawable's page region: the bounds of its UVs.
     pub regions: Vec<[f32; 4]>,
     /// Changes with each definition, so buffers built from the last one are
     /// built again.
     pub generation: u64,
+}
+
+/// A rig page with its names resolved (`Tables::names`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct RigPage {
+    pub texture: u32,
+    pub premultiplied: bool,
+    /// Its normal or height map.
+    pub detail: Option<u32>,
 }
 
 /// A rig node's descriptor and the pose it draws.
@@ -64,8 +71,8 @@ pub(crate) struct RigVertex {
     pub uv: [f32; 2],
     /// The piece's colour, sRGB with linear alpha, as authored.
     pub light: [u8; 4],
-    /// The piece's dark colour, sRGB; alpha 255 when its page is
-    /// premultiplied.
+    /// The piece's dark colour, sRGB; alpha holds its page's flags
+    /// (`PREMULTIPLIED`, `DETAIL`).
     pub dark: [u8; 4],
     /// The piece's page region, u0, v0, u1, v1.
     pub region: [u16; 4],
@@ -73,11 +80,17 @@ pub(crate) struct RigVertex {
 
 pub(crate) const RIG_VERTEX_BYTES: u64 = std::mem::size_of::<RigVertex>() as u64;
 
+/// A vertex's page is premultiplied (`effects.wgsl` `shaded_parts_rig`).
+const PREMULTIPLIED: u8 = 1;
+/// A vertex's page has a detail map.
+const DETAIL: u8 = 2;
+
 /// Pieces drawn by one indexed call: they share a page and a blend mode.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct RigRun {
-    /// The page's texture name id.
+    /// The page's texture name id, and its detail map's.
     pub texture: u32,
+    pub detail: Option<u32>,
     pub blend: PartsRigBlend,
     pub first: u32,
     pub count: u32,
@@ -116,7 +129,7 @@ pub(crate) fn build(asset: &PartsRigAssetRow, pose: &PartsRigPose, out: &mut Rig
         };
         let vertices = next..next + drawable.uvs.len();
         next = vertices.end;
-        let (Some(positions), Some(&(texture, premultiplied))) = (
+        let (Some(positions), Some(page)) = (
             pose.vertices.get(vertices),
             asset.pages.get(drawable.page as usize),
         ) else {
@@ -126,7 +139,9 @@ pub(crate) fn build(asset: &PartsRigAssetRow, pose: &PartsRigPose, out: &mut Rig
         let region = asset.regions[piece.drawable as usize].map(unorm16);
         let light = piece.color.map(unorm8);
         let [r, g, b] = piece.dark.map(unorm8);
-        let dark = [r, g, b, if premultiplied { 255 } else { 0 }];
+        let flags = if page.premultiplied { PREMULTIPLIED } else { 0 }
+            | if page.detail.is_some() { DETAIL } else { 0 };
+        let dark = [r, g, b, flags];
         for (position, uv) in positions.iter().zip(&drawable.uvs) {
             bounds = [
                 bounds[0].min(position[0]),
@@ -147,9 +162,12 @@ pub(crate) fn build(asset: &PartsRigAssetRow, pose: &PartsRigPose, out: &mut Rig
             .extend(drawable.triangles.iter().map(|index| base + index));
         let count = drawable.triangles.len() as u32;
         match out.runs.last_mut() {
-            Some(run) if run.texture == texture && run.blend == piece.blend => run.count += count,
+            Some(run) if run.texture == page.texture && run.blend == piece.blend => {
+                run.count += count
+            }
             _ => out.runs.push(RigRun {
-                texture,
+                texture: page.texture,
+                detail: page.detail,
                 blend: piece.blend,
                 first,
                 count,
@@ -169,7 +187,11 @@ impl Renderer {
         let pages = asset
             .pages
             .iter()
-            .map(|page| (self.tables.names.id(&page.texture), page.premultiplied))
+            .map(|page| RigPage {
+                texture: self.tables.names.id(&page.texture),
+                premultiplied: page.premultiplied,
+                detail: page.detail.as_deref().map(|id| self.tables.names.id(id)),
+            })
             .collect();
         let regions = asset
             .drawables

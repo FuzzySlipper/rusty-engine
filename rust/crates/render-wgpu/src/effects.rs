@@ -114,6 +114,17 @@ struct SpriteDraw {
     batch: Option<RenderHandle>,
     /// A parts rig, placed by the row: its pieces draw from its buffers.
     rig: Option<RenderHandle>,
+    /// A solid rig whose pose has additive, multiply or screen pieces: they
+    /// blend over what is behind them, so it draws with the blended draws,
+    /// back to front after everything solid, still solid itself.
+    blends_over: bool,
+}
+
+impl SpriteDraw {
+    /// Drawn with the blended draws, back to front.
+    fn late(&self) -> bool {
+        self.state.blend || self.blends_over
+    }
 }
 
 /// What one view pass draws of this family, prepared before the pass.
@@ -180,6 +191,8 @@ struct RigBuffers {
     runs: Vec<RigRun>,
     /// Its vertices' bounds in rig units: min x, min y, max x, max y.
     bounds: [f32; 4],
+    /// Its lighting reads its pages' detail maps (authored normal or depth).
+    detail: bool,
 }
 
 /// A sprite batch's buffers, built when the batch, its node's place or its
@@ -530,6 +543,7 @@ impl Effects {
                         ),
                         runs: Vec::new(),
                         bounds: [0.0; 4],
+                        detail: false,
                     },
                 );
             }
@@ -543,9 +557,14 @@ impl Effects {
             buffers.runs.clone_from(&geometry.runs);
             buffers.bounds = geometry.bounds;
         }
-        let buffers = self.rigs.get(&handle)?;
-        let first_page = buffers.runs.first()?.texture;
         let descriptor = &rig.descriptor;
+        let buffers = self.rigs.get_mut(&handle)?;
+        buffers.detail = matches!(
+            descriptor.material.lighting,
+            SpriteLightingMode::AuthoredNormal | SpriteLightingMode::AuthoredDepth
+        );
+        let buffers = &*buffers;
+        let first = *buffers.runs.first()?;
         let pixels =
             (descriptor.size_mode == SpriteSizeMode::Pixel).then_some([descriptor.scale; 2]);
         let placed = match pixels {
@@ -563,7 +582,7 @@ impl Effects {
         )?;
         let (state, cutoff) = parts_rig_state(descriptor);
         let material = &descriptor.material;
-        let ([mode, strength, bias], _) = material_lighting(material, None, Some(first_page));
+        let ([mode, strength, bias], _) = material_lighting(material, first.detail, None);
         let mut row = [0.0; SPRITE_ROW_FLOATS];
         row[..16].copy_from_slice(&model.to_cols_array());
         row[16] = descriptor.texel_snap;
@@ -576,12 +595,16 @@ impl Effects {
         let center = model.transform_point3(Vec3::new((x0 + x1) * 0.5, (y0 + y1) * 0.5, 0.0));
         Some(SpriteDraw {
             state,
-            textures: rig_textures(first_page),
+            textures: rig_textures(&first, buffers.detail),
             render_order: descriptor.render_order,
             depth: center.distance_squared(camera.eye),
             row,
             batch: None,
             rig: Some(handle),
+            blends_over: buffers
+                .runs
+                .iter()
+                .any(|run| run.blend != PartsRigBlend::Normal),
         })
     }
 
@@ -1046,7 +1069,7 @@ impl Effects {
         for run in &rig.runs {
             let (Some(pipeline), Some(bind_group)) = (
                 set.rigs.get(&rig_state(sprite.state, run.blend)),
-                self.sprite_bind_groups.get(&rig_textures(run.texture)),
+                self.sprite_bind_groups.get(&rig_textures(run, rig.detail)),
             ) else {
                 continue;
             };
@@ -1068,7 +1091,7 @@ impl Effects {
             .iter()
             .filter(|run| run.blend == PartsRigBlend::Normal)
         {
-            if let Some(bind_group) = self.sprite_bind_groups.get(&rig_textures(run.texture)) {
+            if let Some(bind_group) = self.sprite_bind_groups.get(&rig_textures(run, rig.detail)) {
                 pass.set_bind_group(1, bind_group, &[]);
                 pass.draw_indexed(
                     run.first..run.first + run.count,
@@ -1229,10 +1252,11 @@ fn rig_depth_state(state: SpriteState) -> Option<RigState> {
     })
 }
 
-/// A rig page's sprite bindings: the page as the colour texture, and as the
-/// detail one for derived-gradient lighting.
-fn rig_textures(page: u32) -> SpriteTextures {
-    (Some(page), None, None, None)
+/// A run's sprite bindings: its page as the colour texture, and its detail
+/// map when the rig's lighting reads one; otherwise the page again, which
+/// derived-gradient lighting reads.
+fn rig_textures(run: &RigRun, detail: bool) -> SpriteTextures {
+    (Some(run.texture), run.detail.filter(|_| detail), None, None)
 }
 
 /// A parts rig's alpha and depth state, as `sprite_state` gives a sprite's.
@@ -2044,6 +2068,7 @@ impl Renderer {
                     row: [0.0; SPRITE_ROW_FLOATS],
                     batch: Some(*handle),
                     rig: None,
+                    blends_over: false,
                 });
                 continue;
             }
@@ -2091,15 +2116,15 @@ impl Renderer {
                 row,
                 batch: None,
                 rig: None,
+                blends_over: false,
             });
         }
         // Solid front to back, blended back to front, each by render order.
         draws.sort_by(|a, b| {
-            a.state
-                .blend
-                .cmp(&b.state.blend)
+            a.late()
+                .cmp(&b.late())
                 .then(a.render_order.cmp(&b.render_order))
-                .then(if a.state.blend {
+                .then(if a.late() {
                     b.depth.total_cmp(&a.depth)
                 } else {
                     a.depth.total_cmp(&b.depth)
@@ -2110,11 +2135,12 @@ impl Renderer {
         for draw in &draws {
             match draw.rig.and_then(|handle| self.effects.rigs.get(&handle)) {
                 Some(rig) => {
+                    let detail = rig.detail;
                     for run in rig.runs.clone() {
                         let state = rig_state(draw.state, run.blend);
                         self.effects
                             .ensure_rig_pipeline(&self.gpu.device, format, state);
-                        self.ensure_sprite_bindings(rig_textures(run.texture));
+                        self.ensure_sprite_bindings(rig_textures(&run, detail));
                     }
                     if let Some(depth) = rig_depth_state(draw.state) {
                         self.effects
@@ -2140,7 +2166,7 @@ impl Renderer {
                     batch: draw.batch,
                     rig: draw.rig,
                 });
-            } else if draw.state.blend {
+            } else if draw.late() {
                 pass.blended.push(BlendedSprite {
                     state: draw.state,
                     textures: draw.textures,

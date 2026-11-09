@@ -403,7 +403,8 @@ struct PartsRigIn {
     @location(11) uv: vec2<f32>,
     // The piece's colour, sRGB with linear alpha.
     @location(12) light: vec4<f32>,
-    // The piece's dark colour, sRGB; a: 1 when its page is premultiplied.
+    // The piece's dark colour, sRGB; a: its page's flags over 255, 1 when
+    // premultiplied, 2 when it has a detail map (`parts_rigs.rs`).
     @location(13) dark: vec4<f32>,
     // The piece's page region: u0, v0, u1, v1.
     @location(14) region: vec4<f32>,
@@ -465,7 +466,12 @@ fn shaded_parts_rig(in: PartsRigOut, front: bool, masked: bool) -> vec4<f32> {
     let uv_x = dpdx(in.uv);
     let uv_y = dpdy(in.uv);
     let extent = max(in.region.zw - in.region.xy, vec2<f32>(1e-6));
-    let surface = sprite_surface(in.world_position, in.normal, in.uv, (in.uv - in.region.xy) / extent, front);
+    var surface = sprite_surface(in.world_position, in.normal, in.uv, (in.uv - in.region.xy) / extent, front);
+    let flags = u32(in.dark.a * 255.0 + 0.5);
+    // Authored normals from a page without a normal map: flat.
+    if (flags & 2u) == 0u && u32(in.params.x + 0.5) == 2u {
+        surface.detail = vec4<f32>(0.5, 0.5, 1.0, 1.0);
+    }
     var texel = textureSample(sprite_color, sprite_color_sampler, in.uv);
     var outside = false;
     if in.snap > 0.0 {
@@ -490,7 +496,7 @@ fn shaded_parts_rig(in: PartsRigOut, front: bool, masked: bool) -> vec4<f32> {
     // A premultiplied page was premultiplied in its encoded (sRGB) values,
     // so it is divided there.
     var straight = texel.rgb;
-    if in.dark.a > 0.5 {
+    if (flags & 1u) != 0u {
         straight = srgb_linear(min(linear_srgb(texel.rgb) / max(texel.a, 1e-6), vec3<f32>(1.0)));
     }
     let rgb = (1.0 - straight) * in.dark.rgb + straight * in.light.rgb;

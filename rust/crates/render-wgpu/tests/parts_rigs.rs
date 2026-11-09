@@ -38,6 +38,7 @@ fn rig_asset(rig: &Rig, id: &str, pages: &[&str]) -> PartsRigAsset {
             .map(|(page, texture)| PartsRigPage {
                 texture: (*texture).to_owned(),
                 premultiplied: page.pma,
+                detail: None,
             })
             .collect(),
         drawables: rig
@@ -467,14 +468,17 @@ fn slot_blend_modes_dark_tint_premultiplied_pages_and_draw_order_follow_their_ar
                 PartsRigPage {
                     texture: "texture/straight".to_owned(),
                     premultiplied: false,
+                    detail: None,
                 },
                 PartsRigPage {
                     texture: "texture/half".to_owned(),
                     premultiplied: false,
+                    detail: None,
                 },
                 PartsRigPage {
                     texture: "texture/premultiplied".to_owned(),
                     premultiplied: true,
+                    detail: None,
                 },
             ],
             drawables: drawables.into(),
@@ -602,6 +606,7 @@ fn texel_snapped_rigs_draw_whole_cells_of_their_grid() {
             pages: vec![PartsRigPage {
                 texture: "texture/checker".to_owned(),
                 premultiplied: false,
+                detail: None,
             }],
             drawables: vec![PartsRigDrawable {
                 page: 0,
@@ -719,4 +724,247 @@ fn a_rig_without_a_pose_or_drawing_draws_nothing() {
     assert_eq!(drawn(&harness.single(&eye)), 0, "no drawing");
     harness.apply(squash);
     assert!(drawn(&harness.single(&eye)) > 1_000, "posed and drawn");
+}
+
+/// The blends asset: `quadrant_page` straight, at full alpha.
+fn blends_rig(harness: &mut Harness, id: &str) -> RenderDiff {
+    let (page, _) = harness.resources.texture(
+        "texture/straight",
+        8,
+        8,
+        &quadrant_page(255, false),
+        TextureFilter::Nearest,
+    );
+    harness.apply(vec![page]);
+    RenderDiff::DefinePartsRig {
+        asset: PartsRigAsset {
+            id: id.to_owned(),
+            pages: vec![PartsRigPage {
+                texture: "texture/straight".to_owned(),
+                premultiplied: false,
+                detail: None,
+            }],
+            drawables: (0..4).map(|q| quadrant(0, q)).collect::<Vec<_>>().into(),
+        },
+    }
+}
+
+fn flat_rig(id: &str, z: f32, material: SpriteMaterialDescriptor) -> PartsRigInstanceDescriptor {
+    let mut rig = figure(BillboardMode::None, [0.0, 0.0, z], 0.0);
+    rig.asset = id.to_owned();
+    rig.scale = 1.0;
+    rig.material = material;
+    rig
+}
+
+#[test]
+fn a_solid_rigs_additive_multiply_and_screen_pieces_blend_over_the_solids_behind_it() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.push(blends_rig(&mut harness, "parts-rig/blends"));
+    let mask = SpriteMaterialDescriptor {
+        alpha: SpriteAlphaMode::Mask { cutoff: 0.5 },
+        ..Default::default()
+    };
+    // Behind: a solid grey square. In front, a metre nearer: a solid rig
+    // whose red normal piece overlaps the square's corner, and whose
+    // additive, multiply and screen pieces lie over the square, outside
+    // its normal piece. Solid draws go front to back, so the nearer rig
+    // would draw first.
+    let behind = pose(vec![(
+        piece(3, PartsRigBlend::Normal),
+        [[5.5, 2.0], [11.0, 2.0], [11.0, 7.0], [5.5, 7.0]],
+    )]);
+    let strip = |x: f32| [[x, 3.0], [x + 1.0, 3.0], [x + 1.0, 6.0], [x, 6.0]];
+    let front = pose(vec![
+        (piece(0, PartsRigBlend::Normal), square(3.0, 0.5, 3.0)),
+        (piece(0, PartsRigBlend::Additive), strip(6.0)),
+        (piece(0, PartsRigBlend::Multiply), strip(7.5)),
+        (piece(0, PartsRigBlend::Screen), strip(9.0)),
+    ]);
+    ops.extend(create(
+        11,
+        flat_rig("parts-rig/blends", -1.0, mask.clone()),
+        &behind,
+    ));
+    ops.extend(create(10, flat_rig("parts-rig/blends", 0.0, mask), &front));
+    harness.apply(ops);
+    let frame = harness.single(&flat_camera());
+
+    let red = [200, 60, 40].map(srgb_linear);
+    let grey = [srgb_linear(128); 3];
+    let each = |f: &dyn Fn(f32, f32) -> f32| [0, 1, 2].map(|c| f(red[c], grey[c]));
+    assert_near(
+        at(&frame, 5.75, 2.7),
+        red,
+        "the normal piece covers the square",
+    );
+    assert_near(
+        at(&frame, 6.5, 4.5),
+        each(&|t, b| t + b),
+        "additive over the square",
+    );
+    assert_near(
+        at(&frame, 8.0, 4.5),
+        each(&|t, b| t * b),
+        "multiply over the square",
+    );
+    assert_near(
+        at(&frame, 9.5, 4.5),
+        each(&|t, b| t + b * (1.0 - t)),
+        "screen over the square",
+    );
+    assert_near(at(&frame, 10.5, 4.5), grey, "the square beside them");
+}
+
+/// An 8×8 detail page: normals tilted `tilt` toward +x (negative toward
+/// −x) everywhere, linear, or heights rising toward +x in red.
+fn detail_page(tilt: i32, heights: bool) -> Vec<u8> {
+    (0..64)
+        .flat_map(|index: i32| {
+            if heights {
+                let height = (index % 8 * 32) as u8;
+                [height, height, height, 255]
+            } else {
+                let z = 255 - tilt.abs();
+                [(128 + tilt) as u8, 128, z as u8, 255]
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn authored_normal_and_depth_lighting_read_the_pages_detail_maps() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.push(blends_rig(&mut harness, "parts-rig/flat"));
+    for (id, tilt, heights) in [
+        ("texture/left", -90, false),
+        ("texture/right", 90, false),
+        ("texture/ramp", 0, true),
+    ] {
+        let (mut detail, _) =
+            harness
+                .resources
+                .texture(id, 8, 8, &detail_page(tilt, heights), TextureFilter::Linear);
+        if let RenderDiff::DefineTexture { texture } = &mut detail {
+            if let Some(payload) = texture.payload.as_mut() {
+                payload.color_space = TextureColorSpace::Linear;
+            }
+        }
+        ops.push(detail);
+        ops.push(RenderDiff::DefinePartsRig {
+            asset: PartsRigAsset {
+                id: format!("parts-rig/{}", &id["texture/".len()..]),
+                pages: vec![PartsRigPage {
+                    texture: "texture/straight".to_owned(),
+                    premultiplied: false,
+                    detail: Some(id.to_owned()),
+                }],
+                drawables: (0..4).map(|q| quadrant(0, q)).collect::<Vec<_>>().into(),
+            },
+        });
+    }
+    // Light from the left and in front, and a dim ambient.
+    for (handle, light) in [
+        (
+            30,
+            LightDescriptor::Directional {
+                color: [1.0, 1.0, 1.0],
+                intensity: 2.0,
+                enabled: true,
+                direction: [1.0, 0.0, -0.4],
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        ),
+        (
+            31,
+            LightDescriptor::Ambient {
+                enabled: true,
+                color: [1.0, 1.0, 1.0],
+                intensity: 0.1,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+                range: None,
+            },
+        ),
+    ] {
+        ops.push(RenderDiff::CreateLight {
+            handle: RenderHandle::new(handle),
+            parent: None,
+            light,
+        });
+    }
+    // Grey squares (drawable 3), lit by authored normals tilted left, flat
+    // (a page with no detail map) and tilted right, by authored depth over
+    // a ramp, and by authored depth over no map (its colour's gradient).
+    let lit = |lighting| SpriteMaterialDescriptor {
+        lighting,
+        normal_strength: 1.0,
+        alpha: SpriteAlphaMode::Mask { cutoff: 0.5 },
+        ..Default::default()
+    };
+    for (handle, asset, lighting, x) in [
+        (
+            10,
+            "parts-rig/left",
+            SpriteLightingMode::AuthoredNormal,
+            0.5,
+        ),
+        (
+            11,
+            "parts-rig/flat",
+            SpriteLightingMode::AuthoredNormal,
+            3.5,
+        ),
+        (
+            12,
+            "parts-rig/right",
+            SpriteLightingMode::AuthoredNormal,
+            6.5,
+        ),
+        (13, "parts-rig/ramp", SpriteLightingMode::AuthoredDepth, 9.5),
+        (
+            14,
+            "parts-rig/flat",
+            SpriteLightingMode::AuthoredDepth,
+            12.5,
+        ),
+    ] {
+        let posed = pose(vec![(piece(3, PartsRigBlend::Normal), square(x, 3.0, 2.5))]);
+        ops.extend(create(handle, flat_rig(asset, 0.0, lit(lighting)), &posed));
+    }
+    harness.apply(ops);
+    let frame = harness.single(&flat_camera());
+    let brightness = |x: f32| {
+        at(&frame, x + 1.25, 4.25)[..3]
+            .iter()
+            .map(|c| u32::from(*c))
+            .sum::<u32>()
+    };
+    let (left, flat, right, ramp, plain) = (
+        brightness(0.5),
+        brightness(3.5),
+        brightness(6.5),
+        brightness(9.5),
+        brightness(12.5),
+    );
+    assert!(
+        left > flat + 30 && flat > right + 30,
+        "normals toward the light shade brighter: left {left}, flat {flat}, right {right}"
+    );
+    assert!(
+        ramp > plain + 12,
+        "heights rising away from the light turn the square toward it: ramp {ramp}, no map {plain}"
+    );
+    assert_screenshot("parts_rigs_authored_lighting", WIDTH, HEIGHT, &frame);
 }

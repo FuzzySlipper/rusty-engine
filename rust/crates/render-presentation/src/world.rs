@@ -337,6 +337,9 @@ fn material_uses(material: &RenderMaterialDescriptor, use_: &mut dyn FnMut(Resou
 fn rig_uses(rig: &PartsRigAsset, use_: &mut dyn FnMut(Resource, &str)) {
     for page in &rig.pages {
         use_(Resource::Texture, &page.texture);
+        if let Some(detail) = &page.detail {
+            use_(Resource::Texture, detail);
+        }
     }
 }
 
@@ -965,11 +968,11 @@ impl PresentationWorld {
             }
         }
         textures.extend(atlases.values().map(|atlas| atlas.texture.as_str()));
-        textures.extend(
-            parts_rigs
-                .values()
-                .flat_map(|rig| rig.pages.iter().map(|page| page.texture.as_str())),
-        );
+        textures.extend(parts_rigs.values().flat_map(|rig| {
+            rig.pages.iter().flat_map(|page| {
+                std::iter::once(page.texture.as_str()).chain(page.detail.as_deref())
+            })
+        }));
         let (sky, background_color) = if retain_background {
             (sky.clone(), *background_color)
         } else {

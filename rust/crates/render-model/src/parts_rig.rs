@@ -26,6 +26,12 @@ use crate::{
 pub struct PartsRigPage {
     pub texture: String,
     pub premultiplied: bool,
+    /// The page's normal map or height map (red), in the page's layout:
+    /// what a rig lit by `AuthoredNormal` or `AuthoredDepth` reads. A page
+    /// without one lights flat under an authored normal, and by its colour's
+    /// gradient under authored depth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 /// What one attachment frame draws with: its page, a page UV per vertex, and
@@ -65,8 +71,10 @@ impl PartsRigAsset {
         validate_asset_id(&self.id, RenderAssetKind::PartsRig)
             .map_err(PartsRigAssetError::Asset)?;
         for (page, value) in self.pages.iter().enumerate() {
-            validate_asset_id(&value.texture, RenderAssetKind::Texture)
-                .map_err(|error| PartsRigAssetError::Texture { page, error })?;
+            for texture in std::iter::once(&value.texture).chain(&value.detail) {
+                validate_asset_id(texture, RenderAssetKind::Texture)
+                    .map_err(|error| PartsRigAssetError::Texture { page, error })?;
+            }
         }
         Ok(())
     }
@@ -129,9 +137,10 @@ pub struct PartsRigInstanceDescriptor {
     pub depth: SpriteDepthPolicy,
     #[serde(default)]
     pub layer: RenderLayer,
-    /// A sprite's material: its lighting (unlit, synthetic or derived from
-    /// the pages), alpha, shadow policy, emission and authored facing. The
-    /// pages are the colour texture; texture maps, softness and wind are a
+    /// A sprite's material: its lighting, alpha, shadow policy, emission and
+    /// authored facing. The pages are its colour, and their detail maps
+    /// (`PartsRigPage::detail`) what authored normal and depth lighting
+    /// read; the material names no texture, and softness and wind are a
     /// sprite's alone.
     #[serde(default)]
     pub material: SpriteMaterialDescriptor,
@@ -152,8 +161,8 @@ pub enum PartsRigError {
     NonPositiveScale,
     InvalidTint,
     InvalidTexelSnap,
-    /// A sprite material option a rig does not draw: authored normal or
-    /// depth lighting, a tint mask or emission map, softness or wind.
+    /// A sprite material option a rig does not draw: a texture (normal,
+    /// depth, tint mask or emission map), softness or wind.
     UnsupportedMaterial,
 }
 
@@ -170,17 +179,28 @@ impl PartsRigInstanceDescriptor {
             return Err(PartsRigError::InvalidTexelSnap);
         }
         let material = &self.material;
-        material.validate().map_err(PartsRigError::Material)?;
-        if matches!(
-            material.lighting,
-            SpriteLightingMode::AuthoredNormal | SpriteLightingMode::AuthoredDepth
-        ) || material.tint_mask.is_some()
+        if material.normal_texture.is_some()
+            || material.depth_texture.is_some()
+            || material.tint_mask.is_some()
             || material.emission_map.is_some()
             || material.softness_metres > 0.0
             || material.wind_bend > 0.0
         {
             return Err(PartsRigError::UnsupportedMaterial);
         }
+        // Its authored lighting reads its pages' detail maps, not a texture
+        // the material names; the rest of the material is a sprite's.
+        SpriteMaterialDescriptor {
+            lighting: match material.lighting {
+                SpriteLightingMode::AuthoredNormal | SpriteLightingMode::AuthoredDepth => {
+                    SpriteLightingMode::Unlit
+                }
+                lighting => lighting,
+            },
+            ..material.clone()
+        }
+        .validate()
+        .map_err(PartsRigError::Material)?;
         Ok(())
     }
 

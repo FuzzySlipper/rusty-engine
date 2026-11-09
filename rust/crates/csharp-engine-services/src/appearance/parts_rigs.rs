@@ -43,18 +43,25 @@ struct RigInstance {
 )]
 impl PartsRigScene {
     /// Keep `rig` as asset `id`'s, drawing from `pages` (one per rig page,
-    /// in its order), and give the definition its realizers draw with. Its
-    /// instances start again from the setup pose.
-    pub(crate) fn define(&mut self, id: String, rig: Arc<Rig>, pages: Vec<String>) -> RenderDiff {
+    /// in its order: its texture and any normal or height map), and give the
+    /// definition its realizers draw with. Its instances start again from
+    /// the setup pose.
+    pub(crate) fn define(
+        &mut self,
+        id: String,
+        rig: Arc<Rig>,
+        pages: Vec<(String, Option<String>)>,
+    ) -> RenderDiff {
         let asset = PartsRigAsset {
             id: id.clone(),
             pages: rig
                 .pages()
                 .iter()
                 .zip(pages)
-                .map(|(page, texture)| PartsRigPage {
+                .map(|(page, (texture, detail))| PartsRigPage {
                     texture,
                     premultiplied: page.pma,
+                    detail,
                 })
                 .collect(),
             drawables: rig
@@ -302,7 +309,11 @@ mod tests {
         let rig = Arc::new(Rig::from_json(SQUASH).expect("squash reads"));
         let bounce = rig.find_animation("bounce").expect("bounce");
         let (mut scene, mut world) = (PartsRigScene::default(), PresentationWorld::default());
-        let define = scene.define(RIG.to_owned(), rig, vec!["texture/squash".to_owned()]);
+        let define = scene.define(
+            RIG.to_owned(),
+            rig,
+            vec![("texture/squash".to_owned(), None)],
+        );
         let RenderDiff::DefinePartsRig { asset } = &define else {
             panic!("a definition");
         };
