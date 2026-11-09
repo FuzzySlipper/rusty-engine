@@ -4,8 +4,8 @@
 //!
 //! A product loads a rig from its content, makes appearances that show one
 //! or more rigs as views seen from different headings, and publishes them as
-//! objects. Each published object plays its own clip; the calls that play,
-//! stop, reskin, drive and read a rig name the object.
+//! objects. Each published object plays its own clips, on layered tracks;
+//! the calls that play, stop, reskin, drive and read a rig name the object.
 
 use std::ffi::c_void;
 
@@ -85,26 +85,64 @@ pub struct NativePartsRigAppearanceRequest {
     pub texel_snap: f32,
 }
 
-/// Play a clip on a published rig object, from its start, fading in over
-/// what played before. Every view's rig needs a clip of that name.
+/// Play a clip on one track of a published rig object, from its start,
+/// fading in over what that track played before. Every view's rig needs a
+/// clip of that name.
+///
+/// Tracks layer lowest first: track 0 is the base, and a clip on a higher
+/// track moves the pose from what the tracks below posed toward its own by
+/// `alpha`, or with `additive` adds its keyed bone values and deforms (times
+/// `alpha`) to them: an effect layer such as a flinch, a glow pulse or a
+/// breathing layer over a walk.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePartsRigPlayRequest {
     pub object_id: u64,
     pub clip: NativeUtf8Slice,
     pub looping: bool,
-    /// Multiplies the time the object's clips and fades advance by; 1 plays
-    /// as authored.
+    /// Multiplies the time all of the object's tracks and fades advance by;
+    /// 1 plays as authored. Set by a play on track 0; a play on a higher
+    /// track leaves it.
     pub speed: f32,
     pub crossfade_seconds: f32,
+    pub track: u32,
+    /// From 0 to 1, how strongly the clip applies; changed while it plays
+    /// by `set_track_alpha`.
+    pub alpha: f32,
+    /// Adds the clip's keyed values to what the tracks below posed rather
+    /// than replacing them. Colours, attachments and events apply as a
+    /// replacing clip's do.
+    pub additive: bool,
 }
 
-/// Fade a published rig object back to its setup pose.
+/// Fade one track of a published rig object out: track 0 back to its setup
+/// pose, a higher track to what the tracks below it pose.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativePartsRigStopRequest {
     pub object_id: u64,
     pub crossfade_seconds: f32,
+    pub track: u32,
+}
+
+/// Set how strongly the clip one track of a published rig object plays
+/// applies, from the next pose on; a clip it fades from keeps its own.
+/// Refused when the track plays nothing.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePartsRigTrackAlphaRequest {
+    pub object_id: u64,
+    pub track: u32,
+    /// From 0 to 1.
+    pub alpha: f32,
+}
+
+/// One track of a published rig object.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativePartsRigTrackRequest {
+    pub object_id: u64,
+    pub track: u32,
 }
 
 /// Show a named skin on a published rig object; empty shows the default
@@ -144,16 +182,22 @@ pub struct NativePartsRigDriveRequest {
     pub value: f32,
 }
 
-/// What a published rig object plays, as it was last posed.
+/// What one track of a published rig object plays.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativePartsRigReadout {
     pub views: u32,
+    /// Whether the track plays a clip; false once it is fading out to
+    /// nothing.
     pub playing: bool,
-    /// The playing clip's name, empty when none plays.
+    /// The track's clip's name, empty when none plays.
     pub clip: NativeAnimationFeedbackText,
-    /// The playing clip's time in seconds, which every view shares.
+    /// The track's clip time in seconds, which every view shares.
     pub clip_seconds: f64,
+    pub looping: bool,
+    pub alpha: f32,
+    pub additive: bool,
+    /// The object's speed, which all its tracks share.
     pub speed: f32,
     /// Whether it has been posed: false until the call that published it
     /// settles.
@@ -260,9 +304,15 @@ pub type NativeDrivePartsRigBone = unsafe extern "C" fn(
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32;
 
+pub type NativeSetPartsRigTrackAlpha = unsafe extern "C" fn(
+    context: *mut c_void,
+    request: NativePartsRigTrackAlphaRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32;
+
 pub type NativeReadPartsRig = unsafe extern "C" fn(
     context: *mut c_void,
-    object_id: u64,
+    request: NativePartsRigTrackRequest,
     readout: *mut NativePartsRigReadout,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32;
@@ -292,6 +342,7 @@ pub struct NativePartsRigsApi {
     pub destroy_appearance: crate::NativeDestroyAppearance,
     pub play: NativePlayPartsRig,
     pub stop: NativeStopPartsRig,
+    pub set_track_alpha: NativeSetPartsRigTrackAlpha,
     pub set_skin: NativeSetPartsRigSkin,
     pub drive_bone: NativeDrivePartsRigBone,
     pub read: NativeReadPartsRig,

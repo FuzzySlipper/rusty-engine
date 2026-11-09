@@ -1,15 +1,20 @@
-//! One clip at a time, with a crossfade from the clips before it: rig-c's
-//! live-tracks mixer (`src/core/tracks.ts`) on its first track, at full
-//! alpha, with no queue.
+//! Clips on layered tracks: rig-c's live-tracks mixer (`src/core/tracks.ts`),
+//! with no queue.
 //!
-//! Each step starts from the setup pose and applies the playing clip and
-//! every clip still fading out under it, oldest first, the way the mixer's
-//! modes decide: a property the older clips key fades from where they left
-//! it, a property only the fading clip keys fades back to setup, and a
-//! property the incoming clip keys is held under it until it takes over.
+//! Each step starts from the setup pose and applies every track, lowest
+//! first: its playing clip and every clip still fading out under it, oldest
+//! first, the way the mixer's modes decide. On one track a property the
+//! older clips key fades from where they left it, a property only the fading
+//! clip keys fades back to setup, and a property the incoming clip keys is
+//! held under it until it takes over. A track above mixes each property a
+//! lower track keyed from the value it left, by its clip's alpha; an
+//! additive clip adds its keyed values to that value instead (rig-c's
+//! `TrackEntry.alpha` and `additive`).
 
-use crate::constraints::ConstraintValues;
-use crate::physics::MASS_INVERSE;
+use std::collections::{BTreeMap, HashMap};
+
+use crate::constraints::{ConstraintKind, ConstraintValues};
+use crate::physics::{GRAVITY, MASS_INVERSE, WIND};
 use crate::rig::{
     AnimationData, BoneTimeline, ColourTimeline, Geometry, Property, Rig, Timeline, TimelineKind,
 };
@@ -41,6 +46,10 @@ pub(crate) struct Entry {
     mix_time: f64,
     mix_duration: f64,
     total_alpha: f64,
+    /// From 0 to 1, multiplied into every timeline's weight.
+    pub alpha: f64,
+    /// Adds its keyed values to what the tracks below posed.
+    pub additive: bool,
     keep_hold: bool,
     timeline_mode: Vec<u8>,
     /// The newer entry (an index into the chain) whose mix ends a hold.
@@ -62,6 +71,8 @@ impl Entry {
             mix_time: 0.0,
             mix_duration: 0.0,
             total_alpha: 0.0,
+            alpha: 1.0,
+            additive: false,
             keep_hold: false,
             timeline_mode: Vec::new(),
             timeline_hold_mix: Vec::new(),
@@ -204,303 +215,421 @@ impl Working {
         }
     }
 }
-
-/// The track: the playing entry first, then each entry it fades from.
+/// The tracks, by index: each the playing entry first, then each entry it
+/// fades from. A track plays over the tracks below it.
 #[derive(Clone, Default)]
 pub(crate) struct Mixer {
-    pub chain: Vec<Entry>,
+    pub tracks: BTreeMap<usize, Vec<Entry>>,
     changed: bool,
 }
 
+/// Whether an additive entry adds this timeline's keyed values, rather than
+/// replacing what the tracks below posed (the runtime's `Timeline.additive`,
+/// rig-c's `addable` and `ADDITIVE_MODE`): every bone value, a deform, a
+/// transform's mixes and a physics constraint's wind and gravity.
+fn addable(rig: &Rig, tl: &Timeline) -> bool {
+    match &tl.kind {
+        TimelineKind::Bone { .. } | TimelineKind::Deform { .. } => true,
+        TimelineKind::Constraint { constraint, .. } => {
+            matches!(
+                rig.constraints[*constraint].kind,
+                ConstraintKind::Transform(_)
+            )
+        }
+        TimelineKind::Physics { value, .. } => *value == WIND || *value == GRAVITY,
+        _ => false,
+    }
+}
+
+/// rig-c's `propertyFrom`: `SETUP` for a property no timeline keyed yet,
+/// `FIRST` for one an older entry of this track keyed, `CURRENT` for one a
+/// lower track keyed.
+fn property_from(
+    owners: &mut HashMap<Property, usize>,
+    track: usize,
+    properties: &[Property],
+) -> u8 {
+    let mut from = SETUP;
+    for (i, p) in properties.iter().enumerate() {
+        match owners.get(p) {
+            None => {
+                owners.insert(*p, track);
+            }
+            Some(&owner) if owner != track => {
+                for q in &properties[i + 1..] {
+                    owners.entry(*q).or_insert(track);
+                }
+                return CURRENT;
+            }
+            Some(_) => from = FIRST,
+        }
+    }
+    from
+}
+
 impl Mixer {
-    /// rig-c's `setAnimation` on track 0, then its `mixDuration`.
-    pub fn set(&mut self, animation: Option<usize>, looping: bool, mix_duration: f64) {
-        if let Some(current) = self.chain.first() {
+    /// rig-c's `setAnimation` on `track`, then its `mixDuration`, `alpha`
+    /// and `additive`.
+    pub fn set(
+        &mut self,
+        track: usize,
+        animation: Option<usize>,
+        looping: bool,
+        mix_duration: f64,
+        alpha: f64,
+        additive: bool,
+    ) {
+        let chain = self.tracks.entry(track).or_default();
+        if let Some(current) = chain.first() {
             if current.next_track_last == -1.0 && current.animation == animation {
-                self.chain.remove(0);
-                self.changed = true;
+                chain.remove(0);
             }
         }
         let mut entry = Entry::new(animation, looping);
         entry.mix_duration = mix_duration;
+        entry.alpha = alpha;
+        entry.additive = additive;
         if animation.is_none() {
             entry.track_end = mix_duration;
         }
-        if let Some(from) = self.chain.first_mut() {
+        if let Some(from) = chain.first_mut() {
             from.timelines_rotation.clear();
         }
-        self.chain.insert(0, entry);
+        chain.insert(0, entry);
         self.changed = true;
     }
 
-    pub fn update(&mut self, delta: f64) {
-        let Some(current) = self.chain.first_mut() else {
-            return;
-        };
-        current.animation_last = current.next_animation_last;
-        current.track_last = current.next_track_last;
-        if current.track_last >= current.track_end && self.chain.len() == 1 {
-            self.chain.clear();
-            self.changed = true;
-            return;
-        }
-        if self.chain.len() > 1 && self.update_mixing_from(0, delta) {
-            self.chain.truncate(1);
-            self.changed = true;
-        }
-        self.chain[0].track_time += delta;
+    /// The playing entry of `track`, if it plays anything.
+    pub fn current(&self, track: usize) -> Option<&Entry> {
+        self.tracks.get(&track).and_then(|chain| chain.first())
     }
 
-    fn update_mixing_from(&mut self, to: usize, delta: f64) -> bool {
-        let from = to + 1;
-        if from >= self.chain.len() {
-            return true;
+    /// rig-c's `setAlpha`: the playing entry's alpha from the next pose on;
+    /// false when `track` plays nothing.
+    pub fn set_alpha(&mut self, track: usize, alpha: f64) -> bool {
+        match self
+            .tracks
+            .get_mut(&track)
+            .and_then(|chain| chain.first_mut())
+        {
+            Some(entry) => {
+                entry.alpha = alpha;
+                true
+            }
+            None => false,
         }
-        let finished = self.update_mixing_from(from, delta);
-        let f = &mut self.chain[from];
-        f.animation_last = f.next_animation_last;
-        f.track_last = f.next_track_last;
-        let (to_next_track_last, to_mix_time, to_mix_duration) = (
-            self.chain[to].next_track_last,
-            self.chain[to].mix_time,
-            self.chain[to].mix_duration,
-        );
-        if to_next_track_last != -1.0 && to_mix_time >= to_mix_duration {
-            if self.chain[from].total_alpha == 0.0 || to_mix_duration == 0.0 {
-                let hold = self.chain[from].total_alpha == 0.0;
-                self.chain.remove(from);
-                if hold {
-                    for entry in self.chain[1..=to].iter_mut() {
-                        entry.keep_hold = true;
-                    }
-                }
+    }
+
+    pub fn update(&mut self, delta: f64) {
+        for chain in self.tracks.values_mut() {
+            let Some(current) = chain.first_mut() else {
+                continue;
+            };
+            current.animation_last = current.next_animation_last;
+            current.track_last = current.next_track_last;
+            if current.track_last >= current.track_end && chain.len() == 1 {
+                chain.clear();
+                self.changed = true;
+                continue;
+            }
+            if chain.len() > 1 && update_mixing_from(chain, 0, delta, &mut self.changed) {
+                chain.truncate(1);
                 self.changed = true;
             }
-            return finished;
+            chain[0].track_time += delta;
         }
-        self.chain[from].track_time += delta;
-        self.chain[to].mix_time += delta;
-        false
     }
 
-    /// Applies the track to `pose`; returns the playing entry's clip time.
+    /// Applies every track to `pose`, lowest first; returns track 0's
+    /// playing entry's clip time (0 when it plays nothing).
     pub fn apply(&mut self, rig: &Rig, pose: &mut Working) -> f64 {
-        if self.chain.is_empty() {
-            return 0.0;
-        }
         if self.changed {
             self.compute_modes(rig);
         }
-        let mut alpha = 1.0;
-        if self.chain.len() > 1 {
-            alpha *= self.apply_mixing_from(rig, 0, pose);
-        } else if self.chain[0].track_time >= self.chain[0].track_end {
-            alpha = 0.0;
-        }
-        let current = &self.chain[0];
-        let animation_last = current.animation_last;
-        let animation_time = current.animation_time(rig);
-        let tls = timelines(rig, current);
-        if alpha == 1.0 {
-            for tl in tls {
-                if let TimelineKind::Attachment { .. } = tl.kind {
-                    apply_attachment(rig, pose, tl, animation_time, SETUP, true);
-                } else {
-                    apply_timeline(
-                        rig,
-                        pose,
-                        tl,
-                        current.animation,
-                        animation_last,
-                        animation_time,
-                        true,
-                        1.0,
-                        SETUP,
-                        false,
-                    );
-                }
+        let mut base = 0.0;
+        for (&track, chain) in self.tracks.iter_mut() {
+            if chain.is_empty() {
+                continue;
             }
-        } else {
-            let count = tls.len();
-            let first_frame = current.timelines_rotation.len() != count * 2;
+            let mut alpha = chain[0].alpha;
+            if chain.len() > 1 {
+                alpha *= apply_mixing_from(rig, chain, 0, pose);
+            } else if chain[0].track_time >= chain[0].track_end {
+                alpha = 0.0;
+            }
+            let current = &mut chain[0];
+            let animation_last = current.animation_last;
+            let animation_time = current.animation_time(rig);
             let animation = current.animation;
-            let modes = std::mem::take(&mut self.chain[0].timeline_mode);
-            let mut rotations = std::mem::take(&mut self.chain[0].timelines_rotation);
-            if first_frame {
-                rotations.resize(count * 2, f64::NAN);
-            }
-            for (i, tl) in tls.iter().enumerate() {
-                let from = modes[i] & MODE;
-                match tl.kind {
-                    TimelineKind::Bone {
-                        kind: BoneTimeline::Rotate,
-                        ..
-                    } => apply_rotate(
-                        rig,
-                        pose,
-                        tl,
-                        animation_time,
-                        alpha,
-                        from,
-                        &mut rotations,
-                        i * 2,
-                        first_frame,
-                    ),
-                    TimelineKind::Attachment { .. } => {
-                        apply_attachment(rig, pose, tl, animation_time, from, alpha >= 0.0)
+            let tls = timelines(rig, current);
+            if track == 0 && alpha == 1.0 {
+                // Track 0 at full weight poses from the setup pose and adds
+                // nothing, additive or not.
+                for tl in tls {
+                    if let TimelineKind::Attachment { .. } = tl.kind {
+                        apply_attachment(rig, pose, tl, animation_time, SETUP, true);
+                    } else {
+                        apply_timeline(
+                            rig,
+                            pose,
+                            tl,
+                            animation,
+                            animation_last,
+                            animation_time,
+                            true,
+                            1.0,
+                            SETUP,
+                            false,
+                            false,
+                        );
                     }
-                    _ => apply_timeline(
-                        rig,
-                        pose,
-                        tl,
-                        animation,
-                        animation_last,
-                        animation_time,
-                        true,
-                        alpha,
-                        from,
-                        false,
-                    ),
+                }
+            } else {
+                // An additive entry's rotations add through the timeline
+                // itself, never the remembered direction.
+                let add = current.additive;
+                let count = tls.len();
+                let first_frame = !add && current.timelines_rotation.len() != count * 2;
+                if first_frame {
+                    current.timelines_rotation.resize(count * 2, f64::NAN);
+                }
+                for (i, tl) in tls.iter().enumerate() {
+                    let from = current.timeline_mode[i] & MODE;
+                    match tl.kind {
+                        TimelineKind::Bone {
+                            kind: BoneTimeline::Rotate,
+                            ..
+                        } if !add => apply_rotate(
+                            rig,
+                            pose,
+                            tl,
+                            animation_time,
+                            alpha,
+                            from,
+                            &mut current.timelines_rotation,
+                            i * 2,
+                            first_frame,
+                        ),
+                        // An entry keeps its attachments at any alpha.
+                        TimelineKind::Attachment { .. } => {
+                            apply_attachment(rig, pose, tl, animation_time, from, alpha >= 0.0)
+                        }
+                        _ => apply_timeline(
+                            rig,
+                            pose,
+                            tl,
+                            animation,
+                            animation_last,
+                            animation_time,
+                            true,
+                            alpha,
+                            from,
+                            false,
+                            add,
+                        ),
+                    }
                 }
             }
-            self.chain[0].timelines_rotation = rotations;
-            self.chain[0].timeline_mode = modes;
+            if track == 0 {
+                base = animation_time;
+            }
+            current.next_animation_last = animation_time;
+            current.next_track_last = current.track_time;
         }
-        let current = &mut self.chain[0];
-        current.next_animation_last = animation_time;
-        current.next_track_last = current.track_time;
         for slot in 0..pose.slots.len() {
             if pose.slots[slot].attachment_state == ATTACH_SETUP {
                 pose.set_attachment(rig, slot, rig.slots[slot].setup);
             }
         }
-        animation_time
+        base
     }
 
-    fn apply_mixing_from(&mut self, rig: &Rig, to: usize, pose: &mut Working) -> f64 {
-        let from = to + 1;
-        let from_mix = if from + 1 < self.chain.len() {
-            self.apply_mixing_from(rig, from, pose)
-        } else {
-            1.0
-        };
-        let mix = self.chain[to].mix();
-        let a = from_mix;
-        let keep = 1.0 - mix;
-        let alpha_mix = a * (1.0 - mix);
-        let alpha_hold = if keep > 0.0 { alpha_mix / keep } else { a };
-        let hold_mixes: Vec<f64> = self.chain[from]
-            .timeline_hold_mix
-            .iter()
-            .map(|h| h.map_or(f64::NAN, |h| self.chain[h].mix()))
-            .collect();
-        let entry = &mut self.chain[from];
-        let tls = timelines(rig, entry);
-        let count = tls.len();
-        let first_frame = entry.timelines_rotation.len() != count * 2;
-        if first_frame {
-            entry.timelines_rotation.resize(count * 2, f64::NAN);
-        }
-        let animation_last = entry.animation_last;
-        let animation_time = entry.animation_time(rig);
-        entry.total_alpha = 0.0;
-        for (i, tl) in tls.iter().enumerate() {
-            let mode = entry.timeline_mode[i];
-            let mix_from = mode & MODE;
-            let alpha = if mode & HOLD != 0 {
-                match hold_mixes.get(i) {
-                    Some(h) if !h.is_nan() => alpha_hold * (1.0 - h),
-                    _ => alpha_hold,
-                }
-            } else {
-                alpha_mix
-            };
-            entry.total_alpha += alpha;
-            match tl.kind {
-                TimelineKind::Bone {
-                    kind: BoneTimeline::Rotate,
-                    ..
-                } => apply_rotate(
-                    rig,
-                    pose,
-                    tl,
-                    animation_time,
-                    alpha,
-                    mix_from,
-                    &mut entry.timelines_rotation,
-                    i * 2,
-                    first_frame,
-                ),
-                TimelineKind::Attachment { .. } => {
-                    apply_attachment(rig, pose, tl, animation_time, mix_from, false)
-                }
-                _ => apply_timeline(
-                    rig,
-                    pose,
-                    tl,
-                    entry.animation,
-                    animation_last,
-                    animation_time,
-                    false,
-                    alpha,
-                    mix_from,
-                    true,
-                ),
-            }
-        }
-        entry.next_animation_last = animation_time;
-        entry.next_track_last = entry.track_time;
-        mix
-    }
-
-    /// rig-c's `computeModes` for one track: oldest entry first.
+    /// rig-c's `computeModes`: every track lowest first, each track's
+    /// entries oldest first.
     fn compute_modes(&mut self, rig: &Rig) {
         self.changed = false;
-        let mut seen: std::collections::HashSet<Property> = std::collections::HashSet::new();
-        for index in (0..self.chain.len()).rev() {
-            let entry = &self.chain[index];
-            let tls = timelines(rig, entry);
-            let to = index.checked_sub(1);
-            let mut modes = std::mem::take(&mut self.chain[index].timeline_mode);
-            modes.resize(tls.len(), 0);
-            let mut hold_mix = vec![None; tls.len()];
-            for (i, tl) in tls.iter().enumerate() {
-                let mut from = SETUP;
-                for p in &tl.properties {
-                    if !seen.insert(*p) {
-                        from = FIRST;
-                    }
-                }
-                let to_animation = to
-                    .and_then(|t| self.chain[t].animation)
-                    .map(|a| &rig.animations[a]);
-                let mut mode =
-                    if to.is_none() || tl.instant || !has_any(to_animation, &tl.properties) {
-                        from
-                    } else {
-                        let mut next = to.and_then(|t| t.checked_sub(1));
-                        while let Some(n) = next {
-                            let n_animation = self.chain[n].animation.map(|a| &rig.animations[a]);
-                            if !has_any(n_animation, &tl.properties) {
-                                if self.chain[n].mix_duration > 0.0 {
-                                    hold_mix[i] = Some(n);
-                                }
-                                break;
-                            }
-                            next = n.checked_sub(1);
-                        }
-                        from | HOLD
-                    };
-                if self.chain[index].keep_hold {
-                    mode = (mode & !HOLD) | (modes[i] & HOLD);
-                }
-                modes[i] = mode;
+        let mut owners: HashMap<Property, usize> = HashMap::new();
+        for (&track, chain) in self.tracks.iter_mut() {
+            for index in (0..chain.len()).rev() {
+                compute_hold(rig, chain, index, track, &mut owners);
             }
-            let entry = &mut self.chain[index];
-            entry.timeline_mode = modes;
-            entry.timeline_hold_mix = hold_mix;
         }
     }
+}
+
+/// rig-c's `updateMixingFrom` for the entry at `to` in a track's chain.
+fn update_mixing_from(chain: &mut Vec<Entry>, to: usize, delta: f64, changed: &mut bool) -> bool {
+    let from = to + 1;
+    if from >= chain.len() {
+        return true;
+    }
+    let finished = update_mixing_from(chain, from, delta, changed);
+    let f = &mut chain[from];
+    f.animation_last = f.next_animation_last;
+    f.track_last = f.next_track_last;
+    let (to_next_track_last, to_mix_time, to_mix_duration) = (
+        chain[to].next_track_last,
+        chain[to].mix_time,
+        chain[to].mix_duration,
+    );
+    if to_next_track_last != -1.0 && to_mix_time >= to_mix_duration {
+        if chain[from].total_alpha == 0.0 || to_mix_duration == 0.0 {
+            let hold = chain[from].total_alpha == 0.0;
+            chain.remove(from);
+            if hold {
+                for entry in chain[1..=to].iter_mut() {
+                    entry.keep_hold = true;
+                }
+            }
+            *changed = true;
+        }
+        return finished;
+    }
+    chain[from].track_time += delta;
+    chain[to].mix_time += delta;
+    false
+}
+
+/// rig-c's `applyMixingFrom`: the entry the one at `to` fades from, after
+/// the entries it fades from in turn; returns `to`'s mix.
+fn apply_mixing_from(rig: &Rig, chain: &mut [Entry], to: usize, pose: &mut Working) -> f64 {
+    let from = to + 1;
+    let from_mix = if from + 1 < chain.len() {
+        apply_mixing_from(rig, chain, from, pose)
+    } else {
+        1.0
+    };
+    let mix = chain[to].mix();
+    let a = chain[from].alpha * from_mix;
+    let keep = 1.0 - mix * chain[to].alpha;
+    let alpha_mix = a * (1.0 - mix);
+    let alpha_hold = if keep > 0.0 { alpha_mix / keep } else { a };
+    let hold_mixes: Vec<f64> = chain[from]
+        .timeline_hold_mix
+        .iter()
+        .map(|h| h.map_or(f64::NAN, |h| chain[h].mix()))
+        .collect();
+    let entry = &mut chain[from];
+    let tls = timelines(rig, entry);
+    let count = tls.len();
+    let add = entry.additive;
+    let first_frame = !add && entry.timelines_rotation.len() != count * 2;
+    if first_frame {
+        entry.timelines_rotation.resize(count * 2, f64::NAN);
+    }
+    let animation_last = entry.animation_last;
+    let animation_time = entry.animation_time(rig);
+    entry.total_alpha = 0.0;
+    for (i, tl) in tls.iter().enumerate() {
+        let mode = entry.timeline_mode[i];
+        let mix_from = mode & MODE;
+        let alpha = if mode & HOLD != 0 {
+            match hold_mixes.get(i) {
+                Some(h) if !h.is_nan() => alpha_hold * (1.0 - h),
+                _ => alpha_hold,
+            }
+        } else {
+            alpha_mix
+        };
+        entry.total_alpha += alpha;
+        match tl.kind {
+            TimelineKind::Bone {
+                kind: BoneTimeline::Rotate,
+                ..
+            } if !add => apply_rotate(
+                rig,
+                pose,
+                tl,
+                animation_time,
+                alpha,
+                mix_from,
+                &mut entry.timelines_rotation,
+                i * 2,
+                first_frame,
+            ),
+            // An entry fading out keeps no attachment, whatever its alpha.
+            TimelineKind::Attachment { .. } => {
+                apply_attachment(rig, pose, tl, animation_time, mix_from, false)
+            }
+            // An entry fading out fires no event; an additive one adds at
+            // its faded alpha.
+            _ => apply_timeline(
+                rig,
+                pose,
+                tl,
+                entry.animation,
+                animation_last,
+                animation_time,
+                false,
+                alpha,
+                mix_from,
+                true,
+                add,
+            ),
+        }
+    }
+    entry.next_animation_last = animation_time;
+    entry.next_track_last = entry.track_time;
+    mix
+}
+
+/// rig-c's `computeHold` for the entry at `index` of track `track`'s chain.
+/// An additive entry's additive timelines are never held, and a timeline
+/// under an additive entry fading in is not held for it.
+fn compute_hold(
+    rig: &Rig,
+    chain: &mut [Entry],
+    index: usize,
+    track: usize,
+    owners: &mut HashMap<Property, usize>,
+) {
+    let entry = &chain[index];
+    let tls = timelines(rig, entry);
+    let to = index.checked_sub(1);
+    let add = entry.additive;
+    let to_adds = to.is_some_and(|t| chain[t].additive);
+    let keep_hold = entry.keep_hold;
+    let mut modes = std::mem::take(&mut chain[index].timeline_mode);
+    modes.resize(tls.len(), 0);
+    let mut hold_mix = vec![None; tls.len()];
+    let animation_of = |e: &Entry| e.animation.map(|a| &rig.animations[a]);
+    for (i, tl) in tls.iter().enumerate() {
+        let from = property_from(owners, track, &tl.properties);
+        let adds = addable(rig, tl);
+        if add && adds {
+            modes[i] = from;
+            continue;
+        }
+        let mut mode = match to {
+            Some(t)
+                if !tl.instant
+                    && !(to_adds && adds)
+                    && has_any(animation_of(&chain[t]), &tl.properties) =>
+            {
+                // Find the next entry that doesn't overwrite this property:
+                // its mix fades out the hold.
+                for n in (0..t).rev() {
+                    if (chain[n].additive && adds)
+                        || !has_any(animation_of(&chain[n]), &tl.properties)
+                    {
+                        if chain[n].mix_duration > 0.0 {
+                            hold_mix[i] = Some(n);
+                        }
+                        break;
+                    }
+                }
+                from | HOLD
+            }
+            _ => from,
+        };
+        if keep_hold {
+            mode = (mode & !HOLD) | (modes[i] & HOLD);
+        }
+        modes[i] = mode;
+    }
+    let entry = &mut chain[index];
+    entry.timeline_mode = modes;
+    entry.timeline_hold_mix = hold_mix;
 }
 
 fn before_first_key(from: u8, alpha: f64, current: f64, setup: f64) -> f64 {
@@ -511,11 +640,24 @@ fn before_first_key(from: u8, alpha: f64, current: f64, setup: f64) -> f64 {
     }
 }
 
-fn scale_value(value: f64, alpha: f64, from: u8, out: bool, current: f64, setup: f64) -> f64 {
-    if alpha == 1.0 {
+/// rig-c's `scaleValue`: past the first key, `value` the curve times the
+/// setup scale; added, its offset from the setup scale is added to the base.
+fn scale_value(
+    value: f64,
+    alpha: f64,
+    from: u8,
+    out: bool,
+    add: bool,
+    current: f64,
+    setup: f64,
+) -> f64 {
+    if alpha == 1.0 && !add {
         return value;
     }
     let mut base = if from == SETUP { setup } else { current };
+    if add {
+        return base + (value - setup) * alpha;
+    }
     if out {
         return base + (value.abs() * sign(base) - base) * alpha;
     }
@@ -556,15 +698,20 @@ fn apply_timeline(
     alpha: f64,
     from: u8,
     out: bool,
+    add: bool,
 ) {
+    // Only the timelines the runtime adds read an additive entry's `add`.
+    let add = add && addable(rig, tl);
     match &tl.kind {
         TimelineKind::Bone { .. } | TimelineKind::Inherit { .. } => {
-            apply_bone(rig, pose, tl, time, alpha, from, out)
+            apply_bone(rig, pose, tl, time, alpha, from, out, add)
         }
         TimelineKind::Colour { .. } => apply_colour(rig, pose, tl, time, alpha, from),
-        TimelineKind::Deform { .. } => apply_deform(rig, pose, tl, time, alpha, from),
-        TimelineKind::Constraint { .. } => apply_constraint(rig, pose, tl, time, alpha, from, out),
-        TimelineKind::Physics { .. } => apply_physics(rig, pose, tl, time, alpha, from),
+        TimelineKind::Deform { .. } => apply_deform(rig, pose, tl, time, alpha, from, add),
+        TimelineKind::Constraint { .. } => {
+            apply_constraint(rig, pose, tl, time, alpha, from, out, add)
+        }
+        TimelineKind::Physics { .. } => apply_physics(rig, pose, tl, time, alpha, from, add),
         // A reset key is crossed as an event is fired: by the playing clip.
         TimelineKind::PhysicsReset { constraint, times } => {
             if fire && crossed(times.iter().copied(), last, time) {
@@ -602,6 +749,7 @@ fn apply_timeline(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_bone(
     rig: &Rig,
     pose: &mut Working,
@@ -610,6 +758,7 @@ fn apply_bone(
     alpha: f64,
     from: u8,
     out: bool,
+    add: bool,
 ) {
     let (bone, keys, kind) = match &tl.kind {
         TimelineKind::Inherit { bone, keys } => {
@@ -649,6 +798,8 @@ fn apply_bone(
             before_first_key(from, alpha, current, s)
         } else if from == SETUP {
             s + value * alpha
+        } else if add {
+            current + value * alpha
         } else {
             current + (value + s - current) * alpha
         }
@@ -663,6 +814,8 @@ fn apply_bone(
         }
         if from == SETUP {
             (sx + v[0] * alpha, sy + v[1] * alpha)
+        } else if add {
+            (cx + v[0] * alpha, cy + v[1] * alpha)
         } else {
             (cx + (sx + v[0] - cx) * alpha, cy + (sy + v[1] - cy) * alpha)
         }
@@ -671,7 +824,7 @@ fn apply_bone(
         if !keyed {
             before_first_key(from, alpha, current, s)
         } else {
-            scale_value(value * s, alpha, from, out, current, s)
+            scale_value(value * s, alpha, from, out, add, current, s)
         }
     };
     use BoneTimeline::*;
@@ -702,6 +855,7 @@ fn apply_bone(
                     alpha,
                     from,
                     out,
+                    add,
                     local.scale_x,
                     setup.scale_x,
                 );
@@ -710,6 +864,7 @@ fn apply_bone(
                     alpha,
                     from,
                     out,
+                    add,
                     local.scale_y,
                     setup.scale_y,
                 );
@@ -736,7 +891,7 @@ fn apply_rotate(
         rotations[i] = 0.0;
     }
     if alpha == 1.0 {
-        apply_bone(rig, pose, tl, time, 1.0, from, false);
+        apply_bone(rig, pose, tl, time, 1.0, from, false, false);
         return;
     }
     let TimelineKind::Bone { bone, keys, .. } = &tl.kind else {
@@ -987,7 +1142,15 @@ fn apply_colour(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha: 
     }
 }
 
-fn apply_deform(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha: f64, from: u8) {
+fn apply_deform(
+    rig: &Rig,
+    pose: &mut Working,
+    tl: &Timeline,
+    time: f64,
+    alpha: f64,
+    from: u8,
+    add: bool,
+) {
     let TimelineKind::Deform { identity, keys } = &tl.kind else {
         return;
     };
@@ -1034,9 +1197,23 @@ fn apply_deform(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha: 
             }
             continue;
         }
+        // Added only over a deform already there: over none it is the setup
+        // pose's branch, additive or not.
+        let from_setup = mix_from == SETUP;
         if alpha == 1.0 {
-            s.deform = Some(target.clone());
-        } else if mix_from == SETUP {
+            match s.deform.as_mut() {
+                Some(current) if add && !from_setup => {
+                    if weighted {
+                        current.iter_mut().zip(&target).for_each(|(c, v)| *c += v);
+                    } else {
+                        for ((c, v), setup) in current.iter_mut().zip(&target).zip(&mesh.setup) {
+                            *c += v - setup;
+                        }
+                    }
+                }
+                _ => s.deform = Some(target.clone()),
+            }
+        } else if from_setup {
             s.deform = Some(if weighted {
                 target.iter().map(|v| v * alpha).collect()
             } else {
@@ -1047,8 +1224,18 @@ fn apply_deform(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha: 
                     .collect()
             });
         } else if let Some(current) = s.deform.as_mut() {
-            for (c, v) in current.iter_mut().zip(&target) {
-                *c += (v - *c) * alpha;
+            if !add {
+                for (c, v) in current.iter_mut().zip(&target) {
+                    *c += (v - *c) * alpha;
+                }
+            } else if weighted {
+                for (c, v) in current.iter_mut().zip(&target) {
+                    *c += v * alpha;
+                }
+            } else {
+                for ((c, v), setup) in current.iter_mut().zip(&target).zip(&mesh.setup) {
+                    *c += (v - setup) * alpha;
+                }
             }
         }
     }
@@ -1071,7 +1258,18 @@ fn crossed(mut keys: impl Iterator<Item = f64>, last: f64, time: f64) -> bool {
 /// from what the clips under it left) toward the keyed value by `alpha`. At
 /// full alpha from setup this is rig-c's `setup + (value - setup)`; a mass
 /// blends as a mass and is held as its inverse.
-fn apply_physics(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha: f64, from: u8) {
+/// Under an additive clip, wind and gravity add the keyed value (times
+/// `alpha`) to what the clips under it left, as rig-c's `ADDITIVE_MODE`
+/// says the runtime does.
+fn apply_physics(
+    rig: &Rig,
+    pose: &mut Working,
+    tl: &Timeline,
+    time: f64,
+    alpha: f64,
+    from: u8,
+    add: bool,
+) {
     let TimelineKind::Physics {
         targets,
         value,
@@ -1091,7 +1289,9 @@ fn apply_physics(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha:
             continue;
         };
         let base = if from == SETUP { setup } else { *current };
-        *current = if mass {
+        *current = if add && from != SETUP {
+            base + keyed * alpha
+        } else if mass {
             let base = 1.0 / base;
             1.0 / (base + (keyed - base) * alpha)
         } else {
@@ -1103,7 +1303,10 @@ fn apply_physics(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha:
 /// A constraint timeline: its values from setup (or from what the clips
 /// under it left) toward the keyed ones by `alpha`. At full alpha from setup
 /// this is rig-c's `setup + (value - setup) * 1`; the stepped ik flags are
-/// the key's, and a clip fading out leaves them.
+/// the key's, and a clip fading out leaves them. Under an additive clip a
+/// transform's mixes add the keyed values (times `alpha`) to what the clips
+/// under it left, as rig-c's `ADDITIVE_MODE` says the runtime does.
+#[allow(clippy::too_many_arguments)]
 fn apply_constraint(
     rig: &Rig,
     pose: &mut Working,
@@ -1112,6 +1315,7 @@ fn apply_constraint(
     alpha: f64,
     from: u8,
     out: bool,
+    add: bool,
 ) {
     let TimelineKind::Constraint {
         constraint,
@@ -1145,7 +1349,11 @@ fn apply_constraint(
         } else {
             current.values[k]
         };
-        current.values[k] = base + (value - base) * alpha;
+        current.values[k] = if add && from != SETUP {
+            base + value * alpha
+        } else {
+            base + (value - base) * alpha
+        };
     }
     if let Some(f) = flags.get(index) {
         if !out {

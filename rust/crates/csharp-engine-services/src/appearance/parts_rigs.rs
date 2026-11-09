@@ -5,7 +5,8 @@
 //! is kept by its drawing's asset id, with its pages admitted as textures;
 //! its `DefinePartsRig` goes out through the projector's catalog. Each
 //! published object showing a rig appearance gets one player per view, kept
-//! by the object's id so a recreated renderer node keeps playing. As each
+//! by the object's id so a recreated renderer node keeps playing; every
+//! call that plays, stops or weighs a track does so in every view. As each
 //! call settles, every player advances to the Engine's presentation time by
 //! the object's speed, every view of an object by the same step, and each
 //! view's pose is published as `SetPartsRigPose`, once per change: a pose
@@ -19,7 +20,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use ::animation_parts_rig::{BlendMode, BoneChannel, Play, Player, Pose, Rig};
+use ::animation_parts_rig::{BlendMode, BoneChannel, Layer, Play, Player, Pose, Rig};
 use render_model::{
     PartsRigAsset, PartsRigBlend, PartsRigCamera, PartsRigClipped, PartsRigDrawable,
     PartsRigInstanceDescriptor, PartsRigPage, PartsRigPiece, PartsRigPose, RenderDiff,
@@ -261,13 +262,17 @@ impl PartsRigScene {
         Ok((players, &mut instance.speed))
     }
 
-    /// Play clip `clip` on every view of `object_id` from its start, fading
-    /// in over what played before, at `speed`.
+    /// Play clip `clip` on `track` of every view of `object_id` from its
+    /// start, layered by `layer` over the tracks below, fading in over what
+    /// the track played before; a play on track 0 sets the object's
+    /// `speed`.
     pub(crate) fn play(
         &mut self,
         object_id: u64,
+        track: usize,
         clip: &str,
         play: Play,
+        layer: Layer,
         speed: f64,
     ) -> Result<(), CsharpEngineServicesError> {
         let (players, instance_speed) = self.players(object_id)?;
@@ -283,20 +288,44 @@ impl PartsRigScene {
             })
             .collect::<Result<Vec<_>, _>>()?;
         for ((player, _), clip) in players.into_iter().zip(clips) {
-            player.play(clip, play);
+            player.play_on(track, clip, play, layer);
         }
-        *instance_speed = speed;
+        if track == 0 {
+            *instance_speed = speed;
+        }
         Ok(())
     }
 
-    /// Fade every view of `object_id` back to its setup pose.
+    /// Fade `track` of every view of `object_id` out.
     pub(crate) fn stop(
         &mut self,
         object_id: u64,
+        track: usize,
         crossfade: f64,
     ) -> Result<(), CsharpEngineServicesError> {
         for (player, _) in self.players(object_id)?.0 {
-            player.stop(crossfade);
+            player.stop_on(track, crossfade);
+        }
+        Ok(())
+    }
+
+    /// Set the alpha of the clip `track` of every view of `object_id`
+    /// plays; refused when it plays nothing.
+    pub(crate) fn set_track_alpha(
+        &mut self,
+        object_id: u64,
+        track: usize,
+        alpha: f64,
+    ) -> Result<(), CsharpEngineServicesError> {
+        // The views play the same tracks: each plays something on it or
+        // none does, so a refusal comes before any is set.
+        for (player, _) in self.players(object_id)?.0 {
+            if !player.set_alpha(track, alpha) {
+                return Err(parts_rig_error(
+                    "CSHARP_PARTS_RIG_TRACK",
+                    format!("track {track} of object {object_id} plays nothing"),
+                ));
+            }
         }
         Ok(())
     }
@@ -352,25 +381,31 @@ impl PartsRigScene {
         Ok(())
     }
 
-    /// What `object_id` plays, as it was last posed.
+    /// What `track` of `object_id` plays.
     pub(crate) fn read(
         &self,
         object_id: u64,
+        track: usize,
     ) -> Result<NativePartsRigReadout, CsharpEngineServicesError> {
         let instance = self.live(object_id)?;
         let first = &instance.views[0];
-        let playing = first
-            .player
-            .as_ref()
-            .and_then(Player::playing)
-            .zip(self.rigs.get(&first.asset));
+        let playing = self.rigs.get(&first.asset).and_then(|rig| {
+            first
+                .player
+                .as_ref()
+                .and_then(|player| player.track(rig, track))
+                .map(|state| (state, rig))
+        });
         Ok(NativePartsRigReadout {
             views: instance.views.len() as u32,
             playing: playing.is_some(),
-            clip: playing.map_or_else(Default::default, |(clip, rig)| {
-                feedback_text(rig.animation_name(clip))
+            clip: playing.map_or_else(Default::default, |(state, rig)| {
+                feedback_text(rig.animation_name(state.animation))
             }),
-            clip_seconds: first.pose.animation_time,
+            clip_seconds: playing.map_or(0.0, |(state, _)| state.animation_time),
+            looping: playing.is_some_and(|(state, _)| state.looping),
+            alpha: playing.map_or(0.0, |(state, _)| state.alpha as f32),
+            additive: playing.is_some_and(|(state, _)| state.additive),
             speed: instance.speed as f32,
             posed: instance.posed_at.is_some(),
         })
@@ -606,6 +641,18 @@ fn bone_channel(channel: NativePartsRigBoneChannel) -> BoneChannel {
     }
 }
 
+/// A track's alpha: from 0 to 1, as rig-c's mixer defines a weight.
+fn alpha(value: f32) -> Result<f64, CsharpEngineServicesError> {
+    if (0.0..=1.0).contains(&value) {
+        Ok(f64::from(value))
+    } else {
+        Err(parts_rig_error(
+            "CSHARP_PARTS_RIG_VALUE",
+            "a track's alpha must be from 0 to 1",
+        ))
+    }
+}
+
 /// A finite, non-negative number: seconds, or a speed.
 fn not_negative(value: f32, what: &str) -> Result<f64, CsharpEngineServicesError> {
     if value.is_finite() && value >= 0.0 {
@@ -810,13 +857,19 @@ impl RuntimeAppearanceBridge {
                 .to_owned();
         let crossfade = not_negative(request.crossfade_seconds, "crossfade")?;
         let speed = not_negative(request.speed, "speed")?;
+        let layer = Layer {
+            alpha: alpha(request.alpha)?,
+            additive: request.additive,
+        };
         self.staged_mut()?.state.parts_rigs.play(
             request.object_id,
+            request.track as usize,
             &clip,
             Play {
                 looping: request.looping,
                 crossfade,
             },
+            layer,
             speed,
         )
     }
@@ -826,10 +879,23 @@ impl RuntimeAppearanceBridge {
         request: NativePartsRigStopRequest,
     ) -> Result<(), CsharpEngineServicesError> {
         let crossfade = not_negative(request.crossfade_seconds, "crossfade")?;
-        self.staged_mut()?
-            .state
-            .parts_rigs
-            .stop(request.object_id, crossfade)
+        self.staged_mut()?.state.parts_rigs.stop(
+            request.object_id,
+            request.track as usize,
+            crossfade,
+        )
+    }
+
+    fn set_parts_rig_track_alpha(
+        &mut self,
+        request: NativePartsRigTrackAlphaRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let alpha = alpha(request.alpha)?;
+        self.staged_mut()?.state.parts_rigs.set_track_alpha(
+            request.object_id,
+            request.track as usize,
+            alpha,
+        )
     }
 
     fn set_parts_rig_skin(
@@ -1016,6 +1082,16 @@ unsafe extern "C" fn stop(
     })
 }
 
+unsafe extern "C" fn set_track_alpha(
+    context: *mut c_void,
+    request: NativePartsRigTrackAlphaRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        appearance_void(context, |bridge| bridge.set_parts_rig_track_alpha(request))
+    })
+}
+
 unsafe extern "C" fn set_skin(
     context: *mut c_void,
     request: *const NativePartsRigSkinRequest,
@@ -1048,13 +1124,17 @@ unsafe extern "C" fn drive_bone(
 
 unsafe extern "C" fn read(
     context: *mut c_void,
-    object_id: u64,
+    request: NativePartsRigTrackRequest,
     readout: *mut NativePartsRigReadout,
     operation_error: *mut NativeOperationErrorReceipt,
 ) -> i32 {
     appearance_operation(context, operation_error, || {
         respond(context, readout, |bridge| {
-            bridge.staged_ref()?.state.parts_rigs.read(object_id)
+            bridge
+                .staged_ref()?
+                .state
+                .parts_rigs
+                .read(request.object_id, request.track as usize)
         })
     })
 }
@@ -1104,6 +1184,7 @@ pub(crate) fn api(bridge: &mut RuntimeAppearanceBridge) -> NativePartsRigsApi {
         destroy_appearance,
         play,
         stop,
+        set_track_alpha,
         set_skin,
         drive_bone,
         read,

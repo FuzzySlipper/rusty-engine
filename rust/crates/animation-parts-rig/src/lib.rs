@@ -5,8 +5,10 @@
 //!
 //! This is a port of rig-c's MIT posing core (`src/core/`; its notice is
 //! `LICENSE-rig-c`). It reads the model document and its `pages` only. [`Rig::from_json`] reads a rig once;
-//! a [`Player`] plays one clip at a time on it, crossfading from the clip
-//! before; and each [`Player::advance`] gives a [`Pose`]: every bone's world
+//! a [`Player`] plays clips on it on layered tracks, each crossfading from
+//! the clip before and applying over the tracks below at its [`Layer`]'s
+//! alpha, replacing or additive; and each [`Player::advance`] gives a
+//! [`Pose`]: every bone's world
 //! transform, and the drawn slots in draw order with their vertices,
 //! colour, blend mode and page. What each slot draws with (its page UVs and
 //! triangles) is the rig's, in [`Rig::drawable`].
@@ -30,6 +32,6 @@ mod rig;
 mod timeline;
 mod world;
 
-pub use pose::{BoneChannel, Clipped, FiredEvent, Piece, Play, Player, Pose};
+pub use pose::{BoneChannel, Clipped, FiredEvent, Layer, Piece, Play, Player, Pose, TrackState};
 pub use rig::{BlendMode, Drawable, Page, Rig, RigError, MODEL_SPEC};
 pub use world::BoneWorld;

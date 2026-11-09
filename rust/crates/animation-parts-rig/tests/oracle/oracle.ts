@@ -7,8 +7,8 @@
 //          before?: { "<step>": { wind?: [x, y], gravity?: [x, y], move?: [x, y] } } }
 //    (`before` acts on the live track before step n, counted from 1: the physics environment, x right and y down,
 //     and a physicsTranslate, y up)
-//    or { model, skin, mode: "tracks", ops: [{play, loop, mix} | {stop} | {step}] }
-//    (the first step of "tracks" is the start, at dt 0)
+//    or { model, skin, mode: "tracks", ops: [{play, loop, mix, track?, alpha?, additive?} | {stop, track?} | {alpha, track} | {step}] }
+//    (the first step of "tracks" is the start, at dt 0; a missing track is track 0)
 import { readFileSync } from 'node:fs';
 
 const [entryPath, planPath] = process.argv.slice(2);
@@ -114,8 +114,14 @@ if (plan.mode === 'track') {
   const tracks = core.openTracks(doc, { reset: 'animation' });
   let started = false;
   for (const op of plan.ops) {
-    if (op.play !== undefined) tracks.setAnimation(0, op.play, { loop: op.loop, mixDuration: op.mix });
-    else if (op.stop !== undefined) tracks.setEmptyAnimation(0, op.stop);
+    const track = op.track ?? 0;
+    if (op.play !== undefined) {
+      const options: any = { loop: op.loop, mixDuration: op.mix };
+      if (op.alpha !== undefined) options.alpha = op.alpha;
+      if (op.additive !== undefined) options.additive = op.additive;
+      tracks.setAnimation(track, op.play, options);
+    } else if (op.stop !== undefined) tracks.setEmptyAnimation(track, op.stop);
+    else if (op.alpha !== undefined) tracks.setAlpha(track, op.alpha);
     else if (!started) {
       started = true;
       poses.push(row(tracks.start()));

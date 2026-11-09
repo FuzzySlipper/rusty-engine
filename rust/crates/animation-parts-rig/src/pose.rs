@@ -72,7 +72,7 @@ pub struct Pose {
     /// The triangles of clipped pieces ([`Piece::clipped`]).
     pub triangles: Vec<u32>,
     pub events: Vec<FiredEvent>,
-    /// The playing clip's time, in seconds.
+    /// Track 0's playing clip's time, in seconds.
     pub animation_time: f64,
 }
 
@@ -82,6 +82,44 @@ pub struct Play {
     pub looping: bool,
     /// Seconds over which the clip fades in over whatever played before.
     pub crossfade: f64,
+}
+
+/// How a clip layers over the tracks below its own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Layer {
+    /// From 0 to 1, multiplied into every one of the clip's timelines: how
+    /// far it moves the pose from what the tracks below posed toward its
+    /// own. Track 0 below 1 moves the setup pose part way.
+    pub alpha: f64,
+    /// Adds the clip's keyed bone values, deforms, transform mixes and
+    /// physics wind and gravity (times `alpha`) to what the tracks below
+    /// posed, rather than replacing them: a breathing layer or a flinch
+    /// over a walk. Its colours, attachments and other values replace, as
+    /// a replacing clip's do.
+    pub additive: bool,
+}
+
+impl Default for Layer {
+    fn default() -> Layer {
+        Layer {
+            alpha: 1.0,
+            additive: false,
+        }
+    }
+}
+
+/// What a track plays.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TrackState {
+    pub animation: usize,
+    pub looping: bool,
+    /// Seconds since the clip started playing.
+    pub track_time: f64,
+    /// The clip time it poses at: the track time wrapped by the clip's
+    /// duration when looping, else held at it.
+    pub animation_time: f64,
+    pub alpha: f64,
+    pub additive: bool,
 }
 
 /// One of a bone's local values, as a product drives it.
@@ -97,11 +135,16 @@ pub enum BoneChannel {
     ShearY,
 }
 
-/// One instance of a rig playing one clip at a time.
+/// One instance of a rig playing clips on layered tracks.
 ///
-/// Each [`Player::advance`] moves the track by a step and poses the rig
-/// once from its setup pose: the clips, then the driven values, then the
-/// bones' world transforms and the constraints.
+/// Each track plays one clip at a time, crossfading from the clips before
+/// it, over the tracks below it: track 0 is the base, a higher track
+/// replaces or adds to what they posed by its clip's [`Layer`]. Each
+/// [`Player::advance`] moves every track by a step and poses the rig once
+/// from its setup pose: the tracks lowest first, then the driven values,
+/// then the bones' world transforms and the constraints. Events fire from
+/// every track's playing clip; draw order and sequence frames follow track
+/// 0's.
 ///
 /// Physics constraints carry their state from step to step: a pose depends
 /// on every step taken since the player was made, so a player advanced by
@@ -182,15 +225,54 @@ impl Player {
         self.skin
     }
 
-    /// Plays a clip from its start, fading in over what played before.
+    /// Plays a clip on track 0 from its start, fully, fading in over what
+    /// played before.
     pub fn play(&mut self, animation: usize, play: Play) {
-        self.mixer
-            .set(Some(animation), play.looping, play.crossfade);
+        self.play_on(0, animation, play, Layer::default());
     }
 
-    /// Fades back to the setup pose.
+    /// Plays a clip on `track` from its start, layered over the tracks
+    /// below it, fading in over what the track played before.
+    pub fn play_on(&mut self, track: usize, animation: usize, play: Play, layer: Layer) {
+        self.mixer.set(
+            track,
+            Some(animation),
+            play.looping,
+            play.crossfade,
+            layer.alpha,
+            layer.additive,
+        );
+    }
+
+    /// Fades track 0 back to the setup pose.
     pub fn stop(&mut self, crossfade: f64) {
-        self.mixer.set(None, false, crossfade);
+        self.stop_on(0, crossfade);
+    }
+
+    /// Fades `track` out, leaving what the tracks below it pose.
+    pub fn stop_on(&mut self, track: usize, crossfade: f64) {
+        self.mixer.set(track, None, false, crossfade, 1.0, false);
+    }
+
+    /// Sets the alpha of the clip `track` plays from the next step on; a
+    /// clip it fades from keeps its own. False, and nothing set, when the
+    /// track plays nothing.
+    pub fn set_alpha(&mut self, track: usize, alpha: f64) -> bool {
+        self.mixer.set_alpha(track, alpha)
+    }
+
+    /// What `track` plays, if anything (a track fading out to nothing plays
+    /// nothing).
+    pub fn track(&self, rig: &Rig, track: usize) -> Option<TrackState> {
+        let entry = self.mixer.current(track)?;
+        Some(TrackState {
+            animation: entry.animation?,
+            looping: entry.looping,
+            track_time: entry.track_time,
+            animation_time: entry.animation_time(rig),
+            alpha: entry.alpha,
+            additive: entry.additive,
+        })
     }
 
     /// Holds one of a bone's local values at `value` on every step, written
@@ -225,12 +307,12 @@ impl Player {
         self.physics.translate(x, y);
     }
 
-    /// The playing clip, if any.
+    /// The clip track 0 plays, if any.
     pub fn playing(&self) -> Option<usize> {
-        self.mixer.chain.first().and_then(|e| e.animation)
+        self.mixer.current(0).and_then(|e| e.animation)
     }
 
-    /// Moves the track by `dt` seconds and poses the rig into `pose`. The
+    /// Moves every track by `dt` seconds and poses the rig into `pose`. The
     /// first step of a clip is usually `dt = 0`, which poses its start.
     pub fn advance(&mut self, rig: &Rig, dt: f64, pose: &mut Pose) {
         let before = self.physics.time;
@@ -280,13 +362,8 @@ impl Player {
         self.physics.resetting = false;
         let w = &self.working;
 
-        // Draw order and sequence frames follow the playing clip.
-        let playing = self
-            .mixer
-            .chain
-            .first()
-            .and_then(|e| e.animation)
-            .map(|a| &rig.animations[a]);
+        // Draw order and sequence frames follow track 0's playing clip.
+        let playing = self.playing().map(|a| &rig.animations[a]);
         let keyed_order = playing.and_then(|a| {
             key_index_at(a.draw_order.iter().map(|k| k.time), animation_time)
                 .map(|i| &a.draw_order[i].moves)
@@ -525,6 +602,92 @@ fn mesh_vertices(
                 }
                 out.push([wx, wy]);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::physics::{GRAVITY, WIND};
+
+    /// rig-c's mixer refuses clips that key constraint timelines, so an
+    /// additive layer over them has no oracle. rig-c's `ADDITIVE_MODE` says
+    /// what the runtime does: a transform's mixes and a physics
+    /// constraint's wind and gravity add, an ik's values and the other
+    /// physics values replace. Over the same clip on track 0, a clip added
+    /// at alpha one half moves the adding values to one and a half times
+    /// track 0's and leaves the replacing ones where track 0 put them.
+    #[test]
+    fn an_additive_layer_adds_transform_mixes_and_wind_and_replaces_the_rest() {
+        for (fixture, clip) in [
+            (
+                include_str!("../tests/fixtures/constraints.model.json"),
+                "reach",
+            ),
+            (
+                include_str!("../tests/fixtures/physics.model.json"),
+                "swing",
+            ),
+        ] {
+            let rig = Rig::from_json(fixture).unwrap();
+            let clip = rig.find_animation(clip).unwrap();
+            let looping = Play {
+                looping: true,
+                crossfade: 0.0,
+            };
+            let values = |layered: bool| {
+                let mut player = Player::new(&rig);
+                player.play(clip, looping);
+                if layered {
+                    let layer = Layer {
+                        alpha: 0.5,
+                        additive: true,
+                    };
+                    player.play_on(1, clip, looping, layer);
+                }
+                let mut pose = Pose::default();
+                player.advance(&rig, 0.0, &mut pose);
+                for _ in 0..13 {
+                    player.advance(&rig, 1.0 / 30.0, &mut pose);
+                }
+                player.working.constraints.clone()
+            };
+            let (base, layered) = (values(false), values(true));
+            let mut checked = 0;
+            for (i, c) in rig.constraints.iter().enumerate() {
+                // The values of constraint `i` the clip keys.
+                let keyed: Vec<usize> = rig.animations[clip]
+                    .timelines
+                    .iter()
+                    .flat_map(|tl| match &tl.kind {
+                        TimelineKind::Constraint { constraint, .. } if *constraint == i => {
+                            (0..7).collect()
+                        }
+                        TimelineKind::Physics { targets, value, .. } if targets.contains(&i) => {
+                            vec![*value]
+                        }
+                        _ => vec![],
+                    })
+                    .collect();
+                for (k, (b, l)) in base[i].values.iter().zip(layered[i].values).enumerate() {
+                    let adds = keyed.contains(&k)
+                        && match c.kind {
+                            ConstraintKind::Transform(_) => true,
+                            ConstraintKind::Physics(_) => k == WIND || k == GRAVITY,
+                            ConstraintKind::Ik(_) => false,
+                        };
+                    let want = if adds { b * 1.5 } else { *b };
+                    assert!(
+                        (l - want).abs() < 1e-12,
+                        "{} value {k}: {l}, want {want}",
+                        c.name
+                    );
+                    checked += usize::from(adds);
+                }
+                assert_eq!(base[i].flags, layered[i].flags, "{}", c.name);
+            }
+            assert!(checked > 0, "some value adds");
         }
     }
 }

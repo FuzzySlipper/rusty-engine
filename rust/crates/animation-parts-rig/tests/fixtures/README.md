@@ -3,7 +3,13 @@
 `tests/rigc_core.rs` poses each `<rig>.model.json` here and compares the
 result with `<rig>.expected.json`, the poses rig-c's own core
 (`@rig-c/core` 3.6.0, commit `1c085852856ea07a111d07b64a45ad4f800dae5e`)
-gave for the same steps.
+gave for the same steps: each clip looping (`openTrack`), and through
+rig-c's live tracks (`openTracks`) a crossfade script and a layered one
+over a rig's first two clips that key no constraint, draw order or
+sequence. The layered script plays additive and replacing clips on tracks 1
+and 2 at partial alphas over track 0, crossfades on each track, changes
+alphas while they play, stops the layers, and takes track 0 itself below
+full alpha and additive.
 
 | Rig | Source |
 | --- | --- |

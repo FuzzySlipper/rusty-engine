@@ -3,7 +3,8 @@
 //! Each `<rig>.model.json` under `tests/fixtures` is a `rigc build --pack`
 //! output; its `<rig>.expected.json` holds the poses `@rig-c/core` gave for
 //! the same steps (`openTrack` for one looping clip, `openTracks` for a
-//! crossfade script). Bones are compared as doubles, drawn vertices as the
+//! crossfade script and a layered one: clips on several tracks, at alphas,
+//! additive or replacing). Bones are compared as doubles, drawn vertices as the
 //! float32 the pose holds. A physics rig's case may move the rig and change
 //! the wind and gravity before a step, as `physicsTranslate` and
 //! `setEnvironment` do. A slot a clip cut is compared with what rig-c's core
@@ -11,7 +12,7 @@
 
 use std::path::Path;
 
-use animation_parts_rig::{BlendMode, BoneChannel, Play, Player, Pose, Rig};
+use animation_parts_rig::{BlendMode, BoneChannel, Layer, Play, Player, Pose, Rig};
 use serde_json::Value;
 
 const FIXTURES: [&str; 12] = [
@@ -348,17 +349,25 @@ fn poses_match_rigc_core() {
                 }
             } else {
                 for op in case["ops"].as_array().unwrap() {
+                    let track = op.get("track").map_or(0, |t| t.as_u64().unwrap() as usize);
                     if let Some(play) = op.get("play") {
                         let animation = rig.find_animation(play.as_str().unwrap()).unwrap();
-                        player.play(
+                        player.play_on(
+                            track,
                             animation,
                             Play {
                                 looping: op["loop"].as_bool().unwrap(),
                                 crossfade: op["mix"].as_f64().unwrap(),
                             },
+                            Layer {
+                                alpha: op.get("alpha").map_or(1.0, |a| a.as_f64().unwrap()),
+                                additive: op.get("additive").is_some_and(|a| a.as_bool().unwrap()),
+                            },
                         );
                     } else if let Some(stop) = op.get("stop") {
-                        player.stop(stop.as_f64().unwrap());
+                        player.stop_on(track, stop.as_f64().unwrap());
+                    } else if let Some(alpha) = op.get("alpha") {
+                        assert!(player.set_alpha(track, alpha.as_f64().unwrap()));
                     } else {
                         check(&mut player, op["step"].as_f64().unwrap(), &mut pose);
                     }

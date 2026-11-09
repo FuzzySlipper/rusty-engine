@@ -6,7 +6,11 @@ document, and the poses rig-c's own core gives for its cases.
 `dt` is the step in seconds and `cap` the most steps one looping case takes.
 Each rig gets, under no skin and under each named skin, one looping case per
 clip (rig-c's `openTrack`) and one crossfade script over its first two clips
-without draw-order, sequence or constraint keys (`openTracks`). A rig with a
+without draw-order, sequence or constraint keys (`openTracks`), and one
+layered script over the same two clips: additive and replacing clips on
+tracks 1 and 2 at partial alphas over track 0, crossfades on each track
+under and over the others, alphas changed while they play, the layers
+stopped, and track 0 itself below full alpha and additive. A rig with a
 bone named `turn` also gets its first clip with `turn`'s x driven to 24 and
 then -24 (rig-c's `adjust`). A rig with physics constraints also gets its
 first clip walked while the rig moves, `move` units a step to the right for
@@ -143,6 +147,26 @@ for name, model in rigs:
             ops += [{"stop": 0.3}] + hold(0.4)
             plan = {"model": model, "skin": skin, "mode": "tracks", "ops": ops}
             cases.append({"name": f"crossfade {a} {b}", "skin": skin, "mode": "tracks", "ops": ops,
+                          "poses": compact(run(plan), regions)})
+
+            def on(track, clip, mix, alpha, additive, loop=True):
+                return {"play": clip, "track": track, "loop": loop, "mix": mix, "alpha": alpha, "additive": additive}
+
+            ops = [{"play": a, "loop": True, "mix": 0}, {"step": 0}] + hold(0.2)
+            ops += [on(1, b, 0.25, 0.5, True)] + hold(0.4)
+            ops += [{"alpha": 0.8, "track": 1}] + hold(0.2)
+            ops += [on(2, a, 0.1, 0.35, False, loop=False)] + hold(0.3)
+            ops += [on(1, a, 0.2, 1, True)] + hold(0.3)
+            ops += [{"play": b, "loop": True, "mix": 0.3}] + hold(0.3)
+            ops += [on(1, b, 0.2, 0.6, False)] + hold(0.25)
+            ops += [on(1, a, 0.2, 0.7, True)] + hold(0.25)
+            ops += [{"stop": 0.25, "track": 1}] + hold(0.35)
+            ops += [{"stop": 0, "track": 2}] + hold(0.1)
+            ops += [{"alpha": 0.6, "track": 0}] + hold(0.2)
+            ops += [on(0, a, 0.2, 1, True)] + hold(0.3)
+            ops += [{"stop": 0.2}] + hold(0.3)
+            plan = {"model": model, "skin": skin, "mode": "tracks", "ops": ops}
+            cases.append({"name": f"layers {a} {b}", "skin": skin, "mode": "tracks", "ops": ops,
                           "poses": compact(run(plan), regions)})
     (out / f"{name}.expected.json").write_text(json.dumps({"regions": regions, "cases": cases}, separators=(",", ":")) + "\n")
     print(name, len(cases), "cases")

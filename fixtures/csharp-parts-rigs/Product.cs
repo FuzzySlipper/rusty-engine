@@ -9,8 +9,10 @@ namespace CsharpPartsRigs;
 /// <summary>
 /// Parts rigs drawn as upright pieces in the world. A townsperson is four views of rusty-dagger's
 /// prototype rigs (front, side, back and the side mirrored); the Engine draws the view each camera
-/// sees, and every view walks on one clip time. Beside it, rig-c's gallery `features` rig plays a
-/// clip that keys events. The product chooses clips, crossfades, the `turn` value and the camera.
+/// sees, and every view walks on one clip time. Over the walk, the rig's `idle` breathing is added
+/// on track 1. Beside it, rig-c's gallery `features` rig plays a clip that keys events, with its
+/// `b` clip added over it on track 1 at part alpha. The product chooses clips, tracks, alphas,
+/// crossfades, the `turn` value and the camera.
 /// </summary>
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
@@ -26,6 +28,12 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // The side rig faces its page's right: a camera at the person's left (-x) sees it as drawn.
     private const float FrontHeading = 0, SideHeading = -MathF.PI / 2, BackHeading = MathF.PI, MirroredSideHeading = MathF.PI / 2;
     private const string WalkClip = "walk", FeaturesClip = "a", TurnBone = "turn", HeadBone = "head";
+    // The effect layers each rig starts with: the townsperson's breathing over its walk, and the
+    // gallery rig's `b` over its `a`, both added on track 1.
+    private const uint LayerTrack = 1, ReadTrackCount = 3;
+    private const string BreathingClip = "idle", FeaturesLayerClip = "b";
+    private const float BreathingAlpha = 1, FeaturesLayerAlpha = .6f;
+    private const string PersonRig = "person", FeaturesRig = "features";
     // A marker the product keeps on a bone every view has, where the camera draws it.
     private const float MarkerSize = .06f;
     private static readonly Color MarkerColor = new(.95f, .15f, .1f, 1);
@@ -75,6 +83,8 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         ]);
         rigs.Play(new PartsRigPlayRequest(TownspersonId, WalkClip, StartCrossfadeSeconds));
         rigs.Play(new PartsRigPlayRequest(FeaturesId, FeaturesClip, StartCrossfadeSeconds));
+        rigs.Play(PartsRigPlayRequest.Layer(TownspersonId, LayerTrack, BreathingClip, BreathingAlpha, true, StartCrossfadeSeconds));
+        rigs.Play(PartsRigPlayRequest.Layer(FeaturesId, LayerTrack, FeaturesLayerClip, FeaturesLayerAlpha, true, StartCrossfadeSeconds));
         camera = engine.CameraView.CreateCamera(CameraDescriptor());
         engine.CameraView.SetActiveCamera(camera);
     }
@@ -145,35 +155,74 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
 
-    [DebugCommand("rigs.observe", Description = "Read-only: each rig's clip, clip time and speed, the view the camera sees, the attached bone where it draws, the camera bearing and the events read.")]
+    [DebugCommand("rigs.observe", Description = "Read-only: each rig's tracks 0-2 (clip, clip time, alpha, additive) and speed, the view the camera sees, the attached bone where it draws, the camera bearing and the events read.")]
     public string Observe()
     {
-        PartsRigReadout person = engine.PartsRigs.Read(TownspersonId);
-        PartsRigReadout gallery = engine.PartsRigs.Read(FeaturesId);
+        RigState person = Rig(TownspersonId);
+        RigState gallery = Rig(FeaturesId);
         PartsRigBoneReadout bone = engine.PartsRigs.ReadBone(new PartsRigBoneRequest(TownspersonId, attachedBone, camera));
         return JsonSerializer.Serialize(new RigFacts(
-            Rig(person), Rig(gallery), orbitDegrees, spinDegreesPerSecond, (int)bone.View, turn,
+            person, gallery, orbitDegrees, spinDegreesPerSecond, (int)bone.View, turn,
             new BoneFacts(attachedBone, bone.Position.X, bone.Position.Y, bone.World.X, bone.World.Y, bone.World.Z,
                 attached.World.X, attached.World.Y, attached.World.Z),
             eventCounts, [.. recentEvents]), RigJsonContext.Default.RigFacts);
 
-        static RigState Rig(PartsRigReadout readout) =>
-            new(readout.Views, readout.Playing ? readout.Clip : null, readout.ClipSeconds, readout.Speed, readout.Posed);
+        RigState Rig(ulong objectId)
+        {
+            PartsRigReadout baseTrack = engine.PartsRigs.Read(new PartsRigTrackRequest(objectId));
+            var tracks = new TrackState?[ReadTrackCount];
+            for (uint track = 0; track < ReadTrackCount; track++)
+            {
+                PartsRigReadout readout = engine.PartsRigs.Read(new PartsRigTrackRequest(objectId, track));
+                tracks[track] = readout.Playing
+                    ? new TrackState(readout.Clip, readout.ClipSeconds, readout.Looping, readout.Alpha, readout.Additive)
+                    : null;
+            }
+            return new RigState(baseTrack.Views, tracks, baseTrack.Speed, baseTrack.Posed);
+        }
     }
 
-    [DebugCommand("rigs.play", Description = "Play a clip on the townsperson: clip name, crossfade seconds, speed (1 as authored). Every view plays it.")]
+    [DebugCommand("rigs.play", Description = "Play a clip on the townsperson's base track (0): clip name, crossfade seconds, speed (1 as authored). Every view plays it.")]
     public string Play(string clip, float crossfadeSeconds, float speed)
     {
         engine.PartsRigs.Play(new PartsRigPlayRequest(TownspersonId, clip, true, speed, crossfadeSeconds));
         return Observe();
     }
 
-    [DebugCommand("rigs.stop", Description = "Fade the townsperson back to its setup pose over the given seconds.")]
+    [DebugCommand("rigs.stop", Description = "Fade the townsperson's base track (0) back to its setup pose over the given seconds; layers above it play on.")]
     public string Stop(float crossfadeSeconds)
     {
         engine.PartsRigs.Stop(new PartsRigStopRequest(TownspersonId, crossfadeSeconds));
         return Observe();
     }
+
+    [DebugCommand("rigs.layer", Description = "Play a looping clip on a track of a rig (person or features) over the tracks below: rig, track (1 and up layer over the base), clip, alpha 0-1, additive (true adds its keyed values, false replaces part way), crossfade seconds.")]
+    public string Layer(string rig, int track, string clip, float alpha, bool additive, float crossfadeSeconds)
+    {
+        engine.PartsRigs.Play(PartsRigPlayRequest.Layer(RigId(rig), checked((uint)track), clip, alpha, additive, crossfadeSeconds));
+        return Observe();
+    }
+
+    [DebugCommand("rigs.alpha", Description = "Set how strongly a rig's (person or features) track applies: rig, track, alpha 0-1.")]
+    public string Alpha(string rig, int track, float alpha)
+    {
+        engine.PartsRigs.SetTrackAlpha(new PartsRigTrackAlphaRequest(RigId(rig), checked((uint)track), alpha));
+        return Observe();
+    }
+
+    [DebugCommand("rigs.unlayer", Description = "Fade a rig's (person or features) track out over the given seconds, leaving the tracks below it: rig, track, crossfade seconds.")]
+    public string Unlayer(string rig, int track, float crossfadeSeconds)
+    {
+        engine.PartsRigs.Stop(new PartsRigStopRequest(RigId(rig), crossfadeSeconds, checked((uint)track)));
+        return Observe();
+    }
+
+    private static ulong RigId(string rig) => rig switch
+    {
+        PersonRig => TownspersonId,
+        FeaturesRig => FeaturesId,
+        _ => throw new ArgumentException($"no rig `{rig}`: {PersonRig} or {FeaturesRig}", nameof(rig)),
+    };
 
     [DebugCommand("rigs.turn", Description = "Hold the townsperson's turn bone's x at a value (about -24 to 24 turns the head); its transform constraints follow.")]
     public string Turn(float value)
@@ -227,7 +276,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     }
 }
 
-internal sealed record RigState(uint Views, string? Clip, double ClipSeconds, float Speed, bool Posed);
+internal sealed record TrackState(string Clip, double ClipSeconds, bool Looping, float Alpha, bool Additive);
+
+internal sealed record RigState(uint Views, TrackState?[] Tracks, float Speed, bool Posed);
 
 internal sealed record BoneFacts(string Bone, float RigX, float RigY, float WorldX, float WorldY, float WorldZ,
     float MarkerX, float MarkerY, float MarkerZ);

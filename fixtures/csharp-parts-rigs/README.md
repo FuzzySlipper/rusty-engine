@@ -5,10 +5,12 @@ Package-consumer fixture for [parts rigs](../../docs/parts-rigs.md).
 - A townsperson walks in place: four views of rusty-dagger's prototype rigs
   (`content/people/townsperson`: front, side and back, and the side again
   mirrored). The Engine draws the view each camera sees; all four walk on one
-  clip time.
+  clip time. Over the walk on track 0, the rig's `idle` (its breathing,
+  head and hair sway) is added on track 1.
 - Beside it, rig-c's gallery `features` rig (MIT, `content/people/features`,
   the same rig as `animation-parts-rig`'s fixture) loops clip `a`, which
-  fires `step` and `cue` events.
+  fires `step` and `cue` events, with clip `b` added over it on track 1 at
+  alpha 0.6.
 
 The model documents are rig-c's `skeleton.model.json` with whitespace
 removed, beside the pages they name.
@@ -20,13 +22,19 @@ RustyEngineFixtureSdkVersion=<version> RestoreAdditionalProjectSources=<feed> \
 
 Live-debug commands:
 
-- `rigs.observe` is read-only. It reports each rig's clip, clip time, speed
-  and views; the camera's bearing and the view it draws; the attached bone
+- `rigs.observe` is read-only. It reports each rig's tracks 0 to 2 (clip,
+  clip time, looping, alpha, additive), speed and views; the camera's bearing and the view it draws; the attached bone
   in that view and where the camera draws it, beside where the marker was
   published; the held `turn` value; and the events read so far.
 - `rigs.play <clip> <crossfade seconds> <speed>` plays `walk` or `idle` on
-  the townsperson, looping.
-- `rigs.stop <crossfade seconds>` fades it back to its setup pose.
+  the townsperson's base track, looping.
+- `rigs.stop <crossfade seconds>` fades its base track back to its setup
+  pose; the layers above play on.
+- `rigs.layer <rig> <track> <clip> <alpha> <additive> <crossfade seconds>`
+  loops a clip on a track of `person` or `features` over the tracks below:
+  `additive` true adds its keyed values, false replaces them by `alpha`.
+  `rigs.alpha <rig> <track> <alpha>` changes a track's alpha while it plays;
+  `rigs.unlayer <rig> <track> <crossfade seconds>` fades it out.
 - `rigs.turn <value>` holds its `turn` bone's x (about -24 to 24 turns the
   head; only the front rig has the bone); `rigs.release` lets go.
 - `rigs.orbit <degrees>` puts the camera at a bearing about it, from in

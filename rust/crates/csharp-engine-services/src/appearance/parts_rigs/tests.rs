@@ -116,6 +116,19 @@ fn play(clip: &str, crossfade: f32, speed: f32) -> NativePartsRigPlayRequest {
         looping: true,
         speed,
         crossfade_seconds: crossfade,
+        track: 0,
+        alpha: 1.0,
+        additive: false,
+    }
+}
+
+/// `clip` on `track`, at `alpha`, added over the tracks below.
+fn layer(track: u32, clip: &str, alpha: f32) -> NativePartsRigPlayRequest {
+    NativePartsRigPlayRequest {
+        track,
+        alpha,
+        additive: true,
+        ..play(clip, 0.0, 1.0)
     }
 }
 
@@ -158,12 +171,16 @@ fn update(step: u64) -> NativeProductUpdateFacts {
 }
 
 fn read(bridge: &RuntimeAppearanceBridge) -> NativePartsRigReadout {
+    read_track(bridge, 0)
+}
+
+fn read_track(bridge: &RuntimeAppearanceBridge, track: usize) -> NativePartsRigReadout {
     bridge
         .staged_ref()
         .unwrap()
         .state
         .parts_rigs
-        .read(OBJECT)
+        .read(OBJECT, track)
         .unwrap()
 }
 
@@ -468,4 +485,125 @@ fn a_moving_object_swings_the_physics_of_each_view() {
         mirrored > 10.0,
         "and in its mirrored view {mirrored} degrees"
     );
+}
+
+/// A clip added on track 1 over track 0's moves every view by the same
+/// layer at the same clip time, leaves the object's speed to track 0's
+/// play, is read back by its track, and once stopped leaves track 0's pose
+/// alone.
+#[test]
+fn an_additive_track_layers_over_the_base_in_every_view() {
+    let (mut bridge, mut world) = (bridge(), PresentationWorld::default());
+    bridge.begin_call();
+    let rig = load(&mut bridge);
+    let view = |mirror| NativePartsRigView {
+        rig: rig.rig,
+        heading: 0.0,
+        mirror,
+    };
+    let figure = appearance(&mut bridge, &[view(false), view(true)]).unwrap();
+    unsafe { bridge.stage_snapshot(&fact(figure, NativeRenderLayer::Scene), 1) }.unwrap();
+    end(&mut bridge, &mut world, 0.0);
+
+    // The base alone, posed twice: its vertices a step in.
+    bridge.begin_call();
+    bridge.play_parts_rig(play("a", 0.0, 1.0)).unwrap();
+    end(&mut bridge, &mut world, 0.0);
+    bridge.begin_call();
+    end(&mut bridge, &mut world, STEP);
+    bridge.begin_call();
+    let base = scene_vertices(&bridge, 0);
+    assert_eq!(
+        bridge
+            .set_parts_rig_track_alpha(NativePartsRigTrackAlphaRequest {
+                object_id: OBJECT,
+                track: 1,
+                alpha: 0.5,
+            })
+            .unwrap_err()
+            .code(),
+        "CSHARP_PARTS_RIG_TRACK",
+        "track 1 plays nothing yet"
+    );
+    assert_eq!(
+        bridge
+            .play_parts_rig(layer(1, "b", 1.5))
+            .unwrap_err()
+            .code(),
+        "CSHARP_PARTS_RIG_VALUE"
+    );
+    bridge.play_parts_rig(layer(1, "b", 0.6)).unwrap();
+    end(&mut bridge, &mut world, 0.0);
+    bridge.begin_call();
+    let added = scene_vertices(&bridge, 0);
+    assert_ne!(added, base, "the layer moves the pose");
+    assert_eq!(added, scene_vertices(&bridge, 1), "in every view");
+    let (track0, track1) = (read_track(&bridge, 0), read_track(&bridge, 1));
+    assert!((track0.clip_seconds - STEP).abs() < 1e-9);
+    assert_eq!(&track1.clip.bytes[..track1.clip.len as usize], b"b");
+    assert_eq!(
+        (track1.clip_seconds, track1.alpha, track1.additive),
+        (0.0, 0.6, true)
+    );
+    assert!(!read_track(&bridge, 2).playing);
+
+    // A higher track's play leaves the speed track 0 set; its alpha moves
+    // the pose.
+    bridge
+        .play_parts_rig(NativePartsRigPlayRequest {
+            speed: 3.0,
+            ..play("a", 0.0, 2.0)
+        })
+        .unwrap();
+    bridge
+        .play_parts_rig(NativePartsRigPlayRequest {
+            speed: 5.0,
+            ..layer(1, "b", 0.6)
+        })
+        .unwrap();
+    assert_eq!(read(&bridge).speed, 3.0);
+    end(&mut bridge, &mut world, STEP);
+    bridge.begin_call();
+    let full = scene_vertices(&bridge, 0);
+    bridge
+        .set_parts_rig_track_alpha(NativePartsRigTrackAlphaRequest {
+            object_id: OBJECT,
+            track: 1,
+            alpha: 0.0,
+        })
+        .unwrap();
+    end(&mut bridge, &mut world, 0.0);
+    bridge.begin_call();
+    assert_ne!(scene_vertices(&bridge, 0), full, "alpha 0 weighs it out");
+    assert_eq!(read_track(&bridge, 1).alpha, 0.0);
+
+    // Stopped, track 1 fades out and track 0 poses alone, as an object
+    // that never had the layer does.
+    bridge
+        .stop_parts_rig(NativePartsRigStopRequest {
+            object_id: OBJECT,
+            crossfade_seconds: 0.0,
+            track: 1,
+        })
+        .unwrap();
+    end(&mut bridge, &mut world, STEP);
+    bridge.begin_call();
+    assert!(!read_track(&bridge, 1).playing);
+    assert!(read(&bridge).playing);
+    let layered_time = read(&bridge).clip_seconds;
+    let alone = {
+        let rig = Rig::from_json(FEATURES).unwrap();
+        let mut player = Player::new(&rig);
+        let looping = Play {
+            looping: true,
+            crossfade: 0.0,
+        };
+        player.play(rig.find_animation("a").unwrap(), looping);
+        let mut pose = Pose::default();
+        player.advance(&rig, 0.0, &mut pose);
+        player.advance(&rig, layered_time, &mut pose);
+        pose.vertices
+    };
+    assert_eq!(scene_vertices(&bridge, 0), alone);
+    bridge.end_call();
 }

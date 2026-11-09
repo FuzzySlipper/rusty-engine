@@ -18,9 +18,46 @@ public readonly partial record struct PartsRigAppearanceRequest
 
 public readonly partial record struct PartsRigPlayRequest
 {
-    /// <summary>Loops <paramref name="clip"/> at its authored speed, fading in over <paramref name="crossfadeSeconds"/>.</summary>
+    private const uint BaseTrack = 0;
+    private const float FullAlpha = 1f, AuthoredSpeed = 1f;
+
+    /// <summary>Loops <paramref name="clip"/> on track 0 at its authored speed, fading in over <paramref name="crossfadeSeconds"/>.</summary>
     public PartsRigPlayRequest(ulong objectId, string clip, float crossfadeSeconds = 0)
-        : this(objectId, clip, true, 1f, crossfadeSeconds)
+        : this(objectId, clip, true, AuthoredSpeed, crossfadeSeconds)
+    {
+    }
+
+    /// <summary>Plays <paramref name="clip"/> on track 0, fully, at <paramref name="speed"/>.</summary>
+    public PartsRigPlayRequest(ulong objectId, string clip, bool looping, float speed, float crossfadeSeconds)
+        : this(objectId, clip, looping, speed, crossfadeSeconds, BaseTrack, FullAlpha, false)
+    {
+    }
+
+    /// <summary>
+    /// Plays <paramref name="clip"/> on <paramref name="track"/> over the tracks below it, at
+    /// <paramref name="alpha"/>: with <paramref name="additive"/> its keyed values add to theirs (a
+    /// flinch, a glow pulse or a breathing layer over a walk), otherwise it replaces them part way. The
+    /// object's speed is left as track 0's play set it.
+    /// </summary>
+    public static PartsRigPlayRequest Layer(ulong objectId, uint track, string clip, float alpha, bool additive,
+        float crossfadeSeconds = 0, bool looping = true) =>
+        new(objectId, clip, looping, AuthoredSpeed, crossfadeSeconds, track, alpha, additive);
+}
+
+public readonly partial record struct PartsRigStopRequest
+{
+    /// <summary>Fades track 0 back to the setup pose over <paramref name="crossfadeSeconds"/>.</summary>
+    public PartsRigStopRequest(ulong objectId, float crossfadeSeconds)
+        : this(objectId, crossfadeSeconds, 0)
+    {
+    }
+}
+
+public readonly partial record struct PartsRigTrackRequest
+{
+    /// <summary>Track 0, the base.</summary>
+    public PartsRigTrackRequest(ulong objectId)
+        : this(objectId, 0)
     {
     }
 }

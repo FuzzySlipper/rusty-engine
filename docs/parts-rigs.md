@@ -25,11 +25,14 @@ Appearance person = engine.PartsRigs.CreateAppearance(new PartsRigAppearanceRequ
 }, metresPerUnit: 1.75f / 896));
 engine.Graphics.PublishSnapshot([new(PersonId, false, 0, transform, person, true, RenderLayer.Scene)]);
 engine.PartsRigs.Play(new PartsRigPlayRequest(PersonId, "walk", crossfadeSeconds: .2f));
+// The idle's breathing added over the walk on track 1.
+engine.PartsRigs.Play(PartsRigPlayRequest.Layer(PersonId, 1, "idle", alpha: 1, additive: true));
 engine.PartsRigs.DriveBone(PartsRigDriveRequest.Hold(PersonId, "turn", PartsRigBoneChannel.X, 18));
 ```
 
 See `fixtures/csharp-parts-rigs` for a townsperson of four views walking in
-place with an orbiting camera, and a gallery rig whose clip fires events.
+place with its breathing added over the walk and an orbiting camera, and a
+gallery rig whose clip fires events with a second clip added over it.
 
 ## Loading
 
@@ -71,14 +74,34 @@ One view shows from every side.
 ## Playing
 
 Every call that plays names a published object. All of an object's views
-play together: one clip, one clip time, one speed and one set of driven
-values, so a stride carries across a change of view. Their rigs need clips
-of the same names, cut to the same length.
+play together: the same clips on the same tracks at the same clip times,
+one speed and one set of driven values, so a stride carries across a change
+of view. Their rigs need clips of the same names, cut to the same length.
 
-- `Play`: a clip by name from its start, looping or once, fading in over
-  `CrossfadeSeconds` from what played, at `Speed` (1 as authored). Every
-  view's rig must have the clip.
-- `Stop`: fade back to the setup pose.
+An object plays its clips on layered tracks, as rig-c's live tracks do.
+Track 0 is the base; each track above applies over what the tracks below
+posed, lowest first. A clip on a track moves the pose toward its own by its
+`Alpha` (0 to 1). An `Additive` clip instead adds its keyed values (times
+its alpha) to what the tracks below posed: bone rotations, translations,
+scales and shears, mesh deforms, transform constraint mixes, and physics
+wind and gravity. Its colours, attachments and other values replace, as a
+replacing clip's do. That is an effect layer: a flinch, a glow pulse or a
+breathing layer over a walk. Each track crossfades on its own, and every
+track's clip fires its events. Draw order and sequence frames follow track
+0's clip.
+
+- `Play`: a clip by name on a `Track` from its start, looping or once,
+  fading in over `CrossfadeSeconds` from what that track played, at `Alpha`,
+  `Additive` or replacing. A play on track 0 sets the object's `Speed` (1 as
+  authored), which all its tracks share; a play on a higher track leaves it.
+  Every view's rig must have the clip. `new PartsRigPlayRequest(id, clip)`
+  loops a clip on track 0; `PartsRigPlayRequest.Layer(id, track, clip,
+  alpha, additive)` layers one.
+- `SetTrackAlpha`: change how strongly a track's clip applies while it
+  plays; a clip it fades from keeps its own. Refused when the track plays
+  nothing.
+- `Stop`: fade a track out: track 0 back to the setup pose, a higher track
+  to what the tracks below it pose.
 - `SetSkin`: a skin by name in every view, or empty for the default skin
   alone.
 - `DriveBone`: hold one of a bone's local values (rotation, x, y, scale or
@@ -101,11 +124,13 @@ rigs starts from the setup pose.
 The poses are evaluated as each call settles, at the Engine's presentation
 time, so reads describe the pose of the previous call.
 
-- `Read`: the views, the playing clip and its time, the speed, and whether
-  the object has been posed.
-- `ReadEvents`: the events rig objects' clips passed since the previous
-  update, object by object in time order: name (cut to 96 bytes), key time,
-  int and float values, volume and balance. A view set fires its first
+- `Read`: one track's clip as it stands (a clip played this call reads at
+  clip time 0), its clip time, whether it loops, its alpha and whether it
+  adds; and the object's views, speed, and whether it has been posed. `new
+  PartsRigTrackRequest(id)` reads track 0.
+- `ReadEvents`: the events rig objects' clips, on every track, passed since
+  the previous update, object by object in time order: name (cut to 96
+  bytes), key time, int and float values, volume and balance. A view set fires its first
   view's events. Events' string values are not carried.
 - `ReadBone`: a named bone as one camera's reading draws it: the view that
   camera draws, the bone's position, rotation and scale in that view's rig
