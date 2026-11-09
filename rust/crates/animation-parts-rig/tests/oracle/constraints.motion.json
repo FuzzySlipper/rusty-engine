@@ -1,0 +1,446 @@
+{
+ "spec": "rigc-motion/1",
+ "archetype": "constraints",
+ "cut": "constraints",
+ "easings": {
+  "smooth": [
+   0.25,
+   0,
+   0.75,
+   1
+  ],
+  "snap": [
+   0.1,
+   0.7,
+   0.3,
+   1
+  ]
+ },
+ "animations": {
+  "reach": {
+   "duration": 1.2,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "aim",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.4,
+       "v": [
+        -200,
+        -90
+       ],
+       "ease": "snap"
+      },
+      {
+       "t": 0.8,
+       "v": [
+        120,
+        60
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "aim2",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        180,
+        -160
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "base",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        -25
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "src",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "v": [
+        200
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "src",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        40,
+        -30
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "src",
+     "property": "scale",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1,
+        1
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        0.6,
+        1.5
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        1,
+        1
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "src",
+     "property": "shear",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        0,
+        0
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        0,
+        -30
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        0,
+        0
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "turn",
+     "property": "translatex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -40
+       ]
+      },
+      {
+       "t": 0.6,
+       "v": [
+        40
+       ],
+       "ease": "smooth"
+      },
+      {
+       "t": 1.2,
+       "v": [
+        -40
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "flip",
+     "property": "scalex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        1
+       ]
+      },
+      {
+       "t": 0.9,
+       "v": [
+        1.4
+       ]
+      },
+      {
+       "t": 1.2,
+       "v": [
+        1
+       ]
+      }
+     ]
+    }
+   ],
+   "ik": [
+    {
+     "constraint": "leg_a",
+     "keys": [
+      {
+       "t": 0,
+       "mix": 1,
+       "softness": 15,
+       "bendPositive": true,
+       "compress": false,
+       "stretch": true,
+       "ease": "smooth"
+      },
+      {
+       "t": 0.5,
+       "mix": 0.4,
+       "softness": 40,
+       "bendPositive": false,
+       "compress": false,
+       "stretch": false
+      },
+      {
+       "t": 1.0,
+       "mix": 1,
+       "softness": 0,
+       "bendPositive": true,
+       "compress": true,
+       "stretch": true
+      }
+     ]
+    },
+    {
+     "constraint": "one_norm",
+     "keys": [
+      {
+       "t": 0.2,
+       "mix": 0.3,
+       "softness": 0,
+       "bendPositive": true,
+       "compress": true,
+       "stretch": false
+      },
+      {
+       "t": 0.7,
+       "mix": 1,
+       "softness": 0,
+       "bendPositive": true,
+       "compress": true,
+       "stretch": true
+      }
+     ]
+    }
+   ],
+   "transform": [
+    {
+     "constraint": "t_world",
+     "keys": [
+      {
+       "t": 0,
+       "mixRotate": 0.7,
+       "mixX": 0.6,
+       "mixY": 0.6,
+       "mixScaleX": 0.5,
+       "mixScaleY": 0.5,
+       "mixShearY": 0.8,
+       "ease": "smooth"
+      },
+      {
+       "t": 0.6,
+       "mixRotate": 1,
+       "mixX": 0.2,
+       "mixY": 0.9,
+       "mixScaleX": 1,
+       "mixScaleY": 0.3,
+       "mixShearY": 0.1
+      },
+      {
+       "t": 1.1,
+       "mixRotate": 0.2,
+       "mixX": 1,
+       "mixY": 1,
+       "mixScaleX": 0,
+       "mixScaleY": 1,
+       "mixShearY": 1
+      }
+     ]
+    },
+    {
+     "constraint": "t_add",
+     "keys": [
+      {
+       "t": 0.3,
+       "mixRotate": 0.5,
+       "mixX": 0.5,
+       "mixY": 0.5,
+       "mixScaleX": 0.5,
+       "mixScaleY": 0.5,
+       "mixShearY": 0.5,
+       "ease": "snap"
+      },
+      {
+       "t": 0.9,
+       "mixRotate": 1,
+       "mixX": 1,
+       "mixY": 1,
+       "mixScaleX": 1,
+       "mixScaleY": 1,
+       "mixShearY": 1
+      }
+     ]
+    }
+   ]
+  },
+  "hold": {
+   "duration": 0.8,
+   "loop": true,
+   "tracks": [
+    {
+     "bone": "aim",
+     "property": "translate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -80,
+        40
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        60,
+        -70
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "src",
+     "property": "rotate",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        -60
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        60
+       ]
+      }
+     ]
+    },
+    {
+     "bone": "turn",
+     "property": "translatex",
+     "keys": [
+      {
+       "t": 0,
+       "v": [
+        20
+       ]
+      },
+      {
+       "t": 0.8,
+       "v": [
+        -20
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

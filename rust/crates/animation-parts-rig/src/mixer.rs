@@ -8,6 +8,7 @@
 //! it, a property only the fading clip keys fades back to setup, and a
 //! property the incoming clip keys is held under it until it takes over.
 
+use crate::constraints::ConstraintValues;
 use crate::rig::{
     AnimationData, BoneTimeline, ColourTimeline, Geometry, Property, Rig, Timeline, TimelineKind,
 };
@@ -122,6 +123,8 @@ pub(crate) struct Working {
     /// The skins a placeholder resolves through: the chosen one, then the
     /// default.
     pub lookup: Vec<usize>,
+    /// Each constraint's keyed values.
+    pub constraints: Vec<ConstraintValues>,
     target: Vec<f64>,
     scratch: Vec<f64>,
 }
@@ -134,6 +137,7 @@ impl Working {
             active: Vec::new(),
             events: Vec::new(),
             lookup: Vec::new(),
+            constraints: Vec::new(),
             target: Vec::new(),
             scratch: Vec::new(),
         }
@@ -151,6 +155,9 @@ impl Working {
             attachment_state: ATTACH_NONE,
         }));
         self.events.clear();
+        self.constraints.clear();
+        self.constraints
+            .extend(rig.constraints.iter().map(|c| c.setup));
     }
 
     /// The attachment a slot shows under a placeholder.
@@ -548,6 +555,7 @@ fn apply_timeline(
         }
         TimelineKind::Colour { .. } => apply_colour(rig, pose, tl, time, alpha, from),
         TimelineKind::Deform { .. } => apply_deform(rig, pose, tl, time, alpha, from),
+        TimelineKind::Constraint { .. } => apply_constraint(rig, pose, tl, time, alpha, from, out),
         TimelineKind::Events(keys) => {
             if fire {
                 let Some(animation) = animation else { return };
@@ -1031,4 +1039,60 @@ fn apply_deform(rig: &Rig, pose: &mut Working, tl: &Timeline, time: f64, alpha: 
     }
     pose.target = target;
     pose.scratch = scratch;
+}
+
+/// A constraint timeline: its values from setup (or from what the clips
+/// under it left) toward the keyed ones by `alpha`. At full alpha from setup
+/// this is rig-c's `setup + (value - setup) * 1`; the stepped ik flags are
+/// the key's, and a clip fading out leaves them.
+fn apply_constraint(
+    rig: &Rig,
+    pose: &mut Working,
+    tl: &Timeline,
+    time: f64,
+    alpha: f64,
+    from: u8,
+    out: bool,
+) {
+    let TimelineKind::Constraint {
+        constraint,
+        keys,
+        flags,
+    } = &tl.kind
+    else {
+        return;
+    };
+    let setup = rig.constraints[*constraint].setup;
+    let current = &mut pose.constraints[*constraint];
+    let mut v = [0.0; 6];
+    let Some(index) = keys.index_at(time) else {
+        match from {
+            SETUP => *current = setup,
+            FIRST => {
+                for (c, s) in current.values.iter_mut().zip(setup.values) {
+                    *c += (s - *c) * alpha;
+                }
+                current.flags = setup.flags;
+            }
+            _ => {}
+        }
+        return;
+    };
+    keys.values_at(time, &mut v);
+    let channels = keys.keys[index].values.len();
+    for (k, value) in v.iter().enumerate().take(channels) {
+        let base = if from == SETUP {
+            setup.values[k]
+        } else {
+            current.values[k]
+        };
+        current.values[k] = base + (value - base) * alpha;
+    }
+    if let Some(f) = flags.get(index) {
+        if !out {
+            current.flags = *f;
+        } else if from == SETUP {
+            current.flags = setup.flags;
+        }
+    }
 }

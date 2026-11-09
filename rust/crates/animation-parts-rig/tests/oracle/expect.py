@@ -6,8 +6,10 @@ document, and the poses rig-c's own core gives for its cases.
 `dt` is the step in seconds and `cap` the most steps one looping case takes.
 Each rig gets, under no skin and under each named skin, one looping case per
 clip (rig-c's `openTrack`) and one crossfade script over its first two clips
-without draw-order or sequence keys (`openTracks`). A rig named `turned` gets
-one two-pose case instead: it is a page-UV variant. Bones keep full doubles;
+without draw-order, sequence or constraint keys (`openTracks`). A rig with a
+bone named `turn` also gets its first clip with `turn`'s x driven to 24 and
+then -24 (rig-c's `adjust`). A rig named `turned` gets one two-pose case
+instead: it is a page-UV variant. Bones keep full doubles;
 vertices are written to 8 significant digits, UVs and colours to 9.
 """
 import json
@@ -66,10 +68,13 @@ def compact(poses, regions):
     ]
 
 
-def track(model, skin, anim, steps, regions, name):
+def track(model, skin, anim, steps, regions, name, drive=None):
     plan = {"model": model, "skin": skin, "mode": "track", "animation": anim, "loop": True, "steps": steps}
-    return {"name": name, "skin": skin, "mode": "track", "animation": anim, "loop": True, "steps": steps,
-            "poses": compact(run(plan), regions)}
+    case = {"name": name, "skin": skin, "mode": "track", "animation": anim, "loop": True, "steps": steps}
+    if drive:
+        plan["drive"] = case["drive"] = drive
+    case["poses"] = compact(run(plan), regions)
+    return case
 
 
 for name, model in rigs:
@@ -86,12 +91,17 @@ for name, model in rigs:
     mixable = [
         a["name"] for a in doc["animations"]
         if not a["drawOrder"] and not any("sequence" in at for sk in a["attachments"] for sl in sk["slots"] for at in sl["attachments"])
+        and not any(a.get("constraints", {}).get(k) for k in ("ik", "transform"))
     ]
+    turn = any(b["name"] == "turn" for b in doc["bones"])
     for skin in skins:
         for i, anim in enumerate(anims):
             duration = max([0.0] + [k["time"] for t in doc["animations"][i]["bones"] for tl in t["timelines"] for k in tl["keys"]])
             steps = [dt] * max(4, min(cap, math.ceil(1.4 * max(duration, 0.5) / dt)))
             cases.append(track(model, skin, anim, steps, regions, f"{anim} looping"))
+            if turn and i == 0:
+                for x in (24, -24):
+                    cases.append(track(model, skin, anim, steps, regions, f"{anim} with turn at {x}", [["turn", "x", x]]))
         if mixable:
             a, b = mixable[0], mixable[min(1, len(mixable) - 1)]
 

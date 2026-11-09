@@ -11,9 +11,12 @@
 //! colour, blend mode and page. What each slot draws with (its page UVs and
 //! triangles) is the rig's, in [`Rig::drawable`].
 //!
-//! Constraints and clipping are not evaluated yet, and a rig that declares
-//! either is refused by name.
+//! IK and transform constraints are applied in the document's order after
+//! the bones' world transforms. Path, physics and slider constraints and
+//! clipping are not evaluated yet, and a rig that declares any of them is
+//! refused by name.
 
+mod constraints;
 mod document;
 mod mixer;
 mod pose;
@@ -21,6 +24,6 @@ mod rig;
 mod timeline;
 mod world;
 
-pub use pose::{FiredEvent, Piece, Play, Player, Pose};
+pub use pose::{BoneChannel, FiredEvent, Piece, Play, Player, Pose};
 pub use rig::{BlendMode, Drawable, Page, Rig, RigError, MODEL_SPEC};
 pub use world::BoneWorld;

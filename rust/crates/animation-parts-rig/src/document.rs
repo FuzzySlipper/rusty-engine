@@ -14,7 +14,10 @@ pub(crate) struct Document {
     pub bones: Vec<Bone>,
     pub slots: Vec<Slot>,
     pub skins: Vec<Skin>,
-    pub constraints: Vec<Constraint>,
+    /// Kept as written: the kinds the core does not evaluate are refused by
+    /// name before their fields are read, and a transform's mappings keep
+    /// their order.
+    pub constraints: Vec<Box<serde_json::value::RawValue>>,
     pub events: Vec<EventDef>,
     pub animations: Vec<Animation>,
     pub pages: Vec<Page>,
@@ -36,6 +39,7 @@ pub(crate) struct Bone {
     pub shear_y: f64,
     pub inherit_mode: Option<String>,
     pub skin_required: bool,
+    pub length: f64,
 }
 
 fn one() -> f64 {
@@ -65,12 +69,136 @@ pub(crate) struct Skin {
     /// document's order.
     #[serde(default)]
     pub attachments: serde_json::Map<String, serde_json::Value>,
+    /// The skin-required constraints this skin applies, by kind.
+    #[serde(default)]
+    pub constraints: SkinConstraints,
 }
 
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct SkinConstraints {
+    pub ik: Vec<String>,
+    pub transform: Vec<String>,
+}
+
+/// What every constraint states, whatever its kind.
 #[derive(Deserialize)]
+pub(crate) struct ConstraintHead {
+    pub kind: String,
+    pub name: String,
+}
+
+/// An ik or transform constraint (rig-c's `readConstraintRecord`). `scaleY`
+/// is the ik's mode name and the transform's offset, so it is read as
+/// either.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub(crate) struct Constraint {
     pub kind: String,
     pub name: String,
+    #[serde(default)]
+    pub bones: Vec<String>,
+    #[serde(default)]
+    pub skin: bool,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub mix: Option<f64>,
+    #[serde(default)]
+    pub softness: f64,
+    #[serde(default)]
+    pub bend_positive: Option<bool>,
+    #[serde(default)]
+    pub compress: bool,
+    #[serde(default)]
+    pub stretch: bool,
+    #[serde(default)]
+    pub scale_y: Option<serde_json::Value>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub properties: Ordered<TransformFrom>,
+    #[serde(default)]
+    pub local_source: bool,
+    #[serde(default)]
+    pub local_target: bool,
+    #[serde(default)]
+    pub additive: bool,
+    #[serde(default)]
+    pub clamp: bool,
+    #[serde(default)]
+    pub rotation: f64,
+    #[serde(default)]
+    pub x: f64,
+    #[serde(default)]
+    pub y: f64,
+    #[serde(default)]
+    pub scale_x: f64,
+    #[serde(default)]
+    pub shear_y: f64,
+    #[serde(default)]
+    pub mix_rotate: Option<f64>,
+    #[serde(default)]
+    pub mix_x: Option<f64>,
+    #[serde(default)]
+    pub mix_y: Option<f64>,
+    #[serde(default)]
+    pub mix_scale_x: Option<f64>,
+    #[serde(default)]
+    pub mix_scale_y: Option<f64>,
+    #[serde(default)]
+    pub mix_shear_y: Option<f64>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct TransformFrom {
+    #[serde(default)]
+    pub offset: f64,
+    #[serde(default)]
+    pub to: Ordered<TransformTo>,
+}
+
+#[derive(Deserialize)]
+pub(crate) struct TransformTo {
+    #[serde(default)]
+    pub offset: f64,
+    #[serde(default = "one")]
+    pub scale: f64,
+    #[serde(default = "one")]
+    pub max: f64,
+}
+
+/// A JSON object's entries in the document's order: a transform applies its
+/// mappings in that order.
+pub(crate) struct Ordered<T>(pub Vec<(String, T)>);
+
+impl<T> Default for Ordered<T> {
+    fn default() -> Self {
+        Ordered(Vec::new())
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Ordered<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Entries<T>(std::marker::PhantomData<T>);
+        impl<'de, T: Deserialize<'de>> serde::de::Visitor<'de> for Entries<T> {
+            type Value = Ordered<T>;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("an object")
+            }
+            fn visit_map<A: serde::de::MapAccess<'de>>(
+                self,
+                mut map: A,
+            ) -> Result<Ordered<T>, A::Error> {
+                let mut out = Vec::new();
+                while let Some(entry) = map.next_entry()? {
+                    out.push(entry);
+                }
+                Ok(Ordered(out))
+            }
+        }
+        deserializer.deserialize_map(Entries(std::marker::PhantomData))
+    }
 }
 
 #[derive(Deserialize)]
@@ -183,6 +311,15 @@ pub(crate) struct Animation {
     pub attachments: Vec<SkinTimelines>,
     pub draw_order: Vec<DrawOrderKey>,
     pub events: Vec<EventKey>,
+    pub constraints: ConstraintTimelines,
+}
+
+/// An animation's ik and transform timelines, by constraint name.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+pub(crate) struct ConstraintTimelines {
+    pub ik: Vec<Timeline>,
+    pub transform: Vec<Timeline>,
 }
 
 #[derive(Deserialize)]

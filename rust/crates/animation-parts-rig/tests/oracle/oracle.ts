@@ -3,7 +3,7 @@
 //
 // bun oracle.ts <core-entry.ts> <plan.json>  → JSON on stdout
 //
-// plan: { model, skin: string|null, mode: "track", animation, loop, steps: [dt…] }
+// plan: { model, skin: string|null, mode: "track", animation, loop, steps: [dt…], drive?: [[bone, channel, value]…] }
 //    or { model, skin, mode: "tracks", ops: [{play, loop, mix} | {stop} | {step}] }
 //    (the first step of "tracks" is the start, at dt 0)
 import { readFileSync } from 'node:fs';
@@ -51,7 +51,12 @@ function row(pose: any) {
 
 const poses: any[] = [];
 if (plan.mode === 'track') {
-  const track = core.openTrack(doc, plan.animation, { loop: plan.loop, reset: 'animation' });
+  // A driven value is written over the posed locals each step, as the core's `adjust`.
+  const drive = plan.drive ?? [];
+  const adjust = drive.length === 0 ? undefined : (locals: any) => {
+    for (const [bone, channel, value] of drive) locals.bone(bone)[channel] = value;
+  };
+  const track = core.openTrack(doc, plan.animation, { loop: plan.loop, reset: 'animation', adjust });
   poses.push(row(track.first));
   for (const dt of plan.steps) poses.push(row(track.step(dt)));
 } else {

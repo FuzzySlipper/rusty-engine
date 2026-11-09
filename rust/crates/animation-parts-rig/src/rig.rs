@@ -5,6 +5,10 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 
+use crate::constraints::{
+    Bones, ConstraintData, ConstraintKind, ConstraintValues, IkData, IkScaleY, TransformData,
+    TransformFrom, TransformTo, BEND_POSITIVE, COMPRESS, STRETCH,
+};
 use crate::document::{self, Document};
 use crate::timeline::{
     f32r, DeformKey, DeformKeys, DrawOrderKey, EventKey, Keys, SequenceKey, SequenceMode,
@@ -22,8 +26,8 @@ pub enum RigError {
     Json(String),
     /// The document is another version of rig-c's model, or none.
     Spec(Option<String>),
-    /// The rig declares constraints, as `(kind, name)`; the core evaluates
-    /// none yet.
+    /// The rig declares constraints of kinds the core does not evaluate yet
+    /// (path, physics, slider), as `(kind, name)`.
     Constraints(Vec<(String, String)>),
     /// A clipping attachment, as `(skin, slot, placeholder)`; clipping is not
     /// evaluated yet.
@@ -100,6 +104,7 @@ pub(crate) struct BoneData {
     pub parent: Option<usize>,
     pub setup: Local,
     pub skin_required: bool,
+    pub length: f64,
 }
 
 pub(crate) struct SlotData {
@@ -116,6 +121,8 @@ pub(crate) struct SkinData {
     pub bones: Vec<usize>,
     /// `(slot, placeholder)` to attachment.
     pub table: HashMap<(usize, u32), usize>,
+    /// The skin-required constraints it applies.
+    pub constraints: Vec<usize>,
 }
 
 pub(crate) enum VertexData {
@@ -229,6 +236,13 @@ pub(crate) enum TimelineKind {
         keys: DeformKeys,
     },
     Events(Vec<EventKey>),
+    /// An ik constraint's mix and softness, or a transform's six mixes; an
+    /// ik's flags per key.
+    Constraint {
+        constraint: usize,
+        keys: Keys,
+        flags: Vec<[bool; 3]>,
+    },
 }
 
 /// One property a timeline poses, for deciding how clips mix.
@@ -248,6 +262,7 @@ pub(crate) enum Property {
     Attachment(usize),
     Deform(usize, usize),
     Event,
+    Constraint(usize),
 }
 
 pub(crate) struct Timeline {
@@ -286,6 +301,8 @@ pub struct Rig {
     pub(crate) animations: Vec<AnimationData>,
     pub(crate) events: Vec<EventData>,
     pub(crate) pages: Vec<Page>,
+    pub(crate) constraints: Vec<ConstraintData>,
+    pub(crate) constraint_bones: Bones,
 }
 
 const REGION_UV_TRIANGLES: [u32; 6] = [0, 1, 2, 2, 3, 0];
@@ -424,21 +441,24 @@ impl Names<'_> {
 impl Rig {
     /// Reads a `rigc-compiled/3` model document.
     ///
-    /// A document of another version, a rig with constraints and a rig with
-    /// clipping attachments are refused by name.
+    /// A document of another version, a rig with path, physics or slider
+    /// constraints and a rig with clipping attachments are refused by name.
     pub fn from_json(text: &str) -> Result<Rig, RigError> {
         let doc: Document =
             serde_json::from_str(text).map_err(|e| RigError::Json(e.to_string()))?;
         if doc.spec.as_deref() != Some(MODEL_SPEC) {
             return Err(RigError::Spec(doc.spec));
         }
-        if !doc.constraints.is_empty() {
-            return Err(RigError::Constraints(
-                doc.constraints
-                    .iter()
-                    .map(|c| (c.kind.clone(), c.name.clone()))
-                    .collect(),
-            ));
+        let mut later = Vec::new();
+        for raw in &doc.constraints {
+            let head: document::ConstraintHead = serde_json::from_str(raw.get())
+                .map_err(|e| RigError::Json(format!("constraint {}: {e}", raw.get())))?;
+            if !matches!(head.kind.as_str(), "ik" | "transform") {
+                later.push((head.kind, head.name));
+            }
+        }
+        if !later.is_empty() {
+            return Err(RigError::Constraints(later));
         }
         Self::read(&doc)
     }
@@ -490,8 +510,31 @@ impl Rig {
                     },
                 },
                 skin_required: b.skin_required,
+                length: b.length,
             });
         }
+
+        let mut constraints = Vec::with_capacity(doc.constraints.len());
+        for raw in &doc.constraints {
+            let c: document::Constraint = serde_json::from_str(raw.get())
+                .map_err(|e| RigError::Json(format!("constraint {}: {e}", raw.get())))?;
+            constraints.push(read_constraint(&c, &names)?);
+        }
+        let constraint_index = |kind: &str, name: &str, what: &str| -> Result<usize, RigError> {
+            constraints
+                .iter()
+                .position(|c: &ConstraintData| {
+                    c.name == name
+                        && matches!(
+                            (&c.kind, kind),
+                            (ConstraintKind::Ik(_), "ik")
+                                | (ConstraintKind::Transform(_), "transform")
+                        )
+                })
+                .ok_or_else(|| {
+                    RigError::Unresolved(format!("{what}: no {kind} constraint \"{name}\""))
+                })
+        };
 
         let mut slots = Vec::with_capacity(doc.slots.len());
         for s in &doc.slots {
@@ -580,10 +623,18 @@ impl Rig {
             for b in &skin.bones {
                 members.push(names.bone(b, &what)?);
             }
+            let mut listed = Vec::new();
+            for name in &skin.constraints.ik {
+                listed.push(constraint_index("ik", name, &what)?);
+            }
+            for name in &skin.constraints.transform {
+                listed.push(constraint_index("transform", name, &what)?);
+            }
             skins.push(SkinData {
                 name: skin.name.clone(),
                 bones: members,
                 table,
+                constraints: listed,
             });
         }
 
@@ -736,8 +787,13 @@ impl Rig {
                 &skins,
                 &attachments,
                 &event_index,
+                &constraint_index,
             )?);
         }
+        let constraint_bones = Bones::new(
+            bones.iter().map(|b| b.parent).collect(),
+            bones.iter().map(|b| b.length).collect(),
+        );
 
         Ok(Rig {
             bones,
@@ -749,8 +805,142 @@ impl Rig {
             animations,
             events,
             pages,
+            constraints,
+            constraint_bones,
         })
     }
+}
+
+const TRANSFORM_PROPERTIES: [&str; 6] = ["rotate", "x", "y", "scaleX", "scaleY", "shearY"];
+
+/// rig-c's `readConstraintRecord` for an ik or transform constraint, with
+/// rig-c's reading of each absent field.
+fn read_constraint(
+    c: &document::Constraint,
+    names: &Names<'_>,
+) -> Result<ConstraintData, RigError> {
+    let what = format!("{} constraint \"{}\"", c.kind, c.name);
+    let mut bones = Vec::with_capacity(c.bones.len());
+    for b in &c.bones {
+        bones.push(names.bone(b, &what)?);
+    }
+    let bone_ref = |name: &Option<String>, field: &str| -> Result<usize, RigError> {
+        let name = name.as_deref().unwrap_or_default();
+        names.bone(name, &format!("{what} {field}"))
+    };
+    if c.kind == "ik" {
+        let scale_y = match &c.scale_y {
+            None => IkScaleY::None,
+            Some(v) => match v.as_str().map(|s| fold(s, true)).as_deref() {
+                Some("none") => IkScaleY::None,
+                Some("uniform") => IkScaleY::Uniform,
+                Some("volume") => IkScaleY::Volume,
+                _ => {
+                    return Err(RigError::Unresolved(format!(
+                        "{what}: scaleY {v} is none of none, uniform, volume"
+                    )))
+                }
+            },
+        };
+        let mut flags = [false; 3];
+        flags[BEND_POSITIVE] = c.bend_positive.unwrap_or(true);
+        flags[COMPRESS] = c.compress;
+        flags[STRETCH] = c.stretch;
+        return Ok(ConstraintData {
+            name: c.name.clone(),
+            skin_required: c.skin,
+            kind: ConstraintKind::Ik(IkData {
+                bones,
+                target: bone_ref(&c.target, "target")?,
+                scale_y,
+            }),
+            setup: ConstraintValues {
+                values: [c.mix.unwrap_or(1.0), c.softness, 0.0, 0.0, 0.0, 0.0],
+                flags,
+            },
+        });
+    }
+    let property = |name: &str, at: &str| -> Result<usize, RigError> {
+        TRANSFORM_PROPERTIES
+            .iter()
+            .position(|p| *p == name)
+            .ok_or_else(|| RigError::Unresolved(format!("{what} {at}: \"{name}\" is no property")))
+    };
+    let mut from = Vec::with_capacity(c.properties.0.len());
+    let mut driven = [false; 6];
+    for (name, f) in &c.properties.0 {
+        let mut to = Vec::with_capacity(f.to.0.len());
+        for (to_name, t) in &f.to.0 {
+            let p = property(to_name, "properties")?;
+            driven[p] = true;
+            to.push(TransformTo {
+                property: p,
+                offset: t.offset,
+                scale: t.scale,
+                max: t.max,
+            });
+        }
+        from.push(TransformFrom {
+            property: property(name, "properties")?,
+            offset: f.offset,
+            to,
+        });
+    }
+    let scale_y_offset = c
+        .scale_y
+        .as_ref()
+        .and_then(serde_json::Value::as_f64)
+        .unwrap_or(0.0);
+    // An absent mix reads 1 for a driven property; `mixY` reads the resolved
+    // `mixX` when x is driven, `mixScaleY` the resolved `mixScaleX`.
+    let stated = [
+        c.mix_rotate,
+        c.mix_x,
+        c.mix_y,
+        c.mix_scale_x,
+        c.mix_scale_y,
+        c.mix_shear_y,
+    ];
+    let own = |p: usize| stated[p].unwrap_or(if driven[p] { 1.0 } else { 0.0 });
+    let mut mixes = [0.0; 6];
+    for (p, mix) in mixes.iter_mut().enumerate() {
+        *mix = match (p, stated[p]) {
+            (_, Some(m)) => m,
+            (2, None) => {
+                if driven[1] {
+                    own(1)
+                } else {
+                    0.0
+                }
+            }
+            (4, None) => {
+                if driven[3] {
+                    own(3)
+                } else {
+                    0.0
+                }
+            }
+            (p, None) => own(p),
+        };
+    }
+    Ok(ConstraintData {
+        name: c.name.clone(),
+        skin_required: c.skin,
+        kind: ConstraintKind::Transform(TransformData {
+            bones,
+            source: bone_ref(&c.source, "source")?,
+            from,
+            local_source: c.local_source,
+            local_target: c.local_target,
+            additive: c.additive,
+            clamp: c.clamp,
+            offsets: [c.rotation, c.x, c.y, c.scale_x, scale_y_offset, c.shear_y],
+        }),
+        setup: ConstraintValues {
+            values: mixes,
+            flags: [false; 3],
+        },
+    })
 }
 
 fn place<'a>(
@@ -904,6 +1094,7 @@ fn read_animation(
     skins: &[SkinData],
     attachments: &[AttachmentData],
     event_index: &HashMap<&str, usize>,
+    constraint_index: &dyn Fn(&str, &str, &str) -> Result<usize, RigError>,
 ) -> Result<AnimationData, RigError> {
     let what = format!("animation \"{}\"", a.name);
     let mut timelines = Vec::new();
@@ -1044,6 +1235,68 @@ fn read_animation(
             timelines.push(Timeline {
                 kind,
                 properties,
+                instant: false,
+            });
+        }
+    }
+
+    // rig-c's `readConstraintTimelines`: a key's absent mix reads 1, its
+    // softness 0, a transform key's `mixY` its own `mixX`; the ik flags are
+    // stepped, absent reading `bendPositive` and nothing else.
+    for (kind, list) in [
+        ("ik", &a.constraints.ik),
+        ("transform", &a.constraints.transform),
+    ] {
+        for tl in list {
+            let constraint = constraint_index(kind, &tl.name, &what)?;
+            let get = |k: &KeyMap, f: &str, default: f64| {
+                k.get(f)
+                    .and_then(serde_json::Value::as_f64)
+                    .unwrap_or(default)
+            };
+            let keys = number_keys(&tl.keys, |k| {
+                Ok(if kind == "ik" {
+                    vec![get(k, "mix", 1.0), get(k, "softness", 0.0)]
+                } else {
+                    let x = get(k, "mixX", 1.0);
+                    vec![
+                        get(k, "mixRotate", 1.0),
+                        x,
+                        get(k, "mixY", x),
+                        get(k, "mixScaleX", 1.0),
+                        get(k, "mixScaleY", 1.0),
+                        get(k, "mixShearY", 1.0),
+                    ]
+                })
+            })?;
+            let flag = |k: &KeyMap, f: &str, default: bool| {
+                k.get(f)
+                    .and_then(serde_json::Value::as_bool)
+                    .unwrap_or(default)
+            };
+            let flags = if kind == "ik" {
+                tl.keys
+                    .iter()
+                    .map(|k| {
+                        [
+                            flag(k, "bendPositive", true),
+                            flag(k, "compress", false),
+                            flag(k, "stretch", false),
+                        ]
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let kind = TimelineKind::Constraint {
+                constraint,
+                keys,
+                flags,
+            };
+            times.extend(timeline_times(&kind));
+            timelines.push(Timeline {
+                kind,
+                properties: vec![Property::Constraint(constraint)],
                 instant: false,
             });
         }
@@ -1191,9 +1444,9 @@ fn read_animation(
 
 fn timeline_times(kind: &TimelineKind) -> Vec<f64> {
     match kind {
-        TimelineKind::Bone { keys, .. } | TimelineKind::Colour { keys, .. } => {
-            keys.keys.iter().map(|k| k.time).collect()
-        }
+        TimelineKind::Bone { keys, .. }
+        | TimelineKind::Colour { keys, .. }
+        | TimelineKind::Constraint { keys, .. } => keys.keys.iter().map(|k| k.time).collect(),
         TimelineKind::Inherit { keys, .. } => keys.iter().map(|k| k.0).collect(),
         TimelineKind::Attachment { keys, .. } => keys.iter().map(|k| k.0).collect(),
         TimelineKind::Deform { keys, .. } => keys.keys.iter().map(|k| k.time).collect(),

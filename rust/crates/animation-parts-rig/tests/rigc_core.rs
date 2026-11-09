@@ -8,10 +8,20 @@
 
 use std::path::Path;
 
-use animation_parts_rig::{BlendMode, Play, Player, Pose, Rig};
+use animation_parts_rig::{BlendMode, BoneChannel, Play, Player, Pose, Rig};
 use serde_json::Value;
 
-const FIXTURES: [&str; 6] = ["squash", "turned", "flex", "portrait", "nod", "features"];
+const FIXTURES: [&str; 9] = [
+    "squash",
+    "turned",
+    "flex",
+    "portrait",
+    "nod",
+    "features",
+    "walk",
+    "constraints",
+    "townsperson",
+];
 
 fn fixture(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -203,6 +213,20 @@ fn poses_match_rigc_core() {
             if let Some(skin) = case["skin"].as_str() {
                 player.set_skin(&rig, Some(rig.find_skin(skin).unwrap()));
             }
+            for drive in case["drive"].as_array().into_iter().flatten() {
+                let bone = rig.find_bone(drive[0].as_str().unwrap()).unwrap();
+                let channel = match drive[1].as_str().unwrap() {
+                    "rotation" => BoneChannel::Rotation,
+                    "x" => BoneChannel::X,
+                    "y" => BoneChannel::Y,
+                    "scaleX" => BoneChannel::ScaleX,
+                    "scaleY" => BoneChannel::ScaleY,
+                    "shearX" => BoneChannel::ShearX,
+                    "shearY" => BoneChannel::ShearY,
+                    other => panic!("no channel {other}"),
+                };
+                player.drive(bone, channel, drive[2].as_f64());
+            }
             let at = format!(
                 "{name} {} (skin {})",
                 case["name"].as_str().unwrap(),
@@ -290,7 +314,7 @@ fn a_named_skin_activates_its_bone_and_slot() {
 }
 
 #[test]
-fn other_versions_and_constraints_are_refused_by_name() {
+fn other_versions_and_unevaluated_constraints_are_refused_by_name() {
     let text = fixture("squash.model.json");
     let older = text.replacen("\"rigc-compiled/3\"", "\"rigc-compiled/2\"", 1);
     let error = Rig::from_json(&older).err().unwrap().to_string();
@@ -299,14 +323,73 @@ fn other_versions_and_constraints_are_refused_by_name() {
         "{error}"
     );
 
-    let mut doc: Value = serde_json::from_str(&text).unwrap();
-    doc["constraints"] = serde_json::json!([
-        { "kind": "transform", "name": "head_turn", "declaredIn": "rig" },
-        { "kind": "ik", "name": "leg_ik", "declaredIn": "rig" }
-    ]);
+    let mut doc: Value = serde_json::from_str(&fixture("constraints.model.json")).unwrap();
+    let list = doc["constraints"].as_array_mut().unwrap();
+    list.push(serde_json::json!({ "kind": "physics", "name": "hair", "bone": "src", "x": 1 }));
+    list.push(serde_json::json!({ "kind": "slider", "name": "look", "animation": "hold" }));
+    list.push(serde_json::json!({ "kind": "path", "name": "rail", "bones": ["tw"] }));
     let error = Rig::from_json(&doc.to_string()).err().unwrap().to_string();
     assert!(
-        error.contains("transform \"head_turn\"") && error.contains("ik \"leg_ik\""),
+        error.contains("physics \"hair\"")
+            && error.contains("slider \"look\"")
+            && error.contains("path \"rail\"")
+            && !error.contains("ik")
+            && !error.contains("transform"),
         "{error}"
     );
+}
+
+/// rig-c's mixer refuses clips that key constraint timelines, so a
+/// crossfade from one has no oracle: the Engine blends their values like the
+/// clip's other numbers, and once the fade ends the pose is the new clip's
+/// alone.
+#[test]
+fn constraint_timelines_fade_out_with_their_clip() {
+    let rig = Rig::from_json(&fixture("constraints.model.json")).unwrap();
+    let (reach, hold) = (
+        rig.find_animation("reach").unwrap(),
+        rig.find_animation("hold").unwrap(),
+    );
+    let dt = 1.0 / 30.0;
+    let alone = {
+        let mut player = Player::new(&rig);
+        player.play(
+            hold,
+            Play {
+                looping: true,
+                crossfade: 0.0,
+            },
+        );
+        let mut pose = Pose::default();
+        player.advance(&rig, 0.0, &mut pose);
+        for _ in 0..30 {
+            player.advance(&rig, dt, &mut pose);
+        }
+        pose
+    };
+    let mut player = Player::new(&rig);
+    let mut pose = Pose::default();
+    player.play(
+        reach,
+        Play {
+            looping: true,
+            crossfade: 0.0,
+        },
+    );
+    player.advance(&rig, 0.0, &mut pose);
+    for _ in 0..12 {
+        player.advance(&rig, dt, &mut pose);
+    }
+    player.play(
+        hold,
+        Play {
+            looping: true,
+            crossfade: 0.4,
+        },
+    );
+    player.advance(&rig, 0.0, &mut pose);
+    for _ in 0..30 {
+        player.advance(&rig, dt, &mut pose);
+    }
+    assert_eq!(pose.bones, alone.bones);
 }

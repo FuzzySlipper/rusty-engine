@@ -2,6 +2,7 @@
 
 use std::ops::Range;
 
+use crate::constraints;
 use crate::mixer::{Mixer, Working};
 use crate::rig::{BlendMode, Geometry, Rig, TimelineKind, VertexData};
 use crate::timeline::{key_index_at, order_of, sequence_frame_at};
@@ -62,16 +63,34 @@ pub struct Play {
     pub crossfade: f64,
 }
 
+/// One of a bone's local values, as a product drives it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoneChannel {
+    /// Degrees counter-clockwise.
+    Rotation,
+    X,
+    Y,
+    ScaleX,
+    ScaleY,
+    ShearX,
+    ShearY,
+}
+
 /// One instance of a rig playing one clip at a time.
 ///
 /// Each [`Player::advance`] moves the track by a step and poses the rig
-/// once from its setup pose.
+/// once from its setup pose: the clips, then the driven values, then the
+/// bones' world transforms and the constraints.
 pub struct Player {
     mixer: Mixer,
     working: Working,
     skin: Option<usize>,
     order: Vec<usize>,
     parents: Vec<Option<usize>>,
+    /// Which constraints the skin applies.
+    applied: Vec<bool>,
+    driven: Vec<(usize, BoneChannel, f64)>,
+    scratch: constraints::Scratch,
 }
 
 impl Player {
@@ -83,6 +102,9 @@ impl Player {
             skin: None,
             order: Vec::new(),
             parents: rig.bones.iter().map(|b| b.parent).collect(),
+            applied: Vec::new(),
+            driven: Vec::new(),
+            scratch: constraints::Scratch::default(),
         };
         player.set_skin(rig, None);
         player
@@ -90,8 +112,15 @@ impl Player {
 
     /// Shows a named skin, falling back to the default skin for slots it
     /// does not fill; `None` shows the default skin alone. A skin-required
-    /// bone is active only under a skin that names it or a bone below it.
+    /// bone is active only under a skin that names it or a bone below it,
+    /// and a skin-required constraint applies only under a skin that lists
+    /// it.
     pub fn set_skin(&mut self, rig: &Rig, skin: Option<usize>) {
+        self.applied.clear();
+        self.applied
+            .extend(rig.constraints.iter().enumerate().map(|(i, c)| {
+                !c.skin_required || skin.is_some_and(|s| rig.skins[s].constraints.contains(&i))
+            }));
         self.skin = skin;
         let w = &mut self.working;
         w.lookup.clear();
@@ -131,6 +160,18 @@ impl Player {
         self.mixer.set(None, false, crossfade);
     }
 
+    /// Holds one of a bone's local values at `value` on every step, written
+    /// over what the clips posed and before the world transforms and the
+    /// constraints read it, as rig-c's `adjust` does; `None` lets the clips
+    /// pose it again. A product's driving value, such as a `turn` bone that
+    /// transform constraints read.
+    pub fn drive(&mut self, bone: usize, channel: BoneChannel, value: Option<f64>) {
+        self.driven.retain(|d| (d.0, d.1) != (bone, channel));
+        if let Some(value) = value {
+            self.driven.push((bone, channel, value));
+        }
+    }
+
     /// The playing clip, if any.
     pub fn playing(&self) -> Option<usize> {
         self.mixer.chain.first().and_then(|e| e.animation)
@@ -142,9 +183,33 @@ impl Player {
         self.mixer.update(dt);
         self.working.reset(rig);
         let animation_time = self.mixer.apply(rig, &mut self.working);
-        let w = &self.working;
+        let w = &mut self.working;
+        for &(bone, channel, value) in &self.driven {
+            let local = &mut w.locals[bone];
+            *match channel {
+                BoneChannel::Rotation => &mut local.rotation,
+                BoneChannel::X => &mut local.x,
+                BoneChannel::Y => &mut local.y,
+                BoneChannel::ScaleX => &mut local.scale_x,
+                BoneChannel::ScaleY => &mut local.scale_y,
+                BoneChannel::ShearX => &mut local.shear_x,
+                BoneChannel::ShearY => &mut local.shear_y,
+            } = value;
+        }
 
         world_transforms(&w.locals, &self.parents, &w.active, &mut pose.bones);
+        if !rig.constraints.is_empty() {
+            constraints::apply(
+                rig,
+                &w.constraints,
+                &self.applied,
+                &mut w.locals,
+                &mut pose.bones,
+                &w.active,
+                &mut self.scratch,
+            );
+        }
+        let w = &self.working;
 
         // Draw order and sequence frames follow the playing clip.
         let playing = self

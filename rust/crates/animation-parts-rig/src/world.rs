@@ -7,7 +7,7 @@
 #[allow(clippy::approx_constant)]
 pub(crate) const RUNTIME_PI: f64 = 3.1415927;
 pub(crate) const RAD: f64 = RUNTIME_PI / 180.0;
-const DEG: f64 = 180.0 / RUNTIME_PI;
+pub(crate) const DEG: f64 = 180.0 / RUNTIME_PI;
 const COLLAPSED_X_AXIS_SQ: f64 = 0.00001 * 0.00001;
 
 /// How much of its parent's world transform a bone takes.
@@ -47,7 +47,7 @@ pub struct BoneWorld {
     pub y: f64,
 }
 
-type M2 = [f64; 4];
+pub(crate) type M2 = [f64; 4];
 
 fn frame(rotation: f64, shear_x: f64, shear_y: f64, scale_x: f64, scale_y: f64) -> M2 {
     let x_angle = (rotation + shear_x) * RAD;
@@ -67,6 +67,17 @@ fn times(p: M2, q: M2) -> M2 {
         p[2] * q[0] + p[3] * q[2],
         p[2] * q[1] + p[3] * q[3],
     ]
+}
+
+/// rig-c's `noScaleDirection`: the parent's matrix turned by `rotation`
+/// degrees and its x column normalised.
+pub(crate) fn no_scale_direction(p: M2, rotation: f64) -> (f64, f64) {
+    let r = rotation * RAD;
+    let (cos, sin) = (r.cos(), r.sin());
+    let ux = p[0] * cos + p[1] * sin;
+    let uy = p[2] * cos + p[3] * sin;
+    let inverse = 1.0 / (ux * ux + uy * uy).sqrt();
+    (ux * inverse, uy * inverse)
 }
 
 fn mode_matrix(parent: &BoneWorld, bone: &Local) -> M2 {
@@ -110,12 +121,7 @@ fn mode_matrix(parent: &BoneWorld, bone: &Local) -> M2 {
             )
         }
         Inherit::NoScale | Inherit::NoScaleOrReflection => {
-            let r = bone.rotation * RAD;
-            let (cos, sin) = (r.cos(), r.sin());
-            let ux = p[0] * cos + p[1] * sin;
-            let uy = p[2] * cos + p[3] * sin;
-            let inverse = 1.0 / (ux * ux + uy * uy).sqrt();
-            let (ux, uy) = (ux * inverse, uy * inverse);
+            let (ux, uy) = no_scale_direction(p, bone.rotation);
             let flip = if bone.inherit == Inherit::NoScale && p[0] * p[3] - p[1] * p[2] < 0.0 {
                 -1.0
             } else {
@@ -130,6 +136,40 @@ fn mode_matrix(parent: &BoneWorld, bone: &Local) -> M2 {
     }
 }
 
+/// One bone's world transform from its local values, under its parent's.
+pub(crate) fn pose_bone(bone: &Local, parent: Option<&BoneWorld>) -> BoneWorld {
+    match parent {
+        None => {
+            let [a, b, c, d] = frame(
+                bone.rotation,
+                bone.shear_x,
+                bone.shear_y,
+                bone.scale_x,
+                bone.scale_y,
+            );
+            BoneWorld {
+                a,
+                b,
+                c,
+                d,
+                x: bone.x,
+                y: bone.y,
+            }
+        }
+        Some(p) => {
+            let [a, b, c, d] = mode_matrix(p, bone);
+            BoneWorld {
+                a,
+                b,
+                c,
+                d,
+                x: p.a * bone.x + p.b * bone.y + p.x,
+                y: p.c * bone.x + p.d * bone.y + p.y,
+            }
+        }
+    }
+}
+
 /// Every bone's world transform, parents before children. `active` says
 /// which bones the applied skin keeps.
 pub(crate) fn world_transforms(
@@ -140,40 +180,10 @@ pub(crate) fn world_transforms(
 ) {
     out.clear();
     for (i, bone) in locals.iter().enumerate() {
-        if !active[i] {
-            out.push(BoneWorld::default());
-            continue;
-        }
-        let world = match parents[i] {
-            None => {
-                let [a, b, c, d] = frame(
-                    bone.rotation,
-                    bone.shear_x,
-                    bone.shear_y,
-                    bone.scale_x,
-                    bone.scale_y,
-                );
-                BoneWorld {
-                    a,
-                    b,
-                    c,
-                    d,
-                    x: bone.x,
-                    y: bone.y,
-                }
-            }
-            Some(parent) => {
-                let p = out[parent];
-                let [a, b, c, d] = mode_matrix(&p, bone);
-                BoneWorld {
-                    a,
-                    b,
-                    c,
-                    d,
-                    x: p.a * bone.x + p.b * bone.y + p.x,
-                    y: p.c * bone.x + p.d * bone.y + p.y,
-                }
-            }
+        let world = if active[i] {
+            pose_bone(bone, parents[i].map(|p| &out[p]))
+        } else {
+            BoneWorld::default()
         };
         out.push(world);
     }
