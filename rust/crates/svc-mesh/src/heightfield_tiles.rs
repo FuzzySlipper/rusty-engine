@@ -580,40 +580,29 @@ fn ray_box(origin: [f64; 3], direction: [f64; 3], min: [f64; 3], max: [f64; 3]) 
 const HELP_AFTER: Duration = Duration::from_millis(2);
 
 /// `work` over `items`, in order: on the calling thread until it has worked
-/// [`HELP_AFTER`], then the rest on scoped threads, a few items each.
+/// [`HELP_AFTER`], then the rest on the shared worker pool, a few items each.
+/// The pool's threads outlive the call: starting a thread costs milliseconds
+/// on Windows, where a call that started its own spent most of its time doing
+/// that (#10701).
 pub fn in_parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    use rayon::prelude::*;
+    const PER_THREAD: usize = 2;
     let started = Instant::now();
     let mut results = Vec::with_capacity(items.len());
     for (index, item) in items.iter().enumerate() {
         results.push(work(item));
         if started.elapsed() >= HELP_AFTER {
-            results.extend(on_threads(&items[index + 1..], &work));
+            let work = &work;
+            results.par_extend(
+                items[index + 1..]
+                    .par_iter()
+                    .with_min_len(PER_THREAD)
+                    .map(work),
+            );
             break;
         }
     }
     results
-}
-
-/// `work` over `items` on scoped threads, a few items each, in order.
-fn on_threads<T: Sync, R: Send>(items: &[T], work: &(impl Fn(&T) -> R + Sync)) -> Vec<R> {
-    const PER_THREAD: usize = 2;
-    let threads = std::thread::available_parallelism()
-        .map_or(1, |cores| cores.get())
-        .min(items.len().div_ceil(PER_THREAD));
-    if threads <= 1 {
-        return items.iter().map(work).collect();
-    }
-    let chunk = items.len().div_ceil(threads);
-    std::thread::scope(|scope| {
-        let handles: Vec<_> = items
-            .chunks(chunk)
-            .map(|slice| scope.spawn(move || slice.iter().map(work).collect::<Vec<R>>()))
-            .collect();
-        handles
-            .into_iter()
-            .flat_map(|handle| handle.join().expect("heightfield meshing panicked"))
-            .collect()
-    })
 }
 
 #[cfg(test)]

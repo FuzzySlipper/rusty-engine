@@ -11,3 +11,4 @@ core-space  = { path = "../core-space" }
 core-voxel  = { path = "../core-voxel" }
 svc-volume  = { path = "../svc-volume" }
 svc-spatial = { path = "../svc-spatial" }
+rayon       = "1.10"

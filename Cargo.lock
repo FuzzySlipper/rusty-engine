@@ -11530,6 +11530,7 @@ version = "0.1.0"
 dependencies = [
  "core-space",
  "core-voxel",
+ "rayon",
  "svc-spatial",
  "svc-volume",
 ]
