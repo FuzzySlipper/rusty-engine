@@ -15,7 +15,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::heightfield::{
     mesh_tile, HeightfieldLayout, TileHit, TileKey, TileMesh, TileRect, TileSamples, TileSurface,
@@ -548,8 +548,30 @@ fn ray_box(origin: [f64; 3], direction: [f64; 3], min: [f64; 3], max: [f64; 3]) 
     (enter <= leave).then_some(enter)
 }
 
-/// `work` over `items` on scoped threads, a few items each, in order.
+/// How long a call works through its items alone before other threads help
+/// with the rest. Handing items to threads costs the caller a few
+/// milliseconds whatever the work (4-6 ms per call on den-agents, #10700),
+/// while most calls mesh or place a few cheap items well under that, so they
+/// stay on the calling thread.
+const HELP_AFTER: Duration = Duration::from_millis(2);
+
+/// `work` over `items`, in order: on the calling thread until it has worked
+/// [`HELP_AFTER`], then the rest on scoped threads, a few items each.
 pub fn in_parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let started = Instant::now();
+    let mut results = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        results.push(work(item));
+        if started.elapsed() >= HELP_AFTER {
+            results.extend(on_threads(&items[index + 1..], &work));
+            break;
+        }
+    }
+    results
+}
+
+/// `work` over `items` on scoped threads, a few items each, in order.
+fn on_threads<T: Sync, R: Send>(items: &[T], work: &(impl Fn(&T) -> R + Sync)) -> Vec<R> {
     const PER_THREAD: usize = 2;
     let threads = std::thread::available_parallelism()
         .map_or(1, |cores| cores.get())
@@ -558,7 +580,6 @@ pub fn in_parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync)
         return items.iter().map(work).collect();
     }
     let chunk = items.len().div_ceil(threads);
-    let work = &work;
     std::thread::scope(|scope| {
         let handles: Vec<_> = items
             .chunks(chunk)
