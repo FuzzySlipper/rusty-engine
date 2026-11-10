@@ -553,9 +553,11 @@ mod tests {
 
     #[test]
     fn a_plain_scene_offers_every_feature_it_leaves_off_then_everything() {
+        // Clustered lighting is on by default; this scene turns it off.
         let settings = RendererSettingsDescriptor {
             antialiasing: render_model::Antialiasing::Msaa2,
             render_scale: 0.75,
+            clustered_lighting: false,
             ..RendererSettingsDescriptor::DEFAULT
         };
         let ids: Vec<String> = plan(&settings, Some([1.0, 2.0, 3.0]), false, false)
