@@ -890,24 +890,38 @@ impl std::ops::DerefMut for HeldScene<'_> {
 
 impl Drop for HeldScene<'_> {
     fn drop(&mut self) {
+        // The readings are read from the renderer before the small lock is
+        // taken, which then only swaps them in: nothing the runtime calls
+        // waits on the renderer through it.
         let scene = &mut *self.scene;
+        let mut readings = Readings {
+            settings: scene.renderer.settings_readout(),
+            preparation: scene.renderer.preparation_readout(),
+            gpu: scene.renderer.gpu_readout(),
+            scatter: scene.renderer.scatter_upload_readout(),
+            skipped_ops: scene.skipped_ops.clone(),
+            last_skip: scene.last_skip.clone(),
+            landmarks: (scene.step, scene.renderer.landmark_sets()),
+            ghost_plates: scene.renderer.ghost_plate_readouts(),
+            shadows: scene.renderer.shadow_report(),
+            collision: scene.overlay_shown.collision,
+            animation_facts: std::mem::take(&mut scene.animation_facts),
+            video_facts: std::mem::take(&mut scene.video_facts),
+        };
+        let changed = std::mem::take(&mut scene.changed);
         let mut beside = self.driver.beside();
-        let readings = &mut beside.readings;
-        readings.settings = scene.renderer.settings_readout();
-        readings.preparation = scene.renderer.preparation_readout();
-        readings.gpu = scene.renderer.gpu_readout();
-        readings.scatter = scene.renderer.scatter_upload_readout();
-        readings.skipped_ops.clone_from(&scene.skipped_ops);
-        readings.last_skip.clone_from(&scene.last_skip);
-        readings.landmarks = (scene.step, scene.renderer.landmark_sets());
-        readings.ghost_plates = scene.renderer.ghost_plate_readouts();
-        readings.shadows = scene.renderer.shadow_report();
-        readings.collision = scene.overlay_shown.collision;
-        readings.animation_facts.append(&mut scene.animation_facts);
-        readings.video_facts.append(&mut scene.video_facts);
-        if std::mem::take(&mut scene.changed) {
-            beside.changed = true;
-            drop(beside);
+        // Facts the runtime has not taken yet come first.
+        let mut animation = std::mem::take(&mut beside.readings.animation_facts);
+        animation.append(&mut readings.animation_facts);
+        readings.animation_facts = animation;
+        let mut video = std::mem::take(&mut beside.readings.video_facts);
+        video.append(&mut readings.video_facts);
+        readings.video_facts = video;
+        let replaced = std::mem::replace(&mut beside.readings, readings);
+        beside.changed |= changed;
+        drop(beside);
+        drop(replaced);
+        if changed {
             self.driver.wake.notify_all();
         }
     }
