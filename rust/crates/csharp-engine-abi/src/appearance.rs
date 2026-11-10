@@ -294,6 +294,10 @@ pub enum NativeSpriteAlphaMode {
     Blend = 2,
 }
 
+/// Whether a world-sized sprite or parts rig casts into the lights' shadow
+/// maps (`Cast`, `CastAndReceive`): its texels that reach the alpha cutoff,
+/// its plane turned to each light. A lit sprite receives shadows whatever
+/// this says.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum NativeSpriteShadowPolicy {

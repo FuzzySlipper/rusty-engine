@@ -7,6 +7,9 @@ Package-consumer fixture for [parts rigs](../../docs/parts-rigs.md).
   mirrored). The Engine draws the view each camera sees; all four walk on one
   clip time. Over the walk on track 0, the rig's `idle` (its breathing,
   head and hair sway) is added on track 1.
+  Her material casts (`SpriteShadowPolicy.CastAndReceive`): a low sun at her
+  front left throws her walking figure across the floor, from the view
+  nearest the sun's bearing, whichever view the camera sees.
 - Beside it, rig-c's gallery `features` rig (MIT, `content/people/features`,
   the same rig as `animation-parts-rig`'s fixture) loops clip `a`, which
   fires `step` and `cue` events, with clip `b` added over it on track 1 at

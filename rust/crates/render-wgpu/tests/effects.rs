@@ -2891,3 +2891,54 @@ fn a_heading_aligned_sprite_turns_with_the_view_not_with_the_eye() {
         );
     }
 }
+
+/// The floor under a masked sprite standing on it, lit by a sun from its
+/// side that casts, the sprite's material casting as `shadow` asks.
+fn sprite_shadow(shadow: SpriteShadowPolicy) -> Vec<u8> {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    let mut ops = scene();
+    ops.extend(atlas_ops(&mut harness.resources));
+    let mut standing = sprite(0, [0.0, 0.0, -5.0], BillboardMode::Cylindrical);
+    standing.material.alpha = SpriteAlphaMode::Mask { cutoff: 0.5 };
+    standing.material.shadow = shadow;
+    ops.push(create(10, standing));
+    ops.push(RenderDiff::CreateLight {
+        handle: RenderHandle::new(20),
+        parent: None,
+        light: LightDescriptor::Directional {
+            color: [1.0, 1.0, 1.0],
+            intensity: 3.0,
+            enabled: true,
+            direction: [-1.0, -0.6, 0.0],
+            range: None,
+            shadow_intent: LightShadowIntent::Requested,
+            shadow: Default::default(),
+        },
+    });
+    harness.apply(ops);
+    harness.single(&camera("above", [0.0, 4.0, -1.5], 0.0, -60.0))
+}
+
+#[test]
+fn a_sprite_whose_material_casts_shadows_the_floor_with_its_quad_turned_to_the_sun() {
+    // The camera sees the sprite face on and the sun lights it from its
+    // side: only a plane turned to the sun casts more than a line.
+    let none = sprite_shadow(SpriteShadowPolicy::None);
+    let receive = sprite_shadow(SpriteShadowPolicy::Receive);
+    let cast = sprite_shadow(SpriteShadowPolicy::Cast);
+    assert_eq!(
+        differing_pixels(&receive, &none),
+        0,
+        "a sprite that only receives casts nothing"
+    );
+    let shadow = differing_pixels(&cast, &none);
+    assert!(
+        shadow > 400,
+        "the sprite's shadow darkens {shadow} floor pixels"
+    );
+    assert_screenshot("sprite_shadow", WIDTH, HEIGHT, &cast);
+}

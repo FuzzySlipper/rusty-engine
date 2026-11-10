@@ -1996,3 +1996,73 @@ fn each_camera_draws_the_rig_view_nearest_its_bearing_and_mirrored_views_flip() 
         "{differing} of {covered} drawn pixels differ from the flipped drawing"
     );
 }
+
+/// The floor where the squash stands, lit by a sun from `sun` (toward the
+/// floor) that casts, the squash's material casting as `shadow` asks, seen
+/// from above and in front.
+fn squash_shadow(sun: [f32; 3], shadow: SpriteShadowPolicy) -> Vec<u8> {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    let mut ops = coloured_mesh("floor", floor(12.0), [0.7, 0.7, 0.7, 1.0]);
+    ops.push(instance(
+        1,
+        None,
+        "floor",
+        transform([0.0, 0.0, -5.0], 0.0, 1.0),
+    ));
+    let (rig, squash) = squash_ops(&mut harness.resources);
+    ops.extend(squash);
+    let mut standing = figure(
+        BillboardMode::Cylindrical,
+        [-400.0 * RIG_SCALE, 0.0, -5.0],
+        0.0,
+    );
+    standing.material.shadow = shadow;
+    ops.extend(create(10, standing, &squash_pose(&rig, 5)));
+    ops.push(RenderDiff::CreateLight {
+        handle: RenderHandle::new(20),
+        parent: None,
+        light: LightDescriptor::Directional {
+            color: [1.0, 1.0, 1.0],
+            intensity: 3.0,
+            enabled: true,
+            direction: sun,
+            range: None,
+            shadow_intent: LightShadowIntent::Requested,
+            shadow: Default::default(),
+        },
+    });
+    harness.apply(ops);
+    harness.single(&camera("above", [0.0, 5.0, -1.0], 0.0, -60.0))
+}
+
+#[test]
+fn a_rig_whose_material_casts_shadows_the_floor_with_its_figure_turned_to_the_sun() {
+    // The sun low behind the camera's right, then from the rig's side: the
+    // camera sees the plane face on both times, and only a plane turned to
+    // the sun casts its whole figure from the side.
+    let [behind, side] =
+        [("behind", [-0.4, -0.6, -0.7]), ("side", [-1.0, -0.6, 0.0])].map(|(name, sun)| {
+            let none = squash_shadow(sun, SpriteShadowPolicy::None);
+            let receive = squash_shadow(sun, SpriteShadowPolicy::Receive);
+            let cast = squash_shadow(sun, SpriteShadowPolicy::CastAndReceive);
+            assert_eq!(
+                differing_pixels(&receive, &none),
+                0,
+                "{name}: a rig that only receives casts nothing"
+            );
+            assert_screenshot(&format!("parts_rig_shadow_{name}"), WIDTH, HEIGHT, &cast);
+            differing_pixels(&cast, &none)
+        });
+    assert!(
+        behind > 250,
+        "the rig's shadow darkens {behind} floor pixels"
+    );
+    assert!(
+        side > behind / 2,
+        "from the side it still casts its figure: {side} pixels, {behind} from behind"
+    );
+}

@@ -48,7 +48,7 @@ use crate::particles::{EntityPositions, ParticleIssue};
 use crate::parts_rigs::{RigGeometry, RigRun, RIG_VERTEX_BYTES};
 use crate::pipelines::VERTEX_FLOATS;
 use crate::resources::{self, ResourceSource};
-use crate::tables::{GpuMesh, GpuTexture, NodeKind, SpriteRow};
+use crate::tables::{AtlasRow, GpuMesh, GpuTexture, NodeKind, SpriteRow};
 use crate::target::{ColorTarget, DEPTH_FORMAT};
 use crate::{ApplyIssue, Gpu, Renderer};
 
@@ -144,6 +144,16 @@ impl SpriteDraw {
 
 /// One view of a parts rig node: the node and the view's index.
 type RigKey = (RenderHandle, u32);
+
+/// A sprite or parts rig drawn into one shadow layer (`effects.wgsl`
+/// `vs_sprite_caster`): its row in the caster rows, placed as the layer's
+/// light sees it, and its textures, or the view of the rig the light sees.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SpriteCaster {
+    instance: u32,
+    textures: SpriteTextures,
+    rig: Option<RigKey>,
+}
 
 /// What one view pass draws of this family, prepared before the pass.
 #[derive(Default)]
@@ -354,6 +364,11 @@ pub(crate) struct Effects {
     cube_rows: Rows,
     formats: Vec<FormatPipelines>,
     sprite_bind_groups: HashMap<SpriteTextures, wgpu::BindGroup>,
+    /// The rows of the sprites and rigs that cast, as each shadow layer's
+    /// light places them, and their pipelines (sprite, rig), made when one
+    /// first casts.
+    caster_rows: Rows,
+    caster_pipelines: Option<[wgpu::RenderPipeline; 2]>,
     /// Sprite batches' buffers, by node.
     batches: HashMap<RenderHandle, BatchBuffers>,
     /// Parts rigs' buffers, by node and view.
@@ -495,6 +510,8 @@ impl Effects {
             cube_rows: Rows::new(device, "render-wgpu particle cube rows"),
             formats: Vec::new(),
             sprite_bind_groups: HashMap::new(),
+            caster_rows: Rows::new(device, "render-wgpu sprite caster rows"),
+            caster_pipelines: None,
             batches: HashMap::new(),
             rigs: HashMap::new(),
             rig_scratch: RigGeometry::default(),
@@ -548,6 +565,8 @@ impl Effects {
     /// row placing its plane. None when that view has no pose, drawing or
     /// piece to draw, or no size this view. `anchored` is a placed rig's
     /// rectangle at the rect its UI anchor reports, while the page reports it.
+    /// `render_scale` is the view's, by which a rig on a screen-pixel grid is
+    /// placed on it; None places none (a shadow layer's light).
     fn prepare_rig(
         &mut self,
         gpu: &Gpu,
@@ -560,7 +579,7 @@ impl Effects {
             PixelRect,
             f32,
             Option<SpriteViewportPlacement>,
-            f32,
+            Option<f32>,
         ),
     ) -> Option<SpriteDraw> {
         let descriptor = &rig.descriptor;
@@ -699,10 +718,10 @@ impl Effects {
             model.transform_point3(Vec3::new((x0 + x1) * 0.5 * mirror, (y0 + y1) * 0.5, 0.0));
         // On a screen-pixel grid: blocks of whole output pixels, so of the
         // render pixels a scaled view draws in, at least one.
-        let grid = match descriptor.pixel_grid {
-            0 => None,
+        let grid = match (descriptor.pixel_grid, render_scale) {
+            (0, _) | (_, None) => None,
             _ if descriptor.viewport_placement.is_some() => None,
-            pixels => {
+            (pixels, Some(render_scale)) => {
                 let side = ((pixels as f32 * render_scale).round() as u32).max(1);
                 let bounds = if view.mirror {
                     [-x1, y0, -x0, y1]
@@ -1281,6 +1300,142 @@ impl Effects {
         }
     }
 
+    /// Make the caster pipelines, sprite and rig, over the shadow pass's
+    /// casters group (0) and layer (2): depth only, biased as mesh casters
+    /// are, both faces.
+    fn ensure_caster_pipelines(
+        &mut self,
+        device: &wgpu::Device,
+        casters: &wgpu::BindGroupLayout,
+        layer: &wgpu::BindGroupLayout,
+    ) {
+        if self.caster_pipelines.is_some() {
+            return;
+        }
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("render-wgpu sprite caster"),
+            bind_group_layouts: &[Some(casters), Some(&self.sprite_layout), Some(layer)],
+            immediate_size: 0,
+        });
+        let row = wgpu::vertex_attr_array![
+            1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4,
+            5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4,
+            9 => Float32x4, 10 => Float32x4
+        ];
+        let corner = wgpu::vertex_attr_array![0 => Float32x2];
+        let piece = wgpu::vertex_attr_array![
+            0 => Float32x2, 11 => Float32x2, 12 => Unorm8x4, 13 => Unorm8x4, 14 => Unorm16x4
+        ];
+        let pipeline = |entry, first: wgpu::VertexBufferLayout<'_>, topology| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("render-wgpu sprite caster"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &self.shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    buffers: &[
+                        Some(first),
+                        Some(wgpu::VertexBufferLayout {
+                            array_stride: (SPRITE_ROW_FLOATS * 4) as u64,
+                            step_mode: wgpu::VertexStepMode::Instance,
+                            attributes: &row,
+                        }),
+                    ],
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    stencil: Default::default(),
+                    bias: wgpu::DepthBiasState {
+                        constant: 0,
+                        slope_scale: crate::pipelines::CASTER_SLOPE_BIAS,
+                        clamp: 0.0,
+                    },
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &self.shader,
+                    entry_point: Some("fs_sprite_caster"),
+                    compilation_options: Default::default(),
+                    targets: &[],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        self.caster_pipelines = Some([
+            pipeline(
+                "vs_sprite_caster",
+                wgpu::VertexBufferLayout {
+                    array_stride: 8,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &corner,
+                },
+                wgpu::PrimitiveTopology::TriangleStrip,
+            ),
+            pipeline(
+                "vs_parts_rig_caster",
+                wgpu::VertexBufferLayout {
+                    array_stride: RIG_VERTEX_BYTES,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &piece,
+                },
+                wgpu::PrimitiveTopology::TriangleList,
+            ),
+        ]);
+    }
+
+    /// Draw one shadow layer's sprite and rig casters into `pass`, its
+    /// casters group and layer already bound. Returns the draws.
+    pub fn draw_casters(&self, pass: &mut wgpu::RenderPass<'_>, casters: &[SpriteCaster]) -> u32 {
+        let Some([sprite_pipeline, rig_pipeline]) = &self.caster_pipelines else {
+            return 0;
+        };
+        let mut draws = 0;
+        pass.set_vertex_buffer(1, self.caster_rows.buffer.slice(..));
+        for caster in casters {
+            let instance = caster.instance..caster.instance + 1;
+            match caster.rig.and_then(|key| self.rigs.get(&key)) {
+                Some(rig) => {
+                    pass.set_pipeline(rig_pipeline);
+                    pass.set_vertex_buffer(0, rig.vertices.slice(..));
+                    pass.set_index_buffer(rig.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    for run in &rig.runs {
+                        if let Some(bind_group) =
+                            self.sprite_bind_groups.get(&rig_textures(run, rig.detail))
+                        {
+                            pass.set_bind_group(1, bind_group, &[]);
+                            pass.draw_indexed(
+                                run.first..run.first + run.count,
+                                0,
+                                instance.clone(),
+                            );
+                            draws += 1;
+                        }
+                    }
+                }
+                None if caster.rig.is_none() => {
+                    let Some(bind_group) = self.sprite_bind_groups.get(&caster.textures) else {
+                        continue;
+                    };
+                    pass.set_pipeline(sprite_pipeline);
+                    pass.set_vertex_buffer(0, self.corners.slice(..));
+                    pass.set_bind_group(1, bind_group, &[]);
+                    pass.draw(0..4, instance);
+                    draws += 1;
+                }
+                None => {}
+            }
+        }
+        draws
+    }
+
     /// Draw the rigs placed in the viewport into the view's finished image,
     /// after its finish, in a pass of their own over it (`finished` its
     /// format): no depth, one sample a pixel.
@@ -1510,6 +1665,25 @@ fn sprite_state(sprite: &SpriteInstanceDescriptor) -> (SpriteState, f32) {
     )
 }
 
+/// The alpha a caster's texels reach to cover the shadow: a masked
+/// material's cutoff, half for a blended one (its silhouette), none for an
+/// opaque one, which covers its whole quad.
+fn caster_cutoff(alpha: SpriteAlphaMode) -> f32 {
+    match alpha {
+        SpriteAlphaMode::Opaque => 0.0,
+        SpriteAlphaMode::Mask { cutoff } => cutoff,
+        SpriteAlphaMode::Blend => 0.5,
+    }
+}
+
+/// Whether a material asks its sprite or rig to cast.
+fn casts(material: &render_model::SpriteMaterialDescriptor) -> bool {
+    matches!(
+        material.shadow,
+        render_model::SpriteShadowPolicy::Cast | render_model::SpriteShadowPolicy::CastAndReceive
+    )
+}
+
 /// Lighting mode, strength and bias as `effects.wgsl` reads them, and the
 /// detail texture it samples.
 fn sprite_lighting(sprite: &SpriteRow, color: Option<u32>) -> ([f32; 3], Option<u32>) {
@@ -1685,6 +1859,53 @@ impl Renderer {
 }
 
 /// The sprite's world quad for this camera: model matrix and plane rectangle.
+/// A single sprite's row as `camera` places it (`effects.wgsl` `SpriteIn`),
+/// with its model matrix, its textures and its pipeline state; None when it
+/// has no place in that view.
+fn sprite_row(
+    resolved: &SpriteRow,
+    atlas: Option<&AtlasRow>,
+    world: &Mat4,
+    camera: &CameraMatrices,
+    viewport: PixelRect,
+    pixel_ratio: f32,
+) -> Option<(Mat4, [f32; SPRITE_ROW_FLOATS], SpriteTextures, SpriteState)> {
+    let sprite = &resolved.descriptor;
+    let rect = atlas.and_then(|atlas| atlas.descriptor.frame_rect(sprite.frame));
+    let uv = rect.map_or([0.0, 0.0, 1.0, 1.0], |rect| {
+        [
+            rect.uv_min[0],
+            rect.uv_min[1],
+            rect.uv_max[0],
+            rect.uv_max[1],
+        ]
+    });
+    let frame_size = rect.and_then(|rect| rect.size).unwrap_or(sprite.size);
+    let (model, quad) = sprite_quad(sprite, world, frame_size, camera, viewport, pixel_ratio)?;
+    let color = atlas.map(|atlas| atlas.texture);
+    let ([mode, strength, bias], detail) = sprite_lighting(resolved, color);
+    let (state, cutoff) = sprite_state(sprite);
+    let mut row = [0.0; SPRITE_ROW_FLOATS];
+    row[..16].copy_from_slice(&model.to_cols_array());
+    row[16..20].copy_from_slice(&uv);
+    row[20..24].copy_from_slice(&sprite.tint);
+    row[24..28].copy_from_slice(&quad);
+    row[28..32].copy_from_slice(&[mode, cutoff, strength, bias]);
+    row[32..36].copy_from_slice(&[
+        sprite.material.softness_metres,
+        f32::from(state.additive),
+        0.0,
+        f32::from(sprite.material.wind_whole_texels),
+    ]);
+    row[36..40].copy_from_slice(&sprite_emission(sprite));
+    Some((
+        model,
+        row,
+        (color, detail, resolved.tint_mask, resolved.emission_map),
+        state,
+    ))
+}
+
 fn sprite_quad(
     sprite: &SpriteInstanceDescriptor,
     world: &Mat4,
@@ -2240,6 +2461,138 @@ impl Renderer {
             .unwrap_or(&self.white)
     }
 
+    /// Place each shown scene sprite and parts rig whose material casts as
+    /// each world shadow layer's light sees it (`ShadowLayer::light_camera`)
+    /// into the caster rows, and list them by layer: within the layer's view
+    /// and its light's reach. A layer whose casters changed (moved, turned,
+    /// posed, a new frame) is stale. A sprite batch, a pixel-sized sprite or
+    /// rig, and one placed in the viewport, cast nothing.
+    pub(crate) fn prepare_sprite_casters(&mut self) {
+        let mut rows = Vec::new();
+        let mut bindings = Vec::new();
+        let unit = PixelRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        for layer in &mut self.shadows.layers {
+            let (mut casters, mut signature) = (Vec::new(), Vec::new());
+            if !layer.is_backdrop() && layer.has_view() {
+                let camera = layer.light_camera();
+                let frustum = crate::batch::Frustum::new(&layer.view_proj);
+                let reach = layer.reach();
+                for handle in &self.tables.sprites {
+                    let Some(node) = self.tables.nodes.get(handle) else {
+                        continue;
+                    };
+                    if !node.world_visible || ViewLayer::of(node.world_layer) != ViewLayer::World {
+                        continue;
+                    }
+                    let (scale, _, centre) = node.world.to_scale_rotation_translation();
+                    let inside = |radius: f32| {
+                        let radius = radius * scale.max_element();
+                        reach.is_none_or(|(at, range)| at.distance(centre) <= range + radius)
+                            && frustum.intersects(&crate::tables::Aabb {
+                                min: centre - Vec3::splat(radius),
+                                max: centre + Vec3::splat(radius),
+                            })
+                    };
+                    let instance = (rows.len() / SPRITE_ROW_FLOATS) as u32;
+                    match &node.kind {
+                        NodeKind::Sprite(resolved) => {
+                            let sprite = &resolved.descriptor;
+                            if !casts(&sprite.material)
+                                || resolved.batch.is_some()
+                                || sprite.viewport_placement.is_some()
+                                || sprite.size_mode == SpriteSizeMode::Pixel
+                                || !inside(sprite.size[0].hypot(sprite.size[1]))
+                            {
+                                continue;
+                            }
+                            let atlas = self.tables.atlases.get(resolved.atlas);
+                            let Some((_, mut row, textures, _)) =
+                                sprite_row(resolved, atlas, &node.world, &camera, unit, 1.0)
+                            else {
+                                continue;
+                            };
+                            row[29] = caster_cutoff(sprite.material.alpha);
+                            signature.extend(row.map(f32::to_bits));
+                            signature.push(textures.0.unwrap_or(u32::MAX));
+                            rows.extend(row);
+                            bindings.push(textures);
+                            casters.push(SpriteCaster {
+                                instance,
+                                textures,
+                                rig: None,
+                            });
+                        }
+                        NodeKind::PartsRig(rig) => {
+                            let descriptor = &rig.descriptor;
+                            if !casts(&descriptor.material)
+                                || descriptor.viewport_placement.is_some()
+                                || descriptor.size_mode == SpriteSizeMode::Pixel
+                                || !inside(rig.reach() * descriptor.scale)
+                            {
+                                continue;
+                            }
+                            let Some(draw) = self.effects.prepare_rig(
+                                &self.gpu,
+                                *handle,
+                                rig,
+                                &self.tables.parts_rigs,
+                                &node.world,
+                                (&camera, unit, 1.0, None, None),
+                            ) else {
+                                continue;
+                            };
+                            let Some(key) = draw.rig else {
+                                continue;
+                            };
+                            let mut row = draw.row;
+                            row[29] = caster_cutoff(descriptor.material.alpha);
+                            let revision = rig.views[key.1 as usize].pose_revision;
+                            signature.extend(row.map(f32::to_bits));
+                            signature.extend([key.1, revision as u32, (revision >> 32) as u32]);
+                            rows.extend(row);
+                            if let Some(buffers) = self.effects.rigs.get(&key) {
+                                bindings.extend(
+                                    buffers
+                                        .runs
+                                        .iter()
+                                        .map(|run| rig_textures(run, buffers.detail)),
+                                );
+                            }
+                            casters.push(SpriteCaster {
+                                instance,
+                                textures: draw.textures,
+                                rig: Some(key),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            if layer.sprite_signature != signature {
+                layer.stale = true;
+                layer.sprite_signature = signature;
+            }
+            layer.sprites = casters;
+        }
+        if rows.is_empty() {
+            return;
+        }
+        self.effects.caster_rows.write(&self.gpu, &rows);
+        for textures in bindings {
+            self.ensure_sprite_bindings(textures);
+        }
+        self.effects.ensure_caster_pipelines(
+            &self.gpu.device,
+            &self.layouts.casters,
+            &self.layouts.shadow_layer,
+        );
+    }
+
     /// Build this view pass's sprite and particle rows and make their
     /// pipelines and bindings ready. Runs before the pass is encoded.
     /// `format` is the world's HDR target the view draws effects into,
@@ -2311,7 +2664,7 @@ impl Renderer {
                             view.viewport,
                             pixel_ratio,
                             anchored,
-                            view.render_scale,
+                            Some(view.render_scale),
                         ),
                     ));
                     continue;
@@ -2404,45 +2757,19 @@ impl Renderer {
                 });
                 continue;
             }
-            let rect = atlas.and_then(|atlas| atlas.descriptor.frame_rect(sprite.frame));
-            let uv = rect.map_or([0.0, 0.0, 1.0, 1.0], |rect| {
-                [
-                    rect.uv_min[0],
-                    rect.uv_min[1],
-                    rect.uv_max[0],
-                    rect.uv_max[1],
-                ]
-            });
-            let frame_size = rect.and_then(|rect| rect.size).unwrap_or(sprite.size);
-            let Some((model, quad)) = sprite_quad(
-                sprite,
+            let Some((model, row, textures, state)) = sprite_row(
+                resolved,
+                atlas,
                 &node.world,
-                frame_size,
                 &view.camera,
                 view.viewport,
                 pixel_ratio,
             ) else {
                 continue;
             };
-            let color = atlas.map(|atlas| atlas.texture);
-            let ([mode, strength, bias], detail) = sprite_lighting(resolved, color);
-            let (state, cutoff) = sprite_state(sprite);
-            let mut row = [0.0; SPRITE_ROW_FLOATS];
-            row[..16].copy_from_slice(&model.to_cols_array());
-            row[16..20].copy_from_slice(&uv);
-            row[20..24].copy_from_slice(&sprite.tint);
-            row[24..28].copy_from_slice(&quad);
-            row[28..32].copy_from_slice(&[mode, cutoff, strength, bias]);
-            row[32..36].copy_from_slice(&[
-                sprite.material.softness_metres,
-                f32::from(state.additive),
-                0.0,
-                f32::from(sprite.material.wind_whole_texels),
-            ]);
-            row[36..40].copy_from_slice(&sprite_emission(sprite));
             draws.push(SpriteDraw {
                 state,
-                textures: (color, detail, resolved.tint_mask, resolved.emission_map),
+                textures,
                 render_order: sprite.render_order,
                 depth: model.w_axis.truncate().distance_squared(view.camera.eye),
                 row,
@@ -2723,6 +3050,71 @@ mod tests {
             visible: true,
             transform: Default::default(),
             metadata: Default::default(),
+        }
+    }
+
+    /// A shadow layer's light places a caster as a camera there would: an
+    /// upright plane turns to face where the light comes from, a sun's
+    /// along its direction and a lamp's toward the lamp, and a rig casts
+    /// the view whose heading is nearest the light's bearing.
+    #[test]
+    fn a_light_turns_its_casters_to_itself_and_picks_the_view_it_sees() {
+        use crate::shadows::{LayerSettings, LayerSource, ShadowLayer};
+        let settings = LayerSettings {
+            size: 512,
+            soft: false,
+        };
+        let viewport = PixelRect {
+            x: 0,
+            y: 0,
+            width: 1,
+            height: 1,
+        };
+        // A sun shining toward +x and down: it comes from -x.
+        let direction = Vec3::new(1.0, -1.0, 0.0).normalize();
+        let mut sun = ShadowLayer::new(LayerSource::Cascade {
+            direction,
+            distance: 100.0,
+            index: 0,
+            row: 0,
+            settings,
+            backdrop: false,
+        });
+        sun.view_proj =
+            glam::camera::rh::proj::directx::orthographic(-10.0, 10.0, -10.0, 10.0, -50.0, 50.0)
+                * glam::camera::rh::view::look_to_mat4(Vec3::ZERO, direction, Vec3::Y);
+        // A spot lamp at -z, 2 m up, looking at the rig.
+        let eye = Vec3::new(0.0, 2.0, -3.0);
+        let lamp = ShadowLayer::new(LayerSource::Fixed {
+            view_proj: glam::camera::rh::proj::directx::perspective(1.2, 1.0, 0.5, 30.0)
+                * glam::camera::rh::view::look_to_mat4(eye, (-eye).normalize(), Vec3::Y),
+            reach: None,
+            settings,
+        });
+        let world = Mat4::IDENTITY;
+        let rig = rig(BillboardMode::Cylindrical, 0.0);
+        // The rig's views, by index: front (0), its right (-90°), back, its left (90°).
+        for (layer, facing, view) in [(&sun, Vec3::NEG_X, 1), (&lamp, Vec3::NEG_Z, 2)] {
+            let camera = layer.light_camera();
+            let model = facing_model(
+                &world,
+                BillboardMode::Cylindrical,
+                None,
+                0.0,
+                &camera,
+                viewport,
+                1.0,
+            )
+            .expect("a world-sized plane has a place");
+            assert!(
+                model.z_axis.truncate().distance(facing) < 1e-4,
+                "the plane faces {:?}, not {facing:?}",
+                model.z_axis
+            );
+            assert_eq!(
+                rig.view_seen(&world.to_cols_array_2d(), &rig_camera(&camera)),
+                view
+            );
         }
     }
 

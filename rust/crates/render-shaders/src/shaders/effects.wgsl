@@ -3,7 +3,7 @@
 // and particle bindings at 20, so the two layouts never collide in this
 // module.
 
-#import rusty::view::{frame, mask_coverage, wind_lean, upright_facing}
+#import rusty::view::{frame, mask_coverage, wind_lean, upright_facing, shadow_views}
 #import rusty::lighting::standard_radiance
 #import rusty::finish::finish
 #import rusty::types::REACTIVE_OVERLAY
@@ -710,6 +710,70 @@ fn fs_parts_rig_grid(in: PartsRigGridOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_parts_rig_grid_reactive(in: PartsRigGridOut) -> ReactivePartsRig {
     return ReactivePartsRig(vec4<f32>(grid_block(in), 1.0), vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, 1.0));
+}
+
+// Shadow casters: a sprite or a parts rig whose material casts, drawn into
+// one shadow layer's depth (`effects.rs` `prepare_sprite_casters`). Its row was placed by the
+// layer's light as by a camera there, so its plane turns to the light and a
+// rig shows the view nearest the light's bearing. It covers its texels
+// whose alpha reaches the row's cutoff, all of its quad without one. The
+// shadow pass binds its casters' group 0, which holds `shadow_views`, and
+// the layer in group 2.
+struct CasterLayer {
+    index: u32,
+};
+
+@group(2) @binding(0) var<uniform> caster_layer: CasterLayer;
+
+struct CasterOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    // The row's alpha (a rig's times its piece's) and its cutoff.
+    @location(1) alpha: vec2<f32>,
+    // Where it lies on a rig's plane, and the frame it draws inside.
+    @location(2) rig: vec2<f32>,
+    @location(3) bounds: vec4<f32>,
+};
+
+@vertex
+fn vs_sprite_caster(in: SpriteIn) -> CasterOut {
+    let model = mat4x4<f32>(in.model0, in.model1, in.model2, in.model3);
+    let scale = vec2<f32>(length(in.model0.xyz), length(in.model1.xyz));
+    let size = (in.quad.zw - in.quad.xy) * scale;
+    let sway = sprite_sway(in.model3.xyz, in.model0.xyz / max(scale.x, 1e-6), size.x, size.y, in.emission.w, in.soft.w);
+    let across = swayed_across(in.corner.x, sway.share);
+    let local = mix(in.quad.xy, in.quad.zw, vec2<f32>(across, in.corner.y));
+    let world = model * vec4<f32>(local, 0.0, 1.0) + vec4<f32>(sway.top * in.corner.y, 0.0);
+    var out: CasterOut;
+    out.clip = shadow_views[caster_layer.index].view_proj * world;
+    out.uv = vec2<f32>(
+        mix(in.uv_rect.x, in.uv_rect.z, across),
+        mix(in.uv_rect.w, in.uv_rect.y, in.corner.y),
+    );
+    out.alpha = vec2<f32>(in.tint.a, in.params.y);
+    out.bounds = vec4<f32>(-1.0, -1.0, 1.0, 1.0);
+    return out;
+}
+
+@vertex
+fn vs_parts_rig_caster(in: PartsRigIn) -> CasterOut {
+    let model = mat4x4<f32>(in.model0, in.model1, in.model2, in.model3);
+    let position = vec2<f32>(in.position.x * in.snap.y, in.position.y);
+    var out: CasterOut;
+    out.clip = shadow_views[caster_layer.index].view_proj * (model * vec4<f32>(position, 0.0, 1.0));
+    out.uv = in.uv;
+    out.alpha = vec2<f32>(in.light.a * in.tint.a, in.params.y);
+    out.rig = position;
+    out.bounds = in.quad;
+    return out;
+}
+
+@fragment
+fn fs_sprite_caster(in: CasterOut) {
+    let alpha = textureSampleLevel(sprite_color, sprite_color_sampler, in.uv, 0.0).a * in.alpha.x;
+    if any(in.rig < in.bounds.xy) || any(in.rig > in.bounds.zw) || (in.alpha.y > 0.0 && alpha < in.alpha.y) {
+        discard;
+    }
 }
 
 // Particle billboard: a screen-aligned quad, of constant pixel size

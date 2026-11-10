@@ -214,7 +214,7 @@ impl Pipelines {
 
 /// The caster pass's slope-scaled depth bias, in depth per unit of the
 /// face's depth slope.
-const CASTER_SLOPE_BIAS: f32 = 1.0;
+pub(crate) const CASTER_SLOPE_BIAS: f32 = 1.0;
 
 /// Depth-only caster pipelines by caster features and face culling:
 /// single-sided parts render their back faces, mirrored parts wind the other

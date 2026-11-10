@@ -140,6 +140,17 @@ the last frame. The smooth drawing is the `parts-rig-grid` pass in
 `gpu.passes`, and the blocks are part of the `world` pass's time. The
 scratch image exists only while a frame draws grid rigs.
 
+## Shadows
+
+A rig whose material's `Shadow` is `Cast` or `CastAndReceive` casts its
+posed pieces into the lights' shadow maps, as a [sprite](csharp-capabilities.md#sprite-shadows)
+does: where their alpha reaches the cutoff, on its plane turned to the light.
+It casts the view whose heading is nearest the light's bearing, mirrored as
+that view is, in the pose its views share, so a walker's shadow walks and
+shows its profile to a sun at its side whichever view the camera sees. A
+rig placed in the viewport or sized in pixels casts nothing; a rig on a
+screen-pixel grid casts its smooth figure.
+
 ## Placing in the viewport
 
 `SetViewport` places a rig appearance in a rectangle of each reading's

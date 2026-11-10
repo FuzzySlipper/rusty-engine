@@ -12,6 +12,8 @@
     <RustyEngineProductContentRoot>$(MSBuildProjectDirectory)/content</RustyEngineProductContentRoot>
     <RustyEngineWatchPaths>$(MSBuildProjectDirectory);$(MSBuildProjectDirectory)/content</RustyEngineWatchPaths>
     <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
+    <!-- The sun's shadow, which the townsperson casts. -->
+    <RustyEngineProductSceneShadows>enabled</RustyEngineProductSceneShadows>
     <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
     <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
     <RustyEngineStagedProductDirectory>$(MSBuildProjectDirectory)/obj/Rusty.Engine/Product</RustyEngineStagedProductDirectory>

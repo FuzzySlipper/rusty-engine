@@ -19,7 +19,7 @@ namespace CsharpPartsRigs;
 /// </summary>
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
-    private const ulong TownspersonId = 1, FeaturesId = 2, FloorId = 3, MarkerId = 4, LookId = 5, BustId = 6;
+    private const ulong TownspersonId = 1, FeaturesId = 2, FloorId = 3, MarkerId = 4, LookId = 5, BustId = 6, SunId = 7;
     // The townsperson's rigs stand 896 units tall, feet at 0; a person about 1.75 m.
     private const float TownspersonMetresPerUnit = 1.75f / 896;
     private const string FrontModel = "people/townsperson/front/skeleton.model.json";
@@ -57,7 +57,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     // Camera orbit about the townsperson.
     private const float OrbitDistance = 3.6f, OrbitHeight = 1.3f, OrbitStartDegrees = 20;
     private static readonly Vector3 OrbitTarget = new(0, .95f, 0);
-    private const float FloorHalfSize = 4, FloorThickness = .1f;
+    private const float FloorHalfSize = 4;
+    // A low sun at the townsperson's front left, so her shadow falls across the floor behind her right.
+    private static readonly Vector3 SunTravel = Vector3.Normalize(new(.7f, -.55f, -.45f));
     private static readonly Color FloorColor = new(.28f, .3f, .27f, 1);
     private const int RecentEventLimit = 6;
     // The dialogue bust: rig-c's `portrait`, 640 units wide on a plate 880 tall. Its square frame is
@@ -82,6 +84,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private readonly IEngineContext engine;
     private readonly PartsRig front, side, back, features, look, portrait;
     private readonly Appearance townspersonLook, featuresLook, lookLook, floorLook, markerLook, bustLook;
+    private readonly Material floorMaterial;
+    private readonly MeshResource floorMesh;
+    private readonly Light sun;
     private readonly Camera camera;
     private string attachedBone = HeadBone;
     private PartsRigBoneReadout attached;
@@ -108,7 +113,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             new(side, SideHeading, false),
             new(back, BackHeading, false),
             new(side, MirroredSideHeading, true),
-        }, TownspersonMetresPerUnit));
+        }, TownspersonMetresPerUnit) with
+        {
+            // She casts her figure into the sun's shadow: the view nearest the sun's bearing, turned to it.
+            Material = new SpriteMaterialDescriptor(SpriteLightingMode.Unlit, default, default, 1, 0, SpriteAlphaMode.Mask, .5f, SpriteShadowPolicy.CastAndReceive),
+        });
         featuresLook = rigs.CreateAppearance(new PartsRigAppearanceRequest(
             new PartsRigView[] { new(features, 0, false) }, FeaturesMetresPerUnit));
         lookLook = rigs.CreateAppearance(new PartsRigAppearanceRequest(
@@ -116,11 +125,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         // Its scale is not read once it is placed in the viewport.
         bustLook = rigs.CreateAppearance(new PartsRigAppearanceRequest(
             new PartsRigView[] { new(portrait, 0, false) }, 1) with { TexelSnap = BustTexelSnap });
-        floorLook = engine.Graphics.CreatePrimitive(new(PrimitiveGeometry.Cube, false, FloorColor));
+        // A lit floor, which the sun's shadow falls on: a primitive is unlit.
+        floorMaterial = engine.Graphics.CreateMaterial(new(FloorColor, default(RenderResourceReference), 1, new Color(1, 1, 1, 1), Vector3.Zero, 0, false));
+        floorMesh = engine.Graphics.CreateMeshResource(Floor(floorMaterial));
+        floorLook = engine.Graphics.CreateMeshAppearance(floorMesh);
         markerLook = engine.Graphics.CreatePrimitive(new(PrimitiveGeometry.Cube, false, MarkerColor));
+        sun = engine.Graphics.CreateLight(new(SunId, false, 0, new(LightKind.Directional, new(1, .95f, .85f), 3, true, Vector3.Zero, SunTravel, false, 0, 0, 0, 0, LightShadowIntent.Requested)));
         engine.Graphics.PublishSnapshot(
         [
-            Fact(FloorId, floorLook, new Vector3(0, -FloorThickness / 2, 0), new Vector3(FloorHalfSize * 2, FloorThickness, FloorHalfSize * 2)),
+            Fact(FloorId, floorLook, Vector3.Zero, Vector3.One),
             Fact(TownspersonId, townspersonLook, Vector3.Zero, Vector3.One),
             Fact(FeaturesId, featuresLook, FeaturesPosition, Vector3.One),
             Fact(LookId, lookLook, LookPosition, Vector3.One),
@@ -208,7 +221,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         lookLook.Dispose();
         bustLook.Dispose();
         floorLook.Dispose();
+        floorMesh.Dispose();
+        floorMaterial.Dispose();
         markerLook.Dispose();
+        sun.Dispose();
         front.Dispose();
         side.Dispose();
         back.Dispose();
@@ -237,6 +253,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             new[] { Fact(MarkerId, markerLook, attached.World, new Vector3(MarkerSize)) },
             ReadOnlyMemory<ulong>.Empty,
             ReadOnlyMemory<MeshJointAttachment>.Empty));
+    }
+
+    /// <summary>A square of the floor's half size at y = 0, facing up.</summary>
+    private static MeshResourceCreateRequest Floor(Material material)
+    {
+        Vector3[] positions = [new(-FloorHalfSize, 0, -FloorHalfSize), new(FloorHalfSize, 0, -FloorHalfSize), new(FloorHalfSize, 0, FloorHalfSize), new(-FloorHalfSize, 0, FloorHalfSize)];
+        return new(positions, new[] { Vector3.UnitY, Vector3.UnitY, Vector3.UnitY, Vector3.UnitY }, new Vector2[] { new(0, 0), new(1, 0), new(1, 1), new(0, 1) },
+            ReadOnlyMemory<Color>.Empty, new uint[] { 0, 2, 1, 0, 3, 2 }, new[] { new MeshGroup(0, 0, 6) }, new[] { new MeshMaterialBinding(0, material) },
+            ReadOnlyMemory<Vector4>.Empty, ReadOnlyMemory<uint>.Empty, false);
     }
 
     private static AppearanceFact Fact(ulong id, Appearance appearance, Vector3 position, Vector3 scale) =>

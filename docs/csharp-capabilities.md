@@ -189,9 +189,24 @@ Appearance tree = engine.Graphics.CreateSpriteFromAtlas(new SpriteFromAtlasReque
 Single sprites, sprite batches and [vegetation sprites](vegetation-fields.md#sprites)
 turn alike in every view, captures and inspection views included, and their
 lighting, normal, wind lean and depth (what ambient occlusion reads) follow
-the turned quad. A sprite casts no shadow map in any mode. The renderer
-works the turn out per view from what was published; nothing is sent while
-the camera moves.
+the turned quad. The renderer works the turn out per view from what was
+published; nothing is sent while the camera moves.
+
+#### Sprite shadows
+
+A single world-sized sprite whose material's `Shadow` is `Cast` or
+`CastAndReceive` casts into the shadow maps of the lights that cast: its
+texels whose alpha reaches a `Mask` material's cutoff (half for a `Blend`
+material; all of an `Opaque` quad). In each shadow layer it turns as it
+turns to a camera standing at the light, so an upright sprite faces where a
+sun comes from, or the lamp, and casts its whole figure when the camera sees
+it edge-on to the light. A layer it casts into keeps its static casters'
+depth and redraws the sprite over it as the sprite moves or changes frame.
+`None` and `Receive` cast nothing, and a scene with no casting sprite pays
+nothing for it. Sprite batches, pixel-sized sprites and sprites placed in the
+viewport do not cast, and neither the backdrop's cascades nor
+[ray-traced sun shadows](lighting-and-sky.md#ray-traced-sun-shadows) see
+sprites. Every lit sprite receives shadows, whatever its policy.
 
 ### Sprite batches
 

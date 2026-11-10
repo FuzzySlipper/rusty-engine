@@ -1943,6 +1943,11 @@ impl Renderer {
         backdrop: bool,
     ) -> ShadowsEncoded {
         let kind = usize::from(backdrop);
+        if !backdrop {
+            // Sprites and rigs that cast turn to the light as it fits: a
+            // layer whose casters changed is stale.
+            self.prepare_sprite_casters();
+        }
         let ours = |layer: &shadows::ShadowLayer| layer.is_backdrop() == backdrop;
         let selected_shadows =
             !backdrop && self.tables.parts.selecting && self.scatter_select.casts();
@@ -1976,9 +1981,13 @@ impl Renderer {
         // static cache, unless time moves every caster (`retimed`); so does
         // a fixed layer the selected copies cast into, which redraws as the
         // eye moves (their levels, thinning and fades go by its distance).
+        // So does a layer sprites or rigs cast into: they redraw as they
+        // move and pose, over the static depth.
         let cached_path = |layer: &shadows::ShadowLayer| {
             !retimed
-                && (!layer.dynamic.batches.is_empty() || (selected_shadows && !layer.is_cascade()))
+                && (!layer.dynamic.batches.is_empty()
+                    || !layer.sprites.is_empty()
+                    || (selected_shadows && !layer.is_cascade()))
         };
         let generation = if self
             .shadows
@@ -2048,6 +2057,19 @@ impl Renderer {
                     Encoded::default()
                 }
             };
+            // Then the sprites and rigs that cast, with the same bindings.
+            let sprites_into = |pass: &mut wgpu::RenderPass<'_>| {
+                if layer.sprites.is_empty() {
+                    return 0;
+                }
+                pass.set_bind_group(0, &self.caster_bind_group, &[]);
+                pass.set_bind_group(
+                    2,
+                    &self.shadows.layer_bind_group,
+                    &[ShadowMaps::layer_offset(layer_index)],
+                );
+                self.effects.draw_casters(pass, &layer.sprites)
+            };
             let ends_frame = last == Some(index);
             if use_cache {
                 if rebuild {
@@ -2088,7 +2110,7 @@ impl Renderer {
                 pass.draw(0..3, tile.page..tile.page + 1);
                 drawn.encoded += casters_into(&mut pass, &layer.dynamic);
                 drawn.encoded += selected_into(&mut pass);
-                drawn.casters += layer.dynamic.drawn();
+                drawn.casters += layer.dynamic.drawn() + sprites_into(&mut pass);
             } else {
                 let mut pass = tile_pass(
                     encoder,
@@ -2104,6 +2126,7 @@ impl Renderer {
                 drawn.encoded += casters_into(&mut pass, &layer.dynamic);
                 drawn.casters += layer.casters.drawn() + layer.dynamic.drawn();
                 drawn.encoded += selected_into(&mut pass);
+                drawn.casters += sprites_into(&mut pass);
             }
         }
         for (index, layer) in self.shadows.layers.iter_mut().enumerate() {

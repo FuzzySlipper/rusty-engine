@@ -487,6 +487,12 @@ pub(crate) struct ShadowLayer {
     /// A caster's stage reads time (a product caster stage, wind): the
     /// layer redraws as presentation time moves. Set with its lists.
     pub timed: bool,
+    /// The sprites and parts rigs that cast into the layer
+    /// (`Renderer::prepare_sprite_casters`), drawn over its mesh casters,
+    /// and what placed them (their rows, frames and poses): when that
+    /// changes, the layer is stale.
+    pub sprites: Vec<crate::effects::SpriteCaster>,
+    pub sprite_signature: Vec<u32>,
 }
 
 /// The static casters' depth a layer's tile in the static cache holds, by
@@ -537,7 +543,7 @@ pub(crate) struct ShadowMaps {
 }
 
 impl ShadowLayer {
-    fn new(source: LayerSource) -> Self {
+    pub(crate) fn new(source: LayerSource) -> Self {
         Self {
             source,
             view_proj: match source {
@@ -551,6 +557,46 @@ impl ShadowLayer {
             cached: None,
             stale: true,
             timed: false,
+            sprites: Vec::new(),
+            sprite_signature: Vec::new(),
+        }
+    }
+
+    /// The layer's light as a camera that places sprites and parts rigs
+    /// (`effects.rs` `facing_model`, `rig_camera`): a cascade's and an
+    /// ambient sky's orthographic, looking along the light, so an upright
+    /// plane turns to face where the light comes from; a spot light's or a
+    /// point light's face at the light, so it turns toward the lamp.
+    pub fn light_camera(&self) -> CameraMatrices {
+        let inverse = self.view_proj.inverse();
+        let (eye, forward, projection) = match self.source {
+            LayerSource::Cascade { direction, .. } => (Vec3::ZERO, direction, Mat4::IDENTITY),
+            LayerSource::Fixed { .. } => {
+                // A perspective view's centre maps to clip w = 0.
+                let centre = inverse * glam::Vec4::Z;
+                if centre.w.abs() > 1e-6 {
+                    let eye = centre.truncate() / centre.w;
+                    let ahead = inverse.project_point3(Vec3::new(0.0, 0.0, 0.5));
+                    (
+                        eye,
+                        (ahead - eye).normalize_or(Vec3::NEG_Z),
+                        directx::perspective(
+                            std::f32::consts::FRAC_PI_2,
+                            1.0,
+                            SHADOW_NEAR,
+                            SHADOW_FAR,
+                        ),
+                    )
+                } else {
+                    (Vec3::ZERO, Vec3::NEG_Y, Mat4::IDENTITY)
+                }
+            }
+        };
+        CameraMatrices {
+            view_proj: self.view_proj,
+            view: look_at(eye, eye + forward),
+            projection,
+            eye,
         }
     }
 
