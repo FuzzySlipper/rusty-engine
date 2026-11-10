@@ -49,13 +49,21 @@ public sealed class ProductGenerator : IIncrementalGenerator
 
             internal static class ProductExports
             {
+                // A Debug build of the product refuses Engine calls made off the Engine's call lane.
+            #if DEBUG
+                private const bool CheckCallLane = true;
+            #else
+                private const bool CheckCallLane = false;
+            #endif
+
                 [global::System.Runtime.InteropServices.UnmanagedCallersOnly(EntryPoint = "rusty_product_bind_v1", CallConvs = new[] { typeof(global::System.Runtime.CompilerServices.CallConvCdecl) })]
                 internal static int BindV1(nint host, nint product)
                     => global::Rusty.Engine.NativeProduct.ProductBridge.Bind(
                         host,
                         product,
                         static context => new {{type}}(context),
-                        GeneratedDebugCommandCatalogFactory.Create);
+                        GeneratedDebugCommandCatalogFactory.Create,
+                        CheckCallLane);
             }
             """;
     }

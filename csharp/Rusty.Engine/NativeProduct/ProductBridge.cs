@@ -221,13 +221,19 @@ public static unsafe class ProductBridge
     /// <summary>Completes the host handshake for the product's generated bind export.</summary>
     /// <param name="host">The host's <c>NativeProductAbiHandshakeV1</c>.</param>
     /// <param name="product">The product handshake this call fills.</param>
+    /// <param name="checkCallLane">
+    /// True in a Debug product build: every Engine call made outside an Engine callback is refused with a
+    /// message naming the call and the thread (docs/world-streaming-contract.md, "Engine call affinity").
+    /// </param>
     public static int Bind(
         nint host,
         nint product,
         Func<ProductCreateContext, IEngineProduct> createProduct,
-        Func<IEngineProduct, IDebugCommandCatalog> createDebugCatalog)
+        Func<IEngineProduct, IDebugCommandCatalog> createDebugCatalog,
+        bool checkCallLane)
     {
         if (host == 0 || product == 0 || createProduct is null || createDebugCatalog is null) return 2;
+        if (checkCallLane) EngineCallLane.Enable();
         s_createProduct = createProduct;
         s_createDebugCatalog = createDebugCatalog;
         *(NativeProductAbiHandshakeV1*)product = new NativeProductAbiHandshakeV1
@@ -245,6 +251,7 @@ public static unsafe class ProductBridge
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int Create(NativeProductCreateArgs* args, void** handle, NativeProductCallError* error)
     {
+        using EngineCallLane.Scope lane = EngineCallLane.Enter();
         ProductLifetime? lifetime = null;
         try
         {
@@ -276,6 +283,7 @@ public static unsafe class ProductBridge
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int Update(void* handle, NativeProductUpdateArgs* args, NativeProductUpdateResult* result)
     {
+        using EngineCallLane.Scope lane = EngineCallLane.Enter();
         try
         {
             if (args is null || result is null || (args->event_count != 0 && args->events is null) || (args->content_change_count != 0 && args->content_changes is null)) return 2;
@@ -316,6 +324,7 @@ public static unsafe class ProductBridge
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int CompleteTimeline(void* handle, NativeProductTimelineCompletion* completion, byte* accepted)
     {
+        using EngineCallLane.Scope lane = EngineCallLane.Enter();
         try
         {
             if (completion is null || accepted is null
@@ -343,6 +352,7 @@ public static unsafe class ProductBridge
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int PausedIntents(void* handle, NativeInputEvent* events, nuint count)
     {
+        using EngineCallLane.Scope lane = EngineCallLane.Enter();
         try
         {
             if (count != 0 && events is null) return 2;
@@ -359,6 +369,7 @@ public static unsafe class ProductBridge
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static void ObserveRuntime(void* handle, NativeProductRuntimeFacts* facts)
     {
+        using EngineCallLane.Scope lane = EngineCallLane.Enter();
         try
         {
             if (handle is null || facts is null) return;
@@ -370,6 +381,7 @@ public static unsafe class ProductBridge
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int ExecuteDebug(void* handle, NativeUtf8Slice* command, NativeProductDebugResult* result)
     {
+        using EngineCallLane.Scope lane = EngineCallLane.Enter();
         try
         {
             if (command is null || result is null || (command->len != 0 && command->bytes is null)) return 2;
@@ -384,6 +396,7 @@ public static unsafe class ProductBridge
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int DescribeDebug(void* handle, NativeProductDebugResult* result)
     {
+        using EngineCallLane.Scope lane = EngineCallLane.Enter();
         try
         {
             if (result is null) return 2;
@@ -566,6 +579,7 @@ public static unsafe class ProductBridge
     private static void Destroy(void* handle)
     {
         if (handle is null) return;
+        using EngineCallLane.Scope lane = EngineCallLane.Enter();
         GCHandle reference = GCHandle.FromIntPtr((nint)handle);
         try
         {
@@ -581,6 +595,7 @@ public static unsafe class ProductBridge
 
     private static int Invoke(void* handle, Action<ProductLifetime> action)
     {
+        using EngineCallLane.Scope lane = EngineCallLane.Enter();
         try
         {
             ProductLifetime lifetime = Get(handle);

@@ -92,6 +92,16 @@ marshal worker calls. Both CoreCLR and NativeAOT use this contract. Product
 code is trusted, so there is no extra locking, thread negotiation or defensive
 dispatch.
 
+A Debug build of the product, which is what `rusty dev` builds, checks the
+lane: the generated bind export turns the check on, and every Engine call
+or handle `Dispose` made outside an Engine callback throws
+`InvalidOperationException` on the calling thread before it reaches native
+code. The message names the call and both threads, and says how to fix it. It
+is also written to the host's stderr, and the lane's next Engine call fails
+once with it and the worker's stack, so a worker that swallows the exception
+cannot hide it ([fixture](../fixtures/csharp-call-lane/CallLaneChecks.cs)).
+Release and NativeAOT builds skip the check.
+
 `SimulationScheduler.Advance` executes callbacks synchronously on the caller's
 admitted update path. It does not start workers, preempt expensive work or make
 an Engine call asynchronous. Split work into bounded pieces before scheduling
@@ -106,6 +116,11 @@ and chunk revision, discard stale work, and cancel/drain on restart/disposal.
 Do not await a worker that needs a callback-held Engine operation. This is
 ordinary C# computation, not an Engine worker facility or a second simulation
 clock. Content/persistence service calls still belong on the callback lane.
+Reading `ProductContent`'s admitted snapshot is not an Engine call, but every
+read from a `ProductContentBundle` (an opened container or build bundle) is.
+A lazy or cached read that a worker may be the first to touch is such a call:
+read it on the update and hand the worker the bytes. A Content call from a
+worker races the update's own and corrupts the native heap.
 
 ### Residency and edits apply in place
 

@@ -872,6 +872,7 @@ internal static class Emit
         bool hasErrorReadout = BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray());
         if (hasErrorReadout) output.AppendLine("        NativeOperationErrorReceipt rawError = default;");
         string invocation = string.Join(", ", new[] { "_native.context" }.Concat(input.Select((_, index) => $"raw{index}")).Concat(string.IsNullOrEmpty(result) ? [] : ["&rawResult"]).Concat(hasErrorReadout ? ["&rawError"] : []));
+        EmitLaneCheck(output, service, operation, "        ");
         output.AppendLine($"        int status = _native.{RawIdentifier(operation)}.Pointer({invocation});");
         EmitRequire(output, model, service, service, operation, hasErrorReadout, "        ");
         if (string.IsNullOrEmpty(result)) output.AppendLine("        return;");
@@ -908,6 +909,7 @@ internal static class Emit
         output.AppendLine($"        fixed ({RawType(item)}* pointer = rawValues)").AppendLine("        {");
         bool hasErrorReadout = BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray());
         if (hasErrorReadout) output.AppendLine("            NativeOperationErrorReceipt rawError = default;");
+        EmitLaneCheck(output, service, operation, "            ");
         output.AppendLine($"            int status = _native.{RawIdentifier(operation)}.Pointer(_native.context, rawValues.Length == 0 ? null : pointer, (nuint)rawValues.Length{(hasErrorReadout ? ", &rawError" : string.Empty)});");
         EmitRequire(output, model, service, service, operation, hasErrorReadout, "            ");
         output.AppendLine("        }").AppendLine("    }").AppendLine();
@@ -960,6 +962,7 @@ internal static class Emit
         if (hasErrorReadout) output.AppendLine("                NativeOperationErrorReceipt rawError = default;");
         string result = ResultParameter(callback) ?? throw new InvalidOperationException("input replacement must return its typed outcome");
         output.AppendLine($"                {RawType(result)} rawResult = default;");
+        EmitLaneCheck(output, service, operation, "                ");
         output.AppendLine($"                int status = _native.{RawIdentifier(operation)}.Pointer(_native.context, rawValues.Length == 0 ? null : pointer, (nuint)rawValues.Length, &rawResult{(hasErrorReadout ? ", &rawError" : string.Empty)});");
         EmitRequire(output, model, service, service, operation, hasErrorReadout, "                ");
         output.AppendLine("                return NativeConversions.FromNative(rawResult);");
@@ -1052,6 +1055,7 @@ internal static class Emit
         if (hasErrorReadout) output.AppendLine("        NativeOperationErrorReceipt rawError = default;");
         string leadingInvocation = string.Join(", ", leading.Select((_, index) => $"raw{index}"));
         string invocation = string.IsNullOrEmpty(result) ? $"_native.context{(leadingInvocation.Length == 0 ? string.Empty : ", " + leadingInvocation)}, &raw" : $"_native.context{(leadingInvocation.Length == 0 ? string.Empty : ", " + leadingInvocation)}, &raw, &rawResult";
+        EmitLaneCheck(output, service, operation, "        ");
         output.AppendLine($"        int status = _native.{RawIdentifier(operation)}.Pointer({invocation}{(hasErrorReadout ? ", &rawError" : string.Empty)});");
         EmitRequire(output, model, service, service, operation, hasErrorReadout, "        ");
         if (string.IsNullOrEmpty(result)) output.AppendLine("        return;");
@@ -1148,6 +1152,7 @@ internal static class Emit
         string native = NativeTableField(service, destroy.Owner);
         Callback callback = model.Callbacks[destroy.Owner.Operations.Single(candidate => candidate.Name == destroy.Name).Callback];
         bool hasErrorReadout = BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray());
+        EmitLaneCheck(output, destroy.Owner, destroy.Name, indent);
         if (hasErrorReadout)
         {
             output.AppendLine($"{indent}NativeOperationErrorReceipt rawDestroyError = default;");
@@ -1158,6 +1163,10 @@ internal static class Emit
         output.AppendLine($"{indent}int disposeStatus = {native}.{RawIdentifier(destroy.Name)}.Pointer({native}.context, {handle});");
         EmitRequire(output, model, service, destroy.Owner, destroy.Name, hasErrorReadout, indent, status: "disposeStatus");
     }
+
+    // A Debug product build refuses an Engine call made off the Engine's call lane before it reaches native code.
+    private static void EmitLaneCheck(StringBuilder output, Service service, string operation, string indent) =>
+        output.AppendLine($"{indent}global::Rusty.Engine.NativeProduct.EngineCallLane.Check(\"{SafeServiceName(service.Name)}\", \"{Pascal(operation)}\");");
 
     private static void EmitRequire(StringBuilder output, BindingModel model, Service emittedService, Service operationService, string operation, bool hasErrorReadout, string indent, string status = "status", string errorReadout = "rawError")
     {

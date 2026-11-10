@@ -29,3 +29,12 @@ namespace Rusty.Engine.Debugging
 
 public sealed class DebugExecutionContext { }
 }
+
+namespace Rusty.Engine.NativeProduct
+{
+
+internal static class EngineCallLane
+{
+    internal static void Check(string service, string operation) { }
+}
+}

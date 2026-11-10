@@ -8,6 +8,10 @@ namespace Rusty.Engine;
 /// enumeration of Entries copies metadata only. Dispose releases the collection's
 /// native ownership, not previously returned managed files or independently retained
 /// ContentReferences/resources. Those consumers have their own lifetimes.
+/// Unlike <see cref="ProductContent"/>'s snapshot, every read, reference and Dispose here is an
+/// Engine Content call, so it is made on the callback lane and never on a product worker; a
+/// worker reads bytes the update read for it (docs/world-streaming-contract.md, Engine call
+/// affinity).
 /// </remarks>
 public sealed class ProductContentBundle : IDisposable
 {
