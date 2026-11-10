@@ -1176,9 +1176,9 @@ pub struct RendererSettingsDescriptor {
     /// Test each view's opaque parts against its frustum on the GPU and
     /// draw them indirectly, instead of building the draw list on the CPU.
     pub gpu_culling: bool,
-    /// Drop scattered copies (grass, plants, trees) hidden behind a world
-    /// view's opaque depth before they draw. Settings written before it
-    /// existed have it off.
+    /// Drop opaque parts and scattered copies (grass, plants, trees) hidden
+    /// behind a world view's opaque depth before they draw. Settings
+    /// written before it existed have it off.
     #[serde(default)]
     pub occlusion_culling: bool,
     /// Light the fog medium and fog volumes in a froxel grid: shafts,

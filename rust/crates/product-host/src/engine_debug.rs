@@ -344,6 +344,14 @@ pub struct ProductHostGpuCullingStatistics {
     pub batches: u32,
     /// Instances the last read-back pass found visible.
     pub visible: u32,
+    /// The last pass also tested its candidates against the occlusion
+    /// pyramid (`OcclusionCulling`).
+    pub occlusion: bool,
+    /// From the last read-back pass: instances inside the frustum but
+    /// wholly behind the pyramid, left undrawn, and the instances its
+    /// occluder depth drew (those the cull before found visible).
+    pub occluded: u32,
+    pub occluders: u32,
     /// Runs of batches drawn with one multi-draw each.
     pub multi_draws: u32,
 }
@@ -388,14 +396,16 @@ pub struct ProductHostScatterSelectionStatistics {
     pub over_limit: u64,
 }
 
-/// The occlusion test of the last world view's selected copies
-/// (`RendererSettings` `OcclusionCulling`): its farthest-depth pyramid's
-/// level-0 size and levels, and the samples per pixel of the occluder depth
-/// it was reduced from (the world pass's).
+/// The occlusion test of the last world view (`RendererSettings`
+/// `OcclusionCulling`): whether it tested its opaque parts as well as its
+/// selected copies, its farthest-depth pyramid's level-0 size and levels,
+/// and the samples per pixel of the occluder depth it was reduced from (the
+/// world pass's).
 #[derive(Debug, Clone, PartialEq, Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ProductHostOcclusionStatistics {
     pub enabled: bool,
+    pub parts: bool,
     pub refused: Option<String>,
     pub size: [u32; 2],
     pub levels: u32,

@@ -92,11 +92,13 @@ before 3.2) keeps each mesh in its own buffers.
 Where the adapter has timestamp queries, `gpu.passes` gives the median GPU
 milliseconds of each renderer pass that is timed, in the frames that draw it,
 with the adapter's compute limits beside them:
-- the compute passes: `gpu-cull`, `occlusion`, `scatter-select`,
-  `backdrop-scatter-select`,
+- the compute passes: `gpu-cull`, `occluder-select`, `occlusion` (the
+  pyramid), `scatter-select`, `backdrop-scatter-select`,
   `light-clusters`, `volumetric-fog`, the ambient occlusion passes
   (`ao-prepass`, `ao-occlusion`, `ao-blur`) and a frame's share of building
   [the sky's light](lighting-and-sky.md#the-skys-light) (`sky-light`);
+- the occluder depth pass, `occlusion-depth`
+  ([occlusion culling](#occlusion-culling));
 - the frame's shadow-layer passes together (`shadows`, and `backdrop-shadows`
   for [the backdrop](lighting-and-sky.md#the-backdrop)'s cascades);
 - the first world view's `world` pass, with the
@@ -217,6 +219,67 @@ room draws without motion history, and wireframe edges without room draw as
 triangles.
 Any other wgpu error is a renderer bug and panics.
 
+## Occlusion culling
+
+With the renderer setting `OcclusionCulling` (`RendererSettings.Set(... with
+{ OcclusionCulling = true })`, or the player's video option *Occlusion
+culling*), a world view skips the opaque parts and scattered copies hidden
+behind nearer opaque geometry. The world layer's opaque parts are then
+tested on the GPU (`culling.rs`): those in the frustum, from the CPU's list,
+or with GPU culling on every one of the layer. Each world view runs three
+steps before its world pass:
+
+1. The cull selects the parts it found visible last frame that are inside
+   this frame's frustum, and the view draws them depth-only at this
+   frame's camera, at its world pass's size and samples per pixel. Only
+   materials that keep every sample they cover occlude: a masked material
+   never does, since the world pass may share its samples out differently,
+   nor does one with a product shader, whose shade stage may discard.
+   Lines, wireframes and scattered copies never occlude.
+2. That depth, each pixel's farthest sample, is reduced to a farthest-depth
+   pyramid. Sampling as the world pass does, it keeps every opening a
+   world-pass sample sees through, however narrow.
+3. The cull tests each candidate against the frustum and the pyramid, and
+   draws a part only when its bounds are not wholly behind the pyramid.
+   The [scatter selection](vegetation-fields.md#occlusion) tests copies
+   against the same pyramid.
+
+A skipped part is hidden behind geometry the frame itself draws, so a turn,
+a quick move, an origin rebase or a part appearing never shows a hole or a
+part a frame late. A part coming into view is tested against what was in
+view, and draws. Until a cull has marked any part (the first frame, or after
+the part bounds grow), every opaque part in the frustum occludes. The
+drawn parts keep the CPU list's order, so the picture is the one drawn
+without the test. The shadows' lists and the backdrop are not tested.
+
+**When it pays.** It saves GPU time where nearer opaque geometry hides much
+of what is in the frustum and the frame waits on the GPU's world pass. It
+costs GPU time for the depth pass and pyramid, and renderer CPU for
+encoding the depth pass:
+
+| Scene (RTX 3080, 1920×1080, 4×) | `world` without → with | the cull's passes | renderer CPU |
+| --- | --- | --- | --- |
+| Daggerfall city at noon (37k of 38k parts in view hidden) | 22.1 → 16.6 ms | 0.3 ms | +0.3 ms |
+| the same, clustered lighting | 1.8 → 1.1 ms | 0.5 ms | +0.2 ms |
+| CraftSurvive forest (123 of 678 hidden) | 11.6 → 10.9 ms | 0.2 ms | +0.6 ms |
+| CraftSurvive open terrain (1 of 63 hidden) | 8.2 → 8.1 ms | 0.2 ms | +0.4 ms |
+
+With clustered lighting a city's world pass is already cheap, and the cull
+roughly breaks even; in open country it is a small loss. Turn it on for
+dense towns, interiors and walled places drawn without clustered lighting,
+or where a frame is GPU-bound behind much hidden geometry.
+
+`engine.renderer` and `rusty-scene-render` report the cost and the effect.
+`gpu.passes` times each step on its own: `occluder-select`, the depth pass
+`occlusion-depth` (the visible parts drawn a second time), the pyramid
+`occlusion` and the test itself, `gpu-cull`. What the test saves shows in
+the `world` pass. `gpu.gpuCulling` gives `occluded` (parts inside the
+frustum left undrawn), `visible`, `occluders` (parts the depth pass drew)
+and `candidates`, and `gpu.occlusion.parts` says that the opaque parts were
+tested. A device without indirect draws tests only the scattered copies
+against a depth of every opaque part, and one without compute refuses the
+setting (`NoComputeShaders`).
+
 ## Feature gallery
 
 How would this game look with a feature it leaves off? `rusty-scene-render
@@ -228,7 +291,7 @@ top quality, each turned on at its Engine default:
   features: render scale 1, 4× antialiasing, shadows, backdrop shadows, no
   shadow budget, each ambient occlusion mode not drawn, low volumetric fog,
   clouds and water reflections, clustered lighting, GPU culling and
-  vegetation occlusion (vsync and occlusion strength and radius are tuning,
+  occlusion culling (vsync and occlusion strength and radius are tuning,
   not features);
 - indirect light, when the scene has no probe volume: one 48×24×48 m around
   the camera, labelled as a stand-in, since a game places its own;

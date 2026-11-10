@@ -248,6 +248,30 @@ pub(crate) fn cpu_list(
     group(parts, entries, base)
 }
 
+/// A view list split for occlusion culling (`occlusion.rs`): its opaque
+/// parts, which the GPU cull tests and draws (`culling.rs`), and what the
+/// CPU still draws: its scatter runs and blended parts. The opaque parts'
+/// ids lead the list's (their sort buckets come first, and scatter runs take
+/// none), so each keeps its place in the instance buffer.
+pub(crate) fn split_opaque(parts: &Parts, list: DrawList) -> (DrawList, DrawList) {
+    let mut opaque = DrawList::default();
+    let mut rest = DrawList {
+        runs: list.runs,
+        ..DrawList::default()
+    };
+    for batch in list.batches {
+        if batch.pass.blends() || parts.state[batch.part as usize].copies.is_some() {
+            rest.batches.push(batch);
+        } else {
+            opaque.batches.push(batch);
+        }
+    }
+    let leading = opaque.drawn() as usize;
+    opaque.ids = list.ids[..leading].to_vec();
+    rest.ids = list.ids[leading..].to_vec();
+    (opaque, rest)
+}
+
 /// Parts that may cast shadows: every shown triangle part of the scene layer
 /// whose node casts (`ShadowCasting::Cast`) and whose material does (an
 /// opaque one, or a blended one with `translucent_shadow`). A scatter run

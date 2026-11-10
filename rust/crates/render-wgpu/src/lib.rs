@@ -227,7 +227,8 @@ pub struct GpuReadout {
     pub backdrop_scatter_selection: ScatterSelectionReadout,
     /// The impostors baked (`impostor.rs`).
     pub impostors: ImpostorReadout,
-    /// The occlusion test of selected scatter copies (`occlusion.rs`).
+    /// The occlusion test of opaque parts and selected scatter copies
+    /// (`occlusion.rs`).
     pub occlusion: OcclusionReadout,
     /// The indirect light volume (`probes.rs`).
     pub indirect_light: IndirectLightReadout,
@@ -323,9 +324,12 @@ pub struct RendererOptions {
     /// list on the CPU each time the camera moves. Off by default; a device
     /// without indirect draws keeps the CPU list regardless.
     pub gpu_culling: bool,
-    /// Drop a world view's selected scatter copies hidden behind its opaque
-    /// non-scatter depth (`occlusion.rs`). Off by default; a device
-    /// without compute or without the selection draws them regardless.
+    /// Drop a world view's opaque parts and selected scatter copies hidden
+    /// behind its opaque depth (`occlusion.rs`): the world layer's opaque
+    /// parts are then GPU-culled (`culling.rs`), those in the frustum unless
+    /// `gpu_culling` makes every one a candidate.
+    /// Off by default. A device without indirect draws tests only the
+    /// copies, and one without compute, or without either, draws them all.
     pub occlusion_culling: bool,
     /// Samples per pixel of the primary destination (the offscreen primary
     /// target and the window surface): 1, 2 or 4. Offscreen render targets
@@ -1232,7 +1236,8 @@ impl Renderer {
             SettingRefusal::NoIndirectDraws
         });
         let occlusion_culling = (requested.occlusion_culling
-            && !(self.occlusion.available() && self.scatter_select.available()))
+            && !(self.occlusion.available()
+                && (self.culling.available() || self.scatter_select.available())))
         .then(|| {
             effective.occlusion_culling = false;
             if self.occlusion.available() {
@@ -1375,7 +1380,10 @@ impl Renderer {
                     self.light_clusters.timing(),
                     self.volumetric_fog.timing(),
                     self.culling.timing(),
-                    self.occlusion.timing(),
+                    self.culling.selection_timing(),
+                ])
+                .chain(self.occlusion.timings())
+                .chain([
                     self.scatter_select.timing(),
                     self.backdrop_select.timing(),
                     self.sky_light.timing(),

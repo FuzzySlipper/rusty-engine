@@ -1,25 +1,32 @@
-//! Occlusion of selected scatter copies behind a world view's opaque scene
-//! (#10020, `hiz.wgsl`).
+//! Occlusion of a world view's opaque parts and selected scatter copies
+//! behind its opaque scene (#10020, #10698, `hiz.wgsl`).
 //!
-//! With `RendererOptions::occlusion_culling`, a world view that selects
-//! scatter copies (`scatter_select.rs`) first draws its occluders depth-only
-//! at its world pass's size and samples per pixel: its opaque parts other
-//! than scatter copies whose materials keep every sample they cover (none
-//! masked, none with a product caster stage that may discard). Sampling as
-//! the world pass does, the depth leaves open every opening a world-pass
-//! sample sees through. That depth, each pixel's farthest sample, is
-//! reduced to a farthest-depth pyramid, and the selection drops from the
-//! camera's list a copy whose bounds lie wholly behind it. The depth is
-//! this frame's, so camera motion, rebases and edits need nothing more, and
-//! nothing the selection keeps is missing for a frame. Scatter copies never
-//! occlude, and the shadows' list is not tested.
+//! With `RendererOptions::occlusion_culling`, a world view first draws its
+//! occluders depth-only at its world pass's size and samples per pixel:
+//! opaque parts other than scatter copies whose materials keep every sample
+//! they cover (none masked, none with a product caster stage that may
+//! discard). Sampling as the world pass does, the depth leaves open every
+//! opening a world-pass sample sees through. That depth, each pixel's
+//! farthest sample, is reduced to a farthest-depth pyramid. The GPU cull
+//! (`culling.rs`) drops an opaque part whose bounds lie wholly behind it,
+//! and the scatter selection (`scatter_select.rs`) a copy.
+//!
+//! Where the cull runs, the occluders are the parts its last cull found
+//! visible, which it selects itself; where it cannot, they are every opaque
+//! part of the CPU list and only the copies are tested. Either way the
+//! depth is drawn at this frame's camera, so camera motion, rebases and
+//! edits need nothing more, and nothing the tests keep is missing for a
+//! frame. Scatter copies never occlude, and the shadows' lists are not
+//! tested.
 
 use crate::frame::PixelRect;
 use crate::target::DEPTH_FORMAT;
 use crate::timing::{untimed, GpuPassTiming, PassTimer};
 use crate::Gpu;
 
+/// The pyramid's reduction; the depth pass is timed on its own.
 const PASS: &str = "occlusion";
+const DEPTH_PASS: &str = "occlusion-depth";
 const WORKGROUP: u32 = 8;
 /// `Seed` in hiz.wgsl.
 const SEED_BYTES: u64 = 16;
@@ -28,8 +35,10 @@ const PYRAMID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 /// The occlusion test of the last world view, for diagnostics.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct OcclusionReadout {
-    /// The last world view tested its selected copies against its depth.
+    /// The last world view tested against its depth.
     pub enabled: bool,
+    /// It tested its opaque parts too, not only its selected copies.
+    pub parts: bool,
     /// Why this device cannot; `None` while it can.
     pub refused: Option<String>,
     /// The pyramid's level-0 size (the view's region, padded to powers of
@@ -72,6 +81,7 @@ pub(crate) struct Occlusion {
     depth: Option<((u32, u32), u32, wgpu::TextureView)>,
     region: [u32; 2],
     timer: Option<PassTimer>,
+    depth_timer: Option<PassTimer>,
     readout: OcclusionReadout,
 }
 
@@ -182,6 +192,7 @@ impl Occlusion {
             depth: None,
             region: [0, 0],
             timer: PassTimer::new(gpu, PASS),
+            depth_timer: PassTimer::new(gpu, DEPTH_PASS),
         }
     }
 
@@ -190,9 +201,12 @@ impl Occlusion {
     }
 
     /// Ready the view's occluder depth for a world pass drawing a target of
-    /// `size` at `samples` per pixel. Starts the occlusion's timing.
+    /// `size` at `samples` per pixel.
     pub fn prepare_depth(&mut self, gpu: &Gpu, size: (u32, u32), samples: u32) {
-        if let Some(timer) = &mut self.timer {
+        for timer in [&mut self.timer, &mut self.depth_timer]
+            .into_iter()
+            .flatten()
+        {
             timer.collect(gpu);
         }
         let size = (size.0.max(1), size.1.max(1));
@@ -221,8 +235,8 @@ impl Occlusion {
     }
 
     /// The view's own occluder depth pass over `region`
-    /// ([`Self::prepare_depth`]): `draw` encodes the opaque non-scatter
-    /// batches into it.
+    /// ([`Self::prepare_depth`]): `draw` encodes the occluders into it. It
+    /// is timed as `occlusion-depth`.
     pub fn encode_depth(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -241,10 +255,7 @@ impl Occlusion {
                 }),
                 stencil_ops: None,
             }),
-            timestamp_writes: self
-                .timer
-                .as_ref()
-                .and_then(|timer| timer.render_writes_between(true, false)),
+            timestamp_writes: self.depth_timer.as_ref().and_then(PassTimer::render_writes),
             occlusion_query_set: None,
             multiview_mask: None,
         });
@@ -261,8 +272,19 @@ impl Occlusion {
     }
 
     /// Reduce the view's occluder depth over `region` (its viewport) to the
-    /// pyramid the selection tests against. Ends the occlusion's timing.
-    pub fn build(&mut self, gpu: &Gpu, encoder: &mut wgpu::CommandEncoder, region: PixelRect) {
+    /// pyramid the tests read; `parts`: the cull tests the opaque parts
+    /// against it. Times it as `occlusion`, after resolving the depth
+    /// pass's time.
+    pub fn build(
+        &mut self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        region: PixelRect,
+        parts: bool,
+    ) {
+        if let Some(timer) = &mut self.depth_timer {
+            timer.resolve(encoder);
+        }
         let Ok(pipelines) = &self.pipelines else {
             return;
         };
@@ -348,7 +370,7 @@ impl Occlusion {
             let writes = self
                 .timer
                 .as_ref()
-                .and_then(|timer| timer.compute_writes_between(false, level == last));
+                .and_then(|timer| timer.compute_writes_between(level == 0, level == last));
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some(PASS),
                 timestamp_writes: writes,
@@ -387,6 +409,7 @@ impl Occlusion {
         self.region = [region.width, region.height];
         self.readout = OcclusionReadout {
             enabled: true,
+            parts,
             refused: None,
             size: [size.0, size.1],
             levels: pyramid.levels,
@@ -394,7 +417,7 @@ impl Occlusion {
         };
     }
 
-    /// The pyramid this view's selection tests against.
+    /// The pyramid this view's tests read.
     pub fn occluders(&self) -> Option<Occluders<'_>> {
         self.pyramid.as_ref().map(|pyramid| Occluders {
             pyramid: &pyramid.all,
@@ -403,24 +426,39 @@ impl Occlusion {
         })
     }
 
-    /// The last world view did not test.
+    /// The last world view did not test: its passes report no time.
     pub fn skipped(&mut self) {
         self.readout.enabled = false;
+        for timer in [&mut self.timer, &mut self.depth_timer]
+            .into_iter()
+            .flatten()
+        {
+            timer.restart();
+        }
     }
 
     /// After the view's encoder was submitted.
     pub fn submitted(&mut self) {
         if self.readout.enabled {
-            if let Some(timer) = &mut self.timer {
+            for timer in [&mut self.timer, &mut self.depth_timer]
+                .into_iter()
+                .flatten()
+            {
                 timer.submitted();
             }
         }
     }
 
-    pub fn timing(&self) -> GpuPassTiming {
-        self.timer
-            .as_ref()
-            .map_or_else(|| untimed(PASS), PassTimer::readout)
+    /// The depth pass's time, then the pyramid's.
+    pub fn timings(&self) -> [GpuPassTiming; 2] {
+        [
+            self.depth_timer
+                .as_ref()
+                .map_or_else(|| untimed(DEPTH_PASS), PassTimer::readout),
+            self.timer
+                .as_ref()
+                .map_or_else(|| untimed(PASS), PassTimer::readout),
+        ]
     }
 
     pub fn readout(&self) -> OcclusionReadout {

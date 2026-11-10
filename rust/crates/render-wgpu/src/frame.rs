@@ -311,6 +311,9 @@ pub(crate) struct ViewCache {
     pub list: DrawList,
     /// With GPU culling: the opaque candidates and their indirect arguments.
     pub candidates: Option<CandidateList>,
+    /// With occlusion culling alone: the frustum list the candidates and
+    /// `list` were split from, to compare the next one with.
+    frustum: Option<DrawList>,
     /// A part moved or regrouped: re-cull, but keep the list to compare.
     stale: bool,
     /// A part regrouped: the candidates must be rebuilt.
@@ -1541,6 +1544,7 @@ impl Renderer {
             parts.grown = false;
             self.rebind_frame();
         }
+        let bounds_on_gpu = self.options.gpu_culling || self.occludes_parts();
         let parts = &mut self.tables.parts;
         parts.grown = false;
         let mut dirty: Vec<u32> = parts.dirty.drain().collect();
@@ -1549,7 +1553,7 @@ impl Renderer {
         // The GPU cull reads world bounds beside the rows; a replaced bounds
         // buffer, or one that fell behind while the CPU culled, takes every
         // slot again.
-        if !self.options.gpu_culling {
+        if !bounds_on_gpu {
             self.culling.bounds_stale();
         } else {
             let slots = parts.meta.len() as u32;
@@ -1621,6 +1625,12 @@ impl Renderer {
         );
     }
 
+    /// The world layer's opaque parts are GPU-cull candidates tested against
+    /// the occlusion pyramid (`occlusion.rs`).
+    fn occludes_parts(&self) -> bool {
+        self.options.occlusion_culling && self.occlusion.available() && self.culling.available()
+    }
+
     /// The layer's draw list for this camera, rebuilt when the camera or any
     /// part changed and uploaded only when the drawn set differs. Returns the
     /// part ids uploaded.
@@ -1649,11 +1659,20 @@ impl Renderer {
             uploaded += self.upload_instances(VIEW_REGIONS * slots, &ids);
             self.casters_uploaded = true;
         }
-        // The backdrop's few large parts list on the CPU.
-        let gpu_culled =
-            self.options.gpu_culling && self.culling.available() && layer != ViewLayer::Backdrop;
+        // The backdrop's few large parts list on the CPU. Occlusion tests the
+        // world's opaque parts on the GPU: with GPU culling every one of the
+        // layer, else those in the frustum, from the CPU's list.
+        let gpu_culled = match layer {
+            ViewLayer::Backdrop => false,
+            ViewLayer::World if self.occludes_parts() => true,
+            _ => self.options.gpu_culling && self.culling.available(),
+        };
+        let from_frustum = gpu_culled && !self.options.gpu_culling;
         if self.views[slot].as_ref().is_some_and(|view| {
-            view.view_proj == *view_proj && !view.stale && view.candidates.is_some() == gpu_culled
+            view.view_proj == *view_proj
+                && !view.stale
+                && view.candidates.is_some() == gpu_culled
+                && view.frustum.is_some() == from_frustum
         }) {
             return uploaded;
         }
@@ -1661,12 +1680,35 @@ impl Renderer {
         let visible_base = base + slots;
         let frustum = Frustum::new(view_proj);
         let previous = self.views[slot].take();
-        let (list, candidates) = if gpu_culled {
+        let (list, candidates, frustum_list) = if from_frustum {
+            let started = std::time::Instant::now();
+            let full = batch::view_list(&self.tables.parts, layer, &frustum, eye, base);
+            self.batch_time += started.elapsed();
+            match previous {
+                // The same frustum set keeps its candidates.
+                Some(ViewCache {
+                    list,
+                    candidates: Some(candidates),
+                    frustum: Some(previous),
+                    regrouped: false,
+                    ..
+                }) if previous == full => (list, Some(candidates), Some(previous)),
+                _ => {
+                    uploaded += self.upload_instances(base, &full.ids);
+                    let (opaque, rest) = batch::split_opaque(&self.tables.parts, full.clone());
+                    let candidates = self.candidate_list(opaque, visible_base);
+                    self.culling
+                        .upload_candidates(&self.gpu, layer, &candidates);
+                    (rest, Some(candidates), Some(full))
+                }
+            }
+        } else if gpu_culled {
             // The candidates survive a camera move and a part move; they
             // follow a regroup.
             let candidates = match previous {
                 Some(ViewCache {
                     candidates: Some(candidates),
+                    frustum: None,
                     regrouped: false,
                     ..
                 }) => candidates,
@@ -1675,18 +1717,7 @@ impl Renderer {
                     let list = batch::opaque_candidates(&self.tables.parts, layer, base);
                     self.batch_time += started.elapsed();
                     uploaded += self.upload_instances(base, &list.ids);
-                    let candidates = CandidateList::new(list, visible_base, |batch| {
-                        let (part, ..) = self.drawn_part(batch.part);
-                        match (part.wireframe, self.pooled(&part.mesh)) {
-                            (true, _) => (part.first_index * 2, part.index_count * 2, 0),
-                            (false, Some((base_vertex, first_index))) => (
-                                first_index + part.first_index,
-                                part.index_count,
-                                base_vertex as i32,
-                            ),
-                            (false, None) => (part.first_index, part.index_count, 0),
-                        }
-                    });
+                    let candidates = self.candidate_list(list, visible_base);
                     self.culling
                         .upload_candidates(&self.gpu, layer, &candidates);
                     candidates
@@ -1699,7 +1730,7 @@ impl Renderer {
             let list = batch::cpu_list(&self.tables.parts, layer, &frustum, eye, blended_base);
             self.batch_time += started.elapsed();
             uploaded += self.upload_instances(blended_base, &list.ids);
-            (list, Some(candidates))
+            (list, Some(candidates), None)
         } else {
             let started = std::time::Instant::now();
             let list = batch::view_list(&self.tables.parts, layer, &frustum, eye, base);
@@ -1710,30 +1741,73 @@ impl Renderer {
             if !unchanged {
                 uploaded += self.upload_instances(base, &list.ids);
             }
-            (list, None)
+            (list, None, None)
         };
         self.views[slot] = Some(ViewCache {
             view_proj: *view_proj,
             list,
             candidates,
+            frustum: frustum_list,
             stale: false,
             regrouped: false,
         });
         uploaded
     }
 
+    /// `list`'s opaque batches as GPU-cull candidates (`culling.rs`), whose
+    /// visible runs start at `visible_base`.
+    fn candidate_list(&self, list: DrawList, visible_base: u32) -> CandidateList {
+        CandidateList::new(
+            list,
+            visible_base,
+            |batch| {
+                let (part, ..) = self.drawn_part(batch.part);
+                match (part.wireframe, self.pooled(&part.mesh)) {
+                    (true, _) => (part.first_index * 2, part.index_count * 2, 0),
+                    (false, Some((base_vertex, first_index))) => (
+                        first_index + part.first_index,
+                        part.index_count,
+                        base_vertex as i32,
+                    ),
+                    (false, None) => (part.first_index, part.index_count, 0),
+                }
+            },
+            |batch| {
+                let (part, _, _, features) = self.drawn_part(batch.part);
+                batch.pass < batch::Pass::Lines && !part.wireframe && occludes(features)
+            },
+            // A run shares a pipeline, a material and the buffers it draws
+            // from: one mesh, or the static pool.
+            |batch| {
+                let (part, _, _, features) = self.drawn_part(batch.part);
+                (
+                    batch.pass,
+                    features,
+                    part.material.clone(),
+                    part.wireframe,
+                    (part.wireframe || self.pooled(&part.mesh).is_none())
+                        .then(|| part.mesh.clone()),
+                )
+            },
+        )
+    }
+
     /// Draw a candidate list's batches from the GPU cull's arguments: one
-    /// indirect draw per batch, or one multi-draw per run of batches sharing
-    /// a pipeline, material and buffers: one mesh, or the static pool
-    /// (`mesh_pool.rs`), whose places the arguments hold. A `depth_only`
-    /// pass keeps the bound material where the caster shader reads none
-    /// (`draw_depth`). Returns what was encoded and the multi-draws issued.
+    /// multi-draw per run of batches sharing a pipeline, material and
+    /// buffers (`CandidateList::runs`): one mesh, or the static pool
+    /// (`mesh_pool.rs`), whose places the arguments hold. Neighbouring runs
+    /// a pass draws alike join: a `depth_only` pass keeps the bound material
+    /// where the caster shader reads none (`draw_depth`). An `occluders`
+    /// pass draws only the runs that occlude (`CandidateList::occludes`).
+    /// Without multi-draw each batch is an indirect draw of its own. Returns
+    /// what was encoded and the multi-draws issued.
     fn draw_batches_indirect<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'_>,
         layer: ViewLayer,
         candidates: &CandidateList,
         depth_only: bool,
+        occluders: bool,
         pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline,
     ) -> (Encoded, u32) {
         let args = self.culling.args(layer);
@@ -1743,27 +1817,66 @@ impl Renderer {
         let mut pool_bound = false;
         let mut encoded = Encoded::default();
         let mut multi_draws = 0;
-        let mut index = 0;
-        // The buffers a batch draws from: the static pool, or its own mesh's.
-        let source = |part: &Part| {
-            (part.wireframe || self.pooled(&part.mesh).is_none()).then(|| part.mesh.clone())
+        // The run being gathered: its batches, and how it binds.
+        let mut gathered: Option<std::ops::Range<usize>> = None;
+        let mut flush = |pass: &mut wgpu::RenderPass<'_>,
+                         gathered: &mut Option<std::ops::Range<usize>>,
+                         encoded: &mut Encoded| {
+            let Some(range) = gathered.take() else {
+                return;
+            };
+            let count = range.len() as u32;
+            if !self.culling.multi_draw() {
+                for index in range {
+                    pass.draw_indexed_indirect(args, index as u64 * 20);
+                }
+                encoded.draw_calls += count;
+            } else if count > 1 {
+                pass.multi_draw_indexed_indirect(args, range.start as u64 * 20, count);
+                multi_draws += 1;
+                encoded.draw_calls += 1;
+            } else {
+                pass.draw_indexed_indirect(args, range.start as u64 * 20);
+                encoded.draw_calls += 1;
+            }
+            encoded.draws += count;
         };
-        while index < batches.len() {
-            let draw = &batches[index];
+        let mut gathered_from: Option<Option<MeshRef>> = None;
+        for run in &candidates.runs {
+            if occluders && !candidates.occludes[run.start] {
+                continue;
+            }
+            let draw = &batches[run.start];
             let (part, mesh, material, features) = self.drawn_part(draw.part);
             let selected = pipeline(draw.pass, features);
+            let reads_material = !depth_only || features.caster() != Features::default();
+            let drawn_from =
+                (part.wireframe || self.pooled(&part.mesh).is_none()).then(|| part.mesh.clone());
+            // A run drawing alike continues the gathered one.
+            let joins = current.is_some_and(|current| current == selected)
+                && material_bound.is_some_and(|bound| !reads_material || bound == material)
+                && drawn_from.is_none()
+                && gathered_from == Some(None)
+                && gathered
+                    .as_ref()
+                    .is_some_and(|range| range.end == run.start);
+            if joins {
+                if let Some(range) = gathered.as_mut() {
+                    range.end = run.end;
+                }
+                continue;
+            }
+            flush(pass, &mut gathered, &mut encoded);
             if current.is_none_or(|current| current != selected) {
                 pass.set_pipeline(selected);
                 current = Some(selected);
                 material_bound = None;
                 encoded.pipeline_binds += 1;
             }
-            let reads_material = !depth_only || features.caster() != Features::default();
             if material_bound.is_none_or(|bound| reads_material && bound != material) {
                 pass.set_bind_group(1, material, &[]);
                 material_bound = Some(material);
             }
-            let drawn_from = source(part);
             if drawn_from.is_none() {
                 if !pool_bound {
                     pass.set_vertex_buffer(0, self.static_pool.vertices.slice(..));
@@ -1789,37 +1902,10 @@ impl Renderer {
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                 pool_bound = false;
             }
-            // Following batches with the same pipeline, material and buffers
-            // draw in the same call.
-            let mut run = 1;
-            if self.culling.multi_draw() {
-                while index + run < batches.len() {
-                    let next = &batches[index + run];
-                    let (next_part, _, next_material, next_features) = self.drawn_part(next.part);
-                    // One pipeline reads materials alike: depth-only by its
-                    // caster features.
-                    let same = next.pass == draw.pass
-                        && pipeline(next.pass, next_features) == selected
-                        && (!reads_material || next_material == material)
-                        && next_part.wireframe == part.wireframe
-                        && source(next_part) == drawn_from;
-                    if !same {
-                        break;
-                    }
-                    run += 1;
-                }
-            }
-            let offset = index as u64 * 20;
-            if run > 1 {
-                pass.multi_draw_indexed_indirect(args, offset, run as u32);
-                multi_draws += 1;
-            } else {
-                pass.draw_indexed_indirect(args, offset);
-            }
-            encoded.draws += run as u32;
-            encoded.draw_calls += 1;
-            index += run;
+            gathered = Some(run.clone());
+            gathered_from = Some(drawn_from);
         }
+        flush(pass, &mut gathered, &mut encoded);
         (encoded, multi_draws)
     }
 
@@ -3514,13 +3600,19 @@ impl Renderer {
             .candidates
             .is_some();
         // The world's or the backdrop's selected scatter copies, and whether
-        // a world view first draws its opaque depth to drop those hidden
-        // behind it (`occlusion.rs`).
+        // a world view first draws its opaque depth to drop what is hidden
+        // behind it (`occlusion.rs`): its culled parts, drawing the occluders
+        // the cull selects, or else its selected copies, drawing the CPU
+        // list's opaque parts.
         let selected = matches!(view.layer, ViewLayer::World | ViewLayer::Backdrop)
             && self.tables.parts.selecting
             && !self.selection(view.layer).draws.is_empty();
-        let occluding =
-            selected && world_layer && self.options.occlusion_culling && self.occlusion.available();
+        let occluding_parts = culled && world_layer && self.occludes_parts();
+        let occluding = !occluding_parts
+            && selected
+            && world_layer
+            && self.options.occlusion_culling
+            && self.occlusion.available();
         let prepass_batches: Vec<batch::Batch> = if occlusion.is_some() || occluding || ray_mask {
             pipelines_created += self.layouts.start_prepass(&self.gpu.device);
             // The CPU list's opaque batches: every one, or with GPU culling
@@ -3545,12 +3637,7 @@ impl Renderer {
             let occluders: Vec<batch::Batch> = prepass_batches
                 .iter()
                 .copied()
-                .filter(|draw| {
-                    let features = self.tables.parts.state[draw.part as usize].class.features;
-                    !features.caster_fragment()
-                        && features.product() == 0
-                        && !features.contains(Features::SCATTER)
-                })
+                .filter(|draw| occludes(self.tables.parts.state[draw.part as usize].class.features))
                 .collect();
             // The list groups batches by pass and features: each set once.
             let mut prepared = None;
@@ -3571,6 +3658,32 @@ impl Renderer {
         } else {
             Vec::new()
         };
+        if occluding_parts {
+            let samples = view.target.samples;
+            let candidates = self.views[slot]
+                .as_ref()
+                .and_then(|cache| cache.candidates.as_ref())
+                .expect("culled view has candidates");
+            let mut prepared = None;
+            for draw in candidates
+                .runs
+                .iter()
+                .filter(|run| candidates.occludes[run.start])
+                .map(|run| &candidates.list.batches[run.start])
+            {
+                let features = self.tables.parts.state[draw.part as usize].class.features;
+                if prepared == Some((features, draw.pass)) {
+                    continue;
+                }
+                prepared = Some((features, draw.pass));
+                pipelines_created += u32::from(self.layouts.prepare_occluder(
+                    &self.gpu.device,
+                    features,
+                    draw.pass,
+                    samples,
+                ));
+            }
+        }
         let whole = view.start == PassStart::Target;
         if world_layer {
             // Ghost plates snap per view; a view is known by its viewport.
@@ -3587,13 +3700,51 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("render-wgpu view"),
             });
+        if occlusion.is_some() || occluding || occluding_parts || ray_mask {
+            self.shadows.write_camera(&self.gpu.queue, &view_proj);
+        }
         // The GPU cull writes the opaque visible runs and indirect arguments
-        // every pass, before anything draws them.
+        // every pass, before anything draws them. With occlusion, it first
+        // selects the parts it last found visible, which the view draws
+        // depth-only at this camera and reduces to the pyramid the cull then
+        // tests against (`occlusion.rs`).
         if culled {
             let candidates = self.views[slot]
                 .as_ref()
                 .and_then(|cache| cache.candidates.as_ref())
                 .expect("culled view has candidates");
+            if occluding_parts {
+                let samples = view.target.samples;
+                self.occlusion.prepare_depth(
+                    &self.gpu,
+                    (view.target.width, view.target.height),
+                    samples,
+                );
+                self.culling.encode_occluders(
+                    &self.gpu,
+                    &mut encoder,
+                    &self.instances_buffer,
+                    view.layer,
+                    candidates,
+                    &view_proj,
+                );
+                self.occlusion
+                    .encode_depth(&mut encoder, view.viewport, |pass| {
+                        let camera_offset = ShadowMaps::layer_offset(self.shadows.camera_slot());
+                        pass.set_bind_group(0, &self.caster_bind_group, &[]);
+                        pass.set_bind_group(2, &self.shadows.layer_bind_group, &[camera_offset]);
+                        self.draw_batches_indirect(
+                            pass,
+                            view.layer,
+                            candidates,
+                            true,
+                            true,
+                            |pass, features| self.layouts.prepass.sampled(pass, features, samples),
+                        );
+                    });
+                self.occlusion
+                    .build(&self.gpu, &mut encoder, view.viewport, true);
+            }
             self.culling.encode(
                 &self.gpu,
                 &mut encoder,
@@ -3601,9 +3752,14 @@ impl Renderer {
                 view.layer,
                 candidates,
                 &view_proj,
+                if occluding_parts {
+                    self.occlusion.occluders()
+                } else {
+                    None
+                },
             );
         } else {
-            self.culling.skipped();
+            self.culling.skipped(view.layer);
         }
         // The opaque non-scatter batches depth-only, with the pre-pass
         // pipelines and the camera in the shadow matrices' camera slot.
@@ -3615,17 +3771,19 @@ impl Renderer {
                 .as_ref()
                 .and_then(|cache| cache.candidates.as_ref())
             {
-                this.draw_batches_indirect(pass, view.layer, candidates, true, |pass, features| {
-                    this.layouts.prepass.get(pass, features)
-                });
+                this.draw_batches_indirect(
+                    pass,
+                    view.layer,
+                    candidates,
+                    true,
+                    false,
+                    |pass, features| this.layouts.prepass.get(pass, features),
+                );
             }
             this.draw_depth(pass, &prepass_batches, |pass, features| {
                 this.layouts.prepass.get(pass, features)
             });
         };
-        if occlusion.is_some() || occluding || ray_mask {
-            self.shadows.write_camera(&self.gpu.queue, &view_proj);
-        }
         if occluding {
             let samples = view.target.samples;
             self.occlusion.prepare_depth(
@@ -3642,8 +3800,9 @@ impl Renderer {
                         self.layouts.prepass.sampled(pass, features, samples)
                     });
                 });
-            self.occlusion.build(&self.gpu, &mut encoder, view.viewport);
-        } else if world_layer {
+            self.occlusion
+                .build(&self.gpu, &mut encoder, view.viewport, false);
+        } else if world_layer && !occluding_parts {
             self.occlusion.skipped();
         }
         // The world's scatter runs, copy by copy, before anything draws them
@@ -3672,7 +3831,7 @@ impl Renderer {
                 } else {
                     Vec::new()
                 },
-                if occluding {
+                if occluding || occluding_parts {
                     self.occlusion.occluders()
                 } else {
                     None
@@ -4008,6 +4167,7 @@ impl Renderer {
                         &mut pass,
                         view.layer,
                         candidates,
+                        false,
                         false,
                         |pass, features| pipelines.get(pass, features),
                     );
@@ -4375,9 +4535,11 @@ impl Renderer {
         if clusters.grid[3] == 1 {
             self.light_clusters.submitted();
         }
+        if world_layer {
+            self.occlusion.submitted();
+        }
         if selected && world_layer {
             self.scatter_select.submitted();
-            self.occlusion.submitted();
         } else if selected {
             self.backdrop_select.submitted();
         }
@@ -4785,6 +4947,14 @@ fn moon_uniform(
         0.0,
     ]);
     rows
+}
+
+/// A part of these features may draw into the occlusion depth
+/// (`occlusion.rs`): its material keeps every sample it covers (none
+/// masked, no product shade stage that may discard), and it is not a
+/// scatter copy.
+fn occludes(features: Features) -> bool {
+    !features.caster_fragment() && features.product() == 0 && !features.contains(Features::SCATTER)
 }
 
 /// The frame uniform's wind row (`rusty::wind`): the unit direction over

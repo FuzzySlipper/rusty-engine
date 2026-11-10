@@ -1176,6 +1176,9 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             candidates: readout.gpu_culling.candidates,
             batches: readout.gpu_culling.batches,
             visible: readout.gpu_culling.visible,
+            occlusion: readout.gpu_culling.occlusion,
+            occluded: readout.gpu_culling.occluded,
+            occluders: readout.gpu_culling.occluders,
             multi_draws: readout.gpu_culling.multi_draws,
         },
         scatter_selection: ProductHostScatterSelectionStatistics {
@@ -1198,6 +1201,7 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
         },
         occlusion: ProductHostOcclusionStatistics {
             enabled: readout.occlusion.enabled,
+            parts: readout.occlusion.parts,
             refused: readout.occlusion.refused,
             size: readout.occlusion.size,
             levels: readout.occlusion.levels,

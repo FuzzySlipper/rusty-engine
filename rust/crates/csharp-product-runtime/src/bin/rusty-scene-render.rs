@@ -758,6 +758,7 @@ fn run() -> Result<(), String> {
     });
     let occlusion = json!({
         "enabled": gpu_readout.occlusion.enabled,
+        "parts": gpu_readout.occlusion.parts,
         "refused": gpu_readout.occlusion.refused,
         "size": gpu_readout.occlusion.size,
         "levels": gpu_readout.occlusion.levels,
@@ -863,6 +864,9 @@ fn run() -> Result<(), String> {
                 "candidates": gpu_readout.gpu_culling.candidates,
                 "batches": gpu_readout.gpu_culling.batches,
                 "visible": gpu_readout.gpu_culling.visible,
+                "occlusion": gpu_readout.gpu_culling.occlusion,
+                "occluded": gpu_readout.gpu_culling.occluded,
+                "occluders": gpu_readout.gpu_culling.occluders,
                 "multiDraws": gpu_readout.gpu_culling.multi_draws,
             },
             "scatterSelection": scatter_selection,

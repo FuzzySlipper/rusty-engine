@@ -274,27 +274,15 @@ it. Without compute, copies draw at their first level (the readout's
 ### Occlusion
 
 With the renderer setting `OcclusionCulling` (`RendererSettings.Set(...
-with { OcclusionCulling = true })`, or the player's video option *Vegetation
-occlusion*), each world view first draws its occluders depth-only at its
-world pass's size and samples per pixel, reduces that depth (each pixel's
-farthest sample) to a farthest-depth pyramid, and drops from the camera's
-list every copy whose bounds lie wholly behind it. The occluders are its
-opaque parts other than scattered copies whose materials keep every sample
-they cover: a masked material never occludes, since the world pass may
-share its samples out differently, nor does one with a product shader, whose
-shade stage may discard. Sampling as the world pass does, the depth keeps
-every opening a world-pass sample sees through, however narrow. With GPU culling on, the culled candidates do not occlude.
-The depth is the frame's own, so nothing the selection keeps appears a
-frame late, and camera motion, origin rebases and edits need nothing more.
-Scattered copies never hide each other, and the shadows' list is not
-tested.
+with { OcclusionCulling = true })`, or the player's video option *Occlusion
+culling*), the camera's list drops every copy whose bounds lie wholly behind
+the world view's farthest-depth pyramid, the one that also culls its opaque
+parts ([occlusion culling](performance.md#occlusion-culling)). Scattered
+copies never hide each other, and the shadows' list is not tested.
 
-The depth pass and pyramid cost GPU time in the `occlusion` pass, and the
-renderer CPU that encodes every opaque part once more. It pays where opaque
-surfaces hide many copies at once. A copy hidden
-behind terrain mostly costs vertex work only, since the depth test already
-discards its pixels, so the gain follows the number of hidden copies more
-than their area.
+A copy hidden behind terrain mostly costs vertex work only, since the depth
+test already discards its pixels, so the gain follows the number of hidden
+copies more than their area.
 
 ## Budgets and readout
 

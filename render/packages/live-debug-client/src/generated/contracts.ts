@@ -138,6 +138,17 @@ batches: number,
  */
 visible: number, 
 /**
+ * The last pass also tested its candidates against the occlusion
+ * pyramid (`OcclusionCulling`).
+ */
+occlusion: boolean, 
+/**
+ * From the last read-back pass: instances inside the frustum but
+ * wholly behind the pyramid, left undrawn, and the instances its
+ * occluder depth drew (those the cull before found visible).
+ */
+occluded: number, occluders: number, 
+/**
  * Runs of batches drawn with one multi-draw each.
  */
 multiDraws: number, };
@@ -291,12 +302,13 @@ globalLights: number,
 overflowedClusters: number, };
 
 /**
- * The occlusion test of the last world view's selected copies
- * (`RendererSettings` `OcclusionCulling`): its farthest-depth pyramid's
- * level-0 size and levels, and the samples per pixel of the occluder depth
- * it was reduced from (the world pass's).
+ * The occlusion test of the last world view (`RendererSettings`
+ * `OcclusionCulling`): whether it tested its opaque parts as well as its
+ * selected copies, its farthest-depth pyramid's level-0 size and levels,
+ * and the samples per pixel of the occluder depth it was reduced from (the
+ * world pass's).
  */
-export type ProductHostOcclusionStatistics = { enabled: boolean, refused: string | null, size: [number, number], levels: number, samples: number, };
+export type ProductHostOcclusionStatistics = { enabled: boolean, parts: boolean, refused: string | null, size: [number, number], levels: number, samples: number, };
 
 /**
  * Closed operation identities returned by direct runtime calls.

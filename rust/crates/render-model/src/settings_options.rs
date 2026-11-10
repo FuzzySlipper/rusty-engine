@@ -460,13 +460,13 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
     },
     RendererSettingOption {
         id: "occlusionCulling",
-        label: "Vegetation occlusion",
+        label: "Occlusion culling",
         group: "Advanced",
-        description: "Skips grass, plants and trees hidden behind terrain and buildings: helps where much is hidden, costs a little in open country.",
+        description: "Skips buildings, props, grass and trees hidden behind nearer walls, buildings and terrain: helps in towns and forests, costs a little in open country.",
         kind: RendererSettingKind::Toggle,
         restart: false,
-        cost: "About 0.14 ms of GPU at 1280×720 with 4× antialiasing on an RX 9070 XT, and 0.6 to 0.85 ms of renderer CPU in a CraftSurvive forest (its own depth pass over every opaque part). It saved 0.34 ms of GPU looking past a near crown; elsewhere the change stayed within the run-to-run spread.",
-        gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: Some("true"), requires: None, setup: Some(GallerySetup::Product("scattered vegetation (Vegetation fields or voxel scatter)")) },
+        cost: "On an RTX 3080 at 1920×1080 with 4× antialiasing: the depth pass and pyramid take 0.2 to 0.3 ms of GPU and the renderer CPU 0.2 to 0.6 ms more. Daggerfall's city world pass fell from 22.1 to 16.6 ms; a CraftSurvive forest's from 11.6 to 10.9 ms; open terrain gained nothing. With clustered lighting a city roughly breaks even.",
+        gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: Some("true"), requires: None, setup: None },
     },
 ];
 
