@@ -3,8 +3,10 @@ name = "desktop-shell"
 version.workspace = true
 edition.workspace = true
 
-[lints]
-workspace = true
+# Denied rather than forbidden: the window's draw and acquire threads raise
+# their priority through the Windows API in one allowed function (src/lib.rs).
+[lints.rust]
+unsafe_code = "deny"
 
 [dependencies]
 render-wgpu.workspace = true
@@ -17,6 +19,9 @@ winit = "0.30"
 # Gamepads, read by the window while it holds gameplay input. Only this crate
 # may depend on gilrs (scripts/dependency_boundary_check.py).
 gilrs = { version = "0.11", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 
 [features]
 # The product UI over the scene, through either web engine. Off by default.

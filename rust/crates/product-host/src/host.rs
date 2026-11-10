@@ -914,7 +914,32 @@ impl HostInputMailbox {
     }
 }
 
+/// This thread runs the product's updates. During a game start or travel the
+/// product's worker tasks (and the SDK's tile samplers on its thread pool)
+/// can keep every core busy at normal priority, and an update at the same
+/// priority then spends most of its time waiting for a core: on a 16-thread
+/// Windows box, 5-14% of its wall time on-CPU and updates of 30-200 ms for a
+/// few ms of work (#10705). Above normal, an update runs whenever it is
+/// ready and the workers take the rest. The window's draw and acquire
+/// threads run above normal too (desktop-shell), so the update does not take
+/// their cores instead. Windows only: raising a thread's priority on Linux
+/// needs a privilege a product does not have.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn run_updates_above_normal() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+    };
+    // SAFETY: the current thread's pseudo-handle is always valid and is not
+    // closed. A refusal leaves the thread at normal priority, as before.
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) };
+}
+
+#[cfg(not(windows))]
+fn run_updates_above_normal() {}
+
 fn scheduler_loop<R: ProductHostRuntime>(state: Arc<HostState<R>>, wake: Arc<SchedulerWake>) {
+    run_updates_above_normal();
     let clock = Instant::now();
     let mut next_tick = clock;
     // When the runtime last showed the world: an observation or a

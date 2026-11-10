@@ -16,5 +16,10 @@ serde_json.workspace = true
 sha2.workspace = true
 ts-rs.workspace = true
 
-[lints]
-workspace = true
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
+
+# Denied rather than forbidden: the scheduler sets its thread's priority
+# through the Windows API in one allowed function (src/lib.rs).
+[lints.rust]
+unsafe_code = "deny"

@@ -2382,6 +2382,7 @@ dependencies = [
  "render-model",
  "render-wgpu",
  "runtime-input",
+ "windows-sys 0.61.2",
  "winit",
 ]
 
@@ -8078,6 +8079,7 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "ts-rs",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

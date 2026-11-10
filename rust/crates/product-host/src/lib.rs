@@ -29,8 +29,11 @@
 //! request lines, fixed `Content-Length` POST bodies, and one SSE response;
 //! it rejects connection reuse, chunked transfer, CORS, cookies, arbitrary
 //! methods, arbitrary routes, and implicit non-loopback binds.
+//!
+//! Unsafe code is denied everywhere but the scheduler's one Windows call
+//! that raises its thread's priority (`host::run_updates_above_normal`).
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 mod activity;
 mod audio;

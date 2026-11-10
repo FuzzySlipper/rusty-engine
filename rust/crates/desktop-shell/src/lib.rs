@@ -23,8 +23,11 @@
 //!
 //! Without either feature the shell presents the scene with no UI and builds
 //! without a web engine.
+//!
+//! Unsafe code is denied everywhere but the one Windows call that raises the
+//! draw and acquire threads' priority ([`run_above_normal`]).
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 #[cfg(any(feature = "ui-overlay", test))]
 mod cursor_image;
@@ -204,6 +207,8 @@ impl DesktopShell {
         config: DesktopShellConfig,
         scene: Arc<dyn DesktopScene>,
     ) -> Result<DesktopShellReport, String> {
+        // This thread draws every frame.
+        run_above_normal();
         self.event_loop.set_control_flow(ControlFlow::Poll);
         let mut shell = Shell {
             config,
@@ -225,6 +230,26 @@ impl DesktopShell {
         Ok(shell.report)
     }
 }
+
+/// The window's draw and acquire threads run above normal priority, as the
+/// runtime's update thread does. While a product's worker tasks keep every
+/// core busy at normal priority (a game start or travel), a frame's acquire
+/// otherwise waits for a core several times longer than it runs, and the
+/// window hitches whenever the update thread alone is raised (#10705).
+/// Windows only, as for the update thread.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn run_above_normal() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+    };
+    // SAFETY: the current thread's pseudo-handle is always valid and is not
+    // closed. A refusal leaves the thread at normal priority, as before.
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) };
+}
+
+#[cfg(not(windows))]
+fn run_above_normal() {}
 
 struct Shell {
     config: DesktopShellConfig,
@@ -298,6 +323,7 @@ impl Presenter {
         let thread = std::thread::Builder::new()
             .name("desktop-shell-acquire".to_owned())
             .spawn(move || {
+                run_above_normal();
                 while requests.recv().is_ok() {
                     let started = Instant::now();
                     let frame = lock(&shared).acquire(&gpu);
