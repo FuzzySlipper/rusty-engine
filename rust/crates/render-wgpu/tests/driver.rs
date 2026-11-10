@@ -169,9 +169,9 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         .unwrap();
     scene.set_player_settings(player);
     scene.rebaseline(call(Vec::new(), NoResources, state(4, true)));
-    // The readouts are as the scene was last left: a reading takes the
-    // rebaseline up first.
-    assert!(scene.view_state().held);
+    // The readouts are as the scene was last left: a reading that takes the
+    // scene takes the rebaseline up first.
+    scene.settle_prepared();
     let readout = scene.settings_readout();
     assert_eq!(readout.player, player);
     assert_eq!(
@@ -296,6 +296,8 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         threads.spawn(move || {
             driver.apply(call(Vec::new(), NoResources, state(12, false)));
             driver.set_simulation(true, 12);
+            driver.view_state();
+            driver.primary_camera();
             let preparation = driver.preparation_readout();
             let (step, _) = driver.landmark_sets();
             let facts = (
@@ -332,6 +334,26 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
     );
     drop(drawing);
 
+    // Consecutive pause changes with no call between land in order, whether
+    // or not a frame took the first up in between.
+    let paused = SceneDriver::new(gpu.clone(), RendererOptions::default());
+    paused.set_simulation(false, 0);
+    paused.set_simulation(true, 0);
+    assert_eq!(drawn_state(&paused, &target), (0, true), "both handed over");
+    paused.set_simulation(false, 0);
+    assert_eq!(drawn_state(&paused, &target), (0, false));
+    paused.set_simulation(true, 0);
+    assert_eq!(drawn_state(&paused, &target), (0, true), "after a frame");
+    paused.apply(call(Vec::new(), NoResources, state(5, true)));
+    paused.set_simulation(false, 5);
+    paused.set_simulation(true, 5);
+    assert_eq!(
+        drawn_state(&paused, &target),
+        (5, true),
+        "back to the call's own state"
+    );
+    drop(paused);
+
     // Undrawn, a clip still ends on Engine time: waiting advances the scene
     // to the latest call, and the completion reaches the Engine (#8871).
     let unwatched = SceneDriver::new(gpu.clone(), RendererOptions::default());
@@ -360,4 +382,12 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         [VideoFact::Completed { handle }]
     );
     drop(unwatched);
+}
+
+/// The step and pause the next frame of `driver` shows.
+fn drawn_state(driver: &SceneDriver, target: &OffscreenTarget) -> (u64, bool) {
+    let ((), shown) = driver.draw(|renderer, now| {
+        renderer.render_view_composition(target, now);
+    });
+    (shown.step, shown.held)
 }

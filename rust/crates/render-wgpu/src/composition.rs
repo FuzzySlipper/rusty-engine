@@ -1120,6 +1120,28 @@ impl Renderer {
         first_primary_camera(composition, &state.plan, &poses, size)
     }
 
+    /// The camera of the composition's first primary view as the last
+    /// composition frame drew it (never the observer), or as its descriptor
+    /// places it before any frame has: what a reading beside the scene
+    /// reports (`driver.rs`).
+    pub(crate) fn primary_drawn_camera(
+        &self,
+        size: (u32, u32),
+    ) -> Option<crate::overlays::OverlayCamera> {
+        let state = &self.composition;
+        let composition = state.composition.as_ref()?;
+        let poses: Vec<CameraPose> = if state.drawn_poses.len() == composition.cameras.len() {
+            state.drawn_poses.clone()
+        } else {
+            composition
+                .cameras
+                .iter()
+                .map(camera::descriptor_pose)
+                .collect()
+        };
+        first_primary_camera(composition, &state.plan, &poses, size)
+    }
+
     /// The rect the page reports for a view anchor.
     pub(crate) fn composition_anchor(&self, name: &str) -> Option<RendererViewport> {
         self.composition.anchors.get(name).copied()

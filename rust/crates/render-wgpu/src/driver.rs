@@ -136,14 +136,14 @@ pub struct PrimaryCamera {
     pub projection: render_host_contracts::RendererCameraProjection,
 }
 
-/// The inspection state of the committed scene.
+/// The inspection state of the committed scene, as the scene was last left.
 #[derive(Debug, Clone)]
 pub struct SceneView {
     pub held: bool,
     pub observer: Option<RendererCameraPose>,
-    /// The view composition the next frame draws.
+    /// The view composition the scene holds.
     pub composition: Option<Arc<RendererViewComposition>>,
-    /// A change was applied since the last frame was drawn.
+    /// A change was applied or handed over since the last frame was drawn.
     pub changed: bool,
 }
 
@@ -211,6 +211,10 @@ struct Readings {
     ghost_plates: Vec<GhostPlateReadout>,
     shadows: crate::ShadowReport,
     collision: Option<crate::CollisionShown>,
+    held: bool,
+    observer: Option<RendererCameraPose>,
+    composition: Option<Arc<RendererViewComposition>>,
+    primary_camera: Option<PrimaryCamera>,
     animation_facts: Vec<AnimationFact>,
     video_facts: Vec<VideoFact>,
 }
@@ -271,6 +275,10 @@ impl SceneDriver {
             ghost_plates: renderer.ghost_plate_readouts(),
             shadows: renderer.shadow_report(),
             collision: None,
+            held: true,
+            observer: None,
+            composition: None,
+            primary_camera: None,
             animation_facts: Vec::new(),
             video_facts: Vec::new(),
         };
@@ -333,8 +341,13 @@ impl SceneDriver {
 
     fn hand_over(&self, edit: Edit) {
         let mut beside = self.beside();
-        if let Edit::Call(call, _) | Edit::Rebaseline(call, _) = &edit {
-            beside.simulation = (call.state.held, call.state.step);
+        // The latest handed over, which the next set_simulation compares with.
+        match &edit {
+            Edit::Call(call, _) | Edit::Rebaseline(call, _) => {
+                beside.simulation = (call.state.held, call.state.step);
+            }
+            Edit::Simulation(held, step) => beside.simulation = (*held, *step),
+            Edit::CollisionLines(_) => {}
         }
         beside.edits.push(edit);
         beside.changed = true;
@@ -468,21 +481,11 @@ impl SceneDriver {
         self.scene().selected_view.clone()
     }
 
-    /// The camera of the composition's first primary view now (never the
-    /// observer): what inspection views frame the player's camera by.
+    /// The camera of the composition's first primary view as the last frame
+    /// drew it (never the observer): what inspection views frame the
+    /// player's camera by. Reading it never waits on a frame.
     pub fn primary_camera(&self) -> Option<PrimaryCamera> {
-        let now = self.now();
-        let mut scene = self.scene();
-        let size = scene
-            .renderer
-            .surface_size()
-            .unwrap_or(DEFAULT_CAPTURE_SIZE);
-        let camera = scene.renderer.primary_overlay_camera(now, size)?;
-        Some(PrimaryCamera {
-            pose: crate::camera::pose_readout(camera.pose).0,
-            orientation: camera.pose.orientation.to_array().map(f64::from),
-            projection: camera.projection,
-        })
+        self.beside().readings.primary_camera
     }
 
     /// A point and frame (`[x, y, z, w]`) in an overlay space, in the world
@@ -609,14 +612,14 @@ impl SceneDriver {
         scene.changed = true;
     }
 
+    /// As the scene was last left, so reading it never waits on a frame.
     pub fn view_state(&self) -> SceneView {
-        let scene = self.scene();
-        let changed = scene.changed || self.beside().changed;
+        let beside = self.beside();
         SceneView {
-            held: scene.held,
-            observer: scene.observer,
-            composition: scene.composition.clone(),
-            changed,
+            held: beside.readings.held,
+            observer: beside.readings.observer,
+            composition: beside.readings.composition.clone(),
+            changed: beside.changed,
         }
     }
 
@@ -867,6 +870,18 @@ impl SceneDriver {
     }
 }
 
+/// The camera of the composition's first primary view as the last frame
+/// drew it (never the observer).
+fn primary_camera(renderer: &Renderer) -> Option<PrimaryCamera> {
+    let size = renderer.surface_size().unwrap_or(DEFAULT_CAPTURE_SIZE);
+    let camera = renderer.primary_drawn_camera(size)?;
+    Some(PrimaryCamera {
+        pose: crate::camera::pose_readout(camera.pose).0,
+        orientation: camera.pose.orientation.to_array().map(f64::from),
+        projection: camera.projection,
+    })
+}
+
 /// The scene while held. Letting it go leaves the renderer's readings beside
 /// it and wakes a waiting output when something changed.
 struct HeldScene<'a> {
@@ -905,6 +920,10 @@ impl Drop for HeldScene<'_> {
             ghost_plates: scene.renderer.ghost_plate_readouts(),
             shadows: scene.renderer.shadow_report(),
             collision: scene.overlay_shown.collision,
+            held: scene.held,
+            observer: scene.observer,
+            composition: scene.composition.clone(),
+            primary_camera: primary_camera(&scene.renderer),
             animation_facts: std::mem::take(&mut scene.animation_facts),
             video_facts: std::mem::take(&mut scene.video_facts),
         };
