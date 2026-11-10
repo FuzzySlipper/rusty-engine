@@ -251,6 +251,68 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
     );
     drop(running);
 
+    // A frame holds the scene while it draws, and nothing the runtime reads
+    // or sets between calls waits on it: the readouts and facts are as the
+    // scene was last left, and the simulation state lands with the next
+    // frame (#10700).
+    let drawing = SceneDriver::new(gpu.clone(), RendererOptions::default());
+    drawing.apply(
+        [SceneChange::ViewComposition(&composition)],
+        &NoResources,
+        &|_| None,
+        state(11, true),
+    );
+    let (entered, in_draw) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let (read, reads) = std::sync::mpsc::channel();
+    let (driver, frame_target) = (&drawing, &target);
+    std::thread::scope(|threads| {
+        let frame = threads.spawn(move || {
+            driver.draw(|renderer, now| {
+                entered.send(()).unwrap();
+                released.recv().unwrap();
+                renderer.render_view_composition(frame_target, now);
+            })
+        });
+        in_draw.recv().unwrap();
+        threads.spawn(move || {
+            driver.set_simulation(false, 12);
+            let preparation = driver.preparation_readout();
+            let (step, _) = driver.landmark_sets();
+            let facts = (
+                driver.take_animation_facts().len(),
+                driver.take_video_facts().len(),
+            );
+            driver.settings_readout();
+            driver.collision_shown();
+            driver.ghost_plate_readouts();
+            driver.gpu_readout();
+            driver.scatter_upload_readout();
+            driver.skipped_ops();
+            read.send((preparation.pending, step, facts)).unwrap();
+        });
+        let read = reads
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the runtime reads without waiting on the frame");
+        assert_eq!(read, (0, 11, (0, 0)));
+        release.send(()).unwrap();
+        let ((), shown) = frame.join().unwrap();
+        assert_eq!(
+            (shown.step, shown.held),
+            (11, true),
+            "the frame drew as it began"
+        );
+    });
+    let ((), shown) = drawing.draw(|renderer, now| {
+        renderer.render_view_composition(&target, now);
+    });
+    assert_eq!(
+        (shown.step, shown.held),
+        (12, false),
+        "the next frame takes it up"
+    );
+    drop(drawing);
+
     // Undrawn, a clip still ends on Engine time: waiting advances the scene
     // to the latest call, and the completion reaches the Engine (#8871).
     let unwatched = SceneDriver::new(gpu.clone(), RendererOptions::default());

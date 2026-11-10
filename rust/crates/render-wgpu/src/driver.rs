@@ -8,6 +8,11 @@
 //! scene through [`SceneDriver::draw`], and a tool captures it through
 //! [`SceneDriver::capture`]. Animation and video facts the frames produce
 //! wait here for the runtime to report them.
+//!
+//! A frame holds the scene for as long as it draws. What the runtime reads
+//! between calls (the renderer's readouts and facts) and the simulation state
+//! it sets are kept beside the scene, current as of the last time anything
+//! held it, so reading or setting them never waits on a frame.
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -147,12 +152,44 @@ pub struct SceneDriver {
     options: RendererOptions,
     epoch: Instant,
     scene: Mutex<Scene>,
+    /// What is read and set without the scene; `wake` waits on it.
+    beside: Mutex<Beside>,
     wake: Condvar,
+}
+
+/// What the runtime reads and sets without holding the scene. Every holder
+/// of the scene takes up the simulation state set here when it takes the
+/// scene, and leaves the renderer's readings here when it lets it go. The
+/// scene is always taken first.
+struct Beside {
+    /// Something changed since the last frame was drawn.
+    changed: bool,
+    /// Whether the simulation is held, and the step the scene shows.
+    simulation: (bool, u64),
+    /// `simulation` was set since the scene last took it up.
+    simulation_set: bool,
+    readings: Readings,
+}
+
+/// The renderer's readouts as the scene was last left, and the facts its
+/// frames produced since the runtime last took them.
+struct Readings {
+    settings: crate::RendererSettingsReadout,
+    preparation: crate::PreparationReadout,
+    gpu: GpuReadout,
+    scatter: crate::ScatterUploadReadout,
+    skipped_ops: BTreeMap<&'static str, u64>,
+    last_skip: Option<String>,
+    landmarks: (u64, Vec<crate::LandmarkSetReadout>),
+    ghost_plates: Vec<GhostPlateReadout>,
+    collision: Option<crate::CollisionShown>,
+    animation_facts: Vec<AnimationFact>,
+    video_facts: Vec<VideoFact>,
 }
 
 struct Scene {
     renderer: Renderer,
-    /// Something changed since the last frame was drawn.
+    /// Something changed since the scene was last left.
     changed: bool,
     held: bool,
     step: u64,
@@ -194,9 +231,29 @@ struct Scene {
 impl SceneDriver {
     /// A renderer for the committed scene on `gpu`.
     pub fn new(gpu: Gpu, options: RendererOptions) -> Arc<Self> {
+        let renderer = Renderer::new(&gpu, options);
+        let readings = Readings {
+            settings: renderer.settings_readout(),
+            preparation: renderer.preparation_readout(),
+            gpu: renderer.gpu_readout(),
+            scatter: renderer.scatter_upload_readout(),
+            skipped_ops: BTreeMap::new(),
+            last_skip: None,
+            landmarks: (0, renderer.landmark_sets()),
+            ghost_plates: renderer.ghost_plate_readouts(),
+            collision: None,
+            animation_facts: Vec::new(),
+            video_facts: Vec::new(),
+        };
         Arc::new(Self {
+            beside: Mutex::new(Beside {
+                changed: true,
+                simulation: (true, 0),
+                simulation_set: false,
+                readings,
+            }),
             scene: Mutex::new(Scene {
-                renderer: Renderer::new(&gpu, options),
+                renderer,
                 changed: true,
                 held: true,
                 step: 0,
@@ -240,10 +297,7 @@ impl SceneDriver {
     ) {
         let now = self.now();
         let mut scene = self.scene();
-        if scene.apply(changes, resources, entities, state, now) {
-            drop(scene);
-            self.wake.notify_all();
-        }
+        scene.apply(changes, resources, entities, state, now);
     }
 
     /// Replaces the renderer with one built from a complete baseline, after
@@ -273,28 +327,30 @@ impl SceneDriver {
         scene.renderer.set_animation_time(state.elapsed_seconds);
         scene.animation_facts.clear();
         scene.video_facts.clear();
+        {
+            let mut beside = self.beside();
+            beside.readings.animation_facts.clear();
+            beside.readings.video_facts.clear();
+        }
         scene.apply(baseline, resources, entities, state, now);
         let shown = scene.overlay_shown.clone();
         scene.renderer.set_overlay_shown(shown);
         let views = scene.inspection_views.clone();
         scene.renderer.set_inspection_views(views);
         scene.changed = true;
-        drop(scene);
-        self.wake.notify_all();
     }
 
     /// Whether the simulation is held, and the step the scene shows, for a
     /// lifecycle change no product call published (pause, time mode).
+    /// The scene takes it up the next time it is held; setting it never
+    /// waits on a frame.
     pub fn set_simulation(&self, held: bool, step: u64) {
-        let mut scene = self.scene();
-        if scene.held != held || scene.step != step {
-            scene.held = held;
-            scene.step = step;
-            if held {
-                scene.lead = None;
-            }
-            scene.changed = true;
-            drop(scene);
+        let mut beside = self.beside();
+        if beside.simulation != (held, step) {
+            beside.simulation = (held, step);
+            beside.simulation_set = true;
+            beside.changed = true;
+            drop(beside);
             self.wake.notify_all();
         }
     }
@@ -306,8 +362,6 @@ impl SceneDriver {
         scene.observer = pose;
         scene.renderer.set_observer(pose);
         scene.changed = true;
-        drop(scene);
-        self.wake.notify_all();
     }
 
     /// What inspection shows: overlay sets, the Debug layer and the
@@ -320,8 +374,6 @@ impl SceneDriver {
         scene.overlay_shown = shown.clone();
         scene.renderer.set_overlay_shown(shown);
         scene.changed = true;
-        drop(scene);
-        self.wake.notify_all();
     }
 
     /// Replaces the collision wires inspection draws while
@@ -330,8 +382,6 @@ impl SceneDriver {
         let mut scene = self.scene();
         scene.renderer.set_collision_lines(lines);
         scene.changed |= scene.overlay_shown.collision.is_some();
-        drop(scene);
-        self.wake.notify_all();
     }
 
     /// Replaces the inspection views; the next frame draws them.
@@ -343,8 +393,6 @@ impl SceneDriver {
         scene.inspection_views = views.clone();
         scene.renderer.set_inspection_views(views);
         scene.changed = true;
-        drop(scene);
-        self.wake.notify_all();
     }
 
     pub fn inspection_views(&self) -> Vec<crate::InspectionView> {
@@ -408,8 +456,7 @@ impl SceneDriver {
     /// Every overlay set's landmark pairs as the last frame drew them, with
     /// the simulation step the scene shows.
     pub fn landmark_sets(&self) -> (u64, Vec<crate::LandmarkSetReadout>) {
-        let scene = self.scene();
-        (scene.step, scene.renderer.landmark_sets())
+        self.beside().readings.landmarks.clone()
     }
 
     /// Draws one inspection view once into a target of its own, as
@@ -478,7 +525,7 @@ impl SceneDriver {
 
     /// Where collision wires are read while they show.
     pub fn collision_shown(&self) -> Option<crate::CollisionShown> {
-        self.scene().overlay_shown.collision
+        self.beside().readings.collision
     }
 
     /// Where the product UI's anchored views draw (see
@@ -491,8 +538,6 @@ impl SceneDriver {
         scene.viewport_anchors = anchors.clone();
         scene.renderer.set_viewport_anchors(anchors);
         scene.changed = true;
-        drop(scene);
-        self.wake.notify_all();
     }
 
     /// The player's choices of renderer settings (video options), over
@@ -502,28 +547,27 @@ impl SceneDriver {
         scene.player_settings = player;
         scene.renderer.set_player_settings(player);
         scene.changed = true;
-        drop(scene);
-        self.wake.notify_all();
     }
 
     pub fn view_state(&self) -> SceneView {
         let scene = self.scene();
+        let changed = scene.changed || self.beside().changed;
         SceneView {
             held: scene.held,
             observer: scene.observer,
             composition: scene.composition.clone(),
-            changed: scene.changed,
+            changed,
         }
     }
 
     /// Animation facts the drawn frames produced since the last call.
     pub fn take_animation_facts(&self) -> Vec<AnimationFact> {
-        std::mem::take(&mut self.scene().animation_facts)
+        std::mem::take(&mut self.beside().readings.animation_facts)
     }
 
     /// How video playbacks ended since the last call.
     pub fn take_video_facts(&self) -> Vec<VideoFact> {
-        std::mem::take(&mut self.scene().video_facts)
+        std::mem::take(&mut self.beside().readings.video_facts)
     }
 
     /// The scene's shadow layers and choice, as the last frame left them.
@@ -533,7 +577,7 @@ impl SceneDriver {
 
     /// Every realized ghost plate as the last drawn view left it.
     pub fn ghost_plate_readouts(&self) -> Vec<GhostPlateReadout> {
-        self.scene().renderer.ghost_plate_readouts()
+        self.beside().readings.ghost_plates.clone()
     }
 
     /// Draw the committed scene: `draw` renders with the renderer at the
@@ -546,6 +590,7 @@ impl SceneDriver {
         let now = self.now();
         let mut scene = self.scene();
         scene.changed = false;
+        self.beside().changed = false;
         scene.present_at(now);
         let result = draw(&mut scene.renderer, now);
         scene.realized_seconds = scene.elapsed_seconds;
@@ -576,26 +621,32 @@ impl SceneDriver {
         timeout: Duration,
         mut ready: impl FnMut(bool) -> Option<T>,
     ) -> Option<T> {
-        let mut scene = self.scene();
-        if let Some(answer) = ready(scene.changed) {
+        if let Some(answer) = ready(self.beside().changed) {
             return Some(answer);
         }
-        if scene.realized_seconds != scene.elapsed_seconds {
-            scene.realized_seconds = scene.elapsed_seconds;
-            scene.renderer.advance_undrawn();
-            scene.collect_facts();
+        {
+            let mut scene = self.scene();
+            if scene.realized_seconds != scene.elapsed_seconds {
+                scene.realized_seconds = scene.elapsed_seconds;
+                scene.renderer.advance_undrawn();
+                scene.collect_facts();
+            }
         }
-        let (scene, _) = self
+        let beside = self.beside();
+        if let Some(answer) = ready(beside.changed) {
+            return Some(answer);
+        }
+        let (beside, _) = self
             .wake
-            .wait_timeout(scene, timeout)
+            .wait_timeout(beside, timeout)
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        ready(scene.changed)
+        ready(beside.changed)
     }
 
     /// Marks the scene changed, so an output waiting in
     /// [`Self::wait_for_change`] draws it again.
     pub fn mark_changed(&self) {
-        self.scene().changed = true;
+        self.beside().changed = true;
         self.wake.notify_all();
     }
 
@@ -604,7 +655,7 @@ impl SceneDriver {
     /// is taken first, so the wake cannot fall between `ready` answering and
     /// the wait starting.
     pub fn notify(&self) {
-        let _scene = self.scene();
+        let _beside = self.beside();
         self.wake.notify_all();
     }
 
@@ -679,27 +730,30 @@ impl SceneDriver {
 
     /// The renderer settings in effect and what the device refused.
     pub fn settings_readout(&self) -> crate::RendererSettingsReadout {
-        self.scene().renderer.settings_readout()
+        self.beside().readings.settings
     }
 
     pub fn gpu_readout(&self) -> GpuReadout {
-        self.scene().renderer.gpu_readout()
+        self.beside().readings.gpu.clone()
     }
 
     /// The scatter patches taken in so far ([`Renderer::scatter_upload_readout`]).
     pub fn scatter_upload_readout(&self) -> crate::ScatterUploadReadout {
-        self.scene().renderer.scatter_upload_readout()
+        self.beside().readings.scatter
     }
 
     /// Ops the renderer could not realize, by op, and the last one's detail.
     pub fn skipped_ops(&self) -> (BTreeMap<&'static str, u64>, Option<String>) {
-        let scene = self.scene();
-        (scene.skipped_ops.clone(), scene.last_skip.clone())
+        let beside = self.beside();
+        (
+            beside.readings.skipped_ops.clone(),
+            beside.readings.last_skip.clone(),
+        )
     }
 
     /// How far deferred preparation is ([`Renderer::preparation_readout`]).
     pub fn preparation_readout(&self) -> crate::PreparationReadout {
-        self.scene().renderer.preparation_readout()
+        self.beside().readings.preparation
     }
 
     /// Waits for every deferred texture and mesh being prepared and takes
@@ -712,8 +766,6 @@ impl SceneDriver {
         scene.record_issues(issues);
         if scene.renderer.preparation_readout() != before {
             scene.changed = true;
-            drop(scene);
-            self.wake.notify_all();
         }
     }
 
@@ -722,8 +774,32 @@ impl SceneDriver {
         &self.gpu
     }
 
-    fn scene(&self) -> MutexGuard<'_, Scene> {
-        self.scene
+    /// Holds the scene, taking up the simulation state set beside it.
+    fn scene(&self) -> HeldScene<'_> {
+        let mut scene = self
+            .scene
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut beside = self.beside();
+        if std::mem::take(&mut beside.simulation_set) {
+            let (held, step) = beside.simulation;
+            if (scene.held, scene.step) != (held, step) {
+                (scene.held, scene.step) = (held, step);
+                if held {
+                    scene.lead = None;
+                }
+                scene.changed = true;
+            }
+        }
+        drop(beside);
+        HeldScene {
+            scene,
+            driver: self,
+        }
+    }
+
+    fn beside(&self) -> MutexGuard<'_, Beside> {
+        self.beside
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -731,6 +807,54 @@ impl SceneDriver {
     /// The presentation clock camera motion is sampled on.
     fn now(&self) -> f64 {
         self.epoch.elapsed().as_secs_f64()
+    }
+}
+
+/// The scene while held. Letting it go leaves the renderer's readings beside
+/// it and wakes a waiting output when something changed.
+struct HeldScene<'a> {
+    scene: MutexGuard<'a, Scene>,
+    driver: &'a SceneDriver,
+}
+
+impl std::ops::Deref for HeldScene<'_> {
+    type Target = Scene;
+
+    fn deref(&self) -> &Scene {
+        &self.scene
+    }
+}
+
+impl std::ops::DerefMut for HeldScene<'_> {
+    fn deref_mut(&mut self) -> &mut Scene {
+        &mut self.scene
+    }
+}
+
+impl Drop for HeldScene<'_> {
+    fn drop(&mut self) {
+        let scene = &mut *self.scene;
+        let mut beside = self.driver.beside();
+        let readings = &mut beside.readings;
+        readings.settings = scene.renderer.settings_readout();
+        readings.preparation = scene.renderer.preparation_readout();
+        readings.gpu = scene.renderer.gpu_readout();
+        readings.scatter = scene.renderer.scatter_upload_readout();
+        readings.skipped_ops.clone_from(&scene.skipped_ops);
+        readings.last_skip.clone_from(&scene.last_skip);
+        readings.landmarks = (scene.step, scene.renderer.landmark_sets());
+        readings.ghost_plates = scene.renderer.ghost_plate_readouts();
+        readings.collision = scene.overlay_shown.collision;
+        readings.animation_facts.append(&mut scene.animation_facts);
+        readings.video_facts.append(&mut scene.video_facts);
+        if !beside.simulation_set {
+            beside.simulation = (scene.held, scene.step);
+        }
+        if std::mem::take(&mut scene.changed) {
+            beside.changed = true;
+            drop(beside);
+            self.driver.wake.notify_all();
+        }
     }
 }
 
