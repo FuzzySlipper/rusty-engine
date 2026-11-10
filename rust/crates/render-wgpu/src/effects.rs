@@ -2604,6 +2604,16 @@ impl Renderer {
                                     (rows_made >> 32) as u32,
                                     buffers.count,
                                 ]);
+                                // And what its instances share that shapes the
+                                // shadow: a tint fading it past the cutoff, its
+                                // size and pivot, its atlas.
+                                signature.extend(
+                                    [sprite.tint.as_slice(), &sprite.size, &sprite.pivot]
+                                        .concat()
+                                        .iter()
+                                        .map(|value| value.to_bits()),
+                                );
+                                signature.push(textures.0.unwrap_or(u32::MAX));
                                 if sways {
                                     signature.extend(time);
                                 }
@@ -2665,9 +2675,22 @@ impl Renderer {
                             };
                             let mut row = draw.row;
                             row[29] = caster_cutoff(descriptor.material.alpha);
-                            let revision = rig.views[key.1 as usize].pose_revision;
+                            // Its pose, and its drawing, which a redefinition
+                            // replaces under the same pose.
+                            let view = &rig.views[key.1 as usize];
+                            let drawing = self
+                                .tables
+                                .parts_rigs
+                                .get(view.asset)
+                                .map_or(0, |asset| asset.generation);
                             signature.extend(row.map(f32::to_bits));
-                            signature.extend([key.1, revision as u32, (revision >> 32) as u32]);
+                            signature.extend([
+                                key.1,
+                                view.pose_revision as u32,
+                                (view.pose_revision >> 32) as u32,
+                                drawing as u32,
+                                (drawing >> 32) as u32,
+                            ]);
                             rows_out.extend(row);
                             if let Some(buffers) = self.effects.rigs.get(&key) {
                                 bindings.extend(

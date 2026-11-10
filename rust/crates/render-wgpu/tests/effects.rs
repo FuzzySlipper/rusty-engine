@@ -3047,3 +3047,32 @@ fn a_swaying_sprite_s_shadow_moves_with_time_alone() {
     assert_eq!(held, 0, "a held time redraws none");
     assert_ne!(first, later, "the shadow sways as the sprite does");
 }
+
+/// A batch faded past its cutoff by its tint casts nothing, and casts again
+/// when it returns, the camera, light and instances held.
+#[test]
+fn a_batch_faded_by_its_tint_stops_and_resumes_casting() {
+    let mut cast = standing_harness(Standing::Batch, SpriteShadowPolicy::CastAndReceive);
+    let mut none = standing_harness(Standing::Batch, SpriteShadowPolicy::None);
+    let mut shadow_with = |alpha: f32| {
+        for harness in [&mut cast, &mut none] {
+            harness.apply(vec![RenderDiff::UpdateSprite {
+                handle: RenderHandle::new(10),
+                frame: None,
+                tint: Some([1.0, 1.0, 1.0, alpha]),
+                render_order: None,
+                visible: None,
+                emission_intensity: None,
+            }]);
+            // Its rows are made by the first view that draws it.
+            harness.single(&standing_eye());
+        }
+        differing_pixels(&cast.single(&standing_eye()), &none.single(&standing_eye()))
+    };
+    let shown = shadow_with(1.0);
+    let faded = shadow_with(0.0);
+    let returned = shadow_with(1.0);
+    assert!(shown > 600, "the batch casts {shown} pixels");
+    assert_eq!(faded, 0, "a batch faded past its cutoff casts nothing");
+    assert_eq!(returned, shown, "it casts again when it returns");
+}
