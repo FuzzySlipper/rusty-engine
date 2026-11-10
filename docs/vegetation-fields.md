@@ -308,11 +308,13 @@ than their area.
   or its copies from before its tile was sampled again or its layer changed.
   What is being placed or waits for room is counted (`Deferred`).
 - Choosing again: a call chooses its tile layers again only when the field
-  changed (a layer set or removed, a tile committed or invalidated, a
-  placement taken in), or the focus moved a sixteenth of a tile from where it
-  last chose. Otherwise it costs nothing. Choosing, it widens every reach by
-  that much, so what it keeps covers any focus within it; the copies' fades
-  are drawn from the camera itself.
+  changed (a layer set or removed, a tile committed or invalidated), or the
+  focus moved a sixteenth of a tile from where it last chose. Choosing, it
+  widens every reach by that much, so what it keeps covers any focus within
+  it; the copies' fades are drawn from the camera itself. A call that only
+  takes in placements keeps that choice and changes what they touch: their
+  tile layers, and the layers whose budgets they push past or that leave
+  copies out. Otherwise a call costs nothing.
 - Device ceiling: every scatter copy held is a 64-byte row per mesh group
   in one buffer the renderer binds whole, so a device holds as many rows as
   its largest storage binding, at most 16.7 million (2^24, what a selection

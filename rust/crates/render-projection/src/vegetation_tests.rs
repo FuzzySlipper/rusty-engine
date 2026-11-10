@@ -904,3 +904,200 @@ fn a_backdrop_field_roots_in_the_backdrop_scaled_and_gives_its_bands_in_layer_un
         )
         .is_err());
 }
+
+/// Every patch a field draws, by tile and layer: its generations and the
+/// copies its last creation gave the renderer; its bare entries; what it is
+/// placing; and its readout's counts.
+type Drawn = (
+    BTreeMap<((i64, i64), u32), ([u64; 2], Vec<ScatterInstance>)>,
+    BTreeMap<((i64, i64), u32), ([u64; 2], u32)>,
+    Vec<Slot>,
+    [u64; 12],
+);
+
+/// Apply `operations` to `scene` (patch handles to their copies) and read
+/// the field's drawn state through it.
+fn drawn(
+    fields: &VegetationFields,
+    scene: &mut HashMap<RenderHandle, Vec<ScatterInstance>>,
+    operations: Vec<RenderDiff>,
+) -> Drawn {
+    for operation in operations {
+        match operation {
+            RenderDiff::CreateScatterPatch { handle, patch, .. } => {
+                scene.insert(handle, patch.instances);
+            }
+            RenderDiff::Destroy { handle } => {
+                scene.remove(&handle);
+            }
+            _ => {}
+        }
+    }
+    let retained = &fields.fields[&FIELD];
+    let mut patches = BTreeMap::new();
+    let mut bare = BTreeMap::new();
+    for (&tile, held) in &retained.tiles {
+        for (&key, patch) in &held.patches {
+            patches.insert(
+                (tile, key),
+                (patch.generations, scene[&patch.handle].clone()),
+            );
+        }
+        for (&key, entry) in &held.bare {
+            bare.insert((tile, key), *entry);
+        }
+    }
+    let r = fields.readout(FIELD).unwrap();
+    let counts = [
+        u64::from(r.tiles),
+        u64::from(r.pending_tiles),
+        u64::from(r.patches),
+        r.instances,
+        u64::from(r.over_budget),
+        u64::from(r.deferred),
+        u64::from(r.placed),
+        r.placed_instances,
+        r.invalidated_tiles,
+        r.replaced_patches,
+        r.sample_bytes,
+        r.settles_reselected,
+    ];
+    (
+        patches,
+        bare,
+        retained.placing.keys().copied().collect(),
+        counts,
+    )
+}
+
+#[test]
+fn a_choice_patched_after_landings_draws_what_a_choice_from_scratch_draws() {
+    // One field patches its choice as placements land, the other chooses
+    // from scratch every time; both are given the same work, two
+    // placements at a time, and must draw the same after every settle.
+    let make = |full_choices: bool| {
+        let mut fields = VegetationFields {
+            full_choices,
+            ..VegetationFields::default()
+        };
+        fields.create(FIELD, layout(), 2).unwrap();
+        fields.set_layer(FIELD, GRASS, grass()).unwrap();
+        // A budget that leaves the farther tiles out.
+        let shrubs = VegetationLayer {
+            mesh: "mesh/shrub".into(),
+            density: 0.5,
+            seed: 23,
+            maximum_instances: 700,
+            ..grass()
+        };
+        fields.set_layer(FIELD, 5, shrubs).unwrap();
+        // Records alone, and a layer cut near the focus.
+        let trees = VegetationLayer {
+            mesh: "mesh/tree".into(),
+            density: 0.0,
+            ..grass()
+        };
+        fields.set_layer(FIELD, 7, trees).unwrap();
+        let far = VegetationLayer {
+            mesh: "mesh/far".into(),
+            density: 0.2,
+            seed: 31,
+            near: 12.0,
+            near_fade: 2.0,
+            ..grass()
+        };
+        fields.set_layer(FIELD, 9, far).unwrap();
+        fields
+    };
+    let hills = |x: f64, z: f64| (2.0 + (x * 0.21).sin() * 3.0 + (z * 0.13).cos() * 2.0) as f32;
+    let side = (layout().tile_cells + 1) as usize;
+    // Raised ground thins to a tenth: re-sampled near tiles give up their
+    // budget to the farther ones it left out.
+    let sample = |request: &VegetationRequest, raised: f32| {
+        let mut content = sampled(request, |x, z| hills(x, z) + raised);
+        let thinned = raised > 0.0 && request.x.abs() <= 1 && request.z.abs() <= 1;
+        content.samples.materials = Some(
+            (0..side * side)
+                .map(|at| u32::from((at + request.x.unsigned_abs() as usize).is_multiple_of(7)))
+                .collect(),
+        );
+        if thinned {
+            content.cover = Some(vec![0.1; side * side]);
+        } else if request.z.rem_euclid(2) == 1 {
+            content.cover = Some(vec![0.6; side * side]);
+        }
+        if (request.x + request.z).rem_euclid(3) == 0 {
+            content.records = vec![VegetationRecord {
+                layer: 7,
+                position: [
+                    4.0,
+                    hills(request.origin[0] + 4.0, request.origin[1] + 4.0),
+                    4.0,
+                ],
+                yaw: 0.3,
+                scale: 1.5,
+            }];
+        }
+        content
+    };
+    let mut patched = make(false);
+    let mut full = make(true);
+    let mut scenes = [HashMap::new(), HashMap::new()];
+    let mut steps = 0;
+    let mut settle_both = |patched: &mut VegetationFields,
+                           full: &mut VegetationFields,
+                           focus: [f64; 3],
+                           raised: f32| {
+        let operations = [
+            patched.settle(FIELD, [0.0; 3], Some(focus)).unwrap(),
+            full.settle(FIELD, [0.0; 3], Some(focus)).unwrap(),
+        ];
+        for fields in [&mut *patched, &mut *full] {
+            for request in fields.requests(FIELD, 0) {
+                let content = sample(&request, raised);
+                fields
+                    .commit(FIELD, (request.x, request.z), request.revision, content)
+                    .unwrap();
+            }
+        }
+        let [a, b] = operations;
+        let [scene_a, scene_b] = &mut scenes;
+        let (left, right) = (drawn(patched, scene_a, a), drawn(full, scene_b, b));
+        assert_eq!(left, right, "after {steps} settles");
+        steps += 1;
+    };
+    // Landings at a still focus, then within a step of it, then a sample
+    // replaced, then a step away, each followed by landings to the end.
+    let still = [8.0, 2.0, 8.0];
+    let within = [8.6, 2.0, 8.2];
+    let moved = [14.0, 2.0, 9.0];
+    for (focus, raised) in [(still, 0.0), (within, 0.0), (within, 0.5), (moved, 0.5)] {
+        if raised > 0.0 && focus == within {
+            for fields in [&mut patched, &mut full] {
+                fields
+                    .invalidate(FIELD, [-16.0, -16.0], [31.0, 31.0])
+                    .unwrap();
+            }
+        }
+        for _ in 0..400 {
+            settle_both(&mut patched, &mut full, focus, raised);
+            let waiting = |fields: &VegetationFields| {
+                let readout = fields.readout(FIELD).unwrap();
+                readout.deferred + readout.pending_tiles
+            };
+            if waiting(&patched) == 0
+                && waiting(&full) == 0
+                && patched.fields[&FIELD].landed.is_empty()
+            {
+                break;
+            }
+            patched.wait_for_placement();
+            full.wait_for_placement();
+        }
+    }
+    let readout = patched.readout(FIELD).unwrap();
+    assert!(readout.over_budget > 0, "the shrubs' budget binds");
+    assert!(readout.patches > 30, "{}", readout.patches);
+    assert!(patched.patched_choices > 20, "{}", patched.patched_choices);
+    assert_eq!(full.patched_choices, 0);
+}

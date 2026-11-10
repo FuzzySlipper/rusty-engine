@@ -30,8 +30,13 @@
 //! later settle takes each finished placement in whole. Until then a tile
 //! layer draws what it had (nothing, or its copies placed before), and what
 //! waits is counted.
+//!
+//! Choosing is the update's own cost: tiles × layers candidates for a far
+//! field. A field keeps its last choice, and a settle that only takes in
+//! placements patches it: the landed counts, the layers whose budgets they
+//! touch, and their patches, drawing what choosing from scratch would.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
@@ -344,6 +349,103 @@ struct Landed {
     microseconds: u64,
 }
 
+/// A layer's candidate on a tile the field last chose from: the tile's
+/// rank among them nearest first, the generations it is placed for, its
+/// nearest distance from where the field chose, and its count when known;
+/// its tile's patch and bare entry for the layer, kept as they change; and
+/// what its last walk made of it: the copies it holds of its layer's budget
+/// and the generations chosen.
+#[derive(Debug)]
+struct Candidate {
+    tile: (i64, i64),
+    rank: usize,
+    generations: [u64; 2],
+    near: f64,
+    known: Option<u32>,
+    drawn: Option<([u64; 2], u32)>,
+    bare: Option<([u64; 2], u32)>,
+    contribution: u32,
+    chosen: Option<[u64; 2]>,
+    /// Its copies landed and are not yet published.
+    fresh: bool,
+}
+
+impl Candidate {
+    /// Its count as a choice from scratch finds it: from its patch or its
+    /// bare entry, made for its generations.
+    fn counted(&self) -> Option<u32> {
+        match (self.drawn, self.bare) {
+            (Some((made, count)), _) if made == self.generations => Some(count),
+            (_, Some((made, count))) if made == self.generations => Some(count),
+            _ => None,
+        }
+    }
+}
+
+/// No candidate of a layer at a tile rank.
+const NO_CANDIDATE: u32 = u32::MAX;
+
+/// A layer's candidates nearest first, each tile rank's candidate, the
+/// copies they hold of its budget, and the candidates its last walk left
+/// out for the budget.
+#[derive(Debug, Default)]
+struct LayerChoice {
+    candidates: Vec<Candidate>,
+    by_rank: Vec<u32>,
+    total: u64,
+    over_budget: u32,
+}
+
+/// What a field last chose from, kept while only placements land.
+#[derive(Debug, Default)]
+struct Selection {
+    /// The tiles with samples nearest first, with their samples; and each
+    /// tile's rank, made when a patched choice first looks one up.
+    tiles: Vec<(i64, i64)>,
+    contents: Vec<Arc<Content>>,
+    ranks: Option<HashMap<(i64, i64), usize>>,
+    layers: BTreeMap<u32, LayerChoice>,
+    /// Candidates of unknown count not being placed, by tile rank then layer:
+    /// they start as the field's placements at once leave room.
+    waiting: BTreeSet<(usize, u32)>,
+}
+
+impl Selection {
+    /// A layer's candidate at a tile rank.
+    fn at(&self, key: u32, rank: usize) -> Option<usize> {
+        let index = *self.layers.get(&key)?.by_rank.get(rank)?;
+        (index != NO_CANDIDATE).then_some(index as usize)
+    }
+
+    /// A slot's candidate.
+    fn find(&mut self, (key, tile): Slot) -> Option<usize> {
+        let tiles = &self.tiles;
+        let ranks = self.ranks.get_or_insert_with(|| {
+            tiles
+                .iter()
+                .enumerate()
+                .map(|(rank, tile)| (*tile, rank))
+                .collect()
+        });
+        let rank = *ranks.get(&tile)?;
+        self.at(key, rank)
+    }
+}
+
+/// What a choice walks: the layers chosen again within their budgets, the
+/// landed candidates of the others, and whether it is a choice from scratch.
+struct Choice {
+    walk: Vec<u32>,
+    landed: Vec<(u32, usize)>,
+    whole: bool,
+}
+
+/// Whether a candidate at `near` is within a layer's reach, wider while the
+/// tile holds its patch.
+fn within(layer: &VegetationLayer, near: f64, held: bool, step: f64) -> bool {
+    near <= f64::from(layer.reach) * if held { VEGETATION_HYSTERESIS } else { 1.0 } + step
+}
+
 #[derive(Debug)]
 struct Field {
     layout: VegetationLayout,
@@ -354,6 +456,8 @@ struct Field {
     /// and those finished, which the next settle takes in.
     placing: BTreeMap<Slot, [u64; 2]>,
     landed: BTreeMap<Slot, Landed>,
+    /// The last choice, patched while only placements land.
+    selection: Option<Selection>,
     tiles: BTreeMap<(i64, i64), Tile>,
     focus: Option<[f64; 3]>,
     placement: Option<[f32; 3]>,
@@ -431,6 +535,11 @@ pub struct VegetationFields {
     fields: BTreeMap<u64, Field>,
     /// The workers placing for every field, started on first use.
     placer: Option<Placer>,
+    /// Tests: every choice from scratch, landings or not.
+    full_choices: bool,
+    /// Tests: the choices patched after landings.
+    #[cfg(test)]
+    patched_choices: u64,
 }
 
 impl Default for VegetationFields {
@@ -439,6 +548,9 @@ impl Default for VegetationFields {
             registry: StableHandleRegistry::new(RenderHandleNamespace::VEGETATION),
             fields: BTreeMap::new(),
             placer: None,
+            full_choices: false,
+            #[cfg(test)]
+            patched_choices: 0,
         }
     }
 }
@@ -474,6 +586,7 @@ impl VegetationFields {
                 placements_per_settle: placements_per_settle.max(1),
                 placing: BTreeMap::new(),
                 landed: BTreeMap::new(),
+                selection: None,
                 tiles: BTreeMap::new(),
                 focus: None,
                 placement: None,
@@ -748,7 +861,6 @@ impl VegetationFields {
                 continue;
             }
             retained.placing.remove(&placed.slot);
-            retained.changed = true;
             retained.landed.insert(
                 placed.slot,
                 Landed {
@@ -826,15 +938,35 @@ impl VegetationFields {
             let [dx, dy, dz] = [0, 1, 2].map(|axis| at[axis] - focus[axis]);
             (dx * dx + dy * dy + dz * dz).sqrt() <= step
         });
-        if !retained.changed && near_last {
+        // Only placements landed since the last choice, the focus within a
+        // step of it: that choice is patched (or, for tests, made again from
+        // scratch at the same focus).
+        let landing_only = !retained.changed && near_last;
+        if landing_only && retained.landed.is_empty() {
             readout.settles_skipped += 1;
             readout.selection_microseconds = started.elapsed().as_micros() as u64;
             readout.publication_microseconds = 0;
             return Ok(operations);
         }
         readout.settles_reselected += 1;
+        let at = if landing_only {
+            retained
+                .chosen_at
+                .expect("a landing-only choice follows a choice")
+        } else {
+            focus
+        };
+        if landing_only && !self.full_choices {
+            if let Some(selection) = retained.selection.take() {
+                #[cfg(test)]
+                {
+                    self.patched_choices += 1;
+                }
+                return self.patch_choice(field, retained, selection, step, started, operations);
+            }
+        }
         retained.changed = false;
-        retained.chosen_at = Some(focus);
+        retained.chosen_at = Some(at);
 
         // Residency: the tiles within the farthest reach widened by a step,
         // kept a little past it.
@@ -843,13 +975,11 @@ impl VegetationFields {
             .tiles
             .keys()
             .copied()
-            .filter(|&key| {
-                retained.flat_distance(focus, key) > (reach + step) * VEGETATION_HYSTERESIS
-            })
+            .filter(|&key| retained.flat_distance(at, key) > (reach + step) * VEGETATION_HYSTERESIS)
             .collect();
         for key in leaving {
             let tile = retained.tiles.remove(&key).expect("listed above");
-            retained.placing.retain(|(_, at), _| *at != key);
+            retained.placing.retain(|(_, tile), _| *tile != key);
             self.forget_tile(field, key, &tile);
             if let Some(handle) = tile.node {
                 operations.push(RenderDiff::Destroy { handle });
@@ -857,14 +987,14 @@ impl VegetationFields {
         }
         if reach > 0.0 {
             let size = retained.layout.tile_size;
-            let low = [focus[0] - reach - step, focus[2] - reach - step]
+            let low = [at[0] - reach - step, at[2] - reach - step]
                 .map(|value| (value / size).floor() as i64);
-            let high = [focus[0] + reach + step, focus[2] + reach + step]
+            let high = [at[0] + reach + step, at[2] + reach + step]
                 .map(|value| (value / size).floor() as i64);
             for x in low[0]..=high[0] {
                 for z in low[1]..=high[1] {
                     if retained.tiles.contains_key(&(x, z))
-                        || retained.flat_distance(focus, (x, z)) > reach + step
+                        || retained.flat_distance(at, (x, z)) > reach + step
                     {
                         continue;
                     }
@@ -884,361 +1014,605 @@ impl VegetationFields {
             }
         }
 
-        // Each layer's candidates, nearest first, with what is known of
-        // their counts; those unknown are placed on workers as the field's
-        // placements at once allow.
-        struct Candidate {
-            tile: (i64, i64),
-            /// Its tile's place in `nearest` (and its samples in `contents`).
-            at: usize,
-            generations: [u64; 2],
-            known: Option<u32>,
-            /// Its patch's generations and copies, and its bare entry.
-            drawn: Option<([u64; 2], u32)>,
-            bare: Option<([u64; 2], u32)>,
-        }
-        // Each tile's distances once, the tiles nearest first: every
-        // layer's candidates are those of them within its reach, in order.
-        struct Near<'a> {
-            key: (i64, i64),
-            distances: [f64; 2],
-            tile: &'a Tile,
-            content: &'a Arc<Content>,
-        }
-        // The placements landed since the last choice: those still wanted
-        // are known and new; the rest are dropped.
-        let mut landed = std::mem::take(&mut retained.landed);
-        let mut fresh: BTreeMap<Slot, Vec<ScatterInstance>> = BTreeMap::new();
-        let mut nearest: Vec<Near<'_>> = retained
+        // Each tile's distances once, the tiles nearest first; each layer's
+        // candidates are those of them within its reach, in order, with what
+        // is known of their counts.
+        let mut nearest: Vec<((i64, i64), [f64; 2], &Tile)> = retained
             .tiles
             .iter()
             .filter_map(|(&key, tile)| {
                 let content = tile.content.as_ref()?;
-                Some(Near {
-                    key,
-                    distances: retained.distances(focus, key, Some(content)),
-                    tile,
-                    content,
-                })
+                Some((key, retained.distances(at, key, Some(content)), tile))
             })
             .collect();
-        nearest.sort_by(|a, b| {
-            a.distances[0]
-                .total_cmp(&b.distances[0])
-                .then(a.key.cmp(&b.key))
-        });
-        let mut candidates: BTreeMap<u32, Vec<Candidate>> = BTreeMap::new();
+        nearest.sort_by(|a, b| a.1[0].total_cmp(&b.1[0]).then(a.0.cmp(&b.0)));
+        let mut landed = std::mem::take(&mut retained.landed);
+        let mut fresh: BTreeMap<Slot, Vec<ScatterInstance>> = BTreeMap::new();
+        let mut selection = Selection {
+            tiles: nearest.iter().map(|(key, _, _)| *key).collect(),
+            contents: nearest
+                .iter()
+                .map(|(_, _, tile)| tile.content.clone().expect("a tile with samples"))
+                .collect(),
+            ..Selection::default()
+        };
         for (&key, (layer, layer_generation)) in &retained.layers {
-            let mut list: Vec<Candidate> = Vec::new();
-            for (at, near_tile) in nearest.iter().enumerate() {
-                let Near {
-                    key: tile_key,
-                    distances: [near, far],
-                    tile,
-                    content,
-                } = *near_tile;
+            let mut choice = LayerChoice {
+                by_rank: vec![NO_CANDIDATE; nearest.len()],
+                ..LayerChoice::default()
+            };
+            for (rank, &(tile_key, [near, far], tile)) in nearest.iter().enumerate() {
+                let content = tile.content.as_ref().expect("a tile with samples");
                 // A layer of records alone has nothing to place on a tile
                 // without its records, and nothing of it is drawn there.
                 if layer.density <= 0.0 && content.recorded.binary_search(&key).is_err() {
                     continue;
                 }
-                let held = tile.patches.contains_key(&key);
-                let limit =
-                    f64::from(layer.reach) * if held { VEGETATION_HYSTERESIS } else { 1.0 } + step;
-                if near > limit || (layer.near > 0.0 && far < f64::from(layer.near) - step) {
+                let drawn = tile
+                    .patches
+                    .get(&key)
+                    .map(|patch| (patch.generations, patch.instances));
+                if !within(layer, near, drawn.is_some(), step)
+                    || (layer.near > 0.0 && far < f64::from(layer.near) - step)
+                {
                     continue;
                 }
-                let generations = [content.generation, *layer_generation];
-                let slot = (key, tile_key);
-                let known = match (tile.patches.get(&key), tile.bare.get(&key)) {
-                    (Some(patch), _) if patch.generations == generations => Some(patch.instances),
-                    (_, Some((made, count))) if *made == generations => Some(*count),
-                    _ => match landed.remove(&slot) {
-                        Some(landing) if landing.generations == generations => {
-                            let count = landing.instances.len() as u32;
-                            let readout = &mut retained.readout;
-                            readout.placed += 1;
-                            readout.placed_instances += u64::from(count);
-                            readout.placement_microseconds += landing.microseconds;
-                            fresh.insert(slot, landing.instances);
-                            Some(count)
-                        }
-                        _ => None,
-                    },
-                };
-                list.push(Candidate {
+                let mut candidate = Candidate {
                     tile: tile_key,
-                    at,
-                    generations,
-                    known,
-                    drawn: tile
-                        .patches
-                        .get(&key)
-                        .map(|patch| (patch.generations, patch.instances)),
+                    rank,
+                    generations: [content.generation, *layer_generation],
+                    near,
+                    known: None,
+                    drawn,
                     bare: tile.bare.get(&key).copied(),
+                    contribution: 0,
+                    chosen: None,
+                    fresh: false,
+                };
+                candidate.known = candidate.counted().or_else(|| {
+                    let landing = landed.remove(&(key, tile_key))?;
+                    if landing.generations != candidate.generations {
+                        return None;
+                    }
+                    let count = landing.instances.len() as u32;
+                    let readout = &mut retained.readout;
+                    readout.placed += 1;
+                    readout.placed_instances += u64::from(count);
+                    readout.placement_microseconds += landing.microseconds;
+                    fresh.insert((key, tile_key), landing.instances);
+                    Some(count)
                 });
+                candidate.fresh = fresh.contains_key(&(key, tile_key));
+                candidate.contribution = candidate
+                    .known
+                    .or(candidate.drawn.map(|(_, count)| count))
+                    .unwrap_or(0);
+                choice.total += u64::from(candidate.contribution);
+                if candidate.known.is_none()
+                    && retained.placing.get(&(key, tile_key)) != Some(&candidate.generations)
+                {
+                    selection.waiting.insert((rank, key));
+                }
+                choice.by_rank[rank] = choice.candidates.len() as u32;
+                choice.candidates.push(candidate);
             }
-            candidates.insert(key, list);
+            selection.layers.insert(key, choice);
         }
+        // What lands for a tile layer no longer a candidate is dropped, and
+        // the patches of tile layers no longer candidates go.
         drop(landed);
-        // Where each tile stands in `nearest`, for what is chosen on it.
-        let tile_at: HashMap<(i64, i64), usize> = nearest
-            .iter()
-            .enumerate()
-            .map(|(at, near_tile)| (near_tile.key, at))
-            .collect();
-        let tile_count = nearest.len();
-        let contents: Vec<Arc<Content>> = nearest
-            .iter()
-            .map(|near_tile| near_tile.content.clone())
-            .collect();
+        let mut leaving: Vec<Slot> = Vec::new();
+        for (rank, &(tile_key, _, tile)) in nearest.iter().enumerate() {
+            for &key in tile.patches.keys() {
+                if selection.at(key, rank).is_none() {
+                    leaving.push((key, tile_key));
+                }
+            }
+        }
         drop(nearest);
-        // Placing: the candidates whose counts are unknown and that are not
-        // being placed for their generations already, nearest first across
-        // layers (the budget goes where it shows most), as many as the
-        // field's placements at once leave room for.
+        for (key, tile_key) in leaving {
+            let tile = retained
+                .tiles
+                .get_mut(&tile_key)
+                .expect("a tile with samples");
+            let patch = tile.patches.remove(&key).expect("listed above");
+            self.registry
+                .remove(&NodeKey::Patch(field, tile_key.0, tile_key.1, key));
+            operations.push(RenderDiff::Destroy {
+                handle: patch.handle,
+            });
+        }
+        let walk: Vec<u32> = selection.layers.keys().copied().collect();
+        self.choose(
+            field,
+            retained,
+            &mut selection,
+            fresh,
+            Choice {
+                walk,
+                landed: Vec::new(),
+                whole: true,
+            },
+            step,
+            started,
+            &mut operations,
+        )?;
+        retained.selection = Some(selection);
+        Ok(operations)
+    }
+
+    /// Only placements landed since the last choice: they become known
+    /// counts in it, and only what they change is chosen and published again.
+    fn patch_choice(
+        &mut self,
+        field: u64,
+        retained: &mut Field,
+        mut selection: Selection,
+        step: f64,
+        started: Instant,
+        mut operations: Vec<RenderDiff>,
+    ) -> Result<Vec<RenderDiff>, VegetationError> {
+        let mut fresh: BTreeMap<Slot, Vec<ScatterInstance>> = BTreeMap::new();
+        // Each layer's landed candidates and the copies they held before.
+        let mut landed: BTreeMap<u32, Vec<(usize, u32)>> = BTreeMap::new();
+        for (slot, landing) in std::mem::take(&mut retained.landed) {
+            let Some(index) = selection.find(slot) else {
+                continue;
+            };
+            let candidate = &mut selection
+                .layers
+                .get_mut(&slot.0)
+                .expect("a found layer")
+                .candidates[index];
+            if candidate.generations != landing.generations || candidate.known.is_some() {
+                continue;
+            }
+            let count = landing.instances.len() as u32;
+            let readout = &mut retained.readout;
+            readout.placed += 1;
+            readout.placed_instances += u64::from(count);
+            readout.placement_microseconds += landing.microseconds;
+            candidate.known = Some(count);
+            candidate.fresh = true;
+            landed
+                .entry(slot.0)
+                .or_default()
+                .push((index, candidate.contribution));
+            fresh.insert(slot, landing.instances);
+        }
+        // A layer whose budget left nothing out and still holds every copy
+        // after the landings chooses its other candidates as before: only
+        // the landed ones change. Any other with landings, and any whose
+        // budget leaves some out, is walked again.
+        let mut walk = Vec::new();
+        let mut fast = Vec::new();
+        for (&key, choice) in &selection.layers {
+            let layer = &retained.layers[&key].0;
+            let Some(indices) = landed.get(&key) else {
+                if choice.over_budget > 0 {
+                    walk.push(key);
+                }
+                continue;
+            };
+            let total = indices
+                .iter()
+                .fold(choice.total, |total, &(index, before)| {
+                    total - u64::from(before)
+                        + u64::from(choice.candidates[index].known.unwrap_or(0))
+                });
+            let held = indices.iter().all(|&(index, _)| {
+                let candidate = &choice.candidates[index];
+                within(layer, candidate.near, candidate.drawn.is_some(), step)
+            });
+            if choice.over_budget == 0 && total <= u64::from(layer.maximum_instances) && held {
+                fast.extend(indices.iter().map(|&(index, _)| (key, index)));
+            } else {
+                walk.push(key);
+            }
+        }
+        self.choose(
+            field,
+            retained,
+            &mut selection,
+            fresh,
+            Choice {
+                walk,
+                landed: fast,
+                whole: false,
+            },
+            step,
+            started,
+            &mut operations,
+        )?;
+        retained.selection = Some(selection);
+        Ok(operations)
+    }
+
+    /// Choose from `selection`: start the waiting placements there is room
+    /// for, nearest first across layers; walk the layers named within their
+    /// budgets, nearest first, and settle the landed candidates of the others
+    /// alone; start the chosen tile layers the budget had left out; publish
+    /// what changed; and bring the selection to what a choice from scratch
+    /// would now find.
+    #[allow(clippy::too_many_arguments)]
+    fn choose(
+        &mut self,
+        field: u64,
+        retained: &mut Field,
+        selection: &mut Selection,
+        mut fresh: BTreeMap<Slot, Vec<ScatterInstance>>,
+        choice: Choice,
+        step: f64,
+        started: Instant,
+        operations: &mut Vec<RenderDiff>,
+    ) -> Result<(), VegetationError> {
         let placements = retained.placements_per_settle as usize;
         let layout = retained.layout;
-        let mut jobs: Vec<(usize, u32)> = candidates
-            .iter()
-            .flat_map(|(&key, list)| {
-                let placing = &retained.placing;
-                list.iter()
-                    .enumerate()
-                    .filter(move |(_, candidate)| {
-                        candidate.known.is_none()
-                            && placing.get(&(key, candidate.tile)) != Some(&candidate.generations)
-                    })
-                    .map(move |(index, _)| (index, key))
-            })
-            .collect();
-        jobs.sort();
         let room = placements.saturating_sub(retained.placing.len());
-        let mut waiting = jobs.len().saturating_sub(room);
-        jobs.truncate(room);
-        let placer = self.placer.get_or_insert_with(Placer::new);
-        for &(index, key) in &jobs {
-            let candidate = &candidates[&key][index];
+        let starting: Vec<(usize, u32)> = selection.waiting.iter().take(room).copied().collect();
+        for (rank, key) in starting {
+            selection.waiting.remove(&(rank, key));
+            let index = selection.at(key, rank).expect("a waiting candidate");
+            let candidate = &selection.layers[&key].candidates[index];
             let slot = (key, candidate.tile);
             retained.placing.insert(slot, candidate.generations);
-            placer.start(PlacementJob {
-                field,
-                slot,
-                generations: candidate.generations,
-                layout,
-                content: contents[candidate.at].clone(),
-                layer: retained.layers[&key].0.clone(),
-            });
+            self.placer
+                .get_or_insert_with(Placer::new)
+                .start(PlacementJob {
+                    field,
+                    slot,
+                    generations: candidate.generations,
+                    layout,
+                    content: selection.contents[rank].clone(),
+                    layer: retained.layers[&key].0.clone(),
+                });
         }
 
         // Choosing: within each layer's budget, nearest first. A tile layer
         // waiting to be placed again counts and draws what it has meanwhile.
-        // What is chosen on each tile (in `nearest` order), by layer key in
-        // order. A tile is touched only where its bare entry changes. Chosen
-        // tile layers last counted while the budget left them out need
-        // their copies again: they go to workers as there is room, nearest
-        // first in each layer.
-        let mut chosen: Vec<Vec<(u32, [u64; 2])>> = vec![Vec::new(); tile_count];
-        let mut late: Vec<(Slot, [u64; 2], Arc<Content>)> = Vec::new();
-        let mut over_budget = 0u32;
-        for (&key, list) in &candidates {
-            let mut budget = u64::from(retained.layers[&key].0.maximum_instances);
-            for candidate in list {
-                let (count, generations) = match (candidate.known, candidate.drawn) {
-                    (Some(count), _) => (count, candidate.generations),
-                    (None, Some((generations, count))) => (count, generations),
-                    (None, None) => continue,
-                };
-                // Bare ground draws nothing until it changes; past the
-                // budget, it is counted.
-                let bare = if count == 0 {
-                    Some((generations, 0))
-                } else if u64::from(count) > budget {
-                    over_budget += 1;
-                    Some((generations, count))
-                } else {
-                    budget -= u64::from(count);
-                    None
-                };
-                if bare != candidate.bare {
-                    let tile = retained
-                        .tiles
-                        .get_mut(&candidate.tile)
-                        .expect("a candidate's tile");
-                    match bare {
-                        Some(entry) => tile.bare.insert(key, entry),
-                        None => tile.bare.remove(&key),
-                    };
-                }
-                if bare.is_some() {
-                    continue;
-                }
-                chosen[candidate.at].push((key, generations));
+        // A tile's bare entry changes only where its count's fate does.
+        // Chosen tile layers last counted while the budget left them out
+        // need their copies again: they take the room left, nearest first in
+        // each layer. Each candidate is brought to what a choice from
+        // scratch would find of it (its count, the copies it holds of its
+        // layer's budget, whether it waits to be placed) as it goes, and
+        // again where publication changes its patch.
+        let Selection {
+            layers,
+            waiting,
+            contents,
+            ..
+        } = &mut *selection;
+        let mut late: Vec<(Slot, [u64; 2], usize)> = Vec::new();
+        let mut publish: Vec<(u32, usize)> = Vec::new();
+        for &key in &choice.walk {
+            let layer = &retained.layers[&key].0;
+            let mut budget = u64::from(layer.maximum_instances);
+            let walked = layers.get_mut(&key).expect("a walked layer");
+            walked.over_budget = 0;
+            for (index, candidate) in walked.candidates.iter_mut().enumerate() {
+                candidate.chosen = None;
                 let slot = (key, candidate.tile);
-                let drawn = candidate
-                    .drawn
-                    .is_some_and(|(drawn, _)| drawn == generations);
-                if !drawn
-                    && !fresh.contains_key(&slot)
-                    && retained.placing.get(&slot) != Some(&generations)
-                {
-                    late.push((slot, generations, contents[candidate.at].clone()));
+                if within(layer, candidate.near, candidate.drawn.is_some(), step) {
+                    let counted = match (candidate.known, candidate.drawn) {
+                        (Some(count), _) => Some((count, candidate.generations)),
+                        (None, Some((generations, count))) => Some((count, generations)),
+                        (None, None) => None,
+                    };
+                    if let Some((count, generations)) = counted {
+                        // Bare ground draws nothing until it changes; past
+                        // the budget, it is counted.
+                        let bare = if count == 0 {
+                            Some((generations, 0))
+                        } else if u64::from(count) > budget {
+                            walked.over_budget += 1;
+                            Some((generations, count))
+                        } else {
+                            budget -= u64::from(count);
+                            None
+                        };
+                        if bare != candidate.bare {
+                            set_bare(&mut retained.tiles, candidate, key, bare);
+                            let before = candidate.contribution;
+                            let after =
+                                derive(layer, key, candidate, step, &retained.placing, waiting);
+                            walked.total = walked.total - u64::from(before) + u64::from(after);
+                        }
+                        if bare.is_none() {
+                            candidate.chosen = Some(generations);
+                            if candidate.drawn.map(|(drawn, _)| drawn) != Some(generations)
+                                && !candidate.fresh
+                                && retained.placing.get(&slot) != Some(&generations)
+                            {
+                                late.push((slot, generations, candidate.rank));
+                            }
+                        }
+                    }
+                }
+                if (candidate.drawn.is_some() && candidate.chosen.is_none()) || candidate.fresh {
+                    publish.push((key, index));
                 }
             }
         }
-        let chosen_on = |tile_key: (i64, i64), key: u32| -> Option<[u64; 2]> {
-            let on = &chosen[*tile_at.get(&tile_key)?];
-            on.binary_search_by_key(&key, |(layer, _)| *layer)
-                .ok()
-                .map(|index| on[index].1)
-        };
-        let room = placements.saturating_sub(retained.placing.len());
-        waiting += late.len().saturating_sub(room);
-        late.truncate(room);
-        let placer = self.placer.get_or_insert_with(Placer::new);
-        for (slot, generations, content) in late {
-            retained.placing.insert(slot, generations);
-            placer.start(PlacementJob {
-                field,
-                slot,
-                generations,
-                layout,
-                content,
-                layer: retained.layers[&slot.0].0.clone(),
-            });
+        for &(key, index) in &choice.landed {
+            let layer = &retained.layers[&key].0;
+            let landed = layers.get_mut(&key).expect("a landed layer");
+            let candidate = &mut landed.candidates[index];
+            let count = candidate.known.expect("a landed count");
+            let bare = (count == 0).then_some((candidate.generations, 0));
+            if bare != candidate.bare {
+                set_bare(&mut retained.tiles, candidate, key, bare);
+            }
+            candidate.chosen = bare.is_none().then_some(candidate.generations);
+            publish.push((key, index));
+            let before = candidate.contribution;
+            let after = derive(layer, key, candidate, step, &retained.placing, waiting);
+            landed.total = landed.total - u64::from(before) + u64::from(after);
         }
-        let deferred = (waiting + retained.placing.len()) as u32;
+        let room = placements.saturating_sub(retained.placing.len());
+        late.truncate(room);
+        for (slot, generations, rank) in late {
+            retained.placing.insert(slot, generations);
+            waiting.remove(&(rank, slot.0));
+            self.placer
+                .get_or_insert_with(Placer::new)
+                .start(PlacementJob {
+                    field,
+                    slot,
+                    generations,
+                    layout,
+                    content: contents[rank].clone(),
+                    layer: retained.layers[&slot.0].0.clone(),
+                });
+        }
         let selection_time = started.elapsed();
 
         // Publication: drop the patches no longer chosen, replace those
         // whose new copies are ready, and make the new ones.
         let publishing = Instant::now();
-        let root = retained.root;
-        for (&tile_key, tile) in &mut retained.tiles {
-            let (x, z) = tile_key;
-            let mut leaving: Vec<(u32, bool)> = Vec::new();
-            for (&key, patch) in &tile.patches {
-                match chosen_on(tile_key, key) {
-                    None => leaving.push((key, false)),
-                    Some(generations)
-                        if generations != patch.generations
-                            && fresh.contains_key(&(key, tile_key)) =>
-                    {
-                        leaving.push((key, generations[0] != patch.generations[0]));
-                    }
-                    Some(_) => {}
-                }
-            }
-            for (key, resampled) in leaving {
-                let patch = tile.patches.remove(&key).expect("listed above");
-                retained.readout.replaced_patches += u64::from(resampled);
-                self.registry.remove(&NodeKey::Patch(field, x, z, key));
-                operations.push(RenderDiff::Destroy {
-                    handle: patch.handle,
-                });
-            }
-        }
-        for ((key, tile_key), instances) in fresh {
-            let Some(generations) = chosen_on(tile_key, key) else {
-                continue;
-            };
-            let tile = retained.tiles.get_mut(&tile_key).expect("a chosen tile");
-            if tile.patches.contains_key(&key) {
-                continue;
-            }
-            let (x, z) = tile_key;
-            let parent = match tile.node {
-                Some(handle) => handle,
-                None => {
-                    let handle = self.registry.allocate(NodeKey::Tile(field, x, z))?;
-                    let origin = [x as f64 * layout.tile_size, z as f64 * layout.tile_size];
-                    let mut node = RenderNode::new(Geometry::Group);
-                    node.transform = Transform {
-                        translation: [origin[0] as f32, 0.0, origin[1] as f32],
-                        ..Transform::IDENTITY
-                    };
-                    operations.push(RenderDiff::Create {
-                        handle,
-                        parent: root,
-                        node,
-                    });
-                    tile.node = Some(handle);
-                    handle
-                }
-            };
+        let mut publication = Publication {
+            field,
+            layout,
+            root: retained.root,
+            replaced: 0,
+            patches: 0,
+            instances: 0,
+        };
+        let Selection {
+            layers, waiting, ..
+        } = &mut *selection;
+        for (key, index) in publish {
             let layer = &retained.layers[&key].0;
-            let units = layout.scale as f32;
-            let handle = self.registry.allocate(NodeKey::Patch(field, x, z, key))?;
-            tile.patches.insert(
+            let published = layers.get_mut(&key).expect("a published layer");
+            let candidate = &mut published.candidates[index];
+            publication.publish(
+                &mut self.registry,
+                &mut retained.tiles,
+                layer,
                 key,
-                Patch {
-                    handle,
-                    instances: instances.len() as u32,
-                    generations,
-                },
-            );
-            operations.push(RenderDiff::CreateScatterPatch {
-                handle,
-                parent: Some(parent),
-                patch: ScatterPatchDescriptor {
-                    asset: layer.mesh.clone(),
-                    material_overrides: layer.material_overrides.clone(),
-                    instances,
-                    // The renderer measures from the camera in layer units.
-                    fade: layer.fade_band(units),
-                    shadow_casting: layer.shadow_casting,
-                    lods: layer
-                        .lods
-                        .iter()
-                        .map(|lod| ScatterLod {
-                            start: lod.start * units,
-                            ..lod.clone()
-                        })
-                        .collect(),
-                    lod_band: layer.lod_band * units,
-                    thinning: ScatterThinning {
-                        points: layer
-                            .thinning
-                            .points
-                            .iter()
-                            .map(|&[distance, share]| [distance * units, share])
-                            .collect(),
-                        ..layer.thinning.clone()
-                    },
-                },
-            });
+                candidate,
+                &mut fresh,
+                operations,
+            )?;
+            candidate.fresh = false;
+            let before = candidate.contribution;
+            let after = derive(layer, key, candidate, step, &retained.placing, waiting);
+            published.total = published.total - u64::from(before) + u64::from(after);
         }
         let publication_time = publishing.elapsed();
 
         let readout = &mut retained.readout;
+        readout.replaced_patches += publication.replaced;
         readout.selection_microseconds = selection_time.as_micros() as u64;
         readout.publication_microseconds = publication_time.as_micros() as u64;
-        readout.over_budget = over_budget;
-        readout.deferred = deferred;
-        readout.tiles = retained
-            .tiles
+        readout.over_budget = selection
+            .layers
             .values()
-            .filter(|tile| tile.content.is_some())
-            .count() as u32;
-        readout.pending_tiles = retained.tiles.values().filter(|tile| !tile.current).count() as u32;
-        readout.patches = retained
-            .tiles
-            .values()
-            .map(|tile| tile.patches.len() as u32)
+            .map(|layer| layer.over_budget)
             .sum();
-        readout.instances = retained
-            .tiles
-            .values()
-            .flat_map(|tile| tile.patches.values())
-            .map(|patch| u64::from(patch.instances))
-            .sum();
-        readout.sample_bytes = retained
-            .tiles
-            .values()
-            .filter_map(|tile| tile.content.as_ref())
-            .map(|content| content.bytes)
-            .sum();
-        Ok(operations)
+        readout.deferred = (selection.waiting.len() + retained.placing.len()) as u32;
+        if choice.whole {
+            readout.tiles = retained
+                .tiles
+                .values()
+                .filter(|tile| tile.content.is_some())
+                .count() as u32;
+            readout.pending_tiles =
+                retained.tiles.values().filter(|tile| !tile.current).count() as u32;
+            readout.patches = retained
+                .tiles
+                .values()
+                .map(|tile| tile.patches.len() as u32)
+                .sum();
+            readout.instances = retained
+                .tiles
+                .values()
+                .flat_map(|tile| tile.patches.values())
+                .map(|patch| u64::from(patch.instances))
+                .sum();
+            readout.sample_bytes = retained
+                .tiles
+                .values()
+                .filter_map(|tile| tile.content.as_ref())
+                .map(|content| content.bytes)
+                .sum();
+        } else {
+            readout.patches = (i64::from(readout.patches) + publication.patches) as u32;
+            readout.instances = (readout.instances as i64 + publication.instances) as u64;
+        }
+        Ok(())
+    }
+}
+
+/// Bring a candidate to what a choice from scratch would find of it: its
+/// count from its patch or bare entry, whether it waits to be placed, and
+/// (returned) the copies it holds of its layer's budget.
+fn derive(
+    layer: &VegetationLayer,
+    key: u32,
+    candidate: &mut Candidate,
+    step: f64,
+    placing: &BTreeMap<Slot, [u64; 2]>,
+    waiting: &mut BTreeSet<(usize, u32)>,
+) -> u32 {
+    let member = within(layer, candidate.near, candidate.drawn.is_some(), step);
+    candidate.known = candidate.counted();
+    candidate.contribution = if member {
+        candidate
+            .known
+            .or(candidate.drawn.map(|(_, count)| count))
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    if member
+        && candidate.known.is_none()
+        && placing.get(&(key, candidate.tile)) != Some(&candidate.generations)
+    {
+        waiting.insert((candidate.rank, key));
+    } else {
+        waiting.remove(&(candidate.rank, key));
+    }
+    candidate.contribution
+}
+
+/// Set a candidate's bare entry, on its tile too.
+fn set_bare(
+    tiles: &mut BTreeMap<(i64, i64), Tile>,
+    candidate: &mut Candidate,
+    key: u32,
+    bare: Option<([u64; 2], u32)>,
+) {
+    let tile = tiles.get_mut(&candidate.tile).expect("a candidate's tile");
+    match bare {
+        Some(entry) => tile.bare.insert(key, entry),
+        None => tile.bare.remove(&key),
+    };
+    candidate.bare = bare;
+}
+
+/// A choice's publication: where its patches stand, and what it changed.
+struct Publication {
+    field: u64,
+    layout: VegetationLayout,
+    root: Option<RenderHandle>,
+    replaced: u64,
+    patches: i64,
+    instances: i64,
+}
+
+impl Publication {
+    /// Drop a candidate's patch if it is no longer chosen or its new copies
+    /// are ready, and make its new one.
+    #[allow(clippy::too_many_arguments)]
+    fn publish(
+        &mut self,
+        registry: &mut StableHandleRegistry<NodeKey>,
+        tiles: &mut BTreeMap<(i64, i64), Tile>,
+        layer: &VegetationLayer,
+        key: u32,
+        candidate: &mut Candidate,
+        fresh: &mut BTreeMap<Slot, Vec<ScatterInstance>>,
+        operations: &mut Vec<RenderDiff>,
+    ) -> Result<(), VegetationError> {
+        let slot = (key, candidate.tile);
+        let (x, z) = candidate.tile;
+        let field = self.field;
+        if let Some((drawn, count)) = candidate.drawn {
+            let leaving = match candidate.chosen {
+                None => Some(false),
+                Some(generations) if generations != drawn && fresh.contains_key(&slot) => {
+                    Some(generations[0] != drawn[0])
+                }
+                Some(_) => None,
+            };
+            if let Some(resampled) = leaving {
+                let tile = tiles.get_mut(&candidate.tile).expect("a candidate's tile");
+                let patch = tile.patches.remove(&key).expect("a drawn patch");
+                self.replaced += u64::from(resampled);
+                registry.remove(&NodeKey::Patch(field, x, z, key));
+                operations.push(RenderDiff::Destroy {
+                    handle: patch.handle,
+                });
+                self.patches -= 1;
+                self.instances -= i64::from(count);
+                candidate.drawn = None;
+            }
+        }
+        let Some(generations) = candidate.chosen else {
+            return Ok(());
+        };
+        if candidate.drawn.is_some() {
+            return Ok(());
+        }
+        let Some(copies) = fresh.remove(&slot) else {
+            return Ok(());
+        };
+        let tile = tiles.get_mut(&candidate.tile).expect("a candidate's tile");
+        let parent = match tile.node {
+            Some(handle) => handle,
+            None => {
+                let handle = registry.allocate(NodeKey::Tile(field, x, z))?;
+                let size = self.layout.tile_size;
+                let mut node = RenderNode::new(Geometry::Group);
+                node.transform = Transform {
+                    translation: [(x as f64 * size) as f32, 0.0, (z as f64 * size) as f32],
+                    ..Transform::IDENTITY
+                };
+                operations.push(RenderDiff::Create {
+                    handle,
+                    parent: self.root,
+                    node,
+                });
+                tile.node = Some(handle);
+                handle
+            }
+        };
+        let units = self.layout.scale as f32;
+        let handle = registry.allocate(NodeKey::Patch(field, x, z, key))?;
+        let count = copies.len() as u32;
+        tile.patches.insert(
+            key,
+            Patch {
+                handle,
+                instances: count,
+                generations,
+            },
+        );
+        candidate.drawn = Some((generations, count));
+        self.patches += 1;
+        self.instances += i64::from(count);
+        operations.push(RenderDiff::CreateScatterPatch {
+            handle,
+            parent: Some(parent),
+            patch: ScatterPatchDescriptor {
+                asset: layer.mesh.clone(),
+                material_overrides: layer.material_overrides.clone(),
+                instances: copies,
+                // The renderer measures from the camera in layer units.
+                fade: layer.fade_band(units),
+                shadow_casting: layer.shadow_casting,
+                lods: layer
+                    .lods
+                    .iter()
+                    .map(|lod| ScatterLod {
+                        start: lod.start * units,
+                        ..lod.clone()
+                    })
+                    .collect(),
+                lod_band: layer.lod_band * units,
+                thinning: ScatterThinning {
+                    points: layer
+                        .thinning
+                        .points
+                        .iter()
+                        .map(|&[distance, share]| [distance * units, share])
+                        .collect(),
+                    ..layer.thinning.clone()
+                },
+            },
+        });
+        Ok(())
     }
 }
 
