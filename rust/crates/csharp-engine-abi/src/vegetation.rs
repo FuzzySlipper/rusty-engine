@@ -25,8 +25,9 @@ pub struct NativeVegetationFocus {
 
 /// A new field over a spatial session's world (none: the scene's own
 /// space), in square tiles of `tile_size` field units sampled `tile_cells`
-/// cells a side (1 to 256). At most `placements_per_call` tile layers are
-/// placed each call; the rest wait, counted in the readout. It draws in
+/// cells a side (1 to 256). Its tile layers are placed on workers, at most
+/// `placements_per_call` at once, and a later call takes each in; the rest
+/// wait, counted in the readout. It draws in
 /// `layer` (Scene or Backdrop), its point (0, 0, 0) at `origin` (with a
 /// session, that far from the world's origin in the session's frame), one
 /// field unit spanning `scale` layer units: its tiles, focus, reach, fades,
@@ -258,12 +259,14 @@ pub struct NativeVegetationReadout {
     pub instances: u64,
     /// Tile layers in reach a layer's `maximum_instances` left bare.
     pub over_budget: u32,
-    /// Tile layers in reach with samples waiting for a placement.
+    /// Tile layers in reach with samples waiting for a placement: being
+    /// placed on workers, or waiting for one.
     pub deferred: u32,
-    /// The last call's placements (tile layers) and the copies they made;
-    /// its time placing (on workers, end to end), choosing what is drawn,
-    /// and turning that into renderer work. The renderer's upload of the
-    /// copies is in the renderer's own frame readout.
+    /// The placements (tile layers) the last call took in from workers and
+    /// the copies they made, the workers' time placing them, and the call's
+    /// own time choosing what is drawn and turning that into renderer work.
+    /// The renderer's upload of the copies is in the renderer's own frame
+    /// readout.
     pub placed: u32,
     pub placed_instances: u64,
     pub placement_microseconds: u64,

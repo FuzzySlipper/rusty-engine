@@ -1,8 +1,9 @@
 //! Vegetation fields (#10016): the product samples tiles of ground when the
 //! Engine asks and decides what grows on them; the Engine keeps the tiles
-//! about a focus, places each layer's copies within its budgets on worker
-//! threads as each call finishes, and draws them as retained scatter
-//! patches. The mechanism is `render_projection::VegetationFields`.
+//! about a focus, places each layer's copies on worker threads, takes the
+//! finished placements in as a later call finishes, chooses within its
+//! budgets and draws them as retained scatter patches. The mechanism is
+//! `render_projection::VegetationFields`.
 
 use std::{collections::BTreeMap, ffi::c_void};
 
@@ -95,7 +96,7 @@ impl RetainedField {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Default)]
 struct VegetationState {
     fields: BTreeMap<u64, RetainedField>,
     tiles: VegetationFields,
@@ -614,10 +615,26 @@ impl RuntimeVegetationBridge {
         self.readout(request.field)
     }
 
+    /// Wait for the placements on workers, for a call to take them in;
+    /// whether any field had placements waiting.
+    #[cfg(test)]
+    pub(crate) fn wait_for_placement(&mut self) -> bool {
+        let state = &mut self.state;
+        let waiting = state.fields.keys().any(|field| {
+            state
+                .tiles
+                .readout(*field)
+                .is_some_and(|readout| readout.deferred > 0)
+        });
+        state.tiles.wait_for_placement();
+        waiting
+    }
+
     /// As a call finishes: resolve every field's place (a rebase moves its
     /// root) and focus (`camera` gives a camera's position in the scene, or
     /// with `true` where it stands in the backdrop),
-    /// then place, choose and project.
+    /// then take in finished placements, start new ones, choose and
+    /// project.
     pub(crate) fn settle(
         &mut self,
         call: &mut RuntimeVegetationCall,

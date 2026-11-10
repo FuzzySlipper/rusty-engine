@@ -19,7 +19,7 @@ public readonly partial record struct VegetationFieldCreateRequest
 
     /// <summary>
     /// A field in the scene as above, placing at most <paramref name="PlacementsPerCall"/> tile
-    /// layers a call.
+    /// layers at once on the Engine's workers.
     /// </summary>
     public VegetationFieldCreateRequest(
         OptionalSpatialSession Session,

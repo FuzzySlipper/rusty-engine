@@ -25,11 +25,14 @@
 //! A hidden field draws nothing, shadows included, and holds still: its
 //! tiles and patches stay for when it is shown again.
 //!
-//! Placing is the costly step: it runs on worker threads, at most
-//! `placements_per_settle` tile layers a settle, and what waits is counted.
+//! Placing is the costly step: it runs on the fields' own worker threads,
+//! at most `placements_per_settle` tile layers of a field at once, and a
+//! later settle takes each finished placement in whole. Until then a tile
+//! layer draws what it had (nothing, or its copies placed before), and what
+//! waits is counted.
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Instant;
 
 use render_model::{
@@ -38,7 +41,6 @@ use render_model::{
     MAX_SCATTER_PATCH_INSTANCES,
 };
 use svc_mesh::heightfield::{HeightfieldLayout, HeightfieldRingSpec, TileSamples, TileSurface};
-use svc_mesh::heightfield_tiles::in_parallel;
 use svc_mesh::scatter::{hash, unit};
 
 use crate::voxel_scatter::{about_y, copy_at, lean, multiply};
@@ -262,11 +264,13 @@ pub struct VegetationReadout {
     pub instances: u64,
     /// Tile layers in reach a layer's instance budget left bare.
     pub over_budget: u32,
-    /// Tile layers in reach with samples, waiting for a placement.
+    /// Tile layers in reach with samples waiting for a placement: being
+    /// placed on workers, or waiting for one.
     pub deferred: u32,
-    /// The last settle's placements (tile layers) and the copies they made,
-    /// and its time placing (on workers, end to end), choosing what is
-    /// drawn, and turning that into renderer work.
+    /// The placements (tile layers) the last settle took in from workers
+    /// and the copies they made, the workers' time placing them, and the
+    /// settle's own time choosing what is drawn and turning that into
+    /// renderer work.
     pub placed: u32,
     pub placed_instances: u64,
     pub placement_microseconds: u64,
@@ -332,12 +336,24 @@ struct Tile {
     node: Option<RenderHandle>,
 }
 
-#[derive(Debug, Clone)]
+/// A placement a worker finished and a settle has not taken in yet.
+#[derive(Debug)]
+struct Landed {
+    generations: [u64; 2],
+    instances: Vec<ScatterInstance>,
+    microseconds: u64,
+}
+
+#[derive(Debug)]
 struct Field {
     layout: VegetationLayout,
     heightfield: HeightfieldLayout,
-    layers: BTreeMap<u32, (VegetationLayer, u64)>,
+    layers: BTreeMap<u32, (Arc<VegetationLayer>, u64)>,
     placements_per_settle: u32,
+    /// Tile layers being placed on workers, for the generations asked for,
+    /// and those finished, which the next settle takes in.
+    placing: BTreeMap<Slot, [u64; 2]>,
+    landed: BTreeMap<Slot, Landed>,
     tiles: BTreeMap<(i64, i64), Tile>,
     focus: Option<[f64; 3]>,
     placement: Option<[f32; 3]>,
@@ -409,10 +425,12 @@ impl Field {
 }
 
 /// The vegetation fields of a runtime and the renderer nodes they draw.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct VegetationFields {
     registry: StableHandleRegistry<NodeKey>,
     fields: BTreeMap<u64, Field>,
+    /// The workers placing for every field, started on first use.
+    placer: Option<Placer>,
 }
 
 impl Default for VegetationFields {
@@ -420,6 +438,7 @@ impl Default for VegetationFields {
         Self {
             registry: StableHandleRegistry::new(RenderHandleNamespace::VEGETATION),
             fields: BTreeMap::new(),
+            placer: None,
         }
     }
 }
@@ -453,6 +472,8 @@ impl VegetationFields {
                 heightfield,
                 layers: BTreeMap::new(),
                 placements_per_settle: placements_per_settle.max(1),
+                placing: BTreeMap::new(),
+                landed: BTreeMap::new(),
                 tiles: BTreeMap::new(),
                 focus: None,
                 placement: None,
@@ -510,11 +531,11 @@ impl VegetationFields {
         layer: VegetationLayer,
     ) -> Result<(), VegetationError> {
         let retained = self.field(field)?;
-        if retained.layers.get(&key).map(|(current, _)| current) == Some(&layer) {
+        if retained.layers.get(&key).map(|(current, _)| &**current) == Some(&layer) {
             return Ok(());
         }
         let generation = retained.generation();
-        retained.layers.insert(key, (layer, generation));
+        retained.layers.insert(key, (Arc::new(layer), generation));
         retained.changed = true;
         Ok(())
     }
@@ -530,6 +551,8 @@ impl VegetationFields {
             return Ok(Vec::new());
         }
         retained.changed = true;
+        retained.placing.retain(|(layer, _), _| *layer != key);
+        retained.landed.retain(|(layer, _), _| *layer != key);
         let mut operations = Vec::new();
         for (&(x, z), tile) in &mut retained.tiles {
             tile.bare.remove(&key);
@@ -687,10 +710,54 @@ impl VegetationFields {
         placement: [f64; 3],
         focus: Option<[f64; 3]>,
     ) -> Result<Vec<RenderDiff>, VegetationError> {
+        self.take_in(false);
         let mut retained = self.fields.remove(&field).ok_or(VegetationError::Field)?;
         let result = self.settle_field(field, &mut retained, placement, focus);
         self.fields.insert(field, retained);
         result
+    }
+
+    /// Wait until every field's placements on workers have finished; each
+    /// field's next settle takes them in.
+    pub fn wait_for_placement(&mut self) {
+        self.take_in(true);
+    }
+
+    /// Hold what workers have finished for the settles to take in; with
+    /// `wait`, until no field has a placement on workers.
+    fn take_in(&mut self, wait: bool) {
+        let Some(placer) = &self.placer else {
+            return;
+        };
+        loop {
+            let placing = wait && self.fields.values().any(|field| !field.placing.is_empty());
+            let finished = if placing {
+                placer.finished.recv().ok()
+            } else {
+                placer.finished.try_recv().ok()
+            };
+            let Some(placed) = finished else {
+                return;
+            };
+            // A placement asked for again since, or for a tile, layer or
+            // field gone since, is dropped.
+            let Some(retained) = self.fields.get_mut(&placed.field) else {
+                continue;
+            };
+            if retained.placing.get(&placed.slot) != Some(&placed.generations) {
+                continue;
+            }
+            retained.placing.remove(&placed.slot);
+            retained.changed = true;
+            retained.landed.insert(
+                placed.slot,
+                Landed {
+                    generations: placed.generations,
+                    instances: placed.instances,
+                    microseconds: placed.microseconds,
+                },
+            );
+        }
     }
 
     fn settle_field(
@@ -750,14 +817,16 @@ impl VegetationFields {
             readout.publication_microseconds = 0;
             return Ok(operations);
         };
-        // Nothing to choose again: no change, nothing deferred, the focus
-        // within a step of the last choice, whose widened reaches cover it.
+        // Nothing to choose again: no change (a placement landing is one),
+        // the focus within a step of the last choice, whose widened reaches
+        // cover it. Placements left waiting while a field's are all on
+        // workers start as those land.
         let step = retained.layout.tile_size * VEGETATION_SELECTION_STEP;
         let near_last = retained.chosen_at.is_some_and(|at| {
             let [dx, dy, dz] = [0, 1, 2].map(|axis| at[axis] - focus[axis]);
             (dx * dx + dy * dy + dz * dz).sqrt() <= step
         });
-        if !retained.changed && readout.deferred == 0 && near_last {
+        if !retained.changed && near_last {
             readout.settles_skipped += 1;
             readout.selection_microseconds = started.elapsed().as_micros() as u64;
             readout.publication_microseconds = 0;
@@ -780,6 +849,7 @@ impl VegetationFields {
             .collect();
         for key in leaving {
             let tile = retained.tiles.remove(&key).expect("listed above");
+            retained.placing.retain(|(_, at), _| *at != key);
             self.forget_tile(field, key, &tile);
             if let Some(handle) = tile.node {
                 operations.push(RenderDiff::Destroy { handle });
@@ -815,7 +885,8 @@ impl VegetationFields {
         }
 
         // Each layer's candidates, nearest first, with what is known of
-        // their counts; those unknown are placed as the budget allows.
+        // their counts; those unknown are placed on workers as the field's
+        // placements at once allow.
         struct Candidate {
             tile: (i64, i64),
             /// Its tile's place in `nearest` (and its samples in `contents`).
@@ -834,6 +905,10 @@ impl VegetationFields {
             tile: &'a Tile,
             content: &'a Arc<Content>,
         }
+        // The placements landed since the last choice: those still wanted
+        // are known and new; the rest are dropped.
+        let mut landed = std::mem::take(&mut retained.landed);
+        let mut fresh: BTreeMap<Slot, Vec<ScatterInstance>> = BTreeMap::new();
         let mut nearest: Vec<Near<'_>> = retained
             .tiles
             .iter()
@@ -874,10 +949,22 @@ impl VegetationFields {
                     continue;
                 }
                 let generations = [content.generation, *layer_generation];
+                let slot = (key, tile_key);
                 let known = match (tile.patches.get(&key), tile.bare.get(&key)) {
                     (Some(patch), _) if patch.generations == generations => Some(patch.instances),
                     (_, Some((made, count))) if *made == generations => Some(*count),
-                    _ => None,
+                    _ => match landed.remove(&slot) {
+                        Some(landing) if landing.generations == generations => {
+                            let count = landing.instances.len() as u32;
+                            let readout = &mut retained.readout;
+                            readout.placed += 1;
+                            readout.placed_instances += u64::from(count);
+                            readout.placement_microseconds += landing.microseconds;
+                            fresh.insert(slot, landing.instances);
+                            Some(count)
+                        }
+                        _ => None,
+                    },
                 };
                 list.push(Candidate {
                     tile: tile_key,
@@ -893,6 +980,7 @@ impl VegetationFields {
             }
             candidates.insert(key, list);
         }
+        drop(landed);
         // Where each tile stands in `nearest`, for what is chosen on it.
         let tile_at: HashMap<(i64, i64), usize> = nearest
             .iter()
@@ -905,56 +993,53 @@ impl VegetationFields {
             .map(|near_tile| near_tile.content.clone())
             .collect();
         drop(nearest);
-        // Placing: the candidates whose counts are unknown, nearest first
-        // across layers (the budget goes where it shows most), at most the
-        // field's placements a settle.
+        // Placing: the candidates whose counts are unknown and that are not
+        // being placed for their generations already, nearest first across
+        // layers (the budget goes where it shows most), as many as the
+        // field's placements at once leave room for.
         let placements = retained.placements_per_settle as usize;
+        let layout = retained.layout;
         let mut jobs: Vec<(usize, u32)> = candidates
             .iter()
-            .flat_map(|(key, list)| {
+            .flat_map(|(&key, list)| {
+                let placing = &retained.placing;
                 list.iter()
                     .enumerate()
-                    .filter(|(_, candidate)| candidate.known.is_none())
-                    .map(move |(index, _)| (index, *key))
+                    .filter(move |(_, candidate)| {
+                        candidate.known.is_none()
+                            && placing.get(&(key, candidate.tile)) != Some(&candidate.generations)
+                    })
+                    .map(move |(index, _)| (index, key))
             })
             .collect();
         jobs.sort();
-        let mut deferred = jobs.len().saturating_sub(placements) as u32;
-        jobs.truncate(placements);
-        let selection_before_placing = started.elapsed();
-        let placing = Instant::now();
-        let layout = retained.layout;
-        let layers = &retained.layers;
-        let placed: Vec<Vec<ScatterInstance>> = in_parallel(&jobs, |&(index, key)| {
+        let room = placements.saturating_sub(retained.placing.len());
+        let mut waiting = jobs.len().saturating_sub(room);
+        jobs.truncate(room);
+        let placer = self.placer.get_or_insert_with(Placer::new);
+        for &(index, key) in &jobs {
             let candidate = &candidates[&key][index];
-            place(
-                &layout,
-                candidate.tile,
-                &contents[candidate.at],
-                key,
-                &layers[&key].0,
-            )
-        });
-        let mut placement_time = placing.elapsed();
-        let mut fresh: BTreeMap<Slot, Vec<ScatterInstance>> = BTreeMap::new();
-        for (&(index, key), instances) in jobs.iter().zip(placed) {
-            let candidate = &mut candidates.get_mut(&key).expect("a job's layer")[index];
-            candidate.known = Some(instances.len() as u32);
-            retained.readout.placed += 1;
-            retained.readout.placed_instances += instances.len() as u64;
-            fresh.insert((key, candidate.tile), instances);
+            let slot = (key, candidate.tile);
+            retained.placing.insert(slot, candidate.generations);
+            placer.start(PlacementJob {
+                field,
+                slot,
+                generations: candidate.generations,
+                layout,
+                content: contents[candidate.at].clone(),
+                layer: retained.layers[&key].0.clone(),
+            });
         }
 
         // Choosing: within each layer's budget, nearest first. A tile layer
         // waiting to be placed again counts and draws what it has meanwhile.
-        let selecting = Instant::now();
         // What is chosen on each tile (in `nearest` order), by layer key in
         // order. A tile is touched only where its bare entry changes. Chosen
         // tile layers last counted while the budget left them out need
-        // their copies again: they take the placements left, nearest first
-        // in each layer.
+        // their copies again: they go to workers as there is room, nearest
+        // first in each layer.
         let mut chosen: Vec<Vec<(u32, [u64; 2])>> = vec![Vec::new(); tile_count];
-        let mut late: Vec<(Slot, Arc<Content>)> = Vec::new();
+        let mut late: Vec<(Slot, [u64; 2], Arc<Content>)> = Vec::new();
         let mut over_budget = 0u32;
         for (&key, list) in &candidates {
             let mut budget = u64::from(retained.layers[&key].0.maximum_instances);
@@ -993,8 +1078,11 @@ impl VegetationFields {
                 let drawn = candidate
                     .drawn
                     .is_some_and(|(drawn, _)| drawn == generations);
-                if !drawn && !fresh.contains_key(&slot) {
-                    late.push((slot, contents[candidate.at].clone()));
+                if !drawn
+                    && !fresh.contains_key(&slot)
+                    && retained.placing.get(&slot) != Some(&generations)
+                {
+                    late.push((slot, generations, contents[candidate.at].clone()));
                 }
             }
         }
@@ -1004,22 +1092,23 @@ impl VegetationFields {
                 .ok()
                 .map(|index| on[index].1)
         };
-        let left = placements.saturating_sub(jobs.len());
-        if late.len() > left {
-            deferred += (late.len() - left) as u32;
-            late.truncate(left);
+        let room = placements.saturating_sub(retained.placing.len());
+        waiting += late.len().saturating_sub(room);
+        late.truncate(room);
+        let placer = self.placer.get_or_insert_with(Placer::new);
+        for (slot, generations, content) in late {
+            retained.placing.insert(slot, generations);
+            placer.start(PlacementJob {
+                field,
+                slot,
+                generations,
+                layout,
+                content,
+                layer: retained.layers[&slot.0].0.clone(),
+            });
         }
-        let selection_time = selection_before_placing + selecting.elapsed();
-        let placing = Instant::now();
-        let placed_late = in_parallel(&late, |((key, tile_key), content)| {
-            place(&layout, *tile_key, content, *key, &retained.layers[key].0)
-        });
-        placement_time += placing.elapsed();
-        for ((slot, _), instances) in late.iter().zip(placed_late) {
-            retained.readout.placed += 1;
-            retained.readout.placed_instances += instances.len() as u64;
-            fresh.insert(*slot, instances);
-        }
+        let deferred = (waiting + retained.placing.len()) as u32;
+        let selection_time = started.elapsed();
 
         // Publication: drop the patches no longer chosen, replace those
         // whose new copies are ready, and make the new ones.
@@ -1122,7 +1211,6 @@ impl VegetationFields {
         let publication_time = publishing.elapsed();
 
         let readout = &mut retained.readout;
-        readout.placement_microseconds = placement_time.as_micros() as u64;
         readout.selection_microseconds = selection_time.as_micros() as u64;
         readout.publication_microseconds = publication_time.as_micros() as u64;
         readout.over_budget = over_budget;
@@ -1152,6 +1240,103 @@ impl VegetationFields {
             .sum();
         Ok(operations)
     }
+}
+
+/// Workers at most: placing is the cost, and the product's thread, the draw
+/// and the shared worker pool keep theirs.
+const MAX_PLACING_WORKERS: usize = 4;
+
+/// A field's layer on a tile to place, for the generations it was asked for.
+struct PlacementJob {
+    field: u64,
+    slot: Slot,
+    generations: [u64; 2],
+    layout: VegetationLayout,
+    content: Arc<Content>,
+    layer: Arc<VegetationLayer>,
+}
+
+/// What a worker placed, and its time placing it.
+struct Placed {
+    field: u64,
+    slot: Slot,
+    generations: [u64; 2],
+    instances: Vec<ScatterInstance>,
+    microseconds: u64,
+}
+
+/// The threads that place tile layers, and what they finish.
+struct Placer {
+    jobs: Option<mpsc::Sender<PlacementJob>>,
+    finished_sender: mpsc::Sender<Placed>,
+    finished: mpsc::Receiver<Placed>,
+}
+
+impl std::fmt::Debug for Placer {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("Placer").finish_non_exhaustive()
+    }
+}
+
+impl Placer {
+    fn new() -> Self {
+        let (finished_sender, finished) = mpsc::channel();
+        let (jobs, queue) = mpsc::channel::<PlacementJob>();
+        let queue = Arc::new(Mutex::new(queue));
+        let count = std::thread::available_parallelism()
+            .map_or(1, |threads| threads.get() / 2)
+            .clamp(1, MAX_PLACING_WORKERS);
+        let mut started = 0;
+        for _ in 0..count {
+            let queue = Arc::clone(&queue);
+            let finished = finished_sender.clone();
+            let spawned = std::thread::Builder::new()
+                .name("rusty-vegetation-place".to_owned())
+                .spawn(move || loop {
+                    let job = queue
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner())
+                        .recv();
+                    match job {
+                        Ok(job) => run(job, &finished),
+                        // The fields are gone.
+                        Err(_) => return,
+                    }
+                });
+            started += usize::from(spawned.is_ok());
+        }
+        Self {
+            jobs: (started > 0).then_some(jobs),
+            finished_sender,
+            finished,
+        }
+    }
+
+    fn start(&self, job: PlacementJob) {
+        match &self.jobs {
+            Some(jobs) => {
+                if let Err(mpsc::SendError(job)) = jobs.send(job) {
+                    run(job, &self.finished_sender);
+                }
+            }
+            // No thread to spare: placed here, taken in as one that was.
+            None => run(job, &self.finished_sender),
+        }
+    }
+}
+
+fn run(job: PlacementJob, finished: &mpsc::Sender<Placed>) {
+    let started = Instant::now();
+    let (key, tile) = job.slot;
+    let instances = place(&job.layout, tile, &job.content, key, &job.layer);
+    // Fields dropped since have no use for it.
+    let _ = finished.send(Placed {
+        field: job.field,
+        slot: job.slot,
+        generations: job.generations,
+        instances,
+        microseconds: started.elapsed().as_micros() as u64,
+    });
 }
 
 fn validate(

@@ -47,8 +47,8 @@ Live debug commands:
   edge, and grass into rock with no palette.
 - `heightfield.invalidate <metres>`: sample again around the camera.
 - `vegetation.inspect`: both vegetation fields' tiles, patches, copies, budget
-  and deferred work, the last call's placement, selection and publication
-  time, invalidations and sampling; over the continent, the backdrop forest
+  and deferred work, the placements the last call took in and their worker
+  time, its selection and publication time, invalidations and sampling; over the continent, the backdrop forest
   field's.
 - `vegetation.show <0|1>`, `vegetation.tune <grass per m²> <reach>`,
   `vegetation.invalidate <metres>`.

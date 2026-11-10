@@ -300,12 +300,16 @@ than their area.
 
 - `MaximumInstances`: the layer's copies are given to its tiles nearest
   first; a tile that does not fit stays bare and is counted (`OverBudget`).
-- `PlacementsPerCall` (64): the most tile layers a call places. Placing runs
-  on worker threads as the call finishes; what waits is counted (`Deferred`)
-  and placed by the next calls, nearest first.
+- `PlacementsPerCall` (64): the most tile layers of the field placed at once.
+  Placing runs on the Engine's vegetation worker threads, off the update: a
+  call hands tile layers to them, nearest first, and a later call takes each
+  finished placement in whole, the same copies in the same order as placing
+  in the call would make. Until then a tile layer draws what it had: nothing,
+  or its copies from before its tile was sampled again or its layer changed.
+  What is being placed or waits for room is counted (`Deferred`).
 - Choosing again: a call chooses its tile layers again only when the field
-  changed (a layer set or removed, a tile committed or invalidated), work
-  was left waiting, or the focus moved a sixteenth of a tile from where it
+  changed (a layer set or removed, a tile committed or invalidated, a
+  placement taken in), or the focus moved a sixteenth of a tile from where it
   last chose. Otherwise it costs nothing. Choosing, it widens every reach by
   that much, so what it keeps covers any focus within it; the copies' fades
   are drawn from the camera itself.
@@ -322,9 +326,10 @@ than their area.
 
 `Read` (and every call) returns the field's readout: tiles held and waiting
 (`Tiles`, `PendingTiles`), patches and copies drawn, `OverBudget`, `Deferred`,
-the last call's placements (`Placed`, `PlacedInstances`) and its time placing,
+the placements the last call took in (`Placed`, `PlacedInstances`) and the
+workers' time placing them (`PlacementMicroseconds`), the call's own time
 choosing what is drawn and turning that into renderer work
-(`PlacementMicroseconds`, `SelectionMicroseconds`, `PublicationMicroseconds`),
+(`SelectionMicroseconds`, `PublicationMicroseconds`),
 `InvalidatedTiles`, `ReplacedPatches`, `SampleBytes`, and the calls that
 had nothing to choose again and those that chose again (`SettlesSkipped`,
 `SettlesReselected`). The renderer's side

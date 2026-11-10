@@ -344,8 +344,19 @@ fn ops(services: &mut EngineServiceSet) -> Vec<RenderDiff> {
         .collect()
 }
 
+/// The call's renderer work, then that of the calls taking in its
+/// vegetation placements as workers finish them.
+fn placed_ops(services: &mut EngineServiceSet) -> Vec<RenderDiff> {
+    let mut operations = ops(services);
+    while services.wait_for_vegetation_placement() {
+        services.begin_call(binding());
+        operations.extend(ops(services));
+    }
+    operations
+}
+
 #[test]
-fn a_field_asks_for_tiles_places_its_layers_as_the_call_ends_and_redoes_only_edited_tiles() {
+fn a_field_asks_for_tiles_places_its_layers_on_workers_and_redoes_only_edited_tiles() {
     let mut services = services();
     services.begin_call(binding());
     let api = services.api();
@@ -389,7 +400,7 @@ fn a_field_asks_for_tiles_places_its_layers_as_the_call_ends_and_redoes_only_edi
     for request in &waiting {
         assert!(commit(&api, field, request, 2.0));
     }
-    let placed = ops(&mut services);
+    let placed = placed_ops(&mut services);
     let patches: Vec<&render_model::ScatterPatchDescriptor> = placed
         .iter()
         .filter_map(|operation| match operation {
@@ -432,7 +443,7 @@ fn a_field_asks_for_tiles_places_its_layers_as_the_call_ends_and_redoes_only_edi
     let again = requests(&api, field);
     assert_eq!(again.len(), 1);
     assert!(commit(&api, field, &again[0], 3.0));
-    let edited = ops(&mut services);
+    let edited = placed_ops(&mut services);
     let destroyed = edited
         .iter()
         .filter(|operation| matches!(operation, RenderDiff::Destroy { .. }))
@@ -595,7 +606,7 @@ fn a_default_material_keeps_the_mesh_bindings_and_detail_adds_levels_and_thinnin
     for request in &requests(&api, field) {
         assert!(commit(&api, field, request, 2.0));
     }
-    let placed = ops(&mut services);
+    let placed = placed_ops(&mut services);
     let patch = placed
         .iter()
         .find_map(|operation| match operation {
@@ -750,7 +761,7 @@ fn a_backdrop_field_focuses_where_the_camera_stands_in_the_backdrop_and_draws_th
     for request in &waiting {
         assert!(commit(&api, field, request, 2.0));
     }
-    let placed = ops(&mut services);
+    let placed = placed_ops(&mut services);
     let patch = placed
         .iter()
         .find_map(|operation| match operation {

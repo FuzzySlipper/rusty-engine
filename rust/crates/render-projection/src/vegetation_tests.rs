@@ -66,7 +66,26 @@ fn sampled(request: &VegetationRequest, height: impl Fn(f64, f64) -> f32) -> Veg
     }
 }
 
-/// Answer every request with `height`, then settle at `focus`.
+/// Settle, then wait for the field's placements on workers and settle again
+/// until none waits; every settle's operations.
+fn settle_placed(
+    fields: &mut VegetationFields,
+    placement: [f64; 3],
+    focus: Option<[f64; 3]>,
+) -> Vec<RenderDiff> {
+    let mut operations = fields.settle(FIELD, placement, focus).unwrap();
+    let mut settles = 1;
+    while fields.readout(FIELD).unwrap().deferred > 0 {
+        fields.wait_for_placement();
+        operations.extend(fields.settle(FIELD, placement, focus).unwrap());
+        settles += 1;
+        assert!(settles < 1_000);
+    }
+    operations
+}
+
+/// Answer every request with `height`, then settle at `focus` until every
+/// placement has landed.
 fn fill(
     fields: &mut VegetationFields,
     focus: [f64; 3],
@@ -79,7 +98,7 @@ fn fill(
             .commit(FIELD, (request.x, request.z), request.revision, content)
             .unwrap());
     }
-    fields.settle(FIELD, [0.0; 3], Some(focus)).unwrap()
+    settle_placed(fields, [0.0; 3], Some(focus))
 }
 
 fn patches(operations: &[RenderDiff]) -> Vec<&ScatterPatchDescriptor> {
@@ -252,6 +271,11 @@ fn an_edit_samples_and_places_again_only_the_tiles_it_touches() {
     assert!(fields
         .commit(FIELD, (1, 0), requests[0].revision, content)
         .unwrap());
+    // Placed on a worker: until it lands, the tile draws what it had.
+    let placing = fields.settle(FIELD, [0.0; 3], None).unwrap();
+    assert!(placing.is_empty(), "{placing:?}");
+    assert_eq!(fields.readout(FIELD).unwrap().deferred, 1);
+    fields.wait_for_placement();
     let operations = fields.settle(FIELD, [0.0; 3], None).unwrap();
     assert_eq!(destroyed(&operations), 1);
     assert_eq!(patches(&operations).len(), 1);
@@ -311,7 +335,7 @@ fn a_layer_budget_goes_to_the_nearest_tiles_and_the_rest_are_counted() {
 }
 
 #[test]
-fn placement_beyond_the_settle_budget_waits_and_is_counted() {
+fn placement_beyond_the_placements_at_once_waits_and_is_counted() {
     let mut fields = fields(2);
     fields
         .settle(FIELD, [0.0; 3], Some([8.0, 2.0, 8.0]))
@@ -322,21 +346,96 @@ fn placement_beyond_the_settle_budget_waits_and_is_counted() {
             .commit(FIELD, (request.x, request.z), request.revision, content)
             .unwrap();
     }
+    let tiles = fields.fields[&FIELD].tiles.len();
+    // The settle hands two placements to workers and draws nothing new.
     let first = fields.settle(FIELD, [0.0; 3], None).unwrap();
-    assert_eq!(patches(&first).len(), 2);
+    assert!(patches(&first).is_empty());
     let readout = fields.readout(FIELD).unwrap();
-    assert_eq!(readout.placed, 2);
-    assert!(readout.deferred > 0);
-    let mut settles = 1;
-    while fields.readout(FIELD).unwrap().deferred > 0 {
-        fields.settle(FIELD, [0.0; 3], None).unwrap();
-        settles += 1;
-        assert!(settles < 100);
+    assert_eq!((readout.placed, readout.deferred as usize), (0, tiles));
+    assert_eq!(fields.fields[&FIELD].placing.len(), 2);
+    // Each settle takes in what landed and starts as many again.
+    fields.wait_for_placement();
+    let second = fields.settle(FIELD, [0.0; 3], None).unwrap();
+    assert_eq!(patches(&second).len(), 2);
+    let readout = fields.readout(FIELD).unwrap();
+    assert_eq!((readout.placed, readout.deferred as usize), (2, tiles - 2));
+    assert_eq!(fields.fields[&FIELD].placing.len(), 2);
+    settle_placed(&mut fields, [0.0; 3], None);
+    assert_eq!(fields.readout(FIELD).unwrap().patches as usize, tiles);
+}
+
+#[test]
+fn landed_placements_are_the_copies_placing_makes_in_order() {
+    // However many are placed at once, and so whichever order they land
+    // in, each patch holds the copies `place` makes of its tile, in order.
+    let hills = |x: f64, z: f64| (2.0 + (x * 0.3).sin() * 1.5 + (z * 0.2).cos()) as f32;
+    for at_once in [1, 1_000] {
+        let mut fields = fields(at_once);
+        fields
+            .set_layer(
+                FIELD,
+                7,
+                VegetationLayer {
+                    density: 0.3,
+                    seed: 5,
+                    ..grass()
+                },
+            )
+            .unwrap();
+        let operations = fill(&mut fields, [8.0, 2.0, 8.0], hills);
+        let retained = &fields.fields[&FIELD];
+        let mut compared = 0;
+        for (&tile, held) in &retained.tiles {
+            let content = held.content.as_ref().unwrap();
+            for (&key, patch) in &held.patches {
+                let made = place(&layout(), tile, content, key, &retained.layers[&key].0);
+                let drawn = operations
+                    .iter()
+                    .find_map(|operation| match operation {
+                        RenderDiff::CreateScatterPatch {
+                            handle,
+                            patch: drawn,
+                            ..
+                        } if *handle == patch.handle => Some(drawn),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(drawn.instances, made, "{tile:?} layer {key}");
+                compared += 1;
+            }
+        }
+        assert_eq!(compared, fields.readout(FIELD).unwrap().patches);
+        assert!(compared > 20, "{compared}");
     }
-    assert_eq!(
-        fields.readout(FIELD).unwrap().patches as usize,
-        fields.fields[&FIELD].tiles.len()
-    );
+}
+
+#[test]
+fn a_placement_for_samples_replaced_while_it_was_placed_is_dropped() {
+    let mut fields = fields(1_000);
+    fill(&mut fields, [8.0, 2.0, 8.0], |_, _| 2.0);
+    fields.invalidate(FIELD, [1.0, 1.0], [2.0, 2.0]).unwrap();
+    let request = fields.requests(FIELD, 0)[0];
+    let high = sampled(&request, |_, _| 3.0);
+    assert!(fields
+        .commit(FIELD, (0, 0), request.revision, high)
+        .unwrap());
+    fields.settle(FIELD, [0.0; 3], None).unwrap();
+    // Sampled again while the first placement is on a worker: only the
+    // latest samples' copies land.
+    fields.invalidate(FIELD, [1.0, 1.0], [2.0, 2.0]).unwrap();
+    let request = fields.requests(FIELD, 0)[0];
+    let higher = sampled(&request, |_, _| 4.0);
+    assert!(fields
+        .commit(FIELD, (0, 0), request.revision, higher)
+        .unwrap());
+    let operations = settle_placed(&mut fields, [0.0; 3], None);
+    let created = patches(&operations);
+    assert_eq!(created.len(), 1);
+    assert!(created[0]
+        .instances
+        .iter()
+        .all(|copy| (copy.translation[1] - 4.0).abs() < 1e-5));
+    assert_eq!(fields.readout(FIELD).unwrap().replaced_patches, 1);
 }
 
 #[test]
@@ -367,7 +466,7 @@ fn ground_classes_and_cover_choose_and_thin_the_spots() {
             .commit(FIELD, (request.x, request.z), request.revision, content)
             .unwrap();
     }
-    let operations = fields.settle(FIELD, [0.0; 3], None).unwrap();
+    let operations = settle_placed(&mut fields, [0.0; 3], None);
     let copies = |tile: (i64, i64)| {
         fields.patch_handle(FIELD, tile, GRASS).map_or(0, |wanted| {
             operations
@@ -435,7 +534,7 @@ fn records_stand_in_their_layer_as_given() {
             .commit(FIELD, (request.x, request.z), request.revision, content)
             .unwrap();
     }
-    let operations = fields.settle(FIELD, [0.0; 3], None).unwrap();
+    let operations = settle_placed(&mut fields, [0.0; 3], None);
     let tree = fields.patch_handle(FIELD, (0, 0), 7).unwrap();
     let placed = operations
         .iter()
@@ -499,9 +598,7 @@ fn the_near_band_skips_tiles_the_cut_hides_and_fades_in_past_it() {
         .iter()
         .all(|patch| patch.fade.near_start == 20.0 && patch.fade.near_end == 22.0));
     // From above, every copy is past the cut: the near tile grows.
-    let operations = fields
-        .settle(FIELD, [0.0; 3], Some([8.0, 24.0, 8.0]))
-        .unwrap();
+    let operations = settle_placed(&mut fields, [0.0; 3], Some([8.0, 24.0, 8.0]));
     assert!(fields.patch_handle(FIELD, (0, 0), GRASS).is_some());
     assert!(!patches(&operations).is_empty());
 }
@@ -632,7 +729,7 @@ fn walk_to(fields: &mut VegetationFields, focus: [f64; 3]) -> Vec<RenderDiff> {
             .commit(FIELD, (request.x, request.z), request.revision, content)
             .unwrap();
     }
-    operations.extend(fields.settle(FIELD, [0.0; 3], Some(focus)).unwrap());
+    operations.extend(settle_placed(fields, [0.0; 3], Some(focus)));
     operations
 }
 

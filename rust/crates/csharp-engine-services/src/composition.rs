@@ -958,6 +958,13 @@ impl EngineServiceSet {
         })
     }
 
+    /// Wait for vegetation placements on workers; whether a call has some
+    /// to take in.
+    #[cfg(test)]
+    pub(crate) fn wait_for_vegetation_placement(&mut self) -> bool {
+        self.vegetation.wait_for_placement()
+    }
+
     fn settle_call(
         &mut self,
         calls: &mut ServiceCalls,
@@ -1009,7 +1016,8 @@ impl EngineServiceSet {
             .settle_level_of_detail(&mut calls.voxel_scene_presentation, viewer)?;
         // Heightfields and vegetation fields focused on a camera measure
         // from where it stands now, in the backdrop under its link for one
-        // drawn there; placing vegetation runs on worker threads here.
+        // drawn there. Vegetation takes in what its workers placed and
+        // hands them more.
         let camera_view = &self.camera_view;
         let cameras = &calls.camera_view;
         let eye = |camera, backdrop| {
