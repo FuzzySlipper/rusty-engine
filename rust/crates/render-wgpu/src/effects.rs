@@ -646,8 +646,10 @@ impl Effects {
             None => [f32::MIN, f32::MIN, f32::MAX, f32::MAX],
         });
         // The figure a synthetic dome spans, in its plane's (mirrored)
-        // units; none (each piece's own page region) unless it asks.
-        if descriptor.figure_dome {
+        // units; none (each piece's own page region) unless it asks. Only
+        // the synthetic dome reads it: an authored normal map keeps its
+        // piece's page orientation.
+        if descriptor.figure_dome && material.lighting == SpriteLightingMode::Synthetic {
             let [x0, y0, x1, y1] = match &descriptor.viewport_placement {
                 Some(placement) => placement.frame,
                 None => asset.figure,

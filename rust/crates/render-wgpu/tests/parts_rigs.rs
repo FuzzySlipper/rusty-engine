@@ -1801,6 +1801,67 @@ fn a_figure_dome_shades_abutting_pieces_as_one_surface() {
     );
 }
 
+/// A figure dome is the synthetic dome's alone: a piece lit by an authored
+/// normal map whose page lies turned a quarter turn from the rig's axes
+/// lights the same with it as without it.
+#[test]
+fn a_figure_dome_leaves_authored_normal_lighting_as_it_is() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.push(blends_rig(&mut harness, "parts-rig/flat"));
+    ops.push(detail_texture(&mut harness, "texture/right", 90, false));
+    // The grey quadrant with its page turned a quarter turn: the page's u
+    // runs up the rig, its v to the right.
+    let mut turned = quadrant(0, 3);
+    turned.uvs.rotate_left(1);
+    ops.push(RenderDiff::DefinePartsRig {
+        asset: PartsRigAsset {
+            id: "parts-rig/turned".to_owned(),
+            pages: vec![PartsRigPage {
+                texture: "texture/straight".to_owned(),
+                premultiplied: false,
+                detail: Some("texture/right".to_owned()),
+            }],
+            drawables: vec![turned].into(),
+            figure: [3.0, 3.0, 5.5, 5.5],
+        },
+    });
+    ops.extend(side_lights());
+    let posed = pose(vec![(
+        piece(0, PartsRigBlend::Normal),
+        square(3.0, 3.0, 2.5),
+    )]);
+    ops.extend(create(
+        10,
+        flat_rig(
+            "parts-rig/turned",
+            0.0,
+            lit(SpriteLightingMode::AuthoredNormal),
+        ),
+        &posed,
+    ));
+    harness.apply(ops);
+    let without = harness.single(&flat_camera());
+    let mut domed = flat_rig(
+        "parts-rig/turned",
+        0.0,
+        lit(SpriteLightingMode::AuthoredNormal),
+    );
+    domed.figure_dome = true;
+    harness.apply(vec![RenderDiff::Destroy {
+        handle: RenderHandle::new(10),
+    }]);
+    harness.apply(create(11, domed, &posed).to_vec());
+    let with = harness.single(&flat_camera());
+    assert!(drawn(&without) > 1_000);
+    assert_eq!(differing_pixels(&without, &with), 0);
+}
+
 /// An orthographic camera `distance` from the origin at `bearing` degrees
 /// about up from +z toward +x, looking at the point `right` units to its
 /// right and `up` units up from the origin.

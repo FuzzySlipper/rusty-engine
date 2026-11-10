@@ -69,7 +69,8 @@ neighbouring pieces shade apart at their seams. `FigureDome` spans one dome
 across the whole figure instead: the bounds of the drawn view's setup pose
 (default skin), or a placed rig's frame. Pieces then shade as one surface
 however they are cut, and breathing and sway move through the dome rather
-than carrying it.
+than carrying it. Other lighting modes ignore it: an authored normal map
+keeps each piece's page orientation.
 
 ```csharp
 SpriteMaterialDescriptor lit = new(SpriteLightingMode.Synthetic, default, default, 1, 0,
