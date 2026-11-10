@@ -646,18 +646,30 @@ impl Renderer {
                 }
             }
         }
-        if regrouped || !moved.is_empty() {
-            // Each layer re-culls on its next pass and uploads only a
-            // different list.
-            for view in self.views.iter_mut().flatten() {
+        // A hidden part is in no list, and showing or hiding one regroups,
+        // so only a shown part's move changes what a view layer draws: a
+        // hidden viewmodel kept posed every call leaves the world's list
+        // alone.
+        let mut moved_layers = [false; 3];
+        for &id in &moved {
+            let state = &self.tables.parts.state[id as usize];
+            if state.shown {
+                moved_layers[ViewLayer::of(state.layer) as usize] = true;
+            }
+        }
+        let shown_moved = moved_layers.contains(&true);
+        // Each layer a part moved in re-culls on its next pass and uploads
+        // only a different list.
+        for (view, moved) in self.views.iter_mut().zip(moved_layers) {
+            if let Some(view) = view.as_mut().filter(|_| regrouped || moved) {
                 view.stale = true;
                 view.regrouped |= regrouped;
             }
         }
-        if regrouped || !moved.is_empty() || layers_changed {
+        if regrouped || shown_moved || layers_changed {
             self.cull_casters(&moved, false);
         }
-        self.prepare_ray_scene(regrouped || runs_changed || !moved.is_empty());
+        self.prepare_ray_scene(regrouped || runs_changed || shown_moved);
         uploaded
     }
 

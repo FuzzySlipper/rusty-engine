@@ -246,3 +246,59 @@ fn the_candidates_survive_moves_and_follow_regroups_and_the_cull_is_timed() {
         assert!(timing.median_gpu_ms.is_finite());
     }
 }
+
+/// A move re-lists only the view layer it can change: a hidden part's move
+/// (a first-person rig a product keeps posed while it is put away) re-lists
+/// nothing, and a shown viewmodel part's move leaves the world's list alone.
+/// Under GPU culling a re-listed world view uploads its blended panes again,
+/// so the uploads show which lists were rebuilt.
+#[test]
+fn a_move_re_lists_only_the_view_layer_it_changes() {
+    let mut harness = wide_scene();
+    add_viewmodel(&mut harness);
+    harness.renderer.set_options(options(true));
+    for _ in 0..3 {
+        harness.render(&view(0.0));
+    }
+    if harness.renderer.gpu_readout().gpu_culling.refused.is_some() {
+        return;
+    }
+    let update = |handle: u64, translation: [f32; 3], visible: Option<bool>| RenderDiff::Update {
+        handle: RenderHandle::new(handle),
+        transform: Some(transform(translation, 25.0, [0.35; 3])),
+        material: None,
+        visible,
+        metadata: None,
+    };
+    let uploads = |harness: &mut Harness, diff: RenderDiff| {
+        harness.apply(vec![diff]);
+        harness.render(&view(0.0)).0.instances_uploaded
+    };
+    // Hiding regroups; moving it while hidden changes no list.
+    uploads(&mut harness, update(901, [0.45, -0.55, -1.4], Some(false)));
+    assert_eq!(
+        uploads(&mut harness, update(901, [0.40, -0.50, -1.4], None)),
+        0,
+        "a hidden part's move re-lists nothing"
+    );
+    // Shown again, its move re-lists the viewmodel, whose opaque crate is a
+    // GPU candidate, and not the world.
+    uploads(&mut harness, update(901, [0.40, -0.50, -1.4], Some(true)));
+    assert_eq!(
+        uploads(&mut harness, update(901, [0.45, -0.55, -1.4], None)),
+        0,
+        "a viewmodel part's move leaves the world's list alone"
+    );
+    // A world crate's move re-lists the world: its panes upload again.
+    let moved = RenderDiff::Update {
+        handle: RenderHandle::new(100),
+        transform: Some(transform([-28.0, 0.0, -28.5], 37.0, [1.0; 3])),
+        material: None,
+        visible: None,
+        metadata: None,
+    };
+    assert!(
+        uploads(&mut harness, moved) > 0,
+        "a world part's move re-lists the world"
+    );
+}
