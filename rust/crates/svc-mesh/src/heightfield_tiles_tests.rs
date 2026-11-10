@@ -295,3 +295,37 @@ fn with_three_rings_tiles_landing_in_any_order_cover_the_region_exactly_once() {
     }
     assert!(heightfield.settled() && heightfield.is_drawn(first[1]));
 }
+
+#[test]
+fn an_invalidated_tile_is_remeshed_once_when_its_own_and_its_coarser_tiles_samples_have_landed() {
+    let mut heightfield = tiles();
+    heightfield.set_focus(Some([3.0, -5.0]));
+    sample_all(&mut heightfield, None);
+    heightfield.take_changes();
+    let whole = coverage(&heightfield);
+    assert_eq!(whole.keys().copied().collect::<Vec<_>>(), [1]);
+    // Ground changes under a coarse tile and the finer tiles within it.
+    heightfield.invalidate([0.5, -7.5], [3.5, -4.5]);
+    let renewed: BTreeSet<TileKey> = heightfield
+        .requests(0)
+        .iter()
+        .map(|request| request.key)
+        .collect();
+    assert!(renewed.iter().any(|key| key.ring == 1) && renewed.iter().any(|key| key.ring == 0));
+    let mut meshed: BTreeMap<TileKey, usize> = BTreeMap::new();
+    // The coarse samples land first, the finer ones later, as requests go.
+    for ring in [1, 0] {
+        sample_all(&mut heightfield, Some(ring));
+        for key in heightfield.take_changes().meshed {
+            *meshed.entry(key).or_default() += 1;
+        }
+        // Old meshes keep drawing meanwhile: nothing goes missing.
+        assert_eq!(coverage(&heightfield), whole);
+    }
+    assert!(
+        renewed.iter().all(|key| meshed.get(key) == Some(&1)),
+        "{meshed:?}"
+    );
+    assert!(meshed.values().all(|times| *times == 1), "{meshed:?}");
+    assert!(heightfield.settled());
+}

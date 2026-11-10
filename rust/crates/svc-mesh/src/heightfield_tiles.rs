@@ -8,7 +8,10 @@
 //! leaving, so samples worked out before either are ignored. A tile is
 //! meshed once it has samples and, below the coarsest ring, its coarser
 //! tile has them too (its morph targets lie on that surface); new samples
-//! remesh the tile and the finer tiles within it. A coarser tile stays
+//! remesh the tile and the finer tiles within it. After an invalidation a
+//! tile is remeshed once, when its own new samples and its coarser tile's
+//! have both landed, rather than again as each arrives; it keeps drawing its
+//! old mesh until then. A coarser tile stays
 //! drawn until every finer tile within it is meshed, then gives way to
 //! them all at once; a finer tile draws only where every coarser tile above
 //! it has given way, so nothing overlaps and nothing goes missing.
@@ -263,12 +266,21 @@ impl HeightfieldTiles {
     }
 
     /// Mesh every tile that waits for it and can be (its coarser tile has
-    /// samples), in parallel, then redraw.
+    /// samples), in parallel, then redraw. A tile whose own or coarser
+    /// tile's new samples are still to come waits for them, so it is meshed
+    /// once (#10700).
     pub fn mesh(&mut self) {
         let jobs: Vec<MeshJob> = self
             .tiles
             .iter()
-            .filter(|(_, tile)| tile.remesh)
+            .filter(|(key, tile)| {
+                tile.remesh
+                    && !self.resampling(**key)
+                    && self
+                        .layout
+                        .parent(**key)
+                        .is_none_or(|parent| !self.resampling(parent))
+            })
             .filter_map(|(key, tile)| {
                 let surface = tile.surface.as_ref()?.1.clone();
                 let parent = match self.layout.parent(*key) {
@@ -413,6 +425,18 @@ impl HeightfieldTiles {
     /// Wanted tiles without current samples.
     pub fn pending(&self) -> usize {
         self.waiting().count()
+    }
+
+    /// A wanted tile that holds samples, but not the ones its revision asks
+    /// for: an invalidation renewed it and its new samples are still to come.
+    /// A tile no ring wants is never asked for again, so nothing waits on it.
+    fn resampling(&self, key: TileKey) -> bool {
+        self.wanted(key)
+            && self.tiles.get(&key).is_some_and(|tile| {
+                tile.surface
+                    .as_ref()
+                    .is_some_and(|(revision, _)| *revision != tile.revision)
+            })
     }
 
     fn waiting(&self) -> impl Iterator<Item = (&TileKey, &Tile)> + '_ {
