@@ -194,17 +194,18 @@ published; nothing is sent while the camera moves.
 
 #### Sprite shadows
 
-A single world-sized sprite whose material's `Shadow` is `Cast` or
+A world-sized sprite or sprite batch whose material's `Shadow` is `Cast` or
 `CastAndReceive` casts into the shadow maps of the lights that cast: its
 texels whose alpha reaches a `Mask` material's cutoff (half for a `Blend`
 material; all of an `Opaque` quad). In each shadow layer it turns as it
 turns to a camera standing at the light, so an upright sprite faces where a
 sun comes from, or the lamp, and casts its whole figure when the camera sees
-it edge-on to the light. A layer it casts into keeps its static casters'
-depth and redraws the sprite over it as the sprite moves or changes frame.
-`None` and `Receive` cast nothing, and a scene with no casting sprite pays
-nothing for it. Sprite batches, pixel-sized sprites and sprites placed in the
-viewport do not cast, and neither the backdrop's cascades nor
+it edge-on to the light; a batch turns each of its quads so. A layer it
+casts into keeps its static casters' depth and redraws the sprite over it as
+the sprite moves, changes frame or sways in the wind. `None` and `Receive`
+cast nothing, and a scene with no casting sprite pays nothing for it.
+Pixel-sized sprites and sprites placed in the viewport do not cast, and
+neither the backdrop's cascades nor
 [ray-traced sun shadows](lighting-and-sky.md#ray-traced-sun-shadows) see
 sprites. Every lit sprite receives shadows, whatever its policy.
 

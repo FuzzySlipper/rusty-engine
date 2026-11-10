@@ -153,6 +153,9 @@ pub(crate) struct SpriteCaster {
     instance: u32,
     textures: SpriteTextures,
     rig: Option<RigKey>,
+    /// A sprite batch: its own rows, turned to the light by the caster row
+    /// at `instance` (`vs_sprite_batch_caster`).
+    batch: Option<RenderHandle>,
 }
 
 /// What one view pass draws of this family, prepared before the pass.
@@ -365,10 +368,10 @@ pub(crate) struct Effects {
     formats: Vec<FormatPipelines>,
     sprite_bind_groups: HashMap<SpriteTextures, wgpu::BindGroup>,
     /// The rows of the sprites and rigs that cast, as each shadow layer's
-    /// light places them, and their pipelines (sprite, rig), made when one
+    /// light places them, and their pipelines (sprite, rig, batch), made when one
     /// first casts.
     caster_rows: Rows,
-    caster_pipelines: Option<[wgpu::RenderPipeline; 2]>,
+    caster_pipelines: Option<[wgpu::RenderPipeline; 3]>,
     /// Sprite batches' buffers, by node.
     batches: HashMap<RenderHandle, BatchBuffers>,
     /// Parts rigs' buffers, by node and view.
@@ -1326,7 +1329,19 @@ impl Effects {
         let piece = wgpu::vertex_attr_array![
             0 => Float32x2, 11 => Float32x2, 12 => Unorm8x4, 13 => Unorm8x4, 14 => Unorm16x4
         ];
-        let pipeline = |entry, first: wgpu::VertexBufferLayout<'_>, topology| {
+        let batch_corner = wgpu::vertex_attr_array![
+            0 => Float32x2, 1 => Float32x4, 2 => Float32x4, 3 => Float32x4,
+            4 => Float32x4, 5 => Float32x4, 9 => Float32x4
+        ];
+        let batch_instance =
+            wgpu::vertex_attr_array![6 => Float32x4, 7 => Float32x4, 8 => Float32x4];
+        let batch_light = wgpu::vertex_attr_array![10 => Float32x4, 11 => Float32x4];
+        let rows = wgpu::VertexBufferLayout {
+            array_stride: (SPRITE_ROW_FLOATS * 4) as u64,
+            step_mode: wgpu::VertexStepMode::Instance,
+            attributes: &row,
+        };
+        let pipeline = |entry, buffers: &[Option<wgpu::VertexBufferLayout<'_>>], topology| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("render-wgpu sprite caster"),
                 layout: Some(&layout),
@@ -1334,14 +1349,7 @@ impl Effects {
                     module: &self.shader,
                     entry_point: Some(entry),
                     compilation_options: Default::default(),
-                    buffers: &[
-                        Some(first),
-                        Some(wgpu::VertexBufferLayout {
-                            array_stride: (SPRITE_ROW_FLOATS * 4) as u64,
-                            step_mode: wgpu::VertexStepMode::Instance,
-                            attributes: &row,
-                        }),
-                    ],
+                    buffers,
                 },
                 primitive: wgpu::PrimitiveState {
                     topology,
@@ -1372,21 +1380,49 @@ impl Effects {
         self.caster_pipelines = Some([
             pipeline(
                 "vs_sprite_caster",
-                wgpu::VertexBufferLayout {
-                    array_stride: 8,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &corner,
-                },
+                &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 8,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &corner,
+                    }),
+                    Some(rows.clone()),
+                ],
                 wgpu::PrimitiveTopology::TriangleStrip,
             ),
             pipeline(
                 "vs_parts_rig_caster",
-                wgpu::VertexBufferLayout {
-                    array_stride: RIG_VERTEX_BYTES,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &piece,
-                },
+                &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: RIG_VERTEX_BYTES,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &piece,
+                    }),
+                    Some(rows.clone()),
+                ],
                 wgpu::PrimitiveTopology::TriangleList,
+            ),
+            // The light row is every instance's: a stride of 0.
+            pipeline(
+                "vs_sprite_batch_caster",
+                &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: (BATCH_CORNER_FLOATS * 4) as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &batch_corner,
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: (BATCH_ROW_FLOATS * 4) as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &batch_instance,
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: 0,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &batch_light,
+                    }),
+                ],
+                wgpu::PrimitiveTopology::TriangleStrip,
             ),
         ]);
     }
@@ -1394,13 +1430,30 @@ impl Effects {
     /// Draw one shadow layer's sprite and rig casters into `pass`, its
     /// casters group and layer already bound. Returns the draws.
     pub fn draw_casters(&self, pass: &mut wgpu::RenderPass<'_>, casters: &[SpriteCaster]) -> u32 {
-        let Some([sprite_pipeline, rig_pipeline]) = &self.caster_pipelines else {
+        let Some([sprite_pipeline, rig_pipeline, batch_pipeline]) = &self.caster_pipelines else {
             return 0;
         };
         let mut draws = 0;
-        pass.set_vertex_buffer(1, self.caster_rows.buffer.slice(..));
         for caster in casters {
             let instance = caster.instance..caster.instance + 1;
+            if let Some(handle) = caster.batch {
+                let (Some(batch), Some(bind_group)) = (
+                    self.batches.get(&handle),
+                    self.sprite_bind_groups.get(&caster.textures),
+                ) else {
+                    continue;
+                };
+                let light = u64::from(caster.instance) * (SPRITE_ROW_FLOATS * 4) as u64;
+                pass.set_pipeline(batch_pipeline);
+                pass.set_bind_group(1, bind_group, &[]);
+                pass.set_vertex_buffer(0, batch.corners.slice(..));
+                pass.set_vertex_buffer(1, batch.rows.slice(..));
+                pass.set_vertex_buffer(2, self.caster_rows.buffer.slice(light..));
+                pass.draw(0..4, 0..batch.count);
+                draws += 1;
+                continue;
+            }
+            pass.set_vertex_buffer(1, self.caster_rows.buffer.slice(..));
             match caster.rig.and_then(|key| self.rigs.get(&key)) {
                 Some(rig) => {
                     pass.set_pipeline(rig_pipeline);
@@ -2468,7 +2521,10 @@ impl Renderer {
     /// posed, a new frame) is stale. A sprite batch, a pixel-sized sprite or
     /// rig, and one placed in the viewport, cast nothing.
     pub(crate) fn prepare_sprite_casters(&mut self) {
-        let mut rows = Vec::new();
+        let mut rows_out = Vec::new();
+        let wind_blows = self.tables.wind.is_some_and(|wind| wind.strength > 0.0);
+        let time = self.presentation_time.to_bits();
+        let time = [time as u32, (time >> 32) as u32];
         let mut bindings = Vec::new();
         let unit = PixelRect {
             x: 0,
@@ -2489,8 +2545,8 @@ impl Renderer {
                     if !node.world_visible || ViewLayer::of(node.world_layer) != ViewLayer::World {
                         continue;
                     }
-                    let (scale, _, centre) = node.world.to_scale_rotation_translation();
-                    let inside = |radius: f32| {
+                    let (scale, _, origin) = node.world.to_scale_rotation_translation();
+                    let inside = |centre: Vec3, radius: f32| {
                         let radius = radius * scale.max_element();
                         reach.is_none_or(|(at, range)| at.distance(centre) <= range + radius)
                             && frustum.intersects(&crate::tables::Aabb {
@@ -2498,16 +2554,70 @@ impl Renderer {
                                 max: centre + Vec3::splat(radius),
                             })
                     };
-                    let instance = (rows.len() / SPRITE_ROW_FLOATS) as u32;
+                    let instance = (rows_out.len() / SPRITE_ROW_FLOATS) as u32;
                     match &node.kind {
                         NodeKind::Sprite(resolved) => {
                             let sprite = &resolved.descriptor;
                             if !casts(&sprite.material)
-                                || resolved.batch.is_some()
                                 || sprite.viewport_placement.is_some()
                                 || sprite.size_mode == SpriteSizeMode::Pixel
-                                || !inside(sprite.size[0].hypot(sprite.size[1]))
                             {
+                                continue;
+                            }
+                            // A swaying sprite's shadow sways with time.
+                            let sways = wind_blows && sprite.material.wind_bend > 0.0;
+                            if let Some(rows) = &resolved.batch {
+                                // Its rows are made by the first view that
+                                // draws it; it casts from the next frame.
+                                let Some(buffers) = self.effects.batches.get(handle) else {
+                                    continue;
+                                };
+                                if !inside(node.world.transform_point3(rows.center), rows.radius) {
+                                    continue;
+                                }
+                                let color = self
+                                    .tables
+                                    .atlases
+                                    .get(resolved.atlas)
+                                    .map(|atlas| atlas.texture);
+                                let (_, detail) = sprite_lighting(resolved, color);
+                                let textures =
+                                    (color, detail, resolved.tint_mask, resolved.emission_map);
+                                let mut row = [0.0; SPRITE_ROW_FLOATS];
+                                // Where the light is, or for an orthographic
+                                // light the way toward it: its camera's back.
+                                let light = if camera.projection.w_axis.w == 1.0 {
+                                    camera.view.inverse().z_axis.truncate().extend(0.0)
+                                } else {
+                                    camera.eye.extend(1.0)
+                                };
+                                row[..4].copy_from_slice(&light.to_array());
+                                row[4] = caster_cutoff(sprite.material.alpha);
+                                signature.extend(row[..5].iter().map(|value| value.to_bits()));
+                                signature.extend(node.world.to_cols_array().map(f32::to_bits));
+                                // Its rows: made again when its instances are.
+                                let rows_made = std::sync::Arc::as_ptr(&buffers.instances)
+                                    .cast::<u8>()
+                                    as usize as u64;
+                                signature.extend([
+                                    rows_made as u32,
+                                    (rows_made >> 32) as u32,
+                                    buffers.count,
+                                ]);
+                                if sways {
+                                    signature.extend(time);
+                                }
+                                rows_out.extend(row);
+                                bindings.push(textures);
+                                casters.push(SpriteCaster {
+                                    instance,
+                                    textures,
+                                    rig: None,
+                                    batch: Some(*handle),
+                                });
+                                continue;
+                            }
+                            if !inside(origin, sprite.size[0].hypot(sprite.size[1])) {
                                 continue;
                             }
                             let atlas = self.tables.atlases.get(resolved.atlas);
@@ -2519,12 +2629,16 @@ impl Renderer {
                             row[29] = caster_cutoff(sprite.material.alpha);
                             signature.extend(row.map(f32::to_bits));
                             signature.push(textures.0.unwrap_or(u32::MAX));
-                            rows.extend(row);
+                            if sways {
+                                signature.extend(time);
+                            }
+                            rows_out.extend(row);
                             bindings.push(textures);
                             casters.push(SpriteCaster {
                                 instance,
                                 textures,
                                 rig: None,
+                                batch: None,
                             });
                         }
                         NodeKind::PartsRig(rig) => {
@@ -2532,7 +2646,7 @@ impl Renderer {
                             if !casts(&descriptor.material)
                                 || descriptor.viewport_placement.is_some()
                                 || descriptor.size_mode == SpriteSizeMode::Pixel
-                                || !inside(rig.reach() * descriptor.scale)
+                                || !inside(origin, rig.reach() * descriptor.scale)
                             {
                                 continue;
                             }
@@ -2554,7 +2668,7 @@ impl Renderer {
                             let revision = rig.views[key.1 as usize].pose_revision;
                             signature.extend(row.map(f32::to_bits));
                             signature.extend([key.1, revision as u32, (revision >> 32) as u32]);
-                            rows.extend(row);
+                            rows_out.extend(row);
                             if let Some(buffers) = self.effects.rigs.get(&key) {
                                 bindings.extend(
                                     buffers
@@ -2567,6 +2681,7 @@ impl Renderer {
                                 instance,
                                 textures: draw.textures,
                                 rig: Some(key),
+                                batch: None,
                             });
                         }
                         _ => {}
@@ -2579,10 +2694,10 @@ impl Renderer {
             }
             layer.sprites = casters;
         }
-        if rows.is_empty() {
+        if rows_out.is_empty() {
             return;
         }
-        self.effects.caster_rows.write(&self.gpu, &rows);
+        self.effects.caster_rows.write(&self.gpu, &rows_out);
         for textures in bindings {
             self.ensure_sprite_bindings(textures);
         }

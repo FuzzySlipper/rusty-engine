@@ -755,6 +755,53 @@ fn vs_sprite_caster(in: SpriteIn) -> CasterOut {
     return out;
 }
 
+// A batch's light, shared by its instances (a vertex buffer of stride 0):
+// where the layer's light is (w 1) or the way toward it (w 0), and its
+// cutoff (`caster.x`).
+struct BatchCasterIn {
+    @location(10) light: vec4<f32>,
+    @location(11) caster: vec4<f32>,
+};
+
+// A batch's quads turned to its layer's light as `vs_sprite_batch` turns
+// them to a camera there.
+@vertex
+fn vs_sprite_batch_caster(in: SpriteBatchIn, caster: BatchCasterIn) -> CasterOut {
+    var right = in.right.xyz;
+    var up = in.up.xyz;
+    let facing = u32(in.soft.z + 0.5);
+    if facing != 0u {
+        var toward = caster.light.xyz;
+        if caster.light.w > 0.5 {
+            toward = caster.light.xyz - in.center.xyz;
+        }
+        toward = normalize(toward);
+        if facing >= 2u {
+            toward = upright_facing(toward, cross(in.right.xyz, in.up.xyz), in.right.w);
+            up = vec3<f32>(0.0, 1.0, 0.0);
+            right = normalize(cross(up, toward));
+        } else {
+            let level = abs(toward.y) > 0.999;
+            right = normalize(cross(select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0), level), toward));
+            up = cross(toward, right);
+        }
+    }
+    let size = in.quad.zw - in.quad.xy;
+    let sway = sprite_sway(in.center.xyz, right, size.x, size.y, in.emission.w, in.soft.w);
+    let across = swayed_across(in.corner.x, sway.share);
+    let local = mix(in.quad.xy, in.quad.zw, vec2<f32>(across, in.corner.y));
+    let world = in.center.xyz + right * local.x + up * local.y + sway.top * in.corner.y;
+    var out: CasterOut;
+    out.clip = shadow_views[caster_layer.index].view_proj * vec4<f32>(world, 1.0);
+    out.uv = vec2<f32>(
+        mix(in.uv_rect.x, in.uv_rect.z, across),
+        mix(in.uv_rect.w, in.uv_rect.y, in.corner.y),
+    );
+    out.alpha = vec2<f32>(in.tint.a, caster.caster.x);
+    out.bounds = vec4<f32>(-1.0, -1.0, 1.0, 1.0);
+    return out;
+}
+
 @vertex
 fn vs_parts_rig_caster(in: PartsRigIn) -> CasterOut {
     let model = mat4x4<f32>(in.model0, in.model1, in.model2, in.model3);

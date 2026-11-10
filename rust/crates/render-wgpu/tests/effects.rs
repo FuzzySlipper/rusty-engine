@@ -2892,9 +2892,17 @@ fn a_heading_aligned_sprite_turns_with_the_view_not_with_the_eye() {
     }
 }
 
-/// The floor under a masked sprite standing on it, lit by a sun from its
-/// side that casts, the sprite's material casting as `shadow` asks.
-fn sprite_shadow(shadow: SpriteShadowPolicy) -> Vec<u8> {
+/// A masked sprite standing on the floor (or a batch of three, or one
+/// swaying in a gusting wind), lit by a sun from its side that casts, its
+/// material casting as `shadow` asks; seen from above.
+#[derive(Clone, Copy, PartialEq)]
+enum Standing {
+    Sprite,
+    Batch,
+    Swaying,
+}
+
+fn standing_harness(standing: Standing, shadow: SpriteShadowPolicy) -> Harness {
     let mut harness = Harness::new(RendererOptions {
         default_world_lights: false,
         shadows: true,
@@ -2902,10 +2910,43 @@ fn sprite_shadow(shadow: SpriteShadowPolicy) -> Vec<u8> {
     });
     let mut ops = scene();
     ops.extend(atlas_ops(&mut harness.resources));
-    let mut standing = sprite(0, [0.0, 0.0, -5.0], BillboardMode::Cylindrical);
-    standing.material.alpha = SpriteAlphaMode::Mask { cutoff: 0.5 };
-    standing.material.shadow = shadow;
-    ops.push(create(10, standing));
+    let mut shared = sprite(0, [0.0, 0.0, -5.0], BillboardMode::Cylindrical);
+    shared.material.alpha = SpriteAlphaMode::Mask { cutoff: 0.5 };
+    shared.material.shadow = shadow;
+    match standing {
+        Standing::Batch => {
+            shared.pivot = [0.5, 0.0];
+            shared.size = [0.8, 0.8];
+            shared.transform = transform([0.0, -0.5, -5.0], 0.0, 1.0);
+            ops.push(RenderDiff::CreateSpriteBatch {
+                handle: RenderHandle::new(10),
+                parent: None,
+                batch: SpriteBatchDescriptor {
+                    sprite: shared,
+                    instances: [-0.9f32, 0.0, 0.9]
+                        .map(|x| SpriteBatchInstance {
+                            position: [x, 0.0, 0.0],
+                            scale: 1.0,
+                            frame: 0,
+                        })
+                        .to_vec()
+                        .into(),
+                },
+            });
+        }
+        Standing::Swaying => {
+            shared.material.wind_bend = 0.6;
+            ops.push(create(10, shared));
+            ops.push(RenderDiff::SetWind {
+                wind: Some(WindDescriptor {
+                    direction: [0.0, 1.0],
+                    strength: 2.0,
+                    gust: 1.0,
+                }),
+            });
+        }
+        Standing::Sprite => ops.push(create(10, shared)),
+    }
     ops.push(RenderDiff::CreateLight {
         handle: RenderHandle::new(20),
         parent: None,
@@ -2920,7 +2961,15 @@ fn sprite_shadow(shadow: SpriteShadowPolicy) -> Vec<u8> {
         },
     });
     harness.apply(ops);
-    harness.single(&camera("above", [0.0, 4.0, -1.5], 0.0, -60.0))
+    harness
+}
+
+fn standing_eye() -> render_host_contracts::RendererCompositionCamera {
+    camera("above", [0.0, 4.0, -1.5], 0.0, -60.0)
+}
+
+fn sprite_shadow(shadow: SpriteShadowPolicy) -> Vec<u8> {
+    standing_harness(Standing::Sprite, shadow).single(&standing_eye())
 }
 
 #[test]
@@ -2941,4 +2990,60 @@ fn a_sprite_whose_material_casts_shadows_the_floor_with_its_quad_turned_to_the_s
         "the sprite's shadow darkens {shadow} floor pixels"
     );
     assert_screenshot("sprite_shadow", WIDTH, HEIGHT, &cast);
+}
+
+#[test]
+fn a_sprite_batch_whose_material_casts_shadows_the_floor_with_each_quad_turned_to_the_sun() {
+    // Its rows are made by the view that first draws it: it casts from the
+    // next frame.
+    let frame = |shadow| {
+        let mut harness = standing_harness(Standing::Batch, shadow);
+        harness.single(&standing_eye());
+        harness.single(&standing_eye())
+    };
+    let none = frame(SpriteShadowPolicy::None);
+    assert_eq!(
+        differing_pixels(&frame(SpriteShadowPolicy::Receive), &none),
+        0,
+        "a batch that only receives casts nothing"
+    );
+    let shadow = differing_pixels(&frame(SpriteShadowPolicy::CastAndReceive), &none);
+    assert!(
+        shadow > 600,
+        "the batch's three shadows darken {shadow} floor pixels"
+    );
+}
+
+/// A swaying sprite's shadow sways with presentation time, the camera, the
+/// light and the scene held.
+#[test]
+fn a_swaying_sprite_s_shadow_moves_with_time_alone() {
+    let mut cast = standing_harness(Standing::Swaying, SpriteShadowPolicy::Cast);
+    let mut none = standing_harness(Standing::Swaying, SpriteShadowPolicy::None);
+    // The shadow, and the layers redrawn for it.
+    let mut shadow_at = |time: f64| -> (Vec<usize>, u32) {
+        cast.renderer.set_animation_time(time);
+        none.renderer.set_animation_time(time);
+        let (shadowed, unshadowed) = (cast.single(&standing_eye()), none.single(&standing_eye()));
+        let shadow = (0..shadowed.len() / 4)
+            .filter(|&pixel| {
+                shadowed[pixel * 4..pixel * 4 + 3] != unshadowed[pixel * 4..pixel * 4 + 3]
+            })
+            .collect();
+        (shadow, cast.renderer.shadow_report().rendered_layers)
+    };
+    let (first, _) = shadow_at(1.0);
+    let (later, redrawn) = shadow_at(1.7);
+    let (_, held) = shadow_at(1.7);
+    assert!(
+        first.len() > 200,
+        "a shadow lies on the floor: {} pixels",
+        first.len()
+    );
+    assert!(
+        redrawn > 0,
+        "a new time redraws the layers the sprite sways in"
+    );
+    assert_eq!(held, 0, "a held time redraws none");
+    assert_ne!(first, later, "the shadow sways as the sprite does");
 }
