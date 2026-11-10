@@ -15,6 +15,13 @@
 //! it holds, and copies past reach, outside the view or thinned away cost
 //! the GPU no vertex work. Without compute, runs draw directly at level 0
 //! (`Parts::selecting` false) and the readout says why.
+//!
+//! A draw holds its copies in a fixed order: its level parts in the order
+//! they were gathered, each part's copies in their run's order. The pass
+//! decides every copy, counts each chunk's copies in each list, sums them
+//! over each run and then over each draw's parts, and writes each copy where
+//! those sums place it. Two copies that meet a sample at one depth so
+//! resolve the same way every frame and every run.
 
 use std::collections::HashMap;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -40,15 +47,19 @@ const BACKDROP_PASS: &str = "backdrop-scatter-select";
 /// reach to take them in.
 const SPHERES: usize = 16;
 /// `Params`: six planes, the eye, the counts, the spheres, the view's
-/// matrix and the occluders.
-const PARAMS_BYTES: u64 = 6 * 16 + 16 + 16 + SPHERES as u64 * 16 + 64 + 16;
+/// matrix, the occluders and where the scratch's regions start.
+const PARAMS_BYTES: u64 = 6 * 16 + 16 + 16 + SPHERES as u64 * 16 + 64 + 16 + 16;
 /// `Run`: eight vectors.
 const RUN_FLOATS: usize = 32;
 /// `wgpu::util::DrawIndexedIndirectArgs`.
 pub(crate) const ARGS_BYTES: u64 = 20;
 const STATS: usize = 9;
-/// Chunks a dispatch row holds (the limit on a dimension).
+/// Workgroups a dispatch row holds (the limit on a dimension).
 const ROW_CHUNKS: u32 = 65_535;
+/// The lists a copy may enter: the camera's levels, then the shadows'.
+const LISTS: u32 = 8;
+/// The storage buffers the busiest kernel binds.
+const STORAGE_BUFFERS: u32 = 6;
 /// The most parts an entry can name (20 bits).
 const MAX_PART: u32 = 1 << 20;
 
@@ -113,14 +124,71 @@ pub struct ScatterSelectionReadout {
     pub over_limit: u64,
 }
 
+/// The selection's kernels, in the order they run (`scatter_select.wgsl`).
+const KERNELS: [&str; 4] = ["cs_select", "cs_scan_runs", "cs_place", "cs_write"];
+
+/// A binding of a kernel's layout.
+#[derive(Clone, Copy)]
+enum Binding {
+    Uniform,
+    Read,
+    Write,
+    Pyramid,
+}
+
+/// Each kernel's bindings (`scatter_select.wgsl`).
+const KERNEL_BINDINGS: [&[(u32, Binding)]; 4] = [
+    &[
+        (0, Binding::Uniform),
+        (1, Binding::Read),
+        (2, Binding::Read),
+        (3, Binding::Read),
+        (4, Binding::Read),
+        (8, Binding::Write),
+        (9, Binding::Pyramid),
+        (10, Binding::Write),
+    ],
+    &[
+        (0, Binding::Uniform),
+        (3, Binding::Read),
+        (10, Binding::Write),
+    ],
+    &[
+        (0, Binding::Uniform),
+        (6, Binding::Write),
+        (10, Binding::Write),
+        (11, Binding::Read),
+    ],
+    &[
+        (0, Binding::Uniform),
+        (3, Binding::Read),
+        (4, Binding::Read),
+        (5, Binding::Read),
+        (6, Binding::Write),
+        (7, Binding::Write),
+        (10, Binding::Write),
+    ],
+];
+
 pub(crate) struct ScatterSelect {
-    pipeline: Option<wgpu::ComputePipeline>,
+    pipelines: Option<[wgpu::ComputePipeline; 4]>,
     refused: Option<String>,
-    layout: wgpu::BindGroupLayout,
+    layouts: [wgpu::BindGroupLayout; 4],
     params: wgpu::Buffer,
     runs: wgpu::Buffer,
     chunks: wgpu::Buffer,
     level_parts: wgpu::Buffer,
+    /// For each draw's arguments, its level parts in order
+    /// (`scatter_select.wgsl` `draw_parts`).
+    draw_parts: wgpu::Buffer,
+    /// The pass's working words: decisions, then the chunks', runs' and
+    /// level parts' counts and starts.
+    scratch: wgpu::Buffer,
+    /// Where `scratch`'s regions start: chunks, runs, level parts; and the
+    /// bytes it uses (bound, not the whole buffer, so the binding stays
+    /// within the selection's budget).
+    scratch_regions: [u32; 3],
+    scratch_bytes: u64,
     pub args: wgpu::Buffer,
     stats: wgpu::Buffer,
     stats_readback: wgpu::Buffer,
@@ -134,6 +202,9 @@ pub(crate) struct ScatterSelect {
     chunk_count: u32,
     run_count: u32,
     copy_count: u32,
+    /// Workgroups of `cs_place`: the draws' arguments, the camera's and
+    /// the shadows'.
+    draw_slots: u32,
     /// Entries the region holds: each part's copies, once a list.
     pub entries: u32,
     /// Copies of runs left out because their entries would pass the
@@ -155,50 +226,41 @@ impl ScatterSelect {
     /// The selection of the runs `layer` (World or Backdrop) draws.
     pub fn new(gpu: &Gpu, shader: wgpu::ShaderModule, layer: ViewLayer) -> Self {
         let device = &gpu.device;
-        let storage = |binding, read_only| wgpu::BindGroupLayoutEntry {
-            binding,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Storage { read_only },
-                has_dynamic_offset: false,
-                min_binding_size: None,
-            },
-            count: None,
-        };
-        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("render-wgpu scatter select"),
-            entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
+        let layouts = KERNEL_BINDINGS.map(|bindings| {
+            let entries: Vec<_> = bindings
+                .iter()
+                .map(|&(binding, kind)| wgpu::BindGroupLayoutEntry {
+                    binding,
                     visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    ty: match kind {
+                        Binding::Uniform => wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        Binding::Read | Binding::Write => wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage {
+                                read_only: matches!(kind, Binding::Read),
+                            },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        Binding::Pyramid => wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
                     },
                     count: None,
-                },
-                storage(1, true),
-                storage(2, true),
-                storage(3, true),
-                storage(4, true),
-                storage(5, true),
-                storage(6, false),
-                storage(7, false),
-                storage(8, false),
-                wgpu::BindGroupLayoutEntry {
-                    binding: 9,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-            ],
+                })
+                .collect();
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("render-wgpu scatter select"),
+                entries: &entries,
+            })
         });
-        let mut refused = gpu.compute_refusal([WORKGROUP, 1, 1], 0);
+        // `run_lanes`, the largest of the kernels' workgroup arrays.
+        let mut refused = gpu.compute_refusal([WORKGROUP, 1, 1], WORKGROUP * 32);
         if refused.is_none()
             && !gpu
                 .adapter
@@ -215,23 +277,29 @@ impl ScatterSelect {
         {
             refused = Some("the device has no indirect first instance".to_owned());
         }
-        if refused.is_none() && device.limits().max_storage_buffers_per_shader_stage < 8 {
-            refused =
-                Some("the device binds fewer than 8 storage buffers to a compute stage".to_owned());
+        if refused.is_none()
+            && device.limits().max_storage_buffers_per_shader_stage < STORAGE_BUFFERS
+        {
+            refused = Some(format!(
+                "the device binds fewer than {STORAGE_BUFFERS} storage buffers to a compute stage"
+            ));
         }
-        let pipeline = refused.is_none().then(|| {
-            let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("render-wgpu scatter select"),
-                bind_group_layouts: &[Some(&layout)],
-                immediate_size: 0,
-            });
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("render-wgpu scatter select"),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some("cs_select"),
-                compilation_options: Default::default(),
-                cache: None,
+        let pipelines = refused.is_none().then(|| {
+            std::array::from_fn(|kernel| {
+                let pipeline_layout =
+                    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                        label: Some("render-wgpu scatter select"),
+                        bind_group_layouts: &[Some(&layouts[kernel])],
+                        immediate_size: 0,
+                    });
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(KERNELS[kernel]),
+                    layout: Some(&pipeline_layout),
+                    module: &shader,
+                    entry_point: Some(KERNELS[kernel]),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
             })
         });
         let storage_buffer = |label, size: u64, usage| {
@@ -244,9 +312,9 @@ impl ScatterSelect {
         };
         let storage = wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST;
         Self {
-            pipeline,
+            pipelines,
             refused,
-            layout,
+            layouts,
             params: storage_buffer(
                 "render-wgpu scatter select params",
                 PARAMS_BYTES,
@@ -255,6 +323,14 @@ impl ScatterSelect {
             runs: storage_buffer("render-wgpu scatter select runs", 0, storage),
             chunks: storage_buffer("render-wgpu scatter select chunks", 0, storage),
             level_parts: storage_buffer("render-wgpu scatter select parts", 0, storage),
+            draw_parts: storage_buffer("render-wgpu scatter select draw parts", 0, storage),
+            scratch: storage_buffer(
+                "render-wgpu scatter select scratch",
+                0,
+                wgpu::BufferUsages::STORAGE,
+            ),
+            scratch_regions: [0; 3],
+            scratch_bytes: 0,
             args: storage_buffer(
                 "render-wgpu scatter select draws",
                 0,
@@ -307,6 +383,7 @@ impl ScatterSelect {
             chunk_count: 0,
             run_count: 0,
             copy_count: 0,
+            draw_slots: 0,
             entries: 0,
             over_budget: 0,
             enabled: false,
@@ -315,7 +392,7 @@ impl ScatterSelect {
     }
 
     pub fn available(&self) -> bool {
-        self.pipeline.is_some()
+        self.pipelines.is_some()
     }
 
     /// Place the draws' meshes in `pool` (each found by `mesh_of`) and
@@ -392,17 +469,21 @@ impl ScatterSelect {
         handles.sort_unstable();
         let mut runs: Vec<f32> = Vec::new();
         let mut chunks: Vec<u32> = Vec::new();
-        // Each level part's id and draw; the draws by what they share.
-        let mut level_parts: Vec<[u32; 2]> = Vec::new();
+        // Each level part's id, draw, run and level; the draws by what they
+        // share.
+        let mut level_parts: Vec<[u32; 4]> = Vec::new();
         let mut shared: HashMap<(Features, crate::batch::Pass, u32, bool), u32> = HashMap::new();
         let mut draws: Vec<SelectedDraw> = Vec::new();
         // A draw's parts' runs cast: its shadow list takes entries.
         let mut reserves: Vec<bool> = Vec::new();
         let mut copies = 0u32;
         let mut run_count = 0u32;
+        // Each gathered run casts.
+        let mut casting: Vec<bool> = Vec::new();
         let mut part_count = 0u32;
         let mut used = 0u64;
         let mut over_budget = 0u64;
+        let mut chunk_count = 0u32;
         for handle in handles {
             let run = &tables.scatter_runs[&handle];
             if !live(run.part) || run.copies.count == 0 {
@@ -417,7 +498,13 @@ impl ScatterSelect {
                 .flatten()
                 .filter(|id| live(**id) && **id < MAX_PART)
                 .count() as u64;
-            let cost = 2 * parts_drawn * u64::from(run.copies.count);
+            // And its words of the scratch, two to an entry: a decision a
+            // copy, a count a list for each chunk and the run, two starts a
+            // level part.
+            let run_chunks = u64::from(run.copies.count.div_ceil(WORKGROUP));
+            let scratch_words =
+                u64::from(run.copies.count) + u64::from(LISTS) * (run_chunks + 1) + 2 * parts_drawn;
+            let cost = 2 * parts_drawn * u64::from(run.copies.count) + scratch_words.div_ceil(2);
             if used + cost > budget {
                 over_budget += u64::from(run.copies.count);
                 continue;
@@ -470,7 +557,7 @@ impl ScatterSelect {
                     // A copy enters a part's list at most once: the draw
                     // holds up to its parts' copies (counted here).
                     draws[draw as usize].camera_entries += run.copies.count;
-                    level_parts.push([id, draw]);
+                    level_parts.push([id, draw, run_count, level as u32]);
                     level_count[level] += 1;
                     part_count += 1;
                 }
@@ -508,12 +595,14 @@ impl ScatterSelect {
             runs.extend_from_slice(&[
                 f32::from_bits(u32::from(run.casts)),
                 f32::from_bits(u32::from(run.last_mesh_level)),
-                0.0,
-                0.0,
+                f32::from_bits(chunk_count),
+                f32::from_bits(copies),
             ]);
             for first in (0..run.copies.count).step_by(WORKGROUP as usize) {
                 chunks.extend_from_slice(&[index, first]);
+                chunk_count += 1;
             }
+            casting.push(run.casts);
             copies += run.copies.count;
         }
         debug_assert_eq!(runs.len(), run_count as usize * RUN_FLOATS);
@@ -544,9 +633,30 @@ impl ScatterSelect {
             slots[draw as usize] = slot as u32;
             ordered.push(selected);
         }
+        // Each draw's level parts in the order they were gathered: its
+        // run's total in the list (camera or shadow, at the part's level)
+        // and the part's first entry there, in the scratch's regions.
+        let mut by_draw: Vec<Vec<[u32; 2]>> = vec![Vec::new(); 2 * draws.len()];
+        for (index, &[_, draw, run, level]) in level_parts.iter().enumerate() {
+            let slot = slots[draw as usize];
+            let index = index as u32;
+            by_draw[slot as usize].push([run * LISTS + level, 2 * index]);
+            if casting[run as usize] {
+                by_draw[(count + slot) as usize].push([run * LISTS + 4 + level, 2 * index + 1]);
+            }
+        }
+        let mut draw_parts: Vec<u32> = Vec::with_capacity(by_draw.len() + 1);
+        let mut listed = 0u32;
+        for list in &by_draw {
+            draw_parts.push(listed);
+            listed += list.len() as u32;
+        }
+        draw_parts.push(listed);
+        draw_parts.extend(by_draw.iter().flatten().flatten());
+        let level_part_count = level_parts.len() as u32;
         let level_parts: Vec<u32> = level_parts
             .iter()
-            .flat_map(|&[part, draw]| {
+            .flat_map(|&[part, draw, _, _]| {
                 let slot = slots[draw as usize];
                 [part, slot, count + slot, 0]
             })
@@ -583,6 +693,26 @@ impl ScatterSelect {
             bytemuck::cast_slice(&level_parts),
             storage,
         );
+        upload(
+            &mut self.draw_parts,
+            "render-wgpu scatter select draw parts",
+            bytemuck::cast_slice(&draw_parts),
+            storage,
+        );
+        let chunk_starts = copies;
+        let run_totals = chunk_starts + LISTS * chunk_count;
+        let part_starts = run_totals + LISTS * run_count;
+        let scratch_bytes = u64::from(part_starts + 2 * level_part_count) * 4;
+        if scratch_bytes > self.scratch.size() {
+            self.scratch = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("render-wgpu scatter select scratch"),
+                size: scratch_bytes.next_power_of_two(),
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            });
+        }
+        self.scratch_regions = [chunk_starts, run_totals, part_starts];
+        self.scratch_bytes = scratch_bytes;
         let args_bytes = ordered.len() as u64 * 2 * ARGS_BYTES;
         if args_bytes > self.args.size() {
             self.args = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -605,8 +735,10 @@ impl ScatterSelect {
         });
         self.draws = ordered;
         self.part_count = part_count;
-        self.chunk_count = (chunks.len() / 2) as u32;
+        debug_assert_eq!(chunk_count as usize, chunks.len() / 2);
+        self.chunk_count = chunk_count;
         self.run_count = run_count;
+        self.draw_slots = 2 * count;
         self.copy_count = copies;
         self.entries = entries;
         self.over_budget = over_budget;
@@ -636,7 +768,7 @@ impl ScatterSelect {
         if let Some(timer) = &mut self.timer {
             timer.collect(gpu);
         }
-        let Some(pipeline) = &self.pipeline else {
+        let Some(pipelines) = &self.pipelines else {
             return;
         };
         self.enabled = true;
@@ -691,7 +823,12 @@ impl ScatterSelect {
             reach = reach.max(centre.distance(eye) + radius);
         }
         params.extend_from_slice(bytemuck::cast_slice(&[eye.x, eye.y, eye.z, reach]));
-        for value in [self.chunk_count, ROW_CHUNKS, spheres.len() as u32, 0] {
+        for value in [
+            self.chunk_count,
+            ROW_CHUNKS,
+            spheres.len() as u32,
+            self.run_count,
+        ] {
             params.extend_from_slice(&value.to_le_bytes());
         }
         for index in 0..SPHERES {
@@ -708,41 +845,63 @@ impl ScatterSelect {
         for value in [region[0], region[1], levels, 0] {
             params.extend_from_slice(&value.to_le_bytes());
         }
+        for value in self.scratch_regions.into_iter().chain([self.draw_slots]) {
+            params.extend_from_slice(&value.to_le_bytes());
+        }
+        debug_assert_eq!(params.len() as u64, PARAMS_BYTES);
         gpu.queue.write_buffer(&self.params, 0, &params);
-        let bind_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("render-wgpu scatter select"),
-            layout: &self.layout,
-            entries: &[
-                (0, &self.params),
-                (1, parts),
-                (2, copies),
-                (3, &self.runs),
-                (4, &self.chunks),
-                (5, &self.level_parts),
-                (6, &self.args),
-                (7, instances),
-                (8, &self.stats),
-            ]
-            .map(|(binding, buffer)| wgpu::BindGroupEntry {
-                binding,
-                resource: buffer.as_entire_binding(),
+        let resource = |binding: u32| match binding {
+            0 => self.params.as_entire_binding(),
+            1 => parts.as_entire_binding(),
+            2 => copies.as_entire_binding(),
+            3 => self.runs.as_entire_binding(),
+            4 => self.chunks.as_entire_binding(),
+            5 => self.level_parts.as_entire_binding(),
+            6 => self.args.as_entire_binding(),
+            7 => instances.as_entire_binding(),
+            8 => self.stats.as_entire_binding(),
+            9 => wgpu::BindingResource::TextureView(pyramid),
+            10 => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &self.scratch,
+                offset: 0,
+                size: std::num::NonZeroU64::new(self.scratch_bytes),
+            }),
+            _ => self.draw_parts.as_entire_binding(),
+        };
+        let bind_groups: Vec<_> = (0..KERNELS.len())
+            .map(|kernel| {
+                let entries: Vec<_> = KERNEL_BINDINGS[kernel]
+                    .iter()
+                    .map(|&(binding, _)| wgpu::BindGroupEntry {
+                        binding,
+                        resource: resource(binding),
+                    })
+                    .collect();
+                gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(KERNELS[kernel]),
+                    layout: &self.layouts[kernel],
+                    entries: &entries,
+                })
             })
-            .into_iter()
-            .chain([wgpu::BindGroupEntry {
-                binding: 9,
-                resource: wgpu::BindingResource::TextureView(pyramid),
-            }])
-            .collect::<Vec<_>>(),
-        });
+            .collect();
         encoder.clear_buffer(&self.stats, 0, None);
         let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
             label: Some(PASS),
             timestamp_writes: self.timer.as_ref().and_then(PassTimer::compute_writes),
         });
-        pass.set_pipeline(pipeline);
-        pass.set_bind_group(0, &bind_group, &[]);
-        let rows = self.chunk_count.div_ceil(ROW_CHUNKS);
-        pass.dispatch_workgroups(self.chunk_count.min(ROW_CHUNKS), rows, 1);
+        // Decide each chunk's copies, sum them over each run, place each
+        // draw's parts, then write the copies where those sums put them.
+        let workgroups = [
+            self.chunk_count,
+            self.run_count,
+            self.draw_slots,
+            self.chunk_count,
+        ];
+        for (kernel, count) in workgroups.into_iter().enumerate() {
+            pass.set_pipeline(&pipelines[kernel]);
+            pass.set_bind_group(0, &bind_groups[kernel], &[]);
+            pass.dispatch_workgroups(count.min(ROW_CHUNKS), count.div_ceil(ROW_CHUNKS), 1);
+        }
         drop(pass);
         if let Some(timer) = &mut self.timer {
             timer.resolve(encoder);

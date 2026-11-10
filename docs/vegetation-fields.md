@@ -263,7 +263,9 @@ inside the view, at the level their distance reaches. Copies outside the
 view, past reach or thinned away cost no vertex work, and the CPU's draw
 lists hold no copy at all. Every tile's copies of one mesh, material and
 pipeline draw together, so the draws follow the layers' meshes and levels,
-not the tiles. The meshes they draw are copied into one shared vertex and
+not the tiles. A draw holds its copies in a fixed order, tile by tile and
+copy by copy, so where two copies meet at one depth the same one shows every
+frame and every run. The meshes they draw are copied into one shared vertex and
 index buffer, so the draws of one pass, pipeline and material (the variants
 of a species with the same bark and leaves) are one multi-draw command. Every world shadow layer takes the casting copies the same
 way without the view test: the sun's cascades those within their reach (the

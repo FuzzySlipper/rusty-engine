@@ -568,6 +568,29 @@ fn a_thinner_level_shows_inside_the_one_it_replaces_within_the_band() {
 }
 
 #[test]
+fn copies_meeting_at_one_depth_resolve_to_the_last_copy_every_frame() {
+    // Copies standing in one place, across forty of the selection's
+    // workgroups, all white but the last, red. The draw holds them in their
+    // patch's order and the opaque pass keeps the later of equal depths, so
+    // the red copy covers every sample, frame after frame.
+    const COPIES: usize = 64 * 40;
+    let mut harness = harness(false);
+    let mut ops = stage(false);
+    let mut copies: Vec<_> = (0..COPIES).map(|_| copy([0.0; 3], [1.0; 3])).collect();
+    copies[COPIES - 1].tint = [1.0, 0.0, 0.0];
+    ops.push(patch(20, 5, copies, ScatterFade::default(), false));
+    harness.apply(ops);
+    for frame in 0..4 {
+        let pixels = render(&mut harness).1;
+        let (red, white) = (red(&pixels), bright(&pixels));
+        assert!(
+            red > 100 && white == 0,
+            "frame {frame}: {red} red pixels, {white} white"
+        );
+    }
+}
+
+#[test]
 fn patches_of_one_mesh_share_one_draw_and_draw_what_one_patch_would() {
     let scene = |split: bool| {
         let mut harness = harness(false);
