@@ -35,7 +35,7 @@ use csharp_engine_abi::{
 };
 use csharp_engine_services::{
     renderer_settings_request, AnimationRealizationFact, EngineServiceSet,
-    GhostPlateRealizationFact, VideoRealizationFact,
+    GhostPlateRealizationFact, HeldRendererResources, VideoRealizationFact,
 };
 use product_host::RuntimePublication;
 use product_host::{
@@ -55,8 +55,9 @@ use product_host::{
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
 use render_wgpu::{
-    AmbientOcclusionPath, AnimationFact, Gpu, GpuReadout, RendererOptions, RendererSettingsReadout,
-    ResourceSource, SceneChange, SceneDriver, SceneState, SettingRefusal, VideoFact, VideoFailure,
+    AmbientOcclusionPath, AnimationFact, CommittedCall, Gpu, GpuReadout, RendererOptions,
+    RendererSettingsReadout, ResourceSource, SceneChange, SceneDriver, SceneState, SettingRefusal,
+    VideoFact, VideoFailure,
 };
 use serde_json::{json, Value};
 
@@ -423,20 +424,25 @@ impl FrameOutput {
         })
     }
 
-    /// Applies a committed call's renderer publications, with the simulation
-    /// step and held state the call left.
+    /// Hands a committed call's renderer publications to the renderer, with
+    /// the simulation step and held state the call left. They leave
+    /// `outputs`: nothing else reads them.
     pub(crate) fn realize(
         &self,
         services: &EngineServiceSet,
-        outputs: &[RuntimePublication],
+        outputs: &mut Vec<RuntimePublication>,
         simulation: Simulation,
     ) {
-        self.driver.apply(
-            scene_changes(outputs),
-            &EngineResources(services),
-            &|entity| services.entity_world_position(entity),
-            scene_state(services, simulation),
-        );
+        let mut changes = Vec::new();
+        outputs.retain_mut(|publication| match scene_change(publication) {
+            Some(change) => {
+                changes.push(change);
+                false
+            }
+            None => true,
+        });
+        self.driver
+            .apply(committed_call(services, changes, simulation));
     }
 
     /// Rebuilds the renderer from the committed world, after a call's
@@ -447,12 +453,12 @@ impl FrameOutput {
         baseline: &[RuntimePublication],
         simulation: Simulation,
     ) {
-        self.driver.rebaseline(
-            scene_changes(baseline),
-            &EngineResources(services),
-            &|entity| services.entity_world_position(entity),
-            scene_state(services, simulation),
-        );
+        let changes = baseline
+            .iter()
+            .filter_map(|publication| scene_change(&mut publication.clone()))
+            .collect();
+        self.driver
+            .rebaseline(committed_call(services, changes, simulation));
     }
 
     /// Follows a lifecycle or time-mode change that no product call
@@ -912,19 +918,35 @@ fn engine_fact(fact: AnimationFact) -> AnimationRealizationFact {
     }
 }
 
-struct EngineResources<'a>(&'a EngineServiceSet);
+/// The resources a call's changes read, held as the call left them.
+struct EngineResources(HeldRendererResources);
 
-impl ResourceSource for EngineResources<'_> {
+impl ResourceSource for EngineResources {
     fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
         self.0
-            .borrowed_renderer_resource(identity)
-            .map(|resource| Cow::Borrowed(resource.bytes()))
+            .get(identity)
+            .map(|bytes| Cow::Borrowed(bytes.as_ref()))
     }
 
     fn shared(&self, identity: &str) -> Option<render_wgpu::SharedBytes> {
-        self.0.borrowed_renderer_resource(identity).map(|resource| {
-            std::sync::Arc::new(resource.shared_bytes()) as render_wgpu::SharedBytes
-        })
+        self.0
+            .get(identity)
+            .map(|bytes| Arc::new(bytes.clone()) as render_wgpu::SharedBytes)
+    }
+}
+
+/// A call's renderer changes, complete: the resources they read and the
+/// entity positions they follow, as the call left them.
+fn committed_call(
+    services: &EngineServiceSet,
+    changes: Vec<SceneChange>,
+    simulation: Simulation,
+) -> CommittedCall {
+    CommittedCall {
+        changes,
+        resources: Box::new(EngineResources(services.held_renderer_resources())),
+        entities: services.entity_world_positions(),
+        state: scene_state(services, simulation),
     }
 }
 
@@ -937,18 +959,18 @@ pub(crate) struct Simulation {
     pub lead: Option<render_wgpu::PresentationLead>,
 }
 
-/// The renderer's changes among a call's publications, in call order.
-fn scene_changes(publications: &[RuntimePublication]) -> impl Iterator<Item = SceneChange<'_>> {
-    publications
-        .iter()
-        .filter_map(|publication| match publication {
-            RuntimePublication::Frame(frame) => Some(SceneChange::Frame(frame)),
-            RuntimePublication::Presentation(frame) => Some(SceneChange::Presentation(frame)),
-            RuntimePublication::ViewComposition(composition) => {
-                Some(SceneChange::ViewComposition(composition))
-            }
-            _ => None,
-        })
+/// A renderer change a publication carries, taken out of it.
+fn scene_change(publication: &mut RuntimePublication) -> Option<SceneChange> {
+    match publication {
+        RuntimePublication::Frame(frame) => Some(SceneChange::Frame(std::mem::take(frame))),
+        RuntimePublication::Presentation(frame) => {
+            Some(SceneChange::Presentation(std::mem::take(frame)))
+        }
+        RuntimePublication::ViewComposition(composition) => {
+            Some(SceneChange::ViewComposition(composition.clone()))
+        }
+        _ => None,
+    }
 }
 
 pub(crate) fn scene_state(services: &EngineServiceSet, simulation: Simulation) -> SceneState {

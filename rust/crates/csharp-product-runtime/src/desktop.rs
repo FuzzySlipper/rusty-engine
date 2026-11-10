@@ -243,6 +243,10 @@ impl DesktopScene for WindowScene {
         shown.step
     }
 
+    fn undrawn(&self) {
+        self.driver.advance_undrawn();
+    }
+
     fn presented(&self, frame: PresentedFrame) {
         self.timing.presented(WindowFrame {
             step: frame.step,

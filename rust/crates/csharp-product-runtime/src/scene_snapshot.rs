@@ -311,8 +311,8 @@ pub enum SceneSnapshotChange {
 }
 
 impl SceneSnapshotChange {
-    pub fn scene_change(&self) -> SceneChange<'_> {
-        match self {
+    pub fn scene_change(&self) -> SceneChange {
+        match self.clone() {
             Self::Frame(frame) => SceneChange::Frame(frame),
             Self::Presentation(frame) => SceneChange::Presentation(frame),
             Self::ViewComposition(composition) => SceneChange::ViewComposition(composition),
@@ -486,8 +486,11 @@ impl SceneSnapshot {
     }
 
     /// The baseline's changes, as a rebaseline applies them.
-    pub fn scene_changes(&self) -> impl Iterator<Item = SceneChange<'_>> {
-        self.changes.iter().map(SceneSnapshotChange::scene_change)
+    pub fn scene_changes(&self) -> Vec<SceneChange> {
+        self.changes
+            .iter()
+            .map(SceneSnapshotChange::scene_change)
+            .collect()
     }
 
     pub fn resource_count(&self) -> usize {
@@ -502,6 +505,16 @@ impl SceneSnapshot {
 impl ResourceSource for SceneSnapshot {
     fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
         self.container.get(&format!("{RESOURCES}/{identity}")).ok()
+    }
+}
+
+/// An open snapshot shared with a renderer that reads its resources while it
+/// takes up the baseline.
+pub struct SharedSnapshot(pub std::sync::Arc<SceneSnapshot>);
+
+impl ResourceSource for SharedSnapshot {
+    fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
+        self.0.bytes(identity)
     }
 }
 

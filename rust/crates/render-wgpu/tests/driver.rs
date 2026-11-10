@@ -15,8 +15,8 @@ use render_host_contracts::{
 };
 use render_presentation::{video_frame, VideoClipRef, VideoPlaybackHandle, VideoProjectionOp};
 use render_wgpu::{
-    Gpu, NoResources, OffscreenTarget, PresentationLead, RendererOptions, ResourceSource,
-    SceneChange, SceneDriver, SceneState, VideoFact,
+    CommittedCall, Gpu, NoResources, OffscreenTarget, PresentationLead, RendererOptions,
+    ResourceSource, SceneChange, SceneDriver, SceneState, VideoFact,
 };
 
 /// `render-video`'s synthetic fixture: 1.5 s of VP9 at 10 fps.
@@ -28,6 +28,20 @@ struct Clip;
 impl ResourceSource for Clip {
     fn bytes(&self, identity: &str) -> Option<Cow<'_, [u8]>> {
         (identity == CLIP_RESOURCE).then_some(Cow::Borrowed(CLIP))
+    }
+}
+
+/// A committed call of `changes` reading `resources`, with no entities.
+fn call(
+    changes: Vec<SceneChange>,
+    resources: impl ResourceSource + Send + 'static,
+    state: SceneState,
+) -> CommittedCall {
+    CommittedCall {
+        changes,
+        resources: Box::new(resources),
+        entities: Default::default(),
+        state,
     }
 }
 
@@ -86,12 +100,11 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
 
     // A call's changes land with the step and revision it reached.
     let composition = composition();
-    scene.apply(
-        [SceneChange::ViewComposition(&composition)],
-        &NoResources,
-        &|_| None,
+    scene.apply(call(
+        vec![SceneChange::ViewComposition(composition.clone())],
+        NoResources,
         state(3, true),
-    );
+    ));
     let target = OffscreenTarget::new(&gpu, 64, 32, 4);
     let (video, shown) =
         scene.draw(|renderer, now| renderer.render_view_composition(&target, now).video);
@@ -155,7 +168,10 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         .choose("antialiasing", &serde_json::json!("off"))
         .unwrap();
     scene.set_player_settings(player);
-    scene.rebaseline([], &NoResources, &|_| None, state(4, true));
+    scene.rebaseline(call(Vec::new(), NoResources, state(4, true)));
+    // The readouts are as the scene was last left: a reading takes the
+    // rebaseline up first.
+    assert!(scene.view_state().held);
     let readout = scene.settings_readout();
     assert_eq!(readout.player, player);
     assert_eq!(
@@ -184,15 +200,14 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         shown.presentation_seconds
     };
     let apply = |step: u64, lead: Option<PresentationLead>| {
-        running.apply(
-            [],
-            &NoResources,
-            &|_| None,
+        running.apply(call(
+            Vec::new(),
+            NoResources,
             SceneState {
                 lead,
                 ..state(step, lead.is_none())
             },
-        );
+        ));
     };
     apply(6, Some(lead));
     let (committed, next) = (6.0 / 60.0, 6.0 / 60.0 + STEP);
@@ -251,17 +266,20 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
     );
     drop(running);
 
-    // A frame holds the scene while it draws, and nothing the runtime reads
-    // or sets between calls waits on it: the readouts and facts are as the
-    // scene was last left, and the simulation state lands with the next
-    // frame (#10700).
+    // A frame holds the scene while it draws, and nothing the runtime hands
+    // over or reads between calls waits on it: a call and the simulation
+    // state land with the next frame, in the order they were handed over,
+    // and the readouts and facts are as the scene was last left (#10700).
     let drawing = SceneDriver::new(gpu.clone(), RendererOptions::default());
-    drawing.apply(
-        [SceneChange::ViewComposition(&composition)],
-        &NoResources,
-        &|_| None,
+    drawing.apply(call(
+        vec![SceneChange::ViewComposition(composition.clone())],
+        NoResources,
         state(11, true),
-    );
+    ));
+    // A first frame takes the call up and leaves the readings at step 11.
+    drawing.draw(|renderer, now| {
+        renderer.render_view_composition(&target, now);
+    });
     let (entered, in_draw) = std::sync::mpsc::channel();
     let (release, released) = std::sync::mpsc::channel::<()>();
     let (read, reads) = std::sync::mpsc::channel();
@@ -276,7 +294,8 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
         });
         in_draw.recv().unwrap();
         threads.spawn(move || {
-            driver.set_simulation(false, 12);
+            driver.apply(call(Vec::new(), NoResources, state(12, false)));
+            driver.set_simulation(true, 12);
             let preparation = driver.preparation_readout();
             let (step, _) = driver.landmark_sets();
             let facts = (
@@ -308,8 +327,8 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
     });
     assert_eq!(
         (shown.step, shown.held),
-        (12, false),
-        "the next frame takes it up"
+        (12, true),
+        "the next frame takes them up, in order"
     );
     drop(drawing);
 
@@ -325,15 +344,14 @@ fn the_driver_reports_what_it_drew_and_ends_clips_undrawn() {
             media_type: "video/webm".to_owned(),
         },
     }]);
-    unwatched.apply(
-        [SceneChange::Presentation(&play)],
-        &Clip,
-        &|_| None,
+    unwatched.apply(call(
+        vec![SceneChange::Presentation(play)],
+        Clip,
         state(1, false),
-    );
+    ));
     assert!(unwatched.take_video_facts().is_empty());
     for step in 2..=120 {
-        unwatched.apply([], &Clip, &|_| None, state(step, false));
+        unwatched.apply(call(Vec::new(), Clip, state(step, false)));
     }
     let never = |_| None::<()>;
     unwatched.wait_for_change(Duration::from_millis(1), never);

@@ -1153,7 +1153,7 @@ impl CsharpProductRuntime {
             // The renderer shows the created world before Start publishes it.
             frames.realize(
                 &services,
-                &initial_output,
+                &mut initial_output,
                 frame_output::Simulation {
                     held: true,
                     step: lifecycle.readout().admitted_simulation_steps(),
@@ -2153,7 +2153,7 @@ impl CsharpProductRuntime {
                             audio.realize(&self.services, &mut outputs);
                         }
                         if let Some(frames) = &self.frame_output {
-                            frames.realize(&self.services, &outputs, self.frame_simulation());
+                            frames.realize(&self.services, &mut outputs, self.frame_simulation());
                         }
                         self.refresh_collision_wires();
                         outputs.retain(|output| !is_empty_frame(output));

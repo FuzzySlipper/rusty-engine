@@ -77,6 +77,9 @@ pub trait DesktopScene: Send + Sync {
     fn draw(&self, draw: &mut dyn FnMut(&mut Renderer, f64)) -> u64;
     /// The window presented a frame.
     fn presented(&self, frame: PresentedFrame);
+    /// The window drew nothing this time (minimized, or its surface
+    /// reconfiguring): the scene keeps up with the runtime undrawn.
+    fn undrawn(&self) {}
     /// A key or mouse button event reached the window at `at`.
     fn input_received(&self, at: SystemTime);
     /// The UI page opened in `engine` (its name, version and GPU renderer).
@@ -484,6 +487,7 @@ impl Shell {
         let frame = match acquired.frame {
             Ok(frame) => frame,
             Err(PresentSkip::Reconfigured | PresentSkip::Unavailable) => {
+                self.scene.undrawn();
                 self.report.frames_skipped += 1;
                 open.next_frame = Instant::now() + open.refresh;
                 return;

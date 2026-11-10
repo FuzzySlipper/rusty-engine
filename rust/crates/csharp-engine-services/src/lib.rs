@@ -59,7 +59,9 @@ pub use composition::{
 };
 pub use gameplay_time::{rate_value as gameplay_rate_value, GameplayTimeRequest};
 pub use render_output::RenderOutputWork;
-pub use render_resources::{CsharpRenderResource, CsharpRenderResourceKind, RenderOutputResources};
+pub use render_resources::{
+    CsharpRenderResource, CsharpRenderResourceKind, HeldRendererResources, RenderOutputResources,
+};
 pub use renderer_settings::renderer_settings_request;
 pub use tween::TweenTime;
 pub use video::VideoRealizationFact;

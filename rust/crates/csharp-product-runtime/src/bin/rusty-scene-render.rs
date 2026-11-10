@@ -33,7 +33,7 @@
 
 use std::{path::PathBuf, time::Instant};
 
-use csharp_product_runtime::scene_snapshot::{SceneSnapshot, SceneSnapshotChange};
+use csharp_product_runtime::scene_snapshot::{SceneSnapshot, SceneSnapshotChange, SharedSnapshot};
 use render_host_contracts::RendererCameraPose;
 use render_model::{
     IndirectLightDescriptor, RendererSettingsDescriptor, RendererSettingsOverrides,
@@ -411,7 +411,7 @@ fn run() -> Result<(), String> {
     }
 
     let opened = Instant::now();
-    let snapshot = SceneSnapshot::open(&snapshot_path)?;
+    let snapshot = std::sync::Arc::new(SceneSnapshot::open(&snapshot_path)?);
     let open_ms = ms(opened);
     // Attached presentation (billboards, audio emitters) follows entities
     // through the retained world, as the Engine's positions do live.
@@ -499,12 +499,12 @@ fn run() -> Result<(), String> {
         driver.set_player_settings(player);
     }
     let applied = Instant::now();
-    driver.rebaseline(
-        snapshot.scene_changes(),
-        &snapshot,
-        &|entity| world.entity_world_position(entity),
-        snapshot.metadata.state.into(),
-    );
+    driver.rebaseline(render_wgpu::CommittedCall {
+        changes: snapshot.scene_changes(),
+        resources: Box::new(SharedSnapshot(snapshot.clone())),
+        entities: world.entity_world_positions(),
+        state: snapshot.metadata.state.into(),
+    });
     // A snapshot's deferred textures and meshes were drawn when it was
     // written: the frames wait for them.
     driver.settle_prepared();

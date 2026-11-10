@@ -2,19 +2,20 @@
 //! it, for whichever output draws it: the stream's render thread offscreen,
 //! or the desktop shell to its window.
 //!
-//! The runtime applies each product call's renderer changes on its own
-//! thread, as it commits them, with the Engine state the call reached, so no
-//! frame shows a call's changes under the previous step. An output draws the
-//! scene through [`SceneDriver::draw`], and a tool captures it through
-//! [`SceneDriver::capture`]. Animation and video facts the frames produce
-//! wait here for the runtime to report them.
+//! The runtime hands over each product call's renderer changes as it commits
+//! them, complete: the resource bytes they read and the entity positions
+//! they follow come with them, and so does the Engine state the call reached,
+//! so no frame shows a call's changes under the previous step. Whoever takes
+//! the scene next applies what was handed over, in order and whole, before
+//! anything else: an output drawing through [`SceneDriver::draw`], a tool
+//! capturing through [`SceneDriver::capture`], or any other reading. The
+//! runtime never takes the scene itself, so an update never waits on a frame.
 //!
-//! A frame holds the scene for as long as it draws. What the runtime reads
-//! between calls (the renderer's readouts and facts) and the simulation state
-//! it sets are kept beside the scene, current as of the last time anything
-//! held it, so reading or setting them never waits on a frame.
+//! What the runtime reads between calls (the renderer's readouts, and the
+//! animation and video facts the frames produce) is kept beside the scene,
+//! as whoever last held the scene left it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
@@ -31,11 +32,36 @@ use crate::{
 const DEFAULT_CAPTURE_SIZE: (u32, u32) = (1920, 1080);
 
 /// One renderer change a committed product call made, in call order.
-#[derive(Debug, Clone, Copy)]
-pub enum SceneChange<'a> {
-    Frame(&'a RenderFrameDiff),
-    Presentation(&'a PresentationFrameDiff),
-    ViewComposition(&'a RendererViewComposition),
+#[derive(Debug, Clone)]
+pub enum SceneChange {
+    Frame(RenderFrameDiff),
+    Presentation(PresentationFrameDiff),
+    ViewComposition(RendererViewComposition),
+}
+
+/// A committed product call's renderer changes, complete when handed over:
+/// the scene applies them later, on whichever thread takes it next, and
+/// reads nothing back from the runtime.
+pub struct CommittedCall {
+    /// The changes, in call order.
+    pub changes: Vec<SceneChange>,
+    /// Every resource the changes may read, held as the call left them.
+    pub resources: Box<dyn ResourceSource + Send>,
+    /// Where each entity was when the call ended, for the effects and
+    /// labels that follow one.
+    pub entities: HashMap<u64, [f32; 3]>,
+    /// What the call brought the Engine to.
+    pub state: SceneState,
+}
+
+/// What the runtime handed over for the scene to take up, in order.
+enum Edit {
+    /// A call's changes, and the presentation clock when it was handed over.
+    Call(CommittedCall, f64),
+    /// A complete baseline for a new renderer.
+    Rebaseline(CommittedCall, f64),
+    Simulation(bool, u64),
+    CollisionLines(Vec<crate::OverlayLine>),
 }
 
 /// The Engine state a call's changes bring the scene to.
@@ -157,17 +183,18 @@ pub struct SceneDriver {
     wake: Condvar,
 }
 
-/// What the runtime reads and sets without holding the scene. Every holder
-/// of the scene takes up the simulation state set here when it takes the
-/// scene, and leaves the renderer's readings here when it lets it go. The
-/// scene is always taken first.
+/// What the runtime hands over and reads without holding the scene. Every
+/// holder of the scene takes up the edits handed over here when it takes
+/// the scene, and leaves the renderer's readings here when it lets it go.
+/// The scene is always taken first.
 struct Beside {
     /// Something changed since the last frame was drawn.
     changed: bool,
-    /// Whether the simulation is held, and the step the scene shows.
+    /// Handed over and not yet taken up.
+    edits: Vec<Edit>,
+    /// Whether the simulation is held, and the step the scene shows, as
+    /// last handed over.
     simulation: (bool, u64),
-    /// `simulation` was set since the scene last took it up.
-    simulation_set: bool,
     readings: Readings,
 }
 
@@ -182,6 +209,7 @@ struct Readings {
     last_skip: Option<String>,
     landmarks: (u64, Vec<crate::LandmarkSetReadout>),
     ghost_plates: Vec<GhostPlateReadout>,
+    shadows: crate::ShadowReport,
     collision: Option<crate::CollisionShown>,
     animation_facts: Vec<AnimationFact>,
     video_facts: Vec<VideoFact>,
@@ -241,6 +269,7 @@ impl SceneDriver {
             last_skip: None,
             landmarks: (0, renderer.landmark_sets()),
             ghost_plates: renderer.ghost_plate_readouts(),
+            shadows: renderer.shadow_report(),
             collision: None,
             animation_facts: Vec::new(),
             video_facts: Vec::new(),
@@ -248,8 +277,8 @@ impl SceneDriver {
         Arc::new(Self {
             beside: Mutex::new(Beside {
                 changed: true,
+                edits: Vec::new(),
                 simulation: (true, 0),
-                simulation_set: false,
                 readings,
             }),
             scene: Mutex::new(Scene {
@@ -284,74 +313,106 @@ impl SceneDriver {
         })
     }
 
-    /// Applies one committed call's renderer changes in order and moves
-    /// effects and animation to the Engine presentation time the call
-    /// reached. `state` is what the call brought the Engine to; it lands
-    /// with the changes, so no frame shows them under the previous step.
-    pub fn apply<'a>(
-        &self,
-        changes: impl IntoIterator<Item = SceneChange<'a>>,
-        resources: &dyn ResourceSource,
-        entities: EntityPositions<'_>,
-        state: SceneState,
-    ) {
+    /// Hands over one committed call's renderer changes. The scene applies
+    /// them in order, and moves effects and animation to the Engine
+    /// presentation time the call reached, before it is next drawn or read;
+    /// `state` lands with the changes, so no frame shows them under the
+    /// previous step. Never waits on a frame.
+    pub fn apply(&self, call: CommittedCall) {
         let now = self.now();
-        let mut scene = self.scene();
-        scene.apply(changes, resources, entities, state, now);
+        self.hand_over(Edit::Call(call, now));
     }
 
-    /// Replaces the renderer with one built from a complete baseline, after
-    /// a product call's renderer work was lost or the world was replaced.
-    /// No draw sees the empty renderer in between.
-    pub fn rebaseline<'a>(
-        &self,
-        baseline: impl IntoIterator<Item = SceneChange<'a>>,
-        resources: &dyn ResourceSource,
-        entities: EntityPositions<'_>,
-        state: SceneState,
-    ) {
+    /// Hands over a complete baseline that replaces the renderer, after a
+    /// product call's renderer work was lost or the world was replaced. No
+    /// draw sees the empty renderer in between.
+    pub fn rebaseline(&self, baseline: CommittedCall) {
         let now = self.now();
-        let mut scene = self.scene();
-        scene.renderer = Renderer::new(&self.gpu, self.options);
-        let observer = scene.observer;
-        scene.renderer.set_observer(observer);
-        let anchors = scene.viewport_anchors.clone();
-        scene.renderer.set_viewport_anchors(anchors);
-        let player = scene.player_settings;
-        scene.renderer.set_player_settings(player);
-        scene.renderer_id += 1;
-        scene.composition = None;
-        scene.composition_revision = 0;
-        scene.elapsed_seconds = state.elapsed_seconds;
-        scene.drawn_seconds = state.elapsed_seconds;
-        scene.renderer.set_animation_time(state.elapsed_seconds);
-        scene.animation_facts.clear();
-        scene.video_facts.clear();
-        {
-            let mut beside = self.beside();
-            beside.readings.animation_facts.clear();
-            beside.readings.video_facts.clear();
+        self.hand_over(Edit::Rebaseline(baseline, now));
+    }
+
+    fn hand_over(&self, edit: Edit) {
+        let mut beside = self.beside();
+        if let Edit::Call(call, _) | Edit::Rebaseline(call, _) = &edit {
+            beside.simulation = (call.state.held, call.state.step);
         }
-        scene.apply(baseline, resources, entities, state, now);
-        let shown = scene.overlay_shown.clone();
-        scene.renderer.set_overlay_shown(shown);
-        let views = scene.inspection_views.clone();
-        scene.renderer.set_inspection_views(views);
-        scene.changed = true;
+        beside.edits.push(edit);
+        beside.changed = true;
+        drop(beside);
+        self.wake.notify_all();
+    }
+
+    /// Takes up one edit the runtime handed over.
+    fn take_up(&self, scene: &mut Scene, edit: Edit) {
+        match edit {
+            Edit::Call(call, now) => {
+                let entities = &|entity| call.entities.get(&entity).copied();
+                scene.apply(
+                    &call.changes,
+                    call.resources.as_ref(),
+                    entities,
+                    call.state,
+                    now,
+                );
+            }
+            Edit::Rebaseline(baseline, now) => {
+                scene.renderer = Renderer::new(&self.gpu, self.options);
+                let observer = scene.observer;
+                scene.renderer.set_observer(observer);
+                let anchors = scene.viewport_anchors.clone();
+                scene.renderer.set_viewport_anchors(anchors);
+                let player = scene.player_settings;
+                scene.renderer.set_player_settings(player);
+                scene.renderer_id += 1;
+                scene.composition = None;
+                scene.composition_revision = 0;
+                let state = baseline.state;
+                scene.elapsed_seconds = state.elapsed_seconds;
+                scene.drawn_seconds = state.elapsed_seconds;
+                scene.renderer.set_animation_time(state.elapsed_seconds);
+                scene.animation_facts.clear();
+                scene.video_facts.clear();
+                {
+                    let mut beside = self.beside();
+                    beside.readings.animation_facts.clear();
+                    beside.readings.video_facts.clear();
+                }
+                let entities = &|entity| baseline.entities.get(&entity).copied();
+                scene.apply(
+                    &baseline.changes,
+                    baseline.resources.as_ref(),
+                    entities,
+                    state,
+                    now,
+                );
+                let shown = scene.overlay_shown.clone();
+                scene.renderer.set_overlay_shown(shown);
+                let views = scene.inspection_views.clone();
+                scene.renderer.set_inspection_views(views);
+                scene.changed = true;
+            }
+            Edit::Simulation(held, step) => {
+                if (scene.held, scene.step) != (held, step) {
+                    (scene.held, scene.step) = (held, step);
+                    if held {
+                        scene.lead = None;
+                    }
+                    scene.changed = true;
+                }
+            }
+            Edit::CollisionLines(lines) => {
+                scene.renderer.set_collision_lines(&lines);
+                scene.changed |= scene.overlay_shown.collision.is_some();
+            }
+        }
     }
 
     /// Whether the simulation is held, and the step the scene shows, for a
     /// lifecycle change no product call published (pause, time mode).
-    /// The scene takes it up the next time it is held; setting it never
-    /// waits on a frame.
+    /// Handed over like a call's changes; never waits on a frame.
     pub fn set_simulation(&self, held: bool, step: u64) {
-        let mut beside = self.beside();
-        if beside.simulation != (held, step) {
-            beside.simulation = (held, step);
-            beside.simulation_set = true;
-            beside.changed = true;
-            drop(beside);
-            self.wake.notify_all();
+        if self.beside().simulation != (held, step) {
+            self.hand_over(Edit::Simulation(held, step));
         }
     }
 
@@ -378,10 +439,9 @@ impl SceneDriver {
 
     /// Replaces the collision wires inspection draws while
     /// [`crate::OverlayShown::collision`] shows them; the next frame follows.
+    /// Handed over like a call's changes; never waits on a frame.
     pub fn set_collision_lines(&self, lines: &[crate::OverlayLine]) {
-        let mut scene = self.scene();
-        scene.renderer.set_collision_lines(lines);
-        scene.changed |= scene.overlay_shown.collision.is_some();
+        self.hand_over(Edit::CollisionLines(lines.to_vec()));
     }
 
     /// Replaces the inspection views; the next frame draws them.
@@ -572,7 +632,7 @@ impl SceneDriver {
 
     /// The scene's shadow layers and choice, as the last frame left them.
     pub fn shadow_report(&self) -> crate::ShadowReport {
-        self.scene().renderer.shadow_report()
+        self.beside().readings.shadows.clone()
     }
 
     /// Every realized ghost plate as the last drawn view left it.
@@ -624,14 +684,7 @@ impl SceneDriver {
         if let Some(answer) = ready(self.beside().changed) {
             return Some(answer);
         }
-        {
-            let mut scene = self.scene();
-            if scene.realized_seconds != scene.elapsed_seconds {
-                scene.realized_seconds = scene.elapsed_seconds;
-                scene.renderer.advance_undrawn();
-                scene.collect_facts();
-            }
-        }
+        self.advance_undrawn();
         let beside = self.beside();
         if let Some(answer) = ready(beside.changed) {
             return Some(answer);
@@ -641,6 +694,18 @@ impl SceneDriver {
             .wait_timeout(beside, timeout)
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         ready(beside.changed)
+    }
+
+    /// Takes up what was handed over and moves the scene to the latest call
+    /// without drawing, for an output that draws nothing now: clips and video
+    /// still end on Engine time, and their facts reach the runtime.
+    pub fn advance_undrawn(&self) {
+        let mut scene = self.scene();
+        if scene.realized_seconds != scene.elapsed_seconds {
+            scene.realized_seconds = scene.elapsed_seconds;
+            scene.renderer.advance_undrawn();
+            scene.collect_facts();
+        }
     }
 
     /// Marks the scene changed, so an output waiting in
@@ -774,24 +839,16 @@ impl SceneDriver {
         &self.gpu
     }
 
-    /// Holds the scene, taking up the simulation state set beside it.
+    /// Holds the scene, first taking up everything handed over, in order.
     fn scene(&self) -> HeldScene<'_> {
         let mut scene = self
             .scene
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut beside = self.beside();
-        if std::mem::take(&mut beside.simulation_set) {
-            let (held, step) = beside.simulation;
-            if (scene.held, scene.step) != (held, step) {
-                (scene.held, scene.step) = (held, step);
-                if held {
-                    scene.lead = None;
-                }
-                scene.changed = true;
-            }
+        let edits = std::mem::take(&mut self.beside().edits);
+        for edit in edits {
+            self.take_up(&mut scene, edit);
         }
-        drop(beside);
         HeldScene {
             scene,
             driver: self,
@@ -844,12 +901,10 @@ impl Drop for HeldScene<'_> {
         readings.last_skip.clone_from(&scene.last_skip);
         readings.landmarks = (scene.step, scene.renderer.landmark_sets());
         readings.ghost_plates = scene.renderer.ghost_plate_readouts();
+        readings.shadows = scene.renderer.shadow_report();
         readings.collision = scene.overlay_shown.collision;
         readings.animation_facts.append(&mut scene.animation_facts);
         readings.video_facts.append(&mut scene.video_facts);
-        if !beside.simulation_set {
-            beside.simulation = (scene.held, scene.step);
-        }
         if std::mem::take(&mut scene.changed) {
             beside.changed = true;
             drop(beside);
@@ -885,9 +940,9 @@ impl Scene {
 
     /// Applies changes and the state they reach under the caller's lock.
     /// Returns whether anything changed.
-    fn apply<'a>(
+    fn apply(
         &mut self,
-        changes: impl IntoIterator<Item = SceneChange<'a>>,
+        changes: &[SceneChange],
         resources: &dyn ResourceSource,
         entities: EntityPositions<'_>,
         state: SceneState,

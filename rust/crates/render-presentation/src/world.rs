@@ -490,6 +490,16 @@ impl PresentationWorld {
         }
     }
 
+    /// Where every entity with a retained node is, each as
+    /// [`Self::entity_world_position`] answers.
+    pub fn entity_world_positions(&self) -> std::collections::HashMap<u64, [f32; 3]> {
+        self.retained
+            .entity_nodes
+            .keys()
+            .filter_map(|entity| Some((*entity, self.entity_world_position(*entity)?)))
+            .collect()
+    }
+
     /// World-space origin of the retained node published for `entity`
     /// (`RenderMetadata::source_entity`), composed through its parents. A
     /// joint attachment uses its parent node's transform, not the joint's.

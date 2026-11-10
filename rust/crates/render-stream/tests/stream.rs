@@ -13,7 +13,20 @@ use render_host_contracts::{
     RendererCompositionView, RendererViewComposition, RendererViewTarget, RendererViewport,
 };
 use render_stream::FrameStreamer;
-use render_wgpu::{Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver, SceneState};
+use render_wgpu::{
+    CommittedCall, Gpu, RendererOptions, ResourceSource, SceneChange, SceneDriver, SceneState,
+};
+
+/// A committed call of `changes`, reading no resources and following no
+/// entities.
+fn call(changes: Vec<SceneChange>, state: SceneState) -> CommittedCall {
+    CommittedCall {
+        changes,
+        resources: Box::new(NoResources),
+        entities: Default::default(),
+        state,
+    }
+}
 
 fn state(step: u64, held: bool) -> SceneState {
     SceneState {
@@ -76,7 +89,7 @@ fn frames_follow_viewers_and_simulation_time() {
     // Running: each applied step draws a frame that shows that step.
     let mut running = Vec::new();
     for step in 1..=10 {
-        scene.apply([], &NoResources, &|_| None, state(step, false));
+        scene.apply(call(Vec::new(), state(step, false)));
         let after = running
             .last()
             .map_or(head.sequence, |last: &Header| last.sequence);
@@ -115,7 +128,7 @@ fn frames_follow_viewers_and_simulation_time() {
 
     // A held call's step lands with its changes: one frame, at the new
     // step, and no second frame for the same change.
-    scene.apply([], &NoResources, &|_| None, state(9, true));
+    scene.apply(call(Vec::new(), state(9, true)));
     let stepped = header(&frames.next_after(held.sequence, None, wait).unwrap());
     assert_eq!((stepped.step, stepped.held), (9, true));
     assert!(frames
@@ -125,7 +138,7 @@ fn frames_follow_viewers_and_simulation_time() {
 
     // On demand: a change waits for a request, which draws exactly one frame.
     streamer.set_on_demand(true);
-    scene.apply([], &NoResources, &|_| None, state(10, true));
+    scene.apply(call(Vec::new(), state(10, true)));
     assert!(frames
         .next_after(held.sequence, None, Duration::from_millis(300))
         .is_none());
@@ -174,12 +187,10 @@ fn frames_follow_viewers_and_simulation_time() {
         }],
         presentations: Vec::new(),
     };
-    scene.apply(
-        [SceneChange::ViewComposition(&composition)],
-        &NoResources,
-        &|_| None,
+    scene.apply(call(
+        vec![SceneChange::ViewComposition(composition.clone())],
         state(11, true),
-    );
+    ));
     let own = streamer.draw_now(wait).expect("a requested frame");
     let near = |actual: [f64; 3], expected: [f64; 3]| {
         actual

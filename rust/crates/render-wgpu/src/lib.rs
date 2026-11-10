@@ -119,8 +119,8 @@ pub use culling::GpuCullingReadout;
 pub use decals::DecalReadout;
 pub use distance_fields::DistanceFieldReadout;
 pub use driver::{
-    Capture, PresentationLead, PrimaryCamera, SceneChange, SceneDriver, SceneFrame, SceneState,
-    SceneView,
+    Capture, CommittedCall, PresentationLead, PrimaryCamera, SceneChange, SceneDriver, SceneFrame,
+    SceneState, SceneView,
 };
 pub use frame::FrameStats;
 pub use impostor::ImpostorReadout;

@@ -1184,6 +1184,27 @@ impl EngineServiceSet {
             })
     }
 
+    /// Every resource a renderer may read for this call's output, held for a
+    /// renderer that applies it later on its own thread. The renderer reads
+    /// no audio clip.
+    pub fn held_renderer_resources(&self) -> crate::HeldRendererResources {
+        let resources = &self.appearance.state.render_resources;
+        crate::HeldRendererResources::new(
+            resources.output_resources(),
+            resources
+                .recently_released()
+                .chain(self.video.render_resources())
+                .map(|resource| (resource.identity().to_owned(), resource.shared_bytes()))
+                .collect(),
+        )
+    }
+
+    /// Where every entity with a retained node is, as
+    /// [`Self::entity_world_position`] answers for each.
+    pub fn entity_world_positions(&self) -> std::collections::HashMap<u64, [f32; 3]> {
+        self.presentation_world.entity_world_positions()
+    }
+
     /// Every resource a renderer of the committed scene may ask for.
     pub fn renderer_resources(&self) -> impl Iterator<Item = &CsharpRenderResource> {
         self.appearance

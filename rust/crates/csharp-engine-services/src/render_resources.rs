@@ -534,6 +534,36 @@ impl RenderOutputResources {
     }
 }
 
+/// Every resource a renderer may read for one committed call, held as the
+/// call left them, so a renderer that applies the call later on its own
+/// thread reads nothing back from the services: the live bodies the registry
+/// shares (copied once if they change while held), and the few bodies
+/// released in this call or the one before, and video's.
+#[derive(Clone)]
+pub struct HeldRendererResources {
+    live: RenderOutputResources,
+    others: Vec<(String, ContentBytes)>,
+}
+
+impl HeldRendererResources {
+    pub(crate) fn new(live: RenderOutputResources, others: Vec<(String, ContentBytes)>) -> Self {
+        Self { live, others }
+    }
+
+    pub fn get(&self, identity: &str) -> Option<&ContentBytes> {
+        self.live
+            .0
+            .get(identity)
+            .map(|body| &body.bytes)
+            .or_else(|| {
+                self.others
+                    .iter()
+                    .find(|(held, _)| held == identity)
+                    .map(|(_, bytes)| bytes)
+            })
+    }
+}
+
 /// Admitted renderer resources by handle. Monotonic slots keep stale handles
 /// invalid while released payloads leave memory.
 #[derive(Clone, Default)]
