@@ -434,8 +434,8 @@ pub struct ProductHostLightClusterStatistics {
     #[ts(optional)]
     pub refused: Option<String>,
     /// Why the last world view looped although clustering is on: more
-    /// unbounded lights than the global list names. Absent while it
-    /// clustered.
+    /// unbounded lights than the global list names, or no light with a
+    /// range to bin. Absent while it clustered.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub fallback: Option<String>,

@@ -4029,10 +4029,15 @@ impl Renderer {
             bloom.is_some() || adapting.is_some() || shafts.is_some() || glow,
         );
         // A world pass's lights are binned into clusters when the host asks
-        // and the device can; the viewmodel's few lights loop.
+        // and the device can; the viewmodel's few lights loop. So does a
+        // world pass with no ranged light to bin: every fragment sees every
+        // light anyway, and the loop reads no cluster.
         let clusters = if world_layer && self.options.clustered_lighting {
             if self.global_lights > CLUSTER_CAPACITY {
                 self.light_clusters.looped(self.global_lights);
+                ClusterUniform::LOOP
+            } else if lights.count <= self.global_lights {
+                self.light_clusters.unranged(lights.count);
                 ClusterUniform::LOOP
             } else {
                 self.light_clusters.encode(

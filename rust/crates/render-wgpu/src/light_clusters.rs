@@ -43,8 +43,8 @@ pub struct LightClusterReadout {
     /// Why this device cannot cluster; `None` while it can.
     pub refused: Option<String>,
     /// Why the last world view looped although clustering is on: more
-    /// unbounded lights than the global list names. `None` while it
-    /// clustered or clustering is off.
+    /// unbounded lights than the global list names, or no light with a
+    /// range to bin. `None` while it clustered or clustering is off.
     pub fallback: Option<String>,
     /// Tiles across, tiles down, depth slices.
     pub grid: [u32; 3],
@@ -211,6 +211,9 @@ impl LightClusters {
     pub fn skipped(&mut self) {
         self.enabled = false;
         self.fallback = None;
+        if let Some(timer) = &mut self.timer {
+            timer.restart();
+        }
     }
 
     /// Bin `lights` for a view of `camera` into the clusters, in `encoder`
@@ -306,8 +309,23 @@ impl LightClusters {
     /// unbounded lights do not fit the global list.
     pub fn looped(&mut self, global_lights: u32) {
         self.enabled = false;
+        if let Some(timer) = &mut self.timer {
+            timer.restart();
+        }
         self.fallback = Some(format!(
             "{global_lights} unbounded lights exceed the global list of {CLUSTER_CAPACITY}; the pass looped over its lights"
+        ));
+    }
+
+    /// A world view looped although clustering is on: none of its `lights`
+    /// has a range, so there is nothing to bin.
+    pub fn unranged(&mut self, lights: u32) {
+        self.enabled = false;
+        if let Some(timer) = &mut self.timer {
+            timer.restart();
+        }
+        self.fallback = Some(format!(
+            "none of the {lights} lights has a range; the pass looped over them"
         ));
     }
 

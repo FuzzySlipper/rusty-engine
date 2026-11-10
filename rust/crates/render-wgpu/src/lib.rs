@@ -316,7 +316,7 @@ pub struct RendererOptions {
     pub ambient_occlusion: AmbientOcclusion,
     /// Bin a world view's lights into a cluster grid before its pass and
     /// shade each fragment from its cluster (`light_clusters.rs`), instead of
-    /// looping over every light. Off by default; a device without compute
+    /// looping over every light. On by default; a device without compute
     /// shaders loops regardless.
     pub clustered_lighting: bool,
     /// Test each view's opaque parts against its frustum on the GPU and
@@ -384,7 +384,7 @@ impl Default for RendererOptions {
             backdrop_shadows: true,
             shadow_budget: None,
             ambient_occlusion: AmbientOcclusion::default(),
-            clustered_lighting: false,
+            clustered_lighting: true,
             gpu_culling: false,
             occlusion_culling: false,
             samples: RendererSettingsDescriptor::DEFAULT.antialiasing.samples(),

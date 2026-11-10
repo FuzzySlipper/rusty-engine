@@ -442,10 +442,10 @@ pub const RENDERER_SETTING_OPTIONS: &[RendererSettingOption] = &[
         id: "clusteredLighting",
         label: "Clustered lighting",
         group: "Advanced",
-        description: "Sorts lights into screen clusters first: faster with many lights in view, a little slower with few.",
+        description: "Sorts lights into screen clusters first: much faster with many lights in view, the same with few.",
         kind: RendererSettingKind::Toggle,
         restart: false,
-        cost: "The binning pass costs 0.01 to 0.1 ms at 1920×1080 on an RX 9070 XT; it repays itself only with dozens of ranged lights in view.",
+        cost: "The binning pass costs 0.07 to 0.15 ms at 1920×1080 on an RTX 3080, and a world view with no ranged light skips it. With up to four ranged lights the world pass costs what the light loop does; with eight it takes about 0.4 ms against the loop's 1 to 1.3 ms, and Daggerfall's city, with 1,229 lights, 1.1 to 1.8 ms against 22.",
         gallery: GalleryExperiment::Try { values: &["true"], alternatives: false, everything: Some("true"), requires: None, setup: None },
     },
     RendererSettingOption {

@@ -275,8 +275,8 @@ enabled: boolean,
 refused?: string, 
 /**
  * Why the last world view looped although clustering is on: more
- * unbounded lights than the global list names. Absent while it
- * clustered.
+ * unbounded lights than the global list names, or no light with a
+ * range to bin. Absent while it clustered.
  */
 fallback?: string, 
 /**

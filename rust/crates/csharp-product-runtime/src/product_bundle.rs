@@ -847,10 +847,16 @@ impl ProductRendererSettings {
                 render_scale,
                 vsync,
                 window_mode,
-                clustered_lighting: switch(
-                    value.lighting.clustered_lighting.as_deref(),
-                    "renderer.lighting.clusteredLighting",
-                )?,
+                clustered_lighting: match value.lighting.clustered_lighting.as_deref() {
+                    None | Some("enabled") => true,
+                    Some("disabled") => false,
+                    Some(_) => {
+                        return Err(field_error(
+                            "renderer.lighting.clusteredLighting",
+                            "must be enabled or disabled",
+                        ))
+                    }
+                },
                 gpu_culling: switch(value.gpu_culling.as_deref(), "renderer.gpuCulling")?,
                 // Products turn it on through `RendererSettings.Set`.
                 occlusion_culling: false,
@@ -1661,19 +1667,19 @@ mod tests {
         let path = root.join(PRODUCT_MANIFEST_NAME);
         let original = fs::read_to_string(&path).unwrap();
         assert!(
-            !read(&root).unwrap().renderer_settings().clustered_lighting,
-            "absent: loop"
+            read(&root).unwrap().renderer_settings().clustered_lighting,
+            "absent: clustered"
         );
         let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
         fs::write(
             &path,
             original.replace(
                 marker,
-                "\"renderer\":{\"lighting\":{\"clusteredLighting\":\"enabled\"}}",
+                "\"renderer\":{\"lighting\":{\"clusteredLighting\":\"disabled\"}}",
             ),
         )
         .unwrap();
-        assert!(read(&root).unwrap().renderer_settings().clustered_lighting);
+        assert!(!read(&root).unwrap().renderer_settings().clustered_lighting);
         fs::write(
             &path,
             original.replace(

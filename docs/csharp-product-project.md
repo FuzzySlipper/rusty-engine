@@ -1272,11 +1272,12 @@ the field atlas (`distanceFields`) beside the occlusion path.
 
 ### Clustered lighting
 
-`RustyEngineProductClusteredLighting` set to `enabled` makes each world view
-bin its lights into a 16×9×24 view-frustum cluster grid in a compute pass,
-so a fragment shades from its cluster's lights instead of every light of the
-pass. The default is `disabled`, which loops; a device without compute
-shaders loops regardless, and so does a world view with more than 63
+`RustyEngineProductClusteredLighting` (default `enabled`) makes each world
+view bin its lights into a 16×9×24 view-frustum cluster grid in a compute
+pass, so a fragment shades from its cluster's lights instead of every light
+of the pass. `disabled` loops over every light; a device without compute
+shaders loops regardless, a world view with no ranged light loops (there is
+nothing to bin), and so does a world view with more than 63
 unbounded lights (ambient, hemisphere, directional, and point or spot
 lights without a range), since the global list names at most that many.
 This writes `renderer.lighting.clusteredLighting` in the staged manifest.

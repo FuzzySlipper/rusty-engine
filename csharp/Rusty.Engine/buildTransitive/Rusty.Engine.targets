@@ -118,8 +118,9 @@
     <RustyEngineProductRenderScale Condition="'$(RustyEngineProductRenderScale)' == ''">1</RustyEngineProductRenderScale>
     <!-- Clustered forward shading: world views bin their
          lights into a view-frustum grid and each fragment shades from its
-         cluster instead of looping over every light. -->
-    <RustyEngineProductClusteredLighting Condition="'$(RustyEngineProductClusteredLighting)' == ''">disabled</RustyEngineProductClusteredLighting>
+         cluster instead of looping over every light. On unless the product
+         sets disabled. -->
+    <RustyEngineProductClusteredLighting Condition="'$(RustyEngineProductClusteredLighting)' == ''">enabled</RustyEngineProductClusteredLighting>
     <!-- GPU visibility: each view tests its opaque parts
          against the frustum in a compute pass and draws them indirectly. -->
     <RustyEngineProductGpuCulling Condition="'$(RustyEngineProductGpuCulling)' == ''">disabled</RustyEngineProductGpuCulling>

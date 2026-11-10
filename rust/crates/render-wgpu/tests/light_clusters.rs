@@ -215,6 +215,53 @@ fn more_global_lights_than_the_list_names_loop_and_say_so() {
 }
 
 #[test]
+fn a_view_without_ranged_lights_loops_and_says_so() {
+    // Only the sun and the unbounded point light: nothing to bin.
+    let mut harness = lit_scene();
+    harness.apply(
+        (0..POINT_LIGHTS)
+            .map(|index| RenderDiff::Destroy {
+                handle: RenderHandle::new(100 + index),
+            })
+            .collect(),
+    );
+    let looped = render_with(&mut harness, false);
+    let clustered = render_with(&mut harness, true);
+    let readout = harness.renderer.gpu_readout().light_clusters;
+    if readout.refused.is_some() {
+        return;
+    }
+    assert!(!readout.enabled, "the pass looped");
+    assert!(
+        readout
+            .fallback
+            .as_deref()
+            .is_some_and(|reason| reason.contains("has a range")),
+        "{:?}",
+        readout.fallback
+    );
+    assert_eq!(looped, clustered);
+    // One ranged light brings the clusters back.
+    harness.apply(vec![RenderDiff::CreateLight {
+        handle: RenderHandle::new(100),
+        parent: None,
+        light: LightDescriptor::Point {
+            color: [1.0, 0.7, 0.4],
+            intensity: 1.5,
+            enabled: true,
+            position: [0.0, 0.6, -2.0],
+            range: Some(2.5),
+            decay: 2.0,
+            shadow_intent: LightShadowIntent::Disabled,
+            shadow: Default::default(),
+        },
+    }]);
+    render_with(&mut harness, true);
+    let readout = harness.renderer.gpu_readout().light_clusters;
+    assert!(readout.enabled && readout.fallback.is_none());
+}
+
+#[test]
 fn the_binning_reports_its_lists_and_time() {
     let mut harness = lit_scene();
     harness.renderer.set_options(RendererOptions {

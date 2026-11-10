@@ -1171,7 +1171,7 @@ pub struct RendererSettingsDescriptor {
     #[serde(default)]
     pub window_mode: WindowMode,
     /// Bin each world view's lights into view-frustum clusters before
-    /// shading, instead of shading every light per fragment.
+    /// shading, instead of shading every light per fragment. On by default.
     pub clustered_lighting: bool,
     /// Test each view's opaque parts against its frustum on the GPU and
     /// draw them indirectly, instead of building the draw list on the CPU.
@@ -1227,7 +1227,7 @@ impl RendererSettingsDescriptor {
         render_scale: 1.0,
         vsync: true,
         window_mode: WindowMode::Maximized,
-        clustered_lighting: false,
+        clustered_lighting: true,
         gpu_culling: false,
         occlusion_culling: false,
         volumetric_fog: VolumetricFogQuality::Off,

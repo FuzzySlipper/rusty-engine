@@ -73,10 +73,13 @@ the frame showing the page's response.
 `settings` gives the renderer settings in effect: what the product or its
 manifest requested, what draws, and why each refused setting differs
 ([renderer settings](lighting-and-sky.md#renderer-settings)). Of its two
-pipeline switches, clustered lighting pays once many ranged lights are in
-view at the same time (with few, the light loop is as fast or faster), and
-GPU culling buys nothing while the CPU draw list is cheap, which it is up to
-a few thousand parts in view.
+pipeline switches, clustered lighting (on by default) costs the same as the
+light loop with up to a few ranged lights in view and pays more the more
+there are: from 8 on an RTX 3080 it shades in a third or less of the
+loop's time, and Daggerfall's city, with 1,229 lights, draws its world pass
+in 1.1 to 1.8 ms instead of 22. A world view with no ranged light loops
+anyway, since there is nothing to bin. GPU culling buys nothing while the
+CPU draw list is cheap, which it is up to a few thousand parts in view.
 
 A draw list's cost follows its materials, not its meshes. Every static
 mesh is also copied into one shared vertex and index buffer when it is
