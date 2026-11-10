@@ -66,6 +66,7 @@ fn rig_asset(rig: &Rig, id: &str, pages: &[&str]) -> PartsRigAsset {
                 triangles: drawable.triangles.clone(),
             })
             .collect(),
+        figure: [0.0; 4],
     }
 }
 
@@ -162,6 +163,7 @@ fn figure(billboard: BillboardMode, translation: [f32; 3], yaw: f32) -> PartsRig
             ..Default::default()
         },
         texel_snap: 0.0,
+        figure_dome: false,
         viewport_placement: None,
         visible: true,
         transform: transform(translation, yaw, 1.0),
@@ -608,6 +610,7 @@ fn slot_blend_modes_dark_tint_premultiplied_pages_and_draw_order_follow_their_ar
                 },
             ],
             drawables: drawables.into(),
+            figure: [0.0; 4],
         },
     });
     let mut rig = figure(BillboardMode::None, [0.0; 3], 0.0);
@@ -741,6 +744,7 @@ fn texel_snapped_rigs_draw_whole_cells_of_their_grid() {
                 triangles: vec![0, 1, 2, 2, 3, 0],
             }]
             .into(),
+            figure: [0.0; 4],
         },
     });
     // The page's 12 texels at 1 rig unit each, turned 27° about their
@@ -836,6 +840,7 @@ fn checker_ops(harness: &mut Harness) -> Vec<RenderDiff> {
                     triangles: vec![0, 1, 2, 2, 3, 0],
                 }]
                 .into(),
+                figure: [0.0; 4],
             },
         },
     ]
@@ -1198,6 +1203,7 @@ fn a_sparse_regions_quad_draws_only_its_own_texels_under_texel_snap() {
                     triangles: vec![0, 1, 2, 2, 3, 0],
                 }]
                 .into(),
+                figure: [0.0; 4],
             },
         },
     ];
@@ -1339,6 +1345,7 @@ fn blends_rig(harness: &mut Harness, id: &str) -> RenderDiff {
                 detail: None,
             }],
             drawables: (0..4).map(|q| quadrant(0, q)).collect::<Vec<_>>().into(),
+            figure: [0.0; 4],
         },
     }
 }
@@ -1512,6 +1519,7 @@ fn authored_normal_and_depth_lighting_read_the_pages_detail_maps() {
                     detail: Some(id.to_owned()),
                 }],
                 drawables: (0..4).map(|q| quadrant(0, q)).collect::<Vec<_>>().into(),
+                figure: [0.0; 4],
             },
         });
     }
@@ -1600,6 +1608,7 @@ fn pages_sharing_a_colour_texture_light_by_their_own_detail_maps() {
                 })
                 .to_vec(),
             drawables: vec![quadrant(0, 3), quadrant(1, 3)].into(),
+            figure: [0.0; 4],
         },
     });
     ops.extend(side_lights());
@@ -1628,6 +1637,167 @@ fn pages_sharing_a_colour_texture_light_by_their_own_detail_maps() {
     assert!(
         left > right + 60,
         "the left-tilted page shades brighter than the right-tilted one: {left}, {right}"
+    );
+}
+
+/// `drawable`'s triangles wound the other way, as some of a rig-c rig's
+/// pieces are.
+fn clockwise(mut drawable: PartsRigDrawable) -> PartsRigDrawable {
+    for triangle in drawable.triangles.chunks_mut(3) {
+        triangle.swap(1, 2);
+    }
+    drawable
+}
+
+/// Grey pieces lit `Synthetic` at strength 1, light from the left: one
+/// piece, two abutting pieces (the right one wound clockwise) under each
+/// piece's own dome, and the same two under one figure dome. The figure
+/// dome shades the two as the one piece is shaded, with no seam where they
+/// meet, whichever way they wind; each piece's own dome turns its edges
+/// apart there.
+#[test]
+fn a_figure_dome_shades_abutting_pieces_as_one_surface() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let mut ops = vec![RenderDiff::SetBackgroundColor {
+        color: [0.0, 0.0, 0.0, 1.0],
+    }];
+    ops.push(blends_rig(&mut harness, "parts-rig/one"));
+    // A figure 4.5 wide from x = 5.75 and 2.5 tall from y = 3.
+    let (width, height, bottom) = (4.5, 2.5, 3.0);
+    ops.push(RenderDiff::DefinePartsRig {
+        asset: PartsRigAsset {
+            id: "parts-rig/two".to_owned(),
+            pages: vec![PartsRigPage {
+                texture: "texture/straight".to_owned(),
+                premultiplied: false,
+                detail: None,
+            }],
+            // The grey quadrant, and the same wound clockwise.
+            drawables: vec![quadrant(0, 3), clockwise(quadrant(0, 3))].into(),
+            figure: [5.75, bottom, 5.75 + width, bottom + height],
+        },
+    });
+    // The same figure 3.5 higher and on the rig's left, for a mirrored view
+    // that draws it where the first stands.
+    let (above, left) = (bottom + 3.5, -5.75 - width);
+    ops.push(RenderDiff::DefinePartsRig {
+        asset: PartsRigAsset {
+            id: "parts-rig/mirrored".to_owned(),
+            pages: vec![PartsRigPage {
+                texture: "texture/straight".to_owned(),
+                premultiplied: false,
+                detail: None,
+            }],
+            drawables: vec![quadrant(0, 3), clockwise(quadrant(0, 3))].into(),
+            figure: [left, above, left + width, above + height],
+        },
+    });
+    ops.extend(side_lights());
+    let halves = |x: f32, bottom: f32| {
+        let half = |x: f32| {
+            [
+                [x, bottom],
+                [x + width / 2.0, bottom],
+                [x + width / 2.0, bottom + height],
+                [x, bottom + height],
+            ]
+        };
+        pose(vec![
+            (piece(0, PartsRigBlend::Normal), half(x)),
+            (piece(1, PartsRigBlend::Normal), half(x + width / 2.0)),
+        ])
+    };
+    let one = pose(vec![(
+        piece(3, PartsRigBlend::Normal),
+        [
+            [0.5, bottom],
+            [0.5 + width, bottom],
+            [0.5 + width, bottom + height],
+            [0.5, bottom + height],
+        ],
+    )]);
+    let synthetic = lit(SpriteLightingMode::Synthetic);
+    let mut figure_dome = flat_rig("parts-rig/two", 0.0, synthetic.clone());
+    figure_dome.figure_dome = true;
+    // Each piece's own dome, though its asset has a figure.
+    ops.extend(create(
+        10,
+        flat_rig("parts-rig/one", 0.0, synthetic.clone()),
+        &one,
+    ));
+    let mut mirrored = flat_rig("parts-rig/mirrored", 0.0, synthetic.clone());
+    mirrored.figure_dome = true;
+    mirrored.views[0].mirror = true;
+    ops.extend(create(
+        11,
+        flat_rig("parts-rig/two", -1.0, synthetic),
+        &halves(5.75, bottom),
+    ));
+    ops.extend(create(12, figure_dome, &halves(5.75, bottom)));
+    ops.extend(create(13, mirrored, &halves(left, above)));
+    harness.apply(ops);
+    let frame = harness.single(&flat_camera());
+    let brightness = |x: f32| {
+        at(&frame, x, bottom + height / 2.0)[..3]
+            .iter()
+            .map(|c| i32::from(*c))
+            .sum::<i32>()
+    };
+    // A pixel each side of the seam, 0.05 m (one pixel) away.
+    let seam = 5.75 + width / 2.0;
+    let jump = brightness(seam - 0.05) - brightness(seam + 0.05);
+    assert!(
+        jump.abs() <= 6,
+        "the figure dome is continuous across the seam: {} then {}",
+        brightness(seam - 0.05),
+        brightness(seam + 0.05)
+    );
+    // Seen from the front: the side toward the light is the bright one.
+    let (lit, unlit) = (brightness(5.75 + 0.3), brightness(5.75 + width - 0.3));
+    assert!(
+        lit > unlit + 60,
+        "lit from the left: {lit} on the left, {unlit} on the right"
+    );
+    let mirrored = |x: f32| {
+        at(&frame, x, above + height / 2.0)[..3]
+            .iter()
+            .map(|c| i32::from(*c))
+            .sum::<i32>()
+    };
+    for step in 1..18 {
+        let offset = step as f32 * width / 18.0;
+        let (single, figure) = (brightness(0.5 + offset), brightness(5.75 + offset));
+        assert!(
+            (single - figure).abs() <= 6,
+            "{offset} m in, the two pieces shade as the one piece does: {figure} against {single}"
+        );
+        let flipped = mirrored(5.75 + offset);
+        assert!(
+            (flipped - figure).abs() <= 6,
+            "{offset} m in, the mirrored view shades as the figure does: {flipped} against {figure}"
+        );
+    }
+    // Hide the figure dome: each piece's own dome shows the seam.
+    assert_screenshot("parts_rigs_figure_dome", WIDTH, HEIGHT, &frame);
+    harness.apply(vec![RenderDiff::Destroy {
+        handle: RenderHandle::new(12),
+    }]);
+    let frame = harness.single(&flat_camera());
+    let brightness = |x: f32| {
+        at(&frame, x, bottom + height / 2.0)[..3]
+            .iter()
+            .map(|c| i32::from(*c))
+            .sum::<i32>()
+    };
+    let jump = brightness(seam + 0.05) - brightness(seam - 0.05);
+    assert!(
+        jump > 60,
+        "each piece's own dome turns its edges apart at the seam: {} then {}",
+        brightness(seam - 0.05),
+        brightness(seam + 0.05)
     );
 }
 

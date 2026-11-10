@@ -29,6 +29,8 @@ pub(crate) struct PartsRigAssetRow {
     pub pages: Vec<RigPage>,
     /// Each drawable's page region: the bounds of its UVs.
     pub regions: Vec<[f32; 4]>,
+    /// Its setup pose's bounds in rig units: what a figure dome spans.
+    pub figure: [f32; 4],
     /// Changes with each definition, so buffers built from the last one are
     /// built again.
     pub generation: u64,
@@ -243,6 +245,7 @@ impl Renderer {
                 drawables: asset.drawables.clone(),
                 pages,
                 regions,
+                figure: asset.figure,
                 generation: self.parts_rig_generation,
             },
         );

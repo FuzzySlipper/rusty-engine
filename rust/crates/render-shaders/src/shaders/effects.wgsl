@@ -403,7 +403,9 @@ struct PartsRigIn {
     // The frame it draws inside: min x, min y, max x, max y.
     @location(7) quad: vec4<f32>,
     @location(8) params: vec4<f32>,
-    @location(9) soft: vec4<f32>,
+    // The figure a synthetic dome spans: min x, min y, max x, max y in rig
+    // units; no area for each piece's own page region.
+    @location(9) dome: vec4<f32>,
     @location(10) emission: vec4<f32>,
     @location(11) uv: vec2<f32>,
     // The piece's colour, sRGB with linear alpha.
@@ -430,6 +432,7 @@ struct PartsRigOut {
     // Rig units per texel, and the view's mirror sign.
     @location(10) snap: vec2<f32>,
     @location(11) bounds: vec4<f32>,
+    @location(12) @interpolate(flat) dome: vec4<f32>,
 };
 
 fn srgb_linear(value: vec3<f32>) -> vec3<f32> {
@@ -463,21 +466,33 @@ fn vs_parts_rig(in: PartsRigIn) -> PartsRigOut {
     out.emission = in.emission.xyz;
     out.snap = in.snap.xy;
     out.bounds = in.quad;
+    out.dome = in.dome;
     return out;
 }
 
 // A rig piece's colour, straight alpha, lit; `masked` discards below the
 // alpha cutoff.
-fn shaded_parts_rig(in: PartsRigOut, front: bool, masked: bool) -> vec4<f32> {
+fn shaded_parts_rig(in: PartsRigOut, masked: bool) -> vec4<f32> {
     // Derivatives and samples first: they need uniform control flow.
     let rig_x = dpdx(in.rig);
     let rig_y = dpdy(in.rig);
     let uv_x = dpdx(in.uv);
     let uv_y = dpdy(in.uv);
-    let extent = max(in.region.zw - in.region.xy, vec2<f32>(1e-6));
-    // A mirrored view's triangles turn over with it; they face as they did.
-    let facing = front == (in.snap.y > 0.0);
-    var surface = sprite_surface(in.world_position, in.normal, in.uv, (in.uv - in.region.xy) / extent, facing);
+    // Where the fragment lies under its synthetic dome, in image
+    // orientation: in the figure, so neighbouring pieces shade as one
+    // surface, or else in its piece's page region.
+    let figure = in.dome.zw - in.dome.xy;
+    var cell = (in.uv - in.region.xy) / max(in.region.zw - in.region.xy, vec2<f32>(1e-6));
+    if figure.x > 0.0 && figure.y > 0.0 {
+        cell = vec2<f32>(in.rig.x - in.dome.x, in.dome.w - in.rig.y) / figure;
+    }
+    // The side of the plane it is seen from, by the plane's normal against
+    // the screen (its place's derivatives turn right then up, toward the
+    // eye): a rig's triangles wind either way, piece by piece, and a
+    // mirrored view's turn over with it.
+    let toward_eye = cross(dpdx(in.world_position), gl_dpdy3(in.world_position));
+    let facing = dot(toward_eye, in.normal) >= 0.0;
+    var surface = sprite_surface(in.world_position, in.normal, in.uv, cell, facing);
     let flags = u32(in.dark.a * 255.0 + 0.5);
     // Authored normals from a page without a normal map: flat.
     if (flags & 2u) == 0u && u32(in.params.x + 0.5) == 2u {
@@ -527,8 +542,8 @@ fn shaded_parts_rig(in: PartsRigOut, front: bool, masked: bool) -> vec4<f32> {
 // Blended pieces, premultiplied: each slot blend mode is a blend state over
 // this (`parts_rigs.rs`).
 @fragment
-fn fs_parts_rig(in: PartsRigOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    let color = shaded_parts_rig(in, front, true);
+fn fs_parts_rig(in: PartsRigOut) -> @location(0) vec4<f32> {
+    let color = shaded_parts_rig(in, true);
     return vec4<f32>(color.rgb * color.a, color.a);
 }
 
@@ -536,9 +551,9 @@ fn fs_parts_rig(in: PartsRigOut, @builtin(front_facing) front: bool) -> @locatio
 // steps at its cells' edges, so its cutoff is hard: smoothed by the alpha's
 // screen derivative, a pixel beside a cell edge would take part coverage.
 @fragment
-fn fs_parts_rig_opaque(in: PartsRigOut, @builtin(front_facing) front: bool) -> OpaqueSpriteOut {
+fn fs_parts_rig_opaque(in: PartsRigOut) -> OpaqueSpriteOut {
     let cutoff = in.params.y;
-    let color = shaded_parts_rig(in, front, false);
+    let color = shaded_parts_rig(in, false);
     let edge = mask_coverage(color.a, cutoff);
     var mask = 0xffffffffu;
     if cutoff > 0.0 {
@@ -552,8 +567,8 @@ fn fs_parts_rig_opaque(in: PartsRigOut, @builtin(front_facing) front: bool) -> O
 // exposed, graded or tone mapped (`effects.rs`). Solid pieces cover their
 // pixel from the cutoff up; blended ones are premultiplied as
 // `fs_parts_rig`'s.
-fn finished_parts_rig(in: PartsRigOut, front: bool, solid: bool) -> vec4<f32> {
-    let color = shaded_parts_rig(in, front, true);
+fn finished_parts_rig(in: PartsRigOut, solid: bool) -> vec4<f32> {
+    let color = shaded_parts_rig(in, true);
     if solid {
         return vec4<f32>(color.rgb, 1.0);
     }
@@ -561,13 +576,13 @@ fn finished_parts_rig(in: PartsRigOut, front: bool, solid: bool) -> vec4<f32> {
 }
 
 @fragment
-fn fs_parts_rig_finished(in: PartsRigOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return finished_parts_rig(in, front, false);
+fn fs_parts_rig_finished(in: PartsRigOut) -> @location(0) vec4<f32> {
+    return finished_parts_rig(in, false);
 }
 
 @fragment
-fn fs_parts_rig_finished_solid(in: PartsRigOut, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
-    return finished_parts_rig(in, front, true);
+fn fs_parts_rig_finished_solid(in: PartsRigOut) -> @location(0) vec4<f32> {
+    return finished_parts_rig(in, true);
 }
 
 // Beside a temporal stage's motion target it also marks the reactive mask
@@ -579,14 +594,14 @@ struct ReactivePartsRig {
 };
 
 @fragment
-fn fs_parts_rig_finished_reactive(in: PartsRigOut, @builtin(front_facing) front: bool) -> ReactivePartsRig {
-    let color = finished_parts_rig(in, front, false);
+fn fs_parts_rig_finished_reactive(in: PartsRigOut) -> ReactivePartsRig {
+    let color = finished_parts_rig(in, false);
     return ReactivePartsRig(color, vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, color.a));
 }
 
 @fragment
-fn fs_parts_rig_finished_solid_reactive(in: PartsRigOut, @builtin(front_facing) front: bool) -> ReactivePartsRig {
-    let color = finished_parts_rig(in, front, true);
+fn fs_parts_rig_finished_solid_reactive(in: PartsRigOut) -> ReactivePartsRig {
+    let color = finished_parts_rig(in, true);
     return ReactivePartsRig(color, vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, 1.0));
 }
 

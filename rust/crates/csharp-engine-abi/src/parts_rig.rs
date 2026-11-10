@@ -83,6 +83,11 @@ pub struct NativePartsRigAppearanceRequest {
     /// Rig units per texel of the grid the figure draws on, for pixel art;
     /// 0 draws it smooth.
     pub texel_snap: f32,
+    /// Under `Synthetic` lighting, one dome spans the whole figure (the
+    /// drawn view's setup-pose bounds, or a placed rig's frame) rather than
+    /// each piece's own page region, so neighbouring pieces shade as one
+    /// surface.
+    pub figure_dome: bool,
 }
 
 /// Places a rig appearance in a rectangle of each reading's viewport, as a

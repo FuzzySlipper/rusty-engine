@@ -645,6 +645,19 @@ impl Effects {
             }
             None => [f32::MIN, f32::MIN, f32::MAX, f32::MAX],
         });
+        // The figure a synthetic dome spans, in its plane's (mirrored)
+        // units; none (each piece's own page region) unless it asks.
+        if descriptor.figure_dome {
+            let [x0, y0, x1, y1] = match &descriptor.viewport_placement {
+                Some(placement) => placement.frame,
+                None => asset.figure,
+            };
+            row[32..36].copy_from_slice(&if view.mirror {
+                [-x1, y0, -x0, y1]
+            } else {
+                [x0, y0, x1, y1]
+            });
+        }
         row[20..24].copy_from_slice(&descriptor.tint);
         row[28..32].copy_from_slice(&[mode, cutoff, strength, bias]);
         row[36..39].copy_from_slice(
@@ -2593,6 +2606,7 @@ mod tests {
                 ..Default::default()
             },
             texel_snap: 0.0,
+            figure_dome: false,
             viewport_placement: None,
             visible: true,
             transform: Default::default(),

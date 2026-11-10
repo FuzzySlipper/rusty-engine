@@ -57,6 +57,12 @@ pub struct PartsRigAsset {
     pub pages: Vec<PartsRigPage>,
     /// Shared, so copies of the asset do not copy its geometry.
     pub drawables: Arc<[PartsRigDrawable]>,
+    /// Its setup pose's bounds in its default skin, in rig units (min x,
+    /// min y, max x, max y): the figure a figure dome spans
+    /// (`PartsRigInstanceDescriptor::figure_dome`). Zero when it draws
+    /// nothing.
+    #[serde(default)]
+    pub figure: [f32; 4],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -238,6 +244,12 @@ pub struct PartsRigInstanceDescriptor {
     /// centre. 0 draws it smooth.
     #[serde(default)]
     pub texel_snap: f32,
+    /// Under `Synthetic` lighting, one dome spans the whole figure rather
+    /// than each piece's page region, so neighbouring pieces shade as one
+    /// surface: the drawn view's setup-pose bounds (`PartsRigAsset::figure`),
+    /// or a placed rig's frame.
+    #[serde(default)]
+    pub figure_dome: bool,
     /// Placed in a rectangle of the viewport rather than in the world.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewport_placement: Option<PartsRigViewportPlacement>,

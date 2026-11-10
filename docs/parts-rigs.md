@@ -62,6 +62,22 @@ material for lighting, alpha, shadow policy, emission and
 figure on its texel grid. The convenience constructor makes a world-sized
 `Cylindrical` rig, unlit and masked at half alpha.
 
+Lighting reads the plane's side the camera sees, whichever way a piece's
+triangles wind. `Synthetic` lighting domes each piece over its own page
+region, as a sprite is domed over its frame, so at a `NormalStrength` near 1
+neighbouring pieces shade apart at their seams. `FigureDome` spans one dome
+across the whole figure instead: the bounds of the drawn view's setup pose
+(default skin), or a placed rig's frame. Pieces then shade as one surface
+however they are cut, and breathing and sway move through the dome rather
+than carrying it.
+
+```csharp
+SpriteMaterialDescriptor lit = new(SpriteLightingMode.Synthetic, default, default, 1, 0,
+    SpriteAlphaMode.Mask, .5f, SpriteShadowPolicy.None);
+Appearance keeper = engine.PartsRigs.CreateAppearance(new PartsRigAppearanceRequest(
+    new PartsRigView[] { new(rig, 0, false) }, metresPerUnit) with { Material = lit, FigureDome = true });
+```
+
 A heading is the bearing, about the object's up axis, of a camera that sees
 that view: radians from the object's +z toward its +x, so 0 is a camera in
 front. Each reading of the scene (the window, the stream, a capture, a

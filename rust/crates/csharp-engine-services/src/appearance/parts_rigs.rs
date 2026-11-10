@@ -97,6 +97,19 @@ impl ViewPlayer {
     }
 }
 
+/// The bounds of `rig`'s setup pose in rig units (min x, min y, max x,
+/// max y), its default skin: what a placed rig fits by default and a figure
+/// dome spans. None when it draws nothing.
+fn setup_bounds(rig: &Rig) -> Option<[f32; 4]> {
+    let mut pose = Pose::default();
+    Player::new(rig).advance(rig, 0.0, &mut pose);
+    let mut vertices = pose.vertices.iter();
+    let [x, y] = *vertices.next()?;
+    Some(vertices.fold([x, y, x, y], |[x0, y0, x1, y1], [x, y]| {
+        [x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y)]
+    }))
+}
+
 fn not_published(object_id: u64) -> CsharpEngineServicesError {
     parts_rig_error(
         "CSHARP_PARTS_RIG_OBJECT",
@@ -135,6 +148,7 @@ impl PartsRigScene {
                     triangles: drawable.triangles.clone(),
                 })
                 .collect(),
+            figure: setup_bounds(&rig).unwrap_or_default(),
         };
         for instance in self.instances.values_mut() {
             for view in &mut instance.views {
@@ -149,18 +163,9 @@ impl PartsRigScene {
         asset
     }
 
-    /// The bounds of asset `id`'s setup pose in rig units (min x, min y,
-    /// max x, max y), its default skin: what a placed rig fits by default.
-    /// None when it draws nothing.
+    /// The bounds of asset `id`'s setup pose (`setup_bounds`).
     fn setup_bounds(&self, id: &str) -> Option<[f32; 4]> {
-        let rig = self.rigs.get(id)?;
-        let mut pose = Pose::default();
-        Player::new(rig).advance(rig, 0.0, &mut pose);
-        let mut vertices = pose.vertices.iter();
-        let [x, y] = *vertices.next()?;
-        Some(vertices.fold([x, y, x, y], |[x0, y0, x1, y1], [x, y]| {
-            [x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y)]
-        }))
+        setup_bounds(self.rigs.get(id)?)
     }
 
     /// Forget asset `id`'s rig; views showing it hold their last pose.
@@ -852,6 +857,7 @@ impl RuntimeAppearanceBridge {
             layer: sprite.layer,
             material: sprite.material,
             texel_snap: request.texel_snap,
+            figure_dome: request.figure_dome,
             viewport_placement: None,
             visible: true,
             transform: Transform::IDENTITY,

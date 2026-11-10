@@ -53,6 +53,14 @@ fn appearance(
     bridge: &mut RuntimeAppearanceBridge,
     views: &[NativePartsRigView],
 ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
+    appearance_with(bridge, views, false)
+}
+
+fn appearance_with(
+    bridge: &mut RuntimeAppearanceBridge,
+    views: &[NativePartsRigView],
+    figure_dome: bool,
+) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
     unsafe {
         bridge.create_parts_rig_appearance(&NativePartsRigAppearanceRequest {
             views: views.as_ptr(),
@@ -70,6 +78,7 @@ fn appearance(
             },
             material: NativeSpriteMaterialDescriptor::default(),
             texel_snap: 0.0,
+            figure_dome,
         })
     }
 }
@@ -606,6 +615,43 @@ fn an_additive_track_layers_over_the_base_in_every_view() {
     };
     assert_eq!(scene_vertices(&bridge, 0), alone);
     bridge.end_call();
+}
+
+/// A rig's drawing carries its setup pose's bounds, which a figure dome
+/// spans, and an appearance asking for one keeps it on its rig.
+#[test]
+fn a_figure_dome_spans_the_setup_poses_bounds() {
+    let model = Rig::from_json(FEATURES).unwrap();
+    let mut setup = Pose::default();
+    Player::new(&model).advance(&model, 0.0, &mut setup);
+    let bounds = setup.vertices.iter().fold(
+        [f32::MAX, f32::MAX, f32::MIN, f32::MIN],
+        |[x0, y0, x1, y1], [x, y]| [x0.min(*x), y0.min(*y), x1.max(*x), y1.max(*y)],
+    );
+    let asset = PartsRigScene::default().define(
+        "parts-rig/features".to_owned(),
+        Arc::new(model),
+        vec!["texture/features".to_owned()],
+    );
+    assert_eq!(asset.figure, bounds);
+
+    let (mut bridge, mut world) = (bridge(), PresentationWorld::default());
+    bridge.begin_call();
+    let rig = load(&mut bridge);
+    let view = NativePartsRigView {
+        rig: rig.rig,
+        heading: 0.0,
+        mirror: false,
+    };
+    let domed = appearance_with(&mut bridge, &[view], true).unwrap();
+    unsafe { bridge.stage_snapshot(&fact(domed, NativeRenderLayer::Scene), 1) }.unwrap();
+    end(&mut bridge, &mut world, 0.0);
+    bridge.begin_call();
+    assert!(
+        bridge.staged_ref().unwrap().state.parts_rigs.instances[&OBJECT]
+            .rig
+            .figure_dome
+    );
 }
 
 fn viewport(

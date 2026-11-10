@@ -12,7 +12,8 @@ public readonly partial record struct PartsRigAppearanceRequest
     /// </summary>
     public PartsRigAppearanceRequest(ReadOnlyMemory<PartsRigView> views, float metresPerUnit)
         : this(views, metresPerUnit, SpriteSizeMode.World, BillboardMode.Cylindrical, 0, SpriteDepthPolicy.Default,
-            new Color(1, 1, 1, 1), GraphicsDefaults.SpriteMaterial with { AlphaMode = SpriteAlphaMode.Mask }, 0f)
+            new Color(1, 1, 1, 1), GraphicsDefaults.SpriteMaterial with { AlphaMode = SpriteAlphaMode.Mask }, 0f,
+            false)
     {
     }
 }
