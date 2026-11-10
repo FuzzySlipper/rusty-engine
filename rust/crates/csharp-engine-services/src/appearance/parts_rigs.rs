@@ -110,6 +110,10 @@ fn setup_bounds(rig: &Rig) -> Option<[f32; 4]> {
     }))
 }
 
+/// Steps of a pose rate a call's elapsed time may fall short of a whole
+/// step by and still take it: sums of frame times round.
+const STEP_SLACK: f64 = 1e-6;
+
 fn not_published(object_id: u64) -> CsharpEngineServicesError {
     parts_rig_error(
         "CSHARP_PARTS_RIG_OBJECT",
@@ -567,8 +571,23 @@ impl PartsRigScene {
             if elapsed == 0.0 && !instance.dirty {
                 continue;
             }
+            // A pose rate steps time by whole steps from the last pose, so
+            // the clip is posed on a steady beat whatever the call rate.
+            let rate = f64::from(instance.rig.pose_rate);
+            let (elapsed, posed_at) = match instance.posed_at {
+                Some(at) if rate > 0.0 => {
+                    // A call landing on a step by its sum of frame times
+                    // still takes it.
+                    let steps = (elapsed * rate + STEP_SLACK).floor();
+                    if steps == 0.0 && !instance.dirty {
+                        continue;
+                    }
+                    (steps / rate, at + steps / rate)
+                }
+                _ => (elapsed, now),
+            };
             let step = elapsed * instance.speed;
-            instance.posed_at = Some(now);
+            instance.posed_at = Some(posed_at);
             instance.dirty = false;
             for (index, view) in instance.views.iter_mut().enumerate() {
                 let (Some(player), Some(rig)) = (&mut view.player, self.rigs.get(&view.asset))
@@ -814,6 +833,11 @@ impl RuntimeAppearanceBridge {
         let native_views =
             unsafe { borrowed_slice(request.views, request.views_len, "parts rig views") }?;
         let material = self.sprite_material_descriptor(request.material)?;
+        let palette =
+            unsafe { borrowed_slice(request.palette, request.palette_len, "parts rig palette") }?
+                .iter()
+                .map(|color| [color.r, color.g, color.b])
+                .collect();
         let staged = self.staged_ref()?;
         let views = native_views
             .iter()
@@ -858,6 +882,10 @@ impl RuntimeAppearanceBridge {
             material: sprite.material,
             texel_snap: request.texel_snap,
             figure_dome: request.figure_dome,
+            pixel_grid: request.pixel_grid,
+            pixel_coverage: request.pixel_coverage,
+            palette,
+            pose_rate: request.pose_rate,
             viewport_placement: None,
             visible: true,
             transform: Transform::IDENTITY,

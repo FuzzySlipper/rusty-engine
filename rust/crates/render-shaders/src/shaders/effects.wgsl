@@ -397,7 +397,8 @@ struct PartsRigIn {
     @location(3) model2: vec4<f32>,
     @location(4) model3: vec4<f32>,
     // x: rig units per texel of the grid it snaps to, 0 for none; y: -1 for
-    // a mirrored view, else 1.
+    // a mirrored view, else 1; zw: a grid rig's shift from the screen into
+    // its region of the scratch image, in clip units (`fs_parts_rig_grid`).
     @location(5) snap: vec4<f32>,
     @location(6) tint: vec4<f32>,
     // The frame it draws inside: min x, min y, max x, max y.
@@ -454,6 +455,7 @@ fn vs_parts_rig(in: PartsRigIn) -> PartsRigOut {
     let world = model * vec4<f32>(position, 0.0, 1.0);
     var out: PartsRigOut;
     out.clip = frame.view_proj * world;
+    out.clip = vec4<f32>(out.clip.xy + in.snap.zw * out.clip.w, out.clip.zw);
     out.world_position = world.xyz / world.w;
     out.normal = normalize((model * vec4<f32>(0.0, 0.0, 1.0, 0.0)).xyz);
     out.uv = in.uv;
@@ -603,6 +605,111 @@ fn fs_parts_rig_finished_reactive(in: PartsRigOut) -> ReactivePartsRig {
 fn fs_parts_rig_finished_solid_reactive(in: PartsRigOut) -> ReactivePartsRig {
     let color = finished_parts_rig(in, true);
     return ReactivePartsRig(color, vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, 1.0));
+}
+
+// A parts rig on a screen-pixel grid (render-wgpu `effects/grid.rs`): drawn
+// smooth and lit into its region of a scratch image, its colour
+// premultiplied by its coverage, then here one quad on its plane, so its
+// depth is the plane's, whose fragments each average their block of that
+// image. A block is square, `grid.z` target pixels a side, on a grid with a
+// corner at the rig origin's projection (`grid.xy`), and draws where the
+// figure covers at least `grid.w` of it, in the figure's colour there, or
+// the nearest of its palette's colours by their sRGB values.
+@group(1) @binding(40) var grid_scratch: texture_2d<f32>;
+// Each palette colour: its linear value, then its sRGB values.
+@group(1) @binding(41) var<storage, read> grid_palette: array<vec4<f32>>;
+
+struct PartsRigGridIn {
+    @location(0) corner: vec2<f32>,
+    @location(1) model0: vec4<f32>,
+    @location(2) model1: vec4<f32>,
+    @location(3) model2: vec4<f32>,
+    @location(4) model3: vec4<f32>,
+    // The quad on the plane, in rig units: min x, min y, max x, max y.
+    @location(5) quad: vec4<f32>,
+    @location(6) grid: vec4<f32>,
+    // The screen rectangle its blocks cover, target pixels, max exclusive.
+    @location(7) rect: vec4<f32>,
+    // xy: from the screen to its scratch region, pixels; z: its palette's
+    // first colour; w: their count.
+    @location(8) shift: vec4<f32>,
+};
+
+struct PartsRigGridOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) @interpolate(flat) grid: vec4<f32>,
+    @location(1) @interpolate(flat) rect: vec4<f32>,
+    @location(2) @interpolate(flat) shift: vec4<f32>,
+};
+
+@vertex
+fn vs_parts_rig_grid(in: PartsRigGridIn) -> PartsRigGridOut {
+    let model = mat4x4<f32>(in.model0, in.model1, in.model2, in.model3);
+    let local = mix(in.quad.xy, in.quad.zw, in.corner);
+    var out: PartsRigGridOut;
+    out.clip = frame.view_proj * model * vec4<f32>(local, 0.0, 1.0);
+    out.grid = in.grid;
+    out.rect = in.rect;
+    out.shift = in.shift;
+    return out;
+}
+
+// The block's colour, its coverage-weighted average of the scratch image;
+// a fragment outside the rectangle or of a block covered too little draws
+// nothing.
+fn grid_block(in: PartsRigGridOut) -> vec3<f32> {
+    let pixel = vec2<i32>(floor(in.clip.xy));
+    let low = vec2<i32>(in.rect.xy);
+    let high = vec2<i32>(in.rect.zw);
+    if any(pixel < low) || any(pixel >= high) {
+        discard;
+    }
+    let side = i32(in.grid.z);
+    let anchor = vec2<i32>(in.grid.xy);
+    let block = anchor + vec2<i32>(floor(vec2<f32>(pixel - anchor) / in.grid.z)) * side;
+    let shift = vec2<i32>(in.shift.xy);
+    var sum = vec4<f32>(0.0);
+    var count = 0.0;
+    for (var y = 0; y < side; y++) {
+        for (var x = 0; x < side; x++) {
+            let at = block + vec2<i32>(x, y);
+            if all(at >= low) && all(at < high) {
+                sum += textureLoad(grid_scratch, at + shift, 0);
+                count += 1.0;
+            }
+        }
+    }
+    if sum.a <= 0.0 || sum.a < in.grid.w * count {
+        discard;
+    }
+    var rgb = sum.rgb / sum.a;
+    let colours = u32(in.shift.w);
+    if colours > 0u {
+        let first = u32(in.shift.z);
+        let seen = linear_srgb(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)));
+        var nearest = 1e30;
+        for (var index = 0u; index < colours; index++) {
+            let offset = seen - grid_palette[(first + index) * 2u + 1u].rgb;
+            let distance = dot(offset, offset);
+            if distance < nearest {
+                nearest = distance;
+                rgb = grid_palette[(first + index) * 2u].rgb;
+            }
+        }
+    }
+    return rgb;
+}
+
+@fragment
+fn fs_parts_rig_grid(in: PartsRigGridOut) -> @location(0) vec4<f32> {
+    return vec4<f32>(grid_block(in), 1.0);
+}
+
+// Beside a temporal stage's motion target its blocks mark the reactive
+// mask, as labels do: the stage keeps none of its history there.
+@fragment
+fn fs_parts_rig_grid_reactive(in: PartsRigGridOut) -> ReactivePartsRig {
+    return ReactivePartsRig(vec4<f32>(grid_block(in), 1.0), vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, 1.0));
 }
 
 // Particle billboard: a screen-aligned quad, of constant pixel size

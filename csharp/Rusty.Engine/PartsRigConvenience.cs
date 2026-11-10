@@ -5,15 +5,18 @@ namespace Rusty.Engine;
 
 public readonly partial record struct PartsRigAppearanceRequest
 {
+    private const float HalfCoverage = .5f;
+
     /// <summary>
     /// A world-sized rig that stands upright and turns toward the eye
     /// (<see cref="BillboardMode.Cylindrical"/>): unlit, untinted, solid where its
-    /// pieces' alpha passes one half, and drawn smooth.
+    /// pieces' alpha passes one half, and drawn smooth, posed every call. A pixel grid
+    /// (<c>with { PixelGrid = 2 }</c>) draws blocks the figure covers by half.
     /// </summary>
     public PartsRigAppearanceRequest(ReadOnlyMemory<PartsRigView> views, float metresPerUnit)
         : this(views, metresPerUnit, SpriteSizeMode.World, BillboardMode.Cylindrical, 0, SpriteDepthPolicy.Default,
             new Color(1, 1, 1, 1), GraphicsDefaults.SpriteMaterial with { AlphaMode = SpriteAlphaMode.Mask }, 0f,
-            false)
+            false, 0, HalfCoverage, ReadOnlyMemory<Color>.Empty, 0f)
     {
     }
 }

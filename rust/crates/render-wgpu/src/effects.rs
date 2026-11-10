@@ -52,6 +52,10 @@ use crate::tables::{GpuMesh, GpuTexture, NodeKind, SpriteRow};
 use crate::target::{ColorTarget, DEPTH_FORMAT};
 use crate::{ApplyIssue, Gpu, Renderer};
 
+mod grid;
+
+pub use grid::PartsRigGridReadout;
+
 /// Particle billboards are drawn `size × 24` pixels across.
 const PARTICLE_PIXELS_PER_UNIT: f32 = 24.0;
 const SPRITE_ROW_FLOATS: usize = 40;
@@ -127,6 +131,8 @@ struct SpriteDraw {
     blends_over: bool,
     /// A rig placed in the viewport: drawn after the finish.
     finished: bool,
+    /// A rig drawn on a screen-pixel grid, where it draws this view.
+    grid: Option<grid::GridPlacement>,
 }
 
 impl SpriteDraw {
@@ -152,6 +158,10 @@ pub(crate) struct EffectsPass {
     /// view's finish, into its finished image, as their pages' colours
     /// are, unexposed, ungraded and not tone mapped (`draw_finished`).
     finished: Vec<SpriteInstance>,
+    /// Rigs on a screen-pixel grid, drawn smooth into their regions (x, y,
+    /// width, height in target pixels) of the scratch image before the
+    /// world pass (`grid.rs`); their block quads are among the solid draws.
+    grid: Vec<(SpriteInstance, [u32; 4])>,
     cubes: u32,
     /// Runs into the particle rows: hard billboards, then soft ones.
     billboards: Vec<BillboardRun>,
@@ -194,6 +204,8 @@ struct SpriteInstance {
     instance: u32,
     batch: Option<RenderHandle>,
     rig: Option<RigKey>,
+    /// A grid rig's block quad: its row in the grid rows.
+    grid: Option<u32>,
 }
 
 /// A parts rig's buffers, built from its pose and drawing when either
@@ -301,6 +313,8 @@ struct FormatPipelines {
     format: ColorTarget,
     sprites: HashMap<SpriteState, wgpu::RenderPipeline>,
     rigs: HashMap<RigState, wgpu::RenderPipeline>,
+    /// Grid rigs' block quads, by depth test and write (`grid.rs`).
+    grids: HashMap<(bool, bool), wgpu::RenderPipeline>,
     /// Hard billboards, depth-tested by the world pass.
     billboard: BlendPipelines,
     /// Soft billboards, testing the world's depth themselves; made at the
@@ -345,6 +359,8 @@ pub(crate) struct Effects {
     /// Parts rigs' buffers, by node and view.
     rigs: HashMap<RigKey, RigBuffers>,
     rig_scratch: RigGeometry,
+    /// Rigs drawn on a screen-pixel grid (`grid.rs`).
+    grid: grid::Grid,
     /// Particle sprite textures by slot, and each content hash's slot. A slot
     /// lives while an emitter or live particle holds it (`Particles`), then
     /// its binding is dropped and the slot reused.
@@ -385,10 +401,11 @@ fn sampler_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
 
 impl Effects {
     pub fn new(
-        device: &wgpu::Device,
+        gpu: &Gpu,
         frame_layout: &wgpu::BindGroupLayout,
         shader: wgpu::ShaderModule,
     ) -> Self {
+        let device = &gpu.device;
         let sprite_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu sprite"),
             entries: &[
@@ -481,6 +498,7 @@ impl Effects {
             batches: HashMap::new(),
             rigs: HashMap::new(),
             rig_scratch: RigGeometry::default(),
+            grid: grid::Grid::new(gpu, frame_layout),
             particle_textures: Vec::new(),
             particle_texture_ids: HashMap::new(),
             free_particle_slots: Vec::new(),
@@ -508,6 +526,16 @@ impl Effects {
         self.rigs.retain(|(handle, _), _| *handle != node);
     }
 
+    /// At the start of a frame (`grid.rs`).
+    pub fn begin_frame(&mut self, gpu: &Gpu) {
+        self.grid.begin_frame(gpu);
+    }
+
+    /// What grid rigs drew over the last frame.
+    pub fn grid_readout(&self) -> PartsRigGridReadout {
+        self.grid.last
+    }
+
     /// Drop cached sprite bindings of a texture that was redefined or released.
     pub fn forget_texture(&mut self, id: u32) {
         self.sprite_bind_groups.retain(|textures, _| {
@@ -527,11 +555,12 @@ impl Effects {
         rig: &crate::parts_rigs::PartsRigRow,
         assets: &crate::tables::Slots<crate::parts_rigs::PartsRigAssetRow>,
         world: &Mat4,
-        (camera, viewport, pixel_ratio, anchored): (
+        (camera, viewport, pixel_ratio, anchored, render_scale): (
             &CameraMatrices,
             PixelRect,
             f32,
             Option<SpriteViewportPlacement>,
+            f32,
         ),
     ) -> Option<SpriteDraw> {
         let descriptor = &rig.descriptor;
@@ -668,6 +697,36 @@ impl Effects {
         let [x0, y0, x1, y1] = buffers.bounds;
         let center =
             model.transform_point3(Vec3::new((x0 + x1) * 0.5 * mirror, (y0 + y1) * 0.5, 0.0));
+        // On a screen-pixel grid: blocks of whole output pixels, so of the
+        // render pixels a scaled view draws in, at least one.
+        let grid = match descriptor.pixel_grid {
+            0 => None,
+            _ if descriptor.viewport_placement.is_some() => None,
+            pixels => {
+                let side = ((pixels as f32 * render_scale).round() as u32).max(1);
+                let bounds = if view.mirror {
+                    [-x1, y0, -x0, y1]
+                } else {
+                    [x0, y0, x1, y1]
+                };
+                match grid::place(&model, bounds, camera, viewport, side) {
+                    grid::Placed::Off => return None,
+                    grid::Placed::Smooth => {
+                        self.grid.smooth();
+                        None
+                    }
+                    grid::Placed::Grid { anchor, rect, quad } => Some(grid::GridPlacement {
+                        side,
+                        anchor,
+                        cutoff: descriptor.pixel_coverage,
+                        rect,
+                        model,
+                        quad,
+                        palette: self.grid.add_palette(&descriptor.palette),
+                    }),
+                }
+            }
+        };
         Some(SpriteDraw {
             state,
             textures: rig_textures(&first, buffers.detail),
@@ -681,6 +740,7 @@ impl Effects {
                 .iter()
                 .any(|run| run.blend != PartsRigBlend::Normal),
             finished: descriptor.viewport_placement.is_some(),
+            grid,
         })
     }
 
@@ -722,6 +782,7 @@ impl Effects {
             format,
             sprites: HashMap::new(),
             rigs: HashMap::new(),
+            grids: HashMap::new(),
             billboard,
             soft: None,
             cube,
@@ -1107,6 +1168,7 @@ impl Effects {
                     instance: sprite.instance,
                     batch: sprite.batch,
                     rig: sprite.rig,
+                    grid: None,
                 },
             );
         }
@@ -1134,6 +1196,10 @@ impl Effects {
         let Some(set) = self.formats.iter().find(|set| set.format == format) else {
             return;
         };
+        if let Some(index) = sprite.grid {
+            self.draw_grid(pass, set, sprite.state, index);
+            return;
+        }
         if let Some(key) = sprite.rig {
             self.draw_rig(pass, set, sprite, key, false);
             return;
@@ -2200,6 +2266,7 @@ impl Renderer {
         let takes_particles = view.layer != ViewLayer::Viewmodel;
         let pixel_ratio = self.pixel_ratio();
         let drawn = view.drawn_camera();
+        self.effects.grid.begin_pass(view.viewport);
         let mut draws = std::mem::take(&mut self.effects.sprite_scratch);
         draws.clear();
         for handle in &self.tables.sprites {
@@ -2239,7 +2306,13 @@ impl Renderer {
                         rig,
                         &self.tables.parts_rigs,
                         &node.world,
-                        (camera, view.viewport, pixel_ratio, anchored),
+                        (
+                            camera,
+                            view.viewport,
+                            pixel_ratio,
+                            anchored,
+                            view.render_scale,
+                        ),
                     ));
                     continue;
                 }
@@ -2327,6 +2400,7 @@ impl Renderer {
                     rig: None,
                     blends_over: false,
                     finished: false,
+                    grid: None,
                 });
                 continue;
             }
@@ -2376,6 +2450,7 @@ impl Renderer {
                 rig: None,
                 blends_over: false,
                 finished: false,
+                grid: None,
             });
         }
         // Solid front to back, blended back to front, each by render order.
@@ -2391,11 +2466,34 @@ impl Renderer {
         });
         let mut rows = std::mem::take(&mut self.effects.row_scratch);
         rows.clear();
+        // Grid rigs draw smooth into the scratch image at the world pass's
+        // samples, then as block quads into the world pass.
+        let scratch = ColorTarget::new(crate::finish::HDR_FORMAT, format.samples);
         for draw in &draws {
+            let instance = (rows.len() / SPRITE_ROW_FLOATS) as u32;
+            let mut row = draw.row;
+            let admitted = draw.grid.as_ref().and_then(|grid| {
+                let (index, region) = self.effects.grid.admit(grid)?;
+                // Its pieces shift from the screen into the region, in the
+                // viewport's clip units.
+                let [x0, y0, ..] = grid.rect;
+                let shift = [
+                    (region[0] as f32 - x0 as f32) * 2.0 / view.viewport.width as f32,
+                    (y0 as f32 - region[1] as f32) * 2.0 / view.viewport.height as f32,
+                ];
+                row[18..20].copy_from_slice(&shift);
+                Some((index, region))
+            });
             match draw.rig.and_then(|key| self.effects.rigs.get(&key)) {
                 Some(rig) => {
                     let detail = rig.detail;
-                    let format = if draw.finished { finished } else { format };
+                    let format = if draw.finished {
+                        finished
+                    } else if admitted.is_some() {
+                        scratch
+                    } else {
+                        format
+                    };
                     for run in rig.runs.clone() {
                         let state = rig_state(draw.state, run.blend, draw.finished);
                         self.effects
@@ -2413,27 +2511,33 @@ impl Renderer {
                     self.ensure_sprite_bindings(draw.textures);
                 }
             }
-            let instance = (rows.len() / SPRITE_ROW_FLOATS) as u32;
             // A batch draws its own rows; a rig is placed by its row.
             if draw.batch.is_none() {
-                rows.extend_from_slice(&draw.row);
+                rows.extend_from_slice(&row);
             }
-            if draw.finished {
-                pass.finished.push(SpriteInstance {
-                    state: draw.state,
-                    textures: draw.textures,
-                    instance,
-                    batch: draw.batch,
-                    rig: draw.rig,
+            let sprite = SpriteInstance {
+                state: draw.state,
+                textures: draw.textures,
+                instance,
+                batch: draw.batch,
+                rig: draw.rig,
+                grid: None,
+            };
+            if let Some((index, region)) = admitted {
+                // Hard blocks: solid whatever its pieces' blending.
+                let depth = (draw.state.depth_test, draw.state.depth_write);
+                self.effects
+                    .ensure_grid_pipeline(&self.gpu.device, format, depth);
+                pass.grid.push((sprite, region));
+                pass.solid.push(SpriteInstance {
+                    rig: None,
+                    grid: Some(index),
+                    ..sprite
                 });
+            } else if draw.finished {
+                pass.finished.push(sprite);
             } else if draw.state.soft {
-                pass.soft_sprites.push(SpriteInstance {
-                    state: draw.state,
-                    textures: draw.textures,
-                    instance,
-                    batch: draw.batch,
-                    rig: draw.rig,
-                });
+                pass.soft_sprites.push(sprite);
             } else if draw.late() {
                 pass.blended.push(BlendedSprite {
                     state: draw.state,
@@ -2445,14 +2549,16 @@ impl Renderer {
                     rig: draw.rig,
                 });
             } else {
-                pass.solid.push(SpriteInstance {
-                    state: draw.state,
-                    textures: draw.textures,
-                    instance,
-                    batch: draw.batch,
-                    rig: draw.rig,
-                });
+                pass.solid.push(sprite);
             }
+        }
+        if !pass.grid.is_empty() {
+            self.effects.grid.upload(
+                &self.gpu,
+                view.target.width,
+                view.target.height,
+                format.samples,
+            );
         }
         self.effects.sprite_rows.write(&self.gpu, &rows);
         self.effects.sprite_scratch = draws;
@@ -2609,6 +2715,10 @@ mod tests {
             },
             texel_snap: 0.0,
             figure_dome: false,
+            pixel_grid: 0,
+            pixel_coverage: 0.5,
+            palette: Vec::new(),
+            pose_rate: 0.0,
             viewport_placement: None,
             visible: true,
             transform: Default::default(),

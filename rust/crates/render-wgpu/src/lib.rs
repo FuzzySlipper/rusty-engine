@@ -122,6 +122,7 @@ pub use driver::{
     Capture, CommittedCall, PresentationLead, PrimaryCamera, SceneChange, SceneDriver, SceneFrame,
     SceneState, SceneView,
 };
+pub use effects::PartsRigGridReadout;
 pub use frame::FrameStats;
 pub use impostor::ImpostorReadout;
 pub use occlusion::OcclusionReadout;
@@ -245,6 +246,9 @@ pub struct GpuReadout {
     pub decals: DecalReadout,
     /// Whether water reads the opaque scene's colour on this device.
     pub water: water::WaterReadout,
+    /// Parts rigs on a screen-pixel grid: drawn as blocks, or smooth where
+    /// the scratch image had no room (`effects/grid.rs`).
+    pub parts_rig_grid: PartsRigGridReadout,
     /// The last primary frame's resolutions and the upscale stage that
     /// brought its picture to the output, if one ran (`upscale.rs`).
     pub upscale: UpscaleReadout,
@@ -868,7 +872,7 @@ impl Renderer {
         let finish = finish::Finish::new(gpu, &mut layouts.shaders);
         let water = water::WaterScene::new(gpu, &mut layouts.shaders, gpu.scene_color_refusal());
         let effects = effects::Effects::new(
-            device,
+            gpu,
             &layouts.frame,
             pipelines::standard(layouts.shaders.module(
                 device,
@@ -1391,6 +1395,7 @@ impl Renderer {
                     self.upscale.timing(),
                     self.upscale.reconstruction_timing(),
                     self.water.timing(),
+                    self.effects.grid_timing(),
                 ])
                 .chain(
                     self.ray_scene
@@ -1427,6 +1432,7 @@ impl Renderer {
             snow: self.tables.snow,
             decals: self.decals.readout(),
             water: self.water.readout(),
+            parts_rig_grid: self.effects.grid_readout(),
             upscale: self.upscaled,
             dlss: self.options.dlss.then(|| self.dlss_refusal()).flatten(),
             ray_reconstruction: (self.options.global_illumination

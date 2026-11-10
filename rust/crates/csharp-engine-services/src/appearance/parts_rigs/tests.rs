@@ -53,34 +53,40 @@ fn appearance(
     bridge: &mut RuntimeAppearanceBridge,
     views: &[NativePartsRigView],
 ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-    appearance_with(bridge, views, false)
+    appearance_with(bridge, views, |_| {})
 }
 
+/// An appearance of `views`, its request as `edit` leaves it.
 fn appearance_with(
     bridge: &mut RuntimeAppearanceBridge,
     views: &[NativePartsRigView],
-    figure_dome: bool,
+    edit: impl FnOnce(&mut NativePartsRigAppearanceRequest),
 ) -> Result<NativeAppearanceHandle, CsharpEngineServicesError> {
-    unsafe {
-        bridge.create_parts_rig_appearance(&NativePartsRigAppearanceRequest {
-            views: views.as_ptr(),
-            views_len: views.len(),
-            scale: 0.01,
-            size_mode: NativeSpriteSizeMode::World,
-            billboard: NativeBillboardMode::Cylindrical,
-            render_order: 0,
-            depth: NativeSpriteDepthPolicy::Default,
-            tint: NativeColor {
-                r: 1.0,
-                g: 1.0,
-                b: 1.0,
-                a: 1.0,
-            },
-            material: NativeSpriteMaterialDescriptor::default(),
-            texel_snap: 0.0,
-            figure_dome,
-        })
-    }
+    let mut request = NativePartsRigAppearanceRequest {
+        views: views.as_ptr(),
+        views_len: views.len(),
+        scale: 0.01,
+        size_mode: NativeSpriteSizeMode::World,
+        billboard: NativeBillboardMode::Cylindrical,
+        render_order: 0,
+        depth: NativeSpriteDepthPolicy::Default,
+        tint: NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        },
+        material: NativeSpriteMaterialDescriptor::default(),
+        texel_snap: 0.0,
+        figure_dome: false,
+        pixel_grid: 0,
+        pixel_coverage: 0.5,
+        palette: std::ptr::null(),
+        palette_len: 0,
+        pose_rate: 0.0,
+    };
+    edit(&mut request);
+    unsafe { bridge.create_parts_rig_appearance(&request) }
 }
 
 fn fact(appearance: NativeAppearanceHandle, layer: NativeRenderLayer) -> NativeAppearanceFact {
@@ -643,7 +649,8 @@ fn a_figure_dome_spans_the_setup_poses_bounds() {
         heading: 0.0,
         mirror: false,
     };
-    let domed = appearance_with(&mut bridge, &[view], true).unwrap();
+    let domed =
+        appearance_with(&mut bridge, &[view], |request| request.figure_dome = true).unwrap();
     unsafe { bridge.stage_snapshot(&fact(domed, NativeRenderLayer::Scene), 1) }.unwrap();
     end(&mut bridge, &mut world, 0.0);
     bridge.begin_call();
@@ -652,6 +659,46 @@ fn a_figure_dome_spans_the_setup_poses_bounds() {
             .rig
             .figure_dome
     );
+}
+
+/// At 4 poses a second, calls 0.1 s apart pose every second or third call,
+/// each time a whole quarter second on; a play still poses at once.
+#[test]
+fn a_pose_rate_steps_the_clip_time_by_whole_steps() {
+    let (mut bridge, mut world) = (bridge(), PresentationWorld::default());
+    bridge.begin_call();
+    let rig = load(&mut bridge);
+    let view = NativePartsRigView {
+        rig: rig.rig,
+        heading: 0.0,
+        mirror: false,
+    };
+    let stepped = appearance_with(&mut bridge, &[view], |request| request.pose_rate = 4.0).unwrap();
+    unsafe { bridge.stage_snapshot(&fact(stepped, NativeRenderLayer::Scene), 1) }.unwrap();
+    assert_eq!(end(&mut bridge, &mut world, 0.0), [0], "the setup pose");
+    bridge.begin_call();
+    bridge.play_parts_rig(play("a", 0.0, 1.0)).unwrap();
+    assert_eq!(
+        end(&mut bridge, &mut world, STEP),
+        [0],
+        "a play poses at once"
+    );
+    let mut posed = Vec::new();
+    let mut times = Vec::new();
+    for _ in 0..8 {
+        bridge.begin_call();
+        times.push(read(&bridge).clip_seconds);
+        posed.push(!end(&mut bridge, &mut world, STEP).is_empty());
+    }
+    // From 0.1 s: 0.2 none, 0.3 the step to 0.25, 0.4 none, 0.5 to 0.5,
+    // 0.6 none, 0.7 none, 0.8 to 0.75, 0.9 none.
+    assert_eq!(posed, [false, true, false, true, false, false, true, false]);
+    let steps: Vec<f64> = times.iter().map(|t| t * 4.0).collect();
+    assert!(
+        steps.iter().all(|step| (step - step.round()).abs() < 1e-9),
+        "clip times on whole steps: {times:?}"
+    );
+    assert_eq!(steps.last().map(|s| s.round()), Some(3.0));
 }
 
 fn viewport(

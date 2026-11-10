@@ -90,6 +90,56 @@ the other side.
 
 One view shows from every side.
 
+## On a screen-pixel grid
+
+`PixelGrid` draws a rig in the world as pixel art on the screen's own grid
+rather than its pages' texel grids. The figure is drawn smooth (load its
+pages with `TextureFilter.Linear`), lit, depth-tested and finished as it is
+without one. Then it is cut into square blocks of that many output pixels:
+
+- **One grid, anchored at the origin.** The grid has a corner at the
+  projection of the rig's origin, so a turned or scaling bone never turns
+  or resizes its pixels. Neighbouring parts share one grid, and a camera or
+  object move never makes blocks crawl across the figure.
+- **Coverage-weighted blocks.** Each block is the coverage-weighted average
+  of the smooth figure under it. It draws where the figure covers at least
+  `PixelCoverage` of it (one half for a hard pixel-art edge).
+- **Depth per pixel.** Each block lies on the rig's plane, so a post or step
+  in front hides it pixel by pixel.
+- **Palette.** With a `Palette` of linear colours, each block takes the
+  nearest by their sRGB values. The match is made after the lighting and
+  before the view's finish, so lamp light and night still pick their
+  colours. The finish (exposure, grading, tone mapping, fog) then applies to
+  the blocks as to the rest of the scene. Under a neutral finish every pixel
+  drawn is a palette colour.
+
+```csharp
+// Mara at her door: 2-pixel blocks of her lit, smooth figure in 32 colours,
+// posed at 8 poses a second.
+Appearance keeper = engine.PartsRigs.CreateAppearance(new PartsRigAppearanceRequest(
+    new PartsRigView[] { new(door, 0, false) }, metresPerUnit) with
+{
+    Material = lit, PixelGrid = 2, Palette = keeperColours, PoseRate = 8,
+});
+```
+
+A grid is refused beside a `TexelSnap`, the two being different pixel
+grids. A rig placed in the viewport draws as it does without one: its texel
+snap to whole screen pixels per texel is its pixel art.
+
+Each reading draws its own grid. A view whose picture is drawn at a render
+scale below 1 makes each block the nearest whole number of render pixels;
+the upscale then softens the blocks. Under a temporal stage the blocks mark
+its reactive mask, so they keep no history of what moves behind them.
+
+The view draws its grid rigs into regions of a scratch image the size of the
+view, one region per rig, packed in draw order. A rig that finds no room
+left, or one standing across the eye's plane, draws smooth.
+`gpu.partsRigGrid` counts the rigs drawn as blocks and those drawn smooth in
+the last frame. The smooth drawing is the `parts-rig-grid` pass in
+`gpu.passes`, and the blocks are part of the `world` pass's time. The
+scratch image exists only while a frame draws grid rigs.
+
 ## Placing in the viewport
 
 `SetViewport` places a rig appearance in a rectangle of each reading's
@@ -210,6 +260,11 @@ track's clip fires its events. Draw order and sequence frames follow track
   to what the tracks below it pose.
 - `SetSkin`: a skin by name in every view, or empty for the default skin
   alone.
+- `PoseRate` (on the appearance): pose its clips that many times a second,
+  each pose a whole step of clip time after the last, rather than at every
+  call. A figure on a pixel grid posed at 8 a second keeps its blocks still
+  between poses. A play, stop, skin change or driven value still poses at
+  the next call, on the same beat.
 - `DriveBone`: hold one of a bone's local values (rotation, x, y, scale or
   shear) over what the clips pose and before the constraints read it, in
   every view whose rig has the bone: a product's driving value such as
@@ -257,3 +312,18 @@ gallery rigs a path constraint on one bone adds about 0.5 µs a pose, and
 `look`'s two sliders, each applying a clip of 16 bones and mesh deforms,
 about 3 µs. An unchanged pose is not sent again, and each reading draws one
 view per figure.
+
+A figure on a pixel grid takes its smooth drawing out of the world pass into
+`parts-rig-grid`, and adds the clear of the view-sized scratch image and its
+block quad. Measured at 1920 × 1080 with 4× MSAA, with CraftSurvive's door
+figure (21 pages) posed every frame (GPU milliseconds):
+
+| | RTX 3080 | RX 9070 XT |
+| --- | --- | --- |
+| One figure, about 320 px tall, smooth | 0.12 | 0.10 |
+| The same in 2-pixel blocks (world + `parts-rig-grid`) | 0.10 + 0.07 | 0.08 + 0.07 |
+| Ten figures, 320 down to 100 px, smooth | 0.21 | 0.16 |
+| The same in 2-pixel blocks | 0.10 + 0.16 | 0.09 + 0.14 |
+
+So blocks cost about 0.05 ms more than smooth, for one figure or ten. A
+32-colour palette adds up to 0.03 ms.

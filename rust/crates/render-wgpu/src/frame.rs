@@ -530,6 +530,7 @@ impl Renderer {
         self.shadows_rendered = (0, 0);
         self.finish.begin_frame(&self.gpu);
         self.water.begin_frame(&self.gpu);
+        self.effects.begin_frame(&self.gpu);
         for timer in [&mut self.shadow_timer, &mut self.backdrop_shadow_timer]
             .into_iter()
             .flatten()
@@ -4076,6 +4077,14 @@ impl Renderer {
         self.gpu
             .queue
             .write_buffer(&self.frame_buffer, cluster_offset, &cluster_bytes);
+        // Grid rigs draw smooth into their scratch regions, lit as the
+        // world pass lights them, before it cuts them into blocks.
+        self.effects.encode_grid(
+            &mut encoder,
+            &self.frame_bind_group,
+            &effects,
+            view.viewport,
+        );
         let pipelines = &self.pipelines[format_index];
         let cache = self.views[slot].as_ref().expect("view list is current");
         let list = &cache.list;
@@ -4524,6 +4533,7 @@ impl Renderer {
                 .draw_finished(&mut pass, finished_format, &effects);
         }
         self.gpu.queue.submit([encoder.finish()]);
+        self.effects.grid_submitted();
         if fog.is_some() {
             self.volumetric_fog.submitted();
         }

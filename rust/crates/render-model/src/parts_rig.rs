@@ -214,6 +214,15 @@ impl PartsRigViewportPlacement {
     }
 }
 
+/// The largest block of a parts rig's pixel grid, in output pixels.
+pub const PARTS_RIG_PIXEL_GRID_MAX: u32 = 16;
+/// The most colours a parts rig's palette names.
+pub const PARTS_RIG_PALETTE_MAX: usize = 256;
+
+fn half() -> f32 {
+    0.5
+}
+
 /// One drawn parts rig: a node whose posed pieces lie on one plane through
 /// its origin, turned to the camera by `billboard` as a sprite is.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -250,6 +259,26 @@ pub struct PartsRigInstanceDescriptor {
     /// or a placed rig's frame.
     #[serde(default)]
     pub figure_dome: bool,
+    /// Drawn on a screen-pixel grid: the figure is drawn smooth and lit,
+    /// then cut into square blocks of this many output pixels on a grid
+    /// anchored at the projection of the rig's origin, each block the
+    /// coverage-weighted average of the figure under it. 0 draws it as it
+    /// is. A viewport-placed rig draws as it is.
+    #[serde(default)]
+    pub pixel_grid: u32,
+    /// The share of a block the figure must cover for the block to draw,
+    /// above 0 and at most 1; unread without a pixel grid.
+    #[serde(default = "half")]
+    pub pixel_coverage: f32,
+    /// Linear colours each block takes the nearest of, by their sRGB
+    /// values, matched after the lighting and before the view's finish;
+    /// none keeps the blocks' own colours. Needs a pixel grid.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub palette: Vec<[f32; 3]>,
+    /// Poses a second its clips are posed at, the time stepping by whole
+    /// steps; 0 poses at every call that moves time.
+    #[serde(default)]
+    pub pose_rate: f32,
     /// Placed in a rectangle of the viewport rather than in the world.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub viewport_placement: Option<PartsRigViewportPlacement>,
@@ -267,6 +296,13 @@ pub enum PartsRigError {
     NonPositiveScale,
     InvalidTint,
     InvalidTexelSnap,
+    /// A pixel grid beside a texel snap, of more than
+    /// `PARTS_RIG_PIXEL_GRID_MAX` pixels, or with a coverage outside (0, 1].
+    InvalidPixelGrid,
+    /// More than `PARTS_RIG_PALETTE_MAX` colours, a colour that is not
+    /// finite and non-negative, or a palette without a pixel grid.
+    InvalidPalette,
+    InvalidPoseRate,
     /// A viewport rectangle a sprite's placement refuses, or a frame that
     /// is not finite with a positive width and height.
     InvalidViewportPlacement,
@@ -295,6 +331,25 @@ impl PartsRigInstanceDescriptor {
         }
         if !(self.texel_snap.is_finite() && self.texel_snap >= 0.0) {
             return Err(PartsRigError::InvalidTexelSnap);
+        }
+        if self.pixel_grid > PARTS_RIG_PIXEL_GRID_MAX
+            || (self.pixel_grid > 0 && self.texel_snap > 0.0)
+            || (self.pixel_grid > 0 && !(self.pixel_coverage > 0.0 && self.pixel_coverage <= 1.0))
+        {
+            return Err(PartsRigError::InvalidPixelGrid);
+        }
+        if self.palette.len() > PARTS_RIG_PALETTE_MAX
+            || (!self.palette.is_empty() && self.pixel_grid == 0)
+            || self
+                .palette
+                .iter()
+                .flatten()
+                .any(|value| !(value.is_finite() && *value >= 0.0))
+        {
+            return Err(PartsRigError::InvalidPalette);
+        }
+        if !(self.pose_rate.is_finite() && self.pose_rate >= 0.0) {
+            return Err(PartsRigError::InvalidPoseRate);
         }
         if let Some(placement) = &self.viewport_placement {
             placement.validate()?;
@@ -567,6 +622,72 @@ mod tests {
             parts_rig_view(&views[..1], 2.0),
             0,
             "one view shows from every side"
+        );
+    }
+
+    fn rig() -> PartsRigInstanceDescriptor {
+        PartsRigInstanceDescriptor {
+            views: vec![view(0.0)],
+            scale: 1.0,
+            size_mode: SpriteSizeMode::World,
+            billboard: BillboardMode::Cylindrical,
+            tint: [1.0; 4],
+            render_order: 0,
+            depth: SpriteDepthPolicy::Default,
+            layer: RenderLayer::Scene,
+            material: SpriteMaterialDescriptor::default(),
+            texel_snap: 0.0,
+            figure_dome: false,
+            pixel_grid: 2,
+            pixel_coverage: 0.5,
+            palette: vec![[0.2, 0.4, 0.6]],
+            pose_rate: 8.0,
+            viewport_placement: None,
+            visible: true,
+            transform: Transform::IDENTITY,
+            metadata: RenderMetadata::default(),
+        }
+    }
+
+    #[test]
+    fn a_pixel_grid_refuses_a_texel_snap_and_bounds_its_block_coverage_and_palette() {
+        assert_eq!(rig().validate(), Ok(()));
+        let refused = |edit: fn(&mut PartsRigInstanceDescriptor)| {
+            let mut rig = rig();
+            edit(&mut rig);
+            rig.validate().unwrap_err()
+        };
+        assert_eq!(
+            refused(|rig| rig.texel_snap = 1.0),
+            PartsRigError::InvalidPixelGrid
+        );
+        assert_eq!(
+            refused(|rig| rig.pixel_grid = 17),
+            PartsRigError::InvalidPixelGrid
+        );
+        assert_eq!(
+            refused(|rig| rig.pixel_coverage = 0.0),
+            PartsRigError::InvalidPixelGrid
+        );
+        assert_eq!(
+            refused(|rig| rig.pixel_coverage = 1.5),
+            PartsRigError::InvalidPixelGrid
+        );
+        assert_eq!(
+            refused(|rig| rig.pixel_grid = 0),
+            PartsRigError::InvalidPalette
+        );
+        assert_eq!(
+            refused(|rig| rig.palette = vec![[0.5; 3]; PARTS_RIG_PALETTE_MAX + 1]),
+            PartsRigError::InvalidPalette
+        );
+        assert_eq!(
+            refused(|rig| rig.palette[0][1] = f32::NAN),
+            PartsRigError::InvalidPalette
+        );
+        assert_eq!(
+            refused(|rig| rig.pose_rate = -1.0),
+            PartsRigError::InvalidPoseRate
         );
     }
 }

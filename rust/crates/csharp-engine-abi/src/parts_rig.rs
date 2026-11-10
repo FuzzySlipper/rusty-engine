@@ -88,6 +88,26 @@ pub struct NativePartsRigAppearanceRequest {
     /// each piece's own page region, so neighbouring pieces shade as one
     /// surface.
     pub figure_dome: bool,
+    /// Draws the figure on a screen-pixel grid: drawn smooth and lit, then
+    /// cut into square blocks of this many output pixels on a grid anchored
+    /// at the projection of the rig's origin, so the blocks hold their place
+    /// on the figure as it or the camera moves. Each block is the
+    /// coverage-weighted average of the figure under it. 0 draws it as it
+    /// is; at most 16; refused with a texel snap. A viewport-placed rig
+    /// draws as it is.
+    pub pixel_grid: u32,
+    /// The share of a block the figure must cover for the block to draw,
+    /// above 0 and at most 1 (one half is a hard pixel-art edge); unread
+    /// without a pixel grid.
+    pub pixel_coverage: f32,
+    /// Borrowed for this call: linear colours each block takes the nearest
+    /// of (alpha unread), after the lighting and before the view's finish.
+    /// None keeps the blocks' own colours; at most 256; needs a pixel grid.
+    pub palette: *const NativeColor,
+    pub palette_len: usize,
+    /// Poses a second the clips are posed at, their time stepping by whole
+    /// steps of the clip; 0 poses at every call that moves time.
+    pub pose_rate: f32,
 }
 
 /// Places a rig appearance in a rectangle of each reading's viewport, as a

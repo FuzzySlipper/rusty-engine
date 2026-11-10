@@ -590,6 +590,7 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
          */
         snow?: ProductHostSnowStatistics;
         decals: ProductHostDecalStatistics;
+        partsRigGrid: ProductHostPartsRigGridStatistics;
         water: ProductHostWaterStatistics;
         upscale: ProductHostUpscaleStatistics;
     };
@@ -724,6 +725,23 @@ declare module "@rusty-engine/live-debug/internal/live-debug-client/src/generate
      * Closed operation identities returned by direct runtime calls.
      */
     export type ProductHostOperationKind = "connect" | "start" | "pause" | "resume" | "restart" | "shutdown" | "report-fault" | "replace-control" | "release-control" | "claim-control" | "input" | "advance-realtime" | "complete-timeline" | "execute-debug";
+    /**
+     * Parts rigs drawn on a screen-pixel grid over the last frame
+     * (`PartsRigAppearanceRequest.PixelGrid`). Drawing them smooth into their
+     * scratch image is the `parts-rig-grid` pass; their blocks are part of the
+     * `world` pass's time.
+     */
+    export type ProductHostPartsRigGridStatistics = {
+        /**
+         * Drawn as blocks, summed over the frame's views.
+         */
+        drawn: number;
+        /**
+         * Drawn smooth: the scratch image the size of the view had no room
+         * left for its rectangle, or it stood across the eye's plane.
+         */
+        smooth: number;
+    };
     /**
      * A frame the desktop window presented: when, in Unix milliseconds, the
      * simulation step it showed, and the presentation time it drew at, which

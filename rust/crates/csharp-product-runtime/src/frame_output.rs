@@ -44,13 +44,14 @@ use product_host::{
     ProductHostDrawingMode, ProductHostDrawnFrame, ProductHostFrameStream,
     ProductHostGpuCullingStatistics, ProductHostGpuPass, ProductHostGpuStatistics,
     ProductHostImpostorStatistics, ProductHostIndirectLightStatistics,
-    ProductHostLightClusterStatistics, ProductHostOcclusionStatistics, ProductHostPresentedFrame,
-    ProductHostRendererInspection, ProductHostRendererSettingValues, ProductHostRendererSettings,
-    ProductHostRendererStatistics, ProductHostScatterSelectionStatistics,
-    ProductHostScatterStatistics, ProductHostShadowStatistics, ProductHostSnowStatistics,
-    ProductHostStreamMedians, ProductHostStreamStatistics, ProductHostTimedStep,
-    ProductHostUiRepaints, ProductHostUpscaleStatistics, ProductHostWaterStatistics,
-    ProductHostWetnessStatistics, ProductHostWindowMedians, ProductHostWindowStatistics,
+    ProductHostLightClusterStatistics, ProductHostOcclusionStatistics,
+    ProductHostPartsRigGridStatistics, ProductHostPresentedFrame, ProductHostRendererInspection,
+    ProductHostRendererSettingValues, ProductHostRendererSettings, ProductHostRendererStatistics,
+    ProductHostScatterSelectionStatistics, ProductHostScatterStatistics,
+    ProductHostShadowStatistics, ProductHostSnowStatistics, ProductHostStreamMedians,
+    ProductHostStreamStatistics, ProductHostTimedStep, ProductHostUiRepaints,
+    ProductHostUpscaleStatistics, ProductHostWaterStatistics, ProductHostWetnessStatistics,
+    ProductHostWindowMedians, ProductHostWindowStatistics,
 };
 use render_host_contracts::{RendererCameraPose, RendererViewComposition, RendererViewTarget};
 use render_stream::{DrawnFrame, FrameStreamer, StreamStats};
@@ -1240,6 +1241,10 @@ fn gpu_statistics(readout: GpuReadout) -> ProductHostGpuStatistics {
             normals: readout.decals.normals,
             emissive: readout.decals.emissive,
             emission: readout.decals.emission,
+        },
+        parts_rig_grid: ProductHostPartsRigGridStatistics {
+            drawn: readout.parts_rig_grid.drawn,
+            smooth: readout.parts_rig_grid.smooth,
         },
         water: ProductHostWaterStatistics {
             refused: readout.water.refused,

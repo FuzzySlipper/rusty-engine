@@ -183,6 +183,7 @@ pub struct ProductHostGpuStatistics {
     #[ts(optional)]
     pub snow: Option<ProductHostSnowStatistics>,
     pub decals: ProductHostDecalStatistics,
+    pub parts_rig_grid: ProductHostPartsRigGridStatistics,
     pub water: ProductHostWaterStatistics,
     pub upscale: ProductHostUpscaleStatistics,
 }
@@ -206,6 +207,20 @@ pub struct ProductHostUpscaleStatistics {
     pub render: [u32; 2],
     /// The output's size, in pixels.
     pub output: [u32; 2],
+}
+
+/// Parts rigs drawn on a screen-pixel grid over the last frame
+/// (`PartsRigAppearanceRequest.PixelGrid`). Drawing them smooth into their
+/// scratch image is the `parts-rig-grid` pass; their blocks are part of the
+/// `world` pass's time.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct ProductHostPartsRigGridStatistics {
+    /// Drawn as blocks, summed over the frame's views.
+    pub drawn: u32,
+    /// Drawn smooth: the scratch image the size of the view had no room
+    /// left for its rectangle, or it stood across the eye's plane.
+    pub smooth: u32,
 }
 
 /// The projected decals the world pass lays (`CameraView.SetDecal`): what
