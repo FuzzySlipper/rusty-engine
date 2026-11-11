@@ -3307,6 +3307,19 @@ fn shadow_layers_report_their_gpu_time_and_atlas_bytes() {
     if readout.timestamps {
         assert!(shadows.timed_frames > 0 && shadows.median_gpu_ms > 0.0);
     }
+    // Shadows turned off: the pass no longer runs, and reads no time.
+    harness.renderer.set_options(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    harness.render(&eye);
+    let readout = harness.renderer.gpu_readout();
+    let shadows = readout
+        .passes
+        .iter()
+        .find(|timing| timing.pass == "shadows")
+        .expect("a shadows pass");
+    assert_eq!(shadows.timed_frames, 0, "{shadows:?}");
 }
 
 /// A lamp over a floor ringed with thirty static crates, and one crate at

@@ -208,6 +208,74 @@ fn a_gusting_lean_moves_with_time_and_its_shadow_follows() {
     assert_ne!(first_shadow, later_shadow, "the shadow follows the lean");
 }
 
+/// As time moves under a still camera, the cascades restore their static
+/// casters' depth and draw only the swaying post over it, and the picture
+/// is the one the scene draws whole at that time.
+#[test]
+fn time_redraws_only_the_swaying_caster_over_the_cascades_static_depth() {
+    let build = |harness: &mut Harness| {
+        let mut ops = scene(
+            Some(MaterialWindDescriptor {
+                bend: 0.4,
+                flutter: 0.0,
+            }),
+            post(0.3, 2.0),
+            true,
+        );
+        ops.extend(coloured_mesh("still", post(0.3, 1.5), [0.9, 0.9, 0.9, 1.0]));
+        for index in 0..6 {
+            ops.push(instance(
+                10 + index,
+                None,
+                "still",
+                transform([index as f32 - 2.5, -1.0, -6.0], 0.0, 1.0),
+            ));
+        }
+        ops.push(RenderDiff::SetWind {
+            wind: Some(WindDescriptor {
+                direction: [1.0, 0.0],
+                strength: 2.0,
+                gust: 1.0,
+            }),
+        });
+        harness.apply(ops);
+    };
+    let options = || RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    };
+    let view = camera("eye", [0.0, 2.0, 0.0], 0.0, -30.0);
+    let mut moving = Harness::new(options());
+    build(&mut moving);
+    // The first frame draws the cascades whole, the second keeps their
+    // static casters in the cache; after that time redraws the post alone.
+    let mut last = Vec::new();
+    for step in 0..5 {
+        moving
+            .renderer
+            .set_animation_time(1.0 + 0.3 * f64::from(step));
+        last = moving.single(&view);
+        let report = moving.renderer.shadow_report();
+        assert!(report.rendered_layers > 0, "step {step}: {report:?}");
+        if step >= 2 {
+            assert!(
+                report.rendered_casters <= report.rendered_layers,
+                "step {step}: the post alone in each layer: {report:?}"
+            );
+        }
+    }
+    let mut whole = Harness::new(options());
+    build(&mut whole);
+    whole.renderer.set_animation_time(2.2);
+    let fresh = whole.single(&view);
+    assert!(
+        whole.renderer.shadow_report().rendered_casters
+            > whole.renderer.shadow_report().rendered_layers
+    );
+    assert_eq!(last, fresh, "restored static depth draws the same shadows");
+}
+
 /// A flutter moves the vertices whose colour alpha weights it: the card's
 /// top edge moves between two times, its foot (alpha 0) does not.
 #[test]

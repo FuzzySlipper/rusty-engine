@@ -723,19 +723,24 @@ impl Renderer {
     }
 
     /// Cull shadow layers' casters to their views and their lights' reach:
-    /// every layer, or only the cascades after a fit. A layer whose casters
-    /// differ, or hold a moved part, is stale; the others keep their maps.
+    /// every layer, or after a fit only the cascades it moved (`refit`) and
+    /// those whose place in the instance buffer that changed. A layer whose
+    /// casters differ, or hold a moved part, is stale; the others keep their
+    /// maps.
     fn cull_casters(&mut self, moved: &HashSet<PartId>, cascades_only: bool) {
         if self.shadows.layers.is_empty() {
             return;
         }
         let started = std::time::Instant::now();
         let parts = &self.tables.parts;
-        let candidates = batch::caster_candidates(parts, RenderLayer::Scene);
-        let backdrop_candidates = if self.shadows.layers.iter().any(|layer| layer.is_backdrop()) {
-            batch::caster_candidates(parts, RenderLayer::Backdrop)
-        } else {
-            Vec::new()
+        // Gathered by the first layer culled from them.
+        let candidates = std::cell::OnceCell::new();
+        let candidates =
+            || candidates.get_or_init(|| batch::caster_candidates(parts, RenderLayer::Scene));
+        let backdrop_candidates = std::cell::OnceCell::new();
+        let backdrop_candidates = || {
+            backdrop_candidates
+                .get_or_init(|| batch::caster_candidates(parts, RenderLayer::Backdrop))
         };
         // A point light's six faces share one reach.
         let mut reached: Option<((Vec3, f32), Vec<PartId>)> = None;
@@ -749,17 +754,20 @@ impl Renderer {
                 if layer.is_cascade() != cascades {
                     continue;
                 }
-                if cascades_only && !cascades {
+                if cascades_only && (!cascades || (!layer.refit && layer.casters_base == base)) {
                     base += layer.casters.instances() + layer.dynamic.instances();
                     continue;
                 }
+                layer.refit = false;
+                layer.casters_base = base;
                 let inside = match layer.reach() {
                     _ if !layer.has_view() => &Vec::new(),
-                    None if layer.is_backdrop() => &backdrop_candidates,
-                    None => &candidates,
+                    None if layer.is_backdrop() => backdrop_candidates(),
+                    None => candidates(),
                     Some(reach) => {
                         if reached.as_ref().is_none_or(|(at, _)| *at != reach) {
-                            reached = Some((reach, batch::within_reach(parts, &candidates, reach)));
+                            reached =
+                                Some((reach, batch::within_reach(parts, candidates(), reach)));
                         }
                         &reached.as_ref().expect("reach culled").1
                     }
@@ -767,7 +775,8 @@ impl Renderer {
                 // A light's caster that moves turns dynamic for the layer: its
                 // moves then redraw only the dynamic casters over the cached
                 // static ones. Cascades re-fit with the camera and keep one
-                // list.
+                // list. In every layer, a caster whose stage reads time is
+                // dynamic, so time moving redraws it alone.
                 let moves = |id: &PartId| moved.contains(id);
                 if !cascades {
                     layer.dynamic_parts.retain(|id| inside.contains(id));
@@ -791,9 +800,13 @@ impl Renderer {
                         }
                     }
                 }
+                let timed = |id: PartId| {
+                    let caster = parts.state[id as usize].class.features.caster();
+                    caster.product() != 0 || caster.moves_with_time()
+                };
                 let (dynamic_ids, static_ids): (Vec<PartId>, Vec<PartId>) = inside
                     .iter()
-                    .partition(|id| layer.dynamic_parts.contains(id));
+                    .partition(|&&id| timed(id) || layer.dynamic_parts.contains(&id));
                 let frustum = Frustum::new(&layer.view_proj);
                 let list = batch::caster_list(parts, &static_ids, &frustum, base);
                 base += list.instances();
@@ -814,10 +827,16 @@ impl Renderer {
                     layer.stale = true;
                 }
                 // A caster whose stage reads time redraws as time moves.
-                layer.timed = list.batches.iter().chain(&dynamic.batches).any(|draw| {
-                    let caster = parts.state[draw.part as usize].class.features.caster();
-                    caster.product() != 0 || caster.moves_with_time()
-                });
+                layer.timed = dynamic.batches.iter().any(|draw| timed(draw.part));
+                if list != layer.casters
+                    || list
+                        .ids
+                        .iter()
+                        .chain(&list.runs)
+                        .any(|id| moved.contains(id))
+                {
+                    layer.casters_revision += 1;
+                }
                 if list != layer.casters || dynamic != layer.dynamic {
                     layer.casters = list;
                     layer.dynamic = dynamic;
@@ -934,6 +953,7 @@ impl Renderer {
             if layer.view_proj != view_proj {
                 layer.view_proj = view_proj;
                 layer.stale = true;
+                layer.refit = true;
                 self.shadows.write_view(&self.gpu.queue, index);
                 fitted = true;
             }
@@ -1949,6 +1969,19 @@ impl Renderer {
             self.prepare_sprite_casters();
         }
         let ours = |layer: &shadows::ShadowLayer| layer.is_backdrop() == backdrop;
+        // Without layers the pass is skipped: its readout starts again
+        // rather than keep the times of shadows since turned off.
+        if !self.shadows.layers.iter().any(ours) {
+            let timer = if backdrop {
+                &mut self.backdrop_shadow_timer
+            } else {
+                &mut self.shadow_timer
+            };
+            if let Some(timer) = timer {
+                timer.restart();
+            }
+            return Default::default();
+        }
         let selected_shadows =
             !backdrop && self.tables.parts.selecting && self.scatter_select.casts();
         // Selected copies that move with time are timed casters too; the
@@ -1977,23 +2010,28 @@ impl Renderer {
             pipelines_created: self.layouts.start_casters(&self.gpu.device),
             ..ShadowsEncoded::default()
         };
-        // A layer with dynamic casters keeps its static casters' depth in the
-        // static cache, unless time moves every caster (`retimed`); so does
-        // a fixed layer the selected copies cast into, which redraws as the
-        // eye moves (their levels, thinning and fades go by its distance).
-        // So does a layer sprites or rigs cast into: they redraw as they
-        // move and pose, over the static depth.
+        // As time moves, only a layer with timed casters (or the timed
+        // selected copies) redraws.
+        let redraws = |layer: &shadows::ShadowLayer| {
+            ours(layer) && (layer.stale || (retimed && (layer.timed || selected_timed)))
+        };
+        // A layer with dynamic casters (timed or moved) keeps its static
+        // casters' depth in the static cache; so does a layer the selected
+        // copies cast into, which redraws as the eye moves (their levels,
+        // thinning and fades go by its distance), and a layer sprites or rigs
+        // cast into: they redraw as they move and pose, over the static
+        // depth. A cascade whose view moved since it last drew renders
+        // directly: it refits with the camera, so the cache would hold its
+        // depth for one frame only.
         let cached_path = |layer: &shadows::ShadowLayer| {
-            !retimed
-                && (!layer.dynamic.batches.is_empty()
-                    || !layer.sprites.is_empty()
-                    || (selected_shadows && !layer.is_cascade()))
+            (!layer.dynamic.batches.is_empty() || !layer.sprites.is_empty() || selected_shadows)
+                && (!layer.is_cascade() || layer.view_proj == layer.drawn_view)
         };
         let generation = if self
             .shadows
             .layers
             .iter()
-            .any(|layer| ours(layer) && (retimed || layer.stale) && cached_path(layer))
+            .any(|layer| redraws(layer) && cached_path(layer))
         {
             self.shadows
                 .ensure_cache(&self.gpu.device, &self.layouts.shadow_restore_layout)
@@ -2003,10 +2041,7 @@ impl Renderer {
         // The frame's first pass and last pass carry the shadows timer's
         // stamps.
         let rendered: Vec<usize> = (0..self.shadows.layers.len())
-            .filter(|&index| {
-                let layer = &self.shadows.layers[index];
-                ours(layer) && (retimed || layer.stale)
-            })
+            .filter(|&index| redraws(&self.shadows.layers[index]))
             .collect();
         let last = rendered.last().copied();
         let mut begun = false;
@@ -2020,10 +2055,10 @@ impl Renderer {
             let token = shadows::CachedStatic {
                 tile,
                 view_proj: layer.view_proj,
-                casters: layer.casters.clone(),
+                casters: layer.casters_revision,
                 generation,
             };
-            let rebuild = use_cache && layer.cached.as_ref() != Some(&token);
+            let rebuild = use_cache && layer.cached != Some(token);
             // One pass into a tile of the atlas or of the static cache.
             let timer = if backdrop {
                 self.backdrop_shadow_timer.as_ref()
@@ -2134,11 +2169,9 @@ impl Renderer {
                 continue;
             }
             layer.stale = false;
-            if retimed || layer.dynamic.batches.is_empty() {
-                layer.cached = None;
-            }
+            layer.drawn_view = layer.view_proj;
             if let Some((_, token)) = cached.iter().find(|(at, _)| *at == index) {
-                layer.cached = Some(token.clone());
+                layer.cached = Some(*token);
             }
         }
         if drawn.layers > 0 {

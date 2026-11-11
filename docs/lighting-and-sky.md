@@ -82,19 +82,25 @@ reports the layers, pages, budget, casting lights, the renderer handles of
 lights the budget left out, the layers and casters re-rendered last frame, and
 the atlas's GPU bytes (`atlasBytes`, every allocated depth page). Its
 `gpu.passes` time a frame's shadow-layer rendering as `shadows`, in the frames
-that render layers.
+that render layers; with no layers it reads no frames.
 
 A point or spot light's layer re-renders only when a caster in it moves. A
 caster that moves while the layer draws it (a posed character, a door, a
-carried prop) becomes dynamic for that layer. The layer keeps its static
-casters' depth in a static cache and, while only dynamic casters move,
-restores that depth and redraws just them, so one walking resident among
-thirty props draws one caster per face, not thirty-one, and the shadows
-are the same. A static caster that moves, joins or leaves renders the static
+carried prop) becomes dynamic for that layer, and in every layer, cascades
+included, so is a caster whose stage moves it with time (wind, a product
+caster stage). The layer keeps its static casters' depth in a static cache
+and, while only dynamic casters, swaying sprites or the selected scatter
+copies change, restores that depth and redraws just them: one walking
+resident among thirty props draws one caster per face, not thirty-one, and
+a swaying tree among a town's houses redraws the tree, with the same
+shadows. A static caster that moves, joins or leaves renders the static
 depth once more. The cache is a depth array the size of the atlas, built
-the first time a layer has a dynamic caster (`staticCacheBytes`). A
-directional light's cascades, which follow the camera, and casters a
-product shader moves with time redraw whole.
+the first time a layer has a dynamic caster (`staticCacheBytes`). A cascade
+draws whole in a frame its view changed: the camera moved or the light
+turned. Each turn of a sun culls and redraws its cascades' static casters,
+so a product that turns its sun by small steps many times a second pays
+that every few frames; the sun's direction needs to change only as fast as
+the shadow visibly moves.
 
 ### Ray-traced sun shadows
 

@@ -1561,6 +1561,7 @@ impl Renderer {
     pub fn rerender_shadows(&mut self) {
         for layer in &mut self.shadows.layers {
             layer.stale = true;
+            layer.cached = None;
         }
     }
 

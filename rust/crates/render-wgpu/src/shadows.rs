@@ -472,10 +472,22 @@ pub(crate) struct ShadowLayer {
     /// No tile yet (size 0) until `set_layers` places it.
     pub tile: Tile,
     /// Casters inside the view and reach, offset into the instance buffer:
-    /// the static ones. A light's layer keeps the casters that have moved
-    /// (posed, moved, added) in `dynamic`, after these in the buffer.
+    /// the static ones. A layer keeps the casters whose stage reads time
+    /// (`timed`), and a light's layer those that have moved (posed, moved,
+    /// added), in `dynamic`, after these in the buffer.
     pub casters: DrawList,
     pub dynamic: DrawList,
+    /// Counts changes to what `casters` draws: a different list, or one of
+    /// its casters moved. The static cache names the count it holds.
+    pub casters_revision: u64,
+    /// The view the layer was last rendered with: a cascade keeps its
+    /// static casters' depth in the cache only while its view holds still.
+    pub drawn_view: Mat4,
+    /// Where its lists start in the instance buffer, and whether a
+    /// cascade's view changed since its casters were culled: a fit culls
+    /// only those cascades, and those whose lists another's moved.
+    pub casters_base: u32,
+    pub refit: bool,
     /// The caster candidates `dynamic` holds: once a caster moves it stays
     /// dynamic while it is inside the layer's reach.
     pub dynamic_parts: Vec<crate::tables::PartId>,
@@ -496,13 +508,14 @@ pub(crate) struct ShadowLayer {
 }
 
 /// The static casters' depth a layer's tile in the static cache holds, by
-/// what it was rendered from. A layer whose static list, view or tile
-/// differs, or a cache since rebuilt, renders it again.
-#[derive(Clone, Debug, PartialEq)]
+/// what it was rendered from. A layer whose static casters (by
+/// `casters_revision`), view or tile differ, or a cache since rebuilt,
+/// renders it again.
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CachedStatic {
     pub tile: Tile,
     pub view_proj: Mat4,
-    pub casters: DrawList,
+    pub casters: u64,
     pub generation: u64,
 }
 
@@ -553,6 +566,10 @@ impl ShadowLayer {
             tile: Tile::default(),
             casters: DrawList::default(),
             dynamic: DrawList::default(),
+            casters_revision: 0,
+            drawn_view: Mat4::ZERO,
+            casters_base: 0,
+            refit: false,
             dynamic_parts: Vec::new(),
             cached: None,
             stale: true,
@@ -1018,6 +1035,8 @@ fn place(layers: &mut [ShadowLayer], page_sizes: &mut Vec<u32>) -> bool {
             size,
         };
         layer.stale = true;
+        // Another layer may take the old tile's place in the static cache.
+        layer.cached = None;
         changed = true;
     }
     // Pages no layer uses keep their place, cut to nothing.
