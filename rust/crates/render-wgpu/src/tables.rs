@@ -821,7 +821,11 @@ impl Parts {
         out[36..40].copy_from_slice(&row.fade);
         let state = &mut self.state[id as usize];
         let mirrored = world.determinant() < 0.0;
-        if state.mirrored != mirrored || state.shown != shown || state.layer != layer {
+        if state.mirrored != mirrored
+            || state.shown != shown
+            || state.layer != layer
+            || state.casts_shadows != casts_shadows
+        {
             self.regrouped = true;
         }
         let bounds = state

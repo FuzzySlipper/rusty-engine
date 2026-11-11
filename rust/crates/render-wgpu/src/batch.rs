@@ -277,21 +277,21 @@ pub(crate) fn split_opaque(parts: &Parts, list: DrawList) -> (DrawList, DrawList
 /// opaque one, or a blended one with `translucent_shadow`). A scatter run
 /// is one candidate.
 pub(crate) fn caster_candidates(parts: &Parts, layer: RenderLayer) -> Vec<PartId> {
-    parts
-        .state
-        .iter()
-        .enumerate()
-        .filter(|(id, state)| {
-            parts.meta[*id].is_some()
-                && state.shown
-                && state.casts_shadows
-                && state.class.shadow
-                && state.layer == layer
-                && !state.class.lines
-                && parts.listed(*id as PartId)
-        })
-        .map(|(id, _)| id as PartId)
+    (0..parts.state.len() as PartId)
+        .filter(|&id| casts(parts, id, layer))
         .collect()
+}
+
+/// Whether a part is a caster candidate of `layer` (`caster_candidates`).
+pub(crate) fn casts(parts: &Parts, id: PartId, layer: RenderLayer) -> bool {
+    let state = &parts.state[id as usize];
+    parts.meta[id as usize].is_some()
+        && state.shown
+        && state.casts_shadows
+        && state.class.shadow
+        && state.layer == layer
+        && !state.class.lines
+        && parts.listed(id)
 }
 
 /// The candidates whose bounds touch a sphere (centre, radius).

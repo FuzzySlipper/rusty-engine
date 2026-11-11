@@ -667,7 +667,16 @@ impl Renderer {
                 view.regrouped |= regrouped;
             }
         }
-        if regrouped || shown_moved || layers_changed {
+        // Only a caster's move changes what a shadow layer draws: a moving
+        // part that casts nowhere (a first-person view's, one whose node
+        // casts no shadow) culls nothing. A part that stops casting regroups.
+        let parts = &self.tables.parts;
+        let caster_moved = !self.shadows.layers.is_empty()
+            && moved.iter().any(|&id| {
+                batch::casts(parts, id, RenderLayer::Scene)
+                    || batch::casts(parts, id, RenderLayer::Backdrop)
+            });
+        if regrouped || caster_moved || layers_changed {
             self.cull_casters(&moved, false);
         }
         self.prepare_ray_scene(regrouped || runs_changed || shown_moved);
