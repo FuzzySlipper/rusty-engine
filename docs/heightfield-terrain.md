@@ -112,8 +112,10 @@ fewer layers.
 **`HeightfieldStreamer`** (`Rusty.Engine.Heightfields`) does this for a
 product: each `Update` commits at most `commitsPerUpdate` finished tiles (8
 by default), then starts sampling new requests on the thread pool, at most
-twice the processors at once. Its `IHeightfieldSampler.Sample` runs on
-workers, several at a time: it reads only product data the product does not
+twice the processors at once. On Windows each sample runs below normal
+priority, so a start that fills every core with tiles leaves the update and
+the window their cores; the pool thread's priority is restored after it.
+Its `IHeightfieldSampler.Sample` runs on workers, several at a time: it reads only product data the product does not
 change under it and calls no Engine service ([call
 affinity](world-streaming-contract.md#engine-call-affinity)). Every
 Engine call stays in `Update`. A sampler that throws rethrows from the next

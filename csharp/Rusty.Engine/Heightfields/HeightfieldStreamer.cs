@@ -206,20 +206,34 @@ public abstract class TileStreamer : IDisposable
             _ = Task.Run(() =>
             {
                 if (token.IsCancellationRequested) return;
-                long started = Stopwatch.GetTimestamp();
-                HeightfieldTileSamples samples = new(tile);
+                // On Windows a tile samples below normal priority, so a game start whose tiles fill every core leaves
+                // the update, the window and the product's own pool work their cores. The pool thread gets its
+                // priority back however the sample ends. Elsewhere a lowered thread may not be raised again.
+                Thread worker = Thread.CurrentThread;
+                ThreadPriority priority = worker.Priority;
+                bool lowered = OperatingSystem.IsWindows();
+                if (lowered) worker.Priority = ThreadPriority.BelowNormal;
                 try
                 {
-                    sampler.Sample(tile, samples);
-                }
-                catch (Exception exception)
-                {
-                    failed.Enqueue((tile, ExceptionDispatchInfo.Capture(exception)));
-                    return;
-                }
+                    long started = Stopwatch.GetTimestamp();
+                    HeightfieldTileSamples samples = new(tile);
+                    try
+                    {
+                        sampler.Sample(tile, samples);
+                    }
+                    catch (Exception exception)
+                    {
+                        failed.Enqueue((tile, ExceptionDispatchInfo.Capture(exception)));
+                        return;
+                    }
 
-                Interlocked.Add(ref sampleTicks, Stopwatch.GetTimestamp() - started);
-                if (!token.IsCancellationRequested) finished.Enqueue(samples);
+                    Interlocked.Add(ref sampleTicks, Stopwatch.GetTimestamp() - started);
+                    if (!token.IsCancellationRequested) finished.Enqueue(samples);
+                }
+                finally
+                {
+                    if (lowered) worker.Priority = priority;
+                }
             }, token);
         }
     }
