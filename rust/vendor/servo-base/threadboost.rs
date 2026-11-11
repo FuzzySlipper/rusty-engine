@@ -203,7 +203,35 @@ mod platform {
     }
 }
 
-#[cfg(not(any(target_os = "linux", target_env = "ohos")))]
+// Engine #10720 (rusty-engine): on Windows an Elevated or Critical thread runs at
+// THREAD_PRIORITY_ABOVE_NORMAL, so script and painting are not left waiting for a core behind
+// the embedder's normal-priority worker threads.
+#[cfg(target_os = "windows")]
+mod platform {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+    };
+
+    use super::ThreadPriority;
+
+    #[expect(unsafe_code)]
+    pub fn boost_thread(priority: ThreadPriority, _: super::BoostAffinity) {
+        if matches!(priority, ThreadPriority::Default) {
+            return;
+        }
+        // SAFETY: `GetCurrentThread` returns a pseudo-handle for the calling thread, which is
+        // valid for `SetThreadPriority` and needs no closing.
+        if unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) } == 0 {
+            log::warn!(
+                "Failed to raise {} to above-normal priority: {:?}",
+                std::thread::current().name().unwrap_or("<unnamed>"),
+                std::io::Error::last_os_error(),
+            );
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", target_env = "ohos", target_os = "windows")))]
 mod platform {
     pub fn boost_thread(_: super::ThreadPriority, _: super::BoostAffinity) {}
 }

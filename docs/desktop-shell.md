@@ -295,6 +295,12 @@ renderer it draws with).
   - On Windows Servo draws with ANGLE (GLES over D3D11) on the window's GPU,
     matched by LUID, into D3D11 textures with NT handles; each finished frame
     is imported again, which acquires it from the external queue.
+  - On Windows Servo's script thread, constellation and WebRender threads
+    run above normal priority, so the page keeps its frames while a
+    product's worker threads fill every core. This is Servo's own thread
+    boost, which 0.7 implements only on Linux
+    ([servo-base patch](../rust/vendor/servo-base/RUSTY_PATCH.md)).
+    `--servo-pref perf_thread_boost_enabled=false` turns it off.
 - Without a GPU with GL and DMA-BUF import (Linux), or ANGLE on the window's
   adapter (Windows), the window refuses to open and names the reason; it
   never falls back to Chromium.
