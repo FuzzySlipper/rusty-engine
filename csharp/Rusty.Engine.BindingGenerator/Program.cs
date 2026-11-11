@@ -902,14 +902,20 @@ internal static class Emit
         string item = BindingModel.Bare(Inputs(callback)[0]);
         if (item == "NativeInputMapping") return EmitProductInputMappingSpanMethod(model, service, operation, callback, returnType, signature);
         StringBuilder output = new();
-        output.AppendLine($"    public {returnType} {Pascal(operation)}({signature})").AppendLine("    {");
-        output.AppendLine($"        {RawType(item)}[] rawValues = new {RawType(item)}[values.Length];");
+        string pascal = Pascal(operation);
+        string buffer = $"_{char.ToLowerInvariant(pascal[0])}{pascal[1..]}Values";
+        // The native side reads the values only during the call, and Engine calls run on one lane,
+        // so one buffer per service is rewritten by each call and grows only to the largest one.
+        output.AppendLine($"    private {RawType(item)}[] {buffer} = [];");
+        output.AppendLine($"    public {returnType} {pascal}({signature})").AppendLine("    {");
+        EmitLaneCheck(output, service, operation, "        ");
+        output.AppendLine($"        if ({buffer}.Length < values.Length) {buffer} = new {RawType(item)}[Math.Max(values.Length, {buffer}.Length * 2)];");
+        output.AppendLine($"        Span<{RawType(item)}> rawValues = {buffer}.AsSpan(0, values.Length);");
         output.AppendLine("        for (int index = 0; index < values.Length; index++)");
         output.AppendLine("            rawValues[index] = NativeConversions.ToNative(values[index]);");
         output.AppendLine($"        fixed ({RawType(item)}* pointer = rawValues)").AppendLine("        {");
         bool hasErrorReadout = BindingModel.HasOperationErrorReceipt(callback.Parameters.Skip(1).ToArray());
         if (hasErrorReadout) output.AppendLine("            NativeOperationErrorReceipt rawError = default;");
-        EmitLaneCheck(output, service, operation, "            ");
         output.AppendLine($"            int status = _native.{RawIdentifier(operation)}.Pointer(_native.context, rawValues.Length == 0 ? null : pointer, (nuint)rawValues.Length{(hasErrorReadout ? ", &rawError" : string.Empty)});");
         EmitRequire(output, model, service, service, operation, hasErrorReadout, "            ");
         output.AppendLine("        }").AppendLine("    }").AppendLine();
