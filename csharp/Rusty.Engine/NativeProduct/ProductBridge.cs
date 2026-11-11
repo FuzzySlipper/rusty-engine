@@ -90,11 +90,19 @@ internal sealed class ProductLifetime
     private IEngineProduct? _product;
     private Exception? _lastCallError;
     private readonly IDebugCommandCatalog _debugCatalog;
+    // Each call's input events, rewritten by the next call: the product reads them as a span
+    // that cannot outlive the call, so the update allocates nothing for them.
+    private ProductInputEvent[] _input = [];
     internal ProductLifetime(IEngineProduct product, IDebugCommandCatalog debugCatalog, ProductDebugExecutionContext debugging, ProductContent content) { _product = product; _debugCatalog = debugCatalog; Debugging = debugging; Content = content; }
     internal ProductContent Content { get; }
     internal IEngineProduct Product => _product ?? throw new ObjectDisposedException(nameof(ProductLifetime));
     internal IDebugCommandCatalog DebugCatalog => _product is null ? throw new ObjectDisposedException(nameof(ProductLifetime)) : _debugCatalog;
     internal ProductDebugExecutionContext Debugging { get; }
+    internal Span<ProductInputEvent> InputEvents(int count)
+    {
+        if (_input.Length < count) _input = new ProductInputEvent[Math.Max(count, _input.Length * 2)];
+        return _input.AsSpan(0, count);
+    }
     internal void RecordCallError(Exception error) => _lastCallError = error;
     internal void ClearCallError() => _lastCallError = null;
     internal Exception? TakeCallError()
@@ -292,7 +300,7 @@ public static unsafe class ProductBridge
             ProductUpdateFacts facts = NativeConversions.FromNative(args->facts);
             ContentReferenceInfo[] contentChanges = CopyContentChanges(args->content_changes, args->content_change_count);
             lifetime.Content.Reload(contentChanges);
-            ProductUpdateResult productResult = lifetime.Product.Update(new ProductUpdate(facts, CopyInput(args->events, args->event_count), contentChanges));
+            ProductUpdateResult productResult = lifetime.Product.Update(new ProductUpdate(facts, CopyInput(lifetime, args->events, args->event_count), contentChanges));
             *result = productResult switch
             {
                 ProductUpdateResult.None => NativeProductUpdateResult.NativeProductUpdateResult_None,
@@ -356,7 +364,8 @@ public static unsafe class ProductBridge
         try
         {
             if (count != 0 && events is null) return 2;
-            Get(handle).Product.HandlePausedIntents(CopyInput(events, count));
+            ProductLifetime lifetime = Get(handle);
+            lifetime.Product.HandlePausedIntents(CopyInput(lifetime, events, count));
             return 1;
         }
         catch (Exception exception)
@@ -662,9 +671,9 @@ public static unsafe class ProductBridge
         return new ProductLifetimeMemory(source, checked((int)length)).Memory;
     }
 
-    private static ProductInputEvent[] CopyInput(NativeInputEvent* source, nuint count)
+    private static ReadOnlySpan<ProductInputEvent> CopyInput(ProductLifetime lifetime, NativeInputEvent* source, nuint count)
     {
-        ProductInputEvent[] events = new ProductInputEvent[checked((int)count)];
+        Span<ProductInputEvent> events = lifetime.InputEvents(checked((int)count));
         for (nuint index = 0; index < count; index++)
         {
             NativeInputEvent input = source[index];
