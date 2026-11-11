@@ -9486,8 +9486,6 @@ dependencies = [
 [[package]]
 name = "servo-base"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c1bbfbafceeefb49538b928ea7a31c798d15c058ef90d9e2af233f54a4d15fa6"
 dependencies = [
  "accesskit",
  "crossbeam-channel",
