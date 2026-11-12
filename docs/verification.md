@@ -54,6 +54,16 @@ examples build once in Release and execute with `--no-build`. Their fake
 services test managed behavior; they do not replace native or visible product
 exercises. NativeAOT remains opt-in.
 
+### Routing lanes off den-agents
+
+The headless lanes can run on a den build worker at a commit instead of on
+den-agents: `den-tool build run --repo rusty-engine --lane LANE --ref SHA`
+(lanes `verify`, `verify-csharp`, `shader-matrix` and `pair`; den-services'
+resource operations guide covers `--host` and the workers). The `pair` lane runs
+`scripts/build-and-test-csharp-release-pair.sh`, as the pair workflow does, and
+only proves the pair: publication stays with the workflow. The GPU lane, window
+tests, `rusty dev` playtests and performance rides stay on their own hosts.
+
 ## GPU verification
 
 GitHub's runners have no GPU, so CI renders on llvmpipe, a software Vulkan

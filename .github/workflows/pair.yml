@@ -135,15 +135,10 @@ jobs:
           libclang_path="$(find /usr/lib/llvm-* -name libclang.so -print -quit)"
           test -n "$libclang_path"
           echo "LD_LIBRARY_PATH=$(dirname "$libclang_path")${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
-          pnpm --dir render install --frozen-lockfile
 
-      - name: Build pair
+      - name: Build the pair and exercise it with a packaged consumer
         if: steps.published.outputs.skip != 'true'
-        run: ./scripts/build-csharp-release-pair.sh --output "$RUNNER_TEMP/pair"
-
-      - name: Exercise the pair with a packaged consumer
-        if: steps.published.outputs.skip != 'true'
-        run: ./scripts/test-csharp-release-pair.sh "$RUNNER_TEMP"/pair/*.tar.gz
+        run: ./scripts/build-and-test-csharp-release-pair.sh "$RUNNER_TEMP/pair"
 
       # The desktop runtime pack is the same host built with the desktop shell
       # and Chromium's runtime; `rusty dev` fetches it for window mode (#8860).
