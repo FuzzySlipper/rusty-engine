@@ -5,6 +5,11 @@ using System.Text;
 using ClangSharp.Interop;
 
 if (args.Length != 6) throw new ArgumentException("usage: BindingGenerator <header> <contracts.cs> <values.cs> <inputs-dir> <clang-resource-dir> <rust-identity.rs>");
+// ClangSharp looks for libclang under its own LLVM version's names; parse with the
+// libclang of the clang whose resource directory is given, whatever its version.
+// Where that clang keeps no libclang.so beside it (Windows), ClangSharp's own search runs.
+string clangLibrary = Path.GetFullPath(Path.Combine(args[4], "..", "..", "libclang.so"));
+clang.ResolveLibrary += (name, _, _) => name == "libclang" && NativeLibrary.TryLoad(clangLibrary, out nint handle) ? handle : 0;
 BindingModel model = BindingModel.Parse(args[0], args[4]);
 Directory.CreateDirectory(Path.GetDirectoryName(args[1])!);
 Directory.CreateDirectory(args[3]);
