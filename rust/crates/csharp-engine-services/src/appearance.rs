@@ -1581,7 +1581,7 @@ pub(crate) struct RuntimeAppearanceCall {
     /// The retained resources changed outside an object publication (a
     /// release, a deferred admission): they are reconciled, and their
     /// definitions and releases published, when the call ends.
-    reconcile_resources: bool,
+    pub(crate) reconcile_resources: bool,
     pub(crate) release_error: Option<CsharpEngineServicesError>,
     /// Typed renderer realization work in the order the C# product invoked the
     /// owning appearance APIs. This remains call-local: it is not a general
@@ -1915,6 +1915,10 @@ pub(crate) struct RuntimeAppearanceBridge {
     /// How far the renderer's deferred preparation is, as it last reported;
     /// `None` while no renderer reports, when nothing waits for one.
     pub(crate) renderer_preparation: Option<crate::RendererPreparation>,
+    /// Deferred mesh partitions being cut on workers.
+    pub(crate) partition_cuts: Vec<crate::render_resources::PartitionCut>,
+    /// Deferred mesh partitions whose cut failed.
+    pub(crate) failed_partition_cuts: u64,
 }
 
 impl RuntimeAppearanceBridge {
@@ -2005,6 +2009,8 @@ impl RuntimeAppearanceBridge {
             tween_owed_seconds: 0.0,
             presentation_clock: (0.0, 0.0),
             renderer_preparation: None,
+            partition_cuts: Vec::new(),
+            failed_partition_cuts: 0,
         }
     }
 
@@ -2134,6 +2140,7 @@ impl RuntimeAppearanceBridge {
             preparation_batched: false,
         });
         self.operation_error = None;
+        self.take_in_partition_cuts();
     }
 
     pub(crate) fn ingest_animation_realization_feedback(
@@ -4844,7 +4851,7 @@ impl RuntimeAppearanceBridge {
     }
 
     /// This call's deferred textures and meshes form its preparation batch.
-    fn join_preparation_batch(&mut self) -> Result<(), CsharpEngineServicesError> {
+    pub(crate) fn join_preparation_batch(&mut self) -> Result<(), CsharpEngineServicesError> {
         let call = self.staged_mut()?;
         if !call.preparation_batched {
             call.preparation_batched = true;
@@ -4881,18 +4888,24 @@ impl RuntimeAppearanceBridge {
 
     fn resource_preparation(&self) -> csharp_engine_abi::NativeResourcePreparationReadout {
         let last_batch = self.preparation_batch();
+        // A batch with a partition still being cut is not done, renderer or not.
+        let (oldest_cut, cuts) = self.partitions_cutting();
+        let cut = oldest_cut.map_or(last_batch, |batch| batch - 1);
+        let failed_cuts = self.failed_partition_cuts;
         match self.renderer_preparation {
             Some(renderer) => csharp_engine_abi::NativeResourcePreparationReadout {
-                completed_batch: renderer.completed_batch.min(last_batch),
+                completed_batch: renderer.completed_batch.min(last_batch).min(cut),
                 last_batch,
-                pending_resources: renderer.pending,
-                failed_resources: renderer.failed,
+                pending_resources: renderer.pending + cuts,
+                failed_resources: renderer.failed + failed_cuts,
             },
-            // Nothing prepares or draws them, so nothing waits.
+            // Nothing prepares or draws the textures and meshes, so they
+            // wait for nothing.
             None => csharp_engine_abi::NativeResourcePreparationReadout {
-                completed_batch: last_batch,
+                completed_batch: cut.min(last_batch),
                 last_batch,
-                ..Default::default()
+                pending_resources: cuts,
+                failed_resources: failed_cuts,
             },
         }
     }
@@ -12316,6 +12329,7 @@ pub(super) mod tests {
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
             billboard: false,
+            deferred: false,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(&mut bridge, &request) }
@@ -12627,6 +12641,7 @@ pub(super) mod tests {
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
             billboard: false,
+            deferred: false,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(&mut bridge, &request) }
@@ -12645,6 +12660,7 @@ pub(super) mod tests {
                             y: 1.0,
                             z: 1.0,
                         },
+                        deferred: false,
                     },
                     &mut partition,
                     std::ptr::null_mut(),
@@ -12747,6 +12763,330 @@ pub(super) mod tests {
             0,
             "the destroyed partition is gone"
         );
+    }
+
+    /// A plain opaque material for generated mesh tests.
+    fn plain_material(bridge: &mut RuntimeAppearanceBridge) -> NativeMaterialHandle {
+        let white = NativeColor {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 1.0,
+        };
+        bridge
+            .create_material(NativeMaterialRequest {
+                texture_scale: NativeVec2::default(),
+                texture_offset: NativeVec2::default(),
+                stochastic_tiling: 0.0,
+                shader: Default::default(),
+                triplanar_sharpness: 0.0,
+                color: white,
+                texture: NativeRenderResourceReference { value: 0 },
+                roughness: 1.0,
+                texture_tint: white,
+                emission_color: NativeVec3::default(),
+                emission_intensity: 0.0,
+                double_sided: false,
+                alpha_mode: NativeMaterialAlphaMode::Opaque,
+                alpha_cutoff: 0.5,
+                metalness: 0.0,
+                normal_map: NativeRenderResourceReference::default(),
+                normal_scale: 1.0,
+                emission_map: Default::default(),
+                occlusion_map: Default::default(),
+                orm_map: Default::default(),
+                occlusion_strength: 0.0,
+                unlit: false,
+                flat_shading: false,
+                keep_dry: false,
+                sinks_under_snow: false,
+                billboard: Default::default(),
+                wind_bend: 0.0,
+                wind_flutter: 0.0,
+                water: Default::default(),
+                translucent_shadow: false,
+            })
+            .unwrap()
+    }
+
+    /// Two triangles a cell apart along x, made `deferred` or not.
+    fn two_cell_mesh(
+        bridge: &mut RuntimeAppearanceBridge,
+        material: NativeMaterialHandle,
+        deferred: bool,
+    ) -> NativeMeshResourceHandle {
+        let vec3 = |x, y| NativeVec3 { x, y, z: 0.0 };
+        let positions = [
+            vec3(0.1, 0.1),
+            vec3(0.9, 0.1),
+            vec3(0.1, 0.9),
+            vec3(1.1, 0.1),
+            vec3(1.9, 0.1),
+            vec3(1.1, 0.9),
+        ];
+        let normals = [NativeVec3 {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        }; 6];
+        let indices = [0, 1, 2, 3, 4, 5];
+        let groups = [NativeMeshGroup {
+            material_slot: 0,
+            start: 0,
+            count: 6,
+        }];
+        let bindings = [NativeMeshMaterialBinding {
+            material_slot: 0,
+            material,
+        }];
+        let request = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: positions.len(),
+            normals: normals.as_ptr(),
+            normals_len: normals.len(),
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: std::ptr::null(),
+            colors_len: 0,
+            indices: indices.as_ptr(),
+            indices_len: indices.len(),
+            groups: groups.as_ptr(),
+            groups_len: groups.len(),
+            bindings: bindings.as_ptr(),
+            bindings_len: bindings.len(),
+            layer_weights: std::ptr::null(),
+            layer_weights_len: 0,
+            layer_palette: std::ptr::null(),
+            layer_palette_len: 0,
+            billboard: false,
+            deferred,
+        };
+        unsafe { crate::render_resources::create_generated_mesh(bridge, &request) }.unwrap()
+    }
+
+    fn partition_request(
+        source: NativeMeshResourceHandle,
+        cell: f32,
+        deferred: bool,
+    ) -> NativeMeshPartitionRequest {
+        NativeMeshPartitionRequest {
+            source,
+            origin: NativeVec3::default(),
+            cell_size: NativeVec3 {
+                x: cell,
+                y: cell,
+                z: cell,
+            },
+            deferred,
+        }
+    }
+
+    fn partition_of(
+        bridge: &mut RuntimeAppearanceBridge,
+        request: NativeMeshPartitionRequest,
+    ) -> NativeMeshPartitionHandle {
+        let context = (bridge as *mut RuntimeAppearanceBridge).cast();
+        let mut partition = NativeMeshPartitionHandle::default();
+        assert_eq!(
+            unsafe {
+                crate::render_resources::partition_mesh(
+                    context,
+                    request,
+                    &mut partition,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        partition
+    }
+
+    fn read_partition(
+        bridge: &mut RuntimeAppearanceBridge,
+        partition: NativeMeshPartitionHandle,
+    ) -> Result<NativeMeshPartitionReadout, CsharpEngineServicesError> {
+        bridge
+            .staged_ref()?
+            .state
+            .generated_meshes
+            .read_partition(partition)
+    }
+
+    fn take_part(
+        bridge: &mut RuntimeAppearanceBridge,
+        partition: NativeMeshPartitionHandle,
+        index: u32,
+    ) -> i32 {
+        let context = (bridge as *mut RuntimeAppearanceBridge).cast();
+        let mut part = NativeMeshResourceHandle::default();
+        unsafe {
+            crate::render_resources::take_mesh_partition_part(
+                context,
+                NativeMeshPartitionPartRequest { partition, index },
+                &mut part,
+                std::ptr::null_mut(),
+            )
+        }
+    }
+
+    /// Waits for every deferred partition's cut worker to end.
+    fn wait_for_cuts(bridge: &RuntimeAppearanceBridge) {
+        let started = std::time::Instant::now();
+        while !bridge.partition_cuts.iter().all(|cut| cut.is_finished()) {
+            assert!(started.elapsed().as_secs() < 30, "a cut never finished");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+
+    #[test]
+    fn a_deferred_partition_is_cut_off_the_call_and_holds_its_batch_until_taken_in() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let material = plain_material(&mut bridge);
+        // Create, cut and destroy the source in one call: the source is
+        // never published, and the cut keeps its own copy.
+        let source = two_cell_mesh(&mut bridge, material, true);
+        let source_asset = bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .generated_meshes
+            .asset(source.value)
+            .unwrap()
+            .to_owned();
+        let partition = partition_of(&mut bridge, partition_request(source, 1.0, true));
+        bridge.destroy_mesh_resource(source).unwrap();
+        // A deferred mesh that is kept is published with the call.
+        let kept = two_cell_mesh(&mut bridge, material, true);
+        let kept_asset = bridge
+            .staged_ref()
+            .unwrap()
+            .state
+            .generated_meshes
+            .asset(kept.value)
+            .unwrap()
+            .to_owned();
+        let readout = bridge.resource_preparation();
+        assert_eq!((readout.last_batch, readout.completed_batch), (1, 0));
+        assert_eq!(readout.pending_resources, 1);
+        assert_eq!(
+            read_partition(&mut bridge, partition).unwrap(),
+            NativeMeshPartitionReadout::default(),
+            "not ready in its own call"
+        );
+        assert_eq!(
+            take_part(&mut bridge, partition, 0),
+            0,
+            "nothing to take yet"
+        );
+        let call = bridge.take_staged_call();
+        let published: String = call
+            .outputs
+            .iter()
+            .filter_map(|output| match output {
+                RuntimeAppearanceCallOutput::Frame(frame) => Some(format!("{:?}", frame.ops)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !published.contains(&format!("\"{source_asset}\"")),
+            "the source never reaches the renderer"
+        );
+        assert!(
+            published.contains(&format!("\"{kept_asset}\"")),
+            "a kept deferred mesh is published: {published}"
+        );
+        bridge.commit(call);
+
+        wait_for_cuts(&bridge);
+        bridge.begin_call();
+        let readout = bridge.resource_preparation();
+        assert_eq!((readout.last_batch, readout.completed_batch), (1, 1));
+        assert_eq!(
+            (readout.pending_resources, readout.failed_resources),
+            (0, 0)
+        );
+        assert_eq!(
+            read_partition(&mut bridge, partition).unwrap(),
+            NativeMeshPartitionReadout {
+                part_count: 2,
+                ready: true
+            }
+        );
+        // Parts of a deferred partition are uploaded off the update, in the
+        // batch of the call that takes them.
+        assert_eq!(take_part(&mut bridge, partition, 0), ABI_OK);
+        assert_eq!(take_part(&mut bridge, partition, 1), ABI_OK);
+        assert_eq!(bridge.resource_preparation().last_batch, 2);
+        let state = &bridge.staged_ref().unwrap().state;
+        let parts = state
+            .projector
+            .resources()
+            .static_meshes
+            .iter()
+            .filter(|mesh| mesh.deferred && mesh.asset != kept_asset)
+            .count();
+        assert_eq!(parts, 2);
+        bridge.end_call();
+    }
+
+    #[test]
+    fn a_partition_destroyed_while_cut_and_a_failed_cut_hold_nothing() {
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        bridge.begin_call();
+        let material = plain_material(&mut bridge);
+        let source = two_cell_mesh(&mut bridge, material, false);
+        let dropped = partition_of(&mut bridge, partition_request(source, 1.0, true));
+        let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+        assert_eq!(
+            unsafe {
+                crate::render_resources::destroy_mesh_partition(
+                    context,
+                    dropped,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        // A zero cell cannot be cut; the call does not check it.
+        let failing = partition_of(&mut bridge, partition_request(source, 0.0, true));
+        bridge.destroy_mesh_resource(source).unwrap();
+        bridge.end_call();
+
+        wait_for_cuts(&bridge);
+        bridge.begin_call();
+        assert!(bridge.partition_cuts.is_empty(), "both cuts were taken in");
+        let readout = bridge.resource_preparation();
+        assert_eq!(readout.completed_batch, readout.last_batch);
+        assert_eq!(
+            (readout.pending_resources, readout.failed_resources),
+            (0, 1)
+        );
+        assert!(read_partition(&mut bridge, dropped).is_err(), "gone");
+        let failure = read_partition(&mut bridge, failing).unwrap_err();
+        assert!(
+            failure.detail().contains("could not be cut"),
+            "{}",
+            failure.detail()
+        );
+        assert_eq!(take_part(&mut bridge, failing, 0), 0);
+        // The failed partition still holds its material until destroyed.
+        assert!(bridge.destroy_material(material).is_err());
+        let context = (&mut bridge as *mut RuntimeAppearanceBridge).cast();
+        assert_eq!(
+            unsafe {
+                crate::render_resources::destroy_mesh_partition(
+                    context,
+                    failing,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        bridge.destroy_material(material).unwrap();
+        bridge.end_call();
     }
 
     #[test]
@@ -12862,6 +13202,7 @@ pub(super) mod tests {
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
             billboard: false,
+            deferred: false,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(&mut bridge, &request) }

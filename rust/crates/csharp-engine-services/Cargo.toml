@@ -44,5 +44,9 @@ voxel-asset.workspace = true
 voxel-annotation.workspace = true
 voxel-object-runtime.workspace = true
 
+[target.'cfg(windows)'.dependencies]
+# A deferred mesh partition's cut thread runs below normal priority.
+windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
+
 [dev-dependencies]
 tempfile.workspace = true

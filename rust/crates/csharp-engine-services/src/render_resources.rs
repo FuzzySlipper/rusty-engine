@@ -1247,6 +1247,32 @@ struct GeneratedMesh {
 struct GeneratedMeshPartition {
     parts: Vec<Option<Arc<StaticMeshAsset>>>,
     material_handles: BTreeSet<u64>,
+    cut: Cut,
+}
+
+/// How far a partition's cut is.
+#[derive(Clone)]
+enum Cut {
+    Ready,
+    /// A worker is cutting it for this preparation batch.
+    Cutting(u64),
+    Failed(&'static str),
+}
+
+/// The parts a cut makes, in partition order.
+type CutParts = Vec<Option<Arc<StaticMeshAsset>>>;
+
+/// A deferred partition being cut on a worker.
+pub(crate) struct PartitionCut {
+    partition: u64,
+    worker: std::thread::JoinHandle<Result<CutParts, &'static str>>,
+}
+
+impl PartitionCut {
+    #[cfg(test)]
+    pub(crate) fn is_finished(&self) -> bool {
+        self.worker.is_finished()
+    }
 }
 
 /// A bound generated mesh that has passed every admission check.
@@ -1318,6 +1344,7 @@ impl GeneratedMeshes {
         slots: BTreeSet<u16>,
         bindings: &[NativeMeshMaterialBinding],
         material_id: impl Fn(u64) -> Option<String>,
+        deferred: bool,
     ) -> Result<BoundGeneratedMesh, CsharpEngineServicesError> {
         let invalid =
             |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_ADMISSION", message);
@@ -1349,7 +1376,7 @@ impl GeneratedMeshes {
             payload,
             material_slots,
             collision: MeshCollisionPolicy::VisualOnly,
-            deferred: false,
+            deferred,
         };
         definition
             .validate()
@@ -1382,38 +1409,79 @@ impl GeneratedMeshes {
         &mut self,
         request: NativeMeshPartitionRequest,
     ) -> Result<NativeMeshPartitionHandle, CsharpEngineServicesError> {
-        let invalid =
-            |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", message);
-        let source = self
-            .resources
-            .get(&request.source.value)
-            .ok_or_else(|| invalid("partition source mesh is not live"))?;
-        let definition = &source.definition;
-        let payloads = partition_mesh_spatially(
-            &definition.payload,
+        let source = self.partition_source(request.source)?;
+        let parts = cut_parts(
+            &source.definition,
             native_vec3_array(request.origin),
             native_vec3_array(request.cell_size),
+            false,
         )
-        .map_err(invalid)?;
-        let parts = payloads
-            .into_iter()
-            .map(|payload| {
-                let used: BTreeSet<_> = payload.groups.iter().map(|g| g.material_slot).collect();
-                Some(Arc::new(StaticMeshAsset {
-                    asset: String::new(),
-                    payload,
-                    material_slots: definition
-                        .material_slots
-                        .iter()
-                        .filter(|m| used.contains(&m.slot))
-                        .cloned()
-                        .collect(),
-                    collision: MeshCollisionPolicy::VisualOnly,
-                    deferred: false,
-                }))
-            })
-            .collect();
+        .map_err(|message| CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", message))?;
         let material_handles = source.material_handles.clone();
+        Ok(self.insert_partition(parts, material_handles, Cut::Ready))
+    }
+
+    /// A deferred partition of a live mesh, cut later for `batch`: its
+    /// handle, and the source definition the worker cuts.
+    fn begin_cut(
+        &mut self,
+        source: NativeMeshResourceHandle,
+        batch: u64,
+    ) -> Result<(NativeMeshPartitionHandle, Arc<StaticMeshAsset>), CsharpEngineServicesError> {
+        let source = self.partition_source(source)?;
+        let definition = Arc::clone(&source.definition);
+        let material_handles = source.material_handles.clone();
+        let handle = self.insert_partition(Vec::new(), material_handles, Cut::Cutting(batch));
+        Ok((handle, definition))
+    }
+
+    /// Takes in a finished cut; whether it failed. A partition destroyed
+    /// while it was cut is gone, and its parts with it.
+    fn finish_cut(&mut self, partition: u64, cut: Result<CutParts, &'static str>) -> bool {
+        let Some(prepared) = self.partitions.get_mut(&partition) else {
+            return false;
+        };
+        match cut {
+            Ok(parts) => {
+                prepared.parts = parts;
+                prepared.cut = Cut::Ready;
+                false
+            }
+            Err(reason) => {
+                prepared.cut = Cut::Failed(reason);
+                true
+            }
+        }
+    }
+
+    /// The batches of the partitions still being cut.
+    fn cutting(&self) -> impl Iterator<Item = u64> + '_ {
+        self.partitions
+            .values()
+            .filter_map(|partition| match partition.cut {
+                Cut::Cutting(batch) => Some(batch),
+                _ => None,
+            })
+    }
+
+    fn partition_source(
+        &self,
+        source: NativeMeshResourceHandle,
+    ) -> Result<&GeneratedMesh, CsharpEngineServicesError> {
+        self.resources.get(&source.value).ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_MESH_PARTITION",
+                "partition source mesh is not live",
+            )
+        })
+    }
+
+    fn insert_partition(
+        &mut self,
+        parts: CutParts,
+        material_handles: BTreeSet<u64>,
+        cut: Cut,
+    ) -> NativeMeshPartitionHandle {
         let handle = self.next_partition;
         self.next_partition = handle + 1;
         self.count_materials(&material_handles, true);
@@ -1422,21 +1490,32 @@ impl GeneratedMeshes {
             GeneratedMeshPartition {
                 parts,
                 material_handles,
+                cut,
             },
         );
-        Ok(NativeMeshPartitionHandle { value: handle })
+        NativeMeshPartitionHandle { value: handle }
     }
 
-    fn read_partition(
+    pub(crate) fn read_partition(
         &self,
         partition: NativeMeshPartitionHandle,
     ) -> Result<NativeMeshPartitionReadout, CsharpEngineServicesError> {
-        let prepared = self.partitions.get(&partition.value).ok_or_else(|| {
-            CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", "mesh partition is not live")
-        })?;
-        Ok(NativeMeshPartitionReadout {
-            part_count: prepared.parts.len() as u32,
-        })
+        let invalid =
+            |message: &str| CsharpEngineServicesError::new("CSHARP_MESH_PARTITION", message);
+        let prepared = self
+            .partitions
+            .get(&partition.value)
+            .ok_or_else(|| invalid("mesh partition is not live"))?;
+        match prepared.cut {
+            Cut::Ready => Ok(NativeMeshPartitionReadout {
+                part_count: prepared.parts.len() as u32,
+                ready: true,
+            }),
+            Cut::Cutting(_) => Ok(NativeMeshPartitionReadout::default()),
+            Cut::Failed(reason) => Err(invalid(&format!(
+                "the deferred mesh partition could not be cut: {reason}"
+            ))),
+        }
     }
 
     fn take_part(
@@ -1449,6 +1528,19 @@ impl GeneratedMeshes {
             .partitions
             .get_mut(&request.partition.value)
             .ok_or_else(|| invalid("mesh partition is not live"))?;
+        match prepared.cut {
+            Cut::Ready => {}
+            Cut::Cutting(_) => {
+                return Err(invalid(
+                    "the deferred mesh partition is still being cut: take its parts once ReadMeshPartition says it is ready",
+                ))
+            }
+            Cut::Failed(reason) => {
+                return Err(invalid(&format!(
+                    "the deferred mesh partition could not be cut: {reason}"
+                )))
+            }
+        }
         let part = prepared
             .parts
             .get_mut(request.index as usize)
@@ -1511,6 +1603,130 @@ impl GeneratedMeshes {
     }
 }
 
+/// Cuts a mesh into its parts by `cell_size` cells from `origin`; each part
+/// keeps the material slots its groups use. `deferred` parts are uploaded off
+/// the update once taken.
+fn cut_parts(
+    definition: &StaticMeshAsset,
+    origin: [f32; 3],
+    cell_size: [f32; 3],
+    deferred: bool,
+) -> Result<CutParts, &'static str> {
+    let payloads = partition_mesh_spatially(&definition.payload, origin, cell_size)?;
+    Ok(payloads
+        .into_iter()
+        .map(|payload| {
+            let used: BTreeSet<_> = payload.groups.iter().map(|g| g.material_slot).collect();
+            Some(Arc::new(StaticMeshAsset {
+                asset: String::new(),
+                payload,
+                material_slots: definition
+                    .material_slots
+                    .iter()
+                    .filter(|m| used.contains(&m.slot))
+                    .cloned()
+                    .collect(),
+                collision: MeshCollisionPolicy::VisualOnly,
+                deferred,
+            }))
+        })
+        .collect())
+}
+
+/// Starts cutting a partition off the update for this call's preparation
+/// batch. The worker keeps its own reference to the source definition.
+fn partition_deferred(
+    bridge: &mut RuntimeAppearanceBridge,
+    request: NativeMeshPartitionRequest,
+) -> Result<NativeMeshPartitionHandle, CsharpEngineServicesError> {
+    bridge.join_preparation_batch()?;
+    let batch = bridge.preparation_batch();
+    let (handle, source) = bridge
+        .staged_mut()?
+        .state
+        .generated_meshes
+        .begin_cut(request.source, batch)?;
+    let (origin, cell_size) = (
+        native_vec3_array(request.origin),
+        native_vec3_array(request.cell_size),
+    );
+    let worker = std::thread::Builder::new()
+        .name("rusty-mesh-partition".to_owned())
+        .spawn(move || {
+            cut_below_normal();
+            cut_parts(&source, origin, cell_size, true)
+        })
+        .map_err(|error| {
+            CsharpEngineServicesError::new(
+                "CSHARP_MESH_PARTITION",
+                format!("no worker thread to cut the mesh: {error}"),
+            )
+        })?;
+    bridge.partition_cuts.push(PartitionCut {
+        partition: handle.value,
+        worker,
+    });
+    Ok(handle)
+}
+
+/// On Windows a cut runs below normal priority, as the heightfield samplers
+/// do (#10718), so a level build leaves the update and the window their
+/// cores. Elsewhere a lowered thread may not be raised again; the thread ends
+/// with its cut, but it is left as it is.
+#[cfg(windows)]
+fn cut_below_normal() {
+    use windows_sys::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
+    // SAFETY: the current thread's pseudo-handle is always valid and is not
+    // closed. A refusal leaves the thread at normal priority.
+    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
+}
+
+#[cfg(not(windows))]
+fn cut_below_normal() {}
+
+impl RuntimeAppearanceBridge {
+    /// Takes in the deferred partitions cut since the last call, without
+    /// waiting for any still being cut.
+    pub(crate) fn take_in_partition_cuts(&mut self) {
+        if self.partition_cuts.is_empty() {
+            return;
+        }
+        let (finished, cutting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.partition_cuts)
+            .into_iter()
+            .partition(|cut| cut.worker.is_finished());
+        self.partition_cuts = cutting;
+        let Ok(call) = self.staged_mut() else {
+            return;
+        };
+        let mut failed = 0;
+        for cut in finished {
+            let parts = cut
+                .worker
+                .join()
+                .unwrap_or(Err("the worker cutting the mesh panicked"));
+            failed += u64::from(call.state.generated_meshes.finish_cut(cut.partition, parts));
+        }
+        self.failed_partition_cuts += failed;
+    }
+
+    /// The oldest preparation batch a partition is still being cut for, and
+    /// how many are.
+    pub(crate) fn partitions_cutting(&self) -> (Option<u64>, u32) {
+        let state = self.staged_ref().map_or(&self.state, |call| &call.state);
+        state
+            .generated_meshes
+            .cutting()
+            .fold((None, 0), |(oldest, count), batch| {
+                (
+                    Some(oldest.map_or(batch, |oldest: u64| oldest.min(batch))),
+                    count + 1,
+                )
+            })
+    }
+}
+
 /// Admits a generated mesh in the staged Graphics call. Its streams are
 /// copied before this returns, each binding names a live material, and its
 /// definition joins the renderer catalog.
@@ -1520,14 +1736,19 @@ pub(crate) unsafe fn create_generated_mesh(
 ) -> Result<NativeMeshResourceHandle, CsharpEngineServicesError> {
     let (payload, slots, bindings) = generated_mesh_payload(request)?;
     let state = &mut *bridge.staged_mut()?.state;
-    let bound = state
-        .generated_meshes
-        .bind(payload, slots, bindings, |material| {
-            state.material_id(material).map(str::to_owned)
-        })?;
+    let bound = state.generated_meshes.bind(
+        payload,
+        slots,
+        bindings,
+        |material| state.material_id(material).map(str::to_owned),
+        request.deferred,
+    )?;
     let handle = bound.handle;
     let definition = state.generated_meshes.insert(bound);
     state.project_static_mesh(definition);
+    if request.deferred {
+        defer_publication(bridge)?;
+    }
     Ok(NativeMeshResourceHandle { value: handle })
 }
 
@@ -1545,6 +1766,16 @@ pub(crate) fn copy_inline_mesh_geometry(
         )
     })?;
     staged.state.generated_meshes.copy_inline(resource)
+}
+
+/// A deferred mesh joins this call's preparation batch and is published when
+/// the call ends, whether or not an object shows it yet.
+fn defer_publication(
+    bridge: &mut RuntimeAppearanceBridge,
+) -> Result<(), CsharpEngineServicesError> {
+    bridge.join_preparation_batch()?;
+    bridge.staged_mut()?.reconcile_resources = true;
+    Ok(())
 }
 
 pub(crate) unsafe extern "C" fn create_mesh_resource(
@@ -1571,6 +1802,9 @@ pub(crate) unsafe extern "C" fn partition_mesh(
 ) -> i32 {
     appearance_operation(context, operation_error, || {
         animation_result(context, result, |bridge| {
+            if request.deferred {
+                return partition_deferred(bridge, request);
+            }
             bridge
                 .staged_mut()?
                 .state
@@ -1607,7 +1841,11 @@ pub(crate) unsafe extern "C" fn take_mesh_partition_part(
         animation_result(context, result, |bridge| {
             let state = &mut *bridge.staged_mut()?.state;
             let (handle, definition) = state.generated_meshes.take_part(request)?;
+            let deferred = definition.deferred;
             state.project_static_mesh(definition);
+            if deferred {
+                defer_publication(bridge)?;
+            }
             Ok(handle)
         })
     })
@@ -2583,9 +2821,13 @@ pub(crate) mod tests {
         request: &NativeMeshResourceCreateRequest,
     ) -> Result<NativeMeshResourceHandle, CsharpEngineServicesError> {
         let (payload, slots, bindings) = unsafe { generated_mesh_payload(request) }?;
-        let bound = meshes.bind(payload, slots, bindings, |material| {
-            (material == MATERIAL.value).then(|| "material/runtime-1".to_owned())
-        })?;
+        let bound = meshes.bind(
+            payload,
+            slots,
+            bindings,
+            |material| (material == MATERIAL.value).then(|| "material/runtime-1".to_owned()),
+            request.deferred,
+        )?;
         let handle = bound.handle;
         meshes.insert(bound);
         Ok(NativeMeshResourceHandle { value: handle })
@@ -2662,6 +2904,7 @@ pub(crate) mod tests {
             layer_palette: palette.as_ptr(),
             layer_palette_len: palette.len(),
             billboard: false,
+            deferred: false,
         };
         let resource = admit_generated(&mut meshes, &request).unwrap();
         let payload = &meshes.resources[&resource.value].definition.payload;
@@ -2769,6 +3012,7 @@ pub(crate) mod tests {
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
             billboard: false,
+            deferred: false,
         };
         let resource = admit_generated(&mut meshes, &request).unwrap();
         positions[1].x = 99.0;
@@ -2820,6 +3064,7 @@ pub(crate) mod tests {
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
             billboard: false,
+            deferred: false,
         };
         assert_eq!(
             admit_generated(&mut meshes, &unrepresentable)
@@ -2899,6 +3144,7 @@ pub(crate) mod tests {
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
             billboard: false,
+            deferred: false,
         };
 
         let resource = admit_generated(&mut meshes, &request).unwrap();

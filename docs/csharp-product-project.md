@@ -733,7 +733,8 @@ bool drawn = engine.Graphics.ReadResourcePreparation().CompletedBatch >= batch;
   never goes back, even when the renderer is rebuilt and prepares the committed
   world again.
 - `PendingResources`: the deferred textures and meshes the renderer had not
-  taken in as of the start of this call.
+  taken in as of the start of this call, and the deferred mesh partitions still
+  being cut ([deferred partitions](csharp-lifecycle.md#runtime-generated-geometry)).
 - `FailedResources`: those that could not be prepared, for example a PNG that
   does not decode. The renderer's skipped ops name why, and whatever draws a
   failed resource draws as it would for one the renderer could not realize.

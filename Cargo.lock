@@ -2030,6 +2030,7 @@ dependencies = [
  "voxel-annotation",
  "voxel-asset",
  "voxel-object-runtime",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

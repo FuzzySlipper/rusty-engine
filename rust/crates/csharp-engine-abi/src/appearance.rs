@@ -1041,6 +1041,14 @@ pub struct NativeMeshPartitionRequest {
     pub source: NativeMeshResourceHandle,
     pub origin: NativeVec3,
     pub cell_size: NativeVec3,
+    /// The mesh is cut off the update, on a worker that keeps its own
+    /// reference to the source, so the source may be destroyed in the same
+    /// call. The cut joins this call's preparation batch
+    /// (`NativeResourcePreparationReadout`), and the partition's readout says
+    /// `ready` once it is taken in, at the start of a later call. Parts taken
+    /// from it are uploaded off the update too, joining the batch of the call
+    /// that takes them.
+    pub deferred: bool,
 }
 
 /// Copied count of parts currently represented by a prepared mesh partition.
@@ -1050,6 +1058,9 @@ pub struct NativeMeshPartitionRequest {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeMeshPartitionReadout {
     pub part_count: u32,
+    /// The parts can be taken: always for a partition cut in its call; for a
+    /// deferred one once its cut is taken in. 0 parts until then.
+    pub ready: bool,
 }
 
 /// Selects one not-yet-consumed part from a prepared mesh partition.
@@ -1100,6 +1111,10 @@ pub struct NativeMeshResourceCreateRequest {
     /// from a copy's origin, and its material's `billboard` shades it. They
     /// cast no shadow.
     pub billboard: bool,
+    /// The streams are still copied in this call, but the mesh is uploaded
+    /// off the update, and what draws it draws once it is ready: it joins
+    /// this call's preparation batch (`NativeResourcePreparationReadout`).
+    pub deferred: bool,
 }
 
 #[repr(C)]

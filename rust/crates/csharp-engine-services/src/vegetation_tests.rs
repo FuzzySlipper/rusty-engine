@@ -115,6 +115,7 @@ fn blade(api: &NativeEngineApi, material: NativeMaterialHandle) -> NativeAppeara
         layer_palette: std::ptr::null(),
         layer_palette_len: 0,
         billboard: false,
+        deferred: false,
     };
     let graphics = &api.graphics;
     let mut resource = NativeMeshResourceHandle::default();

@@ -398,6 +398,7 @@ impl RuntimeImplicitBridge {
             layer_palette: std::ptr::null(),
             layer_palette_len: 0,
             billboard: false,
+            deferred: false,
         };
         let appearance = self
             .appearance

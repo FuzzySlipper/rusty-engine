@@ -386,6 +386,31 @@ public readonly partial record struct MeshResourceCreateRequest
         : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, LayerWeights, LayerPalette, false)
     {
     }
+
+    /// <summary>A mesh uploaded in the call; set <c>Deferred</c> to upload it off the update.</summary>
+    public MeshResourceCreateRequest(
+        ReadOnlyMemory<Vector3> Positions,
+        ReadOnlyMemory<Vector3> Normals,
+        ReadOnlyMemory<Vector2> Uvs,
+        ReadOnlyMemory<Color> Colors,
+        ReadOnlyMemory<uint> Indices,
+        ReadOnlyMemory<MeshGroup> Groups,
+        ReadOnlyMemory<MeshMaterialBinding> Bindings,
+        ReadOnlyMemory<Vector4> LayerWeights,
+        ReadOnlyMemory<uint> LayerPalette,
+        bool Billboard)
+        : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, LayerWeights, LayerPalette, Billboard, false)
+    {
+    }
+}
+
+public readonly partial record struct MeshPartitionRequest
+{
+    /// <summary>A partition cut in the call; set <c>Deferred</c> to cut it off the update.</summary>
+    public MeshPartitionRequest(MeshResource Source, Vector3 Origin, Vector3 CellSize)
+        : this(Source, Origin, CellSize, false)
+    {
+    }
 }
 
 public readonly partial record struct SpriteAppearanceRequest

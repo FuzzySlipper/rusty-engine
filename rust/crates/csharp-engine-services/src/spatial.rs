@@ -7672,6 +7672,7 @@ mod tests {
                         layer_palette: std::ptr::null(),
                         layer_palette_len: 0,
                         billboard: false,
+                        deferred: false,
                     },
                     &mut mesh,
                     std::ptr::null_mut(),

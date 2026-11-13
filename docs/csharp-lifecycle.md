@@ -584,6 +584,36 @@ untaken sections; taken meshes remain independently owned. The source mesh may
 be released after preparation or retained as the unchanged collision source.
 Partitioning does not perform occlusion culling or promise fewer draw calls.
 
+A generated level too big for one update builds its streams on the
+[worker lane](world-streaming-contract.md#engine-call-affinity), then creates
+and cuts its mesh off the update. `MeshResourceCreateRequest` with
+`Deferred = true` still copies the streams in the call, but uploads the mesh on
+the renderer's workers, joining the call's preparation batch as a deferred
+content mesh does ([deferred textures and meshes](csharp-product-project.md#deferred-textures-and-meshes)).
+`MeshPartitionRequest` with `Deferred: true` returns the partition at once and
+cuts it on a worker (below normal priority on Windows) that keeps its own
+reference to the source, so the source may be disposed in the same call; a
+source made and disposed in one call is never uploaded. The cut joins the
+call's preparation batch, and `ReadMeshPartition` says `Ready`, with its
+`PartCount`, from the start of a later call that took the cut in. Until then
+`TakeMeshPartitionPart` is refused. Parts taken from a deferred partition are
+uploaded off the update too, in the batch of the call that takes them:
+
+```csharp
+// The update that takes the job's streams:
+using (MeshResource whole = engine.Graphics.CreateMeshResource(streams.Request(material) with { Deferred = true }))
+    partition = engine.Graphics.PartitionMesh(new MeshPartitionRequest(whole, origin, cellSize, Deferred: true));
+// A later update, once ReadMeshPartition(partition).Ready: take the parts and
+// create their appearances, then note the batch.
+ulong batch = engine.Graphics.ReadResourcePreparation().LastBatch;
+// Show the level once ReadResourcePreparation().CompletedBatch >= batch.
+```
+
+A cut that fails (a zero cell size) counts in `FailedResources`, and
+`ReadMeshPartition` then refuses with the reason. Disposing a partition still
+being cut drops its parts when the cut ends. See the
+[level build fixture](../fixtures/csharp-level-build/README.md).
+
 Remove appearances from the published set before disposing them, then
 dispose their mesh resource. Dispose bound materials after their resources and
 appearances. The Engine releases unused mesh definitions and GPU geometry.
