@@ -1033,6 +1033,17 @@ internal static class Emit
                 {
                     EmitBorrowedSpanElementMarshalling(output, model, requestArgument, field);
                 }
+                else if (field.Type.StartsWith("const ", StringComparison.Ordinal) && HasSafeLayout(model, BindingModel.Bare(field.Type)))
+                {
+                    // The caller's elements are already in the native layout, and the native side
+                    // reads request streams only during the call, so they are pinned for the call
+                    // and passed as they are.
+                    string safeElement = SafeType(BindingModel.Bare(field.Type));
+                    string span = safeElement == rawElement ? $"{requestArgument}.{property}.Span" : $"MemoryMarshal.Cast<{safeElement}, {rawElement}>({requestArgument}.{property}.Span)";
+                    output.AppendLine($"        fixed ({rawElement}* {field.Name}Pointer = {span})").AppendLine("        {");
+                    closers.Add("        }");
+                    continue;
+                }
                 else
                 {
                     output.AppendLine($"        var {field.Name}Span = {requestArgument}.{property}.Span;");
@@ -1098,6 +1109,40 @@ internal static class Emit
         }
         output.AppendLine("    }").AppendLine();
         return output.ToString();
+    }
+
+    /// <summary>
+    /// Native structs whose safe type has the same fields in the same order, so an array of one is
+    /// an array of the other. The System.Numerics types are sequential floats; Color is this
+    /// generator's positional record of NativeColor's fields, and its handwritten partial adds only
+    /// methods. Other generated records are left out: a handwritten partial beside one could add a
+    /// field the generator cannot see.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> SameLayoutStructs = new(StringComparer.Ordinal)
+    {
+        ["NativeVec2"] = ["x", "y"],
+        ["NativeVec3"] = ["x", "y", "z"],
+        ["NativeVec4"] = ["x", "y", "z", "w"],
+        ["NativeQuat"] = ["x", "y", "z", "w"],
+        ["NativeColor"] = ["r", "g", "b", "a"],
+    };
+
+    /// <summary>
+    /// Whether a stream of the safe element type can be passed to native as it is: a primitive the
+    /// safe and raw surfaces spell alike (not bool, which is a byte natively), or one of
+    /// <see cref="SameLayoutStructs"/>, whose declaration is checked here at generation time
+    /// (clang gives field offsets in bits).
+    /// </summary>
+    private static bool HasSafeLayout(BindingModel model, string native)
+    {
+        if (native is "int16_t" or "int" or "int32_t" or "int64_t" or "uint16_t" or "uint32_t" or "uint64_t" or "size_t" or "float" or "double" or "uint8_t") return true;
+        if (!SameLayoutStructs.TryGetValue(native, out string[]? names)) return false;
+        Struct value = model.Structs[native];
+        bool same = value.Size == 4L * names.Length
+            && value.Fields.Count == names.Length
+            && value.Fields.Select((field, index) => field.Name == names[index] && BindingModel.Bare(field.Type) == "float" && field.Array is null && field.Offset == 32L * index).All(match => match);
+        if (!same) throw new InvalidOperationException($"{native} is no longer {names.Length} packed floats ({string.Join(", ", names)}), so its safe type's layout no longer matches it.");
+        return true;
     }
 
     private static bool BorrowedSpanElementHasImmediateFields(BindingModel model, string element) =>

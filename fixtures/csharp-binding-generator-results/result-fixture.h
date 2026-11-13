@@ -17,6 +17,7 @@ typedef struct NativeVec2 { float x; float y; } NativeVec2;
 typedef struct NativeVec3 { float x; float y; float z; } NativeVec3;
 typedef struct NativeVec4 { float x; float y; float z; float w; } NativeVec4;
 typedef struct NativeQuat { float x; float y; float z; float w; } NativeQuat;
+typedef struct NativeColor { float r; float g; float b; float a; } NativeColor;
 typedef struct NativeAnimationFeedbackText {
   uint8_t bytes[96];
   size_t len;
@@ -35,6 +36,15 @@ typedef struct NativeReplaceResultFixtureTagsRequest {
   const NativeResultFixtureTag *tags;
   size_t tags_len;
 } NativeReplaceResultFixtureTagsRequest;
+
+typedef struct NativeReplaceResultFixtureStreamsRequest {
+  const NativeVec3 *points;
+  size_t points_len;
+  const NativeColor *colors;
+  size_t colors_len;
+  const uint32_t *indices;
+  size_t indices_len;
+} NativeReplaceResultFixtureStreamsRequest;
 
 typedef struct NativeResultFixtureItem {
   NativeUtf8Slice label;
@@ -96,6 +106,7 @@ typedef int32_t (*NativeReadOwnedFixture)(void *, NativeOwnedFixtureInfo *);
 typedef int32_t (*NativeReadInvalidOwnedFixture)(void *, NativeOwnedFixtureInfo *);
 typedef int32_t (*NativeReadOptionalOwnedFixture)(void *, uint32_t, NativeOptionalOwnedFixtureReceipt *);
 typedef int32_t (*NativeReplaceResultFixtureTags)(void *, const NativeReplaceResultFixtureTagsRequest *);
+typedef int32_t (*NativeReplaceResultFixtureStreams)(void *, const NativeReplaceResultFixtureStreamsRequest *);
 typedef int32_t (*NativeDestroyOwnedFixture)(void *, NativeOwnedFixtureHandle);
 
 typedef struct NativeResultFixtureApi {
@@ -105,6 +116,7 @@ typedef struct NativeResultFixtureApi {
   NativeReadInvalidOwnedFixture read_invalid_owned_fixture;
   NativeReadOptionalOwnedFixture read_optional_owned_fixture;
   NativeReplaceResultFixtureTags replace_tags;
+  NativeReplaceResultFixtureStreams replace_streams;
   NativeDestroyOwnedFixture destroy_owned_fixture;
 } NativeResultFixtureApi;
 

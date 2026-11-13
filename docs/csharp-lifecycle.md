@@ -609,7 +609,7 @@ ulong batch = engine.Graphics.ReadResourcePreparation().LastBatch;
 // Show the level once ReadResourcePreparation().CompletedBatch >= batch.
 ```
 
-A deferred create still copies its streams in the call, about 100 ms for a
+A deferred create still copies its streams in the call, about 70 ms for a
 million faceted triangles. A level that big keeps every update short by
 building its geometry in pieces, such as bands of rows, and creating and
 cutting whole pieces until a few milliseconds of the update are spent, then

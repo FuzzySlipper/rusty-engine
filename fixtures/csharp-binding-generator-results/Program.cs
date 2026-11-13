@@ -14,6 +14,9 @@ internal static unsafe class Program
     private static readonly List<(nint Pointer, nuint Length)> Latest = [];
     private static readonly HashSet<ulong> OwnedFixtures = [];
     private static readonly List<(string Value, byte[] Payload)> ReplacedTags = [];
+    private static readonly System.Numerics.Vector3[] StreamPoints = [new(1, 2, 3), new(4, 5, 6)];
+    private static readonly Color[] StreamColors = [new(0.25f, 0.5f, 0.75f, 1)];
+    private static int _streamsReplaced;
     private static ulong _nextOwned = 1;
     private static int _ownedFixtureDestroyed;
 
@@ -27,6 +30,7 @@ internal static unsafe class Program
             read_invalid_owned_fixture = new NativeReadInvalidOwnedFixture { Pointer = &ReadInvalidOwnedFixture },
             read_optional_owned_fixture = new NativeReadOptionalOwnedFixture { Pointer = &ReadOptionalOwnedFixture },
             replace_tags = new NativeReplaceResultFixtureTags { Pointer = &ReplaceTags },
+            replace_streams = new NativeReplaceResultFixtureStreams { Pointer = &ReplaceStreams },
             destroy_owned_fixture = new NativeDestroyOwnedFixture { Pointer = &DestroyOwnedFixture },
         };
         ResultFixtureServiceImplementation service = new(api);
@@ -63,6 +67,9 @@ internal static unsafe class Program
         Require(ReplacedTags.Count == 2, "borrowed tag input count was not delivered");
         Require(ReplacedTags[0].Value == "café" && ReplacedTags[0].Payload.SequenceEqual(new byte[] { 0x00, 0xC3, 0xA9, 0xFF }), "non-ASCII UTF-8 and byte input were not copied synchronously");
         Require(ReplacedTags[1].Value == string.Empty && ReplacedTags[1].Payload.Length == 0, "empty borrowed UTF-8 and bytes were not delivered");
+
+        service.ReplaceStreams(new ReplaceResultFixtureStreamsRequest(StreamPoints, StreamColors, ReadOnlyMemory<uint>.Empty));
+        Require(_streamsReplaced == 1, "same-layout streams were not passed to native as the caller's memory");
 
         ResultFixtureItemResult empty = service.ReadItems(new ResultFixtureRequest(0));
         Require(empty.Entries.IsEmpty, "empty result did not become an empty managed collection");
@@ -196,6 +203,20 @@ internal static unsafe class Program
             byte[] payload = tag.payload.len == 0 ? [] : new ReadOnlySpan<byte>(tag.payload.bytes, checked((int)tag.payload.len)).ToArray();
             ReplacedTags.Add((value, payload));
         }
+        return 1;
+    }
+
+    // Streams whose safe elements have the native layout arrive as the caller's own pinned arrays.
+    [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
+    private static int ReplaceStreams(void* _, NativeReplaceResultFixtureStreamsRequest* request)
+    {
+        if (request is null) return 0;
+        bool points = request->points_len == 2 && request->points == Unsafe.AsPointer(ref StreamPoints[0])
+            && request->points[1].x == 4 && request->points[1].y == 5 && request->points[1].z == 6;
+        bool colors = request->colors_len == 1 && request->colors == Unsafe.AsPointer(ref StreamColors[0])
+            && request->colors[0].r == 0.25f && request->colors[0].g == 0.5f && request->colors[0].b == 0.75f && request->colors[0].a == 1;
+        bool indices = request->indices_len == 0 && request->indices is null;
+        if (points && colors && indices) _streamsReplaced++;
         return 1;
     }
 

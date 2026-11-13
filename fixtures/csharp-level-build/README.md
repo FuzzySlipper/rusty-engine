@@ -13,7 +13,7 @@ and shows it in 32 m parts. Two modes:
   take all the parts (913, deferred) and create their appearances. Once
   `ReadResourcePreparation().CompletedBatch` reaches that call's batch, show
   them. A band's streams are copied in the call that creates it, so the bands
-  keep that copy, about 100 ms for the whole level, from landing in one
+  keep that copy, about 70 ms for the whole level, from landing in one
   update.
 
 Until a build is ready the previous level, or nothing, is shown. A block turns
