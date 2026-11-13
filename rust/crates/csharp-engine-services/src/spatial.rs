@@ -2789,7 +2789,8 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeCollisionNavigationReplaceRequest,
     ) -> Result<NativeCollisionNavigationReplaceReceipt, CsharpEngineServicesError> {
-        self.settle_deferred(request.session)?;
+        // Checking the request reads no session state; only a synchronous
+        // derivation installs the deferred batches first (below).
         let (world_min, world_max) = (
             native_vec3_value(request.world_min),
             native_vec3_value(request.world_max),

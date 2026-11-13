@@ -220,6 +220,57 @@ fn a_deferred_grid_installs_what_a_synchronous_one_publishes_and_the_previous_an
 }
 
 #[test]
+fn a_deferred_grid_neither_waits_for_nor_includes_a_deferred_collision_batch() {
+    let (mut bridge, session) = bridge_with(terrain());
+    // A floor tile 6 m up over the terrain, admitted deferred and not yet
+    // installed.
+    collision_residency(
+        &mut bridge,
+        session,
+        &[0],
+        &[placed(1, 0)],
+        &[],
+        &[],
+        6.0,
+        true,
+    )
+    .unwrap();
+    bridge
+        .replace_collision_navigation(&request(session, WIDTH, true))
+        .unwrap();
+    assert!(!bridge.sessions[&session.value].static_deferred.is_empty());
+    assert_eq!(
+        bridge
+            .read_collision_residency(NativeCollisionResidencyReadRequest { session })
+            .unwrap()
+            .pending_batches,
+        1
+    );
+    settle(&mut bridge, session);
+    settle_collision(&mut bridge, session);
+
+    // The grid is the collision as it was at the call, without the tile.
+    let (mut before, before_session) = bridge_with(terrain());
+    before
+        .replace_collision_navigation(&request(before_session, WIDTH, false))
+        .unwrap();
+    assert_eq!(
+        installed(&bridge, session),
+        installed(&before, before_session)
+    );
+    // The tile is live now, and a publication over it differs.
+    let (mut after, after_session) =
+        bridge_with(Arc::clone(&bridge.sessions[&session.value].scene));
+    after
+        .replace_collision_navigation(&request(after_session, WIDTH, false))
+        .unwrap();
+    assert_ne!(
+        installed(&after, after_session),
+        installed(&before, before_session)
+    );
+}
+
+#[test]
 fn a_collision_edit_while_deriving_is_rederived_by_the_next_publication() {
     let (mut bridge, session) = bridge_with(terrain());
     bridge
