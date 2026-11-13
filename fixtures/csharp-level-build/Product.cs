@@ -14,7 +14,7 @@ namespace CsharpLevelBuild;
 /// source destroyed in the same call, a few bands an update, and the parts taken deferred. The
 /// update's pacing is recorded while it builds.
 /// </summary>
-public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
+public sealed partial class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
     // 289² blocks of 12 triangles: 1,002,252 triangles, 3,006,756 vertices.
     private const int DefaultBlocksPerSide = 289;
@@ -109,6 +109,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             Advance(current);
         }
 
+        UpdateNavigation();
         Publish();
         if (build is { } measured)
         {
@@ -121,6 +122,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             }
         }
 
+        MeasureNavigation(entered);
         return ProductUpdateResult.None;
     }
 
@@ -212,6 +214,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public string Start(string mode = "deferred", int blocksPerSide = DefaultBlocksPerSide)
     {
         if (build is not null) return "a build is running; build.cancel first";
+        if (navigating is not null) return "navigation is running";
         Clear();
         Build next = new(mode == "inline" ? Mode.Inline : Mode.Deferred, blocksPerSide, Stopwatch.GetTimestamp());
         // An inline build runs whole in the next update; a deferred one starts its job now.
@@ -310,6 +313,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         foreach (MeshPartition partition in build?.Partitions ?? []) partition.Dispose();
         build = null;
+        DisposeNavigation();
         Clear();
     }
 
@@ -319,6 +323,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         build?.Job?.Dispose();
         foreach (MeshPartition partition in build?.Partitions ?? []) partition.Dispose();
+        DisposeNavigation();
         Clear();
         marker.Dispose();
         markerMesh.Dispose();

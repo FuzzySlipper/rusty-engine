@@ -13,7 +13,7 @@ use std::{
     ops::RangeInclusive,
     rc::Rc,
     sync::{
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc, Mutex, PoisonError, Weak,
     },
     time::Instant,
@@ -21,8 +21,9 @@ use std::{
 
 use crate::operation_diagnostics::{clear_receipt, refuse};
 use collision_navigation::{
-    derive_collision_navigation, CollisionNavigationCache, CollisionNavigationGraph,
-    CollisionNavigationPolicy, ColumnBounds, SceneRevisions, SupportSnap,
+    derive_collision_navigation, ChangesSince, CollisionNavigationCache, CollisionNavigationDelta,
+    CollisionNavigationGraph, CollisionNavigationPolicy, ColumnBounds, Lane, SceneRevisions,
+    SupportSnap,
 };
 use core_ids::EntityId;
 use core_math::{Vec2, Vec3};
@@ -517,6 +518,128 @@ struct NavigationGrid {
     cache: Option<CollisionNavigationCache>,
 }
 
+/// What turns a derivation's delta into a grid, besides the delta.
+#[derive(Clone, Copy)]
+struct GridFinish {
+    grid: VoxelGridSpec,
+    policy: PlanarNavNeighborPolicy,
+    step_height: f64,
+    cell_size: f64,
+    snap: SupportSnap,
+}
+
+impl GridFinish {
+    /// The grid `delta` describes, applied to the cache it was derived
+    /// against and the graph installed from it (in place) when there are
+    /// those, with its components labelled and hashed. Its receipt's time
+    /// runs from `started`.
+    fn build(
+        self,
+        delta: CollisionNavigationDelta,
+        previous: Option<CollisionNavigationCache>,
+        installed: Option<CollisionNavigationGraph>,
+        started: Instant,
+    ) -> DerivedGrid {
+        let (derived_columns, reused_columns, edge_tests) = (
+            delta.derived_columns(),
+            delta.reused_columns(),
+            delta.edge_tests(),
+        );
+        let (cache, graph) = delta.apply(self.grid, previous, installed);
+        let CollisionNavigationGraph {
+            projection,
+            supports: support_heights,
+            centers: cell_centers,
+            edge_admission,
+            jumps,
+        } = graph;
+        let components = NavComponents::label(&projection, &edge_admission, self.policy);
+        let projection_hash = collision_navigation_projection_hash(&projection, &edge_admission);
+        // Supports standing off their column's centre keep their cells:
+        // positions still map to cells by column.
+        let vertical_mapping = NavigationVerticalMapping::new(
+            self.cell_size,
+            support_heights,
+            cell_centers,
+            false,
+            Some(self.snap),
+            false,
+            self.cell_size,
+        );
+        let receipt = NativeCollisionNavigationReplaceReceipt {
+            walkable_cell_count: projection.walkable_len() as u64,
+            projection_hash,
+            navigation_revision: 0,
+            derived_column_count: derived_columns,
+            reused_column_count: reused_columns,
+            edge_test_count: edge_tests,
+            derivation_microseconds: u64::try_from(started.elapsed().as_micros())
+                .unwrap_or(u64::MAX),
+            component_count: components.len() as u64,
+            pending: false,
+        };
+        DerivedGrid {
+            cache,
+            navigation: NavigationState {
+                source: NavigationSource::CollisionDerived(receipt),
+                projection,
+                projection_hash,
+                policy: self.policy,
+                edge_admission: Some(edge_admission),
+                components: Some(components),
+                agent_height_voxels: 0,
+                require_solid_floor: true,
+                traversal: NavTraversalOverlay::empty(),
+                volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
+                vertical_mapping: Some(vertical_mapping),
+                revision: 0,
+                grid_origin: [0.0; 3],
+                edge_kinds: Some(NavigationEdgeKinds {
+                    jumps,
+                    step_height: self.step_height,
+                }),
+            },
+        }
+    }
+}
+
+/// A collision-derived grid built and ready to install; its revision is set
+/// when it installs.
+struct DerivedGrid {
+    cache: CollisionNavigationCache,
+    navigation: NavigationState,
+}
+
+/// What installing a collision-derived grid replaced.
+type ReplacedGrid = (
+    Option<CollisionNavigationCache>,
+    Option<NavigationState>,
+    SpatialContentComposition,
+);
+
+/// What a deferred derivation's worker hands back: the grid, `None` once
+/// cancelled, or why it was refused.
+type DerivationOutcome = Result<Option<DerivedGrid>, String>;
+
+/// A collision-derived grid deriving on a worker from the scene as it was at
+/// the call, and the collision changes made since.
+struct PendingDerivation {
+    /// Held for its drop.
+    _cancel: CancelOnDrop,
+    worker: std::thread::JoinHandle<DerivationOutcome>,
+    changes: ChangesSince,
+}
+
+/// Cancels a deferred derivation when its pending entry is dropped: the
+/// worker stops between runs of columns and its result is dropped.
+struct CancelOnDrop(Arc<AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 pub(crate) struct SpatialSession {
     pub(crate) scene: Arc<VoxelCollisionScene>,
     pub(crate) world_origin: engine_spatial::WorldOriginState,
@@ -528,6 +651,11 @@ pub(crate) struct SpatialSession {
     collision_navigation: Option<CollisionNavigationCache>,
     /// Other collision-derived grids, for agents of other sizes, by grid id.
     grids_beside: BTreeMap<u64, NavigationGrid>,
+    /// Collision-derived grids deriving on workers, by grid id. Dropping one
+    /// cancels it.
+    derivations: BTreeMap<u64, PendingDerivation>,
+    /// Grids whose latest deferred derivation was refused.
+    refused_derivations: BTreeSet<u64>,
     content: SpatialContentComposition,
     controller: CharacterControllerService,
     last_character_receipt: Option<CharacterControllerReceipt>,
@@ -662,6 +790,7 @@ impl SpatialSession {
         }
         self.navigation_revision += 1;
         navigation.revision = self.navigation_revision;
+        self.derivations.clear();
         let replaced = (
             std::mem::replace(&mut self.content, composition),
             self.navigation.replace(navigation),
@@ -770,6 +899,11 @@ impl SpatialSession {
         {
             cache.record_change(before, after, regions.clone());
         }
+        for pending in self.derivations.values_mut() {
+            pending
+                .changes
+                .record_change(before, after, regions.clone());
+        }
         result
     }
 
@@ -785,6 +919,8 @@ impl SpatialSession {
     ) {
         let before = SceneRevisions::of(&self.scene);
         self.scene = scene;
+        // A grid deriving now would install in the frame the scene left.
+        self.derivations.clear();
         let shift =
             [0, 1, 2].map(|axis| origin_before[axis].saturating_sub(origin_after[axis]) as f64);
         let after = SceneRevisions::of(&self.scene);
@@ -848,7 +984,7 @@ impl SpatialSession {
         let stands_beside = self
             .navigation
             .as_ref()
-            .is_some_and(|latest| matches!(latest.source, NavigationSource::CollisionDerived));
+            .is_some_and(|latest| matches!(latest.source, NavigationSource::CollisionDerived(_)));
         if forward.is_none() && !stands_beside {
             return;
         }
@@ -870,9 +1006,79 @@ impl SpatialSession {
         }
     }
 
+    /// Installs a built collision-derived grid as the latest under a new
+    /// navigation revision. Returns its receipt and what it replaced.
+    fn install_collision_grid(
+        &mut self,
+        grid_id: u64,
+        derived: DerivedGrid,
+    ) -> (NativeCollisionNavigationReplaceReceipt, ReplacedGrid) {
+        let DerivedGrid {
+            mut cache,
+            mut navigation,
+        } = derived;
+        self.bring_forward(grid_id);
+        self.navigation_revision += 1;
+        let revision = self.navigation_revision;
+        let NavigationSource::CollisionDerived(receipt) = &mut navigation.source else {
+            unreachable!("a derived grid is collision-derived");
+        };
+        receipt.navigation_revision = revision;
+        let receipt = *receipt;
+        navigation.revision = revision;
+        cache.set_installed(revision);
+        self.refused_derivations.remove(&grid_id);
+        let replaced = (
+            self.collision_navigation.replace(cache),
+            self.navigation.replace(navigation),
+            std::mem::take(&mut self.content),
+        );
+        (receipt, replaced)
+    }
+
+    /// Installs the grids whose deferred derivations are done, without
+    /// waiting for any still deriving. What they replace is freed on a
+    /// thread of its own.
+    pub(crate) fn install_derived_navigation(&mut self) {
+        let finished: Vec<u64> = self
+            .derivations
+            .iter()
+            .filter(|(_, pending)| pending.worker.is_finished())
+            .map(|(grid_id, _)| *grid_id)
+            .collect();
+        for grid_id in finished {
+            let PendingDerivation {
+                _cancel: _,
+                worker,
+                changes,
+            } = self.derivations.remove(&grid_id).expect("listed above");
+            let outcome = worker
+                .join()
+                .unwrap_or_else(|_| Err("the worker panicked".to_owned()));
+            match outcome {
+                Ok(Some(mut derived)) => {
+                    derived.cache.follow(changes);
+                    let (_, replaced) = self.install_collision_grid(grid_id, derived);
+                    // Freeing a large grid takes an update milliseconds; when
+                    // no thread can be spawned, it drops here.
+                    let _ = std::thread::Builder::new()
+                        .name("rusty-navigation-release".to_owned())
+                        .spawn(move || drop(replaced));
+                }
+                // Only a dropped entry is cancelled, and this one was not.
+                Ok(None) => {}
+                Err(reason) => {
+                    eprintln!("CSHARP_COLLISION_NAVIGATION_DEFERRED: grid {grid_id}: {reason}");
+                    self.refused_derivations.insert(grid_id);
+                }
+            }
+        }
+    }
+
     /// Clears one grid. When it was the latest, the highest grid left takes
     /// its place.
     fn clear_grid(&mut self, grid_id: u64) {
+        self.derivations.remove(&grid_id);
         if self.grids_beside.remove(&grid_id).is_some() {
             return;
         }
@@ -897,7 +1103,7 @@ impl SpatialSession {
     fn grid_info(&self, navigation: &NavigationState, latest: bool) -> NativeNavigationGridInfo {
         let cache = self
             .grid_cache(navigation.grid_id())
-            .filter(|_| matches!(navigation.source, NavigationSource::CollisionDerived));
+            .filter(|_| matches!(navigation.source, NavigationSource::CollisionDerived(_)));
         let bounds = cache.map(CollisionNavigationCache::bounds);
         let shape = cache.map(|cache| cache.key().policy.character.shape);
         NativeNavigationGridInfo {
@@ -961,7 +1167,8 @@ enum SpatialCharacterValidationError {
 enum NavigationSource {
     HostWalkableCells,
     VoxelDerived(VoxelCollisionScene),
-    CollisionDerived,
+    /// With the receipt of the publication that installed it.
+    CollisionDerived(NativeCollisionNavigationReplaceReceipt),
 }
 
 struct NavigationState {
@@ -1133,7 +1340,9 @@ impl NavigationState {
                 NativeNavigationProjectionKind::HostWalkableCells
             }
             NavigationSource::VoxelDerived(_) => NativeNavigationProjectionKind::VoxelDerived,
-            NavigationSource::CollisionDerived => NativeNavigationProjectionKind::CollisionDerived,
+            NavigationSource::CollisionDerived(_) => {
+                NativeNavigationProjectionKind::CollisionDerived
+            }
         }
     }
 
@@ -1141,7 +1350,7 @@ impl NavigationState {
         match &self.source {
             // A collision-derived surface includes meshes; its voxel subset
             // cannot describe free 3D space for volumetric navigation.
-            NavigationSource::HostWalkableCells | NavigationSource::CollisionDerived => None,
+            NavigationSource::HostWalkableCells | NavigationSource::CollisionDerived(_) => None,
             NavigationSource::VoxelDerived(scene) => Some(scene.voxel_world()),
         }
     }
@@ -1151,7 +1360,7 @@ impl NavigationState {
     fn volumetric_source_hash(&self) -> Option<u64> {
         match &self.source {
             NavigationSource::VoxelDerived(scene) => Some(scene.authority_hash()),
-            NavigationSource::HostWalkableCells | NavigationSource::CollisionDerived => None,
+            NavigationSource::HostWalkableCells | NavigationSource::CollisionDerived(_) => None,
         }
     }
 
@@ -1516,10 +1725,16 @@ impl RuntimeSpatialBridge {
         self.update_attribution = RuntimeUpdateAttribution::default();
     }
 
-    /// Install the deferred residency rebuilds built so far, as a call
-    /// begins; one still building waits for a later call and holds back
-    /// those after it. In an update, installing counts as residency time.
+    /// Install the deferred residency rebuilds built so far, and the grids
+    /// derived off the update, as a call begins; one still building waits
+    /// for a later call and holds back those after it. In an update,
+    /// installing residency counts as residency time.
     pub(crate) fn settle_deferred_residency(&mut self) {
+        for session in self.sessions.values_mut() {
+            if !session.derivations.is_empty() {
+                session.install_derived_navigation();
+            }
+        }
         let handles: Vec<_> = self
             .sessions
             .iter()
@@ -1695,6 +1910,8 @@ impl RuntimeSpatialBridge {
                 navigation_revision: 0,
                 collision_navigation: None,
                 grids_beside: BTreeMap::new(),
+                derivations: BTreeMap::new(),
+                refused_derivations: BTreeSet::new(),
                 content: SpatialContentComposition::default(),
                 controller: CharacterControllerService::default(),
                 last_character_receipt: None,
@@ -2241,6 +2458,7 @@ impl RuntimeSpatialBridge {
         session.navigation_revision = navigation_revision;
         session.navigation = Some(navigation);
         session.grids_beside.clear();
+        session.derivations.clear();
         session.content = composition;
         Ok(NativeSpatialContentArtifactReplaceReceipt {
             content_reference_value: identity.content_reference.value,
@@ -2333,6 +2551,7 @@ impl RuntimeSpatialBridge {
             touched,
         );
         session.grids_beside.clear();
+        session.derivations.clear();
         session.navigation_revision = navigation_revision;
         Ok(session.content_residency_receipt(receipt.revision_before, 0))
     }
@@ -2474,6 +2693,7 @@ impl RuntimeSpatialBridge {
             navigation_revision,
         };
         session.grids_beside.clear();
+        session.derivations.clear();
         session.navigation = Some(NavigationState {
             source: NavigationSource::HostWalkableCells,
             projection,
@@ -2541,6 +2761,7 @@ impl RuntimeSpatialBridge {
             navigation_revision,
         };
         session.grids_beside.clear();
+        session.derivations.clear();
         session.navigation = Some(NavigationState {
             source: NavigationSource::VoxelDerived(scene),
             projection,
@@ -2653,29 +2874,46 @@ impl RuntimeSpatialBridge {
             min_z: min_cell.z,
             max_z: max_cell.z,
         };
+        let world_y = [f64::from(world_min.y), f64::from(world_max.y)];
+        let grid_id = request.config.grid_id;
+        let finish = GridFinish {
+            grid,
+            policy,
+            step_height,
+            cell_size: request.config.cell_size,
+            snap,
+        };
+        if request.deferred {
+            return self.derive_collision_navigation_deferred(
+                request.session,
+                world_y,
+                navigation_policy,
+                bounds,
+                finish,
+            );
+        }
+        self.settle_deferred(request.session)?;
         let session = self.session_mut(request.session)?;
+        session.derivations.remove(&grid_id);
         let started = std::time::Instant::now();
-        let previous = match session.grids_beside.get(&request.config.grid_id) {
+        let previous = match session.grids_beside.get(&grid_id) {
             Some(beside) => beside.cache.as_ref(),
             None => session.collision_navigation.as_ref(),
         };
         let delta = derive_collision_navigation(
             &session.scene,
             grid,
-            [f64::from(world_min.y), f64::from(world_max.y)],
+            world_y,
             navigation_policy,
             bounds,
             previous,
+            Lane::Call,
         )
         .map_err(|error| {
             CsharpEngineServicesError::new("CSHARP_COLLISION_NAVIGATION_PROJECTION", error.code())
-        })?;
-        session.bring_forward(request.config.grid_id);
-        let (derived_columns, reused_columns, edge_tests) = (
-            delta.derived_columns(),
-            delta.reused_columns(),
-            delta.edge_tests(),
-        );
+        })?
+        .expect("a derivation in the call is never cancelled");
+        session.bring_forward(grid_id);
         // The installed navigation is updated in place when it is the one the
         // cache describes; nothing below can fail.
         let previous = session.collision_navigation.take();
@@ -2702,62 +2940,94 @@ impl RuntimeSpatialBridge {
                         .unwrap_or_default(),
                 })
             });
-        let (mut cache, graph) = delta.apply(grid, previous, installed);
-        let CollisionNavigationGraph {
-            projection,
-            supports: support_heights,
-            centers: cell_centers,
-            edge_admission,
-            jumps,
-        } = graph;
-        let components = NavComponents::label(&projection, &edge_admission, policy);
-        let traversal = NavTraversalOverlay::empty();
-        let session = self.session_mut(request.session)?;
-        session.navigation_revision += 1;
-        let navigation_revision = session.navigation_revision;
-        let projection_hash = collision_navigation_projection_hash(&projection, &edge_admission);
-        let receipt = NativeCollisionNavigationReplaceReceipt {
-            walkable_cell_count: projection.walkable_len() as u64,
-            projection_hash,
-            navigation_revision,
-            derived_column_count: derived_columns,
-            reused_column_count: reused_columns,
-            edge_test_count: edge_tests,
-            derivation_microseconds: u64::try_from(started.elapsed().as_micros())
-                .unwrap_or(u64::MAX),
-            component_count: components.len() as u64,
-        };
-        // Supports standing off their column's centre keep their cells:
-        // positions still map to cells by column.
-        let vertical_mapping = NavigationVerticalMapping::new(
-            request.config.cell_size,
-            support_heights,
-            cell_centers,
-            false,
-            Some(snap),
-            false,
-            request.config.cell_size,
-        );
-        cache.set_installed(navigation_revision);
-        session.collision_navigation = Some(cache);
-        session.navigation = Some(NavigationState {
-            source: NavigationSource::CollisionDerived,
-            projection,
-            projection_hash,
-            policy,
-            edge_admission: Some(edge_admission),
-            components: Some(components),
-            agent_height_voxels: 0,
-            require_solid_floor: true,
-            traversal,
-            volumetric_traversal: VolumetricNavTraversalOverlay::empty(),
-            vertical_mapping: Some(vertical_mapping),
-            revision: navigation_revision,
-            grid_origin: [0.0; 3],
-            edge_kinds: Some(NavigationEdgeKinds { jumps, step_height }),
-        });
-        session.content = SpatialContentComposition::default();
+        let derived = finish.build(delta, previous, installed, started);
+        let (receipt, _) = session.install_collision_grid(grid_id, derived);
         Ok(receipt)
+    }
+
+    /// Start deriving a collision-derived grid on a worker from the scene as
+    /// it is now; it installs at the start of a later call
+    /// ([`SpatialSession::install_derived_navigation`]).
+    fn derive_collision_navigation_deferred(
+        &mut self,
+        handle: NativeSpatialSessionHandle,
+        world_y: [f64; 2],
+        policy: CollisionNavigationPolicy,
+        bounds: ColumnBounds,
+        finish: GridFinish,
+    ) -> Result<NativeCollisionNavigationReplaceReceipt, CsharpEngineServicesError> {
+        let session = self.session_mut(handle)?;
+        let grid_id = policy.grid_id;
+        // A derivation of the grid already running is cancelled.
+        session.derivations.remove(&grid_id);
+        session.refused_derivations.remove(&grid_id);
+        let scene = Arc::clone(&session.scene);
+        let changes = ChangesSince::new(SceneRevisions::of(&scene));
+        let cancel = Arc::new(AtomicBool::new(false));
+        let worker = {
+            let cancel = Arc::clone(&cancel);
+            std::thread::Builder::new()
+                .name("rusty-collision-navigation".to_owned())
+                .spawn(move || -> DerivationOutcome {
+                    crate::worker_priority::below_normal();
+                    let started = std::time::Instant::now();
+                    let delta = derive_collision_navigation(
+                        &scene,
+                        finish.grid,
+                        world_y,
+                        policy,
+                        bounds,
+                        None,
+                        Lane::Worker(&cancel),
+                    )
+                    .map_err(|error| error.code().to_owned())?;
+                    // Collision edits stop copying the scene once it is let go.
+                    drop(scene);
+                    Ok(delta.map(|delta| finish.build(delta, None, None, started)))
+                })
+                .map_err(|error| {
+                    CsharpEngineServicesError::new(
+                        "CSHARP_COLLISION_NAVIGATION_WORKER",
+                        format!("no worker thread to derive the navigation: {error}"),
+                    )
+                })?
+        };
+        session.derivations.insert(
+            grid_id,
+            PendingDerivation {
+                _cancel: CancelOnDrop(cancel),
+                worker,
+                changes,
+            },
+        );
+        Ok(NativeCollisionNavigationReplaceReceipt {
+            pending: true,
+            ..Default::default()
+        })
+    }
+
+    /// A collision-derived grid's deferred derivation and installed receipt.
+    fn read_collision_navigation(
+        &mut self,
+        request: NativeCollisionNavigationReadRequest,
+    ) -> Result<NativeCollisionNavigationReadout, CsharpEngineServicesError> {
+        let session = self.session_mut(request.session)?;
+        let installed = match session.navigation.as_ref() {
+            Some(latest) if latest.grid_id() == request.grid_id => Some(latest),
+            _ => session
+                .grids_beside
+                .get(&request.grid_id)
+                .map(|grid| &grid.navigation),
+        };
+        let installed = match installed.map(|navigation| &navigation.source) {
+            Some(NavigationSource::CollisionDerived(receipt)) => *receipt,
+            _ => NativeCollisionNavigationReplaceReceipt::default(),
+        };
+        Ok(NativeCollisionNavigationReadout {
+            pending: session.derivations.contains_key(&request.grid_id),
+            refused: session.refused_derivations.contains(&request.grid_id),
+            installed,
+        })
     }
 
     fn replace_navigation_traversal(
@@ -3245,6 +3515,7 @@ impl RuntimeSpatialBridge {
         }
         session.navigation = None;
         session.grids_beside.clear();
+        session.derivations.clear();
         session.content = SpatialContentComposition::default();
         Ok(())
     }
@@ -5278,6 +5549,26 @@ unsafe extern "C" fn replace_spatial_collision_navigation(
     }
 }
 
+unsafe extern "C" fn read_spatial_collision_navigation(
+    context: *mut c_void,
+    request: NativeCollisionNavigationReadRequest,
+    output: *mut NativeCollisionNavigationReadout,
+    error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(error);
+    if context.is_null() || output.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeSpatialBridge>() }.read_collision_navigation(request)
+    {
+        Ok(value) => {
+            unsafe { *output = value };
+            ABI_OK
+        }
+        Err(refusal) => refuse(&refusal, error),
+    }
+}
+
 unsafe extern "C" fn replace_spatial_navigation_traversal(
     context: *mut c_void,
     request: *const NativeNavigationTraversalReplaceRequest,
@@ -5960,6 +6251,7 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         replace_navigation: replace_spatial_navigation,
         replace_voxel_navigation: replace_spatial_voxel_navigation,
         replace_collision_navigation: replace_spatial_collision_navigation,
+        read_collision_navigation: read_spatial_collision_navigation,
         replace_navigation_traversal: replace_spatial_navigation_traversal,
         clear_navigation_traversal: clear_spatial_navigation_traversal,
         replace_volumetric_navigation_traversal: replace_spatial_volumetric_navigation_traversal,
@@ -7158,6 +7450,7 @@ fn native_character_tether_fact(
 
 #[cfg(test)]
 mod tests {
+    mod deferred_navigation;
     mod heightfield_collider;
 
     use super::*;
@@ -7825,6 +8118,7 @@ mod tests {
                 maximum_cells: 32,
                 ..collision_navigation::flat_config(1.0, 1, 0.25, 1.0, 45.0)
             },
+            deferred: false,
         }
     }
 

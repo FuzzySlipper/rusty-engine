@@ -1148,6 +1148,50 @@ Reconstructed surfaces cost more than cubes because each capsule cast meets
 triangles rather than boxes, and rough facets send more level edges through the
 step solver.
 
+#### Deriving a grid off the update
+
+A large grid can take an update hundreds of milliseconds. With `Deferred` set,
+`ReplaceCollisionNavigation` checks the request (region, budget, configuration)
+and returns at once; an Engine worker derives the grid from the session's
+collision as it is at the call, then labels and hashes it. It does not wait
+for deferred collision batches or include them: to derive over a batch, wait
+until `ReadCollisionResidency` reports it complete, then make the call.
+
+```csharp
+engine.Spatial.ReplaceCollisionNavigation(new(session, worldMin, worldMax, config) with { Deferred = true });
+// Later, in any call:
+CollisionNavigationReadout grid = engine.Spatial.ReadCollisionNavigation(new(session, config.GridId));
+if (!grid.Pending) { /* grid.Installed is the publication's receipt */ }
+```
+
+- **Readiness.** The receipt says `Pending`, with every count 0. The grid
+  installs at the start of the first Engine call into the product after the
+  worker is done, under a new navigation revision and as the grid published
+  last, as a synchronous publication would. Until then the grid's previous
+  publication, or none, answers every query and explanation.
+  `ReadCollisionNavigation` names the grid by its `GridId` and reports
+  `Pending` while a derivation runs or waits to install, and `Installed`, the
+  receipt of the collision-derived publication the grid holds now (all 0 when
+  it holds none). A deferred one's `DerivationMicroseconds` is the worker's
+  time.
+- **Refusals.** A derivation that fails on the worker changes nothing; the
+  readout's `Refused` says so until the grid is published again, and the host
+  log names why.
+- **Dropped.** Disposing the session, publishing or clearing the grid again,
+  replacing every grid (`ReplaceNavigation`, `ReplaceVoxelNavigation`, content
+  navigation, `ClearNavigation` without a grid) or a world-origin rebase drops
+  a derivation still running: the worker stops within a few columns and the
+  readout reports the grid as the drop left it.
+- **Collision edits** while it derives are recorded, so the next publication
+  re-derives the columns near them. The worker reads the scene as it was, so
+  the first edit made while it does copies the session's collision once:
+  static-mesh shapes are shared, but voxel cells are copied, a few
+  milliseconds per hundred thousand solid voxels.
+- **Cost.** A deferred derivation derives every column, not only those a
+  previous publication could lend, so republishing a small change is cheaper
+  synchronous. Its worker uses one core fewer than the machine has and runs
+  below normal priority on Windows, so the update and the window keep theirs.
+
 ### Collision navigation coordinates
 
 `ReplaceCollisionNavigation` uses a **world-aligned grid with origin (0, 0, 0)**

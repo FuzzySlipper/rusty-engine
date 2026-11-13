@@ -197,6 +197,8 @@ include = [
     "NativeNavigationReplaceRequest",
     "NativeNavigationReplaceReceipt",
     "NativeCollisionNavigationReplaceReceipt",
+    "NativeCollisionNavigationReadRequest",
+    "NativeCollisionNavigationReadout",
     "NativeCollisionNavigationColumnResult",
     "NativeNavigationGridsResult",
     "NativeCollisionNavigationEdgeReadout",

@@ -276,3 +276,13 @@ public readonly partial record struct SpatialContentArtifactResidencyRequest
     {
     }
 }
+
+public readonly partial record struct CollisionNavigationReplaceRequest
+{
+    /// <summary>A grid derived and installed before the call returns.</summary>
+    public CollisionNavigationReplaceRequest(SpatialSession Session, Vector3 WorldMin, Vector3 WorldMax,
+        CollisionNavigationConfig Config)
+        : this(Session, WorldMin, WorldMax, Config, false)
+    {
+    }
+}

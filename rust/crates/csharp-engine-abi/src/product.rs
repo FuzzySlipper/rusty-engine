@@ -359,6 +359,12 @@ pub type NativeReplaceCollisionNavigation = unsafe extern "C" fn(
     *mut NativeCollisionNavigationReplaceReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeReadCollisionNavigation = unsafe extern "C" fn(
+    *mut c_void,
+    NativeCollisionNavigationReadRequest,
+    *mut NativeCollisionNavigationReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeDefaultCollisionNavigationConfig =
     unsafe extern "C" fn(*mut c_void, *mut NativeCollisionNavigationConfig) -> i32;
 pub type NativeExplainCollisionNavigationColumn = unsafe extern "C" fn(
@@ -1692,6 +1698,7 @@ pub struct NativeSpatialApi {
     pub replace_navigation: NativeReplaceNavigation,
     pub replace_voxel_navigation: NativeReplaceVoxelNavigation,
     pub replace_collision_navigation: NativeReplaceCollisionNavigation,
+    pub read_collision_navigation: NativeReadCollisionNavigation,
     pub default_collision_navigation_config: NativeDefaultCollisionNavigationConfig,
     pub explain_collision_navigation_column: NativeExplainCollisionNavigationColumn,
     pub explain_collision_navigation_edge: NativeExplainCollisionNavigationEdge,

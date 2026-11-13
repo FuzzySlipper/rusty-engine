@@ -1156,6 +1156,16 @@ pub struct NativeCollisionNavigationReplaceRequest {
     pub world_min: NativeVec3,
     pub world_max: NativeVec3,
     pub config: NativeCollisionNavigationConfig,
+    /// Check the request now and derive the grid on an Engine worker from the
+    /// session's collision as it is at the call, without waiting for deferred
+    /// collision batches. The receipt says `Pending`; the grid installs at the
+    /// start of the first Engine call into the product after it is derived,
+    /// and until then the grid's previous publication, or none, answers.
+    /// `ReadCollisionNavigation` says when it is installed. Disposing the
+    /// session, replacing or clearing the grid, replacing every grid or a
+    /// world-origin rebase drops a derivation still running. A deferred
+    /// derivation derives every column.
+    pub deferred: bool,
 }
 
 /// A collision-derived publication keeps the previous one's columns wherever
@@ -1177,6 +1187,33 @@ pub struct NativeCollisionNavigationReplaceReceipt {
     pub edge_test_count: u64,
     pub derivation_microseconds: u64,
     pub component_count: u64,
+    /// A deferred request's derivation has started and every other field is
+    /// 0; `ReadCollisionNavigation` reports the grid once it is installed.
+    pub pending: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeCollisionNavigationReadRequest {
+    pub session: NativeSpatialSessionHandle,
+    /// The grid id the replace request's configuration named.
+    pub grid_id: u64,
+}
+
+/// A collision-derived grid's deferred derivation and its installed
+/// publication.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCollisionNavigationReadout {
+    /// A deferred derivation of the grid is running or waits to install.
+    pub pending: bool,
+    /// The grid's latest deferred derivation failed and changed nothing; the
+    /// host log says why. A later publication of the grid clears it.
+    pub refused: bool,
+    /// The receipt of the grid's installed collision-derived publication,
+    /// deferred or not; all 0 when the grid has none. A deferred one's
+    /// `derivation_microseconds` is the worker's time.
+    pub installed: NativeCollisionNavigationReplaceReceipt,
 }
 
 #[repr(C)]

@@ -244,6 +244,74 @@ pub(super) struct CollisionNavigationCache {
     installed: Option<u64>,
 }
 
+/// Records changed world boxes, or nothing once too many were recorded.
+fn extend_dirty(
+    dirty: &mut Option<Vec<[f64; 4]>>,
+    regions: impl IntoIterator<Item = ([f64; 3], [f64; 3])>,
+) {
+    let Some(recorded) = dirty else {
+        return;
+    };
+    recorded.extend(
+        regions
+            .into_iter()
+            .map(|(min, max)| [min[0], min[2], max[0], max[2]]),
+    );
+    if recorded.len() > MAX_DIRTY_REGIONS {
+        *dirty = None;
+    }
+}
+
+/// The collision changes made since a deferred derivation took its scene.
+pub(super) struct ChangesSince {
+    scene: SceneRevisions,
+    /// `None` when too many were recorded or one was not seen coming.
+    dirty: Option<Vec<([f64; 3], [f64; 3])>>,
+}
+
+impl ChangesSince {
+    pub(super) fn new(scene: SceneRevisions) -> Self {
+        Self {
+            scene,
+            dirty: Some(Vec::new()),
+        }
+    }
+
+    pub(super) fn record_change(
+        &mut self,
+        before: SceneRevisions,
+        after: SceneRevisions,
+        regions: impl IntoIterator<Item = ([f64; 3], [f64; 3])>,
+    ) {
+        if self.scene != before {
+            self.dirty = None;
+        }
+        self.scene = after;
+        if let Some(dirty) = &mut self.dirty {
+            dirty.extend(regions);
+            if dirty.len() > MAX_DIRTY_REGIONS {
+                self.dirty = None;
+            }
+        }
+    }
+}
+
+/// Where a derivation runs: in the call, or on a worker that a flag cancels.
+#[derive(Clone, Copy)]
+pub(super) enum Lane<'a> {
+    Call,
+    Worker(&'a std::sync::atomic::AtomicBool),
+}
+
+impl Lane<'_> {
+    fn cancelled(self) -> bool {
+        match self {
+            Lane::Call => false,
+            Lane::Worker(cancel) => cancel.load(std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+}
+
 /// The parts of an installed collision-derived navigation a publication
 /// updates in place.
 pub(super) struct CollisionNavigationGraph {
@@ -331,16 +399,19 @@ impl CollisionNavigationCache {
             return;
         }
         self.scene = after;
-        let Some(dirty) = &mut self.dirty else {
+        extend_dirty(&mut self.dirty, regions);
+    }
+
+    /// Follows the collision changes made while a deferred derivation of
+    /// this cache ran, so the next publication re-derives near them.
+    pub(super) fn follow(&mut self, changes: ChangesSince) {
+        if changes.scene == self.scene {
             return;
-        };
-        dirty.extend(
-            regions
-                .into_iter()
-                .map(|(min, max)| [min[0], min[2], max[0], max[2]]),
-        );
-        if dirty.len() > MAX_DIRTY_REGIONS {
-            self.dirty = None;
+        }
+        self.scene = changes.scene;
+        match changes.dirty {
+            Some(regions) => extend_dirty(&mut self.dirty, regions),
+            None => self.dirty = None,
         }
     }
 
@@ -566,7 +637,8 @@ impl CollisionNavigationDelta {
 /// their support; directed edges then use the character step solver to prove a
 /// wall cannot be crossed and a bounded step can be climbed. Columns and edges
 /// that `previous` holds for the same policy, range and scene are kept. This
-/// reads only; [`CollisionNavigationDelta::apply`] installs the result.
+/// reads only; [`CollisionNavigationDelta::apply`] installs the result. On a
+/// worker lane it is `None` once cancelled.
 pub(super) fn derive_collision_navigation(
     scene: &VoxelCollisionScene,
     grid: VoxelGridSpec,
@@ -574,7 +646,8 @@ pub(super) fn derive_collision_navigation(
     policy: CollisionNavigationPolicy,
     bounds: ColumnBounds,
     previous: Option<&CollisionNavigationCache>,
-) -> Result<CollisionNavigationDelta, CharacterControllerError> {
+    lane: Lane,
+) -> Result<Option<CollisionNavigationDelta>, CharacterControllerError> {
     let key = DerivationKey {
         policy: policy.clone(),
         world_min_y: world_y[0],
@@ -610,9 +683,11 @@ pub(super) fn derive_collision_navigation(
         None => to_derive.extend(bounds.columns()),
     }
     let to_derive: Vec<Column> = to_derive.into_iter().collect();
-    let samples = in_parallel(&to_derive, |&(x, z)| {
+    let Some(samples) = in_parallel(&to_derive, lane, |&(x, z)| {
         sample_column(scene, grid, world_y, &policy, x, z, None).map(|(supports, _)| supports)
-    });
+    }) else {
+        return Ok(None);
+    };
     let mut derived = BTreeMap::new();
     for (column, supports) in to_derive.into_iter().zip(samples) {
         derived.insert(column, supports?);
@@ -659,9 +734,11 @@ pub(super) fn derive_collision_navigation(
             .iter()
             .any(|support| (support.cell.y - level).abs() <= reach)
     };
-    let targets = in_parallel(&sources, |&from| {
+    let Some(targets) = in_parallel(&sources, lane, |&from| {
         derive_edges(scene, grid, &policy, &support, &near_level, from)
-    });
+    }) else {
+        return Ok(None);
+    };
     let mut edges = Vec::with_capacity(sources.len());
     let mut edge_tests = 0;
     for (from, derived) in sources.into_iter().zip(targets) {
@@ -669,7 +746,7 @@ pub(super) fn derive_collision_navigation(
         edge_tests += tested;
         edges.push((from.cell, targets));
     }
-    Ok(CollisionNavigationDelta {
+    Ok(Some(CollisionNavigationDelta {
         key,
         scene: revisions,
         bounds,
@@ -679,7 +756,7 @@ pub(super) fn derive_collision_navigation(
         edge_columns,
         edges,
         edge_tests,
-    })
+    }))
 }
 
 /// Below this many items a derivation step runs on the calling thread.
@@ -688,21 +765,44 @@ const PARALLEL_MINIMUM: usize = 64;
 /// `work` over every item, in order, spread across the machine's cores in
 /// small runs taken as each thread frees up (columns of rock cost less than
 /// columns of rough floor). Each item reads the published scene only, so the
-/// result does not depend on the split.
-fn in_parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let threads = std::thread::available_parallelism().map_or(1, usize::from);
-    if threads <= 1 || items.len() < PARALLEL_MINIMUM {
-        return items.iter().map(work).collect();
-    }
+/// result does not depend on the split. On a worker lane it leaves the update
+/// a core, runs below normal priority on Windows, and stops between runs once
+/// cancelled, returning `None`.
+fn in_parallel<T: Sync, R: Send>(
+    items: &[T],
+    lane: Lane,
+    work: impl Fn(&T) -> R + Sync,
+) -> Option<Vec<R>> {
+    let cores = std::thread::available_parallelism().map_or(1, usize::from);
+    let threads = match lane {
+        Lane::Call => cores,
+        Lane::Worker(_) => cores.saturating_sub(1).max(1),
+    };
     let runs: Vec<&[T]> = items.chunks(PARALLEL_MINIMUM / 4).collect();
+    if threads <= 1 || items.len() < PARALLEL_MINIMUM {
+        let mut done = Vec::with_capacity(items.len());
+        for run in runs {
+            if lane.cancelled() {
+                return None;
+            }
+            done.extend(run.iter().map(&work));
+        }
+        return Some(done);
+    }
     let next = std::sync::atomic::AtomicUsize::new(0);
     let (work, runs, next) = (&work, &runs, &next);
     let mut done: Vec<(usize, Vec<R>)> = std::thread::scope(|scope| {
         let handles: Vec<_> = (0..threads.min(runs.len()))
             .map(|_| {
                 scope.spawn(move || {
+                    if let Lane::Worker(_) = lane {
+                        crate::worker_priority::below_normal();
+                    }
                     let mut done = Vec::new();
                     loop {
+                        if lane.cancelled() {
+                            return done;
+                        }
                         let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(run) = runs.get(index) else {
                             return done;
@@ -721,8 +821,11 @@ fn in_parallel<T: Sync, R: Send>(items: &[T], work: impl Fn(&T) -> R + Sync) -> 
             })
             .collect()
     });
+    if lane.cancelled() {
+        return None;
+    }
     done.sort_unstable_by_key(|(index, _)| *index);
-    done.into_iter().flat_map(|(_, results)| results).collect()
+    Some(done.into_iter().flat_map(|(_, results)| results).collect())
 }
 
 /// The columns of `bounds` within one cell of a changed world region.
@@ -1599,6 +1702,7 @@ mod tests {
                 z: WIDTH as f32,
             },
             config: flat_config(1.0, 1, 0.3, 1.6, 45.0),
+            deferred: false,
         }
     }
 
@@ -2000,6 +2104,7 @@ mod tests {
                 world_min: vec(min),
                 world_max: vec(max),
                 config,
+                deferred: false,
             })
             .unwrap();
         (bridge, session)
@@ -2079,6 +2184,7 @@ mod tests {
                 world_min: vec(0.0, 0.0, 0.0),
                 world_max: vec(26.0, 5.0, 13.0),
                 config,
+                deferred: false,
             })
             .unwrap()
     }
@@ -2328,6 +2434,7 @@ mod tests {
                     world_min: vec(min_x, 0.0, 0.0),
                     world_max: vec(min_x + 64.0, 48.0, 64.0),
                     config,
+                    deferred: false,
                 })
                 .unwrap();
             (started.elapsed(), receipt)
@@ -2912,6 +3019,7 @@ mod tests {
                 z: 8.0,
             },
             config,
+            deferred: false,
         };
         bridge.replace_collision_navigation(&publish).unwrap();
         assert_eq!(
@@ -2981,6 +3089,7 @@ mod tests {
                 z: 4.0,
             },
             config: jumper(false, 3),
+            deferred: false,
         };
         bridge.replace_collision_navigation(&publish).unwrap();
         assert!(edge(&mut bridge, session, [2, 1, 2], [6, 1, 2]).1);
@@ -3351,6 +3460,7 @@ mod tests {
                         z: 4.0,
                     },
                     config,
+                    deferred: false,
                 });
             assert_eq!(
                 receipt.unwrap().walkable_cell_count,
@@ -3492,6 +3602,7 @@ mod tests {
                 z: 6.0,
             },
             config,
+            deferred: false,
         };
         clear_voxel(&mut bridge, session, [3, 2, 3]);
         clear_voxel(&mut bridge, session, [3, 1, 3]);
@@ -3601,6 +3712,7 @@ mod tests {
                 world_min: vec([0.0, 0.0, 0.0]),
                 world_max: vec([8.0, 3.0, 3.0]),
                 config: flat_config(1.0, 1, 0.3, 1.6, 45.0),
+                deferred: false,
             })
             .unwrap();
         assert_eq!(receipt.walkable_cell_count, 21);
@@ -3894,6 +4006,7 @@ mod cost {
                 z: SIZE as f32,
             },
             config,
+            deferred: false,
         };
         let started = std::time::Instant::now();
         let receipt = bridge.replace_collision_navigation(&request).unwrap();

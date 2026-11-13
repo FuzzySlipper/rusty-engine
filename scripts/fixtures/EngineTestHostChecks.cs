@@ -286,6 +286,7 @@ internal static class EngineTestHostChecks
         RagdollFall(host);
         DeferredResidency(host);
         DeferredCollisionResidency(host);
+        DeferredCollisionNavigation(host);
         DeferredContentResidency(host);
         Bundles(library);
     }
@@ -368,6 +369,62 @@ internal static class EngineTestHostChecks
                     $"Tile {tile}'s collision is not as its batches left it.");
             sync!.Dispose();
             deferred!.Dispose();
+        });
+    }
+
+    // A collision-derived grid derived off the update returns from its call
+    // pending, leaves the grid as it was until a later call installs it, and
+    // then holds what a synchronous derivation of the same collision does
+    // (#10808).
+    private static void DeferredCollisionNavigation(EngineTestHost host)
+    {
+        const int Quads = 96;
+        var vertices = new Vector3[(Quads + 1) * (Quads + 1)];
+        var triangles = new Triangle[2 * Quads * Quads];
+        for (int z = 0; z <= Quads; z++)
+            for (int x = 0; x <= Quads; x++)
+                vertices[z * (Quads + 1) + x] = new(x, (x / 8 + z / 8) % 2 * 0.25f, z);
+        for (int z = 0, next = 0; z < Quads; z++)
+            for (int x = 0; x < Quads; x++)
+            {
+                uint corner = (uint)(z * (Quads + 1) + x), row = Quads + 1;
+                triangles[next++] = new(corner, corner + row, corner + 1);
+                triangles[next++] = new(corner + 1, corner + row, corner + row + 1);
+            }
+        SpatialSession? session = null;
+        CollisionNavigationReplaceRequest Grid(IEngineContext engine, ulong grid) => new(session!, new(0, -1, 0),
+            new(Quads, 3, Quads), engine.Spatial.DefaultCollisionNavigationConfig() with { GridId = grid, MaximumCells = Quads * Quads });
+        host.Call(engine =>
+        {
+            session = engine.Spatial.CreateSession(new(1, 16, VoxelSurfaceMode.GreedyCubes));
+            engine.Spatial.ApplyCollisionResidency(new(session, new StaticMeshAsset[] { new(1, default, 0, (uint)vertices.Length, 0, (uint)triangles.Length) },
+                vertices, triangles, new StaticMeshInstance[] { new(1, 1, new(Vector3.Zero, Quaternion.Identity, Vector3.One)) },
+                ReadOnlyMemory<ulong>.Empty, ReadOnlyMemory<ulong>.Empty));
+            CollisionNavigationReplaceReceipt receipt = engine.Spatial.ReplaceCollisionNavigation(Grid(engine, 1) with { Deferred = true });
+            CollisionNavigationReadout readout = engine.Spatial.ReadCollisionNavigation(new(session, 1));
+            Require(receipt.Pending && receipt.WalkableCellCount == 0 && readout.Pending && readout.Installed.WalkableCellCount == 0
+                    && !engine.Spatial.ReadNavigationProjection(new(session, 1)).Present,
+                $"A deferred grid was live in its own call: {receipt}, {readout}.");
+        });
+        CollisionNavigationReadout installed = default;
+        for (int call = 0; ; call++)
+        {
+            host.Call(engine => installed = engine.Spatial.ReadCollisionNavigation(new(session!, 1)));
+            if (!installed.Pending) break;
+            Require(call < 20_000, "The deferred grid never installed.");
+            System.Threading.Thread.Sleep(1);
+        }
+        host.Call(engine =>
+        {
+            CollisionNavigationReplaceReceipt synchronous = engine.Spatial.ReplaceCollisionNavigation(Grid(engine, 2));
+            Require(!installed.Refused && !installed.Installed.Pending && installed.Installed.NavigationRevision > 0
+                    && installed.Installed.WalkableCellCount == synchronous.WalkableCellCount
+                    && installed.Installed.ProjectionHash == synchronous.ProjectionHash
+                    && installed.Installed.ComponentCount == synchronous.ComponentCount,
+                $"The deferred grid {installed} is not the synchronous one {synchronous}.");
+            Require(engine.Spatial.RequestNavigationPath(new(session!, new(1, 0, 1), new(Quads - 2, 0, Quads - 2), 100_000, 1)).Outcome
+                    == NavigationPathOutcome.Reached, "The deferred grid does not route across the floor.");
+            session!.Dispose();
         });
     }
 

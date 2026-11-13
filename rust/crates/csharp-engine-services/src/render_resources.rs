@@ -1653,7 +1653,7 @@ fn partition_deferred(
     let worker = std::thread::Builder::new()
         .name("rusty-mesh-partition".to_owned())
         .spawn(move || {
-            cut_below_normal();
+            crate::worker_priority::below_normal();
             cut_parts(&source, origin, cell_size, true)
         })
         .map_err(|error| {
@@ -1668,23 +1668,6 @@ fn partition_deferred(
     });
     Ok(handle)
 }
-
-/// On Windows a cut runs below normal priority, as the heightfield samplers
-/// do (#10718), so a level build leaves the update and the window their
-/// cores. Elsewhere a lowered thread may not be raised again; the thread ends
-/// with its cut, but it is left as it is.
-#[cfg(windows)]
-fn cut_below_normal() {
-    use windows_sys::Win32::System::Threading::{
-        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
-    };
-    // SAFETY: the current thread's pseudo-handle is always valid and is not
-    // closed. A refusal leaves the thread at normal priority.
-    unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL) };
-}
-
-#[cfg(not(windows))]
-fn cut_below_normal() {}
 
 impl RuntimeAppearanceBridge {
     /// Takes in the deferred partitions cut since the last call, without
