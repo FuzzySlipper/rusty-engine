@@ -4795,6 +4795,7 @@ impl RuntimeAppearanceBridge {
                 billboard: false,
                 vertex_occlusion: false,
                 morph: None,
+                product_data: None,
             },
             material_slots: material_slots.clone(),
             collision: MeshCollisionPolicy::VisualOnly,
@@ -11465,6 +11466,7 @@ pub(super) mod tests {
                 billboard: false,
                 vertex_occlusion: false,
                 morph: None,
+                product_data: None,
             },
             material_slots: vec![MeshMaterialSlot {
                 slot: 0,
@@ -12330,6 +12332,8 @@ pub(super) mod tests {
             layer_palette_len: 0,
             billboard: false,
             deferred: false,
+            product_data: std::ptr::null(),
+            product_data_len: 0,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(&mut bridge, &request) }
@@ -12642,6 +12646,8 @@ pub(super) mod tests {
             layer_palette_len: 0,
             billboard: false,
             deferred: false,
+            product_data: std::ptr::null(),
+            product_data_len: 0,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(&mut bridge, &request) }
@@ -12860,6 +12866,8 @@ pub(super) mod tests {
             layer_palette_len: 0,
             billboard: false,
             deferred,
+            product_data: std::ptr::null(),
+            product_data_len: 0,
         };
         unsafe { crate::render_resources::create_generated_mesh(bridge, &request) }.unwrap()
     }
@@ -13203,6 +13211,8 @@ pub(super) mod tests {
             layer_palette_len: 0,
             billboard: false,
             deferred: false,
+            product_data: std::ptr::null(),
+            product_data_len: 0,
         };
         let resource =
             unsafe { crate::render_resources::create_generated_mesh(&mut bridge, &request) }
@@ -15308,6 +15318,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                 billboard: false,
                 vertex_occlusion: false,
                 morph: None,
+                product_data: None,
             },
             material_slots: vec![MeshMaterialSlot {
                 slot: 0,

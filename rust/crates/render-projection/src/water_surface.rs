@@ -428,6 +428,7 @@ fn surface_asset(asset: &str, mesh: &WaterSurfaceMesh, material: &str) -> Static
             texture_space: None,
             distance_field: None,
             morph: None,
+            product_data: None,
         },
         material_slots: vec![MeshMaterialSlot {
             slot: 0,

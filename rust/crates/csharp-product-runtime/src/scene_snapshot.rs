@@ -576,6 +576,7 @@ mod tests {
             billboard: false,
             vertex_occlusion: false,
             morph: None,
+            product_data: None,
         }
     }
 

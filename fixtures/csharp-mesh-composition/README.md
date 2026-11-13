@@ -17,7 +17,14 @@ dotnet restore CsharpMeshComposition.csproj --source /path/to/pair/sdk-feed
   --runtime /path/to/pair/runtime-pack --port 40177 --live-debug
 ```
 
+`mesh.productdata true` shows three walls drawn by a product shader
+(`content/product-data.wgsl`) that writes each fragment's product data
+(`MeshResourceCreateRequest.ProductData`, `Surface.product_data`) as colour.
+The left wall's data is its place on the wall, so it draws a red-green
+gradient. The middle wall is the same mesh cut into twelve parts and draws the
+same. The right wall has no data, reads zero and draws blue.
+
 The generated SDK handles binding and staging. Geometry is visual-only and no
-content files or product renderer are involved. Runtime assertions check copied
+product renderer is involved. Runtime assertions check copied
 resource counts and the required removal/disposal order. The content directory
-is intentionally empty.
+holds the material showcase's maps and the product data walls' shader.

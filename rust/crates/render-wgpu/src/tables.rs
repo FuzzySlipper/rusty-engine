@@ -146,6 +146,10 @@ pub(crate) struct GpuMesh {
     /// Its geomorph (`render_model::MeshMorph`): the targets' vertex stream
     /// and the range, in the mesh's own units, over which it morphs.
     pub morph: Option<MorphStream>,
+    /// Its product data (`render_model::MeshPayloadDescriptor::product_data`,
+    /// PRODUCT_DATA), the second stream: a vec4 per vertex for a product
+    /// shader.
+    pub product_data: Option<wgpu::Buffer>,
     /// An animated instance's CPU-skinned vertices (SKINNED,
     /// `animated.rs`), or a static mesh instance's deformed payload
     /// (`apply.rs` `deformed_history`): what a pass writing motion reads as
@@ -192,6 +196,10 @@ impl GpuMesh {
                 self.vertex_occlusion,
             )
             .with(crate::shaders::Features::MORPH, self.morph.is_some())
+            .with(
+                crate::shaders::Features::PRODUCT_DATA,
+                self.product_data.is_some(),
+            )
             .with(crate::shaders::Features::SKINNED, self.skinned.is_some())
     }
 
@@ -208,12 +216,13 @@ impl GpuMesh {
         1 + u32::from(self.second_stream().is_some())
     }
 
-    /// The vertex stream bound after the interleaved one: tangents, or a
-    /// morph's targets.
+    /// The vertex stream bound after the interleaved one: tangents, a
+    /// morph's targets, or product data.
     pub fn second_stream(&self) -> Option<&wgpu::Buffer> {
         self.extra
             .as_ref()
             .or(self.morph.as_ref().map(|morph| &morph.targets))
+            .or(self.product_data.as_ref())
     }
 }
 

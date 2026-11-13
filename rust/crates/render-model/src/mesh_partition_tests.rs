@@ -88,6 +88,12 @@ fn attributed_mesh() -> MeshPayloadDescriptor {
         billboard: false,
         vertex_occlusion: false,
         morph: None,
+        // Any values, beyond a colour's range.
+        product_data: Some(
+            (0..9)
+                .flat_map(|vertex| [vertex as f32 * 7.0, -(vertex as f32), 1e6, 0.5])
+                .collect(),
+        ),
     }
 }
 
@@ -131,6 +137,13 @@ fn triangle_signatures(mesh: &MeshPayloadDescriptor) -> Vec<(u16, Vec<u32>)> {
                 if let Some(colors) = colors {
                     attributes.extend(
                         colors[index * 4..index * 4 + 4]
+                            .iter()
+                            .map(|value| value.to_bits()),
+                    );
+                }
+                if let Some(data) = &mesh.product_data {
+                    attributes.extend(
+                        data[index * 4..index * 4 + 4]
                             .iter()
                             .map(|value| value.to_bits()),
                     );
@@ -207,6 +220,7 @@ fn preserves_absent_optional_channels() {
     };
     *uvs = None;
     *colors = None;
+    mesh.product_data = None;
     mesh.layout.attributes.retain(|attribute| {
         !matches!(
             attribute.name,
@@ -220,6 +234,7 @@ fn preserves_absent_optional_channels() {
         };
         assert_eq!(uvs, None);
         assert_eq!(colors, None);
+        assert_eq!(part.product_data, None);
     }
 }
 

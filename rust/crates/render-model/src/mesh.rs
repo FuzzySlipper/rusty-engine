@@ -273,6 +273,11 @@ pub struct MeshPayloadDescriptor {
     /// surface beneath it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub morph: Option<MeshMorph>,
+    /// Four values per vertex that the Engine never reads, for a product
+    /// shader's shade stage (`Surface.product_data`, render-wgpu
+    /// `PRODUCT_DATA`): an inline product mesh's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub product_data: Option<MeshStream<f32>>,
 }
 
 /// A geomorph (a heightfield tile's, render-wgpu `MORPH`): each vertex's
@@ -366,6 +371,15 @@ impl MeshPayloadDescriptor {
         }
         if let Some(morph) = &self.morph {
             morph.validate(self.layout.vertex_count)?;
+        }
+        if let Some(data) = &self.product_data {
+            let expected = self.layout.vertex_count as usize * 4;
+            if data.len() != expected {
+                return Err(MeshDescriptorError::ProductDataLengthMismatch {
+                    expected,
+                    actual: data.len(),
+                });
+            }
         }
         match &self.source {
             MeshPayloadSource::Inline {
@@ -756,6 +770,10 @@ pub enum MeshDescriptorError {
         actual: usize,
     },
     InvalidMorph,
+    ProductDataLengthMismatch {
+        expected: usize,
+        actual: usize,
+    },
     OptionalAttributeSourceMismatch {
         name: MeshAttributeName,
     },
@@ -1901,6 +1919,7 @@ mod tests {
             billboard: false,
             vertex_occlusion: false,
             morph: None,
+            product_data: None,
         }
     }
 

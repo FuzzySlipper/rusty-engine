@@ -68,6 +68,7 @@ pub fn partition_mesh_spatially(
         let mut out_uvs = uvs.as_ref().map(|_| Vec::new());
         let mut out_colors = colors.as_ref().map(|_| Vec::new());
         let mut out_morph = mesh.morph.as_ref().map(|_| Vec::new());
+        let mut out_data = mesh.product_data.as_ref().map(|_| Vec::new());
         let mut out_indices = Vec::with_capacity(triangles.len() * 3);
         let mut groups: Vec<MeshGroupDescriptor> = Vec::new();
         let mut bounds = MeshBoundsDescriptor {
@@ -94,6 +95,9 @@ pub fn partition_mesh_spatially(
                         dst.extend_from_slice(&src[old * 2..old * 2 + 2]);
                     }
                     if let (Some(src), Some(dst)) = (colors, &mut out_colors) {
+                        dst.extend_from_slice(&src[old * 4..old * 4 + 4]);
+                    }
+                    if let (Some(src), Some(dst)) = (&mesh.product_data, &mut out_data) {
                         dst.extend_from_slice(&src[old * 4..old * 4 + 4]);
                     }
                     for (axis, &value) in point.iter().enumerate() {
@@ -134,6 +138,7 @@ pub fn partition_mesh_spatially(
                     start: morph.start,
                     end: morph.end,
                 }),
+            product_data: out_data.map(Into::into),
             source: MeshPayloadSource::Inline {
                 positions: out_positions.into(),
                 normals: out_normals.into(),

@@ -1416,10 +1416,14 @@ impl Renderer {
             };
             let impostor = part_impostors.get(index).copied().unwrap_or(false);
             let billboard = mesh.billboard && scattered.is_some() && !impostor;
-            let features = (features | mesh.features())
+            let mut features = (features | mesh.features())
                 .with(Features::SCATTER, scattered.is_some())
                 .with(Features::IMPOSTOR, impostor)
                 .with(Features::BILLBOARD, billboard);
+            // Only a product shader reads product data.
+            if features.product() == 0 || impostor {
+                features = features.without(Features::PRODUCT_DATA);
+            }
             let displacement = descriptor
                 .and_then(|descriptor| descriptor.shader.as_ref())
                 .map_or(0.0, |shader| shader.displacement_bound);
@@ -1606,7 +1610,7 @@ impl Renderer {
                     let image = resources::decode_texture(&bytes)?;
                     Ok(crate::prepare::Prepared::Texture {
                         thumb: thumb_of(&descriptor, &image),
-                        texture: upload_texture(&gpu, &descriptor, Some(&image)),
+                        texture: Box::new(upload_texture(&gpu, &descriptor, Some(&image))),
                     })
                 }),
             );
@@ -1708,12 +1712,12 @@ impl Renderer {
                         thumb,
                         texture: uploaded,
                     }),
-                ) => self.install_texture(&texture, Some(thumb), uploaded),
+                ) => self.install_texture(&texture, Some(thumb), *uploaded),
                 (
                     crate::prepare::Definition::Mesh(asset),
                     Ok(crate::prepare::Prepared::Mesh(mesh)),
                 ) => {
-                    if let Err(detail) = self.install_static_mesh(&asset, mesh) {
+                    if let Err(detail) = self.install_static_mesh(&asset, *mesh) {
                         issues.push(ApplyIssue {
                             op: "defineStaticMesh",
                             detail,
@@ -2159,7 +2163,7 @@ impl Renderer {
                         resources::Held::Copied(streams) => streams,
                     };
                     upload_static_mesh(&gpu, &prepared, &streams)
-                        .map(crate::prepare::Prepared::Mesh)
+                        .map(|mesh| crate::prepare::Prepared::Mesh(Box::new(mesh)))
                 }),
             );
             return Ok(());
@@ -2328,6 +2332,7 @@ fn upload_static_mesh(
     }
     mesh.texture_space = asset.payload.texture_space;
     attach_morph(gpu, &mut mesh, &asset.payload, &asset.asset)?;
+    attach_product_data(gpu, &mut mesh, &asset.payload, &asset.asset)?;
     Ok(mesh)
 }
 
@@ -2368,6 +2373,32 @@ fn attach_morph(
         start: morph.start,
         end: morph.end,
     });
+    Ok(())
+}
+
+/// Upload a payload's product data as the mesh's second stream.
+fn attach_product_data(
+    gpu: &crate::Gpu,
+    mesh: &mut GpuMesh,
+    payload: &render_model::MeshPayloadDescriptor,
+    label: &str,
+) -> Result<(), String> {
+    let Some(data) = &payload.product_data else {
+        return Ok(());
+    };
+    let device = &gpu.device;
+    let buffer = crate::gpu::allocating(device, || {
+        crate::gpu::buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some(label),
+                contents: bytemuck::cast_slice(data),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        )
+    })
+    .map_err(|error| format!("{label}'s product data could not be uploaded: {error}"))?;
+    mesh.product_data = Some(buffer);
     Ok(())
 }
 
@@ -2473,6 +2504,7 @@ pub(crate) fn upload_vertices(
         billboard: false,
         vertex_occlusion: false,
         morph: None,
+        product_data: None,
         skinned: None,
         vertices: vertex_buffer,
         indices: index_buffer,

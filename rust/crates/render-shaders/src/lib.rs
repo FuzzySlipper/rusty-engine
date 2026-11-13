@@ -22,6 +22,8 @@
 //! vertex stage calls for its world normal. It may
 //! import any module above, and read the standard feature defs
 //! (`#ifdef NORMAL_MAP`) and its own keywords, chosen when it is opened.
+//! Its shade stage reads the mesh's product data as `Surface.product_data`
+//! (PRODUCT_DATA; zero for a mesh without).
 
 use std::collections::HashMap;
 use std::ops::BitOr;
@@ -143,12 +145,18 @@ impl Features {
     /// copy's origin and turns about the vertical to face the camera, its
     /// normals in the quad's frame (`rusty::view::billboard`).
     pub const BILLBOARD: Self = Self::bit(134217728);
+    /// The mesh's product data, a vec4 per vertex the Engine never reads (a
+    /// mesh feature, not a material one), which a product shader's shade
+    /// stage reads as `Surface.product_data`: its second stream. Set only
+    /// with a product shader; an inline mesh has neither tangents, a morph
+    /// nor a skin, so it shares their stream's slot and location.
+    pub const PRODUCT_DATA: Self = Self::bit(268435456);
     /// Every material and mesh feature's bit: all but MOTION, GUIDES,
     /// RAY_SHADOWS, RAY_TRACE and RAY_GI.
     #[cfg(test)]
     const ALL_BITS: u32 = 4194303;
 
-    const DEFS: [(Self, &'static str); 28] = [
+    const DEFS: [(Self, &'static str); 29] = [
         (Self::UNLIT, "UNLIT"),
         (Self::MASK, "MASK"),
         (Self::VOXEL_SURFACE, "VOXEL_SURFACE"),
@@ -177,6 +185,7 @@ impl Features {
         (Self::RAY_TRACE, "RAY_TRACE"),
         (Self::RAY_GI, "RAY_GI"),
         (Self::BILLBOARD, "BILLBOARD"),
+        (Self::PRODUCT_DATA, "PRODUCT_DATA"),
     ];
 
     const fn bit(bits: u32) -> Self {
@@ -287,6 +296,13 @@ impl Features {
             excluded(Self::WATER, Self::MASK | Self::NORMAL_MAP),
             self.contains(Self::WATER_SCENE) && !self.contains(Self::WATER),
             excluded(Self::MORPH, Self::VERTEX_TANGENTS | Self::VERTEX_OCCLUSION),
+            // Product data is an inline mesh's, for a product shader.
+            self.contains(Self::PRODUCT_DATA)
+                && (self.product == 0
+                    || self.bits
+                        & (Self::VERTEX_TANGENTS | Self::MORPH | Self::SKINNED | Self::IMPOSTOR)
+                            .bits
+                        != 0),
             // A scatter run copies a static mesh: never a heightfield tile,
             // a water surface or layered voxel ground.
             excluded(
@@ -1115,6 +1131,116 @@ fn shade(surface: Surface) -> vec4<f32> {
                     compose_case(shaders, Entry::World, features.with_product(*rim));
                 }
                 FeatureCase::Caster(_) => unreachable!("this matrix has no caster cases"),
+            },
+        );
+    }
+
+    /// Writes the mesh's product data as colour (`Surface.product_data`).
+    const DATA: &str = "#import rusty::types::Surface
+
+fn shade(surface: Surface) -> vec4<f32> {
+    return vec4<f32>(surface.product_data.rgb, 1.0);
+}
+";
+
+    fn data_shader() -> ProductShader {
+        ProductShader {
+            path: "shaders/data.wgsl".to_string(),
+            source: DATA.to_string(),
+            keywords: Vec::new(),
+        }
+    }
+
+    /// The material sets an inline mesh with product data meets, without
+    /// and with the targets' features. A mesh without the stream composes
+    /// the same shader, reading zero.
+    fn product_data_cases(bases: &[Features]) -> Vec<Features> {
+        let targets = [
+            Features::default(),
+            Features::MOTION,
+            Features::MOTION | Features::GUIDES,
+            Features::RAY_SHADOWS,
+            Features::RAY_SHADOWS | Features::RAY_TRACE,
+            Features::MOTION | Features::GUIDES | Features::RAY_GI,
+        ];
+        bases
+            .iter()
+            .flat_map(|base| targets.iter().map(move |target| *base | *target))
+            .collect()
+    }
+
+    #[test]
+    fn a_product_shader_reads_product_data_with_or_without_the_stream() {
+        check_product_shader("shaders/data.wgsl", DATA, &[]).unwrap();
+        let mut shaders = Shaders::new();
+        let data = shaders.product(data_shader());
+        for features in product_data_cases(&[Features::default(), Features::MASK | Features::WIND])
+        {
+            assert!(
+                (features | Features::PRODUCT_DATA)
+                    .with_product(data)
+                    .occurs(),
+                "{features:?}"
+            );
+            compose_case(&mut shaders, Entry::World, features.with_product(data));
+            compose_case(
+                &mut shaders,
+                Entry::World,
+                (features | Features::PRODUCT_DATA).with_product(data),
+            );
+            compose_case(
+                &mut shaders,
+                Entry::Shadow,
+                (features | Features::PRODUCT_DATA)
+                    .with_product(data)
+                    .caster(),
+            );
+        }
+        assert!(
+            !Features::PRODUCT_DATA.occurs(),
+            "only with a product shader"
+        );
+        assert!(!(Features::PRODUCT_DATA | Features::VERTEX_TANGENTS)
+            .with_product(data)
+            .occurs());
+    }
+
+    #[test]
+    #[ignore = "exhaustive shader matrix; run through .github/workflows/shaders.yml"]
+    fn product_data_composes_under_every_material_set_an_inline_mesh_meets() {
+        let cases = product_data_cases(&[
+            Features::default(),
+            Features::UNLIT,
+            Features::MASK,
+            Features::UNLIT | Features::MASK,
+            Features::NORMAL_MAP,
+            Features::NORMAL_MAP | Features::STOCHASTIC_TILING,
+            Features::NORMAL_MAP | Features::EMISSIVE_MAP | Features::OCCLUSION_MAP,
+            Features::ORM_MAP,
+            Features::TRIPLANAR | Features::NORMAL_MAP,
+            Features::FLAT_SHADING,
+            Features::WIND,
+            Features::MASK | Features::WIND,
+            Features::LAYER_WEIGHTS | Features::TERRAIN_LAYERS | Features::VOXEL_SURFACE,
+            Features::WATER,
+            Features::WATER | Features::WATER_SCENE,
+            Features::SCATTER,
+            Features::SCATTER | Features::SCATTER_SELECTED | Features::MASK,
+            Features::SCATTER | Features::BILLBOARD | Features::MASK | Features::WIND,
+        ]);
+        every_feature_case(
+            |shaders| shaders.product(data_shader()),
+            &cases
+                .iter()
+                .map(|features| FeatureCase::Material(*features))
+                .collect::<Vec<_>>(),
+            |shaders, data, case| {
+                let FeatureCase::Material(features) = case else {
+                    unreachable!("this matrix has no caster cases")
+                };
+                let features = (features | Features::PRODUCT_DATA).with_product(*data);
+                assert!(features.occurs(), "{features:?}");
+                compose_case(shaders, Entry::World, features);
             },
         );
     }

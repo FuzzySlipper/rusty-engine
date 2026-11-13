@@ -244,6 +244,7 @@ pub fn import_with_context(source: &SourceMesh, context: &ImportContext) -> Impo
             billboard: false,
             vertex_occlusion: false,
             morph: None,
+            product_data: None,
         },
         material_slots: source
             .materials

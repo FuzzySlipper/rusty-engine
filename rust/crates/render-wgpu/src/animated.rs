@@ -1582,6 +1582,7 @@ impl Renderer {
             billboard: false,
             vertex_occlusion: false,
             morph: None,
+            product_data: None,
             skinned: Some(SkinnedHistory::default()),
             vertices: vertex_buffer,
             indices: index_buffer,

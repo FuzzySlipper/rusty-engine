@@ -33,6 +33,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private static readonly Color BoxColor = new(0.9f, 0.9f, 0.9f, 1.0f);
     private static readonly Color[] Tints = [new(1f, 0.35f, 0.35f, 1f), new(0.35f, 1f, 0.35f, 1f), new(0.4f, 0.5f, 1f, 1f)];
     private static readonly BloomRequest LampBloom = new(1.0f, 0.6f);
+    // The product data walls: one whole, one cut into parts, one without data,
+    // side by side in front of the ring, each a grid of cells.
+    private const ulong DataWallObjectId = 7_787_020;
+    private const float DataWallWidth = 1.6f, DataWallHeight = 1.2f, DataWallSpacing = 2.2f, DataWallDepth = 1.0f, DataPartCell = 0.4f;
+    private const int DataWallColumns = 8, DataWallRows = 6;
 
     private readonly IEngineContext _engine;
     private readonly Material _innerMaterial;
@@ -47,6 +52,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private ShadowCasting _casting = ShadowCasting.Cast;
     private bool _viewmodel;
     private MaterialShowcase? _showcase;
+    private ProductDataWalls? _dataWalls;
     private readonly UiStream _uiStream;
     private RingPresentation? _ring;
     private bool _alternatePulse;
@@ -167,6 +173,30 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     }
 
     /// <summary>
+    /// Show (or remove) three walls drawn by a product shader that writes each
+    /// fragment's product data as colour (content/product-data.wgsl): on the
+    /// left a wall whose data is its place, a red-green gradient; in the middle
+    /// the same wall cut into parts, which draws the same; on the right a wall
+    /// without data, which reads zero and draws blue.
+    /// </summary>
+    [DebugCommand("mesh.productdata")]
+    public string ProductData(bool enabled)
+    {
+        if (enabled && _dataWalls is null)
+        {
+            _dataWalls = CreateDataWalls();
+        }
+        else if (!enabled && _dataWalls is { } walls)
+        {
+            _dataWalls = null;
+            PublishRing();
+            walls.Dispose();
+        }
+        PublishRing();
+        return _dataWalls is { } shown ? $"productData=true parts={shown.Parts.Length}" : "productData=false";
+    }
+
+    /// <summary>
     /// Draw the echo ring as a viewmodel (camera-local) with the viewmodel
     /// layer's own field of view in degrees (0 for the camera's).
     /// </summary>
@@ -185,6 +215,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         ReleaseRing();
         _engine.CameraView.ClearActiveCamera(new ClearActiveCameraRequest(0));
         _showcase?.Dispose();
+        _dataWalls?.Dispose();
         _light.Dispose();
         _camera.Dispose();
         _backdrop.Dispose();
@@ -286,6 +317,10 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         {
             facts.AddRange(showcase.Facts());
         }
+        if (_dataWalls is { } walls)
+        {
+            facts.AddRange(walls.Facts());
+        }
         _engine.Graphics.PublishSnapshot(facts.ToArray());
     }
 
@@ -317,6 +352,82 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             _engine.Graphics.CreateMeshAppearance(lampMesh),
             _engine.Graphics.CreateMeshAppearance(crateMesh),
             tinted);
+    }
+
+    private ProductDataWalls CreateDataWalls()
+    {
+        RenderResource shader = _engine.Graphics.OpenResource(new RenderResourceRequest("product-data.wgsl")).Handle;
+        Material material = _engine.Graphics.CreateMaterial(
+            new MaterialRequest(new Color(1, 1, 1, 1), default, 1.0f, new Color(1, 1, 1, 1), Vector3.Zero, 0, true)
+                with { Shader = new MaterialShader(shader, Vector4.Zero) });
+        MeshResource whole = _engine.Graphics.CreateMeshResource(BuildDataWall(material, withData: true));
+        MeshResource plain = _engine.Graphics.CreateMeshResource(BuildDataWall(material, withData: false));
+        MeshResource cut = _engine.Graphics.CreateMeshResource(BuildDataWall(material, withData: true));
+        MeshPartition partition = _engine.Graphics.PartitionMesh(new MeshPartitionRequest(
+            cut, new Vector3(-DataWallWidth / 2, -DataWallHeight / 2, -1), new Vector3(DataPartCell, DataPartCell, 2)));
+        // The parts keep what they need of the source.
+        cut.Dispose();
+        uint count = _engine.Graphics.ReadMeshPartition(partition).PartCount;
+        Require(count == (uint)MathF.Round(DataWallWidth / DataPartCell * (DataWallHeight / DataPartCell)),
+            $"the data wall was cut into {count} parts");
+        MeshResource[] parts = new MeshResource[count];
+        for (uint index = 0; index < count; index++)
+        {
+            parts[index] = _engine.Graphics.TakeMeshPartitionPart(new MeshPartitionPartRequest(partition, index));
+        }
+        partition.Dispose();
+        return new ProductDataWalls(
+            shader,
+            material,
+            whole,
+            plain,
+            parts,
+            _engine.Graphics.CreateMeshAppearance(whole),
+            _engine.Graphics.CreateMeshAppearance(plain),
+            parts.Select(part => _engine.Graphics.CreateMeshAppearance(part)).ToArray());
+    }
+
+    /// <summary>
+    /// A wall facing +Z of <see cref="DataWallColumns"/> by <see cref="DataWallRows"/> cells; with data, each
+    /// vertex's product data is its place on the wall (0 to 1 across and up) with w 1.
+    /// </summary>
+    private static MeshResourceCreateRequest BuildDataWall(Material material, bool withData)
+    {
+        int row = DataWallColumns + 1;
+        Vector3[] positions = new Vector3[row * (DataWallRows + 1)];
+        Vector3[] normals = new Vector3[positions.Length];
+        Vector2[] uvs = new Vector2[positions.Length];
+        Vector4[] data = new Vector4[positions.Length];
+        for (int j = 0; j <= DataWallRows; j++)
+        {
+            for (int i = 0; i <= DataWallColumns; i++)
+            {
+                float u = i / (float)DataWallColumns, v = j / (float)DataWallRows;
+                int vertex = j * row + i;
+                positions[vertex] = new Vector3((u - 0.5f) * DataWallWidth, (v - 0.5f) * DataWallHeight, 0);
+                normals[vertex] = Vector3.UnitZ;
+                uvs[vertex] = new Vector2(u, 1 - v);
+                data[vertex] = new Vector4(u, v, 0, 1);
+            }
+        }
+        uint[] indices = new uint[DataWallColumns * DataWallRows * 6];
+        for (int j = 0, index = 0; j < DataWallRows; j++)
+        {
+            for (int i = 0; i < DataWallColumns; i++, index += 6)
+            {
+                uint at = (uint)(j * row + i), up = at + (uint)row;
+                indices[index] = at;
+                indices[index + 1] = at + 1;
+                indices[index + 2] = up + 1;
+                indices[index + 3] = at;
+                indices[index + 4] = up + 1;
+                indices[index + 5] = up;
+            }
+        }
+        return new MeshResourceCreateRequest(positions, normals, uvs, indices,
+            new MeshGroup[] { new MeshGroup(0, 0, (uint)indices.Length) },
+            new MeshMaterialBinding[] { new MeshMaterialBinding(0, material) })
+            with { ProductData = withData ? data : ReadOnlyMemory<Vector4>.Empty };
     }
 
     /// <summary>A square facing +Z in one material.</summary>
@@ -487,6 +598,39 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     }
 
     private sealed record RingPresentation(MeshResource Mesh, Appearance Primary, Appearance Echo);
+
+    /// <summary>The product data walls' resources, released together.</summary>
+    private sealed record ProductDataWalls(
+        RenderResource Shader,
+        Material Material,
+        MeshResource Whole,
+        MeshResource Plain,
+        MeshResource[] Parts,
+        Appearance WholeWall,
+        Appearance PlainWall,
+        Appearance[] PartWalls) : IDisposable
+    {
+        public IEnumerable<AppearanceFact> Facts()
+        {
+            Transform At(float x) => new(new Vector3(x, 0, DataWallDepth), Quaternion.Identity, Vector3.One);
+            yield return new AppearanceFact(DataWallObjectId, false, 0, At(-DataWallSpacing), WholeWall, true, RenderLayer.Scene);
+            yield return new AppearanceFact(DataWallObjectId + 1, false, 0, At(DataWallSpacing), PlainWall, true, RenderLayer.Scene);
+            for (int i = 0; i < PartWalls.Length; i++)
+            {
+                yield return new AppearanceFact(DataWallObjectId + 2 + (ulong)i, false, 0, At(0), PartWalls[i], true, RenderLayer.Scene);
+            }
+        }
+
+        public void Dispose()
+        {
+            foreach (Appearance appearance in PartWalls) appearance.Dispose();
+            PlainWall.Dispose(); WholeWall.Dispose();
+            foreach (MeshResource part in Parts) part.Dispose();
+            Plain.Dispose(); Whole.Dispose();
+            Material.Dispose();
+            Shader.Dispose();
+        }
+    }
 
     /// <summary>The showcase's resources, released together.</summary>
     private sealed record MaterialShowcase(

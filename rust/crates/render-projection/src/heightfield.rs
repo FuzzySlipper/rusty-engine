@@ -369,6 +369,7 @@ fn tile_asset(
                     start: start as f32,
                     end: end as f32,
                 }),
+            product_data: None,
         },
         material_slots,
         collision: MeshCollisionPolicy::VisualOnly,

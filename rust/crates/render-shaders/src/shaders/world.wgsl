@@ -4,7 +4,8 @@
 // (`lib.rs` `Features`): UNLIT, MASK, VOXEL_SURFACE, NORMAL_MAP,
 // EMISSIVE_MAP, OCCLUSION_MAP, TRIPLANAR, TERRAIN_LAYERS, STOCHASTIC_TILING,
 // FLAT_SHADING, WIND, WATER, WATER_SCENE; and the mesh's
-// streams: VERTEX_TANGENTS, LAYER_WEIGHTS, VERTEX_OCCLUSION, SKINNED. A
+// streams: VERTEX_TANGENTS, LAYER_WEIGHTS, VERTEX_OCCLUSION, SKINNED,
+// PRODUCT_DATA. A
 // product shader (PRODUCT_SHADER) shades the surface in place of
 // `rusty::shade`, and may place its vertices (PRODUCT_DISPLACES) and give
 // their normals (PRODUCT_DISPLACES_NORMAL).
@@ -127,6 +128,11 @@ struct VsOut {
     @location(5) tangent: vec4<f32>,
     @location(6) uv1: vec2<f32>,
 #endif
+#ifdef PRODUCT_DATA
+    // The mesh's product data (`Surface.product_data`), at the tangent's
+    // location: a mesh with it has no tangents.
+    @location(5) product_data: vec4<f32>,
+#endif
 #ifdef TRIPLANAR
     // Texture-space position and normal, which the planes project.
     @location(7) texture_position: vec3<f32>,
@@ -178,6 +184,9 @@ fn vs_world(
 #ifdef MORPH
     // Height change, target normal x and z.
     @location(6) morph: vec3<f32>,
+#endif
+#ifdef PRODUCT_DATA
+    @location(8) product_data: vec4<f32>,
 #endif
 #ifdef MOTION
 #ifdef SKINNED
@@ -365,6 +374,9 @@ fn vs_world(
     out.tangent = vec4<f32>(model * tangent.xyz, tangent.w * sign(determinant(model)));
     out.uv1 = uv1;
 #endif
+#ifdef PRODUCT_DATA
+    out.product_data = product_data;
+#endif
 #ifdef TRIPLANAR
     out.texture_position = texture_space_position(row, position);
 #ifdef PRODUCT_DISPLACES_NORMAL
@@ -528,6 +540,9 @@ fn standard_surface(in: VsOut, front: bool) -> Surface {
 #endif
 #endif
     surface.base = surface.tint * texture_color;
+#ifdef PRODUCT_DATA
+    surface.product_data = in.product_data;
+#endif
     surface.world_position = in.world_position;
     surface.uv = in.uv;
     surface.roughness = 1.0;

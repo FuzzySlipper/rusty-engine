@@ -1896,12 +1896,13 @@ unsafe fn generated_mesh_payload(
         || (request.uvs_len != 0 && request.uvs_len != request.positions_len)
         || (request.colors_len != 0 && request.colors_len != request.positions_len)
         || (request.layer_weights_len != 0 && request.layer_weights_len != request.positions_len)
+        || (request.product_data_len != 0 && request.product_data_len != request.positions_len)
         || request.indices_len < 3
         || !request.indices_len.is_multiple_of(3)
         || request.groups_len == 0
         || request.bindings_len == 0
     {
-        return Err(invalid("mesh requires at least 3 vertices, matching normals/optional UV/color/layer weight streams, complete triangle indices, and nonempty groups/bindings"));
+        return Err(invalid("mesh requires at least 3 vertices, matching normals/optional UV/color/layer weight/product data streams, complete triangle indices, and nonempty groups/bindings"));
     }
     // Layer weights travel in the colour stream, as a voxel chunk's do.
     if request.colors_len != 0 && request.layer_weights_len != 0 {
@@ -1929,6 +1930,11 @@ unsafe fn generated_mesh_payload(
         request.layer_weights,
         request.layer_weights_len,
         "mesh layer weights",
+    )?;
+    let product_data = borrowed_slice(
+        request.product_data,
+        request.product_data_len,
+        "mesh product data",
     )?;
     let indices = borrowed_slice(request.indices, request.indices_len, "mesh indices")?;
     let groups = borrowed_slice(request.groups, request.groups_len, "mesh groups")?;
@@ -2033,6 +2039,12 @@ unsafe fn generated_mesh_payload(
         billboard: request.billboard,
         vertex_occlusion: false,
         morph: None,
+        product_data: (!product_data.is_empty()).then(|| {
+            product_data
+                .iter()
+                .flat_map(|value| [value.x, value.y, value.z, value.w])
+                .collect()
+        }),
     };
     Ok((payload, slots, bindings))
 }
@@ -2733,6 +2745,7 @@ pub(crate) mod tests {
                 billboard: false,
                 vertex_occlusion: false,
                 morph: None,
+                product_data: None,
             },
             material_slots: vec![MeshMaterialSlot {
                 slot: 0,
@@ -2905,6 +2918,8 @@ pub(crate) mod tests {
             layer_palette_len: palette.len(),
             billboard: false,
             deferred: false,
+            product_data: std::ptr::null(),
+            product_data_len: 0,
         };
         let resource = admit_generated(&mut meshes, &request).unwrap();
         let payload = &meshes.resources[&resource.value].definition.payload;
@@ -2955,6 +2970,94 @@ pub(crate) mod tests {
             "CSHARP_MESH_ADMISSION"
         );
         assert_eq!(meshes.len(), 1);
+    }
+
+    #[test]
+    fn generated_mesh_product_data_travels_beside_colours_and_into_parts() {
+        let mut meshes = GeneratedMeshes::default();
+        let positions = triangle_positions();
+        let normals = TRIANGLE_NORMALS;
+        let colors = [NativeColor {
+            r: 0.5,
+            g: 0.5,
+            b: 0.5,
+            a: 1.0,
+        }; 3];
+        // Any values: the Engine never reads them.
+        let data = [0.0, 1.0, 2.0].map(|vertex| csharp_engine_abi::NativeVec4 {
+            x: vertex,
+            y: -vertex,
+            z: 524288.0 + vertex,
+            w: 3.5,
+        });
+        let indices = [0, 1, 2];
+        let groups = [NativeMeshGroup {
+            material_slot: 0,
+            start: 0,
+            count: 3,
+        }];
+        let bindings = [NativeMeshMaterialBinding {
+            material_slot: 0,
+            material: MATERIAL,
+        }];
+        let request = NativeMeshResourceCreateRequest {
+            positions: positions.as_ptr(),
+            positions_len: positions.len(),
+            normals: normals.as_ptr(),
+            normals_len: normals.len(),
+            uvs: std::ptr::null(),
+            uvs_len: 0,
+            colors: colors.as_ptr(),
+            colors_len: colors.len(),
+            indices: indices.as_ptr(),
+            indices_len: indices.len(),
+            groups: groups.as_ptr(),
+            groups_len: groups.len(),
+            bindings: bindings.as_ptr(),
+            bindings_len: bindings.len(),
+            layer_weights: std::ptr::null(),
+            layer_weights_len: 0,
+            layer_palette: std::ptr::null(),
+            layer_palette_len: 0,
+            billboard: false,
+            deferred: false,
+            product_data: data.as_ptr(),
+            product_data_len: data.len(),
+        };
+        let expected = [
+            0.0, -0.0, 524288.0, 3.5, 1.0, -1.0, 524289.0, 3.5, 2.0, -2.0, 524290.0, 3.5,
+        ];
+        let resource = admit_generated(&mut meshes, &request).unwrap();
+        let payload = &meshes.resources[&resource.value].definition.payload;
+        assert_eq!(payload.product_data.as_deref(), Some(&expected[..]));
+        let partition = meshes
+            .partition(NativeMeshPartitionRequest {
+                source: resource,
+                origin: NativeVec3::default(),
+                cell_size: NativeVec3 {
+                    x: 10.0,
+                    y: 10.0,
+                    z: 10.0,
+                },
+                deferred: false,
+            })
+            .unwrap();
+        let (_, part) = meshes
+            .take_part(NativeMeshPartitionPartRequest {
+                partition,
+                index: 0,
+            })
+            .unwrap();
+        assert_eq!(part.payload.product_data.as_deref(), Some(&expected[..]));
+        // Empty or one per vertex.
+        let short = NativeMeshResourceCreateRequest {
+            product_data_len: 2,
+            ..request
+        };
+        assert_eq!(
+            admit_generated(&mut meshes, &short).unwrap_err().code(),
+            "CSHARP_MESH_ADMISSION"
+        );
     }
 
     #[test]
@@ -3013,6 +3116,8 @@ pub(crate) mod tests {
             layer_palette_len: 0,
             billboard: false,
             deferred: false,
+            product_data: std::ptr::null(),
+            product_data_len: 0,
         };
         let resource = admit_generated(&mut meshes, &request).unwrap();
         positions[1].x = 99.0;
@@ -3065,6 +3170,8 @@ pub(crate) mod tests {
             layer_palette_len: 0,
             billboard: false,
             deferred: false,
+            product_data: std::ptr::null(),
+            product_data_len: 0,
         };
         assert_eq!(
             admit_generated(&mut meshes, &unrepresentable)
@@ -3145,6 +3252,8 @@ pub(crate) mod tests {
             layer_palette_len: 0,
             billboard: false,
             deferred: false,
+            product_data: std::ptr::null(),
+            product_data_len: 0,
         };
 
         let resource = admit_generated(&mut meshes, &request).unwrap();

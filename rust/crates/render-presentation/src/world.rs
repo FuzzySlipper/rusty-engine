@@ -2040,6 +2040,7 @@ mod tests {
                 billboard: false,
                 vertex_occlusion: false,
                 morph: None,
+                product_data: None,
             },
             material_slots: vec![MeshMaterialSlot {
                 slot: 0,

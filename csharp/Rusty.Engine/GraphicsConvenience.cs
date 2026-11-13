@@ -402,6 +402,23 @@ public readonly partial record struct MeshResourceCreateRequest
         : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, LayerWeights, LayerPalette, Billboard, false)
     {
     }
+
+    /// <summary>A mesh without product data; set <c>ProductData</c> to give a product shader four values per vertex.</summary>
+    public MeshResourceCreateRequest(
+        ReadOnlyMemory<Vector3> Positions,
+        ReadOnlyMemory<Vector3> Normals,
+        ReadOnlyMemory<Vector2> Uvs,
+        ReadOnlyMemory<Color> Colors,
+        ReadOnlyMemory<uint> Indices,
+        ReadOnlyMemory<MeshGroup> Groups,
+        ReadOnlyMemory<MeshMaterialBinding> Bindings,
+        ReadOnlyMemory<Vector4> LayerWeights,
+        ReadOnlyMemory<uint> LayerPalette,
+        bool Billboard,
+        bool Deferred)
+        : this(Positions, Normals, Uvs, Colors, Indices, Groups, Bindings, LayerWeights, LayerPalette, Billboard, Deferred, ReadOnlyMemory<Vector4>.Empty)
+    {
+    }
 }
 
 public readonly partial record struct MeshPartitionRequest

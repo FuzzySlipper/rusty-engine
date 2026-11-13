@@ -1324,6 +1324,7 @@ fn voxel_mesh_payload_with_material_slots(
         }),
         distance_field: chunk_distance_field(chunk),
         morph: None,
+        product_data: None,
     }
 }
 

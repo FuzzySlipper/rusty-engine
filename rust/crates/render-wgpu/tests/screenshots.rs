@@ -216,6 +216,7 @@ fn payload(
         billboard: false,
         vertex_occlusion: false,
         morph: None,
+        product_data: None,
     }
 }
 

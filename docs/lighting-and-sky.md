@@ -865,6 +865,18 @@ fn shade(surface: Surface) -> vec4<f32> {
   `rusty::finish::finish` returns its colour unchanged (the finish pass
   finishes everything the world draws), and `rusty::material` has the
   material's textures and samplers.
+- **Product data.** An inline mesh may carry four values per vertex that
+  the Engine never reads (`MeshResourceCreateRequest.ProductData`, a
+  `Vector4` per vertex, any values), and `shade` reads them interpolated as
+  `Surface.product_data`: where a fragment lies on a piece, codes that shape
+  it, anything that is not a colour. A mesh without them reads zero.
+  Partitions carry them as they carry colours. Slots whose material has no
+  product shader ignore them. A mesh with them costs 16 bytes a vertex on
+  the GPU and draws outside the static mesh pool (as a skinned or
+  tangent-mapped mesh does); one without costs nothing. The displace and
+  caster stages do not see them. `fixtures/csharp-mesh-composition`
+  (`mesh.productdata true`) draws them as colour, whole, cut into parts and
+  absent.
 - **What it returns.** The fragment's colour in linear light, and its
   alpha. The [finish pass](#exposure-tone-mapping-and-fog) applies bloom,
   exposure, tone mapping and fog after it. It may `discard`.

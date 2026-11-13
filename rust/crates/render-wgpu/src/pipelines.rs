@@ -31,14 +31,18 @@ const MESH_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
 const EXTRA_ATTRIBUTES: [wgpu::VertexAttribute; 2] =
     wgpu::vertex_attr_array![4 => Float32x4, 5 => Float32x2];
 const MORPH_ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![6 => Float32x3];
+/// An inline mesh's product data instead (`GpuMesh::product_data`).
+const PRODUCT_DATA_ATTRIBUTES: [wgpu::VertexAttribute; 1] =
+    wgpu::vertex_attr_array![8 => Float32x4];
 /// The previous frame's skinned vertices (`GpuMesh::previous_stream`):
 /// interleaved as the first stream, of which only the position is read.
 const PREVIOUS_ATTRIBUTES: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![7 => Float32x3];
 
 /// The vertex streams a mesh with `features` binds: the interleaved one,
-/// then its tangents (VERTEX_TANGENTS) or its morph targets (MORPH), then,
-/// writing motion (MOTION), a skinned mesh's previous vertices (SKINNED).
-/// The shadow and pre-pass pipelines take tangents never.
+/// then its tangents (VERTEX_TANGENTS), its morph targets (MORPH) or its
+/// product data (PRODUCT_DATA), then, writing motion (MOTION), a skinned
+/// mesh's previous vertices (SKINNED). The shadow and pre-pass pipelines
+/// take tangents never, nor product data, which casters drop.
 pub(crate) fn mesh_buffers(
     features: Features,
     tangents: bool,
@@ -59,6 +63,12 @@ pub(crate) fn mesh_buffers(
             array_stride: (MORPH_VERTEX_FLOATS * 4) as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
             attributes: &MORPH_ATTRIBUTES,
+        }));
+    } else if features.contains(Features::PRODUCT_DATA) {
+        buffers.push(Some(wgpu::VertexBufferLayout {
+            array_stride: 16,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &PRODUCT_DATA_ATTRIBUTES,
         }));
     }
     if features.contains(Features::SKINNED | Features::MOTION) {

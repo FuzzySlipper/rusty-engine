@@ -290,6 +290,9 @@ struct Surface {
     occlusion: f32,
     // Emitted light: the part's emission times the emissive map.
     emission: vec3<f32>,
+    // The mesh's product data, interpolated: values the Engine never reads,
+    // for a product shader. Zero for a mesh without.
+    product_data: vec4<f32>,
 };
 
 // What the shadow pass gives a product shader's caster stage

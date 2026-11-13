@@ -247,6 +247,7 @@ fn with_source(
         texture_space,
         distance_field,
         morph,
+        product_data,
     } = payload;
     MeshPayloadDescriptor {
         layout: layout.clone(),
@@ -261,6 +262,7 @@ fn with_source(
         texture_space: *texture_space,
         distance_field: distance_field.clone(),
         morph: morph.clone(),
+        product_data: product_data.clone(),
     }
 }
 
@@ -620,6 +622,7 @@ mod tests {
             billboard: false,
             vertex_occlusion: false,
             morph: None,
+            product_data: None,
         }
     }
 

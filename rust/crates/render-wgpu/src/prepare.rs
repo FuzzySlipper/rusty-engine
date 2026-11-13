@@ -28,10 +28,14 @@ pub(crate) enum Definition {
     Mesh(Box<StaticMeshAsset>),
 }
 
-/// What a worker made of a definition.
+/// What a worker made of a definition, boxed: it waits in the finished
+/// queue until it is taken in.
 pub(crate) enum Prepared {
-    Texture { thumb: Thumb, texture: GpuTexture },
-    Mesh(GpuMesh),
+    Texture {
+        thumb: Thumb,
+        texture: Box<GpuTexture>,
+    },
+    Mesh(Box<GpuMesh>),
 }
 
 type Work = Box<dyn FnOnce() -> Result<Prepared, String> + Send>;

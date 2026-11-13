@@ -243,6 +243,7 @@ pub fn payload(positions: Vec<f32>, normals: Vec<f32>, indices: Vec<u32>) -> Mes
         billboard: false,
         vertex_occlusion: false,
         morph: None,
+        product_data: None,
     }
 }
 

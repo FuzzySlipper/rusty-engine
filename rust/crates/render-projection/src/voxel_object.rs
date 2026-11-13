@@ -878,6 +878,7 @@ pub fn voxel_object_mesh_payload(
         texture_space: Some(texture_space),
         distance_field: None,
         morph: None,
+        product_data: None,
     }
 }
 

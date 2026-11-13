@@ -1115,6 +1115,13 @@ pub struct NativeMeshResourceCreateRequest {
     /// off the update, and what draws it draws once it is ready: it joins
     /// this call's preparation batch (`NativeResourcePreparationReadout`).
     pub deferred: bool,
+    /// Four values per vertex that the Engine never reads, for a product
+    /// shader: its shade stage reads them interpolated as
+    /// `Surface.product_data`, zero for a mesh without. Empty or one per
+    /// vertex; partitions carry them. Slots without a product shader ignore
+    /// them.
+    pub product_data: *const NativeVec4,
+    pub product_data_len: usize,
 }
 
 #[repr(C)]
