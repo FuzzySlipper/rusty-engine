@@ -65,12 +65,12 @@ public sealed partial class Product
     /// <summary>What one query answered, beyond revision numbers.</summary>
     private readonly record struct NavigationOutcome(NavigationPathOutcome Outcome, uint Reached, uint Visited, Vector3 NextWaypoint);
 
-    [DebugCommand("nav.start", Description = "Derives a collision-derived navigation grid of 103,041 cells over the level's blocks: mode inline (in the call) or deferred (on Engine workers). edit adds a box to the collision in the first update the grid is pending and removes it once it is installed, timing both. The first run admits the level's collision off the update first.")]
-    public string StartNavigation(string mode = "deferred", string edit = "")
+    [DebugCommand("nav.start", Description = "Derives a collision-derived navigation grid of 103,041 cells over the level's blocks: mode inline (in the call), deferred (on Engine workers), or deferred-edit (deferred, adding a box to the collision in the first update the grid is pending and removing it once it is installed, timing both). The first run admits the level's collision off the update first.")]
+    public string StartNavigation(string mode = "deferred")
     {
         if (navigating is not null) return "navigation is running";
         if (build is not null) return "a build is running";
-        Navigating next = new(mode == "inline" ? Mode.Inline : Mode.Deferred, edit == "edit", Stopwatch.GetTimestamp());
+        Navigating next = new(mode == "inline" ? Mode.Inline : Mode.Deferred, mode == "deferred-edit", Stopwatch.GetTimestamp());
         if (navigationSession is null)
         {
             next.Job = jobs.Run(token => Geometry.Bands(DefaultBlocksPerSide, BlockSize, RowsPerBand, token));

@@ -46,9 +46,9 @@ the partition by the product's `Restart`.
 
 ## Navigation
 
-`nav.start [inline|deferred]` derives a collision-derived navigation grid of
-321² = 103,041 one-metre cells over the level: the blocks and 16 m of floor
-around them, for a 0.3 m body that steps 0.5 m. The first run builds the
+`nav.start [inline|deferred|deferred-edit]` derives a collision-derived
+navigation grid of 321² = 103,041 one-metre cells over the level: the blocks
+and 16 m of floor around them, for a 0.3 m body that steps 0.5 m. The first run builds the
 blocks on the worker lane and admits them and the floor as static collision,
 deferred (73 band assets and the floor), into a session of its own. Each run
 then publishes a small grid synchronously (40 m square over the level's
@@ -67,7 +67,7 @@ compared: `matchesSynchronous` is the hash, cells, components and the four
 route queries all agreeing (edge tests differ when the inline call reuses the
 small grid's columns). That comparison's update comes after the measured ones.
 
-`nav.start deferred edit` also adds a 1 m box to the collision synchronously
+`nav.start deferred-edit` also adds a 1 m box to the collision synchronously
 in the first update the grid is pending, while the worker holds the scene, and
 once the grid is installed removes it and adds it again, reporting both calls'
 milliseconds (`editWhileDerivingMs`, `editAfterMs`); those calls count in the
