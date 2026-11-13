@@ -38,30 +38,54 @@ macro_rules! id_type {
     };
 }
 
-id_type!(/// One live or tombstoned gameplay entity.
-    EntityId);
-id_type!(/// An authority subject or policy identity.
-    SubjectId);
-id_type!(/// A named process or controller identity.
-    ProcessId);
-id_type!(/// A state-machine mode identity.
-    ModeId);
-id_type!(/// A typed signal identity.
-    SignalId);
-id_type!(/// An authority-owned entity classification label.
-    TagId);
-id_type!(/// A durable authored project identity.
-    ProjectId);
-id_type!(/// A durable authored scene identity.
-    SceneId);
-id_type!(/// A durable authored node within a scene.
-    SceneNodeId);
-id_type!(/// A durable prefab definition identity.
-    PrefabId);
-id_type!(/// A stable authored part within a prefab.
-    PrefabPartId);
-id_type!(/// One stored or admitted prefab instance.
-    PrefabInstanceId);
+id_type!(
+    /// One live or tombstoned gameplay entity.
+    EntityId
+);
+id_type!(
+    /// An authority subject or policy identity.
+    SubjectId
+);
+id_type!(
+    /// A named process or controller identity.
+    ProcessId
+);
+id_type!(
+    /// A state-machine mode identity.
+    ModeId
+);
+id_type!(
+    /// A typed signal identity.
+    SignalId
+);
+id_type!(
+    /// An authority-owned entity classification label.
+    TagId
+);
+id_type!(
+    /// A durable authored project identity.
+    ProjectId
+);
+id_type!(
+    /// A durable authored scene identity.
+    SceneId
+);
+id_type!(
+    /// A durable authored node within a scene.
+    SceneNodeId
+);
+id_type!(
+    /// A durable prefab definition identity.
+    PrefabId
+);
+id_type!(
+    /// A stable authored part within a prefab.
+    PrefabPartId
+);
+id_type!(
+    /// One stored or admitted prefab instance.
+    PrefabInstanceId
+);
 
 #[cfg(test)]
 mod tests {
