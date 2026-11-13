@@ -2,6 +2,7 @@ namespace Rusty.Engine
 {
 
 public sealed class ProductContent { }
+public sealed class PreparationJobs { }
 public readonly record struct ProductUpdateFacts;
 public readonly record struct ContentReferenceInfo;
 public readonly record struct ProductTimelineOutcome;

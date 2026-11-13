@@ -5,7 +5,7 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.ExceptionServices;
 using System.Threading;
-using System.Threading.Tasks;
+using Rusty.Engine.NativeProduct;
 
 namespace Rusty.Engine.Heightfields;
 
@@ -183,7 +183,7 @@ public abstract class TileStreamer : IDisposable
         {
             HeightfieldTileRequest tile = failure.Tile;
             inFlight.Remove((tile.Ring, tile.X, tile.Z, tile.Revision));
-            failure.Failure.Throw();
+            EngineWorker.Rethrow(failure.Failure);
         }
 
         for (int committed = 0; committed < commitsPerUpdate && finished.TryDequeue(out HeightfieldTileSamples? samples); committed++)
@@ -203,37 +203,24 @@ public abstract class TileStreamer : IDisposable
             if (!inFlight.Add((tile.Ring, tile.X, tile.Z, tile.Revision))) continue;
             free--;
             CancellationToken token = stopping.Token;
-            _ = Task.Run(() =>
+            // On Windows a tile samples below normal priority, so a game start whose tiles fill every core leaves
+            // the update, the window and the product's own pool work their cores.
+            EngineWorker.Run(sampler, belowNormal: true, () =>
             {
-                if (token.IsCancellationRequested) return;
-                // On Windows a tile samples below normal priority, so a game start whose tiles fill every core leaves
-                // the update, the window and the product's own pool work their cores. The pool thread gets its
-                // priority back however the sample ends. Elsewhere a lowered thread may not be raised again.
-                Thread worker = Thread.CurrentThread;
-                ThreadPriority priority = worker.Priority;
-                bool lowered = OperatingSystem.IsWindows();
-                if (lowered) worker.Priority = ThreadPriority.BelowNormal;
+                long started = Stopwatch.GetTimestamp();
+                HeightfieldTileSamples samples = new(tile);
                 try
                 {
-                    long started = Stopwatch.GetTimestamp();
-                    HeightfieldTileSamples samples = new(tile);
-                    try
-                    {
-                        sampler.Sample(tile, samples);
-                    }
-                    catch (Exception exception)
-                    {
-                        failed.Enqueue((tile, ExceptionDispatchInfo.Capture(exception)));
-                        return;
-                    }
-
-                    Interlocked.Add(ref sampleTicks, Stopwatch.GetTimestamp() - started);
-                    if (!token.IsCancellationRequested) finished.Enqueue(samples);
+                    sampler.Sample(tile, samples);
                 }
-                finally
+                catch (Exception exception)
                 {
-                    if (lowered) worker.Priority = priority;
+                    failed.Enqueue((tile, ExceptionDispatchInfo.Capture(exception)));
+                    return;
                 }
+
+                Interlocked.Add(ref sampleTicks, Stopwatch.GetTimestamp() - started);
+                if (!token.IsCancellationRequested) finished.Enqueue(samples);
             }, token);
         }
     }

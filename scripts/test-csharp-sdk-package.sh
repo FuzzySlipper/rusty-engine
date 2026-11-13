@@ -181,6 +181,7 @@ cp "$repo_root/fixtures/csharp-particle-emission/ParticleEmissionChecks.cs" "$co
 cp "$repo_root/fixtures/csharp-caught-refusals/CaughtRefusalChecks.cs" "$consumer_dir/CaughtRefusalChecks.cs"
 cp "$repo_root/fixtures/csharp-hardware-exceptions/HardwareExceptionChecks.cs" "$consumer_dir/HardwareExceptionChecks.cs"
 cp "$repo_root/fixtures/csharp-call-lane/CallLaneChecks.cs" "$consumer_dir/CallLaneChecks.cs"
+cp "$repo_root/fixtures/csharp-preparation-jobs/PreparationJobChecks.cs" "$consumer_dir/PreparationJobChecks.cs"
 cat > "$consumer_dir/Product.cs" <<'EOF'
 using Rusty.Engine;
 
@@ -194,6 +195,7 @@ public sealed class Product : IEngineProduct
     private readonly SpatialSession _spatial;
     private readonly VoxelScenePresentation _voxelPresentation;
     private readonly ProductContentMixedBundleChecks _mixedBundleChecks;
+    private readonly PreparationJobChecks _jobChecks;
     private bool _particlesChecked;
 
     public Product(ProductCreateContext context)
@@ -207,6 +209,7 @@ public sealed class Product : IEngineProduct
         ProductContentBundleChecks.Run(context);
         ContentContainerChecks.Run(context.Engine, context.Content.ReadText("module-library.txt").Trim());
         _mixedBundleChecks = new ProductContentMixedBundleChecks(context);
+        _jobChecks = new PreparationJobChecks(context.Jobs);
         _engine = context.Engine;
         _stream = _engine.Ui.OpenStream(new UiStreamRequest("sdk-package", "sdk.package.smoke"));
         _voxelMaterial = _engine.Graphics.CreateMaterial(new MaterialRequest(
@@ -233,6 +236,7 @@ public sealed class Product : IEngineProduct
                 CaughtRefusalChecks.Run(_engine, _stream);
                 HardwareExceptionChecks.Run(_engine);
                 CallLaneChecks.Run(_engine);
+                _jobChecks.Run(_engine);
             }
             catch (System.Exception error) { System.Console.Error.WriteLine(error); throw; }
             _particlesChecked = true;
@@ -253,7 +257,11 @@ public sealed class Product : IEngineProduct
     }
     public void Pause() { }
     public void Resume() { }
-    public void Restart() => PublishUi();
+    public void Restart()
+    {
+        _jobChecks.Restarted();
+        PublishUi();
+    }
     public void Shutdown() { }
     public bool CompleteTimeline(ProductTimelineCompletion completion) => completion.Ticket == 7;
     public void Dispose()
@@ -573,7 +581,12 @@ if [[ "$coreclr_smoke" == true ]]; then
         --persistence-root "$work_dir/persistence" \
         --direct-intent runtime.exercise=payload:runtime.exercise.payload \
         --port 0 \
-        --exercise
+        --exercise 2>&1 | tee "$work_dir/coreclr-exercise.log"
+    # The fault exercise restarts the product, which ends its preparation jobs' generation.
+    grep -Fxq PREPARATION_JOB_CHECKS_PASSED "$work_dir/coreclr-exercise.log" || {
+        echo "test-csharp-sdk-package: the CoreCLR exercise did not restart the product after its preparation job checks." >&2
+        exit 1
+    }
 fi
 
 if [[ "$run_aot" == true ]]; then

@@ -5,7 +5,7 @@ using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.ExceptionServices;
 using System.Threading;
-using System.Threading.Tasks;
+using Rusty.Engine.NativeProduct;
 
 namespace Rusty.Engine.VegetationTiles;
 
@@ -130,7 +130,7 @@ public sealed class VegetationStreamer : IDisposable
         {
             VegetationTileRequest tile = failure.Tile;
             inFlight.Remove((tile.X, tile.Z, tile.Revision));
-            failure.Failure.Throw();
+            EngineWorker.Rethrow(failure.Failure);
         }
 
         for (int committed = 0; committed < commitsPerUpdate && finished.TryDequeue(out VegetationTileSamples? samples); committed++)
@@ -155,9 +155,8 @@ public sealed class VegetationStreamer : IDisposable
             if (!inFlight.Add((tile.X, tile.Z, tile.Revision))) continue;
             free--;
             CancellationToken token = stopping.Token;
-            _ = Task.Run(() =>
+            EngineWorker.Run(sampler, belowNormal: false, () =>
             {
-                if (token.IsCancellationRequested) return;
                 long started = Stopwatch.GetTimestamp();
                 VegetationTileSamples samples = new(tile);
                 try

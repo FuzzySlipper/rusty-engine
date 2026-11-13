@@ -93,8 +93,9 @@ internal sealed class ProductLifetime
     // Each call's input events, rewritten by the next call: the product reads them as a span
     // that cannot outlive the call, so the update allocates nothing for them.
     private ProductInputEvent[] _input = [];
-    internal ProductLifetime(IEngineProduct product, IDebugCommandCatalog debugCatalog, ProductDebugExecutionContext debugging, ProductContent content) { _product = product; _debugCatalog = debugCatalog; Debugging = debugging; Content = content; }
+    internal ProductLifetime(IEngineProduct product, IDebugCommandCatalog debugCatalog, ProductDebugExecutionContext debugging, ProductContent content, PreparationJobs jobs) { _product = product; _debugCatalog = debugCatalog; Debugging = debugging; Content = content; Jobs = jobs; }
     internal ProductContent Content { get; }
+    internal PreparationJobs Jobs { get; }
     internal IEngineProduct Product => _product ?? throw new ObjectDisposedException(nameof(ProductLifetime));
     internal IDebugCommandCatalog DebugCatalog => _product is null ? throw new ObjectDisposedException(nameof(ProductLifetime)) : _debugCatalog;
     internal ProductDebugExecutionContext Debugging { get; }
@@ -114,6 +115,7 @@ internal sealed class ProductLifetime
     internal void Dispose()
     {
         _lastCallError = null;
+        Jobs.CancelAll();
         try
         {
             System.Threading.Interlocked.Exchange(ref _product, null)?.Dispose();
@@ -267,11 +269,12 @@ public static unsafe class ProductBridge
             if (args is null || handle is null || (args->content_len != 0 && args->content is null) || (args->input.context_len != 0 && args->input.context is null) || (args->input.direct_intents_len != 0 && args->input.direct_intents is null) || (args->input.physical_mappings_len != 0 && args->input.physical_mappings is null)) return 2;
             ProductInputConfiguration input = CopyInputConfiguration(args->input);
             ProductDebugExecutionContext debugging = new();
+            PreparationJobs jobs = new();
             EngineContext engine = new(args->engine);
             ProductContent content = new(BorrowContent(args->content, args->content_len), engine.Content);
             Func<ProductCreateContext, IEngineProduct> createProduct = s_createProduct ?? throw new InvalidOperationException("The product was created before it was bound.");
-            IEngineProduct product = createProduct(new ProductCreateContext(engine, content, input, debugging));
-            lifetime = new ProductLifetime(product, s_createDebugCatalog!(product), debugging, content);
+            IEngineProduct product = createProduct(new ProductCreateContext(engine, content, input, debugging, jobs));
+            lifetime = new ProductLifetime(product, s_createDebugCatalog!(product), debugging, content, jobs);
             *handle = (void*)GCHandle.ToIntPtr(GCHandle.Alloc(lifetime));
             return 1;
         }
@@ -324,10 +327,10 @@ public static unsafe class ProductBridge
     private static int Resume(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Resume(); lifetime.Debugging.RecordResumed(); });
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int Restart(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Restart(); lifetime.Debugging.RecordRestarted(); });
+    private static int Restart(void* handle) => Invoke(handle, static lifetime => { lifetime.Jobs.CancelAll(); lifetime.Product.Restart(); lifetime.Debugging.RecordRestarted(); });
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
-    private static int Shutdown(void* handle) => Invoke(handle, static lifetime => { lifetime.Product.Shutdown(); lifetime.Debugging.RecordShutdown(); });
+    private static int Shutdown(void* handle) => Invoke(handle, static lifetime => { lifetime.Jobs.CancelAll(); lifetime.Product.Shutdown(); lifetime.Debugging.RecordShutdown(); });
 
     [UnmanagedCallersOnly(CallConvs = [typeof(CallConvCdecl)])]
     private static int CompleteTimeline(void* handle, NativeProductTimelineCompletion* completion, byte* accepted)

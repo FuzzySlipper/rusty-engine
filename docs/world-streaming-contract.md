@@ -102,25 +102,38 @@ once with it and the worker's stack, so a worker that swallows the exception
 cannot hide it ([fixture](../fixtures/csharp-call-lane/CallLaneChecks.cs)).
 Release and NativeAOT builds skip the check.
 
-`SimulationScheduler.Advance` executes callbacks synchronously on the caller's
-admitted update path. It does not start workers, preempt expensive work or make
-an Engine call asynchronous. Split work into bounded pieces before scheduling
-it. ApplyResidency blocks until it returns; it rebuilds only the changed chunks,
-unless the transaction is deferred (below).
+Work too long for one update goes on the product's worker lane,
+`ProductCreateContext.Jobs`. `Jobs.Run(prepare)` starts `prepare` on a .NET
+thread-pool worker (below normal priority on Windows, as the heightfield
+samplers run, so the update and the window keep their cores) and returns a
+`PreparationJob<T>`. The job reads only product data the product will not
+change under it and calls no Engine service; the product polls
+`TryTake` from a later callback, usually at the start of its update, and makes
+the Engine calls with what it returns. `TryTake` hands the result over once and
+throws the job's exception there. Disposing the job, Restart and Shutdown
+cancel its token and drop its result, finished or not; checking the token is
+optional. The heightfield and vegetation samplers run the same way. In a Debug
+build an Engine call from inside a job or a sampler is refused like any other
+off-lane call, and the message names the job (the member, file and line that
+ran it) or the sampler type; `TryTake` or the streamer throws the refusal on
+the update, and the lane's next call does not raise it a second time
+([fixture](../fixtures/csharp-preparation-jobs/PreparationJobChecks.cs)).
 
-Pure product computation may run on product-owned workers using **copied,
-product-owned values only**, without Engine services, mutable product authority
-or `EntityStore` access. Transfer results through a bounded
-mailbox and admit them in a later Update. Tag results with product generation
-and chunk revision, discard stale work, and cancel/drain on restart/disposal.
-Do not await a worker that needs a callback-held Engine operation. This is
-ordinary C# computation, not an Engine worker facility or a second simulation
-clock. Content/persistence service calls still belong on the callback lane.
-Reading `ProductContent`'s admitted snapshot is not an Engine call, but every
-read from a `ProductContentBundle` (an opened container or build bundle) is.
-A lazy or cached read that a worker may be the first to touch is such a call:
-read it on the update and hand the worker the bytes. A Content call from a
-worker races the update's own and corrupts the native heap.
+`SimulationScheduler.Advance` executes callbacks synchronously on the caller's
+admitted update path. It does not start workers (the worker lane above does),
+preempt expensive work or make an Engine call asynchronous. Split work into
+bounded pieces before scheduling it. ApplyResidency blocks until it returns; it
+rebuilds only the changed chunks, unless the transaction is deferred (below).
+
+A job uses **copied, product-owned values only**, without Engine services,
+mutable product authority or `EntityStore` access. Tag a result with the chunk
+revision or request it answers and discard it when stale. Do not block a
+callback waiting on a job. Content/persistence service calls still belong on
+the callback lane. Reading `ProductContent`'s admitted snapshot is not an
+Engine call, but every read from a `ProductContentBundle` (an opened container
+or build bundle) is. A lazy or cached read that a job may be the first to touch
+is such a call: read it on the update and hand the job the bytes. A Content
+call from a worker races the update's own and corrupts the native heap.
 
 ### Residency and edits apply in place
 

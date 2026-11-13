@@ -18,7 +18,7 @@ internal static class EngineCallLane
     private static string? s_laneThreadName;
     // The first refusal not yet raised on the lane, so a worker that swallows its exception
     // cannot hide it.
-    private static string? s_pending;
+    private static Pending? s_pending;
 
     internal static void Enable() => s_checking = true;
 
@@ -50,6 +50,13 @@ internal static class EngineCallLane
         Thread caller = Thread.CurrentThread;
         int lane = s_laneThread;
         string callerName = caller.Name ?? (caller.IsThreadPoolThread ? "a .NET thread-pool worker" : "an unnamed thread");
+        string? work = EngineWorker.Running;
+        string workText = work is null
+            ? string.Empty
+            : $"It was called from inside {work}, which runs on an Engine worker beside the update and may only read " +
+              "product data the product will not change under it. Make the Engine call on the update instead, with what " +
+              "the work returned: a preparation job's result once PreparationJob.TryTake hands it over, a sampler's " +
+              "samples once the streamer commits them. ";
         string laneText = lane == 0
             ? "No Engine callback has run on any thread yet."
             : $"The lane's last Engine callback ran on thread '{s_laneThreadName ?? "unnamed"}' (managed thread {lane}).";
@@ -57,13 +64,15 @@ internal static class EngineCallLane
             $"Rusty Engine {service}.{operation} was called from thread '{callerName}' (managed thread " +
             $"{Environment.CurrentManagedThreadId}{(caller.IsThreadPoolThread ? ", thread pool" : string.Empty)}), " +
             "outside the product's Engine call lane, and was refused before it reached the Engine. " +
+            workText +
             "Engine services, including content reads, ContentReference and handle Dispose, may only be called " +
             "synchronously inside a callback the Engine invoked (product construction, Start, Update, Pause, Resume, " +
             "Restart, Shutdown, a debug command or the product's Dispose), on that callback's own thread. " +
             laneText + " " +
             "The Engine's native state is not shared between threads: a call from another thread races the update's own " +
             "calls and corrupts the native heap, which shows up much later as an unrelated crash. " +
-            "The usual cause is a sampler (IHeightfieldSampler, IVegetationSampler), Task.Run, a timer, an async " +
+            "The usual cause is a preparation job (PreparationJobs.Run), a sampler (IHeightfieldSampler, IVegetationSampler), " +
+            "Task.Run, a timer, an async " +
             "continuation or a thread-pool worker that reaches an Engine service, often indirectly through a lazy or " +
             "cached read of a ProductContentBundle. Fix: read or create what the worker needs on the update, and hand " +
             "the worker plain product-owned values (bytes, arrays, records). See docs/world-streaming-contract.md, " +
@@ -71,19 +80,32 @@ internal static class EngineCallLane
         string stack = Environment.StackTrace;
         Console.Error.WriteLine(message);
         Console.Error.WriteLine(stack);
-        Interlocked.CompareExchange(ref s_pending, $"{message}{Environment.NewLine}The refused call's stack on thread '{callerName}':{Environment.NewLine}{stack}", null);
-        throw new InvalidOperationException(message);
+        InvalidOperationException refusal = new(message);
+        Interlocked.CompareExchange(ref s_pending, new Pending(refusal, $"{message}{Environment.NewLine}The refused call's stack on thread '{callerName}':{Environment.NewLine}{stack}"), null);
+        throw refusal;
+    }
+
+    /// <summary>
+    /// A worker's exception is being raised on the lane: when it is the pending refusal, the lane's
+    /// next Engine call need not raise it again.
+    /// </summary>
+    internal static void Claim(Exception raised)
+    {
+        Pending? pending = Volatile.Read(ref s_pending);
+        if (pending is not null && ReferenceEquals(pending.Refusal, raised)) Interlocked.CompareExchange(ref s_pending, null, pending);
     }
 
     private static void RaisePending(string service, string operation)
     {
-        string? pending = Interlocked.Exchange(ref s_pending, null);
+        Pending? pending = Interlocked.Exchange(ref s_pending, null);
         if (pending is null) return;
         throw new InvalidOperationException(
             $"Rusty Engine {service}.{operation} was stopped on the Engine's call lane because an Engine call was refused " +
             "earlier on another thread, and that thread's exception may have been caught or lost. This call did not run. " +
-            $"The earlier refusal:{Environment.NewLine}{pending}");
+            $"The earlier refusal:{Environment.NewLine}{pending.Text}");
     }
+
+    private sealed record Pending(Exception Refusal, string Text);
 
     [EditorBrowsable(EditorBrowsableState.Never)]
     internal readonly struct Scope(bool entered) : IDisposable
