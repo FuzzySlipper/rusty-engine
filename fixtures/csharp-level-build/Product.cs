@@ -76,7 +76,6 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         public double CutReadyMs { get; set; }
         public double ReadyMs { get; set; }
         public int SettleLeft { get; set; } = SettleUpdates;
-        public ulong? FirstDropped { get; set; }
         public List<double> CallbackMs { get; } = [];
         public List<double> IntervalMs { get; } = [];
         public ulong DroppedSteps { get; set; }
@@ -94,8 +93,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         {
             current.IntervalMs.Add(Stopwatch.GetElapsedTime(current.LastUpdate, entered).TotalMilliseconds);
             current.LastUpdate = entered;
-            current.FirstDropped ??= update.Facts.DroppedStepCount;
-            current.DroppedSteps = update.Facts.DroppedStepCount - current.FirstDropped.Value;
+            current.DroppedSteps += update.Facts.DroppedStepCount;
             current.AdmittedSteps += update.Facts.AdmittedStepCount;
             Advance(current);
         }
