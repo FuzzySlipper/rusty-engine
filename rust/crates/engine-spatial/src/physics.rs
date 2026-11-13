@@ -232,7 +232,7 @@ pub fn integrate_kinematic_with_query(
     }
     let mut position = body.position;
     let mut collision = CollisionResolution::default();
-    for axis in 0..3 {
+    for (axis, blocked) in collision.blocked_axes.iter_mut().enumerate() {
         let mut movement = Vec3::ZERO;
         match axis {
             0 => movement.x = displacement.x,
@@ -247,7 +247,7 @@ pub fn integrate_kinematic_with_query(
         if body.collision_mode == CollisionMode::QueryRequired
             && query.axis_sweep_blocked(min, max, movement)
         {
-            collision.blocked_axes[axis] = true;
+            *blocked = true;
             match axis {
                 0 => next_velocity.x = 0.0,
                 1 => next_velocity.y = 0.0,
