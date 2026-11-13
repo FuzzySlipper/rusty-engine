@@ -10,8 +10,9 @@ namespace CsharpLevelBuild;
 /// <summary>
 /// Builds a generated level of about a million faceted triangles, a field of stone blocks, and
 /// shows it in parts, either all in one update (<c>inline</c>) or off the update (<c>deferred</c>):
-/// the geometry on the worker lane, then the mesh created and cut deferred, its source destroyed
-/// in the same call, and its parts taken deferred. The update's pacing is recorded while it builds.
+/// the geometry on the worker lane in bands of rows, then each band created and cut deferred, its
+/// source destroyed in the same call, a few bands an update, and the parts taken deferred. The
+/// update's pacing is recorded while it builds.
 /// </summary>
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
@@ -19,6 +20,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const int DefaultBlocksPerSide = 289;
     private const float Spacing = 1f, BlockSize = .8f, BlockHeight = .6f, HeightJitter = .5f;
     private const float PartCell = 32f;
+    // A deferred build creates the level in bands of rows, a band's streams copied in the call that
+    // creates it, so creating whole bands until this much of an update is spent keeps every update
+    // short. Bands lie within one row of parts.
+    private const int RowsPerBand = 4;
+    private const double CreateBudgetMs = 2;
     private const int TrianglesPerBlock = 12, VerticesPerBlock = TrianglesPerBlock * 3;
     private const ulong StepObjectId = 1, FirstPartObjectId = 100;
     private const double FieldOfView = 60, NearClip = .1, FarClip = 1000;
@@ -56,7 +62,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     private enum Mode { Inline, Deferred }
 
-    private enum Phase { Building, Cutting, Uploading, Settling }
+    private enum Phase { Building, Creating, Cutting, Uploading, Settling }
 
     /// <summary>One build: its phase, its handles and what was measured.</summary>
     private sealed class Build(Mode mode, int blocksPerSide, long started)
@@ -65,14 +71,19 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         public int BlocksPerSide { get; } = blocksPerSide;
         public long Started { get; } = started;
         public Phase Phase { get; set; }
-        public PreparationJob<Streams>? Job { get; set; }
-        public MeshPartition? Partition { get; set; }
+        public PreparationJob<Streams[]>? Job { get; set; }
+        public Streams[] Bands { get; set; } = [];
+        public int NextBand { get; set; }
+        public List<MeshPartition> Partitions { get; } = [];
         public ulong Batch { get; set; }
         public int Triangles { get; set; }
         public double GeometryMs { get; set; }
         public double CreateMs { get; set; }
+        public double CreateMaxMs { get; set; }
         public double PartitionMs { get; set; }
         public double TakeMs { get; set; }
+        public int MeshCount { get; set; }
+        public int PartCount { get; set; }
         public double CutReadyMs { get; set; }
         public double ReadyMs { get; set; }
         public int SettleLeft { get; set; } = SettleUpdates;
@@ -127,15 +138,28 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
                 current.Phase = Phase.Settling;
                 return;
             case Phase.Building:
-                if (!current.Job!.TryTake(out Streams? streams)) return;
+                if (!current.Job!.TryTake(out Streams[]? bands)) return;
                 current.GeometryMs = Stopwatch.GetElapsedTime(current.Started).TotalMilliseconds;
-                CreateAndCut(current, streams, deferred: true);
+                current.Bands = bands;
                 current.Job.Dispose();
                 current.Job = null;
-                current.Phase = Phase.Cutting;
+                current.Phase = Phase.Creating;
+                return;
+            case Phase.Creating:
+                long creating = Stopwatch.GetTimestamp();
+                do CreateAndCut(current, current.Bands[current.NextBand++], deferred: true);
+                while (current.NextBand < current.Bands.Length && Stopwatch.GetElapsedTime(creating).TotalMilliseconds < CreateBudgetMs);
+                if (current.NextBand == current.Bands.Length)
+                {
+                    current.Bands = [];
+                    current.Phase = Phase.Cutting;
+                }
                 return;
             case Phase.Cutting:
-                if (!engine.Graphics.ReadMeshPartition(current.Partition!).Ready) return;
+                foreach (MeshPartition partition in current.Partitions)
+                {
+                    if (!engine.Graphics.ReadMeshPartition(partition).Ready) return;
+                }
                 current.CutReadyMs = Stopwatch.GetElapsedTime(current.Started).TotalMilliseconds;
                 TakeParts(current);
                 current.Batch = engine.Graphics.ReadResourcePreparation().LastBatch;
@@ -149,30 +173,38 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         }
     }
 
-    /// <summary>Creates the whole mesh, cuts it into parts and destroys it, all in this call.</summary>
+    /// <summary>Creates a mesh, cuts it into parts and destroys it, all in this call.</summary>
     private void CreateAndCut(Build current, Streams streams, bool deferred)
     {
-        current.Triangles = streams.Indices.Length / 3;
+        current.Triangles += streams.Indices.Length / 3;
+        current.MeshCount++;
         long started = Stopwatch.GetTimestamp();
         using MeshResource whole = engine.Graphics.CreateMeshResource(streams.Request(stone, deferred));
-        current.CreateMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        double createMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        current.CreateMs += createMs;
+        current.CreateMaxMs = Math.Max(current.CreateMaxMs, createMs);
         started = Stopwatch.GetTimestamp();
-        current.Partition = engine.Graphics.PartitionMesh(new MeshPartitionRequest(whole, Vector3.Zero, new Vector3(PartCell), deferred));
-        current.PartitionMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        current.Partitions.Add(engine.Graphics.PartitionMesh(new MeshPartitionRequest(whole, Vector3.Zero, new Vector3(PartCell), deferred)));
+        current.PartitionMs += Stopwatch.GetElapsedTime(started).TotalMilliseconds;
     }
 
     private void TakeParts(Build current)
     {
         long started = Stopwatch.GetTimestamp();
-        uint count = engine.Graphics.ReadMeshPartition(current.Partition!).PartCount;
-        for (uint index = 0; index < count; index++)
+        foreach (MeshPartition partition in current.Partitions)
         {
-            MeshResource part = engine.Graphics.TakeMeshPartitionPart(new MeshPartitionPartRequest(current.Partition!, index));
-            parts.Add((part, engine.Graphics.CreateMeshAppearance(part)));
+            uint count = engine.Graphics.ReadMeshPartition(partition).PartCount;
+            for (uint index = 0; index < count; index++)
+            {
+                MeshResource part = engine.Graphics.TakeMeshPartitionPart(new MeshPartitionPartRequest(partition, index));
+                parts.Add((part, engine.Graphics.CreateMeshAppearance(part)));
+            }
+
+            partition.Dispose();
         }
 
-        current.Partition!.Dispose();
-        current.Partition = null;
+        current.PartCount = parts.Count;
+        current.Partitions.Clear();
         current.TakeMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
     }
 
@@ -183,7 +215,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         Clear();
         Build next = new(mode == "inline" ? Mode.Inline : Mode.Deferred, blocksPerSide, Stopwatch.GetTimestamp());
         // An inline build runs whole in the next update; a deferred one starts its job now.
-        if (next.Mode == Mode.Deferred) next.Job = jobs.Run(token => Geometry.Blocks(blocksPerSide, BlockSize, token));
+        if (next.Mode == Mode.Deferred) next.Job = jobs.Run(token => Geometry.Bands(blocksPerSide, BlockSize, RowsPerBand, token));
         build = next;
         return $"building {blocksPerSide}² blocks {mode}";
     }
@@ -195,7 +227,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         if (build is { } current)
         {
             current.Job?.Dispose();
-            current.Partition?.Dispose();
+            foreach (MeshPartition partition in current.Partitions) partition.Dispose();
             build = null;
         }
 
@@ -221,7 +253,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         double Percentile(double[] sorted, double p) => sorted.Length == 0 ? 0 : sorted[Math.Min(sorted.Length - 1, (int)(p * sorted.Length))];
         int hitches = stepMs <= 0 ? 0 : intervals.Count(interval => interval > HitchSteps * stepMs);
         return string.Create(CultureInfo.InvariantCulture,
-            $"mode={done.Mode.ToString().ToLowerInvariant()} triangles={done.Triangles} geometryMs={done.GeometryMs:F0} createMs={done.CreateMs:F1} partitionMs={done.PartitionMs:F1} " +
+            $"mode={done.Mode.ToString().ToLowerInvariant()} triangles={done.Triangles} meshes={done.MeshCount} geometryMs={done.GeometryMs:F0} createMs={done.CreateMs:F1} createMaxMs={done.CreateMaxMs:F1} partitionMs={done.PartitionMs:F1} parts={done.PartCount} " +
             $"cutReadyMs={done.CutReadyMs:F0} takeMs={done.TakeMs:F1} readyMs={done.ReadyMs:F0} updates={callbacks.Length} " +
             $"admittedSteps={done.AdmittedSteps} droppedSteps={done.DroppedSteps} " +
             $"callbackMs p50={Percentile(callbacks, .5):F2} p99={Percentile(callbacks, .99):F2} max={(callbacks.Length == 0 ? 0 : callbacks[^1]):F1} " +
@@ -276,7 +308,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     /// <summary>A restart ends the build: its job is cancelled with the generation.</summary>
     public void Restart()
     {
-        build?.Partition?.Dispose();
+        foreach (MeshPartition partition in build?.Partitions ?? []) partition.Dispose();
         build = null;
         Clear();
     }
@@ -286,7 +318,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     public void Dispose()
     {
         build?.Job?.Dispose();
-        build?.Partition?.Dispose();
+        foreach (MeshPartition partition in build?.Partitions ?? []) partition.Dispose();
         Clear();
         marker.Dispose();
         markerMesh.Dispose();
@@ -316,14 +348,29 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             (Vector3.UnitZ, Vector3.UnitX, Vector3.UnitY), (-Vector3.UnitZ, Vector3.UnitY, Vector3.UnitX),
         ];
 
-        public static Streams Blocks(int perSide, float size, CancellationToken token)
+        /// <summary>The level in bands of <paramref name="rowsPerBand"/> rows, each its own mesh.</summary>
+        public static Streams[] Bands(int perSide, float size, int rowsPerBand, CancellationToken token)
         {
-            int blocks = perSide * perSide;
+            Streams[] bands = new Streams[(perSide + rowsPerBand - 1) / rowsPerBand];
+            for (int band = 0; band < bands.Length; band++)
+            {
+                int first = band * rowsPerBand;
+                bands[band] = Rows(perSide, first, Math.Min(rowsPerBand, perSide - first), size, token);
+            }
+
+            return bands;
+        }
+
+        public static Streams Blocks(int perSide, float size, CancellationToken token) => Rows(perSide, 0, perSide, size, token);
+
+        private static Streams Rows(int perSide, int firstRow, int rows, float size, CancellationToken token)
+        {
+            int blocks = perSide * rows;
             Vector3[] positions = new Vector3[blocks * VerticesPerBlock];
             Vector3[] normals = new Vector3[positions.Length];
             uint[] indices = new uint[positions.Length];
             int next = 0;
-            for (int z = 0; z < perSide; z++)
+            for (int z = firstRow; z < firstRow + rows; z++)
             {
                 token.ThrowIfCancellationRequested();
                 for (int x = 0; x < perSide; x++)

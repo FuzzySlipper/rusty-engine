@@ -6,12 +6,15 @@ and shows it in 32 m parts. Two modes:
 
 - `inline`: in one update, build the streams, `CreateMeshResource`,
   `PartitionMesh`, take every part and create its appearance.
-- `deferred`: build the streams with `context.Jobs.Run` on the worker lane;
-  in the update that takes them, create the mesh with `Deferred`, partition it
-  with `Deferred` and dispose the source; once `ReadMeshPartition` is `Ready`,
-  take the parts (deferred) and create their appearances; once
+- `deferred`: build the streams with `context.Jobs.Run` on the worker lane,
+  in bands of 4 rows (73 meshes). Then, each update, create bands with
+  `Deferred`, partition each with `Deferred` and dispose its source, until 2 ms
+  of the update are spent. Once every band's `ReadMeshPartition` is `Ready`,
+  take all the parts (913, deferred) and create their appearances. Once
   `ReadResourcePreparation().CompletedBatch` reaches that call's batch, show
-  them.
+  them. A band's streams are copied in the call that creates it, so the bands
+  keep that copy, about 100 ms for the whole level, from landing in one
+  update.
 
 Until a build is ready the previous level, or nothing, is shown. A block turns
 every update so a frozen update shows.
@@ -27,9 +30,9 @@ Live debug commands:
 
 - `build.start [inline|deferred] [blocks-per-side]`: starts a build (289 by
   default). When it is shown and 30 more updates have run, the host log gets a
-  `LEVEL_BUILD` line, also returned by `build.report`: triangles, the
-  milliseconds to build the streams, of the `CreateMeshResource` and
-  `PartitionMesh` calls, until the cut was ready, of taking the parts, and
+  `LEVEL_BUILD` line, also returned by `build.report`: triangles, meshes,
+  the milliseconds to build the streams, of the `CreateMeshResource` calls
+  (summed, and the slowest) and of the `PartitionMesh` calls, the parts, until the cut was ready, of taking the parts, and
   until the level was ready; then the steps admitted and dropped, and the
   update callback's and the interval between updates' p50, p99 and maximum,
   with the intervals over two fixed steps (`hitches`).

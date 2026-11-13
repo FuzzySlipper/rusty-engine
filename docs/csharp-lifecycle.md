@@ -609,6 +609,12 @@ ulong batch = engine.Graphics.ReadResourcePreparation().LastBatch;
 // Show the level once ReadResourcePreparation().CompletedBatch >= batch.
 ```
 
+A deferred create still copies its streams in the call, about 100 ms for a
+million faceted triangles. A level that big keeps every update short by
+building its geometry in pieces, such as bands of rows, and creating and
+cutting whole pieces until a few milliseconds of the update are spent, then
+taking every part once all the cuts are ready.
+
 A cut that fails (a zero cell size) counts in `FailedResources`, and
 `ReadMeshPartition` then refuses with the reason. Disposing a partition still
 being cut drops its parts when the cut ends. See the
