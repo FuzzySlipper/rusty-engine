@@ -72,12 +72,24 @@ pub(crate) struct SplatSet {
     pub count: u32,
     /// The Gaussians to `BOUNDS_SIGMAS`, in the primitive's space.
     pub bounds: Aabb,
-    /// For a skinned primitive (its centres in bind space), the Gaussians a
-    /// joint moves to `BOUNDS_SIGMAS`, by skin joint, in bind space: under a
-    /// pose every Gaussian stands within the union of these boxes, each
-    /// moved by its joint (a blend of positions lies in their hull).
-    pub joint_bounds: Option<Vec<Aabb>>,
+    /// For a skinned primitive (its centres in bind space), the Gaussians
+    /// each skin joint moves (`animated.rs` `posed_splat_bounds`).
+    pub joint_bounds: Option<Vec<JointReach>>,
     group: wgpu::BindGroup,
+}
+
+/// The Gaussians one skin joint moves: under a pose every centre stands
+/// within the union of these centre boxes, each moved by its joint (a
+/// blend of positions lies in their hull). The palette moves the centres
+/// only: the shader turns a Gaussian by the blend with its columns'
+/// lengths removed, so its reach stays as it is in the instance's space.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct JointReach {
+    /// The centres, in bind space.
+    pub centres: Aabb,
+    /// The farthest any of them reaches past its centre, `BOUNDS_SIGMAS`
+    /// along its longest axis.
+    pub reach: f32,
 }
 
 /// One set of an instance as a view draws it.
@@ -1034,13 +1046,19 @@ pub(crate) fn gaussian_words(splats: &GlbSplats) -> (Vec<u32>, Aabb) {
 /// A skinned primitive's skin words (`splats.wgsl` `skins`) and each
 /// joint's bounds in bind space, or `None` for an unskinned one or one
 /// indexing more than [`MAX_SKIN_JOINTS`] joints (drawn in bind space).
-fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<Aabb>)> {
+fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<JointReach>)> {
     let (joints, weights) = (splats.joints.as_ref()?, splats.weights.as_ref()?);
     let highest = joints.iter().flatten().copied().max().unwrap_or(0) as usize;
     if highest >= MAX_SKIN_JOINTS {
         return None;
     }
-    let mut bounds = vec![Aabb::EMPTY; highest + 1];
+    let mut bounds = vec![
+        JointReach {
+            centres: Aabb::EMPTY,
+            reach: 0.0,
+        };
+        highest + 1
+    ];
     let mut words = Vec::with_capacity(joints.len() * 2);
     for (index, (joint, weight)) in joints.iter().zip(weights).enumerate() {
         let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
@@ -1064,8 +1082,8 @@ fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<Aabb>)> {
         for (joint, weight) in joint.iter().zip(weight) {
             if *weight > 0.0 {
                 let joint = &mut bounds[usize::from(*joint)];
-                joint.include(centre - Vec3::splat(reach));
-                joint.include(centre + Vec3::splat(reach));
+                joint.centres.include(centre);
+                joint.reach = joint.reach.max(reach);
             }
         }
     }

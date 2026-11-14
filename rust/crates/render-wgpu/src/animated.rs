@@ -1909,21 +1909,33 @@ fn splat_draw(
 fn posed_splat_bounds(set: &crate::splats::SplatSet, draw: &crate::splats::SplatDraw) -> Aabb {
     match &set.joint_bounds {
         Some(joints) if !draw.palette.is_empty() => {
-            let mut bounds = Aabb::EMPTY;
-            for (joint, joint_bounds) in joints.iter().enumerate() {
-                let Some(rows) = draw.palette.get(joint) else {
-                    continue;
-                };
-                if joint_bounds.is_empty() {
-                    continue;
-                }
-                let matrix = Mat4::from_cols_array(&rows_to_columns(rows));
-                bounds = bounds.union(&joint_bounds.transformed(&(draw.model * matrix)));
-            }
-            bounds
+            posed_joint_bounds(joints, &draw.palette).transformed(&draw.model)
         }
         _ => set.bounds.transformed(&draw.model),
     }
+}
+
+/// A skinned set's Gaussians in the instance's space under `palette`.
+fn posed_joint_bounds(joints: &[crate::splats::JointReach], palette: &[[f32; 12]]) -> Aabb {
+    let mut bounds = Aabb::EMPTY;
+    for (joint, reach) in joints.iter().enumerate() {
+        let Some(rows) = palette.get(joint) else {
+            continue;
+        };
+        if reach.centres.is_empty() {
+            continue;
+        }
+        // The palette moves the centres; the Gaussians keep their reach in
+        // the instance's space. The blend the shader turns them by has unit
+        // columns, which stretch no direction by more than √3.
+        let matrix = Mat4::from_cols_array(&rows_to_columns(rows));
+        let mut posed = reach.centres.transformed(&matrix);
+        let reach = Vec3::splat(reach.reach * 3f32.sqrt());
+        posed.include(posed.min - reach);
+        posed.include(posed.max + reach);
+        bounds = bounds.union(&posed);
+    }
+    bounds
 }
 
 /// A palette entry's three rows as a column-major matrix.
@@ -1944,4 +1956,36 @@ pub(crate) fn splat_set(
         .get(set.slot)?
         .splat_sets
         .get(set.set)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::splats::JointReach;
+
+    /// A joint whose palette scales by a half (a rest scale of 2 under an
+    /// inverse bind of a half, the posed joint's scale removed) moves its
+    /// Gaussians' centres by that half, but the shader draws them at their
+    /// own size: the posed bounds keep their whole reach.
+    #[test]
+    fn posed_splat_bounds_keep_the_reach_a_scaled_palette_does_not_shrink() {
+        let joints = [JointReach {
+            centres: Aabb {
+                min: Vec3::new(-0.2, 0.0, 0.0),
+                max: Vec3::new(0.2, 0.0, 0.0),
+            },
+            reach: 0.3,
+        }];
+        #[rustfmt::skip]
+        let half = [[
+            0.5, 0.0, 0.0, 1.0,
+            0.0, 0.5, 0.0, 0.0,
+            0.0, 0.0, 0.5, 0.0,
+        ]];
+        let bounds = posed_joint_bounds(&joints, &half);
+        // Centres at 1 ± 0.1, each reaching 0.3 either way.
+        assert!(bounds.min.x <= 0.6 && bounds.max.x >= 1.4, "{bounds:?}");
+        assert!(bounds.min.y <= -0.3 && bounds.max.y >= 0.3, "{bounds:?}");
+        assert!(bounds.min.z <= -0.3 && bounds.max.z >= 0.3, "{bounds:?}");
+    }
 }

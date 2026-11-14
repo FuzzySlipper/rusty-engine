@@ -494,6 +494,94 @@ fn the_splat_multiplier_scales_colour_in_linear_light() {
     );
 }
 
+/// A skinned splat on a joint posed at a rest scale of 2, bound under an
+/// inverse bind of a half, is drawn at its own size (the shader takes the
+/// palette's scale off its shape), so it is culled by its whole reach: one
+/// whose centre stands 0.2 m past the edge of an orthographic view still
+/// shows its tail there, two standard deviations out.
+#[test]
+fn a_skinned_splat_past_the_edge_of_the_view_shows_its_reach() {
+    use support::splat_glb::{arm_clip_pack_glb, skinned_splat_glb_on};
+    let mut harness = Harness::new(RendererOptions::default());
+    let skeleton = serde_json::json!([
+        {"name": "character", "children": [1]},
+        {"name": "root", "scale": [2.0, 2.0, 2.0], "children": [2]},
+        {"name": "arm", "translation": [0.0, 1.0, 0.0]},
+    ]);
+    #[rustfmt::skip]
+    let inverse_binds = [
+        0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 1.0,
+        0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, -1.0, 0.0, 1.0,
+    ];
+    let mut body = admit(
+        &mut harness,
+        "scaled",
+        skinned_splat_glb_on(
+            skeleton,
+            &inverse_binds,
+            &[Gaussian::round([0.0; 3], 0.1, [255, 0, 0, 255])],
+            &[0],
+        ),
+    );
+    let pack = admit_pack(&mut harness, arm_clip_pack_glb());
+    let hash = pack.content_hash.clone().expect("content hash");
+    body.clip_packs.push(AnimationClipPack {
+        asset: format!("animation-clip-pack/{}", hash.trim_start_matches("sha256:")),
+        runtime_format: pack.runtime_format,
+        content_hash: hash.clone(),
+        rig: pack.rig.clone().expect("the pack's rig"),
+        clips: pack.clips.clone(),
+        provenance: AnimationClipPackProvenance {
+            producer: "fixture".to_owned(),
+            source_hash: hash,
+            target_hash: body.content_hash.clone().expect("content hash"),
+            license: "CC0".to_owned(),
+        },
+        binding: AnimationClipPackBinding::JointNames,
+        translation_fits: Vec::new(),
+    });
+    // The view reaches 16/9 m either side of its axis; the Gaussian's
+    // centre stands 0.2 m past its right edge.
+    let half_width = WIDTH as f32 / HEIGHT as f32;
+    let instance = match splat_instance(1, &body, [half_width + 0.2, 0.0, -3.0]) {
+        RenderDiff::CreateAnimatedMeshInstance {
+            handle,
+            parent,
+            mut instance,
+        } => {
+            instance.playback = Some(AnimatedMeshPlaybackCommand::Sample {
+                clip: "raise".to_owned(),
+                normalized_time: 0.0,
+            });
+            RenderDiff::CreateAnimatedMeshInstance {
+                handle,
+                parent,
+                instance,
+            }
+        }
+        _ => unreachable!(),
+    };
+    harness.apply(vec![
+        RenderDiff::DefineAnimatedMesh { asset: body },
+        instance,
+    ]);
+    let mut view = front();
+    view.projection = render_host_contracts::RendererCameraProjection::Orthographic {
+        vertical_size: 2.0,
+        near: 0.1,
+        far: 100.0,
+    };
+    harness.render(&view);
+    let (_, rgba) = harness.render(&view);
+    assert_eq!(harness.renderer.gpu_readout().splats.instances, 1);
+    let edge = at(&rgba, (WIDTH - 1, HEIGHT / 2));
+    let background = at(&rgba, (4, 4));
+    assert!(
+        edge[0] > background[0] + 20,
+        "the tail at the edge {edge:?} over {background:?}"
+    );
+}
+
 /// The committed splat fixtures (`fixtures/render/assets/splats`) and the
 /// bytes the writer here makes for them.
 fn committed_fixtures() -> [(std::path::PathBuf, Vec<u8>); 2] {
