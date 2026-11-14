@@ -142,6 +142,8 @@ pub(crate) struct SplatSet {
     pub joint_bounds: Option<Vec<JointReach>>,
     /// The ellipsoids it casts as (`SplatShadowCaster::Ellipsoids`).
     pub ellipsoids: Vec<Ellipsoid>,
+    /// It has an albedo stream (`_ALBEDO`), which a lit run draws.
+    pub albedo: bool,
     group: wgpu::BindGroup,
 }
 
@@ -696,7 +698,7 @@ impl Splats {
             )
         };
         let gaussians = storage(&words, GAUSSIAN_BYTES as usize);
-        let normals = storage(&normal_words(splats), 4);
+        let surfaces = storage(&surface_words(splats), 8);
         let skin_buffer = storage(
             skin.as_ref().map_or(&[][..], |(words, _)| words.as_slice()),
             SKIN_BYTES as usize,
@@ -715,7 +717,7 @@ impl Splats {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: normals.as_entire_binding(),
+                    resource: surfaces.as_entire_binding(),
                 },
             ],
         });
@@ -724,6 +726,7 @@ impl Splats {
             bounds,
             joint_bounds: skin.map(|(_, bounds)| bounds),
             ellipsoids: ellipsoids(splats),
+            albedo: splats.albedos.is_some(),
             group,
         })
     }
@@ -1439,7 +1442,12 @@ impl Splats {
                         .map_or(DMat4::IDENTITY, |to| to * previous_model),
                     lens,
                     depth: [near, 1.0 / span, flag(ortho), flag(lit)],
-                    range: [first, set.count, u32::from(index == 0), 0],
+                    range: [
+                        first,
+                        set.count,
+                        u32::from(index == 0),
+                        u32::from(lit && set.albedo),
+                    ],
                     skin: [
                         palette_first,
                         u32::from(skinned),
@@ -2370,12 +2378,30 @@ fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<JointReach>)> {
     Some((words, bounds))
 }
 
-/// Each Gaussian's unit normal, octahedral (`splats.wgsl` `normals`): the
-/// asset's `_NORMAL` when it has one, otherwise its shortest axis pointing
-/// away from the centre of the Gaussians its heaviest joint carries (of the
-/// whole set when unskinned). A flat Gaussian on a figure's surface lies
-/// along it, so its shortest axis is the surface's normal; a round one's is
-/// a guess.
+/// Each Gaussian's surface stream (`splats.wgsl` `surfaces`), what a lit
+/// run reads: its normal (`normal_words`), then its albedo as sRGB unorm8
+/// rgb (`_ALBEDO`, 0 without one). One stream of two words keeps the
+/// projection within a stage's eight storage buffers.
+fn surface_words(splats: &GlbSplats) -> Vec<u32> {
+    let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
+    let albedo = |index: usize| {
+        splats.albedos.as_ref().map_or(0, |albedos| {
+            let color = albedos[index];
+            unorm(color[0]) | unorm(color[1]) << 8 | unorm(color[2]) << 16
+        })
+    };
+    normal_words(splats)
+        .into_iter()
+        .enumerate()
+        .flat_map(|(index, normal)| [normal, albedo(index)])
+        .collect()
+}
+
+/// Each Gaussian's unit normal, octahedral: the asset's `_NORMAL` when it
+/// has one, otherwise its shortest axis pointing away from the centre of
+/// the Gaussians its heaviest joint carries (of the whole set when
+/// unskinned). A flat Gaussian on a figure's surface lies along it, so its
+/// shortest axis is the surface's normal; a round one's is a guess.
 fn normal_words(splats: &GlbSplats) -> Vec<u32> {
     let heaviest = |index: usize| -> usize {
         match (&splats.joints, &splats.weights) {
@@ -2507,6 +2533,7 @@ mod tests {
             scales: Vec::new(),
             colors: Vec::new(),
             normals: None,
+            albedos: None,
             joints: None,
             weights: None,
         };
@@ -2595,6 +2622,7 @@ mod tests {
             scales: vec![[0.01, 0.2, 0.2]; 2],
             colors: vec![[1.0; 4]; 2],
             normals: None,
+            albedos: None,
             joints: Some(vec![[3, 0, 0, 0]; 2]),
             weights: Some(vec![[1.0, 0.0, 0.0, 0.0]; 2]),
         };

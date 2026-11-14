@@ -10,7 +10,7 @@
 //!     [--size 1920x1080] [--eye-height 0.88] [--distance 2.2] [--occluded]
 //!     [--clip-pack PATH --clip ID [--fit JOINT:K,A] [--at SECONDS] [--track SECONDS]]
 //!     [--arms ABDUCT,FOREARM] [--multiplier R,G,B] [--fog DENSITY]
-//!     [--pixel N [--palette PATH]] [--lit FLOOR]
+//!     [--pixel N [--palette PATH]] [--lit FLOOR] [--floor] [--caster splats|ellipsoids]
 //! ```
 //!
 //! - `--occluded`: a box between the camera and the figure's legs, a wall
@@ -40,6 +40,9 @@
 //!   default ones: a sun from his front left and above, ambient light and a
 //!   warm point light at his right front. Unlit captures to compare take the
 //!   same lights with `--lit-scene`.
+//! - `--floor`: a dark floor under him, and shadows on: the `--lit` sun
+//!   casts through its cascades.
+//! - `--caster`: he casts as his Gaussians or as an ellipsoid per joint.
 //! - `--pixel N`, `--palette PATH`: the figure on a grid of N-pixel blocks,
 //!   snapped to a palette JSON's `colours` and `extra` (sRGB hex).
 //! - `--pose-out`: write `pose.json`, every rig joint's world transform at
@@ -81,6 +84,8 @@ struct Arguments {
     palette: Vec<[f32; 3]>,
     lit: Option<f32>,
     lit_scene: bool,
+    floor: bool,
+    caster: SplatShadowCaster,
     pose_out: bool,
     track_joints: Option<Vec<String>>,
     centre: Option<String>,
@@ -176,6 +181,14 @@ fn arguments() -> Result<Arguments, String> {
                 arguments.lit_scene = true;
             }
             "--lit-scene" => arguments.lit_scene = true,
+            "--floor" => arguments.floor = true,
+            "--caster" => {
+                arguments.caster = match value()?.as_str() {
+                    "splats" => SplatShadowCaster::Splats,
+                    "ellipsoids" => SplatShadowCaster::Ellipsoids,
+                    _ => return Err("--caster is splats or ellipsoids".to_owned()),
+                };
+            }
             "--palette" => arguments.palette = palette(&value()?)?,
             "--pose-out" => arguments.pose_out = true,
             "--track-joints" => {
@@ -259,6 +272,7 @@ fn main() {
 
     let mut harness = Harness::new(RendererOptions {
         default_world_lights: !arguments.lit_scene,
+        shadows: arguments.floor,
         ..RendererOptions::default()
     });
     let (width, height) = arguments.size;
@@ -339,6 +353,7 @@ fn main() {
                         SplatLighting::Unlit
                     },
                     light_floor: arguments.lit.unwrap_or(0.0),
+                    shadow_caster: arguments.caster,
                     ..SplatAppearance::default()
                 },
                 asset: asset.asset.clone(),
@@ -420,7 +435,11 @@ fn main() {
                     // From his front left (+z, +x) and above, down and back.
                     direction: [-0.45, -0.75, -0.5],
                     range: None,
-                    shadow_intent: LightShadowIntent::Disabled,
+                    shadow_intent: if arguments.floor {
+                        LightShadowIntent::Requested
+                    } else {
+                        LightShadowIntent::Disabled
+                    },
                     shadow: Default::default(),
                 },
             },
@@ -450,6 +469,25 @@ fn main() {
                     shadow: Default::default(),
                 },
             },
+        ]);
+    }
+    if arguments.floor {
+        ops.extend([
+            RenderDiff::SetRendererSettings {
+                settings: RendererSettingsDescriptor {
+                    shadows: true,
+                    ..RendererSettingsDescriptor::DEFAULT
+                },
+            },
+            RenderDiff::DefineMaterial {
+                material: material("material/floor", [0.16, 0.17, 0.2, 1.0], None),
+            },
+            static_mesh(
+                "mesh/floor",
+                box_mesh([-8.0, -0.1, -8.0], [8.0, 0.0, 8.0], |_| 0),
+                "material/floor",
+            ),
+            instance(90, None, "mesh/floor", transform([0.0; 3], 0.0, [1.0; 3])),
         ]);
     }
     if let Some(density) = arguments.fog {

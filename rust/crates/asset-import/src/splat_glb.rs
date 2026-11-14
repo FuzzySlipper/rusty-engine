@@ -166,9 +166,10 @@ fn check_splat_primitive(
     Ok(())
 }
 
-/// Attributes a splat primitive may carry: `_NORMAL`, each Gaussian's
-/// surface normal, for lighting.
-const OPTIONAL_SPLAT_ATTRIBUTES: [&str; 1] = ["NORMAL"];
+/// Attributes a splat primitive may carry, for lighting: `_NORMAL`, each
+/// Gaussian's surface normal, and `_ALBEDO`, its colour without baked
+/// shading.
+const OPTIONAL_SPLAT_ATTRIBUTES: [&str; 2] = ["NORMAL", "ALBEDO"];
 
 const IDENTITY: [f64; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,

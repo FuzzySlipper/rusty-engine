@@ -63,7 +63,8 @@ struct Project {
     // orthographic projection; w: 1 in a lit run, which projects normals.
     depth: vec4<f32>,
     // x: the set's first slot in the run; y: its Gaussians; z: 1 for the
-    // run's first set, which writes the draw's vertex count.
+    // run's first set, which writes the draw's vertex count; w: 1 when a
+    // lit run draws the set's albedo for its colour.
     range: vec4<u32>,
     // x: the set's first row in `palettes`; y: 1 when it is skinned; z: the
     // first row of its previous palette; w: 1 when the view draws motion.
@@ -111,8 +112,10 @@ const INVALID: u32 = 0xffffffffu;
 // A Gaussian's skin: four joints (a byte each, lowest first) and their four
 // weights (unorm8).
 @group(1) @binding(1) var<storage, read> skins: array<vec2<u32>>;
-// A Gaussian's unit normal in the set's space, octahedral (snorm16 pair).
-@group(1) @binding(2) var<storage, read> normals: array<u32>;
+// What a lit run reads of a Gaussian: x its unit normal in the set's
+// space, octahedral (snorm16 pair); y its albedo (`_ALBEDO`), sRGB unorm8
+// rgb, its colour without baked shading.
+@group(1) @binding(2) var<storage, read> surfaces: array<vec2<u32>>;
 
 @group(0) @binding(10) var<uniform> sort: Sort;
 @group(0) @binding(11) var<storage, read> keys_in: array<u32>;
@@ -237,6 +240,11 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
             );
         }
     }
+    // A lit run draws the albedo where the set has one, at the colour's
+    // opacity.
+    if project.range.w == 1u {
+        color = vec4<f32>(unpack4x8unorm(surfaces[index].y).rgb, color.a);
+    }
     // The multiplier scales the colour in linear light; the layer keeps it
     // in display space.
     if any(project.tint.rgb != vec3<f32>(1.0)) {
@@ -320,7 +328,7 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     // A lit run's normal, turned as the Gaussian is, in view space.
     var normal = vec2<f32>(0.0);
     if project.depth.w > 0.5 {
-        normal = normalize(to_view * (turn * octahedral(normals[index]))).xy;
+        normal = normalize(to_view * (turn * octahedral(surfaces[index].x))).xy;
     }
     projected[slot] = Projected(ndc, pack4x8unorm(color), vec4<f32>(axis1, axis2), vec4<f32>(motion, normal));
 

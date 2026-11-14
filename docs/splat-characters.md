@@ -20,6 +20,7 @@ is a `POINTS` primitive (`mode` 0) with one value per Gaussian in each of:
 | `_COLOR` | float or normalized unsigned VEC4 | **sRGB-encoded** display colour in rgb; **linear** opacity in a. |
 | `JOINTS_0`, `WEIGHTS_0` | as glTF | The skin, on a skinned node: at most 256 joints a primitive indexes. |
 | `_NORMAL` (optional) | float or normalized signed VEC3 | The surface normal at the Gaussian, unit, pointing out of the figure, for [lighting](#lighting). |
+| `_ALBEDO` (optional) | float or normalized unsigned VEC4 | The colour without its baked shading, **sRGB-encoded** as `_COLOR` (alpha unread), which a lit figure draws. |
 
 `_COLOR` is not `COLOR_0`. glTF defines `COLOR_0` as linear, and these
 colours are display-referred: they are the values the splats were trained
@@ -184,17 +185,18 @@ engine.Animation.SetSplatAppearance(new(townsman, Vector3.One, 0, 0.5f, default,
   cascades (so he receives shadows), clustered point and spot lights,
   ambient light, the sky and the indirect-light probes. Every Gaussian
   along a ray is lit alike.
-- **The baked colour is the albedo**, diffuse only (roughness 1, no
-  metal). The paint already holds some shading, which the light multiplies,
-  as the web SDK's relighting does.
+- **The albedo.** A lit figure draws `_ALBEDO` where the asset has one,
+  at `_COLOR`'s opacity. Otherwise the baked colour stands in, and the
+  shading already in the paint is multiplied by the light, as the web SDK's
+  relighting does. Either way it is diffuse only (roughness 1, no metal).
 - **Light floor.** `LightFloor` (0 to 1) keeps that share of the baked
   colour however dark the light. At 0 the scene's ambient light is the
   floor.
-- **Normals.** With `_NORMAL` the asset's normals light him. Without it,
-  each Gaussian's shortest axis stands in, pointing away from the centre of
-  the Gaussians its heaviest joint carries: right for the flat Gaussians on
-  his surface, a guess for round ones, so lighting from the fallback is
-  noisier.
+- **Normals.** With `_NORMAL` the asset's normals light him, and his
+  clothes shade as smooth forms. Without it, each Gaussian's shortest axis
+  stands in, pointing away from the centre of the Gaussians its heaviest
+  joint carries: right for the flat Gaussians on his surface, a guess for
+  round ones, so lighting from the fallback is mottled.
 - **Pixel grid.** Each block is averaged (colour, depth and normal), lit
   once, then snapped to the palette: a block takes one shade, and shadows
   fall on the block grid.
@@ -214,6 +216,23 @@ casts. Lit or unlit, a figure casts only when it is asked to.
 | `None` (default) | nothing | | |
 | `Ellipsoids` | an ellipsoid around the Gaussians each joint carries, posed with it | a smooth mannequin: no hood, pouch or hem | +0.04 ms at 32 figures |
 | `Splats` | its Gaussians, re-projected for each shadow layer and cut where their alpha falls under 0.3 | its own silhouette, hood and stride included | about 0.15 ms a figure: +0.3 ms at 1, +5 ms at 32 |
+
+**Lit crowds.** Walking 48,000-Gaussian townsmen in the web crowd layout
+(`examples/splat_crowd --lights`) under a sun casting through four cascades,
+ambient light and a point light. Frame throughput, ms, median of three
+rounds:
+
+| Figures | GPU, size | Unlit | Lit | Lit, `Ellipsoids` | Lit, `Splats` |
+| --- | --- | --- | --- | --- | --- |
+| 1 | RTX 3080, 1080p | 0.52 | 0.75 | 0.83 | 1.00 |
+| 32 | RTX 3080, 1080p | 2.43 | 3.96 | 4.12 | 9.37 |
+| 32 | RTX 3080, 1440p | 3.12 | 5.25 | 5.41 | 10.73 |
+| 32 | RX 9070 XT, 1080p | 2.25 | 2.79 | 2.93 | 7.86 |
+| 32 | RX 9070 XT, 1440p | 2.55 | 3.49 | 3.64 | 8.54 |
+
+Most of lighting's cost is the layer keeping depth and normal: the light
+itself is a few hundredths of a millisecond. The web SDK's relighting cost
+20 to 25 % of its frames at 32 figures, for its proxy meshes.
 
 Use `Splats` for a few close figures and `Ellipsoids` for crowds. A
 software adapter casts `Splats` as ellipsoids, and `GpuReadout.splats`

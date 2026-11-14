@@ -803,6 +803,53 @@ fn overlapping_lit_gaussians_light_alike_with_and_without_motion() {
     assert_near(temporal, still, 3);
 }
 
+/// Lit, a figure draws its `_ALBEDO` for its colour; unlit, its `_COLOR`.
+#[test]
+fn a_lit_splat_draws_its_albedo_and_an_unlit_one_its_colour() {
+    let options = RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    };
+    let render = |lighting| {
+        let mut harness = Harness::new(options);
+        let disc = Gaussian {
+            scale: [0.3, 0.3, 0.005],
+            albedo: Some([50, 100, 200, 255]),
+            ..Gaussian::round([0.0; 3], 0.3, [200, 100, 50, 255])
+        };
+        let mut ops = splats(&mut harness, 1, &[disc], [0.0, 0.0, -3.0]);
+        ops.push(RenderDiff::CreateLight {
+            handle: RenderHandle::new(20),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0; 3],
+                intensity: 3.0,
+                enabled: true,
+                direction: [0.0, 0.0, -1.0],
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        });
+        ops.push(RenderDiff::SetSplatAppearance {
+            handle: RenderHandle::new(1),
+            appearance: SplatAppearance {
+                lighting,
+                ..SplatAppearance::default()
+            },
+        });
+        harness.apply(ops);
+        at(&harness.render(&front()).1, CENTRE)
+    };
+    let unlit = render(SplatLighting::Unlit);
+    assert_near(unlit, [200, 100, 50], 2);
+    let lit = render(SplatLighting::Lit);
+    assert!(
+        lit[2] > lit[1] && lit[1] > lit[0],
+        "lit {lit:?} draws the albedo's blue"
+    );
+}
+
 /// A lit figure receives the sun's cascaded shadow: a box between the sun
 /// and it darkens it to its floor.
 #[test]

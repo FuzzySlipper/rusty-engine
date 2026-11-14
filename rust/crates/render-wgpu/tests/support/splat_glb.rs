@@ -13,6 +13,9 @@ pub struct Gaussian {
     pub scale: [f32; 3],
     /// sRGB-encoded display colour, then linear opacity.
     pub color: [u8; 4],
+    /// `_ALBEDO`, sRGB-encoded (alpha unread), written when any Gaussian
+    /// of a GLB has one (its colour standing in for those without).
+    pub albedo: Option<[u8; 4]>,
 }
 
 impl Gaussian {
@@ -23,6 +26,7 @@ impl Gaussian {
             rotation: [0.0, 0.0, 0.0, 1.0],
             scale: [sigma; 3],
             color,
+            albedo: None,
         }
     }
 }
@@ -57,6 +61,15 @@ pub fn splat_glb(gaussians: &[Gaussian], translation: [f32; 3]) -> Vec<u8> {
         floats(&mut gaussians.iter().flat_map(|g| g.scale)),
     );
     let colors = push_view(&mut bin, gaussians.iter().flat_map(|g| g.color).collect());
+    let albedos = gaussians.iter().any(|g| g.albedo.is_some()).then(|| {
+        push_view(
+            &mut bin,
+            gaussians
+                .iter()
+                .flat_map(|g| g.albedo.unwrap_or(g.color))
+                .collect(),
+        )
+    });
     let mut min = [f32::MAX; 3];
     let mut max = [f32::MIN; 3];
     for gaussian in gaussians {
@@ -65,14 +78,18 @@ pub fn splat_glb(gaussians: &[Gaussian], translation: [f32; 3]) -> Vec<u8> {
             max[axis] = max[axis].max(gaussian.centre[axis]);
         }
     }
-    let document = json!({
+    let mut attributes = json!({"POSITION": 0, "_ROTATION": 1, "_SCALE": 2, "_COLOR": 3});
+    if albedos.is_some() {
+        attributes["_ALBEDO"] = json!(4);
+    }
+    let mut document = json!({
         "asset": {"version": "2.0", "generator": "render-wgpu splat fixtures"},
         "scene": 0,
         "scenes": [{"nodes": [0]}],
         "nodes": [{"name": "splats", "mesh": 0, "translation": translation}],
         "meshes": [{"name": "splats", "primitives": [{
             "mode": 0,
-            "attributes": {"POSITION": 0, "_ROTATION": 1, "_SCALE": 2, "_COLOR": 3}
+            "attributes": attributes
         }]}],
         "accessors": [
             {"bufferView": positions, "componentType": 5126, "count": count, "type": "VEC3",
@@ -85,6 +102,15 @@ pub fn splat_glb(gaussians: &[Gaussian], translation: [f32; 3]) -> Vec<u8> {
         "bufferViews": views,
         "buffers": [{"byteLength": bin.len()}],
     });
+    if let Some(view) = albedos {
+        document["accessors"]
+            .as_array_mut()
+            .expect("accessors")
+            .push(json!(
+                {"bufferView": view, "componentType": 5121, "normalized": true, "count": count,
+                 "type": "VEC4"}
+            ));
+    }
     glb(&document, &bin)
 }
 
