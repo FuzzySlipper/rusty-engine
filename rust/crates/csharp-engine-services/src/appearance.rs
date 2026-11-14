@@ -6332,17 +6332,26 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: &NativeSplatAppearanceRequest,
     ) -> Result<(), CsharpEngineServicesError> {
+        let palette =
+            unsafe { borrowed_slice(request.palette, request.palette_len, "splat palette") }?
+                .iter()
+                .map(|color| [color.r, color.g, color.b])
+                .collect();
         let appearance = render_model::SplatAppearance {
             multiplier: [
                 request.multiplier.x,
                 request.multiplier.y,
                 request.multiplier.z,
             ],
+            pixel_grid: request.pixel_grid,
+            pixel_coverage: request.pixel_coverage,
+            palette,
+            pose_rate: request.pose_rate,
         };
-        if !appearance.is_valid() {
+        if let Some(refusal) = appearance.refusal() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_SPLAT_APPEARANCE",
-                "a splat multiplier is finite and not negative",
+                refusal,
             ));
         }
         let staged = self.staged_mut()?;
@@ -16002,6 +16011,12 @@ fn shade(surface: Surface) -> vec4<f32> {
             closed.code(),
             "CSHARP_ANIMATION_CLIP_PACK_ASSOCIATION_CLOSED"
         );
+        let palette = [NativeColor {
+            r: 0.25,
+            g: 0.5,
+            b: 0.75,
+            a: 1.0,
+        }];
         let splat = |multiplier: f32| NativeSplatAppearanceRequest {
             appearance,
             multiplier: NativeVec3 {
@@ -16009,14 +16024,36 @@ fn shade(surface: Surface) -> vec4<f32> {
                 y: multiplier,
                 z: multiplier,
             },
+            pixel_grid: 5,
+            pixel_coverage: 0.5,
+            palette: palette.as_ptr(),
+            palette_len: palette.len(),
+            pose_rate: 8.0,
         };
-        assert_eq!(
-            bridge
-                .set_splat_appearance(&splat(-1.0))
-                .unwrap_err()
-                .code(),
-            "CSHARP_SPLAT_APPEARANCE"
-        );
+        for refused in [
+            splat(-1.0),
+            NativeSplatAppearanceRequest {
+                pixel_grid: 0,
+                ..splat(1.0)
+            },
+            NativeSplatAppearanceRequest {
+                pixel_grid: 17,
+                ..splat(1.0)
+            },
+            NativeSplatAppearanceRequest {
+                pixel_coverage: 0.0,
+                ..splat(1.0)
+            },
+            NativeSplatAppearanceRequest {
+                pose_rate: -1.0,
+                ..splat(1.0)
+            },
+        ] {
+            assert_eq!(
+                bridge.set_splat_appearance(&refused).unwrap_err().code(),
+                "CSHARP_SPLAT_APPEARANCE"
+            );
+        }
         let fact = appearance_fact(appearance);
         unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
         let call = bridge.take_staged_call();
@@ -16030,6 +16067,9 @@ fn shade(surface: Surface) -> vec4<f32> {
             RuntimeAppearanceCallOutput::Frame(frame) if frame.ops.iter().any(|op| matches!(
                 op,
                 RenderDiff::SetSplatAppearance { appearance, .. } if appearance.multiplier == [0.5; 3]
+                    && appearance.pixel_grid == 5
+                    && appearance.palette == [[0.25, 0.5, 0.75]]
+                    && appearance.pose_rate == 8.0
             ))
         )));
     }

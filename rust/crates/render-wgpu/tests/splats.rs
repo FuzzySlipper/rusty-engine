@@ -467,6 +467,7 @@ fn the_splat_multiplier_scales_colour_in_linear_light() {
         handle: RenderHandle::new(1),
         appearance: SplatAppearance {
             multiplier: [0.5, 0.5, 0.25],
+            ..SplatAppearance::default()
         },
     }]);
     let (_, rgba) = harness.render(&front());
@@ -492,6 +493,95 @@ fn the_splat_multiplier_scales_colour_in_linear_light() {
         [scaled(200, 0.5), scaled(100, 0.5), scaled(50, 0.25)],
         2,
     );
+}
+
+/// On a pixel grid a figure draws in whole blocks anchored at its origin's
+/// projection, each block one palette colour, and what stands in front of
+/// it still hides it pixel by pixel.
+#[test]
+fn a_figure_on_a_pixel_grid_draws_palette_blocks_behind_what_stands_in_front() {
+    const SIDE: u32 = 4;
+    let mut harness = Harness::new(RendererOptions::default());
+    // A slab 1.6 m by 1 m at z = −4, red left of its origin and blue right
+    // of it: about 62 by 39 pixels, its origin at the view's centre.
+    let slab: Vec<Gaussian> = (-32..=32)
+        .flat_map(|i| (-20..=20).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            let color = if i < 0 {
+                [255, 0, 0, 255]
+            } else {
+                [0, 0, 255, 255]
+            };
+            Gaussian::round([i as f32 * 0.025, j as f32 * 0.025, 0.0], 0.03, color)
+        })
+        .collect();
+    // A thin white box in front, its right edge at x = −0.22 m two metres away:
+    // 17 pixels left of centre, inside a block.
+    let mut ops = vec![
+        RenderDiff::DefineMaterial {
+            material: RenderMaterialDescriptor {
+                unlit: true,
+                ..material("material/box", [1.0; 4], None)
+            },
+        },
+        static_mesh(
+            "mesh/box",
+            box_mesh([-2.0, -1.0, -0.01], [-0.22, 1.0, 0.01], |_| 0),
+            "material/box",
+        ),
+        instance(
+            10,
+            None,
+            "mesh/box",
+            transform([0.0, 0.0, -2.0], 0.0, [1.0; 3]),
+        ),
+    ];
+    ops.extend(splats(&mut harness, 1, &slab, [0.0, 0.0, -4.0]));
+    harness.apply(ops);
+    harness.apply(vec![RenderDiff::SetSplatAppearance {
+        handle: RenderHandle::new(1),
+        appearance: SplatAppearance {
+            pixel_grid: SIDE,
+            palette: vec![[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+            ..SplatAppearance::default()
+        },
+    }]);
+    let (_, rgba) = harness.render(&front());
+    let (red, blue, white) = ([255, 0, 0], [0, 0, 255], [255, 255, 255]);
+    // Blocks wholly on the figure and clear of the box, two rows of them
+    // about the centre: each one palette colour, red left and blue right
+    // (the two blocks about the centre mix them).
+    let (x0, y0) = (CENTRE.0 - 4 * SIDE, CENTRE.1 - SIDE);
+    for block_x in (x0..CENTRE.0 + 6 * SIDE)
+        .step_by(SIDE as usize)
+        .filter(|x| x.abs_diff(CENTRE.0) > SIDE)
+    {
+        for block_y in (y0..CENTRE.1 + SIDE).step_by(SIDE as usize) {
+            let expected = if block_x < CENTRE.0 { red } else { blue };
+            for x in block_x..block_x + SIDE {
+                for y in block_y..block_y + SIDE {
+                    assert_eq!(
+                        at(&rgba, (x, y)),
+                        expected,
+                        "block ({block_x}, {block_y}) at ({x}, {y})"
+                    );
+                }
+            }
+        }
+    }
+    // The block the box's edge crosses: the box where it stands, the block's
+    // colour beside it.
+    let edge = x0 - SIDE;
+    for y in y0..y0 + SIDE {
+        for x in edge..edge + 3 {
+            assert_eq!(at(&rgba, (x, y)), white, "box at ({x}, {y})");
+        }
+        assert_eq!(
+            at(&rgba, (edge + 3, y)),
+            red,
+            "block beside the box at y {y}"
+        );
+    }
 }
 
 fn decode(byte: u8) -> f32 {

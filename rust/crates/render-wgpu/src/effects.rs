@@ -53,6 +53,7 @@ use crate::target::{ColorTarget, DEPTH_FORMAT};
 use crate::{ApplyIssue, Gpu, Renderer};
 
 mod grid;
+pub(crate) use grid::linear_srgb;
 
 pub use grid::PartsRigGridReadout;
 

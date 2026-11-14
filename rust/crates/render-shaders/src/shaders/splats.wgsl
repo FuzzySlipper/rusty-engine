@@ -674,3 +674,86 @@ fn fs_composite_depth_motion(in: CompositeVarying) -> MotionComposite {
     let surface = surface_at(in.position);
     return MotionComposite(surface.x, vec4<f32>(0.0), vec4<f32>(surface.yz, 0.0, 1.0));
 }
+
+// --- The pixel finish --------------------------------------------------------
+
+// A run's one instance on a screen-pixel grid (`splats.rs` `GridPlacement`):
+// `block` is the grid's anchor (a block corner, in target pixels), its block
+// side and its palette's colours; `rect` the blocks it covers (x0, y0, x1,
+// y1, the far edges exclusive); `cutoff.x` the share of a block it must
+// cover. `colours` holds each palette colour as its linear value, then its
+// sRGB one.
+struct Grid {
+    block: vec4<i32>,
+    rect: vec4<i32>,
+    cutoff: vec4<f32>,
+    colours: array<vec4<f32>>,
+};
+
+@group(1) @binding(32) var<storage, read> grid: Grid;
+
+struct Block {
+    // Linear, opaque.
+    color: vec3<f32>,
+    depth: f32,
+};
+
+// The block under the fragment: its colour the layer's coverage-weighted
+// average in display space, snapped to the palette by its display value,
+// and its depth the layer's, weighted as its colour is. None (discarded)
+// where the layer covers less than the cutoff.
+fn grid_block(position: vec4<f32>) -> Block {
+    let pixel = vec2<i32>(position.xy);
+    let side = grid.block.z;
+    let anchor = grid.block.xy;
+    let corner = anchor + vec2<i32>(floor(vec2<f32>(pixel - anchor) / f32(side))) * side;
+    let low = grid.rect.xy;
+    let high = grid.rect.zw;
+    var sum = vec4<f32>(0.0);
+    var depth = 0.0;
+    var count = 0.0;
+    for (var y = 0; y < side; y++) {
+        for (var x = 0; x < side; x++) {
+            let at = corner + vec2<i32>(x, y);
+            if all(at >= low) && all(at < high) {
+                sum += textureLoad(layer, at, 0);
+                depth += textureLoad(surface_layer, at, 0).x;
+                count += 1.0;
+            }
+        }
+    }
+    if sum.a <= 0.0 || sum.a < grid.cutoff.x * count {
+        discard;
+    }
+    let display = clamp(sum.rgb / sum.a, vec3<f32>(0.0), vec3<f32>(1.0));
+    var color = srgb_to_linear(display);
+    let colours = u32(grid.block.w);
+    var nearest = 1e30;
+    for (var index = 0u; index < colours; index++) {
+        let offset = display - grid.colours[index * 2u + 1u].rgb;
+        let distance = dot(offset, offset);
+        if distance < nearest {
+            nearest = distance;
+            color = grid.colours[index * 2u].rgb;
+        }
+    }
+    return Block(color, 1.0 - depth / sum.a);
+}
+
+@fragment
+fn fs_composite_grid(in: CompositeVarying) -> DepthComposite {
+    let block = grid_block(in.position);
+    return DepthComposite(block.depth, vec4<f32>(block.color, 1.0));
+}
+
+// Beside a temporal stage's motion target its blocks mark the reactive
+// mask, as a parts rig's do: the stage keeps none of its history there.
+@fragment
+fn fs_composite_grid_motion(in: CompositeVarying) -> MotionComposite {
+    let block = grid_block(in.position);
+    return MotionComposite(
+        block.depth,
+        vec4<f32>(block.color, 1.0),
+        vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, 1.0),
+    );
+}

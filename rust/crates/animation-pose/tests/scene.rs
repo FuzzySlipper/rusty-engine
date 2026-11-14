@@ -667,6 +667,65 @@ fn a_held_pose_is_sent_once_and_a_moved_instance_reads_where_it_is() {
     assert_ne!(poses[0].nodes, poses[1].nodes, "the running pose moved");
 }
 
+/// A splat figure's pose rate poses its clip at whole steps of Engine time:
+/// calls between steps send nothing, and a call that reaches a step poses
+/// the clip there.
+#[test]
+fn a_pose_rate_poses_the_clip_at_whole_steps() {
+    const RATE: f32 = 4.0;
+    let mut scene = Scene::new();
+    let body = scene.admit(BODY_GLB);
+    scene.call(
+        vec![
+            RenderDiff::DefineAnimatedMesh {
+                asset: body.clone(),
+            },
+            animated(BODY, None, &body, None),
+            RenderDiff::SetSplatAppearance {
+                handle: RenderHandle::new(BODY),
+                appearance: SplatAppearance {
+                    pose_rate: RATE,
+                    ..SplatAppearance::default()
+                },
+            },
+        ],
+        0.0,
+    );
+    scene.call(
+        vec![playback(BODY, play("run", AnimationLoopMode::Repeat, None))],
+        0.1,
+    );
+    let started = scene.sent.len();
+    let first = scene.sent.last().expect("posed at the start").1.clone();
+    // 0.1 s, then 0.2: the clip holds at its start until the step at 0.25.
+    scene.call(Vec::new(), 0.1);
+    assert_eq!(scene.sent.len(), started, "no step reached");
+    // Three frames of a 60 Hz beat summed reach 0.25 only by their sum.
+    for _ in 0..3 {
+        scene.call(Vec::new(), 1.0 / 60.0);
+    }
+    assert_eq!(scene.sent.len(), started + 1, "the step at 0.25 s");
+    let stepped = &scene.sent.last().expect("stepped").1;
+    assert_ne!(stepped.nodes, first.nodes, "the clip moved a step");
+    // The step is the clip at 0.25 s, as sampling it there poses it.
+    let model = scene.model(&body);
+    let duration = f64::from(model.clip_duration(model.clip_index("run").expect("run")));
+    let at_step = scene
+        .poses
+        .sample_clip(
+            RenderHandle::new(BODY),
+            "run",
+            (0.25 / duration) as f32,
+            &scene.world,
+        )
+        .expect("sampled");
+    for (node, sampled) in stepped.nodes.iter().zip(at_step.nodes.iter()) {
+        for (a, b) in node.iter().zip(sampled) {
+            assert!((a - b).abs() < 1e-4, "{a} against {b}");
+        }
+    }
+}
+
 /// The largest joint speed in the scene between an instance's two latest
 /// observations: what a ragdoll or severed part spawned from it moves with.
 fn joint_speed(reading: &JointReading) -> f32 {

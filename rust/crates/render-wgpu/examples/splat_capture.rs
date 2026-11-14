@@ -10,6 +10,7 @@
 //!     [--size 1920x1080] [--eye-height 0.88] [--distance 2.2] [--occluded]
 //!     [--clip-pack PATH --clip ID [--fit JOINT:K,A] [--at SECONDS] [--track SECONDS]]
 //!     [--arms ABDUCT,FOREARM] [--multiplier R,G,B] [--fog DENSITY]
+//!     [--pixel N [--palette PATH]]
 //! ```
 //!
 //! - `--occluded`: a box between the camera and the figure's legs, a wall
@@ -34,11 +35,13 @@
 //!   front, each at every time: `<view>-t<index>.png`.
 //! - `--multiplier R,G,B`: the splat colour multiplier.
 //! - `--fog DENSITY`: exponential fog, grey, which reads the figure's depth.
+//! - `--pixel N`, `--palette PATH`: the figure on a grid of N-pixel blocks,
+//!   snapped to a palette JSON's `colours` and `extra` (sRGB hex).
 //! - `--pose-out`: write `pose.json`, every rig joint's world transform at
 //!   the capture time, for a CPU check of the skinning.
 //!
-//! Writes `<view>.png` per view and `readout.json` (the splat readout and
-//! the `splats` pass timing over the captures).
+//! Writes `<view>.png` per view and `readout.json` (the splat readout, the
+//! `splats` pass timing over the captures and every timed pass's median).
 
 #[path = "../tests/support/mod.rs"]
 mod support;
@@ -69,6 +72,8 @@ struct Arguments {
     arms: Option<(f32, f32)>,
     multiplier: Option<[f32; 3]>,
     fog: Option<f32>,
+    pixel_grid: u32,
+    palette: Vec<[f32; 3]>,
     pose_out: bool,
     track_joints: Option<Vec<String>>,
     centre: Option<String>,
@@ -85,6 +90,34 @@ fn numbers<const N: usize>(text: &str, flag: &str) -> Result<[f32; N], String> {
     values
         .try_into()
         .map_err(|_| format!("{flag} takes {N} numbers"))
+}
+
+/// A palette JSON (asset-pipeline `creatures/image_palette.py`): its
+/// `colours` then its `extra`, sRGB hex, as linear colours.
+fn palette(path: &str) -> Result<Vec<[f32; 3]>, String> {
+    let text = std::fs::read_to_string(path).map_err(|error| format!("{path}: {error}"))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|error| format!("{path}: {error}"))?;
+    let hex = |value: &serde_json::Value| -> Result<[f32; 3], String> {
+        let text = value.as_str().ok_or("a palette colour is a hex string")?;
+        let bits = u32::from_str_radix(text.trim_start_matches('#'), 16)
+            .map_err(|_| format!("palette colour {text}"))?;
+        Ok([16, 8, 0].map(|shift| srgb_linear(((bits >> shift) & 255) as f32 / 255.0)))
+    };
+    ["colours", "extra"]
+        .iter()
+        .filter_map(|key| json.get(key).and_then(serde_json::Value::as_array))
+        .flatten()
+        .map(hex)
+        .collect()
+}
+
+fn srgb_linear(value: f32) -> f32 {
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
 }
 
 fn arguments() -> Result<Arguments, String> {
@@ -130,6 +163,8 @@ fn arguments() -> Result<Arguments, String> {
             }
             "--multiplier" => arguments.multiplier = Some(numbers::<3>(&value()?, "--multiplier")?),
             "--fog" => arguments.fog = Some(value()?.parse().map_err(|_| "--fog")?),
+            "--pixel" => arguments.pixel_grid = value()?.parse().map_err(|_| "--pixel")?,
+            "--palette" => arguments.palette = palette(&value()?)?,
             "--pose-out" => arguments.pose_out = true,
             "--track-joints" => {
                 arguments.track_joints = Some(
@@ -281,6 +316,9 @@ fn main() {
                 inspection: AnimatedMeshInspection::default(),
                 splat: SplatAppearance {
                     multiplier: arguments.multiplier.unwrap_or([1.0; 3]),
+                    pixel_grid: arguments.pixel_grid,
+                    palette: arguments.palette.clone(),
+                    ..SplatAppearance::default()
                 },
                 asset: asset.asset.clone(),
                 transform: Transform::IDENTITY,
@@ -534,13 +572,20 @@ fn main() {
         .iter()
         .find(|timing| timing.pass == "splats")
         .map(|timing| (timing.timed_frames, timing.median_gpu_ms));
+    let passes: Vec<String> = readout
+        .passes
+        .iter()
+        .filter(|timing| timing.timed_frames > 0)
+        .map(|timing| format!("\"{}\": {:.4}", timing.pass, timing.median_gpu_ms))
+        .collect();
     let report = format!(
-        "{{\"runs\": {}, \"instances\": {}, \"gaussians\": {}, \"refused\": {:?}, \"splats_pass\": {:?}, \"adapter\": {:?}}}\n",
+        "{{\"runs\": {}, \"instances\": {}, \"gaussians\": {}, \"refused\": {:?}, \"splats_pass\": {:?}, \"passes\": {{{}}}, \"adapter\": {:?}}}\n",
         readout.splats.runs,
         readout.splats.instances,
         readout.splats.gaussians,
         readout.splats.refused,
         timing,
+        passes.join(", "),
         harness.gpu.adapter_summary(),
     );
     std::fs::write(arguments.out.join("readout.json"), &report).expect("write the readout");

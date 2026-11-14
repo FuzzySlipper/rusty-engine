@@ -800,7 +800,7 @@ impl Renderer {
             // What the splats read at their next frame (`splat_instances`).
             RenderDiff::SetSplatAppearance { handle, appearance } => {
                 if let NodeKind::AnimatedMesh(descriptor) = &mut self.node_mut(*handle)?.kind {
-                    descriptor.splat = *appearance;
+                    descriptor.splat = appearance.clone();
                 }
             }
             // What an instance plays and its pose controls are the Engine's

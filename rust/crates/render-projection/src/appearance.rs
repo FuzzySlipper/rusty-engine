@@ -833,7 +833,7 @@ pub(crate) fn create_node(
             handle,
             parent,
             instance: AnimatedMeshInstanceDescriptor {
-                splat: *splat,
+                splat: splat.clone(),
                 playback_fade: None,
                 inspection: inspection.clone(),
                 asset: asset.clone(),
@@ -1002,7 +1002,7 @@ pub(crate) fn append_node_updates(
             if old_splat != new_splat {
                 operations.push(RenderDiff::SetSplatAppearance {
                     handle,
-                    appearance: *new_splat,
+                    appearance: new_splat.clone(),
                 });
             }
             append_material_parameters(operations, handle, old_parameters, new_parameters);

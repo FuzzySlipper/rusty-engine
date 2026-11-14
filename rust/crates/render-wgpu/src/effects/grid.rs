@@ -413,7 +413,7 @@ impl Grid {
 }
 
 /// sRGB-encoded value of a linear one in [0, 1].
-fn linear_srgb(value: f32) -> f32 {
+pub(crate) fn linear_srgb(value: f32) -> f32 {
     if value <= 0.003_130_8 {
         value * 12.92
     } else {

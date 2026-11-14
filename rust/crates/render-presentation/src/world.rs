@@ -1666,7 +1666,7 @@ impl PresentationWorld {
             }
             RenderDiff::SetSplatAppearance { handle, appearance } => {
                 match &mut self.node_mut(*handle)?.kind {
-                    NodeKind::AnimatedMesh(value) => value.splat = *appearance,
+                    NodeKind::AnimatedMesh(value) => value.splat = appearance.clone(),
                     _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
                 }
             }

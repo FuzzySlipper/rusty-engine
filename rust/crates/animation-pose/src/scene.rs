@@ -65,6 +65,10 @@ pub struct AnimatedScene {
     generations: BTreeMap<u64, u64>,
 }
 
+/// A step a call's time reaches by summed frame times still counts as
+/// reached (as `PartsRigScene`'s pose rate takes it).
+const STEP_SLACK: f64 = 1e-6;
+
 #[derive(Clone)]
 struct Instance {
     asset: String,
@@ -81,7 +85,14 @@ struct Instance {
     controls: AnimatedMeshPose,
     /// A command, control or model changed since the last evaluation.
     dirty: bool,
-    /// The Engine time and placement the pose was last evaluated at.
+    /// Poses a second its clips are posed at (`SplatAppearance::pose_rate`);
+    /// 0 poses at every time.
+    pose_rate: f64,
+    /// When its last playback command took effect: a stepped time never
+    /// falls before it, so a clip starts at its start.
+    commanded_at: f64,
+    /// The Engine time (stepped by the pose rate) and placement the pose was
+    /// last evaluated at.
     posed_at: f64,
     posed_world: Mat4,
     /// Each node's cut, while the controls cut the instance.
@@ -192,6 +203,8 @@ impl AnimatedScene {
                         completion: None,
                         controls: AnimatedMeshPose::default(),
                         dirty: true,
+                        pose_rate: f64::from(instance.splat.pose_rate),
+                        commanded_at: f64::NEG_INFINITY,
                         posed_at: f64::NAN,
                         posed_world: Mat4::IDENTITY,
                         owners: Vec::new(),
@@ -210,6 +223,15 @@ impl AnimatedScene {
                 RenderDiff::SetAnimatedMeshPlayback { handle, playback } => {
                     if let Some(instance) = self.instances.get_mut(handle) {
                         instance.command(playback, now);
+                    }
+                }
+                RenderDiff::SetSplatAppearance { handle, appearance } => {
+                    if let Some(instance) = self.instances.get_mut(handle) {
+                        let rate = f64::from(appearance.pose_rate);
+                        if instance.pose_rate != rate {
+                            instance.pose_rate = rate;
+                            instance.dirty = true;
+                        }
                     }
                 }
                 RenderDiff::SetAnimatedMeshPose { handle, pose } => {
@@ -539,6 +561,7 @@ impl Instance {
     fn command(&mut self, command: &AnimatedMeshPlaybackCommand, now: f64) {
         self.completion = None;
         self.dirty = true;
+        self.commanded_at = now;
         if self.playback.apply(command, now).is_err() {
             return;
         }
@@ -610,10 +633,16 @@ impl Instance {
                 }
             }
         }
+        // A pose rate poses the clips at whole steps of Engine time.
+        let posed = if self.pose_rate > 0.0 {
+            ((now * self.pose_rate + STEP_SLACK).floor() / self.pose_rate).max(self.commanded_at)
+        } else {
+            now
+        };
         let moved = world != self.posed_world;
         let needed = self.dirty
             || (moved && self.controls.reads_world())
-            || ((controller.is_some() || self.varies()) && self.posed_at != now);
+            || ((controller.is_some() || self.varies()) && self.posed_at != posed);
         if !needed {
             // A held pose is observed again at this call's time and where the
             // instance now is, with the same pose: its joints read in the
@@ -637,9 +666,9 @@ impl Instance {
             return None;
         }
         let (actions, finished) = self.playback.actions(
-            now,
+            posed,
             &duration,
-            controller.map(|controller| controller.actions(now, &duration)),
+            controller.map(|controller| controller.actions(posed, &duration)),
         );
         let (nodes, pieces, ik, unlayered) = evaluated(&model, &actions, &self.controls, world);
         self.owners = if self.controls.cuts.is_empty() {
@@ -649,7 +678,7 @@ impl Instance {
             node_cuts(&model.rig, &model.joints, &joints)
         };
         self.dirty = false;
-        self.posed_at = now;
+        self.posed_at = posed;
         self.posed_world = world;
         if finished {
             if let (Some(completing), Some(object_id)) = (self.completion.take(), self.object_id) {

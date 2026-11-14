@@ -4,8 +4,8 @@ use crate::NativeProductAbiFingerprint;
 
 pub const PRODUCT_ABI_PROTOCOL_VERSION: u32 = 1;
 pub const PRODUCT_ABI_FINGERPRINT: NativeProductAbiFingerprint = NativeProductAbiFingerprint {
-    word0: 0xA94FD27D730CCEC7,
-    word1: 0x397E5C9972DF8184,
-    word2: 0x1DB09CBC2072D752,
-    word3: 0x85B386A0703B927B,
+    word0: 0xF4C8A7213B256DB8,
+    word1: 0x000262760D83B715,
+    word2: 0x467BFA5FD6C7ACC9,
+    word3: 0x6FB305B3F3D2906A,
 };

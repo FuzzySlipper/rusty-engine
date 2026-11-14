@@ -113,6 +113,59 @@ baked, lower for a figure in shade.
 Posed bounds (the inspection bounds fact) hold each joint's Gaussians moved
 by that joint.
 
+## Pixel finish
+
+`SetSplatAppearance` also draws a figure as pixel art, as a parts rig's
+[`PixelGrid`](parts-rigs.md#on-a-screen-pixel-grid) does. The figure is
+drawn smooth, then cut into square blocks of `PixelGrid` output pixels (at
+least one render pixel under a render scale):
+
+- **One grid, anchored at the origin.** The grid has a corner at the
+  projection of the instance's origin, so the blocks hold their place on
+  the figure as it or the camera moves.
+- **Coverage-weighted blocks.** Each block is the average of the figure
+  under it, weighted by its coverage, in display space (as its splats
+  blend). A block draws where the figure covers at least `PixelCoverage`
+  of it.
+- **Depth per pixel.** The figure is drawn whole, and each block's pixels
+  are tested against the world at the block's depth (the figure's under
+  it, weighted as its colour), so a post in front hides blocks pixel by
+  pixel.
+- **Palette.** With a `Palette` of linear colours, each block takes the
+  nearest by sRGB value. The view's finish (exposure, grading, tone
+  mapping, fog) then applies to the blocks as to the rest of the scene.
+- **Alone in its run.** A gridded instance is sorted on its own, not
+  Gaussian by Gaussian with its neighbours: two gridded figures that
+  overlap each draw whole blocks, the nearer over the farther.
+- **Temporal stages.** Under TAAU or DLSS the blocks mark the reactive
+  mask, so the stage keeps no history over them.
+- **Pose rate.** `PoseRate` poses the instance's clips that many times a
+  second, their time stepping by whole steps of Engine time, so figures
+  at one rate step together.
+
+```csharp
+// Townsman 385 as the web shows him: 5-pixel blocks in his 52 colours.
+engine.Animation.SetSplatAppearance(new(townsman, Vector3.One, 5, 0.5f, his48, 0));
+```
+
+Against the web SDK's `pixel:5:his48` at its quarter camera (townsman 385,
+viggle441, Walking, four phases at 1920 × 1080):
+
+- **Same:** the block size, the palette, and colour per block.
+- **Grid.** The web's grid is fixed to the screen and covers the whole
+  frame, the world included. The Engine's follows the figure and covers
+  only him, so his blocks do not crawl as he walks.
+- **Edge.** The web averages each block with the background behind him,
+  then snaps it. The Engine averages only his coverage and cuts the block
+  at `PixelCoverage`, so his outline is his colours, not a blend with the
+  ground.
+- **Matching.** The web weights the colour distance by channel (2, 4, 3).
+  The Engine matches by plain sRGB distance, as parts rigs do. On his
+  blocks the two pick different colours for 5 to 6 % of blocks. Over the
+  figure, the shares of each palette colour differ from the web's by an
+  L1 of 0.14 to 0.15 (0.13 to 0.14 with the web's weights): alignment and
+  edges account for most of it.
+
 ## How it draws
 
 - **Resident data.** The renderer reads the GLB as admitted and keeps
@@ -218,4 +271,5 @@ binding's.
   tall (2.2 m away), and 0.19 ms at 3.6 m. Drawing the layer dominates, and
   it grows with the figure's pixels. When something reads the figure's
   depth or motion, every fragment writes the depth target too: 0.55 ms at
-  2.2 m and 0.30 ms at 3.6 m.
+  2.2 m and 0.30 ms at 3.6 m. A pixel grid always keeps the depth, and its
+  blocks add about 0.05 ms to the world pass at 2.2 m.

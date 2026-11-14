@@ -199,13 +199,34 @@ pub struct NativeAnimationClipTranslationFitRequest {
 }
 
 /// How an animated appearance's Gaussian splats draw
-/// (`docs/splat-characters.md`): `multiplier` scales their colour in linear
-/// light (1, 1, 1 draws them as baked; lower for a figure in shade).
+/// (`docs/splat-characters.md`).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeSplatAppearanceRequest {
     pub appearance: NativeAppearanceHandle,
+    /// Scales their colour in linear light: (1, 1, 1) draws them as baked;
+    /// lower for a figure in shade.
     pub multiplier: NativeVec3,
+    /// Draws the figure on a screen-pixel grid: drawn smooth, then cut into
+    /// square blocks of this many output pixels on a grid anchored at the
+    /// projection of the instance's origin, so the blocks hold their place
+    /// on the figure as it or the camera moves. Each block is the
+    /// coverage-weighted average of the figure under it, in display space.
+    /// 0 draws it as it is; at most 16.
+    pub pixel_grid: u32,
+    /// The share of a block the figure must cover for the block to draw,
+    /// above 0 and at most 1 (one half is a hard pixel-art edge); unread
+    /// without a pixel grid.
+    pub pixel_coverage: f32,
+    /// Borrowed for this call: linear colours each block takes the nearest
+    /// of by their sRGB values (alpha unread). None keeps the blocks' own
+    /// colours; at most 256; needs a pixel grid.
+    pub palette: *const NativeColor,
+    pub palette_len: usize,
+    /// Poses a second the instance's clips are posed at, their time stepping
+    /// by whole steps of Engine time, so every figure at one rate steps on
+    /// one beat; 0 poses at every call that moves time.
+    pub pose_rate: f32,
 }
 
 /// Adds an animated appearance to the ordinary Engine-owned appearance

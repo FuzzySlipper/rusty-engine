@@ -36,6 +36,14 @@
 //! (`frame.rs` says what does); otherwise the run leaves the depth as the
 //! opaque world left it.
 //!
+//! **Pixel grid.** An instance on a pixel grid (`SplatAppearance`) draws in
+//! a run of its own, its layer untested against the world so a block an
+//! occluder crosses keeps the figure's coverage. Its composite is one draw
+//! over the blocks its bounds project to (`splats.wgsl` `grid_block`): each
+//! block the layer's coverage-weighted average in display space, snapped
+//! to its palette, at the layer's depth there, tested pixel by pixel
+//! against the world's.
+//!
 //! **Cost.** Projecting and sorting run on the GPU for every view each frame
 //! with a splat run; nothing is copied to or from the CPU per frame. The
 //! readout counts the frame's runs, instances and Gaussians, and the
@@ -85,6 +93,13 @@ const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// `1 − depth` and, while the view draws motion, their motion,
 /// premultiplied and blended as the colour is. Half floats keep a depth's
 /// distance to about a part in 2048.
+/// A layer's grid buffer (`splats.wgsl` `Grid`): three rows of four
+/// words, then each palette colour's linear and sRGB values.
+const GRID_HEADER_BYTES: u64 = 48;
+const GRID_BYTES: u64 = GRID_HEADER_BYTES + render_model::PARTS_RIG_PALETTE_MAX as u64 * 2 * 16;
+/// Bounds reaching this close to the eye's plane (clip w) draw smooth.
+const GRID_NEAREST_W: f32 = 1e-4;
+
 fn surface_format(motion: bool) -> wgpu::TextureFormat {
     if motion {
         wgpu::TextureFormat::Rgba16Float
@@ -168,6 +183,8 @@ pub(crate) struct SplatInstance {
     /// Squared distance from the eye to the bounds' centre: its place among
     /// the blended draws.
     pub depth: f32,
+    /// Its pixel grid: it draws in a run of its own.
+    pub grid: Option<SplatGrid>,
 }
 
 /// A set by its asset's slot and its index among the asset's sets.
@@ -175,6 +192,146 @@ pub(crate) struct SplatInstance {
 pub(crate) struct SetRef {
     pub slot: u32,
     pub set: usize,
+}
+
+/// An instance drawn on a screen-pixel grid
+/// (`SplatAppearance::pixel_grid`).
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SplatGrid {
+    /// Block side in output pixels.
+    pub pixels: u32,
+    pub cutoff: f32,
+    /// Linear colours a block takes the nearest of, by sRGB value.
+    pub palette: Vec<[f32; 3]>,
+    /// The instance's origin in the world, where the grid is anchored.
+    pub origin: Vec3,
+}
+
+/// A run as a view draws it.
+pub(crate) struct SplatRun<'a> {
+    pub sets: Vec<RunSet<'a>>,
+    /// Its nearest and farthest view depth, which its sort keys span.
+    pub depth_range: (f32, f32),
+    /// Whether something after it reads the view's depth or motion, as
+    /// everything does while the view draws motion.
+    pub read_after: bool,
+    /// Its one instance's pixel grid, with the instance's world bounds.
+    pub grid: Option<(&'a SplatGrid, Aabb)>,
+}
+
+/// How a run's layer is composited.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Finish {
+    /// Smooth, writing the depth and motion its surface kept, if it kept them.
+    Smooth { surface: bool },
+    /// On a pixel grid: its blocks, inside the scissor rectangle
+    /// (x, y, width, height in target pixels).
+    Grid { scissor: [u32; 4] },
+    /// On a pixel grid wholly outside the viewport: nothing.
+    Off,
+}
+
+impl Finish {
+    /// Whether the run's layer keeps its surface: a grid's blocks take
+    /// their depth from it.
+    fn keeps_surface(&self) -> bool {
+        match self {
+            Self::Smooth { surface } => *surface,
+            Self::Grid { .. } | Self::Off => true,
+        }
+    }
+
+    /// Whether the run's layer is tested against the world's depth. A
+    /// grid's is drawn whole, as a parts rig's scratch image is, so a block
+    /// an occluder crosses keeps the figure's coverage behind it; each of
+    /// its pixels is tested as the block draws.
+    fn tested(&self) -> bool {
+        matches!(self, Self::Smooth { .. })
+    }
+}
+
+/// A block side in target pixels, a grid anchor (a block corner) and the
+/// blocks it covers (x0, y0, x1, y1, the far edges exclusive), or why there
+/// are none.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum GridPlacement {
+    Grid {
+        side: u32,
+        anchor: [i32; 2],
+        rect: [i32; 4],
+    },
+    Off,
+    /// The bounds reach the eye's plane: their projection is unbounded,
+    /// and the figure draws smooth.
+    Smooth,
+}
+
+/// A grid of blocks of `side` target pixels anchored at `origin`'s
+/// projection, over the projection of `bounds` widened by a pixel, cut to
+/// the viewport.
+fn place_grid(
+    bounds: &Aabb,
+    origin: Vec3,
+    view_proj: &Mat4,
+    viewport: crate::frame::PixelRect,
+    side: u32,
+) -> GridPlacement {
+    let size = glam::Vec2::new(viewport.width as f32, viewport.height as f32);
+    let corner = glam::Vec2::new(viewport.x as f32, viewport.y as f32);
+    let pixel = |point: Vec3| {
+        let clip = *view_proj * point.extend(1.0);
+        (clip.w > GRID_NEAREST_W).then(|| {
+            let ndc = clip.truncate().truncate() / clip.w;
+            corner + glam::Vec2::new(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * size
+        })
+    };
+    let Some(anchor) = pixel(origin) else {
+        return GridPlacement::Smooth;
+    };
+    let (mut low, mut high) = (glam::Vec2::splat(f32::MAX), glam::Vec2::splat(f32::MIN));
+    for index in 0..8 {
+        let point = Vec3::new(
+            if index & 1 == 0 {
+                bounds.min.x
+            } else {
+                bounds.max.x
+            },
+            if index & 2 == 0 {
+                bounds.min.y
+            } else {
+                bounds.max.y
+            },
+            if index & 4 == 0 {
+                bounds.min.z
+            } else {
+                bounds.max.z
+            },
+        );
+        let Some(at) = pixel(point) else {
+            return GridPlacement::Smooth;
+        };
+        low = low.min(at);
+        high = high.max(at);
+    }
+    let anchor = anchor.round();
+    let step = side as f32;
+    let snap = |value: f32, anchor: f32, round: fn(f32) -> f32| {
+        anchor + round((value - anchor) / step) * step
+    };
+    let rect = [
+        snap(low.x - 1.0, anchor.x, f32::floor).max(corner.x),
+        snap(low.y - 1.0, anchor.y, f32::floor).max(corner.y),
+        snap(high.x + 1.0, anchor.x, f32::ceil).min(corner.x + size.x),
+        snap(high.y + 1.0, anchor.y, f32::ceil).min(corner.y + size.y),
+    ];
+    if rect[2] <= rect[0] || rect[3] <= rect[1] {
+        return GridPlacement::Off;
+    }
+    GridPlacement::Grid {
+        side,
+        anchor: [anchor.x as i32, anchor.y as i32],
+        rect: rect.map(|value| value as i32),
+    }
 }
 
 /// The view a run is drawn for.
@@ -186,6 +343,9 @@ pub(crate) struct SplatTarget<'a> {
     pub viewport: crate::frame::PixelRect,
     /// The camera the pass draws with (jittered when it is).
     pub camera: crate::camera::CameraMatrices,
+    /// Render pixels per output pixel: a pixel grid's blocks are whole
+    /// output pixels.
+    pub render_scale: f32,
     /// While the view draws motion: its previous projection.
     pub motion: Option<SplatMotion>,
 }
@@ -260,6 +420,8 @@ struct Layer {
     resolve: Option<wgpu::TextureView>,
     surface: wgpu::TextureView,
     surface_resolve: Option<wgpu::TextureView>,
+    /// Its run's pixel grid (`splats.wgsl` `Grid`).
+    grid: wgpu::Buffer,
     group: wgpu::BindGroup,
 }
 
@@ -278,13 +440,17 @@ pub(crate) struct Splats {
     /// The most layers a view drew into this frame; the rest are dropped at
     /// the next.
     layers_used: usize,
-    /// By samples and, when the layer keeps its surface, whether that holds
-    /// motion.
-    draws: HashMap<(u32, Option<bool>), wgpu::RenderPipeline>,
-    /// Whether each of the view's runs kept its surface.
-    surfaces: Vec<bool>,
-    /// By target: the colour composite, then the depth and motion one.
-    composites: HashMap<ColorTarget, [wgpu::RenderPipeline; 2]>,
+    /// By samples, whether the layer is tested against the world's depth,
+    /// and, when it keeps its surface, whether that holds motion.
+    draws: HashMap<(u32, bool, Option<bool>), wgpu::RenderPipeline>,
+    /// How each of the view's runs is composited.
+    finishes: Vec<Finish>,
+    /// The viewport the view's runs were drawn for, which a grid's scissor
+    /// is put back to.
+    viewport: crate::frame::PixelRect,
+    /// By target: the colour composite, the depth and motion one, and a
+    /// pixel grid's.
+    composites: HashMap<ColorTarget, [wgpu::RenderPipeline; 3]>,
     /// Each drawn set's placing, while frames draw motion.
     history: HashMap<(render_model::RenderHandle, usize), History>,
     timer: Option<PassTimer>,
@@ -326,7 +492,8 @@ impl Splats {
             layers: Vec::new(),
             layers_used: 0,
             draws: HashMap::new(),
-            surfaces: Vec::new(),
+            finishes: Vec::new(),
+            viewport: crate::frame::PixelRect::whole(1, 1),
             composites: HashMap::new(),
             history: HashMap::new(),
             timer: PassTimer::new(gpu, "splats"),
@@ -427,7 +594,7 @@ impl Splats {
             let motion = format.motion;
             let pipeline = |label: &str,
                             entry: &str,
-                            depth_write: bool,
+                            depth_compare: Option<wgpu::CompareFunction>,
                             color: wgpu::ColorTargetState,
                             motion_write: MotionWrite| {
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -440,12 +607,13 @@ impl Splats {
                         buffers: &[],
                     },
                     primitive: wgpu::PrimitiveState::default(),
-                    // Inside the blended pass, whose depth it does not test:
-                    // the layer was tested against it.
+                    // Inside the blended pass, whose depth only a grid's
+                    // blocks test (each pixel of a block against what stands
+                    // there): the layer was tested against it.
                     depth_stencil: Some(wgpu::DepthStencilState {
                         format: DEPTH_FORMAT,
-                        depth_write_enabled: Some(depth_write),
-                        depth_compare: Some(wgpu::CompareFunction::Always),
+                        depth_write_enabled: Some(depth_compare.is_some()),
+                        depth_compare: Some(depth_compare.unwrap_or(wgpu::CompareFunction::Always)),
                         stencil: Default::default(),
                         bias: Default::default(),
                     }),
@@ -467,7 +635,7 @@ impl Splats {
                 } else {
                     "fs_composite"
                 },
-                false,
+                None,
                 wgpu::ColorTargetState {
                     format: format.format,
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
@@ -488,7 +656,7 @@ impl Splats {
                 } else {
                     "fs_composite_depth"
                 },
-                true,
+                Some(wgpu::CompareFunction::Always),
                 wgpu::ColorTargetState {
                     format: format.format,
                     blend: None,
@@ -500,28 +668,43 @@ impl Splats {
                     MotionWrite::None
                 },
             );
-            [colour, surface]
+            // A pixel grid's opaque blocks at the figure's depth.
+            let grid = pipeline(
+                "render-wgpu splat grid",
+                if motion {
+                    "fs_composite_grid_motion"
+                } else {
+                    "fs_composite_grid"
+                },
+                Some(wgpu::CompareFunction::LessEqual),
+                wgpu::ColorTargetState {
+                    format: format.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                },
+                if motion {
+                    MotionWrite::Cover
+                } else {
+                    MotionWrite::None
+                },
+            );
+            [colour, surface, grid]
         });
     }
 
     /// Project, sort and draw each run into a layer of its own, in order:
     /// `runs[i]` is composited by [`Self::draw_composite`]`(.., i)`.
-    /// `depth_ranges[i]` is run `i`'s nearest and farthest view depth, which
-    /// its sort keys span. `surfaces[i]` is whether something after run `i`
-    /// reads the view's depth or motion, as everything does while the view
-    /// draws motion.
     pub fn encode_runs(
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
-        runs: &[Vec<RunSet<'_>>],
-        depth_ranges: &[(f32, f32)],
-        surfaces: &[bool],
+        splat_runs: &[SplatRun<'_>],
         target: &SplatTarget<'_>,
     ) {
-        if self.pipelines.is_none() || runs.is_empty() {
+        if self.pipelines.is_none() || splat_runs.is_empty() {
             return;
         }
+        let runs: Vec<&[RunSet<'_>]> = splat_runs.iter().map(|run| &run.sets[..]).collect();
         let largest = runs
             .iter()
             .map(|run| run.iter().map(|entry| entry.set.count).sum::<u32>())
@@ -536,6 +719,7 @@ impl Splats {
         }
         let previous: Vec<Option<Placed>> = runs
             .iter()
+            .copied()
             .flatten()
             .map(|entry| {
                 let motion = target.motion.as_ref()?;
@@ -546,7 +730,7 @@ impl Splats {
         // previous one when it moved.
         let mut palettes: Vec<f32> = Vec::new();
         let mut palette_firsts = Vec::new();
-        for (entry, previous) in runs.iter().flatten().zip(&previous) {
+        for (entry, previous) in runs.iter().copied().flatten().zip(&previous) {
             let first = (palettes.len() / 4) as u32;
             for joint in &entry.draw.palette {
                 palettes.extend_from_slice(joint);
@@ -570,16 +754,88 @@ impl Splats {
         self.ensure_palettes(&gpu.device, palettes.len().max(4) as u64 * 4);
         self.ensure_run(&gpu.device, largest.max(1));
         let motion = target.motion.is_some();
-        self.surfaces.clear();
-        self.surfaces
-            .extend((0..runs.len()).map(|run| motion || surfaces[run]));
-        for kept in [false, true] {
-            if self.surfaces.contains(&kept) {
-                self.ensure_draw(&gpu.device, target.samples, kept.then_some(motion));
-            }
+        // A grid's blocks take blocks of whole output pixels, so of the render
+        // pixels a scaled view draws, at least one.
+        let placements: Vec<Option<GridPlacement>> = splat_runs
+            .iter()
+            .map(|run| {
+                run.grid.map(|(grid, bounds)| {
+                    let side = ((grid.pixels as f32 * target.render_scale).round() as u32).max(1);
+                    place_grid(
+                        &bounds,
+                        grid.origin,
+                        &target.camera.view_proj,
+                        target.viewport,
+                        side,
+                    )
+                })
+            })
+            .collect();
+        self.finishes.clear();
+        self.finishes
+            .extend(
+                splat_runs
+                    .iter()
+                    .zip(&placements)
+                    .map(|(run, placement)| match placement {
+                        Some(GridPlacement::Grid { rect, .. }) => Finish::Grid {
+                            scissor: [
+                                rect[0] as u32,
+                                rect[1] as u32,
+                                (rect[2] - rect[0]) as u32,
+                                (rect[3] - rect[1]) as u32,
+                            ],
+                        },
+                        Some(GridPlacement::Off) => Finish::Off,
+                        Some(GridPlacement::Smooth) | None => Finish::Smooth {
+                            surface: motion || run.read_after,
+                        },
+                    }),
+            );
+        self.viewport = target.viewport;
+        for finish in self.finishes.clone() {
+            self.ensure_draw(
+                &gpu.device,
+                target.samples,
+                finish.tested(),
+                finish.keeps_surface().then_some(motion),
+            );
         }
         for index in 0..runs.len() {
             self.layer(&gpu.device, index, target);
+        }
+        for (layer, (run, placement)) in self.layers.iter().zip(splat_runs.iter().zip(&placements))
+        {
+            let (Some((grid, _)), Some(GridPlacement::Grid { side, anchor, rect })) =
+                (run.grid, placement)
+            else {
+                continue;
+            };
+            let mut bytes = Vec::with_capacity(GRID_BYTES as usize);
+            for value in [
+                anchor[0],
+                anchor[1],
+                *side as i32,
+                grid.palette.len() as i32,
+            ] {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            for value in rect {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            for value in [grid.cutoff, 0.0, 0.0, 0.0] {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            for colour in &grid.palette {
+                let display =
+                    colour.map(|value| crate::effects::linear_srgb(value.clamp(0.0, 1.0)));
+                for value in [
+                    colour[0], colour[1], colour[2], 1.0, display[0], display[1], display[2], 1.0,
+                ] {
+                    bytes.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+            gpu.queue.write_buffer(&layer.grid, 0, &bytes);
         }
         self.layers_used = self.layers_used.max(runs.len());
 
@@ -616,7 +872,10 @@ impl Splats {
         let mut offsets = Vec::with_capacity(runs.len());
         let mut palette_index = palette_firsts.iter().copied();
         let mut previous_models = previous.iter();
-        for (run, &(near, far)) in runs.iter().zip(depth_ranges) {
+        for (run, &(near, far)) in runs
+            .iter()
+            .zip(splat_runs.iter().map(|run| &run.depth_range))
+        {
             let total: u32 = run.iter().map(|entry| entry.set.count).sum();
             let blocks = total.div_ceil(TILE);
             let sort = bytes.len() as u32;
@@ -721,8 +980,9 @@ impl Splats {
                 }
             }
             let layer = &self.layers[index];
-            let kept = self.surfaces[index];
-            let draw = &self.draws[&(target.samples, kept.then_some(motion))];
+            let finish = self.finishes[index];
+            let kept = finish.keeps_surface();
+            let draw = &self.draws[&(target.samples, finish.tested(), kept.then_some(motion))];
             let attachments = [
                 Some(wgpu::RenderPassColorAttachment {
                     view: &layer.color,
@@ -803,10 +1063,23 @@ impl Splats {
             return;
         };
         pass.set_bind_group(1, &layer.group, &[]);
-        let kept = self.surfaces.get(run).copied().unwrap_or(false);
-        for pipeline in &pipelines[..1 + usize::from(kept)] {
-            pass.set_pipeline(pipeline);
-            pass.draw(0..3, 0..1);
+        match self.finishes.get(run) {
+            Some(&Finish::Smooth { surface }) => {
+                for pipeline in &pipelines[..1 + usize::from(surface)] {
+                    pass.set_pipeline(pipeline);
+                    pass.draw(0..3, 0..1);
+                }
+            }
+            Some(&Finish::Grid {
+                scissor: [x, y, width, height],
+            }) => {
+                pass.set_scissor_rect(x, y, width, height);
+                pass.set_pipeline(&pipelines[2]);
+                pass.draw(0..3, 0..1);
+                let viewport = self.viewport;
+                pass.set_scissor_rect(viewport.x, viewport.y, viewport.width, viewport.height);
+            }
+            Some(Finish::Off) | None => {}
         }
     }
 
@@ -973,62 +1246,75 @@ impl Splats {
         });
     }
 
-    /// The layer's draw at `samples`, keeping its surface, with or without
-    /// motion, when `surface` is some.
-    fn ensure_draw(&mut self, device: &wgpu::Device, samples: u32, surface: Option<bool>) {
+    /// The layer's draw at `samples`, tested against the world's depth or
+    /// not, keeping its surface, with or without motion, when `surface` is
+    /// some.
+    fn ensure_draw(
+        &mut self,
+        device: &wgpu::Device,
+        samples: u32,
+        tested: bool,
+        surface: Option<bool>,
+    ) {
         let pipelines = self.pipelines.as_ref().expect("a device that draws splats");
-        self.draws.entry((samples, surface)).or_insert_with(|| {
-            let colour = Some(wgpu::ColorTargetState {
-                format: LAYER_FORMAT,
-                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                write_mask: wgpu::ColorWrites::ALL,
-            });
-            let targets = [
-                colour,
-                surface.map(|motion| wgpu::ColorTargetState {
-                    format: surface_format(motion),
+        self.draws
+            .entry((samples, tested, surface))
+            .or_insert_with(|| {
+                let colour = Some(wgpu::ColorTargetState {
+                    format: LAYER_FORMAT,
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
-                }),
-            ];
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("render-wgpu splat layer"),
-                layout: Some(&pipelines.draw_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &pipelines.module,
-                    entry_point: Some("vs_splat"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                primitive: wgpu::PrimitiveState {
-                    topology: wgpu::PrimitiveTopology::TriangleStrip,
-                    ..Default::default()
-                },
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: wgpu::MultisampleState {
-                    count: samples,
-                    ..Default::default()
-                },
-                fragment: Some(wgpu::FragmentState {
-                    module: &pipelines.module,
-                    entry_point: Some(if surface.is_some() {
-                        "fs_splat"
-                    } else {
-                        "fs_splat_colour"
+                });
+                let targets = [
+                    colour,
+                    surface.map(|motion| wgpu::ColorTargetState {
+                        format: surface_format(motion),
+                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
                     }),
-                    compilation_options: Default::default(),
-                    targets: &targets[..1 + usize::from(surface.is_some())],
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
-        });
+                ];
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some("render-wgpu splat layer"),
+                    layout: Some(&pipelines.draw_pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &pipelines.module,
+                        entry_point: Some("vs_splat"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    primitive: wgpu::PrimitiveState {
+                        topology: wgpu::PrimitiveTopology::TriangleStrip,
+                        ..Default::default()
+                    },
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(false),
+                        depth_compare: Some(if tested {
+                            wgpu::CompareFunction::LessEqual
+                        } else {
+                            wgpu::CompareFunction::Always
+                        }),
+                        stencil: Default::default(),
+                        bias: Default::default(),
+                    }),
+                    multisample: wgpu::MultisampleState {
+                        count: samples,
+                        ..Default::default()
+                    },
+                    fragment: Some(wgpu::FragmentState {
+                        module: &pipelines.module,
+                        entry_point: Some(if surface.is_some() {
+                            "fs_splat"
+                        } else {
+                            "fs_splat_colour"
+                        }),
+                        compilation_options: Default::default(),
+                        targets: &targets[..1 + usize::from(surface.is_some())],
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            });
     }
 
     /// Layer `index`, made or remade at the target's size.
@@ -1077,6 +1363,12 @@ impl Splats {
                 "render-wgpu splat surface resolved",
             )
         });
+        let grid = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("render-wgpu splat grid"),
+            size: GRID_BYTES,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render-wgpu splat layer"),
             layout: &pipelines.composite_layout,
@@ -1093,6 +1385,10 @@ impl Splats {
                         surface_resolve.as_ref().unwrap_or(&surface),
                     ),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 32,
+                    resource: grid.as_entire_binding(),
+                },
             ],
         });
         let layer = Layer {
@@ -1101,6 +1397,7 @@ impl Splats {
             resolve,
             surface,
             surface_resolve,
+            grid,
             group,
         };
         if index < self.layers.len() {
@@ -1192,7 +1489,11 @@ impl Pipelines {
         };
         let composite_layout = layout(
             "render-wgpu splat composite",
-            &[layer_texture(30), layer_texture(31)],
+            &[
+                layer_texture(30),
+                layer_texture(31),
+                storage(32, true, wgpu::ShaderStages::FRAGMENT),
+            ],
         );
         let pipeline_layout = |label: &str, groups: &[Option<&wgpu::BindGroupLayout>]| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1512,9 +1813,12 @@ mod tests {
         splats.encode_runs(
             &gpu,
             &mut encoder,
-            &[run],
-            &[(near, far)],
-            &[false],
+            &[SplatRun {
+                sets: run,
+                depth_range: (near, far),
+                read_after: false,
+                grid: None,
+            }],
             &SplatTarget {
                 depth: &depth,
                 width: 64,
@@ -1522,6 +1826,7 @@ mod tests {
                 samples: 1,
                 viewport: PixelRect::whole(64, 64),
                 camera,
+                render_scale: 1.0,
                 motion: None,
             },
         );

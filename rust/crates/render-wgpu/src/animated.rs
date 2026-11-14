@@ -1361,10 +1361,11 @@ impl Renderer {
             if !node.world_visible || crate::frame::ViewLayer::of(node.world_layer) != layer {
                 continue;
             }
-            let multiplier = match &node.kind {
-                NodeKind::AnimatedMesh(descriptor) => descriptor.splat.multiplier,
-                _ => [1.0; 3],
+            let appearance = match &node.kind {
+                NodeKind::AnimatedMesh(descriptor) => Some(&descriptor.splat),
+                _ => None,
             };
+            let multiplier = appearance.map_or([1.0; 3], |appearance| appearance.multiplier);
             let mut bounds = Aabb::EMPTY;
             let mut sets = Vec::with_capacity(asset.splat_nodes.len());
             for &(glb_node, set) in &asset.splat_nodes {
@@ -1376,11 +1377,20 @@ impl Renderer {
             if bounds.is_empty() || !frustum.intersects(&bounds) {
                 continue;
             }
+            let grid = appearance
+                .filter(|appearance| appearance.pixel_grid > 0)
+                .map(|appearance| crate::splats::SplatGrid {
+                    pixels: appearance.pixel_grid,
+                    cutoff: appearance.pixel_coverage,
+                    palette: appearance.palette.clone(),
+                    origin: node.world.w_axis.truncate(),
+                });
             instances.push(crate::splats::SplatInstance {
                 handle: *handle,
                 sets,
                 depth: ((bounds.min + bounds.max) * 0.5).distance_squared(eye),
                 bounds,
+                grid,
             });
         }
         instances.sort_by(|a, b| {

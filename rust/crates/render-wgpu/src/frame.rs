@@ -2558,6 +2558,7 @@ impl Renderer {
         let mut order = Vec::with_capacity(parts.len() + splats.len());
         let mut runs: Vec<Vec<usize>> = Vec::new();
         let mut run_gaussians = 0u32;
+        let mut run_gridded = false;
         let mut refused = 0u32;
         let (mut part, mut sprite, mut splat) = (0, 0, 0);
         loop {
@@ -2586,7 +2587,13 @@ impl Renderer {
                 }
                 Some(1) => {
                     let gaussians = splat_gaussians(&splats[splat]);
-                    let continues = matches!(order.last(), Some(Blended::Splats(_)));
+                    // An instance on a pixel grid draws in a run of its own:
+                    // its composite averages its layer by blocks.
+                    let gridded = splats[splat].grid.is_some();
+                    let continues = matches!(order.last(), Some(Blended::Splats(_)))
+                        && !run_gridded
+                        && !gridded;
+                    run_gridded = gridded;
                     if continues
                         && run_gaussians.saturating_add(gaussians)
                             <= crate::splats::MAX_RUN_GAUSSIANS
@@ -4478,40 +4485,6 @@ impl Renderer {
                     );
                 }
                 if !blended.runs.is_empty() {
-                    let runs: Vec<Vec<_>> = blended
-                        .runs
-                        .iter()
-                        .map(|run| {
-                            run.iter()
-                                .flat_map(|&instance| {
-                                    let instance = &splat_instances[instance];
-                                    instance
-                                        .sets
-                                        .iter()
-                                        .enumerate()
-                                        .map(|(index, draw)| (instance.handle, index, draw))
-                                })
-                                .filter_map(|(handle, index, draw)| {
-                                    Some(crate::splats::RunSet {
-                                        set: crate::animated::splat_set(&self.tables, draw.set)?,
-                                        draw,
-                                        key: (handle, index),
-                                    })
-                                })
-                                .collect()
-                        })
-                        .collect();
-                    let ranges: Vec<(f32, f32)> = blended
-                        .runs
-                        .iter()
-                        .map(|run| {
-                            splat_depth_range(
-                                &view.camera.view,
-                                run.iter()
-                                    .map(|&instance| &splat_instances[instance].bounds),
-                            )
-                        })
-                        .collect();
                     // A run keeps its depth and motion only for something
                     // after it that reads them: the finish's fog, a temporal
                     // stage or Ray Reconstruction (both draw motion), an
@@ -4528,19 +4501,54 @@ impl Renderer {
                             .precipitation
                             .is_some_and(|precipitation| precipitation.drops > 0 && world_layer);
                     let mut drawn_after = false;
-                    let mut surfaces = vec![read_after; runs.len()];
+                    let mut followed = vec![false; blended.runs.len()];
                     for item in blended.order.iter().rev() {
                         if let Blended::Splats(run) = *item {
-                            surfaces[run] |= drawn_after;
+                            followed[run] = drawn_after;
                         }
                         drawn_after = true;
                     }
+                    let runs: Vec<crate::splats::SplatRun<'_>> = blended
+                        .runs
+                        .iter()
+                        .zip(followed)
+                        .map(|(run, followed)| {
+                            let sets = run
+                                .iter()
+                                .flat_map(|&instance| {
+                                    let instance = &splat_instances[instance];
+                                    instance
+                                        .sets
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(index, draw)| (instance.handle, index, draw))
+                                })
+                                .filter_map(|(handle, index, draw)| {
+                                    Some(crate::splats::RunSet {
+                                        set: crate::animated::splat_set(&self.tables, draw.set)?,
+                                        draw,
+                                        key: (handle, index),
+                                    })
+                                })
+                                .collect();
+                            // A gridded instance is alone in its run.
+                            let first = &splat_instances[run[0]];
+                            crate::splats::SplatRun {
+                                sets,
+                                depth_range: splat_depth_range(
+                                    &view.camera.view,
+                                    run.iter()
+                                        .map(|&instance| &splat_instances[instance].bounds),
+                                ),
+                                read_after: read_after || followed,
+                                grid: first.grid.as_ref().map(|grid| (grid, first.bounds)),
+                            }
+                        })
+                        .collect();
                     self.splats.encode_runs(
                         &self.gpu,
                         &mut encoder,
                         &runs,
-                        &ranges,
-                        &surfaces,
                         &crate::splats::SplatTarget {
                             depth: view.target.depth,
                             width: view.target.width,
@@ -4548,6 +4556,7 @@ impl Renderer {
                             samples: view.target.samples,
                             viewport: view.viewport,
                             camera: view.drawn_camera(),
+                            render_scale: view.render_scale,
                             motion: view.motion.as_ref().map(|motion| {
                                 let (previous_view_proj, to_pixels, previous_eye) =
                                     motion.previous_projection();

@@ -1519,17 +1519,53 @@ pub struct AnimatedMeshInstanceDescriptor {
 
 /// How an animated instance's Gaussian splats draw
 /// (`docs/splat-characters.md`).
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SplatAppearance {
     /// Scales their colour in linear light: (1, 1, 1) draws them as baked.
     pub multiplier: [f32; 3],
+    /// Drawn on a screen-pixel grid: the figure is drawn smooth, then cut
+    /// into square blocks of this many output pixels on a grid anchored at
+    /// the projection of the instance's origin, each block the
+    /// coverage-weighted average of the figure under it in display space.
+    /// 0 draws it as it is; at most `PARTS_RIG_PIXEL_GRID_MAX`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pixel_grid: u32,
+    /// The share of a block the figure must cover for the block to draw,
+    /// above 0 and at most 1; unread without a pixel grid.
+    #[serde(default = "half")]
+    pub pixel_coverage: f32,
+    /// Linear colours each block takes the nearest of, by their sRGB
+    /// values; none keeps the blocks' own colours. Needs a pixel grid; at
+    /// most `PARTS_RIG_PALETTE_MAX`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub palette: Vec<[f32; 3]>,
+    /// Poses a second its clips are posed at, their time stepping by whole
+    /// steps of Engine time; 0 poses at every call that moves time.
+    #[serde(default, skip_serializing_if = "is_zero_rate")]
+    pub pose_rate: f32,
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+fn is_zero_rate(value: &f32) -> bool {
+    *value == 0.0
+}
+
+fn half() -> f32 {
+    0.5
 }
 
 impl Default for SplatAppearance {
     fn default() -> Self {
         Self {
             multiplier: [1.0; 3],
+            pixel_grid: 0,
+            pixel_coverage: half(),
+            palette: Vec::new(),
+            pose_rate: 0.0,
         }
     }
 }
@@ -1539,11 +1575,42 @@ impl SplatAppearance {
         *self == Self::default()
     }
 
-    /// Finite and not negative.
-    pub fn is_valid(&self) -> bool {
-        self.multiplier
+    /// Why it is refused: a multiplier that is not finite or is negative, a
+    /// pixel grid past its most or with a coverage outside (0, 1], or a
+    /// palette past its most, without a grid, or with a colour that is not
+    /// finite or is negative, or a pose rate that is not finite or is
+    /// negative.
+    pub fn refusal(&self) -> Option<&'static str> {
+        if !self
+            .multiplier
             .iter()
             .all(|value| value.is_finite() && *value >= 0.0)
+        {
+            return Some("a splat multiplier is finite and not negative");
+        }
+        if self.pixel_grid > crate::PARTS_RIG_PIXEL_GRID_MAX
+            || (self.pixel_grid > 0 && !(self.pixel_coverage > 0.0 && self.pixel_coverage <= 1.0))
+        {
+            return Some(
+                "a splat pixel grid is at most 16 pixels, its coverage above 0 and at most 1",
+            );
+        }
+        if self.palette.len() > crate::PARTS_RIG_PALETTE_MAX
+            || (!self.palette.is_empty() && self.pixel_grid == 0)
+            || self
+                .palette
+                .iter()
+                .flatten()
+                .any(|value| !(value.is_finite() && *value >= 0.0))
+        {
+            return Some(
+                "a splat palette has at most 256 finite, non-negative colours and needs a pixel grid",
+            );
+        }
+        if !(self.pose_rate.is_finite() && self.pose_rate >= 0.0) {
+            return Some("a splat pose rate is finite and not negative");
+        }
+        None
     }
 }
 
