@@ -273,3 +273,25 @@ binding's.
   depth or motion, every fragment writes the depth target too: 0.55 ms at
   2.2 m and 0.30 ms at 3.6 m. A pixel grid always keeps the depth, and its
   blocks add about 0.05 ms to the world pass at 2.2 m.
+- **Crowds.** Walking 48,000-Gaussian townsmen in the web crowd page's
+  layout (a 1.4 m grid seen from in front, each on its own phase), as
+  `examples/splat_crowd` draws them offscreen. The figures are a frame's
+  throughput, CPU and GPU overlapping, without presenting; median of three
+  rounds:
+
+  | Figures | Gaussians | RTX 3080, 1080p | RTX 3080, 1440p | RX 9070 XT, 1080p | RX 9070 XT, 1440p |
+  | --- | --- | --- | --- | --- | --- |
+  | 1 | 48,000 | 0.49 ms | 0.67 ms | 0.37 ms | 0.59 ms |
+  | 8 | 384,000 | 1.14 ms | 1.63 ms | 0.89 ms | 1.09 ms |
+  | 16 | 768,000 | 1.59 ms | 2.17 ms | 1.39 ms | 1.52 ms |
+  | 32 | 1,536,000 | 2.34 ms | 2.98 ms | 2.28 ms | 2.48 ms |
+
+  The `splats` pass is most of it: on the 3080 at 1080p, 2.15 ms of the
+  32-figure frame. Cost grows with the Gaussians projected and sorted and
+  with the pixels the figures cover, not with the count of instances: one
+  run sorts them all.
+
+  On the same 3080 the web SDK draws 32 such figures at 26 to 41 fps
+  (1582 × 948, in a browser). Its CPU sorter lags and throttles under load;
+  the Engine sorts every Gaussian on the GPU each frame. A crowd of 32 close
+  figures takes about a seventh of a 60 Hz frame on these GPUs.
