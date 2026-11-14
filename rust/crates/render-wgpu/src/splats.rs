@@ -503,6 +503,19 @@ fn ellipsoid_buffer(device: &wgpu::Device, bytes: u64) -> wgpu::Buffer {
     })
 }
 
+/// A perspective shadow layer's `view_proj` split into the view it was
+/// made from and the lens's focal lengths (`shadows.rs`: a symmetric
+/// right-handed perspective, whose clip w is the view's −z), so a Gaussian's
+/// footprint takes the layer's own lens whatever its cone: rows 0 and 1 are
+/// the view's x and y axes scaled by the focal lengths, row 3 its −z.
+fn split_perspective(view_proj: Mat4) -> (Mat4, glam::Vec2) {
+    let (x, y, w) = (view_proj.row(0), view_proj.row(1), view_proj.row(3));
+    let focal =
+        glam::Vec2::new(x.truncate().length(), y.truncate().length()).max(glam::Vec2::splat(1e-6));
+    let view = Mat4::from_cols(x / focal.x, y / focal.y, -w, glam::Vec4::W).transpose();
+    (view, focal)
+}
+
 /// A palette joint (rows 0 to 2 of its matrix) as a matrix.
 fn joint_matrix(rows: &[f32; 12]) -> Mat4 {
     Mat4::from_cols_array(&[
@@ -773,15 +786,10 @@ impl Splats {
                     ));
                     (texels * view_proj, [1.0, 1.0, side, side], 1.0)
                 } else {
-                    let projection = layer.camera.projection;
+                    let (view, focal) = split_perspective(layer.camera.view_proj);
                     (
-                        layer.camera.view.as_dmat4(),
-                        [
-                            projection.x_axis.x * 0.5 * side,
-                            projection.y_axis.y * 0.5 * side,
-                            side,
-                            side,
-                        ],
+                        view.as_dmat4(),
+                        [focal.x * 0.5 * side, focal.y * 0.5 * side, side, side],
                         0.0,
                     )
                 };
@@ -2519,6 +2527,32 @@ mod tests {
             splats.colors.push([1.0, 0.5, 0.25, opacity]);
         }
         splats
+    }
+
+    /// A spot layer's view and lens come back from its `view_proj` for any
+    /// cone, not the 90° one `ShadowLayer::light_camera` assumes.
+    #[test]
+    fn a_perspective_layer_splits_into_its_view_and_lens() {
+        for cone in [30f32, 60.0, 90.0, 140.0] {
+            let projection =
+                glam::camera::rh::proj::directx::perspective(cone.to_radians(), 1.0, 0.1, 40.0);
+            let view = glam::camera::rh::view::look_at_mat4(
+                Vec3::new(1.0, 4.0, 2.0),
+                Vec3::new(0.3, 0.0, -1.0),
+                Vec3::Y,
+            );
+            let (split, focal) = split_perspective(projection * view);
+            let expected = 1.0 / (cone.to_radians() * 0.5).tan();
+            assert!(
+                (focal.x - expected).abs() < 1e-4 && (focal.y - expected).abs() < 1e-4,
+                "{cone}: {focal}"
+            );
+            let point = Vec3::new(0.4, 0.2, -0.6);
+            assert!(
+                (split.transform_point3(point) - view.transform_point3(point)).length() < 1e-4,
+                "{cone}: the view"
+            );
+        }
     }
 
     /// `splats.wgsl` `octahedral`, on the CPU.

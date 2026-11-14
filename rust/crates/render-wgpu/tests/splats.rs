@@ -923,6 +923,94 @@ fn a_splat_figure_casts_as_its_gaussians_or_as_ellipsoids() {
     );
 }
 
+/// Under a spot light's narrow cone a figure's Gaussians cast at their own
+/// size: a sheet of Gaussians that overlap one another throws a whole
+/// shadow, with no light through it.
+#[test]
+fn gaussian_casters_cover_their_shadow_under_a_narrow_spot() {
+    let options = RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    };
+    // Flat Gaussians 0.1 m apart at σ 0.05: they overlap, cut at alpha 0.3.
+    let sheet: Vec<Gaussian> = (-5..=5)
+        .flat_map(|i| (-5..=5).map(move |j| (i, j)))
+        .map(|(i, j)| Gaussian {
+            scale: [0.05, 0.005, 0.05],
+            ..Gaussian::round(
+                [i as f32 * 0.1, 0.0, j as f32 * 0.1],
+                0.05,
+                [200, 200, 200, 255],
+            )
+        })
+        .collect();
+    // From low beside the sheet, under it, at the floor its shadow covers.
+    let view = camera([0.0, 0.35, 2.2], 0.0, -12.0);
+    let floor = |caster: SplatShadowCaster| {
+        let mut harness = Harness::new(options);
+        let mut ops = splats(&mut harness, 1, &sheet, [0.0, 1.0, 0.0]);
+        ops.extend([
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(20),
+                parent: None,
+                light: LightDescriptor::Spot {
+                    color: [1.0; 3],
+                    intensity: 40.0,
+                    enabled: true,
+                    position: [0.0, 3.0, 0.0],
+                    direction: [0.02, -1.0, 0.0],
+                    range: Some(10.0),
+                    decay: 2.0,
+                    outer_angle_radians: 15f32.to_radians(),
+                    penumbra: 0.0,
+                    shadow_intent: LightShadowIntent::Requested,
+                    shadow: Default::default(),
+                },
+            },
+            RenderDiff::DefineMaterial {
+                material: material("material/floor", [0.6, 0.6, 0.6, 1.0], None),
+            },
+            static_mesh(
+                "mesh/floor",
+                box_mesh([-5.0, -0.1, -5.0], [5.0, 0.0, 5.0], |_| 0),
+                "material/floor",
+            ),
+            instance(30, None, "mesh/floor", transform([0.0; 3], 0.0, [1.0; 3])),
+            RenderDiff::SetSplatAppearance {
+                handle: RenderHandle::new(1),
+                appearance: SplatAppearance {
+                    shadow_caster: caster,
+                    ..SplatAppearance::default()
+                },
+            },
+        ]);
+        harness.apply(ops);
+        harness.render(&view).1
+    };
+    let open = floor(SplatShadowCaster::None);
+    let cast = floor(SplatShadowCaster::Splats);
+    // The floor the spot lights (below the horizon, which the sheet's own
+    // pixels stand above), the sheet's shadow over all of it.
+    let (mut lit, mut shadowed) = (0, 0);
+    for y in HEIGHT / 5..HEIGHT {
+        for x in 0..WIDTH {
+            if luminance(at(&open, (x, y))) < 300 {
+                continue;
+            }
+            lit += 1;
+            if luminance(at(&cast, (x, y))) + 60 < luminance(at(&open, (x, y))) {
+                shadowed += 1;
+            }
+        }
+    }
+    assert!(lit > 300, "the spot lights the floor: {lit} pixels");
+    assert!(
+        shadowed * 100 >= lit * 98,
+        "{shadowed} of {lit} pixels in shadow"
+    );
+}
+
 fn decode(byte: u8) -> f32 {
     let c = f32::from(byte) / 255.0;
     if c <= 0.04045 {
