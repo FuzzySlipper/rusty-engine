@@ -509,6 +509,7 @@ impl Renderer {
             } else if kept {
                 self.forget_skinned_history();
                 self.forget_deformed_history();
+                self.splats.forget_history();
             }
         }
         if stage.is_none() && !effect {

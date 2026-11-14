@@ -4483,11 +4483,19 @@ impl Renderer {
                         .iter()
                         .map(|run| {
                             run.iter()
-                                .flat_map(|&instance| &splat_instances[instance].sets)
-                                .filter_map(|draw| {
+                                .flat_map(|&instance| {
+                                    let instance = &splat_instances[instance];
+                                    instance
+                                        .sets
+                                        .iter()
+                                        .enumerate()
+                                        .map(|(index, draw)| (instance.handle, index, draw))
+                                })
+                                .filter_map(|(handle, index, draw)| {
                                     Some(crate::splats::RunSet {
                                         set: crate::animated::splat_set(&self.tables, draw.set)?,
                                         draw,
+                                        key: (handle, index),
                                     })
                                 })
                                 .collect()
@@ -4516,6 +4524,16 @@ impl Renderer {
                             samples: view.target.samples,
                             viewport: view.viewport,
                             camera: view.drawn_camera(),
+                            motion: view.motion.as_ref().map(|motion| {
+                                let (previous_view_proj, to_pixels, previous_eye) =
+                                    motion.previous_projection();
+                                crate::splats::SplatMotion {
+                                    frame: self.temporal.motion_frames(),
+                                    previous_view_proj,
+                                    to_pixels,
+                                    previous_eye,
+                                }
+                            }),
                         },
                     );
                     self.splats

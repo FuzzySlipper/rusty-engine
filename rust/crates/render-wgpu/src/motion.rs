@@ -20,7 +20,9 @@
 //!   wind sway at the previous presentation time; particles from where they
 //!   were drawn; falling drops back along their fall; a skinned vertex
 //!   where the previous frame's pose put it (`animated.rs`), and a node or
-//!   child on a joint by its part's previous model. Each view takes the
+//!   child on a joint by its part's previous model; a Gaussian splat by
+//!   its centre, from its instance's previous model and palette
+//!   (`splats.rs`). Each view takes the
 //!   previous frame's projection of its camera. Blended parts and particles
 //!   cover what lies behind with their motion where they are at least half
 //!   opaque (`rusty::motion::motion_output`), and leave it otherwise.
@@ -314,6 +316,16 @@ pub(crate) struct MotionPass {
 }
 
 impl MotionPass {
+    /// What the view's `Motion` uniform holds, for motion computed off the
+    /// draw (splats, `splats.rs`): the previous projection of a point's
+    /// offset from the previous camera, clip space to this frame's jittered
+    /// target pixels, and the previous camera.
+    pub fn previous_projection(&self) -> (Mat4, Mat4, Vec3) {
+        let matrix = |at: usize| Mat4::from_cols_slice(&self.uniform[at..at + 16]);
+        let eye = &self.uniform[32..35];
+        (matrix(0), matrix(16), Vec3::new(eye[0], eye[1], eye[2]))
+    }
+
     /// The pass's colour attachment, after its HDR colour.
     pub fn attachment(&self, whole: bool) -> wgpu::RenderPassColorAttachment<'_> {
         wgpu::RenderPassColorAttachment {

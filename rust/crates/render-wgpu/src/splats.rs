@@ -21,6 +21,17 @@
 //! layer is composited into the HDR target at the run's place among the
 //! blended draws, decoded to linear light there.
 //!
+//! **Depth and motion.** The same draw keeps, in the layer's surface
+//! target, the depth and motion of what it drew, blended as the colour is:
+//! each Gaussian's depth and centre's motion weighted by its share of the
+//! pixel, its centre placed where it stood by the set's previous model and
+//! palette (kept by instance and set from the last frame that drew
+//! motion). Where the layer covers at least half a pixel, a second
+//! composite draw writes those into the view's depth and the motion target
+//! where there is one: the finish fogs a figure at its own distance, what
+//! draws after it meets it, and a temporal stage follows it. The colour
+//! composite marks the reactive mask under the rest of the layer.
+//!
 //! **Cost.** Projecting and sorting run on the GPU for every view each frame
 //! with a splat run; nothing is copied to or from the CPU per frame. The
 //! readout counts the frame's runs, instances and Gaussians, and the
@@ -46,9 +57,10 @@ const SKIN_BYTES: u64 = 8;
 /// The most joints a skinned set's Gaussians index: a joint is one byte.
 pub(crate) const MAX_SKIN_JOINTS: usize = 256;
 /// Bytes of one projected Gaussian (`splats.wgsl` `Projected`).
-const PROJECTED_BYTES: u64 = 32;
-/// One dynamic uniform slot of the parameters buffer.
-const PARAMS_SLOT: u64 = 256;
+const PROJECTED_BYTES: u64 = 48;
+/// One dynamic uniform slot of the parameters buffer (`splats.wgsl`
+/// `Project` within it).
+const PARAMS_SLOT: u64 = 512;
 const WORKGROUP: u32 = 256;
 /// Keys a sort block takes (`splats.wgsl` `TILE`).
 const TILE: u32 = 1024;
@@ -65,6 +77,17 @@ const SORT_SHIFTS: [u32; 2] = [0, 8];
 /// deviations: its quad's reach, 2·sqrt(2)σ, rounded up.
 const BOUNDS_SIGMAS: f32 = 3.0;
 const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
+/// A layer's surface target (`splats.wgsl` `fs_splat`): its Gaussians'
+/// `1 − depth` and, while the view draws motion, their motion,
+/// premultiplied and blended as the colour is. Half floats keep a depth's
+/// distance to about a part in 2048.
+fn surface_format(motion: bool) -> wgpu::TextureFormat {
+    if motion {
+        wgpu::TextureFormat::Rgba16Float
+    } else {
+        wgpu::TextureFormat::R16Float
+    }
+}
 
 /// One splat primitive of an animated asset, resident on the GPU.
 pub(crate) struct SplatSet {
@@ -110,6 +133,9 @@ pub(crate) struct SplatDraw {
 pub(crate) struct RunSet<'a> {
     pub set: &'a SplatSet,
     pub draw: &'a SplatDraw,
+    /// Its instance's node and its index among the instance's sets: what
+    /// its previous placing is kept by.
+    pub key: (render_model::RenderHandle, usize),
 }
 
 /// What the splats drew over the last frame, summed over its views.
@@ -156,8 +182,37 @@ pub(crate) struct SplatTarget<'a> {
     pub viewport: crate::frame::PixelRect,
     /// The camera the pass draws with (jittered when it is).
     pub camera: crate::camera::CameraMatrices,
+    /// While the view draws motion: its previous projection.
+    pub motion: Option<SplatMotion>,
 }
 
+/// A view's previous projection (`motion.rs` `MotionPass`), for the motion
+/// of each Gaussian's centre.
+pub(crate) struct SplatMotion {
+    /// The frame's index among frames that draw motion
+    /// (`Temporal::motion_frames`).
+    pub frame: u64,
+    /// The previous frame's projection of a point's offset from its camera.
+    pub previous_view_proj: Mat4,
+    /// Clip space to this frame's jittered target pixels.
+    pub to_pixels: Mat4,
+    pub previous_eye: Vec3,
+}
+
+/// Where a set stood: its model and palette (`SplatDraw`).
+#[derive(Clone)]
+struct Placed {
+    model: Mat4,
+    palette: Vec<[f32; 12]>,
+}
+
+/// A set's placing in the last frame that drew motion and in the one
+/// before it.
+struct History {
+    frame: u64,
+    current: Placed,
+    previous: Placed,
+}
 struct Pipelines {
     project_layout: wgpu::BindGroupLayout,
     gaussian_layout: wgpu::BindGroupLayout,
@@ -191,12 +246,16 @@ struct RunBuffers {
     draw_group: wgpu::BindGroup,
 }
 
-/// A run's layer: colour at the view's samples, resolved when multisampled,
-/// and the bind group the composite reads it by.
+/// A run's layer: colour and the surface target at the view's samples,
+/// resolved when multisampled, and the bind group the composite reads them
+/// by.
 struct Layer {
-    size: (u32, u32, u32),
+    /// Width, height, samples, and whether its surface holds motion.
+    size: (u32, u32, u32, bool),
     color: wgpu::TextureView,
     resolve: Option<wgpu::TextureView>,
+    surface: wgpu::TextureView,
+    surface_resolve: Option<wgpu::TextureView>,
     group: wgpu::BindGroup,
 }
 
@@ -215,8 +274,12 @@ pub(crate) struct Splats {
     /// The most layers a view drew into this frame; the rest are dropped at
     /// the next.
     layers_used: usize,
-    draws: HashMap<u32, wgpu::RenderPipeline>,
-    composites: HashMap<ColorTarget, wgpu::RenderPipeline>,
+    /// By samples and whether the surface holds motion.
+    draws: HashMap<(u32, bool), wgpu::RenderPipeline>,
+    /// By target: the colour composite, then the depth and motion one.
+    composites: HashMap<ColorTarget, [wgpu::RenderPipeline; 2]>,
+    /// Each drawn set's placing, while frames draw motion.
+    history: HashMap<(render_model::RenderHandle, usize), History>,
     timer: Option<PassTimer>,
     timed: bool,
     counts: SplatReadout,
@@ -257,6 +320,7 @@ impl Splats {
             layers_used: 0,
             draws: HashMap::new(),
             composites: HashMap::new(),
+            history: HashMap::new(),
             timer: PassTimer::new(gpu, "splats"),
             timed: false,
             counts: SplatReadout::default(),
@@ -345,59 +409,90 @@ impl Splats {
         self.counts.refused_instances += count;
     }
 
-    /// Make the composite's pipeline for a pass drawing into `format`
+    /// Make the composite's pipelines for a pass drawing into `format`
     /// before the pass borrows the renderer.
     pub fn prepare_target(&mut self, device: &wgpu::Device, format: ColorTarget) {
         let Some(pipelines) = &self.pipelines else {
             return;
         };
         self.composites.entry(format).or_insert_with(|| {
-            let reactive = format.motion;
-            let blend = wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING;
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("render-wgpu splat composite"),
-                layout: Some(&pipelines.composite_pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &pipelines.module,
-                    entry_point: Some("vs_composite"),
-                    compilation_options: Default::default(),
-                    buffers: &[],
-                },
-                primitive: wgpu::PrimitiveState::default(),
-                // Inside the blended pass, whose depth it neither tests nor
-                // writes: the layer was tested against it.
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::Always),
-                    stencil: Default::default(),
-                    bias: Default::default(),
-                }),
-                multisample: format.multisample(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &pipelines.module,
-                    entry_point: Some(if reactive {
-                        "fs_composite_reactive"
-                    } else {
-                        "fs_composite"
+            let motion = format.motion;
+            let pipeline = |label: &str,
+                            entry: &str,
+                            depth_write: bool,
+                            color: wgpu::ColorTargetState,
+                            motion_write: MotionWrite| {
+                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                    label: Some(label),
+                    layout: Some(&pipelines.composite_pipeline_layout),
+                    vertex: wgpu::VertexState {
+                        module: &pipelines.module,
+                        entry_point: Some("vs_composite"),
+                        compilation_options: Default::default(),
+                        buffers: &[],
+                    },
+                    primitive: wgpu::PrimitiveState::default(),
+                    // Inside the blended pass, whose depth it does not test:
+                    // the layer was tested against it.
+                    depth_stencil: Some(wgpu::DepthStencilState {
+                        format: DEPTH_FORMAT,
+                        depth_write_enabled: Some(depth_write),
+                        depth_compare: Some(wgpu::CompareFunction::Always),
+                        stencil: Default::default(),
+                        bias: Default::default(),
                     }),
-                    compilation_options: Default::default(),
-                    targets: &format.targets(
-                        wgpu::ColorTargetState {
-                            format: format.format,
-                            blend: Some(blend),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        },
-                        if reactive {
-                            MotionWrite::Reactive
-                        } else {
-                            MotionWrite::None
-                        },
-                    ),
-                }),
-                multiview_mask: None,
-                cache: None,
-            })
+                    multisample: format.multisample(),
+                    fragment: Some(wgpu::FragmentState {
+                        module: &pipelines.module,
+                        entry_point: Some(entry),
+                        compilation_options: Default::default(),
+                        targets: &format.targets(color, motion_write),
+                    }),
+                    multiview_mask: None,
+                    cache: None,
+                })
+            };
+            let colour = pipeline(
+                "render-wgpu splat composite",
+                if motion {
+                    "fs_composite_reactive"
+                } else {
+                    "fs_composite"
+                },
+                false,
+                wgpu::ColorTargetState {
+                    format: format.format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                },
+                if motion {
+                    MotionWrite::Reactive
+                } else {
+                    MotionWrite::None
+                },
+            );
+            // Where the layer covers at least half a pixel: its depth, for
+            // the finish's fog and what draws after, and its motion.
+            let surface = pipeline(
+                "render-wgpu splat depth",
+                if motion {
+                    "fs_composite_depth_motion"
+                } else {
+                    "fs_composite_depth"
+                },
+                true,
+                wgpu::ColorTargetState {
+                    format: format.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::empty(),
+                },
+                if motion {
+                    MotionWrite::Cover
+                } else {
+                    MotionWrite::None
+                },
+            );
+            [colour, surface]
         });
     }
 
@@ -422,19 +517,48 @@ impl Splats {
             .max()
             .unwrap_or(0);
         let slots = runs.iter().map(|run| run.len() as u64 + 2).sum::<u64>();
-        // Every skinned set's palette, in run order.
+        // Each set's placing in the previous frame that drew motion; sets
+        // the last frame did not draw are forgotten.
+        if let Some(motion) = &target.motion {
+            self.history
+                .retain(|_, history| history.frame + 1 >= motion.frame);
+        }
+        let previous: Vec<Option<Placed>> = runs
+            .iter()
+            .flatten()
+            .map(|entry| {
+                let motion = target.motion.as_ref()?;
+                Some(self.previous_placed(entry, motion.frame))
+            })
+            .collect();
+        // Every skinned set's palette, in run order, each followed by its
+        // previous one when it moved.
         let mut palettes: Vec<f32> = Vec::new();
         let mut palette_firsts = Vec::new();
-        for entry in runs.iter().flatten() {
-            palette_firsts.push((palettes.len() / 4) as u32);
+        for (entry, previous) in runs.iter().flatten().zip(&previous) {
+            let first = (palettes.len() / 4) as u32;
             for joint in &entry.draw.palette {
                 palettes.extend_from_slice(joint);
             }
+            let previous_first = match previous {
+                Some(previous)
+                    if previous.palette.len() == entry.draw.palette.len()
+                        && previous.palette != entry.draw.palette =>
+                {
+                    let at = (palettes.len() / 4) as u32;
+                    for joint in &previous.palette {
+                        palettes.extend_from_slice(joint);
+                    }
+                    at
+                }
+                _ => first,
+            };
+            palette_firsts.push((first, previous_first));
         }
         self.ensure_params(&gpu.device, slots);
         self.ensure_palettes(&gpu.device, palettes.len().max(4) as u64 * 4);
         self.ensure_run(&gpu.device, largest.max(1));
-        self.ensure_draw(&gpu.device, target.samples);
+        self.ensure_draw(&gpu.device, target.samples, target.motion.is_some());
         for index in 0..runs.len() {
             self.layer(&gpu.device, index, target);
         }
@@ -454,9 +578,25 @@ impl Splats {
         ];
         let view = target.camera.view.as_dmat4();
         let view_proj = target.camera.view_proj.as_dmat4();
+        // NDC to the target's pixels as the pass rasterises them, jitter
+        // included: where a Gaussian's centre is drawn.
+        let pixels = [
+            viewport.x as f32 + 0.5 * width,
+            viewport.y as f32 + 0.5 * height,
+            0.5 * width,
+            -0.5 * height,
+        ];
+        // A point's offset from the previous camera to this frame's jittered
+        // pixels, as the world's motion places it (`motion.wgsl`).
+        let previous_pixels = target.motion.as_ref().map(|motion| {
+            motion.to_pixels.as_dmat4()
+                * motion.previous_view_proj.as_dmat4()
+                * glam::DMat4::from_translation(-motion.previous_eye.as_dvec3())
+        });
         let mut bytes = Vec::new();
         let mut offsets = Vec::with_capacity(runs.len());
         let mut palette_index = palette_firsts.iter().copied();
+        let mut previous_models = previous.iter();
         for (run, &(near, far)) in runs.iter().zip(depth_ranges) {
             let total: u32 = run.iter().map(|entry| entry.set.count).sum();
             let blocks = total.div_ceil(TILE);
@@ -473,11 +613,20 @@ impl Splats {
             let mut first = 0u32;
             for (index, entry) in run.iter().enumerate() {
                 let (set, draw) = (entry.set, entry.draw);
-                let palette_first = palette_index.next().expect("one palette start per set");
+                let (palette_first, previous_first) =
+                    palette_index.next().expect("one palette start per set");
+                let previous = previous_models.next().expect("one placing per set");
                 let model = draw.model.as_dmat4();
                 let mut slot = Vec::with_capacity(PARAMS_SLOT as usize);
                 push_matrix(&mut slot, &(view * model));
                 push_matrix(&mut slot, &(view_proj * model));
+                let previous_model = previous
+                    .as_ref()
+                    .map_or(model, |previous| previous.model.as_dmat4());
+                push_matrix(
+                    &mut slot,
+                    &previous_pixels.map_or(DMat4::IDENTITY, |to| to * previous_model),
+                );
                 for value in lens {
                     slot.extend_from_slice(&value.to_le_bytes());
                 }
@@ -491,11 +640,19 @@ impl Splats {
                 // A skinned set's palette in rows of four floats, three a
                 // joint; its Gaussians stand in bind space without one.
                 let skinned = set.joint_bounds.is_some() && !draw.palette.is_empty();
-                for value in [palette_first, u32::from(skinned), 0, 0] {
+                for value in [
+                    palette_first,
+                    u32::from(skinned),
+                    previous_first,
+                    u32::from(previous_pixels.is_some()),
+                ] {
                     slot.extend_from_slice(&value.to_le_bytes());
                 }
                 let [r, g, b] = draw.multiplier;
                 for value in [r, g, b, 0.0] {
+                    slot.extend_from_slice(&value.to_le_bytes());
+                }
+                for value in pixels {
                     slot.extend_from_slice(&value.to_le_bytes());
                 }
                 slot.resize(PARAMS_SLOT as usize, 0);
@@ -513,7 +670,7 @@ impl Splats {
 
         let pipelines = self.pipelines.as_ref().expect("checked above");
         let buffers = self.run.as_ref().expect("ensured above");
-        let draw = &self.draws[&target.samples];
+        let draw = &self.draws[&(target.samples, target.motion.is_some())];
         let timer = self.timer.as_ref().filter(|_| !self.timed);
         for (index, (run, (sort, sets, total, blocks))) in runs.iter().zip(&offsets).enumerate() {
             let groups = (DIGITS * blocks).div_ceil(TILE);
@@ -548,15 +705,26 @@ impl Splats {
             let layer = &self.layers[index];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu splat layer"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &layer.color,
-                    depth_slice: None,
-                    resolve_target: layer.resolve.as_ref(),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
+                color_attachments: &[
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &layer.color,
+                        depth_slice: None,
+                        resolve_target: layer.resolve.as_ref(),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: &layer.surface,
+                        depth_slice: None,
+                        resolve_target: layer.surface_resolve.as_ref(),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
+                ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: target.depth,
                     depth_ops: Some(wgpu::Operations {
@@ -609,13 +777,50 @@ impl Splats {
     /// Composite run `run` of the view's last [`Self::encode_runs`] into a
     /// pass drawing into `format` (the frame's bind group in group 0).
     pub fn draw_composite(&self, pass: &mut wgpu::RenderPass<'_>, format: ColorTarget, run: usize) {
-        let (Some(pipeline), Some(layer)) = (self.composites.get(&format), self.layers.get(run))
+        let (Some(pipelines), Some(layer)) = (self.composites.get(&format), self.layers.get(run))
         else {
             return;
         };
-        pass.set_pipeline(pipeline);
         pass.set_bind_group(1, &layer.group, &[]);
-        pass.draw(0..3, 0..1);
+        for pipeline in pipelines {
+            pass.set_pipeline(pipeline);
+            pass.draw(0..3, 0..1);
+        }
+    }
+
+    /// Where `entry` stood in the frame that drew motion before `frame`, or
+    /// where it stands now when that frame did not draw it; this frame's
+    /// placing is kept for the next.
+    fn previous_placed(&mut self, entry: &RunSet<'_>, frame: u64) -> Placed {
+        let current = Placed {
+            model: entry.draw.model,
+            palette: entry.draw.palette.clone(),
+        };
+        match self.history.get_mut(&entry.key) {
+            // An earlier view of this frame kept it.
+            Some(history) if history.frame == frame => history.previous.clone(),
+            Some(history) if history.frame + 1 == frame => {
+                history.previous = std::mem::replace(&mut history.current, current);
+                history.frame = frame;
+                history.previous.clone()
+            }
+            _ => {
+                self.history.insert(
+                    entry.key,
+                    History {
+                        frame,
+                        current: current.clone(),
+                        previous: current.clone(),
+                    },
+                );
+                current
+            }
+        }
+    }
+
+    /// Frames no longer draw motion: no placings are kept.
+    pub fn forget_history(&mut self) {
+        self.history.clear();
     }
 
     fn ensure_params(&mut self, device: &wgpu::Device, slots: u64) {
@@ -746,9 +951,9 @@ impl Splats {
         });
     }
 
-    fn ensure_draw(&mut self, device: &wgpu::Device, samples: u32) {
+    fn ensure_draw(&mut self, device: &wgpu::Device, samples: u32, motion: bool) {
         let pipelines = self.pipelines.as_ref().expect("a device that draws splats");
-        self.draws.entry(samples).or_insert_with(|| {
+        self.draws.entry((samples, motion)).or_insert_with(|| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("render-wgpu splat layer"),
                 layout: Some(&pipelines.draw_pipeline_layout),
@@ -777,11 +982,18 @@ impl Splats {
                     module: &pipelines.module,
                     entry_point: Some("fs_splat"),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: LAYER_FORMAT,
-                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &[
+                        Some(wgpu::ColorTargetState {
+                            format: LAYER_FORMAT,
+                            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }),
+                        Some(wgpu::ColorTargetState {
+                            format: surface_format(motion),
+                            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }),
+                    ],
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -791,7 +1003,12 @@ impl Splats {
 
     /// Layer `index`, made or remade at the target's size.
     fn layer(&mut self, device: &wgpu::Device, index: usize, target: &SplatTarget<'_>) {
-        let size = (target.width, target.height, target.samples);
+        let size = (
+            target.width,
+            target.height,
+            target.samples,
+            target.motion.is_some(),
+        );
         if self
             .layers
             .get(index)
@@ -800,7 +1017,7 @@ impl Splats {
             return;
         }
         let pipelines = self.pipelines.as_ref().expect("a device that draws splats");
-        let texture = |samples: u32, label: &str| {
+        let texture = |samples: u32, format: wgpu::TextureFormat, label: &str| {
             device
                 .create_texture(&wgpu::TextureDescriptor {
                     label: Some(label),
@@ -812,27 +1029,48 @@ impl Splats {
                     mip_level_count: 1,
                     sample_count: samples,
                     dimension: wgpu::TextureDimension::D2,
-                    format: LAYER_FORMAT,
+                    format,
                     usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                         | wgpu::TextureUsages::TEXTURE_BINDING,
                     view_formats: &[],
                 })
                 .create_view(&Default::default())
         };
-        let color = texture(size.2, "render-wgpu splat layer");
-        let resolve = (size.2 > 1).then(|| texture(1, "render-wgpu splat layer resolved"));
+        let color = texture(size.2, LAYER_FORMAT, "render-wgpu splat layer");
+        let resolve =
+            (size.2 > 1).then(|| texture(1, LAYER_FORMAT, "render-wgpu splat layer resolved"));
+        let surface = texture(size.2, surface_format(size.3), "render-wgpu splat surface");
+        let surface_resolve = (size.2 > 1).then(|| {
+            texture(
+                1,
+                surface_format(size.3),
+                "render-wgpu splat surface resolved",
+            )
+        });
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("render-wgpu splat layer"),
             layout: &pipelines.composite_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 30,
-                resource: wgpu::BindingResource::TextureView(resolve.as_ref().unwrap_or(&color)),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 30,
+                    resource: wgpu::BindingResource::TextureView(
+                        resolve.as_ref().unwrap_or(&color),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 31,
+                    resource: wgpu::BindingResource::TextureView(
+                        surface_resolve.as_ref().unwrap_or(&surface),
+                    ),
+                },
+            ],
         });
         let layer = Layer {
             size,
             color,
             resolve,
+            surface,
+            surface_resolve,
             group,
         };
         if index < self.layers.len() {
@@ -912,18 +1150,19 @@ impl Pipelines {
                 storage(21, true, wgpu::ShaderStages::VERTEX),
             ],
         );
+        let layer_texture = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
         let composite_layout = layout(
             "render-wgpu splat composite",
-            &[wgpu::BindGroupLayoutEntry {
-                binding: 30,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            &[layer_texture(30), layer_texture(31)],
         );
         let pipeline_layout = |label: &str, groups: &[Option<&wgpu::BindGroupLayout>]| {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -1230,10 +1469,12 @@ mod tests {
             RunSet {
                 set: &sets[0],
                 draw: &draws[0],
+                key: (render_model::RenderHandle::new(1), 0),
             },
             RunSet {
                 set: &sets[1],
                 draw: &draws[1],
+                key: (render_model::RenderHandle::new(2), 0),
             },
         ];
         let (near, far) = (0.5, 25.0);
@@ -1250,6 +1491,7 @@ mod tests {
                 samples: 1,
                 viewport: PixelRect::whole(64, 64),
                 camera,
+                motion: None,
             },
         );
         gpu.queue.submit([encoder.finish()]);

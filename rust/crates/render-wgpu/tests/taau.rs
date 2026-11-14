@@ -446,6 +446,139 @@ fn fresh_msaa_frame(harness: &Harness, view: &RendererCompositionCamera) -> Vec<
     target.read_rgba(&harness.gpu)
 }
 
+/// A splat figure: a slab of small Gaussians 0.6 m wide and 1.6 m tall,
+/// standing on the floor, striped so a trail would show.
+fn splat_figure(harness: &mut Harness) -> AnimatedMeshAsset {
+    use support::splat_glb::{splat_glb, Gaussian};
+    let mut gaussians = Vec::new();
+    for row in 0..54 {
+        for column in 0..20 {
+            let (x, y) = (column as f32 * 0.03 - 0.3, row as f32 * 0.03 + 0.05);
+            let stripe = (row / 6) % 2 == 0;
+            let color = if stripe {
+                [220, 180, 40, 230]
+            } else {
+                [40, 60, 200, 230]
+            };
+            gaussians.push(Gaussian::round([x, y, 0.0], 0.022, color));
+        }
+    }
+    let bytes = splat_glb(&gaussians, [0.0; 3]);
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath("splat-figure.glb".to_owned()),
+        &bytes,
+        &ImportContext::default(),
+    )
+    .assets
+    .expect("the splat figure is admitted");
+    let hash = imported.animated_mesh.content_hash.clone().expect("hash");
+    harness.resources.insert(
+        &format!(
+            "animated-mesh-resource/{}",
+            hash.trim_start_matches("sha256:")
+        ),
+        bytes,
+    );
+    imported.animated_mesh
+}
+
+/// A splat figure walking across the view at 1.5 m/s for 48 frames at
+/// render scale 0.67 under TAAU leaves no trail: where it covers a pixel
+/// its Gaussians' motion carries the history with it, and at its soft edge
+/// the reactive mask keeps none. Measured against the same figure standing
+/// still where it ends, settled under TAAU, so the stage's own edges (at
+/// 0.67 against 4x MSAA) count alike: pixels more than 32 levels from a
+/// fresh 4x MSAA frame, and the mean difference.
+#[test]
+#[ignore = "hardware-only animated visual sequence; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test taau -- --ignored"]
+fn a_walking_splat_figure_leaves_no_trail() {
+    let (walking_mean, walking) = splat_figure_against_a_fresh_frame(1.5);
+    let (still_mean, still) = splat_figure_against_a_fresh_frame(0.0);
+    eprintln!(
+        "splat figure under TAAU: walking mean {walking_mean:.3}, {walking} pixels; \
+         still mean {still_mean:.3}, {still} pixels"
+    );
+    assert!(
+        walking_mean < still_mean + 0.2,
+        "the walking figure against a fresh frame: {walking_mean:.3} (still {still_mean:.3})"
+    );
+    assert!(
+        walking < still + 100,
+        "the walking figure's trail: {walking} pixels (still {still})"
+    );
+}
+
+/// The splat figure under TAAU at render scale 0.67 for 48 frames at
+/// 60 Hz, walking at `speed` to stand at x = −0.3 on the last: its mean
+/// difference from the same moment drawn afresh with 4x MSAA and the
+/// pixels more than 32 levels off. Hardware-only.
+fn splat_figure_against_a_fresh_frame(speed: f32) -> (f64, usize) {
+    const FIGURE: u64 = 600;
+    const STEP: f64 = 1.0 / 60.0;
+    const FRAMES: u32 = 48;
+    let mut harness = scene();
+    require_hardware_adapter(&harness.gpu, "splat TAAU history");
+    let figure = splat_figure(&mut harness);
+    harness.apply(vec![
+        RenderDiff::DefineAnimatedMesh {
+            asset: figure.clone(),
+        },
+        RenderDiff::CreateAnimatedMeshInstance {
+            handle: RenderHandle::new(FIGURE),
+            parent: None,
+            instance: AnimatedMeshInstanceDescriptor {
+                splat: Default::default(),
+                playback_fade: None,
+                inspection: AnimatedMeshInspection::default(),
+                asset: figure.asset.clone(),
+                transform: Transform::IDENTITY,
+                visible: true,
+                material_overrides: Vec::new(),
+                playback: None,
+                metadata: RenderMetadata::default(),
+                layer: RenderLayer::Scene,
+                shadow_casting: Default::default(),
+            },
+        },
+        RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                antialiasing: Antialiasing::Temporal,
+                render_scale: 0.67,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        },
+    ]);
+    harness.target = OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, harness.renderer.samples());
+    let view = runner_view();
+    let end = (f64::from(FRAMES) * STEP) as f32;
+    let mut last = Vec::new();
+    for frame in 1..=FRAMES {
+        let time = f64::from(frame) * STEP;
+        harness.at(time);
+        harness.apply(vec![RenderDiff::Update {
+            handle: RenderHandle::new(FIGURE),
+            transform: Some(transform(
+                [-0.3 + speed * (time as f32 - end), 0.0, 0.0],
+                0.0,
+                [1.0; 3],
+            )),
+            material: None,
+            visible: None,
+            metadata: None,
+        }]);
+        last = harness.render(&view).1;
+    }
+    let reference = fresh_msaa_frame(&harness, &view);
+    let off = last
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(reference.as_chunks::<4>().0.iter())
+        .filter(|(a, b)| (0..3).any(|c| a[c].abs_diff(b[c]) > 32))
+        .count();
+    (mean_difference(&last, &reference), off)
+}
+
 #[test]
 #[ignore = "hardware-only animated visual sequence; run with WGPU_ADAPTER_NAME=<adapter> cargo test -p render-wgpu --test taau -- --ignored"]
 fn a_flapping_deformed_mesh_leaves_no_trail() {

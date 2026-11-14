@@ -494,6 +494,280 @@ fn the_splat_multiplier_scales_colour_in_linear_light() {
     );
 }
 
+fn decode(byte: u8) -> f32 {
+    let c = f32::from(byte) / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+fn encode(linear: f32) -> i32 {
+    let c = linear.clamp(0.0, 1.0);
+    let display = if c <= 0.003_130_8 {
+        c * 12.92
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (display * 255.0).round() as i32
+}
+
+/// The camera's focal length in pixels: 60° over `HEIGHT` rows.
+fn focal() -> f32 {
+    (HEIGHT as f32 / 2.0) / 30f32.to_radians().tan()
+}
+
+/// The pixel whose centre is nearest where a camera at the origin looking
+/// down −z draws a point.
+fn ahead(x: f32, y: f32, z: f32) -> (u32, u32) {
+    (
+        (WIDTH as f32 / 2.0 + focal() * x / -z).floor() as u32,
+        (HEIGHT as f32 / 2.0 - focal() * y / -z).floor() as u32,
+    )
+}
+
+/// The finish fogs a splat at its own distance: the composite writes the
+/// depth of the nearest Gaussian at least half opaque, so linear fog over
+/// ten metres takes half of one five metres away and four fifths of one
+/// eight metres away, where without that depth it would take the
+/// background's (none).
+#[test]
+fn splats_are_fogged_at_their_own_distance() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let fog = [0.5, 0.25, 0.75];
+    let color = [200, 100, 50, 255];
+    let mut ops = splats(
+        &mut harness,
+        1,
+        &[Gaussian::round([0.0; 3], 0.3, color)],
+        [-1.0, 0.0, -5.0],
+    );
+    ops.extend(splats(
+        &mut harness,
+        2,
+        &[Gaussian::round([0.0; 3], 0.4, color)],
+        [1.5, 0.0, -8.0],
+    ));
+    ops.push(RenderDiff::SetFog {
+        fog: Some(FogDescriptor::Linear {
+            color: fog,
+            start: 0.0,
+            end: 10.0,
+        }),
+    });
+    harness.apply(ops);
+    let (_, rgba) = harness.render(&front());
+    let fogged = |visibility: f32| -> [i32; 3] {
+        [0, 1, 2].map(|c| encode(decode(color[c]) * visibility + fog[c] * (1.0 - visibility)))
+    };
+    // The distance along the ray to each Gaussian's centre.
+    let near = ahead(-1.0, 0.0, -5.0);
+    let distance = (1.0f32 + 25.0).sqrt();
+    assert_near(at(&rgba, near), fogged(1.0 - distance / 10.0), 3);
+    let far = ahead(1.5, 0.0, -8.0);
+    let distance = (1.5f32 * 1.5 + 64.0).sqrt();
+    assert_near(at(&rgba, far), fogged(1.0 - distance / 10.0), 3);
+}
+
+/// A blended sprite and two splat instances, seen from either side: from
+/// the front `near` (red) covers its pixel and the half-transparent blue
+/// sprite blends over `far` (green); from behind the order turns, the
+/// sprite between them splitting them into two runs both ways.
+#[test]
+fn splat_instances_and_a_blended_sprite_turn_their_order_with_the_camera() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    let texture = harness
+        .resources
+        .texture("texture/white", 1, 1, &[255; 4], TextureWrap::Clamp);
+    let mut ops = vec![
+        RenderDiff::SetBackgroundColor {
+            color: [0.0, 0.0, 0.0, 1.0],
+        },
+        RenderDiff::DefineTexture { texture },
+        RenderDiff::DefineSpriteAtlas {
+            atlas: SpriteAtlasDescriptor {
+                id: "sprite/white".into(),
+                texture: "texture/white".into(),
+                frames: vec![SpriteFrameRect {
+                    frame: 0,
+                    uv_min: [0.0; 2],
+                    uv_max: [1.0; 2],
+                    size: None,
+                }],
+            },
+        },
+        RenderDiff::CreateSprite {
+            handle: RenderHandle::new(10),
+            parent: None,
+            sprite: SpriteInstanceDescriptor {
+                asset: "sprite/white".to_owned(),
+                frame: 0,
+                pivot: [0.5, 0.5],
+                size: [3.0, 3.0],
+                size_mode: SpriteSizeMode::World,
+                billboard: BillboardMode::Spherical,
+                tint: [0.0, 0.0, 1.0, 0.5],
+                render_order: 0,
+                depth: SpriteDepthPolicy::Default,
+                layer: RenderLayer::Scene,
+                viewport_placement: None,
+                shading: SpriteShading::Unlit,
+                material: SpriteMaterialDescriptor {
+                    alpha: SpriteAlphaMode::Blend,
+                    ..SpriteMaterialDescriptor::default()
+                },
+                visible: true,
+                transform: Transform {
+                    translation: [0.0, 0.0, -5.0],
+                    ..Transform::IDENTITY
+                },
+                attachment: SpriteAttachment::default(),
+                metadata: RenderMetadata::default(),
+            },
+        },
+    ];
+    ops.extend(splats(
+        &mut harness,
+        1,
+        &[Gaussian::round([0.0; 3], 0.15, [255, 0, 0, 255])],
+        [-0.5, 0.0, -4.0],
+    ));
+    ops.extend(splats(
+        &mut harness,
+        2,
+        &[Gaussian::round([0.0; 3], 0.15, [0, 255, 0, 255])],
+        [0.5, 0.0, -6.0],
+    ));
+    harness.apply(ops);
+    // Within half a pixel of a Gaussian's centre its falloff is 0.996, and
+    // the sRGB curve is steep near black: the sprite under it shows by a
+    // few levels. Drawn in the wrong order it would show by 186.
+    const NEAR: i32 = 8;
+    // Half blue over a colour, blended in linear light.
+    let under_sprite = |under: [i32; 3]| -> [i32; 3] {
+        let blue = [0.0, 0.0, 1.0];
+        [0, 1, 2].map(|c| encode(0.5 * blue[c] + 0.5 * decode(under[c] as u8)))
+    };
+    let front_view = front();
+    harness.render(&front_view);
+    let (_, rgba) = harness.render(&front_view);
+    assert_near(at(&rgba, ahead(-0.5, 0.0, -4.0)), [255, 0, 0], NEAR);
+    assert_near(
+        at(&rgba, ahead(0.5, 0.0, -6.0)),
+        under_sprite([0, 255, 0]),
+        NEAR,
+    );
+    assert_eq!(harness.renderer.gpu_readout().splats.runs, 2);
+
+    // From ten metres down the axis, looking back: +x is on the left.
+    let behind = camera([0.0, 0.0, -10.0], 180.0, 0.0);
+    harness.render(&behind);
+    let (_, rgba) = harness.render(&behind);
+    let from_behind = |x: f32, z: f32| ahead(-x, 0.0, -(z + 10.0));
+    assert_near(at(&rgba, from_behind(0.5, -6.0)), [0, 255, 0], NEAR);
+    assert_near(
+        at(&rgba, from_behind(-0.5, -4.0)),
+        under_sprite([255, 0, 0]),
+        NEAR,
+    );
+    assert_eq!(harness.renderer.gpu_readout().splats.runs, 2);
+}
+
+/// The motion view's range: `compose.wgsl` `MOTION_VIEW_RANGE`.
+const MOTION_RANGE: f32 = 16.0;
+
+/// The motion the motion view shows at a pixel, render pixels right and
+/// down.
+fn motion_at(rgba: &[u8], (x, y): (u32, u32)) -> [f32; 2] {
+    let index = ((y * WIDTH + x) * 4) as usize;
+    [rgba[index], rgba[index + 1]]
+        .map(|value| (f32::from(value) / 255.0 - 0.5) * 2.0 * MOTION_RANGE)
+}
+
+#[track_caller]
+fn assert_motion(found: [f32; 2], expected: [f32; 2], tolerance: f32) {
+    assert!(
+        (found[0] - expected[0]).abs() <= tolerance && (found[1] - expected[1]).abs() <= tolerance,
+        "motion {found:?}, expected {expected:?}"
+    );
+}
+
+fn motion_shown(harness: &mut Harness) {
+    harness
+        .renderer
+        .set_overlay_shown(render_wgpu::OverlayShown {
+            motion: true,
+            ..Default::default()
+        });
+}
+
+/// A moved splat instance draws its Gaussians' motion where it covers the
+/// pixel, once, and holds still after.
+#[test]
+fn a_moved_splat_instance_moves_once_and_then_holds() {
+    let mut harness = Harness::new(RendererOptions::default());
+    motion_shown(&mut harness);
+    let ops = splats(
+        &mut harness,
+        1,
+        &[Gaussian::round([0.0; 3], 0.3, [200, 100, 50, 255])],
+        [0.0, 0.0, -3.0],
+    );
+    harness.apply(ops);
+    harness.render(&front());
+    harness.render(&front());
+    harness.apply(vec![RenderDiff::Update {
+        handle: RenderHandle::new(1),
+        transform: Some(Transform {
+            translation: [0.2, 0.0, -3.0],
+            ..Transform::IDENTITY
+        }),
+        material: None,
+        visible: None,
+        metadata: None,
+    }]);
+    let (_, moved) = harness.render(&front());
+    let centre = ahead(0.2, 0.0, -3.0);
+    assert_motion(motion_at(&moved, centre), [focal() * 0.2 / 3.0, 0.0], 0.3);
+    let (_, held) = harness.render(&front());
+    assert_motion(motion_at(&held, centre), [0.0, 0.0], 0.15);
+}
+
+/// A skinned splat figure whose pose moves draws its Gaussians' motion
+/// from the previous palette: the fitted root climbs half a metre between
+/// two samples of the clip, the instance itself standing still.
+#[test]
+fn a_posed_splat_figure_moves_by_its_previous_palette() {
+    let mut harness = Harness::new(RendererOptions::default());
+    motion_shown(&mut harness);
+    let (body, instance) = skinned_arm_figure(&mut harness, 0.0);
+    harness.apply(vec![
+        RenderDiff::DefineAnimatedMesh { asset: body },
+        instance,
+    ]);
+    let view = camera([0.0, 1.0, 6.0], 0.0, 0.0);
+    harness.render(&view);
+    harness.render(&view);
+    harness.apply(vec![RenderDiff::SetAnimatedMeshPlayback {
+        handle: RenderHandle::new(1),
+        playback: AnimatedMeshPlaybackCommand::Sample {
+            clip: "raise".to_owned(),
+            normalized_time: 1.0,
+        },
+    }]);
+    let (_, moved) = harness.render(&view);
+    // Half a metre up at six metres; y down.
+    let climb = [0.0, -focal() * 0.5 / 6.0];
+    assert_motion(motion_at(&moved, on_plane(0.0, 1.25)), climb, 0.4);
+    assert_motion(motion_at(&moved, on_plane(-0.5, 1.75)), climb, 0.4);
+    let (_, held) = harness.render(&view);
+    assert_motion(motion_at(&held, on_plane(0.0, 1.25)), [0.0, 0.0], 0.15);
+}
+
 /// A skinned splat on a joint posed at a rest scale of 2, bound under an
 /// inverse bind of a half, is drawn at its own size (the shader takes the
 /// palette's scale off its shape), so it is culled by its whole reach: one
@@ -580,6 +854,114 @@ fn a_skinned_splat_past_the_edge_of_the_view_shows_its_reach() {
         edge[0] > background[0] + 20,
         "the tail at the edge {edge:?} over {background:?}"
     );
+}
+
+/// A snapshot of the world drawn by a fresh renderer, as a scene reading
+/// draws it, draws its splat instances as the running renderer does.
+#[test]
+fn a_fresh_renderer_draws_a_snapshots_splats_as_the_running_one() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = splats(
+        &mut harness,
+        1,
+        &[
+            Gaussian::round([0.0; 3], 0.3, [200, 100, 50, 200]),
+            Gaussian::round([0.2, 0.1, 0.1], 0.2, [50, 100, 200, 160]),
+        ],
+        [0.0, 0.0, -3.0],
+    );
+    let (body, instance) = skinned_arm_figure(&mut harness, 0.5);
+    ops.push(RenderDiff::DefineAnimatedMesh { asset: body });
+    ops.push(match instance {
+        RenderDiff::CreateAnimatedMeshInstance {
+            parent,
+            mut instance,
+            ..
+        } => {
+            instance.transform.translation = [1.0, -1.0, -5.0];
+            RenderDiff::CreateAnimatedMeshInstance {
+                handle: RenderHandle::new(2),
+                parent,
+                instance,
+            }
+        }
+        _ => unreachable!(),
+    });
+    harness.apply(ops);
+    harness.render(&front());
+    let (_, running) = harness.render(&front());
+    let (_, fresh) = harness.render_fresh(&front());
+    assert_ne!(
+        at(&running, CENTRE),
+        at(&running, (4, 4)),
+        "the splats draw"
+    );
+    assert!(
+        running == fresh,
+        "the fresh renderer draws the snapshot's splats alike"
+    );
+}
+
+/// The skinned arm figure (`skinned_splat_glb`) with the arm pack bound by
+/// joint names, its root fitted, sampling `raise` at `normalized_time`, as
+/// instance 1 at the origin.
+fn skinned_arm_figure(
+    harness: &mut Harness,
+    normalized_time: f32,
+) -> (AnimatedMeshAsset, RenderDiff) {
+    use support::splat_glb::{arm_clip_pack_glb, skinned_splat_glb};
+    let mut body = admit(
+        harness,
+        "skinned",
+        skinned_splat_glb(
+            &[
+                Gaussian::round([0.0, 0.5, 0.0], 0.1, [0, 255, 0, 255]),
+                Gaussian::round([0.0, 1.5, 0.0], 0.1, [255, 0, 0, 255]),
+            ],
+            &[0, 1],
+        ),
+    );
+    let pack = admit_pack(harness, arm_clip_pack_glb());
+    let hash = pack.content_hash.clone().expect("content hash");
+    body.clip_packs.push(AnimationClipPack {
+        asset: format!("animation-clip-pack/{}", hash.trim_start_matches("sha256:")),
+        runtime_format: pack.runtime_format,
+        content_hash: hash.clone(),
+        rig: pack.rig.clone().expect("the pack's rig"),
+        clips: pack.clips.clone(),
+        provenance: AnimationClipPackProvenance {
+            producer: "fixture".to_owned(),
+            source_hash: hash,
+            target_hash: body.content_hash.clone().expect("content hash"),
+            license: "CC0".to_owned(),
+        },
+        binding: AnimationClipPackBinding::JointNames,
+        translation_fits: vec![AnimationClipTranslationFit {
+            clip: "raise".to_owned(),
+            joint: "root".to_owned(),
+            scale: [1.0, 0.5, 1.0],
+            offset: [0.0, 0.25, 0.0],
+        }],
+    });
+    let instance = match splat_instance(1, &body, [0.0; 3]) {
+        RenderDiff::CreateAnimatedMeshInstance {
+            handle,
+            parent,
+            mut instance,
+        } => {
+            instance.playback = Some(AnimatedMeshPlaybackCommand::Sample {
+                clip: "raise".to_owned(),
+                normalized_time,
+            });
+            RenderDiff::CreateAnimatedMeshInstance {
+                handle,
+                parent,
+                instance,
+            }
+        }
+        _ => unreachable!(),
+    };
+    (body, instance)
 }
 
 /// The committed splat fixtures (`fixtures/render/assets/splats`) and the

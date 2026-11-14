@@ -145,7 +145,8 @@ by that joint.
   are projected and radix-sorted back to front together on the GPU every
   frame, so two figures standing close, or touching, interleave Gaussian
   by Gaussian. Between a run and a sprite or blended part the order is per
-  object, as it is between those.
+  object, as it is between those: a sprite between two figures splits them
+  into two runs, and the order turns as the camera moves round.
 - **Colour.** Each run draws into a layer of its own, tested against the
   world's opaque depth and writing none. The layer blends the colours as
   they are, in display space, and is composited into the HDR target at the
@@ -159,9 +160,23 @@ by that joint.
   - Where a soft edge lets the world through, that light mixes in linear
     light, so a silhouette against a bright background reads a little
     lighter than in the web SDK.
-- **Fog and temporal upscaling.** A splat writes no depth, so finish fog
-  sees what is behind it. Under temporal upscaling its pixels carry the
-  reactive mask, so the upscaler keeps no history there.
+- **Depth and motion.** Beside its colour, a layer keeps the depth of
+  what it drew and, when the frame draws motion, its motion, blended as the
+  colour is: each Gaussian's depth and its centre's motion since the
+  previous frame (from the instance's previous place and its set's
+  previous palette), weighted by its share of the pixel. Where the layer
+  covers at least half a pixel, the composite writes that depth into the
+  view's depth and that motion into the motion target. So:
+  - the finish fogs a figure at its own distance;
+  - blended parts, sprites, particles and soft particles drawn after it
+    meet it;
+  - under temporal upscaling a figure's history follows it as it walks or
+    its pose moves.
+
+  Where the layer covers less, at its soft edge, the composite marks the
+  reactive mask instead, so the upscaler keeps no history there, and the
+  pixel keeps the depth behind it. The depth is held as a half float, to
+  about one part in 2,000 of its distance.
 
 Measured against a CPU reference of the web kernel, townsman 385
 (48,000 Gaussians, 1920 × 1080, five views), at rest and walking with his
@@ -192,6 +207,9 @@ binding's.
 - **Readout.** `GpuReadout.splats` reports the last frame's runs, instances
   and Gaussians, summed over its views. The `splats` pass timer covers the
   projection, sort and layers of the frame's first view with a run.
-- **Measured cost.** One 48,000-Gaussian figure at 1920 × 1080 took
-  0.31 ms of GPU time on an RX 9070 XT about 750 pixels tall (2.2 m away),
-  and 0.20 ms at 3.6 m, at rest or walking.
+- **Measured cost.** One 48,000-Gaussian figure walking at
+  1920 × 1080 takes 0.55 ms of GPU time on an RX 9070 XT about 750 pixels
+  tall (2.2 m away), and 0.30 ms at 3.6 m. Drawing the layer dominates, and
+  it grows with the figure's pixels: every fragment writes both the colour
+  and the depth target, and the depth's write is about 0.25 ms of the
+  first and 0.1 ms of the second.

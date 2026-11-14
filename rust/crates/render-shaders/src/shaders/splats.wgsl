@@ -15,6 +15,15 @@
 // Splat colours are display-referred (sRGB-encoded) and were trained by
 // blending those values, so a layer blends them as they are and only the
 // composite decodes the result to linear light.
+//
+// Beside its colour a layer keeps the depth and motion of what it drew,
+// blended as the colour is: each Gaussian's depth and centre's motion
+// weighted by its share of the pixel. Where the layer covers at least half
+// a pixel the composite writes that depth and motion (divided by the
+// coverage) into the view's depth and motion, so the finish fogs a figure
+// at its own distance, later blended draws and soft particles meet it,
+// and a temporal stage follows it; elsewhere under the layer it marks the
+// reactive mask.
 
 // One Gaussian of a splat resource, two words of four:
 // [0] centre xyz (f32 bits), colour (r, g, b, opacity as unorm8, r lowest);
@@ -27,11 +36,13 @@ struct Gaussian {
 
 // One projected Gaussian of a run: where its quad stands and what it draws.
 // `centre`: in NDC (x, y, depth); `color`: packed as the resource's;
-// `axes`: the quad's two half axes in NDC (x, y, then x, y).
+// `axes`: the quad's two half axes in NDC (x, y, then x, y); `motion`: xy
+// its centre's motion in target pixels (`rusty::motion`), zw unused.
 struct Projected {
     centre: vec3<f32>,
     color: u32,
     axes: vec4<f32>,
+    motion: vec4<f32>,
 };
 
 // One instance's set of Gaussians projected for a view.
@@ -40,6 +51,9 @@ struct Project {
     model_view: mat4x4<f32>,
     // Instance space to the pass's clip space (jittered as the pass draws).
     clip_from_model: mat4x4<f32>,
+    // The previous frame's instance space to this frame's jittered target
+    // pixels, homogeneous (`rusty::motion` `previous_pixel`).
+    previous_pixels: mat4x4<f32>,
     // x, y: focal lengths in render pixels; z, w: the viewport's size.
     lens: vec4<f32>,
     // x: the run's nearest view depth; y: 1 / its depth span; z: 1 for an
@@ -48,10 +62,13 @@ struct Project {
     // x: the set's first slot in the run; y: its Gaussians; z: 1 for the
     // run's first set, which writes the draw's vertex count.
     range: vec4<u32>,
-    // x: the set's first row in `palettes`; y: 1 when it is skinned.
+    // x: the set's first row in `palettes`; y: 1 when it is skinned; z: the
+    // first row of its previous palette; w: 1 when the view draws motion.
     skin: vec4<u32>,
     // rgb: the colour multiplier in linear light.
     tint: vec4<f32>,
+    // NDC to the target's pixels as the pass rasterises them: xy + ndc·zw.
+    pixels: vec4<f32>,
 };
 
 // The indirect draw of a run's layer: 4 vertices per visible Gaussian.
@@ -104,6 +121,7 @@ const INVALID: u32 = 0xffffffffu;
 @group(0) @binding(21) var<storage, read> order: array<u32>;
 
 @group(1) @binding(30) var layer: texture_2d<f32>;
+@group(1) @binding(31) var surface_layer: texture_2d<f32>;
 
 fn rotation_matrix(q: vec4<f32>) -> mat3x3<f32> {
     let x = q.x;
@@ -132,6 +150,30 @@ fn half_float(bits: u32) -> f32 {
     return select(magnitude, -magnitude, (bits & 0x8000u) != 0u);
 }
 
+// The rows of a Gaussian's blended joint matrix from the palette at `first`,
+// and in `w` of the fourth its weights' total.
+fn blended_rows(first: u32, skin: vec2<u32>) -> mat4x4<f32> {
+    let weights = unpack4x8unorm(skin.y);
+    var rows = mat4x4<f32>(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
+    for (var influence = 0u; influence < 4u; influence = influence + 1u) {
+        let weight = weights[influence];
+        if weight > 0.0 {
+            let joint = (skin.x >> (8u * influence)) & 0xffu;
+            let row = first + joint * 3u;
+            rows[0] = rows[0] + weight * palettes[row];
+            rows[1] = rows[1] + weight * palettes[row + 1u];
+            rows[2] = rows[2] + weight * palettes[row + 2u];
+        }
+    }
+    rows[3] = vec4<f32>(0.0, 0.0, 0.0, weights.x + weights.y + weights.z + weights.w);
+    return rows;
+}
+
+fn moved(rows: mat4x4<f32>, point: vec3<f32>) -> vec3<f32> {
+    let p = vec4<f32>(point, 1.0);
+    return vec3<f32>(dot(rows[0], p), dot(rows[1], p), dot(rows[2], p)) / rows[3].w;
+}
+
 fn cull(slot: u32) {
     project_keys[slot] = CULLED;
     project_values[slot] = slot;
@@ -158,24 +200,18 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     // and the blend with its columns' lengths removed turns it, so a joint's
     // scale never inflates it.
     var turn = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+    // Where it stood in the previous frame, in the previous instance space.
+    var previous_centre = centre;
     if project.skin.y == 1u {
         let skin = skins[index];
-        let weights = unpack4x8unorm(skin.y);
-        var rows = array<vec4<f32>, 3>(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
-        for (var influence = 0u; influence < 4u; influence = influence + 1u) {
-            let weight = weights[influence];
-            if weight > 0.0 {
-                let joint = (skin.x >> (8u * influence)) & 0xffu;
-                let row = project.skin.x + joint * 3u;
-                rows[0] = rows[0] + weight * palettes[row];
-                rows[1] = rows[1] + weight * palettes[row + 1u];
-                rows[2] = rows[2] + weight * palettes[row + 2u];
+        let rows = blended_rows(project.skin.x, skin);
+        if rows[3].w > 0.0 {
+            let rest = centre;
+            centre = moved(rows, rest);
+            previous_centre = centre;
+            if project.skin.w == 1u && project.skin.z != project.skin.x {
+                previous_centre = moved(blended_rows(project.skin.z, skin), rest);
             }
-        }
-        let total = weights.x + weights.y + weights.z + weights.w;
-        if total > 0.0 {
-            let point = vec4<f32>(centre, 1.0);
-            centre = vec3<f32>(dot(rows[0], point), dot(rows[1], point), dot(rows[2], point)) / total;
             let columns = mat3x3<f32>(
                 vec3<f32>(rows[0].x, rows[1].x, rows[2].x),
                 vec3<f32>(rows[0].y, rows[1].y, rows[2].y),
@@ -260,7 +296,15 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     let to_ndc = 2.0 / size;
     let axis1 = l1 * direction * to_ndc;
     let axis2 = l2 * vec2<f32>(direction.y, -direction.x) * to_ndc;
-    projected[slot] = Projected(ndc, pack4x8unorm(color), vec4<f32>(axis1, axis2));
+    // The centre's motion: from where it stood to where the pass draws it.
+    var motion = vec2<f32>(0.0);
+    if project.skin.w == 1u {
+        let previous = project.previous_pixels * vec4<f32>(previous_centre, 1.0);
+        if previous.w > 1e-6 {
+            motion = project.pixels.xy + ndc.xy * project.pixels.zw - previous.xy / previous.w;
+        }
+    }
+    projected[slot] = Projected(ndc, pack4x8unorm(color), vec4<f32>(axis1, axis2), vec4<f32>(motion, 0.0, 0.0));
 
     // Back to front: the farthest Gaussian sorts first.
     let along = clamp((depth - project.depth.x) * project.depth.y, 0.0, 1.0);
@@ -473,6 +517,7 @@ struct SplatVarying {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) @interpolate(flat) motion: vec2<f32>,
 };
 
 @vertex
@@ -490,13 +535,23 @@ fn vs_splat(
     );
     out.uv = corner;
     out.color = unpack4x8unorm(splat.color);
+    out.motion = splat.motion.xy;
     return out;
 }
 
 const EXP4: f32 = 0.018315639;
 
+struct SplatOut {
+    // Premultiplied, in display space.
+    @location(0) color: vec4<f32>,
+    // 1 − its depth (the quad stands at its centre's) and its centre's
+    // motion, premultiplied by its alpha as the colour is: a view that
+    // draws no motion keeps only the depth.
+    @location(1) surface: vec4<f32>,
+};
+
 @fragment
-fn fs_splat(in: SplatVarying) -> @location(0) vec4<f32> {
+fn fs_splat(in: SplatVarying) -> SplatOut {
     let a = dot(in.uv, in.uv);
     if a > 1.0 {
         discard;
@@ -505,8 +560,10 @@ fn fs_splat(in: SplatVarying) -> @location(0) vec4<f32> {
     if alpha < ALPHA_MIN {
         discard;
     }
-    // Premultiplied, in display space.
-    return vec4<f32>(in.color.rgb * alpha, alpha);
+    return SplatOut(
+        vec4<f32>(in.color.rgb * alpha, alpha),
+        vec4<f32>(vec3<f32>(1.0 - in.position.z, in.motion) * alpha, alpha),
+    );
 }
 
 // --- The composite -----------------------------------------------------------
@@ -558,11 +615,47 @@ struct ReactiveComposite {
 };
 
 // `rusty::types::REACTIVE_OVERLAY`: the temporal stage keeps no history
-// under the splats, which write no motion of their own yet.
+// where the layer blends over what lies under it; `fs_composite_depth_motion`
+// then writes the figure's own motion where it covers at least half.
 const REACTIVE_OVERLAY: f32 = 1.0;
 
 @fragment
 fn fs_composite_reactive(in: CompositeVarying) -> ReactiveComposite {
     let color = composited(in.position);
     return ReactiveComposite(color, vec4<f32>(0.0, 0.0, REACTIVE_OVERLAY, color.a));
+}
+
+// The layer's depth and motion at the fragment where it covers at least
+// half of it (its colour's alpha), each its Gaussians' weighted by their
+// shares; none (discarded) elsewhere.
+fn surface_at(position: vec4<f32>) -> vec3<f32> {
+    let pixel = vec2<i32>(position.xy);
+    let coverage = textureLoad(layer, pixel, 0).a;
+    if coverage < 0.5 {
+        discard;
+    }
+    let value = textureLoad(surface_layer, pixel, 0).xyz / coverage;
+    return vec3<f32>(1.0 - value.x, value.yz);
+}
+
+struct DepthComposite {
+    @builtin(frag_depth) depth: f32,
+    @location(0) color: vec4<f32>,
+};
+
+@fragment
+fn fs_composite_depth(in: CompositeVarying) -> DepthComposite {
+    return DepthComposite(surface_at(in.position).x, vec4<f32>(0.0));
+}
+
+struct MotionComposite {
+    @builtin(frag_depth) depth: f32,
+    @location(0) color: vec4<f32>,
+    @location(1) motion: vec4<f32>,
+};
+
+@fragment
+fn fs_composite_depth_motion(in: CompositeVarying) -> MotionComposite {
+    let surface = surface_at(in.position);
+    return MotionComposite(surface.x, vec4<f32>(0.0), vec4<f32>(surface.yz, 0.0, 1.0));
 }
