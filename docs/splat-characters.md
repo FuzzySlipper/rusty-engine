@@ -178,6 +178,12 @@ by that joint.
   pixel keeps the depth behind it. The depth is held as a half float, to
   about one part in 2,000 of its distance.
 
+  A run keeps them only when something after it reads them: fog
+  (analytic or volumetric), motion (temporal upscaling, Ray
+  Reconstruction), an image effect, particles, soft sprites, overlay
+  lines, rain or snow, or any blended draw after the run. Otherwise the
+  view's depth stays as the opaque world left it.
+
 Measured against a CPU reference of the web kernel, townsman 385
 (48,000 Gaussians, 1920 × 1080, five views), at rest and walking with his
 Gaussians skinned on the CPU from the same joints, differs as follows:
@@ -208,8 +214,8 @@ binding's.
   and Gaussians, summed over its views. The `splats` pass timer covers the
   projection, sort and layers of the frame's first view with a run.
 - **Measured cost.** One 48,000-Gaussian figure walking at
-  1920 × 1080 takes 0.55 ms of GPU time on an RX 9070 XT about 750 pixels
-  tall (2.2 m away), and 0.30 ms at 3.6 m. Drawing the layer dominates, and
-  it grows with the figure's pixels: every fragment writes both the colour
-  and the depth target, and the depth's write is about 0.25 ms of the
-  first and 0.1 ms of the second.
+  1920 × 1080 takes 0.31 ms of GPU time on an RX 9070 XT about 750 pixels
+  tall (2.2 m away), and 0.19 ms at 3.6 m. Drawing the layer dominates, and
+  it grows with the figure's pixels. When something reads the figure's
+  depth or motion, every fragment writes the depth target too: 0.55 ms at
+  2.2 m and 0.30 ms at 3.6 m.

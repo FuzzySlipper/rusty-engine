@@ -30,7 +30,11 @@
 //! composite draw writes those into the view's depth and the motion target
 //! where there is one: the finish fogs a figure at its own distance, what
 //! draws after it meets it, and a temporal stage follows it. The colour
-//! composite marks the reactive mask under the rest of the layer.
+//! composite marks the reactive mask under the rest of the layer. Writing
+//! the surface target costs about as much as the layer's colour, so a run
+//! keeps it only when something after it reads the view's depth or motion
+//! (`frame.rs` says what does); otherwise the run leaves the depth as the
+//! opaque world left it.
 //!
 //! **Cost.** Projecting and sorting run on the GPU for every view each frame
 //! with a splat run; nothing is copied to or from the CPU per frame. The
@@ -274,8 +278,11 @@ pub(crate) struct Splats {
     /// The most layers a view drew into this frame; the rest are dropped at
     /// the next.
     layers_used: usize,
-    /// By samples and whether the surface holds motion.
-    draws: HashMap<(u32, bool), wgpu::RenderPipeline>,
+    /// By samples and, when the layer keeps its surface, whether that holds
+    /// motion.
+    draws: HashMap<(u32, Option<bool>), wgpu::RenderPipeline>,
+    /// Whether each of the view's runs kept its surface.
+    surfaces: Vec<bool>,
     /// By target: the colour composite, then the depth and motion one.
     composites: HashMap<ColorTarget, [wgpu::RenderPipeline; 2]>,
     /// Each drawn set's placing, while frames draw motion.
@@ -319,6 +326,7 @@ impl Splats {
             layers: Vec::new(),
             layers_used: 0,
             draws: HashMap::new(),
+            surfaces: Vec::new(),
             composites: HashMap::new(),
             history: HashMap::new(),
             timer: PassTimer::new(gpu, "splats"),
@@ -499,13 +507,16 @@ impl Splats {
     /// Project, sort and draw each run into a layer of its own, in order:
     /// `runs[i]` is composited by [`Self::draw_composite`]`(.., i)`.
     /// `depth_ranges[i]` is run `i`'s nearest and farthest view depth, which
-    /// its sort keys span.
+    /// its sort keys span. `surfaces[i]` is whether something after run `i`
+    /// reads the view's depth or motion, as everything does while the view
+    /// draws motion.
     pub fn encode_runs(
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
         runs: &[Vec<RunSet<'_>>],
         depth_ranges: &[(f32, f32)],
+        surfaces: &[bool],
         target: &SplatTarget<'_>,
     ) {
         if self.pipelines.is_none() || runs.is_empty() {
@@ -558,7 +569,15 @@ impl Splats {
         self.ensure_params(&gpu.device, slots);
         self.ensure_palettes(&gpu.device, palettes.len().max(4) as u64 * 4);
         self.ensure_run(&gpu.device, largest.max(1));
-        self.ensure_draw(&gpu.device, target.samples, target.motion.is_some());
+        let motion = target.motion.is_some();
+        self.surfaces.clear();
+        self.surfaces
+            .extend((0..runs.len()).map(|run| motion || surfaces[run]));
+        for kept in [false, true] {
+            if self.surfaces.contains(&kept) {
+                self.ensure_draw(&gpu.device, target.samples, kept.then_some(motion));
+            }
+        }
         for index in 0..runs.len() {
             self.layer(&gpu.device, index, target);
         }
@@ -670,7 +689,6 @@ impl Splats {
 
         let pipelines = self.pipelines.as_ref().expect("checked above");
         let buffers = self.run.as_ref().expect("ensured above");
-        let draw = &self.draws[&(target.samples, target.motion.is_some())];
         let timer = self.timer.as_ref().filter(|_| !self.timed);
         for (index, (run, (sort, sets, total, blocks))) in runs.iter().zip(&offsets).enumerate() {
             let groups = (DIGITS * blocks).div_ceil(TILE);
@@ -703,28 +721,31 @@ impl Splats {
                 }
             }
             let layer = &self.layers[index];
+            let kept = self.surfaces[index];
+            let draw = &self.draws[&(target.samples, kept.then_some(motion))];
+            let attachments = [
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &layer.color,
+                    depth_slice: None,
+                    resolve_target: layer.resolve.as_ref(),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+                Some(wgpu::RenderPassColorAttachment {
+                    view: &layer.surface,
+                    depth_slice: None,
+                    resolve_target: layer.surface_resolve.as_ref(),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                }),
+            ];
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu splat layer"),
-                color_attachments: &[
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &layer.color,
-                        depth_slice: None,
-                        resolve_target: layer.resolve.as_ref(),
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                    Some(wgpu::RenderPassColorAttachment {
-                        view: &layer.surface,
-                        depth_slice: None,
-                        resolve_target: layer.surface_resolve.as_ref(),
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                            store: wgpu::StoreOp::Store,
-                        },
-                    }),
-                ],
+                color_attachments: &attachments[..1 + usize::from(kept)],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: target.depth,
                     depth_ops: Some(wgpu::Operations {
@@ -782,7 +803,8 @@ impl Splats {
             return;
         };
         pass.set_bind_group(1, &layer.group, &[]);
-        for pipeline in pipelines {
+        let kept = self.surfaces.get(run).copied().unwrap_or(false);
+        for pipeline in &pipelines[..1 + usize::from(kept)] {
             pass.set_pipeline(pipeline);
             pass.draw(0..3, 0..1);
         }
@@ -951,9 +973,24 @@ impl Splats {
         });
     }
 
-    fn ensure_draw(&mut self, device: &wgpu::Device, samples: u32, motion: bool) {
+    /// The layer's draw at `samples`, keeping its surface, with or without
+    /// motion, when `surface` is some.
+    fn ensure_draw(&mut self, device: &wgpu::Device, samples: u32, surface: Option<bool>) {
         let pipelines = self.pipelines.as_ref().expect("a device that draws splats");
-        self.draws.entry((samples, motion)).or_insert_with(|| {
+        self.draws.entry((samples, surface)).or_insert_with(|| {
+            let colour = Some(wgpu::ColorTargetState {
+                format: LAYER_FORMAT,
+                blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            });
+            let targets = [
+                colour,
+                surface.map(|motion| wgpu::ColorTargetState {
+                    format: surface_format(motion),
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                }),
+            ];
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("render-wgpu splat layer"),
                 layout: Some(&pipelines.draw_pipeline_layout),
@@ -980,20 +1017,13 @@ impl Splats {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &pipelines.module,
-                    entry_point: Some("fs_splat"),
+                    entry_point: Some(if surface.is_some() {
+                        "fs_splat"
+                    } else {
+                        "fs_splat_colour"
+                    }),
                     compilation_options: Default::default(),
-                    targets: &[
-                        Some(wgpu::ColorTargetState {
-                            format: LAYER_FORMAT,
-                            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        }),
-                        Some(wgpu::ColorTargetState {
-                            format: surface_format(motion),
-                            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                            write_mask: wgpu::ColorWrites::ALL,
-                        }),
-                    ],
+                    targets: &targets[..1 + usize::from(surface.is_some())],
                 }),
                 multiview_mask: None,
                 cache: None,
@@ -1484,6 +1514,7 @@ mod tests {
             &mut encoder,
             &[run],
             &[(near, far)],
+            &[false],
             &SplatTarget {
                 depth: &depth,
                 width: 64,

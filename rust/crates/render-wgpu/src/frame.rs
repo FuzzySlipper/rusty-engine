@@ -4512,11 +4512,35 @@ impl Renderer {
                             )
                         })
                         .collect();
+                    // A run keeps its depth and motion only for something
+                    // after it that reads them: the finish's fog, a temporal
+                    // stage or Ray Reconstruction (both draw motion), an
+                    // image effect, or a draw that tests against the depth.
+                    let read_after = view.motion.is_some()
+                        || view.reconstruct.is_some()
+                        || self.tables.fog.is_some()
+                        || (world_layer && self.volumetric_fog_reach().is_some())
+                        || self.image_effect.active()
+                        || effects.particles()
+                        || overlay_lines > 0
+                        || self
+                            .tables
+                            .precipitation
+                            .is_some_and(|precipitation| precipitation.drops > 0 && world_layer);
+                    let mut drawn_after = false;
+                    let mut surfaces = vec![read_after; runs.len()];
+                    for item in blended.order.iter().rev() {
+                        if let Blended::Splats(run) = *item {
+                            surfaces[run] |= drawn_after;
+                        }
+                        drawn_after = true;
+                    }
                     self.splats.encode_runs(
                         &self.gpu,
                         &mut encoder,
                         &runs,
                         &ranges,
+                        &surfaces,
                         &crate::splats::SplatTarget {
                             depth: view.target.depth,
                             width: view.target.width,

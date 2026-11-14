@@ -9,7 +9,7 @@
 //! cargo run -p render-wgpu --example splat_capture -- --glb PATH --out DIR
 //!     [--size 1920x1080] [--eye-height 0.88] [--distance 2.2] [--occluded]
 //!     [--clip-pack PATH --clip ID [--fit JOINT:K,A] [--at SECONDS] [--track SECONDS]]
-//!     [--arms ABDUCT,FOREARM] [--multiplier R,G,B]
+//!     [--arms ABDUCT,FOREARM] [--multiplier R,G,B] [--fog DENSITY]
 //! ```
 //!
 //! - `--occluded`: a box between the camera and the figure's legs, a wall
@@ -33,6 +33,7 @@
 //!   (270°, 4°) and `three-quarter` (315°, 8°) around from the figure's
 //!   front, each at every time: `<view>-t<index>.png`.
 //! - `--multiplier R,G,B`: the splat colour multiplier.
+//! - `--fog DENSITY`: exponential fog, grey, which reads the figure's depth.
 //! - `--pose-out`: write `pose.json`, every rig joint's world transform at
 //!   the capture time, for a CPU check of the skinning.
 //!
@@ -67,6 +68,7 @@ struct Arguments {
     track: Option<f64>,
     arms: Option<(f32, f32)>,
     multiplier: Option<[f32; 3]>,
+    fog: Option<f32>,
     pose_out: bool,
     track_joints: Option<Vec<String>>,
     centre: Option<String>,
@@ -127,6 +129,7 @@ fn arguments() -> Result<Arguments, String> {
                 arguments.arms = Some((abduct, forearm));
             }
             "--multiplier" => arguments.multiplier = Some(numbers::<3>(&value()?, "--multiplier")?),
+            "--fog" => arguments.fog = Some(value()?.parse().map_err(|_| "--fog")?),
             "--pose-out" => arguments.pose_out = true,
             "--track-joints" => {
                 arguments.track_joints = Some(
@@ -345,6 +348,14 @@ fn main() {
             box_mesh([-3.0, 0.0, -0.05], [3.0, 3.0, 0.05], |_| 0),
             "material/wall",
         ));
+    }
+    if let Some(density) = arguments.fog {
+        ops.push(RenderDiff::SetFog {
+            fog: Some(FogDescriptor::Exponential {
+                color: [0.5, 0.5, 0.5],
+                density,
+            }),
+        });
     }
     harness.apply(ops);
 

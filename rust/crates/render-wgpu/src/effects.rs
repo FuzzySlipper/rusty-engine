@@ -271,6 +271,12 @@ impl EffectsPass {
         !self.finished.is_empty()
     }
 
+    /// Whether the pass draws particles or soft sprites, which read the
+    /// world's depth after its blended draws.
+    pub fn particles(&self) -> bool {
+        self.cubes > 0 || !self.billboards.is_empty() || !self.soft_sprites.is_empty()
+    }
+
     /// Whether any sprite or billboard needs the particle pass after the world's.
     pub fn soft(&self) -> bool {
         !self.soft_sprites.is_empty() || self.billboards.iter().any(|run| run.soft)

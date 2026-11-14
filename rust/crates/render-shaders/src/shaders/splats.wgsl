@@ -550,8 +550,9 @@ struct SplatOut {
     @location(1) surface: vec4<f32>,
 };
 
-@fragment
-fn fs_splat(in: SplatVarying) -> SplatOut {
+// The Gaussian's alpha at the fragment; fragments past its reach or too
+// faint to show are discarded.
+fn splat_alpha(in: SplatVarying) -> f32 {
     let a = dot(in.uv, in.uv);
     if a > 1.0 {
         discard;
@@ -560,10 +561,24 @@ fn fs_splat(in: SplatVarying) -> SplatOut {
     if alpha < ALPHA_MIN {
         discard;
     }
+    return alpha;
+}
+
+@fragment
+fn fs_splat(in: SplatVarying) -> SplatOut {
+    let alpha = splat_alpha(in);
     return SplatOut(
         vec4<f32>(in.color.rgb * alpha, alpha),
         vec4<f32>(vec3<f32>(1.0 - in.position.z, in.motion) * alpha, alpha),
     );
+}
+
+// A layer that keeps no surface: nothing after its run reads the view's
+// depth or motion.
+@fragment
+fn fs_splat_colour(in: SplatVarying) -> @location(0) vec4<f32> {
+    let alpha = splat_alpha(in);
+    return vec4<f32>(in.color.rgb * alpha, alpha);
 }
 
 // --- The composite -----------------------------------------------------------
