@@ -696,13 +696,16 @@ fn hash(digit: char) -> String {
     format!("sha256:{}", digit.to_string().repeat(64))
 }
 
+static NEXT_DIRECTORY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn temporary_directory(label: &str) -> std::path::PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "rusty-engine-{label}-{}-{unique}",
-        std::process::id()
+        "rusty-engine-{label}-{}-{unique}-{}",
+        std::process::id(),
+        NEXT_DIRECTORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ))
 }

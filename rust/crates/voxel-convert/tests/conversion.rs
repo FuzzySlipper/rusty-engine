@@ -534,13 +534,16 @@ fn pad_to_four(bytes: &mut Vec<u8>, padding: u8) {
     }
 }
 
+static NEXT_DIRECTORY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn temporary_directory() -> std::path::PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
     std::env::temp_dir().join(format!(
-        "rusty-engine-voxel-convert-{}-{unique}",
-        std::process::id()
+        "rusty-engine-voxel-convert-{}-{unique}-{}",
+        std::process::id(),
+        NEXT_DIRECTORY.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ))
 }
