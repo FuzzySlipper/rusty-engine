@@ -606,8 +606,9 @@ fn fs_splat_lit(in: SplatVarying) -> SplatOut {
 struct LitMotionOut {
     @location(0) color: vec4<f32>,
     @location(1) surface: vec4<f32>,
-    // The normal's view-space xy, premultiplied by alpha.
-    @location(2) normal: vec2<f32>,
+    // The normal's view-space xy, premultiplied by alpha, and the alpha
+    // its blend takes: the RG16F target keeps xy.
+    @location(2) normal: vec4<f32>,
 };
 
 // A lit run under motion: its normal in a target of its own.
@@ -617,7 +618,7 @@ fn fs_splat_lit_motion(in: SplatVarying) -> LitMotionOut {
     return LitMotionOut(
         vec4<f32>(in.color.rgb * alpha, alpha),
         vec4<f32>(vec3<f32>(1.0 - in.position.z, in.motion) * alpha, alpha),
-        in.normal * alpha,
+        vec4<f32>(in.normal * alpha, 0.0, alpha),
     );
 }
 

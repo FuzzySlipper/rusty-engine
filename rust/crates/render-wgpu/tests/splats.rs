@@ -730,6 +730,79 @@ fn a_lit_splat_takes_the_suns_light_at_its_normal_down_to_its_floor() {
     );
 }
 
+/// Under a temporal stage a lit run's normals blend in a target of their
+/// own as they do beside the depth without one: a translucent Gaussian
+/// over an opaque one, their normals tilted apart, lights the same.
+#[test]
+fn overlapping_lit_gaussians_light_alike_with_and_without_motion() {
+    let options = RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    };
+    // Flat Gaussians turned alike about y. The fallback normal points away
+    // from their centre, so the front one's tilts toward +x and the back
+    // one's toward −x: blended by alpha they face the camera, and a blend
+    // that lost the front's alpha would tilt them. The sun from the right.
+    let turned = |degrees: f32, z: f32, opacity: u8| {
+        let (sin, cos) = (degrees.to_radians() * 0.5).sin_cos();
+        Gaussian {
+            rotation: [0.0, sin, 0.0, cos],
+            scale: [0.3, 0.3, 0.005],
+            ..Gaussian::round([0.0, 0.0, z], 0.3, [200, 160, 120, opacity])
+        }
+    };
+    let render = |temporal: bool| {
+        let mut harness = Harness::new(options);
+        let mut ops = splats(
+            &mut harness,
+            1,
+            &[turned(50.0, -0.2, 255), turned(50.0, 0.2, 128)],
+            [0.0, 0.0, -3.0],
+        );
+        ops.push(RenderDiff::CreateLight {
+            handle: RenderHandle::new(20),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0; 3],
+                intensity: 3.0,
+                enabled: true,
+                direction: [-1.0, 0.0, -0.4],
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        });
+        ops.push(RenderDiff::SetSplatAppearance {
+            handle: RenderHandle::new(1),
+            appearance: SplatAppearance {
+                lighting: SplatLighting::Lit,
+                light_floor: 0.1,
+                ..SplatAppearance::default()
+            },
+        });
+        if temporal {
+            ops.push(RenderDiff::SetRendererSettings {
+                settings: RendererSettingsDescriptor {
+                    antialiasing: Antialiasing::Temporal,
+                    render_scale: 1.0,
+                    ..RendererSettingsDescriptor::DEFAULT
+                },
+            });
+        }
+        harness.apply(ops);
+        let samples = harness.renderer.samples();
+        harness.target = render_wgpu::OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, samples);
+        let mut rgba = Vec::new();
+        for _ in 0..16 {
+            rgba = harness.render(&front()).1;
+        }
+        at(&rgba, CENTRE)
+    };
+    let still = render(false);
+    let temporal = render(true);
+    assert_near(temporal, still, 3);
+}
+
 /// A lit figure receives the sun's cascaded shadow: a box between the sun
 /// and it darkens it to its floor.
 #[test]
