@@ -227,8 +227,9 @@ rounds:
 | 1 | RTX 3080, 1080p | 0.52 | 0.75 | 0.83 | 1.00 |
 | 32 | RTX 3080, 1080p | 2.43 | 3.96 | 4.12 | 9.37 |
 | 32 | RTX 3080, 1440p | 3.12 | 5.25 | 5.41 | 10.73 |
-| 32 | RX 9070 XT, 1080p | 2.25 | 2.79 | 2.93 | 7.86 |
-| 32 | RX 9070 XT, 1440p | 2.55 | 3.49 | 3.64 | 8.54 |
+| 1 | RX 9070 XT, 1080p | 0.50 | 0.70 | 0.74 | 0.95 |
+| 32 | RX 9070 XT, 1080p | 2.29 | 2.75 | 2.83 | 7.79 |
+| 32 | RX 9070 XT, 1440p | 2.51 | 3.44 | 3.51 | 8.35 |
 
 Most of lighting's cost is the layer keeping depth and normal: the light
 itself is a few hundredths of a millisecond. The web SDK's relighting cost
