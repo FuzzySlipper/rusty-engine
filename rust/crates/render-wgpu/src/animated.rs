@@ -1300,7 +1300,8 @@ impl Renderer {
         });
     }
 
-    /// Exact posed world bounds: every vertex at its current pose.
+    /// Posed world bounds: every vertex at its current pose, and each splat
+    /// joint's Gaussians moved by that joint (`posed_splat_bounds`).
     pub(crate) fn animated_world_bounds(&self, handle: RenderHandle) -> Option<Aabb> {
         let instance = self.tables.animated.get(&handle)?;
         let asset = self.tables.animated_assets.get(instance.slot)?;
@@ -1326,6 +1327,11 @@ impl Renderer {
                     bounds.include(matrix.transform_point3(crate::convert::vec3(*position)));
                 }
             }
+        }
+        // Gaussian splats in their posed bounds.
+        for &(glb_node, set) in &asset.splat_nodes {
+            let draw = splat_draw(instance, asset, glb_node, set, world, [1.0; 3]);
+            bounds = bounds.union(&posed_splat_bounds(&asset.splat_sets[set], &draw));
         }
         let finite = bounds.min.is_finite() && bounds.max.is_finite();
         (!bounds.is_empty() && finite).then_some(bounds)
@@ -1355,25 +1361,17 @@ impl Renderer {
             if !node.world_visible || crate::frame::ViewLayer::of(node.world_layer) != layer {
                 continue;
             }
+            let multiplier = match &node.kind {
+                NodeKind::AnimatedMesh(descriptor) => descriptor.splat.multiplier,
+                _ => [1.0; 3],
+            };
             let mut bounds = Aabb::EMPTY;
             let mut sets = Vec::with_capacity(asset.splat_nodes.len());
             for &(glb_node, set) in &asset.splat_nodes {
                 let splat_set = &asset.splat_sets[set];
-                // A skinned primitive's Gaussians stand in bind space.
-                let local = if splat_set.skinned {
-                    Mat4::IDENTITY
-                } else {
-                    placed_node(instance, asset, glb_node)
-                };
-                let model = node.world * local;
-                bounds = bounds.union(&splat_set.bounds.transformed(&model));
-                sets.push((
-                    crate::splats::SetRef {
-                        slot: instance.slot,
-                        set,
-                    },
-                    model,
-                ));
+                let draw = splat_draw(instance, asset, glb_node, set, node.world, multiplier);
+                bounds = bounds.union(&posed_splat_bounds(splat_set, &draw));
+                sets.push(draw);
             }
             if bounds.is_empty() || !frustum.intersects(&bounds) {
                 continue;
@@ -1843,6 +1841,97 @@ fn vertex_bounds(vertices: &[f32]) -> Aabb {
 /// ([`animation_pose::joint_nodes`]).
 pub fn joint_nodes(model: &GlbModel) -> HashMap<String, usize> {
     animation_pose::joint_nodes(model)
+}
+
+/// How a view draws `set` of `asset`, which GLB node `glb_node` draws, for
+/// `instance` at `world`: a skinned set moves by its skin's joints in the
+/// instance's pose, a rigid one by its node.
+fn splat_draw(
+    instance: &AnimatedInstance,
+    asset: &AnimatedAssetRow,
+    glb_node: usize,
+    set: usize,
+    world: Mat4,
+    multiplier: [f32; 3],
+) -> crate::splats::SplatDraw {
+    let splat_set = &asset.splat_sets[set];
+    let skin = asset.model.nodes[glb_node]
+        .skin
+        .filter(|_| splat_set.joint_bounds.is_some())
+        .and_then(|skin| asset.model.skins.get(skin));
+    let (model, palette) = match skin {
+        Some(skin) => (
+            world,
+            skin.joints
+                .iter()
+                .zip(&skin.inverse_binds)
+                .map(|(joint, inverse)| {
+                    // A joint's scale never inflates the Gaussians.
+                    let matrix = node_matrix(instance, asset, *joint);
+                    let unscaled = Mat4::from_cols(
+                        matrix.x_axis.truncate().normalize_or_zero().extend(0.0),
+                        matrix.y_axis.truncate().normalize_or_zero().extend(0.0),
+                        matrix.z_axis.truncate().normalize_or_zero().extend(0.0),
+                        matrix.w_axis,
+                    ) * *inverse;
+                    let row = |r: usize| unscaled.row(r).to_array();
+                    let [a, b, c] = [row(0), row(1), row(2)];
+                    [
+                        a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], c[0], c[1], c[2], c[3],
+                    ]
+                })
+                .collect(),
+        ),
+        // Unskinned, or a skin the set cannot index: in its node's place.
+        None => (
+            world
+                * if splat_set.joint_bounds.is_some() {
+                    Mat4::IDENTITY
+                } else {
+                    placed_node(instance, asset, glb_node)
+                },
+            Vec::new(),
+        ),
+    };
+    crate::splats::SplatDraw {
+        set: crate::splats::SetRef {
+            slot: instance.slot,
+            set,
+        },
+        model,
+        palette,
+        multiplier,
+    }
+}
+
+/// `set`'s world bounds as `draw` places it: each joint's Gaussians moved by
+/// that joint, or the whole set by its model.
+fn posed_splat_bounds(set: &crate::splats::SplatSet, draw: &crate::splats::SplatDraw) -> Aabb {
+    match &set.joint_bounds {
+        Some(joints) if !draw.palette.is_empty() => {
+            let mut bounds = Aabb::EMPTY;
+            for (joint, joint_bounds) in joints.iter().enumerate() {
+                let Some(rows) = draw.palette.get(joint) else {
+                    continue;
+                };
+                if joint_bounds.is_empty() {
+                    continue;
+                }
+                let matrix = Mat4::from_cols_array(&rows_to_columns(rows));
+                bounds = bounds.union(&joint_bounds.transformed(&(draw.model * matrix)));
+            }
+            bounds
+        }
+        _ => set.bounds.transformed(&draw.model),
+    }
+}
+
+/// A palette entry's three rows as a column-major matrix.
+fn rows_to_columns(rows: &[f32; 12]) -> [f32; 16] {
+    [
+        rows[0], rows[4], rows[8], 0.0, rows[1], rows[5], rows[9], 0.0, rows[2], rows[6], rows[10],
+        0.0, rows[3], rows[7], rows[11], 1.0,
+    ]
 }
 
 /// A splat set by its asset's slot and index.

@@ -1092,6 +1092,16 @@ pub type NativeAssociateAnimationClipPack = unsafe extern "C" fn(
     *const NativeAnimationClipPackAssociationRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeFitAnimationClipTranslation = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAnimationClipTranslationFitRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetSplatAppearance = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSplatAppearanceRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateAnimatedMeshAppearance = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimatedMeshAppearanceRequest,
@@ -1924,9 +1934,16 @@ pub struct NativeAnimationApi {
     pub open_animation_clip_pack_from_content: NativeOpenAnimationResourceFromContent,
     pub open_animation_clip_pack: NativeOpenAnimationClipPack,
     pub associate_animation_clip_pack: NativeAssociateAnimationClipPack,
+    /// Associate a clip pack whose skeleton names every joint of the
+    /// primary's, with the primary's rest rotations but bone lengths of its
+    /// own: rotation channels apply as authored, and a translation applies
+    /// only where the clip moves it.
+    pub associate_animation_clip_pack_by_joint_names: NativeAssociateAnimationClipPack,
+    pub fit_animation_clip_translation: NativeFitAnimationClipTranslation,
     pub create_animated_mesh_appearance: NativeCreateAnimatedMeshAppearance,
     pub replace_animated_mesh_appearance: NativeReplaceAnimatedMeshAppearance,
     pub set_mesh_inspection: NativeSetAnimatedMeshInspection,
+    pub set_splat_appearance: NativeSetSplatAppearance,
     pub update_animated_mesh_materials: NativeUpdateAnimatedMeshMaterials,
     pub update_animated_mesh_material_factors: NativeUpdateAnimatedMeshMaterialFactors,
     pub destroy_appearance: NativeDestroyAppearance,

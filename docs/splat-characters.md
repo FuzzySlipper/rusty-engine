@@ -3,11 +3,9 @@
 A splat character is an animated GLB whose mesh is a cloud of Gaussians
 rather than triangles: each point a small soft ellipsoid with its own
 colour, as asset-pipeline bakes characters from paintings and orbit videos.
-The Engine admits it like any animated GLB and draws it as Gaussians,
+The Engine admits it like any animated GLB, poses it with the
+`Animation` service, skins its Gaussians on the GPU and draws them,
 sorted back to front and blended into the world.
-
-Splat characters draw at rest. They are not posed by clips or skinned to a
-skeleton yet.
 
 ## The asset
 
@@ -20,19 +18,34 @@ is a `POINTS` primitive (`mode` 0) with one value per Gaussian in each of:
 | `_ROTATION` | float or normalized signed VEC4 | Orientation, a unit quaternion xyzw. |
 | `_SCALE` | float VEC3 | Standard deviation along each of the Gaussian's own axes, in metres (linear, not log). |
 | `_COLOR` | float or normalized unsigned VEC4 | **sRGB-encoded** display colour in rgb; **linear** opacity in a. |
-| `JOINTS_0`, `WEIGHTS_0` | as glTF | The skin, on a skinned node. |
+| `JOINTS_0`, `WEIGHTS_0` | as glTF | The skin, on a skinned node: at most 256 joints a primitive indexes. |
 
 `_COLOR` is not `COLOR_0`. glTF defines `COLOR_0` as linear, and these
 colours are display-referred: they are the values the splats were trained
 to blend.
 
-The figure stands on y = 0, +Y up, in metres, facing +Z.
+The figure stands on y = 0, +Y up, in metres.
 
 A GLB with splat primitives has only splat primitives, and carries no clips
 of its own. Admission refuses a missing attribute, attributes of different
 lengths and non-finite values. Its bounds are the Gaussians' centres to
 three standard deviations, each node's at rest (a skinned node's in bind
-space).
+space). A skinned one names its rig: its skin's named joints, held in
+place, as clip packs and joint reads need.
+
+### A PINOC character
+
+A character baked for Viggle's PINOC clips is skinned to the joints of the
+canonical 441-joint humanoid its Gaussians use, plus their ancestors up to
+`root`, under their canonical names and parents:
+
+- each joint's rest translation is the character's own (the `.vsplat`
+  `joints` block), and its rest rotation the canonical one;
+- the inverse binds are those of that rest;
+- the Gaussians stay in the `.vsplat`'s own space.
+
+That rest faces +X. The PINOC clips hold `root` turned half round, so a
+played character faces +Z and walks along it.
 
 Products open it as any animated GLB:
 
@@ -43,6 +56,55 @@ RenderResource body = engine.Animation.OpenAnimatedMeshFromContent(new(bodySourc
 `CreateAnimatedMeshAppearance` and `CreateInstance` place it, and every
 instance of one resource reads the same resident Gaussians.
 
+## Posing
+
+A splat character is posed as any animated mesh
+([skeleton poses](skeleton-poses.md)): playback, clip layers, IK, joint
+overrides and joint reads.
+
+**Clip packs on other bone lengths.** PINOC clips come on the canonical
+skeleton: every joint the character has, and many it does not, at the
+canonical rest translations. `AssociateAnimationClipPackByJointNames`
+binds such a pack:
+
+- the pack names every joint of the character;
+- rotation channels apply as authored;
+- a translation channel applies only where it moves, so the character
+  keeps its own bone lengths;
+- a top joint's channels (a joint with no joint above it, such as Mixamo's
+  `Hips`) are carried out of the frame of the nodes above it that are not
+  joints, and into the character's: a Z-up export's armature turned
+  +90° about x binds as its Y-up clip.
+
+`AssociateAnimationClipPack` would refuse the pack, since its rig is not
+the character's.
+
+**Pelvis fit.** A clip's pelvis translation is authored for the canonical
+legs. `FitAnimationClipTranslation` fits one joint's translation in one
+clip as it binds: each key `t` becomes `scale * t + offset` per axis. For
+asset-pipeline's `clip_fit.py` values `k` and `A` that is scale (k, k, k)
+and offset (0, A, 0).
+
+```csharp
+engine.Animation.AssociateAnimationClipPackByJointNames(new(body, walking, producer, license));
+engine.Animation.FitAnimationClipTranslation(new(body, walking, "Animation", "pelvis",
+    new(0.9586f, 0.9586f, 0.9586f), new(0, 0.0181f, 0)));
+```
+
+Associate and fit before creating an appearance for the character.
+
+**Arm offset.** An arm offset added to every clip, such as upper arms 10°
+further out and forearms a further 15°, is an additive `Model`
+`JointOverride` on each joint: a turn about +z (the played figure's
+forward), positive for the left arm, negative for the right.
+
+**Colour multiplier.** `SetSplatAppearance` scales an appearance's splat
+colour in linear light, as a stand-in for lighting: (1, 1, 1) draws them as
+baked, lower for a figure in shade.
+
+Posed bounds (the inspection bounds fact) hold each joint's Gaussians moved
+by that joint.
+
 ## How it draws
 
 - **Resident data.** The renderer reads the GLB as admitted and keeps
@@ -51,6 +113,15 @@ instance of one resource reads the same resident Gaussians.
   - the colour and opacity;
   - the rotation;
   - the standard deviations as halves.
+- **Skinning.** A skinned set's Gaussians are skinned on the GPU each frame
+  as they are projected, from a palette of its joints:
+  - each joint's matrix in the instance's space with its scale removed (a
+    joint's scale never inflates the Gaussians), times its inverse bind;
+  - the four joints blended linearly by weight;
+  - the centre moved by the blend, and the Gaussian turned by the blend
+    with its columns' lengths removed.
+
+  Only the palette, three rows a joint, is written per frame.
 - **Kernel.** It is the one the splats were trained with, as the web SDK
   (PlayCanvas 2.23) draws them:
   - the 3D covariance is projected through the view's Jacobian;
@@ -84,14 +155,19 @@ instance of one resource reads the same resident Gaussians.
   sees what is behind it. Under temporal upscaling its pixels carry the
   reactive mask, so the upscaler keeps no history there.
 
-Measured against a CPU reference of the web kernel, townsman 385 at rest
-(48,000 Gaussians, 420 × 720, five views) differs as follows:
+Measured against a CPU reference of the web kernel, townsman 385
+(48,000 Gaussians, 1920 × 1080, five views), at rest and walking with his
+Gaussians skinned on the CPU from the same joints, differs as follows:
 
-- **Figure mean:** within 0.12 levels per channel.
+- **Figure mean:** within 0.13 levels per channel.
 - **Pixels at least half covered:** a median difference of 0.5 levels and
-  a 99th percentile of 7 to 10.
+  a 99th percentile of 6.4 to 10.6.
 - **Soft edges:** differ by up to about 30 levels (95th percentile), as
   explained under **Colour** above.
+
+Walking with the pelvis fit, the planted ball of each foot drifts as it
+does in the web SDK: 0.55 and 1.25 cm (median per stance, left and right)
+against 0.6 and 1.2 cm, at 1.49 m/s.
 
 ## Devices and cost
 
@@ -103,5 +179,6 @@ Measured against a CPU reference of the web kernel, townsman 385 at rest
 - **Readout.** `GpuReadout.splats` reports the last frame's runs, instances
   and Gaussians, summed over its views. The `splats` pass timer covers the
   projection, sort and layers of the frame's first view with a run.
-- **Measured cost.** One 48,000-Gaussian figure at 420 × 720 took 0.17 ms
-  of GPU time on an RX 9070 XT.
+- **Measured cost.** One 48,000-Gaussian figure at 1920 × 1080 took
+  0.31 ms of GPU time on an RX 9070 XT about 750 pixels tall (2.2 m away),
+  and 0.20 ms at 3.6 m, at rest or walking.

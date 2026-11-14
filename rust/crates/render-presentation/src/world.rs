@@ -1664,6 +1664,12 @@ impl PresentationWorld {
                     _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
                 }
             }
+            RenderDiff::SetSplatAppearance { handle, appearance } => {
+                match &mut self.node_mut(*handle)?.kind {
+                    NodeKind::AnimatedMesh(value) => value.splat = *appearance,
+                    _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
+                }
+            }
             RenderDiff::SetAnimatedMeshPlayback { handle, playback } => {
                 let now = self.elapsed_seconds;
                 let node = self.node_mut(*handle)?;
@@ -3249,6 +3255,7 @@ mod joint_attachment_tests {
                 handle: body,
                 parent: None,
                 instance: AnimatedMeshInstanceDescriptor {
+                    splat: Default::default(),
                     playback_fade: None,
                     asset: asset.asset.clone(),
                     transform: Transform::IDENTITY,

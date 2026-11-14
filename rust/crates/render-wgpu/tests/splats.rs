@@ -41,6 +41,7 @@ fn splat_instance(handle: u64, asset: &AnimatedMeshAsset, translation: [f32; 3])
         handle: RenderHandle::new(handle),
         parent: None,
         instance: AnimatedMeshInstanceDescriptor {
+            splat: Default::default(),
             playback_fade: None,
             inspection: AnimatedMeshInspection::default(),
             asset: asset.asset.clone(),
@@ -281,4 +282,258 @@ fn opaque_geometry_hides_gaussians_behind_it_and_not_those_in_front() {
         [255, 255, 255],
         2,
     );
+}
+
+/// Admit a clip pack and hold it under its runtime identity.
+fn admit_pack(harness: &mut Harness, bytes: Vec<u8>) -> AnimatedMeshAsset {
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath("pack.glb".to_owned()),
+        &bytes,
+        &ImportContext::default(),
+    );
+    let pack = imported
+        .assets
+        .unwrap_or_else(|| panic!("the pack is admitted: {:?}", imported.diagnostics))
+        .animated_mesh;
+    let hash = pack.content_hash.clone().expect("content hash");
+    harness.resources.insert(
+        &format!("clip-pack-resource/{}", hash.trim_start_matches("sha256:")),
+        bytes,
+    );
+    pack
+}
+
+/// Where the front camera at (0, 1, 6) draws a point on the z = 0 plane.
+fn on_plane(x: f32, y: f32) -> (u32, u32) {
+    let focal = (HEIGHT as f32 / 2.0) / 30f32.to_radians().tan();
+    (
+        (WIDTH as f32 / 2.0 + focal * x / 6.0) as u32,
+        (HEIGHT as f32 / 2.0 - focal * (y - 1.0) / 6.0) as u32,
+    )
+}
+
+/// A skinned splat figure takes its pose from a clip pack on a skeleton of
+/// other bone lengths, bound by joint names: the clip's rotation turns its
+/// arm, the arm keeps the figure's own length (the pack holds its
+/// translation still), and the root's translation is fitted.
+#[test]
+fn a_skinned_splat_figure_takes_its_pose_from_a_clip_pack_bound_by_joint_names() {
+    use support::splat_glb::{arm_clip_pack_glb, skinned_splat_glb};
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut body = admit(
+        &mut harness,
+        "skinned",
+        skinned_splat_glb(
+            &[
+                Gaussian::round([0.0, 0.5, 0.0], 0.1, [0, 255, 0, 255]),
+                Gaussian::round([0.0, 1.5, 0.0], 0.1, [255, 0, 0, 255]),
+            ],
+            &[0, 1],
+        ),
+    );
+    assert!(body.rig.is_some(), "a skinned splat GLB names its rig");
+    let pack = admit_pack(&mut harness, arm_clip_pack_glb());
+    let hash = pack.content_hash.clone().expect("content hash");
+    body.clip_packs.push(AnimationClipPack {
+        asset: format!("animation-clip-pack/{}", hash.trim_start_matches("sha256:")),
+        runtime_format: pack.runtime_format,
+        content_hash: hash.clone(),
+        rig: pack.rig.clone().expect("the pack's rig"),
+        clips: pack.clips.clone(),
+        provenance: AnimationClipPackProvenance {
+            producer: "fixture".to_owned(),
+            source_hash: hash,
+            target_hash: body.content_hash.clone().expect("content hash"),
+            license: "CC0".to_owned(),
+        },
+        binding: AnimationClipPackBinding::JointNames,
+        translation_fits: vec![AnimationClipTranslationFit {
+            clip: "raise".to_owned(),
+            joint: "root".to_owned(),
+            scale: [1.0, 0.5, 1.0],
+            offset: [0.0, 0.25, 0.0],
+        }],
+    });
+    let instance = match splat_instance(1, &body, [0.0; 3]) {
+        RenderDiff::CreateAnimatedMeshInstance {
+            handle,
+            parent,
+            mut instance,
+        } => {
+            instance.playback = Some(AnimatedMeshPlaybackCommand::Sample {
+                clip: "raise".to_owned(),
+                normalized_time: 0.0,
+            });
+            RenderDiff::CreateAnimatedMeshInstance {
+                handle,
+                parent,
+                instance,
+            }
+        }
+        _ => unreachable!(),
+    };
+    harness.apply(vec![
+        RenderDiff::DefineAnimatedMesh { asset: body },
+        instance,
+    ]);
+    let camera = camera([0.0, 1.0, 6.0], 0.0, 0.0);
+    let (_, rgba) = harness.render(&camera);
+    // The root fitted up to y = 0.25: its Gaussian at (0, 0.75).
+    assert_near(at(&rgba, on_plane(0.0, 0.75)), [0, 255, 0], 3);
+    // The arm one metre above the root, turned: its Gaussian at (−0.5, 1.25).
+    assert_near(at(&rgba, on_plane(-0.5, 1.25)), [255, 0, 0], 3);
+    // Not at the pack's arm length, nor where it stood at rest.
+    let background = at(&rgba, (4, 4));
+    assert_eq!(at(&rgba, on_plane(-0.5, 2.25)), background);
+    assert_eq!(at(&rgba, on_plane(0.0, 1.5)), background);
+}
+
+/// A clip pack whose skeleton is wrapped in a non-joint node of its own (a
+/// Z-up export's armature, turned +90° about x) binds by joint names to a
+/// figure whose top joint is `Hips`, no `root` above it: the wrapper's turn
+/// is folded into the top joint's channels, so the clip poses the figure as
+/// authored in the Y-up world.
+#[test]
+fn a_wrapped_clip_pack_binds_to_a_hips_rooted_figure() {
+    use support::splat_glb::{hips_splat_glb, wrapped_hips_pack_glb};
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut body = admit(&mut harness, "hips", hips_splat_glb());
+    let rig = body
+        .rig
+        .as_ref()
+        .expect("a skinned splat GLB names its rig");
+    assert_eq!(rig.structural_root_ids, ["Hips"]);
+    let pack = admit_pack(&mut harness, wrapped_hips_pack_glb());
+    let hash = pack.content_hash.clone().expect("content hash");
+    body.clip_packs.push(AnimationClipPack {
+        asset: format!("animation-clip-pack/{}", hash.trim_start_matches("sha256:")),
+        runtime_format: pack.runtime_format,
+        content_hash: hash.clone(),
+        rig: pack.rig.clone().expect("the pack's rig"),
+        clips: pack.clips.clone(),
+        provenance: AnimationClipPackProvenance {
+            producer: "fixture".to_owned(),
+            source_hash: hash,
+            target_hash: body.content_hash.clone().expect("content hash"),
+            license: "CC0".to_owned(),
+        },
+        binding: AnimationClipPackBinding::JointNames,
+        translation_fits: Vec::new(),
+    });
+    let instance = match splat_instance(1, &body, [0.0; 3]) {
+        RenderDiff::CreateAnimatedMeshInstance {
+            handle,
+            parent,
+            mut instance,
+        } => {
+            instance.playback = Some(AnimatedMeshPlaybackCommand::Sample {
+                clip: "turn".to_owned(),
+                normalized_time: 0.0,
+            });
+            RenderDiff::CreateAnimatedMeshInstance {
+                handle,
+                parent,
+                instance,
+            }
+        }
+        _ => unreachable!(),
+    };
+    harness.apply(vec![
+        RenderDiff::DefineAnimatedMesh { asset: body },
+        instance,
+    ]);
+    let (_, rgba) = harness.render(&camera([0.0, 1.0, 6.0], 0.0, 0.0));
+    // Hips where the clip puts it in the Y-up world, at y = 1 (the arm's
+    // Gaussian a few pixels off tints it slightly).
+    assert_near(at(&rgba, on_plane(0.0, 1.0)), [0, 255, 0], 6);
+    // The arm turned 90° about +z, at the figure's own half-metre length.
+    assert_near(at(&rgba, on_plane(-0.5, 1.0)), [255, 0, 0], 6);
+    let background = at(&rgba, (4, 4));
+    assert_eq!(at(&rgba, on_plane(0.0, 1.5)), background);
+}
+
+/// The splat multiplier scales a figure's colour in linear light.
+#[test]
+fn the_splat_multiplier_scales_colour_in_linear_light() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let ops = splats(
+        &mut harness,
+        1,
+        &[Gaussian::round([0.0; 3], 0.3, [200, 100, 50, 255])],
+        [0.0, 0.0, -3.0],
+    );
+    harness.apply(ops);
+    harness.apply(vec![RenderDiff::SetSplatAppearance {
+        handle: RenderHandle::new(1),
+        appearance: SplatAppearance {
+            multiplier: [0.5, 0.5, 0.25],
+        },
+    }]);
+    let (_, rgba) = harness.render(&front());
+    let scaled = |byte: u8, by: f32| {
+        let linear = |c: f32| {
+            if c <= 0.04045 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let encode = |c: f32| {
+            if c <= 0.003_130_8 {
+                c * 12.92
+            } else {
+                1.055 * c.powf(1.0 / 2.4) - 0.055
+            }
+        };
+        (encode(linear(f32::from(byte) / 255.0) * by) * 255.0).round() as i32
+    };
+    assert_near(
+        at(&rgba, CENTRE),
+        [scaled(200, 0.5), scaled(100, 0.5), scaled(50, 0.25)],
+        2,
+    );
+}
+
+/// The committed splat fixtures (`fixtures/render/assets/splats`) and the
+/// bytes the writer here makes for them.
+fn committed_fixtures() -> [(std::path::PathBuf, Vec<u8>); 2] {
+    use support::splat_glb::{arm_clip_pack_glb, skinned_splat_glb};
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../../fixtures/render/assets/splats");
+    [
+        (
+            dir.join("skinned-arm.glb"),
+            skinned_splat_glb(
+                &[
+                    Gaussian::round([0.0, 0.5, 0.0], 0.1, [0, 255, 0, 255]),
+                    Gaussian::round([0.0, 1.5, 0.0], 0.1, [255, 0, 0, 255]),
+                ],
+                &[0, 1],
+            ),
+        ),
+        (dir.join("arm-pack.glb"), arm_clip_pack_glb()),
+    ]
+}
+
+/// Other crates' tests read the committed fixtures; they are what the
+/// writer here makes (`write_the_splat_fixtures` writes them again).
+#[test]
+fn the_committed_splat_fixtures_are_the_writers() {
+    for (path, bytes) in committed_fixtures() {
+        let committed =
+            std::fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        assert!(
+            committed == bytes,
+            "{} differs from its writer: run `cargo test -p render-wgpu --test splats write_the_splat_fixtures -- --ignored`",
+            path.display()
+        );
+    }
+}
+
+#[test]
+#[ignore = "writes fixtures/render/assets/splats"]
+fn write_the_splat_fixtures() {
+    for (path, bytes) in committed_fixtures() {
+        std::fs::write(&path, bytes).expect("write the fixture");
+    }
 }

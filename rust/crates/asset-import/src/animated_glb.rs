@@ -264,13 +264,26 @@ fn import_glb(
         keyframe_count,
     ) = if let Some(measured) = crate::splat_glb::measure(parsed) {
         // Gaussian splats: no triangles to measure or voxelize, no materials.
+        // A skinned one names its rig, for clip packs and joint reads.
+        let rig = match derive_clipless_rig_signature(&json_document, parsed) {
+            Ok(rig) => rig,
+            Err(message) => {
+                diagnostics.push(ImportDiagnostic::warning(
+                    ImportCode::InvalidAnimation,
+                    asset_id.as_str(),
+                    message,
+                    "export one named skin joint forest before associating clip packs",
+                ));
+                None
+            }
+        };
         match measured {
             Ok(bounds) => (
                 GlbAnimationKind::Static,
                 bounds,
                 Vec::new(),
                 Vec::new(),
-                None,
+                rig,
                 0,
                 0,
             ),
@@ -726,6 +739,121 @@ fn derive_animation_rig_signature(
         structural_root_ids: roots,
         designated_motion_root_ids,
         authored_pose_translation_joint_ids,
+    };
+    signature.validate().map_err(|_| {
+        "derived named skin joint forest is not a valid renderer rig signature".to_owned()
+    })?;
+    Ok(Some(signature))
+}
+
+/// The rig signature of a skinned GLB without clips of its own: its named
+/// skin joints, held in place (`InPlace`, no designated motion root), so
+/// clip packs can bind to it and its joints can be read and posed. `None`
+/// without a skin.
+fn derive_clipless_rig_signature(
+    root: &serde_json::Value,
+    parsed: &ParsedGltf<'_>,
+) -> Result<Option<AnimationRigSignature>, String> {
+    let document = &parsed.document;
+    if document.skins().next().is_none() {
+        return Ok(None);
+    }
+    let raw_nodes = root
+        .get("nodes")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "GLB has no node table for renderer rig fingerprinting".to_owned())?;
+    let mut parents = vec![None; document.nodes().count()];
+    for node in document.nodes() {
+        for child in node.children() {
+            parents[child.index()] = Some(node.index());
+        }
+    }
+    let blob = parsed.blob.as_deref();
+    let mut inverse_binds = BTreeMap::<usize, [f64; 16]>::new();
+    for skin in document.skins() {
+        let matrices: Vec<[f64; 16]> = match skin
+            .reader(|buffer| match buffer.source() {
+                BufferSource::Bin => blob,
+                BufferSource::Uri(_) => None,
+            })
+            .read_inverse_bind_matrices()
+        {
+            Some(matrices) => matrices
+                .map(|matrix| std::array::from_fn(|index| f64::from(matrix[index / 4][index % 4])))
+                .collect(),
+            None => vec![
+                [
+                    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                ];
+                skin.joints().count()
+            ],
+        };
+        for (joint, inverse_bind) in skin.joints().zip(matrices) {
+            if let Some(prior) = inverse_binds.insert(joint.index(), inverse_bind) {
+                if prior != inverse_bind {
+                    return Err(format!(
+                        "named skin joint node {} has conflicting inverse-bind matrices",
+                        joint.index()
+                    ));
+                }
+            }
+        }
+    }
+    let mut ids = BTreeMap::new();
+    for &node in inverse_binds.keys() {
+        let name = document
+            .nodes()
+            .nth(node)
+            .and_then(|node| node.name().map(str::to_owned))
+            .ok_or_else(|| {
+                format!(
+                    "skin joint node {node} has no name; joint identities are never synthesized"
+                )
+            })?;
+        if ids.values().any(|existing| *existing == name) {
+            return Err(format!("two skin joints both use the identity `{name}`"));
+        }
+        ids.insert(node, name);
+    }
+    let mut fingerprint_joints = Vec::with_capacity(ids.len());
+    let mut joints = Vec::with_capacity(ids.len());
+    for (&node, id) in &ids {
+        let parent = parents[node]
+            .filter(|parent| ids.contains_key(parent))
+            .map(|parent| ids[&parent].clone());
+        fingerprint_joints.push(AnimationRigFingerprintJoint {
+            id: id.clone(),
+            parent: parent.clone(),
+            local_rest_matrix: three_local_rest_matrix(&raw_nodes[node])?,
+            inverse_bind_matrix: inverse_binds[&node],
+        });
+        joints.push(AnimationRigJoint {
+            id: id.clone(),
+            parent,
+        });
+    }
+    joints.sort_by(|left, right| left.id.cmp(&right.id));
+    let roots: Vec<String> = joints
+        .iter()
+        .filter(|joint| joint.parent.is_none())
+        .map(|joint| joint.id.clone())
+        .collect();
+    let root_joint_id = roots
+        .first()
+        .cloned()
+        .ok_or_else(|| "the named skin joint forest has no structural root".to_owned())?;
+    let bind_rest_hash = animation_rig_fingerprint(&fingerprint_joints).map_err(|_| {
+        "named skin joint matrices cannot produce the canonical renderer fingerprint".to_owned()
+    })?;
+    let signature = AnimationRigSignature {
+        joints,
+        bind_rest_hash,
+        bind_rest_convention: AnimationBindRestConvention::LocalMatrixV1,
+        root_convention: AnimationRootConvention::InPlace,
+        root_joint_id,
+        structural_root_ids: roots,
+        designated_motion_root_ids: Vec::new(),
+        authored_pose_translation_joint_ids: Vec::new(),
     };
     signature.validate().map_err(|_| {
         "derived named skin joint forest is not a valid renderer rig signature".to_owned()

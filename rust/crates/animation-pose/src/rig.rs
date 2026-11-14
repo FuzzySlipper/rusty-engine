@@ -1,12 +1,14 @@
 //! A GLB's node hierarchy and clips, as pose evaluation reads them, and the
 //! clips an animated mesh asset plays by descriptor id.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use glam::{Mat4, Quat, Vec3};
 use gltf::animation::util::ReadOutputs;
 use gltf::animation::{Interpolation, Property};
-use render_model::{AnimatedMeshAsset, PosedJoint, Transform};
+use render_model::{
+    AnimatedMeshAsset, AnimationClipPackBinding, AnimationClipTranslationFit, PosedJoint, Transform,
+};
 
 use crate::{Channel, Clip, Hierarchy, Interp, Path, Trs};
 
@@ -241,6 +243,7 @@ pub fn asset_clips<H: Hierarchy + ?Sized, B: AsRef<[u8]>>(
         }
     }
     let by_name = channel_targets(primary);
+    let primary_joints: HashSet<usize> = primary.skin_joints().into_iter().collect();
     for pack in &asset.clip_packs {
         let identity = resource_identity("clip-pack-resource", Some(pack.content_hash.as_str()))
             .ok_or_else(|| format!("clip pack {} has no content hash", pack.asset))?;
@@ -257,23 +260,126 @@ pub fn asset_clips<H: Hierarchy + ?Sized, B: AsRef<[u8]>>(
             else {
                 continue;
             };
+            let by_joint_names = pack.binding == AnimationClipPackBinding::JointNames;
+            let pack_joints: HashSet<usize> = pack_rig.skin_joints().into_iter().collect();
             clip.channels.retain_mut(|channel| {
-                let target = pack_rig.nodes[channel.node]
-                    .name
-                    .as_deref()
-                    .and_then(|name| by_name.get(name));
-                match target {
-                    Some(node) => {
-                        channel.node = *node;
-                        true
+                let name = pack_rig.nodes[channel.node].name.as_deref();
+                let Some(node) = name.and_then(|name| by_name.get(name)) else {
+                    return false;
+                };
+                // Bound by joint names, a top joint's values are in the frame
+                // of the nodes above it that are not joints (a Z-up export's
+                // armature): carried into the primary's frame for the joint.
+                if by_joint_names {
+                    let fold = above_joints(primary, *node, &primary_joints).inverse()
+                        * above_joints(&pack_rig, channel.node, &pack_joints);
+                    if !fold.abs_diff_eq(Mat4::IDENTITY, 1e-6) {
+                        fold_channel(channel, &fold);
                     }
-                    None => false,
                 }
+                // Bound by joint names, a translation the clip holds still
+                // is the pack skeleton's bone length, not motion: the
+                // primary keeps its own.
+                if by_joint_names && channel.path == Path::Translation && !moves(channel) {
+                    return false;
+                }
+                for fit in &pack.translation_fits {
+                    if fit.clip == descriptor.id
+                        && name == Some(fit.joint.as_str())
+                        && channel.path == Path::Translation
+                    {
+                        fit_translation(channel, fit);
+                    }
+                }
+                channel.node = *node;
+                true
             });
             clips.insert(descriptor.id.clone(), clip);
         }
     }
     Ok(clips)
+}
+
+/// For a top joint (one whose parent is not a joint) the static placement of
+/// the nodes above it, at rest; identity for any other node.
+fn above_joints<H: Hierarchy + ?Sized>(model: &H, node: usize, joints: &HashSet<usize>) -> Mat4 {
+    let mut parent = model.parent(node);
+    if parent.is_some_and(|parent| joints.contains(&parent)) {
+        return Mat4::IDENTITY;
+    }
+    let mut frame = Mat4::IDENTITY;
+    while let Some(index) = parent {
+        frame = model.rest(index).matrix() * frame;
+        parent = model.parent(index);
+    }
+    frame
+}
+
+/// A channel's values carried by `fold`: a translation as a point (a cubic
+/// spline's tangents as vectors), a rotation turned by its rotation. Scale
+/// channels stay as they are.
+fn fold_channel(channel: &mut Channel, fold: &Mat4) {
+    let (_, turn, _) = fold.to_scale_rotation_translation();
+    let cubic = channel.interpolation == Interp::CubicSpline;
+    match channel.path {
+        Path::Translation => {
+            for (index, value) in channel.values.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+                let tangent = cubic && index % 3 != 1;
+                let vector = Vec3::from_array(*value);
+                let moved = if tangent {
+                    fold.transform_vector3(vector)
+                } else {
+                    fold.transform_point3(vector)
+                };
+                *value = moved.to_array();
+            }
+        }
+        Path::Rotation => {
+            for (index, value) in channel.values.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let tangent = cubic && index % 3 != 1;
+                let rotation = Quat::from_array(*value);
+                // A tangent turns with the value it leads to.
+                let turned = if tangent {
+                    turn * rotation
+                } else {
+                    (turn * rotation).normalize()
+                };
+                *value = turned.to_array();
+            }
+        }
+        Path::Scale => {}
+    }
+}
+
+/// Whether a translation channel's values change over its keys (a cubic
+/// spline's tangents count).
+fn moves(channel: &Channel) -> bool {
+    let cubic = channel.interpolation == Interp::CubicSpline;
+    let stride = if cubic { 9 } else { 3 };
+    let first = channel.values.get(if cubic { 3..6 } else { 0..3 });
+    channel.values.chunks(stride).any(|key| {
+        let (value, tangents) = if cubic {
+            (&key[3..6], [&key[0..3], &key[6..9]])
+        } else {
+            (&key[0..3], [&[][..], &[][..]])
+        };
+        first.is_some_and(|first| value.iter().zip(first).any(|(a, b)| (a - b).abs() > 1e-6))
+            || tangents
+                .iter()
+                .flat_map(|t| t.iter())
+                .any(|t| t.abs() > 1e-6)
+    })
+}
+
+/// A translation channel's keys `t` as `scale * t + offset`; a cubic
+/// spline's tangents scale without the offset.
+fn fit_translation(channel: &mut Channel, fit: &AnimationClipTranslationFit) {
+    let cubic = channel.interpolation == Interp::CubicSpline;
+    for (index, value) in channel.values.iter_mut().enumerate() {
+        let axis = index % 3;
+        let tangent = cubic && (index / 3) % 3 != 1;
+        *value = *value * fit.scale[axis] + if tangent { 0.0 } else { fit.offset[axis] };
+    }
 }
 
 /// The node of each rig joint, in rig order (`AnimationRigSignature`): what

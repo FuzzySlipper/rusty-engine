@@ -123,7 +123,10 @@ over the pose below it by `weight` (0 to 1):
   rotation is applied after the evaluated one (a curl over the clip), and the
   translation is added.
 - `Model` or `World`: the joint is placed there and its descendants follow.
-  It keeps its evaluated scale. `Additive` is refused here.
+  It keeps its evaluated scale. With `Additive`, the rotation turns the joint
+  about its own origin around that space's axes, on top of its evaluated
+  placement, and the translation moves it along them: a fixed turn the
+  clips do not carry, such as arms held further out from a wide skirt.
 
 One joint's overrides apply in list order, whatever their space: a `Model`
 placement followed by an additive `Local` turn keeps the turn, and the

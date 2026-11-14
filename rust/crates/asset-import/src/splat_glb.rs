@@ -427,4 +427,25 @@ mod tests {
         ));
         assert!(clips.assets.is_none());
     }
+
+    /// A skinned splat GLB without clips names its rig, held in place, so
+    /// clip packs can bind to it and its joints can be read.
+    #[test]
+    fn a_skinned_splat_glb_names_its_rig() {
+        let bytes = include_bytes!("../../../../fixtures/render/assets/splats/skinned-arm.glb");
+        let outcome = import(bytes);
+        let mesh = outcome
+            .assets
+            .unwrap_or_else(|| panic!("admitted: {:?}", outcome.diagnostics))
+            .animated_mesh;
+        let rig = mesh.rig.expect("a skinned splat GLB names its rig");
+        let ids: Vec<&str> = rig.joints.iter().map(|joint| joint.id.as_str()).collect();
+        assert_eq!(ids, ["arm", "root"]);
+        assert_eq!(rig.structural_root_ids, ["root"]);
+        assert_eq!(
+            rig.root_convention,
+            render_model::AnimationRootConvention::InPlace
+        );
+        assert!(mesh.clips.is_empty());
+    }
 }

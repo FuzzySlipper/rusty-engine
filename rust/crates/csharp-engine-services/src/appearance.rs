@@ -6110,6 +6110,14 @@ impl RuntimeAppearanceBridge {
         &mut self,
         request: &NativeAnimationClipPackAssociationRequest,
     ) -> Result<(), CsharpEngineServicesError> {
+        self.associate_clip_pack(request, AnimationClipPackBinding::Rig)
+    }
+
+    fn associate_clip_pack(
+        &mut self,
+        request: &NativeAnimationClipPackAssociationRequest,
+        binding: AnimationClipPackBinding,
+    ) -> Result<(), CsharpEngineServicesError> {
         let producer = borrowed_request_utf8(request.producer, "animation clip-pack producer")?;
         let license = borrowed_request_utf8(request.license, "animation clip-pack license")?;
 
@@ -6166,11 +6174,29 @@ impl RuntimeAppearanceBridge {
                 "animation clip-pack has no importer-derived named skin rig",
             )
         })?;
-        if !primary_rig.is_clip_compatible_with(&pack_rig) {
-            return Err(CsharpEngineServicesError::new(
-                "CSHARP_ANIMATION_CLIP_PACK_RIG",
-                "primary animated mesh and clip-pack importer-derived rig signatures differ",
-            ));
+        match binding {
+            AnimationClipPackBinding::Rig if !primary_rig.is_clip_compatible_with(&pack_rig) => {
+                return Err(CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_CLIP_PACK_RIG",
+                    "primary animated mesh and clip-pack importer-derived rig signatures differ",
+                ));
+            }
+            AnimationClipPackBinding::JointNames => {
+                if let Some(missing) = primary_rig
+                    .joints
+                    .iter()
+                    .find(|joint| !pack_rig.joints.iter().any(|named| named.id == joint.id))
+                {
+                    return Err(CsharpEngineServicesError::new(
+                        "CSHARP_ANIMATION_CLIP_PACK_RIG",
+                        format!(
+                            "the clip pack does not name the primary's joint `{}`",
+                            missing.id
+                        ),
+                    ));
+                }
+            }
+            AnimationClipPackBinding::Rig => {}
         }
         let clip_pack = AnimationClipPack {
             asset,
@@ -6184,6 +6210,8 @@ impl RuntimeAppearanceBridge {
                 target_hash: primary.content_hash().to_owned(),
                 license,
             },
+            binding,
+            translation_fits: Vec::new(),
         };
         let mut assembled = primary_mesh;
         assembled.clip_packs.push(clip_pack);
@@ -6224,6 +6252,123 @@ impl RuntimeAppearanceBridge {
         Ok(())
     }
 
+    fn fit_animation_clip_translation(
+        &mut self,
+        request: &NativeAnimationClipTranslationFitRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let clip = borrowed_request_utf8(request.clip, "fitted clip")?;
+        let joint = borrowed_request_utf8(request.joint, "fitted joint")?;
+        let scale = [request.scale.x, request.scale.y, request.scale.z];
+        let offset = [request.offset.x, request.offset.y, request.offset.z];
+        if !scale.iter().chain(&offset).all(|value| value.is_finite()) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_FIT",
+                "a clip translation fit's scale and offset are finite",
+            ));
+        }
+        let pack = self.resource(request.clip_pack.value)?.clone();
+        let asset = format!(
+            "animation-clip-pack/{}",
+            pack.content_hash()
+                .strip_prefix("sha256:")
+                .unwrap_or(pack.content_hash())
+        );
+        let staged = self.staged_mut()?;
+        if staged
+            .state
+            .render_resources
+            .held(request.primary_mesh.value)
+        {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_PACK_ASSOCIATION_CLOSED",
+                "fit clips before creating an animated appearance or graph for the primary mesh",
+            ));
+        }
+        let mesh = staged
+            .state
+            .render_resources
+            .animated_mesh_mut(request.primary_mesh.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_RENDER_RESOURCE_HANDLE",
+                    "unknown primary animated mesh resource handle",
+                )
+            })?;
+        let carried = mesh
+            .clip_packs
+            .iter_mut()
+            .find(|carried| carried.asset == asset)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_CLIP_FIT",
+                    "fit a clip of a pack associated with the primary mesh",
+                )
+            })?;
+        if !carried.clips.iter().any(|descriptor| descriptor.id == clip) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_FIT",
+                format!("the clip pack has no clip `{clip}`"),
+            ));
+        }
+        if !carried.rig.joints.iter().any(|named| named.id == joint) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATION_CLIP_FIT",
+                format!("the clip pack has no joint `{joint}`"),
+            ));
+        }
+        carried
+            .translation_fits
+            .retain(|fit| fit.clip != clip || fit.joint != joint);
+        carried.translation_fits.push(AnimationClipTranslationFit {
+            clip,
+            joint,
+            scale,
+            offset,
+        });
+        Ok(())
+    }
+
+    fn set_splat_appearance(
+        &mut self,
+        request: &NativeSplatAppearanceRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let appearance = render_model::SplatAppearance {
+            multiplier: [
+                request.multiplier.x,
+                request.multiplier.y,
+                request.multiplier.z,
+            ],
+        };
+        if !appearance.is_valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_SPLAT_APPEARANCE",
+                "a splat multiplier is finite and not negative",
+            ));
+        }
+        let staged = self.staged_mut()?;
+        let identity = staged
+            .state
+            .appearances
+            .get(&request.appearance.value)
+            .cloned()
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_APPEARANCE_HANDLE",
+                    "appearance handle is not live",
+                )
+            })?;
+        match staged.state.projector.appearance_mut(&identity) {
+            Some(Appearance::AnimatedMesh { splat, .. }) => {
+                *splat = appearance;
+                Ok(())
+            }
+            _ => Err(CsharpEngineServicesError::new(
+                "CSHARP_ANIMATED_MESH_APPEARANCE",
+                "a splat appearance requires an animated mesh appearance",
+            )),
+        }
+    }
+
     fn create_animated_mesh_appearance(
         &mut self,
         request: NativeAnimatedMeshAppearanceRequest,
@@ -6238,6 +6383,7 @@ impl RuntimeAppearanceBridge {
             mesh.asset.clone()
         };
         let appearance = self.allocate_appearance(Appearance::AnimatedMesh {
+            splat: Default::default(),
             inspection: Default::default(),
             asset,
             material_overrides: Vec::new(),
@@ -9314,6 +9460,48 @@ pub(crate) unsafe extern "C" fn associate_animation_clip_pack(
         })
     })
 }
+pub(crate) unsafe extern "C" fn associate_animation_clip_pack_by_joint_names(
+    context: *mut c_void,
+    request: *const NativeAnimationClipPackAssociationRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.associate_clip_pack(unsafe { &*request }, AnimationClipPackBinding::JointNames)
+        })
+    })
+}
+pub(crate) unsafe extern "C" fn fit_animation_clip_translation(
+    context: *mut c_void,
+    request: *const NativeAnimationClipTranslationFitRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.fit_animation_clip_translation(unsafe { &*request })
+        })
+    })
+}
+pub(crate) unsafe extern "C" fn set_splat_appearance(
+    context: *mut c_void,
+    request: *const NativeSplatAppearanceRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.set_splat_appearance(unsafe { &*request })
+        })
+    })
+}
 pub(crate) unsafe extern "C" fn create_animated_mesh_appearance(
     context: *mut c_void,
     request: *const NativeAnimatedMeshAppearanceRequest,
@@ -9700,9 +9888,12 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         open_animation_clip_pack_from_content,
         open_animation_clip_pack,
         associate_animation_clip_pack,
+        associate_animation_clip_pack_by_joint_names,
+        fit_animation_clip_translation,
         create_animated_mesh_appearance,
         replace_animated_mesh_appearance,
         set_mesh_inspection,
+        set_splat_appearance,
         update_animated_mesh_materials,
         update_animated_mesh_material_factors,
         destroy_appearance: destroy_animated_mesh_appearance,
@@ -15710,6 +15901,137 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert!(ops
             .iter()
             .any(|op| matches!(op, RenderDiff::CreateAnimatedMeshInstance { .. })));
+    }
+
+    /// A clip pack on a skeleton of other bone lengths binds to a splat
+    /// figure by joint names, not by rig, and its clips can be fitted until
+    /// an appearance holds the figure; the splat multiplier is validated
+    /// and published.
+    #[test]
+    fn a_clip_pack_binds_by_joint_names_and_fits_a_clip() {
+        const FIGURE: &[u8] =
+            include_bytes!("../../../../fixtures/render/assets/splats/skinned-arm.glb");
+        const PACK: &[u8] =
+            include_bytes!("../../../../fixtures/render/assets/splats/arm-pack.glb");
+        let mut content = BTreeMap::new();
+        content.insert("figure.glb".to_owned(), crate::ContentBytes::from(FIGURE));
+        content.insert("pack.glb".to_owned(), crate::ContentBytes::from(PACK));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        let utf8 = |bytes: &'static [u8]| NativeUtf8Slice {
+            bytes: bytes.as_ptr(),
+            len: bytes.len(),
+        };
+        bridge.begin_call();
+        let figure = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: utf8(b"figure.glb"),
+            })
+            .expect("the figure is admitted");
+        let pack = bridge
+            .open_animation_clip_pack(&NativeAnimationClipPackResourceRequest {
+                path: utf8(b"pack.glb"),
+            })
+            .expect("the pack is admitted");
+        let associate = NativeAnimationClipPackAssociationRequest {
+            primary_mesh: figure,
+            clip_pack: pack,
+            producer: utf8(b"fixture"),
+            license: utf8(b"CC0-1.0"),
+        };
+        let refused = bridge
+            .associate_animation_clip_pack(&associate)
+            .expect_err("the arm lengths differ, so the rigs do");
+        assert_eq!(refused.code(), "CSHARP_ANIMATION_CLIP_PACK_RIG");
+        bridge
+            .associate_clip_pack(&associate, AnimationClipPackBinding::JointNames)
+            .expect("the pack names every joint of the figure");
+        let fit = |clip: &'static [u8], scale_y: f32| NativeAnimationClipTranslationFitRequest {
+            primary_mesh: figure,
+            clip_pack: pack,
+            clip: utf8(clip),
+            joint: utf8(b"root"),
+            scale: NativeVec3 {
+                x: 1.0,
+                y: scale_y,
+                z: 1.0,
+            },
+            offset: NativeVec3 {
+                x: 0.0,
+                y: 0.25,
+                z: 0.0,
+            },
+        };
+        let unknown = bridge
+            .fit_animation_clip_translation(&fit(b"walk", 0.5))
+            .expect_err("the pack has no clip `walk`");
+        assert_eq!(unknown.code(), "CSHARP_ANIMATION_CLIP_FIT");
+        bridge
+            .fit_animation_clip_translation(&fit(b"raise", 0.25))
+            .unwrap();
+        // A later fit of the same clip and joint replaces the first.
+        bridge
+            .fit_animation_clip_translation(&fit(b"raise", 0.5))
+            .unwrap();
+        let carried = bridge
+            .resource(figure.value)
+            .unwrap()
+            .animated_mesh()
+            .unwrap()
+            .clip_packs
+            .clone();
+        assert_eq!(carried.len(), 1);
+        assert_eq!(carried[0].binding, AnimationClipPackBinding::JointNames);
+        assert_eq!(
+            carried[0].translation_fits,
+            vec![AnimationClipTranslationFit {
+                clip: "raise".to_owned(),
+                joint: "root".to_owned(),
+                scale: [1.0, 0.5, 1.0],
+                offset: [0.0, 0.25, 0.0],
+            }]
+        );
+        let appearance = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest {
+                resource: figure,
+            })
+            .unwrap();
+        let closed = bridge
+            .fit_animation_clip_translation(&fit(b"raise", 0.5))
+            .expect_err("an appearance holds the figure");
+        assert_eq!(
+            closed.code(),
+            "CSHARP_ANIMATION_CLIP_PACK_ASSOCIATION_CLOSED"
+        );
+        let splat = |multiplier: f32| NativeSplatAppearanceRequest {
+            appearance,
+            multiplier: NativeVec3 {
+                x: multiplier,
+                y: multiplier,
+                z: multiplier,
+            },
+        };
+        assert_eq!(
+            bridge
+                .set_splat_appearance(&splat(-1.0))
+                .unwrap_err()
+                .code(),
+            "CSHARP_SPLAT_APPEARANCE"
+        );
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        let call = bridge.take_staged_call();
+        bridge.commit(call);
+        bridge.begin_call();
+        bridge.set_splat_appearance(&splat(0.5)).unwrap();
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        let call = bridge.take_staged_call();
+        assert!(call.outputs.iter().any(|output| matches!(
+            output,
+            RuntimeAppearanceCallOutput::Frame(frame) if frame.ops.iter().any(|op| matches!(
+                op,
+                RenderDiff::SetSplatAppearance { appearance, .. } if appearance.multiplier == [0.5; 3]
+            ))
+        )));
     }
 
     #[test]

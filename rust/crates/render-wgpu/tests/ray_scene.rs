@@ -55,6 +55,7 @@ fn character(asset: &AnimatedMeshAsset, normalized_time: f32) -> RenderDiff {
         handle: RenderHandle::new(BODY),
         parent: None,
         instance: AnimatedMeshInstanceDescriptor {
+            splat: Default::default(),
             playback_fade: None,
             inspection: AnimatedMeshInspection::default(),
             asset: asset.asset.clone(),

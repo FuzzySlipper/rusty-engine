@@ -1,15 +1,31 @@
 //! Capture a splat GLB (`docs/splat-characters.md`) from the cameras the
 //! splat acceptance compares with the web reference: front, both sides,
-//! back and three-quarter, each looking at the figure from `--distance`
-//! at `--eye-height`, with a 60° vertical field of view. With `--occluded`
-//! a box stands between the camera and the figure's legs and a wall behind
-//! it. The GLB is read from a local path: character bytes stay out of the
-//! repository.
+//! back and three-quarter, each looking at the figure's pelvis from
+//! `--distance` at `--eye-height`, with a 60° vertical field of view. The
+//! GLB and any clip pack are read from local paths: character bytes stay
+//! out of the repository.
 //!
 //! ```text
-//! cargo run -p render-wgpu --example splat_capture -- \
-//!     --glb PATH --out DIR [--size 420x720] [--eye-height 0.88] [--distance 3.6] [--occluded]
+//! cargo run -p render-wgpu --example splat_capture -- --glb PATH --out DIR
+//!     [--size 1920x1080] [--eye-height 0.88] [--distance 2.2] [--occluded]
+//!     [--clip-pack PATH --clip ID [--fit JOINT:K,A] [--at SECONDS] [--track SECONDS]]
+//!     [--arms ABDUCT,FOREARM] [--multiplier R,G,B]
 //! ```
+//!
+//! - `--occluded`: a box between the camera and the figure's legs, a wall
+//!   behind it.
+//! - `--clip-pack`, `--clip`: play clip `ID` of a clip pack bound by joint
+//!   names, looping, captured at `--at` seconds.
+//! - `--fit JOINT:K,A`: fit the clip's translation of `JOINT` to
+//!   (K·x, A + K·y, K·z).
+//! - `--arms ABDUCT,FOREARM`: turn the upper arms and then the forearms
+//!   further out, in degrees, about the model's forward axis (+z), on top
+//!   of the clip.
+//! - `--track SECONDS`: write `track.json`, the world positions of the
+//!   pelvis, feet and balls of the feet at 60 Hz from 0 to `SECONDS`.
+//! - `--multiplier R,G,B`: the splat colour multiplier.
+//! - `--pose-out`: write `pose.json`, every rig joint's world transform at
+//!   the capture time, for a CPU check of the skinning.
 //!
 //! Writes `<view>.png` per view and `readout.json` (the splat readout and
 //! the `splats` pass timing over the captures).
@@ -22,6 +38,11 @@ use render_model::*;
 use render_wgpu::{OffscreenTarget, RendererOptions};
 use support::*;
 
+const FIGURE: u64 = 1;
+const TRACKED: [&str; 5] = ["pelvis", "foot_l", "foot_r", "ball_l", "ball_r"];
+const TRACK_RATE: f64 = 60.0;
+
+#[derive(Default)]
 struct Arguments {
     glb: std::path::PathBuf,
     out: std::path::PathBuf,
@@ -29,15 +50,35 @@ struct Arguments {
     eye_height: f64,
     distance: f64,
     occluded: bool,
+    clip_pack: Option<std::path::PathBuf>,
+    clip: Option<String>,
+    fit: Option<(String, f32, f32)>,
+    at: f64,
+    track: Option<f64>,
+    arms: Option<(f32, f32)>,
+    multiplier: Option<[f32; 3]>,
+    pose_out: bool,
+}
+
+fn numbers<const N: usize>(text: &str, flag: &str) -> Result<[f32; N], String> {
+    let values: Vec<f32> = text
+        .split(',')
+        .map(|value| value.trim().parse::<f32>())
+        .collect::<Result<_, _>>()
+        .map_err(|_| format!("{flag} takes {N} numbers"))?;
+    values
+        .try_into()
+        .map_err(|_| format!("{flag} takes {N} numbers"))
 }
 
 fn arguments() -> Result<Arguments, String> {
-    let mut glb = None;
-    let mut out = None;
-    let mut size = (420, 720);
-    let mut eye_height = 0.88;
-    let mut distance = 3.6;
-    let mut occluded = false;
+    let mut arguments = Arguments {
+        size: (1920, 1080),
+        eye_height: 0.88,
+        distance: 2.2,
+        ..Arguments::default()
+    };
+    let (mut glb, mut out) = (None, None);
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} takes a value"));
@@ -47,25 +88,82 @@ fn arguments() -> Result<Arguments, String> {
             "--size" => {
                 let text = value()?;
                 let (w, h) = text.split_once('x').ok_or("--size is WIDTHxHEIGHT")?;
-                size = (
+                arguments.size = (
                     w.parse().map_err(|_| "--size width")?,
                     h.parse().map_err(|_| "--size height")?,
                 );
             }
-            "--eye-height" => eye_height = value()?.parse().map_err(|_| "--eye-height")?,
-            "--distance" => distance = value()?.parse().map_err(|_| "--distance")?,
-            "--occluded" => occluded = true,
+            "--eye-height" => {
+                arguments.eye_height = value()?.parse().map_err(|_| "--eye-height")?;
+            }
+            "--distance" => arguments.distance = value()?.parse().map_err(|_| "--distance")?,
+            "--occluded" => arguments.occluded = true,
+            "--clip-pack" => arguments.clip_pack = Some(value()?.into()),
+            "--clip" => arguments.clip = Some(value()?),
+            "--fit" => {
+                let text = value()?;
+                let (joint, numbers_text) = text.split_once(':').ok_or("--fit is JOINT:K,A")?;
+                let [k, a] = numbers::<2>(numbers_text, "--fit")?;
+                arguments.fit = Some((joint.to_owned(), k, a));
+            }
+            "--at" => arguments.at = value()?.parse().map_err(|_| "--at")?,
+            "--track" => arguments.track = Some(value()?.parse().map_err(|_| "--track")?),
+            "--arms" => {
+                let [abduct, forearm] = numbers::<2>(&value()?, "--arms")?;
+                arguments.arms = Some((abduct, forearm));
+            }
+            "--multiplier" => arguments.multiplier = Some(numbers::<3>(&value()?, "--multiplier")?),
+            "--pose-out" => arguments.pose_out = true,
             other => return Err(format!("unknown flag {other}")),
         }
     }
-    Ok(Arguments {
-        glb: glb.ok_or("--glb PATH is required")?,
-        out: out.ok_or("--out DIR is required")?,
-        size,
-        eye_height,
-        distance,
-        occluded,
+    arguments.glb = glb.ok_or("--glb PATH is required")?;
+    arguments.out = out.ok_or("--out DIR is required")?;
+    if arguments.clip_pack.is_some() != arguments.clip.is_some() {
+        return Err("--clip-pack and --clip go together".to_owned());
+    }
+    Ok(arguments)
+}
+
+fn read(path: &std::path::Path) -> Vec<u8> {
+    std::fs::read(path).unwrap_or_else(|error| {
+        eprintln!(
+            "splat_capture: cannot read {}: {error} (character files are local, outside the repository)",
+            path.display()
+        );
+        std::process::exit(2);
     })
+}
+
+fn admit(path: &std::path::Path, bytes: &[u8]) -> AnimatedMeshAsset {
+    let imported = import_animated_glb_asset(
+        &SourceUri::RelativePath(path.file_name().map_or("asset.glb".into(), |name| {
+            name.to_string_lossy().into_owned()
+        })),
+        bytes,
+        &ImportContext::default(),
+    );
+    imported
+        .assets
+        .unwrap_or_else(|| {
+            eprintln!(
+                "splat_capture: {} is not admitted: {:?}",
+                path.display(),
+                imported.diagnostics
+            );
+            std::process::exit(1);
+        })
+        .animated_mesh
+}
+
+fn hex(hash: &str) -> &str {
+    hash.trim_start_matches("sha256:")
+}
+
+/// A rotation of `degrees` about `axis` (unit), xyzw.
+fn turn(axis: [f32; 3], degrees: f32) -> [f32; 4] {
+    let (sin, cos) = (degrees.to_radians() * 0.5).sin_cos();
+    [axis[0] * sin, axis[1] * sin, axis[2] * sin, cos]
 }
 
 fn main() {
@@ -73,53 +171,88 @@ fn main() {
         eprintln!("splat_capture: {error}");
         std::process::exit(2);
     });
-    let bytes = std::fs::read(&arguments.glb).unwrap_or_else(|error| {
-        eprintln!(
-            "splat_capture: cannot read {}: {error} (character GLBs are local, outside the repository)",
-            arguments.glb.display()
-        );
-        std::process::exit(2);
-    });
+    let bytes = read(&arguments.glb);
     std::fs::create_dir_all(&arguments.out).expect("create the output directory");
 
     let mut harness = Harness::new(RendererOptions::default());
     let (width, height) = arguments.size;
     harness.target = OffscreenTarget::new(&harness.gpu, width, height, 1);
-    let imported = import_animated_glb_asset(
-        &SourceUri::RelativePath("character.glb".to_owned()),
-        &bytes,
-        &ImportContext::default(),
-    );
-    let asset = imported.assets.unwrap_or_else(|| {
-        eprintln!("splat_capture: not admitted: {:?}", imported.diagnostics);
-        std::process::exit(1);
-    });
-    let asset = asset.animated_mesh;
+    let mut asset = admit(&arguments.glb, &bytes);
     let hash = asset.content_hash.clone().expect("content hash");
-    harness.resources.insert(
-        &format!(
-            "animated-mesh-resource/{}",
-            hash.trim_start_matches("sha256:")
-        ),
-        bytes,
-    );
+    harness
+        .resources
+        .insert(&format!("animated-mesh-resource/{}", hex(&hash)), bytes);
+    let playback = arguments.clip_pack.as_ref().map(|path| {
+        let pack_bytes = read(path);
+        let pack = admit(path, &pack_bytes);
+        let pack_hash = pack.content_hash.clone().expect("content hash");
+        harness.resources.insert(
+            &format!("clip-pack-resource/{}", hex(&pack_hash)),
+            pack_bytes,
+        );
+        let clip = arguments.clip.clone().expect("checked with --clip-pack");
+        asset.clip_packs.push(AnimationClipPack {
+            asset: format!("animation-clip-pack/{}", hex(&pack_hash)),
+            runtime_format: pack.runtime_format,
+            content_hash: pack_hash.clone(),
+            rig: pack.rig.clone().expect("the clip pack names its rig"),
+            clips: pack.clips.clone(),
+            provenance: AnimationClipPackProvenance {
+                producer: "splat_capture".to_owned(),
+                source_hash: pack_hash,
+                target_hash: hash.clone(),
+                license: "local".to_owned(),
+            },
+            binding: AnimationClipPackBinding::JointNames,
+            translation_fits: arguments
+                .fit
+                .iter()
+                .map(|(joint, k, a)| AnimationClipTranslationFit {
+                    clip: clip.clone(),
+                    joint: joint.clone(),
+                    scale: [*k; 3],
+                    offset: [0.0, *a, 0.0],
+                })
+                .collect(),
+        });
+        AnimatedMeshPlaybackCommand::Play {
+            clip,
+            r#loop: AnimationLoopMode::Repeat,
+            speed: 1.0,
+            weight: 1.0,
+            restart: true,
+            fade_seconds: None,
+            start_offset_seconds: None,
+            start_paused: false,
+        }
+    });
+    let rig_index = |name: &str| {
+        asset
+            .rig
+            .as_ref()
+            .and_then(|rig| rig.joints.iter().position(|joint| joint.id == name))
+            .map(|index| index as u32)
+    };
     let mut ops = vec![
         RenderDiff::DefineAnimatedMesh {
             asset: asset.clone(),
         },
         RenderDiff::CreateAnimatedMeshInstance {
-            handle: RenderHandle::new(1),
+            handle: RenderHandle::new(FIGURE),
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
                 playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
+                splat: SplatAppearance {
+                    multiplier: arguments.multiplier.unwrap_or([1.0; 3]),
+                },
                 asset: asset.asset.clone(),
                 transform: Transform::IDENTITY,
                 visible: true,
                 material_overrides: Vec::new(),
-                playback: None,
+                playback,
                 metadata: RenderMetadata {
-                    source_entity: Some(1),
+                    source_entity: Some(FIGURE),
                     ..RenderMetadata::default()
                 },
                 layer: RenderLayer::Scene,
@@ -127,6 +260,35 @@ fn main() {
             },
         },
     ];
+    if let Some((abduct, forearm)) = arguments.arms {
+        // The figure faces +z: turning about +z lifts its left arm (toward
+        // +x) and lowers its right one, so the right turns the other way.
+        let mut overrides = Vec::new();
+        for (bones, degrees) in [
+            (["upperarm_l", "upperarm_r"], abduct),
+            (["lowerarm_l", "lowerarm_r"], forearm),
+        ] {
+            for (bone, sign) in bones.iter().zip([1.0, -1.0]) {
+                let joint = rig_index(bone).unwrap_or_else(|| panic!("the rig has no {bone}"));
+                overrides.push(JointOverride {
+                    joint,
+                    space: PoseSpace::Model,
+                    additive: true,
+                    rotation: Some(turn([0.0, 0.0, 1.0], sign * degrees)),
+                    translation: None,
+                    scale: None,
+                    weight: 1.0,
+                });
+            }
+        }
+        ops.push(RenderDiff::SetAnimatedMeshPose {
+            handle: RenderHandle::new(FIGURE),
+            pose: AnimatedMeshPose {
+                overrides,
+                ..AnimatedMeshPose::default()
+            },
+        });
+    }
     if arguments.occluded {
         // Unlit, so their colours read back as written.
         for (id, color) in [
@@ -153,23 +315,80 @@ fn main() {
     }
     harness.apply(ops);
 
+    let joint_world = |harness: &Harness, name: &str| -> Option<[f32; 3]> {
+        let index = rig_index(name)? as usize;
+        let reading = harness.poses.joints(RenderHandle::new(FIGURE))?;
+        Some(reading.latest.joints.get(index)?.world.translation)
+    };
+    if let Some(seconds) = arguments.track {
+        let mut rows = Vec::new();
+        let frames = (seconds * TRACK_RATE).round() as u64;
+        for frame in 0..=frames {
+            let time = frame as f64 / TRACK_RATE;
+            harness.at(time);
+            let joints: Vec<String> = TRACKED
+                .iter()
+                .filter_map(|name| {
+                    joint_world(&harness, name)
+                        .map(|[x, y, z]| format!("\"{name}\": [{x}, {y}, {z}]"))
+                })
+                .collect();
+            rows.push(format!("{{\"t\": {time}, {}}}", joints.join(", ")));
+        }
+        std::fs::write(
+            arguments.out.join("track.json"),
+            format!("[\n{}\n]\n", rows.join(",\n")),
+        )
+        .expect("write the track");
+    }
+    if arguments.at > 0.0 {
+        harness.at(arguments.at.max(arguments.track.unwrap_or(0.0)));
+    }
+    if arguments.pose_out {
+        if let (Some(rig), Some(reading)) = (
+            asset.rig.as_ref(),
+            harness.poses.joints(RenderHandle::new(FIGURE)),
+        ) {
+            let rows: Vec<String> = rig
+                .joints
+                .iter()
+                .zip(&reading.latest.joints)
+                .map(|(joint, posed)| {
+                    format!(
+                        "\"{}\": {{\"translation\": {:?}, \"rotation\": {:?}, \"scale\": {:?}}}",
+                        joint.id, posed.world.translation, posed.world.rotation, posed.world.scale
+                    )
+                })
+                .collect();
+            std::fs::write(
+                arguments.out.join("pose.json"),
+                format!("{{\n{}\n}}\n", rows.join(",\n")),
+            )
+            .expect("write the pose");
+        }
+    }
+    // The cameras look at the pelvis where it stands.
+    let centre = joint_world(&harness, "pelvis")
+        .map_or([0.0, 0.0], |[x, _, z]| [f64::from(x), f64::from(z)]);
+
     let d = arguments.distance;
     let h = arguments.eye_height;
     let diagonal = d * std::f64::consts::FRAC_1_SQRT_2;
     // Engine yaw 0 looks down −z and positive yaw turns toward +x; the
     // figure faces +z.
     let views = [
-        ("front", [0.0, h, d], 0.0),
-        ("left", [d, h, 0.0], -90.0),
-        ("right", [-d, h, 0.0], 90.0),
-        ("back", [0.0, h, -d], 180.0),
-        ("three-quarter", [diagonal, h, diagonal], -45.0),
+        ("front", [0.0, d], 0.0),
+        ("left", [d, 0.0], -90.0),
+        ("right", [-d, 0.0], 90.0),
+        ("back", [0.0, -d], 180.0),
+        ("three-quarter", [diagonal, diagonal], -45.0),
     ];
     let mut handle = 100;
-    for (name, position, yaw) in views {
+    for (name, [x, z], yaw) in views {
+        let position = [centre[0] + x, h, centre[1] + z];
         if arguments.occluded {
             // The box between this camera and the figure, the wall behind it.
-            let toward = [position[0] / d, position[2] / d];
+            let toward = [x / d, z / d];
             let place = |distance: f64, id: &str, handle: u64| {
                 instance(
                     handle,
@@ -177,9 +396,9 @@ fn main() {
                     id,
                     transform(
                         [
-                            (toward[0] * distance) as f32,
+                            (centre[0] + toward[0] * distance) as f32,
                             0.0,
-                            (toward[1] * distance) as f32,
+                            (centre[1] + toward[1] * distance) as f32,
                         ],
                         // Square to the camera: a transform's yaw turns the
                         // other way from a camera's.
@@ -211,10 +430,10 @@ fn main() {
             handle += 2;
         }
     }
-    // Time the splats over a few more frames of the last view.
-    let camera = camera(views[0].1, views[0].2, 0.0);
+    // Time the splats over a few more frames of the front view.
+    let front = camera([centre[0], h, centre[1] + d], 0.0, 0.0);
     for _ in 0..30 {
-        harness.render(&camera);
+        harness.render(&front);
     }
     let readout = harness.renderer.gpu_readout();
     let timing = readout

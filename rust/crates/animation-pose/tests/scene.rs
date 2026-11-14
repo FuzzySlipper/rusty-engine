@@ -152,6 +152,7 @@ fn animated(
         handle: RenderHandle::new(handle),
         parent: parent.map(RenderHandle::new),
         instance: AnimatedMeshInstanceDescriptor {
+            splat: Default::default(),
             playback_fade: None,
             inspection: AnimatedMeshInspection::default(),
             asset: asset.asset.clone(),
@@ -461,6 +462,8 @@ fn clip_layers_from_a_skeleton_only_pack_evaluate_as_sampled() {
             target_hash: body.content_hash.clone().unwrap(),
             license: "CC0".to_owned(),
         },
+        binding: Default::default(),
+        translation_fits: Vec::new(),
     });
     let joint = |name: &str| rig_joint(&body, name);
     let pose = AnimatedMeshPose {

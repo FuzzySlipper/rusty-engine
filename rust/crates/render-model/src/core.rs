@@ -1686,6 +1686,11 @@ pub enum RenderDiff {
         handle: RenderHandle,
         inspection: crate::AnimatedMeshInspection,
     },
+    /// Replaces how the instance's Gaussian splats draw.
+    SetSplatAppearance {
+        handle: RenderHandle,
+        appearance: crate::SplatAppearance,
+    },
     SetAnimatedMeshPlayback {
         handle: RenderHandle,
         playback: AnimatedMeshPlaybackCommand,
@@ -1848,6 +1853,7 @@ impl RenderFrameDiff {
                 | RenderDiff::CreateAnimatedMeshInstance { .. }
                 | RenderDiff::CreateScatterPatch { .. }
                 | RenderDiff::SetAnimatedMeshInspection { .. }
+                | RenderDiff::SetSplatAppearance { .. }
                 | RenderDiff::SetAnimatedMeshPlayback { .. }
                 | RenderDiff::SetAnimatedMeshPose { .. }
                 | RenderDiff::SetEvaluatedPose { .. }

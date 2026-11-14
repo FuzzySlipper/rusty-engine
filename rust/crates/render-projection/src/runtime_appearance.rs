@@ -1281,6 +1281,7 @@ mod tests {
                 (
                     BODY.to_owned(),
                     Appearance::AnimatedMesh {
+                        splat: Default::default(),
                         inspection: Default::default(),
                         asset: "mesh-animation/character".to_owned(),
                         material_overrides: Vec::new(),

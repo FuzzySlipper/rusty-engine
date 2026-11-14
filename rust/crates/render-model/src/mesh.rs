@@ -1219,6 +1219,50 @@ pub struct AnimationClipPack {
     pub rig: AnimationRigSignature,
     pub clips: Vec<AnimationClipDescriptor>,
     pub provenance: AnimationClipPackProvenance,
+    /// How its clips bind to the primary's joints.
+    #[serde(default, skip_serializing_if = "AnimationClipPackBinding::is_rig")]
+    pub binding: AnimationClipPackBinding,
+    /// Changes to one joint's translation in named clips, made as the clips
+    /// bind: a clip authored for other legs fitted to the primary's.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub translation_fits: Vec<AnimationClipTranslationFit>,
+}
+
+/// How a clip pack's clips bind to its primary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AnimationClipPackBinding {
+    /// The pack's rig is the primary's (`is_clip_compatible_with`) and its
+    /// channels apply as authored.
+    #[default]
+    Rig,
+    /// The pack names every joint of the primary's rig, on a skeleton whose
+    /// rest rotations are the primary's but whose bone lengths may differ.
+    /// Rotation channels apply as authored; a translation channel applies
+    /// only where it moves, so a joint the clip holds still keeps the
+    /// primary's own rest translation. A top joint's channels (no joint
+    /// above it) are carried from the frame of the pack's nodes above it to
+    /// the primary's: a Z-up export's wrapper binds as its Y-up clip.
+    JointNames,
+}
+
+impl AnimationClipPackBinding {
+    pub fn is_rig(&self) -> bool {
+        *self == Self::Rig
+    }
+}
+
+/// One joint's translation in one clip of a pack, fitted to the primary:
+/// each key `t` becomes `scale * t + offset`, per axis.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AnimationClipTranslationFit {
+    /// The clip's descriptor id in the pack.
+    pub clip: String,
+    /// The joint's name.
+    pub joint: String,
+    pub scale: [f32; 3],
+    pub offset: [f32; 3],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1451,6 +1495,9 @@ pub struct AnimatedMeshInspection {
 pub struct AnimatedMeshInstanceDescriptor {
     #[serde(default)]
     pub inspection: AnimatedMeshInspection,
+    /// How its Gaussian splats draw, if its mesh has any.
+    #[serde(default, skip_serializing_if = "SplatAppearance::is_default")]
+    pub splat: SplatAppearance,
     pub asset: String,
     pub transform: Transform,
     pub visible: bool,
@@ -1468,6 +1515,36 @@ pub struct AnimatedMeshInstanceDescriptor {
     /// Whether the instance's parts cast shadows (`Cast` by default).
     #[serde(default, skip_serializing_if = "crate::ShadowCasting::is_cast")]
     pub shadow_casting: crate::ShadowCasting,
+}
+
+/// How an animated instance's Gaussian splats draw
+/// (`docs/splat-characters.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SplatAppearance {
+    /// Scales their colour in linear light: (1, 1, 1) draws them as baked.
+    pub multiplier: [f32; 3],
+}
+
+impl Default for SplatAppearance {
+    fn default() -> Self {
+        Self {
+            multiplier: [1.0; 3],
+        }
+    }
+}
+
+impl SplatAppearance {
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Finite and not negative.
+    pub fn is_valid(&self) -> bool {
+        self.multiplier
+            .iter()
+            .all(|value| value.is_finite() && *value >= 0.0)
+    }
 }
 
 impl AnimatedMeshInstanceDescriptor {
@@ -2196,6 +2273,8 @@ mod tests {
                 target_hash: hash,
                 license: "CC0-1.0".to_owned(),
             },
+            binding: Default::default(),
+            translation_fits: Vec::new(),
         };
         assert_eq!(pack.validate(), Ok(()));
         for name in [

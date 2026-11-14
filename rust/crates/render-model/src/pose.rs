@@ -108,7 +108,9 @@ pub enum PoseSpace {
 /// with `additive` composes onto it (rotation after the clip's, translation
 /// added, scale multiplied). A `Model` or `World` value moves the joint
 /// toward that placement and its descendants follow; the joint keeps its
-/// evaluated scale. `scale` is the joint's uniform local scale in every
+/// evaluated scale. With `additive` a `Model` or `World` value turns the
+/// joint about its own origin around that space's axes, and moves it along
+/// them, on top of its evaluated placement. `scale` is the joint's uniform local scale in every
 /// space, applied after the layers about the joint as drawn, its
 /// descendants following: 0 collapses the joint's subtree into it. Each
 /// override's weight is its own, and one joint's overrides apply in list
@@ -259,8 +261,6 @@ pub enum AnimatedMeshPoseError {
     InvalidTranslation,
     /// A negative or non-finite joint scale.
     InvalidScale,
-    /// `additive` outside `Local` space.
-    AdditiveOutsideLocal,
     /// An IK constraint in `Local` space.
     IkSpace,
     /// IK joints that are not three distinct joints.
@@ -332,9 +332,6 @@ impl AnimatedMeshPose {
             if !weight(joint.weight) {
                 return Err(AnimatedMeshPoseError::InvalidWeight);
             }
-            if joint.additive && joint.space != PoseSpace::Local {
-                return Err(AnimatedMeshPoseError::AdditiveOutsideLocal);
-            }
             if let Some(rotation) = joint.rotation {
                 let length = rotation.iter().map(|value| value * value).sum::<f32>();
                 if !length.is_finite() || length < 1e-12 {
@@ -397,7 +394,7 @@ mod tests {
     }
 
     #[test]
-    fn additive_is_local_only_and_ik_needs_a_placed_space() {
+    fn additive_turns_in_any_space_and_ik_needs_a_placed_space() {
         let pose = |overrides, two_bone_ik| AnimatedMeshPose {
             twists: Vec::new(),
             clip_layers: Vec::new(),
@@ -412,7 +409,7 @@ mod tests {
         );
         assert_eq!(
             pose(vec![joint(PoseSpace::World, true)], vec![]).validate(),
-            Err(AnimatedMeshPoseError::AdditiveOutsideLocal)
+            Ok(())
         );
         let ik = TwoBoneIkConstraint {
             root: 0,

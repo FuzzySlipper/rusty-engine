@@ -180,6 +180,34 @@ pub struct NativeAnimationClipPackAssociationRequest {
     pub license: NativeUtf8Slice,
 }
 
+/// Fits one joint's translation in one clip of a pack associated with a
+/// primary: each key `t` becomes `scale * t + offset`, per axis, as the
+/// clip binds (a pelvis height and stride fitted to the primary's legs).
+/// Made before an appearance or graph holds the primary, like the
+/// association; a later fit of the same clip and joint replaces it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAnimationClipTranslationFitRequest {
+    pub primary_mesh: NativeRenderResourceHandle,
+    pub clip_pack: NativeRenderResourceHandle,
+    /// The clip's id in the pack.
+    pub clip: NativeUtf8Slice,
+    /// The joint's name.
+    pub joint: NativeUtf8Slice,
+    pub scale: NativeVec3,
+    pub offset: NativeVec3,
+}
+
+/// How an animated appearance's Gaussian splats draw
+/// (`docs/splat-characters.md`): `multiplier` scales their colour in linear
+/// light (1, 1, 1 draws them as baked; lower for a figure in shade).
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSplatAppearanceRequest {
+    pub appearance: NativeAppearanceHandle,
+    pub multiplier: NativeVec3,
+}
+
 /// Adds an animated appearance to the ordinary Engine-owned appearance
 /// snapshot. Its associated render resource must have been opened through
 /// `OpenAnimatedMesh` during product Create.

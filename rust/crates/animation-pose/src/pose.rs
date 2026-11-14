@@ -389,21 +389,36 @@ fn override_placed(
     weight: f32,
 ) -> Mat4 {
     let (scale, rotation, translation) = placed.to_scale_rotation_translation();
+    // Additive: the value turns the joint about its own origin, and moves
+    // it, along that space's axes, on top of where it stands.
+    let value = |current_rotation: Quat, current_translation: Vec3| {
+        (
+            joint.rotation.map_or(current_rotation, |value| {
+                if joint.additive {
+                    rotation_of(value) * current_rotation
+                } else {
+                    rotation_of(value)
+                }
+            }),
+            joint.translation.map_or(current_translation, |value| {
+                if joint.additive {
+                    current_translation + vec3(value)
+                } else {
+                    vec3(value)
+                }
+            }),
+        )
+    };
     let (target_rotation, target_translation) = match joint.space {
         PoseSpace::World => {
             let (_, world_rotation, world_translation) =
                 (world * placed).to_scale_rotation_translation();
-            let target = Mat4::from_rotation_translation(
-                joint.rotation.map_or(world_rotation, rotation_of),
-                joint.translation.map_or(world_translation, vec3),
-            );
+            let (world_rotation, world_translation) = value(world_rotation, world_translation);
+            let target = Mat4::from_rotation_translation(world_rotation, world_translation);
             let (_, rotation, translation) = (to_model * target).to_scale_rotation_translation();
             (rotation, translation)
         }
-        _ => (
-            joint.rotation.map_or(rotation, rotation_of),
-            joint.translation.map_or(translation, vec3),
-        ),
+        _ => value(rotation, translation),
     };
     let rotation = if joint.rotation.is_some() {
         rotation.slerp(target_rotation, weight).normalize()
@@ -748,6 +763,31 @@ mod tests {
             position(&posed, 2).distance(Vec3::new(5.0, 1.0, 0.0)) < 1e-5,
             "the hand follows the placed elbow"
         );
+    }
+
+    /// An additive `Model` override turns a joint about its own origin
+    /// around the model's axes, on top of its pose: the elbow stays put and
+    /// the forearm, pointing along +x, turns 90 degrees about +z to +y.
+    #[test]
+    fn an_additive_model_override_turns_a_joint_about_the_models_axes() {
+        let model = arm();
+        let turned = AnimatedMeshPose {
+            overrides: vec![JointOverride {
+                joint: 1,
+                space: PoseSpace::Model,
+                additive: true,
+                rotation: Some(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2).to_array()),
+                translation: Some([0.0, 0.5, 0.0]),
+                scale: None,
+                weight: 1.0,
+            }],
+            ..AnimatedMeshPose::default()
+        };
+        let resting = Vec3::new(1.0, 0.0, 0.0);
+        let posed = controlled(&model, &RIG, rest(&model), &turned, Mat4::IDENTITY);
+        assert!(position(&posed, 1).distance(resting + Vec3::new(0.0, 0.5, 0.0)) < 1e-5);
+        let forearm = position(&posed, 2) - position(&posed, 1);
+        assert!(forearm.normalize().distance(Vec3::Y) < 1e-5, "{forearm}");
     }
 
     fn shift(joint: u32, space: PoseSpace, additive: bool, x: f32, weight: f32) -> JointOverride {

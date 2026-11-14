@@ -384,6 +384,7 @@ fn runner_against_a_fresh_frame(antialiasing: Antialiasing) -> (Option<UpscaleMe
             handle: RenderHandle::new(RUNNER),
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
+                splat: Default::default(),
                 playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: body.asset.clone(),

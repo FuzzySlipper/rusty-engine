@@ -50,6 +50,11 @@ pub enum Appearance {
     AnimatedMesh {
         #[serde(default)]
         inspection: render_model::AnimatedMeshInspection,
+        #[serde(
+            default,
+            skip_serializing_if = "render_model::SplatAppearance::is_default"
+        )]
+        splat: render_model::SplatAppearance,
         asset: String,
         material_overrides: Vec<MeshMaterialSlot>,
         playback: Option<AnimatedMeshPlaybackCommand>,
@@ -822,11 +827,13 @@ pub(crate) fn create_node(
             material_overrides,
             playback,
             inspection,
+            splat,
             ..
         } => RenderDiff::CreateAnimatedMeshInstance {
             handle,
             parent,
             instance: AnimatedMeshInstanceDescriptor {
+                splat: *splat,
                 playback_fade: None,
                 inspection: inspection.clone(),
                 asset: asset.clone(),
@@ -961,6 +968,7 @@ pub(crate) fn append_node_updates(
                 playback: old_playback,
                 inspection: old_inspection,
                 material_parameters: old_parameters,
+                splat: old_splat,
                 ..
             },
             Appearance::AnimatedMesh {
@@ -968,6 +976,7 @@ pub(crate) fn append_node_updates(
                 playback: new_playback,
                 inspection: new_inspection,
                 material_parameters: new_parameters,
+                splat: new_splat,
                 ..
             },
         ) => {
@@ -988,6 +997,12 @@ pub(crate) fn append_node_updates(
                 operations.push(RenderDiff::SetAnimatedMeshInspection {
                     handle,
                     inspection: new_inspection.clone(),
+                });
+            }
+            if old_splat != new_splat {
+                operations.push(RenderDiff::SetSplatAppearance {
+                    handle,
+                    appearance: *new_splat,
                 });
             }
             append_material_parameters(operations, handle, old_parameters, new_parameters);
@@ -1174,6 +1189,7 @@ mod tests {
                 deformed: None,
             },
             Appearance::AnimatedMesh {
+                splat: Default::default(),
                 asset: "animated/held".to_owned(),
                 material_overrides: Vec::new(),
                 playback: None,

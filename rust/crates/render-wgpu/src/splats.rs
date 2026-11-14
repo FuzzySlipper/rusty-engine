@@ -40,6 +40,11 @@ use crate::Gpu;
 
 /// Bytes of one resident Gaussian (`splats.wgsl` `Gaussian`).
 const GAUSSIAN_BYTES: u64 = 32;
+/// Bytes of one Gaussian's skin (`splats.wgsl` `skins`): four joints and
+/// four weights, a byte each.
+const SKIN_BYTES: u64 = 8;
+/// The most joints a skinned set's Gaussians index: a joint is one byte.
+pub(crate) const MAX_SKIN_JOINTS: usize = 256;
 /// Bytes of one projected Gaussian (`splats.wgsl` `Projected`).
 const PROJECTED_BYTES: u64 = 32;
 /// One dynamic uniform slot of the parameters buffer.
@@ -67,9 +72,32 @@ pub(crate) struct SplatSet {
     pub count: u32,
     /// The Gaussians to `BOUNDS_SIGMAS`, in the primitive's space.
     pub bounds: Aabb,
-    /// Whether the primitive is skinned (its centres are in bind space).
-    pub skinned: bool,
+    /// For a skinned primitive (its centres in bind space), the Gaussians a
+    /// joint moves to `BOUNDS_SIGMAS`, by skin joint, in bind space: under a
+    /// pose every Gaussian stands within the union of these boxes, each
+    /// moved by its joint (a blend of positions lies in their hull).
+    pub joint_bounds: Option<Vec<Aabb>>,
     group: wgpu::BindGroup,
+}
+
+/// One set of an instance as a view draws it.
+pub(crate) struct SplatDraw {
+    pub set: SetRef,
+    /// The set's space to the world: the instance's node for a skinned
+    /// set (its palette takes bind space to the instance's), and the
+    /// GLB node's place under it for a rigid one.
+    pub model: Mat4,
+    /// A skinned set's joint matrices in the instance's space, scale
+    /// removed, after the inverse binds: rows 0 to 2 of each.
+    pub palette: Vec<[f32; 12]>,
+    /// Linear-light colour multiplier (`SplatAppearance`).
+    pub multiplier: [f32; 3],
+}
+
+/// A set of a run, resolved for drawing.
+pub(crate) struct RunSet<'a> {
+    pub set: &'a SplatSet,
+    pub draw: &'a SplatDraw,
 }
 
 /// What the splats drew over the last frame, summed over its views.
@@ -92,8 +120,7 @@ pub struct SplatReadout {
 pub(crate) struct SplatInstance {
     /// Its node: the order between instances at one distance.
     pub handle: render_model::RenderHandle,
-    /// Each set and the matrix taking its space to the world.
-    pub sets: Vec<(SetRef, Mat4)>,
+    pub sets: Vec<SplatDraw>,
     /// The sets' world bounds.
     pub bounds: Aabb,
     /// Squared distance from the eye to the bounds' centre: its place among
@@ -167,6 +194,9 @@ pub(crate) struct Splats {
     run: Option<RunBuffers>,
     params: wgpu::Buffer,
     params_slots: u64,
+    /// The view's skinned sets' palettes (`splats.wgsl` `palettes`).
+    palettes: wgpu::Buffer,
+    palette_bytes: u64,
     /// Each view's runs draw into the first of these; a view submits its
     /// work before the next view reuses them.
     layers: Vec<Layer>,
@@ -209,6 +239,8 @@ impl Splats {
             run: None,
             params: params_buffer(device, 16),
             params_slots: 16,
+            palettes: palette_buffer(device, 4096),
+            palette_bytes: 4096,
             layers: Vec::new(),
             layers_used: 0,
             draws: HashMap::new(),
@@ -231,29 +263,43 @@ impl Splats {
         let pipelines = self.pipelines.as_ref()?;
         let (words, bounds) = gaussian_words(splats);
         let count = splats.centres.len() as u32;
-        // An empty buffer cannot be bound: keep one Gaussian's room.
-        let mut bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
-        bytes.resize(bytes.len().max(GAUSSIAN_BYTES as usize), 0);
-        let buffer = crate::gpu::buffer_init(
-            &gpu.device,
-            &wgpu::util::BufferInitDescriptor {
-                label: Some(label),
-                contents: &bytes,
-                usage: wgpu::BufferUsages::STORAGE,
-            },
+        let skin = skin_words(splats);
+        let storage = |words: &[u32], room: usize| {
+            // An empty buffer cannot be bound: keep one record's room.
+            let mut bytes: Vec<u8> = words.iter().flat_map(|word| word.to_le_bytes()).collect();
+            bytes.resize(bytes.len().max(room), 0);
+            crate::gpu::buffer_init(
+                &gpu.device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: &bytes,
+                    usage: wgpu::BufferUsages::STORAGE,
+                },
+            )
+        };
+        let gaussians = storage(&words, GAUSSIAN_BYTES as usize);
+        let skin_buffer = storage(
+            skin.as_ref().map_or(&[][..], |(words, _)| words.as_slice()),
+            SKIN_BYTES as usize,
         );
         let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
             layout: &pipelines.gaussian_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: gaussians.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: skin_buffer.as_entire_binding(),
+                },
+            ],
         });
         Some(SplatSet {
             count,
             bounds,
-            skinned: splats.joints.is_some(),
+            joint_bounds: skin.map(|(_, bounds)| bounds),
             group,
         })
     }
@@ -351,7 +397,7 @@ impl Splats {
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
-        runs: &[Vec<(&SplatSet, Mat4)>],
+        runs: &[Vec<RunSet<'_>>],
         depth_ranges: &[(f32, f32)],
         target: &SplatTarget<'_>,
     ) {
@@ -360,11 +406,21 @@ impl Splats {
         }
         let largest = runs
             .iter()
-            .map(|run| run.iter().map(|(set, _)| set.count).sum::<u32>())
+            .map(|run| run.iter().map(|entry| entry.set.count).sum::<u32>())
             .max()
             .unwrap_or(0);
         let slots = runs.iter().map(|run| run.len() as u64 + 2).sum::<u64>();
+        // Every skinned set's palette, in run order.
+        let mut palettes: Vec<f32> = Vec::new();
+        let mut palette_firsts = Vec::new();
+        for entry in runs.iter().flatten() {
+            palette_firsts.push((palettes.len() / 4) as u32);
+            for joint in &entry.draw.palette {
+                palettes.extend_from_slice(joint);
+            }
+        }
         self.ensure_params(&gpu.device, slots);
+        self.ensure_palettes(&gpu.device, palettes.len().max(4) as u64 * 4);
         self.ensure_run(&gpu.device, largest.max(1));
         self.ensure_draw(&gpu.device, target.samples);
         for index in 0..runs.len() {
@@ -388,8 +444,9 @@ impl Splats {
         let view_proj = target.camera.view_proj.as_dmat4();
         let mut bytes = Vec::new();
         let mut offsets = Vec::with_capacity(runs.len());
+        let mut palette_index = palette_firsts.iter().copied();
         for (run, &(near, far)) in runs.iter().zip(depth_ranges) {
-            let total: u32 = run.iter().map(|(set, _)| set.count).sum();
+            let total: u32 = run.iter().map(|entry| entry.set.count).sum();
             let blocks = total.div_ceil(TILE);
             let sort = bytes.len() as u32;
             for shift in SORT_SHIFTS {
@@ -402,8 +459,10 @@ impl Splats {
             }
             let mut sets = Vec::with_capacity(run.len());
             let mut first = 0u32;
-            for (index, (set, model)) in run.iter().enumerate() {
-                let model = model.as_dmat4();
+            for (index, entry) in run.iter().enumerate() {
+                let (set, draw) = (entry.set, entry.draw);
+                let palette_first = palette_index.next().expect("one palette start per set");
+                let model = draw.model.as_dmat4();
                 let mut slot = Vec::with_capacity(PARAMS_SLOT as usize);
                 push_matrix(&mut slot, &(view * model));
                 push_matrix(&mut slot, &(view_proj * model));
@@ -417,6 +476,16 @@ impl Splats {
                 for value in [first, set.count, u32::from(index == 0), 0] {
                     slot.extend_from_slice(&value.to_le_bytes());
                 }
+                // A skinned set's palette in rows of four floats, three a
+                // joint; its Gaussians stand in bind space without one.
+                let skinned = set.joint_bounds.is_some() && !draw.palette.is_empty();
+                for value in [palette_first, u32::from(skinned), 0, 0] {
+                    slot.extend_from_slice(&value.to_le_bytes());
+                }
+                let [r, g, b] = draw.multiplier;
+                for value in [r, g, b, 0.0] {
+                    slot.extend_from_slice(&value.to_le_bytes());
+                }
                 slot.resize(PARAMS_SLOT as usize, 0);
                 sets.push(bytes.len() as u32);
                 bytes.extend_from_slice(&slot);
@@ -425,6 +494,10 @@ impl Splats {
             offsets.push((sort, sets, total, blocks));
         }
         gpu.queue.write_buffer(&self.params, 0, &bytes);
+        if !palettes.is_empty() {
+            let palette_bytes: Vec<u8> = palettes.iter().flat_map(|v| v.to_le_bytes()).collect();
+            gpu.queue.write_buffer(&self.palettes, 0, &palette_bytes);
+        }
 
         let pipelines = self.pipelines.as_ref().expect("checked above");
         let buffers = self.run.as_ref().expect("ensured above");
@@ -441,10 +514,10 @@ impl Splats {
                         .and_then(|timer| timer.compute_writes_between(true, false)),
                 });
                 pass.set_pipeline(&pipelines.project);
-                for ((set, _), offset) in run.iter().zip(sets) {
+                for (entry, offset) in run.iter().zip(sets) {
                     pass.set_bind_group(0, &buffers.project_group, &[*offset]);
-                    pass.set_bind_group(1, &set.group, &[]);
-                    pass.dispatch_workgroups(set.count.div_ceil(WORKGROUP).max(1), 1, 1);
+                    pass.set_bind_group(1, &entry.set.group, &[]);
+                    pass.dispatch_workgroups(entry.set.count.div_ceil(WORKGROUP).max(1), 1, 1);
                 }
                 for (step, group) in buffers.sort_groups.iter().enumerate() {
                     pass.set_bind_group(0, group, &[sort + step as u32 * PARAMS_SLOT as u32]);
@@ -543,6 +616,16 @@ impl Splats {
         self.run = None;
     }
 
+    fn ensure_palettes(&mut self, device: &wgpu::Device, bytes: u64) {
+        if bytes <= self.palette_bytes {
+            return;
+        }
+        self.palette_bytes = bytes.next_power_of_two();
+        self.palettes = palette_buffer(device, self.palette_bytes);
+        // The run's bind groups name the old buffer.
+        self.run = None;
+    }
+
     fn ensure_run(&mut self, device: &wgpu::Device, gaussians: u32) {
         if self
             .run
@@ -610,6 +693,7 @@ impl Splats {
                 entry(2, keys[0].as_entire_binding()),
                 entry(3, values[0].as_entire_binding()),
                 entry(4, args.as_entire_binding()),
+                entry(5, self.palettes.as_entire_binding()),
             ],
         });
         let sort_group = |from: usize, to: usize| {
@@ -790,9 +874,13 @@ impl Pipelines {
                 storage(2, false, compute),
                 storage(3, false, compute),
                 storage(4, false, compute),
+                storage(5, true, compute),
             ],
         );
-        let gaussian_layout = layout("render-wgpu splat gaussians", &[storage(0, true, compute)]);
+        let gaussian_layout = layout(
+            "render-wgpu splat gaussians",
+            &[storage(0, true, compute), storage(1, true, compute)],
+        );
         let sort_layout = layout(
             "render-wgpu splats sort",
             &[
@@ -888,6 +976,15 @@ fn params_buffer(device: &wgpu::Device, slots: u64) -> wgpu::Buffer {
     })
 }
 
+fn palette_buffer(device: &wgpu::Device, bytes: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("render-wgpu splat palettes"),
+        size: bytes,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 fn push_matrix(bytes: &mut Vec<u8>, matrix: &DMat4) {
     for value in matrix.as_mat4().to_cols_array() {
         bytes.extend_from_slice(&value.to_le_bytes());
@@ -932,6 +1029,47 @@ pub(crate) fn gaussian_words(splats: &GlbSplats) -> (Vec<u32>, Aabb) {
         bounds.include(centre + Vec3::splat(reach));
     }
     (words, bounds)
+}
+
+/// A skinned primitive's skin words (`splats.wgsl` `skins`) and each
+/// joint's bounds in bind space, or `None` for an unskinned one or one
+/// indexing more than [`MAX_SKIN_JOINTS`] joints (drawn in bind space).
+fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<Aabb>)> {
+    let (joints, weights) = (splats.joints.as_ref()?, splats.weights.as_ref()?);
+    let highest = joints.iter().flatten().copied().max().unwrap_or(0) as usize;
+    if highest >= MAX_SKIN_JOINTS {
+        return None;
+    }
+    let mut bounds = vec![Aabb::EMPTY; highest + 1];
+    let mut words = Vec::with_capacity(joints.len() * 2);
+    for (index, (joint, weight)) in joints.iter().zip(weights).enumerate() {
+        let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
+        words.push(
+            u32::from(joint[0])
+                | u32::from(joint[1]) << 8
+                | u32::from(joint[2]) << 16
+                | u32::from(joint[3]) << 24,
+        );
+        words.push(
+            unorm(weight[0])
+                | unorm(weight[1]) << 8
+                | unorm(weight[2]) << 16
+                | unorm(weight[3]) << 24,
+        );
+        let centre = Vec3::from(splats.centres[index]);
+        let reach = BOUNDS_SIGMAS
+            * splats.scales[index]
+                .iter()
+                .fold(0.0f32, |a, b| a.max(b.abs()));
+        for (joint, weight) in joint.iter().zip(weight) {
+            if *weight > 0.0 {
+                let joint = &mut bounds[usize::from(*joint)];
+                joint.include(centre - Vec3::splat(reach));
+                joint.include(centre + Vec3::splat(reach));
+            }
+        }
+    }
+    Some((words, bounds))
 }
 
 /// The IEEE half nearest a non-negative `value` (a standard deviation):
@@ -1063,7 +1201,23 @@ mod tests {
             eye: Vec3::ZERO,
         };
         let shift = Mat4::from_translation(Vec3::new(0.0, 0.0, -0.025));
-        let run = vec![(&sets[0], Mat4::IDENTITY), (&sets[1], shift)];
+        let draw = |model: Mat4| SplatDraw {
+            set: SetRef { slot: 0, set: 0 },
+            model,
+            palette: Vec::new(),
+            multiplier: [1.0; 3],
+        };
+        let draws = [draw(Mat4::IDENTITY), draw(shift)];
+        let run = vec![
+            RunSet {
+                set: &sets[0],
+                draw: &draws[0],
+            },
+            RunSet {
+                set: &sets[1],
+                draw: &draws[1],
+            },
+        ];
         let (near, far) = (0.5, 25.0);
         let mut encoder = device.create_command_encoder(&Default::default());
         splats.encode_runs(

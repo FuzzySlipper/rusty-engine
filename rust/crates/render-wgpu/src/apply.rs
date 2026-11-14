@@ -797,6 +797,12 @@ impl Renderer {
                 }
                 self.set_animated_inspection(*handle, inspection)?
             }
+            // What the splats read at their next frame (`splat_instances`).
+            RenderDiff::SetSplatAppearance { handle, appearance } => {
+                if let NodeKind::AnimatedMesh(descriptor) = &mut self.node_mut(*handle)?.kind {
+                    descriptor.splat = *appearance;
+                }
+            }
             // What an instance plays and its pose controls are the Engine's
             // to evaluate; the renderer draws the pose it evaluated.
             RenderDiff::SetAnimatedMeshPlayback { .. } | RenderDiff::SetAnimatedMeshPose { .. } => {
@@ -3502,6 +3508,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::CreateAnimatedMeshInstance { .. } => "createAnimatedMeshInstance",
         RenderDiff::CreateScatterPatch { .. } => "createScatterPatch",
         RenderDiff::SetAnimatedMeshInspection { .. } => "setAnimatedMeshInspection",
+        RenderDiff::SetSplatAppearance { .. } => "setSplatAppearance",
         RenderDiff::SetAnimatedMeshPlayback { .. } => "setAnimatedMeshPlayback",
         RenderDiff::SetAnimatedMeshPose { .. } => "setAnimatedMeshPose",
         RenderDiff::SetEvaluatedPose { .. } => "setEvaluatedPose",

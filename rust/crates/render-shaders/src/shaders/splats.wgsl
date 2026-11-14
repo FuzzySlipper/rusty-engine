@@ -48,6 +48,10 @@ struct Project {
     // x: the set's first slot in the run; y: its Gaussians; z: 1 for the
     // run's first set, which writes the draw's vertex count.
     range: vec4<u32>,
+    // x: the set's first row in `palettes`; y: 1 when it is skinned.
+    skin: vec4<u32>,
+    // rgb: the colour multiplier in linear light.
+    tint: vec4<f32>,
 };
 
 // The indirect draw of a run's layer: 4 vertices per visible Gaussian.
@@ -80,7 +84,13 @@ const INVALID: u32 = 0xffffffffu;
 @group(0) @binding(2) var<storage, read_write> project_keys: array<u32>;
 @group(0) @binding(3) var<storage, read_write> project_values: array<u32>;
 @group(0) @binding(4) var<storage, read_write> draw_args: DrawArgs;
+// Three rows a joint: a skinned set's joint matrices (instance space, scale
+// removed, after the inverse binds).
+@group(0) @binding(5) var<storage, read> palettes: array<vec4<f32>>;
 @group(1) @binding(0) var<storage, read> gaussians: array<Gaussian>;
+// A Gaussian's skin: four joints (a byte each, lowest first) and their four
+// weights (unorm8).
+@group(1) @binding(1) var<storage, read> skins: array<vec2<u32>>;
 
 @group(0) @binding(10) var<uniform> sort: Sort;
 @group(0) @binding(11) var<storage, read> keys_in: array<u32>;
@@ -138,11 +148,50 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
         draw_args.vertex_count = 4u;
     }
     let gaussian = gaussians[index];
-    let centre = bitcast<vec3<f32>>(gaussian.centre_color.xyz);
-    let color = unpack4x8unorm(gaussian.centre_color.w);
+    var centre = bitcast<vec3<f32>>(gaussian.centre_color.xyz);
+    var color = unpack4x8unorm(gaussian.centre_color.w);
     if color.a < ALPHA_MIN {
         cull(slot);
         return;
+    }
+    // Skinned: the linear blend of its joints' matrices moves its centre,
+    // and the blend with its columns' lengths removed turns it, so a joint's
+    // scale never inflates it.
+    var turn = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
+    if project.skin.y == 1u {
+        let skin = skins[index];
+        let weights = unpack4x8unorm(skin.y);
+        var rows = array<vec4<f32>, 3>(vec4<f32>(0.0), vec4<f32>(0.0), vec4<f32>(0.0));
+        for (var influence = 0u; influence < 4u; influence = influence + 1u) {
+            let weight = weights[influence];
+            if weight > 0.0 {
+                let joint = (skin.x >> (8u * influence)) & 0xffu;
+                let row = project.skin.x + joint * 3u;
+                rows[0] = rows[0] + weight * palettes[row];
+                rows[1] = rows[1] + weight * palettes[row + 1u];
+                rows[2] = rows[2] + weight * palettes[row + 2u];
+            }
+        }
+        let total = weights.x + weights.y + weights.z + weights.w;
+        if total > 0.0 {
+            let point = vec4<f32>(centre, 1.0);
+            centre = vec3<f32>(dot(rows[0], point), dot(rows[1], point), dot(rows[2], point)) / total;
+            let columns = mat3x3<f32>(
+                vec3<f32>(rows[0].x, rows[1].x, rows[2].x),
+                vec3<f32>(rows[0].y, rows[1].y, rows[2].y),
+                vec3<f32>(rows[0].z, rows[1].z, rows[2].z),
+            );
+            turn = mat3x3<f32>(
+                columns[0] / max(length(columns[0]), 1e-8),
+                columns[1] / max(length(columns[1]), 1e-8),
+                columns[2] / max(length(columns[2]), 1e-8),
+            );
+        }
+    }
+    // The multiplier scales the colour in linear light; the layer keeps it
+    // in display space.
+    if any(project.tint.rgb != vec3<f32>(1.0)) {
+        color = vec4<f32>(linear_to_srgb(srgb_to_linear(color.rgb) * project.tint.rgb), color.a);
     }
     let clip = project.clip_from_model * vec4<f32>(centre, 1.0);
     let view = (project.model_view * vec4<f32>(centre, 1.0)).xyz;
@@ -165,13 +214,13 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
         half_float(gaussian.rotation_scale.z >> 16u),
     );
     let sigma_z = half_float(gaussian.rotation_scale.w & 0xffffu);
-    let r = rotation_matrix(q);
-    let w = mat3x3<f32>(
+    let r = turn * rotation_matrix(q);
+    let to_view = mat3x3<f32>(
         project.model_view[0].xyz,
         project.model_view[1].xyz,
         project.model_view[2].xyz,
     );
-    let m = w * mat3x3<f32>(r[0] * sigma_xy.x, r[1] * sigma_xy.y, r[2] * sigma_z);
+    let m = to_view * mat3x3<f32>(r[0] * sigma_xy.x, r[1] * sigma_xy.y, r[2] * sigma_z);
     let covariance = m * transpose(m);
 
     // The projection's Jacobian at the centre, in render pixels, y up.
@@ -211,7 +260,7 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     let to_ndc = 2.0 / size;
     let axis1 = l1 * direction * to_ndc;
     let axis2 = l2 * vec2<f32>(direction.y, -direction.x) * to_ndc;
-    projected[slot] = Projected(ndc, gaussian.centre_color.w, vec4<f32>(axis1, axis2));
+    projected[slot] = Projected(ndc, pack4x8unorm(color), vec4<f32>(axis1, axis2));
 
     // Back to front: the farthest Gaussian sorts first.
     let along = clamp((depth - project.depth.x) * project.depth.y, 0.0, 1.0);
@@ -478,6 +527,13 @@ fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
     let low = color / 12.92;
     let high = pow((color + 0.055) / 1.055, vec3<f32>(2.4));
     return select(high, low, color <= vec3<f32>(0.04045));
+}
+
+fn linear_to_srgb(color: vec3<f32>) -> vec3<f32> {
+    let clamped = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
+    let low = clamped * 12.92;
+    let high = 1.055 * pow(clamped, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(high, low, clamped <= vec3<f32>(0.0031308));
 }
 
 // The layer's premultiplied display colour at the fragment, decoded to

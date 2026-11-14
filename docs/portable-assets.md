@@ -120,7 +120,10 @@ packs together have no limit.
 A clip pack is a GLB that carries a skeleton and clips. It needs no mesh:
 export the skeleton's nodes and its skin (joint names and inverse binds)
 with the clips, and leave out meshes and materials. Its skeleton must match
-the character's: the same joint names, parents and rest pose.
+the character's: the same joint names, parents and rest pose. A pack on a
+skeleton with the same joint names and rest rotations but other bone
+lengths, or wrapped in nodes of its own, binds by joint names instead
+([splat characters](splat-characters.md#posing)).
 
 ```csharp
 RenderResource body = engine.Animation.OpenAnimatedMeshFromContent(new(bodySource));

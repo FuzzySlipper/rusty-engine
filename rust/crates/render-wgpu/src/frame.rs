@@ -2551,7 +2551,7 @@ impl Renderer {
             instance
                 .sets
                 .iter()
-                .filter_map(|&(set, _)| crate::animated::splat_set(&self.tables, set))
+                .filter_map(|draw| crate::animated::splat_set(&self.tables, draw.set))
                 .map(|set| set.count)
                 .sum()
         };
@@ -4484,8 +4484,11 @@ impl Renderer {
                         .map(|run| {
                             run.iter()
                                 .flat_map(|&instance| &splat_instances[instance].sets)
-                                .filter_map(|&(set, model)| {
-                                    Some((crate::animated::splat_set(&self.tables, set)?, model))
+                                .filter_map(|draw| {
+                                    Some(crate::splats::RunSet {
+                                        set: crate::animated::splat_set(&self.tables, draw.set)?,
+                                        draw,
+                                    })
                                 })
                                 .collect()
                         })
