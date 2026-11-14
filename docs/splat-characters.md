@@ -33,19 +33,26 @@ three standard deviations, each node's at rest (a skinned node's in bind
 space). A skinned one names its rig: its skin's named joints, held in
 place, as clip packs and joint reads need.
 
-### A PINOC character
+### PINOC characters
 
-A character baked for Viggle's PINOC clips is skinned to the joints of the
-canonical 441-joint humanoid its Gaussians use, plus their ancestors up to
-`root`, under their canonical names and parents:
+asset-pipeline writes a character baked for Viggle's PINOC clips on one of
+two rigs:
 
-- each joint's rest translation is the character's own (the `.vsplat`
-  `joints` block), and its rest rotation the canonical one;
-- the inverse binds are those of that rest;
-- the Gaussians stay in the `.vsplat`'s own space.
+- **Mixamo (the default).** The 22 Mixamo body bones under the names
+  PINOC's Mixamo clips use (`mixamorig:Hips` and on). `Hips` is the top
+  joint and carries the walk's travel; an identity `character` node holds
+  it. The figure faces +Z at rest and when played. Its clips are PINOC's
+  Mixamo exports, whose skeleton hangs under a Z-up `Armature.001`: the
+  binding folds that wrapper into `Hips` (below).
+- **viggle441.** The joints of Viggle's canonical 441-joint humanoid that
+  its Gaussians use, plus their ancestors up to `root`, under their
+  canonical names and parents:
+  - each joint's rest translation is the character's own (the `.vsplat`
+    `joints` block), and its rest rotation the canonical one;
+  - the Gaussians stay in the `.vsplat`'s own space.
 
-That rest faces +X. The PINOC clips hold `root` turned half round, so a
-played character faces +Z and walks along it.
+  That rest faces +X. PINOC's own clips hold `root` turned half round, so a
+  played character faces +Z and walks along it.
 
 Products open it as any animated GLB:
 
@@ -79,24 +86,25 @@ binds such a pack:
 `AssociateAnimationClipPack` would refuse the pack, since its rig is not
 the character's.
 
-**Pelvis fit.** A clip's pelvis translation is authored for the canonical
-legs. `FitAnimationClipTranslation` fits one joint's translation in one
-clip as it binds: each key `t` becomes `scale * t + offset` per axis. For
-asset-pipeline's `clip_fit.py` values `k` and `A` that is scale (k, k, k)
-and offset (0, A, 0).
+**Pelvis fit.** A clip's pelvis (or `Hips`) translation is authored for
+the clip's own legs. `FitAnimationClipTranslation` fits one joint's
+translation in one clip as it binds: each key `t` becomes
+`scale * t + offset` per axis, after any wrapper is folded in. For
+asset-pipeline's fitted `k` and `A` (its `character.json`) that is scale
+(k, k, k) and offset (0, A, 0).
 
 ```csharp
 engine.Animation.AssociateAnimationClipPackByJointNames(new(body, walking, producer, license));
-engine.Animation.FitAnimationClipTranslation(new(body, walking, "Animation", "pelvis",
-    new(0.9586f, 0.9586f, 0.9586f), new(0, 0.0181f, 0)));
+engine.Animation.FitAnimationClipTranslation(new(body, walking, "Armature.001|Scene", "mixamorig:Hips",
+    new(0.8836f, 0.8836f, 0.8836f), new(0, 0.0866f, 0)));
 ```
 
 Associate and fit before creating an appearance for the character.
 
 **Arm offset.** An arm offset added to every clip, such as upper arms 10°
 further out and forearms a further 15°, is an additive `Model`
-`JointOverride` on each joint: a turn about +z (the played figure's
-forward), positive for the left arm, negative for the right.
+`JointOverride` on each upper arm and forearm: a turn about +z (the played
+figure's forward), positive for the left arm, negative for the right.
 
 **Colour multiplier.** `SetSplatAppearance` scales an appearance's splat
 colour in linear light, as a stand-in for lighting: (1, 1, 1) draws them as
@@ -165,9 +173,14 @@ Gaussians skinned on the CPU from the same joints, differs as follows:
 - **Soft edges:** differ by up to about 30 levels (95th percentile), as
   explained under **Colour** above.
 
-Walking with the pelvis fit, the planted ball of each foot drifts as it
-does in the web SDK: 0.55 and 1.25 cm (median per stance, left and right)
-against 0.6 and 1.2 cm, at 1.49 m/s.
+Walking with the pelvis fit, the viggle441 townsman's planted ball of each
+foot drifts as it does in the web SDK: 0.55 and 1.25 cm (median per stance,
+left and right) against 0.6 and 1.2 cm, at 1.49 m/s. On both rigs, at eight phases of
+the walk, every Gaussian stands within 0.02 mm of asset-pipeline's offline
+pose of the same clip. The Mixamo townsman on PINOC's Mixamo Walking walks
+at 1.60 m/s. Its right foot slides about 5.5 cm a stance in both:
+that clip slides it on its own figure too, an asset issue rather than the
+binding's.
 
 ## Devices and cost
 

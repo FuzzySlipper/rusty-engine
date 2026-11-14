@@ -22,7 +22,16 @@
 //!   further out, in degrees, about the model's forward axis (+z), on top
 //!   of the clip.
 //! - `--track SECONDS`: write `track.json`, the world positions of the
-//!   pelvis, feet and balls of the feet at 60 Hz from 0 to `SECONDS`.
+//!   pelvis, feet and balls of the feet (or the joints `--track-joints A,B`
+//!   names) at 60 Hz from 0 to `SECONDS`.
+//! - `--centre JOINT`: the joint the cameras look at (`pelvis` by default).
+//! - `--web-views HEIGHT --times T1,T2,...`: instead of the views above,
+//!   asset-pipeline's web harness cameras (`tests/splats/character.js`) for
+//!   a figure HEIGHT metres tall: a 42° vertical field of view, 1.6 × HEIGHT
+//!   from a target 0.5 × HEIGHT up over the pelvis, `front` (pitch 4°),
+//!   `quarter` (45°, 8°), `side` (90°, 4°), `back` (180°, 4°), `right-side`
+//!   (270°, 4°) and `three-quarter` (315°, 8°) around from the figure's
+//!   front, each at every time: `<view>-t<index>.png`.
 //! - `--multiplier R,G,B`: the splat colour multiplier.
 //! - `--pose-out`: write `pose.json`, every rig joint's world transform at
 //!   the capture time, for a CPU check of the skinning.
@@ -39,6 +48,7 @@ use render_wgpu::{OffscreenTarget, RendererOptions};
 use support::*;
 
 const FIGURE: u64 = 1;
+/// The joints `--track` writes unless `--track-joints` names others.
 const TRACKED: [&str; 5] = ["pelvis", "foot_l", "foot_r", "ball_l", "ball_r"];
 const TRACK_RATE: f64 = 60.0;
 
@@ -58,6 +68,10 @@ struct Arguments {
     arms: Option<(f32, f32)>,
     multiplier: Option<[f32; 3]>,
     pose_out: bool,
+    track_joints: Option<Vec<String>>,
+    centre: Option<String>,
+    web_views: Option<f64>,
+    times: Vec<f64>,
 }
 
 fn numbers<const N: usize>(text: &str, flag: &str) -> Result<[f32; N], String> {
@@ -102,7 +116,7 @@ fn arguments() -> Result<Arguments, String> {
             "--clip" => arguments.clip = Some(value()?),
             "--fit" => {
                 let text = value()?;
-                let (joint, numbers_text) = text.split_once(':').ok_or("--fit is JOINT:K,A")?;
+                let (joint, numbers_text) = text.rsplit_once(':').ok_or("--fit is JOINT:K,A")?;
                 let [k, a] = numbers::<2>(numbers_text, "--fit")?;
                 arguments.fit = Some((joint.to_owned(), k, a));
             }
@@ -114,6 +128,25 @@ fn arguments() -> Result<Arguments, String> {
             }
             "--multiplier" => arguments.multiplier = Some(numbers::<3>(&value()?, "--multiplier")?),
             "--pose-out" => arguments.pose_out = true,
+            "--track-joints" => {
+                arguments.track_joints = Some(
+                    value()?
+                        .split(',')
+                        .map(|name| name.trim().to_owned())
+                        .collect(),
+                );
+            }
+            "--centre" => arguments.centre = Some(value()?),
+            "--web-views" => {
+                arguments.web_views = Some(value()?.parse().map_err(|_| "--web-views")?);
+            }
+            "--times" => {
+                arguments.times = value()?
+                    .split(',')
+                    .map(|time| time.trim().parse::<f64>())
+                    .collect::<Result<_, _>>()
+                    .map_err(|_| "--times takes seconds")?;
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -326,7 +359,11 @@ fn main() {
         for frame in 0..=frames {
             let time = frame as f64 / TRACK_RATE;
             harness.at(time);
-            let joints: Vec<String> = TRACKED
+            let tracked: Vec<String> = arguments
+                .track_joints
+                .clone()
+                .unwrap_or_else(|| TRACKED.iter().map(|name| (*name).to_owned()).collect());
+            let joints: Vec<String> = tracked
                 .iter()
                 .filter_map(|name| {
                     joint_world(&harness, name)
@@ -367,8 +404,53 @@ fn main() {
             .expect("write the pose");
         }
     }
+    if let Some(figure) = arguments.web_views {
+        let centre_joint = arguments.centre.as_deref().unwrap_or("pelvis");
+        let times = if arguments.times.is_empty() {
+            vec![arguments.at]
+        } else {
+            arguments.times.clone()
+        };
+        // Around from the figure's front (+z), toward its left (+x): the
+        // harness's yaw, and its pitch.
+        let views = [
+            ("front", 0.0, 4.0),
+            ("quarter", 45.0, 8.0),
+            ("side", 90.0, 4.0),
+            ("back", 180.0, 4.0),
+            ("right-side", 270.0, 4.0),
+            ("three-quarter", 315.0, 8.0),
+        ];
+        for (index, time) in times.iter().enumerate() {
+            harness.at(*time);
+            let [x, _, z] = joint_world(&harness, centre_joint).unwrap_or([0.0; 3]);
+            let target = [f64::from(x), 0.5 * figure, f64::from(z)];
+            for (name, around, pitch) in views {
+                let (around, tilt): (f64, f64) = (f64::to_radians(around), f64::to_radians(pitch));
+                let distance = 1.6 * figure;
+                let position = [
+                    target[0] + distance * tilt.cos() * around.sin(),
+                    target[1] + distance * tilt.sin(),
+                    target[2] + distance * tilt.cos() * around.cos(),
+                ];
+                let mut view = camera(position, -around.to_degrees(), -pitch);
+                view.projection = render_host_contracts::RendererCameraProjection::Perspective {
+                    fov_y_degrees: 42.0,
+                    near: 0.01,
+                    far: 200.0,
+                };
+                harness.render(&view);
+                let (_, rgba) = harness.render(&view);
+                let png =
+                    render_wgpu::encode_png(width, height, &rgba).expect("encode the capture");
+                std::fs::write(arguments.out.join(format!("{name}-t{index}.png")), png)
+                    .expect("write the capture");
+            }
+        }
+        return;
+    }
     // The cameras look at the pelvis where it stands.
-    let centre = joint_world(&harness, "pelvis")
+    let centre = joint_world(&harness, arguments.centre.as_deref().unwrap_or("pelvis"))
         .map_or([0.0, 0.0], |[x, _, z]| [f64::from(x), f64::from(z)]);
 
     let d = arguments.distance;
