@@ -234,6 +234,23 @@ pub struct NativeSplatAppearanceRequest {
     /// Lit: the share of the baked colour kept however dark the light, 0
     /// to 1 (0: the scene's own ambient light is the floor).
     pub light_floor: f32,
+    /// How it casts into shadow maps while its instance casts: not at all,
+    /// as its own Gaussians (its silhouette), or as an ellipsoid per joint.
+    pub shadow_caster: NativeSplatShadowCaster,
+}
+
+/// How a splat appearance casts shadows.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeSplatShadowCaster {
+    /// It casts nothing.
+    None = 0,
+    /// Its Gaussians, cut where their alpha falls under 0.3: its own
+    /// silhouette.
+    Splats = 1,
+    /// An ellipsoid around the Gaussians each joint carries: a smooth
+    /// stand-in, cheap at any count.
+    Ellipsoids = 2,
 }
 
 /// How a splat appearance's colour meets the world's light.

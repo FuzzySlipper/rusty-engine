@@ -829,6 +829,100 @@ fn a_lit_splat_receives_a_cascaded_shadow() {
     assert_near(shadowed, [tenth(200), tenth(100), tenth(50)], 3);
 }
 
+/// A splat instance casts into the sun's cascades as its Gaussians or as
+/// ellipsoids, or not at all: a sheet of Gaussians a metre over the floor,
+/// the sun slanting through it, darkens the floor where its shadow falls, and
+/// moving it away brings the light back.
+#[test]
+fn a_splat_figure_casts_as_its_gaussians_or_as_ellipsoids() {
+    let options = RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    };
+    // A sheet a metre square, flat in x and z.
+    let sheet: Vec<Gaussian> = (-10..=10)
+        .flat_map(|i| (-10..=10).map(move |j| (i, j)))
+        .map(|(i, j)| Gaussian {
+            scale: [0.06, 0.01, 0.06],
+            ..Gaussian::round(
+                [i as f32 * 0.05, 0.0, j as f32 * 0.05],
+                0.06,
+                [200, 200, 200, 255],
+            )
+        })
+        .collect();
+    // The sun along +x and down: the sheet at y = 1 shadows the floor
+    // about x = 1, where the camera looks straight down.
+    let view = camera([1.0, 4.0, 0.0], 0.0, -89.9);
+    let floor_at = |caster: SplatShadowCaster, moved: bool| {
+        let mut harness = Harness::new(options);
+        let mut ops = splats(&mut harness, 1, &sheet, [0.0, 1.0, 0.0]);
+        ops.extend([
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(20),
+                parent: None,
+                light: LightDescriptor::Directional {
+                    color: [1.0; 3],
+                    intensity: 3.0,
+                    enabled: true,
+                    direction: [1.0, -1.0, 0.05],
+                    range: None,
+                    shadow_intent: LightShadowIntent::Requested,
+                    shadow: Default::default(),
+                },
+            },
+            RenderDiff::DefineMaterial {
+                material: material("material/floor", [0.6, 0.6, 0.6, 1.0], None),
+            },
+            static_mesh(
+                "mesh/floor",
+                box_mesh([-5.0, -0.1, -5.0], [5.0, 0.0, 5.0], |_| 0),
+                "material/floor",
+            ),
+            instance(30, None, "mesh/floor", transform([0.0; 3], 0.0, [1.0; 3])),
+            RenderDiff::SetSplatAppearance {
+                handle: RenderHandle::new(1),
+                appearance: SplatAppearance {
+                    shadow_caster: caster,
+                    ..SplatAppearance::default()
+                },
+            },
+        ]);
+        harness.apply(ops);
+        let shadowed = luminance(at(&harness.render(&view).1, CENTRE));
+        if !moved {
+            return (shadowed, shadowed);
+        }
+        harness.apply(vec![RenderDiff::Update {
+            handle: RenderHandle::new(1),
+            transform: Some(Transform {
+                translation: [0.0, 1.0, 3.0],
+                ..Transform::IDENTITY
+            }),
+            material: None,
+            visible: None,
+            metadata: None,
+        }]);
+        (shadowed, luminance(at(&harness.render(&view).1, CENTRE)))
+    };
+    let (open, _) = floor_at(SplatShadowCaster::None, false);
+    let (gaussians, moved_away) = floor_at(SplatShadowCaster::Splats, true);
+    let (ellipsoids, _) = floor_at(SplatShadowCaster::Ellipsoids, false);
+    assert!(
+        open > gaussians + 100,
+        "open {open}, under its Gaussians {gaussians}"
+    );
+    assert!(
+        open > ellipsoids + 100,
+        "open {open}, under its ellipsoid {ellipsoids}"
+    );
+    assert!(
+        (moved_away - open).abs() < 6,
+        "open {open}, after it moved away {moved_away}"
+    );
+}
+
 fn decode(byte: u8) -> f32 {
     let c = f32::from(byte) / 255.0;
     if c <= 0.04045 {

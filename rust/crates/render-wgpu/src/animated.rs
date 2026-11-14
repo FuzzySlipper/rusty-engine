@@ -1388,6 +1388,13 @@ impl Renderer {
             let light = appearance
                 .filter(|appearance| appearance.lighting == render_model::SplatLighting::Lit)
                 .map(|appearance| appearance.light_floor);
+            let casts = match &node.kind {
+                NodeKind::AnimatedMesh(descriptor) => descriptor.shadow_casting.is_cast(),
+                _ => false,
+            };
+            let caster = appearance
+                .map(|appearance| appearance.shadow_caster)
+                .filter(|caster| casts && !caster.is_none());
             instances.push(crate::splats::SplatInstance {
                 handle: *handle,
                 sets,
@@ -1395,6 +1402,7 @@ impl Renderer {
                 bounds,
                 grid,
                 light,
+                caster,
             });
         }
         instances.sort_by(|a, b| {
@@ -1403,6 +1411,148 @@ impl Renderer {
                 .then_with(|| a.handle.cmp(&b.handle))
         });
         instances
+    }
+
+    /// List what each world shadow layer's splat instances cast this frame
+    /// (`SplatAppearance::shadow_caster`, while the instance casts): within
+    /// the layer's view and its light's reach. A layer whose splat casters
+    /// moved, posed or changed is stale. A software adapter casts
+    /// ellipsoids for Gaussians.
+    pub(crate) fn prepare_splat_casters(&mut self) {
+        if !self.splats.draws() {
+            return;
+        }
+        let casting = self.tables.animated.keys().any(|handle| {
+            self.tables
+                .nodes
+                .get(handle)
+                .is_some_and(|node| match &node.kind {
+                    NodeKind::AnimatedMesh(descriptor) => {
+                        descriptor.shadow_casting.is_cast()
+                            && !descriptor.splat.shadow_caster.is_none()
+                    }
+                    _ => false,
+                })
+        });
+        let lights: Vec<_> = self
+            .shadows
+            .layers
+            .iter()
+            .map(|layer| {
+                (casting && !layer.is_backdrop() && layer.has_view()).then(|| {
+                    (
+                        layer.light_camera(),
+                        layer.tile.size,
+                        layer.is_cascade(),
+                        layer.reach(),
+                    )
+                })
+            })
+            .collect();
+        let listed: Vec<Vec<crate::splats::SplatInstance>> = lights
+            .iter()
+            .map(|light| {
+                let Some((camera, _, _, reach)) = light else {
+                    return Vec::new();
+                };
+                self.splat_instances(
+                    crate::frame::ViewLayer::World,
+                    &camera.view_proj,
+                    camera.eye,
+                )
+                .into_iter()
+                .filter(|instance| instance.caster.is_some())
+                .filter(|instance| {
+                    reach.is_none_or(|(at, range)| {
+                        let bounds = &instance.bounds;
+                        let radius = (bounds.max - bounds.min).length() * 0.5;
+                        at.distance((bounds.min + bounds.max) * 0.5) <= range + radius
+                    })
+                })
+                .collect()
+            })
+            .collect();
+        let gaussians = self.splats.casts_splats();
+        for (layer, instances) in self.shadows.layers.iter_mut().zip(&listed) {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            for instance in instances {
+                instance.handle.hash(&mut hasher);
+                instance.caster.hash(&mut hasher);
+                for draw in &instance.sets {
+                    draw.set.slot.hash(&mut hasher);
+                    draw.set.set.hash(&mut hasher);
+                    for value in draw.model.to_cols_array() {
+                        value.to_bits().hash(&mut hasher);
+                    }
+                    for value in draw.palette.iter().flatten() {
+                        value.to_bits().hash(&mut hasher);
+                    }
+                }
+            }
+            let signature = if instances.is_empty() {
+                0
+            } else {
+                hasher.finish() | 1
+            };
+            if layer.splat_signature != signature {
+                layer.stale = true;
+                layer.splat_signature = signature;
+            }
+            layer.splat_casters = !instances.is_empty();
+        }
+        let mut refused = false;
+        let inputs: Vec<Option<crate::splats::LayerCasters<'_>>> = lights
+            .iter()
+            .zip(&listed)
+            .map(|(light, instances)| {
+                let (camera, tile, cascade, _) = light.as_ref()?;
+                if instances.is_empty() {
+                    return None;
+                }
+                let (mut splats, mut ellipsoids) = (Vec::new(), Vec::new());
+                for instance in instances {
+                    let wants = instance.caster == Some(render_model::SplatShadowCaster::Splats);
+                    refused |= wants && !gaussians;
+                    let as_gaussians = gaussians && wants;
+                    for draw in &instance.sets {
+                        let Some(set) = splat_set(&self.tables, draw.set) else {
+                            continue;
+                        };
+                        if as_gaussians {
+                            splats.push((set, draw));
+                        } else {
+                            ellipsoids.push((set, draw));
+                        }
+                    }
+                }
+                Some(crate::splats::LayerCasters {
+                    camera: *camera,
+                    tile: *tile,
+                    cascade: *cascade,
+                    splats,
+                    ellipsoids,
+                })
+            })
+            .collect();
+        let casts = inputs.iter().any(Option::is_some);
+        self.splats.prepare_casters(&self.gpu, &inputs);
+        if refused {
+            self.splats.caster_refused();
+        }
+        if casts && !self.splats.has_caster_pipelines() {
+            let module = crate::pipelines::standard(self.layouts.shaders.module(
+                &self.gpu.device,
+                crate::shaders::Entry::SplatCaster,
+                crate::shaders::Features::default(),
+            ));
+            self.splats.ensure_caster_pipelines(
+                &self.gpu.device,
+                &module,
+                &self.layouts.casters,
+                &self.layouts.shadow_layer,
+            );
+        }
     }
 
     /// A joint's current transform in its instance's space.

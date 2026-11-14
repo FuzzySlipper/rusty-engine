@@ -1552,6 +1552,32 @@ pub struct SplatAppearance {
     /// to 1; unread unlit.
     #[serde(default, skip_serializing_if = "is_zero_rate")]
     pub light_floor: f32,
+    /// How it casts into the shadow maps of lights that request them,
+    /// while the instance's `shadow_casting` casts: not at all (the
+    /// default), as its own Gaussians, or as an ellipsoid per joint.
+    #[serde(default, skip_serializing_if = "SplatShadowCaster::is_none")]
+    pub shadow_caster: SplatShadowCaster,
+}
+
+/// How a splat instance casts shadows (`docs/splat-characters.md`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SplatShadowCaster {
+    /// It casts nothing.
+    #[default]
+    None,
+    /// Its Gaussians, re-projected for each shadow layer and cut where
+    /// their alpha falls under 0.3: its own silhouette.
+    Splats,
+    /// An ellipsoid around the Gaussians each joint carries, posed with the
+    /// joint: a smooth stand-in, cheap at any count.
+    Ellipsoids,
+}
+
+impl SplatShadowCaster {
+    pub fn is_none(&self) -> bool {
+        *self == Self::None
+    }
 }
 
 /// How a splat instance's colour meets the world's light
@@ -1596,6 +1622,7 @@ impl Default for SplatAppearance {
             pose_rate: 0.0,
             lighting: SplatLighting::Unlit,
             light_floor: 0.0,
+            shadow_caster: SplatShadowCaster::None,
         }
     }
 }

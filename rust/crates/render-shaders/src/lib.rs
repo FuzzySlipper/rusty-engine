@@ -531,6 +531,9 @@ pub enum Entry {
     /// A lit splat run's composite: its layer lit by the world's lights
     /// (`splat_light.wgsl`).
     SplatLight,
+    /// Splat characters casting into a shadow layer: their Gaussians or an
+    /// ellipsoid per joint (`splat_caster.wgsl`).
+    SplatCaster,
 }
 
 impl Entry {
@@ -598,6 +601,10 @@ impl Entry {
             Self::SplatLight => (
                 "shaders/splat_light.wgsl",
                 include_str!("shaders/splat_light.wgsl"),
+            ),
+            Self::SplatCaster => (
+                "shaders/splat_caster.wgsl",
+                include_str!("shaders/splat_caster.wgsl"),
             ),
             Self::Upscale => ("shaders/upscale.wgsl", include_str!("shaders/upscale.wgsl")),
             Self::RayProbe => (
@@ -1026,6 +1033,7 @@ mod tests {
             Entry::RayGiComposite,
             Entry::Splats,
             Entry::SplatLight,
+            Entry::SplatCaster,
         ] {
             compose_case(&mut shaders, entry, Features::default());
         }

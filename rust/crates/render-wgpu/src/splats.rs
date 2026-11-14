@@ -54,6 +54,14 @@
 //! world's `standard_radiance` at the blended depth and normal; a pixel
 //! grid's block is averaged, lit once, then snapped.
 //!
+//! **Casting.** An instance whose appearance casts (`SplatShadowCaster`)
+//! is listed for each shadow layer that sees it (`prepare_casters`). As its
+//! Gaussians, `cs_project` re-projects them with the layer's light into the
+//! run buffers before the layer's pass (`project_casters`), and the pass
+//! draws them unsorted, each cut where its alpha falls under 0.3
+//! (`splat_caster.wgsl`). As ellipsoids, a unit sphere per joint stands
+//! around the Gaussians that joint carries most, posed with it.
+//!
 //! **Cost.** Projecting and sorting run on the GPU for every view each frame
 //! with a splat run; nothing is copied to or from the CPU per frame. The
 //! readout counts the frame's runs, instances and Gaussians, and the
@@ -132,7 +140,19 @@ pub(crate) struct SplatSet {
     /// For a skinned primitive (its centres in bind space), the Gaussians
     /// each skin joint moves (`animated.rs` `posed_splat_bounds`).
     pub joint_bounds: Option<Vec<JointReach>>,
+    /// The ellipsoids it casts as (`SplatShadowCaster::Ellipsoids`).
+    pub ellipsoids: Vec<Ellipsoid>,
     group: wgpu::BindGroup,
+}
+
+/// An ellipsoid caster: the box of the centres whose heaviest joint is
+/// `joint` (the whole set's when unskinned), widened by their mean reach, in
+/// the set's space (bind space when skinned).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Ellipsoid {
+    pub joint: Option<usize>,
+    pub centre: Vec3,
+    pub half: Vec3,
 }
 
 /// The Gaussians one skin joint moves: under a pose every centre stands
@@ -186,6 +206,9 @@ pub struct SplatReadout {
     pub refused_instances: u32,
     /// Why splats draw nothing on this device, if they do not.
     pub refused: Option<String>,
+    /// Why figures that cast as their Gaussians cast as ellipsoids, if
+    /// any did.
+    pub refused_casters: Option<String>,
 }
 
 /// One instance's sets as one view draws them.
@@ -203,6 +226,8 @@ pub(crate) struct SplatInstance {
     /// Lit by the world's lights (`SplatAppearance::lighting`), with its
     /// light floor: it draws in runs of lit instances with that floor.
     pub light: Option<f32>,
+    /// How it casts into shadow layers, when it casts.
+    pub caster: Option<render_model::SplatShadowCaster>,
 }
 
 /// A set by its asset's slot and its index among the asset's sets.
@@ -404,6 +429,88 @@ struct History {
     current: Placed,
     previous: Placed,
 }
+/// One shadow layer's splat casters as the frame lists them
+/// (`Renderer::prepare_splat_casters`).
+pub(crate) struct LayerCasters<'a> {
+    /// The layer's light as a camera (`ShadowLayer::light_camera`), the
+    /// side of its tile in texels, and whether it is a cascade (its
+    /// projection orthographic, `view_proj` alone).
+    pub camera: crate::camera::CameraMatrices,
+    pub tile: u32,
+    pub cascade: bool,
+    /// The sets cast as their Gaussians.
+    pub splats: Vec<(&'a SplatSet, &'a SplatDraw)>,
+    /// The sets cast as ellipsoids.
+    pub ellipsoids: Vec<(&'a SplatSet, &'a SplatDraw)>,
+}
+
+/// What one shadow layer's splat instances cast this frame.
+#[derive(Default)]
+struct CasterLayer {
+    /// Each set cast as its Gaussians: its slot in the caster parameters,
+    /// its Gaussians and its bind group.
+    sets: Vec<(u32, u32, wgpu::BindGroup)>,
+    /// Their Gaussians in all: the slots its draw reads.
+    total: u32,
+    /// Its rows of the ellipsoid buffer.
+    ellipsoids: std::ops::Range<u32>,
+}
+
+/// Splat instances casting into shadow layers: their projection parameters
+/// and palettes (apart from a view's, which the same frame writes), each
+/// ellipsoid's placing, the bind groups over the run buffers, and the
+/// caster pipelines.
+struct Casters {
+    params: wgpu::Buffer,
+    slots: u64,
+    palettes: wgpu::Buffer,
+    palette_bytes: u64,
+    ellipsoids: wgpu::Buffer,
+    ellipsoid_bytes: u64,
+    /// The run buffers' generation they name, the projection's group and
+    /// the draw's.
+    groups: Option<(u64, wgpu::BindGroup, wgpu::BindGroup)>,
+    layers: Vec<CasterLayer>,
+    /// The Gaussians' caster and the ellipsoids'.
+    pipelines: Option<[wgpu::RenderPipeline; 2]>,
+}
+
+/// Floats an ellipsoid row takes: its unit sphere's placing.
+const ELLIPSOID_ROW_FLOATS: usize = 16;
+
+impl Casters {
+    fn new(device: &wgpu::Device) -> Self {
+        Self {
+            params: params_buffer(device, 16),
+            slots: 16,
+            palettes: palette_buffer(device, 4096),
+            palette_bytes: 4096,
+            ellipsoids: ellipsoid_buffer(device, 4096),
+            ellipsoid_bytes: 4096,
+            groups: None,
+            layers: Vec::new(),
+            pipelines: None,
+        }
+    }
+}
+
+fn ellipsoid_buffer(device: &wgpu::Device, bytes: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("render-wgpu splat ellipsoids"),
+        size: bytes,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
+/// A palette joint (rows 0 to 2 of its matrix) as a matrix.
+fn joint_matrix(rows: &[f32; 12]) -> Mat4 {
+    Mat4::from_cols_array(&[
+        rows[0], rows[4], rows[8], 0.0, rows[1], rows[5], rows[9], 0.0, rows[2], rows[6], rows[10],
+        0.0, rows[3], rows[7], rows[11], 1.0,
+    ])
+}
+
 struct Pipelines {
     project_layout: wgpu::BindGroupLayout,
     gaussian_layout: wgpu::BindGroupLayout,
@@ -426,11 +533,11 @@ struct Pipelines {
 /// The buffers a run is projected and sorted in, reused by every run.
 struct RunBuffers {
     capacity: u32,
-    /// The sorted keys and values, which a test reads back: two passes
-    /// sort them back into the projection's pair.
-    #[cfg(test)]
+    /// The projection's records, and its keys and values: two passes sort
+    /// them back into that pair (a test reads them back). A shadow layer's
+    /// casters are projected into the same buffers, unsorted.
+    projected: wgpu::Buffer,
     keys: wgpu::Buffer,
-    #[cfg(test)]
     values: wgpu::Buffer,
     args: wgpu::Buffer,
     project_group: wgpu::BindGroup,
@@ -489,6 +596,12 @@ pub(crate) struct Splats {
     lit_composites: HashMap<ColorTarget, [wgpu::RenderPipeline; 2]>,
     /// Each drawn set's placing, while frames draw motion.
     history: HashMap<(render_model::RenderHandle, usize), History>,
+    /// Counts the run buffers made: the casters' bind groups name one.
+    run_generation: u64,
+    /// What the frame's shadow layers' splat instances cast.
+    casters: Casters,
+    /// A software adapter casts ellipsoids for `SplatShadowCaster::Splats`.
+    software: bool,
     timer: Option<PassTimer>,
     timed: bool,
     counts: SplatReadout,
@@ -534,6 +647,9 @@ impl Splats {
             composites: HashMap::new(),
             lit_composites: HashMap::new(),
             history: HashMap::new(),
+            run_generation: 0,
+            casters: Casters::new(device),
+            software: gpu.is_software(),
             timer: PassTimer::new(gpu, "splats"),
             timed: false,
             counts: SplatReadout::default(),
@@ -594,6 +710,7 @@ impl Splats {
             count,
             bounds,
             joint_bounds: skin.map(|(_, bounds)| bounds),
+            ellipsoids: ellipsoids(splats),
             group,
         })
     }
@@ -607,6 +724,358 @@ impl Splats {
         self.timed = false;
         self.last = std::mem::take(&mut self.counts);
         self.layers.truncate(std::mem::take(&mut self.layers_used));
+    }
+
+    /// Whether this device casts `SplatShadowCaster::Splats` as Gaussians:
+    /// a software adapter casts ellipsoids instead.
+    pub fn casts_splats(&self) -> bool {
+        self.pipelines.is_some() && !self.software
+    }
+
+    /// A figure that casts as its Gaussians cast as ellipsoids this frame.
+    pub fn caster_refused(&mut self) {
+        self.counts.refused_casters =
+            Some("a software adapter casts splat figures as ellipsoids".to_owned());
+    }
+
+    /// List what each shadow layer's splat instances cast this frame
+    /// (`layers[i]` for layer `i`, `None` for one that takes none): write
+    /// the Gaussians' projection parameters and palettes, and each
+    /// ellipsoid's placing.
+    pub fn prepare_casters(&mut self, gpu: &Gpu, layers: &[Option<LayerCasters<'_>>]) {
+        self.casters.layers.clear();
+        if self.pipelines.is_none() {
+            return;
+        }
+        let largest = layers
+            .iter()
+            .flatten()
+            .map(|layer| layer.splats.iter().map(|(set, _)| set.count).sum::<u32>())
+            .max()
+            .unwrap_or(0);
+        if largest > 0 {
+            self.ensure_run(&gpu.device, largest);
+        }
+        let (mut bytes, mut palettes, mut rows) = (Vec::new(), Vec::<f32>::new(), Vec::new());
+        for layer in layers {
+            let mut out = CasterLayer::default();
+            if let Some(layer) = layer {
+                let view_proj = layer.camera.view_proj.as_dmat4();
+                let side = layer.tile as f32;
+                // A cascade's view is its orthographic `view_proj` scaled to
+                // its tile's texels (one texel a unit); a perspective layer
+                // has its camera's view and lens.
+                let (view, lens, ortho) = if layer.cascade {
+                    let texels = DMat4::from_scale(glam::DVec3::new(
+                        f64::from(side) * 0.5,
+                        f64::from(side) * 0.5,
+                        1.0,
+                    ));
+                    (texels * view_proj, [1.0, 1.0, side, side], 1.0)
+                } else {
+                    let projection = layer.camera.projection;
+                    (
+                        layer.camera.view.as_dmat4(),
+                        [
+                            projection.x_axis.x * 0.5 * side,
+                            projection.y_axis.y * 0.5 * side,
+                            side,
+                            side,
+                        ],
+                        0.0,
+                    )
+                };
+                for (set, draw) in &layer.splats {
+                    let palette_first = (palettes.len() / 4) as u32;
+                    for joint in &draw.palette {
+                        palettes.extend_from_slice(joint);
+                    }
+                    let skinned = set.joint_bounds.is_some() && !draw.palette.is_empty();
+                    let model = draw.model.as_dmat4();
+                    let slot = ProjectSlot {
+                        model_view: view * model,
+                        clip_from_model: view_proj * model,
+                        previous_pixels: DMat4::IDENTITY,
+                        lens,
+                        depth: [0.0, 1.0, ortho, 0.0],
+                        range: [out.total, set.count, 0, 0],
+                        skin: [palette_first, u32::from(skinned), palette_first, 0],
+                        tint: [1.0, 1.0, 1.0, 0.0],
+                        pixels: [0.0; 4],
+                    };
+                    out.sets
+                        .push((bytes.len() as u32, set.count, set.group.clone()));
+                    bytes.extend_from_slice(&slot.bytes());
+                    out.total += set.count;
+                }
+                let first = (rows.len() / ELLIPSOID_ROW_FLOATS) as u32;
+                for (set, draw) in &layer.ellipsoids {
+                    for ellipsoid in &set.ellipsoids {
+                        let joint = match ellipsoid.joint {
+                            Some(joint) => match draw.palette.get(joint) {
+                                Some(rows) => joint_matrix(rows),
+                                None => continue,
+                            },
+                            None => Mat4::IDENTITY,
+                        };
+                        // The unit sphere's radius is a half.
+                        let place = draw.model
+                            * joint
+                            * Mat4::from_translation(ellipsoid.centre)
+                            * Mat4::from_scale(ellipsoid.half * 2.0);
+                        rows.extend_from_slice(&place.to_cols_array());
+                    }
+                }
+                out.ellipsoids = first..(rows.len() / ELLIPSOID_ROW_FLOATS) as u32;
+            }
+            self.casters.layers.push(out);
+        }
+        let device = &gpu.device;
+        let slots = (bytes.len() as u64 / PARAMS_SLOT).max(1);
+        if slots > self.casters.slots {
+            self.casters.slots = slots.next_power_of_two();
+            self.casters.params = params_buffer(device, self.casters.slots);
+            self.casters.groups = None;
+        }
+        let palette_bytes = (palettes.len() as u64 * 4).max(16);
+        if palette_bytes > self.casters.palette_bytes {
+            self.casters.palette_bytes = palette_bytes.next_power_of_two();
+            self.casters.palettes = palette_buffer(device, self.casters.palette_bytes);
+            self.casters.groups = None;
+        }
+        let ellipsoid_bytes = (rows.len() as u64 * 4).max(64);
+        if ellipsoid_bytes > self.casters.ellipsoid_bytes {
+            self.casters.ellipsoid_bytes = ellipsoid_bytes.next_power_of_two();
+            self.casters.ellipsoids = ellipsoid_buffer(device, self.casters.ellipsoid_bytes);
+        }
+        if !bytes.is_empty() {
+            gpu.queue.write_buffer(&self.casters.params, 0, &bytes);
+        }
+        if !palettes.is_empty() {
+            let palette_bytes: Vec<u8> = palettes.iter().flat_map(|v| v.to_le_bytes()).collect();
+            gpu.queue
+                .write_buffer(&self.casters.palettes, 0, &palette_bytes);
+        }
+        if !rows.is_empty() {
+            let row_bytes: Vec<u8> = rows.iter().flat_map(|v| v.to_le_bytes()).collect();
+            gpu.queue
+                .write_buffer(&self.casters.ellipsoids, 0, &row_bytes);
+        }
+        let (Some(pipelines), Some(run)) = (&self.pipelines, &self.run) else {
+            return;
+        };
+        if self
+            .casters
+            .groups
+            .as_ref()
+            .is_some_and(|(generation, _, _)| *generation == self.run_generation)
+        {
+            return;
+        }
+        fn entry(binding: u32, resource: wgpu::BindingResource<'_>) -> wgpu::BindGroupEntry<'_> {
+            wgpu::BindGroupEntry { binding, resource }
+        }
+        let project = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render-wgpu splat casters project"),
+            layout: &pipelines.project_layout,
+            entries: &[
+                entry(
+                    0,
+                    wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.casters.params,
+                        offset: 0,
+                        size: wgpu::BufferSize::new(PARAMS_SLOT),
+                    }),
+                ),
+                entry(1, run.projected.as_entire_binding()),
+                entry(2, run.keys.as_entire_binding()),
+                entry(3, run.values.as_entire_binding()),
+                entry(4, run.args.as_entire_binding()),
+                entry(5, self.casters.palettes.as_entire_binding()),
+            ],
+        });
+        // The caster reads each slot and its key (`CULLED` for one the
+        // projection dropped) where the view's draw reads the sorted order.
+        let draw = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render-wgpu splat casters draw"),
+            layout: &pipelines.draw_layout,
+            entries: &[
+                entry(20, run.projected.as_entire_binding()),
+                entry(21, run.keys.as_entire_binding()),
+            ],
+        });
+        self.casters.groups = Some((self.run_generation, project, draw));
+    }
+
+    /// Whether shadow layer `layer` takes splat casters this frame.
+    pub fn casts_into(&self, layer: usize) -> bool {
+        self.casters
+            .layers
+            .get(layer)
+            .is_some_and(|layer| layer.total > 0 || !layer.ellipsoids.is_empty())
+    }
+
+    /// Project shadow layer `layer`'s Gaussian casters for its light, before
+    /// its pass: into the run buffers, which the frame's views reuse after.
+    pub fn project_casters(&self, encoder: &mut wgpu::CommandEncoder, layer: usize) {
+        let (Some(pipelines), Some(layer), Some((generation, project, _))) = (
+            &self.pipelines,
+            self.casters.layers.get(layer),
+            &self.casters.groups,
+        ) else {
+            return;
+        };
+        if layer.total == 0 || *generation != self.run_generation {
+            return;
+        }
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("render-wgpu splat casters project"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&pipelines.project);
+        for (offset, count, group) in &layer.sets {
+            pass.set_bind_group(0, project, &[*offset]);
+            pass.set_bind_group(1, group, &[]);
+            pass.dispatch_workgroups(count.div_ceil(WORKGROUP).max(1), 1, 1);
+        }
+    }
+
+    /// Draw shadow layer `layer`'s splat casters into its pass, whose groups
+    /// 0 and 2 the shadow pass bound: the Gaussians `project_casters`
+    /// projected, then the ellipsoids, each a `sphere`. Returns the draws.
+    pub fn draw_casters(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        layer: usize,
+        sphere: Option<&crate::tables::GpuMesh>,
+    ) -> u32 {
+        let (Some([splats, ellipsoids]), Some(layer)) =
+            (&self.casters.pipelines, self.casters.layers.get(layer))
+        else {
+            return 0;
+        };
+        let mut draws = 0;
+        if let Some((_, _, draw)) = self
+            .casters
+            .groups
+            .as_ref()
+            .filter(|(generation, _, _)| layer.total > 0 && *generation == self.run_generation)
+        {
+            pass.set_pipeline(splats);
+            pass.set_bind_group(1, draw, &[]);
+            pass.draw(0..4, 0..layer.total);
+            draws += 1;
+        }
+        if let (false, Some(sphere)) = (layer.ellipsoids.is_empty(), sphere) {
+            let count = sphere.groups.first().map_or(0, |group| group.2);
+            pass.set_pipeline(ellipsoids);
+            pass.set_vertex_buffer(0, sphere.vertices.slice(..));
+            pass.set_vertex_buffer(1, self.casters.ellipsoids.slice(..));
+            pass.set_index_buffer(sphere.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..count, 0, layer.ellipsoids.clone());
+            draws += 1;
+        }
+        draws
+    }
+
+    pub fn has_caster_pipelines(&self) -> bool {
+        self.casters.pipelines.is_some()
+    }
+
+    /// Make the caster pipelines once a layer takes splat casters: groups
+    /// 0 (`casters`) and 2 (`layer`) the shadow pass's, 1 the run buffers.
+    pub fn ensure_caster_pipelines(
+        &mut self,
+        device: &wgpu::Device,
+        module: &wgpu::ShaderModule,
+        casters: &wgpu::BindGroupLayout,
+        layer: &wgpu::BindGroupLayout,
+    ) {
+        let Some(pipelines) = &self.pipelines else {
+            return;
+        };
+        if self.casters.pipelines.is_some() {
+            return;
+        }
+        // The ellipsoids read no run buffers: their group 1 is empty.
+        let layout = |draw: Option<&wgpu::BindGroupLayout>| {
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("render-wgpu splat casters"),
+                bind_group_layouts: &[Some(casters), draw, Some(layer)],
+                immediate_size: 0,
+            })
+        };
+        let splat_layout = layout(Some(&pipelines.draw_layout));
+        let ellipsoid_layout = layout(None);
+        let depth = || {
+            Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(true),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: Default::default(),
+                bias: wgpu::DepthBiasState {
+                    constant: 0,
+                    slope_scale: crate::pipelines::CASTER_SLOPE_BIAS,
+                    clamp: 0.0,
+                },
+            })
+        };
+        let splats = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("render-wgpu splat casters"),
+            layout: Some(&splat_layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("vs_splat_caster"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: depth(),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module,
+                entry_point: Some("fs_splat_caster"),
+                compilation_options: Default::default(),
+                targets: &[],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let position = wgpu::vertex_attr_array![0 => Float32x3];
+        let place = wgpu::vertex_attr_array![
+            3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4
+        ];
+        let ellipsoids = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("render-wgpu splat ellipsoid casters"),
+            layout: Some(&ellipsoid_layout),
+            vertex: wgpu::VertexState {
+                module,
+                entry_point: Some("vs_ellipsoid_caster"),
+                compilation_options: Default::default(),
+                buffers: &[
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: (crate::pipelines::VERTEX_FLOATS * 4) as u64,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &position,
+                    }),
+                    Some(wgpu::VertexBufferLayout {
+                        array_stride: (ELLIPSOID_ROW_FLOATS * 4) as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &place,
+                    }),
+                ],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: depth(),
+            multisample: Default::default(),
+            fragment: None,
+            multiview_mask: None,
+            cache: None,
+        });
+        self.casters.pipelines = Some([splats, ellipsoids]);
     }
 
     pub fn readout(&self) -> SplatReadout {
@@ -946,48 +1415,34 @@ impl Splats {
                     palette_index.next().expect("one palette start per set");
                 let previous = previous_models.next().expect("one placing per set");
                 let model = draw.model.as_dmat4();
-                let mut slot = Vec::with_capacity(PARAMS_SLOT as usize);
-                push_matrix(&mut slot, &(view * model));
-                push_matrix(&mut slot, &(view_proj * model));
                 let previous_model = previous
                     .as_ref()
                     .map_or(model, |previous| previous.model.as_dmat4());
-                push_matrix(
-                    &mut slot,
-                    &previous_pixels.map_or(DMat4::IDENTITY, |to| to * previous_model),
-                );
-                for value in lens {
-                    slot.extend_from_slice(&value.to_le_bytes());
-                }
                 let span = (far - near).max(1e-3);
                 let flag = |on: bool| if on { 1.0 } else { 0.0 };
-                for value in [near, 1.0 / span, flag(ortho), flag(lit)] {
-                    slot.extend_from_slice(&value.to_le_bytes());
-                }
-                for value in [first, set.count, u32::from(index == 0), 0] {
-                    slot.extend_from_slice(&value.to_le_bytes());
-                }
                 // A skinned set's palette in rows of four floats, three a
                 // joint; its Gaussians stand in bind space without one.
                 let skinned = set.joint_bounds.is_some() && !draw.palette.is_empty();
-                for value in [
-                    palette_first,
-                    u32::from(skinned),
-                    previous_first,
-                    u32::from(previous_pixels.is_some()),
-                ] {
-                    slot.extend_from_slice(&value.to_le_bytes());
-                }
                 let [r, g, b] = draw.multiplier;
-                for value in [r, g, b, 0.0] {
-                    slot.extend_from_slice(&value.to_le_bytes());
-                }
-                for value in pixels {
-                    slot.extend_from_slice(&value.to_le_bytes());
-                }
-                slot.resize(PARAMS_SLOT as usize, 0);
+                let slot = ProjectSlot {
+                    model_view: view * model,
+                    clip_from_model: view_proj * model,
+                    previous_pixels: previous_pixels
+                        .map_or(DMat4::IDENTITY, |to| to * previous_model),
+                    lens,
+                    depth: [near, 1.0 / span, flag(ortho), flag(lit)],
+                    range: [first, set.count, u32::from(index == 0), 0],
+                    skin: [
+                        palette_first,
+                        u32::from(skinned),
+                        previous_first,
+                        u32::from(previous_pixels.is_some()),
+                    ],
+                    tint: [r, g, b, 0.0],
+                    pixels,
+                };
                 sets.push(bytes.len() as u32);
-                bytes.extend_from_slice(&slot);
+                bytes.extend_from_slice(&slot.bytes());
                 first += set.count;
             }
             offsets.push((sort, sets, total, blocks));
@@ -1323,11 +1778,11 @@ impl Splats {
                 entry(21, values[0].as_entire_binding()),
             ],
         });
+        self.run_generation += 1;
         self.run = Some(RunBuffers {
             capacity,
-            #[cfg(test)]
+            projected,
             keys: keys[0].clone(),
-            #[cfg(test)]
             values: values[0].clone(),
             args,
             project_group,
@@ -1736,6 +2191,82 @@ fn palette_buffer(device: &wgpu::Device, bytes: u64) -> wgpu::Buffer {
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
+}
+
+/// One set's projection parameters (`splats.wgsl` `Project`), a slot of
+/// the parameters buffer.
+struct ProjectSlot {
+    model_view: DMat4,
+    clip_from_model: DMat4,
+    previous_pixels: DMat4,
+    lens: [f32; 4],
+    depth: [f32; 4],
+    range: [u32; 4],
+    skin: [u32; 4],
+    tint: [f32; 4],
+    pixels: [f32; 4],
+}
+
+impl ProjectSlot {
+    fn bytes(&self) -> Vec<u8> {
+        let mut slot = Vec::with_capacity(PARAMS_SLOT as usize);
+        push_matrix(&mut slot, &self.model_view);
+        push_matrix(&mut slot, &self.clip_from_model);
+        push_matrix(&mut slot, &self.previous_pixels);
+        for value in self.lens.into_iter().chain(self.depth) {
+            slot.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in self.range.into_iter().chain(self.skin) {
+            slot.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in self.tint.into_iter().chain(self.pixels) {
+            slot.extend_from_slice(&value.to_le_bytes());
+        }
+        slot.resize(PARAMS_SLOT as usize, 0);
+        slot
+    }
+}
+
+/// The joints whose Gaussians a set casts as ellipsoids: fewer than this
+/// cast nothing.
+const ELLIPSOID_MIN_GAUSSIANS: usize = 8;
+
+/// A set's ellipsoid casters: one per joint that is the heaviest of at
+/// least `ELLIPSOID_MIN_GAUSSIANS` Gaussians (one for an unskinned set),
+/// the box of those centres widened by their mean largest σ.
+fn ellipsoids(splats: &GlbSplats) -> Vec<Ellipsoid> {
+    let mut boxes: Vec<(Aabb, f32, usize)> = Vec::new();
+    for (index, centre) in splats.centres.iter().enumerate() {
+        let joint = match (&splats.joints, &splats.weights) {
+            (Some(joints), Some(weights)) => {
+                let slot = (0..4)
+                    .max_by(|a, b| weights[index][*a].total_cmp(&weights[index][*b]))
+                    .unwrap_or(0);
+                usize::from(joints[index][slot])
+            }
+            _ => 0,
+        };
+        if boxes.len() <= joint {
+            boxes.resize(joint + 1, (Aabb::EMPTY, 0.0, 0));
+        }
+        let entry = &mut boxes[joint];
+        entry.0.include(Vec3::from(*centre));
+        entry.1 += splats.scales[index]
+            .iter()
+            .fold(0.0f32, |a, b| a.max(b.abs()));
+        entry.2 += 1;
+    }
+    let skinned = splats.joints.is_some() && splats.weights.is_some();
+    boxes
+        .into_iter()
+        .enumerate()
+        .filter(|(_, (_, _, count))| *count >= ELLIPSOID_MIN_GAUSSIANS)
+        .map(|(joint, (bounds, reach, count))| Ellipsoid {
+            joint: skinned.then_some(joint),
+            centre: (bounds.min + bounds.max) * 0.5,
+            half: (bounds.max - bounds.min) * 0.5 + Vec3::splat(reach / count as f32),
+        })
+        .collect()
 }
 
 fn push_matrix(bytes: &mut Vec<u8>, matrix: &DMat4) {

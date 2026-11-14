@@ -2028,8 +2028,10 @@ impl Renderer {
         let kind = usize::from(backdrop);
         if !backdrop {
             // Sprites and rigs that cast turn to the light as it fits: a
-            // layer whose casters changed is stale.
+            // layer whose casters changed is stale. So is one whose splat
+            // casters moved or posed.
             self.prepare_sprite_casters();
+            self.prepare_splat_casters();
         }
         let ours = |layer: &shadows::ShadowLayer| layer.is_backdrop() == backdrop;
         // Without layers the pass is skipped: its readout starts again
@@ -2087,7 +2089,10 @@ impl Renderer {
         // directly: it refits with the camera, so the cache would hold its
         // depth for one frame only.
         let cached_path = |layer: &shadows::ShadowLayer| {
-            (!layer.dynamic.batches.is_empty() || !layer.sprites.is_empty() || selected_shadows)
+            (!layer.dynamic.batches.is_empty()
+                || !layer.sprites.is_empty()
+                || layer.splat_casters
+                || selected_shadows)
                 && (!layer.is_cascade() || layer.view_proj == layer.drawn_view)
         };
         let generation = if self
@@ -2155,9 +2160,11 @@ impl Renderer {
                     Encoded::default()
                 }
             };
-            // Then the sprites and rigs that cast, with the same bindings.
+            // Then the sprites and rigs that cast, and the splat instances,
+            // with the same bindings.
+            let splats = !backdrop && self.splats.casts_into(index);
             let sprites_into = |pass: &mut wgpu::RenderPass<'_>| {
-                if layer.sprites.is_empty() {
+                if layer.sprites.is_empty() && !splats {
                     return 0;
                 }
                 pass.set_bind_group(0, &self.caster_bind_group, &[]);
@@ -2166,7 +2173,13 @@ impl Renderer {
                     &self.shadows.layer_bind_group,
                     &[ShadowMaps::layer_offset(layer_index)],
                 );
-                self.effects.draw_casters(pass, &layer.sprites)
+                let mut draws = self.effects.draw_casters(pass, &layer.sprites);
+                if splats {
+                    draws +=
+                        self.splats
+                            .draw_casters(pass, index, self.builtins.get(&Builtin::Sphere));
+                }
+                draws
             };
             let ends_frame = last == Some(index);
             if use_cache {
@@ -2188,6 +2201,9 @@ impl Renderer {
                 }
                 // The tile: the static depth restored, the dynamic casters
                 // over it.
+                if splats {
+                    self.splats.project_casters(encoder, index);
+                }
                 let mut pass = tile_pass(
                     encoder,
                     self.shadows.page_view(tile.page),
@@ -2210,6 +2226,9 @@ impl Renderer {
                 drawn.encoded += selected_into(&mut pass);
                 drawn.casters += layer.dynamic.drawn() + sprites_into(&mut pass);
             } else {
+                if splats {
+                    self.splats.project_casters(encoder, index);
+                }
                 let mut pass = tile_pass(
                     encoder,
                     self.shadows.page_view(tile.page),

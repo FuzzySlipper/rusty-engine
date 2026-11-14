@@ -146,7 +146,8 @@ least one render pixel under a render scale):
 
 ```csharp
 // Townsman 385 as the web shows him: 5-pixel blocks in his 52 colours.
-engine.Animation.SetSplatAppearance(new(townsman, Vector3.One, 5, 0.5f, his48, 0));
+engine.Animation.SetSplatAppearance(new(townsman, Vector3.One, 5, 0.5f, his48, 0,
+    SplatLighting.Unlit, 0, SplatShadowCaster.None));
 ```
 
 Against the web SDK's `pixel:5:his48` at its quarter camera (townsman 385,
@@ -174,7 +175,7 @@ lights. Unlit (the default) draws it as baked, scaled by the multiplier.
 
 ```csharp
 engine.Animation.SetSplatAppearance(new(townsman, Vector3.One, 0, 0.5f, default, 0,
-    SplatLighting.Lit, LightFloor: 0.15f));
+    SplatLighting.Lit, LightFloor: 0.15f, ShadowCaster: SplatShadowCaster.Ellipsoids));
 ```
 
 - **Per pixel, after blending.** The figure's Gaussians blend their depth
@@ -203,6 +204,20 @@ engine.Animation.SetSplatAppearance(new(townsman, Vector3.One, 0, 0.5f, default,
   than 0.31 for a close 48k figure on an RX 9070 XT, as a figure something
   reads), and the light is one evaluation per covered pixel. Under motion
   the normal takes a target of its own.
+
+**Casting shadows.** `ShadowCaster` sets how a figure casts into the shadow
+maps of lights that request them, while its instance's `shadow_casting`
+casts. Lit or unlit, a figure casts only when it is asked to.
+
+| `ShadowCaster` | What casts | Look | Cost (RX 9070 XT, 1080p, walking 48k figures, the sun's four cascades) |
+| --- | --- | --- | --- |
+| `None` (default) | nothing | | |
+| `Ellipsoids` | an ellipsoid around the Gaussians each joint carries, posed with it | a smooth mannequin: no hood, pouch or hem | +0.04 ms at 32 figures |
+| `Splats` | its Gaussians, re-projected for each shadow layer and cut where their alpha falls under 0.3 | its own silhouette, hood and stride included | about 0.15 ms a figure: +0.3 ms at 1, +5 ms at 32 |
+
+Use `Splats` for a few close figures and `Ellipsoids` for crowds. A
+software adapter casts `Splats` as ellipsoids, and `GpuReadout.splats`
+says so (`refused_casters`). Splat figures receive shadows only when lit.
 
 ## How it draws
 

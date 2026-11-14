@@ -6352,6 +6352,11 @@ impl RuntimeAppearanceBridge {
                 NativeSplatLighting::Lit => render_model::SplatLighting::Lit,
             },
             light_floor: request.light_floor,
+            shadow_caster: match request.shadow_caster {
+                NativeSplatShadowCaster::None => render_model::SplatShadowCaster::None,
+                NativeSplatShadowCaster::Splats => render_model::SplatShadowCaster::Splats,
+                NativeSplatShadowCaster::Ellipsoids => render_model::SplatShadowCaster::Ellipsoids,
+            },
         };
         if let Some(refusal) = appearance.refusal() {
             return Err(CsharpEngineServicesError::new(
@@ -16036,6 +16041,7 @@ fn shade(surface: Surface) -> vec4<f32> {
             pose_rate: 8.0,
             lighting: NativeSplatLighting::Lit,
             light_floor: 0.25,
+            shadow_caster: NativeSplatShadowCaster::Ellipsoids,
         };
         for refused in [
             splat(-1.0),
@@ -16083,6 +16089,7 @@ fn shade(surface: Surface) -> vec4<f32> {
                     && appearance.pose_rate == 8.0
                     && appearance.lighting == render_model::SplatLighting::Lit
                     && appearance.light_floor == 0.25
+                    && appearance.shadow_caster == render_model::SplatShadowCaster::Ellipsoids
             ))
         )));
     }

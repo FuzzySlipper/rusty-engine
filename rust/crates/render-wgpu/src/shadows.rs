@@ -505,6 +505,11 @@ pub(crate) struct ShadowLayer {
     /// changes, the layer is stale.
     pub sprites: Vec<crate::effects::SpriteCaster>,
     pub sprite_signature: Vec<u32>,
+    /// Splat instances cast into the layer (`Renderer::prepare_splat_casters`),
+    /// drawn over its mesh casters as sprites are, and a signature of where
+    /// and how they stand: a change makes the layer stale.
+    pub splat_casters: bool,
+    pub splat_signature: u64,
 }
 
 /// The static casters' depth a layer's tile in the static cache holds, by
@@ -576,6 +581,8 @@ impl ShadowLayer {
             timed: false,
             sprites: Vec::new(),
             sprite_signature: Vec::new(),
+            splat_casters: false,
+            splat_signature: 0,
         }
     }
 

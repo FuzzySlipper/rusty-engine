@@ -11,7 +11,7 @@
 //! cargo run --release -p render-wgpu --example splat_crowd -- --glb PATH
 //!     --clip-pack PATH --clip ID --fit JOINT:K,A --out DIR
 //!     [--counts 1,8,16,32] [--size 1920x1080] [--warm 2] [--frames 240]
-//!     [--lights] [--lit FLOOR]
+//!     [--lights] [--lit FLOOR] [--caster splats|ellipsoids]
 //! ```
 //!
 //! - `--fit JOINT:K,A`: the clip's translation of `JOINT` becomes
@@ -24,6 +24,8 @@
 //!   the figures.
 //! - `--lit FLOOR`: the figures lit by the world's lights, keeping FLOOR of
 //!   their baked colour.
+//! - `--caster`: the figures cast as their Gaussians or as an ellipsoid per
+//!   joint (none by default).
 //!
 //! Writes `crowd.json`: per count, each timed pass's median GPU time (over
 //! the last 120 frames; `world` spans the splats' passes, which run inside
@@ -69,13 +71,14 @@ struct Arguments {
     frames: usize,
     lights: bool,
     lit: Option<f32>,
+    caster: SplatShadowCaster,
 }
 
 fn arguments() -> Result<Arguments, String> {
     let (mut glb, mut clip_pack, mut clip, mut fit, mut out) = (None, None, None, None, None);
     let mut counts = vec![1, 8, 16, 32];
     let (mut size, mut warm, mut frames) = ((1920, 1080), 2.0, 240);
-    let (mut lights, mut lit) = (false, None);
+    let (mut lights, mut lit, mut caster) = (false, None, SplatShadowCaster::None);
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} takes a value"));
@@ -113,6 +116,14 @@ fn arguments() -> Result<Arguments, String> {
             "--frames" => frames = value()?.parse().map_err(|_| "--frames")?,
             "--lights" => lights = true,
             "--lit" => lit = Some(value()?.parse().map_err(|_| "--lit")?),
+            "--caster" => {
+                caster = match value()?.as_str() {
+                    "splats" => SplatShadowCaster::Splats,
+                    "ellipsoids" => SplatShadowCaster::Ellipsoids,
+                    "none" => SplatShadowCaster::None,
+                    _ => return Err("--caster is splats, ellipsoids or none".to_owned()),
+                };
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -128,6 +139,7 @@ fn arguments() -> Result<Arguments, String> {
         frames,
         lights,
         lit,
+        caster,
     })
 }
 
@@ -316,6 +328,7 @@ fn main() {
                             SplatLighting::Unlit
                         },
                         light_floor: arguments.lit.unwrap_or(0.0),
+                        shadow_caster: arguments.caster,
                         ..SplatAppearance::default()
                     },
                     asset: asset.asset.clone(),

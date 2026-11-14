@@ -9,7 +9,7 @@
 //!     --walk PATH [--walk-fit JOINT:K,A] --idle PATH [--idle-fit JOINT:K,A]
 //!     --out DIR [--size 1920x1080] [--frames 90] [--save 30,60,89]
 //!     [--taau SCALE] [--motion-view] [--fresh] [--no-fog]
-//!     [--lights] [--lit FLOOR]
+//!     [--lights] [--lit FLOOR] [--caster splats|ellipsoids] [--overhead]
 //! ```
 //!
 //! - `--walk`, `--idle`: clip packs bound by joint names; the walker plays
@@ -27,6 +27,10 @@
 //!   the bystander, and an awning whose shadow the walker crosses.
 //! - `--lit FLOOR`: both figures lit by the world's lights, keeping FLOOR
 //!   of their baked colour however dark.
+//! - `--caster`: both figures cast shadows as their Gaussians or as an
+//!   ellipsoid per joint (none by default).
+//! - `--overhead`: the camera follows the walker from behind and above,
+//!   looking down toward where the sun of `--lights` casts his shadow.
 //!
 //! Writes `readout.json`: the splat readout, every pass's median GPU time
 //! over the last 30 frames, the adapter and the `--fresh` difference.
@@ -75,6 +79,8 @@ struct Arguments {
     fog: bool,
     lights: bool,
     lit: Option<f32>,
+    caster: SplatShadowCaster,
+    overhead: bool,
 }
 
 fn fit(text: &str, flag: &str) -> Result<(String, f32, f32), String> {
@@ -110,6 +116,8 @@ fn arguments() -> Result<Arguments, String> {
         fog: true,
         lights: false,
         lit: None,
+        caster: SplatShadowCaster::None,
+        overhead: false,
     };
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} takes a value"));
@@ -141,7 +149,16 @@ fn arguments() -> Result<Arguments, String> {
             "--fresh" => arguments.fresh = true,
             "--no-fog" => arguments.fog = false,
             "--lights" => arguments.lights = true,
+            "--overhead" => arguments.overhead = true,
             "--lit" => arguments.lit = Some(value()?.parse().map_err(|_| "--lit")?),
+            "--caster" => {
+                arguments.caster = match value()?.as_str() {
+                    "splats" => SplatShadowCaster::Splats,
+                    "ellipsoids" => SplatShadowCaster::Ellipsoids,
+                    "none" => SplatShadowCaster::None,
+                    _ => return Err("--caster is splats, ellipsoids or none".to_owned()),
+                };
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -431,6 +448,13 @@ fn follow(time: f64) -> RendererCompositionCamera {
     camera([x * 0.6, CAMERA_HEIGHT, CAMERA_BACK], 0.0, CAMERA_PITCH)
 }
 
+/// From behind the path and above, looking down toward the camera side of
+/// the path (`--overhead`), level with the walker.
+fn overhead(time: f64) -> RendererCompositionCamera {
+    let x = f64::from(START[0]) + 1.6 * time;
+    camera([x, 3.4, -3.2], 180.0, -42.0)
+}
+
 /// `harness`'s world at this moment drawn afresh with 4x MSAA.
 fn fresh_msaa(harness: &Harness, view: &RendererCompositionCamera, size: (u32, u32)) -> Vec<u8> {
     let mut renderer = render_wgpu::Renderer::new(&harness.gpu, RendererOptions::default());
@@ -494,13 +518,18 @@ fn main() {
     if arguments.lights {
         ops.extend(lights());
     }
-    if let Some(floor) = arguments.lit {
+    if arguments.lit.is_some() || !arguments.caster.is_none() {
         for handle in [WALKER, BYSTANDER] {
             ops.push(RenderDiff::SetSplatAppearance {
                 handle: RenderHandle::new(handle),
                 appearance: SplatAppearance {
-                    lighting: SplatLighting::Lit,
-                    light_floor: floor,
+                    lighting: if arguments.lit.is_some() {
+                        SplatLighting::Lit
+                    } else {
+                        SplatLighting::Unlit
+                    },
+                    light_floor: arguments.lit.unwrap_or(0.0),
+                    shadow_caster: arguments.caster,
                     ..SplatAppearance::default()
                 },
             });
@@ -532,7 +561,11 @@ fn main() {
     for frame in 0..arguments.frames {
         let time = f64::from(frame) / RATE;
         harness.at(time);
-        let view = follow(time);
+        let view = if arguments.overhead {
+            overhead(time)
+        } else {
+            follow(time)
+        };
         let (_, rgba) = harness.render(&view);
         if arguments.save.contains(&frame) {
             let png = render_wgpu::encode_png(width, height, &rgba).expect("encode the frame");
