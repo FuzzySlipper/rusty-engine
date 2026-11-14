@@ -74,6 +74,10 @@ pub(crate) struct AnimatedAssetRow {
     /// The node of each rig joint, in rig order (`AnimationRigSignature`):
     /// what cuts and the joint overlay index.
     rig: Vec<Option<usize>>,
+    /// Splat primitives resident on the GPU, by (mesh, primitive) order.
+    splat_sets: Vec<crate::splats::SplatSet>,
+    /// Each node drawing a splat set, with the set.
+    splat_nodes: Vec<(usize, usize)>,
 }
 
 pub(crate) struct AnimatedInstance {
@@ -507,6 +511,30 @@ impl Renderer {
                 self.prepare_material(features, blend, double_sided);
             }
         }
+        let mut splat_sets = Vec::new();
+        let mut uploaded_splats = HashMap::new();
+        for (mesh_index, splats) in model.splats.iter().enumerate() {
+            for (primitive_index, splats) in splats.iter().enumerate() {
+                let Some(set) = self.splats.upload(
+                    &self.gpu,
+                    &format!("{label} splats {mesh_index}/{primitive_index}"),
+                    splats,
+                ) else {
+                    continue;
+                };
+                uploaded_splats
+                    .entry(mesh_index)
+                    .or_insert_with(Vec::new)
+                    .push(splat_sets.len());
+                splat_sets.push(set);
+            }
+        }
+        let splat_nodes = model
+            .order
+            .iter()
+            .filter_map(|&node| Some((node, uploaded_splats.get(&model.nodes[node].mesh?)?)))
+            .flat_map(|(node, sets)| sets.iter().map(move |set| (node, *set)))
+            .collect();
         let joints = joint_nodes(&model);
         let rig = animation_pose::rig_nodes(asset, &model);
         let rest = {
@@ -531,6 +559,8 @@ impl Renderer {
                 slots,
                 joints,
                 rig,
+                splat_sets,
+                splat_nodes,
             },
         );
         // Live instances (a redefinition keeps them) draw on the new asset.
@@ -1301,6 +1331,68 @@ impl Renderer {
         (!bounds.is_empty() && finite).then_some(bounds)
     }
 
+    /// The splat instances a view of `layer` draws: each visible animated
+    /// instance with splat sets whose bounds meet the frustum of
+    /// `view_proj`, farthest first.
+    pub(crate) fn splat_instances(
+        &self,
+        layer: crate::frame::ViewLayer,
+        view_proj: &Mat4,
+        eye: Vec3,
+    ) -> Vec<crate::splats::SplatInstance> {
+        let frustum = crate::batch::Frustum::new(view_proj);
+        let mut instances = Vec::new();
+        for (handle, instance) in self.tables.animated.iter() {
+            let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
+                continue;
+            };
+            if asset.splat_nodes.is_empty() {
+                continue;
+            }
+            let Some(node) = self.tables.nodes.get(handle) else {
+                continue;
+            };
+            if !node.world_visible || crate::frame::ViewLayer::of(node.world_layer) != layer {
+                continue;
+            }
+            let mut bounds = Aabb::EMPTY;
+            let mut sets = Vec::with_capacity(asset.splat_nodes.len());
+            for &(glb_node, set) in &asset.splat_nodes {
+                let splat_set = &asset.splat_sets[set];
+                // A skinned primitive's Gaussians stand in bind space.
+                let local = if splat_set.skinned {
+                    Mat4::IDENTITY
+                } else {
+                    placed_node(instance, asset, glb_node)
+                };
+                let model = node.world * local;
+                bounds = bounds.union(&splat_set.bounds.transformed(&model));
+                sets.push((
+                    crate::splats::SetRef {
+                        slot: instance.slot,
+                        set,
+                    },
+                    model,
+                ));
+            }
+            if bounds.is_empty() || !frustum.intersects(&bounds) {
+                continue;
+            }
+            instances.push(crate::splats::SplatInstance {
+                handle: *handle,
+                sets,
+                depth: ((bounds.min + bounds.max) * 0.5).distance_squared(eye),
+                bounds,
+            });
+        }
+        instances.sort_by(|a, b| {
+            b.depth
+                .total_cmp(&a.depth)
+                .then_with(|| a.handle.cmp(&b.handle))
+        });
+        instances
+    }
+
     /// A joint's current transform in its instance's space.
     /// Every uploaded animated mesh: assets' rigid primitives and instances'
     /// skinned buffers.
@@ -1751,4 +1843,16 @@ fn vertex_bounds(vertices: &[f32]) -> Aabb {
 /// ([`animation_pose::joint_nodes`]).
 pub fn joint_nodes(model: &GlbModel) -> HashMap<String, usize> {
     animation_pose::joint_nodes(model)
+}
+
+/// A splat set by its asset's slot and index.
+pub(crate) fn splat_set(
+    tables: &crate::tables::Tables,
+    set: crate::splats::SetRef,
+) -> Option<&crate::splats::SplatSet> {
+    tables
+        .animated_assets
+        .get(set.slot)?
+        .splat_sets
+        .get(set.set)
 }

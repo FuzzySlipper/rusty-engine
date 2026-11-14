@@ -16,6 +16,7 @@ mod plan;
 mod publish;
 mod sidecar;
 mod source;
+mod splat_glb;
 
 pub use animated_glb::{
     glb_model_triangles, import_animated_glb_asset, import_parsed_animated_glb_asset,

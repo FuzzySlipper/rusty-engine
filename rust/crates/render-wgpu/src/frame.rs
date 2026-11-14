@@ -320,6 +320,59 @@ pub(crate) struct ViewCache {
     regrouped: bool,
 }
 
+/// One of a view's blended draws (`Renderer::blended_order`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Blended {
+    /// The `n`th blended part batch.
+    Part(usize),
+    /// The `n`th blended sprite (`EffectsPass::blended_key`).
+    Sprite(usize),
+    /// The `n`th splat run's layer.
+    Splats(usize),
+}
+
+pub(crate) struct BlendedOrder {
+    pub order: Vec<Blended>,
+    /// Each run's splat instances, by their index in the view's list.
+    pub runs: Vec<Vec<usize>>,
+    /// Splat instances no run had room for.
+    pub refused: u32,
+}
+
+/// The nearest and farthest view depth of `bounds` from the camera
+/// `view`: what a splat run's sort keys span.
+fn splat_depth_range<'a>(
+    view: &Mat4,
+    bounds: impl Iterator<Item = &'a crate::tables::Aabb>,
+) -> (f32, f32) {
+    let (mut near, mut far) = (f32::MAX, 0.0f32);
+    for bounds in bounds {
+        for corner in 0..8 {
+            let point = Vec3::new(
+                if corner & 1 == 0 {
+                    bounds.min.x
+                } else {
+                    bounds.max.x
+                },
+                if corner & 2 == 0 {
+                    bounds.min.y
+                } else {
+                    bounds.max.y
+                },
+                if corner & 4 == 0 {
+                    bounds.min.z
+                } else {
+                    bounds.max.z
+                },
+            );
+            let depth = -view.transform_point3(point).z;
+            near = near.min(depth);
+            far = far.max(depth);
+        }
+    }
+    (near.max(0.0).min(far), far)
+}
+
 /// A world view's backdrop camera (`Renderer::backdrop_camera`).
 pub(crate) struct BackdropCamera {
     pub camera: CameraMatrices,
@@ -531,6 +584,7 @@ impl Renderer {
         self.finish.begin_frame(&self.gpu);
         self.water.begin_frame(&self.gpu);
         self.effects.begin_frame(&self.gpu);
+        self.splats.begin_frame(&self.gpu);
         for timer in [&mut self.shadow_timer, &mut self.backdrop_shadow_timer]
             .into_iter()
             .flatten()
@@ -2440,10 +2494,10 @@ impl Renderer {
         encoded
     }
 
-    /// Blended parts and blended sprites in one order: render order (parts
-    /// are 0), then back to front.
-    /// A blended surface writes no depth, so drawing either family as a
-    /// block would let whatever draws second cover the other.
+    /// Blended parts, blended sprites and splat runs in one order (`order`,
+    /// [`Self::blended_order`]). A blended surface writes no depth, so
+    /// drawing any family as a block would let whatever draws second cover
+    /// the others.
     #[allow(clippy::too_many_arguments, reason = "one blended pass")]
     fn draw_blended<'a>(
         &'a self,
@@ -2451,34 +2505,115 @@ impl Renderer {
         format: ColorTarget,
         parts: &[batch::Batch],
         effects: &EffectsPass,
-        eye: Vec3,
+        order: &[Blended],
         pipeline: impl Fn(batch::Pass, Features) -> &'a wgpu::RenderPipeline + Copy,
         bind: impl Fn(&mut wgpu::RenderPass<'_>, Features) + Copy,
     ) -> Encoded {
+        let mut encoded = Encoded::default();
+        for item in order {
+            match *item {
+                Blended::Part(part) => {
+                    encoded +=
+                        self.draw_batches_bound(pass, &parts[part..part + 1], pipeline, bind);
+                }
+                Blended::Sprite(sprite) => {
+                    self.effects
+                        .draw_blended_sprite(pass, format, effects, sprite);
+                }
+                Blended::Splats(run) => {
+                    self.splats.draw_composite(pass, format, run);
+                    encoded.draws += 1;
+                }
+            }
+        }
+        encoded
+    }
+
+    /// The blended draws' order: render order (parts and splat instances
+    /// are 0), then back to front, each part by its bounds' centre, each
+    /// sprite by its origin and each splat instance by its bounds' centre.
+    /// Splat instances that follow each other are one run, drawn into one
+    /// layer; an instance a run has no room for draws nothing.
+    fn blended_order(
+        &self,
+        parts: &[batch::Batch],
+        effects: &EffectsPass,
+        eye: Vec3,
+        splats: &[crate::splats::SplatInstance],
+    ) -> BlendedOrder {
         let part_depth = |batch: &batch::Batch| {
             let bounds = &self.tables.parts.state[batch.part as usize].world_bounds;
             ((bounds.min + bounds.max) * 0.5).distance_squared(eye)
         };
-        let (mut part, mut sprite, mut encoded) = (0, 0, Encoded::default());
+        // Farther first within a render order; a lower order first.
+        let before = |a: (i32, f32), b: (i32, f32)| a.0 < b.0 || (a.0 == b.0 && a.1 >= b.1);
+        let splat_gaussians = |instance: &crate::splats::SplatInstance| -> u32 {
+            instance
+                .sets
+                .iter()
+                .filter_map(|&(set, _)| crate::animated::splat_set(&self.tables, set))
+                .map(|set| set.count)
+                .sum()
+        };
+        let mut order = Vec::with_capacity(parts.len() + splats.len());
+        let mut runs: Vec<Vec<usize>> = Vec::new();
+        let mut run_gaussians = 0u32;
+        let mut refused = 0u32;
+        let (mut part, mut sprite, mut splat) = (0, 0, 0);
         loop {
-            let part_first = match (parts.get(part), effects.blended_key(sprite)) {
-                (None, None) => break,
-                (Some(_), None) => true,
-                (None, Some(_)) => false,
-                (Some(batch), Some((order, depth))) => {
-                    order > 0 || (order == 0 && part_depth(batch) >= depth)
+            let part_key = parts.get(part).map(|batch| (0, part_depth(batch)));
+            let sprite_key = effects.blended_key(sprite);
+            let splat_key = splats.get(splat).map(|instance| (0, instance.depth));
+            let next = [
+                part_key.map(|key| (key, 0)),
+                splat_key.map(|key| (key, 1)),
+                sprite_key.map(|key| (key, 2)),
+            ]
+            .into_iter()
+            .flatten()
+            .reduce(|best, candidate| {
+                if before(best.0, candidate.0) {
+                    best
+                } else {
+                    candidate
                 }
-            };
-            if part_first {
-                encoded += self.draw_batches_bound(pass, &parts[part..part + 1], pipeline, bind);
-                part += 1;
-            } else {
-                self.effects
-                    .draw_blended_sprite(pass, format, effects, sprite);
-                sprite += 1;
+            });
+            match next.map(|(_, family)| family) {
+                None => break,
+                Some(0) => {
+                    order.push(Blended::Part(part));
+                    part += 1;
+                }
+                Some(1) => {
+                    let gaussians = splat_gaussians(&splats[splat]);
+                    let continues = matches!(order.last(), Some(Blended::Splats(_)));
+                    if continues
+                        && run_gaussians.saturating_add(gaussians)
+                            <= crate::splats::MAX_RUN_GAUSSIANS
+                    {
+                        run_gaussians += gaussians;
+                        runs.last_mut().expect("a run continues").push(splat);
+                    } else if gaussians <= crate::splats::MAX_RUN_GAUSSIANS {
+                        // A new run: none to continue, or no room in it.
+                        run_gaussians = gaussians;
+                        order.push(Blended::Splats(runs.len()));
+                        runs.push(vec![splat]);
+                    } else {
+                        refused += 1;
+                    }
+                    splat += 1;
+                }
+                Some(_) => {
+                    order.push(Blended::Sprite(sprite));
+                    sprite += 1;
+                }
             }
         }
-        encoded
+        BlendedOrder {
+            order,
+            runs,
+            refused,
+        }
     }
 
     /// Bind each moon's texture, or white, with the filter it was opened
@@ -4150,6 +4285,16 @@ impl Renderer {
             &effects,
             view.viewport,
         );
+        // Splat instances take their places among the blended draws; their
+        // runs draw into layers between the opaque and blended passes.
+        let splat_instances = if self.splats.draws() {
+            self.splat_instances(view.layer, &view_proj, eye)
+        } else {
+            Vec::new()
+        };
+        if !splat_instances.is_empty() {
+            self.splats.prepare_target(&self.gpu.device, hdr_format);
+        }
         let pipelines = &self.pipelines[format_index];
         let cache = self.views[slot].as_ref().expect("view list is current");
         let list = &cache.list;
@@ -4172,7 +4317,9 @@ impl Renderer {
         // The opaque colour too where a water reads it or the view reflects
         // in its water.
         let scene_color = water && (reads_scene || self.water_reflection_march().is_some());
-        let split = water || ray_gi;
+        let blended = self.blended_order(&batches[blend_start..], &effects, eye, &splat_instances);
+        self.splats.refused_instances(blended.refused);
+        let split = water || ray_gi || !blended.runs.is_empty();
         // The HDR colour, and the motion target beside it when there is one,
         // and the guide targets after it.
         let attached = 1 + view
@@ -4330,6 +4477,47 @@ impl Renderer {
                         scene_color.then_some(&hdr.color),
                     );
                 }
+                if !blended.runs.is_empty() {
+                    let runs: Vec<Vec<_>> = blended
+                        .runs
+                        .iter()
+                        .map(|run| {
+                            run.iter()
+                                .flat_map(|&instance| &splat_instances[instance].sets)
+                                .filter_map(|&(set, model)| {
+                                    Some((crate::animated::splat_set(&self.tables, set)?, model))
+                                })
+                                .collect()
+                        })
+                        .collect();
+                    let ranges: Vec<(f32, f32)> = blended
+                        .runs
+                        .iter()
+                        .map(|run| {
+                            splat_depth_range(
+                                &view.camera.view,
+                                run.iter()
+                                    .map(|&instance| &splat_instances[instance].bounds),
+                            )
+                        })
+                        .collect();
+                    self.splats.encode_runs(
+                        &self.gpu,
+                        &mut encoder,
+                        &runs,
+                        &ranges,
+                        &crate::splats::SplatTarget {
+                            depth: view.target.depth,
+                            width: view.target.width,
+                            height: view.target.height,
+                            samples: view.target.samples,
+                            viewport: view.viewport,
+                            camera: view.drawn_camera(),
+                        },
+                    );
+                    self.splats
+                        .drew_instances(blended.runs.iter().map(Vec::len).sum::<usize>() as u32);
+                }
                 pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("render-wgpu world blended"),
                     color_attachments: &kept(&hdr, view.motion.as_ref())[..attached],
@@ -4363,7 +4551,7 @@ impl Renderer {
                 hdr_format,
                 &batches[blend_start..],
                 &effects,
-                eye,
+                &blended.order,
                 |pass, features| pipelines.get(pass, features),
                 |pass, features| {
                     if water {
@@ -4599,6 +4787,7 @@ impl Renderer {
         }
         self.gpu.queue.submit([encoder.finish()]);
         self.effects.grid_submitted();
+        self.splats.submitted();
         if fog.is_some() {
             self.volumetric_fog.submitted();
         }

@@ -68,6 +68,8 @@ The root [README](../README.md) is the repository landing page and
 - [First-person held weapons and arms](first-person-held.md): authored held
   motion played as tweens, sway and head bob, and arms that reach and hold
   by rig profile, or play baked arm clips with the look riding the hand.
+- [Gaussian splat characters](splat-characters.md): GLBs whose mesh is a
+  cloud of Gaussians, sorted on the GPU and blended in display space.
 - [Skeleton poses](skeleton-poses.md): two-bone IK and joint overrides over
   animated meshes, evaluated once by the Engine, and reading the evaluated
   joints.

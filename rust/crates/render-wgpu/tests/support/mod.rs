@@ -5,6 +5,8 @@
 
 #![allow(dead_code, reason = "each test binary uses a subset")]
 
+pub mod splat_glb;
+
 use std::{borrow::Cow, collections::HashMap, path::PathBuf, sync::Arc};
 
 use animation_pose::{AnimatedScene, Completion, PoseModel};

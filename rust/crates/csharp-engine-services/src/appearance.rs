@@ -15626,6 +15626,92 @@ fn shade(surface: Surface) -> vec4<f32> {
         assert!(resources.materials.is_empty());
     }
 
+    /// A GLB of Gaussian splats (`docs/splat-characters.md`) opens as an
+    /// animated mesh and publishes its definition and instance as one does.
+    #[test]
+    fn a_splat_glb_opens_as_an_animated_mesh() {
+        let floats = |values: &[f32]| {
+            values
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>()
+        };
+        let mut bin = floats(&[0.0, 1.0, 0.0, 0.2, 1.1, 0.0]);
+        bin.extend(floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
+        bin.extend(floats(&[0.05; 6]));
+        bin.extend([200, 100, 50, 255, 50, 100, 200, 255]);
+        let view = |offset: usize, length: usize| serde_json::json!({"buffer": 0, "byteOffset": offset, "byteLength": length});
+        let document = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0]}],
+            "nodes": [{"name": "body", "mesh": 0}],
+            "meshes": [{"primitives": [{"mode": 0, "attributes":
+                {"POSITION": 0, "_ROTATION": 1, "_SCALE": 2, "_COLOR": 3}}]}],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 2, "type": "VEC3",
+                 "min": [0.0, 1.0, 0.0], "max": [0.2, 1.1, 0.0]},
+                {"bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC4"},
+                {"bufferView": 2, "componentType": 5126, "count": 2, "type": "VEC3"},
+                {"bufferView": 3, "componentType": 5121, "normalized": true, "count": 2, "type": "VEC4"},
+            ],
+            "bufferViews": [view(0, 24), view(24, 32), view(56, 24), view(80, 8)],
+            "buffers": [{"byteLength": bin.len()}],
+        });
+        let mut json = serde_json::to_vec(&document).unwrap();
+        json.resize(json.len().div_ceil(4) * 4, b' ');
+        let mut glb = Vec::new();
+        glb.extend_from_slice(b"glTF");
+        glb.extend_from_slice(&2u32.to_le_bytes());
+        glb.extend_from_slice(&((28 + json.len() + bin.len()) as u32).to_le_bytes());
+        glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"JSON");
+        glb.extend_from_slice(&json);
+        glb.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        glb.extend_from_slice(b"BIN\0");
+        glb.extend_from_slice(&bin);
+        let mut content = BTreeMap::new();
+        content.insert("splats.glb".to_owned(), crate::ContentBytes::from(glb));
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
+        bridge.begin_call();
+        let path = b"splats.glb";
+        let resource = bridge
+            .open_animated_mesh(&NativeAnimatedMeshResourceRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("a splat GLB is admitted");
+        let appearance = bridge
+            .create_animated_mesh_appearance(NativeAnimatedMeshAppearanceRequest { resource })
+            .unwrap();
+        let fact = appearance_fact(appearance);
+        unsafe { bridge.stage_snapshot(&fact, 1) }.unwrap();
+        let call = bridge.take_staged_call();
+        let ops: Vec<_> = call
+            .outputs
+            .iter()
+            .filter_map(|output| match output {
+                RuntimeAppearanceCallOutput::Frame(frame) => Some(&frame.ops),
+                _ => None,
+            })
+            .flatten()
+            .collect();
+        let bounds = ops
+            .iter()
+            .find_map(|op| match op {
+                RenderDiff::DefineAnimatedMesh { asset } => Some(asset.bounds),
+                _ => None,
+            })
+            .expect("the splats are defined");
+        // The Gaussians' centres to three standard deviations.
+        assert!((bounds.min[0] + 0.15).abs() < 1e-4 && (bounds.max[1] - 1.25).abs() < 1e-4);
+        assert!(ops
+            .iter()
+            .any(|op| matches!(op, RenderDiff::CreateAnimatedMeshInstance { .. })));
+    }
+
     #[test]
     fn animated_resource_release_removes_baseline_and_reopen_redefines_before_instance() {
         const CHARACTER_GLB: &[u8] = include_bytes!(

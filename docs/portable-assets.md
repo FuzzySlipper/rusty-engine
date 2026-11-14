@@ -98,6 +98,9 @@ The packaged fixture `fixtures/csharp-portable-assets` contains equivalent loose
 and bundle sprite/model/material documents, ordered timing, explicit missing
 directions, and repeated release/reload. `portable.inspect` reports its facts.
 
+A GLB whose mesh is a cloud of Gaussians rather than triangles opens the
+same way; [splat characters](splat-characters.md) has its format.
+
 ## Animation clips and clip packs
 
 An animated GLB can carry any number of clips and channels. Admission

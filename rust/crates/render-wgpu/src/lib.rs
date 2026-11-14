@@ -71,6 +71,7 @@ mod scatter_select;
 mod shaders;
 mod shadows;
 mod sky_light;
+mod splats;
 mod stars;
 mod surface;
 mod tables;
@@ -130,6 +131,7 @@ pub use prepare::PreparationReadout;
 pub use ray_gi::RayGiReadout;
 pub use ray_scene::{ProbeHit, ProbeRay, RaySceneReadout};
 pub use scatter_select::ScatterSelectionReadout;
+pub use splats::SplatReadout;
 pub use water::WaterReadout;
 
 /// Scatter patches taken in since the renderer was made (cumulative: read
@@ -249,6 +251,9 @@ pub struct GpuReadout {
     /// Parts rigs on a screen-pixel grid: drawn as blocks, or smooth where
     /// the scratch image had no room (`effects/grid.rs`).
     pub parts_rig_grid: PartsRigGridReadout,
+    /// Gaussian splats drawn over the last frame: runs, instances and
+    /// Gaussians, or why this device draws none (`splats.rs`).
+    pub splats: SplatReadout,
     /// The last primary frame's resolutions and the upscale stage that
     /// brought its picture to the output, if one ran (`upscale.rs`).
     pub upscale: UpscaleReadout,
@@ -735,6 +740,7 @@ pub struct Renderer {
     draw_args: Option<std::sync::Mutex<draw_args::DrawArgs>>,
     composition: composition::ViewComposition,
     effects: effects::Effects,
+    splats: splats::Splats,
     /// Rain or snow around the camera (`precipitation.rs`).
     precipitation: precipitation::Precipitation,
     /// Projected decals over the opaque world (`decals.rs`).
@@ -880,6 +886,15 @@ impl Renderer {
                 Features::default(),
             )),
         );
+        let splats = splats::Splats::new(
+            gpu,
+            pipelines::standard(
+                layouts
+                    .shaders
+                    .module(device, Entry::Splats, Features::default()),
+            ),
+            &layouts.frame,
+        );
         let volumetric_fog = volumetric_fog::VolumetricFog::new(
             gpu,
             pipelines::standard(layouts.shaders.module(
@@ -1022,6 +1037,7 @@ impl Renderer {
             draw_args: draw_args::DrawArgs::new(gpu).map(std::sync::Mutex::new),
             composition: Default::default(),
             effects,
+            splats,
             precipitation,
             decals,
             volumetric_fog,
@@ -1396,6 +1412,7 @@ impl Renderer {
                     self.upscale.reconstruction_timing(),
                     self.water.timing(),
                     self.effects.grid_timing(),
+                    self.splats.timing(),
                 ])
                 .chain(
                     self.ray_scene
@@ -1433,6 +1450,7 @@ impl Renderer {
             decals: self.decals.readout(),
             water: self.water.readout(),
             parts_rig_grid: self.effects.grid_readout(),
+            splats: self.splats.readout(),
             upscale: self.upscaled,
             dlss: self.options.dlss.then(|| self.dlss_refusal()).flatten(),
             ray_reconstruction: (self.options.global_illumination

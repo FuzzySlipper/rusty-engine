@@ -262,7 +262,24 @@ fn import_glb(
         rig,
         channel_count,
         keyframe_count,
-    ) = if parsed.document.animations().next().is_some() {
+    ) = if let Some(measured) = crate::splat_glb::measure(parsed) {
+        // Gaussian splats: no triangles to measure or voxelize, no materials.
+        match measured {
+            Ok(bounds) => (
+                GlbAnimationKind::Static,
+                bounds,
+                Vec::new(),
+                Vec::new(),
+                None,
+                0,
+                0,
+            ),
+            Err(diagnostic) => {
+                diagnostics.push(diagnostic);
+                return failed(diagnostics);
+            }
+        }
+    } else if parsed.document.animations().next().is_some() {
         // A GLB with a skeleton and clips but no geometry is a clip pack: it
         // has no bind-pose mesh to measure, no materials and empty bounds.
         let skeleton_only = parsed.document.meshes().next().is_none();

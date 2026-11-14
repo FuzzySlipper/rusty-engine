@@ -34,6 +34,25 @@ pub struct GlbPrimitive {
     pub material: Option<usize>,
 }
 
+/// A `POINTS` primitive of Gaussian splats (`docs/splat-characters.md`):
+/// each point a Gaussian with its centre, orientation, size, display colour
+/// and opacity, and its skin when the primitive is skinned.
+pub struct GlbSplats {
+    /// `POSITION`: centres, in the primitive's space (bind space when
+    /// skinned).
+    pub centres: Vec<[f32; 3]>,
+    /// `_ROTATION`: unit quaternions, xyzw.
+    pub rotations: Vec<[f32; 4]>,
+    /// `_SCALE`: the standard deviation along each of the Gaussian's own
+    /// axes, in metres.
+    pub scales: Vec<[f32; 3]>,
+    /// `_COLOR`: sRGB-encoded display colour in rgb, linear opacity in a.
+    pub colors: Vec<[f32; 4]>,
+    pub joints: Option<Vec<[u16; 4]>>,
+    /// Normalized to sum 1 (a zero sum becomes `(1, 0, 0, 0)`).
+    pub weights: Option<Vec<[f32; 4]>>,
+}
+
 pub struct GlbSkin {
     pub joints: Vec<usize>,
     pub(crate) inverse_binds: Vec<Mat4>,
@@ -147,6 +166,8 @@ pub struct GlbModel {
     pub order: Vec<usize>,
     /// Mesh index to its primitives.
     pub meshes: Vec<Vec<GlbPrimitive>>,
+    /// Mesh index to its splat primitives.
+    pub splats: Vec<Vec<GlbSplats>>,
     pub skins: Vec<GlbSkin>,
     /// Empty unless decoded `with_clips`: the renderer draws evaluated poses
     /// and never samples a clip.
@@ -207,9 +228,15 @@ pub(crate) fn decode(bytes: &[u8], with_clips: bool) -> Result<GlbModel, String>
         .collect();
 
     let mut meshes = Vec::new();
+    let mut splats = Vec::new();
     for mesh in document.meshes() {
         let mut primitives = Vec::new();
+        let mut mesh_splats = Vec::new();
         for primitive in mesh.primitives() {
+            if is_splat_primitive(&primitive) {
+                mesh_splats.push(decode_splats(&primitive, data)?);
+                continue;
+            }
             if primitive.mode() != gltf::mesh::Mode::Triangles {
                 continue;
             }
@@ -261,6 +288,7 @@ pub(crate) fn decode(bytes: &[u8], with_clips: bool) -> Result<GlbModel, String>
             });
         }
         meshes.push(primitives);
+        splats.push(mesh_splats);
     }
 
     let skins = document
@@ -413,6 +441,7 @@ pub(crate) fn decode(bytes: &[u8], with_clips: bool) -> Result<GlbModel, String>
         nodes,
         order,
         meshes,
+        splats,
         skins,
         clips,
         materials,
@@ -485,6 +514,116 @@ fn generated_tangents(primitive: &GlbPrimitive, set: u32) -> Option<Vec<[f32; 4]
     };
     bevy_mikktspace::generate_tangents(&mut faces).ok()?;
     Some(faces.tangents)
+}
+
+/// Whether `primitive` is a splat primitive: `POINTS` with `_SCALE`.
+pub(crate) fn is_splat_primitive(primitive: &gltf::Primitive<'_>) -> bool {
+    primitive.mode() == gltf::mesh::Mode::Points
+        && primitive
+            .get(&gltf::Semantic::Extras("SCALE".to_owned()))
+            .is_some()
+}
+
+fn decode_splats<'a, 's>(
+    primitive: &'a gltf::Primitive<'a>,
+    data: impl Clone + Fn(gltf::Buffer<'a>) -> Option<&'s [u8]>,
+) -> Result<GlbSplats, String> {
+    let attribute = |name: &str| {
+        primitive
+            .get(&gltf::Semantic::Extras(name.to_owned()))
+            .ok_or_else(|| format!("glb: splat primitive without _{name}"))
+    };
+    let centres = floats::<3>(
+        primitive
+            .get(&gltf::Semantic::Positions)
+            .ok_or("glb: splat primitive without POSITION")?,
+        data.clone(),
+    )?;
+    let rotations = floats::<4>(attribute("ROTATION")?, data.clone())?;
+    let scales = floats::<3>(attribute("SCALE")?, data.clone())?;
+    let colors = floats::<4>(attribute("COLOR")?, data.clone())?;
+    let count = centres.len();
+    if [rotations.len(), scales.len(), colors.len()]
+        .iter()
+        .any(|len| *len != count)
+    {
+        return Err("glb: splat attributes differ in count".to_owned());
+    }
+    let reader = primitive.reader(data);
+    let joints: Option<Vec<[u16; 4]>> = reader
+        .read_joints(0)
+        .map(|joints| joints.into_u16().collect());
+    let weights: Option<Vec<[f32; 4]>> = reader.read_weights(0).map(|weights| {
+        weights
+            .into_f32()
+            .map(|w| {
+                let sum: f32 = w.iter().sum();
+                if sum > 0.0 {
+                    w.map(|value| value / sum)
+                } else {
+                    [1.0, 0.0, 0.0, 0.0]
+                }
+            })
+            .collect()
+    });
+    Ok(GlbSplats {
+        centres,
+        rotations,
+        scales,
+        colors,
+        joints,
+        weights,
+    })
+}
+
+/// An accessor of `N` components as floats: f32 as it is, normalized
+/// integers mapped to [0, 1] or [−1, 1].
+fn floats<'a, 's, const N: usize>(
+    accessor: gltf::Accessor<'a>,
+    data: impl Clone + Fn(gltf::Buffer<'a>) -> Option<&'s [u8]>,
+) -> Result<Vec<[f32; N]>, String>
+where
+    [f32; N]: gltf::accessor::Item,
+    [u8; N]: gltf::accessor::Item,
+    [u16; N]: gltf::accessor::Item,
+    [i8; N]: gltf::accessor::Item,
+    [i16; N]: gltf::accessor::Item,
+{
+    use gltf::accessor::{DataType, Iter};
+    let index = accessor.index();
+    if accessor.dimensions().multiplicity() != N {
+        return Err(format!("glb: accessor {index} is not {N} components"));
+    }
+    let normalized = accessor.normalized();
+    let missing = || format!("glb: accessor {index} has no data");
+    let values = match accessor.data_type() {
+        DataType::F32 => Iter::<[f32; N]>::new(accessor, data)
+            .ok_or_else(missing)?
+            .collect(),
+        DataType::U8 if normalized => Iter::<[u8; N]>::new(accessor, data)
+            .ok_or_else(missing)?
+            .map(|value| value.map(|c| f32::from(c) / 255.0))
+            .collect(),
+        DataType::U16 if normalized => Iter::<[u16; N]>::new(accessor, data)
+            .ok_or_else(missing)?
+            .map(|value| value.map(|c| f32::from(c) / 65535.0))
+            .collect(),
+        DataType::I8 if normalized => Iter::<[i8; N]>::new(accessor, data)
+            .ok_or_else(missing)?
+            .map(|value| value.map(|c| (f32::from(c) / 127.0).max(-1.0)))
+            .collect(),
+        DataType::I16 if normalized => Iter::<[i16; N]>::new(accessor, data)
+            .ok_or_else(missing)?
+            .map(|value| value.map(|c| (f32::from(c) / 32767.0).max(-1.0)))
+            .collect(),
+        other => {
+            return Err(format!(
+                "glb: accessor {index} is {other:?}{}; splat attributes are float or normalized integers",
+                if normalized { " normalized" } else { "" }
+            ))
+        }
+    };
+    Ok(values)
 }
 
 #[cfg(test)]

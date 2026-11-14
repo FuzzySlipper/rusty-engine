@@ -521,6 +521,9 @@ pub enum Entry {
     RayGi,
     /// Its light added to the opaque world (`ray_gi_composite.wgsl`).
     RayGiComposite,
+    /// Gaussian splats: projected, radix-sorted, drawn into a run's layer
+    /// and composited (`splats.wgsl`; compute and raster).
+    Splats,
 }
 
 impl Entry {
@@ -584,6 +587,7 @@ impl Entry {
                 include_str!("shaders/impostor_bake.wgsl"),
             ),
             Self::Hiz => ("shaders/hiz.wgsl", include_str!("shaders/hiz.wgsl")),
+            Self::Splats => ("shaders/splats.wgsl", include_str!("shaders/splats.wgsl")),
             Self::Upscale => ("shaders/upscale.wgsl", include_str!("shaders/upscale.wgsl")),
             Self::RayProbe => (
                 "shaders/ray_probe.wgsl",
@@ -1009,6 +1013,7 @@ mod tests {
             Entry::RayMask,
             Entry::RayGi,
             Entry::RayGiComposite,
+            Entry::Splats,
         ] {
             compose_case(&mut shaders, entry, Features::default());
         }

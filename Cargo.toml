@@ -119,7 +119,7 @@ ts-rs = { version = "11.1", features = ["serde-json-impl", "no-serde-warnings"] 
 sha2 = "0.10"
 base64 = "0.22"
 stats_alloc = "0.1.10"
-gltf = { version = "1.4", default-features = false, features = ["utils", "names", "KHR_materials_unlit", "KHR_materials_emissive_strength", "KHR_materials_specular", "KHR_materials_volume", "KHR_materials_ior", "KHR_texture_transform", "allow_empty_texture"] }
+gltf = { version = "1.4", default-features = false, features = ["utils", "names", "extras", "KHR_materials_unlit", "KHR_materials_emissive_strength", "KHR_materials_specular", "KHR_materials_volume", "KHR_materials_ior", "KHR_texture_transform", "allow_empty_texture"] }
 cap-std = "3"
 tempfile = "3"
 fs2 = "0.4"
