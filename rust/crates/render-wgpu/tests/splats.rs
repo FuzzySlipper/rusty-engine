@@ -972,7 +972,8 @@ fn a_splat_figure_casts_as_its_gaussians_or_as_ellipsoids() {
 
 /// Under a spot light's narrow cone a figure's Gaussians cast at their own
 /// size: a sheet of Gaussians that overlap one another throws a whole
-/// shadow, with no light through it.
+/// shadow, with no light through it. A software adapter casts them as
+/// ellipsoids, and its readout says so.
 #[test]
 fn gaussian_casters_cover_their_shadow_under_a_narrow_spot() {
     let options = RendererOptions {
@@ -1033,10 +1034,22 @@ fn gaussian_casters_cover_their_shadow_under_a_narrow_spot() {
             },
         ]);
         harness.apply(ops);
-        harness.render(&view).1
+        // The readout reports the frame before.
+        harness.render(&view);
+        let rgba = harness.render(&view).1;
+        (
+            rgba,
+            harness.renderer.gpu_readout().splats,
+            harness.gpu.is_software(),
+        )
     };
-    let open = floor(SplatShadowCaster::None);
-    let cast = floor(SplatShadowCaster::Splats);
+    let (open, _, _) = floor(SplatShadowCaster::None);
+    let (cast, readout, software) = floor(SplatShadowCaster::Splats);
+    if software {
+        assert!(readout.refused_casters.is_some(), "{readout:?}");
+        return;
+    }
+    assert_eq!(readout.refused_casters, None);
     // The floor the spot lights (below the horizon, which the sheet's own
     // pixels stand above), the sheet's shadow over all of it.
     let (mut lit, mut shadowed) = (0, 0);
