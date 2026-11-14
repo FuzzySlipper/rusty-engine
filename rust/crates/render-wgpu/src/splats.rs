@@ -44,6 +44,16 @@
 //! to its palette, at the layer's depth there, tested pixel by pixel
 //! against the world's.
 //!
+//! **Lighting.** A lit instance (`SplatAppearance::lighting`) draws in runs
+//! of lit instances. Its projection turns each Gaussian's normal (the
+//! asset's `_NORMAL`, or its shortest axis pointing away from the centre of
+//! its joint's Gaussians, `normal_words`) to view space, and its layer keeps
+//! that normal's xy beside the depth, blended as the colour is: in the
+//! surface target, or under motion in a target of its own. Its composite
+//! (`splat_light.wgsl`) lights the blended colour per pixel with the
+//! world's `standard_radiance` at the blended depth and normal; a pixel
+//! grid's block is averaged, lit once, then snapped.
+//!
 //! **Cost.** Projecting and sorting run on the GPU for every view each frame
 //! with a splat run; nothing is copied to or from the CPU per frame. The
 //! readout counts the frame's runs, instances and Gaussians, and the
@@ -93,12 +103,17 @@ const LAYER_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 /// `1 − depth` and, while the view draws motion, their motion,
 /// premultiplied and blended as the colour is. Half floats keep a depth's
 /// distance to about a part in 2048.
-/// A layer's grid buffer (`splats.wgsl` `Grid`): three rows of four
-/// words, then each palette colour's linear and sRGB values.
-const GRID_HEADER_BYTES: u64 = 48;
+/// A layer's run parameters (`splat_layer.wgsl` `Grid`): seven rows of
+/// four words, then each palette colour's linear and sRGB values.
+const GRID_HEADER_BYTES: u64 = 112;
 const GRID_BYTES: u64 = GRID_HEADER_BYTES + render_model::PARTS_RIG_PALETTE_MAX as u64 * 2 * 16;
 /// Bounds reaching this close to the eye's plane (clip w) draw smooth.
 const GRID_NEAREST_W: f32 = 1e-4;
+
+/// A lit run's normal target under motion (`splats.wgsl`
+/// `fs_splat_lit_motion`): its Gaussians' view-space normal xy, weighted by
+/// alpha.
+const NORMAL_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
 
 fn surface_format(motion: bool) -> wgpu::TextureFormat {
     if motion {
@@ -185,6 +200,9 @@ pub(crate) struct SplatInstance {
     pub depth: f32,
     /// Its pixel grid: it draws in a run of its own.
     pub grid: Option<SplatGrid>,
+    /// Lit by the world's lights (`SplatAppearance::lighting`), with its
+    /// light floor: it draws in runs of lit instances with that floor.
+    pub light: Option<f32>,
 }
 
 /// A set by its asset's slot and its index among the asset's sets.
@@ -217,28 +235,37 @@ pub(crate) struct SplatRun<'a> {
     pub read_after: bool,
     /// Its one instance's pixel grid, with the instance's world bounds.
     pub grid: Option<(&'a SplatGrid, Aabb)>,
+    /// Lit, with its instances' light floor.
+    pub light: Option<f32>,
 }
 
 /// How a run's layer is composited.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Finish {
     /// Smooth, writing the depth and motion its surface kept, if it kept them.
-    Smooth { surface: bool },
+    Smooth { surface: bool, lit: bool },
     /// On a pixel grid: its blocks, inside the scissor rectangle
     /// (x, y, width, height in target pixels).
-    Grid { scissor: [u32; 4] },
+    Grid { scissor: [u32; 4], lit: bool },
     /// On a pixel grid wholly outside the viewport: nothing.
     Off,
 }
 
 impl Finish {
-    /// Whether the run's layer keeps its surface: a grid's blocks take
-    /// their depth from it.
+    /// Whether the run's layer keeps its surface: a grid's blocks and a lit
+    /// run's light take their depth from it.
     fn keeps_surface(&self) -> bool {
         match self {
-            Self::Smooth { surface } => *surface,
+            Self::Smooth { surface, lit } => *surface || *lit,
             Self::Grid { .. } | Self::Off => true,
         }
+    }
+
+    fn lit(&self) -> bool {
+        matches!(
+            self,
+            Self::Smooth { lit: true, .. } | Self::Grid { lit: true, .. }
+        )
     }
 
     /// Whether the run's layer is tested against the world's depth. A
@@ -386,6 +413,8 @@ struct Pipelines {
     draw_pipeline_layout: wgpu::PipelineLayout,
     composite_pipeline_layout: wgpu::PipelineLayout,
     module: wgpu::ShaderModule,
+    /// `splat_light.wgsl`: a lit run's composite.
+    light_module: wgpu::ShaderModule,
     project: wgpu::ComputePipeline,
     sort_count: wgpu::ComputePipeline,
     scan_local: wgpu::ComputePipeline,
@@ -414,13 +443,16 @@ struct RunBuffers {
 /// resolved when multisampled, and the bind group the composite reads them
 /// by.
 struct Layer {
-    /// Width, height, samples, and whether its surface holds motion.
-    size: (u32, u32, u32, bool),
+    /// Width, height, samples, whether its surface holds more than depth
+    /// (motion or a lit run's normal), and whether it has a normal target.
+    size: (u32, u32, u32, bool, bool),
     color: wgpu::TextureView,
     resolve: Option<wgpu::TextureView>,
     surface: wgpu::TextureView,
     surface_resolve: Option<wgpu::TextureView>,
-    /// Its run's pixel grid (`splats.wgsl` `Grid`).
+    /// A lit run's normal target under motion, and its resolve.
+    normal: Option<(wgpu::TextureView, Option<wgpu::TextureView>)>,
+    /// Its run's parameters (`splat_layer.wgsl` `Grid`).
     grid: wgpu::Buffer,
     group: wgpu::BindGroup,
 }
@@ -441,8 +473,9 @@ pub(crate) struct Splats {
     /// the next.
     layers_used: usize,
     /// By samples, whether the layer is tested against the world's depth,
-    /// and, when it keeps its surface, whether that holds motion.
-    draws: HashMap<(u32, bool, Option<bool>), wgpu::RenderPipeline>,
+    /// when it keeps its surface whether that holds motion, and whether the
+    /// run is lit.
+    draws: HashMap<(u32, bool, Option<bool>, bool), wgpu::RenderPipeline>,
     /// How each of the view's runs is composited.
     finishes: Vec<Finish>,
     /// The viewport the view's runs were drawn for, which a grid's scissor
@@ -451,6 +484,9 @@ pub(crate) struct Splats {
     /// By target: the colour composite, the depth and motion one, and a
     /// pixel grid's.
     composites: HashMap<ColorTarget, [wgpu::RenderPipeline; 3]>,
+    /// By target: a lit run's colour composite and its pixel grid's
+    /// (`splat_light.wgsl`).
+    lit_composites: HashMap<ColorTarget, [wgpu::RenderPipeline; 2]>,
     /// Each drawn set's placing, while frames draw motion.
     history: HashMap<(render_model::RenderHandle, usize), History>,
     timer: Option<PassTimer>,
@@ -463,6 +499,7 @@ impl Splats {
     pub fn new(
         gpu: &Gpu,
         module: wgpu::ShaderModule,
+        light_module: wgpu::ShaderModule,
         frame_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let device = &gpu.device;
@@ -480,7 +517,7 @@ impl Splats {
             });
         let pipelines = refusal
             .is_none()
-            .then(|| Pipelines::new(device, module, frame_layout));
+            .then(|| Pipelines::new(device, module, light_module, frame_layout));
         Self {
             pipelines,
             refusal,
@@ -495,6 +532,7 @@ impl Splats {
             finishes: Vec::new(),
             viewport: crate::frame::PixelRect::whole(1, 1),
             composites: HashMap::new(),
+            lit_composites: HashMap::new(),
             history: HashMap::new(),
             timer: PassTimer::new(gpu, "splats"),
             timed: false,
@@ -529,6 +567,7 @@ impl Splats {
             )
         };
         let gaussians = storage(&words, GAUSSIAN_BYTES as usize);
+        let normals = storage(&normal_words(splats), 4);
         let skin_buffer = storage(
             skin.as_ref().map_or(&[][..], |(words, _)| words.as_slice()),
             SKIN_BYTES as usize,
@@ -544,6 +583,10 @@ impl Splats {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: skin_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: normals.as_entire_binding(),
                 },
             ],
         });
@@ -585,111 +628,88 @@ impl Splats {
     }
 
     /// Make the composite's pipelines for a pass drawing into `format`
-    /// before the pass borrows the renderer.
-    pub fn prepare_target(&mut self, device: &wgpu::Device, format: ColorTarget) {
+    /// before the pass borrows the renderer, a lit run's too when `lit`.
+    pub fn prepare_target(&mut self, device: &wgpu::Device, format: ColorTarget, lit: bool) {
         let Some(pipelines) = &self.pipelines else {
             return;
         };
+        let motion = format.motion;
+        let blended = wgpu::ColorTargetState {
+            format: format.format,
+            blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+            write_mask: wgpu::ColorWrites::ALL,
+        };
+        let opaque = wgpu::ColorTargetState {
+            format: format.format,
+            blend: None,
+            write_mask: wgpu::ColorWrites::ALL,
+        };
+        let either = |with: MotionWrite| if motion { with } else { MotionWrite::None };
+        let pick = |with: &'static str, without: &'static str| if motion { with } else { without };
         self.composites.entry(format).or_insert_with(|| {
-            let motion = format.motion;
-            let pipeline = |label: &str,
-                            entry: &str,
-                            depth_compare: Option<wgpu::CompareFunction>,
-                            color: wgpu::ColorTargetState,
-                            motion_write: MotionWrite| {
-                device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                    label: Some(label),
-                    layout: Some(&pipelines.composite_pipeline_layout),
-                    vertex: wgpu::VertexState {
-                        module: &pipelines.module,
-                        entry_point: Some("vs_composite"),
-                        compilation_options: Default::default(),
-                        buffers: &[],
-                    },
-                    primitive: wgpu::PrimitiveState::default(),
-                    // Inside the blended pass, whose depth only a grid's
-                    // blocks test (each pixel of a block against what stands
-                    // there): the layer was tested against it.
-                    depth_stencil: Some(wgpu::DepthStencilState {
-                        format: DEPTH_FORMAT,
-                        depth_write_enabled: Some(depth_compare.is_some()),
-                        depth_compare: Some(depth_compare.unwrap_or(wgpu::CompareFunction::Always)),
-                        stencil: Default::default(),
-                        bias: Default::default(),
-                    }),
-                    multisample: format.multisample(),
-                    fragment: Some(wgpu::FragmentState {
-                        module: &pipelines.module,
-                        entry_point: Some(entry),
-                        compilation_options: Default::default(),
-                        targets: &format.targets(color, motion_write),
-                    }),
-                    multiview_mask: None,
-                    cache: None,
-                })
-            };
-            let colour = pipeline(
-                "render-wgpu splat composite",
-                if motion {
-                    "fs_composite_reactive"
-                } else {
-                    "fs_composite"
-                },
+            let colour = composite_pipeline(
+                device,
+                pipelines,
+                format,
+                ("render-wgpu splat composite", &pipelines.module),
+                pick("fs_composite_reactive", "fs_composite"),
                 None,
-                wgpu::ColorTargetState {
-                    format: format.format,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                },
-                if motion {
-                    MotionWrite::Reactive
-                } else {
-                    MotionWrite::None
-                },
+                blended.clone(),
+                either(MotionWrite::Reactive),
             );
             // Where the layer covers at least half a pixel: its depth, for
             // the finish's fog and what draws after, and its motion.
-            let surface = pipeline(
-                "render-wgpu splat depth",
-                if motion {
-                    "fs_composite_depth_motion"
-                } else {
-                    "fs_composite_depth"
-                },
+            let surface = composite_pipeline(
+                device,
+                pipelines,
+                format,
+                ("render-wgpu splat depth", &pipelines.module),
+                pick("fs_composite_depth_motion", "fs_composite_depth"),
                 Some(wgpu::CompareFunction::Always),
                 wgpu::ColorTargetState {
-                    format: format.format,
-                    blend: None,
                     write_mask: wgpu::ColorWrites::empty(),
+                    ..opaque.clone()
                 },
-                if motion {
-                    MotionWrite::Cover
-                } else {
-                    MotionWrite::None
-                },
+                either(MotionWrite::Cover),
             );
             // A pixel grid's opaque blocks at the figure's depth.
-            let grid = pipeline(
-                "render-wgpu splat grid",
-                if motion {
-                    "fs_composite_grid_motion"
-                } else {
-                    "fs_composite_grid"
-                },
+            let grid = composite_pipeline(
+                device,
+                pipelines,
+                format,
+                ("render-wgpu splat grid", &pipelines.module),
+                pick("fs_composite_grid_motion", "fs_composite_grid"),
                 Some(wgpu::CompareFunction::LessEqual),
-                wgpu::ColorTargetState {
-                    format: format.format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                },
-                if motion {
-                    MotionWrite::Cover
-                } else {
-                    MotionWrite::None
-                },
+                opaque.clone(),
+                either(MotionWrite::Cover),
             );
             [colour, surface, grid]
         });
+        if lit {
+            self.lit_composites.entry(format).or_insert_with(|| {
+                let colour = composite_pipeline(
+                    device,
+                    pipelines,
+                    format,
+                    ("render-wgpu splat lit composite", &pipelines.light_module),
+                    pick("fs_composite_lit_reactive", "fs_composite_lit"),
+                    None,
+                    blended.clone(),
+                    either(MotionWrite::Reactive),
+                );
+                let grid = composite_pipeline(
+                    device,
+                    pipelines,
+                    format,
+                    ("render-wgpu splat lit grid", &pipelines.light_module),
+                    pick("fs_composite_grid_lit_motion", "fs_composite_grid_lit"),
+                    Some(wgpu::CompareFunction::LessEqual),
+                    opaque.clone(),
+                    either(MotionWrite::Cover),
+                );
+                [colour, grid]
+            });
+        }
     }
 
     /// Project, sort and draw each run into a layer of its own, in order:
@@ -785,10 +805,12 @@ impl Splats {
                                 (rect[2] - rect[0]) as u32,
                                 (rect[3] - rect[1]) as u32,
                             ],
+                            lit: run.light.is_some(),
                         },
                         Some(GridPlacement::Off) => Finish::Off,
                         Some(GridPlacement::Smooth) | None => Finish::Smooth {
                             surface: motion || run.read_after,
+                            lit: run.light.is_some(),
                         },
                     }),
             );
@@ -799,34 +821,62 @@ impl Splats {
                 target.samples,
                 finish.tested(),
                 finish.keeps_surface().then_some(motion),
+                finish.lit(),
             );
         }
-        for index in 0..runs.len() {
-            self.layer(&gpu.device, index, target);
+        for (index, finish) in self.finishes.clone().iter().enumerate() {
+            let lit = finish.lit();
+            self.layer(&gpu.device, index, target, motion || lit, motion && lit);
         }
-        for (layer, (run, placement)) in self.layers.iter().zip(splat_runs.iter().zip(&placements))
+        // The view's rotation, for a lit run's normals (view space to world).
+        let view_to_world = [
+            target.camera.view.x_axis.truncate(),
+            target.camera.view.y_axis.truncate(),
+            target.camera.view.z_axis.truncate(),
+        ];
+        for ((layer, finish), (run, placement)) in self
+            .layers
+            .iter()
+            .zip(&self.finishes)
+            .zip(splat_runs.iter().zip(&placements))
         {
-            let (Some((grid, _)), Some(GridPlacement::Grid { side, anchor, rect })) =
-                (run.grid, placement)
-            else {
+            let gridded = run.grid.zip(match placement {
+                Some(GridPlacement::Grid { side, anchor, rect }) => Some((side, anchor, rect)),
+                _ => None,
+            });
+            if gridded.is_none() && run.light.is_none() {
                 continue;
+            }
+            let ((side, anchor, rect), (cutoff, palette)) = match gridded {
+                Some(((grid, _), placed)) => (placed, (grid.cutoff, &grid.palette[..])),
+                None => ((&0, &[0, 0], &[0; 4]), (0.0, &[][..])),
             };
             let mut bytes = Vec::with_capacity(GRID_BYTES as usize);
-            for value in [
-                anchor[0],
-                anchor[1],
-                *side as i32,
-                grid.palette.len() as i32,
-            ] {
+            for value in [anchor[0], anchor[1], *side as i32, palette.len() as i32] {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
             for value in rect {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
-            for value in [grid.cutoff, 0.0, 0.0, 0.0] {
+            let normal_target = if motion && finish.lit() { 1.0 } else { 0.0 };
+            for value in [cutoff, run.light.unwrap_or(0.0), normal_target, 0.0] {
                 bytes.extend_from_slice(&value.to_le_bytes());
             }
-            for colour in &grid.palette {
+            let viewport = target.viewport;
+            for value in [
+                viewport.x as f32,
+                viewport.y as f32,
+                viewport.width as f32,
+                viewport.height as f32,
+            ] {
+                bytes.extend_from_slice(&value.to_le_bytes());
+            }
+            for row in view_to_world {
+                for value in [row.x, row.y, row.z, 0.0] {
+                    bytes.extend_from_slice(&value.to_le_bytes());
+                }
+            }
+            for colour in palette {
                 let display =
                     colour.map(|value| crate::effects::linear_srgb(value.clamp(0.0, 1.0)));
                 for value in [
@@ -872,9 +922,10 @@ impl Splats {
         let mut offsets = Vec::with_capacity(runs.len());
         let mut palette_index = palette_firsts.iter().copied();
         let mut previous_models = previous.iter();
-        for (run, &(near, far)) in runs
+        for ((run, &(near, far)), lit) in runs
             .iter()
             .zip(splat_runs.iter().map(|run| &run.depth_range))
+            .zip(self.finishes.iter().map(Finish::lit))
         {
             let total: u32 = run.iter().map(|entry| entry.set.count).sum();
             let blocks = total.div_ceil(TILE);
@@ -909,7 +960,8 @@ impl Splats {
                     slot.extend_from_slice(&value.to_le_bytes());
                 }
                 let span = (far - near).max(1e-3);
-                for value in [near, 1.0 / span, if ortho { 1.0 } else { 0.0 }, 0.0] {
+                let flag = |on: bool| if on { 1.0 } else { 0.0 };
+                for value in [near, 1.0 / span, flag(ortho), flag(lit)] {
                     slot.extend_from_slice(&value.to_le_bytes());
                 }
                 for value in [first, set.count, u32::from(index == 0), 0] {
@@ -982,7 +1034,12 @@ impl Splats {
             let layer = &self.layers[index];
             let finish = self.finishes[index];
             let kept = finish.keeps_surface();
-            let draw = &self.draws[&(target.samples, finish.tested(), kept.then_some(motion))];
+            let draw = &self.draws[&(
+                target.samples,
+                finish.tested(),
+                kept.then_some(motion),
+                finish.lit(),
+            )];
             let attachments = [
                 Some(wgpu::RenderPassColorAttachment {
                     view: &layer.color,
@@ -1002,10 +1059,24 @@ impl Splats {
                         store: wgpu::StoreOp::Store,
                     },
                 }),
+                layer
+                    .normal
+                    .as_ref()
+                    .map(|(view, resolve)| wgpu::RenderPassColorAttachment {
+                        view,
+                        depth_slice: None,
+                        resolve_target: resolve.as_ref(),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    }),
             ];
+            // The normal target only in a lit run under motion.
+            let targets = 1 + usize::from(kept) + usize::from(kept && motion && finish.lit());
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("render-wgpu splat layer"),
-                color_attachments: &attachments[..1 + usize::from(kept)],
+                color_attachments: &attachments[..targets],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: target.depth,
                     depth_ops: Some(wgpu::Operations {
@@ -1058,28 +1129,47 @@ impl Splats {
     /// Composite run `run` of the view's last [`Self::encode_runs`] into a
     /// pass drawing into `format` (the frame's bind group in group 0).
     pub fn draw_composite(&self, pass: &mut wgpu::RenderPass<'_>, format: ColorTarget, run: usize) {
-        let (Some(pipelines), Some(layer)) = (self.composites.get(&format), self.layers.get(run))
-        else {
+        let (Some(pipelines), Some(layer), Some(finish)) = (
+            self.composites.get(&format),
+            self.layers.get(run),
+            self.finishes.get(run),
+        ) else {
             return;
         };
+        // A lit run's colour and blocks come from `splat_light.wgsl`; its
+        // depth and motion as an unlit run's.
+        let lit = finish
+            .lit()
+            .then(|| self.lit_composites.get(&format))
+            .flatten();
+        if finish.lit() && lit.is_none() {
+            return;
+        }
+        let (colour, grid) = match lit {
+            Some([colour, grid]) => (colour, grid),
+            None => (&pipelines[0], &pipelines[2]),
+        };
         pass.set_bind_group(1, &layer.group, &[]);
-        match self.finishes.get(run) {
-            Some(&Finish::Smooth { surface }) => {
-                for pipeline in &pipelines[..1 + usize::from(surface)] {
-                    pass.set_pipeline(pipeline);
+        match *finish {
+            Finish::Smooth { .. } => {
+                pass.set_pipeline(colour);
+                pass.draw(0..3, 0..1);
+                if finish.keeps_surface() {
+                    pass.set_pipeline(&pipelines[1]);
                     pass.draw(0..3, 0..1);
                 }
             }
-            Some(&Finish::Grid {
+            Finish::Grid {
                 scissor: [x, y, width, height],
-            }) => {
+                ..
+            } => {
                 pass.set_scissor_rect(x, y, width, height);
-                pass.set_pipeline(&pipelines[2]);
+                pass.set_pipeline(grid);
                 pass.draw(0..3, 0..1);
                 let viewport = self.viewport;
                 pass.set_scissor_rect(viewport.x, viewport.y, viewport.width, viewport.height);
             }
-            Some(Finish::Off) | None => {}
+            Finish::Off => {}
         }
     }
 
@@ -1255,23 +1345,29 @@ impl Splats {
         samples: u32,
         tested: bool,
         surface: Option<bool>,
+        lit: bool,
     ) {
         let pipelines = self.pipelines.as_ref().expect("a device that draws splats");
         self.draws
-            .entry((samples, tested, surface))
+            .entry((samples, tested, surface, lit))
             .or_insert_with(|| {
                 let colour = Some(wgpu::ColorTargetState {
                     format: LAYER_FORMAT,
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 });
+                let blended = |format| wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                };
+                // A lit run without motion keeps its normal in the surface;
+                // under motion in a target of its own.
+                let normal = lit && surface == Some(true);
                 let targets = [
                     colour,
-                    surface.map(|motion| wgpu::ColorTargetState {
-                        format: surface_format(motion),
-                        blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
+                    surface.map(|motion| blended(surface_format(motion || lit))),
+                    normal.then(|| blended(NORMAL_FORMAT)),
                 ];
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("render-wgpu splat layer"),
@@ -1303,13 +1399,15 @@ impl Splats {
                     },
                     fragment: Some(wgpu::FragmentState {
                         module: &pipelines.module,
-                        entry_point: Some(if surface.is_some() {
-                            "fs_splat"
-                        } else {
-                            "fs_splat_colour"
+                        entry_point: Some(match (surface, lit) {
+                            (None, _) => "fs_splat_colour",
+                            (Some(_), false) => "fs_splat",
+                            (Some(false), true) => "fs_splat_lit",
+                            (Some(true), true) => "fs_splat_lit_motion",
                         }),
                         compilation_options: Default::default(),
-                        targets: &targets[..1 + usize::from(surface.is_some())],
+                        targets: &targets
+                            [..1 + usize::from(surface.is_some()) + usize::from(normal)],
                     }),
                     multiview_mask: None,
                     cache: None,
@@ -1317,14 +1415,18 @@ impl Splats {
             });
     }
 
-    /// Layer `index`, made or remade at the target's size.
-    fn layer(&mut self, device: &wgpu::Device, index: usize, target: &SplatTarget<'_>) {
-        let size = (
-            target.width,
-            target.height,
-            target.samples,
-            target.motion.is_some(),
-        );
+    /// Layer `index`, made or remade at the target's size, its surface
+    /// RGBA16F when `wide` (motion or a lit run's normal) and with a normal
+    /// target when `normal` (a lit run under motion).
+    fn layer(
+        &mut self,
+        device: &wgpu::Device,
+        index: usize,
+        target: &SplatTarget<'_>,
+        wide: bool,
+        normal: bool,
+    ) {
+        let size = (target.width, target.height, target.samples, wide, normal);
         if self
             .layers
             .get(index)
@@ -1363,6 +1465,13 @@ impl Splats {
                 "render-wgpu splat surface resolved",
             )
         });
+        let normal = size.4.then(|| {
+            (
+                texture(size.2, NORMAL_FORMAT, "render-wgpu splat normal"),
+                (size.2 > 1)
+                    .then(|| texture(1, NORMAL_FORMAT, "render-wgpu splat normal resolved")),
+            )
+        });
         let grid = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("render-wgpu splat grid"),
             size: GRID_BYTES,
@@ -1389,6 +1498,14 @@ impl Splats {
                     binding: 32,
                     resource: grid.as_entire_binding(),
                 },
+                // Without a normal target the surface stands in, unread.
+                wgpu::BindGroupEntry {
+                    binding: 33,
+                    resource: wgpu::BindingResource::TextureView(match &normal {
+                        Some((view, resolve)) => resolve.as_ref().unwrap_or(view),
+                        None => surface_resolve.as_ref().unwrap_or(&surface),
+                    }),
+                },
             ],
         });
         let layer = Layer {
@@ -1397,6 +1514,7 @@ impl Splats {
             resolve,
             surface,
             surface_resolve,
+            normal,
             grid,
             group,
         };
@@ -1408,10 +1526,57 @@ impl Splats {
     }
 }
 
+/// A composite pipeline into `format`: `vs_composite` and the fragment
+/// `entry` of `module` (labelled), inside the blended pass, testing its
+/// depth with `depth_compare` and writing it, or neither without one.
+#[allow(clippy::too_many_arguments, reason = "one pipeline's states")]
+fn composite_pipeline(
+    device: &wgpu::Device,
+    pipelines: &Pipelines,
+    format: ColorTarget,
+    (label, module): (&str, &wgpu::ShaderModule),
+    entry: &str,
+    depth_compare: Option<wgpu::CompareFunction>,
+    color: wgpu::ColorTargetState,
+    motion_write: MotionWrite,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(&pipelines.composite_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &pipelines.module,
+            entry_point: Some("vs_composite"),
+            compilation_options: Default::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        // Inside the blended pass, whose depth only a grid's blocks test
+        // (each pixel of a block against what stands there): the layer was
+        // tested against it.
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(depth_compare.is_some()),
+            depth_compare: Some(depth_compare.unwrap_or(wgpu::CompareFunction::Always)),
+            stencil: Default::default(),
+            bias: Default::default(),
+        }),
+        multisample: format.multisample(),
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            targets: &format.targets(color, motion_write),
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 impl Pipelines {
     fn new(
         device: &wgpu::Device,
         module: wgpu::ShaderModule,
+        light_module: wgpu::ShaderModule,
         frame_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let storage = |binding: u32, read_only: bool, visibility: wgpu::ShaderStages| {
@@ -1456,7 +1621,11 @@ impl Pipelines {
         );
         let gaussian_layout = layout(
             "render-wgpu splat gaussians",
-            &[storage(0, true, compute), storage(1, true, compute)],
+            &[
+                storage(0, true, compute),
+                storage(1, true, compute),
+                storage(2, true, compute),
+            ],
         );
         let sort_layout = layout(
             "render-wgpu splats sort",
@@ -1493,6 +1662,7 @@ impl Pipelines {
                 layer_texture(30),
                 layer_texture(31),
                 storage(32, true, wgpu::ShaderStages::FRAGMENT),
+                layer_texture(33),
             ],
         );
         let pipeline_layout = |label: &str, groups: &[Option<&wgpu::BindGroupLayout>]| {
@@ -1539,6 +1709,7 @@ impl Pipelines {
             draw_pipeline_layout,
             composite_pipeline_layout,
             module,
+            light_module,
             project,
             sort_count,
             scan_local,
@@ -1660,6 +1831,84 @@ fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<JointReach>)> {
     Some((words, bounds))
 }
 
+/// Each Gaussian's unit normal, octahedral (`splats.wgsl` `normals`): the
+/// asset's `_NORMAL` when it has one, otherwise its shortest axis pointing
+/// away from the centre of the Gaussians its heaviest joint carries (of the
+/// whole set when unskinned). A flat Gaussian on a figure's surface lies
+/// along it, so its shortest axis is the surface's normal; a round one's is
+/// a guess.
+fn normal_words(splats: &GlbSplats) -> Vec<u32> {
+    let heaviest = |index: usize| -> usize {
+        match (&splats.joints, &splats.weights) {
+            (Some(joints), Some(weights)) => {
+                let (slot, _) = weights[index].iter().enumerate().fold(
+                    (0, f32::MIN),
+                    |best, (slot, weight)| {
+                        if *weight > best.1 {
+                            (slot, *weight)
+                        } else {
+                            best
+                        }
+                    },
+                );
+                usize::from(joints[index][slot])
+            }
+            _ => 0,
+        }
+    };
+    let mut sums: Vec<(Vec3, f32)> = Vec::new();
+    if splats.normals.is_none() {
+        for (index, centre) in splats.centres.iter().enumerate() {
+            let joint = heaviest(index);
+            if sums.len() <= joint {
+                sums.resize(joint + 1, (Vec3::ZERO, 0.0));
+            }
+            sums[joint].0 += Vec3::from(*centre);
+            sums[joint].1 += 1.0;
+        }
+    }
+    (0..splats.centres.len())
+        .map(|index| {
+            let normal = match &splats.normals {
+                Some(normals) => Vec3::from(normals[index]),
+                None => {
+                    let rotation = splats.rotations[index];
+                    let q =
+                        glam::Quat::from_xyzw(rotation[0], rotation[1], rotation[2], rotation[3])
+                            .normalize();
+                    let scale = splats.scales[index];
+                    let shortest = (0..3)
+                        .min_by(|a, b| scale[*a].abs().total_cmp(&scale[*b].abs()))
+                        .unwrap_or(2);
+                    let axis = q * Vec3::AXES[shortest];
+                    let (sum, count) = sums[heaviest(index)];
+                    let away = Vec3::from(splats.centres[index]) - sum / count.max(1.0);
+                    if axis.dot(away) < 0.0 {
+                        -axis
+                    } else {
+                        axis
+                    }
+                }
+            };
+            octahedral(normal.normalize_or(Vec3::Z))
+        })
+        .collect()
+}
+
+/// A unit vector's octahedral encoding as two snorm16 (`splats.wgsl`
+/// `octahedral`).
+fn octahedral(normal: Vec3) -> u32 {
+    let n = normal / (normal.x.abs() + normal.y.abs() + normal.z.abs());
+    let (x, y) = if n.z < 0.0 {
+        let sign = |value: f32| if value >= 0.0 { 1.0 } else { -1.0 };
+        ((1.0 - n.y.abs()) * sign(n.x), (1.0 - n.x.abs()) * sign(n.y))
+    } else {
+        (n.x, n.y)
+    };
+    let snorm = |value: f32| ((value.clamp(-1.0, 1.0) * 32767.0).round() as i16) as u16 as u32;
+    snorm(x) | snorm(y) << 16
+}
+
 /// The IEEE half nearest a non-negative `value` (a standard deviation):
 /// tiny values flush toward zero, large ones stop at the largest half.
 fn half_bits(value: f32) -> u16 {
@@ -1718,6 +1967,7 @@ mod tests {
             rotations: Vec::new(),
             scales: Vec::new(),
             colors: Vec::new(),
+            normals: None,
             joints: None,
             weights: None,
         };
@@ -1740,22 +1990,84 @@ mod tests {
         splats
     }
 
+    /// `splats.wgsl` `octahedral`, on the CPU.
+    fn from_octahedral(word: u32) -> Vec3 {
+        let unpack = |bits: u32| f32::from(bits as u16 as i16) / 32767.0;
+        let (x, y) = (unpack(word & 0xffff), unpack(word >> 16));
+        let mut n = Vec3::new(x, y, 1.0 - x.abs() - y.abs());
+        if n.z < 0.0 {
+            let sign = |value: f32| if value >= 0.0 { 1.0 } else { -1.0 };
+            n = Vec3::new(
+                (1.0 - n.y.abs()) * sign(n.x),
+                (1.0 - n.x.abs()) * sign(n.y),
+                n.z,
+            );
+        }
+        n.normalize()
+    }
+
+    /// Normals keep their direction through the octahedral encoding, and
+    /// without `_NORMAL` a flat Gaussian's shortest axis points away from
+    /// the Gaussians its joint carries.
+    #[test]
+    fn normals_are_the_assets_or_flat_gaussians_shortest_axes_pointing_out() {
+        for normal in [
+            Vec3::X,
+            -Vec3::Y,
+            Vec3::new(0.3, -0.5, -0.8).normalize(),
+            -Vec3::Z,
+        ] {
+            let decoded = from_octahedral(octahedral(normal));
+            assert!(
+                decoded.dot(normal) > 0.9999,
+                "{normal} came back as {decoded}"
+            );
+        }
+        // Two flat Gaussians either side of their joint, thin along x.
+        let splats = GlbSplats {
+            centres: vec![[-0.5, 0.0, 0.0], [0.5, 0.0, 0.0]],
+            rotations: vec![[0.0, 0.0, 0.0, 1.0]; 2],
+            scales: vec![[0.01, 0.2, 0.2]; 2],
+            colors: vec![[1.0; 4]; 2],
+            normals: None,
+            joints: Some(vec![[3, 0, 0, 0]; 2]),
+            weights: Some(vec![[1.0, 0.0, 0.0, 0.0]; 2]),
+        };
+        let words = normal_words(&splats);
+        assert!(from_octahedral(words[0]).dot(-Vec3::X) > 0.999);
+        assert!(from_octahedral(words[1]).dot(Vec3::X) > 0.999);
+        // The asset's own normals are kept.
+        let given = GlbSplats {
+            normals: Some(vec![[0.0, 1.0, 0.0], [0.0, 0.0, -1.0]]),
+            ..splats
+        };
+        let words = normal_words(&given);
+        assert!(from_octahedral(words[0]).dot(Vec3::Y) > 0.999);
+        assert!(from_octahedral(words[1]).dot(-Vec3::Z) > 0.999);
+    }
+
     /// The GPU's radix sort orders a run of two sets as a stable sort by
     /// key does, the culled Gaussians last, and the draw counts the rest.
     #[test]
     fn a_run_sorts_back_to_front_as_a_stable_cpu_sort_does() {
         let gpu = Gpu::headless().expect("a wgpu adapter");
         let device = &gpu.device;
-        let module = crate::pipelines::standard(crate::shaders::Shaders::new().module(
+        let mut shaders = crate::shaders::Shaders::new();
+        let module = crate::pipelines::standard(shaders.module(
             device,
             render_shaders::Entry::Splats,
+            render_shaders::Features::default(),
+        ));
+        let light_module = crate::pipelines::standard(shaders.module(
+            device,
+            render_shaders::Entry::SplatLight,
             render_shaders::Features::default(),
         ));
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[],
         });
-        let mut splats = Splats::new(&gpu, module, &frame_layout);
+        let mut splats = Splats::new(&gpu, module, light_module, &frame_layout);
         if let Some(refusal) = &splats.refusal {
             panic!("splats refused on this adapter: {refusal}");
         }
@@ -1818,6 +2130,7 @@ mod tests {
                 depth_range: (near, far),
                 read_after: false,
                 grid: None,
+                light: None,
             }],
             &SplatTarget {
                 depth: &depth,

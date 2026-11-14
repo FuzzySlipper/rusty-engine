@@ -138,8 +138,11 @@ fn check_splat_primitive(
             "remove the empty primitive",
         ));
     }
-    for name in SPLAT_ATTRIBUTES {
-        let Some(accessor) = primitive.get(&gltf::Semantic::Extras(name.to_owned())) else {
+    for name in SPLAT_ATTRIBUTES.iter().chain(&OPTIONAL_SPLAT_ATTRIBUTES) {
+        let Some(accessor) = primitive.get(&gltf::Semantic::Extras((*name).to_owned())) else {
+            if OPTIONAL_SPLAT_ATTRIBUTES.contains(name) {
+                continue;
+            }
             return Err(ImportDiagnostic::error(
                 ImportCode::MalformedSource,
                 format!("{path}.attributes._{name}"),
@@ -162,6 +165,10 @@ fn check_splat_primitive(
     }
     Ok(())
 }
+
+/// Attributes a splat primitive may carry: `_NORMAL`, each Gaussian's
+/// surface normal, for lighting.
+const OPTIONAL_SPLAT_ATTRIBUTES: [&str; 1] = ["NORMAL"];
 
 const IDENTITY: [f64; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -400,6 +407,31 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.code == ImportCode::MalformedSource && d.message.contains("_COLOR")));
+    }
+
+    /// `_NORMAL` is optional, and when written has one value per Gaussian.
+    #[test]
+    fn a_splat_normal_stream_is_admitted_and_its_count_checked() {
+        let with = import(&glb(
+            |attributes| attributes["_NORMAL"] = serde_json::json!(2),
+            |_| {},
+        ));
+        assert!(with.assets.is_some(), "{:?}", with.diagnostics);
+        let short = import(&glb(
+            |attributes| attributes["_NORMAL"] = serde_json::json!(4),
+            |document| {
+                document["accessors"]
+                    .as_array_mut()
+                    .unwrap()
+                    .push(serde_json::json!(
+                        {"bufferView": 2, "componentType": 5126, "count": 1, "type": "VEC3"}
+                    ));
+            },
+        ));
+        assert!(short.assets.is_none());
+        assert!(short.diagnostics.iter().any(|d| {
+            d.code == ImportCode::AttributeLengthMismatch && d.message.contains("_NORMAL")
+        }));
     }
 
     #[test]

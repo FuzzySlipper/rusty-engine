@@ -1385,12 +1385,16 @@ impl Renderer {
                     palette: appearance.palette.clone(),
                     origin: node.world.w_axis.truncate(),
                 });
+            let light = appearance
+                .filter(|appearance| appearance.lighting == render_model::SplatLighting::Lit)
+                .map(|appearance| appearance.light_floor);
             instances.push(crate::splats::SplatInstance {
                 handle: *handle,
                 sets,
                 depth: ((bounds.min + bounds.max) * 0.5).distance_squared(eye),
                 bounds,
                 grid,
+                light,
             });
         }
         instances.sort_by(|a, b| {

@@ -404,7 +404,7 @@ impl BitOr for Features {
 }
 
 /// Importable modules, each after the modules it imports.
-const MODULES: [(&str, &str); 14] = [
+const MODULES: [(&str, &str); 15] = [
     ("shaders/types.wgsl", include_str!("shaders/types.wgsl")),
     ("shaders/view.wgsl", include_str!("shaders/view.wgsl")),
     ("shaders/motion.wgsl", include_str!("shaders/motion.wgsl")),
@@ -425,6 +425,10 @@ const MODULES: [(&str, &str); 14] = [
     ("shaders/finish.wgsl", include_str!("shaders/finish.wgsl")),
     ("shaders/shade.wgsl", include_str!("shaders/shade.wgsl")),
     ("shaders/image.wgsl", include_str!("shaders/image.wgsl")),
+    (
+        "shaders/splat_layer.wgsl",
+        include_str!("shaders/splat_layer.wgsl"),
+    ),
 ];
 
 /// The import path a product shader's module takes.
@@ -524,6 +528,9 @@ pub enum Entry {
     /// Gaussian splats: projected, radix-sorted, drawn into a run's layer
     /// and composited (`splats.wgsl`; compute and raster).
     Splats,
+    /// A lit splat run's composite: its layer lit by the world's lights
+    /// (`splat_light.wgsl`).
+    SplatLight,
 }
 
 impl Entry {
@@ -588,6 +595,10 @@ impl Entry {
             ),
             Self::Hiz => ("shaders/hiz.wgsl", include_str!("shaders/hiz.wgsl")),
             Self::Splats => ("shaders/splats.wgsl", include_str!("shaders/splats.wgsl")),
+            Self::SplatLight => (
+                "shaders/splat_light.wgsl",
+                include_str!("shaders/splat_light.wgsl"),
+            ),
             Self::Upscale => ("shaders/upscale.wgsl", include_str!("shaders/upscale.wgsl")),
             Self::RayProbe => (
                 "shaders/ray_probe.wgsl",
@@ -1014,6 +1025,7 @@ mod tests {
             Entry::RayGi,
             Entry::RayGiComposite,
             Entry::Splats,
+            Entry::SplatLight,
         ] {
             compose_case(&mut shaders, entry, Features::default());
         }

@@ -584,6 +584,178 @@ fn a_figure_on_a_pixel_grid_draws_palette_blocks_behind_what_stands_in_front() {
     }
 }
 
+/// A flat Gaussian facing the camera at z = −3, lit when `lit` with a
+/// light floor of `floor`, under a sun shining along `sun` (and casting
+/// through its cascades when the harness draws shadows), with a box at
+/// `blocker` when given.
+fn lit_disc(
+    harness: &mut Harness,
+    lit: bool,
+    floor: f32,
+    sun: [f32; 3],
+    blocker: Option<[f32; 3]>,
+) {
+    let disc = Gaussian {
+        scale: [0.3, 0.3, 0.005],
+        ..Gaussian::round([0.0; 3], 0.3, [200, 100, 50, 255])
+    };
+    let mut ops = splats(harness, 1, &[disc], [0.0, 0.0, -3.0]);
+    ops.push(RenderDiff::CreateLight {
+        handle: RenderHandle::new(20),
+        parent: None,
+        light: LightDescriptor::Directional {
+            color: [1.0; 3],
+            intensity: 3.0,
+            enabled: true,
+            direction: sun,
+            range: None,
+            shadow_intent: LightShadowIntent::Requested,
+            shadow: Default::default(),
+        },
+    });
+    if let Some(at) = blocker {
+        ops.push(RenderDiff::DefineMaterial {
+            material: material("material/blocker", [0.5, 0.5, 0.5, 1.0], None),
+        });
+        ops.push(static_mesh(
+            "mesh/blocker",
+            box_mesh([-0.6, -0.1, -0.6], [0.6, 0.1, 0.6], |_| 0),
+            "material/blocker",
+        ));
+        ops.push(instance(
+            30,
+            None,
+            "mesh/blocker",
+            transform(at, 0.0, [1.0; 3]),
+        ));
+    }
+    ops.push(RenderDiff::SetSplatAppearance {
+        handle: RenderHandle::new(1),
+        appearance: SplatAppearance {
+            lighting: if lit {
+                SplatLighting::Lit
+            } else {
+                SplatLighting::Unlit
+            },
+            light_floor: floor,
+            ..SplatAppearance::default()
+        },
+    });
+    harness.apply(ops);
+}
+
+fn luminance([r, g, b]: [i32; 3]) -> i32 {
+    r + g + b
+}
+
+/// Lit, a figure takes the world's light at its own normals: a flat
+/// Gaussian is bright with the sun before it and falls to its light floor
+/// with the sun behind it, its hue kept; unlit it draws as baked.
+#[test]
+fn a_lit_splat_takes_the_suns_light_at_its_normal_down_to_its_floor() {
+    let options = RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    };
+    let render = |lit, floor, sun| {
+        let mut harness = Harness::new(options);
+        lit_disc(&mut harness, lit, floor, sun, None);
+        at(&harness.render(&front()).1, CENTRE)
+    };
+    let unlit = render(false, 0.0, [0.0, 0.0, -1.0]);
+    assert_near(unlit, [200, 100, 50], 2);
+    let before = render(true, 0.25, [0.0, 0.0, -1.0]);
+    let behind = render(true, 0.25, [0.0, 0.0, 1.0]);
+    assert!(
+        luminance(before) > luminance(behind) + 150,
+        "sun before {before:?}, behind {behind:?}"
+    );
+    // Behind, a quarter of the baked colour in linear light.
+    let quarter = |byte: u8| encode(decode(byte) * 0.25);
+    assert_near(behind, [quarter(200), quarter(100), quarter(50)], 3);
+    // Lit, red still leads green and green blue.
+    assert!(before[0] > before[1] && before[1] > before[2], "{before:?}");
+
+    // Under a temporal stage the view draws motion and the normal takes a
+    // target of its own: the light is the same.
+    let temporal = |sun| {
+        let mut harness = Harness::new(options);
+        lit_disc(&mut harness, true, 0.25, sun, None);
+        harness.apply(vec![RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                antialiasing: Antialiasing::Temporal,
+                render_scale: 1.0,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        }]);
+        let samples = harness.renderer.samples();
+        harness.target = render_wgpu::OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, samples);
+        let mut rgba = Vec::new();
+        for _ in 0..16 {
+            rgba = harness.render(&front()).1;
+        }
+        at(&rgba, CENTRE)
+    };
+    assert_near(temporal([0.0, 0.0, -1.0]), before, 3);
+    assert_near(temporal([0.0, 0.0, 1.0]), behind, 3);
+
+    // On a pixel grid the block is lit once, then snapped: a bright
+    // palette colour with the sun before it, a dark one behind.
+    let palette = vec![[0.9, 0.4, 0.1], [0.05, 0.02, 0.01]];
+    let gridded = |sun| {
+        let mut harness = Harness::new(options);
+        lit_disc(&mut harness, true, 0.25, sun, None);
+        harness.apply(vec![RenderDiff::SetSplatAppearance {
+            handle: RenderHandle::new(1),
+            appearance: SplatAppearance {
+                lighting: SplatLighting::Lit,
+                light_floor: 0.25,
+                pixel_grid: 4,
+                palette: palette.clone(),
+                ..SplatAppearance::default()
+            },
+        }]);
+        at(&harness.render(&front()).1, CENTRE)
+    };
+    let byte = |linear: f32| encode(linear);
+    assert_near(
+        gridded([0.0, 0.0, -1.0]),
+        [byte(0.9), byte(0.4), byte(0.1)],
+        1,
+    );
+    assert_near(
+        gridded([0.0, 0.0, 1.0]),
+        [byte(0.05), byte(0.02), byte(0.01)],
+        1,
+    );
+}
+
+/// A lit figure receives the sun's cascaded shadow: a box between the sun
+/// and it darkens it to its floor.
+#[test]
+fn a_lit_splat_receives_a_cascaded_shadow() {
+    let options = RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    };
+    // The sun from above and in front; the box half way along its light.
+    let sun = [0.0, -1.0, -1.0];
+    let render = |blocker| {
+        let mut harness = Harness::new(options);
+        lit_disc(&mut harness, true, 0.1, sun, blocker);
+        at(&harness.render(&front()).1, CENTRE)
+    };
+    let open = render(None);
+    let shadowed = render(Some([0.0, 1.5, -1.5]));
+    assert!(
+        luminance(open) > luminance(shadowed) + 150,
+        "open {open:?}, shadowed {shadowed:?}"
+    );
+    let tenth = |byte: u8| encode(decode(byte) * 0.1);
+    assert_near(shadowed, [tenth(200), tenth(100), tenth(50)], 3);
+}
+
 fn decode(byte: u8) -> f32 {
     let c = f32::from(byte) / 255.0;
     if c <= 0.04045 {

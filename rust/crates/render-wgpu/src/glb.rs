@@ -48,6 +48,9 @@ pub struct GlbSplats {
     pub scales: Vec<[f32; 3]>,
     /// `_COLOR`: sRGB-encoded display colour in rgb, linear opacity in a.
     pub colors: Vec<[f32; 4]>,
+    /// `_NORMAL`, when the asset has one: each Gaussian's surface normal,
+    /// pointing out of the figure, in the primitive's space.
+    pub normals: Option<Vec<[f32; 3]>>,
     pub joints: Option<Vec<[u16; 4]>>,
     /// Normalized to sum 1 (a zero sum becomes `(1, 0, 0, 0)`).
     pub weights: Option<Vec<[f32; 4]>>,
@@ -542,9 +545,14 @@ fn decode_splats<'a, 's>(
     let rotations = floats::<4>(attribute("ROTATION")?, data.clone())?;
     let scales = floats::<3>(attribute("SCALE")?, data.clone())?;
     let colors = floats::<4>(attribute("COLOR")?, data.clone())?;
+    let normals = attribute("NORMAL")
+        .ok()
+        .map(|accessor| floats::<3>(accessor, data.clone()))
+        .transpose()?;
     let count = centres.len();
     if [rotations.len(), scales.len(), colors.len()]
         .iter()
+        .chain(normals.as_ref().map(Vec::len).as_ref())
         .any(|len| *len != count)
     {
         return Err("glb: splat attributes differ in count".to_owned());
@@ -571,6 +579,7 @@ fn decode_splats<'a, 's>(
         rotations,
         scales,
         colors,
+        normals,
         joints,
         weights,
     })

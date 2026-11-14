@@ -10,7 +10,7 @@
 //!     [--size 1920x1080] [--eye-height 0.88] [--distance 2.2] [--occluded]
 //!     [--clip-pack PATH --clip ID [--fit JOINT:K,A] [--at SECONDS] [--track SECONDS]]
 //!     [--arms ABDUCT,FOREARM] [--multiplier R,G,B] [--fog DENSITY]
-//!     [--pixel N [--palette PATH]]
+//!     [--pixel N [--palette PATH]] [--lit FLOOR]
 //! ```
 //!
 //! - `--occluded`: a box between the camera and the figure's legs, a wall
@@ -35,6 +35,11 @@
 //!   front, each at every time: `<view>-t<index>.png`.
 //! - `--multiplier R,G,B`: the splat colour multiplier.
 //! - `--fog DENSITY`: exponential fog, grey, which reads the figure's depth.
+//! - `--lit FLOOR`: the figure lit by the world's lights, keeping FLOOR of
+//!   its baked colour however dark, under its own lights in place of the
+//!   default ones: a sun from his front left and above, ambient light and a
+//!   warm point light at his right front. Unlit captures to compare take the
+//!   same lights with `--lit-scene`.
 //! - `--pixel N`, `--palette PATH`: the figure on a grid of N-pixel blocks,
 //!   snapped to a palette JSON's `colours` and `extra` (sRGB hex).
 //! - `--pose-out`: write `pose.json`, every rig joint's world transform at
@@ -74,6 +79,8 @@ struct Arguments {
     fog: Option<f32>,
     pixel_grid: u32,
     palette: Vec<[f32; 3]>,
+    lit: Option<f32>,
+    lit_scene: bool,
     pose_out: bool,
     track_joints: Option<Vec<String>>,
     centre: Option<String>,
@@ -164,6 +171,11 @@ fn arguments() -> Result<Arguments, String> {
             "--multiplier" => arguments.multiplier = Some(numbers::<3>(&value()?, "--multiplier")?),
             "--fog" => arguments.fog = Some(value()?.parse().map_err(|_| "--fog")?),
             "--pixel" => arguments.pixel_grid = value()?.parse().map_err(|_| "--pixel")?,
+            "--lit" => {
+                arguments.lit = Some(value()?.parse().map_err(|_| "--lit")?);
+                arguments.lit_scene = true;
+            }
+            "--lit-scene" => arguments.lit_scene = true,
             "--palette" => arguments.palette = palette(&value()?)?,
             "--pose-out" => arguments.pose_out = true,
             "--track-joints" => {
@@ -245,7 +257,10 @@ fn main() {
     let bytes = read(&arguments.glb);
     std::fs::create_dir_all(&arguments.out).expect("create the output directory");
 
-    let mut harness = Harness::new(RendererOptions::default());
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: !arguments.lit_scene,
+        ..RendererOptions::default()
+    });
     let (width, height) = arguments.size;
     harness.target = OffscreenTarget::new(&harness.gpu, width, height, 1);
     let mut asset = admit(&arguments.glb, &bytes);
@@ -318,6 +333,12 @@ fn main() {
                     multiplier: arguments.multiplier.unwrap_or([1.0; 3]),
                     pixel_grid: arguments.pixel_grid,
                     palette: arguments.palette.clone(),
+                    lighting: if arguments.lit.is_some() {
+                        SplatLighting::Lit
+                    } else {
+                        SplatLighting::Unlit
+                    },
+                    light_floor: arguments.lit.unwrap_or(0.0),
                     ..SplatAppearance::default()
                 },
                 asset: asset.asset.clone(),
@@ -386,6 +407,50 @@ fn main() {
             box_mesh([-3.0, 0.0, -0.05], [3.0, 3.0, 0.05], |_| 0),
             "material/wall",
         ));
+    }
+    if arguments.lit_scene {
+        ops.extend([
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(60),
+                parent: None,
+                light: LightDescriptor::Directional {
+                    color: [1.0, 0.96, 0.88],
+                    intensity: 3.0,
+                    enabled: true,
+                    // From his front left (+z, +x) and above, down and back.
+                    direction: [-0.45, -0.75, -0.5],
+                    range: None,
+                    shadow_intent: LightShadowIntent::Disabled,
+                    shadow: Default::default(),
+                },
+            },
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(61),
+                parent: None,
+                light: LightDescriptor::Ambient {
+                    color: [0.75, 0.82, 1.0],
+                    intensity: 0.45,
+                    enabled: true,
+                    shadow_intent: LightShadowIntent::Disabled,
+                    shadow: Default::default(),
+                    range: None,
+                },
+            },
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(62),
+                parent: None,
+                light: LightDescriptor::Point {
+                    color: [1.0, 0.45, 0.15],
+                    intensity: 4.0,
+                    enabled: true,
+                    position: [-0.9, 1.2, 0.7],
+                    range: Some(3.0),
+                    decay: 2.0,
+                    shadow_intent: LightShadowIntent::Disabled,
+                    shadow: Default::default(),
+                },
+            },
+        ]);
     }
     if let Some(density) = arguments.fog {
         ops.push(RenderDiff::SetFog {

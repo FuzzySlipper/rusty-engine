@@ -893,6 +893,11 @@ impl Renderer {
                     .shaders
                     .module(device, Entry::Splats, Features::default()),
             ),
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::SplatLight,
+                Features::default(),
+            )),
             &layouts.frame,
         );
         let volumetric_fog = volumetric_fog::VolumetricFog::new(

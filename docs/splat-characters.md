@@ -19,6 +19,7 @@ is a `POINTS` primitive (`mode` 0) with one value per Gaussian in each of:
 | `_SCALE` | float VEC3 | Standard deviation along each of the Gaussian's own axes, in metres (linear, not log). |
 | `_COLOR` | float or normalized unsigned VEC4 | **sRGB-encoded** display colour in rgb; **linear** opacity in a. |
 | `JOINTS_0`, `WEIGHTS_0` | as glTF | The skin, on a skinned node: at most 256 joints a primitive indexes. |
+| `_NORMAL` (optional) | float or normalized signed VEC3 | The surface normal at the Gaussian, unit, pointing out of the figure, for [lighting](#lighting). |
 
 `_COLOR` is not `COLOR_0`. glTF defines `COLOR_0` as linear, and these
 colours are display-referred: they are the values the splats were trained
@@ -165,6 +166,43 @@ viggle441, Walking, four phases at 1920 × 1080):
   figure, the shares of each palette colour differ from the web's by an
   L1 of 0.14 to 0.15 (0.13 to 0.14 with the web's weights): alignment and
   edges account for most of it.
+
+## Lighting
+
+`SetSplatAppearance` with `Lighting = Lit` lights a figure with the world's
+lights. Unlit (the default) draws it as baked, scaled by the multiplier.
+
+```csharp
+engine.Animation.SetSplatAppearance(new(townsman, Vector3.One, 0, 0.5f, default, 0,
+    SplatLighting.Lit, LightFloor: 0.15f));
+```
+
+- **Per pixel, after blending.** The figure's Gaussians blend their depth
+  and normal beside their colour. Where they draw, the composite lights the
+  blended colour once with the world's own lighting: the sun through its
+  cascades (so he receives shadows), clustered point and spot lights,
+  ambient light, the sky and the indirect-light probes. Every Gaussian
+  along a ray is lit alike.
+- **The baked colour is the albedo**, diffuse only (roughness 1, no
+  metal). The paint already holds some shading, which the light multiplies,
+  as the web SDK's relighting does.
+- **Light floor.** `LightFloor` (0 to 1) keeps that share of the baked
+  colour however dark the light. At 0 the scene's ambient light is the
+  floor.
+- **Normals.** With `_NORMAL` the asset's normals light him. Without it,
+  each Gaussian's shortest axis stands in, pointing away from the centre of
+  the Gaussians its heaviest joint carries: right for the flat Gaussians on
+  his surface, a guess for round ones, so lighting from the fallback is
+  noisier.
+- **Pixel grid.** Each block is averaged (colour, depth and normal), lit
+  once, then snapped to the palette: a block takes one shade, and shadows
+  fall on the block grid.
+- **Runs.** Lit figures draw in runs of their own, apart from unlit ones
+  and from lit ones with another floor.
+- **Cost.** A lit figure always keeps the depth and normal (0.55 ms rather
+  than 0.31 for a close 48k figure on an RX 9070 XT, as a figure something
+  reads), and the light is one evaluation per covered pixel. Under motion
+  the normal takes a target of its own.
 
 ## How it draws
 

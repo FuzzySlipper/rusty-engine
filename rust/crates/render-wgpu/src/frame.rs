@@ -2559,6 +2559,7 @@ impl Renderer {
         let mut runs: Vec<Vec<usize>> = Vec::new();
         let mut run_gaussians = 0u32;
         let mut run_gridded = false;
+        let mut run_light: Option<f32> = None;
         let mut refused = 0u32;
         let (mut part, mut sprite, mut splat) = (0, 0, 0);
         loop {
@@ -2588,12 +2589,17 @@ impl Renderer {
                 Some(1) => {
                     let gaussians = splat_gaussians(&splats[splat]);
                     // An instance on a pixel grid draws in a run of its own:
-                    // its composite averages its layer by blocks.
+                    // its composite averages its layer by blocks. Lit and
+                    // unlit instances, and lit ones of different floors,
+                    // draw in runs apart: a run's composite is lit or not.
                     let gridded = splats[splat].grid.is_some();
+                    let light = splats[splat].light;
                     let continues = matches!(order.last(), Some(Blended::Splats(_)))
                         && !run_gridded
-                        && !gridded;
+                        && !gridded
+                        && run_light == light;
                     run_gridded = gridded;
+                    run_light = light;
                     if continues
                         && run_gaussians.saturating_add(gaussians)
                             <= crate::splats::MAX_RUN_GAUSSIANS
@@ -4300,7 +4306,11 @@ impl Renderer {
             Vec::new()
         };
         if !splat_instances.is_empty() {
-            self.splats.prepare_target(&self.gpu.device, hdr_format);
+            let lit = splat_instances
+                .iter()
+                .any(|instance| instance.light.is_some());
+            self.splats
+                .prepare_target(&self.gpu.device, hdr_format, lit);
         }
         let pipelines = &self.pipelines[format_index];
         let cache = self.views[slot].as_ref().expect("view list is current");
@@ -4542,6 +4552,7 @@ impl Renderer {
                                 ),
                                 read_after: read_after || followed,
                                 grid: first.grid.as_ref().map(|grid| (grid, first.bounds)),
+                                light: first.light,
                             }
                         })
                         .collect();

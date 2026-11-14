@@ -9,6 +9,7 @@
 //!     --walk PATH [--walk-fit JOINT:K,A] --idle PATH [--idle-fit JOINT:K,A]
 //!     --out DIR [--size 1920x1080] [--frames 90] [--save 30,60,89]
 //!     [--taau SCALE] [--motion-view] [--fresh] [--no-fog]
+//!     [--lights] [--lit FLOOR]
 //! ```
 //!
 //! - `--walk`, `--idle`: clip packs bound by joint names; the walker plays
@@ -21,6 +22,11 @@
 //! - `--fresh`: also draw the last frame's moment afresh with 4x MSAA,
 //!   `fresh.png`, and report the last frame's difference from it.
 //! - `--no-fog`: no fog.
+//! - `--lights`: the scene's own lights instead of the default ones: a
+//!   sun casting through its cascades, ambient light, a warm point light by
+//!   the bystander, and an awning whose shadow the walker crosses.
+//! - `--lit FLOOR`: both figures lit by the world's lights, keeping FLOOR
+//!   of their baked colour however dark.
 //!
 //! Writes `readout.json`: the splat readout, every pass's median GPU time
 //! over the last 30 frames, the adapter and the `--fresh` difference.
@@ -67,6 +73,8 @@ struct Arguments {
     motion_view: bool,
     fresh: bool,
     fog: bool,
+    lights: bool,
+    lit: Option<f32>,
 }
 
 fn fit(text: &str, flag: &str) -> Result<(String, f32, f32), String> {
@@ -100,6 +108,8 @@ fn arguments() -> Result<Arguments, String> {
         motion_view: false,
         fresh: false,
         fog: true,
+        lights: false,
+        lit: None,
     };
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} takes a value"));
@@ -130,6 +140,8 @@ fn arguments() -> Result<Arguments, String> {
             "--motion-view" => arguments.motion_view = true,
             "--fresh" => arguments.fresh = true,
             "--no-fog" => arguments.fog = false,
+            "--lights" => arguments.lights = true,
+            "--lit" => arguments.lit = Some(value()?.parse().map_err(|_| "--lit")?),
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -264,6 +276,62 @@ fn figure(
     }
 }
 
+/// The sun (casting through its cascades), ambient light, a warm point
+/// light by the bystander, and an awning over the path whose shadow the
+/// walker crosses between about x = 0.2 and 1.2.
+fn lights() -> Vec<RenderDiff> {
+    vec![
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(40),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0, 0.96, 0.88],
+                intensity: 3.0,
+                enabled: true,
+                direction: [0.35, -1.0, -0.45],
+                range: None,
+                shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
+            },
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(41),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [0.75, 0.82, 1.0],
+                intensity: 0.45,
+                enabled: true,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+                range: None,
+            },
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(42),
+            parent: None,
+            light: LightDescriptor::Point {
+                color: [1.0, 0.55, 0.2],
+                intensity: 6.0,
+                enabled: true,
+                position: [-1.1, 1.4, 0.6],
+                range: Some(3.5),
+                decay: 2.0,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        },
+        RenderDiff::DefineMaterial {
+            material: material("material/awning", [0.45, 0.3, 0.2, 1.0], None),
+        },
+        static_mesh(
+            "mesh/awning",
+            box_mesh([-0.4, 2.6, 0.2], [0.6, 2.7, 1.2], |_| 0),
+            "material/awning",
+        ),
+        instance(43, None, "mesh/awning", transform([0.0; 3], 0.0, [1.0; 3])),
+    ]
+}
+
 /// The floor, crates receding into the fog, the sprite.
 fn world(harness: &mut Harness, fog: bool) -> Vec<RenderDiff> {
     let texture = harness
@@ -386,7 +454,11 @@ fn main() {
         std::process::exit(2);
     });
     std::fs::create_dir_all(&arguments.out).expect("create the output directory");
-    let mut harness = Harness::new(RendererOptions::default());
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: !arguments.lights,
+        shadows: arguments.lights,
+        ..RendererOptions::default()
+    });
     let bytes = read(&arguments.glb);
     let body = admit(&arguments.glb, &bytes);
     let hash = body.content_hash.clone().expect("content hash");
@@ -419,13 +491,31 @@ fn main() {
         figure(WALKER, &walker, walking, START, 90.0),
         figure(BYSTANDER, &bystander, idling, BYSTANDER_AT, 20.0),
     ]);
-    let settings = match arguments.taau {
-        Some(render_scale) => RendererSettingsDescriptor {
-            antialiasing: Antialiasing::Temporal,
-            render_scale,
-            ..RendererSettingsDescriptor::DEFAULT
-        },
-        None => RendererSettingsDescriptor::DEFAULT,
+    if arguments.lights {
+        ops.extend(lights());
+    }
+    if let Some(floor) = arguments.lit {
+        for handle in [WALKER, BYSTANDER] {
+            ops.push(RenderDiff::SetSplatAppearance {
+                handle: RenderHandle::new(handle),
+                appearance: SplatAppearance {
+                    lighting: SplatLighting::Lit,
+                    light_floor: floor,
+                    ..SplatAppearance::default()
+                },
+            });
+        }
+    }
+    let settings = RendererSettingsDescriptor {
+        shadows: arguments.lights,
+        ..match arguments.taau {
+            Some(render_scale) => RendererSettingsDescriptor {
+                antialiasing: Antialiasing::Temporal,
+                render_scale,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+            None => RendererSettingsDescriptor::DEFAULT,
+        }
     };
     ops.push(RenderDiff::SetRendererSettings { settings });
     harness.apply(ops);

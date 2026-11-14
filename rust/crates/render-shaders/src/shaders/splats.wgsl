@@ -25,6 +25,8 @@
 // and a temporal stage follows it; elsewhere under the layer it marks the
 // reactive mask.
 
+#import rusty::splat_layer::{layer, surface_layer, grid, srgb_to_linear, linear_to_srgb, block_sums, snapped}
+
 // One Gaussian of a splat resource, two words of four:
 // [0] centre xyz (f32 bits), colour (r, g, b, opacity as unorm8, r lowest);
 // [1] rotation xy and zw (snorm16 pairs, xyzw), σ xy and σ z (f16 pairs), in
@@ -37,7 +39,8 @@ struct Gaussian {
 // One projected Gaussian of a run: where its quad stands and what it draws.
 // `centre`: in NDC (x, y, depth); `color`: packed as the resource's;
 // `axes`: the quad's two half axes in NDC (x, y, then x, y); `motion`: xy
-// its centre's motion in target pixels (`rusty::motion`), zw unused.
+// its centre's motion in target pixels (`rusty::motion`), zw in a lit run
+// its normal's view-space xy.
 struct Projected {
     centre: vec3<f32>,
     color: u32,
@@ -57,7 +60,7 @@ struct Project {
     // x, y: focal lengths in render pixels; z, w: the viewport's size.
     lens: vec4<f32>,
     // x: the run's nearest view depth; y: 1 / its depth span; z: 1 for an
-    // orthographic projection.
+    // orthographic projection; w: 1 in a lit run, which projects normals.
     depth: vec4<f32>,
     // x: the set's first slot in the run; y: its Gaussians; z: 1 for the
     // run's first set, which writes the draw's vertex count.
@@ -108,6 +111,8 @@ const INVALID: u32 = 0xffffffffu;
 // A Gaussian's skin: four joints (a byte each, lowest first) and their four
 // weights (unorm8).
 @group(1) @binding(1) var<storage, read> skins: array<vec2<u32>>;
+// A Gaussian's unit normal in the set's space, octahedral (snorm16 pair).
+@group(1) @binding(2) var<storage, read> normals: array<u32>;
 
 @group(0) @binding(10) var<uniform> sort: Sort;
 @group(0) @binding(11) var<storage, read> keys_in: array<u32>;
@@ -120,8 +125,6 @@ const INVALID: u32 = 0xffffffffu;
 @group(0) @binding(20) var<storage, read> drawn: array<Projected>;
 @group(0) @binding(21) var<storage, read> order: array<u32>;
 
-@group(1) @binding(30) var layer: texture_2d<f32>;
-@group(1) @binding(31) var surface_layer: texture_2d<f32>;
 
 fn rotation_matrix(q: vec4<f32>) -> mat3x3<f32> {
     let x = q.x;
@@ -177,6 +180,16 @@ fn moved(rows: mat4x4<f32>, point: vec3<f32>) -> vec3<f32> {
 fn cull(slot: u32) {
     project_keys[slot] = CULLED;
     project_values[slot] = slot;
+}
+
+// A unit vector from its octahedral encoding (`splats.rs` `octahedral`).
+fn octahedral(word: u32) -> vec3<f32> {
+    let e = unpack2x16snorm(word);
+    var n = vec3<f32>(e, 1.0 - abs(e.x) - abs(e.y));
+    if n.z < 0.0 {
+        n = vec3<f32>((1.0 - abs(n.yx)) * select(vec2<f32>(-1.0), vec2<f32>(1.0), n.xy >= vec2<f32>(0.0)), n.z);
+    }
+    return normalize(n);
 }
 
 @compute @workgroup_size(256)
@@ -304,7 +317,12 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
             motion = project.pixels.xy + ndc.xy * project.pixels.zw - previous.xy / previous.w;
         }
     }
-    projected[slot] = Projected(ndc, pack4x8unorm(color), vec4<f32>(axis1, axis2), vec4<f32>(motion, 0.0, 0.0));
+    // A lit run's normal, turned as the Gaussian is, in view space.
+    var normal = vec2<f32>(0.0);
+    if project.depth.w > 0.5 {
+        normal = normalize(to_view * (turn * octahedral(normals[index]))).xy;
+    }
+    projected[slot] = Projected(ndc, pack4x8unorm(color), vec4<f32>(axis1, axis2), vec4<f32>(motion, normal));
 
     // Back to front: the farthest Gaussian sorts first.
     let along = clamp((depth - project.depth.x) * project.depth.y, 0.0, 1.0);
@@ -518,6 +536,7 @@ struct SplatVarying {
     @location(0) uv: vec2<f32>,
     @location(1) @interpolate(flat) color: vec4<f32>,
     @location(2) @interpolate(flat) motion: vec2<f32>,
+    @location(3) @interpolate(flat) normal: vec2<f32>,
 };
 
 @vertex
@@ -536,6 +555,7 @@ fn vs_splat(
     out.uv = corner;
     out.color = unpack4x8unorm(splat.color);
     out.motion = splat.motion.xy;
+    out.normal = splat.motion.zw;
     return out;
 }
 
@@ -573,6 +593,34 @@ fn fs_splat(in: SplatVarying) -> SplatOut {
     );
 }
 
+// A lit run without motion: its normal's xy beside its depth.
+@fragment
+fn fs_splat_lit(in: SplatVarying) -> SplatOut {
+    let alpha = splat_alpha(in);
+    return SplatOut(
+        vec4<f32>(in.color.rgb * alpha, alpha),
+        vec4<f32>(vec3<f32>(1.0 - in.position.z, in.normal) * alpha, alpha),
+    );
+}
+
+struct LitMotionOut {
+    @location(0) color: vec4<f32>,
+    @location(1) surface: vec4<f32>,
+    // The normal's view-space xy, premultiplied by alpha.
+    @location(2) normal: vec2<f32>,
+};
+
+// A lit run under motion: its normal in a target of its own.
+@fragment
+fn fs_splat_lit_motion(in: SplatVarying) -> LitMotionOut {
+    let alpha = splat_alpha(in);
+    return LitMotionOut(
+        vec4<f32>(in.color.rgb * alpha, alpha),
+        vec4<f32>(vec3<f32>(1.0 - in.position.z, in.motion) * alpha, alpha),
+        in.normal * alpha,
+    );
+}
+
 // A layer that keeps no surface: nothing after its run reads the view's
 // depth or motion.
 @fragment
@@ -593,19 +641,6 @@ fn vs_composite(@builtin(vertex_index) vertex: u32) -> CompositeVarying {
     var out: CompositeVarying;
     out.position = vec4<f32>(uv * 2.0 - 1.0, 0.0, 1.0);
     return out;
-}
-
-fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
-    let low = color / 12.92;
-    let high = pow((color + 0.055) / 1.055, vec3<f32>(2.4));
-    return select(high, low, color <= vec3<f32>(0.04045));
-}
-
-fn linear_to_srgb(color: vec3<f32>) -> vec3<f32> {
-    let clamped = clamp(color, vec3<f32>(0.0), vec3<f32>(1.0));
-    let low = clamped * 12.92;
-    let high = 1.055 * pow(clamped, vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(high, low, clamped <= vec3<f32>(0.0031308));
 }
 
 // The layer's premultiplied display colour at the fragment, decoded to
@@ -677,67 +712,24 @@ fn fs_composite_depth_motion(in: CompositeVarying) -> MotionComposite {
 
 // --- The pixel finish --------------------------------------------------------
 
-// A run's one instance on a screen-pixel grid (`splats.rs` `GridPlacement`):
-// `block` is the grid's anchor (a block corner, in target pixels), its block
-// side and its palette's colours; `rect` the blocks it covers (x0, y0, x1,
-// y1, the far edges exclusive); `cutoff.x` the share of a block it must
-// cover. `colours` holds each palette colour as its linear value, then its
-// sRGB one.
-struct Grid {
-    block: vec4<i32>,
-    rect: vec4<i32>,
-    cutoff: vec4<f32>,
-    colours: array<vec4<f32>>,
-};
-
-@group(1) @binding(32) var<storage, read> grid: Grid;
-
 struct Block {
     // Linear, opaque.
     color: vec3<f32>,
     depth: f32,
 };
 
-// The block under the fragment: its colour the layer's coverage-weighted
-// average in display space, snapped to the palette by its display value,
-// and its depth the layer's, weighted as its colour is. None (discarded)
-// where the layer covers less than the cutoff.
+// The block of a run's one instance on a screen-pixel grid
+// (`rusty::splat_layer` `Grid`) under the fragment: its colour the layer's
+// coverage-weighted average in display space, snapped to the palette by
+// its display value, and its depth the layer's, weighted as its colour is.
+// None (discarded) where the layer covers less than the cutoff.
 fn grid_block(position: vec4<f32>) -> Block {
-    let pixel = vec2<i32>(position.xy);
-    let side = grid.block.z;
-    let anchor = grid.block.xy;
-    let corner = anchor + vec2<i32>(floor(vec2<f32>(pixel - anchor) / f32(side))) * side;
-    let low = grid.rect.xy;
-    let high = grid.rect.zw;
-    var sum = vec4<f32>(0.0);
-    var depth = 0.0;
-    var count = 0.0;
-    for (var y = 0; y < side; y++) {
-        for (var x = 0; x < side; x++) {
-            let at = corner + vec2<i32>(x, y);
-            if all(at >= low) && all(at < high) {
-                sum += textureLoad(layer, at, 0);
-                depth += textureLoad(surface_layer, at, 0).x;
-                count += 1.0;
-            }
-        }
-    }
-    if sum.a <= 0.0 || sum.a < grid.cutoff.x * count {
+    let sums = block_sums(position, false);
+    if sums.color.a <= 0.0 || sums.color.a < grid.cutoff.x * sums.count {
         discard;
     }
-    let display = clamp(sum.rgb / sum.a, vec3<f32>(0.0), vec3<f32>(1.0));
-    var color = srgb_to_linear(display);
-    let colours = u32(grid.block.w);
-    var nearest = 1e30;
-    for (var index = 0u; index < colours; index++) {
-        let offset = display - grid.colours[index * 2u + 1u].rgb;
-        let distance = dot(offset, offset);
-        if distance < nearest {
-            nearest = distance;
-            color = grid.colours[index * 2u].rgb;
-        }
-    }
-    return Block(color, 1.0 - depth / sum.a);
+    let display = clamp(sums.color.rgb / sums.color.a, vec3<f32>(0.0), vec3<f32>(1.0));
+    return Block(snapped(display, srgb_to_linear(display)), 1.0 - sums.depth / sums.color.a);
 }
 
 @fragment

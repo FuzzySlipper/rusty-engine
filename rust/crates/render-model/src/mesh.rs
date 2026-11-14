@@ -1544,6 +1544,34 @@ pub struct SplatAppearance {
     /// steps of Engine time; 0 poses at every call that moves time.
     #[serde(default, skip_serializing_if = "is_zero_rate")]
     pub pose_rate: f32,
+    /// Lit by the world's lights, the baked colour taken as the albedo, or
+    /// unlit (as baked, scaled by the multiplier).
+    #[serde(default, skip_serializing_if = "SplatLighting::is_unlit")]
+    pub lighting: SplatLighting,
+    /// Lit: the share of the baked colour kept however dark the light, 0
+    /// to 1; unread unlit.
+    #[serde(default, skip_serializing_if = "is_zero_rate")]
+    pub light_floor: f32,
+}
+
+/// How a splat instance's colour meets the world's light
+/// (`docs/splat-characters.md`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SplatLighting {
+    /// As baked, scaled by the multiplier.
+    #[default]
+    Unlit,
+    /// Lit per pixel by the world's lights where its Gaussians blend: the
+    /// sun through its cascades, clustered lights, ambient light and the
+    /// sky.
+    Lit,
+}
+
+impl SplatLighting {
+    pub fn is_unlit(&self) -> bool {
+        *self == Self::Unlit
+    }
 }
 
 fn is_zero(value: &u32) -> bool {
@@ -1566,6 +1594,8 @@ impl Default for SplatAppearance {
             pixel_coverage: half(),
             palette: Vec::new(),
             pose_rate: 0.0,
+            lighting: SplatLighting::Unlit,
+            light_floor: 0.0,
         }
     }
 }
@@ -1578,8 +1608,8 @@ impl SplatAppearance {
     /// Why it is refused: a multiplier that is not finite or is negative, a
     /// pixel grid past its most or with a coverage outside (0, 1], or a
     /// palette past its most, without a grid, or with a colour that is not
-    /// finite or is negative, or a pose rate that is not finite or is
-    /// negative.
+    /// finite or is negative, a pose rate that is not finite or is
+    /// negative, or a light floor outside 0 to 1.
     pub fn refusal(&self) -> Option<&'static str> {
         if !self
             .multiplier
@@ -1609,6 +1639,9 @@ impl SplatAppearance {
         }
         if !(self.pose_rate.is_finite() && self.pose_rate >= 0.0) {
             return Some("a splat pose rate is finite and not negative");
+        }
+        if !(0.0..=1.0).contains(&self.light_floor) {
+            return Some("a splat light floor is from 0 to 1");
         }
         None
     }

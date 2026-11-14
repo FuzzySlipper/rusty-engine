@@ -11,6 +11,7 @@
 //! cargo run --release -p render-wgpu --example splat_crowd -- --glb PATH
 //!     --clip-pack PATH --clip ID --fit JOINT:K,A --out DIR
 //!     [--counts 1,8,16,32] [--size 1920x1080] [--warm 2] [--frames 240]
+//!     [--lights] [--lit FLOOR]
 //! ```
 //!
 //! - `--fit JOINT:K,A`: the clip's translation of `JOINT` becomes
@@ -18,6 +19,11 @@
 //! - `--warm SECONDS`: frames drawn untimed at 60 Hz first, so the GPU
 //!   reaches its clocks.
 //! - `--frames N`: frames timed at 60 Hz.
+//! - `--lights`: the scene's own lights instead of the default ones: a sun
+//!   casting through its cascades, ambient light and a point light among
+//!   the figures.
+//! - `--lit FLOOR`: the figures lit by the world's lights, keeping FLOOR of
+//!   their baked colour.
 //!
 //! Writes `crowd.json`: per count, each timed pass's median GPU time (over
 //! the last 120 frames; `world` spans the splats' passes, which run inside
@@ -61,12 +67,15 @@ struct Arguments {
     size: (u32, u32),
     warm: f64,
     frames: usize,
+    lights: bool,
+    lit: Option<f32>,
 }
 
 fn arguments() -> Result<Arguments, String> {
     let (mut glb, mut clip_pack, mut clip, mut fit, mut out) = (None, None, None, None, None);
     let mut counts = vec![1, 8, 16, 32];
     let (mut size, mut warm, mut frames) = ((1920, 1080), 2.0, 240);
+    let (mut lights, mut lit) = (false, None);
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} takes a value"));
@@ -102,6 +111,8 @@ fn arguments() -> Result<Arguments, String> {
             }
             "--warm" => warm = value()?.parse().map_err(|_| "--warm")?,
             "--frames" => frames = value()?.parse().map_err(|_| "--frames")?,
+            "--lights" => lights = true,
+            "--lit" => lit = Some(value()?.parse().map_err(|_| "--lit")?),
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -115,6 +126,8 @@ fn arguments() -> Result<Arguments, String> {
         size,
         warm,
         frames,
+        lights,
+        lit,
     })
 }
 
@@ -190,6 +203,58 @@ fn figure(arguments: &Arguments) -> (AnimatedMeshAsset, Vec<u8>, String, Vec<u8>
     (asset, bytes, pack_hash, pack_bytes)
 }
 
+/// A sun casting through its cascades, ambient light and a warm point
+/// light among the front row (`--lights`).
+fn lights() -> Vec<RenderDiff> {
+    vec![
+        RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                shadows: true,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(60),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0, 0.96, 0.88],
+                intensity: 3.0,
+                enabled: true,
+                direction: [-0.45, -0.75, -0.5],
+                range: None,
+                shadow_intent: LightShadowIntent::Requested,
+                shadow: Default::default(),
+            },
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(61),
+            parent: None,
+            light: LightDescriptor::Ambient {
+                color: [0.75, 0.82, 1.0],
+                intensity: 0.45,
+                enabled: true,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+                range: None,
+            },
+        },
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(62),
+            parent: None,
+            light: LightDescriptor::Point {
+                color: [1.0, 0.45, 0.15],
+                intensity: 4.0,
+                enabled: true,
+                position: [0.0, 1.2, 1.0],
+                range: Some(4.0),
+                decay: 2.0,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        },
+    ]
+}
+
 fn main() {
     let arguments = arguments().unwrap_or_else(|error| {
         eprintln!("splat_crowd: {error}");
@@ -200,7 +265,11 @@ fn main() {
     let (width, height) = arguments.size;
     let mut rows = Vec::new();
     for &count in &arguments.counts {
-        let mut harness = Harness::new(RendererOptions::default());
+        let mut harness = Harness::new(RendererOptions {
+            default_world_lights: !arguments.lights,
+            shadows: arguments.lights,
+            ..RendererOptions::default()
+        });
         harness.target = OffscreenTarget::new(&harness.gpu, width, height, 1);
         harness.resources.insert(
             &format!(
@@ -240,7 +309,15 @@ fn main() {
                 instance: AnimatedMeshInstanceDescriptor {
                     playback_fade: None,
                     inspection: AnimatedMeshInspection::default(),
-                    splat: SplatAppearance::default(),
+                    splat: SplatAppearance {
+                        lighting: if arguments.lit.is_some() {
+                            SplatLighting::Lit
+                        } else {
+                            SplatLighting::Unlit
+                        },
+                        light_floor: arguments.lit.unwrap_or(0.0),
+                        ..SplatAppearance::default()
+                    },
                     asset: asset.asset.clone(),
                     transform: Transform {
                         translation: [x as f32, 0.0, z as f32],
@@ -266,6 +343,9 @@ fn main() {
                     shadow_casting: Default::default(),
                 },
             });
+        }
+        if arguments.lights {
+            ops.extend(lights());
         }
         harness.apply(ops);
         // In front of the group (the figures face +z), far enough back to

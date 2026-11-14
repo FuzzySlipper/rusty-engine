@@ -227,6 +227,23 @@ pub struct NativeSplatAppearanceRequest {
     /// by whole steps of Engine time, so every figure at one rate steps on
     /// one beat; 0 poses at every call that moves time.
     pub pose_rate: f32,
+    /// Lit by the world's lights per pixel where the Gaussians blend (the
+    /// sun through its cascades, clustered lights, ambient light, the
+    /// sky), the baked colour taken as the albedo; or unlit, as baked.
+    pub lighting: NativeSplatLighting,
+    /// Lit: the share of the baked colour kept however dark the light, 0
+    /// to 1 (0: the scene's own ambient light is the floor).
+    pub light_floor: f32,
+}
+
+/// How a splat appearance's colour meets the world's light.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeSplatLighting {
+    /// As baked, scaled by the multiplier.
+    Unlit = 0,
+    /// Lit per pixel by the world's lights.
+    Lit = 1,
 }
 
 /// Adds an animated appearance to the ordinary Engine-owned appearance
