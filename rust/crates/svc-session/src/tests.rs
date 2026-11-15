@@ -64,6 +64,31 @@ fn join(
     (session, events)
 }
 
+/// Holds every worker of `runtime` until the returned sender drops, so
+/// nothing on it runs: its sessions fall silent as a hung game or a lost
+/// network does. Dropping a runtime does not silence them: it drops each
+/// task's QUIC streams, and a dropped send stream finishes, which a driver
+/// still mid-poll on another worker sends as an orderly end.
+fn freeze(runtime: &SessionRuntime) -> std::sync::mpsc::Sender<()> {
+    let (held, holding) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let released = Arc::new(Mutex::new(released));
+    for _ in 0..SESSION_WORKERS {
+        let held = held.clone();
+        let released = Arc::clone(&released);
+        runtime.handle().spawn(async move {
+            held.send(()).unwrap();
+            let _ = released.lock().unwrap().recv();
+        });
+    }
+    for _ in 0..SESSION_WORKERS {
+        holding
+            .recv_timeout(Duration::from_secs(10))
+            .expect("every session worker is held");
+    }
+    release
+}
+
 fn messages(events: &[Event]) -> Vec<(u32, u64, Vec<u8>)> {
     events
         .iter()
@@ -273,9 +298,8 @@ fn a_vanished_guest_is_reported_lost_after_the_idle_timeout() {
     let guest_runtime = SessionRuntime::new().unwrap();
     let (guest, _) = join(&guest_runtime, &invitation, &Identity::ephemeral());
     let member = guest.drain().local_member;
-    // Stopping the guest's runtime silences it without a goodbye.
-    std::mem::forget(guest);
-    drop(guest_runtime);
+    // The guest's game hangs: it sends nothing more, not even a goodbye.
+    let _frozen = freeze(&guest_runtime);
     let started = Instant::now();
     until(&host, &mut host_events, |_, seen| {
         seen.contains(&Event::Left {

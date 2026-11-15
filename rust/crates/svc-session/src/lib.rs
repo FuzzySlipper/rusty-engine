@@ -54,6 +54,9 @@ pub const CHAT_LINES: usize = 1000;
 
 pub const HOST_MEMBER: u32 = 1;
 
+/// Threads a [`SessionRuntime`] runs its sessions' network tasks on.
+const SESSION_WORKERS: usize = 2;
+
 /// The tokio runtime every session of one owner runs on.
 pub struct SessionRuntime {
     runtime: Option<tokio::runtime::Runtime>,
@@ -62,7 +65,7 @@ pub struct SessionRuntime {
 impl SessionRuntime {
     pub fn new() -> Result<Self, String> {
         tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(SESSION_WORKERS)
             .thread_name("rusty-session")
             .enable_all()
             .build()
