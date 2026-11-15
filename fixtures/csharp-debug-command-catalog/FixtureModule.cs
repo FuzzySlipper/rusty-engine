@@ -35,3 +35,26 @@ public sealed class FixtureDiagnosticsModule : IDebugCommandModule
     [DebugCommand("fixture.ping", Description = "Exercises a second live module registration.")]
     public string Ping(int sequence) => $"pong:{sequence}";
 }
+
+public interface IFixtureSessionCommands : IDebugCommandModule
+{
+    [DebugCommand("fixture.session", Description = "Names the live session.")]
+    string Session();
+}
+
+public interface IFixtureTurnCommands : IDebugCommandModule
+{
+    [DebugCommand("fixture.turns", Description = "Reads the live session's turn count.")]
+    string Turns();
+}
+
+/// <summary>One object serving two command interfaces, replaced by registering its successor.</summary>
+public sealed class FixtureSession(string name, int turns) : IFixtureSessionCommands, IFixtureTurnCommands
+{
+    public string Session() => name;
+    public string Turns() => turns.ToString();
+}
+
+public sealed class FixtureModuleWithoutCommands : IDebugCommandModule
+{
+}

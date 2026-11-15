@@ -281,6 +281,7 @@ internal static class DebugCommandCatalogGenerator
         source.AppendLine("    public DebugCommandRegistrationResult Register<TModule>(TModule module) where TModule : class, IDebugCommandModule");
         source.AppendLine("    {");
         source.AppendLine("        if (module is null) return new(DebugCommandRegistrationStatus.UnsupportedModule, \"A debug module instance is required.\");");
+        source.AppendLine("        bool registered = false;");
         foreach (INamedTypeSymbol module in modules)
         {
             string field = ModuleField(module);
@@ -288,10 +289,12 @@ internal static class DebugCommandCatalogGenerator
             source.Append("        if (module is ").Append(TypeName(module)).Append(' ').Append(variable).AppendLine(")");
             source.AppendLine("        {");
             source.Append("            ").Append(field).Append(" = ").Append(variable).AppendLine(";");
-            source.Append("            return new(DebugCommandRegistrationStatus.Registered, \"").Append(Escape(TypeDisplay(module))).AppendLine(" registered.\");");
+            source.AppendLine("            registered = true;");
             source.AppendLine("        }");
         }
-        source.AppendLine("        return new(DebugCommandRegistrationStatus.UnsupportedModule, \"No generated debug commands exist for the supplied module type.\");");
+        source.AppendLine("        return registered");
+        source.AppendLine("            ? new(DebugCommandRegistrationStatus.Registered, $\"{module.GetType().Name} registered.\")");
+        source.AppendLine("            : new(DebugCommandRegistrationStatus.UnsupportedModule, \"No generated debug commands exist for the supplied module type.\");");
         source.AppendLine("    }");
         source.AppendLine();
         source.AppendLine("    public DebugCommandResult Execute(string commandLine)");

@@ -40,7 +40,11 @@ public interface IDebugCommandModuleSource
 
 /// <summary>
 /// A generated catalog implements this narrow registration surface. Products register their
-/// currently live modules during setup instead of relying on discovery or a service locator.
+/// live modules explicitly instead of relying on discovery or a service locator. A product may
+/// keep the registrar for its lifetime and call <see cref="Register{TModule}"/> again at any
+/// point on the Engine call lane (setup, an update, or a debug command), for example when it
+/// replaces a game session. Each call makes the supplied object the live instance for every
+/// module type it implements, replacing any earlier one; nothing unregisters a module.
 /// </summary>
 public interface IDebugCommandModuleRegistrar
 {

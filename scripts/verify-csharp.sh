@@ -41,6 +41,8 @@ fi
 while IFS= read -r fixture_project; do
   dotnet build "$REPO_ROOT/$fixture_project" --nologo --verbosity quiet
 done < <(cd "$REPO_ROOT" && git grep -l 'csharp/Rusty.Engine/Rusty.Engine.csproj' -- 'fixtures/csharp-*/*.csproj')
+# The generated debug-command catalog's registration and dispatch assertions.
+dotnet run --project "$REPO_ROOT/fixtures/csharp-debug-command-catalog/CsharpDebugCommandCatalog.csproj" --no-build
 # These executable examples implement generated service interfaces in fakes,
 # and their assertions exercise the managed helpers used by products. Build
 # each once in the same configuration, then run every assertion without
