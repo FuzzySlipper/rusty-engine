@@ -551,6 +551,10 @@ pub struct RendererSettingsReadout {
     pub water_reflections: Option<SettingRefusal>,
     pub ray_traced_shadows: Option<SettingRefusal>,
     pub global_illumination: Option<SettingRefusal>,
+    /// Anisotropic filtering of mipmapped material textures, which no
+    /// setting asks for: a software adapter samples them trilinear
+    /// (`SoftwareAdapter`).
+    pub anisotropic_filtering: Option<SettingRefusal>,
 }
 
 pub struct Renderer {
@@ -1330,6 +1334,10 @@ impl Renderer {
             water_reflections,
             ray_traced_shadows,
             global_illumination,
+            anisotropic_filtering: self
+                .gpu
+                .is_software()
+                .then_some(SettingRefusal::SoftwareAdapter),
         }
     }
 

@@ -436,7 +436,9 @@ lighting fall back to the screen-space pass and the light loop),
 window mode are moot) and
 `VsyncOnly` (the window's display has no immediate or mailbox present mode,
 so frames wait for its refresh with vsync off), `SoftwareAdapter` (a
-GPU-only feature on a software adapter, the temporal stage among them),
+GPU-only feature on a software adapter, the temporal stage among them,
+and `anisotropicFiltering`, which no setting asks for: material textures
+sample trilinear there),
 `TooFewTextureBindings` (water reflections on a device without the colour
 copy), `NoRayQueries` (a ray-traced setting on a device made without ray
 queries, or not on Vulkan), `NeedsDlss` (global illumination without `Dlss`

@@ -1094,6 +1094,7 @@ fn settings_statistics(
         ("waterReflections", readout.water_reflections),
         ("rayTracedShadows", readout.ray_traced_shadows),
         ("globalIllumination", readout.global_illumination),
+        ("anisotropicFiltering", readout.anisotropic_filtering),
     ] {
         if let Some(refusal) = refusal {
             refused.insert(setting.to_owned(), reason(refusal).to_owned());

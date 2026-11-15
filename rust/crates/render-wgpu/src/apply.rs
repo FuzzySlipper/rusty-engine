@@ -52,7 +52,11 @@ pub struct ApplyIssue {
 /// rects and normal scales, and the layer contrast; the wind; the water
 /// feature's six rows; whether the surface keeps dry.
 const MATERIAL_UNIFORM_BYTES: usize = 512;
-/// Anisotropic filtering of mipmapped material textures.
+/// Anisotropic filtering of mipmapped material textures on a GPU. A software
+/// adapter samples them trilinear: the filter is a GPU look feature and
+/// costly there, and llvmpipe on Mesa 26.2 takes the footprint of a
+/// derivative-valued `textureSampleGrad` across a quad whose coordinates
+/// jump, which seams stochastic tiling.
 const MATERIAL_ANISOTROPY: u16 = 16;
 /// Payload groups without a voxel material are fully rough.
 const FALLBACK_ROUGHNESS: f32 = 1.0;
@@ -2596,11 +2600,16 @@ pub(crate) fn upload_rgba_texture(
                 texture.create_view(&Default::default()),
                 // Mipmaps minify trilinearly. Anisotropic filtering keeps
                 // grazing surfaces sharp but needs every filter linear, so a
-                // nearest-magnified texture goes without it.
+                // nearest-magnified texture goes without it, as does every
+                // texture on a software adapter.
                 sampler(
                     wgpu::FilterMode::Linear,
                     wgpu::MipmapFilterMode::Linear,
-                    if nearest { 1 } else { MATERIAL_ANISOTROPY },
+                    if nearest || gpu.is_software() {
+                        1
+                    } else {
+                        MATERIAL_ANISOTROPY
+                    },
                 ),
             )
         }),

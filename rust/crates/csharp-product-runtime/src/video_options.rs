@@ -379,6 +379,7 @@ mod tests {
             water_reflections: None,
             ray_traced_shadows: None,
             global_illumination: None,
+            anisotropic_filtering: None,
         };
         let catalogue = options.catalogue(&readout);
         assert_eq!(catalogue["stored"], false);

@@ -67,6 +67,15 @@ fn settings_change_the_options_the_renderer_draws_with() {
     );
     assert_eq!(readout.antialiasing, None);
     assert_eq!(readout.ambient_occlusion, None);
+    // Material textures filter anisotropically on a GPU and trilinear on a
+    // software adapter.
+    assert_eq!(
+        readout.anisotropic_filtering,
+        harness
+            .gpu
+            .is_software()
+            .then_some(SettingRefusal::SoftwareAdapter)
+    );
 }
 
 #[test]

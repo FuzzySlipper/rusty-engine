@@ -713,6 +713,7 @@ fn run() -> Result<(), String> {
         ("clusteredLighting", settings.clustered_lighting),
         ("gpuCulling", settings.gpu_culling),
         ("volumetricFog", settings.volumetric_fog),
+        ("anisotropicFiltering", settings.anisotropic_filtering),
     ];
     // Built apart: the report is past `json!`'s recursion limit.
     let scatter_selection = json!({
