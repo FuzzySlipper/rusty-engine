@@ -118,4 +118,7 @@ jq --argjson archive "$(asset "$pair-win-x64.tar.gz")" --argjson desktop "$(asse
 gh release upload "$tag" --repo "$repo" "$work/out/$pair-win-x64.tar.gz" "$work/out/$pair-win-x64.tar.gz.sha256" \
     "$work/out/$desktop-win-x64.tar.xz" "$work/out/$desktop-win-x64.tar.xz.sha256"
 gh release upload "$tag" --repo "$repo" --clobber "$work/out/pair-release.json"
+# The release now holds the archives, so the build folder is spent. A failed
+# run keeps its folder for inspection until the next run of that pair.
+ssh "$host" "Remove-Item -Recurse -Force '$remote' -ErrorAction SilentlyContinue"
 printf 'published win-x64 pair and desktop pack for %s\n' "$tag"
