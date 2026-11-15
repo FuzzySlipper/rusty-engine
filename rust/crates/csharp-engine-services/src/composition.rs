@@ -5679,6 +5679,8 @@ mod tests {
             y: 0.375,
             z: 0.25,
         };
+        // The west strip's floor stands where its translation lifts it.
+        let west_floor = translated_west.y;
         let translated_east = NativeVec3 {
             x: 0.1,
             y: 0.125,
@@ -5696,11 +5698,10 @@ mod tests {
             (receipt.instance_count, receipt.navigation_cell_count),
             (2, 5)
         );
-        let across = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        let across = step([0.5, west_floor, 0.5], [4.5, 0.0, 0.5]);
         assert_eq!(across.outcome, NativeNavigationPathOutcome::Reached);
-        let expected_waypoint_y =
-            0.375 * 0.5 / (1.25f32.powi(2) + 0.375f32.powi(2) + 0.25f32.powi(2)).sqrt();
-        assert!((across.next_waypoint.y - expected_waypoint_y).abs() < 1.0e-3);
+        // The step keeps to the translated floor it starts on.
+        assert!((across.next_waypoint.y - west_floor).abs() < 1.0e-3);
         assert!((floor_height(&services, [1.5, 0.5]).unwrap() - 0.375).abs() < 1.0e-9);
         assert!((floor_height(&services, [4.5, 0.5]).unwrap() - 0.125).abs() < 1.0e-9);
         assert!(floor_below(&services, [1.5, 0.5]) && floor_below(&services, [4.5, 0.5]));
@@ -5708,12 +5709,17 @@ mod tests {
             has_instance(&services, 500),
             "the session's own collision stays"
         );
-        // The translated west artifact begins at x=.25. A position in its
-        // old integer cell but outside that translated footprint must fail
-        // both collision and navigation instead of falling back to cell 0.
+        // The translated west artifact begins at x=.25. Navigation maps a
+        // position within a cell of that translated footprint onto it, as
+        // collision-derived navigation's snap across does; one farther out
+        // fails rather than falling back to its integer cell.
         assert!(floor_height(&services, [0.05, 0.5]).is_none());
         assert_eq!(
-            step([0.05, 0.0, 0.5], [1.5, 0.0, 0.5]).outcome,
+            step([0.05, west_floor, 0.5], [1.5, west_floor, 0.5]).outcome,
+            NativeNavigationPathOutcome::Reached
+        );
+        assert_eq!(
+            step([-0.8, west_floor, 0.5], [1.5, west_floor, 0.5]).outcome,
             NativeNavigationPathOutcome::StartNotWalkable
         );
 
@@ -5737,7 +5743,7 @@ mod tests {
             residency(&[malformed_translation], &[]).unwrap_err(),
             "CSHARP_SPATIAL_CONTENT_TRANSFORM"
         );
-        let unchanged = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        let unchanged = step([0.5, west_floor, 0.5], [4.5, 0.0, 0.5]);
         assert_eq!(unchanged.navigation_revision, revision);
         assert!(!has_instance(&services, 3) && has_instance(&services, 1));
 
@@ -5755,7 +5761,7 @@ mod tests {
         // Collision residency may remove a placed artifact's instance; the
         // placement leaves the composition with it, its navigation cells at
         // once and its asset with its last user.
-        let before = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        let before = step([0.5, west_floor, 0.5], [4.5, 0.0, 0.5]);
         assert_eq!(before.outcome, NativeNavigationPathOutcome::Reached);
         let receipt = collision_residency(&[], &[], &[1]);
         assert_eq!(
@@ -5763,7 +5769,7 @@ mod tests {
             "the terrain and east assets stay, the west one leaves"
         );
         assert!(!has_instance(&services, 1) && !floor_below(&services, [1.5, 0.5]));
-        let removed = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        let removed = step([0.5, west_floor, 0.5], [4.5, 0.0, 0.5]);
         assert_eq!(
             removed.outcome,
             NativeNavigationPathOutcome::StartNotWalkable
@@ -5779,7 +5785,7 @@ mod tests {
             (receipt.instance_count, receipt.navigation_cell_count),
             (2, 5)
         );
-        let before = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        let before = step([0.5, west_floor, 0.5], [4.5, 0.0, 0.5]);
         assert_eq!(before.outcome, NativeNavigationPathOutcome::Reached);
 
         // So may replacing it with the product's own instance.
@@ -5791,7 +5797,7 @@ mod tests {
         let receipt = collision_residency(&[], &product_instance, &[]);
         assert_eq!(receipt.asset_count, 2);
         assert!(has_instance(&services, 1) && !floor_below(&services, [1.5, 0.5]));
-        let replaced = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        let replaced = step([0.5, west_floor, 0.5], [4.5, 0.0, 0.5]);
         assert_eq!(
             replaced.outcome,
             NativeNavigationPathOutcome::StartNotWalkable
@@ -5818,7 +5824,7 @@ mod tests {
         );
         assert!(!floor_below(&services, [1.5, 0.5]) && floor_below(&services, [4.5, 0.5]));
         assert_eq!(
-            step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]).outcome,
+            step([0.5, west_floor, 0.5], [4.5, 0.0, 0.5]).outcome,
             NativeNavigationPathOutcome::StartNotWalkable
         );
         // Reload it under the same identity.
@@ -5859,7 +5865,7 @@ mod tests {
         };
         collision_residency(&[], &product_copy, &[]);
         assert_eq!(copy_hit(&services), Some((600, west_asset)));
-        let before = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        let before = step([0.5, west_floor, 0.5], [4.5, 0.0, 0.5]);
         assert_eq!(before.outcome, NativeNavigationPathOutcome::Reached);
         let receipt = collision_residency(&[], &[], &[1]);
         assert_eq!(
@@ -5869,7 +5875,7 @@ mod tests {
         );
         assert!(!has_instance(&services, 1) && !floor_below(&services, [1.5, 0.5]));
         assert_eq!(copy_hit(&services), Some((600, west_asset)));
-        let removed = step([0.5, 0.0, 0.5], [4.5, 0.0, 0.5]);
+        let removed = step([0.5, west_floor, 0.5], [4.5, 0.0, 0.5]);
         assert_eq!(
             removed.outcome,
             NativeNavigationPathOutcome::StartNotWalkable
@@ -5903,7 +5909,7 @@ mod tests {
             (3, 7)
         );
         assert_eq!(
-            step([0.5, 0.0, 0.5], [0.5, 0.0, -1.5]).outcome,
+            step([0.5, west_floor, 0.5], [0.5, 0.0, -1.5]).outcome,
             NativeNavigationPathOutcome::Reached
         );
         assert!(floor_below(&services, [0.5, -1.5]) && !floor_below(&services, [1.5, -0.5]));
@@ -5948,7 +5954,7 @@ mod tests {
             ABI_OK
         );
         assert_eq!(
-            step([-9.5, 0.0, 0.5], [-5.5, 0.0, 0.5]).outcome,
+            step([-9.5, west_floor, 0.5], [-5.5, 0.0, 0.5]).outcome,
             NativeNavigationPathOutcome::Reached
         );
         assert!(floor_below(&services, [-5.5, 0.5]));
@@ -5959,7 +5965,7 @@ mod tests {
             (3, 7)
         );
         assert_eq!(
-            step([-9.5, 0.0, 0.5], [-3.5, 0.0, 0.5]).outcome,
+            step([-9.5, west_floor, 0.5], [-3.5, 0.0, 0.5]).outcome,
             NativeNavigationPathOutcome::Reached
         );
         assert!(floor_below(&services, [-3.5, 0.5]));
@@ -5975,7 +5981,7 @@ mod tests {
         assert!(floor_below(&services, [-8.5, 0.5]) && !floor_below(&services, [1.5, 0.5]));
         assert!((floor_height(&services, [-8.5, 0.5]).unwrap() - 0.375).abs() < 1.0e-9);
         assert_eq!(
-            step([-9.5, 0.0, 0.5], [-8.5, 0.0, 0.5]).outcome,
+            step([-9.5, west_floor, 0.5], [-8.5, west_floor, 0.5]).outcome,
             NativeNavigationPathOutcome::Reached
         );
         let _ = services.finish_call();

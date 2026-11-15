@@ -1339,6 +1339,15 @@ revisions, counts and projection hashes—and `ReadContentArtifact`—identify t
 admitted source. Disposing the Content reference afterward does not remove the
 copied spatial state.
 
+A navigation query maps a position onto an artifact's cells as collision-derived
+navigation does with its snap: to the nearest support across, then vertically,
+whose cell is the position's own or a neighbour (within one cell of its
+footprint) and whose height is within a step of the position's, the request's
+`NavigationMaxStepCells` levels (at least one) of the artifact's level quantum.
+A position with no such support, such as one standing under a column that holds
+only an upper floor, with no floor beside it, answers `StartNotWalkable` or
+`GoalNotWalkable`, never a support on another level.
+
 The same facts can also be written as a compact binary file, recognised by
 its first eight bytes, `RSPATIAL`. It is admitted through the same call with
 the same refusals, so a binary file and the JSON file of the

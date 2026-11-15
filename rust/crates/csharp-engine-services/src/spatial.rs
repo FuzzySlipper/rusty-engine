@@ -1211,8 +1211,10 @@ struct NavigationVerticalMapping {
     /// Whether any authored cell moved off the integer navigation grid in X/Z.
     /// The position lookup can stay column-indexed for the common aligned case.
     has_continuous_horizontal_translation: bool,
-    /// Collision-derived navigation maps a point to a nearby support; an
-    /// admitted artifact maps it to the level its height rounds to.
+    /// How far from a support a point may lie and still map to it:
+    /// collision-derived navigation's configured snap, or for admitted
+    /// artifacts (`None`) a step of the session's policy and one cell
+    /// across; see [`NavigationState::world_cell`].
     snap: Option<SupportSnap>,
     /// Whether [`Self::columns`] keys a cell by the grid column its centre
     /// lies in (composed artifact cells) rather than its own column
@@ -1378,74 +1380,49 @@ impl NavigationState {
         let Some(vertical) = &self.vertical_mapping else {
             return base;
         };
-        if vertical.has_continuous_horizontal_translation {
-            let cell_size = self.projection.grid().voxel_size();
-            let half_cell = cell_size * 0.5;
-            // A containing footprint's centre lies within half a cell, so in
-            // the position's own grid column or a neighbour.
-            let [column_x, column_z] = [px, pz].map(|at| (at / cell_size).floor() as i64);
-            let mut best: Option<(f64, f64, VoxelCoord)> = None;
-            let nearby = (column_x.saturating_sub(1)..=column_x.saturating_add(1)).flat_map(|x| {
-                vertical.column_cells(x, column_z.saturating_sub(1)..=column_z.saturating_add(1))
-            });
-            for cell in nearby {
-                let Some(&[center_x, center_z]) = vertical.cell_centers.get(&cell) else {
-                    continue;
-                };
-                let across_x = (center_x - half_cell - px)
-                    .max(px - (center_x + half_cell))
-                    .max(0.0);
-                let across_z = (center_z - half_cell - pz)
-                    .max(pz - (center_z + half_cell))
-                    .max(0.0);
-                let across = across_x.hypot(across_z);
-                if across > f64::EPSILON {
-                    continue;
-                }
-                let Some(&support) = vertical.support_heights.get(&cell) else {
-                    continue;
-                };
-                let key = (across, (y - support).abs());
-                if best.is_none_or(|(best_across, best_rise, _)| key < (best_across, best_rise)) {
-                    best = Some((key.0, key.1, cell));
-                }
-            }
-            if let Some((_, _, cell)) = best {
-                return cell;
-            }
-            // A translated artifact owns only its translated footprint. Do
-            // not fall back to the integer cell here: that would admit a
-            // position through navigation after collision has correctly
-            // rejected it outside the authored placement.
-            return VoxelCoord::new(base.x, i64::MIN, base.z);
-        }
-        let [x, _, z] = base.to_array();
-        let Some(snap) = vertical.snap else {
-            // The column's nearest support at any height, else the level the
-            // height rounds to.
-            return vertical
-                .column_cells(x, z..=z)
-                .filter_map(|cell| Some((cell, *vertical.support_heights.get(&cell)?)))
-                .min_by(|(_, left), (_, right)| (y - left).abs().total_cmp(&(y - right).abs()))
-                .map_or_else(
-                    || VoxelCoord::new(x, (y / vertical.level_quantum).round() as i64, z),
-                    |(cell, _)| cell,
-                );
-        };
-        // The nearest support across, then up or down, within the snap: the
-        // containing cell's own supports are across zero.
         let grid = self.projection.grid();
         let cell_size = grid.voxel_size();
-        let ring = (snap.across / cell_size).ceil().min(1024.0) as i64;
-        let point = [px, pz];
+        let snap = vertical.snap.unwrap_or_else(|| {
+            // An admitted artifact's walker steps up or down max_step_cells
+            // levels between neighbouring cells, so a point stands on a
+            // support within one such step (at least a level) of its height,
+            // in its own cell or a neighbour's.
+            let step = f64::from(self.policy.max_step_cells.max(1)) * vertical.level_quantum;
+            SupportSnap {
+                above: step,
+                below: step,
+                across: cell_size,
+            }
+        });
+        // The nearest support across, then up or down, within the snap: the
+        // containing cell's own supports are across zero. A translated
+        // artifact's cell covers the cell around its translated centre, which
+        // is looked up in the column that centre lies in, so its footprint
+        // reaches up to one column further.
+        let translated = vertical.has_continuous_horizontal_translation;
+        let half_cell = cell_size * 0.5;
+        let ring = (snap.across / cell_size).ceil().min(1024.0) as i64 + i64::from(translated);
+        let [x, z] = if translated {
+            [px, pz].map(|at| (at / cell_size).floor() as i64)
+        } else {
+            [base.x, base.z]
+        };
         let mut best: Option<(f64, f64, VoxelCoord)> = None;
-        for cx in x - ring..=x + ring {
-            for cell in vertical.column_cells(cx, z - ring..=z + ring) {
+        for cx in x.saturating_sub(ring)..=x.saturating_add(ring) {
+            for cell in vertical.column_cells(cx, z.saturating_sub(ring)..=z.saturating_add(ring)) {
                 let Some(&support) = vertical.support_heights.get(&cell) else {
                     continue;
                 };
-                let min = grid.voxel_min_world(VoxelCoord::new(cell.x, 0, cell.z));
-                let across = [(point[0], min.x), (point[1], min.z)]
+                let low = if translated {
+                    let Some(&[center_x, center_z]) = vertical.cell_centers.get(&cell) else {
+                        continue;
+                    };
+                    [center_x - half_cell, center_z - half_cell]
+                } else {
+                    let min = grid.voxel_min_world(VoxelCoord::new(cell.x, 0, cell.z));
+                    [min.x, min.z]
+                };
+                let across = [(px, low[0]), (pz, low[1])]
                     .map(|(at, low)| (low - at).max(at - (low + cell_size)).max(0.0));
                 let across = across[0].hypot(across[1]);
                 let rise = y - support;
@@ -1458,7 +1435,12 @@ impl NavigationState {
                 }
             }
         }
-        best.map_or(VoxelCoord::new(x, i64::MIN, z), |(_, _, cell)| cell)
+        // No support within the snap: a cell no navigation holds, so the
+        // query answers not walkable. A translated artifact owns only its
+        // translated cells, so the integer cell is not a fallback either.
+        best.map_or(VoxelCoord::new(base.x, i64::MIN, base.z), |(_, _, cell)| {
+            cell
+        })
     }
 
     /// How each cell of `path` is reached from the one before.
@@ -11109,46 +11091,39 @@ mod tests {
     }
 
     /// The cells a position query may answer for `position`, read from
-    /// every support rather than the column lookup: in an aligned
-    /// composition the nearest support in the position's own column, else
-    /// the level its height rounds to; with a translated artifact the
-    /// nearest support whose footprint contains it.
+    /// every support rather than the column lookup: the nearest support
+    /// across, then in height, whose footprint (the integer cell, or the cell
+    /// around a translated centre) lies within a cell of it and whose height
+    /// is within a step (`max_step_cells` levels, at least one).
     fn composed_position_cells(navigation: &NavigationState, position: Vec3) -> Vec<VoxelCoord> {
         let vertical = navigation.vertical_mapping.as_ref().unwrap();
         let [px, y, pz] =
             navigation.grid_position([position.x, position.y, position.z].map(f64::from));
         let grid = navigation.projection.grid();
         let base = grid.world_to_voxel(core_space::WorldPos::new(px, y, pz));
-        let half_cell = grid.voxel_size() * 0.5;
+        let cell_size = grid.voxel_size();
+        let step = f64::from(navigation.policy.max_step_cells.max(1)) * vertical.level_quantum;
         let keyed: Vec<((f64, f64), VoxelCoord)> = vertical
             .support_heights
             .iter()
             .filter_map(|(&cell, &support)| {
-                if vertical.has_continuous_horizontal_translation {
-                    let [center_x, center_z] = vertical.cell_centers[&cell];
-                    let across = (center_x - half_cell - px)
-                        .max(px - (center_x + half_cell))
-                        .max(0.0)
-                        .hypot(
-                            (center_z - half_cell - pz)
-                                .max(pz - (center_z + half_cell))
-                                .max(0.0),
-                        );
-                    (across <= f64::EPSILON).then_some(((across, (y - support).abs()), cell))
+                let [low_x, low_z] = if vertical.has_continuous_horizontal_translation {
+                    vertical.cell_centers[&cell].map(|center| center - cell_size * 0.5)
                 } else {
-                    (cell.x == base.x && cell.z == base.z)
-                        .then_some(((0.0, (y - support).abs()), cell))
-                }
+                    [cell.x as f64 * cell_size, cell.z as f64 * cell_size]
+                };
+                let across = (low_x - px)
+                    .max(px - (low_x + cell_size))
+                    .max(0.0)
+                    .hypot((low_z - pz).max(pz - (low_z + cell_size)).max(0.0));
+                let rise = (y - support).abs();
+                (across <= cell_size && rise <= step).then_some(((across, rise), cell))
             })
             .collect();
         let Some(&(best, _)) = keyed.iter().min_by(|(left, _), (right, _)| {
             left.0.total_cmp(&right.0).then(left.1.total_cmp(&right.1))
         }) else {
-            return vec![if vertical.has_continuous_horizontal_translation {
-                VoxelCoord::new(base.x, i64::MIN, base.z)
-            } else {
-                VoxelCoord::new(base.x, (y / vertical.level_quantum).round() as i64, base.z)
-            }];
+            return vec![VoxelCoord::new(base.x, i64::MIN, base.z)];
         };
         keyed
             .into_iter()
@@ -11521,6 +11496,124 @@ mod tests {
                 })
                 .unwrap();
             assert!(!projection.present, "deferred: {deferred}");
+        }
+    }
+
+    /// A position over a column whose only support is on another level
+    /// stands on a neighbouring column's support within a step of its
+    /// height, or nowhere; never on the other level. The translated
+    /// footprints of a placement with a continuous translation answer the
+    /// same.
+    #[test]
+    fn artifact_positions_map_within_a_step_of_their_height() {
+        const UPPER: f64 = 19.0;
+        let upper = (UPPER / 0.25) as i64;
+        let path = "spatial/levels.json";
+        // Floor in columns 0, 2 and 3; column 1 holds only a support 19 m
+        // up; columns 5 and 6 hold only supports up there, with nothing in
+        // column 4.
+        let mut content = crate::content::RuntimeContentBridge::new(BTreeMap::from([(
+            path.to_owned(),
+            spatial_artifact(
+                "levels",
+                0.25,
+                &[
+                    (0, 0, 0, 0.0),
+                    (1, 0, upper, UPPER),
+                    (2, 0, 0, 0.0),
+                    (3, 0, 0, 0.0),
+                    (5, 0, upper, UPPER),
+                    (6, 0, upper, UPPER),
+                ],
+            ),
+        )]));
+        let artifact = open_content(&mut content, path);
+        for shift in [0.0, 0.25] {
+            let mut bridge = RuntimeSpatialBridge::new();
+            bridge.bind_content(&content);
+            let session = create_session(&api(&mut bridge));
+            let admitted = [NativeSpatialContentArtifactInstance {
+                id: 1,
+                content: artifact,
+                column_offset: 0,
+                level_offset: 0,
+                row_offset: 0,
+                quarter_turns: 0,
+                translation: NativeVec3 {
+                    x: shift as f32,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            }];
+            bridge
+                .apply_content_artifact_residency(&NativeSpatialContentArtifactResidencyRequest {
+                    session,
+                    admitted: admitted.as_ptr(),
+                    admitted_len: admitted.len(),
+                    removed: std::ptr::null(),
+                    removed_len: 0,
+                    navigation_grid_id: 7,
+                    navigation_chunk_size: 8,
+                    navigation_max_step_cells: 2,
+                    deferred: false,
+                })
+                .unwrap();
+            let navigation = bridge.sessions[&session.value].navigation.as_ref().unwrap();
+            assert_eq!(
+                navigation
+                    .vertical_mapping
+                    .as_ref()
+                    .unwrap()
+                    .has_continuous_horizontal_translation,
+                shift != 0.0
+            );
+            let step = |bridge: &mut RuntimeSpatialBridge, from: f64, target: f64| {
+                let at = |x: f64| NativeVec3 {
+                    x: (x + shift) as f32,
+                    y: 0.02,
+                    z: 0.5,
+                };
+                let result = bridge
+                    .evaluate_navigation(NativeNavigationStepRequest {
+                        session,
+                        from: at(from),
+                        target: at(target),
+                        max_step_units: 0.5,
+                        max_visited: 64,
+                        grid_id: 0,
+                    })
+                    .unwrap();
+                let first = (result.path_len > 0)
+                    .then(|| unsafe { *result.path })
+                    .map(|cell| [cell.x, cell.y, cell.z]);
+                (result.outcome, first)
+            };
+
+            // Standing in column 1, a quarter metre from column 2's floor,
+            // the walker starts on that floor and reaches column 3.
+            assert_eq!(
+                step(&mut bridge, 1.75, 3.5),
+                (NativeNavigationPathOutcome::Reached, Some([2, 0, 0])),
+                "shift {shift}"
+            );
+            // Standing on the floor, column 1 is the floor beside it too.
+            assert_eq!(
+                step(&mut bridge, 3.5, 1.75).0,
+                NativeNavigationPathOutcome::Reached,
+                "shift {shift}"
+            );
+            // In column 5 no floor lies within a cell: not walkable, at
+            // either end.
+            assert_eq!(
+                step(&mut bridge, 5.5, 3.5).0,
+                NativeNavigationPathOutcome::StartNotWalkable,
+                "shift {shift}"
+            );
+            assert_eq!(
+                step(&mut bridge, 3.5, 5.5).0,
+                NativeNavigationPathOutcome::GoalNotWalkable,
+                "shift {shift}"
+            );
         }
     }
 
