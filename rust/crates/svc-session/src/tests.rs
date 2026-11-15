@@ -22,6 +22,11 @@ fn until(
     }
 }
 
+/// Iroh 1.3's keep-alive interval (its unexported `HEARTBEAT_INTERVAL`). The
+/// host's idle timer restarts on its first packet after the guest's last, at
+/// the latest this keep-alive.
+const KEEP_ALIVE: Duration = Duration::from_secs(5);
+
 fn host(runtime: &SessionRuntime) -> (Session, Vec<Event>, Invitation) {
     let session = Session::host(
         runtime,
@@ -307,7 +312,16 @@ fn a_vanished_guest_is_reported_lost_after_the_idle_timeout() {
             reason: LeaveReason::Lost,
         })
     });
-    assert!(started.elapsed() >= IDLE_TIMEOUT - Duration::from_secs(2));
+    // The guest's last packet can precede the freeze by a moment, and a
+    // loaded machine can fire the host's timer late. Both slacks stay well
+    // short of iroh's 30 s default.
+    let lost_after = started.elapsed();
+    let earliest = IDLE_TIMEOUT - Duration::from_secs(2);
+    let latest = IDLE_TIMEOUT + KEEP_ALIVE + Duration::from_secs(5);
+    assert!(
+        (earliest..=latest).contains(&lost_after),
+        "reported Lost after {lost_after:?}, outside {earliest:?}..={latest:?}"
+    );
 }
 
 #[test]

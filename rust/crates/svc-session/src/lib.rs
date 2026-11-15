@@ -31,8 +31,11 @@ use wire::{read_frame, write_frame, ChatEntry, Frame, RosterEntry, PROTOCOL};
 
 const ALPN: &[u8] = b"rusty-engine/session/1";
 /// A peer that sends nothing (keep-alives included) for this long is gone.
-/// Iroh's 30 s default left players waiting half a minute to learn that a
-/// friend's game had closed.
+/// QUIC restarts the timer on this side's first packet after the peer's last
+/// (RFC 9000 §10.1). With no product traffic that packet is iroh's keep-alive,
+/// 5 s after the peer's last (`HEARTBEAT_INTERVAL` in iroh 1.3). So a peer
+/// that falls silent is reported 10 to 15 s later. Iroh's 30 s default left
+/// players waiting half a minute to learn that a friend's game had closed.
 const IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Reaching a relay, a host, or a guest's first frame.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);

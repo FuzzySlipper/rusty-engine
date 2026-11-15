@@ -122,9 +122,13 @@ Disposing a `Session` leaves: peers learn at once. The host sees
 `MemberLeft` with `Left`. Its guests end with `HostClosed`; there is no host
 migration.
 
-A peer that vanishes (its game killed, its network gone) is noticed after
-about 10 to 12 seconds without traffic: `MemberLeft` with `Lost` on the host,
-and `Ended` with `HostLost` on a guest. Other end reasons:
+A peer that vanishes (its game killed or hung, its network gone) is noticed
+10 to 15 seconds after it falls silent: `MemberLeft` with `Lost` on the host,
+and `Ended` with `HostLost` on a guest. The 10 s idle timeout restarts when
+this side next sends. Without product traffic, iroh's keep-alive does that
+5 s after the peer's last packet (`HEARTBEAT_INTERVAL` in iroh 1.3). So a
+side that sends regularly notices after about 10 s, and an idle one after up
+to 15 s. Other end reasons:
 - `Refused`: wrong session, application or protocol;
 - `Unreachable`: no relay or host answered, or a relay refused the token;
 - `Failed`: this side could not start.
@@ -157,7 +161,7 @@ Each limit answers a failure that internet peers can cause.
 | Received, not yet taken | 64 MiB per session | A peer could flood a paused product. | The sender is disconnected (`Flooded`); a flooding host ends the guest's session. |
 | Chat line | 4 KiB | Bounds the transcript. | Longer lines are refused. |
 | Transcript | 1000 lines | Joiners receive it whole. | Older lines drop off. |
-| Silence | 10 s idle | Notice vanished peers. | A peer gone for 10 s is lost, even if it returns. |
+| Silence | 10 s idle, so 10 to 15 s silent | Notice vanished peers. | A peer silent that long is lost, even if it returns. |
 | Connect | 30 s | An unreachable host or relay. | |
 
 ## Running a relay
