@@ -153,6 +153,8 @@ Soft bodies collide with the static environment from `BindWorldCollision`
 (voxel chunks and static meshes), with bodies (both ways) and with each
 other, by `CollisionGroups` and `CollisionMask`. Their contacts are counted
 in `ReadSoftBody`'s `ContactCount`, not in the bodies' contact facts.
+A [kinematic body](rope-physics.md#kinematic-bodies) a product moves, such
+as an actor's capsule, parts cloth it walks through.
 `SelfContacts` lets a surface collide with itself; the tests check only that
 a folding self-colliding sheet steps finite and stays above the floor.
 
@@ -240,7 +242,8 @@ empty, and `soft.inspect` reports its scene's mean step time.
   every piece with its UVs; coincident surface vertices keep their own
   UVs; a driven particle stays driven, and pins stay on their particles,
   while a tear renumbers the cloth mid-step; a filled mesh draws its own
-  triangles;
+  triangles; a kinematic capsule walking through a banner parts it and it
+  settles back;
   self-contacts and FEM bodies step finite; validation and removal.
 - Bridge tests: an appearance is reshaped by the steps that move its body,
   and not once the body is gone; joint attachments carry cloth with a posed

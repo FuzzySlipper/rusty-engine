@@ -1186,6 +1186,8 @@ sealed class DynamicsServiceFake : IDynamicsService
     public DynamicsStepReceipt Step(DynamicsStepRequest request) => throw new NotSupportedException();
     public DynamicsReadout Read(DynamicsReadRequest request) => throw new NotSupportedException();
     public void Reset(DynamicsResetRequest request) => throw new NotSupportedException();
+    public void MoveBodyKinematic(DynamicsBodyKinematicRequest request) => throw new NotSupportedException();
+    public void ReleaseBodyKinematic(DynamicsBody body) => throw new NotSupportedException();
     public void UpdateBody(DynamicsUpdateBodyRequest request) => throw new NotSupportedException();
     public DynamicsWorldResult ReadWorld(DynamicsWorldReadRequest request) => throw new NotSupportedException();
     public DynamicsBody ReplaceBody(DynamicsReplaceBodyRequest request) => throw new NotSupportedException();

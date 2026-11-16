@@ -225,9 +225,9 @@ pub struct NativeDynamicsBodyConfig {
     pub properties: NativeDynamicsBodyProperties,
 }
 
-/// Complete dynamic-body behavior supported by the current Engine owner.
-/// Static and kinematic bodies remain Spatial/character families rather than
-/// alternate modes hidden inside this request.
+/// Complete simulated-body behavior supported by the current Engine owner.
+/// A product moves a body kinematically with `move_body_kinematic` rather
+/// than through a mode in this request; static environment stays Spatial's.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDynamicsBodyProperties {
@@ -579,6 +579,18 @@ pub struct NativeDynamicsResetRequest {
     pub linear_velocity: NativeVec3,
     pub angular_velocity: NativeVec3,
     pub sleeping: bool,
+}
+
+/// Move a body kinematically: during the next step it goes from where it is
+/// to `transform` (unit scale, as in reset) at an even pace through the step's
+/// substeps, pushing the simulated bodies, beads, bones and particles its
+/// collision groups meet, and nothing pushes it. A step with no new placement
+/// leaves it where it is.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeDynamicsBodyKinematicRequest {
+    pub body: NativeDynamicsBodyHandle,
+    pub transform: NativeTransform,
 }
 
 #[repr(C)]

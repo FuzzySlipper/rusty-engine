@@ -61,6 +61,54 @@ takes the maximum over a step's substeps. It matches a hanging mass's weight but
 can miss catch peaks, so it is not a breaking tension. A catch is a
 slack-to-taut transition that the solver tracks between steps.
 
+## Kinematic bodies
+
+A product moves a Dynamics body itself with
+`Dynamics.MoveBodyKinematic(new DynamicsBodyKinematicRequest(body, transform))`,
+so that a walking player or enemy pushes hanging chains, the simulated bones
+of a [ragdoll](ragdolls.md) and [cloth](soft-bodies.md) aside:
+
+```csharp
+// Each step, from the actor's own state: a capsule where the actor will be.
+engine.Dynamics.MoveBodyKinematic(new(actorCapsule, new(actorCentre, Quaternion.Identity, Vector3.One)));
+engine.Dynamics.Step(new(world, dt, 1, ReadOnlyMemory<DynamicsAction>.Empty));
+```
+
+- Any body created with `Create*Body` takes it (the bodies a chain, ragdoll
+  or severed part owns stay with their owner). From the next step it is
+  kinematic and goes from where it is to the placement by the end of that
+  step, at an even pace through all of its substeps (rope, joint and
+  soft-body substeps, and every step of `Step(steps: n)`). Contacts carry its
+  velocity in each substep rather than one jump. The transform has unit
+  scale, as in `Reset`.
+- The step uses the placement up. A step with no new one leaves the body
+  where it is, at rest; a second call before the same step replaces the
+  first.
+- Nothing pushes it: contacts, joints, ropes and water do not move it, and
+  step actions and point impulses on it do nothing. Its axis locks do not
+  restrict the placement.
+- It meets simulated bodies, chain beads, simulated ragdoll bones and free
+  soft-body particles by its own `CollisionGroups` and `CollisionMask`, as
+  any body does, and its contacts show in `Read` and `ReadWorld`. It does not
+  collide with the bound static environment or with other kinematic bodies
+  (animated ragdoll bones, other actors' bodies):
+  the product moves it from its actor, and a wall must not stop it.
+- `Dynamics.ReleaseBodyKinematic(body)` makes it simulated again from the
+  next step, with the velocity it moved with in its last substep; gravity,
+  damping and locks apply again. Releasing a simulated body does nothing.
+- `Read`, `StepAndRead` and `ReadWorld` report it as any body: where it is
+  after the step and the velocity it moved with. `RebaseWorldOrigin` moves
+  it, and a placement given for the coming step, with everything else.
+  `Reset` teleports it (a cut or respawn) and it stays kinematic. `UpdateBody`
+  keeps it kinematic with its placement; `Replace*Body` makes a new,
+  simulated body. Ropes, joints and chains attached to it follow it.
+
+The actor does not feel what it pushes, and nothing couples the Spatial
+character controller to Dynamics: the product moves one body per actor near
+things that should part around it. How quickly a pushed chain settles back
+is its damping, which the product tunes. The solver mechanism is the one
+[animated ragdoll bones](ragdolls.md#animated-bones) use.
+
 ## Kinematic character coupling
 
 One optional tether participates in the character step. For a dynamic anchor,
@@ -140,9 +188,18 @@ river current on a tether.
   - a settling stack;
   - static-scene rebinding;
   - rope survival across body replacement;
-  - translation.
+  - translation;
+  - kinematic bodies: reaching a placement at an even pace, staying put,
+    pushed by nothing, rebase, replacement, reset and release, and waking
+    what they meet;
+  - a kinematic capsule walking at 1.5 m/s through a pinned banner and a
+    figure's limp arm, parting them without passing into them, and both
+    settling back.
 - The bridge tests cover chains, terrain contact, contact suppression,
-  character reactions, light-anchor catch energy and world-origin rebasing.
+  character reactions, light-anchor catch energy and world-origin rebasing,
+  and a kinematic capsule walking at 1.5 m/s through a hanging chain: the
+  beads part without passing into it, it ends where it was placed, released
+  it keeps walking, and the chain settles back.
 - `svc-collision` floating tests cover box, sphere and lying-capsule drafts
   against Archimedes, capsule ends against closed forms and fine sampling,
   angular drag in the reported torque, tipping under an offset load against hydrostatics and

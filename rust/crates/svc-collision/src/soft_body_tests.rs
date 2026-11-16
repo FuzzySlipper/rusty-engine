@@ -809,3 +809,53 @@ fn a_skinned_sheet_draws_its_skin_riding_the_swinging_sheet() {
         ))
         .is_err());
 }
+
+/// A capsule walked kinematically at walking pace through a hanging banner
+/// parts it without a particle passing into it, and the banner settles back.
+#[test]
+fn a_kinematic_capsule_walks_through_a_hanging_banner() {
+    use crate::dynamics::walking::{capsule, to_axis, walk, RADIUS};
+    const HALF_HEIGHT: f64 = 0.6;
+    let mut solver = DynamicsSolver::new(GRAVITY);
+    solver.bind_environment(&floor());
+    // Damped, so it settles back in a few seconds.
+    solver
+        .insert_soft_body(DynamicsSoftBodyInput {
+            linear_damping: 1.0,
+            ..banner()
+        })
+        .unwrap();
+    steps(&mut solver, 120);
+    let rest = particles(&solver, SHEET);
+    // Its top at 2.7 m, below the pinned row at 3 m: across the banner's
+    // middle, through the lower rows.
+    solver
+        .insert_body(capsule(9, [2.55, 1.8, 1.0], HALF_HEIGHT))
+        .unwrap();
+    let (mut closest, mut widest) = (f64::INFINITY, 0.0_f64);
+    let last = walk(&mut solver, 9, [0.0, 0.0, 1.0], 80, |solver, centre| {
+        for (particle, rest) in particles(solver, SHEET).iter().zip(&rest) {
+            closest = closest.min(to_axis(particle.position, centre, HALF_HEIGHT));
+            widest = widest.max((particle.position[2] - rest.position[2]).abs());
+        }
+    });
+    assert!(
+        closest > RADIUS - 0.05,
+        "a particle came {closest} m from the axis"
+    );
+    assert!(widest > 0.3, "the banner parted only {widest} m");
+    assert_eq!(solver.body(DynamicsBodyId(9)).unwrap().translation, last);
+
+    steps(&mut solver, 360);
+    let back = particles(&solver, SHEET)
+        .iter()
+        .zip(&rest)
+        .map(|(particle, rest)| {
+            (0..3)
+                .map(|axis| (particle.position[axis] - rest.position[axis]).powi(2))
+                .sum::<f64>()
+                .sqrt()
+        })
+        .fold(0.0, f64::max);
+    assert!(back < 0.05, "the banner is still {back} m from rest");
+}

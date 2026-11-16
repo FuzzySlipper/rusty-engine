@@ -626,6 +626,96 @@ mod tests {
             .collect()
     }
 
+    /// A capsule walked kinematically at walking pace through the limp arm
+    /// of a figure held by its hips swings it aside without passing into it,
+    /// and the arm settles back.
+    #[test]
+    fn a_kinematic_capsule_walks_through_a_hanging_figures_arm() {
+        use crate::dynamics::walking::{capsule, to_axis, walk, RADIUS};
+        const HALF_HEIGHT: f64 = 0.3;
+        const LIFT: f64 = 1.0;
+        let (bones, links, mut rest) = figure();
+        for placement in &mut rest {
+            placement.translation[1] += LIFT;
+        }
+        let mut solver = DynamicsSolver::new(GRAVITY);
+        solver.bind_environment(&floor());
+        let spawn = RagdollSpawn {
+            rest: rest.clone(),
+            current: rest.clone(),
+            previous: None,
+        };
+        solver
+            .insert_ragdoll(&bones, &links, material(), &spawn)
+            .unwrap();
+        // Held by its hips; the rest of it hangs.
+        let hips = rest[0];
+        solver
+            .set_body_kinematic(bones[0].body, Some((hips.translation, hips.rotation)))
+            .unwrap();
+        for _ in 0..240 {
+            solver.step(TICK, 1, &[]).unwrap();
+        }
+        // Points along both arm bones: each one's joint, middle and tip.
+        let arm = |solver: &DynamicsSolver| {
+            solver
+                .ragdoll_placements(&bones)
+                .iter()
+                .zip(&bones)
+                .skip(5)
+                .take(2)
+                .flat_map(|(placed, bone)| {
+                    let placed = placed.unwrap();
+                    let pose = Pose::from_parts(
+                        Vector::from_array(placed.translation),
+                        Rotation::from_array(placed.rotation),
+                    );
+                    let RagdollShape::Capsule { radius } = bone.shape else {
+                        unreachable!("arm bones are capsules")
+                    };
+                    [0.0, 0.5, 1.0].map(|along| {
+                        let point = pose * (Vector::from_array(bone.tip) * along);
+                        (point.to_array(), radius)
+                    })
+                })
+                .collect::<Vec<_>>()
+        };
+        let hanging = arm(&solver);
+        // Clear of the legs, its top below the shoulder: it meets the
+        // forearm and the elbow.
+        solver
+            .insert_body(capsule(99, [7.45, 0.4 + LIFT, 7.0], HALF_HEIGHT))
+            .unwrap();
+        let (mut closest, mut widest) = (f64::INFINITY, 0.0_f64);
+        let last = walk(&mut solver, 99, [0.0, 0.0, 1.0], 80, |solver, centre| {
+            for ((point, radius), (rest, _)) in arm(solver).into_iter().zip(&hanging) {
+                closest = closest.min(to_axis(point, centre, HALF_HEIGHT) - radius);
+                widest = widest.max((point[2] - rest[2]).abs());
+            }
+        });
+        assert!(
+            closest > RADIUS - 0.05,
+            "the arm came {closest} m from the axis"
+        );
+        assert!(widest > 0.2, "the arm swung only {widest} m");
+        assert_eq!(solver.body(DynamicsBodyId(99)).unwrap().translation, last);
+
+        for _ in 0..360 {
+            solver.step(TICK, 1, &[]).unwrap();
+        }
+        let back = arm(&solver)
+            .into_iter()
+            .zip(&hanging)
+            .map(|((point, _), (rest, _))| {
+                (0..3)
+                    .map(|axis| (point[axis] - rest[axis]).powi(2))
+                    .sum::<f64>()
+                    .sqrt()
+            })
+            .fold(0.0, f64::max);
+        assert!(back < 0.1, "the arm is still {back} m from rest");
+    }
+
     #[test]
     fn a_moving_kinematic_root_keeps_its_velocity_through_substeps_and_release() {
         let (bones, links, rest) = figure();

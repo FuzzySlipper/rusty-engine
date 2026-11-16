@@ -793,6 +793,38 @@ impl RuntimeDynamicsBridge {
             .map_err(solver_error("CSHARP_DYNAMICS_RESET"))
     }
 
+    /// Move a body kinematically to the request's placement over the next
+    /// step. Its transform has unit scale, as in `reset`.
+    fn move_body_kinematic(
+        &mut self,
+        request: NativeDynamicsBodyKinematicRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let world = self.active_body(request.body.value)?;
+        let transform = checked_transform(request.transform)?;
+        self.active_world_mut(world)?
+            .solver
+            .set_body_kinematic(
+                DynamicsBodyId(request.body.value),
+                Some((
+                    vec3_f64(transform.translation),
+                    quat_f64(transform.rotation),
+                )),
+            )
+            .map_err(solver_error("CSHARP_DYNAMICS_KINEMATIC"))
+    }
+
+    /// Make a body simulated again, keeping the velocity it moved with.
+    fn release_body_kinematic(
+        &mut self,
+        body: NativeDynamicsBodyHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let world = self.active_body(body.value)?;
+        self.active_world_mut(world)?
+            .solver
+            .set_body_kinematic(DynamicsBodyId(body.value), None)
+            .map_err(solver_error("CSHARP_DYNAMICS_KINEMATIC"))
+    }
+
     fn replace_body(
         &mut self,
         request: NativeDynamicsReplaceBodyRequest,
@@ -1607,6 +1639,36 @@ unsafe extern "C" fn reset(
     }
 }
 
+unsafe extern "C" fn move_body_kinematic(
+    context: *mut c_void,
+    request: NativeDynamicsBodyKinematicRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(operation_error);
+    if context.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.move_body_kinematic(request) {
+        Ok(()) => ABI_OK,
+        Err(error) => refuse(context, &error, operation_error),
+    }
+}
+
+unsafe extern "C" fn release_body_kinematic(
+    context: *mut c_void,
+    body: NativeDynamicsBodyHandle,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    clear_receipt(operation_error);
+    if context.is_null() {
+        return 0;
+    }
+    match unsafe { &mut *context.cast::<RuntimeDynamicsBridge>() }.release_body_kinematic(body) {
+        Ok(()) => ABI_OK,
+        Err(error) => refuse(context, &error, operation_error),
+    }
+}
+
 unsafe extern "C" fn update_body(
     context: *mut c_void,
     request: NativeDynamicsUpdateBodyRequest,
@@ -1760,6 +1822,8 @@ pub(crate) fn api(bridge: &mut RuntimeDynamicsBridge) -> NativeDynamicsApi {
         step_and_read,
         read,
         reset,
+        move_body_kinematic,
+        release_body_kinematic,
         update_body,
         read_world,
         replace_body,
@@ -2427,6 +2491,199 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         assert_eq!(run(), run());
+    }
+
+    /// A capsule a product moves kinematically at walking pace through a
+    /// hanging chain pushes the beads aside without passing into them, ends
+    /// where it was placed, and the chain settles back once it has gone.
+    #[test]
+    fn a_kinematic_capsule_walks_through_a_hanging_chain() {
+        const WALK: f32 = 1.5;
+        // The chain's damping, which a product tunes: it settles in seconds.
+        const DAMPING: f32 = 2.0;
+        const SETTLE: usize = 480;
+        const CAPSULE_HALF_HEIGHT: f32 = 0.6;
+        const CAPSULE_RADIUS: f32 = 0.3;
+        const BEAD_RADIUS: f32 = 0.15;
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3 {
+                    x: 0.0,
+                    y: -9.81,
+                    z: 0.0,
+                },
+            })
+            .unwrap();
+        let ground = (-4..5).flat_map(|x| (-2..3).map(move |z| [x, -1, z]));
+        bridge.active_world_mut(world.value).unwrap().bind_scene(
+            u64::MAX,
+            &VoxelCollisionScene::from_solid_voxels(1.0, 8, ground).unwrap(),
+        );
+        let mut chain = chain_config(1, 5);
+        chain.radius = BEAD_RADIUS;
+        chain.properties.linear_damping = DAMPING;
+        chain.properties.angular_damping = DAMPING;
+        bridge
+            .create_fixed_chain(NativeDynamicsFixedChainRequest {
+                world,
+                anchor: NativeVec3 {
+                    x: 0.0,
+                    y: 3.0,
+                    z: 0.0,
+                },
+                end: NativeVec3 {
+                    x: 0.0,
+                    y: 0.5,
+                    z: 0.0,
+                },
+                config: chain,
+            })
+            .unwrap();
+        let step = |bridge: &mut RuntimeDynamicsBridge| {
+            bridge
+                .step(&NativeDynamicsStepRequest {
+                    world,
+                    step_seconds: ONE_SIXTIETH_SECOND,
+                    steps: 1,
+                    actions: std::ptr::null(),
+                    actions_len: 0,
+                })
+                .unwrap();
+        };
+        let beads = |bridge: &RuntimeDynamicsBridge| {
+            (1..=5)
+                .map(|index| {
+                    bridge
+                        .read_chain_point(NativeDynamicsChainPointRequest {
+                            world,
+                            id: 1,
+                            index,
+                        })
+                        .unwrap()
+                        .position
+                })
+                .collect::<Vec<_>>()
+        };
+        for _ in 0..120 {
+            step(&mut bridge);
+        }
+        let rest = beads(&bridge);
+
+        let start = NativeVec3 {
+            x: -1.5,
+            y: 1.5,
+            z: 0.0,
+        };
+        let mut capsule = body_config(start).properties;
+        capsule.mass = 80.0;
+        let capsule = bridge
+            .create_capsule_body(&NativeDynamicsCreateCapsuleBodyRequest {
+                world,
+                body: NativeDynamicsCapsuleBodyConfig {
+                    transform: transform(start),
+                    half_height: CAPSULE_HALF_HEIGHT,
+                    radius: CAPSULE_RADIUS,
+                    properties: capsule,
+                },
+            })
+            .unwrap();
+        // Distance from a bead centre to the capsule's axis.
+        let to_axis = |bead: NativeVec3, centre: NativeVec3| {
+            let y = bead.y.clamp(
+                centre.y - CAPSULE_HALF_HEIGHT,
+                centre.y + CAPSULE_HALF_HEIGHT,
+            );
+            ((bead.x - centre.x).powi(2) + (bead.y - y).powi(2) + (bead.z - centre.z).powi(2))
+                .sqrt()
+        };
+        let mut placement = start;
+        let (mut closest, mut widest, mut touched) = (f32::MAX, 0.0_f32, false);
+        let ticks = 120;
+        for _ in 0..ticks {
+            placement.x += WALK / 60.0;
+            bridge
+                .move_body_kinematic(NativeDynamicsBodyKinematicRequest {
+                    body: capsule,
+                    transform: transform(placement),
+                })
+                .unwrap();
+            step(&mut bridge);
+            let read = bridge
+                .read_world(NativeDynamicsWorldReadRequest { world })
+                .unwrap();
+            let contacts = unsafe { std::slice::from_raw_parts(read.contacts, read.contacts_len) };
+            touched |= contacts.iter().any(|contact| {
+                !contact.environment
+                    && (contact.first.value == capsule.value
+                        || contact.second.value == capsule.value)
+            });
+            let centre = bridge
+                .read(NativeDynamicsReadRequest { body: capsule })
+                .unwrap()
+                .transform
+                .translation;
+            for (bead, rest) in beads(&bridge).into_iter().zip(&rest) {
+                closest = closest.min(to_axis(bead, centre));
+                widest = widest.max(((bead.x - rest.x).powi(2) + (bead.z - rest.z).powi(2)).sqrt());
+            }
+        }
+        let passed = bridge
+            .read(NativeDynamicsReadRequest { body: capsule })
+            .unwrap();
+        assert!(touched, "the capsule never met the chain");
+        assert!(
+            closest > CAPSULE_RADIUS + BEAD_RADIUS - 0.05,
+            "a bead came within {closest} m of the capsule's axis"
+        );
+        assert!(widest > 0.3, "the chain swung only {widest} m aside");
+        // Nothing pushed it: it is exactly where it was last placed, moving
+        // at the pace it was moved.
+        let at = passed.transform.translation;
+        assert!(
+            (at.x - placement.x).abs() < 1e-4
+                && (at.y - placement.y).abs() < 1e-4
+                && at.z.abs() < 1e-4,
+            "{at:?}"
+        );
+        assert!((passed.linear_velocity.x - WALK).abs() < 1e-2, "{passed:?}");
+
+        // Released, it keeps walking away; the chain settles back.
+        bridge.release_body_kinematic(capsule).unwrap();
+        let mut last = Vec::new();
+        for tick in 0..SETTLE {
+            step(&mut bridge);
+            if tick == 0 {
+                let walking = bridge
+                    .read(NativeDynamicsReadRequest { body: capsule })
+                    .unwrap();
+                assert!(
+                    (walking.linear_velocity.x - WALK).abs() < 0.05,
+                    "{walking:?}"
+                );
+            }
+            last = beads(&bridge);
+        }
+        let back = last
+            .iter()
+            .zip(&rest)
+            .map(|(bead, rest)| {
+                ((bead.x - rest.x).powi(2) + (bead.y - rest.y).powi(2) + (bead.z - rest.z).powi(2))
+                    .sqrt()
+            })
+            .fold(0.0_f32, f32::max);
+        // It comes to rest where it hung.
+        assert!(back < 0.05, "the chain is still {back} m from rest");
+
+        bridge.destroy_body(capsule).unwrap();
+        assert!(bridge
+            .move_body_kinematic(NativeDynamicsBodyKinematicRequest {
+                body: capsule,
+                transform: transform(placement),
+            })
+            .is_err());
+        assert!(bridge.release_body_kinematic(capsule).is_err());
     }
 
     #[test]

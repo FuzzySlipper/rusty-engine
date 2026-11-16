@@ -256,6 +256,16 @@ pub type NativeResetDynamics = unsafe extern "C" fn(
     NativeDynamicsResetRequest,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeMoveDynamicsBodyKinematic = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsBodyKinematicRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReleaseDynamicsBodyKinematic = unsafe extern "C" fn(
+    *mut c_void,
+    NativeDynamicsBodyHandle,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeUpdateDynamicsBody = unsafe extern "C" fn(
     *mut c_void,
     NativeDynamicsUpdateBodyRequest,
@@ -1653,6 +1663,8 @@ pub struct NativeDynamicsApi {
     pub step_and_read: NativeStepAndReadDynamics,
     pub read: NativeReadDynamics,
     pub reset: NativeResetDynamics,
+    pub move_body_kinematic: NativeMoveDynamicsBodyKinematic,
+    pub release_body_kinematic: NativeReleaseDynamicsBodyKinematic,
     pub update_body: NativeUpdateDynamicsBody,
     pub read_world: NativeReadDynamicsWorld,
     pub replace_body: NativeReplaceDynamicsBody,

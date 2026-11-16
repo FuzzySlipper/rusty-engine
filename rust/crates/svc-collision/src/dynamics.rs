@@ -366,11 +366,13 @@ impl DynamicsSolver {
 
     /// Replace a body's shape, mass and material in place. Attached ropes
     /// stay attached; `body.translation` and `body.rotation` become its pose.
+    /// A kinematic body stays kinematic, with any placement it was given.
     pub fn replace_body(&mut self, mut body: DynamicsBodyInput) -> Result<(), DynamicsError> {
         let Some(previous) = self.bodies.get(&body.id).copied() else {
             return Err(DynamicsError::UnknownBody { body: body.id });
         };
         validate_body(&mut body)?;
+        let body_type = self.world.bodies[previous].body_type();
         let attached = self
             .tethers_attached_to(body.id)
             .into_iter()
@@ -386,6 +388,9 @@ impl DynamicsSolver {
         self.world.remove_body(previous);
         let (builder, collider) = body_builders(&body);
         let (handle, _) = self.world.insert(builder, collider);
+        if body_type != RigidBodyType::Dynamic {
+            self.world.bodies[handle].set_body_type(body_type, true);
+        }
         self.bodies.insert(body.id, handle);
         self.reattach_soft_bodies(body.id, soft_attachments);
         self.shapes.insert(body.id, body.shape);
@@ -684,14 +689,18 @@ impl DynamicsSolver {
         Ok(())
     }
 
-    /// Move every body and fixed rope anchor by `delta`, for a world-origin
-    /// rebase. Velocities, contacts and rope state are unchanged.
+    /// Move every body, kinematic placement and fixed rope anchor by `delta`,
+    /// for a world-origin rebase. Velocities, contacts and rope state are
+    /// unchanged.
     pub fn translate(&mut self, delta: [f64; 3]) {
         let delta = vector(delta);
         for handle in self.bodies.values() {
             let body = &mut self.world.bodies[*handle];
             let translation = body.translation() + delta;
             body.set_translation(translation, false);
+        }
+        for target in self.kinematic_targets.values_mut() {
+            target.translation += delta;
         }
         for tether in self.tethers.values_mut() {
             tether.translate(&mut self.world, delta);
@@ -1304,6 +1313,76 @@ impl CollisionProjection {
     }
 }
 
+/// A capsule a test walks kinematically through hanging things.
+#[cfg(test)]
+pub(crate) mod walking {
+    use super::*;
+
+    /// Walking pace, metres per second.
+    pub(crate) const WALK: f64 = 1.5;
+    pub(crate) const RADIUS: f64 = 0.3;
+    const TICK: f64 = 1.0 / 60.0;
+
+    pub(crate) fn capsule(id: u64, at: [f64; 3], half_height: f64) -> DynamicsBodyInput {
+        DynamicsBodyInput {
+            id: DynamicsBodyId(id),
+            translation: at,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            shape: DynamicsShape::CapsuleY {
+                half_height,
+                radius: RADIUS,
+            },
+            mass: 80.0,
+            mass_properties: None,
+            linear_velocity: [0.0; 3],
+            angular_velocity: [0.0; 3],
+            locked_translation_axes: [false; 3],
+            locked_rotation_axes: [false; 3],
+            linear_damping: 0.0,
+            angular_damping: 0.0,
+            gravity_scale: 0.0,
+            friction: 0.5,
+            restitution: 0.0,
+            collision_groups: u32::MAX,
+            collision_mask: u32::MAX,
+            enabled: true,
+            sleeping: false,
+            continuous_collision: false,
+        }
+    }
+
+    /// Walk body `id` from where it is along unit `direction` at
+    /// [`WALK`] for `ticks` steps, placing it kinematically each step, and
+    /// call `each` with the solver and its centre after every step. Returns
+    /// its last placement.
+    pub(crate) fn walk(
+        solver: &mut DynamicsSolver,
+        id: u64,
+        direction: [f64; 3],
+        ticks: usize,
+        mut each: impl FnMut(&DynamicsSolver, [f64; 3]),
+    ) -> [f64; 3] {
+        let mut placement = solver.body(DynamicsBodyId(id)).unwrap().translation;
+        for _ in 0..ticks {
+            placement = [0, 1, 2].map(|axis| placement[axis] + direction[axis] * WALK * TICK);
+            solver
+                .set_body_kinematic(DynamicsBodyId(id), Some((placement, [0.0, 0.0, 0.0, 1.0])))
+                .unwrap();
+            solver.step(TICK, 1, &[]).unwrap();
+            let centre = solver.body(DynamicsBodyId(id)).unwrap().translation;
+            each(solver, centre);
+        }
+        placement
+    }
+
+    /// Distance from `point` to the axis of an upright capsule at `centre`.
+    pub(crate) fn to_axis(point: [f64; 3], centre: [f64; 3], half_height: f64) -> f64 {
+        let y = point[1].clamp(centre[1] - half_height, centre[1] + half_height);
+        ((point[0] - centre[0]).powi(2) + (point[1] - y).powi(2) + (point[2] - centre[2]).powi(2))
+            .sqrt()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core_space::{ChunkCoord, ChunkDims, GridId, LocalVoxelCoord, VoxelGridSpec};
@@ -1395,6 +1474,142 @@ mod tests {
         solver.step(TICK, 1, &[]).unwrap();
         let coasting = solver.body(DynamicsBodyId(1)).unwrap().linear_velocity[2];
         assert!((coasting - carried).abs() < 1e-9);
+    }
+
+    /// A kinematic body reaches its placement by the end of a step at an
+    /// even pace, stays put without one, is pushed by nothing and keeps the
+    /// velocity it moved with when released.
+    #[test]
+    fn a_kinematic_body_moves_as_placed_and_nothing_pushes_it() {
+        // Gravity acts on it, once it is simulated.
+        let capsule = |half_height| DynamicsBodyInput {
+            gravity_scale: 1.0,
+            ..walking::capsule(1, [0.0; 3], half_height)
+        };
+        let mut solver = DynamicsSolver::new(GRAVITY);
+        let walker = DynamicsBodyId(1);
+        solver.insert_body(capsule(0.6)).unwrap();
+        let identity = [0.0, 0.0, 0.0, 1.0];
+        // Over three steps in one call: the velocity of its last substep is
+        // the whole move over the whole time, so it moved at an even pace.
+        solver
+            .set_body_kinematic(walker, Some(([0.3, 0.0, 0.0], identity)))
+            .unwrap();
+        assert!(solver.body_is_kinematic(walker));
+        solver.step(TICK, 3, &[]).unwrap();
+        let moved = solver.body(walker).unwrap();
+        assert!((moved.translation[0] - 0.3).abs() < 1e-12, "{moved:?}");
+        assert!((moved.linear_velocity[0] - 0.3 / (3.0 * TICK)).abs() < 1e-9);
+        // No new placement: it stays where it is, and gravity does not move it.
+        solver.step(TICK, 1, &[]).unwrap();
+        let still = solver.body(walker).unwrap();
+        assert_eq!(still.translation, moved.translation);
+        assert_eq!(still.linear_velocity, [0.0; 3]);
+
+        // A heavy ball thrown at it bounces off; actions on it do nothing.
+        solver
+            .insert_body(DynamicsBodyInput {
+                id: DynamicsBodyId(2),
+                translation: [2.0, 0.0, 0.0],
+                linear_velocity: [-6.0, 0.0, 0.0],
+                mass: 500.0,
+                ..body()
+            })
+            .unwrap();
+        let shove = DynamicsAction {
+            body: walker,
+            force: [1000.0, 0.0, 0.0],
+            torque: [0.0, 1000.0, 0.0],
+            impulse: [100.0, 0.0, 0.0],
+            torque_impulse: [0.0, 100.0, 0.0],
+            wake: true,
+        };
+        for _ in 0..30 {
+            solver.step(TICK, 1, &[shove]).unwrap();
+        }
+        let hit = solver.body(walker).unwrap();
+        assert_eq!(hit.translation, still.translation);
+        assert_eq!(hit.rotation, still.rotation);
+        // The ball stopped against it rather than passing into it.
+        let ball = solver.body(DynamicsBodyId(2)).unwrap();
+        assert!(ball.translation[0] > 0.3 + 0.3 + 0.5 - 0.02, "{ball:?}");
+        assert!(ball.linear_velocity[0] > -0.1, "{ball:?}");
+        solver.remove_body(DynamicsBodyId(2));
+
+        // A placement given before a rebase moves with the world.
+        solver
+            .set_body_kinematic(walker, Some(([0.4, 0.0, 0.0], identity)))
+            .unwrap();
+        solver.translate([10.0, 0.0, 0.0]);
+        solver.step(TICK, 1, &[]).unwrap();
+        let rebased = solver.body(walker).unwrap();
+        assert!((rebased.translation[0] - 10.4).abs() < 1e-9, "{rebased:?}");
+        assert!((rebased.linear_velocity[0] - 0.1 / TICK).abs() < 1e-6);
+
+        // Replacing its shape keeps it kinematic, with its placement.
+        solver
+            .set_body_kinematic(walker, Some(([10.5, 0.0, 0.0], identity)))
+            .unwrap();
+        solver
+            .replace_body(DynamicsBodyInput {
+                translation: rebased.translation,
+                ..capsule(0.8)
+            })
+            .unwrap();
+        assert!(solver.body_is_kinematic(walker));
+        solver.step(TICK, 1, &[]).unwrap();
+        assert!((solver.body(walker).unwrap().translation[0] - 10.5).abs() < 1e-9);
+
+        // A reset teleports it and it stays kinematic.
+        solver
+            .set_body_motion(
+                walker,
+                [20.0, 0.0, 0.0],
+                identity,
+                [0.0; 3],
+                [0.0; 3],
+                false,
+            )
+            .unwrap();
+        assert!(solver.body_is_kinematic(walker));
+        solver
+            .set_body_kinematic(walker, Some(([20.1, 0.0, 0.0], identity)))
+            .unwrap();
+        solver.step(TICK, 1, &[]).unwrap();
+        assert!((solver.body(walker).unwrap().translation[0] - 20.1).abs() < 1e-9);
+
+        // Released, it keeps the velocity it moved with and falls.
+        solver.set_body_kinematic(walker, None).unwrap();
+        assert!(!solver.body_is_kinematic(walker));
+        solver.set_body_kinematic(walker, None).unwrap();
+        solver.step(TICK, 1, &[]).unwrap();
+        let released = solver.body(walker).unwrap();
+        assert!(
+            (released.linear_velocity[0] - 0.1 / TICK).abs() < 1e-6,
+            "{released:?}"
+        );
+        assert!(released.linear_velocity[1] < 0.0, "{released:?}");
+    }
+
+    /// A kinematic capsule walking into a sleeping body wakes and pushes it.
+    #[test]
+    fn a_walking_kinematic_body_wakes_what_it_meets() {
+        let mut solver = DynamicsSolver::new([0.0; 3]);
+        solver
+            .insert_body(DynamicsBodyInput {
+                translation: [1.0, 0.0, 0.0],
+                sleeping: true,
+                ..body()
+            })
+            .unwrap();
+        solver
+            .insert_body(walking::capsule(2, [-0.5, 0.0, 0.0], 0.6))
+            .unwrap();
+        assert!(solver.body(DynamicsBodyId(1)).unwrap().sleeping);
+        walking::walk(&mut solver, 2, [1.0, 0.0, 0.0], 60, |_, _| ());
+        let pushed = solver.body(DynamicsBodyId(1)).unwrap();
+        assert!(!pushed.sleeping);
+        assert!(pushed.translation[0] > 1.5, "{pushed:?}");
     }
 
     fn explicit_body() -> DynamicsBodyInput {

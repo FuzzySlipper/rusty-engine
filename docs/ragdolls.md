@@ -186,6 +186,10 @@ other bones and soft bodies collide with it. So a ragdoll can be:
 A sudden change in the pose's motion lags a step. Animated bones never
 sleep.
 
+A body the product moves itself, such as an actor's capsule walking through
+a hanging figure, is a [kinematic body](rope-physics.md#kinematic-bodies):
+it pushes simulated bones aside the same way.
+
 `SetRagdollWind(new(ragdoll, wind, drag))` blows air past the simulated
 bones from the next step on, in every substep, until set again: each feels
 `drag × area × v|v|`, `v` the air's speed through it. A box bone is a plate
