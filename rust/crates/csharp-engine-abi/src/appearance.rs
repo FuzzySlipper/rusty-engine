@@ -807,8 +807,9 @@ pub struct NativeMaterialRequest {
     /// A product shader shading this material; a zero handle for the
     /// standard shade stage.
     pub shader: NativeMaterialShader,
-    /// Repeats of the base texture and normal map per uv unit, or per mesh
-    /// unit on the triplanar planes; a zero component repeats once.
+    /// Repeats of the base texture and its normal, emission and occlusion
+    /// maps per uv unit, or per mesh unit on the triplanar planes; a zero
+    /// component repeats once.
     pub texture_scale: NativeVec2,
     /// Added to the scaled uv, in repeats.
     pub texture_offset: NativeVec2,

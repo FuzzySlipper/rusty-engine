@@ -489,9 +489,9 @@ and its tangent frame stays continuous across tile seams.
 normal map from three axis planes blended by the surface normal instead of
 the uv; see [textures on reconstructed
 surfaces](smooth-voxel-surfaces.md#textures-on-reconstructed-surfaces).
-`TextureScale` sets how often the base texture and normal map repeat: per uv
-unit, or per mesh unit on the triplanar planes, so materials sharing one
-retained mesh can repeat at different lengths. A zero component (the default)
+`TextureScale` sets how often the base texture and its normal, emission and
+occlusion maps repeat: per uv unit, or per mesh unit on the triplanar planes,
+so materials sharing one retained mesh can repeat at different lengths. A zero component (the default)
 repeats once. `TextureOffset` shifts the repeat, in repeats.
 `StochasticTiling` (0, the default, for none) hides a repeating texture's
 grid: the base texture and normal map are read as randomly offset and rotated
