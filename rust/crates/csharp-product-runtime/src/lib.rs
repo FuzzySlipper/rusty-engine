@@ -2631,20 +2631,27 @@ impl CsharpProductRuntime {
             && !self.lifecycle.gameplay_time().held()
     }
 
-    /// Device audio plays only while world time moves, and at its rate:
-    /// Engine cursors advance only with admitted steps, so the device holds
-    /// and slows with them. Shutdown ends every voice.
+    /// Device audio follows the clocks Engine cursors advance on: nothing
+    /// plays while the runtime admits no host time (it does not run, or
+    /// playtest inspection owns time); `World` buses also hold while gameplay
+    /// time does and play at its rate; `Host` buses play on. Shutdown ends
+    /// every voice.
     pub(crate) fn follow_world_time(&mut self) {
         self.follow_simulation_with_frames();
-        let moves = self.world_time_moves();
-        let rate =
-            csharp_engine_services::gameplay_rate_value(self.lifecycle.gameplay_time().rate());
+        let time = audio_output::WorldTime {
+            suspended: self.lifecycle.state() != RuntimeState::Running
+                || self.playtest_time != playtest::TimeMode::Realtime,
+            held: self.lifecycle.gameplay_time().held(),
+            rate: csharp_engine_services::gameplay_rate_value(
+                self.lifecycle.gameplay_time().rate(),
+            ),
+        };
         let Some(audio) = &mut self.audio_output else {
             return;
         };
         match self.lifecycle.state() {
             RuntimeState::Shutdown => audio.silence(),
-            _ => audio.follow_world(!moves, rate, &self.services),
+            _ => audio.follow_world(time, &self.services),
         }
     }
 

@@ -821,8 +821,9 @@ impl EngineServiceSet {
         self.input.begin_call(accepts_input_replacement);
         self.gameplay_time.begin_call();
         self.audio.begin_call();
-        if update.is_some() {
-            self.audio.advance_elapsed(self.call_elapsed_seconds);
+        if let Some(facts) = update {
+            self.audio
+                .advance_elapsed(self.call_elapsed_seconds, facts.host_elapsed_seconds);
         }
         self.video.begin_call();
         self.render_output.begin_call();

@@ -7,10 +7,10 @@ use std::{
 use csharp_engine_abi::*;
 use render_model::RenderAssetKind;
 use render_presentation::{
-    AudioBus, AudioBusControl, AudioEmitter, AudioHandle, AudioProjectionDiagnosticCode,
-    AudioProjectionOp, AudioProjector, AudioRolloff, AudioSourceDescriptor, AudioVoiceControl,
-    AudioVoiceDesiredState, PresentationAssetLookup, PresentationFrameDiff, PresentationOp,
-    PresentationOpMeta,
+    AudioBus, AudioBusControl, AudioClock, AudioEmitter, AudioHandle,
+    AudioProjectionDiagnosticCode, AudioProjectionOp, AudioProjector, AudioRolloff,
+    AudioSourceDescriptor, AudioVoiceControl, AudioVoiceDesiredState, PresentationAssetLookup,
+    PresentationFrameDiff, PresentationOp, PresentationOpMeta,
 };
 
 #[cfg(test)]
@@ -324,10 +324,15 @@ impl RuntimeAudioBridge {
         });
     }
 
-    /// Advances retained playback by the update interval the runtime admitted.
-    pub(crate) fn advance_elapsed(&mut self, elapsed_seconds: f64) {
+    /// Advances retained playback by the update interval the runtime
+    /// admitted: `World` buses by its world seconds, `Host` buses by its
+    /// host seconds.
+    pub(crate) fn advance_elapsed(&mut self, world_seconds: f64, host_seconds: f64) {
         if let Some(staged) = self.staged.as_mut() {
-            staged.state.projector.advance_elapsed(elapsed_seconds);
+            staged
+                .state
+                .projector
+                .advance_elapsed(world_seconds, host_seconds);
         }
     }
 
@@ -413,6 +418,13 @@ impl RuntimeAudioBridge {
                 op: AudioProjectionOp::BusControl {
                     bus: bus.bus,
                     control: AudioBusControl::SetMuted { muted: bus.muted },
+                },
+            });
+            ops.push(PresentationOp::Audio {
+                meta: PresentationOpMeta::new(ops.len() as u32),
+                op: AudioProjectionOp::BusControl {
+                    bus: bus.bus,
+                    control: AudioBusControl::SetClock { clock: bus.clock },
                 },
             });
         }
@@ -992,6 +1004,21 @@ impl RuntimeAudioBridge {
         })
     }
 
+    fn set_bus_clock(
+        &mut self,
+        bus: NativeAudioBus,
+        clock: NativeAudioClock,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let clock = match clock {
+            NativeAudioClock::World => AudioClock::World,
+            NativeAudioClock::Host => AudioClock::Host,
+        };
+        self.stage_op(AudioProjectionOp::BusControl {
+            bus: audio_bus(bus),
+            control: AudioBusControl::SetClock { clock },
+        })
+    }
+
     fn read(&mut self) -> Result<NativeAudioResult, CsharpEngineServicesError> {
         let staged = self.staged.as_ref().ok_or_else(|| {
             CsharpEngineServicesError::new(
@@ -1086,6 +1113,10 @@ impl RuntimeAudioBridge {
         Ok(NativeAudioBusReadout {
             volume: readout.volume,
             muted: readout.muted,
+            clock: match readout.clock {
+                AudioClock::World => NativeAudioClock::World,
+                AudioClock::Host => NativeAudioClock::Host,
+            },
         })
     }
 }
@@ -1477,6 +1508,27 @@ pub(crate) unsafe extern "C" fn set_audio_bus_muted(
         }
     }
 }
+pub(crate) unsafe extern "C" fn set_audio_bus_clock(
+    context: *mut c_void,
+    request: *const NativeAudioBusClockRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    let request = unsafe { *request };
+    match bridge.set_bus_clock(request.bus, request.clock) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
 pub(crate) unsafe extern "C" fn read_audio(
     context: *mut c_void,
     result: *mut NativeAudioResult,
@@ -1598,6 +1650,7 @@ pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
         control_voice: control_audio_voice,
         set_bus_volume: set_audio_bus_volume,
         set_bus_muted: set_audio_bus_muted,
+        set_bus_clock: set_audio_bus_clock,
         read: read_audio,
         read_voice: read_audio_voice,
         read_bus: read_audio_bus,
@@ -2060,6 +2113,7 @@ mod tests {
             NativeAudioBusReadout {
                 volume: 0.25,
                 muted: true,
+                clock: NativeAudioClock::Host,
             }
         );
         assert_eq!(
@@ -2343,7 +2397,7 @@ mod tests {
         ));
         assert_eq!(
             baseline.ops.len(),
-            9,
+            13,
             "one restored voice and four bus states"
         );
         assert_eq!(bridge.state.projector.readout(), before);
@@ -2371,7 +2425,7 @@ mod tests {
         bridge.commit(initial);
 
         bridge.begin_call();
-        bridge.advance_elapsed(0.75);
+        bridge.advance_elapsed(0.75, 0.0);
         let staged = bridge.take_staged_call().expect("staged elapsed state");
         bridge.commit(staged);
         let baseline = bridge.snapshot_frame();
@@ -2383,7 +2437,7 @@ mod tests {
         ));
 
         bridge.begin_call();
-        bridge.advance_elapsed(0.5);
+        bridge.advance_elapsed(0.5, 0.0);
         let staged = bridge.take_staged_call().expect("completed elapsed state");
         bridge.commit(staged);
         let baseline = bridge.snapshot_frame();
@@ -2393,6 +2447,105 @@ mod tests {
                 desired_state: AudioVoiceDesiredState::Paused, cursor_seconds, ..
             }, .. } if (*cursor_seconds - 1.0).abs() < f64::EPSILON
         ));
+    }
+
+    #[test]
+    fn each_bus_cursor_advances_on_its_clock_and_a_product_can_change_it() {
+        let mut content = BTreeMap::new();
+        content.insert("audio/trial.wav".to_owned(), wav());
+        let mut bridge = RuntimeAudioBridge::new(content);
+        bridge.begin_call();
+        let path = b"audio/trial.wav";
+        let clip = bridge
+            .open_clip(&NativeAudioClipRequest {
+                path: NativeUtf8Slice {
+                    bytes: path.as_ptr(),
+                    len: path.len(),
+                },
+            })
+            .expect("admitted clip");
+        let clock = |bridge: &mut RuntimeAudioBridge, bus| bridge.read_bus(bus).unwrap().clock;
+        assert_eq!(
+            [
+                NativeAudioBus::Sfx,
+                NativeAudioBus::Ambient,
+                NativeAudioBus::Ui,
+                NativeAudioBus::Music,
+            ]
+            .map(|bus| clock(&mut bridge, bus)),
+            [
+                NativeAudioClock::World,
+                NativeAudioClock::Host,
+                NativeAudioClock::Host,
+                NativeAudioClock::Host,
+            ],
+            "effects follow the world; music, ambience and UI the host"
+        );
+        let effect = bridge
+            .create_voice(descriptor(clip, NativeAudioBus::Sfx))
+            .expect("effect voice");
+        let music = bridge
+            .create_voice(descriptor(clip, NativeAudioBus::Music))
+            .expect("music voice");
+        let call = bridge.take_staged_call().expect("first call");
+        bridge.commit(call);
+        let cursor = |bridge: &RuntimeAudioBridge, voice: NativeAudioVoiceHandle| {
+            bridge
+                .state
+                .projector
+                .voice(AudioHandle::new(voice.value))
+                .expect("voice")
+                .cursor_seconds
+        };
+
+        // A held update: no world time, a quarter second of host time.
+        bridge.begin_call();
+        bridge.advance_elapsed(0.0, 0.25);
+        let call = bridge.take_staged_call().expect("held update");
+        bridge.commit(call);
+        assert_eq!(cursor(&bridge, effect), 0.0, "the effect holds");
+        assert_eq!(cursor(&bridge, music), 0.25, "the music plays on");
+
+        // Slow motion: world time at half the host's.
+        bridge.begin_call();
+        bridge.advance_elapsed(0.125, 0.25);
+        let call = bridge.take_staged_call().expect("slow update");
+        bridge.commit(call);
+        assert_eq!(cursor(&bridge, effect), 0.125);
+        assert_eq!(cursor(&bridge, music), 0.5);
+
+        // The product moves Music onto world time; it holds from then on.
+        bridge.begin_call();
+        bridge
+            .set_bus_clock(NativeAudioBus::Music, NativeAudioClock::World)
+            .expect("music follows the world");
+        assert_eq!(
+            clock(&mut bridge, NativeAudioBus::Music),
+            NativeAudioClock::World
+        );
+        bridge.advance_elapsed(0.0, 0.25);
+        let call = bridge.take_staged_call().expect("override call");
+        bridge.commit(call);
+        assert_eq!(
+            cursor(&bridge, music),
+            0.5,
+            "music now holds with the world"
+        );
+        assert!(
+            bridge.snapshot_frame().ops.iter().any(|op| matches!(
+                op,
+                PresentationOp::Audio {
+                    op: AudioProjectionOp::BusControl {
+                        bus: AudioBus::Music,
+                        control: AudioBusControl::SetClock {
+                            clock: AudioClock::World
+                        },
+                    },
+                    ..
+                }
+            )),
+            "a fresh realization follows the product's clock"
+        );
     }
 
     #[test]

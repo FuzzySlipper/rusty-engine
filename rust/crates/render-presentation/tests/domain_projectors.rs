@@ -346,6 +346,7 @@ fn audio_retained_voice_controls_and_fixed_bus_state_are_owner_truth() {
             bus: AudioBus::Sfx,
             volume: 0.25,
             muted: true,
+            clock: AudioClock::World,
         }
     );
     assert_eq!(projector.readout().active_sources, 1);

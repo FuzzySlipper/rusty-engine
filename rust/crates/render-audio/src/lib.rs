@@ -4,8 +4,10 @@
 //! [`AudioRealizer`] turns the committed `PresentationOp::Audio` stream into
 //! sound on one output device through kira. It owns no Engine clock: retained
 //! cursors reach it only through `Restore` ops in a baseline, and the device
-//! plays in real time between baselines. Realized positions never flow back
-//! into Engine state; only natural completions and diagnostics are reported.
+//! plays in real time between baselines. Each bus follows its clock: a `World`
+//! bus holds while the world does and plays at the world's rate, a `Host` bus
+//! plays on. Realized positions never flow back into Engine state; only
+//! natural completions and diagnostics are reported.
 //!
 //! Only this crate depends on kira and cpal.
 
@@ -30,9 +32,10 @@ use kira::{
 };
 use render_model::AudioContainer;
 use render_presentation::{
-    AudioBus, AudioBusControl, AudioClipRef, AudioEmitter, AudioHandle, AudioProjectionDiagnostic,
-    AudioProjectionDiagnosticCode, AudioProjectionOp, AudioSignalHandle, AudioSourceDescriptor,
-    AudioSourcePatch, AudioVoiceControl, AudioVoiceDesiredState, PresentationOp,
+    AudioBus, AudioBusControl, AudioClipRef, AudioClock, AudioEmitter, AudioHandle,
+    AudioProjectionDiagnostic, AudioProjectionDiagnosticCode, AudioProjectionOp, AudioSignalHandle,
+    AudioSourceDescriptor, AudioSourcePatch, AudioVoiceControl, AudioVoiceDesiredState,
+    PresentationOp,
 };
 
 pub use kira::backend::mock::{MockBackend, MockBackendSettings};
@@ -167,10 +170,10 @@ struct Playback {
     pitch: f64,
     /// What it plays, so resuming can start it again at its held moment.
     descriptor: AudioSourceDescriptor,
-    /// Where world time moved the sound while the device was suspended; the
-    /// cursor until the device resumes.
+    /// Where world time moved the sound while it was held; the cursor until
+    /// it resumes.
     held_at: Option<f64>,
-    /// World time carried the sound past its end while suspended.
+    /// World time carried the sound past its end while held.
     ended: bool,
 }
 
@@ -233,19 +236,19 @@ impl Playback {
         }
     }
 
-    /// Plays at the descriptor's rate scaled by the world's.
-    fn follow_world(&mut self, world_rate: f64) {
-        let rate = PlaybackRate(self.pitch * world_rate);
+    /// Plays at the descriptor's rate scaled by its bus clock's.
+    fn follow_rate(&mut self, clock_rate: f64) {
+        let rate = PlaybackRate(self.pitch * clock_rate);
         each_sound!(&mut self.sound, handle => handle.set_playback_rate(rate, IMMEDIATE));
     }
 
     /// Applies the descriptor fields a playing sound can change in place.
-    fn apply(&mut self, descriptor: &AudioSourceDescriptor, world_rate: f64) {
+    fn apply(&mut self, descriptor: &AudioSourceDescriptor, clock_rate: f64) {
         // A held advance may start the sound again from this descriptor.
         self.descriptor = descriptor.clone();
         self.pitch = f64::from(descriptor.pitch);
         let volume = amplitude_to_decibels(descriptor.volume);
-        let rate = PlaybackRate(self.pitch * world_rate);
+        let rate = PlaybackRate(self.pitch * clock_rate);
         let pan = Panning(descriptor.pan);
         let region = loop_region(descriptor.looping);
         each_sound!(&mut self.sound, handle => {
@@ -279,13 +282,17 @@ struct OneShot {
 struct BusState {
     volume: f32,
     muted: bool,
+    clock: AudioClock,
 }
 
 impl BusState {
-    const DEFAULT: Self = Self {
-        volume: 1.0,
-        muted: false,
-    };
+    const fn new(bus: AudioBus) -> Self {
+        Self {
+            volume: 1.0,
+            muted: false,
+            clock: bus.default_clock(),
+        }
+    }
 
     fn gain(self) -> f32 {
         if self.muted {
@@ -318,11 +325,25 @@ pub struct AudioRealizer<B: Backend = DefaultBackend> {
     soundtrack_clip: Option<Arc<render_video::VideoClip>>,
     /// The soundtrack's position after a held advance, until it resumes.
     soundtrack_held_at: Option<f64>,
-    /// How fast world time runs against realtime; every sound plays at this
-    /// multiple of its own rate (see [`AudioRealizer::set_world_rate`]).
+    /// How fast world time runs against realtime; every sound on a `World`
+    /// bus plays at this multiple of its own rate (see
+    /// [`AudioRealizer::set_world_rate`]).
     world_rate: f64,
     /// The device holds every sound (see [`AudioRealizer::set_suspended`]).
     suspended: bool,
+    /// The world holds, and every sound on a `World` bus with it (see
+    /// [`AudioRealizer::set_world_held`]).
+    world_held: bool,
+}
+
+/// What holds, and how fast each bus plays, at one moment; comparing two
+/// tells which sounds a change holds, releases or retimes.
+#[derive(Clone, Copy, PartialEq)]
+struct Timing {
+    held: [bool; BUSES.len()],
+    rates: [f64; BUSES.len()],
+    soundtrack_held: bool,
+    soundtrack_rate: f64,
 }
 
 impl AudioRealizer<DefaultBackend> {
@@ -374,7 +395,7 @@ impl<B: Backend> AudioRealizer<B> {
             manager,
             listener,
             buses,
-            bus_states: [BusState::DEFAULT; BUSES.len()],
+            bus_states: BUSES.map(BusState::new),
             clips: HashMap::new(),
             voices: BTreeMap::new(),
             one_shots: Vec::new(),
@@ -385,6 +406,7 @@ impl<B: Backend> AudioRealizer<B> {
             soundtrack_held_at: None,
             world_rate: 1.0,
             suspended: false,
+            world_held: false,
         })
     }
 
@@ -444,10 +466,14 @@ impl<B: Backend> AudioRealizer<B> {
         self.released_one_shots
             .retain(|playback| !playback.finished());
         self.facts.clear();
+        let before = self.timing();
         for bus in BUSES {
-            self.bus_states[bus_index(bus)] = BusState::DEFAULT;
+            self.bus_states[bus_index(bus)] = BusState::new(bus);
             self.apply_bus_gain(bus);
         }
+        // Only released one-shots remain to follow a clock the reset changed;
+        // a streaming one that cannot start again is sought instead.
+        self.follow_timing(before, &|_: &str| None, &NoEntityPositions);
     }
 
     /// Stops every sound, one-shots included, for a runtime that has shut
@@ -476,39 +502,223 @@ impl<B: Backend> AudioRealizer<B> {
         });
     }
 
-    /// Follows the runtime lifecycle: a paused runtime advances no Engine
-    /// cursor, so the device holds every sound where it is. Sounds hold rather
-    /// than their tracks: a paused track processes nothing, so a sound stopped
-    /// on one would keep its streaming decoder thread until the track resumed.
+    /// Follows the runtime lifecycle and playtest inspection: while neither
+    /// admits host time, no Engine cursor advances, so the device holds every
+    /// sound where it is, whatever its bus's clock. Sounds hold rather than
+    /// their tracks: a paused track processes nothing, so a sound stopped on
+    /// one would keep its streaming decoder thread until the track resumed.
     pub fn set_suspended(
         &mut self,
         suspended: bool,
         clips: &impl AudioClipSource,
         entities: &impl AudioEntityPositions,
     ) {
-        if suspended == self.suspended {
-            return;
-        }
+        let before = self.timing();
         self.suspended = suspended;
-        if suspended {
-            let voices = self
-                .voices
-                .values_mut()
-                .filter(|voice| voice.state == RealizedVoiceState::Playing)
-                .filter_map(|voice| voice.playback.as_mut());
-            let one_shots = self
-                .one_shots
-                .iter_mut()
-                .map(|one_shot| &mut one_shot.playback);
-            for playback in voices.chain(one_shots).chain(&mut self.released_one_shots) {
-                playback.pause();
-            }
-            if let Some(soundtrack) = &mut self.soundtrack {
-                soundtrack.pause(IMMEDIATE);
-            }
+        self.follow_timing(before, clips, entities);
+    }
+
+    /// Follows held gameplay time: the sounds on `World` buses and the video
+    /// soundtrack hold while the world does and resume where they held;
+    /// `Host` buses play on.
+    pub fn set_world_held(
+        &mut self,
+        held: bool,
+        clips: &impl AudioClipSource,
+        entities: &impl AudioEntityPositions,
+    ) {
+        let before = self.timing();
+        self.world_held = held;
+        self.follow_timing(before, clips, entities);
+    }
+
+    /// Plays every sound on a `World` bus, and the video soundtrack, at
+    /// `rate` times its own rate, so device cursors keep pace with the
+    /// Engine's when gameplay time runs slower than realtime. This resamples
+    /// (pitch falls with the rate); it is not a time stretch. A held world
+    /// (rate 0) is [`Self::set_world_held`] instead.
+    pub fn set_world_rate(&mut self, rate: f64) {
+        if !rate.is_finite() || rate <= 0.0 {
             return;
         }
-        let handles = self.voices.keys().copied().collect::<Vec<_>>();
+        let before = self.timing();
+        self.world_rate = rate;
+        self.follow_timing(before, &|_: &str| None, &NoEntityPositions);
+    }
+
+    /// The clock a bus follows.
+    pub fn bus_clock(&self, bus: AudioBus) -> AudioClock {
+        self.bus_states[bus_index(bus)].clock
+    }
+
+    /// Moves every held sound on a `World` bus, and the video soundtrack, on
+    /// by `world_seconds` of world time that passed while it held (a
+    /// playtest inspection advance runs world steps with the device
+    /// suspended), so the device stands where the Engine's cursors do. A
+    /// one-shot moved past its end completes as it would have. `Host` buses
+    /// admit no host time from such an advance and stay where they are.
+    pub fn advance_held(&mut self, world_seconds: f64) {
+        if !world_seconds.is_finite() || world_seconds <= 0.0 {
+            return;
+        }
+        let timing = self.timing();
+        let moves =
+            |bus: AudioBus| timing.held[bus_index(bus)] && self.bus_clock(bus) == AudioClock::World;
+        let moved = BUSES.map(moves);
+        let moves = |playback: &Playback| moved[bus_index(playback.descriptor.bus)];
+        for voice in self.voices.values_mut() {
+            if voice.state != RealizedVoiceState::Playing {
+                continue;
+            }
+            if let Some(playback) = voice.playback.as_mut().filter(|playback| moves(playback)) {
+                playback.advance_held(world_seconds, voice.descriptor.looping);
+            }
+        }
+        // One-shots never loop.
+        let one_shots = self
+            .one_shots
+            .iter_mut()
+            .map(|one_shot| &mut one_shot.playback);
+        for playback in one_shots.chain(&mut self.released_one_shots) {
+            if moves(playback) {
+                playback.advance_held(world_seconds, false);
+            }
+        }
+        if !timing.soundtrack_held {
+            return;
+        }
+        if let Some(soundtrack) = &self.soundtrack {
+            let held = self
+                .soundtrack_held_at
+                .unwrap_or_else(|| soundtrack.position());
+            self.soundtrack_held_at = Some(held + world_seconds);
+        }
+    }
+
+    fn timing(&self) -> Timing {
+        let world = |bus: AudioBus| self.bus_clock(bus) == AudioClock::World;
+        let world_stops = self.suspended || self.world_held;
+        Timing {
+            held: BUSES.map(|bus| self.suspended || (self.world_held && world(bus))),
+            rates: BUSES.map(|bus| if world(bus) { self.world_rate } else { 1.0 }),
+            soundtrack_held: world_stops,
+            soundtrack_rate: self.world_rate,
+        }
+    }
+
+    fn holds(&self, bus: AudioBus) -> bool {
+        self.timing().held[bus_index(bus)]
+    }
+
+    fn clock_rate(&self, bus: AudioBus) -> f64 {
+        self.timing().rates[bus_index(bus)]
+    }
+
+    /// Holds, releases and retimes the sounds whose bus `before` timed
+    /// differently, so a change applies from now on to sounds already
+    /// playing.
+    fn follow_timing(
+        &mut self,
+        before: Timing,
+        clips: &impl AudioClipSource,
+        entities: &impl AudioEntityPositions,
+    ) {
+        let after = self.timing();
+        if after == before {
+            return;
+        }
+        for bus in BUSES {
+            let index = bus_index(bus);
+            if after.rates[index] != before.rates[index] {
+                self.retime_bus(bus, after.rates[index]);
+            }
+            match (before.held[index], after.held[index]) {
+                (false, true) => self.hold_bus(bus),
+                (true, false) => self.release_bus(bus, clips, entities),
+                _ => {}
+            }
+        }
+        if after.soundtrack_rate != before.soundtrack_rate {
+            if let Some(soundtrack) = &mut self.soundtrack {
+                soundtrack.set_playback_rate(PlaybackRate(after.soundtrack_rate), IMMEDIATE);
+            }
+        }
+        match (before.soundtrack_held, after.soundtrack_held) {
+            (false, true) => {
+                if let Some(soundtrack) = &mut self.soundtrack {
+                    soundtrack.pause(IMMEDIATE);
+                }
+            }
+            (true, false) => {
+                let restarted = match (self.soundtrack_held_at.take(), self.soundtrack_clip.clone())
+                {
+                    (Some(position), Some(clip)) => self.start_soundtrack(clip, position).is_ok(),
+                    _ => false,
+                };
+                if !restarted {
+                    if let Some(soundtrack) = &mut self.soundtrack {
+                        soundtrack.resume(IMMEDIATE);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Every playing sound on `bus`: its voices that play, its one-shots and
+    /// the released one-shots still playing out.
+    fn bus_playbacks(&mut self, bus: AudioBus) -> impl Iterator<Item = &mut Playback> {
+        let voices = self
+            .voices
+            .values_mut()
+            .filter(|voice| voice.state == RealizedVoiceState::Playing)
+            .filter_map(|voice| voice.playback.as_mut());
+        let one_shots = self
+            .one_shots
+            .iter_mut()
+            .map(|one_shot| &mut one_shot.playback);
+        voices
+            .chain(one_shots)
+            .chain(&mut self.released_one_shots)
+            .filter(move |playback| playback.descriptor.bus == bus)
+    }
+
+    fn retime_bus(&mut self, bus: AudioBus, clock_rate: f64) {
+        let voices = self
+            .voices
+            .values_mut()
+            .filter_map(|voice| voice.playback.as_mut());
+        let one_shots = self
+            .one_shots
+            .iter_mut()
+            .map(|one_shot| &mut one_shot.playback);
+        for playback in voices
+            .chain(one_shots)
+            .chain(&mut self.released_one_shots)
+            .filter(|playback| playback.descriptor.bus == bus)
+        {
+            playback.follow_rate(clock_rate);
+        }
+    }
+
+    fn hold_bus(&mut self, bus: AudioBus) {
+        for playback in self.bus_playbacks(bus) {
+            playback.pause();
+        }
+    }
+
+    fn release_bus(
+        &mut self,
+        bus: AudioBus,
+        clips: &impl AudioClipSource,
+        entities: &impl AudioEntityPositions,
+    ) {
+        let handles = self
+            .voices
+            .iter()
+            .filter(|(_, voice)| voice.descriptor.bus == bus)
+            .map(|(handle, _)| *handle)
+            .collect::<Vec<_>>();
         for handle in handles {
             let Some(voice) = self.voices.get_mut(&handle) else {
                 continue;
@@ -531,80 +741,18 @@ impl<B: Backend> AudioRealizer<B> {
             }
         }
         for mut one_shot in std::mem::take(&mut self.one_shots) {
-            one_shot.playback = self.stand_at_held_moment(one_shot.playback, clips, entities);
-            one_shot.playback.resume();
+            if one_shot.playback.descriptor.bus == bus {
+                one_shot.playback = self.stand_at_held_moment(one_shot.playback, clips, entities);
+                one_shot.playback.resume();
+            }
             self.one_shots.push(one_shot);
         }
-        for playback in std::mem::take(&mut self.released_one_shots) {
-            let mut playback = self.stand_at_held_moment(playback, clips, entities);
-            playback.resume();
+        for mut playback in std::mem::take(&mut self.released_one_shots) {
+            if playback.descriptor.bus == bus {
+                playback = self.stand_at_held_moment(playback, clips, entities);
+                playback.resume();
+            }
             self.released_one_shots.push(playback);
-        }
-        let restarted = match (self.soundtrack_held_at.take(), self.soundtrack_clip.clone()) {
-            (Some(position), Some(clip)) => self.start_soundtrack(clip, position).is_ok(),
-            _ => false,
-        };
-        if !restarted {
-            if let Some(soundtrack) = &mut self.soundtrack {
-                soundtrack.resume(IMMEDIATE);
-            }
-        }
-    }
-
-    /// Plays every sound, and the video soundtrack, at `rate` times its own
-    /// rate, so device cursors keep pace with the Engine's when gameplay time
-    /// runs slower than realtime. This resamples (pitch falls with the rate);
-    /// it is not a time stretch. A held world (rate 0) is suspended instead.
-    pub fn set_world_rate(&mut self, rate: f64) {
-        if !rate.is_finite() || rate <= 0.0 || rate == self.world_rate {
-            return;
-        }
-        self.world_rate = rate;
-        for voice in self.voices.values_mut() {
-            if let Some(playback) = voice.playback.as_mut() {
-                playback.follow_world(rate);
-            }
-        }
-        for one_shot in &mut self.one_shots {
-            one_shot.playback.follow_world(rate);
-        }
-        for playback in &mut self.released_one_shots {
-            playback.follow_world(rate);
-        }
-        if let Some(soundtrack) = &mut self.soundtrack {
-            soundtrack.set_playback_rate(PlaybackRate(rate), IMMEDIATE);
-        }
-    }
-
-    /// Moves every playing sound and the video soundtrack on by `world_seconds`
-    /// of world time that passed while the device was suspended (a playtest
-    /// inspection advance runs world steps with the world held), so the device
-    /// stands where the Engine's cursors do. A one-shot moved past its end
-    /// completes as it would have.
-    pub fn advance_held(&mut self, world_seconds: f64) {
-        if !world_seconds.is_finite() || world_seconds <= 0.0 {
-            return;
-        }
-        for voice in self.voices.values_mut() {
-            if voice.state != RealizedVoiceState::Playing {
-                continue;
-            }
-            if let Some(playback) = voice.playback.as_mut() {
-                playback.advance_held(world_seconds, voice.descriptor.looping);
-            }
-        }
-        // One-shots never loop.
-        for one_shot in &mut self.one_shots {
-            one_shot.playback.advance_held(world_seconds, false);
-        }
-        for playback in &mut self.released_one_shots {
-            playback.advance_held(world_seconds, false);
-        }
-        if let Some(soundtrack) = &self.soundtrack {
-            let held = self
-                .soundtrack_held_at
-                .unwrap_or_else(|| soundtrack.position());
-            self.soundtrack_held_at = Some(held + world_seconds);
         }
     }
 
@@ -637,7 +785,7 @@ impl<B: Backend> AudioRealizer<B> {
                     .playback_rate(PlaybackRate(self.world_rate)),
             )
             .map_err(|error| error.to_string())?;
-        if self.suspended {
+        if self.timing().soundtrack_held {
             handle.pause(IMMEDIATE);
         }
         if let Some(mut previous) = self.soundtrack.replace(handle) {
@@ -833,12 +981,16 @@ impl<B: Backend> AudioRealizer<B> {
                 self.control_voice(*handle, sequence, *control, clips, entities)?;
             }
             AudioProjectionOp::BusControl { bus, control } => {
+                let before = self.timing();
                 let state = &mut self.bus_states[bus_index(*bus)];
                 match *control {
                     AudioBusControl::SetVolume { volume } => state.volume = volume,
                     AudioBusControl::SetMuted { muted } => state.muted = muted,
+                    // Sounds already playing on the bus follow it from now on.
+                    AudioBusControl::SetClock { clock } => state.clock = clock,
                 }
                 self.apply_bus_gain(*bus);
+                self.follow_timing(before, clips, entities);
             }
         }
         Ok(())
@@ -892,7 +1044,13 @@ impl<B: Backend> AudioRealizer<B> {
         clips: &impl AudioClipSource,
         entities: &impl AudioEntityPositions,
     ) -> Result<(), OpError> {
-        let world_rate = self.world_rate;
+        let bus = self
+            .voices
+            .get(&handle)
+            .ok_or_else(unknown_handle)?
+            .descriptor
+            .bus;
+        let clock_rate = self.clock_rate(bus);
         let voice = self.voices.get_mut(&handle).ok_or_else(unknown_handle)?;
         let next = patched(voice.descriptor.clone(), patch);
         let previous = std::mem::replace(&mut voice.descriptor, next);
@@ -907,7 +1065,7 @@ impl<B: Backend> AudioRealizer<B> {
             || previous.rolloff != voice.descriptor.rolloff
             || (is_spatial(&previous) && patch.emitter.is_some());
         if !rebuild {
-            playback.apply(&voice.descriptor, world_rate);
+            playback.apply(&voice.descriptor, clock_rate);
             return Ok(());
         }
         let cursor = playback.cursor(previous.looping);
@@ -934,7 +1092,13 @@ impl<B: Backend> AudioRealizer<B> {
         clips: &impl AudioClipSource,
         entities: &impl AudioEntityPositions,
     ) -> Result<(), OpError> {
-        let suspended = self.suspended;
+        let bus = self
+            .voices
+            .get(&handle)
+            .ok_or_else(unknown_handle)?
+            .descriptor
+            .bus;
+        let held = self.holds(bus);
         let voice = self.voices.get_mut(&handle).ok_or_else(unknown_handle)?;
         voice.sequence = sequence;
         let restart_at = match control {
@@ -949,8 +1113,8 @@ impl<B: Backend> AudioRealizer<B> {
             }
             AudioVoiceControl::Resume => match (voice.state, voice.playback.as_mut()) {
                 (RealizedVoiceState::Paused, Some(playback)) => {
-                    // A suspended device resumes it with everything else.
-                    if !suspended {
+                    // A held bus resumes it with everything else on it.
+                    if !held {
                         playback.resume();
                     }
                     voice.state = RealizedVoiceState::Playing;
@@ -1056,7 +1220,7 @@ impl<B: Backend> AudioRealizer<B> {
         };
         let volume = amplitude_to_decibels(descriptor.volume);
         let pitch = f64::from(descriptor.pitch);
-        let rate = PlaybackRate(pitch * self.world_rate);
+        let rate = PlaybackRate(pitch * self.clock_rate(descriptor.bus));
         let pan = Panning(descriptor.pan);
         let region = loop_region(descriptor.looping);
         let (sound, duration) = match data {
@@ -1108,7 +1272,7 @@ impl<B: Backend> AudioRealizer<B> {
             held_at: None,
             ended: false,
         };
-        if self.suspended {
+        if self.holds(descriptor.bus) {
             playback.pause();
         }
         Ok(playback)

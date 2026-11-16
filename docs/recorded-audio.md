@@ -41,26 +41,32 @@ bytes.
 
 One realizer (`render-audio`, kira) plays the committed audio wherever the
 manifest's `audio.output` says. Audio ops are taken out of each call's
-publications before anything else sees them. The realizer follows world time:
-it plays only while it moves (the product runs, playtest inspection does not
-hold it, and [gameplay time](csharp-lifecycle.md#gameplay-time) is not held),
-and plays every voice and the video soundtrack at the gameplay rate times its
-own pitch, so device positions keep pace with the Engine cursors in slow
-motion. That resamples (pitch falls with the rate); there is no time stretch. World time
-admitted while the device holds (a playtest inspection advance) moves every
-held sound, one-shot and soundtrack on by that much, so they resume at the
-world moment the advance reached, and a one-shot it carries past its end
-completes then. Each sound holds on its own while its bus keeps running, so a
-sound stopped during a hold ends then, along with its decoder thread. On
-resume a streaming clip (Ogg, Opus, a soundtrack) is started again at that
-moment, once per hold, rather than sought, so it resumes without first playing
-what its decoder had buffered.
-All four buses are world audio, `Ui` included: a sound that must play while
-the world holds belongs to the product UI page. A binding change (Start,
-Restart, fault) replays the committed baseline, and Shutdown stops every
-voice. Natural
-completions and realization diagnostics become realization facts the product
-reads through `Audio`. It also plays a playing video clip's Opus soundtrack
+publications before anything else sees them. Each bus follows a clock (see
+[buses](#buses)), and the device plays its voices and one-shots on it, so
+device positions keep pace with the Engine cursors:
+
+- `World` buses play only while world time moves: they hold while
+  [gameplay time](csharp-lifecycle.md#gameplay-time) is held, resume where
+  they held, and play at the gameplay rate times their own pitch in slow
+  motion. That resamples (pitch falls with the rate); there is no time
+  stretch. The video soundtrack follows world time too, as its picture does.
+- `Host` buses play on at their own pitch through holds and rate changes;
+  their Engine cursors advance by the update's `HostElapsedSeconds`.
+- Every bus holds while the runtime admits no host time: it is not running,
+  or playtest inspection owns time.
+
+World time admitted while the device holds (a playtest inspection advance)
+moves every held `World` sound, one-shot and the soundtrack on by that much,
+so they resume at the world moment the advance reached, and a one-shot it
+carries past its end completes then; `Host` sounds stay where they held, as
+an inspection step admits no host time. Each sound holds on its own while its
+bus keeps running, so a sound stopped during a hold ends then, along with its
+decoder thread. On resume a streaming clip (Ogg, Opus, a soundtrack) is
+started again at that moment, once per hold, rather than sought, so it
+resumes without first playing what its decoder had buffered. A binding
+change (Start, Restart, fault) replays the committed baseline, and Shutdown
+stops every voice. Natural completions and realization diagnostics become
+realization facts the product reads through `Audio`. It also plays a playing video clip's Opus soundtrack
 (demuxed by `render-video`) from the clip's start, outside the Engine buses.
 
 `Audio.Emit` returns an Engine signal handle for each one-shot, including
@@ -89,11 +95,6 @@ so products can release their final clip references in `Dispose`.
 - `device-required` (`RustyEngineProductAudioOutput`, or `rusty dev
   --audio-output device-required`) fails the load without a device.
 
-Every voice plays on one of four buses, `Sfx`, `Ambient`, `Ui` and `Music`,
-each with its own volume and mute (`Audio.SetBusVolume`, `SetBusMuted`,
-`ReadBus`), so a product can give players separate music, ambience, effects
-and interface levels.
-
 Opus streams through symphonia's Ogg demuxer and seeking, and the pure-Rust
 `opus-decoder` (MIT/Apache-2.0, no FFI) decodes it, applying the OpusHead
 output gain. Its output matches libopus for the fixtures, and seeks decode
@@ -102,6 +103,28 @@ primary view in the committed view composition, and an entity-attached voice
 follows the committed graphics node published for its entity
 (`source_entity`, as `EntityGraphicsProjection` publishes it) plus its offset.
 An entity with no published node reports `HostFailure`.
+
+## Buses
+
+Every voice and one-shot plays on one of four buses, `Sfx`, `Ambient`, `Ui`
+and `Music`, each with its own volume, mute and clock (`Audio.SetBusVolume`,
+`SetBusMuted`, `SetBusClock`, and `ReadBus` for all three), so a product can
+give players separate music, ambience, effects and interface levels.
+
+A bus's clock (`AudioClock`) says which time its sounds follow. `Sfx` follows
+`World` and `Ambient`, `Ui` and `Music` follow `Host`, so a menu, inventory or
+dialogue that holds gameplay time keeps its music, ambience and interface
+sounds while effects wait for the world. A product that wants otherwise sets a
+bus's clock at runtime, once at setup or whenever its needs change; sounds
+already playing on the bus follow the new clock from then on:
+
+```csharp
+// Ambience in this game is the world's: it pauses with it.
+engine.Audio.SetBusClock(new AudioBusClockRequest(AudioBus.Ambient, AudioClock.World));
+```
+
+A sound that should pause with the world goes on a `World` bus; there are no
+other tags.
 
 ## Spatial range
 

@@ -405,6 +405,145 @@ fn world_time_advanced_while_suspended_moves_every_sound_on() {
     );
 }
 
+fn on_bus(bus: AudioBus, looping: bool) -> AudioSourceDescriptor {
+    let mut descriptor = descriptor("sha256:wav", looping);
+    descriptor.clip.duration_seconds = Some(1.0);
+    descriptor.bus = bus;
+    descriptor
+}
+
+fn cursor(realizer: &AudioRealizer<MockBackend>, handle: u64) -> f64 {
+    realizer
+        .voice_cursor(AudioHandle::new(handle))
+        .expect("voice")
+}
+
+#[test]
+fn a_held_world_holds_world_buses_and_host_buses_play_on() {
+    let mut realizer = realizer();
+    assert_eq!(
+        BUSES.map(|bus| realizer.bus_clock(bus)),
+        [
+            AudioClock::World,
+            AudioClock::Host,
+            AudioClock::Host,
+            AudioClock::Host
+        ],
+        "effects follow the world; ambience, interface and music the host"
+    );
+    // Handles 1-4 are looping voices on Sfx, Ambient, Ui and Music, and two
+    // one-shots of about a second play on Sfx and Ui.
+    let mut ops = BUSES
+        .iter()
+        .zip(1..)
+        .map(|(bus, handle)| {
+            restore(
+                handle,
+                on_bus(*bus, true),
+                AudioVoiceDesiredState::Playing,
+                0.0,
+            )
+        })
+        .collect::<Vec<_>>();
+    ops.push(emit(2, 7, on_bus(AudioBus::Sfx, false)));
+    ops.push(emit(3, 8, on_bus(AudioBus::Ui, false)));
+    apply(&mut realizer, &ops);
+    run(&mut realizer, 0.1);
+
+    realizer.set_world_held(true, &Clips::fixtures(), &NoEntityPositions);
+    run(&mut realizer, 0.05);
+    let held = [1, 2, 3, 4].map(|handle| cursor(&realizer, handle));
+    run(&mut realizer, 1.2);
+    let after = [1, 2, 3, 4].map(|handle| cursor(&realizer, handle));
+    assert!(
+        (after[0] - held[0]).abs() < 1e-9,
+        "the Sfx voice holds: {held:?} -> {after:?}"
+    );
+    for index in 1..4 {
+        let moved = (after[index] - held[index]).rem_euclid(1.0);
+        assert!(
+            (moved - 0.2).abs() < 0.02,
+            "a Host voice plays on: {held:?} -> {after:?}"
+        );
+    }
+    // The Ui one-shot finished during the hold; the Sfx one waits for the
+    // world.
+    realizer.refresh(&NoEntityPositions);
+    assert_eq!(
+        realizer.take_facts(),
+        [RealizedAudioFact::OneShotCompleted {
+            sequence: 3,
+            signal_handle: AudioSignalHandle::new(8),
+        }]
+    );
+    assert_eq!(realizer.readout().one_shots, 1);
+
+    // Released into slow motion: the Sfx voice resumes where it held, at
+    // half speed, and Music keeps realtime.
+    realizer.set_world_rate(0.5);
+    realizer.set_world_held(false, &Clips::fixtures(), &NoEntityPositions);
+    let music = cursor(&realizer, 4);
+    run(&mut realizer, 0.4);
+    let effect = cursor(&realizer, 1) - held[0];
+    assert!(
+        (effect - 0.2).abs() < 0.02,
+        "the Sfx voice resumed where it held, slowed: moved {effect}"
+    );
+    let music = (cursor(&realizer, 4) - music).rem_euclid(1.0);
+    assert!(
+        (music - 0.4).abs() < 0.02,
+        "Music ignores the gameplay rate: moved {music}"
+    );
+}
+
+#[test]
+fn a_bus_clock_change_applies_to_sounds_already_playing() {
+    let mut realizer = realizer();
+    apply(
+        &mut realizer,
+        &[restore(
+            1,
+            on_bus(AudioBus::Music, true),
+            AudioVoiceDesiredState::Playing,
+            0.0,
+        )],
+    );
+    let set_clock = |clock| {
+        op(
+            3,
+            AudioProjectionOp::BusControl {
+                bus: AudioBus::Music,
+                control: AudioBusControl::SetClock { clock },
+            },
+        )
+    };
+    realizer.set_world_held(true, &Clips::fixtures(), &NoEntityPositions);
+    run(&mut realizer, 0.1);
+    assert!(cursor(&realizer, 1) > 0.05, "Music plays through the hold");
+
+    // The product puts Music on world time: it holds with the world now.
+    apply(&mut realizer, &[set_clock(AudioClock::World)]);
+    assert_eq!(realizer.bus_clock(AudioBus::Music), AudioClock::World);
+    run(&mut realizer, 0.05);
+    let held = cursor(&realizer, 1);
+    run(&mut realizer, 0.3);
+    assert!(
+        (cursor(&realizer, 1) - held).abs() < 1e-9,
+        "Music now holds with the world"
+    );
+
+    // Back on host time it resumes where it held.
+    apply(&mut realizer, &[set_clock(AudioClock::Host)]);
+    run(&mut realizer, 0.2);
+    let moved = cursor(&realizer, 1) - held;
+    assert!((moved - 0.2).abs() < 0.02, "resumed where it held: {moved}");
+
+    // A baseline starts from the default clocks; its own bus ops set them.
+    apply(&mut realizer, &[set_clock(AudioClock::World)]);
+    realizer.reset();
+    assert_eq!(realizer.bus_clock(AudioBus::Music), AudioClock::Host);
+}
+
 /// Renders after resume until `cursor` moves clearly past `from`, checking
 /// at every block that it never plays from before `from` (stale buffered or
 /// restarted audio) and never runs ahead of the audio rendered since. The

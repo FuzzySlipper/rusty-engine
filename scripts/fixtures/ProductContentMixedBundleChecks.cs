@@ -160,6 +160,14 @@ public sealed class ProductContentMixedBundleChecks : IDisposable
         Require(engine.Audio.ReadBus(new AudioBusReadRequest(AudioBus.Music)).Volume == 0.5f
             && engine.Audio.ReadBus(new AudioBusReadRequest(AudioBus.Ambient)).Volume == 1,
             "the music bus volume is its own");
+        Require(engine.Audio.ReadBus(new AudioBusReadRequest(AudioBus.Music)).Clock == AudioClock.Host
+            && engine.Audio.ReadBus(new AudioBusReadRequest(AudioBus.Sfx)).Clock == AudioClock.World,
+            "music plays on host time and effects on world time by default");
+        engine.Audio.SetBusClock(new AudioBusClockRequest(AudioBus.Music, AudioClock.World));
+        Require(engine.Audio.ReadBus(new AudioBusReadRequest(AudioBus.Music)).Clock == AudioClock.World,
+            "a product moves the music bus onto world time");
+        // Open runs again later and checks the default once more.
+        engine.Audio.SetBusClock(new AudioBusClockRequest(AudioBus.Music, AudioClock.Host));
 
         resources = new MixedBundleResources(
             texture,

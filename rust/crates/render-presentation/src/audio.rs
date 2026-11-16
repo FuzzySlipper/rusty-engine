@@ -52,6 +52,27 @@ pub enum AudioBus {
     Music,
 }
 
+/// The time a bus's sounds follow. `World` sounds hold while gameplay time is
+/// held, resume where they held, and play at the gameplay rate; `Host` sounds
+/// play on at their own rate through holds and rate changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioClock {
+    World,
+    Host,
+}
+
+impl AudioBus {
+    /// Effects follow the world; music, ambience and interface sound play on
+    /// through a held world until a product chooses otherwise.
+    pub const fn default_clock(self) -> AudioClock {
+        match self {
+            AudioBus::Sfx => AudioClock::World,
+            AudioBus::Ambient | AudioBus::Ui | AudioBus::Music => AudioClock::Host,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum AudioEmitter {
@@ -140,6 +161,7 @@ pub enum AudioVoiceControl {
 pub enum AudioBusControl {
     SetVolume { volume: f32 },
     SetMuted { muted: bool },
+    SetClock { clock: AudioClock },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -159,6 +181,7 @@ pub struct AudioBusReadout {
     pub bus: AudioBus,
     pub volume: f32,
     pub muted: bool,
+    pub clock: AudioClock,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -266,13 +289,15 @@ struct RetainedAudioVoice {
 struct AudioBusState {
     volume: f32,
     muted: bool,
+    clock: AudioClock,
 }
 
-impl Default for AudioBusState {
-    fn default() -> Self {
+impl AudioBusState {
+    fn new(bus: AudioBus) -> Self {
         Self {
             volume: 1.0,
             muted: false,
+            clock: bus.default_clock(),
         }
     }
 }
@@ -353,11 +378,16 @@ impl AudioProjector {
     }
 
     pub fn bus(&self, bus: AudioBus) -> AudioBusReadout {
-        let state = self.buses.get(&bus).copied().unwrap_or_default();
+        let state = self
+            .buses
+            .get(&bus)
+            .copied()
+            .unwrap_or_else(|| AudioBusState::new(bus));
         AudioBusReadout {
             bus,
             volume: state.volume,
             muted: state.muted,
+            clock: state.clock,
         }
     }
 
@@ -381,18 +411,37 @@ impl AudioProjector {
         *self = Self::default();
     }
 
-    /// Advances only retained desired playback on the host-admitted Engine
-    /// timeline. Non-looping voices stop at their known end and are retained
-    /// paused at that cursor, so a later baseline does not restart them.
-    pub fn advance_elapsed(&mut self, elapsed_seconds: f64) {
-        if !elapsed_seconds.is_finite() || elapsed_seconds <= 0.0 {
-            return;
-        }
+    /// Advances only retained desired playback: a voice on a `World` bus by
+    /// the admitted world seconds, one on a `Host` bus by the host seconds
+    /// the same update reported. Non-looping voices stop at their known end
+    /// and are retained paused at that cursor, so a later baseline does not
+    /// restart them.
+    pub fn advance_elapsed(&mut self, world_seconds: f64, host_seconds: f64) {
+        let valid = |seconds: f64| {
+            if seconds.is_finite() {
+                seconds.max(0.0)
+            } else {
+                0.0
+            }
+        };
+        let (world_seconds, host_seconds) = (valid(world_seconds), valid(host_seconds));
+        let buses = &self.buses;
         for voice in self.active.values_mut() {
             if voice.desired_state != AudioVoiceDesiredState::Playing {
                 continue;
             }
-            let elapsed = elapsed_seconds * f64::from(voice.descriptor.pitch);
+            let bus = voice.descriptor.bus;
+            let clock = buses
+                .get(&bus)
+                .map_or_else(|| bus.default_clock(), |state| state.clock);
+            let seconds = match clock {
+                AudioClock::World => world_seconds,
+                AudioClock::Host => host_seconds,
+            };
+            if seconds == 0.0 {
+                continue;
+            }
+            let elapsed = seconds * f64::from(voice.descriptor.pitch);
             let next = voice.cursor_seconds + elapsed;
             match voice.descriptor.clip.duration_seconds {
                 Some(duration) if voice.descriptor.looping => {
@@ -516,7 +565,10 @@ impl AudioProjector {
                 };
             }
             AudioProjectionOp::BusControl { bus, control } => {
-                let state = self.buses.entry(*bus).or_default();
+                let state = self
+                    .buses
+                    .entry(*bus)
+                    .or_insert_with(|| AudioBusState::new(*bus));
                 match control {
                     AudioBusControl::SetVolume { volume } => {
                         if !at_least(*volume, 0.0) {
@@ -525,6 +577,7 @@ impl AudioProjector {
                         state.volume = *volume;
                     }
                     AudioBusControl::SetMuted { muted } => state.muted = *muted,
+                    AudioBusControl::SetClock { clock } => state.clock = *clock,
                 }
             }
         }

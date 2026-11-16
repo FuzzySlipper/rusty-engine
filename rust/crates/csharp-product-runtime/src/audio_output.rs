@@ -36,10 +36,23 @@ use crate::{native_audio_diagnostic_code, AudioOutputSelection, CsharpProductRun
 pub(crate) struct AudioOutput {
     realizer: Realizer,
     next_fact_id: u64,
-    /// Whether world time is held and how fast it runs, as last followed.
-    world: Option<(bool, f64)>,
+    /// Whether every sound holds, whether the world holds, and how fast it
+    /// runs, as last followed.
+    world: Option<WorldTime>,
     /// The Engine world time the device last caught up with.
     world_seconds: f64,
+}
+
+/// What the device follows of the runtime's time.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) struct WorldTime {
+    /// No host time is admitted (the runtime does not run, or playtest
+    /// inspection owns time): every sound holds.
+    pub(crate) suspended: bool,
+    /// Gameplay time is held: sounds on `World` buses hold.
+    pub(crate) held: bool,
+    /// The gameplay rate `World` buses play at.
+    pub(crate) rate: f64,
 }
 
 /// The one realizer, on a device or mixing for the stream.
@@ -167,7 +180,7 @@ impl AudioOutput {
         // new sounds start at its end.
         let world_seconds = services.presentation_elapsed_seconds();
         let advanced = world_seconds - std::mem::replace(&mut self.world_seconds, world_seconds);
-        if advanced > 0.0 && self.world.is_some_and(|(held, _)| held) {
+        if advanced > 0.0 && self.world.is_some_and(|time| time.suspended || time.held) {
             self.realizer.advance_held(advanced);
         }
         for output in outputs.iter() {
@@ -262,21 +275,28 @@ impl AudioOutput {
         }
     }
 
-    /// Plays world audio only while world time moves, at its rate: the
-    /// Engine's audio cursors advance with admitted steps, so the device
-    /// holds while the world does and slows with it.
-    pub(crate) fn follow_world(&mut self, held: bool, rate: f64, services: &EngineServiceSet) {
-        if self.world == Some((held, rate)) {
+    /// Follows the clocks the Engine's cursors advance on: every sound holds
+    /// while no host time is admitted, and `World` buses also hold while
+    /// gameplay time does and play at its rate, as their cursors advance only
+    /// with admitted steps. `Host` buses play on through a held world.
+    pub(crate) fn follow_world(&mut self, time: WorldTime, services: &EngineServiceSet) {
+        if self.world == Some(time) {
             return;
         }
-        self.world = Some((held, rate));
+        self.world = Some(time);
         let clips = |hash: &str| services.audio_clip_bytes(hash);
         let entities = EngineEntities(services);
         match &mut self.realizer {
-            Realizer::Device(realizer) => realizer.set_suspended(held, &clips, &entities),
-            Realizer::Stream { realizer, .. } => realizer.set_suspended(held, &clips, &entities),
+            Realizer::Device(realizer) => {
+                realizer.set_suspended(time.suspended, &clips, &entities);
+                realizer.set_world_held(time.held, &clips, &entities);
+            }
+            Realizer::Stream { realizer, .. } => {
+                realizer.set_suspended(time.suspended, &clips, &entities);
+                realizer.set_world_held(time.held, &clips, &entities);
+            }
         }
-        self.realizer.set_world_rate(rate);
+        self.realizer.set_world_rate(time.rate);
     }
 
     pub(crate) fn silence(&mut self) {
@@ -518,7 +538,14 @@ mod tests {
         let mut outputs = crate::service_outputs(call.take_output()).expect("outputs");
         output.realize(&services, &mut outputs);
         // Playtest inspection holds the world: the device holds too.
-        output.follow_world(true, 1.0, &services);
+        output.follow_world(
+            WorldTime {
+                suspended: true,
+                held: false,
+                rate: 1.0,
+            },
+            &services,
+        );
         let held = output
             .voice_cursor(AudioHandle::new(voice.value))
             .expect("voice");

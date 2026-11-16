@@ -146,8 +146,10 @@ advance), and drawing never adds any. Particles (bursts and emitters, flipbook
 frames), GLB clip and controller animation, sprite playback, the shader time
 value and shadows, video pictures and audio cursors all read that world time,
 so a held world keeps its moment while the player looks around, and slow time
-slows them all together. Device audio plays at the gameplay rate and holds
-while the world holds ([recorded audio](recorded-audio.md#realization)).
+slows them all together. Audio on a `World` bus (`Sfx` by default) plays at
+the gameplay rate and holds while the world holds; `Music`, `Ambient` and `Ui`
+follow host time by default and play on, and a product can move any bus to
+either clock ([audio buses](recorded-audio.md#buses)).
 Appearances show their last published transforms (nothing is extrapolated
 between steps) under any [tweens](appearance-tweens.md) the Engine plays on
 them, which follow world time (including the time owed between steps, so

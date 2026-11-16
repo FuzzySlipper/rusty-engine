@@ -731,6 +731,11 @@ pub type NativeSetAudioBusMuted = unsafe extern "C" fn(
     *const NativeAudioBusMutedRequest,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetAudioBusClock = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioBusClockRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadAudio = unsafe extern "C" fn(
     *mut c_void,
     *mut NativeAudioResult,
@@ -2004,6 +2009,7 @@ pub struct NativeAudioApi {
     pub control_voice: NativeControlAudioVoice,
     pub set_bus_volume: NativeSetAudioBusVolume,
     pub set_bus_muted: NativeSetAudioBusMuted,
+    pub set_bus_clock: NativeSetAudioBusClock,
     pub read: NativeReadAudio,
     pub read_voice: NativeReadAudioVoice,
     pub read_bus: NativeReadAudioBus,

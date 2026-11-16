@@ -36,6 +36,17 @@ pub enum NativeAudioBus {
     Music = 3,
 }
 
+/// The time a bus's sounds follow. `World` sounds hold while gameplay time is
+/// held, resume where they held, and play at the gameplay rate; `Host` sounds
+/// play on through holds and rate changes. `Sfx` follows `World` and the
+/// other buses `Host` until a product sets a bus's clock.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeAudioClock {
+    World = 0,
+    Host = 1,
+}
+
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeAudioEmitterKind {
@@ -201,6 +212,15 @@ pub struct NativeAudioBusMutedRequest {
     pub muted: bool,
 }
 
+/// Sets the clock a bus follows; sounds already playing on it follow the new
+/// clock from then on.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioBusClockRequest {
+    pub bus: NativeAudioBus,
+    pub clock: NativeAudioClock,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAudioResult {
@@ -243,6 +263,7 @@ impl Default for NativeAudioVoiceReadout {
 pub struct NativeAudioBusReadout {
     pub volume: f32,
     pub muted: bool,
+    pub clock: NativeAudioClock,
 }
 
 #[repr(C)]
