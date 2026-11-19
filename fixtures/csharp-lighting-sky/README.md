@@ -31,6 +31,9 @@ bank and pier in it).
 the layer in world-anchored cells of that side and that many shades, turning
 the camera to show they hold;
 `lighting.clouds.volumetric off|low|high` draws the cloud layer raymarched,
+`lighting.clouds.edges <coverage> <sharpness> <erosion>` a 2 km
+cumulonimbus layer whose volumetric rims rise at that edge sharpness (0 for
+the default) and erode by that detail (0 for none),
 and `lighting.clouds.region <id> <x> <z> <radius> <coverage> <darkness>` and
 `lighting.clouds.region.remove <id>` a drifting storm over the layer;
 `lighting.lantern <intensity>` lights a lit sprite and a sprite batch from one

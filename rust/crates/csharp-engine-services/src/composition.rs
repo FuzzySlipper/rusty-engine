@@ -4378,6 +4378,8 @@ mod tests {
             twilight_degrees: 0.0,
             pixel_metres: 0.0,
             shade_steps: 0,
+            edge_sharpness: 0.0,
+            detail_erosion: 0.0,
         };
         services.begin_call(binding());
         let api = services.api();
@@ -4401,6 +4403,8 @@ mod tests {
                 twilight_degrees: 0.0,
                 pixel_metres: 0.0,
                 shade_steps: 0,
+                edge_sharpness: 0.0,
+                detail_erosion: 0.0,
             }),
         };
         assert_eq!(
@@ -4432,6 +4436,14 @@ mod tests {
                 pixel_metres: -1.0,
                 ..request(0.5, 8.0, 1500.0, 600.0, 1.0)
             },
+            NativeCloudsRequest {
+                edge_sharpness: -1.0,
+                ..request(0.5, 8.0, 1500.0, 600.0, 1.0)
+            },
+            NativeCloudsRequest {
+                detail_erosion: f32::NAN,
+                ..request(0.5, 8.0, 1500.0, 600.0, 1.0)
+            },
         ] {
             let mut refusal = empty_receipt();
             assert_eq!(set(refused, &mut refusal), 0);
@@ -4458,6 +4470,8 @@ mod tests {
                     twilight_degrees: 0.0,
                     pixel_metres: 0.0,
                     shade_steps: 0,
+                    edge_sharpness: 0.0,
+                    detail_erosion: 0.0,
                 }),
             }]
         );

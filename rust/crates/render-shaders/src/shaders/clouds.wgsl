@@ -132,7 +132,7 @@ fn cloud_light(position: vec3<f32>, toward: vec3<f32>) -> f32 {
         // shadow agree.
         let middle = frame.clouds.y + coverage.z * 0.33;
         let crossing = position.xz + toward.xz * ((middle - position.y) / max(toward.y, 0.05));
-        cover = smoothstep(0.0, 0.35, cloud_density(vec3<f32>(crossing.x, middle, crossing.y), 2));
+        cover = smoothstep(0.0, 0.35, cloud_density(vec3<f32>(crossing.x, middle, crossing.y), 2, 0.0));
     } else {
         let p = (plane - frame.cloud_drift.xy * frame.time.x) / frame.clouds.z;
         cover = cloud_cover(p, detail, coverage.x, CLOUD_SHADE_OCTAVES);
@@ -190,6 +190,12 @@ fn cloud_noise_3d(p: vec3<f32>) -> f32 {
     return mix(below, above, w.z);
 }
 
+// Where the next octave of the volumetric clouds' noise samples, from `at`:
+// half the size, offset so the octaves don't line up.
+fn cloud_octave_3d(at: vec3<f32>) -> vec3<f32> {
+    return at * 2.07 + vec3<f32>(13.7, 5.3, 29.1);
+}
+
 // Fractal 3D noise of the volumetric clouds, in [0, 1]: `octaves` octaves
 // (at most three), each half the size and half the weight of the last.
 fn cloud_fbm_3d(p: vec3<f32>, octaves: i32) -> f32 {
@@ -200,7 +206,7 @@ fn cloud_fbm_3d(p: vec3<f32>, octaves: i32) -> f32 {
     for (var octave = 0; octave < octaves; octave++) {
         sum += cloud_noise_3d(at) * amplitude;
         total += amplitude;
-        at = at * 2.07 + vec3<f32>(13.7, 5.3, 29.1);
+        at = cloud_octave_3d(at);
         amplitude *= 0.5;
     }
     return sum / total;
@@ -211,8 +217,13 @@ fn cloud_fbm_3d(p: vec3<f32>, octaves: i32) -> f32 {
 // there (the layer's, raised by regions), so more coverage fills more of the
 // slab; shaped by height by the kind there (`cloud_profile`). Zero outside
 // the clouds' height there, from the layer's altitude up by their
-// thickness.
-fn cloud_density(position: vec3<f32>, octaves: i32) -> f32 {
+// thickness. It rises from a cloud's rim by the layer's edge sharpness
+// (`Frame.cloud_shape.w`). With `erosion` above 0 the octave after the
+// march's two (the view's march passes the layer's; the light's and the
+// ground's shade pass 0) eats into the thin density near a rim, the more
+// the thinner, so a dense core keeps its shape and a rim breaks into finer
+// detail: one more noise sample where there is cloud.
+fn cloud_density(position: vec3<f32>, octaves: i32, erosion: f32) -> f32 {
     let at = cloud_coverage(position.xz);
     let coverage = at.x;
     let kind = at.w;
@@ -232,5 +243,10 @@ fn cloud_density(position: vec3<f32>, octaves: i32) -> f32 {
     // The noise sits mostly between 0.3 and 0.7: no coverage keeps none of
     // it, full coverage nearly all. A sheet fills more evenly.
     let threshold = mix(0.72, 0.33, coverage) - 0.08 * (1.0 - min(kind, 1.0));
-    return clamp((shape - threshold) / (1.0 - threshold) * 3.0, 0.0, 1.0) * profile;
+    let density = clamp((shape - threshold) / (1.0 - threshold) * frame.cloud_shape.w, 0.0, 1.0) * profile;
+    if erosion <= 0.0 || density <= 0.0 {
+        return density;
+    }
+    let fine = cloud_noise_3d(cloud_octave_3d(cloud_octave_3d(p)));
+    return max(density - erosion * fine * (1.0 - density), 0.0);
 }

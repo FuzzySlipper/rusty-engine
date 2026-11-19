@@ -2711,8 +2711,9 @@ impl Renderer {
         };
         let panorama = panorama.is_some();
         // The blend amount, then the cloud layer's coverage, altitude and
-        // size, drift, cells and shades, tint, and what the panoramas are
-        // tinted (`sky.wgsl` SkyUniform).
+        // size, drift, cells and shades, tint and the volumetric clouds'
+        // detail erosion, and what the panoramas are tinted (`sky.wgsl`
+        // SkyUniform).
         let mut values = [0.0f32; 20];
         values[0] = amount;
         if let Some(clouds) = clouds {
@@ -2724,6 +2725,7 @@ impl Renderer {
                 clouds.shade_steps as f32,
             ]);
             values[12..15].copy_from_slice(&clouds.color);
+            values[15] = clouds.detail_erosion;
         }
         values[16..19].copy_from_slice(&behind);
         let uniform: Vec<u8> = values
@@ -5348,6 +5350,9 @@ const DEFAULT_CLOUD_SCALE: f32 = 600.0;
 /// The volumetric slab's thickness as a share of the layer's altitude.
 const CLOUD_THICKNESS_SHARE: f32 = 0.6;
 
+/// The volumetric clouds' edge sharpness for a layer that leaves it 0.
+const DEFAULT_CLOUD_EDGE_SHARPNESS: f32 = 3.0;
+
 /// The layer the sky draws: the product's, or a default one when only
 /// regions are placed; `None` draws no clouds.
 pub(crate) fn drawn_clouds(
@@ -5367,6 +5372,8 @@ pub(crate) fn drawn_clouds(
             twilight_degrees: 0.0,
             pixel_metres: 0.0,
             shade_steps: 0,
+            edge_sharpness: 0.0,
+            detail_erosion: 0.0,
         }),
         _ => None,
     }
@@ -5398,8 +5405,8 @@ fn region_thickness(
 /// cloud size and the tallest clouds' thickness (the volumetric slab the
 /// raymarch spans); then the drift, the number of cloud regions and the
 /// volumetric raymarch's steps (0: the flat layer); then the layer's own
-/// thickness and kind and its twilight (radians). All zero without a layer
-/// or regions.
+/// thickness and kind, its twilight (radians) and its volumetric edge
+/// sharpness. All zero without a layer or regions.
 fn clouds_uniform(
     clouds: Option<render_model::CloudsDescriptor>,
     regions: &[render_model::CloudRegionDescriptor],
@@ -5424,7 +5431,11 @@ fn clouds_uniform(
                 own,
                 layer.kind.profile(),
                 layer.twilight_degrees.to_radians(),
-                0.0,
+                if layer.edge_sharpness > 0.0 {
+                    layer.edge_sharpness
+                } else {
+                    DEFAULT_CLOUD_EDGE_SHARPNESS
+                },
             ]
         }
         None => [0.0; 12],

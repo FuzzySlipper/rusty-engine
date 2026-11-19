@@ -54,19 +54,25 @@ public readonly partial record struct CloudsRequest
 {
     /// <summary>A cloud layer of the default kind (cumulus) and thickness (six tenths of its altitude), lit only while the sun is up.</summary>
     public CloudsRequest(float Coverage, System.Numerics.Vector2 Drift, float Altitude, float Scale, System.Numerics.Vector3 Color)
-        : this(Coverage, Drift, Altitude, Scale, Color, 0, CloudKind.Cumulus, 0, 0, 0)
+        : this(Coverage, Drift, Altitude, Scale, Color, 0, CloudKind.Cumulus, 0, 0, 0, 0, 0)
     {
     }
 
     /// <summary>A cloud layer lit only while the sun is up.</summary>
     public CloudsRequest(float Coverage, System.Numerics.Vector2 Drift, float Altitude, float Scale, System.Numerics.Vector3 Color, float Thickness, CloudKind Kind)
-        : this(Coverage, Drift, Altitude, Scale, Color, Thickness, Kind, 0, 0, 0)
+        : this(Coverage, Drift, Altitude, Scale, Color, Thickness, Kind, 0, 0, 0, 0, 0)
     {
     }
 
     /// <summary>A smooth cloud layer, in neither cells nor steps.</summary>
     public CloudsRequest(float Coverage, System.Numerics.Vector2 Drift, float Altitude, float Scale, System.Numerics.Vector3 Color, float Thickness, CloudKind Kind, float TwilightDegrees)
-        : this(Coverage, Drift, Altitude, Scale, Color, Thickness, Kind, TwilightDegrees, 0, 0)
+        : this(Coverage, Drift, Altitude, Scale, Color, Thickness, Kind, TwilightDegrees, 0, 0, 0, 0)
+    {
+    }
+
+    /// <summary>A cloud layer at the volumetric clouds' default edge sharpness, with no detail erosion.</summary>
+    public CloudsRequest(float Coverage, System.Numerics.Vector2 Drift, float Altitude, float Scale, System.Numerics.Vector3 Color, float Thickness, CloudKind Kind, float TwilightDegrees, float PixelMetres, uint ShadeSteps)
+        : this(Coverage, Drift, Altitude, Scale, Color, Thickness, Kind, TwilightDegrees, PixelMetres, ShadeSteps, 0, 0)
     {
     }
 }

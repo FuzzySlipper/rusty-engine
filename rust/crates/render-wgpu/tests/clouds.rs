@@ -92,6 +92,8 @@ fn clouds_sized(coverage: f32, scale: f32) -> RenderDiff {
             twilight_degrees: 0.0,
             pixel_metres: 0.0,
             shade_steps: 0,
+            edge_sharpness: 0.0,
+            detail_erosion: 0.0,
         }),
     }
 }
@@ -405,6 +407,8 @@ fn twilight_clouds(twilight_degrees: f32) -> RenderDiff {
             twilight_degrees,
             pixel_metres: 0.0,
             shade_steps: 0,
+            edge_sharpness: 0.0,
+            detail_erosion: 0.0,
         }),
     }
 }
@@ -600,6 +604,8 @@ fn low_drifting(coverage: f32) -> RenderDiff {
             twilight_degrees: 0.0,
             pixel_metres: 0.0,
             shade_steps: 0,
+            edge_sharpness: 0.0,
+            detail_erosion: 0.0,
         }),
     }
 }
@@ -706,6 +712,8 @@ fn pixel_sky(pixel_metres: f32, shade_steps: u32) -> Harness {
                 twilight_degrees: 0.0,
                 pixel_metres,
                 shade_steps,
+                edge_sharpness: 0.0,
+                detail_erosion: 0.0,
             }),
         },
     ]);

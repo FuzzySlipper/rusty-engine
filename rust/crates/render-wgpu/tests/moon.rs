@@ -220,6 +220,8 @@ fn clouds_and_the_world_cover_it_and_its_bloom() {
                     twilight_degrees: 0.0,
                     pixel_metres: 0.0,
                     shade_steps: 0,
+                    edge_sharpness: 0.0,
+                    detail_erosion: 0.0,
                 }),
             }]);
         }
@@ -294,6 +296,8 @@ fn an_overcast_covers_it_as_much_as_it_covers_the_sky() {
                     twilight_degrees: 0.0,
                     pixel_metres: 0.0,
                     shade_steps: 0,
+                    edge_sharpness: 0.0,
+                    detail_erosion: 0.0,
                 }),
             }]);
         }
@@ -346,6 +350,8 @@ fn it_changes_nothing_else() {
                     twilight_degrees: 0.0,
                     pixel_metres: 0.0,
                     shade_steps: 0,
+                    edge_sharpness: 0.0,
+                    detail_erosion: 0.0,
                 }),
             },
         ]);
@@ -426,6 +432,8 @@ fn its_light_lights_the_clouds_at_night_toward_it_and_none_leaves_them_as_they_w
                     twilight_degrees: 8.0,
                     pixel_metres: 0.0,
                     shade_steps: 0,
+                    edge_sharpness: 0.0,
+                    detail_erosion: 0.0,
                 }),
             },
             RenderDiff::SetMoon {
@@ -705,6 +713,8 @@ fn two_moons_light_the_clouds_as_their_sum() {
                 twilight_degrees: 0.0,
                 pixel_metres: 0.0,
                 shade_steps: 0,
+                edge_sharpness: 0.0,
+                detail_erosion: 0.0,
             }),
         }]);
         harness.apply(moons);

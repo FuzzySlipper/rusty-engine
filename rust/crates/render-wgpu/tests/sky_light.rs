@@ -624,6 +624,8 @@ fn a_mirror_floor_reflects_the_backdrop_on_the_horizon_and_the_clouds_overhead()
             twilight_degrees: 0.0,
             pixel_metres: 0.0,
             shade_steps: 0,
+            edge_sharpness: 0.0,
+            detail_erosion: 0.0,
         }),
     }]);
     let overcast = settle(&mut clouded, &down);

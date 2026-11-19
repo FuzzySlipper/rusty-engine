@@ -54,7 +54,7 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private static readonly Vector3 MoonColor = new(1,.95f,.85f);
     // The cloud layer: its drift over the ground (m/s), altitude and cloud size (m), and an untinted light.
     private static readonly Vector2 CloudDrift = new(8, 3);
-    private const float CloudAltitude = 1200, CloudScale = 500;
+    private const float CloudAltitude = 1200, CloudScale = 500, TowerThickness = 2000;
     private static readonly Vector3 RainVelocity = new(1.5f,-14,0.5f), SnowVelocity = new(0.6f,-1.4f,0.3f);
     private const float RainSize = 0.03f, SnowSize = 0.06f, RainStreakSeconds = 0.05f, PrecipitationRadius = 16, PrecipitationHeight = 10;
     private static readonly Color RainColor = new(1.6f,1.7f,1.9f,0.6f), SnowColor = new(2f,2f,2.1f,0.9f);
@@ -567,6 +567,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     {
         engine.CameraView.SetClouds(new(Math.Clamp(coverage,0,1),CloudDrift,CloudAltitude,CloudScale,CloudTint,0,CloudKind.Cumulus,0,pixelMetres,shadeSteps));
         cloudTurn = degreesPerSecond;
+        engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
+        return Inspect();
+    }
+    // A towering layer 2 km thick whose volumetric rims rise at the given edge sharpness (0: the default, 3) and erode by the given detail (0: none); lighting.clouds.volumetric low or high draws them.
+    [DebugCommand("lighting.clouds.edges")]
+    public string CloudEdges(float coverage,float edgeSharpness,float detailErosion)
+    {
+        engine.CameraView.SetClouds(new CloudsRequest(Math.Clamp(coverage,0,1),CloudDrift,CloudAltitude,CloudScale,CloudTint,TowerThickness,CloudKind.Cumulonimbus,0)
+            with { EdgeSharpness = Math.Max(edgeSharpness,0), DetailErosion = Math.Max(detailErosion,0) });
         engine.CameraView.UpdateCamera(new(camera,Camera(CloudsEye,CloudsTarget)));
         return Inspect();
     }

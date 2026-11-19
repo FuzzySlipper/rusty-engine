@@ -296,6 +296,8 @@ fn clouds_cover_the_field_and_the_world_hides_it() {
                     twilight_degrees: 0.0,
                     pixel_metres: 0.0,
                     shade_steps: 0,
+                    edge_sharpness: 0.0,
+                    detail_erosion: 0.0,
                 }),
             }]);
         }

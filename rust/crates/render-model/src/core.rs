@@ -795,12 +795,23 @@ pub struct CloudsDescriptor {
     /// and between clear and full cover; 0 leaves them smooth.
     #[serde(default)]
     pub shade_steps: u32,
+    /// How sharply the volumetric clouds' density rises from their rims:
+    /// the gain on the noise above the coverage's threshold (`clouds.wgsl`
+    /// `cloud_density`); 0 takes the default, 3. Higher draws crisper rims,
+    /// lower softer ones.
+    #[serde(default)]
+    pub edge_sharpness: f32,
+    /// How much a finer noise octave eats into the volumetric clouds' thin
+    /// rims as the view sees them (0 none; about 1 strong); their dense
+    /// cores keep their shape.
+    #[serde(default)]
+    pub detail_erosion: f32,
 }
 
 impl CloudsDescriptor {
     /// Coverage within `0..=1`, a finite drift, a finite altitude and scale
-    /// above 0, and a finite non-negative thickness, colour, twilight and
-    /// cell size.
+    /// above 0, and a finite non-negative thickness, colour, twilight, cell
+    /// size, edge sharpness and detail erosion.
     pub fn valid(&self) -> bool {
         (0.0..=1.0).contains(&self.coverage)
             && self.drift.iter().all(|value| value.is_finite())
@@ -810,6 +821,8 @@ impl CloudsDescriptor {
             && self.color.iter().all(|&channel| non_negative(channel))
             && non_negative(self.twilight_degrees)
             && non_negative(self.pixel_metres)
+            && non_negative(self.edge_sharpness)
+            && non_negative(self.detail_erosion)
     }
 }
 

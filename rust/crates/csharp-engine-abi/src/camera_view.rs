@@ -515,7 +515,12 @@ pub enum NativeCloudKind {
 /// past a few pixels, neighbours merge. `shade_steps` (0 for smooth) limits
 /// the flat layer to that many shades between lit and shadowed cloud and that
 /// many levels of cover, at least two. Both leave the volumetric clouds and
-/// the shade on the ground as they are.
+/// the shade on the ground as they are. `edge_sharpness` (0 for the default,
+/// 3) is how sharply the volumetric clouds' density rises from their rims,
+/// in their shade on the ground too: higher draws crisper rims, lower softer
+/// ones. `detail_erosion` (0, the default, for none; about 1 strong) eats a
+/// finer noise octave into the volumetric clouds' thin rims as the view sees
+/// them, leaving their dense cores and their light and shade as they are.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeCloudsRequest {
@@ -530,6 +535,8 @@ pub struct NativeCloudsRequest {
     pub twilight_degrees: f32,
     pub pixel_metres: f32,
     pub shade_steps: u32,
+    pub edge_sharpness: f32,
+    pub detail_erosion: f32,
 }
 
 /// How wet the scene's lit surfaces are, after rain. `wetness` (0 to 1,

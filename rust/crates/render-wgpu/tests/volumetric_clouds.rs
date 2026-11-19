@@ -83,6 +83,8 @@ fn layer(coverage: f32) -> RenderDiff {
             twilight_degrees: 0.0,
             pixel_metres: 0.0,
             shade_steps: 0,
+            edge_sharpness: 0.0,
+            detail_erosion: 0.0,
         }),
     }
 }
@@ -327,6 +329,8 @@ fn a_sun_below_the_horizon_lights_the_side_of_a_tower_facing_it() {
                     twilight_degrees: twilight,
                     pixel_metres: 0.0,
                     shade_steps: 0,
+                    edge_sharpness: 0.0,
+                    detail_erosion: 0.0,
                     ..match layer(0.0) {
                         RenderDiff::SetClouds {
                             clouds: Some(clouds),
@@ -438,6 +442,8 @@ fn drifting() -> Harness {
             twilight_degrees: 0.0,
             pixel_metres: 0.0,
             shade_steps: 0,
+            edge_sharpness: 0.0,
+            detail_erosion: 0.0,
         }),
     }]);
     harness
@@ -581,4 +587,103 @@ fn drifting_volumetric_clouds_move_on_a_still_camera() {
         .filter(|pixel| (f32::from(pixel[0]) / 255.0 - 0.5) * 32.0 < -0.3)
         .count();
     assert_eq!(leftward, 0, "nothing drifts left");
+}
+
+/// A tall broken cumulonimbus layer, 2 km thick, with this edge sharpness
+/// and detail erosion (0, 0: the defaults).
+fn towering(edge_sharpness: f32, detail_erosion: f32) -> RenderDiff {
+    RenderDiff::SetClouds {
+        clouds: Some(CloudsDescriptor {
+            coverage: 0.6,
+            drift: [0.0, 0.0],
+            altitude: 1500.0,
+            scale: 600.0,
+            color: [1.0; 3],
+            thickness: 2000.0,
+            kind: CloudKind::Cumulonimbus,
+            twilight_degrees: 0.0,
+            pixel_metres: 0.0,
+            shade_steps: 0,
+            edge_sharpness,
+            detail_erosion,
+        }),
+    }
+}
+
+/// The mean luminance step between neighbouring pixels across `rgba`
+/// (`width` wide): how crisp its edges and how fine its detail.
+fn crispness(rgba: &[u8], width: usize) -> f64 {
+    let luma: Vec<f64> = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|p| 0.299 * f64::from(p[0]) + 0.587 * f64::from(p[1]) + 0.114 * f64::from(p[2]))
+        .collect();
+    let height = luma.len() / width;
+    let mut total = 0.0;
+    for row in 0..height - 1 {
+        for column in 0..width - 1 {
+            let at = row * width + column;
+            total += (luma[at + 1] - luma[at]).abs() + (luma[at + width] - luma[at]).abs();
+        }
+    }
+    total / ((width - 1) * (height - 1)) as f64
+}
+
+#[test]
+#[ignore = "hardware-only volumetric-cloud edge visual test; run scripts/gpu-lane-temporal-tests.sh"]
+fn a_sharper_edge_and_detail_erosion_crisp_the_volumetric_rims_and_default_to_todays_clouds() {
+    const SIZE: (u32, u32) = (1920, 1080);
+    // Up into the layer at 1080p, settled over its history.
+    let render = |quality, clouds: RenderDiff| {
+        let mut harness = scene(quality);
+        require_hardware_adapter(&harness.gpu, "volumetric-cloud edges");
+        let samples = harness.renderer.samples();
+        harness.target = render_wgpu::OffscreenTarget::new(&harness.gpu, SIZE.0, SIZE.1, samples);
+        harness.apply(vec![clouds]);
+        harness.renderer.set_animation_time(2.0);
+        let view = camera([0.0, 1.0, 0.0], 30.0, 20.0);
+        for _ in 0..24 {
+            harness.render(&view);
+        }
+        harness.render(&view).1
+    };
+    let keep_sized = |name: &str, rgba: &[u8]| {
+        if let Some(directory) = std::env::var_os("RUSTY_CLOUD_TEST_IMAGES") {
+            let png = render_wgpu::encode_png(SIZE.0, SIZE.1, rgba).expect("png");
+            std::fs::write(
+                std::path::Path::new(&directory).join(format!("{name}.png")),
+                png,
+            )
+            .expect("write");
+        }
+    };
+    for quality in [VolumetricCloudsQuality::Low, VolumetricCloudsQuality::High] {
+        let today = render(quality, towering(0.0, 0.0));
+        assert_eq!(
+            today,
+            render(quality, towering(3.0, 0.0)),
+            "{quality:?}: 0 takes the default sharpness, 3"
+        );
+        let sharp = render(quality, towering(8.0, 0.0));
+        let eroded = render(quality, towering(0.0, 1.0));
+        let name = format!("{quality:?}").to_lowercase();
+        keep_sized(&format!("edges-{name}-default"), &today);
+        keep_sized(&format!("edges-{name}-sharpness-8"), &sharp);
+        keep_sized(&format!("edges-{name}-erosion-1"), &eroded);
+        let width = SIZE.0 as usize;
+        let (soft, crisp, detailed) = (
+            crispness(&today, width),
+            crispness(&sharp, width),
+            crispness(&eroded, width),
+        );
+        assert!(
+            crisp > soft * 1.1,
+            "{quality:?}: a sharper edge crisps the rims: {crisp:.3} against {soft:.3}"
+        );
+        assert!(
+            detailed > soft * 1.1,
+            "{quality:?}: erosion breaks the rims into finer detail: {detailed:.3} against {soft:.3}"
+        );
+    }
 }

@@ -91,9 +91,10 @@ struct Frame {
     cloud_drift: vec4<f32>,
     // The layer's own shape: x its volumetric thickness, metres; y its
     // kind (0 stratus, 1 cumulus, 2 cumulonimbus); z how far below the
-    // horizon the sun still lights it, radians (0: only while it is up).
-    // `clouds.w` is the tallest of it and the regions', which the raymarch
-    // spans.
+    // horizon the sun still lights it, radians (0: only while it is up); w
+    // the gain of the volumetric density above its threshold (`clouds.wgsl`
+    // `cloud_density`; 3 by default), its edge sharpness. `clouds.w` is the
+    // tallest of it and the regions', which the raymarch spans.
     cloud_shape: vec4<f32>,
     // The surfaces' wetness (`lighting.wgsl` `wetted`): x how wet (0 dry to
     // 1 soaked), y how much standing water gathers in puddles (0 to 1). The

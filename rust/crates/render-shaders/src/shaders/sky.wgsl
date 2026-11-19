@@ -23,7 +23,9 @@ struct SkyUniform {
     // second; z the side of its cells, metres (0: smooth); w its shades
     // (0: smooth).
     cloud_drift: vec4<f32>,
-    // rgb: the tint of the light the clouds take.
+    // rgb: the tint of the light the clouds take; w how much the finer
+    // octave erodes the volumetric clouds' rims in the view's march (0:
+    // none; `rusty::clouds::cloud_density`).
     cloud_color: vec4<f32>,
     // rgb: what the panoramas are multiplied by where the clouds read the sky
     // behind them: 1, or over a clear colour, with white panoramas, that
@@ -317,7 +319,7 @@ fn march_clouds(direction: vec3<f32>, pixel: vec2<f32>, phase: f32) -> CloudSamp
     for (var index = 0; index < steps; index = index + 1) {
         let t = start + (f32(index) + jitter) * step;
         let position = camera + direction * t;
-        let density = cloud_density(position, 2);
+        let density = cloud_density(position, 2, sky.cloud_color.w);
         if density <= 0.002 {
             continue;
         }
@@ -363,7 +365,7 @@ fn scattering_lobe(direction: vec3<f32>, toward: vec3<f32>) -> f32 {
 fn light_through(position: vec3<f32>, toward: vec3<f32>, light_step: f32) -> f32 {
     var optical = 0.0;
     for (var k = 1; k <= CLOUD_LIGHT_STEPS; k = k + 1) {
-        optical += cloud_density(position + toward * light_step * f32(k), 1) * light_step;
+        optical += cloud_density(position + toward * light_step * f32(k), 1, 0.0) * light_step;
     }
     return exp(-CLOUD_EXTINCTION * optical)
         + CLOUD_MULTIPLE_SCATTER * exp(-CLOUD_EXTINCTION * CLOUD_MULTIPLE_REACH * optical);

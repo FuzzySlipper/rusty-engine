@@ -1198,11 +1198,13 @@ impl RuntimeCameraViewBridge {
             twilight_degrees: request.twilight_degrees,
             pixel_metres: request.pixel_metres,
             shade_steps: request.shade_steps,
+            edge_sharpness: request.edge_sharpness,
+            detail_erosion: request.detail_erosion,
         };
         if !clouds.valid() {
             return Err(CsharpEngineServicesError::new(
                 "CSHARP_CLOUDS",
-                "clouds need a finite coverage and drift, an altitude and scale above 0, and a non-negative thickness, colour, twilight and cell size, all finite",
+                "clouds need a finite coverage and drift, an altitude and scale above 0, and a non-negative thickness, colour, twilight, cell size, edge sharpness and detail erosion, all finite",
             ));
         }
         // Coverage 0 draws no layer, but its altitude, scale, drift, kind and
