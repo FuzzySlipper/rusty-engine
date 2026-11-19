@@ -283,12 +283,48 @@ internal static class EngineTestHostChecks
             ExpectRefusal(() => engine.Host.RequestExit(), "ENGINE_HOST_EXIT_UNAVAILABLE");
         });
 
+        QueuedPersistence(host);
         RagdollFall(host);
         DeferredResidency(host);
         DeferredCollisionResidency(host);
         DeferredCollisionNavigation(host);
         DeferredContentResidency(host);
         Bundles(library);
+    }
+
+    // Deferred saves return queued with their revision and ticket; Load and
+    // the guards see the newest at once, a save that is not deferred lands
+    // after them, and a cache store reads back what it wrote (#10911).
+    private static void QueuedPersistence(EngineTestHost host)
+    {
+        host.Call(engine =>
+        {
+            using PersistenceStore store = engine.Persistence.OpenStore(new("queued"));
+            for (ulong revision = 1; revision <= 3; revision++)
+            {
+                PersistenceSaveReceipt queued = engine.Persistence.Save(new(
+                    store, "slot", PersistenceRevisionGuard.Any, 0, new byte[] { (byte)revision }, Deferred: true));
+                Require(queued == new PersistenceSaveReceipt(PersistenceSaveOutcome.Queued, revision, revision), $"A deferred save answered {queued}.");
+            }
+            using (PersistenceBlob newest = engine.Persistence.Load(new(store, "slot")))
+            {
+                Require(engine.Persistence.DescribeBlob(newest).Revision == 3 && engine.Persistence.ReadBlobBytes(newest).Span[0] == 3,
+                    "Load did not see the newest queued save.");
+            }
+            PersistenceSaveReceipt stale = engine.Persistence.Save(new(
+                store, "slot", PersistenceRevisionGuard.Exact, 2, new byte[] { 9 }, Deferred: true));
+            Require(stale == new PersistenceSaveReceipt(PersistenceSaveOutcome.RevisionConflict, 3), $"A stale guard answered {stale}.");
+            PersistenceSaveReceipt saved = engine.Persistence.Save(new(store, "slot", PersistenceRevisionGuard.Exact, 3, new byte[] { 4 }));
+            Require(saved == new PersistenceSaveReceipt(4), $"A save after queued ones answered {saved}.");
+            PersistenceSaveReadout readout = engine.Persistence.ReadSaves(store);
+            Require(readout == new PersistenceSaveReadout(3, 3, 0, 0), $"The queue read {readout}.");
+            Require(engine.Persistence.ReadSaveFailureText(store) == "", "A store with no failure reported one.");
+
+            using PersistenceStore cache = engine.Persistence.OpenStore(new("cache", Cache: true));
+            engine.Persistence.Save(new(cache, "chunk", PersistenceRevisionGuard.Any, 0, new byte[8192], Deferred: true));
+            using PersistenceBlob chunk = engine.Persistence.Load(new(cache, "chunk"));
+            Require(engine.Persistence.DescribeBlob(chunk) == new PersistenceBlobInfo(true, 1, 8192), "A cache store did not read back its blob.");
+        });
     }
 
     // A deferred static collision batch, a terrain window of about 1.6 M

@@ -2001,6 +2001,7 @@ dependencies = [
  "core-math",
  "core-space",
  "core-time",
+ "crc32fast",
  "csharp-engine-abi",
  "engine-spatial",
  "entity-state",

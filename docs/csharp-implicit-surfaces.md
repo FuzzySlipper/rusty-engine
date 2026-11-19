@@ -474,7 +474,7 @@ version. Storage owns only its file layout marker and revision; specialized code
 
 A stored file the Engine cannot read or write is an expected refusal, not a fault.
 `ProductStateStore<T>` throws `PersistenceStorageException`, whose `Failure` is
-`UnrecognizedContainer` (not the RSP2 layout), `MalformedContainer` (an RSP2 header that disagrees with its payload) or
+`UnrecognizedContainer` (neither the RSP2 nor the RSC1 layout), `MalformedContainer` (a header that disagrees with its payload, or a cache blob whose CRC disagrees) or
 `Io`. Catch it to report the save or load; the file, its revision and the store
 are unchanged, and other keys keep working. The Engine never migrates an old
 layout: discard the file or convert it with a product tool. The direct Persistence
@@ -492,6 +492,49 @@ Recreating a deleted key starts at revision one; revisions are not tombstone IDs
 Storage failures throw rather than returning a deletion receipt. After an I/O
 failure, reload to determine whether removal occurred. Product slot catalogs and
 metadata remain product-owned.
+
+#### Queued saves and cache stores
+
+A save with `Deferred = true` returns without touching the disk. The call
+decides the guard and the revision, copies the payload and queues the write;
+the receipt says `Queued` with the revision the blob will have and the
+store's `Ticket` for it. A guard that does not match returns
+`RevisionConflict` at once and queues nothing. One Engine thread writes every
+store's queued saves, in the order they were made.
+
+Until a key's queued writes finish, the Engine holds its newest payload:
+`Load` returns it, and later guards are decided against it, so a product
+keeps naming the revision its last receipt gave. The Engine also remembers
+the revision it last loaded, saved or deleted for each key, so a save of a
+key the runtime has already loaded or saved reads no file in the call; a
+read there could wait behind the worker's writes. Load a key before its
+first deferred save to keep that save off the disk too. The files belong to
+the running Engine: a change made to them from outside while it runs is not
+seen by its guards. A save without `Deferred`
+and every `Delete` wait for the queued writes before theirs, so they land
+after them.
+
+`ReadSaves(store)` reports the store's queued saves: `Queued` is the last
+ticket issued, every ticket up to `Finished` has been written or has failed,
+and `Failed` and `LastFailed` count and name the failures.
+`ReadSaveFailureText(store)` is the last failure's code, key, ticket and I/O
+error. A failed write is not rolled back or retried: its revision never
+reaches the disk, saves already queued after it are still written, and
+`Load` then reads what the disk holds. Destroying a store does not cancel
+its queued saves. When the runtime stops, restarts or is replaced, every
+queued save is written first; a crash or a killed process loses the ones not
+yet `Finished`.
+
+A durable store syncs each write's file and, on Linux, its directory, so a
+`Finished` save survives a crash. A store opened with
+`new PersistenceOpenRequest(scope, Cache: true)` is for regenerable data such
+as derived caches: its writes and deletes skip those syncs. A crash may lose
+any cache write or delete the operating system had not yet flushed (on Linux,
+typically the last few seconds), so a key may come back older, absent, or
+damaged. Cache blobs use the RSC1 layout, the durable header plus a CRC-32 of
+the payload, so a blob whose data did not all reach the disk is refused as
+`MalformedContainer` rather than read: catch it and regenerate. Either store
+reads either layout.
 
 
 `StatsComponentCapture.Capture` reads a component's selected stat/track values as plain

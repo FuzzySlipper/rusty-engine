@@ -510,6 +510,7 @@ mod tests {
                     bytes: scope.as_ptr(),
                     len: scope.len(),
                 },
+                cache: false,
             };
             let status = unsafe {
                 (persistence.open_store)(persistence.context, &open, store, &mut receipt)

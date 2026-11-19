@@ -1017,6 +1017,11 @@ sealed class InMemoryPersistenceService : IPersistenceService
     public ReadOnlyMemory<byte> ReadBlobBytes(PersistenceBlob blob)
         => _blobs[blob.Handle.Value].Payload;
 
+    // Every save is written in the call, so none is ever queued.
+    public PersistenceSaveReadout ReadSaves(PersistenceStore store) => default;
+
+    public ReadOnlyMemory<byte> ReadSaveFailure(PersistenceStore store) => ReadOnlyMemory<byte>.Empty;
+
     public void Seed(string scope, string key, byte[] payload)
         => _saved[(scope, key)] = new Saved(1, payload);
 }

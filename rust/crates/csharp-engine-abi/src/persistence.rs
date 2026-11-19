@@ -27,6 +27,10 @@ pub struct NativePersistenceOpenRequest {
     /// A product-selected relative scope beneath the host-selected root.
     /// The host owns the base root; product code never supplies its path.
     pub scope: NativeUtf8Slice,
+    /// A store for regenerable data: its writes and deletes skip the fsyncs,
+    /// so a crash may lose them, and its blobs carry a CRC-32 of the payload
+    /// so a torn one is refused rather than read.
+    pub cache: bool,
 }
 
 #[repr(C)]
@@ -39,6 +43,11 @@ pub struct NativePersistenceSaveRequest {
     pub expected_revision: u64,
     /// Opaque product-defined state bytes copied before disk commit.
     pub payload: NativeByteSlice,
+    /// Decide the guard and revision now, copy the payload and write it on
+    /// the persistence worker: the receipt says `Queued` and names a ticket.
+    /// Saves are written in the order they were made, and a `Load` of the key
+    /// sees the newest one at once. `ReadSaves` says when it is written.
+    pub deferred: bool,
 }
 
 #[repr(u32)]
@@ -47,16 +56,50 @@ pub enum NativePersistenceSaveOutcome {
     #[default]
     Saved = 0,
     RevisionConflict = 1,
+    /// A deferred save was admitted and will be written with `revision`.
+    Queued = 2,
 }
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NativePersistenceSaveReceipt {
-    /// Saved values describe the new blob. Conflict values describe the
-    /// existing blob; revision zero means the key is absent.
+    /// Saved and Queued values describe the new blob. Conflict values
+    /// describe the newest blob, queued or stored; revision zero means the
+    /// key is absent.
     pub outcome: NativePersistenceSaveOutcome,
     pub revision: u64,
+    /// The store's number for a queued save, counting from one; zero for a
+    /// save that was not queued.
+    pub ticket: u64,
 }
+
+/// A store's deferred saves as of this call.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativePersistenceSaveReadout {
+    /// The last ticket issued.
+    pub queued: u64,
+    /// Every save up to this ticket has been written or has failed.
+    pub finished: u64,
+    /// How many of them failed.
+    pub failed: u64,
+    /// The last ticket that failed, or zero.
+    pub last_failed: u64,
+}
+
+pub type NativeReadPersistenceSaves = unsafe extern "C" fn(
+    *mut c_void,
+    NativePersistenceStoreHandle,
+    *mut NativePersistenceSaveReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+/// UTF-8 text of the store's last failed deferred save; empty if none failed.
+pub type NativeReadPersistenceSaveFailure = unsafe extern "C" fn(
+    *mut c_void,
+    NativePersistenceStoreHandle,
+    *mut NativeByteResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]

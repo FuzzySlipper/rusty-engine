@@ -112,6 +112,7 @@ include = [
     "NativePersistenceSaveRequest",
     "NativePersistenceSaveReceipt",
     "NativePersistenceSaveOutcome",
+    "NativePersistenceSaveReadout",
     "NativePersistenceLoadRequest",
     "NativePersistenceBlobInfo",
     "NativePersistenceCopyBlobRequest",

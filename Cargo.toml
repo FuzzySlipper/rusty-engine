@@ -117,6 +117,8 @@ serde_path_to_error = "0.1"
 # Emits the Rust-to-TypeScript wire contracts (#8793).
 ts-rs = { version = "11.1", features = ["serde-json-impl", "no-serde-warnings"] }
 sha2 = "0.10"
+# Cache-store persistence blobs carry a CRC-32 of their payload (#10911).
+crc32fast = "1.5"
 base64 = "0.22"
 stats_alloc = "0.1.10"
 gltf = { version = "1.4", default-features = false, features = ["utils", "names", "extras", "KHR_materials_unlit", "KHR_materials_emissive_strength", "KHR_materials_specular", "KHR_materials_volume", "KHR_materials_ior", "KHR_texture_transform", "allow_empty_texture"] }

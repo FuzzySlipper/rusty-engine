@@ -2110,6 +2110,8 @@ pub struct NativePersistenceApi {
     pub describe_blob: NativeDescribePersistenceBlob,
     pub copy_blob: NativeCopyPersistenceBlob,
     pub read_blob_bytes: NativeReadPersistenceBlobBytes,
+    pub read_saves: NativeReadPersistenceSaves,
+    pub read_save_failure: NativeReadPersistenceSaveFailure,
 }
 
 pub type NativeSelectGameplayRate = unsafe extern "C" fn(
