@@ -146,8 +146,11 @@ internal static class EngineTestHostChecks
 
         host.Call(engine =>
         {
-            // A product shader is checked when it is opened, and held by its materials.
-            ExpectRefusal(() => engine.Graphics.OpenResource(new RenderResourceRequest("shaders/broken.wgsl")), "CSHARP_SHADER");
+            // A product shader is read when it is opened, not compiled: one that does not compose
+            // opens, and the renderer reports it where it compiles it. Its materials hold it.
+            RenderResourceInfo broken = engine.Graphics.OpenResource(new RenderResourceRequest("shaders/broken.wgsl"));
+            Require(broken.Kind == RenderResourceKind.Shader, "a shader that does not compose still opens");
+            broken.Handle.Dispose();
             RenderResourceInfo tint = engine.Graphics.OpenResource(new RenderResourceRequest("shaders/tint.wgsl"));
             Require(tint.Kind == RenderResourceKind.Shader, "a .wgsl resource is a shader");
             RenderResource shader = tint.Handle;
