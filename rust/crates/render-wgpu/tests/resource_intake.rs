@@ -119,6 +119,7 @@ fn ms(since: Instant) -> f64 {
 /// A running world: a ground and `locations` locations already drawn.
 fn world(locations: u32) -> Harness {
     let mut harness = Harness::new(RendererOptions::default());
+    harness.settle = false;
     harness.apply(vec![
         RenderDiff::DefineMaterial {
             material: material("material/ground", [0.4, 0.5, 0.3, 1.0], None),

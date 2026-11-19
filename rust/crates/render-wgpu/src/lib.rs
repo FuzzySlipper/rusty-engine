@@ -78,6 +78,7 @@ mod tables;
 mod target;
 mod timing;
 mod upscale;
+mod variants;
 mod video;
 mod volumetric_fog;
 mod voxel;
@@ -771,9 +772,15 @@ pub struct Renderer {
     ray_gi_without_denoiser: bool,
     /// Toward the sun whose shadows rays trace, while they do.
     ray_sun_toward: Option<glam::Vec3>,
-    /// Deferred textures and meshes being decoded and uploaded on workers
-    /// (`prepare.rs`).
+    /// Deferred textures and meshes being decoded and uploaded on workers,
+    /// and product shader variants being made there (`prepare.rs`).
     preparation: prepare::Preparation,
+    /// Nodes drawing nothing until a product shader variant one of their
+    /// parts draws with is taken in (`variants.rs`).
+    waiting_for_variants: std::collections::BTreeSet<render_model::RenderHandle>,
+    /// Material features whose product shader did not compose, and why:
+    /// those materials draw with the standard shade stage.
+    failed_variants: HashMap<shaders::Features, String>,
 }
 
 /// The water reflection's march at low and high quality: its steps and its
@@ -1001,6 +1008,8 @@ impl Renderer {
             ray_shadows: None,
             ray_sun_toward: None,
             preparation: prepare::Preparation::default(),
+            waiting_for_variants: std::collections::BTreeSet::new(),
+            failed_variants: HashMap::new(),
             animation_time: 0.0,
             presentation_time: 0.0,
             animation_facts: Vec::new(),

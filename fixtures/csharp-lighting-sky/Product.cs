@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -90,6 +91,19 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private MeshResource? sphereSmooth, sphereFlat;
     private RenderResource? treeMesh;
     private Appearance? sphereSmoothLook, sphereFlatLook, treeSmoothLook, treeFlatLook;
+    // Moss shaders (#10913): content/moss.wgsl and its SWAY variant, first opened during an update (lighting.shader), shading two spheres on the floor; their variants compile on the Engine's workers and the spheres draw once this update's batch is drawn.
+    private const ulong MossSphereId = 80, SwaySphereId = 81;
+    private const string MossShaderPath = "moss.wgsl", SwayKeyword = "SWAY";
+    private static readonly Vector4 MossColour = new(.18f,.32f,.08f,.6f), MossPatches = new(.4f,.15f,0,0);
+    private static readonly Color MossStone = new(.55f,.53f,.5f,1);
+    private static readonly Vector3 MossEye = new(3.5f,2.1f,6.4f), MossTarget = new(3.5f,1.4f,3.4f);
+    private bool mossWanted;
+    private RenderResource? mossShader, swayShader;
+    private Material? moss, swaying;
+    private MeshResource? mossSphere, swaySphere;
+    private Appearance? mossLook, swayLook;
+    private ShaderTiming? shaderTiming;
+    private long shaderOpenedAt;
     // The wind (#9541): the tree with a wind bend, grass cards whose vertex alpha weights their flutter, and a banner a product displace stage waves, all on the room's floor by the torch.
     private const ulong WindTreeId = 30, GrassBaseId = 31, BannerId = 40, PoleId = 41;
     private const int GrassCards = 6;
@@ -270,6 +284,59 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             sphereSmoothLook = sphereFlatLook = treeSmoothLook = treeFlatLook = null; sphereSmooth = sphereFlat = null; treeMesh = null; facetSmooth = facetFlat = treeFlat = null;
         }
         return Inspect();
+    }
+    // Open moss.wgsl and its SWAY variant for the first time in the next update, and shade two spheres with them (false clears them); lighting.shader.readout reads how long that update spent in the calls and how many updates passed before they drew.
+    [DebugCommand("lighting.shader")]
+    public string MossShaders(bool shown)
+    {
+        if (shown) { mossWanted = mossLook is null; return Inspect(); }
+        if (mossLook is null) return Inspect();
+        engine.Graphics.PublishSnapshot([]);
+        mossLook.Dispose(); swayLook?.Dispose(); mossSphere?.Dispose(); swaySphere?.Dispose(); moss?.Dispose(); swaying?.Dispose(); mossShader?.Dispose(); swayShader?.Dispose();
+        mossLook = swayLook = null; mossSphere = swaySphere = null; moss = swaying = null; mossShader = swayShader = null;
+        return Inspect();
+    }
+    [DebugCommand("lighting.shader.readout")]
+    public string MossShaderReadout() => shaderTiming is null ? "{}" : JsonSerializer.Serialize(shaderTiming,ProofJsonContext.Default.ShaderTiming);
+    private void OpenMossShaders()
+    {
+        mossWanted = false;
+        Color white = new(1,1,1,1);
+        long started = Stopwatch.GetTimestamp();
+        mossShader = engine.Graphics.OpenResource(new RenderResourceRequest(MossShaderPath)).Handle;
+        double open = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        long variantStarted = Stopwatch.GetTimestamp();
+        swayShader = engine.Graphics.OpenResource(new RenderResourceRequest(MossShaderPath) { ShaderKeywords = SwayKeyword }).Handle;
+        double variant = Stopwatch.GetElapsedTime(variantStarted).TotalMilliseconds;
+        long materialsStarted = Stopwatch.GetTimestamp();
+        moss = engine.Graphics.CreateMaterial(new MaterialRequest(MossStone,default(RenderResourceReference),.9f,white,Vector3.Zero,0,false) with { Shader = new MaterialShader(mossShader,MossColour,MossPatches,default,default) });
+        swaying = engine.Graphics.CreateMaterial(new MaterialRequest(MossStone,default(RenderResourceReference),.9f,white,Vector3.Zero,0,false) with { Shader = new MaterialShader(swayShader,MossColour,MossPatches,default,default) });
+        double materials = Stopwatch.GetElapsedTime(materialsStarted).TotalMilliseconds;
+        long meshesStarted = Stopwatch.GetTimestamp();
+        mossSphere = engine.Graphics.CreateMeshResource(Sphere(moss));
+        swaySphere = engine.Graphics.CreateMeshResource(Sphere(swaying));
+        mossLook = engine.Graphics.CreateMeshAppearance(mossSphere);
+        swayLook = engine.Graphics.CreateMeshAppearance(swaySphere);
+        engine.Graphics.PublishSnapshot(new AppearanceFact[]
+        {
+            Fact(MossSphereId,mossLook,new(2.9f,1.6f,3.4f),.5f),
+            Fact(SwaySphereId,swayLook,new(4.1f,1.6f,3.4f),.5f),
+        });
+        double meshes = Stopwatch.GetElapsedTime(meshesStarted).TotalMilliseconds;
+        double call = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        engine.CameraView.UpdateCamera(new(camera,Camera(MossEye,MossTarget)));
+        ResourcePreparationReadout preparation = engine.Graphics.ReadResourcePreparation();
+        shaderOpenedAt = Stopwatch.GetTimestamp();
+        shaderTiming = new(open,variant,materials,meshes,call,preparation.LastBatch,preparation.CompletedBatch,0,null,null,preparation.FailedResources);
+    }
+    private void WatchMossShaders()
+    {
+        if (shaderTiming is not { UpdatesUntilDrawn: null } timing) return;
+        ResourcePreparationReadout preparation = engine.Graphics.ReadResourcePreparation();
+        int updates = timing.UpdatesWatched + 1;
+        shaderTiming = preparation.CompletedBatch >= timing.Batch
+            ? timing with { UpdatesWatched = updates, UpdatesUntilDrawn = updates, MsUntilDrawn = Stopwatch.GetElapsedTime(shaderOpenedAt).TotalMilliseconds, CompletedBatch = preparation.CompletedBatch, Failed = preparation.FailedResources }
+            : timing with { UpdatesWatched = updates, CompletedBatch = preparation.CompletedBatch };
     }
     private static AppearanceFact Fact(ulong id,Appearance look,Vector3 at,float scale) => new(id,false,0,new Transform(at,Quaternion.Identity,new Vector3(scale)),look,true,RenderLayer.Scene);
     // Blow the wind at the given strength over the tree, the grass and the banner (0 stills it; below 0 clears the scene), with the camera on them.
@@ -998,16 +1065,21 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
         if (lanternPlayback is not null) { engine.Graphics.AdvanceSpritePlayback(new(lanternPlayback)); PublishLantern(); }
         if (moonCrossing > 0) MoveCrossingMoon((float)(update.Facts.FixedDeltaSeconds*update.Facts.AdmittedStepCount));
         if (cloudTurn != 0) TurnClouds((float)(update.Facts.FixedDeltaSeconds*update.Facts.AdmittedStepCount));
+        WatchMossShaders();
+        if (mossWanted) OpenMossShaders();
         return ProductUpdateResult.None;
     }
     public void Pause(){} public void Resume(){} public void Restart(){SetTorch(true);} public void Shutdown(){}
-    public void Dispose(){Lantern(-1); Moons(0,0); engine.CameraView.ClearSkyBackground(default); engine.CameraView.SetStars(default); starCatalogue?.Dispose(); starBand?.Dispose(); Flame(false); Facets(false); Wind(-1); Water(-1); Backdrop(0); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
+    public void Dispose(){Lantern(-1); Moons(0,0); engine.CameraView.ClearSkyBackground(default); engine.CameraView.SetStars(default); starCatalogue?.Dispose(); starBand?.Dispose(); Flame(false); Facets(false); MossShaders(false); Wind(-1); Water(-1); Backdrop(0); flameSprite?.Dispose(); emberSprite?.Dispose(); smokeSprite?.Dispose(); presentation?.Dispose(); torch.Dispose(); sun.Dispose(); hemisphere.Dispose(); skyAmbient.Dispose(); camera.Dispose(); stone.Dispose(); scene.Dispose(); day.Dispose(); night.Dispose();}
 }
 internal sealed record LightingSave(uint[] Room,LightDescriptor Torch);
+// A first shader open in an update (lighting.shader): milliseconds in the opens, the materials, the spheres' meshes and appearances, and the whole update's Engine calls; the update's preparation batch, how many updates passed before it was drawn and how long that took.
+internal sealed record ShaderTiming(double OpenMs,double VariantOpenMs,double MaterialsMs,double MeshesMs,double UpdateCallsMs,ulong Batch,ulong CompletedBatch,int UpdatesWatched,int? UpdatesUntilDrawn,double? MsUntilDrawn,ulong Failed);
 internal sealed record LightingProof(bool RoundTrip,float Lit,float Blocked,float Dark,float Current,bool Torch,float Clock);
 [JsonSourceGenerationOptions(PropertyNamingPolicy=JsonKnownNamingPolicy.CamelCase,IncludeFields=true,UseStringEnumConverter=true)]
 [JsonSerializable(typeof(LightingSave))]
 [JsonSerializable(typeof(LightingProof))]
+[JsonSerializable(typeof(ShaderTiming))]
 [JsonSerializable(typeof(RendererSettingsReadout))]
 [JsonSerializable(typeof(LightReadout))]
 [JsonSerializable(typeof(VoxelSceneReadout))]

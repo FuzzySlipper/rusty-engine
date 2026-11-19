@@ -18,7 +18,12 @@ and the lantern's two-frame atlas and emission map.
 repository's `content/map-models.sources.json`), the flat-shading pair's prop
 (`lighting.facets`) and the tree the wind bends (`lighting.wind`).
 `content/wave.wgsl` is the banner's product shader: a displace stage that
-waves the card from its pole edge by the scene's wind. `generate-water.py`
+waves the card from its pole edge by the scene's wind. `content/moss.wgsl`
+mosses two spheres (`lighting.shader true`): the next update opens it and its
+`SWAY` keyword variant for the first time and makes their materials, and
+`lighting.shader.readout` reports the milliseconds that update spent in those
+calls and how many updates passed before the renderer, compiling the shader on
+its workers, drew them. `generate-water.py`
 regenerates `content/foam.png` and `content/ripples.png`, the shore's foam
 mask and ripple normal map (`lighting.water`; `lighting.water 2` absorbs and
 refracts the sand, and `lighting.water.reflections off|low|high` mirrors the

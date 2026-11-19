@@ -5,7 +5,8 @@
 //! presentation time (#9126); keywords and a caster stage (#9127); a
 //! displace stage that moves the vertices and their shadow (#9541), and a
 //! displaced normal that lights them smoothly (#9905), and a displacement
-//! bound that grows what culls them (#9906).
+//! bound that grows what culls them (#9906); their variants made on the
+//! workers, what draws with one waiting for it (#10913).
 
 mod support;
 
@@ -245,7 +246,12 @@ fn a_product_shader_that_does_not_compose_is_reported_by_line_and_shades_as_stan
             ],
         })
         .unwrap();
-    let issues = harness.renderer.apply(&frame, &harness.resources);
+    // Composed on the workers: its error is reported as it is taken in,
+    // and it counts as failed.
+    let mut issues = harness.renderer.apply(&frame, &harness.resources);
+    assert!(issues.is_empty(), "{issues:?}");
+    issues.extend(harness.renderer.settle_prepared());
+    assert_eq!(harness.renderer.preparation_readout().failed, 1);
     assert_eq!(issues.len(), 1, "{issues:?}");
     assert_eq!(issues[0].op, "defineMaterial");
     assert!(
@@ -906,4 +912,156 @@ fn a_displacement_bound_keeps_a_carried_part_drawn_and_shadowed() {
         );
         assert_eq!(again, unbounded, "gpu culling {gpu_culling}: culled again");
     }
+}
+
+/// Green, or blue with BLUE: the keyword variant's colour.
+const KEYED: &str = "#import rusty::types::Surface
+#import rusty::finish::finish
+
+fn shade(surface: Surface) -> vec4<f32> {
+#ifdef BLUE
+    return finish(vec4<f32>(0.0, 0.0, 1.0, 1.0), surface.world_position);
+#else
+    return finish(vec4<f32>(0.0, 1.0, 0.0, 1.0), surface.world_position);
+#endif
+}
+";
+
+fn keyed(id: &str, keywords: &[&str]) -> RenderDiff {
+    RenderDiff::DefineShader {
+        shader: ShaderDescriptor {
+            id: id.to_owned(),
+            path: "shaders/keyed.wgsl".to_owned(),
+            source: KEYED.to_owned(),
+            keywords: keywords.iter().map(|keyword| keyword.to_string()).collect(),
+        },
+    }
+}
+
+fn shaded_by(id: &str, shader: &str) -> RenderMaterialDescriptor {
+    let mut descriptor = material(id, [0.8, 0.8, 0.8, 1.0], None);
+    descriptor.shader = Some(MaterialShaderDescriptor {
+        shader: shader.to_owned(),
+        parameters: [[0.0; 4]; 4],
+        textures: [None, None],
+        displacement_bound: 0.0,
+    });
+    descriptor
+}
+
+#[test]
+fn a_product_shader_and_its_keyword_variant_are_made_off_the_call_and_draw_once_taken_in() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    harness.settle = false;
+    let view = camera(VIEW.0, VIEW.1, VIEW.2);
+    let (left, right) = (
+        (WIDTH / 4 + 25, HEIGHT / 2),
+        (WIDTH * 3 / 4 - 25, HEIGHT / 2),
+    );
+    harness.renderer.set_preparation_batch(1);
+    harness.apply(vec![keyed("shader/keyed", &[])]);
+    scene(&mut harness, shaded_by("material/right", "shader/keyed"));
+    let readout = harness.renderer.preparation_readout();
+    assert!(readout.pending > 0, "{readout:?}");
+    assert_eq!(readout.completed_batch, 0);
+    // The standard box draws; the shaded one waits for its variant.
+    let (_, waiting) = harness.render(&view);
+    assert_ne!(pixel(&waiting, right.0, right.1), [0, 255, 0, 255]);
+    let standard = pixel(&waiting, left.0, left.1);
+
+    // The workers finish; a later committed call takes the variant in.
+    assert!(harness.renderer.settle_prepared().is_empty());
+    harness.renderer.set_preparation_batch(2);
+    let readout = harness.renderer.preparation_readout();
+    assert_eq!(
+        (readout.completed_batch, readout.pending, readout.failed),
+        (2, 0, 0)
+    );
+    let (_, drawn) = harness.render(&view);
+    assert_eq!(pixel(&drawn, right.0, right.1), [0, 255, 0, 255]);
+    assert_eq!(pixel(&drawn, left.0, left.1), standard);
+
+    // A keyword variant is its own variant, made the same way.
+    harness.apply(vec![
+        keyed("shader/keyed+BLUE", &["BLUE"]),
+        RenderDiff::DefineMaterial {
+            material: shaded_by("material/right", "shader/keyed+BLUE"),
+        },
+    ]);
+    assert!(harness.renderer.preparation_readout().pending > 0);
+    let (_, waiting) = harness.render(&view);
+    assert_ne!(pixel(&waiting, right.0, right.1), [0, 0, 255, 255]);
+    assert!(harness.renderer.settle_prepared().is_empty());
+    assert_eq!(
+        pixel(&harness.render(&view).1, right.0, right.1),
+        [0, 0, 255, 255]
+    );
+}
+
+#[test]
+fn a_material_defined_ahead_of_what_draws_it_makes_its_variant_so_a_part_draws_at_once() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    });
+    harness.settle = false;
+    let view = camera(VIEW.0, VIEW.1, VIEW.2);
+    let right = (WIDTH * 3 / 4 - 25, HEIGHT / 2);
+    scene(
+        &mut harness,
+        material("material/right", [0.8, 0.8, 0.8, 1.0], None),
+    );
+    harness.render(&view);
+    // Nothing draws it yet: its variant is made all the same.
+    harness.renderer.set_preparation_batch(1);
+    harness.apply(vec![
+        keyed("shader/keyed", &[]),
+        RenderDiff::DefineMaterial {
+            material: shaded_by("material/ahead", "shader/keyed"),
+        },
+    ]);
+    assert!(harness.renderer.preparation_readout().pending > 0);
+    assert!(harness.renderer.settle_prepared().is_empty());
+    assert_eq!(harness.renderer.preparation_readout().completed_batch, 1);
+    // A material with the same features then draws in the very next frame.
+    harness.apply(vec![RenderDiff::DefineMaterial {
+        material: shaded_by("material/right", "shader/keyed"),
+    }]);
+    assert_eq!(harness.renderer.preparation_readout().pending, 0);
+    assert_eq!(
+        pixel(&harness.render(&view).1, right.0, right.1),
+        [0, 255, 0, 255]
+    );
+}
+
+#[test]
+fn a_shader_redefined_while_its_variant_is_made_draws_as_redefined() {
+    let mut harness = Harness::new(RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    });
+    harness.settle = false;
+    let view = camera(VIEW.0, VIEW.1, VIEW.2);
+    let right = (WIDTH * 3 / 4 - 25, HEIGHT / 2);
+    harness.apply(vec![keyed("shader/keyed", &[])]);
+    scene(&mut harness, shaded_by("material/right", "shader/keyed"));
+    // A content reload before the first is taken in.
+    harness.apply(vec![RenderDiff::DefineShader {
+        shader: ShaderDescriptor {
+            id: "shader/keyed".to_owned(),
+            path: "shaders/keyed.wgsl".to_owned(),
+            source: KEYED.replace("0.0, 1.0, 0.0, 1.0", "1.0, 1.0, 0.0, 1.0"),
+            keywords: Vec::new(),
+        },
+    }]);
+    assert!(harness.renderer.settle_prepared().is_empty());
+    assert_eq!(
+        pixel(&harness.render(&view).1, right.0, right.1),
+        [255, 255, 0, 255]
+    );
 }

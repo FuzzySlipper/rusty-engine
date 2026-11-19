@@ -112,16 +112,13 @@ pub(crate) struct Layouts {
     pub casters: wgpu::BindGroupLayout,
     /// Shadow caster pass: the layer index (dynamic offset).
     pub shadow_layer: wgpu::BindGroupLayout,
-    world: wgpu::PipelineLayout,
-    /// The world layout for a water material: its group 2 is the opaque
-    /// scene's copy (`water.rs`) rather than the view's occlusion.
-    water: wgpu::PipelineLayout,
+    /// What world, caster and pre-pass pipelines are made with, here and
+    /// on the workers making a product shader's (`variants.rs`).
+    pub variant_layouts: VariantLayouts,
     /// Group 4 of the world pipelines that trace the sun's shadows
-    /// (`RAY_SHADOWS`, `ray_scene.rs`), and the world and water layouts
-    /// with it; none on a device without ray queries.
+    /// (`RAY_SHADOWS`, `ray_scene.rs`); none on a device without ray
+    /// queries.
     pub ray: Option<wgpu::BindGroupLayout>,
-    world_ray: Option<wgpu::PipelineLayout>,
-    water_ray: Option<wgpu::PipelineLayout>,
     sky_pipeline: wgpu::PipelineLayout,
     /// The volumetric clouds' reduced march (`cloud_march.rs`): its group 2
     /// holds the view's history, and its pipeline draws into the reduced
@@ -143,13 +140,12 @@ pub(crate) struct Layouts {
     /// (`fs_sun_glow`, `post.rs` `Chain::glow`): under no clouds, the flat
     /// layer, and the raymarched clouds, by `SkyClouds::index`.
     pub sun_glow: [wgpu::RenderPipeline; 3],
-    shadow_pipeline: wgpu::PipelineLayout,
     pub shaders: Shaders,
     sky_shader: wgpu::ShaderModule,
     /// The world entry compiled per feature set in use.
-    world_shaders: HashMap<Features, wgpu::ShaderModule>,
+    pub(crate) world_shaders: HashMap<Features, wgpu::ShaderModule>,
     /// The caster entry per caster feature set (`Features::caster`).
-    shadow_shaders: HashMap<Features, wgpu::ShaderModule>,
+    pub(crate) shadow_shaders: HashMap<Features, wgpu::ShaderModule>,
     pub shadow: ShadowPipelines,
     /// Clears one shadow tile's depth to the far plane within its viewport.
     pub shadow_clear: wgpu::RenderPipeline,
@@ -177,9 +173,12 @@ pub(crate) struct Layouts {
 pub(crate) struct Variants {
     known: BTreeSet<(Features, Pass)>,
     /// Shadow casters have drawn.
-    casters: bool,
+    pub casters: bool,
     /// The ambient occlusion pre-pass has drawn.
-    prepass: bool,
+    pub prepass: bool,
+    /// Samples per pixel the views' occluder depth has drawn at
+    /// (`Layouts::prepare_occluder`).
+    pub occluder_samples: BTreeSet<u32>,
 }
 
 /// One target format's pipelines: the sky, the sun and moon added over the
@@ -204,7 +203,7 @@ pub(crate) struct Pipelines {
     /// clouds, the flat layer or the raymarched clouds (`SkyClouds::index`),
     /// each made as a view first draws it (`Layouts::prepare_sky_motion`).
     sky_motion: [Option<wgpu::RenderPipeline>; 3],
-    world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
+    pub(crate) world: HashMap<(Features, Pass), wgpu::RenderPipeline>,
     /// The world draws into this target: it holds every known variant.
     pub draws_world: bool,
 }
@@ -231,12 +230,12 @@ pub(crate) const CASTER_SLOPE_BIAS: f32 = 1.0;
 /// way, double-sided parts render both.
 #[derive(Default)]
 pub(crate) struct ShadowPipelines {
-    pipelines: HashMap<(Features, Option<wgpu::Face>), wgpu::RenderPipeline>,
+    pub(crate) pipelines: HashMap<(Features, Option<wgpu::Face>), wgpu::RenderPipeline>,
 }
 
 impl ShadowPipelines {
     /// Caster lists only hold the opaque passes.
-    fn cull(pass: Pass) -> Option<wgpu::Face> {
+    pub(crate) fn cull(pass: Pass) -> Option<wgpu::Face> {
         match pass {
             Pass::OpaqueMirrored | Pass::BlendMirrored => Some(wgpu::Face::Back),
             Pass::OpaqueDoubleSided | Pass::BlendDoubleSided => None,
@@ -255,7 +254,7 @@ impl ShadowPipelines {
 #[derive(Default)]
 pub(crate) struct PrepassPipelines {
     /// By caster features, pass and samples per pixel.
-    pipelines: HashMap<(Features, Pass, u32), wgpu::RenderPipeline>,
+    pub(crate) pipelines: HashMap<(Features, Pass, u32), wgpu::RenderPipeline>,
 }
 
 impl PrepassPipelines {
@@ -749,14 +748,17 @@ impl Layouts {
         Self {
             frame,
             material,
-            water,
             sky,
             casters,
             shadow_layer,
-            world,
+            variant_layouts: VariantLayouts {
+                world,
+                water,
+                world_ray,
+                water_ray,
+                shadow: shadow_pipeline,
+            },
             ray,
-            world_ray,
-            water_ray,
             sky_pipeline,
             cloud_march,
             cloud_march_pipeline,
@@ -769,7 +771,6 @@ impl Layouts {
             stars_pipeline,
             stars_shader,
             sun_glow,
-            shadow_pipeline,
             shaders,
             sky_shader,
             world_shaders: HashMap::new(),
@@ -1101,23 +1102,147 @@ impl Layouts {
         if pipelines.world.contains_key(&(features, pass)) {
             return false;
         }
+        let compiled = compiled(pipelines.target, features, pass);
+        self.world_shader(device, compiled);
+        let pipeline = self.variant_layouts.world_pipeline(
+            device,
+            pipelines.target,
+            &self.world_shaders[&compiled],
+            features,
+            pass,
+        );
+        pipelines.world.insert((features, pass), pipeline);
+        true
+    }
+
+    /// Make the caster pipeline drawing `features` in `pass` (opaque passes
+    /// only select the culling). Casters without an alpha mask write depth
+    /// with no fragment stage. Returns whether it was made now.
+    pub fn prepare_caster(
+        &mut self,
+        device: &wgpu::Device,
+        features: Features,
+        pass: Pass,
+    ) -> bool {
+        let (features, cull_mode) = (features.caster(), ShadowPipelines::cull(pass));
+        if self.shadow.pipelines.contains_key(&(features, cull_mode)) {
+            return false;
+        }
+        let shader = self
+            .shadow_shaders
+            .entry(features)
+            .or_insert_with(|| standard(self.shaders.module(device, Entry::Shadow, features)));
+        let pipeline = self
+            .variant_layouts
+            .caster_pipeline(device, shader, features, cull_mode);
+        self.shadow
+            .pipelines
+            .insert((features, cull_mode), pipeline);
+        true
+    }
+
+    /// Make the ambient occlusion pre-pass pipeline drawing `features` in
+    /// `pass` (an opaque world pass): the caster shader with the world pass's
+    /// culling. Returns whether it was made now.
+    pub fn prepare_prepass(
+        &mut self,
+        device: &wgpu::Device,
+        features: Features,
+        pass: Pass,
+    ) -> bool {
+        self.prepare_depth_only(device, features, pass, 1)
+    }
+
+    /// The pre-pass pipeline at `samples` per pixel, for a view's occluder
+    /// depth (`occlusion.rs`), which samples as its world pass does.
+    pub fn prepare_occluder(
+        &mut self,
+        device: &wgpu::Device,
+        features: Features,
+        pass: Pass,
+        samples: u32,
+    ) -> bool {
+        self.variants.occluder_samples.insert(samples);
+        self.prepare_depth_only(device, features, pass, samples)
+    }
+
+    fn prepare_depth_only(
+        &mut self,
+        device: &wgpu::Device,
+        features: Features,
+        pass: Pass,
+        samples: u32,
+    ) -> bool {
+        let features = features.caster();
+        if self
+            .prepass
+            .pipelines
+            .contains_key(&(features, pass, samples))
+        {
+            return false;
+        }
+        let shader = self
+            .shadow_shaders
+            .entry(features)
+            .or_insert_with(|| standard(self.shaders.module(device, Entry::Shadow, features)));
+        let pipeline = self
+            .variant_layouts
+            .depth_only_pipeline(device, shader, features, pass, samples);
+        self.prepass
+            .pipelines
+            .insert((features, pass, samples), pipeline);
+        true
+    }
+}
+
+/// What `features` compiles as in `pass` on `target`: beside a motion target
+/// the variant writes motion too, and an opaque one the guides beside guide
+/// targets; without one, skinned vertices compile as any others.
+pub(crate) fn compiled(target: ColorTarget, features: Features, pass: Pass) -> Features {
+    let opaque_guides = target.guides && !pass.blends();
+    if target.motion {
+        (features | Features::MOTION).with(Features::GUIDES, opaque_guides)
+    } else {
+        features.without(Features::SKINNED)
+    }
+    .with(Features::RAY_SHADOWS, target.ray_shadows)
+    .with(Features::RAY_GI, target.ray_gi && !pass.blends())
+    .with(Features::RAY_TRACE, target.ray_shadows && pass.blends())
+}
+
+/// The pipeline layouts world, caster and pre-pass pipelines are made with,
+/// and how each is made: by `Layouts` as parts need them, and by the
+/// workers making a product shader's variants (`variants.rs`).
+#[derive(Clone)]
+pub(crate) struct VariantLayouts {
+    world: wgpu::PipelineLayout,
+    /// The world layout for a water material: its group 2 is the opaque
+    /// scene's copy (`water.rs`) rather than the view's occlusion.
+    water: wgpu::PipelineLayout,
+    /// The world and water layouts with the ray scene in group 4; none on a
+    /// device without ray queries.
+    world_ray: Option<wgpu::PipelineLayout>,
+    water_ray: Option<wgpu::PipelineLayout>,
+    /// Shadow casters and the pre-pass: parts, instances, shadow views.
+    shadow: wgpu::PipelineLayout,
+}
+
+impl VariantLayouts {
+    /// The world pipeline drawing `features` in `pass` on `target`, with
+    /// `shader`: the world entry compiled as `compiled` says.
+    pub fn world_pipeline(
+        &self,
+        device: &wgpu::Device,
+        target: ColorTarget,
+        shader: &wgpu::ShaderModule,
+        features: Features,
+        pass: Pass,
+    ) -> wgpu::RenderPipeline {
         // Beside a motion target the variant writes motion too, and an
         // opaque one the guides beside guide targets; without one, skinned
         // vertices compile as any others.
-        let opaque_guides = pipelines.target.guides && !pass.blends();
-        let compiled = if pipelines.target.motion {
-            (features | Features::MOTION).with(Features::GUIDES, opaque_guides)
-        } else {
-            features.without(Features::SKINNED)
-        }
-        .with(Features::RAY_SHADOWS, pipelines.target.ray_shadows)
-        .with(Features::RAY_GI, pipelines.target.ray_gi && !pass.blends())
-        .with(
-            Features::RAY_TRACE,
-            pipelines.target.ray_shadows && pass.blends(),
-        );
-        self.world_shader(device, compiled);
-        let shader = &self.world_shaders[&compiled];
+        let opaque_guides = target.guides && !pass.blends();
+        let compiled = compiled(target, features, pass);
         let (topology, cull_mode, front_face, blend) = match pass {
             Pass::Opaque => (TRIANGLES, BACK, CCW, false),
             Pass::OpaqueMirrored => (TRIANGLES, BACK, CW, false),
@@ -1128,13 +1253,10 @@ impl Layouts {
             Pass::BlendDoubleSided => (TRIANGLES, None, CCW, true),
         };
         let buffers = mesh_buffers(compiled, true);
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu world"),
             layout: Some(
-                match (
-                    features.contains(Features::WATER),
-                    pipelines.target.ray_shadows,
-                ) {
+                match (features.contains(Features::WATER), target.ray_shadows) {
                     (true, false) => &self.water,
                     (false, false) => &self.world,
                     (true, true) => self.water_ray.as_ref().expect("a ray device's layout"),
@@ -1160,16 +1282,16 @@ impl Layouts {
                 stencil: Default::default(),
                 bias: Default::default(),
             }),
-            multisample: pipelines.target.multisample(),
+            multisample: target.multisample(),
             fragment: Some(wgpu::FragmentState {
                 module: shader,
                 // Opaque passes cover their pixel (`finish.rs`).
                 entry_point: Some(if blend { "fs_world" } else { "fs_world_opaque" }),
                 compilation_options: Default::default(),
                 targets: &guided(
-                    pipelines.target.targets(
+                    target.targets(
                         wgpu::ColorTargetState {
-                            format: pipelines.target.format,
+                            format: target.format,
                             blend: blend.then_some(wgpu::BlendState::ALPHA_BLENDING),
                             write_mask: wgpu::ColorWrites::ALL,
                         },
@@ -1186,32 +1308,23 @@ impl Layouts {
             }),
             multiview_mask: None,
             cache: None,
-        });
-        pipelines.world.insert((features, pass), pipeline);
-        true
+        })
     }
 
-    /// Make the caster pipeline drawing `features` in `pass` (opaque passes
-    /// only select the culling). Casters without an alpha mask write depth
-    /// with no fragment stage. Returns whether it was made now.
-    pub fn prepare_caster(
-        &mut self,
+    /// The caster pipeline drawing caster features `features` with
+    /// `cull_mode`, with `shader` (the caster entry). Casters without an
+    /// alpha mask write depth with no fragment stage.
+    pub fn caster_pipeline(
+        &self,
         device: &wgpu::Device,
+        shader: &wgpu::ShaderModule,
         features: Features,
-        pass: Pass,
-    ) -> bool {
-        let (features, cull_mode) = (features.caster(), ShadowPipelines::cull(pass));
-        if self.shadow.pipelines.contains_key(&(features, cull_mode)) {
-            return false;
-        }
-        let shader = self
-            .shadow_shaders
-            .entry(features)
-            .or_insert_with(|| standard(self.shaders.module(device, Entry::Shadow, features)));
+        cull_mode: Option<wgpu::Face>,
+    ) -> wgpu::RenderPipeline {
         let buffers = mesh_buffers(features, false);
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu shadow"),
-            layout: Some(&self.shadow_pipeline),
+            layout: Some(&self.shadow),
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some("vs_shadow"),
@@ -1246,65 +1359,28 @@ impl Layouts {
             }),
             multiview_mask: None,
             cache: None,
-        });
-        self.shadow
-            .pipelines
-            .insert((features, cull_mode), pipeline);
-        true
+        })
     }
 
-    /// Make the ambient occlusion pre-pass pipeline drawing `features` in
-    /// `pass` (an opaque world pass): the caster shader with the world pass's
-    /// culling. Returns whether it was made now.
-    pub fn prepare_prepass(
-        &mut self,
+    /// The pre-pass pipeline drawing caster features `features` in `pass`
+    /// at `samples` per pixel, with `shader` (the caster entry).
+    pub fn depth_only_pipeline(
+        &self,
         device: &wgpu::Device,
-        features: Features,
-        pass: Pass,
-    ) -> bool {
-        self.prepare_depth_only(device, features, pass, 1)
-    }
-
-    /// The pre-pass pipeline at `samples` per pixel, for a view's occluder
-    /// depth (`occlusion.rs`), which samples as its world pass does.
-    pub fn prepare_occluder(
-        &mut self,
-        device: &wgpu::Device,
+        shader: &wgpu::ShaderModule,
         features: Features,
         pass: Pass,
         samples: u32,
-    ) -> bool {
-        self.prepare_depth_only(device, features, pass, samples)
-    }
-
-    fn prepare_depth_only(
-        &mut self,
-        device: &wgpu::Device,
-        features: Features,
-        pass: Pass,
-        samples: u32,
-    ) -> bool {
-        let features = features.caster();
-        if self
-            .prepass
-            .pipelines
-            .contains_key(&(features, pass, samples))
-        {
-            return false;
-        }
-        let shader = self
-            .shadow_shaders
-            .entry(features)
-            .or_insert_with(|| standard(self.shaders.module(device, Entry::Shadow, features)));
+    ) -> wgpu::RenderPipeline {
         let (cull_mode, front_face) = match pass {
             Pass::OpaqueMirrored | Pass::BlendMirrored => (BACK, CW),
             Pass::OpaqueDoubleSided | Pass::BlendDoubleSided | Pass::Lines => (None, CCW),
             Pass::Opaque | Pass::Blend => (BACK, CCW),
         };
         let buffers = mesh_buffers(features, false);
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("render-wgpu ambient occlusion pre-pass"),
-            layout: Some(&self.shadow_pipeline),
+            layout: Some(&self.shadow),
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some("vs_shadow"),
@@ -1335,11 +1411,7 @@ impl Layouts {
             }),
             multiview_mask: None,
             cache: None,
-        });
-        self.prepass
-            .pipelines
-            .insert((features, pass, samples), pipeline);
-        true
+        })
     }
 }
 

@@ -930,10 +930,22 @@ fn shade(surface: Surface) -> vec4<f32> {
   A normal rebuilt in `shade` from `dpdx`/`dpdy` of the world position is
   one per triangle, so it shows the mesh's facets. The shadow pass needs no
   normal and does not call it; without it, the mesh's normal shades.
-- **Checked when opened.** `OpenResource` checks the keywords and composes
-  the shader (and its caster stage) with the standard modules, refusing an
-  error with `CSHARP_SHADER`, naming the file, line and column. A product
-  shader draws in blended passes too.
+- **Compiled off the update.** `OpenResource` only reads a shader: it
+  refuses one that is not UTF-8 or has a malformed keyword with
+  `CSHARP_SHADER`, and costs what opening any small file costs. The renderer
+  composes the shader with the standard modules, and makes its pipelines, on
+  its workers once a material uses it, from when the call creating the
+  material ends; a keyword variant is compiled the same way. Whatever draws
+  with the material draws nothing until it is taken in at the start of a
+  later call, usually a few frames on (seconds with a cold driver shader
+  cache), so the window, the stream and a capture show it from the same
+  frame. The material's call joins a [preparation
+  batch](csharp-product-project.md#deferred-textures-and-meshes), so
+  `ReadResourcePreparation` says when it draws, and making a material before
+  anything draws with it compiles the shader ahead. A shader that does not
+  compose counts as failed there, its materials draw with the standard shade
+  stage, and the renderer's skipped ops name its file, line and column. A
+  product shader draws in blended passes too.
 - **Lifetime.** A shader resource is held while a material uses it. Under
   `rusty dev`, an edited loose `.wgsl` restarts the runtime and is checked
   again; the stream and the window draw it alike.
@@ -2068,8 +2080,8 @@ of the output's size beside the output, 4 bytes a pixel (14.7 MB at
 While an effect is set, each primary view draws into a picture of its own,
 and one full-screen pass runs the effect into the view, timed as
 `image-effect`. `Shader` handle 0 removes the effect, and the views draw
-straight into the target again. A shader that does not compose is
-refused when it is opened, with its file and line. A shader may define both
+straight into the target again. A shader that does not compose leaves the
+effect off, and the renderer's skipped ops name its file and line. A shader may define both
 `shade` and `image_effect`.
 
 ## Fixture

@@ -225,9 +225,10 @@ impl CsharpRenderResource {
         })
     }
 
-    /// A product shader: UTF-8 WGSL that composes with the standard shader
-    /// family (render-shaders), checked now so its error names the content
-    /// file and line.
+    /// A product shader: UTF-8 WGSL with well-formed keywords. It is
+    /// composed with the standard shader family where it draws: on the
+    /// renderer's workers, when a material uses it, whose error names the
+    /// content file and line (render-wgpu's variant preparation).
     fn admit_shader(
         path: String,
         relative_path: &str,
@@ -235,14 +236,16 @@ impl CsharpRenderResource {
         content_hash: String,
         keywords: &[String],
     ) -> Result<Self, CsharpEngineServicesError> {
-        let source = std::str::from_utf8(&bytes).map_err(|_| {
+        std::str::from_utf8(&bytes).map_err(|_| {
             CsharpEngineServicesError::new(
                 "CSHARP_SHADER",
                 format!("shader `{relative_path}` is not UTF-8 text"),
             )
         })?;
-        render_shaders::check_product_shader(relative_path, source, keywords)
-            .map_err(|error| CsharpEngineServicesError::new("CSHARP_SHADER", error))?;
+        for keyword in keywords {
+            render_shaders::check_keyword(keyword)
+                .map_err(|error| CsharpEngineServicesError::new("CSHARP_SHADER", error))?;
+        }
         // Each keyword set is its own variant, so its own resource.
         let identity = format!(
             "shader/{}{}",

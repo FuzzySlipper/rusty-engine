@@ -667,7 +667,7 @@ impl ProductShader {
             .iter()
             .map(|keyword| (keyword.clone(), ShaderDefValue::Bool(true)))
             .collect();
-        let Ok(output) = Preprocessor::default().preprocess(&code.join("\n"), &defs) else {
+        let Ok(output) = PREPROCESSOR.preprocess(&code.join("\n"), &defs) else {
             return false;
         };
         let tokens: Vec<_> = Tokenizer::new(&output.preprocessed_source, false).collect();
@@ -679,6 +679,11 @@ impl ProductShader {
 
 /// A keyword is an upper-case shader def name the standard family does not
 /// use: `[A-Z_][A-Z0-9_]*`.
+/// naga_oil's preprocessor, made once: making one compiles its patterns,
+/// which cost milliseconds each time a stage was looked for.
+static PREPROCESSOR: std::sync::LazyLock<Preprocessor> =
+    std::sync::LazyLock::new(Preprocessor::default);
+
 pub fn check_keyword(keyword: &str) -> Result<(), String> {
     let mut characters = keyword.chars();
     let valid = characters
@@ -696,6 +701,14 @@ pub fn check_keyword(keyword: &str) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+/// What a family composes beside the standard modules: whatever a device
+/// can bind (`Shaders::without_decals`, `Shaders::without_scene_color`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Composing {
+    pub decals: bool,
+    pub scene_color: bool,
 }
 
 pub struct Shaders {
@@ -758,6 +771,31 @@ impl Shaders {
     pub fn without_scene_color(mut self) -> Self {
         self.scene_color = false;
         self
+    }
+
+    /// What this family composes beside the standard modules.
+    pub fn composing(&self) -> Composing {
+        Composing {
+            decals: self.decals,
+            scene_color: self.scene_color,
+        }
+    }
+
+    /// A new family composing as `composing`, with no product shaders: one
+    /// a worker composes with (render-wgpu's variant preparation).
+    pub fn composing_as(composing: Composing) -> Self {
+        let mut shaders = Self::new();
+        shaders.decals = composing.decals;
+        shaders.scene_color = composing.scene_color;
+        shaders
+    }
+
+    /// The product shader `product` (a `Features::product` id) names.
+    pub fn product_shader(&self, product: u32) -> Option<&ProductShader> {
+        let index = (product & !PRODUCT_FLAGS) as usize;
+        index
+            .checked_sub(1)
+            .and_then(|index| self.products.get(index))
     }
 
     /// The id `Features::with_product` takes for `shader`: the same id for
@@ -839,43 +877,41 @@ impl Shaders {
     }
 }
 
-/// Check a product shader before it is admitted: its keywords, and that it
-/// composes where it will run. A material shader (`fn shade`) composes into
-/// the world pass (and the shadow pass, if it defines a caster) with the
-/// standard features a plain material has; an image effect
-/// (`fn image_effect`) composes into the image effect pass. A shader that
-/// defines neither is checked as a material shader. The error names its file
-/// and line.
-pub fn check_product_shader(path: &str, source: &str, keywords: &[String]) -> Result<(), String> {
-    for keyword in keywords {
-        check_keyword(keyword)?;
-    }
-    let mut shaders = Shaders::new();
-    let shader = ProductShader {
-        path: path.to_string(),
-        source: source.to_string(),
-        keywords: keywords.to_vec(),
-    };
-    let effect = shader.defines("image_effect");
-    let shades = shader.defines("shade");
-    let product = shaders.product(shader);
-    let features = Features::default().with_product(product);
-    if effect {
-        shaders.compose(Entry::ImageEffect, features)?;
-        if !shades {
-            return Ok(());
-        }
-    }
-    shaders.compose(Entry::World, features)?;
-    if features.caster().product() != 0 {
-        shaders.compose(Entry::Shadow, features.caster())?;
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A product shader's keywords, and that it composes where it will
+    /// run: a material shader (`fn shade`) into the world pass (and the
+    /// shadow pass, if it defines a caster), an image effect
+    /// (`fn image_effect`) into the image effect pass; one that defines
+    /// neither as a material shader. The error names its file and line.
+    fn check_product_shader(path: &str, source: &str, keywords: &[String]) -> Result<(), String> {
+        for keyword in keywords {
+            check_keyword(keyword)?;
+        }
+        let mut shaders = Shaders::new();
+        let shader = ProductShader {
+            path: path.to_string(),
+            source: source.to_string(),
+            keywords: keywords.to_vec(),
+        };
+        let effect = shader.defines("image_effect");
+        let shades = shader.defines("shade");
+        let product = shaders.product(shader);
+        let features = Features::default().with_product(product);
+        if effect {
+            shaders.compose(Entry::ImageEffect, features)?;
+            if !shades {
+                return Ok(());
+            }
+        }
+        shaders.compose(Entry::World, features)?;
+        if features.caster().product() != 0 {
+            shaders.compose(Entry::Shadow, features.caster())?;
+        }
+        Ok(())
+    }
     use std::collections::HashSet;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

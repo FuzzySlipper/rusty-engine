@@ -1338,15 +1338,26 @@ impl Renderer {
             NodeKind::Group | NodeKind::Light(_) | NodeKind::Sprite(_) | NodeKind::PartsRig(_) => {}
         }
         // A node draws nothing while a texture one of its materials samples
-        // is being prepared (`prepare.rs`): the material is defined again
-        // when it is taken in, which rebuilds the node.
+        // is being prepared, or its product shader's variant made
+        // (`prepare.rs`): the material is defined again, or its users
+        // rebuilt, when it is taken in, which rebuilds the node.
         let preparation = &self.preparation;
+        let wanted = crate::variants::Wanted::Material;
         let waits = !preparation.is_idle()
             && parts.iter().any(|(part, _)| match part.material {
                 MaterialRef::Retained(id) => materials.get(id).is_some_and(|row| {
                     row.descriptor
                         .textures()
                         .any(|texture| preparation.pending(texture))
+                        || (row.features.product() != 0
+                            && preparation.pending(&variant_id(
+                                row.features,
+                                material_passes(
+                                    blends(&row.descriptor),
+                                    row.descriptor.double_sided,
+                                ),
+                                wanted,
+                            )))
                 }),
                 _ => false,
             });
@@ -1364,6 +1375,7 @@ impl Renderer {
         // copy reaches from its origin.
         let mut scattered_bounds: Vec<(MeshRef, Aabb)> = Vec::new();
         let mut copy_radius: f32 = 0.0;
+        let mut waiting = false;
         for (index, (mut part, mut row)) in parts.into_iter().enumerate() {
             if let MeshRef::Builtin(kind) = part.mesh {
                 part.index_count = self.builtins[&kind].groups[0].2;
@@ -1450,13 +1462,26 @@ impl Renderer {
                 lines: part.wireframe || mesh.topology == Topology::Lines,
                 features,
             };
+            // A part drawing a product shader's variant not yet made waits
+            // for it, and the whole node with it (below).
+            let selected = part_levels.get(index).is_some() && self.tables.parts.selecting;
+            let selected_class = PartClass {
+                features: class.features | Features::SCATTER_SELECTED,
+                ..class
+            };
+            let ready = self.part_variant_ready(class);
+            // Both asked for, so both are made at once.
+            let selected_ready = !selected || self.part_variant_ready(selected_class);
+            if !(ready && selected_ready) {
+                waiting = true;
+            }
+            if waiting {
+                continue;
+            }
             self.prepare_part(class);
-            if part_levels.get(index).is_some() && self.tables.parts.selecting {
+            if selected {
                 // Its selected copies draw with their own pipelines.
-                self.prepare_part(PartClass {
-                    features: class.features | Features::SCATTER_SELECTED,
-                    ..class
-                });
+                self.prepare_part(selected_class);
             }
             let id = self
                 .tables
@@ -1481,6 +1506,14 @@ impl Renderer {
             }
             self.tables.parts.write(id, &world, shown, layer, casts);
             ids.push(id);
+        }
+        // Rebuilt when a variant is taken in (`install_prepared`).
+        if waiting {
+            for id in ids.drain(..) {
+                self.tables.parts.remove(id);
+            }
+            scattered = None;
+            self.waiting_for_variants.insert(handle);
         }
         if scattered.is_some() {
             // A patch is refused whole: when one part's rows did not fit,
@@ -1697,15 +1730,17 @@ impl Renderer {
         self.preparation.readout()
     }
 
-    /// Take in the deferred textures and meshes workers have prepared, at
-    /// the start of a committed call. Returns those that failed.
+    /// Take in the deferred textures and meshes, and the product shader
+    /// variants, workers have prepared, at the start of a committed call.
+    /// Returns those that failed.
     pub fn take_prepared(&mut self) -> Vec<ApplyIssue> {
         self.install_prepared(false)
     }
 
-    /// Wait for every deferred texture and mesh being prepared and take
-    /// them in: what a reading that must show the whole committed scene
-    /// does first (a snapshot, an offline render).
+    /// Wait for every deferred texture and mesh and product shader variant
+    /// being prepared, and those taking them in asks for, and take them in:
+    /// what a reading that must show the whole committed scene does first
+    /// (a snapshot, an offline render).
     pub fn settle_prepared(&mut self) -> Vec<ApplyIssue> {
         self.install_prepared(true)
     }
@@ -1714,7 +1749,34 @@ impl Renderer {
     /// everything being prepared. Returns the definitions that failed.
     fn install_prepared(&mut self, wait: bool) -> Vec<ApplyIssue> {
         let mut issues = Vec::new();
-        for (definition, result) in self.preparation.take_finished(wait) {
+        // Taking a variant in can ask for more (a material's, then its
+        // parts'): waiting waits for those too.
+        loop {
+            let finished = self.preparation.take_finished(wait);
+            let took = !finished.is_empty();
+            let mut variants = false;
+            self.install_finished(finished, &mut issues, &mut variants);
+            if variants {
+                for handle in std::mem::take(&mut self.waiting_for_variants) {
+                    self.rebuild_parts(handle);
+                }
+            }
+            if !wait || !took || self.preparation.is_idle() {
+                return issues;
+            }
+        }
+    }
+
+    fn install_finished(
+        &mut self,
+        finished: Vec<(
+            crate::prepare::Definition,
+            Result<crate::prepare::Prepared, String>,
+        )>,
+        issues: &mut Vec<ApplyIssue>,
+        variants: &mut bool,
+    ) {
+        for (definition, result) in finished {
             match (definition, result) {
                 (
                     crate::prepare::Definition::Texture(texture),
@@ -1734,16 +1796,36 @@ impl Renderer {
                         });
                     }
                 }
+                (
+                    crate::prepare::Definition::Variant { features, wanted },
+                    Ok(crate::prepare::Prepared::Variant(mut made)),
+                ) => {
+                    *variants = true;
+                    let errors = std::mem::take(&mut made.errors);
+                    self.layouts.install_variant(&mut self.pipelines, *made);
+                    for detail in &errors {
+                        issues.push(ApplyIssue {
+                            op: "defineMaterial",
+                            detail: detail.clone(),
+                        });
+                    }
+                    if wanted == crate::variants::Wanted::Material {
+                        if let Some(error) = errors.first() {
+                            self.failed_variants.insert(features, error.clone());
+                        }
+                        self.material_variant_made(features, !errors.is_empty());
+                    }
+                }
                 (definition, result) => issues.push(ApplyIssue {
                     op: match definition {
                         crate::prepare::Definition::Texture(_) => "defineTexture",
                         crate::prepare::Definition::Mesh(_) => "defineStaticMesh",
+                        crate::prepare::Definition::Variant { .. } => "defineMaterial",
                     },
                     detail: result.err().unwrap_or_default(),
                 }),
             }
         }
-        issues
     }
 
     fn define_material(&mut self, descriptor: RenderMaterialDescriptor) -> Result<(), String> {
@@ -2004,6 +2086,12 @@ impl Renderer {
             None => 0,
         };
         let mut features = features.with_product(product);
+        // A product shader that did not compose where it was made draws with
+        // the standard shade stage (`material_variant_made`).
+        if let Some(failed) = self.failed_variants.get(&features) {
+            error = Some(failed.clone());
+            features = features.with_product(0);
+        }
         self.prepare_material(features, blends(&descriptor), descriptor.double_sided);
         let composed = self.layouts.shader_errors.drain(..).next();
         if let Some(composed) = composed {
@@ -2047,12 +2135,12 @@ impl Renderer {
     /// far and for the shadow casters, so its first draw does not compile
     /// them.
     pub(crate) fn prepare_material(&mut self, features: Features, blend: bool, double_sided: bool) {
-        let passes: &[Pass] = match (blend, double_sided) {
-            (false, false) => &[Pass::Opaque, Pass::OpaqueMirrored],
-            (false, true) => &[Pass::OpaqueDoubleSided],
-            (true, false) => &[Pass::Blend, Pass::BlendMirrored],
-            (true, true) => &[Pass::BlendDoubleSided],
-        };
+        let passes = material_passes(blend, double_sided);
+        // A product shader's are made on the workers (`variants.rs`).
+        if features.product() != 0 {
+            self.request_variant(features, passes, crate::variants::Wanted::Material);
+            return;
+        }
         let device = &self.gpu.device;
         // Compiled even before any target exists, so a product shader's
         // error is known when its material is defined.
@@ -2065,6 +2153,81 @@ impl Renderer {
                 self.layouts.prepare_caster(device, features, pass);
             }
         }
+    }
+
+    /// Ask the workers to make what drawing `features` (a product shader's)
+    /// in `passes` needs and is not made yet (`variants.rs`). Whether
+    /// everything is made, so it draws.
+    fn request_variant(
+        &mut self,
+        features: Features,
+        passes: &[Pass],
+        wanted: crate::variants::Wanted,
+    ) -> bool {
+        let id = variant_id(features, passes, wanted);
+        if self.preparation.pending(&id) {
+            return false;
+        }
+        let Some(work) = self.layouts.variant_work(
+            &self.pipelines,
+            features,
+            passes,
+            wanted,
+            self.options.shadows,
+        ) else {
+            return true;
+        };
+        let device = self.gpu.device.clone();
+        self.preparation.start(
+            id,
+            crate::prepare::Definition::Variant { features, wanted },
+            Box::new(move || {
+                Ok(crate::prepare::Prepared::Variant(Box::new(
+                    work.make(&device),
+                )))
+            }),
+        );
+        false
+    }
+
+    /// Whether a part of `class` draws now: a product shader's variant it
+    /// draws with is made, or is asked for and it waits.
+    fn part_variant_ready(&mut self, class: PartClass) -> bool {
+        if class.features.product() == 0 {
+            return true;
+        }
+        let mut passes = vec![Pass::of(class, false), Pass::of(class, true)];
+        passes.dedup();
+        self.request_variant(class.features, &passes, crate::variants::Wanted::Part)
+    }
+
+    /// A product shader variant materials with `features` asked for was
+    /// taken in: what draws them draws, with the standard shade stage if
+    /// the shader did not compose (`insert_material`).
+    fn material_variant_made(&mut self, features: Features, failed: bool) {
+        let made: Vec<RenderMaterialDescriptor> = self
+            .tables
+            .materials
+            .values()
+            .filter(|row| row.features == features)
+            .map(|row| row.descriptor.clone())
+            .collect();
+        let made: Vec<_> = made
+            .into_iter()
+            .filter(|descriptor| !self.is_layer_variant(&descriptor.id))
+            .collect();
+        if failed {
+            for descriptor in made {
+                // Its error was reported as the variant was taken in.
+                let _ = self.define_material(descriptor);
+            }
+            return;
+        }
+        let ids: Vec<u32> = made
+            .iter()
+            .filter_map(|descriptor| self.tables.names.get(&descriptor.id))
+            .collect();
+        self.rebuild_users(&ids);
     }
 
     /// A material's bind group and the features its variant compiles, its
@@ -2906,6 +3069,22 @@ impl MaterialParams {
 }
 
 /// Whether a retained material draws alpha-blended.
+/// The passes a material draws in.
+pub(crate) fn material_passes(blend: bool, double_sided: bool) -> &'static [Pass] {
+    match (blend, double_sided) {
+        (false, false) => &[Pass::Opaque, Pass::OpaqueMirrored],
+        (false, true) => &[Pass::OpaqueDoubleSided],
+        (true, false) => &[Pass::Blend, Pass::BlendMirrored],
+        (true, true) => &[Pass::BlendDoubleSided],
+    }
+}
+
+/// What a product shader variant is prepared as (`prepare.rs`): one for
+/// each feature set, passes and use.
+fn variant_id(features: Features, passes: &[Pass], wanted: crate::variants::Wanted) -> String {
+    format!("variant {features:?} {passes:?} {wanted:?}")
+}
+
 pub(crate) fn blends(descriptor: &RenderMaterialDescriptor) -> bool {
     match &descriptor.voxel_surface {
         Some(surface) => surface.alpha_mode == VoxelSurfaceAlphaModeDescriptor::Blend,

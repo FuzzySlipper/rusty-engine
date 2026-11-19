@@ -77,6 +77,11 @@ impl Resources {
 }
 
 pub struct Harness {
+    /// Applying waits for what the workers prepare (`Renderer::
+    /// settle_prepared`), as a snapshot does, so what is drawn next draws
+    /// it: a product shader's variants among it. Tests of the waiting itself
+    /// turn it off.
+    pub settle: bool,
     pub gpu: Gpu,
     pub world: PresentationWorld,
     pub renderer: Renderer,
@@ -119,6 +124,7 @@ impl Harness {
     /// A harness on its own device: one a test binary makes once.
     pub fn on(gpu: Gpu, options: RendererOptions) -> Self {
         Self {
+            settle: true,
             renderer: Renderer::new(&gpu, options),
             target: OffscreenTarget::new(&gpu, WIDTH, HEIGHT, 4),
             world: PresentationWorld::default(),
@@ -142,7 +148,10 @@ impl Harness {
             .world
             .apply(frame)
             .expect("retained model admits the fixture");
-        let issues = self.renderer.apply(&delta, &self.resources);
+        let mut issues = self.renderer.apply(&delta, &self.resources);
+        if self.settle {
+            issues.extend(self.renderer.settle_prepared());
+        }
         assert!(
             issues.is_empty(),
             "renderer skipped fixture ops: {issues:?}"
@@ -159,9 +168,12 @@ impl Harness {
             .world
             .apply_presentation(frame)
             .expect("retained model admits the fixture");
-        let issues = self
+        let mut issues = self
             .renderer
             .apply_presentation(&delta, &self.resources, &|_| None);
+        if self.settle {
+            issues.extend(self.renderer.settle_prepared());
+        }
         self.settle_poses();
         issues
     }
@@ -208,7 +220,8 @@ impl Harness {
     /// must draw too.
     pub fn render_fresh(&self, camera: &RendererCompositionCamera) -> (FrameStats, Vec<u8>) {
         let mut renderer = Renderer::new(&self.gpu, self.renderer.options());
-        let issues = renderer.apply(&self.world.snapshot().frame, &self.resources);
+        let mut issues = renderer.apply(&self.world.snapshot().frame, &self.resources);
+        issues.extend(renderer.settle_prepared());
         assert!(issues.is_empty(), "the snapshot applies: {issues:?}");
         let stats = renderer.render_offscreen(camera, &self.target);
         (stats, self.target.read_rgba(&self.gpu))

@@ -1597,6 +1597,25 @@ pub(crate) struct RuntimeAppearanceCall {
     preparation_batched: bool,
 }
 
+impl RuntimeAppearanceCall {
+    /// This call's work the renderer prepares on its workers forms its
+    /// preparation batch.
+    fn join_preparation_batch(&mut self) {
+        if !self.preparation_batched {
+            self.preparation_batched = true;
+            self.state.preparation_batch += 1;
+        }
+    }
+
+    /// A material shaded by a product shader: the renderer compiles the
+    /// shader's variants on its workers, with this call's batch, from when
+    /// the call ends, whether or not anything draws the material yet.
+    fn compile_product_shader(&mut self) {
+        self.join_preparation_batch();
+        self.reconcile_resources = true;
+    }
+}
+
 #[derive(Clone)]
 pub(crate) enum RuntimeAppearanceCallOutput {
     Frame(render_model::RenderFrameDiff),
@@ -3882,10 +3901,14 @@ impl RuntimeAppearanceBridge {
         for texture in built.textures {
             retain_texture_descriptor(&mut resources.textures, texture);
         }
+        let shaded = built.shader.is_some();
         if let Some(shader) = built.shader {
             retain_shader_descriptor(&mut resources.shaders, shader);
         }
         resources.materials.push(built.descriptor);
+        if shaded {
+            staged.compile_product_shader();
+        }
         staged.state.materials.insert(handle, id);
         staged.state.set_held(Holder::Material, handle, built.held);
         NativeMaterialHandle { value: handle }
@@ -4150,6 +4173,7 @@ impl RuntimeAppearanceBridge {
         for texture in textures {
             retain_texture_descriptor(&mut resources.textures, texture);
         }
+        let shaded = shader.is_some();
         if let Some((_, shader)) = shader {
             retain_shader_descriptor(&mut resources.shaders, shader);
         }
@@ -4157,6 +4181,9 @@ impl RuntimeAppearanceBridge {
             CsharpEngineServicesError::new("CSHARP_MATERIAL", "material catalog drifted")
         })?;
         *material = descriptor;
+        if shaded {
+            staged.compile_product_shader();
+        }
         staged.state.set_held(
             Holder::Material,
             request.material.value,
@@ -4853,11 +4880,7 @@ impl RuntimeAppearanceBridge {
 
     /// This call's deferred textures and meshes form its preparation batch.
     pub(crate) fn join_preparation_batch(&mut self) -> Result<(), CsharpEngineServicesError> {
-        let call = self.staged_mut()?;
-        if !call.preparation_batched {
-            call.preparation_batched = true;
-            call.state.preparation_batch += 1;
-        }
+        self.staged_mut()?.join_preparation_batch();
         Ok(())
     }
 
@@ -14345,7 +14368,7 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn product_shaders_are_checked_when_opened_and_retained_with_their_materials() {
+    fn product_shaders_open_without_composing_and_are_retained_with_their_materials() {
         const TINT: &str = "#import rusty::types::Surface
 #import rusty::material::material
 #import rusty::shade::standard_shade
@@ -14366,17 +14389,22 @@ fn shade(surface: Surface) -> vec4<f32> {
                     .as_bytes(),
             ),
         );
+        content.insert(
+            "shaders/binary.wgsl".to_owned(),
+            crate::ContentBytes::from(&[0xff_u8, 0xfe, 0x00][..]),
+        );
         let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content);
         bridge.begin_call();
-        let refused = bridge
+        // Composed where it draws, by the renderer, which names the file and
+        // line of an error; opening it only reads it.
+        let broken = bridge
             .open_resource(&resource_request("shaders/broken.wgsl"))
+            .unwrap();
+        assert_eq!(broken.kind, NativeRenderResourceKind::Shader);
+        let refused = bridge
+            .open_resource(&resource_request("shaders/binary.wgsl"))
             .unwrap_err();
         assert_eq!(refused.code(), "CSHARP_SHADER");
-        assert!(
-            refused.detail().contains("shaders/broken.wgsl:6:"),
-            "{}",
-            refused.detail()
-        );
         let shader = bridge
             .open_resource(&resource_request("shaders/tint.wgsl"))
             .unwrap();
@@ -14441,6 +14469,10 @@ fn shade(surface: Surface) -> vec4<f32> {
             );
         }
         let material = bridge.create_material(request(2.5)).unwrap();
+        // Its shader compiles with this call's batch once the call ends,
+        // whether or not anything draws it yet.
+        assert_eq!(bridge.preparation_batch(), 1);
+        assert!(bridge.staged_ref().unwrap().reconcile_resources);
         let resources = bridge.staged_ref().unwrap().state.projector.resources();
         let descriptor = resources.materials.last().unwrap();
         let used = descriptor

@@ -116,7 +116,10 @@ impl Harness {
                 ops,
             })
             .expect("retained model admits the fixture");
-        let issues = self.renderer.apply(&delta, &self.resources);
+        // What the workers prepare (a product shader's variants) is
+        // waited for, as a snapshot waits, so what is drawn next draws it.
+        let mut issues = self.renderer.apply(&delta, &self.resources);
+        issues.extend(self.renderer.settle_prepared());
         assert!(
             issues.is_empty(),
             "renderer skipped fixture ops: {issues:?}"

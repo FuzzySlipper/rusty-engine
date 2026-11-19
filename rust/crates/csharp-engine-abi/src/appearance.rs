@@ -430,7 +430,17 @@ pub enum NativeTextureColorSpace {
     Linear = 1,
 }
 
-/// One admitted immutable renderer resource selected by its product content path.
+/// One admitted immutable renderer resource selected by its product content
+/// path. A shader (`.wgsl`) is read when it is opened, not compiled: opening one
+/// checks only that it is UTF-8 and its keywords. The renderer compiles it on
+/// its workers once a material uses it, from when the call creating that
+/// material ends, and what draws with the material draws nothing until the
+/// compiled shader is taken in, a few frames later. That call's preparation
+/// batch (`NativeResourcePreparationReadout`) says when; a material made
+/// before anything draws with it compiles the shader ahead. A shader that
+/// does not compose counts as failed there, its materials draw with the
+/// standard shade stage, and the renderer's skipped ops name its file and
+/// line.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeRenderResourceRequest {
@@ -1240,7 +1250,9 @@ pub struct NativeRenderResourceContentRequest {
     pub shader_keywords: NativeUtf8Slice,
     /// A texture is decoded and uploaded off the update, and what samples
     /// it draws once it is ready: it joins this call's preparation batch
-    /// (`NativeResourcePreparationReadout`). Ignored for other resources.
+    /// (`NativeResourcePreparationReadout`). Ignored for other resources; a
+    /// shader is always compiled off the update
+    /// (`NativeRenderResourceRequest`).
     pub deferred: bool,
 }
 
@@ -1262,9 +1274,10 @@ pub struct NativeStaticMeshContentReferenceRequest {
     pub deferred: bool,
 }
 
-/// How far the textures and meshes opened `deferred` are. Each product call
-/// that opens any is a batch, numbered in order; a batch is drawn once every
-/// texture and mesh in it is prepared and taken in, which happens at the
+/// How far the textures and meshes opened `deferred`, and the product
+/// shaders of the materials made, are. Each product call that opens or makes
+/// any is a batch, numbered in order; a batch is drawn once every texture,
+/// mesh and shader in it is prepared and taken in, which happens at the
 /// start of a later call, so every reading of the scene shows it from then
 /// on. Until then what draws them draws nothing.
 #[repr(C)]
@@ -1275,12 +1288,14 @@ pub struct NativeResourcePreparationReadout {
     /// The latest batch: this call's, once it has opened a deferred
     /// resource. 0 before any.
     pub last_batch: u64,
-    /// Deferred textures and meshes the renderer has not yet taken in, as
-    /// of this call's start.
+    /// Deferred textures and meshes, and shader compiles, the renderer has
+    /// not yet taken in, as of this call's start.
     pub pending_resources: u32,
-    /// Deferred textures and meshes that could not be prepared; the
-    /// renderer's skipped ops say why. What draws them draws as for a
-    /// resource the renderer could not realize.
+    /// Deferred textures and meshes that could not be prepared, and shader
+    /// compiles that did not compose; the renderer's skipped ops say why.
+    /// What draws them draws as for a resource the renderer could not
+    /// realize, and a material whose shader did not compose with the
+    /// standard shade stage.
     pub failed_resources: u64,
 }
 

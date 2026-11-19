@@ -1,6 +1,6 @@
 //! The standard shader family (`render-shaders`) as wgpu shader modules.
 
-pub(crate) use render_shaders::{Entry, Features, ProductShader};
+pub(crate) use render_shaders::{Composing, Entry, Features, ProductShader};
 
 pub(crate) struct Shaders(render_shaders::Shaders);
 
@@ -18,6 +18,22 @@ impl Shaders {
     /// (`render_shaders::Shaders::without_scene_color`).
     pub fn without_scene_color(self) -> Self {
         Self(self.0.without_scene_color())
+    }
+
+    /// What it composes beside the standard modules.
+    pub fn composing(&self) -> Composing {
+        self.0.composing()
+    }
+
+    /// A new family composing as `composing`
+    /// (`render_shaders::Shaders::composing_as`).
+    pub fn composing_as(composing: Composing) -> Self {
+        Self(render_shaders::Shaders::composing_as(composing))
+    }
+
+    /// The product shader a `Features::product` id names.
+    pub fn product_shader(&self, product: u32) -> Option<&ProductShader> {
+        self.0.product_shader(product)
     }
 
     /// The id a material shaded by `shader` adds to its features.

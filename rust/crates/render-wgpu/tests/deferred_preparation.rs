@@ -60,6 +60,7 @@ fn reddish(pixel: [u8; 4]) -> bool {
 fn a_deferred_texture_and_mesh_draw_once_taken_in_and_every_batch_completes() {
     for (deferred_texture, deferred_mesh) in [(true, false), (false, true), (true, true)] {
         let mut harness = Harness::new(RendererOptions::default());
+        harness.settle = false;
         harness.renderer.set_preparation_batch(1);
         let ops = textured_box(&mut harness, deferred_texture, deferred_mesh);
         harness.apply(ops);
@@ -111,6 +112,7 @@ fn a_deferred_texture_and_mesh_draw_once_taken_in_and_every_batch_completes() {
 #[test]
 fn a_released_or_redefined_definition_drops_what_was_being_prepared() {
     let mut harness = Harness::new(RendererOptions::default());
+    harness.settle = false;
     harness.renderer.set_preparation_batch(1);
     let ops = textured_box(&mut harness, true, true);
     harness.apply(ops);
@@ -140,6 +142,7 @@ fn a_released_or_redefined_definition_drops_what_was_being_prepared() {
 #[test]
 fn a_batch_completes_only_when_its_last_resource_is_taken_in() {
     let mut harness = Harness::new(RendererOptions::default());
+    harness.settle = false;
     harness.renderer.set_preparation_batch(1);
     let ops = textured_box(&mut harness, true, false);
     harness.apply(ops);
@@ -162,6 +165,7 @@ fn a_batch_completes_only_when_its_last_resource_is_taken_in() {
 #[test]
 fn a_deferred_texture_that_does_not_decode_fails_and_its_batch_completes() {
     let mut harness = Harness::new(RendererOptions::default());
+    harness.settle = false;
     harness.renderer.set_preparation_batch(1);
     let mut texture =
         harness
@@ -184,6 +188,7 @@ fn a_deferred_texture_that_does_not_decode_fails_and_its_batch_completes() {
 #[test]
 fn a_texture_prepared_before_anything_samples_it_draws_when_a_material_does() {
     let mut harness = Harness::new(RendererOptions::default());
+    harness.settle = false;
     harness.renderer.set_preparation_batch(1);
     let mut texture =
         harness

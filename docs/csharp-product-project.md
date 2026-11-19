@@ -710,6 +710,12 @@ A deferred texture or mesh is published when the call that opens it ends, so
 preparation starts then, whether or not anything samples or shows it yet. A
 product can open a location's resources ahead of building it.
 
+A product shader is always compiled this way, with no flag: a call that
+creates or updates a material shaded by one joins a batch, and the renderer
+compiles the shader's variants on its workers from when the call ends.
+Objects drawing with the material draw nothing until then
+([product shaders](lighting-and-sky.md#product-shaders)).
+
 Each product call that opens anything deferred is a preparation batch,
 numbered in order. A batch is drawn once every texture and mesh in it has been
 taken in:

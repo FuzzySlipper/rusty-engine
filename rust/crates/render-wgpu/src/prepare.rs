@@ -6,6 +6,9 @@
 //! draws it waits: a node naming a mesh being prepared, or a material
 //! sampling a texture being prepared, draws nothing (`rebuild_parts`).
 //!
+//! A product shader's variants are made here too, always (`variants.rs`):
+//! what draws one draws nothing until it is taken in.
+//!
 //! Each call's deferred definitions belong to the batch the Engine numbered
 //! for it ([`Renderer::set_preparation_batch`]); the readout says which
 //! batches are done, as the services' deferred residency does.
@@ -26,6 +29,11 @@ const MAX_WORKERS: usize = 4;
 pub(crate) enum Definition {
     Texture(TextureDescriptor),
     Mesh(Box<StaticMeshAsset>),
+    /// A product shader's variant: these features in these passes.
+    Variant {
+        features: crate::shaders::Features,
+        wanted: crate::variants::Wanted,
+    },
 }
 
 /// What a worker made of a definition, boxed: it waits in the finished
@@ -36,6 +44,15 @@ pub(crate) enum Prepared {
         texture: Box<GpuTexture>,
     },
     Mesh(Box<GpuMesh>),
+    Variant(Box<crate::variants::MadeVariant>),
+}
+
+impl Prepared {
+    /// A variant the shader did not compose under counts as failed, though
+    /// what it made (with the standard stages) is taken in.
+    fn failed(&self) -> bool {
+        matches!(self, Self::Variant(made) if !made.errors.is_empty())
+    }
 }
 
 type Work = Box<dyn FnOnce() -> Result<Prepared, String> + Send>;
@@ -97,9 +114,11 @@ pub struct PreparationReadout {
     /// Every batch numbered up to this one is drawn: its deferred textures
     /// and meshes were prepared and taken in, or failed.
     pub completed_batch: u64,
-    /// Deferred textures and meshes not yet taken in.
+    /// Deferred textures and meshes, and product shader variants, not yet
+    /// taken in.
     pub pending: u32,
-    /// Taken in, and failed (the renderer's skipped ops name why).
+    /// Taken in, and failed (the renderer's skipped ops name why; a
+    /// product shader that does not compose fails).
     pub installed: u64,
     pub failed: u64,
 }
@@ -184,8 +203,8 @@ impl Preparation {
                 .remove(&finished.id)
                 .expect("a current definition is pending");
             match &finished.result {
-                Ok(_) => self.installed += 1,
-                Err(_) => self.failed += 1,
+                Ok(prepared) if !prepared.failed() => self.installed += 1,
+                _ => self.failed += 1,
             }
             taken.push((pending.definition, finished.result));
         }
