@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use engine_spatial::{
-    DynamicsBodyId, DynamicsBodyInput, DynamicsShape, DynamicsSolver, MaterialVoxel,
-    SurfaceMeshOptions, SurfaceMode, VoxelChunkIdentity, VoxelChunkPayload,
+    DeferredChunkRebuild, DynamicsBodyId, DynamicsBodyInput, DynamicsShape, DynamicsSolver,
+    MaterialVoxel, SurfaceMeshOptions, SurfaceMode, VoxelChunkIdentity, VoxelChunkPayload,
     VoxelChunkResidencyOperation, VoxelChunkResidencyService, VoxelCollisionScene, VoxelEdit,
     VoxelEditService,
 };
@@ -561,6 +561,107 @@ fn a_deferred_residency_change_installs_what_a_synchronous_one_builds() {
         rebuild.install(&mut deferred).unwrap();
         assert_same_scene(&deferred, &sync, &format!("{mode:?} edit before install"));
     }
+}
+
+/// Whether every meshed chunk of `scene` keeps the coarse mesh built from
+/// its voxels now, and its count and hash match a scene built in one pass.
+fn assert_coarse_meshes_current(scene: &VoxelCollisionScene, context: &str) {
+    assert!(!scene.has_stale_coarse_meshes(), "{context}");
+    for chunk in scene.mesh_chunks() {
+        let kept = scene
+            .coarse_mesh(chunk.chunk)
+            .unwrap_or_else(|| panic!("{context}: {:?} has no coarse mesh", chunk.chunk));
+        let built = scene.coarse_mesh_chunk(chunk.chunk).unwrap().unwrap();
+        assert_eq!(**kept, built, "{context}: {:?}", chunk.chunk);
+    }
+    let fresh =
+        VoxelCollisionScene::from_material_voxels(1.0, CHUNK as u32, scene.material_voxels())
+            .unwrap();
+    assert_eq!(
+        (scene.solid_voxel_count(), scene.authority_hash()),
+        (fresh.solid_voxel_count(), fresh.authority_hash()),
+        "{context}"
+    );
+}
+
+#[test]
+fn kept_coarse_meshes_follow_deferred_and_synchronous_changes() {
+    let mut scene = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+        1.0,
+        CHUNK as u32,
+        [],
+        SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring),
+    )
+    .unwrap();
+    let admit = |x: i64, y: i64, z: i64, seed: u64| VoxelChunkResidencyOperation::Admit {
+        chunk: VoxelChunkIdentity::new(x, y, z),
+        payload: rock(seed),
+    };
+    let evict = |x: i64, y: i64, z: i64| VoxelChunkResidencyOperation::Evict {
+        chunk: VoxelChunkIdentity::new(x, y, z),
+    };
+    let block: Vec<_> = (0..3)
+        .flat_map(|x| (0..2).map(move |z| (x, z)))
+        .map(|(x, z)| admit(x, 0, z, (x * 2 + z) as u64))
+        .collect();
+    VoxelChunkResidencyService::apply(&mut scene, &block).unwrap();
+    assert!(scene.coarse_mesh([0, 0, 0]).is_none());
+    scene.set_coarse_meshes(true);
+    assert_coarse_meshes_current(&scene, "kept");
+
+    // A deferred change builds the coarse meshes it reaches with its
+    // meshes: until it installs the scene shows the old ones.
+    let operations = [admit(3, 0, 0, 10), evict(0, 0, 1)];
+    let before = scene.coarse_mesh([2, 0, 0]).cloned();
+    let (_, rebuild) = VoxelChunkResidencyService::apply_deferred(&mut scene, &operations).unwrap();
+    assert_eq!(scene.coarse_mesh([2, 0, 0]).cloned(), before);
+    assert!(scene.coarse_mesh([3, 0, 0]).is_none());
+    rebuild.install(&mut scene).unwrap();
+    assert_coarse_meshes_current(&scene, "deferred");
+
+    // A synchronous change drops the coarse meshes it reaches; a follow-up
+    // builds them off the caller's thread.
+    let state = scene.mesh_state();
+    VoxelChunkResidencyService::apply(&mut scene, &[admit(1, 0, 2, 11)]).unwrap();
+    assert!(scene.has_stale_coarse_meshes());
+    assert!(scene.coarse_mesh([1, 0, 1]).is_none());
+    assert!(scene.coarse_mesh([3, 0, 0]).is_some());
+    // A consumer is told which chunks lost theirs.
+    assert!(scene
+        .dirty_chunks_since(state)
+        .unwrap()
+        .contains(&[2, 0, 1]));
+    VoxelEditService::apply(
+        &mut scene,
+        &[VoxelEdit::Clear {
+            address: [CHUNK + 2, 2, 2],
+        }],
+    )
+    .unwrap();
+    let follow_up = DeferredChunkRebuild::coarse(&mut scene).unwrap();
+    assert!(DeferredChunkRebuild::coarse(&mut scene).is_none());
+    let state = scene.mesh_state();
+    follow_up.install(&mut scene).unwrap();
+    assert!(scene
+        .dirty_chunks_since(state)
+        .unwrap()
+        .contains(&[1, 0, 1]));
+    assert_coarse_meshes_current(&scene, "synchronous");
+
+    // A deferred change takes over the coarse meshes a synchronous one left.
+    VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address: [2, 2, 2] }]).unwrap();
+    assert!(scene.has_stale_coarse_meshes());
+    let (_, rebuild) =
+        VoxelChunkResidencyService::apply_deferred(&mut scene, &[evict(2, 0, 1)]).unwrap();
+    assert!(!scene.has_stale_coarse_meshes());
+    rebuild.install(&mut scene).unwrap();
+    assert_coarse_meshes_current(&scene, "taken over");
+
+    // Dropping them keeps none.
+    scene.set_coarse_meshes(false);
+    assert!(scene.coarse_mesh([0, 0, 0]).is_none());
+    VoxelEditService::apply(&mut scene, &[VoxelEdit::Clear { address: [3, 2, 3] }]).unwrap();
+    assert!(!scene.has_stale_coarse_meshes());
 }
 
 #[test]

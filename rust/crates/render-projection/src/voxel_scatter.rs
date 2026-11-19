@@ -253,7 +253,7 @@ fn select<'a>(
     scene: &'a VoxelCollisionScene,
     field: &VoxelScatterField,
     scatter: usize,
-    coarse: &BTreeMap<[i64; 3], VoxelMeshChunk>,
+    coarse: &BTreeMap<[i64; 3], std::sync::Arc<VoxelMeshChunk>>,
     held: &impl Fn(&[i64; 3]) -> bool,
     mut count: impl FnMut(&'a VoxelMeshChunk) -> Option<u64>,
 ) -> Option<Selection<'a>> {
@@ -316,7 +316,7 @@ fn reached<'a>(
     scene: &'a VoxelCollisionScene,
     field: &VoxelScatterField,
     scatter: usize,
-    coarse: &BTreeMap<[i64; 3], VoxelMeshChunk>,
+    coarse: &BTreeMap<[i64; 3], std::sync::Arc<VoxelMeshChunk>>,
     placed: &impl Fn(&[i64; 3]) -> bool,
 ) -> Vec<(f64, &'a VoxelMeshChunk)> {
     let radius = f64::from(field.scatters[scatter].radius);
@@ -370,7 +370,7 @@ pub(crate) fn scatter_changed(
     snapshot: &ScatterSnapshot,
     scene: &VoxelCollisionScene,
     field: Option<&VoxelScatterField>,
-    coarse: &BTreeMap<[i64; 3], VoxelMeshChunk>,
+    coarse: &BTreeMap<[i64; 3], std::sync::Arc<VoxelMeshChunk>>,
 ) -> bool {
     let Some(field) = field else {
         return !snapshot.patches.is_empty();
@@ -417,7 +417,7 @@ impl ScatterProjection<'_> {
         &mut self,
         scene: &VoxelCollisionScene,
         field: Option<&VoxelScatterField>,
-        coarse: &BTreeMap<[i64; 3], VoxelMeshChunk>,
+        coarse: &BTreeMap<[i64; 3], std::sync::Arc<VoxelMeshChunk>>,
     ) -> Result<(), VoxelProjectionError> {
         let scatters = field.map_or(&[][..], |field| &field.scatters[..]);
         let rebuilt = scatters != self.snapshot.scatters;

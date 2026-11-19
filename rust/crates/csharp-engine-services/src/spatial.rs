@@ -1682,6 +1682,23 @@ impl RuntimeSpatialBridge {
         self.collision_source.clone()
     }
 
+    /// Keep a session's coarse meshes while a presentation draws its distant
+    /// chunks coarse, or drop them (`VoxelCollisionScene::set_coarse_meshes`).
+    /// Nothing happens when they are already so.
+    pub(crate) fn keep_coarse_meshes(
+        &mut self,
+        handle: NativeSpatialSessionHandle,
+        keep: bool,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let scene = &self.session_mut(handle)?.scene;
+        if scene.keeps_coarse_meshes() == (keep && scene.has_coarse_meshes()) {
+            return Ok(());
+        }
+        self.edit_scene(handle, |session| {
+            Arc::make_mut(&mut session.scene).set_coarse_meshes(keep)
+        })
+    }
+
     pub(crate) fn bind_appearance(
         &mut self,
         appearance: &mut crate::appearance::RuntimeAppearanceBridge,
@@ -1846,6 +1863,15 @@ impl RuntimeSpatialBridge {
         self.collision_source.detach(handle);
         let session = self.session_mut(handle)?;
         let result = edit(session);
+        // The coarse meshes a synchronous change dropped are built on a
+        // worker, installing in order with the deferred changes.
+        if session.scene.has_stale_coarse_meshes() {
+            session
+                .deferred
+                .extend(engine_spatial::DeferredChunkRebuild::coarse(Arc::make_mut(
+                    &mut session.scene,
+                )));
+        }
         let scene = Arc::clone(&session.scene);
         self.publish_scene(handle, scene);
         Ok(result)

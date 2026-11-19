@@ -86,6 +86,7 @@ fn engine_api(
     dynamics_bridge.bind_appearance(appearance_bridge);
     dynamics_bridge.bind_water_fields(water_field_bridge);
     spatial_bridge.bind_implicit(implicit_bridge);
+    voxel_scene_presentation_bridge.bind_spatial(spatial_bridge);
     NativeEngineApi {
         input: crate::input::api(input_bridge),
         gameplay_time: crate::gameplay_time::api(gameplay_time_bridge),

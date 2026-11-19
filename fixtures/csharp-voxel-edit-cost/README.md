@@ -22,8 +22,16 @@ Live debug commands:
   breakdown follows: rebuilt chunks, mesh, collider and settle microseconds
   from the edit receipt, and from the presentation readout whether the
   refresh compared every chunk, the chunks it compared, the meshes it sent,
-  the coarse meshes it built, the chunks whose level of detail it chose and
-  its projection microseconds.
+  the chunks whose level of detail it chose and its projection microseconds.
+- `stream.start [updates]`: streams for that many updates (600 by default).
+  Each update admits the next 8 chunks of a column ahead of the landscape and
+  evicts 8 a column behind in one deferred `ApplyResidency`, then calls
+  `RefreshScene`, so about 768 chunks stay resident; the camera moves a column
+  with each column admitted.
+- `stream.report`: the stream's `ApplyResidency`, `RefreshScene` and combined
+  milliseconds (median, 95th percentile, worst) and the median of each phase
+  the receipt and readout report: settle, write and rebuild, projection and
+  scatter, chunks compared and meshes sent.
 
 The cases, near the camera:
 
@@ -34,4 +42,4 @@ The cases, near the camera:
 - two one-cell edits in different chunks, then one refresh.
 
 Times are the product's stopwatch around each call. Compare runs on the same
-machine and pair.
+machine and pair, and note the machine's load.

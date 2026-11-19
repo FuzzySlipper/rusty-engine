@@ -12,6 +12,8 @@ namespace CsharpVoxelEditCost;
 /// of 16³ one-metre voxels drawn with level of detail, edited by 1, 50 and 256 cells in one
 /// chunk, 256 cells across 16 chunks, and two one-cell edits before one refresh. Each case
 /// reports <c>ApplyEdits</c> and <c>RefreshScene</c> times with the Engine's breakdown.
+/// It also streams: each update admits 8 chunks ahead of the landscape and evicts 8 behind it
+/// in one deferred <c>ApplyResidency</c>, then refreshes, the camera moving with the stream.
 /// </summary>
 public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugCommandModule
 {
@@ -37,6 +39,9 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private const int Inset = 4;
     private const int FewCells = 50, ManyCells = 256;
     private const int DefaultRepeats = 9;
+    // The stream: chunks admitted and evicted each update, and how many updates by default.
+    private const int StreamChunksPerUpdate = 8, DefaultStreamUpdates = 600;
+    private const int ChunkVolume = ChunkSize * ChunkSize * ChunkSize;
     private readonly IEngineContext engine;
     private readonly SpatialSession session;
     private readonly Material ground, rock;
@@ -45,6 +50,11 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     private double admissionMs, projectionMs;
     // Each repeat sets the cells to the other material, so every edit changes them.
     private bool rockNext = true;
+    // The stream's queues, the first column it has not queued, its updates left and its samples.
+    private readonly Queue<VoxelChunkIdentity> streamIn = new(), streamOut = new();
+    private long nextStreamColumn = ChunksAcross;
+    private int streamUpdatesLeft;
+    private readonly List<StreamSample> streamSamples = [];
 
     public Product(ProductCreateContext context)
     {
@@ -75,14 +85,22 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
 
     private void Admit()
     {
-        int volume = ChunkSize * ChunkSize * ChunkSize;
-        List<VoxelResidencyOperation> operations = [];
-        uint[] materials = new uint[ChunksAcross * ChunksAcross * ChunksHigh * volume];
-        float[] densities = new float[materials.Length];
-        int next = 0;
+        List<VoxelChunkIdentity> chunks = [];
         for (long cz = 0; cz < ChunksAcross; cz++)
         for (long cy = 0; cy < ChunksHigh; cy++)
         for (long cx = 0; cx < ChunksAcross; cx++)
+            chunks.Add(new(cx, cy, cz));
+        engine.Voxel.ApplyResidency(Residency(chunks, [], deferred: false));
+    }
+
+    /// <summary>A residency transaction admitting the landscape's chunks and evicting others.</summary>
+    private VoxelResidencyTransaction Residency(IReadOnlyList<VoxelChunkIdentity> admitted, IReadOnlyList<VoxelChunkIdentity> evicted, bool deferred)
+    {
+        List<VoxelResidencyOperation> operations = [];
+        uint[] materials = new uint[admitted.Count * ChunkVolume];
+        float[] densities = new float[materials.Length];
+        int next = 0;
+        foreach (VoxelChunkIdentity chunk in admitted)
         {
             uint offset = (uint)next;
             // X-fastest, then Y, then Z: the Engine's dense payload order.
@@ -90,17 +108,19 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
             for (long y = 0; y < ChunkSize; y++)
             for (long x = 0; x < ChunkSize; x++)
             {
-                double worldX = (cx * ChunkSize + x + CellCentre) * VoxelSize, worldZ = (cz * ChunkSize + z + CellCentre) * VoxelSize;
-                double worldY = (cy * ChunkSize + y + CellCentre) * VoxelSize;
+                double worldX = (chunk.X * ChunkSize + x + CellCentre) * VoxelSize, worldZ = (chunk.Z * ChunkSize + z + CellCentre) * VoxelSize;
+                double worldY = (chunk.Y * ChunkSize + y + CellCentre) * VoxelSize;
                 float distance = (float)((worldY - Height(worldX, worldZ)) / VoxelSize);
                 bool solid = distance < 0;
                 materials[next] = !solid ? 0 : distance > -GroundDepth ? GroundSlot : RockSlot;
                 densities[next] = solid ? Math.Min(distance, -MinimumDensity) : Math.Max(distance, MinimumDensity);
                 next++;
             }
-            operations.Add(new(VoxelResidencyOperationKind.Admit, new(cx, cy, cz), offset, (uint)volume, offset, (uint)volume));
+            operations.Add(new(VoxelResidencyOperationKind.Admit, chunk, offset, ChunkVolume, offset, ChunkVolume));
         }
-        engine.Voxel.ApplyResidency(new(ReadOnlyMemory<uint>.Empty, session, operations.ToArray(), materials, densities));
+        foreach (VoxelChunkIdentity chunk in evicted)
+            operations.Add(new(VoxelResidencyOperationKind.Evict, chunk, 0, 0));
+        return new(ReadOnlyMemory<uint>.Empty, session, operations.ToArray(), materials, densities, deferred);
     }
 
     /// <summary>
@@ -198,11 +218,81 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
                 $"rebuiltChunks={last.Receipt.RebuiltMeshChunks} meshUs={last.Receipt.MeshMicroseconds} " +
                 $"colliderUs={last.Receipt.ColliderMicroseconds} settleUs={last.Receipt.SettleMicroseconds} | " +
                 $"everyChunk={last.Readout.ProjectedEveryChunk} projected={last.Readout.ProjectedChunkCount} " +
-                $"published={last.Readout.PublishedMeshCount} coarseBuilt={last.Readout.CoarseBuiltCount} " +
+                $"published={last.Readout.PublishedMeshCount} " +
                 $"coarsePlanned={last.Readout.CoarsePlannedCount} " +
                 $"projectionUs={last.Readout.ProjectionMicroseconds}");
         }
         return report.ToString();
+    }
+
+    private sealed record StreamSample(double ApplyMs, double RefreshMs, VoxelResidencyReceipt Receipt, VoxelScenePresentationReadout Readout);
+
+    [DebugCommand("stream.start", Description = "Streams for the given number of updates: each admits 8 chunks ahead of the landscape and evicts 8 behind it in one deferred ApplyResidency, then refreshes.")]
+    public string StartStream(int updates = DefaultStreamUpdates)
+    {
+        if (updates < 1) throw new ArgumentOutOfRangeException(nameof(updates));
+        streamSamples.Clear();
+        streamUpdatesLeft = updates;
+        return FormattableString.Invariant($"streaming for {updates} updates");
+    }
+
+    /// <summary>One update of the stream: the next 8 chunks in, the 8 a column behind out, then a refresh.</summary>
+    private void Stream()
+    {
+        if (streamIn.Count < StreamChunksPerUpdate)
+        {
+            // A column is the chunks of one x across the landscape's depth and height.
+            for (long cz = 0; cz < ChunksAcross; cz++)
+            for (long cy = 0; cy < ChunksHigh; cy++)
+            {
+                streamIn.Enqueue(new(nextStreamColumn, cy, cz));
+                streamOut.Enqueue(new(nextStreamColumn - ChunksAcross, cy, cz));
+            }
+            nextStreamColumn++;
+            // The camera keeps its place over the moving landscape.
+            Vector3 moved = new((nextStreamColumn - ChunksAcross) * ChunkSize * VoxelSize, 0, 0);
+            engine.CameraView.UpdateCamera(new(camera, Descriptor(Eye + moved, Target + moved)));
+        }
+        VoxelChunkIdentity[] admitted = Take(streamIn), evicted = Take(streamOut);
+        VoxelResidencyTransaction transaction = Residency(admitted, evicted, deferred: true);
+        long started = Stopwatch.GetTimestamp();
+        VoxelResidencyReceipt receipt = engine.Voxel.ApplyResidency(transaction);
+        double applyMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        started = Stopwatch.GetTimestamp();
+        VoxelScenePresentationReadout readout = engine.VoxelScenePresentation.RefreshScene(presentation!);
+        double refreshMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+        streamSamples.Add(new(applyMs, refreshMs, receipt, readout));
+
+        static VoxelChunkIdentity[] Take(Queue<VoxelChunkIdentity> queue) =>
+            Enumerable.Range(0, Math.Min(StreamChunksPerUpdate, queue.Count)).Select(_ => queue.Dequeue()).ToArray();
+    }
+
+    private static double Percentile(IEnumerable<double> values, double fraction)
+    {
+        double[] sorted = values.Order().ToArray();
+        return sorted[Math.Min(sorted.Length - 1, (int)(sorted.Length * fraction))];
+    }
+
+    [DebugCommand("stream.report", Description = "Reports the stream's ApplyResidency and RefreshScene milliseconds (median, 95th percentile, worst) and the median of each phase the Engine reports.")]
+    public string StreamReport()
+    {
+        if (streamSamples.Count == 0) return "no stream samples; run stream.start";
+        string Line(string name, Func<StreamSample, double> value) => FormattableString.Invariant(
+            $"{name} median={Median(streamSamples.Select(value)):F2} p95={Percentile(streamSamples.Select(value), .95):F2} max={streamSamples.Max(value):F2}");
+        double Phase(Func<StreamSample, ulong> value) => Median(streamSamples.Select(sample => value(sample) / 1000d));
+        return string.Join(Environment.NewLine,
+            FormattableString.Invariant($"updates={streamSamples.Count} left={streamUpdatesLeft} chunks={streamSamples[^1].Readout.ChunkCount} coarse={streamSamples[^1].Readout.CoarseChunkCount}"),
+            Line("applyMs", sample => sample.ApplyMs),
+            Line("refreshMs", sample => sample.RefreshMs),
+            Line("applyPlusRefreshMs", sample => sample.ApplyMs + sample.RefreshMs),
+            FormattableString.Invariant(
+                $"phase medians ms: settle={Phase(sample => sample.Receipt.SettleMicroseconds):F2} write={Phase(sample => sample.Receipt.WriteMicroseconds):F2} ") +
+            FormattableString.Invariant(
+                $"rebuild={Phase(sample => sample.Receipt.RebuildMicroseconds):F2} projection={Phase(sample => sample.Readout.ProjectionMicroseconds):F2} ") +
+            FormattableString.Invariant(
+                $"scatter={Phase(sample => sample.Readout.ScatterMicroseconds):F2} projected={Median(streamSamples.Select(sample => (double)sample.Readout.ProjectedChunkCount)):F0} ") +
+            FormattableString.Invariant(
+                $"published={Median(streamSamples.Select(sample => (double)sample.Readout.PublishedMeshCount)):F0}"));
     }
 
     [DebugCommand("edits.inspect", Description = "Reports chunks, chunks drawn coarse, and admission and first projection milliseconds.")]
@@ -224,7 +314,15 @@ public sealed class Product : IEngineProduct, IDebugCommandModuleSource, IDebugC
     }
 
     public void RegisterDebugCommands(IDebugCommandModuleRegistrar registrar) => registrar.Register(this);
-    public ProductUpdateResult Update(ProductUpdate update) => ProductUpdateResult.None;
+    public ProductUpdateResult Update(ProductUpdate update)
+    {
+        if (streamUpdatesLeft > 0)
+        {
+            streamUpdatesLeft--;
+            Stream();
+        }
+        return ProductUpdateResult.None;
+    }
     public void Pause() { }
     public void Resume() { }
     public void Restart() { }

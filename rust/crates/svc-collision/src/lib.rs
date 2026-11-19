@@ -254,8 +254,9 @@ struct ChunkCollider {
     /// The canonical voxels of each Compound child, in the same order as
     /// `cubes.shapes()`. A cube voxel's own cuboid names its voxel exactly:
     /// a ray may strike a top face precisely at an adjacent sparse-cell
-    /// boundary. A merged box names the voxel under the impact.
-    boxes: Vec<VoxelBox>,
+    /// boundary. A merged box names the voxel under the impact. Shared, as
+    /// the shapes are, so a copy of the projection does not copy them.
+    boxes: Arc<[VoxelBox]>,
     /// The reconstructed surface drawn for this chunk, when its materials are
     /// not drawn as cubes.
     surface: Option<ChunkSurfacePart>,
@@ -287,7 +288,7 @@ impl VoxelBox {
 /// [`CollisionProjection::prepare_chunk_parts`] or
 /// [`CollisionProjection::prepare_chunk`].
 pub struct PreparedChunkParts {
-    boxes: Vec<VoxelBox>,
+    boxes: Arc<[VoxelBox]>,
     cubes: Option<Arc<Compound>>,
     surface: Option<ChunkSurfacePart>,
 }
@@ -299,7 +300,7 @@ struct ChunkSurfacePart {
     /// Oriented, so a point near the surface can be classified inside or out.
     shape: Arc<TriMesh>,
     /// The voxels owning each triangle.
-    owners: Vec<VoxelBox>,
+    owners: Arc<[VoxelBox]>,
 }
 
 impl ChunkCollider {
@@ -1132,7 +1133,7 @@ impl CollisionProjection {
         let boxes = merge_boxes(&self.grid, coord, cube_voxels);
         let previous = self.chunks.get(&coord);
         let kept_cubes = previous
-            .filter(|previous| previous.boxes == boxes)
+            .filter(|previous| *previous.boxes == *boxes)
             .map(|previous| previous.cubes.clone());
         let kept_surface = previous
             .and_then(|previous| previous.surface.as_ref())
@@ -1180,12 +1181,12 @@ impl CollisionProjection {
                     Some(ChunkSurfacePart {
                         key: surface_key,
                         shape: Arc::new(shape),
-                        owners: surface.owners,
+                        owners: surface.owners.into(),
                     })
                 })
         });
         PreparedChunkParts {
-            boxes,
+            boxes: boxes.into(),
             cubes,
             surface,
         }
@@ -2041,7 +2042,7 @@ mod tests {
         );
         // The two neighbouring voxels merge into one box.
         assert_eq!(
-            projection.chunks[&coord].boxes,
+            *projection.chunks[&coord].boxes,
             [VoxelBox {
                 min: VoxelCoord::new(0, 0, 0),
                 max: VoxelCoord::new(1, 0, 0),

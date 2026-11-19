@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use core_space::{ChunkCoord, ChunkRegion, Direction6, VoxelGridSpec, WorldPos};
 use svc_volume::VoxelChunk;
@@ -69,7 +70,9 @@ impl std::error::Error for PartitionError {}
 #[derive(Debug, Clone)]
 struct Slot {
     state: ChunkState,
-    data: Option<VoxelChunk>,
+    /// Shared copy-on-write, so a copy of the world (a worker's snapshot)
+    /// shares its chunks; a chunk is copied only when changed while shared.
+    data: Option<Arc<VoxelChunk>>,
 }
 
 /// The world-level voxel partition for a single grid.
@@ -120,6 +123,16 @@ impl VoxelWorld {
     /// from any state; marks the chunk dirty (new data needs meshing/collision).
     /// Returns the previous data if it was resident.
     pub fn insert(&mut self, coord: ChunkCoord, chunk: VoxelChunk) -> Option<VoxelChunk> {
+        self.insert_shared(coord, Arc::new(chunk))
+            .map(Arc::unwrap_or_clone)
+    }
+
+    /// [`insert`](Self::insert) without copying a chunk another world shares.
+    pub fn insert_shared(
+        &mut self,
+        coord: ChunkCoord,
+        chunk: Arc<VoxelChunk>,
+    ) -> Option<Arc<VoxelChunk>> {
         let prev = self
             .chunks
             .insert(
@@ -146,7 +159,9 @@ impl VoxelWorld {
             Some(slot) => {
                 slot.state = ChunkState::Unloaded;
                 self.dirty.remove(&coord);
-                Ok(slot.data.take().expect("resident slot has data"))
+                Ok(Arc::unwrap_or_clone(
+                    slot.data.take().expect("resident slot has data"),
+                ))
             }
             None => Err(PartitionError::NotResident { coord, state }),
         }
@@ -154,12 +169,23 @@ impl VoxelWorld {
 
     /// Fully forget a coordinate (→ `Absent`). Returns its data if it was resident.
     pub fn remove(&mut self, coord: ChunkCoord) -> Option<VoxelChunk> {
+        self.remove_shared(coord).map(Arc::unwrap_or_clone)
+    }
+
+    /// [`remove`](Self::remove) without copying a chunk another world shares.
+    pub fn remove_shared(&mut self, coord: ChunkCoord) -> Option<Arc<VoxelChunk>> {
         self.dirty.remove(&coord);
         self.chunks.remove(&coord).and_then(|s| s.data)
     }
 
     /// Borrow a resident chunk's data.
     pub fn get(&self, coord: ChunkCoord) -> Option<&VoxelChunk> {
+        self.chunks.get(&coord).and_then(|s| s.data.as_deref())
+    }
+
+    /// A resident chunk's shared data, for another world to hold without
+    /// copying it.
+    pub fn get_shared(&self, coord: ChunkCoord) -> Option<&Arc<VoxelChunk>> {
         self.chunks.get(&coord).and_then(|s| s.data.as_ref())
     }
 
@@ -169,14 +195,14 @@ impl VoxelWorld {
         let slot = self.chunks.get_mut(&coord)?;
         let data = slot.data.as_mut()?;
         self.dirty.insert(coord);
-        Some(data)
+        Some(Arc::make_mut(data))
     }
 
     /// Deterministic iterator over resident `(coord, &chunk)`, coordinate-ascending.
     pub fn resident_chunks(&self) -> impl Iterator<Item = (ChunkCoord, &VoxelChunk)> {
         self.chunks
             .iter()
-            .filter_map(|(c, s)| s.data.as_ref().map(|d| (*c, d)))
+            .filter_map(|(c, s)| s.data.as_deref().map(|d| (*c, d)))
     }
 
     /// Deterministic iterator over every tracked coordinate + state.

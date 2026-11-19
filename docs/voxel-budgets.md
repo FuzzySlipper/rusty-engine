@@ -18,8 +18,10 @@ place. They then rebuild only:
 Each chunk's mesh and collider are built together, on worker threads when a
 change rebuilds several chunks, and installed in order before the call
 returns. A deferred residency transaction builds them on a worker thread
-instead, from copies of the chunks they read, and installs them at the start
-of a call once built ([residency and edits](world-streaming-contract.md#residency-and-edits-apply-in-place)). A cube chunk's collider is its collidable voxels merged into boxes.
+instead, from the chunks they read, and installs them at the start of a call
+once built ([residency and edits](world-streaming-contract.md#residency-and-edits-apply-in-place)).
+The worker shares those chunks with the scene rather than copying them; a
+chunk changed while the worker still reads it is copied then, alone. A cube chunk's collider is its collidable voxels merged into boxes.
 Unchanged chunks keep their meshes and collider shapes; a bound Dynamics world
 keeps those colliders too. Nothing copies, hashes or rebuilds the whole scene.
 The authority hash is an order-independent sum maintained per voxel.
@@ -27,10 +29,20 @@ The authority hash is an order-independent sum maintained per voxel.
 An edit receipt breaks its call down: `RebuiltMeshChunks`,
 `MeshMicroseconds` and `ColliderMicroseconds` (summed over chunks, which build
 in parallel) and `SettleMicroseconds`, the time spent first installing the
-session's earlier deferred changes. `VoxelScenePresentation.RefreshScene`
-then republishes only the chunks changed since the last projection
+session's earlier deferred changes. A residency receipt reports the call's
+phases as wall time: `SettleMicroseconds` (the earlier deferred changes
+installed first: all of them, waiting for any still building, before a
+synchronous transaction; those already built before a deferred one),
+`WriteMicroseconds` (reading the payload, writing the voxels and accounting
+the changed chunks) and `RebuildMicroseconds` (meshing and building colliders
+for a synchronous transaction; preparing and starting the worker for a
+deferred one), with `MeshMicroseconds` summed over chunks.
+`VoxelScenePresentation.RefreshScene` then republishes only the chunks changed
+since the last projection, and builds no mesh
 ([scene presentation](csharp-lifecycle.md#microvoxel-objects)); its readout reports the chunks
-it compared, the meshes it sent and the time it took.
+it compared, the meshes it sent, the time it took and the part of it spent
+placing scatters. Coarse level-of-detail meshes are built off the update
+([distance level of detail](smooth-voxel-surfaces.md#distance-level-of-detail)).
 
 A failed edit changes nothing:
 - invalid coordinates, material slots or states are refused before any write;
@@ -83,7 +95,21 @@ In a running product, the
 [`csharp-voxel-edit-cost`](../fixtures/csharp-voxel-edit-cost/README.md) fixture
 times `ApplyEdits` and `RefreshScene` for 1, 50 and 256 cells in one chunk,
 256 cells across 16 chunks, and two edits before one refresh, in a
-dual-contoured landscape of 768 chunks drawn with level of detail.
+dual-contoured landscape of 768 chunks drawn with level of detail. Its stream
+admits 8 chunks and evicts 8 each update in one deferred `ApplyResidency`,
+then refreshes, and reports both calls' times and their phases.
+
+Without a product, the ignored `streaming_cost` test in
+`csharp-engine-services` streams the same way through about 800 resident
+dual-contoured chunks drawn with level of detail, one update a 60 Hz frame:
+
+```sh
+cargo test --release -p csharp-engine-services --lib streaming_cost -- --ignored --nocapture
+```
+
+It prints each tenth update and the median, 95th percentile and worst of the
+deferred installs at the call's start, `ApplyResidency`, `RefreshScene` and the
+level-of-detail settle. Compare runs on the same machine at a similar load.
 
 ## Memory
 

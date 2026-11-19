@@ -218,9 +218,6 @@ pub struct NativeVoxelScenePresentationReadout {
     pub material_count: u32,
     /// Chunks drawn from their coarse meshes at the last projection.
     pub coarse_chunk_count: u64,
-    /// Time the last projection spent meshing coarse chunks, summed over
-    /// chunks (they mesh in parallel, so wall time can be shorter).
-    pub coarse_mesh_microseconds: u64,
     /// Scatter patches (one per chunk and scatter) and the copies they hold.
     pub scatter_patch_count: u64,
     pub scatter_instance_count: u64,
@@ -237,15 +234,15 @@ pub struct NativeVoxelScenePresentationReadout {
     /// Chunk meshes the last projection sent to the renderer, fine or
     /// coarse.
     pub published_mesh_count: u64,
-    /// Coarse meshes the last projection built.
-    pub coarse_built_count: u64,
     /// Chunks whose level of detail the last projection chose: every chunk
-    /// when the viewer or the coarse distance changed, otherwise those near
-    /// a change and those waiting for a stream to pause.
+    /// when the viewer or the coarse distance changed, otherwise those whose
+    /// meshes or coarse meshes changed.
     pub coarse_planned_count: u64,
     /// Wall time of the last projection, which projects every presentation
     /// of the product.
     pub projection_microseconds: u64,
+    /// The part of it spent placing this presentation's scatters.
+    pub scatter_microseconds: u64,
 }
 
 /// Result of clearing all retained voxel scene projections in this product

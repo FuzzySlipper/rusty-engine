@@ -344,22 +344,23 @@ mesh.
   fine neighbour every open edge of a coarse mesh carries a skirt reaching one
   coarse cell into the solid and as far toward the neighbour, which closes both
   the step and the gap where the two surfaces stop short of each other.
+- While a presentation of a session draws coarse, the session keeps every
+  meshed chunk's coarse mesh beside its full mesh, so a chunk the camera
+  leaves behind turns coarse with no meshing, and a refresh or a camera move
+  never meshes. Setting a distance on a session without them builds them all
+  once, in parallel; setting zero on the last such presentation drops them.
 - A coarse mesh reads two voxels into each neighbour, so a change to the
-  voxels of the chunk or of any neighbour rebuilds it; a neighbour remeshed
-  only for its seams changes nothing. An edit rebuilds it with the same
-  projection. A chunk admitted or evicted within reach, as a stream does
-  column after column, rebuilds it once the stream pauses: with the second
-  consecutive projection that admits or evicts nothing within reach (the
-  first is the update's own level-of-detail settle). A streamed chunk is
-  thus meshed coarse once its neighbours have arrived rather than once per
-  neighbour. Until then a chunk newly drawn coarse shows its full mesh and
-  one already coarse keeps its coarse mesh. Chunks rebuilt together are
-  meshed in parallel.
+  voxels of a chunk rebuilds the coarse meshes of it and its 26 neighbours,
+  off the update. A deferred residency transaction builds them on its worker
+  with its meshes, and they install together. A synchronous change (an edit,
+  a transaction without `Deferred`) drops them and builds them on a worker
+  afterwards, installing like a deferred transaction, usually by the next
+  update; until then those chunks are drawn from their full meshes. Their
+  meshing time is counted in the transaction's `MeshMicroseconds` when it is
+  synchronous.
 - Sessions whose materials are all cubes, and chunks with an odd edge, are
   always drawn at full resolution. `VoxelScenePresentationReadout.
-  CoarseChunkCount` reports how many chunks are drawn coarse, and
-  `CoarseMeshMicroseconds` the time the last projection spent meshing coarse
-  chunks, summed over chunks.
+  CoarseChunkCount` reports how many chunks are drawn coarse.
 
 ## Scatter
 

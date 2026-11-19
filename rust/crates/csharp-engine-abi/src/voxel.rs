@@ -219,6 +219,17 @@ pub struct NativeVoxelResidencyReceipt {
     /// Crossing normals the replaced and evicted chunks carried; residency
     /// payloads do not carry them (#9504).
     pub dropped_hermite_normals: u32,
+    /// Time spent installing the session's earlier deferred changes first:
+    /// for a synchronous transaction, every one, waiting for those still
+    /// building; for a deferred one, those already built.
+    pub settle_microseconds: u64,
+    /// Time spent reading the payload, writing the voxels and accounting
+    /// the changed chunks.
+    pub write_microseconds: u64,
+    /// Wall time spent rebuilding the meshes and colliders the change
+    /// reaches, or, for a deferred transaction, preparing the worker's copy
+    /// of what it reads and starting it.
+    pub rebuild_microseconds: u64,
 }
 
 /// Collision policy for one occupied material slot; visuals retain the cell.

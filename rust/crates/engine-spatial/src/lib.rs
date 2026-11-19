@@ -310,6 +310,17 @@ pub struct VoxelCollisionScene {
     mesh_history: VecDeque<(u64, Vec<[i64; 3]>)>,
     /// How many chunks `mesh_history` names, counting repeats.
     mesh_history_chunks: usize,
+    /// Each meshed chunk's coarse mesh, kept while a presentation draws the
+    /// scene's distant chunks coarse ([`Self::set_coarse_meshes`]); `None`
+    /// when they are not kept.
+    coarse_chunks: Option<BTreeMap<ChunkCoord, Arc<VoxelMeshChunk>>>,
+    /// Chunks whose coarse mesh a synchronous change dropped, to be built on
+    /// a worker thread ([`DeferredChunkRebuild::coarse`]).
+    stale_coarse: BTreeSet<ChunkCoord>,
+    /// Each resident chunk's share of `solid_voxel_count` and
+    /// `authority_hash`, so a chunk that leaves is accounted without walking
+    /// its voxels. A chunk changed voxel by voxel loses its entry.
+    chunk_accounts: BTreeMap<ChunkCoord, (usize, u64)>,
     source_revision: VoxelSourceRevision,
     /// The source revision the meshes and colliders show while a deferred
     /// residency change rebuilds them (`DeferredChunkRebuild`); `None` when
@@ -623,14 +634,12 @@ impl VoxelCollisionScene {
         // Every voxel was validated when it entered `voxel_world`.
         let mut solid_voxel_count = 0usize;
         let mut authority_hash = 0u64;
+        let mut chunk_accounts = BTreeMap::new();
         for (coordinate, chunk) in voxel_world.resident_chunks() {
-            for (local, value) in chunk.iter() {
-                let Some(voxel) = material_voxel_at(grid, coordinate, local, value) else {
-                    continue;
-                };
-                solid_voxel_count += 1;
-                authority_hash = authority_hash.wrapping_add(voxel_hash(voxel));
-            }
+            let (count, hash) = chunk_account(grid, coordinate, chunk);
+            solid_voxel_count += count;
+            authority_hash = authority_hash.wrapping_add(hash);
+            chunk_accounts.insert(coordinate, (count, hash));
         }
         let (mesh_chunks, mesh_microseconds) = build_mesh_chunks(&voxel_world, &mesh_options)?;
         let dirty_chunks = voxel_world
@@ -662,6 +671,9 @@ impl VoxelCollisionScene {
             mesh_state: next_mesh_state(),
             mesh_history: VecDeque::new(),
             mesh_history_chunks: 0,
+            coarse_chunks: None,
+            stale_coarse: BTreeSet::new(),
+            chunk_accounts,
             source_revision: revisions.source,
             projected_revision: None,
             synchronous_state: next_mesh_state(),
@@ -795,7 +807,7 @@ impl VoxelCollisionScene {
             mesh_microseconds: 0,
             collider_microseconds: 0,
         };
-        self.record_mesh_update();
+        self.record_mesh_update(&BTreeSet::new());
     }
 
     /// Replace the surface modes and characters. Every chunk is remeshed and
@@ -823,6 +835,7 @@ impl VoxelCollisionScene {
         candidate
             .projection
             .copy_static_meshes_from(&self.projection);
+        candidate.set_coarse_meshes(self.keeps_coarse_meshes());
         *self = candidate;
         Ok(())
     }
@@ -893,6 +906,54 @@ impl VoxelCollisionScene {
         chunk: [i64; 3],
     ) -> Option<Result<VoxelMeshChunk, CollisionSceneError>> {
         self.coarse_mesh_chunks(&[chunk]).meshes.pop().flatten()
+    }
+
+    /// Keep every meshed chunk's coarse mesh beside its mesh, for a
+    /// presentation that draws distant chunks coarse, or drop them. Turning
+    /// them on builds them all here, in parallel; after that each change
+    /// builds the coarse meshes it reaches off the caller's thread: a
+    /// deferred residency change with its meshes, a synchronous change in a
+    /// follow-up ([`DeferredChunkRebuild::coarse`]), and until then the
+    /// chunks it reached have none. Either way consumers compare every chunk
+    /// once. A scene without coarse meshes ([`Self::has_coarse_meshes`])
+    /// keeps none.
+    pub fn set_coarse_meshes(&mut self, keep: bool) {
+        let keep = keep && self.has_coarse_meshes();
+        if keep == self.coarse_chunks.is_some() {
+            return;
+        }
+        self.stale_coarse.clear();
+        self.coarse_chunks = keep.then(|| {
+            let coordinates: Vec<_> = self.mesh_chunks.keys().copied().collect();
+            let source = self.rebuild_source();
+            source
+                .coarse_meshes(&coordinates)
+                .into_iter()
+                .filter_map(|(coordinate, mesh)| mesh.map(|mesh| (coordinate, mesh)))
+                .collect()
+        });
+        self.mesh_state = next_mesh_state();
+        self.mesh_history.clear();
+        self.mesh_history_chunks = 0;
+    }
+
+    /// Whether the scene keeps its chunks' coarse meshes.
+    pub fn keeps_coarse_meshes(&self) -> bool {
+        self.coarse_chunks.is_some()
+    }
+
+    /// A chunk's kept coarse mesh: `None` when the scene keeps none, or the
+    /// chunk's is not built yet or it has no mesh.
+    pub fn coarse_mesh(&self, chunk: [i64; 3]) -> Option<&Arc<VoxelMeshChunk>> {
+        self.coarse_chunks
+            .as_ref()?
+            .get(&ChunkCoord::new(chunk[0], chunk[1], chunk[2]))
+    }
+
+    /// Whether a synchronous change left chunks without their coarse mesh
+    /// ([`DeferredChunkRebuild::coarse`] builds them).
+    pub fn has_stale_coarse_meshes(&self) -> bool {
+        !self.stale_coarse.is_empty()
     }
 
     /// The mesh of one chunk, if it has one.
@@ -997,6 +1058,7 @@ impl VoxelCollisionScene {
             .map_err(CollisionSceneError::StaticMeshRebase)?;
         candidate.world_origin = target;
         candidate.rebase_revision = rebase_revision;
+        candidate.set_coarse_meshes(self.keeps_coarse_meshes());
         Ok(candidate)
     }
 
@@ -1266,14 +1328,19 @@ impl VoxelCollisionScene {
     /// Copies of what rebuilding `dirty` and `field_dirty` reads, for a
     /// worker thread: those chunks and their resident neighbours and the
     /// colliders `dirty` may keep.
+    /// The chunks are shared, not copied: a change to one while the worker
+    /// holds it copies that chunk alone.
     pub(crate) fn rebuild_snapshot(
         &self,
         dirty: &BTreeSet<ChunkCoord>,
         field_dirty: &BTreeSet<ChunkCoord>,
+        coarse: &BTreeSet<ChunkCoord>,
     ) -> RebuildSnapshot {
         let mut world = VoxelWorld::new(self.voxel_world.grid());
-        let reached: BTreeSet<ChunkCoord> = dirty
-            .union(field_dirty)
+        let owners: BTreeSet<ChunkCoord> =
+            dirty.union(field_dirty).chain(coarse).copied().collect();
+        let reached: BTreeSet<ChunkCoord> = owners
+            .iter()
             .flat_map(|owner| {
                 (-1..=1).flat_map(move |x| {
                     (-1..=1).flat_map(move |y| {
@@ -1284,8 +1351,8 @@ impl VoxelCollisionScene {
             })
             .collect();
         for coordinate in reached {
-            if let Some(chunk) = self.voxel_world.get(coordinate) {
-                world.insert(coordinate, chunk.clone());
+            if let Some(chunk) = self.voxel_world.get_shared(coordinate) {
+                world.insert_shared(coordinate, Arc::clone(chunk));
             }
         }
         RebuildSnapshot {
@@ -1304,7 +1371,8 @@ impl VoxelCollisionScene {
         dirty: &BTreeSet<ChunkCoord>,
         field_dirty: &BTreeSet<ChunkCoord>,
     ) -> Result<ChunkRebuild, CollisionSceneError> {
-        self.rebuild_source().rebuild(changed, dirty, field_dirty)
+        self.rebuild_source()
+            .rebuild(changed, dirty, field_dirty, None)
     }
 
     fn prepare_collider(
@@ -1490,6 +1558,10 @@ impl VoxelCollisionScene {
 
     /// Add (`present`) or remove one solid voxel's share of the count and hash.
     pub(crate) fn account_voxel(&mut self, voxel: MaterialVoxel, present: bool) {
+        let grid = self.voxel_world.grid();
+        let [x, y, z] = voxel.address;
+        self.chunk_accounts
+            .remove(&grid.voxel_to_chunk(VoxelCoord::new(x, y, z)));
         if present {
             self.solid_voxel_count += 1;
             self.authority_hash = self.authority_hash.wrapping_add(voxel_hash(voxel));
@@ -1507,16 +1579,21 @@ impl VoxelCollisionScene {
         present: bool,
     ) {
         let grid = self.voxel_world.grid();
-        let Some(chunk) = chunk.or_else(|| self.voxel_world.get(coordinate)) else {
-            return;
+        // The share a resident chunk was accounted with, unless edited since.
+        let cached = (!present)
+            .then(|| self.chunk_accounts.remove(&coordinate))
+            .flatten();
+        let (count, hash) = match cached {
+            Some(account) => account,
+            None => {
+                let Some(chunk) = chunk.or_else(|| self.voxel_world.get(coordinate)) else {
+                    return;
+                };
+                chunk_account(grid, coordinate, chunk)
+            }
         };
-        let (count, hash) = chunk
-            .iter()
-            .filter_map(|(local, value)| material_voxel_at(grid, coordinate, local, value))
-            .fold((0, 0_u64), |(count, hash), voxel| {
-                (count + 1, hash.wrapping_add(voxel_hash(voxel)))
-            });
         if present {
+            self.chunk_accounts.insert(coordinate, (count, hash));
             self.solid_voxel_count += count;
             self.authority_hash = self.authority_hash.wrapping_add(hash);
         } else {
@@ -1575,6 +1652,7 @@ impl VoxelCollisionScene {
                 }
             }
         }
+        let coarse_changed = self.install_coarse(rebuild.coarse_reach, rebuild.coarse);
         self.install_prepared(rebuild.colliders);
         self.projection.touch();
         let previous_mesh_state = std::mem::replace(&mut self.mesh_state, next_mesh_state());
@@ -1597,19 +1675,95 @@ impl VoxelCollisionScene {
             mesh_microseconds: rebuild.microseconds,
             collider_microseconds: rebuild.collider_microseconds,
         };
-        self.record_mesh_update();
+        self.record_mesh_update(&coarse_changed);
+    }
+
+    /// Install the coarse meshes a rebuild built, or, when it built none,
+    /// drop those its change reached and leave them to be built off the
+    /// caller's thread. Returns the chunks whose coarse mesh changed.
+    fn install_coarse(
+        &mut self,
+        reach: BTreeSet<ChunkCoord>,
+        built: Option<BTreeMap<ChunkCoord, Option<Arc<VoxelMeshChunk>>>>,
+    ) -> BTreeSet<ChunkCoord> {
+        let Some(kept) = self.coarse_chunks.as_mut() else {
+            return BTreeSet::new();
+        };
+        let mut changed = BTreeSet::new();
+        match built {
+            Some(built) => {
+                for (coordinate, mesh) in built {
+                    self.stale_coarse.remove(&coordinate);
+                    // Only a chunk with a mesh has a coarse one.
+                    match mesh.filter(|_| self.mesh_chunks.contains_key(&coordinate)) {
+                        Some(mesh) => {
+                            kept.insert(coordinate, mesh);
+                        }
+                        None => {
+                            kept.remove(&coordinate);
+                        }
+                    }
+                    changed.insert(coordinate);
+                }
+            }
+            None => {
+                for coordinate in reach {
+                    if kept.remove(&coordinate).is_some() {
+                        changed.insert(coordinate);
+                    }
+                    if self.mesh_chunks.contains_key(&coordinate) {
+                        self.stale_coarse.insert(coordinate);
+                    }
+                }
+            }
+        }
+        // A chunk whose mesh went has no coarse mesh either.
+        let gone: Vec<_> = kept
+            .keys()
+            .filter(|coordinate| !self.mesh_chunks.contains_key(coordinate))
+            .copied()
+            .collect();
+        for coordinate in gone {
+            kept.remove(&coordinate);
+            self.stale_coarse.remove(&coordinate);
+            changed.insert(coordinate);
+        }
+        changed
+    }
+
+    /// Take the chunks a synchronous change left without their coarse mesh.
+    pub(crate) fn take_stale_coarse(&mut self) -> BTreeSet<ChunkCoord> {
+        std::mem::take(&mut self.stale_coarse)
+    }
+
+    /// Give back chunks taken with [`Self::take_stale_coarse`] whose coarse
+    /// meshes were not installed.
+    pub(crate) fn restore_stale_coarse(&mut self, stale: BTreeSet<ChunkCoord>) {
+        if self.coarse_chunks.is_some() {
+            self.stale_coarse.extend(
+                stale
+                    .into_iter()
+                    .filter(|coordinate| self.mesh_chunks.contains_key(coordinate)),
+            );
+        }
     }
 
     /// Add the mesh update just made to the history, dropping the oldest
     /// changes once it names more chunks than the scene has meshes: a
     /// consumer that far behind compares every chunk anyway.
-    fn record_mesh_update(&mut self) {
+    /// `coarse` names the chunks whose coarse mesh alone changed too.
+    fn record_mesh_update(&mut self, coarse: &BTreeSet<ChunkCoord>) {
         let Some(previous) = self.mesh_update.previous_mesh_state else {
             return;
         };
-        self.mesh_history_chunks += self.mesh_update.dirty_chunks.len();
-        self.mesh_history
-            .push_back((previous, self.mesh_update.dirty_chunks.clone()));
+        let mut changed = self.mesh_update.dirty_chunks.clone();
+        if !coarse.is_empty() {
+            changed.extend(coarse.iter().map(|coordinate| coordinate.to_array()));
+            changed.sort_unstable();
+            changed.dedup();
+        }
+        self.mesh_history_chunks += changed.len();
+        self.mesh_history.push_back((previous, changed));
         while self.mesh_history.len() > 1 && self.mesh_history_chunks > self.mesh_chunks.len() {
             let (_, dropped) = self.mesh_history.pop_front().expect("more than one");
             self.mesh_history_chunks -= dropped.len();
@@ -1714,11 +1868,15 @@ impl RebuildSource<'_> {
     /// `field_dirty` chunks outside `dirty` keep their meshes and rebuild
     /// only their distance fields, applied to the mesh each has when the
     /// rebuild is published.
+    /// `coarse` names the chunks whose coarse meshes to build too, or
+    /// `None` to leave the coarse meshes the change reaches to be built
+    /// later.
     pub(crate) fn rebuild(
         &self,
         changed: &BTreeSet<ChunkCoord>,
         dirty: &BTreeSet<ChunkCoord>,
         field_dirty: &BTreeSet<ChunkCoord>,
+        coarse: Option<&BTreeSet<ChunkCoord>>,
     ) -> Result<ChunkRebuild, CollisionSceneError> {
         let greedy = self.options.all_greedy();
         let coordinates: Vec<_> = dirty.iter().copied().collect();
@@ -1743,6 +1901,8 @@ impl RebuildSource<'_> {
             meshes: BTreeMap::new(),
             fields: Vec::new(),
             colliders: Vec::new(),
+            coarse_reach: coarse_reach(changed),
+            coarse: None,
             microseconds: 0,
             collider_microseconds: 0,
         };
@@ -1769,7 +1929,42 @@ impl RebuildSource<'_> {
                 rebuild.fields.push((*coordinate, field));
             }
         }
+        if let Some(coarse) = coarse {
+            let started = Instant::now();
+            let coordinates: Vec<_> = coarse.iter().copied().collect();
+            rebuild.coarse = Some(self.coarse_meshes(&coordinates).into_iter().collect());
+            let elapsed = started.elapsed().as_micros() as u64;
+            rebuild.microseconds = rebuild.microseconds.saturating_add(elapsed);
+        }
         Ok(rebuild)
+    }
+
+    /// The coarse meshes of `coordinates`, built in parallel: `None` for a
+    /// chunk without a mesh, or one whose coarse mesh fails to build, which
+    /// is then drawn from its mesh.
+    pub(crate) fn coarse_meshes(
+        &self,
+        coordinates: &[ChunkCoord],
+    ) -> Vec<(ChunkCoord, Option<Arc<VoxelMeshChunk>>)> {
+        let built = surface_collision::in_parallel(coordinates, |coordinate| {
+            let grid = self.world.grid();
+            let source = self
+                .world
+                .get(coordinate)
+                .filter(|chunk| !chunk.is_empty())?;
+            let mesh =
+                svc_mesh::mesh_chunk_coarse_in_world(self.world, coordinate, self.options)?.ok()?;
+            Some(Arc::new(voxel_mesh_chunk(
+                coordinate,
+                grid.voxel_min_world(grid.chunk_origin_voxel(coordinate)),
+                grid.chunk_origin_voxel(coordinate).to_array(),
+                grid.chunk_dims().to_array(),
+                grid.voxel_size() as f32,
+                source.content_hash().0,
+                mesh,
+            )))
+        });
+        coordinates.iter().copied().zip(built).collect()
     }
 
     /// The collider of `coordinate` from its current voxels and `mesh`, its
@@ -1841,8 +2036,19 @@ pub(crate) struct ChunkRebuild {
     meshes: BTreeMap<ChunkCoord, Option<Arc<VoxelMeshChunk>>>,
     fields: Vec<(ChunkCoord, Vec<u8>)>,
     colliders: Vec<(ChunkCoord, Option<PreparedChunkParts>)>,
+    /// The chunks whose coarse meshes the change reaches, and those built,
+    /// if any were.
+    coarse_reach: BTreeSet<ChunkCoord>,
+    coarse: Option<BTreeMap<ChunkCoord, Option<Arc<VoxelMeshChunk>>>>,
     microseconds: u64,
     collider_microseconds: u64,
+}
+
+impl ChunkRebuild {
+    /// Whether it built the coarse meshes its change reaches.
+    pub(crate) fn built_coarse(&self) -> bool {
+        self.coarse.is_some()
+    }
 }
 
 fn build_mesh_chunks(
@@ -1878,6 +2084,31 @@ pub(crate) fn build_mesh_chunk(
         chunk.content_hash().0,
         mesh,
     ))
+}
+
+/// The chunks whose coarse meshes a change to `changed` reaches: a coarse
+/// mesh reads two voxels into each neighbour, edges and corners included.
+pub(crate) fn coarse_reach(changed: &BTreeSet<ChunkCoord>) -> BTreeSet<ChunkCoord> {
+    changed
+        .iter()
+        .flat_map(|owner| {
+            (-1..=1).flat_map(move |x| {
+                (-1..=1).flat_map(move |y| {
+                    (-1..=1).map(move |z| ChunkCoord::new(owner.x + x, owner.y + y, owner.z + z))
+                })
+            })
+        })
+        .collect()
+}
+
+/// A chunk's share of the solid voxel count and authority hash.
+fn chunk_account(grid: VoxelGridSpec, coordinate: ChunkCoord, chunk: &VoxelChunk) -> (usize, u64) {
+    chunk
+        .iter()
+        .filter_map(|(local, value)| material_voxel_at(grid, coordinate, local, value))
+        .fold((0, 0_u64), |(count, hash), voxel| {
+            (count + 1, hash.wrapping_add(voxel_hash(voxel)))
+        })
 }
 
 fn material_voxel_at(

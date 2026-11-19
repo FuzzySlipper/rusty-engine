@@ -158,7 +158,9 @@ of the player defers them and refreshes its presentation every update, so the
 update pays for writing voxels only; a chunk the player needs now is admitted
 without `Deferred`. A deferred change whose mesh fails to build is undone when
 it installs, as a synchronous one is, unless a later change wrote over it, and
-the host log names the error.
+the host log names the error. The receipt's `SettleMicroseconds`,
+`WriteMicroseconds` and `RebuildMicroseconds` say where the call's time went
+([costs](voxel-budgets.md#how-a-change-is-applied)).
 
 The Engine keeps no undo history. The product owns undo: it applies inverse
 edits. It also owns which chunks stay resident. The costs are in

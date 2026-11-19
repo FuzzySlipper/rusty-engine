@@ -4,6 +4,8 @@
 //! colliders.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
+use std::time::Instant;
 
 use core_space::{ChunkCoord, ChunkDims};
 use core_voxel::VoxelValue;
@@ -230,6 +232,17 @@ pub struct VoxelChunkResidencyReceipt {
     /// admitted again draws its sharp cuts from estimated normals until a
     /// brush or stamp cuts them again.
     pub dropped_hermite_normals: usize,
+    /// Wall time spent validating and writing the voxels and accounting
+    /// the changed chunks.
+    pub write_microseconds: u64,
+    /// Wall time spent rebuilding the meshes and colliders the change
+    /// reaches, or, for a deferred change, preparing the worker's copy of
+    /// what it reads and starting it.
+    pub rebuild_microseconds: u64,
+}
+
+fn microseconds_since(started: Instant) -> u64 {
+    started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -260,7 +273,10 @@ impl VoxelChunkResidencyService {
         scene: &mut VoxelCollisionScene,
         operations: &[VoxelChunkResidencyOperation],
     ) -> Result<VoxelChunkResidencyReceipt, VoxelChunkResidencyApplyError> {
+        let started = Instant::now();
         let written = write(scene, operations)?;
+        let mut write_microseconds = microseconds_since(started);
+        let started = Instant::now();
         let rebuild =
             match scene.rebuild_chunks(&written.changed, &written.dirty, &written.field_dirty) {
                 Ok(rebuild) => rebuild,
@@ -269,9 +285,18 @@ impl VoxelChunkResidencyService {
                     return Err(VoxelChunkResidencyApplyError::ProjectionBuild(error));
                 }
             };
+        let mut rebuild_microseconds = microseconds_since(started);
+        let started = Instant::now();
         let dropped_hermite_normals = account(scene, &written.previous);
+        write_microseconds += microseconds_since(started);
+        let started = Instant::now();
         scene.publish_local_change(&written.dirty, rebuild);
-        Ok(receipt(scene, written, dropped_hermite_normals))
+        rebuild_microseconds += microseconds_since(started);
+        Ok(VoxelChunkResidencyReceipt {
+            write_microseconds,
+            rebuild_microseconds,
+            ..receipt(scene, written, dropped_hermite_normals)
+        })
     }
 
     /// Apply operations as [`Self::apply`] does, writing the voxels now and
@@ -286,19 +311,38 @@ impl VoxelChunkResidencyService {
         operations: &[VoxelChunkResidencyOperation],
     ) -> Result<(VoxelChunkResidencyReceipt, DeferredChunkRebuild), VoxelChunkResidencyApplyError>
     {
+        let started = Instant::now();
         let written = write(scene, operations)?;
         let dropped_hermite_normals = account(scene, &written.previous);
+        let write_microseconds = microseconds_since(started);
+        let started = Instant::now();
         scene
             .projected_revision
             .get_or_insert(written.revision_before);
         scene.source_revision = scene.source_revision.next();
-        let snapshot = scene.rebuild_snapshot(&written.dirty, &written.field_dirty);
+        // The coarse meshes the change reaches build with its meshes, with
+        // any a synchronous change left to build.
+        let coarse = scene.keeps_coarse_meshes().then(|| {
+            let mut coarse = crate::coarse_reach(&written.changed);
+            coarse.extend(scene.take_stale_coarse());
+            coarse
+        });
+        let snapshot = scene.rebuild_snapshot(
+            &written.dirty,
+            &written.field_dirty,
+            coarse.as_ref().unwrap_or(&BTreeSet::new()),
+        );
         let (changed, dirty, field_dirty) = (
             written.changed.clone(),
             written.dirty.clone(),
             written.field_dirty.clone(),
         );
-        let build = move || snapshot.source().rebuild(&changed, &dirty, &field_dirty);
+        let coarse_built = coarse.clone();
+        let build = move || {
+            snapshot
+                .source()
+                .rebuild(&changed, &dirty, &field_dirty, coarse_built.as_ref())
+        };
         let rebuild = DeferredChunkRebuild {
             accepted: scene.source_revision,
             synchronous_state: scene.synchronous_state,
@@ -306,6 +350,7 @@ impl VoxelChunkResidencyService {
             dirty: written.dirty.clone(),
             field_dirty: written.field_dirty.clone(),
             previous: first_previous(&written.previous),
+            coarse,
             built: match std::thread::Builder::new()
                 .name("rusty-voxel-residency".to_owned())
                 .spawn(build)
@@ -319,7 +364,12 @@ impl VoxelChunkResidencyService {
                 )),
             },
         };
-        Ok((receipt(scene, written, dropped_hermite_normals), rebuild))
+        let receipt = VoxelChunkResidencyReceipt {
+            write_microseconds,
+            rebuild_microseconds: microseconds_since(started),
+            ..receipt(scene, written, dropped_hermite_normals)
+        };
+        Ok((receipt, rebuild))
     }
 }
 
@@ -334,7 +384,9 @@ pub struct DeferredChunkRebuild {
     dirty: BTreeSet<ChunkCoord>,
     field_dirty: BTreeSet<ChunkCoord>,
     /// Each changed chunk as it was before, to put back if a mesh fails.
-    previous: BTreeMap<ChunkCoord, Option<VoxelChunk>>,
+    previous: BTreeMap<ChunkCoord, Option<Arc<VoxelChunk>>>,
+    /// The chunks whose coarse meshes it builds, when the scene keeps them.
+    coarse: Option<BTreeSet<ChunkCoord>>,
     built: Built,
 }
 
@@ -344,6 +396,48 @@ enum Built {
 }
 
 impl DeferredChunkRebuild {
+    /// Build on a worker thread the coarse meshes synchronous changes left
+    /// the scene without ([`VoxelCollisionScene::has_stale_coarse_meshes`]),
+    /// to install as a deferred change is, in order with the others; `None`
+    /// when there are none. Until it installs those chunks are drawn from
+    /// their meshes.
+    pub fn coarse(scene: &mut VoxelCollisionScene) -> Option<Self> {
+        let coarse = scene.take_stale_coarse();
+        if coarse.is_empty() {
+            return None;
+        }
+        let none = BTreeSet::new();
+        let snapshot = scene.rebuild_snapshot(&none, &none, &coarse);
+        let coarse_built = coarse.clone();
+        let build = move || {
+            let none = BTreeSet::new();
+            snapshot
+                .source()
+                .rebuild(&none, &none, &none, Some(&coarse_built))
+        };
+        Some(Self {
+            accepted: scene.source_revision,
+            synchronous_state: scene.synchronous_state,
+            changed: BTreeSet::new(),
+            dirty: BTreeSet::new(),
+            field_dirty: BTreeSet::new(),
+            previous: BTreeMap::new(),
+            built: match std::thread::Builder::new()
+                .name("rusty-voxel-coarse".to_owned())
+                .spawn(build)
+            {
+                Ok(worker) => Built::Building(worker),
+                Err(_) => Built::Ready(scene.rebuild_source().rebuild(
+                    &none,
+                    &none,
+                    &none,
+                    Some(&coarse),
+                )),
+            },
+            coarse: Some(coarse),
+        })
+    }
+
     /// The chunks the change admitted, replaced or evicted.
     pub fn changed_chunks(&self) -> impl Iterator<Item = VoxelChunkIdentity> + '_ {
         self.changed
@@ -383,7 +477,15 @@ impl DeferredChunkRebuild {
         };
         match built {
             Ok(rebuild) => {
+                let coarse_built = rebuild.built_coarse();
                 scene.publish_rebuild(&self.dirty, rebuild);
+                // A rebuild made again here built no coarse meshes: those
+                // left to it are left to the next.
+                if !coarse_built {
+                    if let Some(coarse) = self.coarse {
+                        scene.restore_stale_coarse(coarse);
+                    }
+                }
                 Ok(())
             }
             Err(error) if scene.source_revision != self.accepted => Err(error),
@@ -393,10 +495,10 @@ impl DeferredChunkRebuild {
                     match before {
                         Some(chunk) => {
                             scene.account_chunk(coordinate, Some(&chunk), true);
-                            scene.voxel_world.insert(coordinate, chunk);
+                            scene.voxel_world.insert_shared(coordinate, chunk);
                         }
                         None => {
-                            scene.voxel_world.remove(coordinate);
+                            scene.voxel_world.remove_shared(coordinate);
                         }
                     }
                 }
@@ -412,7 +514,7 @@ struct Written {
     revision_before: VoxelSourceRevision,
     /// The chunks each operation replaced, in order, for accounting and for
     /// putting back if a mesh fails to build.
-    previous: Vec<(ChunkCoord, Option<VoxelChunk>)>,
+    previous: Vec<(ChunkCoord, Option<Arc<VoxelChunk>>)>,
     admitted: Vec<VoxelChunkIdentity>,
     replaced: Vec<VoxelChunkIdentity>,
     evicted: Vec<VoxelChunkIdentity>,
@@ -465,7 +567,7 @@ fn write(
     }
 
     let revision_before = scene.source_revision;
-    let mut previous: Vec<(ChunkCoord, Option<VoxelChunk>)> = Vec::new();
+    let mut previous: Vec<(ChunkCoord, Option<Arc<VoxelChunk>>)> = Vec::new();
     let (mut admitted, mut replaced, mut evicted, mut retained) =
         (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for (identity, contents) in validated {
@@ -482,9 +584,12 @@ fn write(
                 } else {
                     admitted.push(identity);
                 }
-                previous.push((coordinate, scene.voxel_world.insert(coordinate, chunk)));
+                previous.push((
+                    coordinate,
+                    scene.voxel_world.insert_shared(coordinate, Arc::new(chunk)),
+                ));
             }
-            None => match scene.voxel_world.remove(coordinate) {
+            None => match scene.voxel_world.remove_shared(coordinate) {
                 Some(chunk) => {
                     evicted.push(identity);
                     previous.push((coordinate, Some(chunk)));
@@ -523,14 +628,14 @@ fn write(
 }
 
 /// Undo a write whose chunks did not rebuild.
-fn put_back(scene: &mut VoxelCollisionScene, previous: Vec<(ChunkCoord, Option<VoxelChunk>)>) {
+fn put_back(scene: &mut VoxelCollisionScene, previous: Vec<(ChunkCoord, Option<Arc<VoxelChunk>>)>) {
     for (coordinate, chunk) in previous.into_iter().rev() {
         match chunk {
             Some(chunk) => {
-                scene.voxel_world.insert(coordinate, chunk);
+                scene.voxel_world.insert_shared(coordinate, chunk);
             }
             None => {
-                scene.voxel_world.remove(coordinate);
+                scene.voxel_world.remove_shared(coordinate);
             }
         }
     }
@@ -538,8 +643,8 @@ fn put_back(scene: &mut VoxelCollisionScene, previous: Vec<(ChunkCoord, Option<V
 
 /// Each changed chunk as it was before the first operation on it.
 fn first_previous(
-    previous: &[(ChunkCoord, Option<VoxelChunk>)],
-) -> BTreeMap<ChunkCoord, Option<VoxelChunk>> {
+    previous: &[(ChunkCoord, Option<Arc<VoxelChunk>>)],
+) -> BTreeMap<ChunkCoord, Option<Arc<VoxelChunk>>> {
     let mut first = BTreeMap::new();
     for (coordinate, chunk) in previous {
         first.entry(*coordinate).or_insert_with(|| chunk.clone());
@@ -551,7 +656,7 @@ fn first_previous(
 /// what is there now. Returns the crossing normals the old chunks carried.
 fn account(
     scene: &mut VoxelCollisionScene,
-    previous: &[(ChunkCoord, Option<VoxelChunk>)],
+    previous: &[(ChunkCoord, Option<Arc<VoxelChunk>>)],
 ) -> usize {
     let mut first = BTreeMap::new();
     for (coordinate, chunk) in previous {
@@ -561,7 +666,7 @@ fn account(
         .values()
         .copied()
         .flatten()
-        .map(VoxelChunk::edge_crossing_count)
+        .map(|chunk| chunk.edge_crossing_count())
         .sum();
     for (coordinate, before) in first {
         if let Some(before) = before {
@@ -604,6 +709,8 @@ fn receipt(
         },
         removed_mesh_chunks: if rebuilt { update.removed_chunks } else { 0 },
         dropped_hermite_normals,
+        write_microseconds: 0,
+        rebuild_microseconds: 0,
     }
 }
 
@@ -720,4 +827,56 @@ fn resident_chunk_readout(identity: VoxelChunkIdentity, chunk: &VoxelChunk) -> R
 
 fn chunk_content_hash(chunk: &VoxelChunk) -> VoxelChunkContentHash {
     VoxelChunkContentHash::new(chunk.content_hash().0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use svc_mesh::{SurfaceMeshOptions, SurfaceMode};
+
+    #[test]
+    fn a_worker_snapshot_shares_chunks_and_keeps_them_through_an_edit() {
+        let mut scene = VoxelCollisionScene::from_material_voxels_with_mesh_options(
+            1.0,
+            8,
+            (0..16).flat_map(|x| {
+                (0..8).map(move |z| crate::MaterialVoxel {
+                    state: 0,
+                    address: [x, 0, z],
+                    material_slot: 1,
+                })
+            }),
+            SurfaceMeshOptions::with_mode(SurfaceMode::DualContouring),
+        )
+        .unwrap();
+        let chunk = ChunkCoord::new(1, 0, 0);
+        let snapshot = scene.rebuild_snapshot(
+            &BTreeSet::from([ChunkCoord::new(0, 0, 0)]),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        );
+        let held = snapshot.world.get_shared(chunk).unwrap();
+        assert!(Arc::ptr_eq(
+            held,
+            scene.voxel_world.get_shared(chunk).unwrap()
+        ));
+        let before = held.content_hash();
+        // An edit while the worker holds the chunk copies that chunk alone.
+        crate::VoxelEditService::apply(
+            &mut scene,
+            &[crate::VoxelEdit::Clear { address: [9, 0, 3] }],
+        )
+        .unwrap();
+        assert!(!Arc::ptr_eq(
+            held,
+            scene.voxel_world.get_shared(chunk).unwrap()
+        ));
+        assert_eq!(held.content_hash(), before);
+        assert_ne!(scene.voxel_world.get(chunk).unwrap().content_hash(), before);
+        let untouched = ChunkCoord::new(0, 0, 0);
+        assert!(Arc::ptr_eq(
+            snapshot.world.get_shared(untouched).unwrap(),
+            scene.voxel_world.get_shared(untouched).unwrap()
+        ));
+    }
 }

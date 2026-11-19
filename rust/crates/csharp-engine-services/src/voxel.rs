@@ -514,12 +514,21 @@ impl RuntimeSpatialBridge {
         request: &NativeVoxelResidencyTransaction,
     ) -> Result<NativeVoxelResidencyReceipt, CsharpEngineServicesError> {
         let chunk_size = self.session_mut(request.session)?.scene.chunk_size();
+        let started = Instant::now();
         let operations = translate_residency(request, chunk_size)?;
+        let translate_microseconds = microseconds_since(started);
+        let timed = |mut receipt: NativeVoxelResidencyReceipt, settle_microseconds| {
+            receipt.settle_microseconds = settle_microseconds;
+            receipt.write_microseconds += translate_microseconds;
+            receipt
+        };
         if request.deferred {
             return self.edit_scene_deferring(request.session, |session| {
                 // Earlier deferred changes still building build on; the
                 // rebuilds install in order.
+                let started = Instant::now();
                 session.install_built();
+                let settle_microseconds = microseconds_since(started);
                 let applied = session.change_collision(|scene| {
                     // The colliders change when the rebuild installs.
                     match VoxelChunkResidencyService::apply_deferred(scene, &operations) {
@@ -533,10 +542,13 @@ impl RuntimeSpatialBridge {
                 });
                 let (receipt, rebuild) = applied?;
                 session.deferred.extend(rebuild);
-                Ok(receipt)
+                Ok(timed(receipt, settle_microseconds))
             })?;
         }
-        self.edit_scene(request.session, |session| {
+        self.edit_scene_deferring(request.session, |session| {
+            let started = Instant::now();
+            session.settle();
+            let settle_microseconds = microseconds_since(started);
             session.change_collision(|scene| {
                 match VoxelChunkResidencyService::apply(scene, &operations) {
                     Ok(receipt) => {
@@ -549,10 +561,11 @@ impl RuntimeSpatialBridge {
                             .collect();
                         let mut native = native_residency_receipt(&receipt);
                         native.mesh_microseconds = scene.mesh_update().mesh_microseconds;
-                        (Ok(native), changed)
+                        (Ok(timed(native, settle_microseconds)), changed)
                     }
                     Err(error) => (
-                        residency_refusal(scene, error).map(|(receipt, _)| receipt),
+                        residency_refusal(scene, error)
+                            .map(|(receipt, _)| timed(receipt, settle_microseconds)),
                         Vec::new(),
                     ),
                 }
@@ -852,10 +865,17 @@ fn native_edit_receipt(receipt: &engine_spatial::VoxelEditReceipt) -> NativeVoxe
     }
 }
 
+fn microseconds_since(started: Instant) -> u64 {
+    started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+}
+
 fn native_residency_receipt(
     receipt: &engine_spatial::VoxelChunkResidencyReceipt,
 ) -> NativeVoxelResidencyReceipt {
     NativeVoxelResidencyReceipt {
+        settle_microseconds: 0,
+        write_microseconds: receipt.write_microseconds,
+        rebuild_microseconds: receipt.rebuild_microseconds,
         revision_before: receipt.revision_before.raw(),
         accepted_revision: receipt.accepted_revision.raw(),
         admitted_count: narrow(receipt.admitted.len()),
@@ -2410,7 +2430,9 @@ mod tests {
             (vec![([2, 0, 1], 11)], vec![[0, 0, 0]]),
         ];
         for (admitted, evicted) in &updates {
-            residency(&mut sync, sync_session, admitted, evicted, false);
+            let sync_receipt = residency(&mut sync, sync_session, admitted, evicted, false);
+            // A synchronous change meshes in the call.
+            assert!(sync_receipt.rebuild_microseconds > 0);
             let before = shown(&deferred, session);
             let receipt = residency(&mut deferred, session, admitted, evicted, true);
             // Collision and meshes stay as they were within the call; the

@@ -122,6 +122,9 @@ pub(crate) struct RuntimeVoxelScenePresentationBridge {
     state: VoxelScenePresentationState,
     staged: Option<RuntimeVoxelScenePresentationCall>,
     appearance: Option<*mut RuntimeAppearanceBridge>,
+    /// The sibling Spatial owner, which keeps a session's coarse meshes
+    /// while a presentation draws its distant chunks coarse.
+    spatial_owner: Option<*mut crate::spatial::RuntimeSpatialBridge>,
     update_attribution: RuntimeUpdateAttribution,
     operation_diagnostics: crate::operation_diagnostics::OperationDiagnostics,
     borrowed: crate::operation_diagnostics::BorrowedResult,
@@ -141,6 +144,7 @@ impl RuntimeVoxelScenePresentationBridge {
             },
             staged: None,
             appearance: None,
+            spatial_owner: None,
             update_attribution: RuntimeUpdateAttribution::default(),
             operation_diagnostics: Default::default(),
             borrowed: Default::default(),
@@ -152,6 +156,34 @@ impl RuntimeVoxelScenePresentationBridge {
         // refreshed while assembling the call table and used only during the
         // synchronous generated callback.
         self.appearance = Some(appearance as *mut RuntimeAppearanceBridge);
+    }
+
+    pub(crate) fn bind_spatial(&mut self, spatial: &mut crate::spatial::RuntimeSpatialBridge) {
+        // Retained by EngineServiceSet like the appearance sibling, and used
+        // only during a synchronous generated callback.
+        self.spatial_owner = Some(spatial as *mut crate::spatial::RuntimeSpatialBridge);
+    }
+
+    /// Keep `session`'s coarse meshes while a presentation of it draws
+    /// distant chunks coarse, and drop them once none does.
+    fn keep_coarse_meshes(
+        &mut self,
+        session: NativeSpatialSessionHandle,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let keep = self
+            .staged_mut()?
+            .state
+            .presentations
+            .values()
+            .any(|presentation| {
+                presentation.session.value == session.value && presentation.coarse_distance > 0.0
+            });
+        let Some(spatial) = self.spatial_owner else {
+            return Ok(());
+        };
+        // SAFETY: bind_spatial points at the sibling owner retained by
+        // EngineServiceSet. Callbacks do not retain it beyond this call.
+        unsafe { &mut *spatial }.keep_coarse_meshes(session, keep)
     }
 
     pub(crate) fn reset_update_attribution(&mut self) {
@@ -350,6 +382,8 @@ impl RuntimeVoxelScenePresentationBridge {
         // A product may set the distance whenever its view changes, even every
         // update: only chunks that change level are projected again.
         presentation.coarse_distance = request.coarse_distance;
+        self.keep_coarse_meshes(session)?;
+        let staged = self.staged_mut()?;
         if let Some(frame) = project_level_changes(&mut staged.state, &spatial)? {
             staged.frames.push(frame);
         }
@@ -798,6 +832,8 @@ impl RuntimeVoxelScenePresentationBridge {
             })?;
         let frame = project_all_presentations(&mut staged.state, &spatial)?;
         staged.frames.push(frame);
+        // The session may already be gone.
+        let _ = self.keep_coarse_meshes(removed.session);
         self.release_scatters([removed])
     }
 
@@ -894,6 +930,9 @@ impl RuntimeVoxelScenePresentationBridge {
         staged
             .frames
             .push(project_all_presentations(&mut staged.state, &spatial)?);
+        for presentation in removed.values() {
+            let _ = self.keep_coarse_meshes(presentation.session);
+        }
         self.release_scatters(removed.into_values())?;
         Ok(NativeVoxelScenePresentationClearReceipt {
             cleared_count,
@@ -1295,18 +1334,15 @@ fn presentation_readout(
             .projector
             .coarse_chunk_count(&presentation_instance_id(handle.value))
             as u64,
-        coarse_mesh_microseconds: state
-            .projector
-            .coarse_mesh_microseconds(&presentation_instance_id(handle.value)),
         scatter_patch_count: scatter.patches,
         scatter_instance_count: scatter.instances,
         scatter_over_budget_count: scatter.over_budget,
         projected_every_chunk: projection.compared_every_chunk,
         projected_chunk_count: projection.visited_chunks,
         published_mesh_count: projection.published_meshes,
-        coarse_built_count: projection.coarse_built,
         coarse_planned_count: projection.coarse_planned,
         projection_microseconds: state.projection_microseconds,
+        scatter_microseconds: projection.scatter_microseconds,
     })
 }
 
@@ -1905,6 +1941,7 @@ mod tests {
         let stone = material(&mut appearance);
         let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         bridge.bind_appearance(&mut appearance);
+        bridge.bind_spatial(&mut spatial);
         bridge.begin_call();
         let bindings = [NativeVoxelSceneMaterialBinding {
             material_slot: 1,
@@ -1921,7 +1958,8 @@ mod tests {
             presentation,
             coarse_distance,
         };
-        // No camera has been seen yet, so nothing is coarse.
+        // No camera has been seen yet, so nothing is coarse; the scene
+        // keeps its coarse meshes from now on.
         assert_eq!(
             bridge
                 .set_level_of_detail(lod(10.0))
@@ -1929,6 +1967,11 @@ mod tests {
                 .coarse_chunk_count,
             0
         );
+        assert!(spatial
+            .collision_source()
+            .scene(session)
+            .unwrap()
+            .keeps_coarse_meshes());
         let replaced = |frames: &[RenderFrameDiff]| {
             frames
                 .iter()
@@ -1978,6 +2021,13 @@ mod tests {
         assert_eq!(off.coarse_chunk_count, 0);
         let call = bridge.take_staged_call().unwrap();
         assert_eq!(replaced(&call.frames), 2);
+        // The scene keeps coarse meshes only while a presentation draws
+        // them.
+        assert!(!spatial
+            .collision_source()
+            .scene(session)
+            .unwrap()
+            .keeps_coarse_meshes());
     }
 
     #[test]
@@ -2043,7 +2093,6 @@ mod tests {
         assert!(!edited.projected_every_chunk);
         assert_eq!(edited.projected_chunk_count, 1);
         assert_eq!(edited.published_mesh_count, 1);
-        assert_eq!(edited.coarse_built_count, 0);
         assert_eq!(edited.coarse_planned_count, 0);
     }
 
@@ -2065,6 +2114,7 @@ mod tests {
         let stone = material(&mut appearance);
         let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
         bridge.bind_appearance(&mut appearance);
+        bridge.bind_spatial(&mut spatial);
         bridge.begin_call();
         let bindings = [NativeVoxelSceneMaterialBinding {
             material_slot: 1,
@@ -3624,5 +3674,296 @@ mod tests {
             .expect("selected texture resource");
         assert_eq!(selected.identity(), payload_resource);
         assert_eq!(selected.asset_identity(), texture_id);
+    }
+
+    /// A cost probe, not a check (docs/voxel-budgets.md): about 800
+    /// resident dual-contoured 16³ chunks drawn coarse beyond 48 m, a stream
+    /// admitting 8 chunks and evicting 8 in one deferred transaction an
+    /// update, one update a 60 Hz frame, the presentation refreshed and its
+    /// level of detail settled each update.
+    #[test]
+    #[ignore]
+    fn streaming_cost() {
+        const EDGE: i64 = 16;
+        // Resident columns along x and z, and chunks in each.
+        const LONG: i64 = 20;
+        const WIDE: i64 = 20;
+        const HIGH: i64 = 2;
+        const PER_UPDATE: usize = 8;
+        const COARSE_DISTANCE: f64 = 48.0;
+        const UPDATES: usize = 300;
+        let (coarse, updates) = (COARSE_DISTANCE, UPDATES);
+        let mut spatial = RuntimeSpatialBridge::new();
+        let spatial_api = crate::spatial::api(&mut spatial);
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.create_session)(
+                    spatial_api.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: EDGE as u32,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::DualContouring,
+                    },
+                    &mut session,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let height = |x: i64, z: i64| {
+            20.0 + 6.0 * (x as f64 / 13.0).sin()
+                + 5.0 * (z as f64 / 17.0).cos()
+                + 2.0 * ((x + 2 * z) as f64 / 5.0).sin()
+        };
+        let apply = |spatial: &mut RuntimeSpatialBridge,
+                     admitted: &[[i64; 3]],
+                     evicted: &[[i64; 3]],
+                     deferred: bool| {
+            let volume = (EDGE * EDGE * EDGE) as u32;
+            let mut slots = Vec::new();
+            let mut densities = Vec::new();
+            let mut operations = Vec::new();
+            for chunk in admitted {
+                let offset = slots.len() as u32;
+                for z in 0..EDGE {
+                    for y in 0..EDGE {
+                        for x in 0..EDGE {
+                            let (wx, wy, wz) = (
+                                chunk[0] * EDGE + x,
+                                chunk[1] * EDGE + y,
+                                chunk[2] * EDGE + z,
+                            );
+                            let h = height(wx, wz);
+                            let d = wy as f64 + 0.5 - h;
+                            slots.push(if d < 0.0 {
+                                if d > -1.5 {
+                                    2
+                                } else {
+                                    1
+                                }
+                            } else {
+                                0
+                            });
+                            densities.push(d.abs().min(4.0) as f32);
+                        }
+                    }
+                }
+                operations.push(NativeVoxelResidencyOperation {
+                    kind: NativeVoxelResidencyOperationKind::Admit,
+                    chunk: NativeVoxelChunkIdentity {
+                        x: chunk[0],
+                        y: chunk[1],
+                        z: chunk[2],
+                    },
+                    material_offset: offset,
+                    material_count: volume,
+                    density_offset: offset,
+                    density_count: volume,
+                });
+            }
+            for chunk in evicted {
+                operations.push(NativeVoxelResidencyOperation {
+                    kind: NativeVoxelResidencyOperationKind::Evict,
+                    chunk: NativeVoxelChunkIdentity {
+                        x: chunk[0],
+                        y: chunk[1],
+                        z: chunk[2],
+                    },
+                    ..Default::default()
+                });
+            }
+            let voxel = crate::voxel::api(spatial);
+            let mut receipt = NativeVoxelResidencyReceipt::default();
+            let mut error = unsafe { std::mem::zeroed::<NativeOperationErrorReceipt>() };
+            let started = Instant::now();
+            assert_eq!(
+                unsafe {
+                    (voxel.apply_residency)(
+                        voxel.context,
+                        &NativeVoxelResidencyTransaction {
+                            states: std::ptr::null(),
+                            states_len: 0,
+                            session,
+                            operations: operations.as_ptr(),
+                            operations_len: operations.len(),
+                            material_slots: slots.as_ptr(),
+                            material_slots_len: slots.len(),
+                            densities: densities.as_ptr(),
+                            densities_len: densities.len(),
+                            deferred,
+                        },
+                        &mut receipt,
+                        &mut error,
+                    )
+                },
+                ABI_OK
+            );
+            (started.elapsed().as_secs_f64() * 1e3, receipt)
+        };
+        // The initial ring, synchronously.
+        let mut all = Vec::new();
+        for x in 0..LONG {
+            for z in 0..WIDE {
+                for y in 0..HIGH {
+                    all.push([x, y, z]);
+                }
+            }
+        }
+        let started = Instant::now();
+        apply(&mut spatial, &all, &[], false);
+        eprintln!(
+            "initial admit {} chunks: {:.1} ms",
+            all.len(),
+            started.elapsed().as_secs_f64() * 1e3
+        );
+
+        let mut appearance =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), BTreeMap::new());
+        appearance.begin_call();
+        let stone = material(&mut appearance);
+        let grass = material_with_color(
+            &mut appearance,
+            NativeColor {
+                r: 0.2,
+                g: 0.6,
+                b: 0.2,
+                a: 1.0,
+            },
+        );
+        let mut bridge = RuntimeVoxelScenePresentationBridge::new(spatial.collision_source());
+        bridge.bind_appearance(&mut appearance);
+        bridge.bind_spatial(&mut spatial);
+        bridge.begin_call();
+        let bindings = [
+            NativeVoxelSceneMaterialBinding {
+                material_slot: 1,
+                material: stone,
+            },
+            NativeVoxelSceneMaterialBinding {
+                material_slot: 2,
+                material: grass,
+            },
+        ];
+        let presentation = bridge
+            .project_scene(NativeProjectVoxelSceneRequest {
+                session,
+                materials: bindings.as_ptr(),
+                materials_len: bindings.len(),
+            })
+            .unwrap();
+        bridge
+            .set_level_of_detail(NativeVoxelSceneLevelOfDetailRequest {
+                presentation,
+                coarse_distance: coarse,
+            })
+            .unwrap();
+        let viewer = |x0: i64| {
+            standing([
+                ((x0 + LONG / 2) * EDGE) as f64,
+                30.0,
+                (WIDE / 2 * EDGE) as f64,
+            ])
+        };
+        let mut call = bridge.take_staged_call().unwrap();
+        bridge.settle_level_of_detail(&mut call, viewer(0)).unwrap();
+        bridge.commit_call(call);
+        // Settle the coarse meshes.
+        for _ in 0..4 {
+            bridge.begin_call();
+            bridge.refresh(presentation).unwrap();
+            let mut call = bridge.take_staged_call().unwrap();
+            bridge.settle_level_of_detail(&mut call, viewer(0)).unwrap();
+            bridge.commit_call(call);
+        }
+
+        let mut queue_in: std::collections::VecDeque<[i64; 3]> = Default::default();
+        let mut queue_out: std::collections::VecDeque<[i64; 3]> = Default::default();
+        let mut next_row = LONG;
+        let mut rows = Vec::new();
+        let mut last_update: Option<Instant> = None;
+        for update in 0..updates {
+            if queue_in.len() < PER_UPDATE {
+                for z in 0..WIDE {
+                    for y in 0..HIGH {
+                        queue_in.push_back([next_row, y, z]);
+                        queue_out.push_back([next_row - LONG, y, z]);
+                    }
+                }
+                next_row += 1;
+            }
+            let admitted: Vec<_> = (0..PER_UPDATE)
+                .filter_map(|_| queue_in.pop_front())
+                .collect();
+            let evicted: Vec<_> = (0..PER_UPDATE)
+                .filter_map(|_| queue_out.pop_front())
+                .collect();
+            let x0 = admitted[0][0] - LONG;
+            // One update a 60 Hz frame, as a product runs, so the workers
+            // have the time between updates.
+            if let Some(last) = last_update {
+                let frame = std::time::Duration::from_micros(16_667);
+                if let Some(rest) = frame.checked_sub(Instant::now() - last) {
+                    std::thread::sleep(rest);
+                }
+            }
+            last_update = Some(Instant::now());
+            let t0 = Instant::now();
+            spatial.settle_deferred_residency();
+            let settle = t0.elapsed().as_secs_f64() * 1e3;
+            bridge.begin_call();
+            let (apply_ms, receipt) = apply(&mut spatial, &admitted, &evicted, true);
+            let t1 = Instant::now();
+            let readout = bridge.refresh(presentation).unwrap();
+            let refresh = t1.elapsed().as_secs_f64() * 1e3;
+            let t2 = Instant::now();
+            let mut call = bridge.take_staged_call().unwrap();
+            bridge
+                .settle_level_of_detail(&mut call, viewer(x0))
+                .unwrap();
+            let lod = t2.elapsed().as_secs_f64() * 1e3;
+            let ops: usize = call.frames.iter().map(|f| f.ops.len()).sum();
+            bridge.commit_call(call);
+            rows.push((settle, apply_ms, refresh, lod));
+            if update % 10 == 0 {
+                eprintln!(
+                    "u{update:3} settle={settle:.2} apply={apply_ms:.2} (settle={} write={} rebuild={} us) refresh={refresh:.2} lod={lod:.2} ops={ops} chunks={} compared={} published={} coarse={}",
+                    receipt.settle_microseconds,
+                    receipt.write_microseconds,
+                    receipt.rebuild_microseconds,
+                    readout.chunk_count,
+                    readout.projected_chunk_count,
+                    readout.published_mesh_count,
+                    readout.coarse_chunk_count,
+                );
+            }
+        }
+        // Each update's settle, apply, refresh and level-of-detail times,
+        // then apply plus refresh.
+        let columns: [(&str, Vec<f64>); 6] = [
+            ("settle", rows.iter().map(|row| row.0).collect()),
+            ("apply", rows.iter().map(|row| row.1).collect()),
+            ("refresh", rows.iter().map(|row| row.2).collect()),
+            ("lod", rows.iter().map(|row| row.3).collect()),
+            (
+                "apply+refresh",
+                rows.iter().map(|row| row.1 + row.2).collect(),
+            ),
+            (
+                "total",
+                rows.iter()
+                    .map(|row| row.0 + row.1 + row.2 + row.3)
+                    .collect(),
+            ),
+        ];
+        for (name, mut values) in columns {
+            values.sort_by(f64::total_cmp);
+            let (median, p95, max) = (
+                values[values.len() / 2],
+                values[values.len() * 95 / 100],
+                values[values.len() - 1],
+            );
+            eprintln!("{name:8} median={median:.2} p95={p95:.2} max={max:.2}");
+        }
     }
 }
