@@ -2259,6 +2259,47 @@ mod tests {
         assert_eq!(crossing(&mut bridge, session, 3, 10.5), Some(vec![18]));
     }
 
+    /// A wide body on coarse cells beside a narrow one on fine cells, as a
+    /// large creature beside a player-sized one: through a passage only the
+    /// narrow one fits, it routes, and the wide one, published last, has no
+    /// route instead of coarsening the narrow one's.
+    #[test]
+    fn a_wide_grid_beside_a_narrow_one_leaves_its_passage_open() {
+        let (mut bridge, session) = bridge_with(Arc::new(gapped_wall(&[GAPS[0]])));
+        publish_agent(&mut bridge, session, 1, 0.3, 1.6);
+        let mut wide = flat_config(2.0, 1, 1.0, 3.2, 45.0);
+        wide.grid_id = 2;
+        let vec = |x, y, z| NativeVec3 { x, y, z };
+        bridge
+            .replace_collision_navigation(&NativeCollisionNavigationReplaceRequest {
+                session,
+                world_min: vec(0.0, 0.0, 0.0),
+                world_max: vec(26.0, 5.0, 13.0),
+                config: wide,
+                deferred: false,
+            })
+            .unwrap();
+        let held: Vec<_> = grids(&mut bridge, session)
+            .iter()
+            .map(|info| (info.grid_id, info.cell_size, info.agent_radius))
+            .collect();
+        assert_eq!(held, [(1, 1.0, 0.3), (2, 2.0, 1.0)]);
+
+        assert_eq!(crossing(&mut bridge, session, 1, 3.5), Some(vec![3]));
+        let at = |z| NativeVec3 { x: 3.5, y: 0.1, z };
+        let wide_step = bridge
+            .evaluate_navigation(NativeNavigationStepRequest {
+                session,
+                from: at(2.5),
+                target: at(10.5),
+                max_step_units: 1000.0,
+                max_visited: 4096,
+                grid_id: 2,
+            })
+            .unwrap();
+        assert_eq!(wide_step.outcome, NativeNavigationPathOutcome::NoPath);
+    }
+
     #[test]
     fn replacing_or_clearing_one_grid_leaves_the_others_answering() {
         let (mut bridge, session) = three_agents();

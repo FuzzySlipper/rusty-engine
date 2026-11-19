@@ -1039,7 +1039,7 @@ at a time with `with`:
 | Option | Meaning | Default |
 |---|---|---|
 | `GridId`, `CellSize`, `ChunkSize`, `MaximumCells` | The world-aligned grid and the most X/Z columns one publication may cover. | 1, 1 m, 16, 65,536 |
-| `Character` | The body navigation stands and moves with. Pass the `CharacterControllerConfig` the product's character uses: `Shape` radius, standing height and contact skin; `Surface` maximum slope, maximum step height (metres up), minimum step width and floor snap; `Recovery` tolerances. Its radius may be at most half a cell. | `DefaultCharacterControllerConfig()` |
+| `Character` | The body navigation stands and moves with. Pass the `CharacterControllerConfig` the product's character uses: `Shape` radius, standing height and contact skin; `Surface` maximum slope, maximum step height (metres up), minimum step width and floor snap; `Recovery` tolerances. | `DefaultCharacterControllerConfig()` |
 | `MaximumDrop` | Farthest a one-way downward edge falls, in metres. | The default step height |
 | `VerticalSearchCells` | How many cell levels up or down a neighbouring support is searched for. The step height and drop decide which of those are edges; raise this with them, since a support beyond it is never a neighbour. | 1 |
 | `SupportsPerColumn` | Surfaces sampled per X/Z column, top down. A deeper layer is unknown, not walkable. | 8 |

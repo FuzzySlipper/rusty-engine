@@ -1145,8 +1145,9 @@ pub struct NativeCollisionNavigationEdgeReadout {
     pub navigation_revision: u64,
 }
 
-/// Atomically replaces the session's retained planar projection by sampling
-/// the coherent Engine collision scene in the explicit finite world region.
+/// Atomically replaces the grid `config.grid_id` names, leaving the session's
+/// other collision-derived grids as they are, by sampling the coherent Engine
+/// collision scene in the explicit finite world region.
 /// The product supplies policy and bounds only; collision geometry never
 /// crosses the ABI boundary.
 #[repr(C)]
@@ -1284,7 +1285,7 @@ impl Default for NativeNavigationGridsResult {
     }
 }
 
-/// A bounded, full planar path request over the session's admitted projection.
+/// A bounded, full planar path request over one of the session's grids.
 /// `max_visited` bounds both the owner search and the retained indexed result.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
