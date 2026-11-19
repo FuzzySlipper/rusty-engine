@@ -327,11 +327,7 @@ impl VoxelChunkResidencyService {
             coarse.extend(scene.take_stale_coarse());
             coarse
         });
-        let snapshot = scene.rebuild_snapshot(
-            &written.dirty,
-            &written.field_dirty,
-            coarse.as_ref().unwrap_or(&BTreeSet::new()),
-        );
+        let snapshot = scene.rebuild_snapshot(&written.dirty);
         let (changed, dirty, field_dirty) = (
             written.changed.clone(),
             written.dirty.clone(),
@@ -407,7 +403,7 @@ impl DeferredChunkRebuild {
             return None;
         }
         let none = BTreeSet::new();
-        let snapshot = scene.rebuild_snapshot(&none, &none, &coarse);
+        let snapshot = scene.rebuild_snapshot(&none);
         let coarse_built = coarse.clone();
         let build = move || {
             let none = BTreeSet::new();
@@ -835,6 +831,27 @@ mod tests {
     use svc_mesh::{SurfaceMeshOptions, SurfaceMode};
 
     #[test]
+    fn a_chunks_account_is_the_sum_of_its_voxels_hashes() {
+        let voxels: Vec<_> = (0..8_i64)
+            .flat_map(|x| (0..8).flat_map(move |y| (0..8).map(move |z| [x, y, z])))
+            .filter(|[x, y, z]| (x * 7 + y * 3 + z * 5) % 4 != 0)
+            .map(|[x, y, z]| crate::MaterialVoxel {
+                state: ((x + z) % 3) as u16,
+                address: [x - 8, y + 16, z - 3 * 8],
+                material_slot: 1 + (y % 2) as u16,
+            })
+            .collect();
+        let scene = VoxelCollisionScene::from_material_voxels(1.0, 8, voxels.clone()).unwrap();
+        let expected = voxels.iter().fold(0_u64, |sum, voxel| {
+            sum.wrapping_add(crate::voxel_hash(*voxel))
+        });
+        assert_eq!(
+            (scene.solid_voxel_count(), scene.authority_hash()),
+            (voxels.len(), expected)
+        );
+    }
+
+    #[test]
     fn a_worker_snapshot_shares_chunks_and_keeps_them_through_an_edit() {
         let mut scene = VoxelCollisionScene::from_material_voxels_with_mesh_options(
             1.0,
@@ -850,11 +867,7 @@ mod tests {
         )
         .unwrap();
         let chunk = ChunkCoord::new(1, 0, 0);
-        let snapshot = scene.rebuild_snapshot(
-            &BTreeSet::from([ChunkCoord::new(0, 0, 0)]),
-            &BTreeSet::new(),
-            &BTreeSet::new(),
-        );
+        let snapshot = scene.rebuild_snapshot(&BTreeSet::from([ChunkCoord::new(0, 0, 0)]));
         let held = snapshot.world.get_shared(chunk).unwrap();
         assert!(Arc::ptr_eq(
             held,

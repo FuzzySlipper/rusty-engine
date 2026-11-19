@@ -1325,36 +1325,12 @@ impl VoxelCollisionScene {
         }
     }
 
-    /// Copies of what rebuilding `dirty` and `field_dirty` reads, for a
-    /// worker thread: those chunks and their resident neighbours and the
-    /// colliders `dirty` may keep.
-    /// The chunks are shared, not copied: a change to one while the worker
-    /// holds it copies that chunk alone.
-    pub(crate) fn rebuild_snapshot(
-        &self,
-        dirty: &BTreeSet<ChunkCoord>,
-        field_dirty: &BTreeSet<ChunkCoord>,
-        coarse: &BTreeSet<ChunkCoord>,
-    ) -> RebuildSnapshot {
-        let mut world = VoxelWorld::new(self.voxel_world.grid());
-        let owners: BTreeSet<ChunkCoord> =
-            dirty.union(field_dirty).chain(coarse).copied().collect();
-        let reached: BTreeSet<ChunkCoord> = owners
-            .iter()
-            .flat_map(|owner| {
-                (-1..=1).flat_map(move |x| {
-                    (-1..=1).flat_map(move |y| {
-                        (-1..=1)
-                            .map(move |z| ChunkCoord::new(owner.x + x, owner.y + y, owner.z + z))
-                    })
-                })
-            })
-            .collect();
-        for coordinate in reached {
-            if let Some(chunk) = self.voxel_world.get_shared(coordinate) {
-                world.insert_shared(coordinate, Arc::clone(chunk));
-            }
-        }
+    /// What rebuilding `dirty` chunks reads, for a worker thread: the voxels
+    /// and the colliders `dirty` may keep. The chunks are shared, not
+    /// copied: a change to one while the worker holds it copies that chunk
+    /// alone.
+    pub(crate) fn rebuild_snapshot(&self, dirty: &BTreeSet<ChunkCoord>) -> RebuildSnapshot {
+        let world = self.voxel_world.clone();
         RebuildSnapshot {
             world,
             options: self.mesh_options.clone(),
@@ -1694,16 +1670,22 @@ impl VoxelCollisionScene {
             Some(built) => {
                 for (coordinate, mesh) in built {
                     self.stale_coarse.remove(&coordinate);
-                    // Only a chunk with a mesh has a coarse one.
-                    match mesh.filter(|_| self.mesh_chunks.contains_key(&coordinate)) {
+                    // Only a chunk with a mesh has a coarse one, and only a
+                    // coarse mesh that came, went or differs is a change.
+                    let was = match mesh.filter(|_| self.mesh_chunks.contains_key(&coordinate)) {
                         Some(mesh) => {
-                            kept.insert(coordinate, mesh);
+                            let same =
+                                |was: &Arc<VoxelMeshChunk>| was.content_hash == mesh.content_hash;
+                            match kept.get(&coordinate) {
+                                Some(was) if same(was) => continue,
+                                _ => kept.insert(coordinate, mesh),
+                            }
                         }
-                        None => {
-                            kept.remove(&coordinate);
-                        }
+                        None => kept.remove(&coordinate),
+                    };
+                    if was.is_some() || kept.contains_key(&coordinate) {
+                        changed.insert(coordinate);
                     }
-                    changed.insert(coordinate);
                 }
             }
             None => {
@@ -2101,14 +2083,37 @@ pub(crate) fn coarse_reach(changed: &BTreeSet<ChunkCoord>) -> BTreeSet<ChunkCoor
         .collect()
 }
 
-/// A chunk's share of the solid voxel count and authority hash.
+/// A chunk's share of the solid voxel count and authority hash: the sum of
+/// [`voxel_hash`] over its solid voxels. The sum does not depend on order, so
+/// the walk goes x, then y, then z, and feeds each coordinate into the hash
+/// once for every voxel that shares it.
 fn chunk_account(grid: VoxelGridSpec, coordinate: ChunkCoord, chunk: &VoxelChunk) -> (usize, u64) {
-    chunk
-        .iter()
-        .filter_map(|(local, value)| material_voxel_at(grid, coordinate, local, value))
-        .fold((0, 0_u64), |(count, hash), voxel| {
-            (count + 1, hash.wrapping_add(voxel_hash(voxel)))
-        })
+    let origin = grid.chunk_origin_voxel(coordinate).to_array();
+    let [width, height, depth] = grid.chunk_dims().to_array();
+    let (mut count, mut sum) = (0, 0_u64);
+    for x in 0..width {
+        let mut after_x = FNV_OFFSET;
+        feed_hash(&mut after_x, &(origin[0] + i64::from(x)).to_le_bytes());
+        for y in 0..height {
+            let mut after_y = after_x;
+            feed_hash(&mut after_y, &(origin[1] + i64::from(y)).to_le_bytes());
+            for z in 0..depth {
+                let Some(value) = chunk.get(LocalVoxelCoord { x, y, z }) else {
+                    continue;
+                };
+                let Some(material) = value.material() else {
+                    continue;
+                };
+                let mut hash = after_y;
+                feed_hash(&mut hash, &(origin[2] + i64::from(z)).to_le_bytes());
+                feed_hash(&mut hash, &material.raw().to_le_bytes());
+                feed_hash(&mut hash, &value.state().raw().to_le_bytes());
+                count += 1;
+                sum = sum.wrapping_add(hash);
+            }
+        }
+    }
+    (count, sum)
 }
 
 fn material_voxel_at(
@@ -2355,8 +2360,10 @@ fn finalize(value: u64) -> u64 {
     value ^ (value >> 31)
 }
 
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+
 fn voxel_hash(voxel: MaterialVoxel) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    let mut hash = FNV_OFFSET;
     for coordinate in voxel.address {
         feed_hash(&mut hash, &coordinate.to_le_bytes());
     }
