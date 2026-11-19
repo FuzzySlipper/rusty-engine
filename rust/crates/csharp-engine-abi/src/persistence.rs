@@ -28,8 +28,9 @@ pub struct NativePersistenceOpenRequest {
     /// The host owns the base root; product code never supplies its path.
     pub scope: NativeUtf8Slice,
     /// A store for regenerable data: its writes and deletes skip the fsyncs,
-    /// so a crash may lose them, and its blobs carry a CRC-32 of the payload
-    /// so a torn one is refused rather than read.
+    /// so a crash may lose them, and its blobs carry a CRC-32 of the payload.
+    /// A damaged blob, torn by a crash or otherwise, reads as absent, so a
+    /// save replaces it and a delete removes it.
     pub cache: bool,
 }
 

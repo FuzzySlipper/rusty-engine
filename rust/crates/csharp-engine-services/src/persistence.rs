@@ -310,11 +310,13 @@ impl RuntimePersistenceBridge {
     }
 
     /// The key's newest state: its queued payload while a write is pending,
-    /// else what is stored.
+    /// else what is stored. In a cache store a damaged blob reads as absent:
+    /// a crash may leave one, and the cache regenerates it.
     fn current(
         &mut self,
         path: &Path,
         key: &str,
+        cache: bool,
     ) -> Result<Option<PersistenceBlob>, CsharpEngineServicesError> {
         self.take_finished(false);
         if let Some(pending) = self.pending.get(path) {
@@ -324,7 +326,19 @@ impl RuntimePersistenceBridge {
                 payload: pending.payload.to_vec(),
             }));
         }
-        let blob = read_blob(path, key)?;
+        let blob = match read_blob(path, key) {
+            Err(error)
+                if cache
+                    && matches!(
+                        error.code(),
+                        "CSHARP_PERSISTENCE_CONTAINER_MALFORMED"
+                            | "CSHARP_PERSISTENCE_CONTAINER_UNRECOGNIZED"
+                    ) =>
+            {
+                None
+            }
+            read => read?,
+        };
         self.known.insert(
             path.to_owned(),
             blob.as_ref().map_or(0, |blob| blob.revision),
@@ -338,10 +352,13 @@ impl RuntimePersistenceBridge {
         &mut self,
         path: &Path,
         key: &str,
+        cache: bool,
     ) -> Result<u64, CsharpEngineServicesError> {
         match self.known.get(path) {
             Some(revision) => Ok(*revision),
-            None => Ok(self.current(path, key)?.map_or(0, |blob| blob.revision)),
+            None => Ok(self
+                .current(path, key, cache)?
+                .map_or(0, |blob| blob.revision)),
         }
     }
 
@@ -352,7 +369,7 @@ impl RuntimePersistenceBridge {
         let (path, key, cache) = self.store_path(request.store, request.key)?;
         let payload = unsafe { borrowed_bytes(request.payload, "persistence payload") }?;
         self.take_finished(!request.deferred);
-        let current = self.current_revision(&path, &key)?;
+        let current = self.current_revision(&path, &key, cache)?;
         if !matches_guard(request.revision_guard, request.expected_revision, current) {
             return Ok(NativePersistenceSaveReceipt {
                 outcome: NativePersistenceSaveOutcome::RevisionConflict,
@@ -429,11 +446,19 @@ impl RuntimePersistenceBridge {
     ) -> Result<NativePersistenceDeleteReceipt, CsharpEngineServicesError> {
         let (path, key, cache) = self.store_path(request.store, request.key)?;
         self.take_finished(true);
-        let revision = self.current(&path, &key)?.map_or(0, |blob| blob.revision);
+        let revision = self
+            .current(&path, &key, cache)?
+            .map_or(0, |blob| blob.revision);
         let outcome = if !matches_guard(request.revision_guard, request.expected_revision, revision)
         {
             NativePersistenceDeleteOutcome::RevisionConflict
         } else if revision == 0 {
+            // A cache store's damaged blob reads as absent; it goes too.
+            if cache && path.exists() {
+                remove_key(&path, cache).map_err(|error| {
+                    io_error(format!("deleting persistence key `{key}` failed: {error}"))
+                })?;
+            }
             NativePersistenceDeleteOutcome::Missing
         } else {
             remove_key(&path, cache).map_err(|error| {
@@ -449,12 +474,14 @@ impl RuntimePersistenceBridge {
         &mut self,
         request: &NativePersistenceLoadRequest,
     ) -> Result<NativePersistenceBlobHandle, CsharpEngineServicesError> {
-        let (path, key, _) = self.store_path(request.store, request.key)?;
-        let blob = self.current(&path, &key)?.unwrap_or(PersistenceBlob {
-            present: false,
-            revision: 0,
-            payload: Vec::new(),
-        });
+        let (path, key, cache) = self.store_path(request.store, request.key)?;
+        let blob = self
+            .current(&path, &key, cache)?
+            .unwrap_or(PersistenceBlob {
+                present: false,
+                revision: 0,
+                payload: Vec::new(),
+            });
         Ok(self.insert_blob(blob))
     }
 }
@@ -1806,52 +1833,101 @@ mod tests {
         }
 
         #[test]
-        fn a_cache_store_writes_crc_blobs_and_refuses_a_torn_one() {
+        fn a_cache_store_reads_a_torn_blob_as_absent_and_regenerates_it_after_a_restart() {
             let root = tempfile::tempdir().unwrap();
-            let mut bridge = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
-            let store = open(&mut bridge, "cache", true);
-            let payload = vec![7_u8; 8 * 1024];
-            assert_eq!(
-                save_key(&mut bridge, store, "chunk", ANY, &payload, false).revision,
-                1
-            );
-            assert_eq!(
-                save_key(&mut bridge, store, "chunk", ANY, &payload, true).revision,
-                2
-            );
-            bridge.take_finished(true);
             let path = root.path().join("cache/chunk");
-            let bytes = fs::read(&path).unwrap();
-            assert_eq!(
-                (&bytes[..4], bytes.len()),
-                (&b"RSC1"[..], CACHE_HEADER_LEN + payload.len())
-            );
-            assert_eq!(
-                load_key(&mut bridge, store, "chunk").unwrap(),
-                (2, payload.clone())
-            );
+            let payload = vec![7_u8; 8 * 1024];
+            let bytes = {
+                let mut bridge = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
+                let store = open(&mut bridge, "cache", true);
+                assert_eq!(
+                    save_key(&mut bridge, store, "chunk", ANY, &payload, false).revision,
+                    1
+                );
+                assert_eq!(
+                    save_key(&mut bridge, store, "chunk", ANY, &payload, true).revision,
+                    2
+                );
+                bridge.take_finished(true);
+                let bytes = fs::read(&path).unwrap();
+                assert_eq!(
+                    (&bytes[..4], bytes.len()),
+                    (&b"RSC1"[..], CACHE_HEADER_LEN + payload.len())
+                );
+                assert_eq!(
+                    load_key(&mut bridge, store, "chunk").unwrap(),
+                    (2, payload.clone())
+                );
+                bytes
+            };
 
-            // A full-length blob whose tail never reached the disk.
+            // After a crash: a full-length blob whose tail never reached the
+            // disk, a truncated one, and one that is not a container at all.
             let mut torn = bytes.clone();
             torn[CACHE_HEADER_LEN + 4096..].fill(0);
-            fs::write(&path, &torn).unwrap();
-            assert_eq!(
-                load_key(&mut bridge, store, "chunk").unwrap_err(),
-                "CSHARP_PERSISTENCE_CONTAINER_MALFORMED"
-            );
-            fs::write(&path, &bytes[..CACHE_HEADER_LEN + 100]).unwrap();
-            assert_eq!(
-                load_key(&mut bridge, store, "chunk").unwrap_err(),
-                "CSHARP_PERSISTENCE_CONTAINER_MALFORMED"
-            );
-
-            // Either store reads either layout.
-            fs::write(&path, &bytes).unwrap();
-            let durable = open(&mut bridge, "cache", false);
-            assert_eq!(
-                load_key(&mut bridge, durable, "chunk").unwrap(),
-                (2, payload)
-            );
+            let damaged = [torn, bytes[..CACHE_HEADER_LEN + 100].to_vec(), vec![0; 64]];
+            for (index, damage) in damaged.iter().enumerate() {
+                fs::write(&path, damage).unwrap();
+                let mut bridge = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
+                // A durable store refuses the damaged blob and leaves it.
+                let durable = open(&mut bridge, "cache", false);
+                assert!(load_key(&mut bridge, durable, "chunk")
+                    .unwrap_err()
+                    .starts_with("CSHARP_PERSISTENCE_CONTAINER_"));
+                let cache = open(&mut bridge, "cache", true);
+                assert_eq!(
+                    load_key(&mut bridge, cache, "chunk").unwrap(),
+                    (0, Vec::new()),
+                    "damage {index}"
+                );
+                if index == 2 {
+                    // A delete discards it.
+                    let mut deleted = NativePersistenceDeleteReceipt::default();
+                    let request = NativePersistenceDeleteRequest {
+                        store: cache,
+                        key: utf8("chunk"),
+                        revision_guard: NativePersistenceRevisionGuard::Any,
+                        expected_revision: 0,
+                    };
+                    assert_eq!(
+                        unsafe {
+                            delete(
+                                context(&mut bridge),
+                                &request,
+                                &mut deleted,
+                                std::ptr::null_mut(),
+                            )
+                        },
+                        ABI_OK
+                    );
+                    assert_eq!(deleted.outcome, NativePersistenceDeleteOutcome::Missing);
+                    assert!(!path.exists());
+                    continue;
+                }
+                // The cache regenerates the key over it.
+                let absent = (NativePersistenceRevisionGuard::Absent, 0);
+                let regenerated = vec![index as u8 + 1; 8 * 1024];
+                assert_eq!(
+                    save_key(
+                        &mut bridge,
+                        cache,
+                        "chunk",
+                        absent,
+                        &regenerated,
+                        index == 0
+                    )
+                    .revision,
+                    1
+                );
+                bridge.take_finished(true);
+                drop(bridge);
+                let mut bridge = RuntimePersistenceBridge::new(Some(root.path().to_path_buf()));
+                let cache = open(&mut bridge, "cache", true);
+                assert_eq!(
+                    load_key(&mut bridge, cache, "chunk").unwrap(),
+                    (1, regenerated)
+                );
+            }
         }
     }
 }

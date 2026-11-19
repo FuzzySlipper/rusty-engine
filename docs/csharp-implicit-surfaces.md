@@ -532,9 +532,13 @@ as derived caches: its writes and deletes skip those syncs. A crash may lose
 any cache write or delete the operating system had not yet flushed (on Linux,
 typically the last few seconds), so a key may come back older, absent, or
 damaged. Cache blobs use the RSC1 layout, the durable header plus a CRC-32 of
-the payload, so a blob whose data did not all reach the disk is refused as
-`MalformedContainer` rather than read: catch it and regenerate. Either store
-reads either layout.
+the payload, so a blob whose data did not all reach the disk is never read.
+In a cache store a damaged blob, torn, truncated or not a container at all,
+reads as absent: `Load` reports it absent, a save with an `Absent` or `Any`
+guard replaces it, and a delete removes it and reports `Missing`, so the
+cache regenerates the key as it would a missing one. A durable store reads
+the cache layout too but refuses a damaged blob of either layout and leaves
+it as it is.
 
 
 `StatsComponentCapture.Capture` reads a component's selected stat/track values as plain
