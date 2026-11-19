@@ -404,8 +404,8 @@ pub struct MeshVoxelCell {
 pub enum MeshError {
     StateRequiresGreedyCubes,
     InvalidSurfaceCharacter,
-    /// A terrain layer set needs 1 to 16 distinct slots, each on a layer
-    /// below 4, and a transition of 1 to 4 voxels.
+    /// A terrain layer set needs 1 to 32 distinct slots (16 without a
+    /// mapping), each on a layer below 16, and a transition of 1 to 4 voxels.
     InvalidTerrainLayers,
     /// The chunk would emit more vertices than a `u32` index can address.
     TooManyVertices {

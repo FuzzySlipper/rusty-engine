@@ -365,8 +365,56 @@ fn a_chunk_reaching_more_than_four_layers_draws_the_four_most_weighed() {
 }
 
 #[test]
+fn eighteen_slots_on_sixteen_layers_each_weigh_their_layer() {
+    // Flat ground of eighteen chunks, chunk x of slot 20 + x. Slots 36 and
+    // 37 share layers 0 and 1 with slots 20 and 21, sixteen chunks west, so
+    // only they weigh those layers in their chunks.
+    const SLOTS: i64 = 18;
+    let grid =
+        VoxelGridSpec::new(GridId::new(0), 0.5, ChunkDims::cubic(SIZE as u32).unwrap()).unwrap();
+    let mut world = VoxelWorld::new(grid);
+    for cx in 0..SLOTS {
+        let mut chunk = VoxelChunk::from_spec(&grid);
+        let slot = VoxelValue::solid(VoxelMaterialId::new(20 + cx as u16));
+        for x in 0..SIZE as u32 {
+            for y in 0..3 {
+                for z in 0..SIZE as u32 {
+                    chunk.set(LocalVoxelCoord::new(x, y, z), slot).unwrap();
+                }
+            }
+        }
+        world.insert(ChunkCoord::new(cx, 0, 0), chunk);
+    }
+    let layers: Vec<u8> = (0..16).chain([0, 1]).collect();
+    let options = banded_layers((20..38).collect(), layers.clone());
+    for (cx, layer) in layers.iter().enumerate() {
+        let payload = mesh(&world, cx as i64, &options);
+        // A one-voxel transition reaches no neighbour from the middle.
+        let middle: Vec<f32> = payload
+            .positions
+            .chunks(3)
+            .zip(payload.layer_weights.chunks(4))
+            .filter(|(position, _)| (2.0..=6.0).contains(&(position[0] / 0.5)))
+            .map(|(_, weights)| {
+                weights
+                    .iter()
+                    .zip(&payload.layer_palette)
+                    .filter(|(_, palette)| *palette == layer)
+                    .map(|(weight, _)| *weight)
+                    .sum()
+            })
+            .collect();
+        assert!(!middle.is_empty(), "chunk {cx}");
+        assert!(
+            middle.iter().all(|weight| *weight == 1.0),
+            "chunk {cx}: {middle:?}"
+        );
+    }
+}
+
+#[test]
 fn malformed_mappings_are_refused() {
-    let many: Vec<u16> = (1..=17).collect();
+    let many: Vec<u16> = (1..=33).collect();
     for (slots, layers) in [
         (vec![], vec![]),
         (vec![1, 2, 1], vec![0, 1, 0]),

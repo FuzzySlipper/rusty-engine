@@ -24,9 +24,10 @@ pub const MAX_TERRAIN_LAYERS: usize = 16;
 /// The most layers one chunk's vertices weigh: a mesh carries this many
 /// weights per vertex.
 pub const CHUNK_TERRAIN_LAYERS: usize = 4;
-/// The most material slots one set maps onto its layers. Meshing looks each
-/// voxel's slot up in the set, so the set stays short.
-pub const MAX_TERRAIN_LAYER_SLOTS: usize = 16;
+/// The most material slots one set maps onto its layers, twice the layers.
+/// Weights are per layer, so slots cost no vertex or shader space; meshing
+/// looks each voxel's slot up in the set, so the set stays short.
+pub const MAX_TERRAIN_LAYER_SLOTS: usize = 32;
 /// The widest transition, in voxels on each side of a vertex.
 pub const MAX_TERRAIN_TRANSITION_CELLS: u8 = 4;
 

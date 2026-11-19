@@ -98,8 +98,8 @@ metre unless `MaterialRequest.TextureScale` sets another repeat.
 ## Blending terrain layers
 
 Where two materials meet on a reconstructed surface their textures change at
-a polygon edge. To blend them instead, name up to sixteen material slots as
-terrain layers and draw them with one terrain layer material:
+a polygon edge. To blend them instead, name their material slots as terrain
+layers and draw them with one terrain layer material:
 
 ```csharp
 engine.Voxel.ConfigureTerrainLayers(new VoxelTerrainLayerRequest(
@@ -111,7 +111,8 @@ Material terrain = engine.Graphics.CreateTerrainLayerMaterial(
 
 Several physical slots can draw as one layer, so grass and the dirt under it
 keep their own identities and still blend as one texture. `Layers` gives the
-layer (0 to 15) of each slot at the same index, for up to 16 distinct slots:
+layer (0 to 15) of each slot at the same index, for up to 32 distinct slots
+on up to 16 layers:
 
 ```csharp
 engine.Voxel.ConfigureTerrainLayers(new VoxelTerrainLayerRequest(
@@ -144,7 +145,7 @@ or noise); the Engine only blends what it chose:
   the same weights in both chunks, and a world-origin rebase changes none. An
   edit within reach of a chunk border remeshes the neighbour as well. A vertex
   with no layer voxel in reach, and every cube face, takes its own slot's
-  layer whole. Without `Layers`, the slots are layers 0 to 15 in order. A
+  layer whole. Without `Layers`, 1 to 16 slots are layers 0 to 15 in order. A
   duplicate slot, a layer past 15, or `Layers` of another length than `Slots`
   is refused and the previous layers stay. No slots removes the weights.
 - **Material.** `CreateTerrainLayerMaterial` takes the base material as layer 0

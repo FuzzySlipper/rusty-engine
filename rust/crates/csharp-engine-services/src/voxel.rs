@@ -1689,7 +1689,7 @@ mod tests {
         }
         // So are duplicate or conflicting slot mappings, a layer past 15, a
         // layer count that does not match the slots, and too many slots.
-        let many: Vec<u32> = (1..=17).collect();
+        let many: Vec<u32> = (1..=33).collect();
         for (slots, layers) in [
             (vec![1, 2, 1], vec![0, 1, 0]),
             (vec![1, 2, 1], vec![0, 1, 1]),
