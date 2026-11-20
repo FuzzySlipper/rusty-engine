@@ -535,3 +535,221 @@ fn a_destroyed_collider_takes_its_ground() {
         })
         .is_err());
 }
+
+/// A town's composition of placed artifacts (grid 7) and a wild grid
+/// derived from a heightfield collider around the walker (grid 2) stand side
+/// by side: publishing either, sync or deferred, leaves the other installed
+/// and answering, and only a collision grid on the composition's own id
+/// ends it.
+#[test]
+fn a_heightfield_grid_stands_beside_an_artifact_composition() {
+    const TOWN: u64 = 7;
+    const WILD: u64 = 2;
+    let path = "spatial/town.json";
+    let mut content = crate::content::RuntimeContentBridge::new(BTreeMap::from([(
+        path.to_owned(),
+        spatial_artifact(
+            "town",
+            0.25,
+            &[(0, 0, 0, 0.0), (1, 0, 0, 0.0), (2, 0, 0, 0.0)],
+        ),
+    )]));
+    let artifact = open_content(&mut content, path);
+    let mut walk = Walk::new(ground, origin_anchor());
+    walk.bridge.bind_content(&content);
+    walk.arrive(4.0, 4.0);
+    let session = walk.session;
+
+    let place = |walk: &mut Walk, id: u64, column: i64, removed: &[u64], deferred: bool| {
+        let admitted = [NativeSpatialContentArtifactInstance {
+            id,
+            content: artifact,
+            column_offset: column,
+            level_offset: 0,
+            row_offset: 40,
+            quarter_turns: 0,
+            translation: NativeVec3::default(),
+        }];
+        walk.bridge
+            .apply_content_artifact_residency(&NativeSpatialContentArtifactResidencyRequest {
+                session,
+                admitted: admitted.as_ptr(),
+                admitted_len: usize::from(id != 0),
+                removed: removed.as_ptr(),
+                removed_len: removed.len(),
+                navigation_grid_id: TOWN,
+                navigation_chunk_size: 8,
+                navigation_max_step_cells: 1,
+                deferred,
+            })
+            .unwrap();
+        walk.bridge.settle_deferred(session).unwrap();
+    };
+    let wild = |walk: &mut Walk, grid_id: u64, min: f32, deferred: bool| {
+        let mut request = collision_navigation_request(session);
+        request.world_min = NativeVec3 {
+            x: min,
+            y: -3.0,
+            z: min,
+        };
+        request.world_max = NativeVec3 {
+            x: min + 8.0,
+            y: 3.0,
+            z: min + 8.0,
+        };
+        request.config.grid_id = grid_id;
+        request.config.maximum_cells = 256;
+        request.deferred = deferred;
+        walk.bridge.replace_collision_navigation(&request).unwrap();
+        let started = std::time::Instant::now();
+        while walk.bridge.sessions[&session.value]
+            .derivations
+            .contains_key(&grid_id)
+        {
+            assert!(started.elapsed().as_secs() < 60, "never derived");
+            walk.bridge.settle_deferred_residency();
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    };
+    // Each grid's id, kind, cells and hash.
+    let held = |walk: &mut Walk| {
+        let grids = walk
+            .bridge
+            .read_navigation_grids(NativeNavigationGridsRequest { session })
+            .unwrap();
+        unsafe { std::slice::from_raw_parts(grids.grids, grids.grids_len) }
+            .iter()
+            .map(|grid| {
+                (
+                    grid.grid_id,
+                    grid.kind,
+                    grid.walkable_cell_count,
+                    grid.projection_hash,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let town_step = |walk: &mut Walk, to: f32| {
+        walk.bridge
+            .evaluate_navigation(NativeNavigationStepRequest {
+                session,
+                from: NativeVec3 {
+                    x: 40.5,
+                    y: 0.02,
+                    z: 40.5,
+                },
+                target: NativeVec3 {
+                    x: to,
+                    y: 0.02,
+                    z: 40.5,
+                },
+                max_step_units: 0.5,
+                max_visited: 64,
+                grid_id: TOWN,
+            })
+            .unwrap()
+            .outcome
+    };
+    let composing = |walk: &Walk| walk.bridge.sessions[&session.value].content.active;
+
+    place(&mut walk, 1, 40, &[], false);
+    let town = held(&mut walk);
+    assert_eq!(town.len(), 1);
+    assert_eq!(
+        town_step(&mut walk, 42.5),
+        NativeNavigationPathOutcome::Reached
+    );
+
+    // Publishing the wild grid, in the call or off it, leaves the town.
+    for (min, deferred) in [(0.0, false), (2.0, true)] {
+        wild(&mut walk, WILD, min, deferred);
+        let grids = held(&mut walk);
+        assert_eq!(grids.len(), 2, "deferred {deferred}: {grids:?}");
+        assert_eq!(grids[0].0, WILD);
+        assert_eq!(grids[0].1, NativeNavigationProjectionKind::CollisionDerived);
+        assert!(grids[0].2 >= 48, "the ground is walkable: {grids:?}");
+        assert_eq!(grids[1], town[0], "deferred {deferred}");
+        assert!(composing(&walk));
+        assert_eq!(
+            town_step(&mut walk, 42.5),
+            NativeNavigationPathOutcome::Reached
+        );
+    }
+    let wild_grid = held(&mut walk)[0];
+
+    // Placing and removing artifacts, in the call or off it, leaves the
+    // wild grid; the town grows and shrinks.
+    for deferred in [false, true] {
+        place(&mut walk, 2, 43, &[], deferred);
+        let grids = held(&mut walk);
+        assert_eq!(grids[0], wild_grid, "deferred {deferred}");
+        assert_eq!(grids[1].2, 6, "deferred {deferred}");
+        assert_eq!(
+            town_step(&mut walk, 45.5),
+            NativeNavigationPathOutcome::Reached
+        );
+        place(&mut walk, 0, 0, &[2], deferred);
+        assert_eq!(held(&mut walk), [wild_grid, town[0]], "deferred {deferred}");
+    }
+
+    // A wild derivation still running when an artifact is placed installs
+    // beside the town.
+    let mut request = collision_navigation_request(session);
+    request.world_min = NativeVec3 {
+        x: 0.0,
+        y: -3.0,
+        z: 0.0,
+    };
+    request.world_max = NativeVec3 {
+        x: 8.0,
+        y: 3.0,
+        z: 8.0,
+    };
+    request.config.grid_id = WILD;
+    request.config.maximum_cells = 256;
+    request.deferred = true;
+    walk.bridge.replace_collision_navigation(&request).unwrap();
+    place(&mut walk, 2, 43, &[], false);
+    wild(&mut walk, WILD, 0.0, true);
+    let grids = held(&mut walk);
+    assert_eq!(grids[0].0, WILD);
+    assert!(grids[0].2 >= 48);
+    assert_eq!(grids[1].2, 6);
+
+    // Collision residency taking an artifact out recomposes the town where
+    // it stands; the wild grid stays the one published last.
+    let removed = [2_u64];
+    walk.bridge
+        .apply_collision_residency(&NativeCollisionResidencyRequest {
+            session,
+            assets: std::ptr::null(),
+            assets_len: 0,
+            vertices: std::ptr::null(),
+            vertices_len: 0,
+            triangles: std::ptr::null(),
+            triangles_len: 0,
+            instances: std::ptr::null(),
+            instances_len: 0,
+            removed_assets: std::ptr::null(),
+            removed_assets_len: 0,
+            removed_instances: removed.as_ptr(),
+            removed_instances_len: removed.len(),
+            deferred: false,
+        })
+        .unwrap();
+    let grids = held(&mut walk);
+    assert_eq!(grids[1], town[0]);
+    let session_state = &walk.bridge.sessions[&session.value];
+    assert_eq!(session_state.navigation.as_ref().unwrap().grid_id(), WILD);
+    assert!(session_state.content.active);
+
+    // A collision grid on the town's own id replaces it and ends the
+    // composition.
+    wild(&mut walk, TOWN, 0.0, false);
+    let grids = held(&mut walk);
+    assert_eq!(grids.len(), 2);
+    assert!(grids
+        .iter()
+        .all(|grid| grid.1 == NativeNavigationProjectionKind::CollisionDerived));
+    assert!(!composing(&walk));
+}

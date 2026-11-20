@@ -364,9 +364,10 @@ impl ComposedCells {
 }
 
 /// The artifacts that make up a session's planar navigation: the base one
-/// `ReplaceContentArtifact` installed and those placed beside it. Replacing
-/// collision or navigation another way ends it; unloading every artifact
-/// does not, so a later placement keeps the composition's grid.
+/// `ReplaceContentArtifact` installed and those placed beside it. Its grid
+/// stands beside collision-derived grids on other ids; replacing collision
+/// or navigation another way ends it. Unloading every artifact does not, so
+/// a later placement keeps the composition's grid.
 #[derive(Default)]
 struct SpatialContentComposition {
     active: bool,
@@ -755,7 +756,7 @@ impl SpatialSession {
                 if content {
                     match refused.cells {
                         Some(cells) => self.content.cells = cells,
-                        None => self.content.recompose_cells(self.navigation_grid()),
+                        None => self.content.recompose_cells(self.content_grid_spec()),
                     }
                 }
                 Err(refused.reason)
@@ -785,16 +786,15 @@ impl SpatialSession {
         {
             // The worker changed the cells it took; the layers are as they
             // were.
-            self.content.recompose_cells(self.navigation_grid());
+            self.content.recompose_cells(self.content_grid_spec());
             return Err(format!("{error:?}"));
         }
+        self.bring_content_forward(navigation.grid_id());
         self.navigation_revision += 1;
         navigation.revision = self.navigation_revision;
-        self.derivations.clear();
         let replaced = (
             std::mem::replace(&mut self.content, composition),
             self.navigation.replace(navigation),
-            std::mem::take(&mut self.grids_beside),
         );
         // Freeing a large composition's navigation takes an update several
         // milliseconds, so a thread of its own does it; when none can be
@@ -808,16 +808,112 @@ impl SpatialSession {
     /// Where the composition's navigation grid's zero corner lies; a first
     /// placement starts a composition on the current frame.
     fn content_grid_origin(&self) -> [f64; 3] {
-        match (&self.navigation, self.content.active) {
-            (Some(navigation), true) => navigation.grid_origin,
-            _ => [0.0; 3],
-        }
+        self.content_grid()
+            .map_or([0.0; 3], |navigation| navigation.grid_origin)
     }
 
-    fn navigation_grid(&self) -> Option<VoxelGridSpec> {
-        self.navigation
-            .as_ref()
+    fn content_grid_spec(&self) -> Option<VoxelGridSpec> {
+        self.content_grid()
             .map(|navigation| navigation.projection.grid())
+    }
+
+    /// Whether `navigation` is the composition's grid: while a composition
+    /// is active, the one grid the session holds that is not derived from
+    /// collision.
+    fn is_content_grid(&self, navigation: &NavigationState) -> bool {
+        self.content.active && !matches!(navigation.source, NavigationSource::CollisionDerived(_))
+    }
+
+    /// The composition's grid, the latest or standing beside it.
+    fn content_grid(&self) -> Option<&NavigationState> {
+        self.navigation
+            .iter()
+            .chain(self.grids_beside.values().map(|grid| &grid.navigation))
+            .find(|navigation| self.is_content_grid(navigation))
+    }
+
+    /// Makes the composition's grid the latest for a content publication
+    /// on `grid_id`. Collision-derived grids under other ids stand beside
+    /// it and keep deriving; one under `grid_id` or the composition's id,
+    /// and its derivation, go. With no composition, a grid of another kind
+    /// goes too: it held the session alone.
+    fn bring_content_forward(&mut self, grid_id: u64) {
+        let current = self
+            .content_grid()
+            .map_or(grid_id, NavigationState::grid_id);
+        if !self.content.active {
+            self.grids_beside.retain(|_, grid| {
+                matches!(
+                    grid.navigation.source,
+                    NavigationSource::CollisionDerived(_)
+                )
+            });
+        }
+        self.bring_forward(current);
+        for id in [current, grid_id] {
+            self.derivations.remove(&id);
+            self.refused_derivations.remove(&id);
+            self.grids_beside.remove(&id);
+        }
+        if self
+            .navigation
+            .as_ref()
+            .is_some_and(|latest| matches!(latest.source, NavigationSource::CollisionDerived(_)))
+        {
+            self.navigation = None;
+        }
+        self.collision_navigation = None;
+    }
+
+    /// Recomposes the composition's grid where it stands, after its
+    /// `touched` cells changed, under a new navigation revision. Which grid
+    /// is the latest does not change.
+    fn recompose_content_grid(&mut self, touched: Vec<VoxelCoord>) {
+        let latest = self
+            .navigation
+            .as_ref()
+            .is_some_and(|navigation| self.is_content_grid(navigation));
+        let mut slot = if latest {
+            self.navigation.take()
+        } else {
+            let Some(id) = self.content_grid().map(NavigationState::grid_id) else {
+                return;
+            };
+            self.grids_beside.remove(&id).map(|grid| grid.navigation)
+        };
+        let Some((grid, max_step_cells, grid_origin)) = slot.as_ref().map(|current| {
+            (
+                current.projection.grid(),
+                current.policy.max_step_cells,
+                current.grid_origin,
+            )
+        }) else {
+            return;
+        };
+        let revision = self.navigation_revision + 1;
+        self.content.install_navigation(
+            &mut slot,
+            true,
+            grid,
+            max_step_cells,
+            grid_origin,
+            revision,
+            touched,
+        );
+        self.navigation_revision = revision;
+        match (latest, slot) {
+            (true, slot) => self.navigation = slot,
+            (false, Some(navigation)) => {
+                self.grids_beside.insert(
+                    navigation.grid_id(),
+                    NavigationGrid {
+                        navigation,
+                        cache: None,
+                    },
+                );
+            }
+            (false, None) => {}
+        }
     }
 
     /// A content residency receipt for the composition live now.
@@ -827,7 +923,7 @@ impl SpatialSession {
         deferred_batch: u64,
     ) -> NativeSpatialContentArtifactResidencyReceipt {
         let live = self.scene.static_mesh_projection();
-        let navigation = self.navigation.as_ref().map_or((0, 0), |navigation| {
+        let navigation = self.content_grid().map_or((0, 0), |navigation| {
             (
                 navigation.projection.walkable_len() as u64,
                 navigation.projection_hash,
@@ -969,9 +1065,9 @@ impl SpatialSession {
         self.grids_beside.get(&grid_id)?.cache.as_ref()
     }
 
-    /// Makes `grid_id` the latest for a collision-derived publication. The
-    /// grid that was latest stands beside it, unless another kind of
-    /// navigation, which holds a session alone.
+    /// Makes `grid_id` the latest for a publication. The grid that was
+    /// latest stands beside it when collision-derived or the composition's;
+    /// navigation of another kind holds a session alone.
     fn bring_forward(&mut self, grid_id: u64) {
         if self
             .navigation
@@ -981,10 +1077,10 @@ impl SpatialSession {
             return;
         }
         let forward = self.grids_beside.remove(&grid_id);
-        let stands_beside = self
-            .navigation
-            .as_ref()
-            .is_some_and(|latest| matches!(latest.source, NavigationSource::CollisionDerived(_)));
+        let stands_beside = self.navigation.as_ref().is_some_and(|latest| {
+            matches!(latest.source, NavigationSource::CollisionDerived(_))
+                || self.is_content_grid(latest)
+        });
         if forward.is_none() && !stands_beside {
             return;
         }
@@ -1028,10 +1124,15 @@ impl SpatialSession {
         navigation.revision = revision;
         cache.set_installed(revision);
         self.refused_derivations.remove(&grid_id);
+        // Replacing the composition's own grid ends the composition.
+        let content = match &self.navigation {
+            Some(latest) if self.is_content_grid(latest) => std::mem::take(&mut self.content),
+            _ => SpatialContentComposition::default(),
+        };
         let replaced = (
             self.collision_navigation.replace(cache),
             self.navigation.replace(navigation),
-            std::mem::take(&mut self.content),
+            content,
         );
         (receipt, replaced)
     }
@@ -1079,6 +1180,12 @@ impl SpatialSession {
     /// its place.
     fn clear_grid(&mut self, grid_id: u64) {
         self.derivations.remove(&grid_id);
+        if self
+            .content_grid()
+            .is_some_and(|grid| grid.grid_id() == grid_id)
+        {
+            self.content = SpatialContentComposition::default();
+        }
         if self.grids_beside.remove(&grid_id).is_some() {
             return;
         }
@@ -1090,7 +1197,6 @@ impl SpatialSession {
             return;
         }
         let next = self.grids_beside.pop_last().map(|(_, grid)| grid);
-        self.content = SpatialContentComposition::default();
         match next {
             Some(grid) => {
                 self.navigation = Some(grid.navigation);
@@ -2246,7 +2352,7 @@ impl RuntimeSpatialBridge {
         let mut released_assets = BTreeSet::new();
         let recomposing = !leaving.is_empty() || base_leaves;
         if recomposing {
-            if session.navigation.is_none() {
+            if session.content_grid().is_none() {
                 return Err(CsharpEngineServicesError::new(
                     "CSHARP_NAVIGATION",
                     "composed spatial content has no navigation",
@@ -2316,27 +2422,7 @@ impl RuntimeSpatialBridge {
                     );
                 }
             }
-            if let Some((grid, max_step_cells, grid_origin)) =
-                session.navigation.as_ref().map(|current| {
-                    (
-                        current.projection.grid(),
-                        current.policy.max_step_cells,
-                        current.grid_origin,
-                    )
-                })
-            {
-                let revision = session.navigation_revision + 1;
-                session.content.install_navigation(
-                    &mut session.navigation,
-                    true,
-                    grid,
-                    max_step_cells,
-                    grid_origin,
-                    revision,
-                    touched,
-                );
-                session.navigation_revision = revision;
-            }
+            session.recompose_content_grid(touched);
         }
         Ok(NativeCollisionReplaceReceipt {
             revision_before: receipt.revision_before,
@@ -2463,10 +2549,9 @@ impl RuntimeSpatialBridge {
             navigation_projection_hash: navigation.projection_hash,
         };
         composition.base = Some((identity, admitted));
+        session.bring_content_forward(request.navigation_grid_id);
         session.navigation_revision = navigation_revision;
         session.navigation = Some(navigation);
-        session.grids_beside.clear();
-        session.derivations.clear();
         session.content = composition;
         Ok(NativeSpatialContentArtifactReplaceReceipt {
             content_reference_value: identity.content_reference.value,
@@ -2545,6 +2630,7 @@ impl RuntimeSpatialBridge {
                 scene.install_static_mesh_residency(collision, baked)
             })
             .map_err(content_collision_error)?;
+        session.bring_content_forward(config.grid_id);
         let touched = session
             .content
             .place(&leaving, arriving, grid, &AtomicUsize::new(0));
@@ -2558,8 +2644,6 @@ impl RuntimeSpatialBridge {
             navigation_revision,
             touched,
         );
-        session.grids_beside.clear();
-        session.derivations.clear();
         session.navigation_revision = navigation_revision;
         Ok(session.content_residency_receipt(receipt.revision_before, 0))
     }
@@ -11454,11 +11538,11 @@ mod tests {
         assert_eq!(assert_whole(&bridge), 1);
     }
 
-    /// Content navigation holds a session alone, however it arrives: collision
-    /// grids published before it go, a grid id then stands in one place, and
-    /// naming that grid clears it.
+    /// Content navigation, however it arrives, replaces only the collision
+    /// grid on its own id: the others stand beside it, a grid id stands in
+    /// one place, and naming the composition's grid clears it alone.
     #[test]
-    fn content_residency_replaces_every_collision_grid() {
+    fn content_residency_replaces_only_its_own_grid() {
         let path = "spatial/a.json";
         for (content_grid, deferred) in [(1, false), (7, false), (1, true), (7, true)] {
             let mut content = crate::content::RuntimeContentBridge::new(BTreeMap::from([(
@@ -11507,14 +11591,19 @@ mod tests {
                     .map(|grid| grid.grid_id)
                     .collect::<Vec<_>>()
             };
-            assert_eq!(held(&mut bridge), [content_grid], "deferred: {deferred}");
+            let mut all = vec![1, 2, content_grid];
+            all.sort_unstable();
+            all.dedup();
+            assert_eq!(held(&mut bridge), all, "deferred: {deferred}");
             bridge
                 .clear_navigation(NativeNavigationClearRequest {
                     session,
                     grid_id: content_grid,
                 })
                 .unwrap();
-            assert!(held(&mut bridge).is_empty(), "deferred: {deferred}");
+            all.retain(|grid| *grid != content_grid);
+            assert_eq!(held(&mut bridge), all, "deferred: {deferred}");
+            assert!(!bridge.sessions[&session.value].content.active);
             let projection = bridge
                 .read_navigation_projection(NativeNavigationProjectionReadRequest {
                     session,

@@ -1031,9 +1031,15 @@ one grid never names it, and a product with several must, or a later publication
 changes what it reads. `ClearNavigation` with a `GridId` clears that grid, and
 when it was the one published last the highest left takes its place; without
 one it clears them all. `ReadNavigationGrids` lists what the session holds: each
-grid's kind, cells, agent, and the columns it covers. `ReplaceNavigation`,
-`ReplaceVoxelNavigation` and content navigation hold a session alone: they
-replace every grid, and a collision-derived grid then replaces them.
+grid's kind, cells, agent, and the columns it covers. `ReplaceNavigation` and
+`ReplaceVoxelNavigation` hold a session alone: they replace every grid, and a
+collision-derived grid then replaces them. A
+[composition of placed artifacts](#placed-artifacts-side-by-side) stands
+beside collision-derived grids on other ids: placing or removing artifacts
+leaves them and their deferred derivations, and publishing one leaves the
+composition. A walker uses the composition's grid where it covers its start
+and a collision-derived grid elsewhere, such as one derived over a
+heightfield collider in a box that moves with the player.
 
 Start from `Spatial.DefaultCollisionNavigationConfig()` and change one option
 at a time with `with`:
@@ -1431,8 +1437,12 @@ SpatialContentArtifactResidencyReceipt resident = engine.Spatial.ApplyContentArt
   artifact and collision added through `ApplyCollisionResidency`.
 - **Ending the composition.** `ReplaceContentArtifact`,
   `ReplaceCollision`, `ReplaceNavigation`, `ReplaceVoxelNavigation`,
-  `ReplaceCollisionNavigation` and `ClearNavigation` end it. Artifact
-  collision then stays as ordinary static collision.
+  `ClearNavigation` with no `GridId` or with the composition's, and
+  `ReplaceCollisionNavigation` on the composition's `GridId` end it. Artifact
+  collision then stays as ordinary static collision. A collision-derived
+  grid on another `GridId` stands beside the composition instead (see
+  [several agent sizes](#several-agent-sizes)); a placement on a collision
+  grid's `GridId` replaces that grid.
 - **Collision residency.** `ApplyCollisionResidency` that removes or
   replaces a placed artifact's instance, or the base artifact's, takes that
   artifact out of the composition in the same call: navigation is recomposed
