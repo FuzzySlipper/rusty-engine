@@ -1077,6 +1077,9 @@ fn settings_statistics(
         SettingRefusal::NotBuilt => "this build of the Engine does not have it",
         SettingRefusal::UnsupportedAdapter => "the adapter cannot run it",
         SettingRefusal::InitializationFailed => "it failed to start on this device",
+        SettingRefusal::NoRayQueries if readout.ray_queries_after_restart => {
+            "the device was made without ray queries: it draws after a restart"
+        }
         SettingRefusal::NoRayQueries => "the adapter has no ray queries",
         SettingRefusal::NeedsDlss => "it draws only under DLSS antialiasing",
     };

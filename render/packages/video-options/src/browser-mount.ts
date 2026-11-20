@@ -325,15 +325,20 @@ export async function mountVideoOptions(
       view.reset = null;
       if (hadFocus) view.input.focus();
     }
+    // A refusal is a warning; a choice waiting for a restart is a plain note.
     const refused = engine?.refused ?? null;
-    if (refused && !view.note) {
-      view.note = element('div', 'rusty-video-options__note rusty-video-options__note--refused');
+    const note = refused ?? engine?.pending ?? null;
+    if (note && !view.note) {
+      view.note = element('div', 'rusty-video-options__note');
       view.line.append(view.note);
-    } else if (!refused && view.note) {
+    } else if (!note && view.note) {
       view.note.remove();
       view.note = null;
     }
-    if (view.note) view.note.textContent = refused;
+    if (view.note) {
+      view.note.textContent = note;
+      view.note.classList.toggle('rusty-video-options__note--refused', refused !== null);
+    }
   };
 
   const updatePresets = (): void => {

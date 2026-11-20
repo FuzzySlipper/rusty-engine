@@ -54,8 +54,10 @@ pub struct RendererSettingOption {
     pub description: &'static str,
     #[serde(flatten)]
     pub kind: RendererSettingKind,
-    /// A change takes effect only when the product restarts. None does: the
-    /// renderer applies every setting on its next frame.
+    /// A change may take effect only when the product restarts: a device
+    /// asks for ray queries as it is made
+    /// (`RendererSettingsDescriptor::ray_traced`). The renderer
+    /// applies every other setting on its next frame.
     pub restart: bool,
     /// What the setting costs, as measured: a sentence for a menu.
     pub cost: &'static str,

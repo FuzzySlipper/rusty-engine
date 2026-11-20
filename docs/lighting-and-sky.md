@@ -664,11 +664,16 @@ renderer setting, is reported and ignored.
 The presets Low, Medium, High and Ultra set render scale, antialiasing,
 shadows, their budget, the occlusion mode, and volumetric fog, clouds and
 water reflections (off, off, low, high), over the player's other choices. A setting the device refuses is shown with the reason, from the
-same refusals the readout carries. The panel's route,
+same refusals the readout carries, and a refused toggle is disabled. A
+ray-traced choice (`rayTracedShadows`, `globalIllumination`, `rayTraced`
+occlusion) refused `NoRayQueries` on a GPU that traces rays on Vulkan,
+whose device was made before a ray-traced setting was selected, is not
+refused but `pending`: "Takes effect when the game restarts.", shown as a
+note with the toggle still offered. The panel's route,
 `/__rusty/product/runtime/video-options`, answers `GET` with the catalogue
-(each option's `value` drawn, `requested`, `gameDefault`, `chosen` and
-`refused`, whether a change needs a `restart` (only `rayTracedShadows` and
-`globalIllumination` do) and its measured
+(each option's `value` drawn, `requested`, `gameDefault`, `chosen`,
+`refused` and `pending`, whether a change needs a `restart` (only
+`rayTracedShadows` and `globalIllumination` do) and its measured
 `cost`, which the panel shows under the description) and `POST` with one change: `{"choose": {"id", "value"}}`,
 `{"forget": id}`, `{"forget": null}` for every choice, or
 `{"preset": id}`. A scene snapshot records the player's choices, and

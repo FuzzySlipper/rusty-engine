@@ -206,6 +206,17 @@ pub(crate) fn refusal(gpu: &Gpu) -> Option<(SettingRefusal, String)> {
     ))
 }
 
+/// Whether the ray-traced settings are refused only because this device was
+/// made without ray queries, on a GPU and backend that trace rays: a device
+/// made for a ray-traced setting asks for them ([`request`]), so they draw
+/// after a restart.
+pub(crate) fn after_restart(gpu: &Gpu) -> bool {
+    !gpu.is_software()
+        && gpu.adapter.features().contains(FEATURES)
+        && gpu.adapter.get_info().backend == wgpu::Backend::Vulkan
+        && !gpu.device.features().contains(FEATURES)
+}
+
 /// The ray scene's state, for diagnostics and evidence
 /// ([`crate::GpuReadout::ray_scene`]).
 #[derive(Debug, Clone, PartialEq)]

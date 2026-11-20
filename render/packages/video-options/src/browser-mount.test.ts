@@ -24,7 +24,7 @@ if (location.search === '?servo') delete HTMLOutputElement.prototype.htmlFor;
 import { mountVideoOptions } from '/browser-mount.js';
 const option = (id, group, kind, value, extra) => ({
   id, label: id, group, description: '', kind, value, requested: value, gameDefault: value,
-  chosen: false, restart: false, cost: '', refused: null, ...extra,
+  chosen: false, restart: false, cost: '', refused: null, pending: null, ...extra,
 });
 let options = [
   option('strength', 'Lighting', 'range', 1, { min: 0, max: 2, step: 0.1, unit: '' }),
@@ -41,6 +41,10 @@ window.transport = {
         ? { ...o, value: change.choose.value, requested: change.choose.value, chosen: true } : o);
     }
     return catalogue();
+  },
+  // An Engine toggle the catalogue gains, as a refused or waiting one.
+  addToggle: (id, extra) => {
+    options = [...options, option(id, 'Lighting', 'toggle', false, { requested: true, chosen: true, ...extra })];
   },
   // An Engine change made elsewhere, as another page or the game would.
   setElsewhere: (id, value) => {
@@ -198,5 +202,47 @@ test('the panel renders every row where an output has no htmlFor, as in Servo', 
     ]);
     assert.equal(named, control);
   }
+  await page.close();
+});
+
+test('a choice waiting for a restart keeps its toggle with a plain note; a refused one is disabled with a warning', async () => {
+  const page = await open();
+  await page.evaluate(async () => {
+    const shell = window as unknown as {
+      transport: { addToggle(id: string, extra: object): void };
+      panel: { refresh(): Promise<void> };
+    };
+    shell.transport.addToggle('waiting', { pending: 'Takes effect when the game restarts.' });
+    shell.transport.addToggle('unable', { refused: 'This graphics device cannot trace rays.' });
+    await shell.panel.refresh();
+  });
+  const row = (id: string) =>
+    page.$eval(`[data-option="${id}"]`, (line) => {
+      const checkbox = line.querySelector('input[type=checkbox]') as HTMLInputElement;
+      const note = line.querySelector('.rusty-video-options__note');
+      return {
+        checked: checkbox.checked,
+        disabled: checkbox.disabled,
+        note: note?.textContent ?? null,
+        warning: note?.classList.contains('rusty-video-options__note--refused') ?? false,
+      };
+    });
+  assert.deepEqual(await row('waiting'), {
+    checked: true,
+    disabled: false,
+    note: 'Takes effect when the game restarts.',
+    warning: false,
+  });
+  assert.deepEqual(await row('unable'), {
+    checked: true,
+    disabled: true,
+    note: 'This graphics device cannot trace rays.',
+    warning: true,
+  });
+  // Turned back off, the waiting choice sends its change.
+  await page.click('[data-option="waiting"] input[type=checkbox]');
+  await settled(page, 'Saved for this install.');
+  const sent = await page.evaluate(() => (window as unknown as { changes: unknown[] }).changes);
+  assert.deepEqual(sent, [{ choose: { id: 'waiting', value: false } }]);
   await page.close();
 });

@@ -454,8 +454,15 @@ fn refused_without_ray_queries() {
     let mut harness = Harness::on(gpu, options(true));
     scene(&mut harness, None);
     frame(&mut harness);
-    let refused = harness.renderer.settings_readout().ray_traced_shadows;
-    assert_eq!(refused, Some(SettingRefusal::NoRayQueries));
+    let readout = harness.renderer.settings_readout();
+    assert_eq!(
+        readout.ray_traced_shadows,
+        Some(SettingRefusal::NoRayQueries)
+    );
+    assert!(
+        readout.ray_queries_after_restart,
+        "the GPU traced them above: they draw after a restart"
+    );
     assert!(
         harness.renderer.shadow_report().layers > 0,
         "the cascades draw"

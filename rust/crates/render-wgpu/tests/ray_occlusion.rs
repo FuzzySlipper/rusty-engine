@@ -143,6 +143,10 @@ fn rays_darken_what_meets_on_screen_or_off_and_pass_clear_texels() {
             AmbientOcclusionMode::ScreenSpace
         );
         assert_eq!(path, AmbientOcclusionPath::Raster);
+        assert!(
+            !readout.ray_queries_after_restart,
+            "a restart does not trace rays on a software adapter"
+        );
         return;
     }
     assert_eq!(readout.ambient_occlusion, None);
@@ -211,6 +215,10 @@ fn refused_without_ray_queries() {
     assert_eq!(
         readout.ambient_occlusion,
         Some(SettingRefusal::NoRayQueries)
+    );
+    assert!(
+        readout.ray_queries_after_restart,
+        "the GPU traced them above: they draw after a restart"
     );
     assert_eq!(
         readout.effective.ambient_occlusion.mode,

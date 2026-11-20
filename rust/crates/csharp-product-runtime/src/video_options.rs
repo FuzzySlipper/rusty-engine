@@ -93,7 +93,8 @@ impl VideoOptions {
     }
 
     /// Every option with its value in effect, what was asked, the game's own
-    /// value, whether the player chose it and what the device refused.
+    /// value, whether the player chose it, what the device refused and what
+    /// waits for a restart.
     pub(crate) fn catalogue(&self, readout: &RendererSettingsReadout) -> Value {
         let options: Vec<Value> = RENDERER_SETTING_OPTIONS
             .iter()
@@ -118,9 +119,14 @@ impl VideoOptions {
                         "chosen".to_owned(),
                         Value::from(readout.player.chosen(option.id)),
                     );
+                    let (refused, pending) = refusal(readout, option.id, self.streamed);
                     object.insert(
                         "refused".to_owned(),
-                        refusal(readout, option.id, self.streamed).map_or(Value::Null, Value::from),
+                        refused.map_or(Value::Null, Value::from),
+                    );
+                    object.insert(
+                        "pending".to_owned(),
+                        pending.map_or(Value::Null, Value::from),
                     );
                 }
                 entry
@@ -135,16 +141,36 @@ impl VideoOptions {
     }
 }
 
-/// Why the device does not draw option `id` as asked, in words for the
-/// panel.
-fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Option<&'static str> {
+/// Why the device does not draw option `id` as asked, or that it draws
+/// after a restart, in words for the panel: a ray-traced setting chosen on
+/// a GPU that traces rays, whose device was made without ray queries.
+fn refusal(
+    readout: &RendererSettingsReadout,
+    id: &str,
+    streamed: bool,
+) -> (Option<&'static str>, Option<&'static str>) {
     if id == "vsync" && streamed {
-        return Some("The game is streamed to a browser page, which paces its own frames.");
+        return (
+            Some("The game is streamed to a browser page, which paces its own frames."),
+            None,
+        );
     }
     if id == "windowMode" && streamed {
-        return Some("The game is streamed to a browser page, which has no window of its own.");
+        return (
+            Some("The game is streamed to a browser page, which has no window of its own."),
+            None,
+        );
     }
-    let refused = match id {
+    match device_refusal(readout, id) {
+        Some(SettingRefusal::NoRayQueries) if readout.ray_queries_after_restart => {
+            (None, Some("Takes effect when the game restarts."))
+        }
+        refused => (refused.map(refusal_words), None),
+    }
+}
+
+fn device_refusal(readout: &RendererSettingsReadout, id: &str) -> Option<SettingRefusal> {
+    match id {
         "ambientOcclusion" => readout.ambient_occlusion,
         "antialiasing" => readout.antialiasing,
         "vsync" => readout.vsync,
@@ -157,8 +183,11 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         "rayTracedShadows" => readout.ray_traced_shadows,
         "globalIllumination" => readout.global_illumination,
         _ => None,
-    }?;
-    Some(match refused {
+    }
+}
+
+fn refusal_words(refused: SettingRefusal) -> &'static str {
+    match refused {
         SettingRefusal::NoComputeShaders => "This graphics device has no compute shaders.",
         SettingRefusal::NoIndirectDraws => {
             "This graphics device cannot draw from GPU-written lists."
@@ -178,7 +207,7 @@ fn refusal(readout: &RendererSettingsReadout, id: &str, streamed: bool) -> Optio
         SettingRefusal::InitializationFailed => "It failed to start on this graphics device.",
         SettingRefusal::NoRayQueries => "This graphics device cannot trace rays.",
         SettingRefusal::NeedsDlss => "It needs DLSS antialiasing.",
-    })
+    }
 }
 
 /// `{"choose": {"id", "value"}}`, `{"forget": id}`, `{"forget": null}` (every
@@ -380,6 +409,7 @@ mod tests {
             ray_traced_shadows: None,
             global_illumination: None,
             anisotropic_filtering: None,
+            ray_queries_after_restart: false,
         };
         let catalogue = options.catalogue(&readout);
         assert_eq!(catalogue["stored"], false);
@@ -402,5 +432,65 @@ mod tests {
             "streamed output has no display"
         );
         assert_eq!(catalogue["presets"][0]["id"], "low");
+    }
+
+    #[test]
+    fn a_ray_traced_choice_waits_for_a_restart_only_on_a_gpu_that_traces_rays() {
+        let options = VideoOptions::open(None, false);
+        let product = render_model::RendererSettingsDescriptor::DEFAULT;
+        let mut player = RendererSettingsOverrides::default();
+        player.choose("rayTracedShadows", &json!(true)).unwrap();
+        player
+            .choose("globalIllumination", &json!("rayTraced"))
+            .unwrap();
+        player
+            .choose("ambientOcclusion", &json!("rayTraced"))
+            .unwrap();
+        let requested = player.apply(product);
+        let readout = |after_restart| RendererSettingsReadout {
+            requested,
+            product,
+            player,
+            effective: product,
+            ambient_occlusion: Some(SettingRefusal::NoRayQueries),
+            antialiasing: None,
+            vsync: None,
+            clustered_lighting: None,
+            gpu_culling: None,
+            occlusion_culling: None,
+            volumetric_fog: None,
+            volumetric_clouds: None,
+            water_reflections: None,
+            ray_traced_shadows: Some(SettingRefusal::NoRayQueries),
+            global_illumination: Some(SettingRefusal::NoRayQueries),
+            anisotropic_filtering: None,
+            ray_queries_after_restart: after_restart,
+        };
+        let entry = |catalogue: &Value, id: &str| {
+            catalogue["options"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|entry| entry["id"] == id)
+                .unwrap()
+                .clone()
+        };
+        let waiting = options.catalogue(&readout(true));
+        let unable = options.catalogue(&readout(false));
+        for id in ["rayTracedShadows", "globalIllumination", "ambientOcclusion"] {
+            assert_eq!(entry(&waiting, id)["refused"], Value::Null, "{id}");
+            assert_eq!(
+                entry(&waiting, id)["pending"],
+                "Takes effect when the game restarts.",
+                "{id}"
+            );
+            assert_eq!(
+                entry(&unable, id)["refused"],
+                "This graphics device cannot trace rays.",
+                "{id}"
+            );
+            assert_eq!(entry(&unable, id)["pending"], Value::Null, "{id}");
+        }
+        assert_eq!(entry(&waiting, "vsync")["pending"], Value::Null);
     }
 }

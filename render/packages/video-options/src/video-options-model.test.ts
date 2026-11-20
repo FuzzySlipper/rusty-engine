@@ -34,6 +34,7 @@ const catalogue: VideoOptionsCatalogue = {
       restart: false,
       cost: '',
       refused: null,
+      pending: null,
     },
     {
       id: 'gpuCulling',
@@ -48,6 +49,7 @@ const catalogue: VideoOptionsCatalogue = {
       restart: false,
       cost: '',
       refused: 'no indirect draws',
+      pending: null,
     },
   ],
 };

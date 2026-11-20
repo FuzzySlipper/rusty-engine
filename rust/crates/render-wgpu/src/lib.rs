@@ -556,6 +556,10 @@ pub struct RendererSettingsReadout {
     /// setting asks for: a software adapter samples them trilinear
     /// (`SoftwareAdapter`).
     pub anisotropic_filtering: Option<SettingRefusal>,
+    /// The ray-traced settings' `NoRayQueries` is only this device's: the
+    /// GPU traces rays on Vulkan, and the device was made before a
+    /// ray-traced setting was selected. They draw after a restart.
+    pub ray_queries_after_restart: bool,
 }
 
 pub struct Renderer {
@@ -1347,6 +1351,7 @@ impl Renderer {
                 .gpu
                 .is_software()
                 .then_some(SettingRefusal::SoftwareAdapter),
+            ray_queries_after_restart: ray_scene::after_restart(&self.gpu),
         }
     }
 
