@@ -1969,6 +1969,11 @@ declare module "@rusty-engine/video-options/internal/video-options/src/video-opt
         readonly cost: string;
         /** Why the device does not draw it as asked, in words, or null. */
         readonly refused: string | null;
+        /**
+         * That it draws as asked after a restart, in words, or null: a
+         * ray-traced choice on a graphics device that traces rays.
+         */
+        readonly pending: string | null;
     };
     export interface VideoOptionPreset {
         readonly id: string;
