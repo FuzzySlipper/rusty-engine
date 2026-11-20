@@ -266,7 +266,8 @@ export async function mountVideoOptions(
       const range = element('input');
       range.type = 'range';
       const output = element('output', 'rusty-video-options__value');
-      output.htmlFor.add(id);
+      // Servo has no HTMLOutputElement.htmlFor; the attribute names the control everywhere.
+      output.setAttribute('for', id);
       range.addEventListener('input', () => {
         const current = view.row.option;
         if (current.kind === 'range') output.textContent = formatRange(Number(range.value), current.step, current.unit ?? '');

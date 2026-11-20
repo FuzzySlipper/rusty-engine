@@ -16,6 +16,10 @@ const dist = fileURLToPath(new URL('.', import.meta.url));
 const PAGE = `<!doctype html>
 <html><body>
 <div id="holder"></div>
+<script>
+// ?servo shapes the DOM as Servo's: its HTMLOutputElement has no htmlFor.
+if (location.search === '?servo') delete HTMLOutputElement.prototype.htmlFor;
+</script>
 <script type="module">
 import { mountVideoOptions } from '/browser-mount.js';
 const option = (id, group, kind, value, extra) => ({
@@ -63,7 +67,7 @@ let browser: Browser;
 
 before(async () => {
   server = createServer(async (request, response) => {
-    const path = request.url === '/' ? null : request.url!.replace(/^\//, '');
+    const path = request.url === '/' || request.url!.startsWith('/?') ? null : request.url!.replace(/^\//, '');
     if (path === null) {
       response.writeHead(200, { 'content-type': 'text/html' }).end(PAGE);
       return;
@@ -85,9 +89,9 @@ after(async () => {
   await new Promise((resolve) => server?.close(resolve));
 });
 
-async function open(style = ''): Promise<Page> {
+async function open(style = '', search = ''): Promise<Page> {
   const page = await browser.newPage();
-  await page.goto(origin);
+  await page.goto(`${origin}/${search}`);
   if (style) await page.evaluate((css) => { document.getElementById('holder')!.style.cssText = css; }, style);
   await page.waitForFunction(() => (window as unknown as { ready?: boolean }).ready === true);
   return page;
@@ -180,4 +184,19 @@ test("the look's custom properties set on an ancestor take effect, with defaults
   assert.equal(background, 'rgba(14, 18, 26, 0.94)');
   assert.match(family ?? '', /system-ui/);
   await plain.close();
+});
+
+test('the panel renders every row where an output has no htmlFor, as in Servo', async () => {
+  const page = await open('', '?servo');
+  assert.equal(await page.evaluate(() => 'htmlFor' in HTMLOutputElement.prototype), false);
+  const rows = await page.$$eval('[data-option]', (lines) => lines.map((line) => (line as HTMLElement).dataset['option']));
+  assert.deepEqual(rows.sort(), ['fov', 'shadows', 'strength']);
+  for (const id of ['strength', 'fov']) {
+    const [control, named] = await page.$eval(`[data-option="${id}"]`, (line) => [
+      line.querySelector('input')!.id,
+      line.querySelector('output')!.getAttribute('for'),
+    ]);
+    assert.equal(named, control);
+  }
+  await page.close();
 });
