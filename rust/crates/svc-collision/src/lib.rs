@@ -62,7 +62,7 @@ pub use tether::{
 pub use dynamics::{
     DynamicsAction, DynamicsAnchorObservation, DynamicsBodyId, DynamicsBodyInput,
     DynamicsBodyOutput, DynamicsContact, DynamicsEnvironmentReceipt, DynamicsError,
-    DynamicsMassProperties, DynamicsShape, DynamicsSolver, DynamicsStepReceipt,
+    DynamicsMassProperties, DynamicsShape, DynamicsSleep, DynamicsSolver, DynamicsStepReceipt,
 };
 pub use joint::{
     DynamicsJoint, DynamicsJointError, DynamicsJointFrame, DynamicsJointLimit, DynamicsJointMotor,

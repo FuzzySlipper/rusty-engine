@@ -246,6 +246,19 @@ pub struct NativeDynamicsBodyProperties {
     pub enabled: bool,
     pub sleeping: bool,
     pub continuous_collision: bool,
+    pub sleep: NativeDynamicsSleepThresholds,
+}
+
+/// When an awake body may fall asleep. A value that is not positive keeps the
+/// solver's default (0.1 m/s, 0.5 s). There is no angular value: the solver
+/// counts spin in the linear speed, measured at the body's farthest point.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeDynamicsSleepThresholds {
+    /// Speed, in metres per second, below which the body may sleep.
+    pub linear_speed: f32,
+    /// Seconds the body must stay below `linear_speed` before it sleeps.
+    pub seconds: f32,
 }
 
 #[repr(C)]

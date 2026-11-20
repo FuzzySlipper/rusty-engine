@@ -304,6 +304,7 @@ mod tests {
             enabled: true,
             sleeping: false,
             continuous_collision: false,
+            sleep: Default::default(),
         }
     }
 

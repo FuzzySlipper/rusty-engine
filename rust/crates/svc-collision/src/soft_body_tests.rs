@@ -112,6 +112,7 @@ fn ball(id: u64, at: [f64; 3], radius: f64, held: bool) -> DynamicsBodyInput {
         enabled: true,
         sleeping: false,
         continuous_collision: false,
+        sleep: Default::default(),
     }
 }
 

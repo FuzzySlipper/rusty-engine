@@ -15,8 +15,9 @@ use core_math::Vec3;
 use csharp_engine_abi::*;
 use engine_spatial::{
     rigid_body_component_mass_properties, DynamicsAction, DynamicsBodyId, DynamicsBodyInput,
-    DynamicsBodyOutput, DynamicsError, DynamicsMassProperties, DynamicsShape, DynamicsSolver,
-    DynamicsTether, DynamicsTetherEndpoint, DynamicsWaterPlane, VoxelCollisionScene,
+    DynamicsBodyOutput, DynamicsError, DynamicsMassProperties, DynamicsShape, DynamicsSleep,
+    DynamicsSolver, DynamicsTether, DynamicsTetherEndpoint, DynamicsWaterPlane,
+    VoxelCollisionScene,
 };
 use entity_state::{
     EntityTransform, Quat, RigidBodyComponent, RigidBodyInertiaPolicy, RigidBodyShape,
@@ -468,7 +469,12 @@ impl RuntimeDynamicsBridge {
         let world = self.active_world_mut(world_handle)?;
         world
             .solver
-            .insert_body(body_input(handle, config.transform, &config.body))
+            .insert_body(body_input(
+                handle,
+                config.transform,
+                &config.body,
+                config.sleep,
+            ))
             .map_err(solver_error("CSHARP_DYNAMICS_BODY"))?;
         world.bodies.insert(handle, config.body);
         self.bodies.insert(
@@ -885,7 +891,12 @@ impl RuntimeDynamicsBridge {
             .solver
             .body(DynamicsBodyId(handle))
             .expect("admitted body");
-        let mut input = body_input(handle, EntityTransform::IDENTITY, &body);
+        let mut input = body_input(
+            handle,
+            EntityTransform::IDENTITY,
+            &body,
+            sleep(request.properties.sleep),
+        );
         input.translation = pose.translation;
         input.rotation = pose.rotation;
         world
@@ -1060,7 +1071,12 @@ fn output_transform(output: &DynamicsBodyOutput) -> EntityTransform {
     }
 }
 
-fn body_input(id: u64, transform: EntityTransform, body: &RigidBodyComponent) -> DynamicsBodyInput {
+fn body_input(
+    id: u64,
+    transform: EntityTransform,
+    body: &RigidBodyComponent,
+    sleep: DynamicsSleep,
+) -> DynamicsBodyInput {
     DynamicsBodyInput {
         id: DynamicsBodyId(id),
         translation: vec3_f64(transform.translation),
@@ -1107,6 +1123,7 @@ fn body_input(id: u64, transform: EntityTransform, body: &RigidBodyComponent) ->
         enabled: body.enabled,
         sleeping: body.sleeping,
         continuous_collision: body.continuous_collision,
+        sleep,
     }
 }
 
@@ -1144,6 +1161,7 @@ fn tombstoned(kind: &str) -> CsharpEngineServicesError {
 struct BodyConfig {
     transform: EntityTransform,
     body: RigidBodyComponent,
+    sleep: DynamicsSleep,
 }
 
 fn cuboid_body_config(
@@ -1250,7 +1268,11 @@ fn body_config(
         axis_locks.rotation_z,
     ];
     body.gravity_scale = gravity_scale;
-    Ok(BodyConfig { transform, body })
+    Ok(BodyConfig {
+        transform,
+        body,
+        sleep: DynamicsSleep::default(),
+    })
 }
 
 fn body_config_with_properties(
@@ -1261,7 +1283,15 @@ fn body_config_with_properties(
     Ok(BodyConfig {
         transform,
         body: body_with_properties(shape, properties)?,
+        sleep: sleep(properties.sleep),
     })
+}
+
+fn sleep(value: NativeDynamicsSleepThresholds) -> DynamicsSleep {
+    DynamicsSleep {
+        linear_speed: f64::from(value.linear_speed),
+        seconds: f64::from(value.seconds),
+    }
 }
 
 fn body_with_properties(
@@ -2017,6 +2047,7 @@ mod tests {
                 enabled: true,
                 sleeping: false,
                 continuous_collision: false,
+                sleep: NativeDynamicsSleepThresholds::default(),
             },
         }
     }
@@ -2684,6 +2715,258 @@ mod tests {
             })
             .is_err());
         assert!(bridge.release_body_kinematic(capsule).is_err());
+    }
+
+    /// Thresholds a loose item might use: it may sleep below 0.5 m/s once it
+    /// has stayed there for a tenth of a second.
+    const QUICK_SLEEP: NativeDynamicsSleepThresholds = NativeDynamicsSleepThresholds {
+        linear_speed: 0.5,
+        seconds: 0.1,
+    };
+
+    /// A world with gravity over a voxel floor whose top is at y = 0.
+    fn floored_world() -> (RuntimeDynamicsBridge, NativeDynamicsWorldHandle) {
+        let spatial = crate::spatial::RuntimeSpatialBridge::new();
+        let mut bridge = RuntimeDynamicsBridge::new(spatial.collision_source());
+        let world = bridge
+            .create_world(NativeDynamicsWorldConfig {
+                gravity: NativeVec3 {
+                    x: 0.0,
+                    y: -9.81,
+                    z: 0.0,
+                },
+            })
+            .unwrap();
+        let floor = (-4..5).flat_map(|x| (-2..3).map(move |z| [x, -1, z]));
+        bridge.active_world_mut(world.value).unwrap().bind_scene(
+            u64::MAX,
+            &VoxelCollisionScene::from_solid_voxels(1.0, 8, floor).unwrap(),
+        );
+        (bridge, world)
+    }
+
+    /// A 0.5 m box held 1 m above the floor at `x`.
+    fn dropped_box(
+        bridge: &mut RuntimeDynamicsBridge,
+        world: NativeDynamicsWorldHandle,
+        x: f32,
+        sleep: NativeDynamicsSleepThresholds,
+    ) -> NativeDynamicsBodyHandle {
+        let mut config = body_config(NativeVec3 { x, y: 1.0, z: 0.0 });
+        config.half_extents = NativeVec3 {
+            x: 0.25,
+            y: 0.25,
+            z: 0.25,
+        };
+        config.properties.gravity_scale = 1.0;
+        config.properties.sleep = sleep;
+        bridge
+            .create_body(&NativeDynamicsCreateBodyRequest {
+                world,
+                body: config,
+            })
+            .unwrap()
+    }
+
+    fn step_with(
+        bridge: &mut RuntimeDynamicsBridge,
+        world: NativeDynamicsWorldHandle,
+        actions: &[NativeDynamicsAction],
+    ) {
+        bridge
+            .step(&NativeDynamicsStepRequest {
+                world,
+                step_seconds: ONE_SIXTIETH_SECOND,
+                steps: 1,
+                actions: actions.as_ptr(),
+                actions_len: actions.len(),
+            })
+            .unwrap();
+    }
+
+    fn sleeping(bridge: &mut RuntimeDynamicsBridge, body: NativeDynamicsBodyHandle) -> bool {
+        bridge
+            .read(NativeDynamicsReadRequest { body })
+            .unwrap()
+            .sleeping
+    }
+
+    /// Steps until each body first reads asleep, returning those steps.
+    fn steps_until_asleep(
+        bridge: &mut RuntimeDynamicsBridge,
+        world: NativeDynamicsWorldHandle,
+        bodies: &[NativeDynamicsBodyHandle],
+    ) -> Vec<usize> {
+        const LIMIT: usize = 600;
+        let mut asleep = vec![None; bodies.len()];
+        for step in 1..=LIMIT {
+            step_with(bridge, world, &[]);
+            for (index, &body) in bodies.iter().enumerate() {
+                if asleep[index].is_none() && sleeping(bridge, body) {
+                    asleep[index] = Some(step);
+                }
+            }
+            if asleep.iter().all(Option::is_some) {
+                break;
+            }
+        }
+        asleep
+            .into_iter()
+            .map(|step| step.expect("a box never slept"))
+            .collect()
+    }
+
+    /// Two identical boxes dropped side by side: the one with raised sleep
+    /// thresholds sleeps first, and the other still sleeps by the defaults.
+    #[test]
+    fn raised_sleep_thresholds_put_a_dropped_box_to_sleep_first() {
+        let (mut bridge, world) = floored_world();
+        let quick = dropped_box(&mut bridge, world, -1.0, QUICK_SLEEP);
+        let default = dropped_box(
+            &mut bridge,
+            world,
+            1.0,
+            NativeDynamicsSleepThresholds::default(),
+        );
+        let asleep = steps_until_asleep(&mut bridge, world, &[quick, default]);
+        // The default needs half a second of stillness, 30 steps.
+        assert!(asleep[0] + 20 < asleep[1], "{asleep:?}");
+        for body in [quick, default] {
+            let rest = bridge.read(NativeDynamicsReadRequest { body }).unwrap();
+            assert!(
+                (rest.transform.translation.y - 0.25).abs() < 0.02,
+                "{rest:?}"
+            );
+        }
+    }
+
+    /// `UpdateBody` gives a falling body new thresholds where it is, and it
+    /// sleeps by them.
+    #[test]
+    fn update_body_gives_a_live_body_new_sleep_thresholds() {
+        let (mut bridge, world) = floored_world();
+        let updated = dropped_box(
+            &mut bridge,
+            world,
+            -1.0,
+            NativeDynamicsSleepThresholds::default(),
+        );
+        let default = dropped_box(
+            &mut bridge,
+            world,
+            1.0,
+            NativeDynamicsSleepThresholds::default(),
+        );
+        for _ in 0..10 {
+            step_with(&mut bridge, world, &[]);
+        }
+        let falling = bridge
+            .read(NativeDynamicsReadRequest { body: updated })
+            .unwrap();
+        let mut properties = body_config(NativeVec3::default()).properties;
+        properties.gravity_scale = 1.0;
+        properties.linear_velocity = falling.linear_velocity;
+        properties.sleep = QUICK_SLEEP;
+        bridge
+            .update_body(NativeDynamicsUpdateBodyRequest {
+                body: updated,
+                properties,
+            })
+            .unwrap();
+        let moved = bridge
+            .read(NativeDynamicsReadRequest { body: updated })
+            .unwrap();
+        assert_eq!(
+            moved.transform.translation.y,
+            falling.transform.translation.y
+        );
+        let asleep = steps_until_asleep(&mut bridge, world, &[updated, default]);
+        assert!(asleep[0] + 20 < asleep[1], "{asleep:?}");
+    }
+
+    /// A body asleep by raised thresholds still wakes when an impulse
+    /// reaches it and when a kinematic body walks into it.
+    #[test]
+    fn a_quick_sleeping_body_wakes_for_an_impulse_and_a_kinematic_push() {
+        const WALK: f32 = 1.5;
+        let (mut bridge, world) = floored_world();
+        let item = dropped_box(&mut bridge, world, 0.0, QUICK_SLEEP);
+        steps_until_asleep(&mut bridge, world, &[item]);
+        let rest = bridge
+            .read(NativeDynamicsReadRequest { body: item })
+            .unwrap();
+
+        let shove = NativeDynamicsAction {
+            body: item,
+            force: NativeVec3::default(),
+            torque: NativeVec3::default(),
+            impulse: NativeVec3 {
+                x: 2.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            torque_impulse: NativeVec3::default(),
+            wake: true,
+        };
+        step_with(&mut bridge, world, &[shove]);
+        let struck = bridge
+            .read(NativeDynamicsReadRequest { body: item })
+            .unwrap();
+        assert!(
+            !struck.sleeping && struck.linear_velocity.x > 0.5,
+            "{struck:?}"
+        );
+        steps_until_asleep(&mut bridge, world, &[item]);
+        let shoved = bridge
+            .read(NativeDynamicsReadRequest { body: item })
+            .unwrap();
+        assert!(
+            shoved.transform.translation.x > rest.transform.translation.x + 0.05,
+            "{shoved:?}"
+        );
+
+        // A capsule walks along +x into the sleeping box and pushes it on.
+        let start = NativeVec3 {
+            x: shoved.transform.translation.x - 1.5,
+            y: 0.9,
+            z: 0.0,
+        };
+        let mut capsule = body_config(start).properties;
+        capsule.mass = 80.0;
+        let capsule = bridge
+            .create_capsule_body(&NativeDynamicsCreateCapsuleBodyRequest {
+                world,
+                body: NativeDynamicsCapsuleBodyConfig {
+                    transform: transform(start),
+                    half_height: 0.6,
+                    radius: 0.3,
+                    properties: capsule,
+                },
+            })
+            .unwrap();
+        let mut placement = start;
+        let mut woke = false;
+        for _ in 0..90 {
+            placement.x += WALK / 60.0;
+            bridge
+                .move_body_kinematic(NativeDynamicsBodyKinematicRequest {
+                    body: capsule,
+                    transform: transform(placement),
+                })
+                .unwrap();
+            step_with(&mut bridge, world, &[]);
+            woke |= !sleeping(&mut bridge, item);
+        }
+        let pushed = bridge
+            .read(NativeDynamicsReadRequest { body: item })
+            .unwrap();
+        assert!(woke, "the walking capsule never woke the box");
+        // Pushed ahead of the capsule, not passed into.
+        assert!(
+            pushed.transform.translation.x > placement.x + 0.3 + 0.25 - 0.05,
+            "box at {:?}, capsule at {placement:?}",
+            pushed.transform.translation
+        );
     }
 
     #[test]
@@ -3567,6 +3850,7 @@ mod tests {
             enabled: true,
             sleeping: false,
             continuous_collision: true,
+            sleep: Default::default(),
         };
         let generic = NativeDynamicsBodyConfig {
             properties,

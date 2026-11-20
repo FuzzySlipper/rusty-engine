@@ -78,10 +78,11 @@ handwrite a parallel C# declaration or generic dispatch protocol.
 `DynamicsBodyConfig(Transform, HalfExtents, Properties)` accepts the same
 `DynamicsBodyProperties` as shape-specific creation. Both `CreateBody` and
 `ReplaceBody` apply initial velocities, mass policy, axis locks, damping, gravity,
-material, collision filters, enabled/sleeping state, and continuous collision
-selection. The six-argument constructor retains the standard defaults: zero
+material, collision filters, enabled/sleeping state, continuous collision
+selection, and when the body falls asleep ([body sleep](csharp-lifecycle.md#body-sleep)).
+The six-argument constructor retains the standard defaults: zero
 velocities/damping/restitution, friction 0.5, all collision groups/masks, enabled,
-awake, and discrete collision.
+awake, discrete collision, and the solver's sleep defaults.
 
 Products select `ContinuousCollision` in these properties; Engine owns the CCD
 solver. There is no per-step motion limit: a fast discrete body can pass through

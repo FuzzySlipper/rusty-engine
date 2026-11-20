@@ -348,6 +348,30 @@ The [packaged fixture](../fixtures/csharp-particle-emission/ParticleEmissionChec
 exercises caught refusals followed by cube, billboard and colliding debris
 admission in the same callback.
 
+### Body sleep
+
+An awake Dynamics body falls asleep once it has moved slower than a speed for
+a time, and a sleeping body costs nothing until a contact, an impulse or a
+moving body wakes it. `DynamicsBodyProperties.Sleep` sets both per body:
+
+- `LinearSpeed`, in metres per second: the body may sleep below this speed,
+  measured at its farthest point from its centre, so spinning counts too.
+- `Seconds`: how long it must stay below that speed before it sleeps.
+
+A value that is not positive keeps the solver's default, 0.1 m/s for 0.5 s;
+`DynamicsSleepThresholds.Default` keeps both. Creation, `UpdateBody` and the
+`Replace*Body` requests take them, and they last through `MoveBodyKinematic`
+and `ReleaseBodyKinematic`. `UpdateBody` applies new values where the body is
+and starts its stillness time again. Raised values settle a dropped item
+sooner; they do not stop anything waking it. There is no angular value:
+for a body with a collider the solver counts rotation only through the speed
+of its farthest point.
+
+Touching bodies sleep together, once every one of them is ready, so an item
+resting on an awake body with default values sleeps when that body does.
+Ragdoll bones and soft bodies keep the defaults; chain beads take their
+chain's body properties.
+
 ### Bounded dynamics ropes
 
 `Dynamics.SetFixedTether` and `SetBodyTether` attach a caller-selected ID to

@@ -686,6 +686,7 @@ fn dynamics_bodies_float_on_a_water_field() {
                 enabled: true,
                 sleeping: false,
                 continuous_collision: false,
+                sleep: Default::default(),
             },
         },
     };

@@ -290,6 +290,7 @@ fn resting_ball(id: u64, at: [f64; 3]) -> DynamicsBodyInput {
         enabled: true,
         sleeping: false,
         continuous_collision: false,
+        sleep: Default::default(),
     }
 }
 

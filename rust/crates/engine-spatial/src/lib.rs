@@ -76,7 +76,7 @@ pub use svc_collision::{
     DynamicsBodyOutput, DynamicsContact, DynamicsEnvironmentReceipt, DynamicsError, DynamicsJoint,
     DynamicsJointError, DynamicsJointFrame, DynamicsJointLimit, DynamicsJointMotor,
     DynamicsMassProperties, DynamicsPlacement, DynamicsRopeSolverConfig, DynamicsShape,
-    DynamicsSolver, DynamicsStepReceipt, DynamicsTether, DynamicsTetherEndpoint,
+    DynamicsSleep, DynamicsSolver, DynamicsStepReceipt, DynamicsTether, DynamicsTetherEndpoint,
     DynamicsTetherError, DynamicsTetherReadout, DynamicsWaterPlane, DynamicsWaterReadout,
     DynamicsWind, RagdollBone, RagdollDrive, RagdollLink, RagdollMaterial, RagdollShape,
     RagdollSpawn,

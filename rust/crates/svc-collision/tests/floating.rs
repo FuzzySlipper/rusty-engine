@@ -37,6 +37,7 @@ fn body(id: u64, shape: DynamicsShape, mass: f64, translation: [f64; 3]) -> Dyna
         enabled: true,
         sleeping: false,
         continuous_collision: false,
+        sleep: Default::default(),
     }
 }
 

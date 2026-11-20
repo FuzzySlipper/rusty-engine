@@ -242,6 +242,7 @@ impl DynamicsSolver {
                 enabled: true,
                 sleeping: false,
                 continuous_collision: false,
+                sleep: Default::default(),
             });
             if result.is_err() {
                 break;

@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use rapier3d_f64::prelude::{
     ColliderBuilder, ColliderHandle, Group, IntegrationParameters, InteractionGroups,
-    InteractionTestMode, LockedAxes, MassProperties, PhysicsWorld, Pose, RigidBodyBuilder,
-    RigidBodyHandle, RigidBodyType, Rotation, SharedShape, Vector,
+    InteractionTestMode, LockedAxes, MassProperties, PhysicsWorld, Pose, RigidBody,
+    RigidBodyBuilder, RigidBodyHandle, RigidBodyType, Rotation, SharedShape, Vector,
 };
 
 use crate::joint::{DynamicsJoint, DynamicsJointError, DynamicsJointMotor, SolverJoint};
@@ -74,6 +74,18 @@ pub struct DynamicsBodyInput {
     pub enabled: bool,
     pub sleeping: bool,
     pub continuous_collision: bool,
+    pub sleep: DynamicsSleep,
+}
+
+/// When an awake body may fall asleep. A value that is not positive keeps
+/// Rapier's default (0.1 m/s, 0.5 s). Rapier counts spin in the linear
+/// speed, measured at the body's farthest point, so there is no angular value.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct DynamicsSleep {
+    /// Speed, in metres per second, below which the body may sleep.
+    pub linear_speed: f64,
+    /// Seconds the body must stay below `linear_speed` before it sleeps.
+    pub seconds: f64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -333,6 +345,7 @@ impl DynamicsSolver {
         validate_body(&mut body)?;
         let (builder, collider) = body_builders(&body);
         let (handle, _) = self.world.insert(builder, collider);
+        apply_sleep(&mut self.world.bodies[handle], body.sleep);
         self.bodies.insert(body.id, handle);
         self.shapes.insert(body.id, body.shape);
         Ok(())
@@ -388,6 +401,7 @@ impl DynamicsSolver {
         self.world.remove_body(previous);
         let (builder, collider) = body_builders(&body);
         let (handle, _) = self.world.insert(builder, collider);
+        apply_sleep(&mut self.world.bodies[handle], body.sleep);
         if body_type != RigidBodyType::Dynamic {
             self.world.bodies[handle].set_body_type(body_type, true);
         }
@@ -1111,6 +1125,19 @@ impl DynamicsSolver {
     }
 }
 
+/// Rapier's builder has no sleep thresholds, so they go on the inserted body.
+/// A default body is left untouched. Rapier lets a body sleep once its
+/// farthest point moves slower than twice its threshold, so the threshold is
+/// half the speed.
+fn apply_sleep(body: &mut RigidBody, sleep: DynamicsSleep) {
+    if sleep.linear_speed > 0.0 {
+        body.activation_mut().normalized_linear_threshold = sleep.linear_speed / 2.0;
+    }
+    if sleep.seconds > 0.0 {
+        body.activation_mut().time_until_sleep = sleep.seconds;
+    }
+}
+
 fn body_builders(body: &DynamicsBodyInput) -> (RigidBodyBuilder, ColliderBuilder) {
     let builder = RigidBodyBuilder::dynamic()
         .translation(vector(body.translation))
@@ -1348,6 +1375,7 @@ pub(crate) mod walking {
             enabled: true,
             sleeping: false,
             continuous_collision: false,
+            sleep: Default::default(),
         }
     }
 
@@ -1418,6 +1446,7 @@ mod tests {
             enabled: true,
             sleeping: false,
             continuous_collision: false,
+            sleep: Default::default(),
         }
     }
 
