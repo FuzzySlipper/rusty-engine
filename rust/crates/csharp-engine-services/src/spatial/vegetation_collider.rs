@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use engine_spatial::{
     StaticMeshAssetId, StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform,
 };
-use render_projection::VegetationColliderTile;
+use render_projection::{VegetationColliderTile, VegetationSlot};
 
 use super::{static_deferred, SpatialSession};
 
@@ -77,7 +77,7 @@ impl SpatialSession {
         field: u64,
         origin: [f64; 3],
         scale: f64,
-        wanted: &[((u32, (i64, i64)), VegetationColliderTile)],
+        wanted: &[(VegetationSlot, VegetationColliderTile)],
     ) {
         let wanted: BTreeMap<Key, &VegetationColliderTile> = wanted
             .iter()

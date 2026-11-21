@@ -912,7 +912,7 @@ fn a_backdrop_field_roots_in_the_backdrop_scaled_and_gives_its_bands_in_layer_un
 type Drawn = (
     BTreeMap<((i64, i64), u32), ([u64; 2], Vec<ScatterInstance>)>,
     BTreeMap<((i64, i64), u32), ([u64; 2], u32)>,
-    Vec<Slot>,
+    Vec<VegetationSlot>,
     [u64; 12],
 );
 

@@ -124,7 +124,10 @@ fn session() -> (RuntimeSpatialBridge, NativeSpatialSessionHandle) {
 fn stand(
     bridge: &mut RuntimeSpatialBridge,
     session: NativeSpatialSessionHandle,
-    wanted: &[((u32, (i64, i64)), render_projection::VegetationColliderTile)],
+    wanted: &[(
+        render_projection::VegetationSlot,
+        render_projection::VegetationColliderTile,
+    )],
 ) {
     bridge
         .session_mut(session)

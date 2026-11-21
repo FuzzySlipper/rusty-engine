@@ -335,7 +335,7 @@ pub struct VegetationReadout {
 }
 
 /// A layer's key and a tile.
-type Slot = (u32, (i64, i64));
+pub type VegetationSlot = (u32, (i64, i64));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum NodeKey {
@@ -458,7 +458,7 @@ impl Selection {
     }
 
     /// A slot's candidate.
-    fn find(&mut self, (key, tile): Slot) -> Option<usize> {
+    fn find(&mut self, (key, tile): VegetationSlot) -> Option<usize> {
         let tiles = &self.tiles;
         let ranks = self.ranks.get_or_insert_with(|| {
             tiles
@@ -494,8 +494,8 @@ struct Field {
     placements_per_settle: u32,
     /// Tile layers being placed on workers, for the generations asked for,
     /// and those finished, which the next settle takes in.
-    placing: BTreeMap<Slot, [u64; 2]>,
-    landed: BTreeMap<Slot, Landed>,
+    placing: BTreeMap<VegetationSlot, [u64; 2]>,
+    landed: BTreeMap<VegetationSlot, Landed>,
     /// The last choice, patched while only placements land.
     selection: Option<Selection>,
     tiles: BTreeMap<(i64, i64), Tile>,
@@ -515,7 +515,7 @@ struct Field {
     chosen_at: Option<[f64; 3]>,
     /// The colliders of the layers that have one, by tile layer, as their
     /// placements landed: kept while the tile and layer are.
-    collision: BTreeMap<Slot, VegetationColliderTile>,
+    collision: BTreeMap<VegetationSlot, VegetationColliderTile>,
 }
 
 impl Field {
@@ -845,7 +845,7 @@ impl VegetationFields {
     /// The colliders of a drawn field's copies on tiles within each
     /// collider's reach of its focus, by tile layer; none while it is hidden
     /// or has no focus.
-    pub fn colliders(&self, field: u64) -> Vec<((u32, (i64, i64)), VegetationColliderTile)> {
+    pub fn colliders(&self, field: u64) -> Vec<(VegetationSlot, VegetationColliderTile)> {
         let Some(retained) = self.fields.get(&field) else {
             return Vec::new();
         };
@@ -1125,7 +1125,7 @@ impl VegetationFields {
             .collect();
         nearest.sort_by(|a, b| a.1[0].total_cmp(&b.1[0]).then(a.0.cmp(&b.0)));
         let mut landed = std::mem::take(&mut retained.landed);
-        let mut fresh: BTreeMap<Slot, Vec<ScatterInstance>> = BTreeMap::new();
+        let mut fresh: BTreeMap<VegetationSlot, Vec<ScatterInstance>> = BTreeMap::new();
         let mut selection = Selection {
             tiles: nearest.iter().map(|(key, _, _)| *key).collect(),
             contents: nearest
@@ -1199,7 +1199,7 @@ impl VegetationFields {
         // What lands for a tile layer no longer a candidate is dropped, and
         // the patches of tile layers no longer candidates go.
         drop(landed);
-        let mut leaving: Vec<Slot> = Vec::new();
+        let mut leaving: Vec<VegetationSlot> = Vec::new();
         for (rank, &(tile_key, _, tile)) in nearest.iter().enumerate() {
             for &key in tile.patches.keys() {
                 if selection.at(key, rank).is_none() {
@@ -1250,7 +1250,7 @@ impl VegetationFields {
         started: Instant,
         mut operations: Vec<RenderDiff>,
     ) -> Result<Vec<RenderDiff>, VegetationError> {
-        let mut fresh: BTreeMap<Slot, Vec<ScatterInstance>> = BTreeMap::new();
+        let mut fresh: BTreeMap<VegetationSlot, Vec<ScatterInstance>> = BTreeMap::new();
         // Each layer's landed candidates and the copies they held before.
         let mut landed: BTreeMap<u32, Vec<(usize, u32)>> = BTreeMap::new();
         for (slot, landing) in std::mem::take(&mut retained.landed) {
@@ -1338,7 +1338,7 @@ impl VegetationFields {
         field: u64,
         retained: &mut Field,
         selection: &mut Selection,
-        mut fresh: BTreeMap<Slot, Vec<ScatterInstance>>,
+        mut fresh: BTreeMap<VegetationSlot, Vec<ScatterInstance>>,
         choice: Choice,
         step: f64,
         started: Instant,
@@ -1381,7 +1381,7 @@ impl VegetationFields {
             contents,
             ..
         } = &mut *selection;
-        let mut late: Vec<(Slot, [u64; 2], usize)> = Vec::new();
+        let mut late: Vec<(VegetationSlot, [u64; 2], usize)> = Vec::new();
         let mut publish: Vec<(u32, usize)> = Vec::new();
         for &key in &choice.walk {
             let layer = &retained.layers[&key].0;
@@ -1550,7 +1550,7 @@ fn derive(
     key: u32,
     candidate: &mut Candidate,
     step: f64,
-    placing: &BTreeMap<Slot, [u64; 2]>,
+    placing: &BTreeMap<VegetationSlot, [u64; 2]>,
     waiting: &mut BTreeSet<(usize, u32)>,
 ) -> u32 {
     let member = within(layer, candidate.near, candidate.drawn.is_some(), step);
@@ -1610,7 +1610,7 @@ impl Publication {
         layer: &VegetationLayer,
         key: u32,
         candidate: &mut Candidate,
-        fresh: &mut BTreeMap<Slot, Vec<ScatterInstance>>,
+        fresh: &mut BTreeMap<VegetationSlot, Vec<ScatterInstance>>,
         operations: &mut Vec<RenderDiff>,
     ) -> Result<(), VegetationError> {
         let slot = (key, candidate.tile);
@@ -1721,7 +1721,7 @@ const MAX_PLACING_WORKERS: usize = 4;
 /// A field's layer on a tile to place, for the generations it was asked for.
 struct PlacementJob {
     field: u64,
-    slot: Slot,
+    slot: VegetationSlot,
     generations: [u64; 2],
     layout: VegetationLayout,
     content: Arc<Content>,
@@ -1731,7 +1731,7 @@ struct PlacementJob {
 /// What a worker placed, and its time placing it.
 struct Placed {
     field: u64,
-    slot: Slot,
+    slot: VegetationSlot,
     generations: [u64; 2],
     instances: Vec<ScatterInstance>,
     microseconds: u64,
