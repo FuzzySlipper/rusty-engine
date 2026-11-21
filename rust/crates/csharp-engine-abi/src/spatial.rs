@@ -1165,7 +1165,8 @@ pub struct NativeCollisionNavigationReplaceRequest {
     /// `ReadCollisionNavigation` says when it is installed. Disposing the
     /// session, replacing or clearing the grid, replacing every grid or a
     /// world-origin rebase drops a derivation still running. A deferred
-    /// derivation derives every column.
+    /// derivation derives every column, on one worker thread for every four
+    /// cores the machine has (at least one).
     pub deferred: bool,
 }
 

@@ -762,22 +762,35 @@ pub(super) fn derive_collision_navigation(
 /// Below this many items a derivation step runs on the calling thread.
 const PARALLEL_MINIMUM: usize = 64;
 
+/// A worker lane takes one thread for every this many cores the machine has.
+/// Leaving the update one core was not enough: with simultaneous
+/// multithreading the remaining threads share the update's, the renderer's
+/// and the UI's cores, and every update slowed while a grid derived (#10952).
+const WORKER_CORES_PER_THREAD: usize = 4;
+
+/// How many threads a derivation step uses: every core in the call, and a
+/// quarter of them, at least one, on a worker, so a deferred derivation takes
+/// longer and the updates around it keep their pace.
+fn lane_threads(lane: Lane, cores: usize) -> usize {
+    match lane {
+        Lane::Call => cores,
+        Lane::Worker(_) => (cores / WORKER_CORES_PER_THREAD).max(1),
+    }
+}
+
 /// `work` over every item, in order, spread across the machine's cores in
 /// small runs taken as each thread frees up (columns of rock cost less than
 /// columns of rough floor). Each item reads the published scene only, so the
-/// result does not depend on the split. On a worker lane it leaves the update
-/// a core, runs below normal priority on Windows, and stops between runs once
-/// cancelled, returning `None`.
+/// result does not depend on the split. On a worker lane it uses
+/// [`lane_threads`], runs below normal priority on Windows, and stops between
+/// runs once cancelled, returning `None`.
 fn in_parallel<T: Sync, R: Send>(
     items: &[T],
     lane: Lane,
     work: impl Fn(&T) -> R + Sync,
 ) -> Option<Vec<R>> {
     let cores = std::thread::available_parallelism().map_or(1, usize::from);
-    let threads = match lane {
-        Lane::Call => cores,
-        Lane::Worker(_) => cores.saturating_sub(1).max(1),
-    };
+    let threads = lane_threads(lane, cores);
     let runs: Vec<&[T]> = items.chunks(PARALLEL_MINIMUM / 4).collect();
     if threads <= 1 || items.len() < PARALLEL_MINIMUM {
         let mut done = Vec::with_capacity(items.len());
@@ -1758,6 +1771,29 @@ mod tests {
             .unwrap();
         assert_eq!(receipt.reused_column_count, 0);
         published(&fresh, fresh_session)
+    }
+
+    #[test]
+    fn a_worker_derives_on_a_quarter_of_the_cores_and_a_call_on_all_of_them() {
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let worker = Lane::Worker(&cancel);
+        assert_eq!(lane_threads(worker, 20), 5);
+        assert_eq!(lane_threads(worker, 2), 1);
+        assert_eq!(lane_threads(Lane::Call, 20), 20);
+
+        let cores = std::thread::available_parallelism().map_or(1, usize::from);
+        let items: Vec<u32> = (0..4096).collect();
+        let threads = in_parallel(&items, worker, |_| {
+            std::thread::sleep(std::time::Duration::from_micros(20));
+            std::thread::current().id()
+        })
+        .unwrap();
+        let used: std::collections::HashSet<_> = threads.into_iter().collect();
+        assert!(
+            used.len() <= lane_threads(worker, cores),
+            "{} threads on {cores} cores",
+            used.len()
+        );
     }
 
     #[test]

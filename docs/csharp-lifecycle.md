@@ -1223,8 +1223,10 @@ if (!grid.Pending) { /* grid.Installed is the publication's receipt */ }
   milliseconds per hundred thousand solid voxels.
 - **Cost.** A deferred derivation derives every column, not only those a
   previous publication could lend, so republishing a small change is cheaper
-  synchronous. Its worker uses one core fewer than the machine has and runs
-  below normal priority on Windows, so the update and the window keep theirs.
+  synchronous. Its worker uses one thread for every four cores the machine
+  has (at least one) and runs below normal priority on Windows, so the update,
+  the renderer and the window keep their cores and the derivation takes
+  longer.
 
 ### Collision navigation coordinates
 
