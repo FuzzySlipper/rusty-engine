@@ -10,8 +10,8 @@ use std::{collections::BTreeMap, ffi::c_void};
 use csharp_engine_abi::*;
 use render_model::{RenderDiff, RenderFrameDiff, RenderLayer, ShadowCasting};
 use render_projection::{
-    VegetationCollider, VegetationError, VegetationFields, VegetationLayer, VegetationLayout,
-    VegetationReadout, VegetationRecord, VegetationTileContent,
+    VegetationCollider, VegetationColliderStamp, VegetationError, VegetationFields,
+    VegetationLayer, VegetationLayout, VegetationReadout, VegetationRecord, VegetationTileContent,
 };
 use svc_mesh::heightfield::TileSamples;
 
@@ -107,9 +107,9 @@ struct VegetationState {
     fields: BTreeMap<u64, RetainedField>,
     tiles: VegetationFields,
     next: u64,
-    /// The fields whose copies stand as colliders, and their sessions, so a
-    /// field gone takes its colliders with it.
-    colliding: BTreeMap<u64, u64>,
+    /// The fields whose copies stand as colliders, their sessions, so a
+    /// field gone takes its colliders with it, and what was handed over.
+    colliding: BTreeMap<u64, (u64, VegetationColliderStamp)>,
 }
 
 pub(crate) struct RuntimeVegetationCall {
@@ -208,10 +208,13 @@ impl RuntimeVegetationBridge {
         let (retained, tiles) = self.retained(handle)?;
         let colliders = if retained.collides() {
             tiles
-                .colliders(handle.value)
-                .iter()
-                .map(|(_, colliders)| colliders.copies.len() as u64)
-                .sum()
+                .colliders(handle.value, None)
+                .map_or(0, |(_, wanted)| {
+                    wanted
+                        .iter()
+                        .map(|(_, colliders)| colliders.copies.len() as u64)
+                        .sum()
+                })
         } else {
             0
         };
@@ -700,8 +703,12 @@ impl RuntimeVegetationBridge {
             if !retained.collides() {
                 continue;
             }
-            let wanted = state.tiles.colliders(*handle);
-            if wanted.is_empty() && !state.colliding.contains_key(handle) {
+            let known = state.colliding.get(handle).map(|(_, stamp)| stamp);
+            // Nothing changed since they were handed over.
+            let Some((stamp, wanted)) = state.tiles.colliders(*handle, known) else {
+                continue;
+            };
+            if wanted.is_empty() && known.is_none() {
                 continue;
             }
             let session = NativeSpatialSessionHandle {
@@ -716,14 +723,14 @@ impl RuntimeVegetationBridge {
             if wanted.is_empty() {
                 state.colliding.remove(handle);
             } else {
-                state.colliding.insert(*handle, retained.session);
+                state.colliding.insert(*handle, (retained.session, stamp));
             }
         }
         let gone: Vec<(u64, u64)> = state
             .colliding
             .iter()
             .filter(|(handle, _)| !state.fields.contains_key(handle))
-            .map(|(handle, session)| (*handle, *session))
+            .map(|(handle, (session, _))| (*handle, *session))
             .collect();
         for (handle, session) in gone {
             state.colliding.remove(&handle);

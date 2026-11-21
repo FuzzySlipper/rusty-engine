@@ -256,7 +256,7 @@ fn clearance(path: &[[f32; 2]]) -> f32 {
 #[test]
 fn a_colliding_tree_stops_a_character_and_a_derived_grid_routes_around_it() {
     let fields = grown();
-    assert_eq!(fields.colliders(FIELD).len(), 1);
+    assert_eq!(fields.colliders(FIELD, None).unwrap().1.len(), 1);
 
     // With no tree standing, the character walks straight through its place
     // and the grid runs straight past it.
@@ -265,7 +265,11 @@ fn a_colliding_tree_stops_a_character_and_a_derived_grid_routes_around_it() {
     assert!(clearance(&route(&mut bridge, session)) < RADIUS);
 
     // Standing, it stops the character at its face and the grid goes round.
-    stand(&mut bridge, session, &fields.colliders(FIELD));
+    stand(
+        &mut bridge,
+        session,
+        &fields.colliders(FIELD, None).unwrap().1,
+    );
     assert_eq!(copies(&bridge, session), 1);
     let stopped = walk(&mut bridge, session);
     assert!(
@@ -288,13 +292,21 @@ fn a_colliding_tree_stops_a_character_and_a_derived_grid_routes_around_it() {
 fn a_tree_placed_again_replaces_its_collider_and_one_unchanged_is_not_sent_again() {
     let fields = grown();
     let (mut bridge, session) = session();
-    stand(&mut bridge, session, &fields.colliders(FIELD));
+    stand(
+        &mut bridge,
+        session,
+        &fields.colliders(FIELD, None).unwrap().1,
+    );
     let revision = bridge.sessions[&session.value]
         .scene
         .static_mesh_projection()
         .revision();
     // The same placement again changes nothing.
-    stand(&mut bridge, session, &fields.colliders(FIELD));
+    stand(
+        &mut bridge,
+        session,
+        &fields.colliders(FIELD, None).unwrap().1,
+    );
     assert_eq!(
         bridge.sessions[&session.value]
             .scene
@@ -303,7 +315,7 @@ fn a_tree_placed_again_replaces_its_collider_and_one_unchanged_is_not_sent_again
         revision
     );
     // Placed again (a new stamp), its old collider goes and the new comes.
-    let mut wanted = fields.colliders(FIELD);
+    let mut wanted = fields.colliders(FIELD, None).unwrap().1;
     wanted[0].1.stamp += 1;
     stand(&mut bridge, session, &wanted);
     assert_eq!(copies(&bridge, session), 1);

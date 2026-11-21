@@ -136,6 +136,13 @@ pub struct VegetationCollider {
     pub reach: f32,
 }
 
+/// Which colliders a field wanted when they were read: each tile layer
+/// within reach and the stamp of its placement.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct VegetationColliderStamp {
+    slots: Vec<(VegetationSlot, u64)>,
+}
+
 /// One copy's collider: its foot (x and z from its tile's origin, y the
 /// world height) and its scale.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -513,9 +520,9 @@ struct Field {
     changed: bool,
     /// The focus the last choice was made for.
     chosen_at: Option<[f64; 3]>,
-    /// The colliders of the layers that have one, by tile layer, as their
-    /// placements landed: kept while the tile and layer are.
-    collision: BTreeMap<VegetationSlot, VegetationColliderTile>,
+    /// The colliders of the layers that have one, by tile and then layer, as
+    /// their placements landed: kept while the tile and layer are.
+    collision: BTreeMap<(i64, i64), BTreeMap<u32, VegetationColliderTile>>,
 }
 
 impl Field {
@@ -527,6 +534,14 @@ impl Field {
     fn revision(&mut self) -> u32 {
         self.next_revision = self.next_revision.wrapping_add(1).max(1);
         self.next_revision
+    }
+
+    /// Forget a layer's colliders on every tile.
+    fn forget_colliders(&mut self, key: u32) {
+        self.collision.retain(|_, layers| {
+            layers.remove(&key);
+            !layers.is_empty()
+        });
     }
 
     fn reach(&self) -> f64 {
@@ -695,7 +710,7 @@ impl VegetationFields {
         // A layer that collides no longer stops colliding at once; one that
         // still does keeps its colliders until its copies are placed again.
         if layer.collider.is_none() {
-            retained.collision.retain(|(layer, _), _| *layer != key);
+            retained.forget_colliders(key);
         }
         retained.layers.insert(key, (Arc::new(layer), generation));
         retained.changed = true;
@@ -715,7 +730,7 @@ impl VegetationFields {
         retained.changed = true;
         retained.placing.retain(|(layer, _), _| *layer != key);
         retained.landed.retain(|(layer, _), _| *layer != key);
-        retained.collision.retain(|(layer, _), _| *layer != key);
+        retained.forget_colliders(key);
         let mut operations = Vec::new();
         for (&(x, z), tile) in &mut retained.tiles {
             tile.bare.remove(&key);
@@ -843,23 +858,60 @@ impl VegetationFields {
     }
 
     /// The colliders of a drawn field's copies on tiles within each
-    /// collider's reach of its focus, by tile layer; none while it is hidden
-    /// or has no focus.
-    pub fn colliders(&self, field: u64) -> Vec<(VegetationSlot, VegetationColliderTile)> {
-        let Some(retained) = self.fields.get(&field) else {
-            return Vec::new();
+    /// collider's reach of its focus, by tile layer, and their stamp; none
+    /// while it is hidden or has no focus. `None` when they are what `known`
+    /// stamps, so a caller holding them has nothing to change. Only the
+    /// tiles within the farthest collider reach are looked at.
+    pub fn colliders(
+        &self,
+        field: u64,
+        known: Option<&VegetationColliderStamp>,
+    ) -> Option<(
+        VegetationColliderStamp,
+        Vec<(VegetationSlot, VegetationColliderTile)>,
+    )> {
+        let mut stamp = VegetationColliderStamp::default();
+        let retained = self.fields.get(&field);
+        if let Some((retained, focus)) = retained
+            .and_then(|retained| Some((retained, retained.focus.filter(|_| retained.visible)?)))
+        {
+            let reach = retained
+                .layers
+                .values()
+                .filter_map(|(layer, _)| layer.collider)
+                .map(|collider| f64::from(collider.reach))
+                .fold(0.0, f64::max);
+            let size = retained.layout.tile_size;
+            let low =
+                [focus[0] - reach, focus[2] - reach].map(|value| (value / size).floor() as i64);
+            let high =
+                [focus[0] + reach, focus[2] + reach].map(|value| (value / size).floor() as i64);
+            for (&tile, layers) in retained
+                .collision
+                .range((low[0], i64::MIN)..=(high[0], i64::MAX))
+                .filter(|((_, z), _)| (low[1]..=high[1]).contains(z))
+            {
+                let near = retained.flat_distance(focus, tile);
+                stamp.slots.extend(
+                    layers
+                        .iter()
+                        .filter(|(_, colliders)| near <= f64::from(colliders.collider.reach))
+                        .map(|(&key, colliders)| ((key, tile), colliders.stamp)),
+                );
+            }
+        }
+        if known == Some(&stamp) {
+            return None;
+        }
+        let wanted = match retained {
+            Some(retained) => stamp
+                .slots
+                .iter()
+                .map(|&((key, tile), _)| ((key, tile), retained.collision[&tile][&key].clone()))
+                .collect(),
+            None => Vec::new(),
         };
-        let Some(focus) = retained.focus.filter(|_| retained.visible) else {
-            return Vec::new();
-        };
-        retained
-            .collision
-            .iter()
-            .filter(|((_, tile), colliders)| {
-                retained.flat_distance(focus, *tile) <= f64::from(colliders.collider.reach)
-            })
-            .map(|(slot, colliders)| (*slot, colliders.clone()))
-            .collect()
+        Some((stamp, wanted))
     }
 
     pub fn readout(&self, field: u64) -> Option<VegetationReadout> {
@@ -948,8 +1000,8 @@ impl VegetationFields {
                     .collect();
                 let stamp = retained.generation();
                 let origin = retained.origin(tile);
-                retained.collision.insert(
-                    placed.slot,
+                retained.collision.entry(tile).or_default().insert(
+                    key,
                     VegetationColliderTile {
                         stamp,
                         collider,
@@ -1077,7 +1129,7 @@ impl VegetationFields {
         for key in leaving {
             let tile = retained.tiles.remove(&key).expect("listed above");
             retained.placing.retain(|(_, tile), _| *tile != key);
-            retained.collision.retain(|(_, tile), _| *tile != key);
+            retained.collision.remove(&key);
             self.forget_tile(field, key, &tile);
             if let Some(handle) = tile.node {
                 operations.push(RenderDiff::Destroy { handle });

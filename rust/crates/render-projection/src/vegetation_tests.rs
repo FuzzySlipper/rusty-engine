@@ -1122,7 +1122,7 @@ fn a_colliding_layer_keeps_its_placed_copies_within_its_collider_reach() {
         )
         .unwrap();
     let operations = fill(&mut fields, [8.0, 2.0, 8.0], |_, _| 2.0);
-    let colliders = fields.colliders(FIELD);
+    let colliders = fields.colliders(FIELD, None).unwrap().1;
     // Tiles within 12 m of (8, 8): the one holding it and its eight
     // neighbours, whose nearest corners are 11.3 m off; none farther.
     let tiles: std::collections::BTreeSet<_> =
@@ -1160,14 +1160,18 @@ fn a_colliding_layer_keeps_its_placed_copies_within_its_collider_reach() {
             .zip(&patch.instances)
             .all(|(copy, drawn)| copy.foot == drawn.translation && copy.scale == drawn.scale));
     }
+    // Read again with nothing changed, they are what the caller holds.
+    let (stamp, _) = fields.colliders(FIELD, None).unwrap();
+    assert!(fields.colliders(FIELD, Some(&stamp)).is_none());
     // Hidden, the field collides nowhere; shown, it collides again.
     fields.set_visible(FIELD, false).unwrap();
-    assert!(fields.colliders(FIELD).is_empty());
+    assert!(fields.colliders(FIELD, Some(&stamp)).unwrap().1.is_empty());
+    assert!(fields.colliders(FIELD, None).unwrap().1.is_empty());
     fields.set_visible(FIELD, true).unwrap();
-    assert_eq!(fields.colliders(FIELD).len(), 9);
+    assert_eq!(fields.colliders(FIELD, None).unwrap().1.len(), 9);
     // A layer that no longer collides, or is removed, has none.
     fields.set_layer(FIELD, GRASS, grass()).unwrap();
-    assert!(fields.colliders(FIELD).is_empty());
+    assert!(fields.colliders(FIELD, None).unwrap().1.is_empty());
     fields
         .set_layer(
             FIELD,
@@ -1179,9 +1183,9 @@ fn a_colliding_layer_keeps_its_placed_copies_within_its_collider_reach() {
         )
         .unwrap();
     settle_placed(&mut fields, [0.0; 3], Some([8.0, 2.0, 8.0]));
-    assert_eq!(fields.colliders(FIELD).len(), 9);
+    assert_eq!(fields.colliders(FIELD, None).unwrap().1.len(), 9);
     fields.remove_layer(FIELD, GRASS).unwrap();
-    assert!(fields.colliders(FIELD).is_empty());
+    assert!(fields.colliders(FIELD, None).unwrap().1.is_empty());
 }
 
 #[test]
