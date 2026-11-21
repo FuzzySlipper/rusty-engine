@@ -69,6 +69,7 @@ fn dual_contoured_room() -> VoxelCollisionScene {
 }
 
 struct Crawler {
+    config: CrawlerConfig,
     position: Vec3,
     motion: CrawlerMotion,
     sequence: u64,
@@ -79,6 +80,7 @@ struct Crawler {
 impl Crawler {
     fn at(position: Vec3) -> Self {
         Self {
+            config: CrawlerConfig::default(),
             position,
             motion: CrawlerMotion::default(),
             sequence: 0,
@@ -98,7 +100,7 @@ impl Crawler {
             scene,
             self.position,
             self.motion,
-            &CrawlerConfig::default(),
+            &self.config,
             CrawlerCommand {
                 direction,
                 cling,
@@ -171,14 +173,20 @@ fn neg(v: Vec3) -> Vec3 {
 /// Floor → +X wall → ceiling → −X wall → floor, the receipt naming each
 /// surface with its normal and the rotation drawing the body on it.
 fn round_the_room(scene: &VoxelCollisionScene, tolerance: f32) {
+    round_the_room_with(scene, tolerance, CrawlerConfig::default());
+}
+
+fn round_the_room_with(scene: &VoxelCollisionScene, tolerance: f32, config: CrawlerConfig) {
     let mut crawler = Crawler::at(Vec3::new(0.0, 1.5, 0.5));
+    crawler.config = config;
+    let rest = 1.0 + config.radius + config.contact_skin;
     let landed = crawler.settle(scene);
     assert!(
         on(&landed, CrawlerSurface::Floor, Y, tolerance),
         "{landed:?}"
     );
     assert!(
-        (landed.position.y - 1.27).abs() < 0.02,
+        (landed.position.y - rest).abs() < 0.02,
         "rests its skin off the floor: {landed:?}"
     );
 
@@ -219,6 +227,13 @@ fn round_the_room(scene: &VoxelCollisionScene, tolerance: f32) {
 #[test]
 fn a_crawler_goes_round_a_cube_room_floor_wall_ceiling_wall_floor() {
     round_the_room(&cube_room(), 1.0e-3);
+}
+
+#[test]
+fn a_crawler_with_no_skin_goes_round_a_cube_room() {
+    let mut config = CrawlerConfig::default();
+    config.contact_skin = 0.0;
+    round_the_room_with(&cube_room(), 1.0e-3, config);
 }
 
 #[test]
@@ -521,5 +536,53 @@ fn measure_crawler_step_cost() {
         }
         let micros = started.elapsed().as_secs_f64() * 1.0e6 / f64::from(steps);
         println!("{name}: {steps} steps, {micros:.2} us per 60 Hz crawler step");
+    }
+}
+
+/// With no skin, or very little, the ball rests touching the floor; a move
+/// along it still goes, and stays on the floor (R10967-1).
+#[test]
+fn a_crawler_with_no_skin_moves_along_its_floor() {
+    let scene = cube_room();
+    for skin in [0.0_f32, 1.0e-6] {
+        let mut config = CrawlerConfig::default();
+        config.contact_skin = skin;
+        let mut position = Vec3::new(0.0, 1.25 + skin, 0.5);
+        let mut motion = CrawlerMotion {
+            attached: true,
+            ..CrawlerMotion::default()
+        };
+        for sequence in 1..=30 {
+            let receipt = step_crawler(
+                &scene,
+                position,
+                motion,
+                &config,
+                CrawlerCommand {
+                    direction: X,
+                    cling: true,
+                    step_seconds: STEP,
+                    sequence,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                receipt.surface,
+                CrawlerSurface::Floor,
+                "skin {skin}: {receipt:?}"
+            );
+            position = receipt.position;
+            motion = receipt.motion;
+        }
+        // Accelerating at 30 m/s² to 4 m/s takes 8 steps and 0.27 m; 22
+        // more at 4 m/s make about 1.73 m in all. A dropped move falls short.
+        assert!(
+            position.x > 1.68,
+            "skin {skin} moved all the way: {position:?}"
+        );
+        assert!(
+            (position.y - (1.25 + skin)).abs() < 1.0e-3,
+            "skin {skin} on the floor: {position:?}"
+        );
     }
 }

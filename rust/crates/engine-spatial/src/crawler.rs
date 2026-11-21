@@ -42,6 +42,9 @@ const RECOVERY_PASSES: usize = 4;
 /// A turn of up smaller than this is following the surface, not an edge.
 const EDGE_RADIANS: f64 = 0.02;
 const EPSILON: f64 = 1.0e-9;
+/// The least a grazing move steps off the surface it grazes, so a ball with
+/// no skin (resting touching it) still clears it.
+const MINIMUM_GRAZE_STEP: f64 = 1.0e-4;
 
 /// Crawler body and movement. Construct it with [`Default`] and change
 /// fields.
@@ -414,12 +417,14 @@ impl Crawl<'_> {
 
     /// A hit on a surface the move runs along or leaves, not into: the ball
     /// starts within the sweep's distance of it. It steps off to its full
-    /// skin and the move is swept again.
+    /// skin, or a tenth of a millimetre with less, and the move is swept
+    /// again; sticking brings it back.
     fn grazes(&mut self, hit: &Hit, translation: V) -> bool {
         if hit.normal.dot(translation) < -1.0e-6 * translation.length() {
             return false;
         }
-        self.position = self.position.add(hit.normal.mul(self.skin * 0.5));
+        let step = (self.skin * 0.5).max(MINIMUM_GRAZE_STEP);
+        self.position = self.position.add(hit.normal.mul(step));
         true
     }
 
@@ -562,7 +567,8 @@ impl Crawl<'_> {
                 }
                 // A wall beside it, met at once: step off it and look again.
                 Some(hit) if hit.fraction <= 1.0e-6 => {
-                    self.position = self.position.add(hit.normal.mul(self.skin));
+                    let step = self.skin.max(MINIMUM_GRAZE_STEP);
+                    self.position = self.position.add(hit.normal.mul(step));
                 }
                 _ => break,
             }
