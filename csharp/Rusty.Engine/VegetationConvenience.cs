@@ -48,13 +48,13 @@ public readonly partial record struct VegetationLayerRequest
     /// <paramref name="Density"/> copies per square metre on ground class 0, on tiles within
     /// <paramref name="Reach"/> metres of the focus: upright, full size and untinted on ground up
     /// to 35 degrees steep, shrinking away over the last quarter of the reach, however near,
-    /// casting no shadows, at most 65,536 copies. Use <c>with</c> to vary the rest; a voxel scene
+    /// casting no shadows, colliding with nothing, at most 65,536 copies. Use <c>with</c> to vary the rest; a voxel scene
     /// scatter with the same key, seed and density grows the same spots, so its fade-out band can
     /// be this layer's <c>Near</c> and <c>NearFade</c>.
     /// </summary>
     public VegetationLayerRequest(VegetationField Field, uint Layer, Appearance Appearance, OptionalMaterial Material, float Density, float Reach)
         : this(Field, Layer, Appearance, Material, Density, 1, 35f, 0f, 1f, 1f, Vector3.One, Vector3.One, 0, Reach, Reach * 0.25f,
-            0f, 0f, 65_536, false)
+            0f, 0f, 65_536, false, 0f, 0f, 0f)
     {
     }
 

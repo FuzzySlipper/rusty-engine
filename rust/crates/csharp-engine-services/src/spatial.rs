@@ -5,6 +5,7 @@ mod contacts;
 mod heightfield_collider;
 mod inspection;
 mod static_deferred;
+mod vegetation_collider;
 
 use std::{
     cell::RefCell,
@@ -674,6 +675,8 @@ pub(crate) struct SpatialSession {
     static_deferred: static_deferred::StaticDeferred,
     /// Heightfield colliders, whose tiles ride those batches.
     heightfield_colliders: heightfield_collider::SessionColliders,
+    /// Vegetation copies standing as colliders, which ride them too.
+    vegetation_colliders: vegetation_collider::SessionVegetation,
 }
 
 impl SpatialSession {
@@ -2036,6 +2039,7 @@ impl RuntimeSpatialBridge {
                 deferred: Default::default(),
                 static_deferred: Default::default(),
                 heightfield_colliders: Default::default(),
+                vegetation_colliders: Default::default(),
             },
         );
         self.publish_scene(NativeSpatialSessionHandle { value }, scene);
@@ -7545,6 +7549,7 @@ fn native_character_tether_fact(
 mod tests {
     mod deferred_navigation;
     mod heightfield_collider;
+    mod vegetation_collider;
 
     use super::*;
 

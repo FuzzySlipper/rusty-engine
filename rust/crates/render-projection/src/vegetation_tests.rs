@@ -33,6 +33,7 @@ fn grass() -> VegetationLayer {
         lods: Vec::new(),
         lod_band: 0.0,
         thinning: ScatterThinning::default(),
+        collider: None,
     }
 }
 
@@ -1100,4 +1101,115 @@ fn a_choice_patched_after_landings_draws_what_a_choice_from_scratch_draws() {
     assert!(readout.patches > 30, "{}", readout.patches);
     assert!(patched.patched_choices > 20, "{}", patched.patched_choices);
     assert_eq!(full.patched_choices, 0);
+}
+
+#[test]
+fn a_colliding_layer_keeps_its_placed_copies_within_its_collider_reach() {
+    let trunk = VegetationCollider {
+        radius: 0.3,
+        height: 3.0,
+        reach: 12.0,
+    };
+    let mut fields = fields(1_000);
+    fields
+        .set_layer(
+            FIELD,
+            GRASS,
+            VegetationLayer {
+                collider: Some(trunk),
+                ..grass()
+            },
+        )
+        .unwrap();
+    let operations = fill(&mut fields, [8.0, 2.0, 8.0], |_, _| 2.0);
+    let colliders = fields.colliders(FIELD);
+    // Tiles within 12 m of (8, 8): the one holding it and its eight
+    // neighbours, whose nearest corners are 11.3 m off; none farther.
+    let tiles: std::collections::BTreeSet<_> =
+        colliders.iter().map(|((_, tile), _)| *tile).collect();
+    assert_eq!(tiles.len(), 9);
+    assert!(tiles
+        .iter()
+        .all(|(x, z)| (-1..=1).contains(x) && (-1..=1).contains(z)));
+    // Each holds the copies its patch draws, at their feet.
+    let drawn = patches(&operations);
+    for ((key, tile), colliders) in &colliders {
+        assert_eq!(*key, GRASS);
+        assert_eq!(colliders.collider, trunk);
+        assert_eq!(
+            colliders.origin,
+            [tile.0 as f64 * 16.0, tile.1 as f64 * 16.0]
+        );
+        let handle = fields.patch_handle(FIELD, *tile, GRASS).unwrap();
+        let patch = operations
+            .iter()
+            .find_map(|operation| match operation {
+                RenderDiff::CreateScatterPatch {
+                    handle: made,
+                    patch,
+                    ..
+                } if *made == handle => Some(patch),
+                _ => None,
+            })
+            .unwrap();
+        assert!(drawn.contains(&patch));
+        assert_eq!(colliders.copies.len(), patch.instances.len());
+        assert!(colliders
+            .copies
+            .iter()
+            .zip(&patch.instances)
+            .all(|(copy, drawn)| copy.foot == drawn.translation && copy.scale == drawn.scale));
+    }
+    // Hidden, the field collides nowhere; shown, it collides again.
+    fields.set_visible(FIELD, false).unwrap();
+    assert!(fields.colliders(FIELD).is_empty());
+    fields.set_visible(FIELD, true).unwrap();
+    assert_eq!(fields.colliders(FIELD).len(), 9);
+    // A layer that no longer collides, or is removed, has none.
+    fields.set_layer(FIELD, GRASS, grass()).unwrap();
+    assert!(fields.colliders(FIELD).is_empty());
+    fields
+        .set_layer(
+            FIELD,
+            GRASS,
+            VegetationLayer {
+                collider: Some(trunk),
+                ..grass()
+            },
+        )
+        .unwrap();
+    settle_placed(&mut fields, [0.0; 3], Some([8.0, 2.0, 8.0]));
+    assert_eq!(fields.colliders(FIELD).len(), 9);
+    fields.remove_layer(FIELD, GRASS).unwrap();
+    assert!(fields.colliders(FIELD).is_empty());
+}
+
+#[test]
+fn a_collider_is_upright_finite_and_above_zero() {
+    for collider in [
+        VegetationCollider {
+            radius: 0.0,
+            height: 3.0,
+            reach: 10.0,
+        },
+        VegetationCollider {
+            radius: 0.3,
+            height: f32::NAN,
+            reach: 10.0,
+        },
+        VegetationCollider {
+            radius: 0.3,
+            height: 3.0,
+            reach: -1.0,
+        },
+    ] {
+        assert_eq!(
+            VegetationLayer {
+                collider: Some(collider),
+                ..grass()
+            }
+            .validate(),
+            Err(VegetationLayerError::Collider)
+        );
+    }
 }

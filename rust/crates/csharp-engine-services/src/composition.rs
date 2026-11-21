@@ -960,6 +960,12 @@ impl EngineServiceSet {
         })
     }
 
+    /// The spatial sessions, for tests that read what services put there.
+    #[cfg(test)]
+    pub(crate) fn spatial_bridge(&mut self) -> &mut RuntimeSpatialBridge {
+        &mut self.spatial
+    }
+
     /// Wait for vegetation placements on workers; whether a call has some
     /// to take in.
     #[cfg(test)]
@@ -1032,6 +1038,10 @@ impl EngineServiceSet {
         };
         self.heightfield.settle(&mut calls.heightfield, eye)?;
         self.vegetation.settle(&mut calls.vegetation, eye)?;
+        // Copies that collide stand in their sessions as their placements
+        // land and their tiles come within reach.
+        self.vegetation
+            .settle_colliders(&mut calls.vegetation, &mut self.spatial);
         // Water fields take the time this call admitted and draw what their
         // workers last published.
         self.water_field.settle()?;

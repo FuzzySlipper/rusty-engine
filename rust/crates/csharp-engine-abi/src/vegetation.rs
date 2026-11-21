@@ -80,6 +80,15 @@ pub struct NativeVegetationVisibilityRequest {
 /// normal. The nearest tiles' copies come first within
 /// `maximum_instances`. The appearance and material must stay live while the
 /// layer grows them.
+///
+/// With a `collider_radius` above 0, each copy also stands in the field's
+/// spatial session as an upright cylinder of that radius and
+/// `collider_height` from its foot (field units, scaled with the copy), for
+/// the copies on tiles within `collider_reach` of the focus while the field
+/// is drawn: character steps, contacts, queries and collision-derived
+/// navigation meet it. Its colliders follow the copies placed, not the
+/// budget or the fades, and ride deferred collision batches: a copy placed
+/// or gone changes the session's collision a call or more later.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeVegetationLayerRequest {
@@ -104,6 +113,9 @@ pub struct NativeVegetationLayerRequest {
     pub near_fade: f32,
     pub maximum_instances: u32,
     pub casts_shadows: bool,
+    pub collider_radius: f32,
+    pub collider_height: f32,
+    pub collider_reach: f32,
 }
 
 /// A farther level of detail of a layer: from `start` metres its copies draw
@@ -283,6 +295,9 @@ pub struct NativeVegetationReadout {
     /// and calls that chose again.
     pub settles_skipped: u64,
     pub settles_reselected: u64,
+    /// The copies standing as colliders now: those of its colliding layers
+    /// within their reach, as handed to the session's collision.
+    pub colliders: u64,
 }
 
 pub type NativeCreateVegetationField = unsafe extern "C" fn(

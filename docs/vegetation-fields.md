@@ -7,7 +7,8 @@ placement records. The Engine keeps the tiles resident about the focus,
 places each layer's copies on worker threads within budgets, and draws them as
 retained instanced scatter patches. Nothing here needs voxel or collision
 residency: a field grows as far over distant heightfield ground as over
-walking ground.
+walking ground. A layer may still have its nearest copies collide
+([Colliders](#colliders)).
 
 ```csharp
 using Rusty.Engine.VegetationTiles;
@@ -324,7 +325,7 @@ choosing what is drawn and turning that into renderer work
 (`SelectionMicroseconds`, `PublicationMicroseconds`),
 `InvalidatedTiles`, `ReplacedPatches`, `SampleBytes`, and the calls that
 had nothing to choose again and those that chose again (`SettlesSkipped`,
-`SettlesReselected`). The renderer's side
+`SettlesReselected`), and the copies standing as colliders (`Colliders`). The renderer's side
 of the upload is `engine.renderer` statistics' `scatter`: patches and copies
 taken in since it was made, the CPU time turning them into drawable parts and
 the GPU row bytes they upload; read it twice and subtract for a span.
@@ -338,5 +339,34 @@ levels 1 to 3; its GPU time is the `scatter-select` pass. `gpu.occlusion`
 reports the occlusion test: on, its pyramid's size and levels, and its
 depth's samples per pixel; its GPU time is the `occlusion` pass.
 
-Copies are never nodes, entities, colliders or pickable, and they cast
-shadows only when the layer asks.
+Copies are never nodes, entities or pickable, and they cast shadows only when
+the layer asks.
+
+## Colliders
+
+A layer with a `ColliderRadius` above 0 has each copy stand in the field's
+spatial session as an upright cylinder of that radius and `ColliderHeight`
+from its foot, in field units and scaled with the copy, while the copy's tile
+is within `ColliderReach` of the focus and the field is drawn. Size it to a
+trunk or a rock, not a canopy, so bodies pass under branches. It stays upright
+however the copy leans. Only a field in the scene over a spatial session
+collides.
+
+```csharp
+engine.Vegetation.SetLayer(new VegetationLayerRequest(field, TreeLayer, treeLook, default, 0.02f, 400) with
+{
+    ColliderRadius = 0.25f, ColliderHeight = 4, ColliderReach = 120,
+});
+```
+
+The colliders follow the copies placed, not the budget or the fades: a copy
+the budget leaves undrawn still collides. Character steps, contacts, queries,
+Dynamics and collision-derived navigation all meet them, and the session's
+collision revision moves when they change. Each tile layer's copies ride a
+deferred collision batch as they land or come within reach, and leave in one
+as they go, so a placement shows in collision a call or more after it lands.
+A hidden field takes its colliders out of the session.
+
+Cost: one static mesh instance per copy within reach, baked on a worker. Keep
+the reach to what bodies there need: a tile's colliders go in and out whole,
+so a long reach on a dense layer makes large batches as the focus moves.

@@ -10,8 +10,8 @@ use std::{collections::BTreeMap, ffi::c_void};
 use csharp_engine_abi::*;
 use render_model::{RenderDiff, RenderFrameDiff, RenderLayer, ShadowCasting};
 use render_projection::{
-    VegetationError, VegetationFields, VegetationLayer, VegetationLayout, VegetationReadout,
-    VegetationRecord, VegetationTileContent,
+    VegetationCollider, VegetationError, VegetationFields, VegetationLayer, VegetationLayout,
+    VegetationReadout, VegetationRecord, VegetationTileContent,
 };
 use svc_mesh::heightfield::TileSamples;
 
@@ -19,7 +19,7 @@ use crate::{
     appearance::RuntimeAppearanceBridge,
     composition::{borrowed_slice, ABI_OK},
     operation_diagnostics::{clear_receipt, refuse, BorrowedResult},
-    spatial::SpatialCollisionSource,
+    spatial::{RuntimeSpatialBridge, SpatialCollisionSource},
     CsharpEngineServicesError,
 };
 
@@ -90,6 +90,12 @@ impl RetainedField {
         std::array::from_fn(|axis| self.origin[axis] - cell[axis] as f64)
     }
 
+    /// Whether its copies may stand as colliders: it grows in the scene over
+    /// a spatial session.
+    fn collides(&self) -> bool {
+        self.session != 0 && self.layer == RenderLayer::Scene
+    }
+
     /// A layer point in field units.
     fn field_point(&self, placement: [f64; 3], point: [f64; 3]) -> [f64; 3] {
         std::array::from_fn(|axis| (point[axis] - placement[axis]) / self.scale)
@@ -101,6 +107,9 @@ struct VegetationState {
     fields: BTreeMap<u64, RetainedField>,
     tiles: VegetationFields,
     next: u64,
+    /// The fields whose copies stand as colliders, and their sessions, so a
+    /// field gone takes its colliders with it.
+    colliding: BTreeMap<u64, u64>,
 }
 
 pub(crate) struct RuntimeVegetationCall {
@@ -196,9 +205,19 @@ impl RuntimeVegetationBridge {
         &mut self,
         handle: NativeVegetationFieldHandle,
     ) -> Result<NativeVegetationReadout, CsharpEngineServicesError> {
-        let (_, tiles) = self.retained(handle)?;
+        let (retained, tiles) = self.retained(handle)?;
+        let colliders = if retained.collides() {
+            tiles
+                .colliders(handle.value)
+                .iter()
+                .map(|(_, colliders)| colliders.copies.len() as u64)
+                .sum()
+        } else {
+            0
+        };
         Ok(native_readout(
             tiles.readout(handle.value).unwrap_or_default(),
+            colliders,
         ))
     }
 
@@ -424,6 +443,11 @@ impl RuntimeVegetationBridge {
             lods: Vec::new(),
             lod_band: 0.0,
             thinning: Default::default(),
+            collider: (request.collider_radius != 0.0).then_some(VegetationCollider {
+                radius: request.collider_radius,
+                height: request.collider_height,
+                reach: request.collider_reach,
+            }),
         };
         // Setting a layer again keeps its levels and thinning.
         let retained_layer = match existing {
@@ -663,6 +687,52 @@ impl RuntimeVegetationBridge {
         }
         Ok(())
     }
+
+    /// After [`Self::settle`]: each field's copies wanted as colliders stand
+    /// in its session, and those of fields gone or hidden leave it.
+    pub(crate) fn settle_colliders(
+        &self,
+        call: &mut RuntimeVegetationCall,
+        spatial: &mut RuntimeSpatialBridge,
+    ) {
+        let state = &mut call.state;
+        for (handle, retained) in &state.fields {
+            if !retained.collides() {
+                continue;
+            }
+            let wanted = state.tiles.colliders(*handle);
+            if wanted.is_empty() && !state.colliding.contains_key(handle) {
+                continue;
+            }
+            let session = NativeSpatialSessionHandle {
+                value: retained.session,
+            };
+            // A session gone took its collision with it.
+            let Ok(standing) = spatial.session_mut(session) else {
+                state.colliding.remove(handle);
+                continue;
+            };
+            standing.set_vegetation_colliders(*handle, retained.origin, retained.scale, &wanted);
+            if wanted.is_empty() {
+                state.colliding.remove(handle);
+            } else {
+                state.colliding.insert(*handle, retained.session);
+            }
+        }
+        let gone: Vec<(u64, u64)> = state
+            .colliding
+            .iter()
+            .filter(|(handle, _)| !state.fields.contains_key(handle))
+            .map(|(handle, session)| (*handle, *session))
+            .collect();
+        for (handle, session) in gone {
+            state.colliding.remove(&handle);
+            if let Ok(standing) = spatial.session_mut(NativeSpatialSessionHandle { value: session })
+            {
+                standing.set_vegetation_colliders(handle, [0.0; 3], 1.0, &[]);
+            }
+        }
+    }
 }
 
 /// The material a layer (or its level `lod`) draws every slot with.
@@ -683,7 +753,7 @@ fn focus_of(focus: NativeVegetationFocus) -> Result<Focus, CsharpEngineServicesE
     Ok(Focus::Point([focus.x, focus.y, focus.z]))
 }
 
-fn native_readout(readout: VegetationReadout) -> NativeVegetationReadout {
+fn native_readout(readout: VegetationReadout, colliders: u64) -> NativeVegetationReadout {
     NativeVegetationReadout {
         visible: readout.visible,
         tiles: readout.tiles,
@@ -702,6 +772,7 @@ fn native_readout(readout: VegetationReadout) -> NativeVegetationReadout {
         sample_bytes: readout.sample_bytes,
         settles_skipped: readout.settles_skipped,
         settles_reselected: readout.settles_reselected,
+        colliders,
     }
 }
 

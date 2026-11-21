@@ -212,6 +212,9 @@ fn layer(
         near_fade: 0.0,
         maximum_instances: 100_000,
         casts_shadows: false,
+        collider_radius: 0.0,
+        collider_height: 0.0,
+        collider_reach: 0.0,
     }
 }
 
@@ -837,4 +840,122 @@ fn a_field_hidden_and_removed_in_one_call_leaves_the_world_whole() {
         .iter()
         .any(|operation| matches!(operation, RenderDiff::Destroy { .. })));
     apply(removed);
+}
+
+#[test]
+fn a_colliding_layer_stands_its_copies_in_the_fields_session_until_the_field_goes() {
+    let mut services = services();
+    services.begin_call(binding());
+    let api = services.api();
+    let mut session = NativeSpatialSessionHandle::default();
+    assert_eq!(
+        unsafe {
+            (api.spatial.create_session)(
+                api.spatial.context,
+                NativeSpatialSessionConfig {
+                    collision_voxel_size: 1.0,
+                    collision_chunk_size: 16,
+                    voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                },
+                &mut session,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    let paint = material(&api);
+    let look = blade(&api, paint);
+    let vegetation = &api.vegetation;
+    let mut field = NativeVegetationFieldHandle::default();
+    assert_eq!(
+        unsafe {
+            (vegetation.create)(
+                vegetation.context,
+                NativeVegetationFieldCreateRequest {
+                    session: NativeOptionalSpatialSession { session },
+                    tile_size: 16.0,
+                    tile_cells: 8,
+                    placements_per_call: 64,
+                    focus: NativeVegetationFocus {
+                        camera: NativeOptionalCamera::default(),
+                        x: 8.0,
+                        y: 2.0,
+                        z: 8.0,
+                    },
+                    scale: 1.0,
+                    ..Default::default()
+                },
+                &mut field,
+                std::ptr::null_mut(),
+            )
+        },
+        ABI_OK
+    );
+    // The tile at the origin holds one tree; grass grows everywhere and
+    // collides nowhere.
+    set_layer(
+        &api,
+        layer(
+            field,
+            GRASS,
+            look,
+            NativeOptionalMaterial { material: paint },
+            1.0,
+        ),
+    );
+    set_layer(
+        &api,
+        NativeVegetationLayerRequest {
+            collider_radius: 0.2,
+            collider_height: 2.0,
+            collider_reach: 20.0,
+            ..layer(
+                field,
+                TREES,
+                look,
+                NativeOptionalMaterial { material: paint },
+                0.0,
+            )
+        },
+    );
+    ops(&mut services);
+    services.begin_call(binding());
+    let api = services.api();
+    for request in &requests(&api, field) {
+        assert!(commit(&api, field, request, 2.0));
+    }
+    placed_ops(&mut services);
+
+    // The next call installs the batch the last handed over.
+    let standing = |services: &mut EngineServiceSet| {
+        for _ in 0..5_000 {
+            services.begin_call(binding());
+            ops(services);
+            let bridge = services.spatial_bridge();
+            let scene = &bridge.session_mut(session).unwrap().scene;
+            let count = scene.static_mesh_projection().instance_count();
+            if bridge
+                .session_mut(session)
+                .unwrap()
+                .static_deferred_is_empty()
+            {
+                return count;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("the colliders never installed");
+    };
+    assert_eq!(standing(&mut services), 1);
+    services.begin_call(binding());
+    assert_eq!(read(&services.api(), field).colliders, 1);
+    ops(&mut services);
+
+    services.begin_call(binding());
+    let api = services.api();
+    assert_eq!(
+        unsafe { (api.vegetation.destroy)(api.vegetation.context, field, std::ptr::null_mut()) },
+        ABI_OK
+    );
+    ops(&mut services);
+    assert_eq!(standing(&mut services), 0);
 }
