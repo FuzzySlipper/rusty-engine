@@ -597,6 +597,14 @@ impl StaticMeshCollisionProjection {
         let pose = identity();
         let mut best = None;
         for (instance_id, instance) in &self.instances {
+            // An instance whose bounds the segment misses has no triangle it
+            // meets, so its mesh is not descended.
+            if instance
+                .bounds
+                .is_some_and(|bounds| !segment_meets(bounds, ray.origin, direction, max_distance))
+            {
+                continue;
+            }
             if let Some(hit) =
                 instance
                     .shape
@@ -627,9 +635,11 @@ impl StaticMeshCollisionProjection {
     pub fn aabb_overlaps(&self, min: WorldPos, max: WorldPos) -> bool {
         let (pose, cuboid) = query_cuboid(min, max);
         let collider_pose = identity();
+        let query = span(min, max, WorldVec::new(0.0, 0.0, 0.0));
         self.instances.values().any(|instance| {
-            intersection_test(&pose, &cuboid, &collider_pose, instance.shape.as_ref())
-                .is_ok_and(|hit| hit.intersecting)
+            may_meet(query, instance.bounds)
+                && intersection_test(&pose, &cuboid, &collider_pose, instance.shape.as_ref())
+                    .is_ok_and(|hit| hit.intersecting)
         })
     }
 
@@ -643,18 +653,95 @@ impl StaticMeshCollisionProjection {
         let (pose, cuboid) = query_cuboid(min, max);
         let velocity = Vector::new(translation.x, translation.y, translation.z);
         let collider_pose = identity();
+        let query = span(min, max, translation);
         self.instances.values().any(|instance| {
-            cast_shapes(
-                &pose,
-                velocity,
-                &cuboid,
-                &collider_pose,
-                Vector::ZERO,
-                instance.shape.as_ref(),
-                ShapeCastOptions::with_max_time_of_impact(1.0),
-            )
-            .map_or(true, |hit| hit.is_some())
+            may_meet(query, instance.bounds)
+                && cast_shapes(
+                    &pose,
+                    velocity,
+                    &cuboid,
+                    &collider_pose,
+                    Vector::ZERO,
+                    instance.shape.as_ref(),
+                    ShapeCastOptions::with_max_time_of_impact(1.0),
+                )
+                .map_or(true, |hit| hit.is_some())
         })
+    }
+}
+
+/// How far an instance's bounds are widened before a query is rejected
+/// against them, so a hit on their very surface is never lost to rounding.
+const BOUNDS_SLACK: f64 = 1.0e-6;
+
+/// Whether a ray from `origin` along the unit `direction` meets `bounds`
+/// within `max_distance` (slab test, bounds widened by [`BOUNDS_SLACK`]).
+fn segment_meets(
+    bounds: WorldAabb,
+    origin: WorldPos,
+    direction: WorldVec,
+    max_distance: f64,
+) -> bool {
+    let (mut near, mut far) = (0.0_f64, max_distance);
+    for (from, along, low, high) in [
+        (origin.x, direction.x, bounds.min.x, bounds.max.x),
+        (origin.y, direction.y, bounds.min.y, bounds.max.y),
+        (origin.z, direction.z, bounds.min.z, bounds.max.z),
+    ] {
+        let (low, high) = (low - BOUNDS_SLACK, high + BOUNDS_SLACK);
+        if along == 0.0 {
+            if from < low || from > high {
+                return false;
+            }
+            continue;
+        }
+        let (enter, leave) = ((low - from) / along, (high - from) / along);
+        near = near.max(enter.min(leave));
+        far = far.min(enter.max(leave));
+        if near > far {
+            return false;
+        }
+    }
+    true
+}
+
+/// The box a query box between corners `min` and `max` (either order)
+/// covers moving by `translation`, widened by [`BOUNDS_SLACK`]; none when
+/// not finite, which rejects nothing.
+fn span(min: WorldPos, max: WorldPos, translation: WorldVec) -> Option<WorldAabb> {
+    let low = |a: f64, b: f64, t: f64| a.min(b).min(a.min(b) + t) - BOUNDS_SLACK;
+    let high = |a: f64, b: f64, t: f64| a.max(b).max(a.max(b) + t) + BOUNDS_SLACK;
+    let bounds = WorldAabb {
+        min: WorldPos::new(
+            low(min.x, max.x, translation.x),
+            low(min.y, max.y, translation.y),
+            low(min.z, max.z, translation.z),
+        ),
+        max: WorldPos::new(
+            high(min.x, max.x, translation.x),
+            high(min.y, max.y, translation.y),
+            high(min.z, max.z, translation.z),
+        ),
+    };
+    [
+        bounds.min.x,
+        bounds.min.y,
+        bounds.min.z,
+        bounds.max.x,
+        bounds.max.y,
+        bounds.max.z,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    .then_some(bounds)
+}
+
+/// Whether a query may meet an instance: unknown bounds on either side never
+/// reject.
+fn may_meet(query: Option<WorldAabb>, instance: Option<WorldAabb>) -> bool {
+    match (query, instance) {
+        (Some(query), Some(instance)) => query.intersects(instance),
+        _ => true,
     }
 }
 
@@ -1053,6 +1140,125 @@ mod tests {
                 2.0,
             )
             .is_some());
+    }
+
+    /// The queries as they were before bounds rejected instances: every
+    /// instance's shape asked.
+    fn unpruned_raycast(
+        projection: &StaticMeshCollisionProjection,
+        origin: WorldPos,
+        direction: WorldVec,
+        max_distance: f64,
+    ) -> Option<(StaticMeshInstanceId, f64)> {
+        let ray = ParryRay::new(
+            world_to_point(origin),
+            Vector::new(direction.x, direction.y, direction.z),
+        );
+        projection
+            .instances
+            .iter()
+            .filter_map(|(id, instance)| {
+                instance
+                    .shape
+                    .cast_ray_and_get_normal(&identity(), &ray, max_distance, false)
+                    .map(|hit| (*id, hit.time_of_impact))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    #[test]
+    fn rays_and_boxes_rejected_by_bounds_answer_as_asking_every_instance() {
+        let mut projection = StaticMeshCollisionProjection::default();
+        let at = |id, x: f64, y: f64| StaticMeshColliderInstance {
+            id: StaticMeshInstanceId(id),
+            asset: StaticMeshAssetId(7),
+            transform: StaticMeshTransform {
+                translation: [x, y, 0.0],
+                ..StaticMeshTransform::IDENTITY
+            },
+        };
+        projection
+            .replace_all(
+                [ramp()],
+                [at(1, 0.0, 0.0), at(2, 4.0, 0.0), at(3, 8.0, 1.0)],
+            )
+            .unwrap();
+        // Rays from every side, along the bounds' faces and edges, from
+        // inside them, ending exactly on a surface or just short of it.
+        let mut checked = 0;
+        for ox in [-1.0, 0.0, 1.5, 3.0, 3.5, 7.0, 11.0, 12.0] {
+            for oy in [-0.5, 0.0, 1.0, 3.0, 4.0] {
+                for oz in [-1.0, 0.0, 1.0, 2.0] {
+                    for (dx, dy, dz) in [
+                        (1.0, 0.0, 0.0),
+                        (-1.0, 0.0, 0.0),
+                        (0.0, -1.0, 0.0),
+                        (0.0, 1.0, 0.0),
+                        (0.0, 0.0, -1.0),
+                        (0.6, -0.8, 0.0),
+                        (-0.6, -0.48, 0.64),
+                    ] {
+                        for max_distance in [0.5, 1.0, 2.0, 3.0, 12.0] {
+                            let origin = WorldPos::new(ox, oy, oz);
+                            let direction = WorldVec::new(dx, dy, dz);
+                            let pruned = projection
+                                .raycast(Ray::new(origin, direction), max_distance)
+                                .map(|hit| (hit.instance, hit.distance));
+                            assert_eq!(
+                                pruned,
+                                unpruned_raycast(&projection, origin, direction, max_distance),
+                                "ray from {origin:?} along {direction:?} for {max_distance}"
+                            );
+                            checked += usize::from(pruned.is_some());
+                        }
+                    }
+                }
+            }
+        }
+        assert!(checked > 100, "the rays hit something often: {checked}");
+        // Boxes and sweeps on every side, touching the bounds' faces, inside
+        // them, reaching them only at the end of a sweep or a hair short.
+        let (pose_of, mut met) = (identity(), 0);
+        for x in [-1.0, 2.5, 3.0, 3.01, 7.0, 11.0, 11.5] {
+            for y in [-0.6, 0.5, 2.9, 4.0] {
+                for (tx, ty) in [(0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, -1.0), (0.5, 0.5)] {
+                    let (min, max) = (
+                        WorldPos::new(x, y, -0.25),
+                        WorldPos::new(x + 0.5, y + 0.5, 0.25),
+                    );
+                    let translation = WorldVec::new(tx, ty, 0.0);
+                    let (pose, cuboid) = query_cuboid(min, max);
+                    let overlaps = projection.instances.values().any(|instance| {
+                        intersection_test(&pose, &cuboid, &pose_of, instance.shape.as_ref())
+                            .is_ok_and(|hit| hit.intersecting)
+                    });
+                    let swept = projection.instances.values().any(|instance| {
+                        cast_shapes(
+                            &pose,
+                            Vector::new(tx, ty, 0.0),
+                            &cuboid,
+                            &pose_of,
+                            Vector::ZERO,
+                            instance.shape.as_ref(),
+                            ShapeCastOptions::with_max_time_of_impact(1.0),
+                        )
+                        .map_or(true, |hit| hit.is_some())
+                    });
+                    assert_eq!(
+                        projection.aabb_overlaps(min, max),
+                        overlaps,
+                        "box at {min:?}"
+                    );
+                    assert_eq!(
+                        projection.swept_aabb_overlaps(min, max, translation),
+                        swept,
+                        "box at {min:?} by {translation:?}"
+                    );
+                    met += usize::from(swept);
+                }
+            }
+        }
+        assert!(met > 20, "the boxes met something often: {met}");
     }
 
     #[test]
