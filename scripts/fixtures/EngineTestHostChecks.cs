@@ -291,6 +291,7 @@ internal static class EngineTestHostChecks
         DeferredResidency(host);
         DeferredCollisionResidency(host);
         DeferredCollisionNavigation(host);
+        SurfaceCrawler(host);
         DeferredContentResidency(host);
         Bundles(library);
     }
@@ -415,6 +416,80 @@ internal static class EngineTestHostChecks
     // pending, leaves the grid as it was until a later call installs it, and
     // then holds what a synchronous derivation of the same collision does
     // (#10808).
+    // A crawler steered by script round a closed 1 m voxel room (inside x and
+    // z -3..3, y 1..5): floor, up the +X wall, across the ceiling, down the -X
+    // wall; it lets go of the ceiling on request and lands, and is lost when
+    // the wall it holds is cut away.
+    private static void SurfaceCrawler(EngineTestHost host) => host.Call(engine =>
+    {
+        using SpatialSession session = engine.Spatial.CreateSession(new(1, 8, VoxelSurfaceMode.GreedyCubes));
+        var room = new List<VoxelEdit>();
+        for (int x = -4; x <= 3; x++)
+            for (int y = 0; y <= 5; y++)
+                for (int z = -4; z <= 3; z++)
+                    if (y == 0 || y == 5 || x == -4 || x == 3 || z == -4 || z == 3)
+                        room.Add(new(VoxelEditKind.Set, new(x, y, z), 1));
+        engine.Voxel.ApplyEdits(new(session, room.ToArray()));
+        CrawlerConfig config = engine.Spatial.DefaultCrawlerConfig();
+        Require(config.Radius == 0.25f && config.ContactSkin > 0, $"default crawler config: {config}");
+        Vector3 position = new(0, 1.5f, 0.5f);
+        CrawlerMotion motion = default;
+        ulong sequence = 0;
+        var transitions = new List<CrawlerTransition>();
+        CrawlerStepReceipt Step(Vector3 direction, bool cling)
+        {
+            CrawlerStepReceipt receipt = engine.Spatial.ProposeCrawlerStep(new(session, position, motion, config,
+                new(direction, cling, 1f / 60, ++sequence)));
+            position = receipt.Position;
+            motion = receipt.Motion;
+            if (receipt.Transition != CrawlerTransition.None) transitions.Add(receipt.Transition);
+            return receipt;
+        }
+        CrawlerStepReceipt Drive(Vector3 direction, bool cling, string what, Func<CrawlerStepReceipt, bool> done)
+        {
+            for (int i = 0; i < 400; i++)
+            {
+                CrawlerStepReceipt receipt = Step(direction, cling);
+                if (done(receipt)) return receipt;
+            }
+            throw new InvalidOperationException($"crawler {what}: not done at {position}, {motion}; {string.Join(",", transitions)}");
+        }
+        bool On(CrawlerStepReceipt r, CrawlerSurface surface, Vector3 up) =>
+            r.Surface == surface && Near(r.Motion.Up, up) && Near(Vector3.Transform(Vector3.UnitY, r.Rotation), up);
+
+        Drive(Vector3.Zero, true, "lands", r => On(r, CrawlerSurface.Floor, Vector3.UnitY) && r.Motion.Velocity.Length() < 1e-3f);
+        Require(MathF.Abs(position.Y - 1.27f) < 0.02f, $"rests its skin off the floor: {position}");
+        CrawlerStepReceipt wall = Drive(Vector3.UnitX, true, "up the +X wall", r => On(r, CrawlerSurface.Wall, -Vector3.UnitX));
+        Require(wall.Contact.Present && wall.Contact.SourceKind == CharacterCollisionSourceKind.VoxelChunk
+            && Near(wall.Contact.Normal, -Vector3.UnitX), $"the wall contact: {wall.Contact}");
+        Require(transitions.Contains(CrawlerTransition.Concave), "floor to wall is a concave edge");
+        Drive(Vector3.UnitY, true, "onto the ceiling", r => On(r, CrawlerSurface.Ceiling, -Vector3.UnitY));
+        Drive(-Vector3.UnitX, true, "across the ceiling", r => On(r, CrawlerSurface.Wall, Vector3.UnitX));
+        Drive(-Vector3.UnitY, true, "down to the floor", r => On(r, CrawlerSurface.Floor, Vector3.UnitY));
+
+        // Back up the wall to the ceiling, then let go.
+        Drive(-Vector3.UnitX, true, "back up the -X wall", r => On(r, CrawlerSurface.Wall, Vector3.UnitX));
+        Drive(Vector3.UnitY, true, "back onto the ceiling", r => On(r, CrawlerSurface.Ceiling, -Vector3.UnitY));
+        for (int i = 0; i < 20; i++) Step(Vector3.UnitX, true);
+        CrawlerStepReceipt letGo = Step(Vector3.Zero, false);
+        Require(letGo.Transition == CrawlerTransition.Detached && letGo.Surface == CrawlerSurface.None && !letGo.Motion.Attached,
+            $"letting go of the ceiling: {letGo}");
+        CrawlerStepReceipt landed = Drive(Vector3.Zero, false, "falls and lands", r => r.Transition == CrawlerTransition.Landed);
+        Require(On(landed, CrawlerSurface.Floor, Vector3.UnitY) && landed.Position.Y < 1.3f, $"landed on the floor: {landed}");
+
+        // Up the +X wall, then cut it away under the crawler.
+        Drive(new(1, 1, 0), true, "up the wall again", r => r.Surface == CrawlerSurface.Wall && r.Position.Y > 3);
+        var cut = new List<VoxelEdit>();
+        for (int y = 1; y <= 4; y++)
+            for (int z = -2; z <= 2; z++)
+                cut.Add(new(VoxelEditKind.Clear, new(3, y, z), 0));
+        engine.Voxel.ApplyEdits(new(session, cut.ToArray()));
+        CrawlerStepReceipt lost = Step(Vector3.Zero, true);
+        Require(lost.Transition == CrawlerTransition.Lost && lost.Surface == CrawlerSurface.None, $"lost its wall: {lost}");
+        ExpectRefusal(() => engine.Spatial.ProposeCrawlerStep(new(session, position, motion, config with { Radius = 0 },
+            new(Vector3.Zero, true, 1f / 60, ++sequence))), "invalid-crawler-config");
+    });
+
     private static void DeferredCollisionNavigation(EngineTestHost host)
     {
         const int Quads = 96;

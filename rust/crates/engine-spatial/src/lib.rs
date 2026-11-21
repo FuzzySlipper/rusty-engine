@@ -13,7 +13,12 @@ mod character_modes;
 pub use character_modes::{CharacterMovementFact, CharacterMovementMode, CharacterMovementRequest};
 mod character_controller;
 mod character_tether;
+mod crawler;
 pub use character_tether::{CharacterTetherFact, CharacterTetherRequest};
+pub use crawler::{
+    step_crawler, CrawlerCommand, CrawlerConfig, CrawlerContact, CrawlerError, CrawlerMotion,
+    CrawlerStepReceipt, CrawlerSurface, CrawlerTransition,
+};
 mod entity_motion;
 mod occlusion;
 mod perception;
@@ -99,12 +104,12 @@ pub use svc_collision::{
     cast_character_capsule_against_obstacles, character_capsule_overlap_obstacles,
     CharacterCapsule, CharacterCapsuleCastHit, CharacterCapsuleOverlap,
     CharacterCollisionQueryError, CharacterCollisionQueryStats, CharacterCollisionSource,
-    CharacterObstacle, ContactPose, ContactQueryError, ContactShape, ContactSource, ContactTarget,
-    InspectedCollider, InspectedColliderSource, ModelSurface, ModelSurfaceHit, ModelSurfacePoint,
-    PlacedModelSurface, ShapeContact, StaticMeshAssetId, StaticMeshBaked, StaticMeshColliderAsset,
-    StaticMeshColliderInstance, StaticMeshCollisionError, StaticMeshCollisionProjection,
-    StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId, StaticMeshResidencyPlan,
-    StaticMeshTransform, CUBOID_LINES, TRIANGLE_LINES,
+    CharacterObstacle, CharacterSurfaceContact, ContactPose, ContactQueryError, ContactShape,
+    ContactSource, ContactTarget, InspectedCollider, InspectedColliderSource, ModelSurface,
+    ModelSurfaceHit, ModelSurfacePoint, PlacedModelSurface, ShapeContact, StaticMeshAssetId,
+    StaticMeshBaked, StaticMeshColliderAsset, StaticMeshColliderInstance, StaticMeshCollisionError,
+    StaticMeshCollisionProjection, StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId,
+    StaticMeshResidencyPlan, StaticMeshTransform, CUBOID_LINES, TRIANGLE_LINES,
 };
 pub use svc_mesh::distance_field;
 pub use svc_mesh::{
@@ -1789,6 +1794,18 @@ impl VoxelCollisionScene {
         capsule: CharacterCapsule,
     ) -> Result<Option<CharacterCapsuleOverlap>, CharacterCollisionQueryError> {
         self.projection.character_capsule_overlap(capsule)
+    }
+
+    /// The voxel or static-mesh surface nearest a ball within `reach` of
+    /// its rim, or the deepest overlap.
+    pub fn nearest_character_surface(
+        &self,
+        center: WorldPos,
+        radius: f64,
+        reach: f64,
+    ) -> Result<Option<CharacterSurfaceContact>, CharacterCollisionQueryError> {
+        self.projection
+            .nearest_character_surface(center, radius, reach)
     }
 
     /// Whether the capsule overlaps anything, without finding the deepest

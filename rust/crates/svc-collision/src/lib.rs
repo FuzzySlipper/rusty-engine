@@ -101,7 +101,7 @@ use parry3d_f64::query::{
     ShapeCastHit, ShapeCastOptions, ShapeCastStatus,
 };
 use parry3d_f64::shape::{
-    Capsule, CompositeShapeRef, Compound, Cuboid, Shape, SharedShape, TriMesh,
+    Ball, Capsule, CompositeShapeRef, Compound, Cuboid, Shape, SharedShape, TriMesh,
 };
 
 /// How a voxel value participates in collision. Derived from the value/material;
@@ -412,6 +412,17 @@ pub struct CharacterCapsuleOverlap {
     /// World-space separation direction for the capsule.
     pub normal: WorldVec,
     pub penetration_depth: f64,
+}
+
+/// The surface nearest a ball: where it is, the direction from it to the
+/// ball's centre, and how far the centre is from it (less than the radius
+/// when the ball overlaps it).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CharacterSurfaceContact {
+    pub source: CharacterCollisionSource,
+    pub point: WorldPos,
+    pub normal: WorldVec,
+    pub distance: f64,
 }
 
 /// Per logical capsule query fan-out. Candidate counts are projection entries
@@ -897,6 +908,82 @@ impl CollisionProjection {
             );
         }
         Ok((best, stats))
+    }
+
+    /// The voxel or static-mesh surface nearest a ball within `reach` of its
+    /// rim, or the deepest overlap when the ball is inside collision. The
+    /// normal points from the surface to the ball's centre, so near a convex
+    /// edge it turns about the edge as the ball moves past it.
+    pub fn nearest_character_surface(
+        &self,
+        center: WorldPos,
+        radius: f64,
+        reach: f64,
+    ) -> Result<Option<CharacterSurfaceContact>, CharacterCollisionQueryError> {
+        let probe = CharacterCapsule {
+            center,
+            half_height: 0.0,
+            radius,
+        };
+        validate_character_query(probe, WorldVec::ZERO, reach)?;
+        let ball_pose = Pose::translation(center.x, center.y, center.z);
+        let ball = Ball::new(radius);
+        let obstacle_pose = identity();
+        let query_bounds = swept_capsule_bounds(probe, WorldVec::ZERO, reach);
+        let mut best: Option<CharacterSurfaceContact> = None;
+        let mut keep = |source: CharacterCollisionSource, shape: &dyn Shape| {
+            let found = contact(&ball_pose, &ball, &obstacle_pose, shape, reach)
+                .map_err(|_| CharacterCollisionQueryError::UnsupportedBackendQuery)?;
+            let Some(found) = found else {
+                return Ok(());
+            };
+            let distance = found.dist + radius;
+            if best.as_ref().is_some_and(|current| {
+                current.distance < distance
+                    || (current.distance == distance && current.source <= source)
+            }) {
+                return Ok(());
+            }
+            let point = WorldPos::new(found.point2.x, found.point2.y, found.point2.z);
+            let away = center - point;
+            let length = away.length();
+            // Off the surface the normal is the way back to the centre; in
+            // or on it, the surface's own.
+            let normal = if found.dist > 0.0 && length > 1.0e-9 {
+                WorldVec::new(away.x / length, away.y / length, away.z / length)
+            } else {
+                WorldVec::new(found.normal2.x, found.normal2.y, found.normal2.z)
+            };
+            best = Some(CharacterSurfaceContact {
+                source,
+                point,
+                normal,
+                distance,
+            });
+            Ok::<_, CharacterCollisionQueryError>(())
+        };
+        for (coord, collider) in self.character_candidates(query_bounds) {
+            if !character_query_may_intersect(query_bounds, collider.bounds) {
+                continue;
+            }
+            for shape in collider.shapes() {
+                keep(CharacterCollisionSource::VoxelChunk(*coord), shape)?;
+            }
+        }
+        for (instance, asset, geometry_hash, shape, bounds) in self.static_meshes.character_shapes()
+        {
+            if character_query_may_intersect(query_bounds, bounds) {
+                keep(
+                    CharacterCollisionSource::StaticMesh {
+                        instance,
+                        asset,
+                        geometry_hash,
+                    },
+                    shape.as_ref(),
+                )?;
+            }
+        }
+        Ok(best)
     }
 
     #[cfg(test)]

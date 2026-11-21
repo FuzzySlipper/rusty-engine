@@ -477,6 +477,14 @@ pub type NativeProposeCharacterStep = unsafe extern "C" fn(
     *mut NativeCharacterStepReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeDefaultCrawlerConfig =
+    unsafe extern "C" fn(*mut c_void, *mut NativeCrawlerConfig) -> i32;
+pub type NativeProposeCrawlerStep = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeCrawlerStepRequest,
+    *mut NativeCrawlerStepReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCaptureCharacterContinuation = unsafe extern "C" fn(
     *mut c_void,
     NativeCharacterContinuationCaptureRequest,
@@ -1747,6 +1755,8 @@ pub struct NativeSpatialApi {
     pub propose_character_step: NativeProposeCharacterStep,
     pub capture_character_continuation: NativeCaptureCharacterContinuation,
     pub read_character_controller: NativeReadCharacterController,
+    pub default_crawler_config: NativeDefaultCrawlerConfig,
+    pub propose_crawler_step: NativeProposeCrawlerStep,
     pub evaluate_navigation_step: NativeEvaluateNavigationStep,
     pub read_projection: NativeReadSpatialProjection,
     pub contains_point: NativeSpatialContainsPoint,

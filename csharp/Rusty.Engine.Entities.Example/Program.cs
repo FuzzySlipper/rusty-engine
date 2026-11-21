@@ -769,6 +769,8 @@ sealed class SpatialServiceFake : ISpatialService
     public void ValidateCharacterControllerConfig(CharacterControllerConfig arg0) => throw new NotSupportedException();
     public void ValidateCharacterControllerCommand(CharacterControllerValidationRequest arg0) => throw new NotSupportedException();
     public CharacterContinuationCheckpoint CaptureCharacterContinuation(CharacterContinuationCaptureRequest arg0) => throw new NotSupportedException();
+    public CrawlerConfig DefaultCrawlerConfig() => default;
+    public CrawlerStepReceipt ProposeCrawlerStep(CrawlerStepRequest arg0) => throw new NotSupportedException();
 
     public CharacterStepReceipt ProposeCharacterStep(CharacterStepRequest request)
     {

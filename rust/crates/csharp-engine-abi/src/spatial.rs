@@ -2000,6 +2000,145 @@ pub struct NativeCharacterStepReceipt {
     pub recovery_distance: f32,
 }
 
+/// A surface crawler's body and movement. The ball is its whole collision
+/// body; its up direction follows the surface it is on. The default
+/// configuration (`default_crawler_config`) is a starting point.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCrawlerConfig {
+    /// The ball's radius in metres.
+    pub radius: f32,
+    /// How far off a surface the ball rests; less than the radius.
+    pub contact_skin: f32,
+    /// Top speed along a surface, metres per second.
+    pub speed: f32,
+    /// Speed gained each second toward a commanded direction.
+    pub acceleration: f32,
+    /// Speed lost each second with no direction commanded.
+    pub braking: f32,
+    /// Downward acceleration while falling.
+    pub gravity: f32,
+    pub terminal_fall_speed: f32,
+    /// How far beyond its skin a surface may fall away, as at a convex edge,
+    /// and still be held.
+    pub stick_distance: f32,
+    /// A surface at most this far from level is a floor (held without
+    /// `cling`); as far from upside down, a ceiling; between, a wall.
+    pub floor_maximum_slope_radians: f32,
+}
+
+/// What a crawler carries from one step to the next; the product holds it
+/// and passes the last receipt's back. The default is a crawler not yet on a
+/// surface, upright, facing +Z: its first step holds a surface within reach
+/// or falls onto one.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCrawlerMotion {
+    /// On a surface rather than falling.
+    pub attached: bool,
+    /// The normal of the surface it is on; zero reads as +Y.
+    pub up: NativeVec3,
+    /// The heading along the surface; zero reads as +Z.
+    pub forward: NativeVec3,
+    pub velocity: NativeVec3,
+    pub last_sequence: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCrawlerCommand {
+    /// Where to go, in the world. It is laid onto the surface the crawler is
+    /// on, so toward a point up a wall it drives a crawler on the floor into
+    /// the wall and up it. Longer than one is one; zero brakes.
+    pub direction: NativeVec3,
+    /// Hold walls and ceilings. Without it a crawler on one lets go and
+    /// falls, and holds only floors.
+    pub cling: bool,
+    /// The interval this command covers, from 1 ms to 1 s.
+    pub step_seconds: f32,
+    pub sequence: u64,
+}
+
+/// One crawler step against the session's voxel and static-mesh collision.
+/// The Engine retains nothing.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeCrawlerStepRequest {
+    pub session: NativeSpatialSessionHandle,
+    /// The ball's centre.
+    pub position: NativeVec3,
+    pub motion: NativeCrawlerMotion,
+    pub config: NativeCrawlerConfig,
+    pub command: NativeCrawlerCommand,
+}
+
+/// Which kind of surface a crawler is on.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeCrawlerSurface {
+    /// Falling.
+    #[default]
+    None = 0,
+    Floor = 1,
+    Wall = 2,
+    Ceiling = 3,
+}
+
+/// What became of a crawler's hold during a step: the last thing that
+/// happened.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeCrawlerTransition {
+    #[default]
+    None = 0,
+    /// Moved onto a surface it met, as from a floor up a wall.
+    Concave = 1,
+    /// Rounded an edge onto the surface beyond, as over a lip.
+    Convex = 2,
+    /// Let go of a wall or ceiling without `cling`.
+    Detached = 3,
+    /// Took hold of a surface after falling.
+    Landed = 4,
+    /// Nothing within reach to hold; falling.
+    Lost = 5,
+}
+
+/// The surface a crawler holds after its step and what it is.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCrawlerContact {
+    pub present: bool,
+    pub point: NativeVec3,
+    pub normal: NativeVec3,
+    /// From the ball's centre to the surface.
+    pub distance: f32,
+    pub source_kind: NativeCharacterCollisionSourceKind,
+    pub source_instance: u64,
+    pub source_asset: u64,
+    pub source_geometry_hash: u64,
+    /// For a voxel collision chunk, its chunk coordinate.
+    pub source_chunk_x: i64,
+    pub source_chunk_y: i64,
+    pub source_chunk_z: i64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeCrawlerStepReceipt {
+    /// The ball's centre.
+    pub position: NativeVec3,
+    /// Turns +Y to `motion.up` and +Z to `motion.forward`: the drawn body's
+    /// rotation.
+    pub rotation: NativeQuat,
+    pub surface: NativeCrawlerSurface,
+    pub transition: NativeCrawlerTransition,
+    pub contact: NativeCrawlerContact,
+    pub motion: NativeCrawlerMotion,
+    pub displacement: NativeVec3,
+    /// The sub-steps the command was solved as.
+    pub sub_steps: u32,
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeNavigationStepRequest {

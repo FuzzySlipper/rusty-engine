@@ -2,6 +2,7 @@ mod artifact_binary;
 mod collision_inspection;
 mod collision_navigation;
 mod contacts;
+mod crawler;
 mod heightfield_collider;
 mod inspection;
 mod static_deferred;
@@ -6370,6 +6371,8 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         propose_character_step,
         capture_character_continuation,
         read_character_controller,
+        default_crawler_config: crawler::default_config,
+        propose_crawler_step: crawler::propose_step,
         evaluate_navigation_step,
         read_projection,
         contains_point,
