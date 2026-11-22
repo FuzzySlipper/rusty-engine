@@ -94,10 +94,13 @@ impl DirectPlayback {
                 weight,
                 base_offset_seconds,
                 anchor_seconds,
+                start_normalized_time,
                 ..
             } => {
-                let raw = base_offset_seconds + (now - anchor_seconds) * f64::from(*speed);
                 let length = length(clip);
+                let raw = base_offset_seconds
+                    + f64::from(start_normalized_time * length)
+                    + (now - anchor_seconds) * f64::from(*speed);
                 let finished = *r#loop == AnimationLoopMode::Once && raw >= f64::from(length);
                 (
                     action(wrap(raw, length, *r#loop), *weight)
@@ -110,13 +113,18 @@ impl DirectPlayback {
                 r#loop,
                 weight,
                 offset_seconds,
+                start_normalized_time,
                 ..
-            } => (
-                action(wrap(*offset_seconds, length(clip), *r#loop), *weight)
-                    .into_iter()
-                    .collect(),
-                false,
-            ),
+            } => {
+                let length = length(clip);
+                let offset = offset_seconds + f64::from(start_normalized_time * length);
+                (
+                    action(wrap(offset, length, *r#loop), *weight)
+                        .into_iter()
+                        .collect(),
+                    false,
+                )
+            }
             AnimatedMeshPlaybackTimeline::Sampled {
                 normalized_time, ..
             } => (

@@ -197,6 +197,7 @@ fn started(
         restart: true,
         fade_seconds: fade,
         start_offset_seconds: offset,
+        start_normalized_time: 0.0,
         start_paused: paused,
     }
 }

@@ -95,6 +95,7 @@ fn play(clip: &str, r#loop: AnimationLoopMode) -> AnimatedMeshPlaybackCommand {
         restart: true,
         fade_seconds: None,
         start_offset_seconds: None,
+        start_normalized_time: 0.0,
         start_paused: false,
     }
 }
@@ -1181,6 +1182,7 @@ fn a_renderer_rebuilt_from_the_retained_world_draws_the_live_poses() {
             restart: true,
             fade_seconds: fade,
             start_offset_seconds: None,
+            start_normalized_time: 0.0,
             start_paused: false,
         },
     };

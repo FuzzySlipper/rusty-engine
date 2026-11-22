@@ -7386,6 +7386,7 @@ impl RuntimeAppearanceBridge {
                 restart: request.restart,
                 fade_seconds: request.has_fade.then_some(request.fade_seconds),
                 start_offset_seconds: None,
+                start_normalized_time: request.normalized_time,
                 start_paused: false,
             },
             NativeAnimationPlaybackKind::Stop => AnimatedMeshPlaybackCommand::Stop {

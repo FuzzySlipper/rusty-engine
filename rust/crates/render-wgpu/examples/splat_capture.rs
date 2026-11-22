@@ -349,6 +349,7 @@ fn main() {
             restart: true,
             fade_seconds: None,
             start_offset_seconds: None,
+            start_normalized_time: 0.0,
             start_paused: false,
         }
     });

@@ -109,6 +109,8 @@ struct Instance {
 struct Completing {
     clip: String,
     offset: f64,
+    /// The start point as a fraction of the clip, ahead of `offset`.
+    start_normalized_time: f32,
 }
 
 #[derive(Clone)]
@@ -573,9 +575,17 @@ impl Instance {
                 start_paused: false,
                 ..
             } => {
+                let start_normalized_time = match &self.playback.playback.timeline {
+                    AnimatedMeshPlaybackTimeline::Playing {
+                        start_normalized_time,
+                        ..
+                    } => *start_normalized_time,
+                    _ => 0.0,
+                };
                 self.completion = Some(Completing {
                     clip: clip.clone(),
                     offset: start_offset_seconds.unwrap_or(0.0),
+                    start_normalized_time,
                 });
             }
             AnimatedMeshPlaybackCommand::Resume => {
@@ -588,6 +598,7 @@ impl Instance {
                     self.completion = Some(Completing {
                         clip: clip.clone(),
                         offset: 0.0,
+                        start_normalized_time: 0.0,
                     });
                 }
             }
@@ -625,9 +636,11 @@ impl Instance {
             self.playback.resolve(&index);
             // A `once` clip started at or past its end reports nothing.
             if let Some(completing) = &self.completion {
-                let ended = model
-                    .clip_index(&completing.clip)
-                    .is_some_and(|clip| completing.offset >= f64::from(duration(clip)));
+                let ended = model.clip_index(&completing.clip).is_some_and(|clip| {
+                    let length = duration(clip);
+                    completing.offset + f64::from(completing.start_normalized_time * length)
+                        >= f64::from(length)
+                });
                 if ended {
                     self.completion = None;
                 }

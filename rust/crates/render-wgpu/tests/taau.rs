@@ -400,6 +400,7 @@ fn runner_against_a_fresh_frame(antialiasing: Antialiasing) -> (Option<UpscaleMe
                     restart: true,
                     fade_seconds: None,
                     start_offset_seconds: None,
+                    start_normalized_time: 0.0,
                     start_paused: false,
                 }),
                 metadata: RenderMetadata::default(),

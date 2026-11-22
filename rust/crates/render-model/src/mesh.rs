@@ -1546,7 +1546,7 @@ pub struct SplatAppearance {
     pub palette: Vec<[f32; 3]>,
     /// Poses a second its clips are posed at, their time stepping by whole
     /// steps of Engine time; 0 poses at every call that moves time.
-    #[serde(default, skip_serializing_if = "is_zero_rate")]
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub pose_rate: f32,
     /// Lit by the world's lights, the baked colour taken as the albedo, or
     /// unlit (as baked, scaled by the multiplier).
@@ -1554,7 +1554,7 @@ pub struct SplatAppearance {
     pub lighting: SplatLighting,
     /// Lit: the share of the baked colour kept however dark the light, 0
     /// to 1; unread unlit.
-    #[serde(default, skip_serializing_if = "is_zero_rate")]
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub light_floor: f32,
     /// How it casts into the shadow maps of lights that request them,
     /// while the instance's `shadow_casting` casts: not at all (the
@@ -1645,7 +1645,7 @@ fn is_zero(value: &u32) -> bool {
     *value == 0
 }
 
-fn is_zero_rate(value: &f32) -> bool {
+fn is_zero_f32(value: &f32) -> bool {
     *value == 0.0
 }
 
@@ -1758,6 +1758,11 @@ pub enum AnimatedMeshPlaybackCommand {
         /// for a baseline.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         start_offset_seconds: Option<f64>,
+        /// Where the clip starts, as a fraction of its length (0 or more),
+        /// ahead of `start_offset_seconds`; a looping clip wraps. A `Play` of
+        /// the clip already playing, without `restart`, continues it instead.
+        #[serde(default, skip_serializing_if = "is_zero_f32")]
+        start_normalized_time: f32,
         /// Start the reconstructed action at its retained offset but leave it
         /// paused. This avoids replaying a prior pause command during a
         /// baseline installation.
@@ -1800,6 +1805,7 @@ impl AnimatedMeshPlaybackCommand {
                 weight,
                 fade_seconds,
                 start_offset_seconds,
+                start_normalized_time,
                 ..
             } => {
                 if clip.trim().is_empty() {
@@ -1813,6 +1819,9 @@ impl AnimatedMeshPlaybackCommand {
                 }
                 if start_offset_seconds.is_some_and(|value| !value.is_finite() || value < 0.0) {
                     return Err(AnimatedMeshPlaybackError::InvalidStartOffset);
+                }
+                if !start_normalized_time.is_finite() || *start_normalized_time < 0.0 {
+                    return Err(AnimatedMeshPlaybackError::InvalidNormalizedTime);
                 }
                 validate_fade(*fade_seconds)
             }
@@ -1898,6 +1907,10 @@ pub enum AnimatedMeshPlaybackTimeline {
         weight: f32,
         base_offset_seconds: f64,
         anchor_seconds: f64,
+        /// The start point as a fraction of the clip's length, added to the
+        /// offset where the clip's length is known.
+        #[serde(default, skip_serializing_if = "is_zero_f32")]
+        start_normalized_time: f32,
     },
     Paused {
         clip: String,
@@ -1905,6 +1918,8 @@ pub enum AnimatedMeshPlaybackTimeline {
         speed: f32,
         weight: f32,
         offset_seconds: f64,
+        #[serde(default, skip_serializing_if = "is_zero_f32")]
+        start_normalized_time: f32,
     },
     Sampled {
         clip: String,
@@ -1932,28 +1947,41 @@ impl AnimatedMeshPlaybackTimeline {
                 weight,
                 restart,
                 start_offset_seconds,
+                start_normalized_time,
                 start_paused,
                 ..
             } => {
-                let preserved_offset = match self {
+                // A clip already playing, played again without a restart,
+                // continues where it is.
+                let continued = match self {
                     Self::Playing {
                         clip: current_clip,
                         base_offset_seconds,
                         anchor_seconds,
                         speed: current_speed,
+                        start_normalized_time,
                         ..
-                    } if !restart && current_clip == clip => {
+                    } if !restart && current_clip == clip => Some((
                         *base_offset_seconds
-                            + (now_seconds - *anchor_seconds) * f64::from(*current_speed)
-                    }
+                            + (now_seconds - *anchor_seconds) * f64::from(*current_speed),
+                        *start_normalized_time,
+                    )),
                     Self::Paused {
                         clip: current_clip,
                         offset_seconds,
+                        start_normalized_time,
                         ..
-                    } if !restart && current_clip == clip => *offset_seconds,
-                    _ => 0.0,
+                    } if !restart && current_clip == clip => {
+                        Some((*offset_seconds, *start_normalized_time))
+                    }
+                    _ => None,
                 };
-                let offset_seconds = start_offset_seconds.unwrap_or(preserved_offset);
+                let (offset_seconds, start_normalized_time) =
+                    match (start_offset_seconds, continued) {
+                        (Some(offset), _) => (*offset, *start_normalized_time),
+                        (None, Some(continued)) => continued,
+                        (None, None) => (0.0, *start_normalized_time),
+                    };
                 if *start_paused {
                     *self = Self::Paused {
                         clip: clip.clone(),
@@ -1961,6 +1989,7 @@ impl AnimatedMeshPlaybackTimeline {
                         speed: *speed,
                         weight: *weight,
                         offset_seconds,
+                        start_normalized_time,
                     };
                 } else {
                     *self = Self::Playing {
@@ -1970,6 +1999,7 @@ impl AnimatedMeshPlaybackTimeline {
                         weight: *weight,
                         base_offset_seconds: offset_seconds,
                         anchor_seconds: now_seconds,
+                        start_normalized_time,
                     };
                 }
             }
@@ -1981,6 +2011,7 @@ impl AnimatedMeshPlaybackTimeline {
                     weight,
                     base_offset_seconds,
                     anchor_seconds,
+                    start_normalized_time,
                 } = self
                 {
                     *self = Self::Paused {
@@ -1990,6 +2021,7 @@ impl AnimatedMeshPlaybackTimeline {
                         weight: *weight,
                         offset_seconds: *base_offset_seconds
                             + (now_seconds - *anchor_seconds) * f64::from(*speed),
+                        start_normalized_time: *start_normalized_time,
                     };
                 }
             }
@@ -2000,6 +2032,7 @@ impl AnimatedMeshPlaybackTimeline {
                     speed,
                     weight,
                     offset_seconds,
+                    start_normalized_time,
                 } = self
                 {
                     *self = Self::Playing {
@@ -2009,6 +2042,7 @@ impl AnimatedMeshPlaybackTimeline {
                         weight: *weight,
                         base_offset_seconds: *offset_seconds,
                         anchor_seconds: now_seconds,
+                        start_normalized_time: *start_normalized_time,
                     };
                 }
             }
@@ -2048,6 +2082,7 @@ impl AnimatedMeshPlaybackTimeline {
                 weight,
                 base_offset_seconds,
                 anchor_seconds,
+                start_normalized_time,
             } => Some(AnimatedMeshPlaybackCommand::Play {
                 clip: clip.clone(),
                 r#loop: *r#loop,
@@ -2058,6 +2093,7 @@ impl AnimatedMeshPlaybackTimeline {
                 start_offset_seconds: Some(
                     *base_offset_seconds + (now_seconds - *anchor_seconds) * f64::from(*speed),
                 ),
+                start_normalized_time: *start_normalized_time,
                 start_paused: false,
             }),
             Self::Paused {
@@ -2066,6 +2102,7 @@ impl AnimatedMeshPlaybackTimeline {
                 speed,
                 weight,
                 offset_seconds,
+                start_normalized_time,
             } => Some(AnimatedMeshPlaybackCommand::Play {
                 clip: clip.clone(),
                 r#loop: *r#loop,
@@ -2074,6 +2111,7 @@ impl AnimatedMeshPlaybackTimeline {
                 restart: true,
                 fade_seconds: None,
                 start_offset_seconds: Some(*offset_seconds),
+                start_normalized_time: *start_normalized_time,
                 start_paused: true,
             }),
             Self::Sampled {
@@ -2503,6 +2541,49 @@ mod tests {
     }
 
     #[test]
+    fn play_start_point_is_a_finite_fraction_carried_through_pause_and_reconstruction() {
+        let play = |start_normalized_time, restart| AnimatedMeshPlaybackCommand::Play {
+            clip: "run".to_owned(),
+            r#loop: AnimationLoopMode::Repeat,
+            speed: 1.0,
+            weight: 1.0,
+            restart,
+            fade_seconds: None,
+            start_offset_seconds: None,
+            start_normalized_time,
+            start_paused: false,
+        };
+        for start in [f32::NAN, f32::INFINITY, -0.01] {
+            assert_eq!(
+                play(start, true).validate(),
+                Err(AnimatedMeshPlaybackError::InvalidNormalizedTime)
+            );
+        }
+        assert_eq!(play(1.37, true).validate(), Ok(()));
+
+        let mut timeline = AnimatedMeshPlaybackTimeline::default();
+        timeline.apply_command(&play(0.37, true), 1.0).unwrap();
+        // Played again without a restart, the clip continues.
+        timeline.apply_command(&play(0.9, false), 2.0).unwrap();
+        timeline
+            .apply_command(&AnimatedMeshPlaybackCommand::Pause, 3.0)
+            .unwrap();
+        let paused = timeline.snapshot_command(9.0).unwrap().unwrap();
+        assert!(matches!(
+            paused,
+            AnimatedMeshPlaybackCommand::Play {
+                start_offset_seconds: Some(offset),
+                start_normalized_time,
+                start_paused: true,
+                ..
+            } if (offset - 2.0).abs() < f64::EPSILON && start_normalized_time == 0.37
+        ));
+        let mut rebuilt = AnimatedMeshPlaybackTimeline::default();
+        rebuilt.apply_command(&paused, 9.0).unwrap();
+        assert_eq!(rebuilt, timeline);
+    }
+
+    #[test]
     fn direct_playback_timeline_reconstructs_current_offset_and_pause_without_history() {
         let play = AnimatedMeshPlaybackCommand::Play {
             clip: "run".to_owned(),
@@ -2512,6 +2593,7 @@ mod tests {
             restart: true,
             fade_seconds: Some(0.25),
             start_offset_seconds: None,
+            start_normalized_time: 0.0,
             start_paused: false,
         };
         let mut timeline = AnimatedMeshPlaybackTimeline::default();

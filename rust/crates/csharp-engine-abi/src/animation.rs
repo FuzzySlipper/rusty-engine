@@ -361,6 +361,11 @@ pub struct NativeAnimationInstanceRequest {
 /// Direct playback command for one retained animation instance. `Sample`
 /// holds a normalized point in a clip; `Pause` and `Resume` retain the current
 /// backend sample. `fade_seconds` is ignored for commands without a fade.
+/// `Play` starts its clip at `normalized_time`, a fraction of the clip's
+/// length (0 or more) that a looping clip wraps, also when it cross-fades in;
+/// 0 starts at the beginning. Playing the clip already playing without
+/// `restart` continues it where it is. A `normalized_time` that is not finite,
+/// or is below 0, is refused.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAnimationPlaybackRequest {

@@ -1320,6 +1320,156 @@ mod tests {
         end_call(&mut bridge);
     }
 
+    /// `Play` starts its clip at the request's `NormalizedTime`, a fraction
+    /// of the clip's length that wraps for a looping clip, on a restart and
+    /// into a cross-fade; a same-clip `Play` without a restart continues the
+    /// clip, and a malformed start point is refused.
+    #[test]
+    fn play_starts_its_clip_at_the_normalized_time() {
+        let mut bridge = RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), {
+            let mut content = BTreeMap::new();
+            content.insert(
+                "body.glb".to_owned(),
+                crate::ContentBytes::from(CHARACTER_GLB),
+            );
+            content
+        });
+        let play = |instance,
+                    clip: &'static str,
+                    restart: bool,
+                    fade: Option<f32>,
+                    normalized_time: f32| NativeAnimationPlaybackRequest {
+            instance,
+            kind: NativeAnimationPlaybackKind::Play,
+            clip: utf8(clip),
+            loop_mode: NativeAnimationLoopMode::Repeat,
+            speed: 1.0,
+            weight: 1.0,
+            restart,
+            fade_seconds: fade.unwrap_or(0.0),
+            has_fade: fade.is_some(),
+            normalized_time,
+        };
+        let explicit = |instance, clip, time, blend_clip, blend_time, blend_weight| {
+            NativeAnimationPoseSampleRequest {
+                instance,
+                clip: utf8(clip),
+                time,
+                blend_clip: utf8(blend_clip),
+                blend_time,
+                blend_weight,
+                normalized: false,
+                placement: placed_at(0.0),
+                apply_pose_controls: false,
+                use_current_playback: false,
+            }
+        };
+        let current = |instance| NativeAnimationPoseSampleRequest {
+            use_current_playback: true,
+            ..explicit(instance, "", 0.0, "", 0.0, 0.0)
+        };
+        let same = |a: &[NativeJointPose], b: &[NativeJointPose]| {
+            a.len() == b.len()
+                && a.iter().zip(b).all(|(a, b)| {
+                    let (a, b) = (a.model.translation, b.model.translation);
+                    (a.x - b.x).abs() < 1e-5 && (a.y - b.y).abs() < 1e-5 && (a.z - b.z).abs() < 1e-5
+                })
+        };
+
+        // A call of no length poses where its commands start.
+        bridge.set_presentation_clock(1.0, 0.0);
+        bridge.begin_call();
+        let (instance, _) = character_for_test(&mut bridge);
+        let (run, idle) = {
+            let state = &bridge.staged_ref().unwrap().state;
+            let appearance = state.animation_instances[&instance.value].appearance;
+            let model = bridge
+                .pose_model(state.animated_appearances[&appearance])
+                .unwrap();
+            let length = |clip| model.clip_duration(model.clip_index(clip).unwrap());
+            (length("run"), length("idle"))
+        };
+        bridge
+            .set_animation_playback(&play(instance, "run", true, None, 0.37))
+            .unwrap();
+        let started = sampled(&mut bridge, &current(instance)).unwrap();
+        let at_37 = sampled(
+            &mut bridge,
+            &NativeAnimationPoseSampleRequest {
+                normalized: true,
+                ..explicit(instance, "run", 0.37, "", 0.0, 0.0)
+            },
+        )
+        .unwrap();
+        assert!(same(&started, &at_37), "run starts 37 % in");
+        let at_0 = sampled(&mut bridge, &explicit(instance, "run", 0.0, "", 0.0, 0.0)).unwrap();
+        assert!(!same(&started, &at_0));
+
+        // A looping clip wraps a start point past its end.
+        bridge
+            .set_animation_playback(&play(instance, "run", true, None, 1.37))
+            .unwrap();
+        let wrapped = sampled(&mut bridge, &current(instance)).unwrap();
+        assert!(same(&wrapped, &at_37), "1.37 wraps to 37 %");
+
+        // The same clip played without a restart continues where it is.
+        bridge
+            .set_animation_playback(&play(instance, "run", false, None, 0.8))
+            .unwrap();
+        let continued = sampled(&mut bridge, &current(instance)).unwrap();
+        assert!(same(&continued, &at_37), "run continues");
+
+        for malformed in [f32::NAN, f32::INFINITY, -0.01] {
+            let refused = bridge
+                .set_animation_playback(&play(instance, "run", true, None, malformed))
+                .unwrap_err();
+            assert!(
+                refused.to_string().contains("InvalidNormalizedTime"),
+                "{refused}"
+            );
+        }
+        let call = bridge.take_staged_call();
+        bridge.commit(call);
+
+        // The next call, 2.0 to 2.25, cross-fades over a second into idle
+        // started 60 % in. Run started at 1.0, 37 % in.
+        bridge.set_presentation_clock(2.0, 0.25);
+        bridge.begin_call();
+        bridge
+            .set_animation_playback(&play(instance, "idle", false, Some(1.0), 0.6))
+            .unwrap();
+        let fading = sampled(&mut bridge, &current(instance)).unwrap();
+        let wrap = |time: f32, length: f32| time.rem_euclid(length);
+        let blend = sampled(
+            &mut bridge,
+            &explicit(
+                instance,
+                "run",
+                wrap(0.37 * run + 1.25, run),
+                "idle",
+                wrap(0.6 * idle + 0.25, idle),
+                0.25,
+            ),
+        )
+        .unwrap();
+        assert!(same(&fading, &blend), "idle fades in from 60 %");
+        let from_start = sampled(
+            &mut bridge,
+            &explicit(
+                instance,
+                "run",
+                wrap(0.37 * run + 1.25, run),
+                "idle",
+                0.25,
+                0.25,
+            ),
+        )
+        .unwrap();
+        assert!(!same(&fading, &from_start));
+        let call = bridge.take_staged_call();
+        bridge.commit(call);
+    }
+
     const CLIP_PACK_GLB: &[u8] =
         include_bytes!("../../../../../fixtures/csharp-joint-attachments/content/body.clips.glb");
 
