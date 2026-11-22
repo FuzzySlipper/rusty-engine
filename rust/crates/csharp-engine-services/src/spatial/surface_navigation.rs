@@ -312,30 +312,42 @@ fn derive(
 
 impl SurfaceGrid {
     /// The place whose resting ball is nearest `at`, within the snap
-    /// distance.
+    /// distance; of two as near, the first found. A resting ball lies
+    /// within a cell of its place's cell, so the places within the snap
+    /// distance are in the cells that many cells and one more around `at`'s;
+    /// when those outnumber the places, every place is compared instead.
     fn snap(&self, at: core_space::WorldPos) -> Option<u32> {
-        let center = self.policy.config.cell_of(at);
+        let distance = |slot: u32| {
+            let rest = self.navigation.nodes[slot as usize].rest;
+            ((rest.x - at.x).powi(2) + (rest.y - at.y).powi(2) + (rest.z - at.z).powi(2)).sqrt()
+        };
+        let reach = (self.policy.snap / self.policy.config.cell_size).ceil() + 1.0;
+        let lookups = (2.0 * reach + 1.0).powi(3) * SurfaceFace::ALL.len() as f64;
+        let near: Box<dyn Iterator<Item = u32> + '_> =
+            if lookups > self.navigation.nodes.len() as f64 {
+                Box::new(0..self.navigation.nodes.len() as u32)
+            } else {
+                let center = self.policy.config.cell_of(at);
+                let reach = reach as i64;
+                Box::new((-reach..=reach).flat_map(move |dx| {
+                    (-reach..=reach).flat_map(move |dy| {
+                        (-reach..=reach).flat_map(move |dz| {
+                            let cell = VoxelCoord::new(center.x + dx, center.y + dy, center.z + dz);
+                            SurfaceFace::ALL.into_iter().filter_map(move |face| {
+                                self.navigation
+                                    .index
+                                    .get(&SurfaceCell { cell, face })
+                                    .copied()
+                            })
+                        })
+                    })
+                }))
+            };
         let mut best: Option<(f64, u32)> = None;
-        for dx in -1..=1 {
-            for dy in -1..=1 {
-                for dz in -1..=1 {
-                    let near = VoxelCoord::new(center.x + dx, center.y + dy, center.z + dz);
-                    for face in SurfaceFace::ALL {
-                        let Some(&slot) =
-                            self.navigation.index.get(&SurfaceCell { cell: near, face })
-                        else {
-                            continue;
-                        };
-                        let rest = self.navigation.nodes[slot as usize].rest;
-                        let distance = ((rest.x - at.x).powi(2)
-                            + (rest.y - at.y).powi(2)
-                            + (rest.z - at.z).powi(2))
-                        .sqrt();
-                        if best.is_none_or(|(least, _)| distance < least) {
-                            best = Some((distance, slot));
-                        }
-                    }
-                }
+        for slot in near {
+            let distance = distance(slot);
+            if best.is_none_or(|(least, _)| distance < least) {
+                best = Some((distance, slot));
             }
         }
         best.filter(|&(distance, _)| distance <= self.policy.snap)

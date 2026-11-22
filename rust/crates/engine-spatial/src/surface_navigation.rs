@@ -6,8 +6,9 @@
 //!   half a cell above it, and likewise for the other five facings. One ray
 //!   down each line of cells along an axis finds every surface on that line
 //!   facing back along it; through collidable voxels it skips to the run's
-//!   far side. A surface tilted more than 45° from the facing belongs to
-//!   another facing's lines. It is a surface cell when the ball fits resting
+//!   far side. A surface belongs to the facing its normal leans along most
+//!   (floors first, then X, then Z, as near as two), so every normal has
+//!   one. It is a surface cell when the ball fits resting
 //!   its skin off it with its centre outside collision: a reconstructed
 //!   surface can lie above its voxels' run, and a line going on below it
 //!   meets the deep voxels' cubes inside the rock.
@@ -30,8 +31,6 @@ use svc_collision::{CharacterCapsule, CharacterCollisionSource};
 use crate::crawler::V;
 use crate::{CrawlerConfig, CrawlerSurface, SpatialCollisionHit, VoxelCollisionScene};
 
-/// A surface tilted further than this from a facing belongs to another.
-const FACING_COS: f64 = std::f64::consts::FRAC_1_SQRT_2;
 /// How far past a surface a ray continues.
 const RAY_EPSILON: f64 = 1.0e-6;
 /// The fit test lifts a ball with less skin than this to it, so one resting
@@ -114,6 +113,20 @@ impl SurfaceFace {
 
     fn v(self) -> V {
         V(self.step().map(|value| value as f64))
+    }
+
+    /// The facing a surface of `normal` belongs to: the axis it leans along
+    /// most, Y before X before Z where two lean as far.
+    pub fn of_normal(normal: WorldVec) -> Self {
+        let [x, y, z] = [normal.x, normal.y, normal.z];
+        let axis = if y.abs() >= x.abs() && y.abs() >= z.abs() {
+            1
+        } else if x.abs() >= z.abs() {
+            0
+        } else {
+            2
+        };
+        Self::of(axis, [x, y, z][axis] >= 0.0)
     }
 }
 
@@ -311,7 +324,7 @@ pub fn surface_lines(region: SurfaceRegion) -> Vec<SurfaceLine> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SurfaceSampleOutcome {
     Surface,
-    /// Tilted more than 45° from the facing: another facing's lines hold it.
+    /// It leans along another axis more: another facing's lines hold it.
     OtherFacing,
     /// The ball resting on it overlaps collision.
     BallOverlap,
@@ -425,7 +438,7 @@ pub fn sample_surface_line(
             overlap: None,
         };
         if region.contains(cell.cell) {
-            if normal.dot(facing) < FACING_COS - 1.0e-9 {
+            if SurfaceFace::of_normal(normal.wvec()) != face {
                 sample.outcome = SurfaceSampleOutcome::OtherFacing;
             } else if nodes.last().is_some_and(|node| node.cell == cell) {
                 sample.outcome = SurfaceSampleOutcome::SameCell;

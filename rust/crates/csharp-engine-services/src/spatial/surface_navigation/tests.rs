@@ -224,6 +224,33 @@ fn snapping_misses_and_an_unpublished_grid_are_outcomes() {
 }
 
 #[test]
+fn a_start_more_than_a_cell_from_its_place_snaps_within_the_snap_distance() {
+    // A floor alone at y = 1: its balls rest at y = 1.27.
+    let voxels = (-4..4).flat_map(|x| (-4..4).map(move |z| [x, 0, z]));
+    let (mut bridge, session) =
+        bridge_with(VoxelCollisionScene::from_solid_voxels(1.0, 8, voxels).unwrap());
+    let above = v(0.5, 3.5, 0.5);
+    let goal = v(1.5, 1.27, 0.5);
+    for (snap, expected) in [
+        (2.0, NativeSurfaceNavigationPathOutcome::StartOffSurface),
+        (3.0, NativeSurfaceNavigationPathOutcome::Reached),
+        (100.0, NativeSurfaceNavigationPathOutcome::Reached),
+    ] {
+        let mut publish = request(session, false);
+        publish.world_min = v(-3.0, 0.0, -3.0);
+        publish.world_max = v(3.0, 5.0, 3.0);
+        publish.config.snap_distance = snap;
+        bridge.replace_surface_navigation(&publish).unwrap();
+        let (result, waypoints) = path(&mut bridge, session, above, goal);
+        assert_eq!(result.outcome, expected, "snap {snap}");
+        if expected == NativeSurfaceNavigationPathOutcome::Reached {
+            let start = waypoints[0].cell;
+            assert_eq!((start.x, start.y, start.z), (0, 1, 0));
+        }
+    }
+}
+
+#[test]
 fn a_deferred_grid_installs_at_a_later_call_and_planar_requests_refuse_it() {
     let (mut bridge, session) = bridge_with(trench_room());
     let pending = bridge

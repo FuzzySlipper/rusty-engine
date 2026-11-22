@@ -2339,8 +2339,8 @@ pub enum NativeSurfaceCellOutcome {
     Surface = 0,
     /// The cell's line meets no surface of this facing in the cell.
     NoSurface = 1,
-    /// The surface there is tilted more than 45° from the facing: another
-    /// facing holds it.
+    /// The surface there leans along another axis more: that facing holds
+    /// it.
     OtherFacing = 2,
     /// The ball resting on it overlaps collision; `overlap` says what.
     BallOverlap = 3,

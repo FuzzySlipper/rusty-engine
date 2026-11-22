@@ -7,10 +7,11 @@ use std::collections::{BTreeSet, VecDeque};
 use core_space::VoxelCoord;
 use engine_spatial::{
     derive_surface_navigation, surface_edge, surface_edge_kind, CrawlerConfig, CrawlerSurface,
-    MaterialSurface, MaterialVoxel, SurfaceCell, SurfaceCharacter, SurfaceEdgeKind,
-    SurfaceEdgeOutcome, SurfaceFace, SurfaceMaterials, SurfaceMeshOptions, SurfaceMode,
-    SurfaceNavigation, SurfaceNavigationConfig, SurfaceRegion, VertexPlacement,
-    VoxelCollisionScene,
+    MaterialSurface, MaterialVoxel, StaticMeshAssetId, StaticMeshColliderAsset,
+    StaticMeshColliderInstance, StaticMeshInstanceId, StaticMeshTransform, SurfaceCell,
+    SurfaceCharacter, SurfaceEdgeKind, SurfaceEdgeOutcome, SurfaceFace, SurfaceMaterials,
+    SurfaceMeshOptions, SurfaceMode, SurfaceNavigation, SurfaceNavigationConfig, SurfaceRegion,
+    VertexPlacement, VoxelCollisionScene,
 };
 
 /// A closed shell of `size`-metre voxels: inside x and z from −3 to 3 and y
@@ -275,4 +276,52 @@ fn no_surface_cell_lies_inside_dual_contoured_rock() {
         assert!(!scene.contains_point(rest), "{node:?}");
         assert!(node.rest.y > -1.5, "a place under the ground: {node:?}");
     }
+}
+
+#[test]
+fn a_ramp_inclined_diagonally_is_a_floor_crossed_from_corner_to_corner() {
+    // A 49° ramp turned 45° about Y: its normal, about (0.534, 0.656, 0.534),
+    // is more than 45° from every axis, and leans along Y most.
+    let fall = (49.0_f64.to_radians()).tan() / 2.0_f64.sqrt();
+    let height = |x: f64, z: f64| 6.0 - fall * (x + z);
+    let corners = [(-3.0, -3.0), (3.0, -3.0), (-3.0, 3.0), (3.0, 3.0)];
+    let positions: Vec<[f64; 3]> = corners.iter().map(|&(x, z)| [x, height(x, z), z]).collect();
+    let asset =
+        StaticMeshColliderAsset::new(StaticMeshAssetId(3), positions, vec![[0, 2, 1], [1, 2, 3]])
+            .unwrap();
+    let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[40, 40, 40]]).unwrap();
+    scene
+        .replace_static_mesh_colliders(
+            [asset],
+            [StaticMeshColliderInstance {
+                id: StaticMeshInstanceId(3),
+                asset: StaticMeshAssetId(3),
+                transform: StaticMeshTransform::IDENTITY,
+            }],
+        )
+        .unwrap();
+    let region = SurfaceRegion {
+        min: VoxelCoord::new(-3, 0, -3),
+        max: VoxelCoord::new(2, 11, 2),
+    };
+    let navigation = derive_surface_navigation(&scene, &config(), region).unwrap();
+    let floors: Vec<_> = navigation
+        .nodes
+        .iter()
+        .filter(|node| node.cell.face == SurfaceFace::PositiveY)
+        .collect();
+    // One place on every column the ramp covers, and every one a floor.
+    assert_eq!(floors.len(), 36, "{:?}", navigation.nodes.len());
+    for node in &floors {
+        assert_eq!(node.surface, CrawlerSurface::Floor, "{node:?}");
+        assert!((node.normal.x - node.normal.z).abs() < 1.0e-6 && node.normal.y > 0.6);
+    }
+    let on = |x: i64, z: i64| {
+        floors
+            .iter()
+            .find(|node| node.cell.cell.x == x && node.cell.cell.z == z)
+            .expect("a place on the column")
+            .cell
+    };
+    assert!(reachable(&navigation, on(2, 2)).contains(&on(-3, -3)));
 }

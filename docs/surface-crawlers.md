@@ -107,10 +107,11 @@ SurfaceNavigationPathResult path = engine.Spatial.RequestSurfaceNavigationPath(n
 
 A grid is cells of `CellSize`, each holding up to six places, one per facing
 (`SurfaceFace`: `PositiveY` a floor, `NegativeY` a ceiling, the other four
-walls). A surface belongs to the cell half a cell in front of it. It is a
-place where the ball fits resting its skin off it, its centre outside
-collision; a surface tilted more than 45° from a facing is the next facing's.
-Places join:
+walls). A surface belongs to the facing its normal leans along most (Y
+before X before Z where two lean as far), so a ramp tilted diagonally is a
+floor, and to the cell half a cell in front of it. It is a place where the
+ball fits resting its skin off it, its centre outside collision. Places
+join:
 
 - **along** one facing to the next cell, or one cell up or down for a slope;
 - **concave**, to another facing in the same cell, as floor into wall;
