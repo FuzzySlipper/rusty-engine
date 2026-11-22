@@ -163,13 +163,27 @@ fn check_splat_primitive(
             ));
         }
     }
+    // A group is a byte the renderer reads as it is.
+    if let Some(groups) = primitive.get(&gltf::Semantic::Extras("GROUP".to_owned())) {
+        if groups.dimensions() != gltf::accessor::Dimensions::Scalar
+            || groups.data_type() != gltf::accessor::DataType::U8
+            || groups.view().is_none()
+        {
+            return Err(ImportDiagnostic::error(
+                ImportCode::MalformedSource,
+                format!("{path}.attributes._GROUP"),
+                "_GROUP is one unsigned byte per Gaussian (SCALAR, UNSIGNED_BYTE)",
+                "write each Gaussian's group, 0 for none, as an unsigned byte",
+            ));
+        }
+    }
     Ok(())
 }
 
-/// Attributes a splat primitive may carry, for lighting: `_NORMAL`, each
+/// Attributes a splat primitive may carry: for lighting, `_NORMAL`, each
 /// Gaussian's surface normal, and `_ALBEDO`, its colour without baked
-/// shading.
-const OPTIONAL_SPLAT_ATTRIBUTES: [&str; 2] = ["NORMAL", "ALBEDO"];
+/// shading; and `_GROUP`, the group a product may tint it by.
+const OPTIONAL_SPLAT_ATTRIBUTES: [&str; 3] = ["NORMAL", "ALBEDO", "GROUP"];
 
 const IDENTITY: [f64; 16] = [
     1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
@@ -433,6 +447,48 @@ mod tests {
         assert!(short.diagnostics.iter().any(|d| {
             d.code == ImportCode::AttributeLengthMismatch && d.message.contains("_NORMAL")
         }));
+    }
+
+    /// `_GROUP` is optional, one unsigned byte per Gaussian: a float or
+    /// vector group, or a short one, is refused.
+    #[test]
+    fn a_splat_group_stream_is_admitted_and_malformed_ones_refused() {
+        // The colours' two bytes 0 and 1 read as groups.
+        let group = |accessor: serde_json::Value| {
+            import(&glb(
+                |attributes| attributes["_GROUP"] = serde_json::json!(4),
+                move |document| document["accessors"].as_array_mut().unwrap().push(accessor),
+            ))
+        };
+        let with = group(serde_json::json!(
+            {"bufferView": 3, "componentType": 5121, "count": 2, "type": "SCALAR"}
+        ));
+        assert!(with.assets.is_some(), "{:?}", with.diagnostics);
+        for (accessor, code) in [
+            (
+                serde_json::json!({"bufferView": 2, "componentType": 5126, "count": 2, "type": "SCALAR"}),
+                ImportCode::MalformedSource,
+            ),
+            (
+                serde_json::json!({"bufferView": 3, "componentType": 5121, "count": 2, "type": "VEC2"}),
+                ImportCode::MalformedSource,
+            ),
+            (
+                serde_json::json!({"bufferView": 3, "componentType": 5121, "count": 1, "type": "SCALAR"}),
+                ImportCode::AttributeLengthMismatch,
+            ),
+        ] {
+            let refused = group(accessor.clone());
+            assert!(refused.assets.is_none(), "{accessor}");
+            assert!(
+                refused
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code == code && d.message.contains("_GROUP")),
+                "{accessor}: {:?}",
+                refused.diagnostics
+            );
+        }
     }
 
     #[test]

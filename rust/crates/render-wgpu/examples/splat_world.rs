@@ -278,6 +278,7 @@ fn figure(
             playback_fade: None,
             inspection: AnimatedMeshInspection::default(),
             splat: SplatAppearance::default(),
+            splat_groups: Vec::new(),
             asset: asset.asset.clone(),
             transform: transform(translation, yaw_degrees, [1.0; 3]),
             visible: true,

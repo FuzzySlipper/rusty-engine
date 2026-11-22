@@ -1670,6 +1670,12 @@ impl PresentationWorld {
                     _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
                 }
             }
+            RenderDiff::SetSplatGroupTints { handle, tints } => {
+                match &mut self.node_mut(*handle)?.kind {
+                    NodeKind::AnimatedMesh(value) => value.splat_groups.clone_from(tints),
+                    _ => return Err(PresentationWorldError::WrongNodeKind(*handle)),
+                }
+            }
             RenderDiff::SetAnimatedMeshPlayback { handle, playback } => {
                 let now = self.elapsed_seconds;
                 let node = self.node_mut(*handle)?;
@@ -3256,6 +3262,7 @@ mod joint_attachment_tests {
                 parent: None,
                 instance: AnimatedMeshInstanceDescriptor {
                     splat: Default::default(),
+                    splat_groups: Vec::new(),
                     playback_fade: None,
                     asset: asset.asset.clone(),
                     transform: Transform::IDENTITY,

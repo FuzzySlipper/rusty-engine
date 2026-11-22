@@ -192,6 +192,7 @@ fn render(glb: Vec<u8>, lights: Vec<RenderDiff>) -> Vec<u8> {
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
                 splat: Default::default(),
+                splat_groups: Vec::new(),
                 playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: asset.asset.clone(),
@@ -573,6 +574,7 @@ fn render_pair(
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
                 splat: Default::default(),
+                splat_groups: Vec::new(),
                 playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: asset.asset.clone(),

@@ -186,6 +186,7 @@ fn hand_scene(harness: &mut Harness, joints: &Joints) -> impl Fn(&str) -> u32 {
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
                 splat: Default::default(),
+                splat_groups: Vec::new(),
                 playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: asset.asset.clone(),

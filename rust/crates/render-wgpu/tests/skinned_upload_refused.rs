@@ -167,6 +167,7 @@ fn a_skinned_mesh_too_large_for_the_device_is_refused_and_the_frame_draws() {
                 parent: None,
                 instance: AnimatedMeshInstanceDescriptor {
                     splat: Default::default(),
+                    splat_groups: Vec::new(),
                     playback_fade: None,
                     inspection: AnimatedMeshInspection::default(),
                     asset: strip.asset.clone(),

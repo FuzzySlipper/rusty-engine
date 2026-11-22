@@ -21,6 +21,7 @@ is a `POINTS` primitive (`mode` 0) with one value per Gaussian in each of:
 | `JOINTS_0`, `WEIGHTS_0` | as glTF | The skin, on a skinned node: at most 256 joints a primitive indexes. |
 | `_NORMAL` (optional) | float or normalized signed VEC3 | The surface normal at the Gaussian, unit, pointing out of the figure, for [lighting](#lighting). |
 | `_ALBEDO` (optional) | float or normalized unsigned VEC4 | The colour without its baked shading, **sRGB-encoded** as `_COLOR` (alpha unread), which a lit figure draws. |
+| `_GROUP` (optional) | unsigned byte SCALAR | The Gaussian's group, which a product may [tint](#group-tints): 0 for none, 1 to 255 a group. Without it no Gaussian is in a group. |
 
 `_COLOR` is not `COLOR_0`. glTF defines `COLOR_0` as linear, and these
 colours are display-referred: they are the values the splats were trained
@@ -30,7 +31,8 @@ The figure stands on y = 0, +Y up, in metres.
 
 A GLB with splat primitives has only splat primitives, and carries no clips
 of its own. Admission refuses a missing attribute, attributes of different
-lengths and non-finite values. Its bounds are the Gaussians' centres to
+lengths, non-finite values and a `_GROUP` that is not one unsigned byte
+per Gaussian. Its bounds are the Gaussians' centres to
 three standard deviations, each node's at rest (a skinned node's in bind
 space). A skinned one names its rig: its skin's named joints, held in
 place, as clip packs and joint reads need.
@@ -114,6 +116,36 @@ baked, lower for a figure in shade.
 
 Posed bounds (the inspection bounds fact) hold each joint's Gaussians moved
 by that joint.
+
+## Group tints
+
+`SetSplatGroupTint` recolours one group of an instance's Gaussians (its
+`_GROUP`): eyes closing in a blink, a face flushing, runes lighting up.
+
+```csharp
+// Lids down: the eye Gaussians (group 1) take the skin's colour.
+engine.Animation.SetSplatGroupTint(new(townsman, 1, skin, blink));
+```
+
+- **Per instance.** Each Gaussian of the group draws
+  `lerp(baked, Target, Weight)`. The instance's other Gaussians, and every
+  other instance of the resource, draw as they did.
+- **Display colour.** `Target` is sRGB-encoded display colour, as `_COLOR`
+  is, and the lerp is in display space. It applies to the colour the figure
+  draws, `_COLOR` or a lit figure's `_ALBEDO`, before the multiplier,
+  lighting, the pixel grid and its palette. Opacity stays as baked.
+- **Held.** The tint holds until changed, and is sent to the renderer only
+  when it changes. A product may set it on every update. `Weight` 0 clears
+  it.
+- **Limit.** An instance tints at most 8 groups at once. A ninth is
+  refused until one is cleared. Group 0, and a `Target` or `Weight` outside
+  0 to 1, are refused.
+- **Cost.** The group rides in the unused byte of each Gaussian's resident
+  albedo word, so it adds no memory. Only a tinted instance reads it, and
+  then a few compares per Gaussian against the instance's table. 32
+  walking 48,000-Gaussian figures, every one blinking (its weight set
+  every frame), take 2.33 ms a frame against 2.32 ms untinted on an
+  RTX 3080 at 1920 × 1080, and 2.93 ms against 2.93 at 2560 × 1440.
 
 ## Pixel finish
 
@@ -247,6 +279,9 @@ says so (`refused_casters`). Splat figures receive shadows only when lit.
   - the colour and opacity;
   - the rotation;
   - the standard deviations as halves.
+
+  Beside them, 8 more: its normal, its albedo and its group (and,
+  skinned, 8 of skin).
 - **Skinning.** A skinned set's Gaussians are skinned on the GPU each frame
   as they are projected, from a palette of its joints:
   - each joint's matrix in the instance's space with its scale removed (a

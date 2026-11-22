@@ -54,6 +54,8 @@ pub struct GlbSplats {
     /// `_ALBEDO`, when the asset has one: each Gaussian's colour without
     /// its baked shading, sRGB-encoded as `_COLOR` (alpha unread).
     pub albedos: Option<Vec<[f32; 4]>>,
+    /// `_GROUP`, when the asset has one: each Gaussian's group, 0 for none.
+    pub groups: Option<Vec<u8>>,
     pub joints: Option<Vec<[u16; 4]>>,
     /// Normalized to sum 1 (a zero sum becomes `(1, 0, 0, 0)`).
     pub weights: Option<Vec<[f32; 4]>>,
@@ -556,11 +558,21 @@ fn decode_splats<'a, 's>(
         .ok()
         .map(|accessor| floats::<4>(accessor, data.clone()))
         .transpose()?;
+    let groups = attribute("GROUP")
+        .ok()
+        .map(|accessor| {
+            let index = accessor.index();
+            gltf::accessor::Iter::<u8>::new(accessor, data.clone())
+                .map(Iterator::collect::<Vec<u8>>)
+                .ok_or_else(|| format!("glb: accessor {index} has no data"))
+        })
+        .transpose()?;
     let count = centres.len();
     if [rotations.len(), scales.len(), colors.len()]
         .iter()
         .chain(normals.as_ref().map(Vec::len).as_ref())
         .chain(albedos.as_ref().map(Vec::len).as_ref())
+        .chain(groups.as_ref().map(Vec::len).as_ref())
         .any(|len| *len != count)
     {
         return Err("glb: splat attributes differ in count".to_owned());
@@ -589,6 +601,7 @@ fn decode_splats<'a, 's>(
         colors,
         normals,
         albedos,
+        groups,
         joints,
         weights,
     })

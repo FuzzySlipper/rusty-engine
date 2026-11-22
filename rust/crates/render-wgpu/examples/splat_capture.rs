@@ -11,6 +11,7 @@
 //!     [--clip-pack PATH --clip ID [--fit JOINT:K,A] [--at SECONDS] [--track SECONDS]]
 //!     [--arms ABDUCT,FOREARM] [--multiplier R,G,B] [--fog DENSITY]
 //!     [--pixel N [--palette PATH]] [--lit FLOOR] [--floor] [--caster splats|ellipsoids]
+//!     [--tint GROUP:RRGGBB:WEIGHT ...]
 //! ```
 //!
 //! - `--occluded`: a box between the camera and the figure's legs, a wall
@@ -45,6 +46,10 @@
 //! - `--caster`: he casts as his Gaussians or as an ellipsoid per joint.
 //! - `--pixel N`, `--palette PATH`: the figure on a grid of N-pixel blocks,
 //!   snapped to a palette JSON's `colours` and `extra` (sRGB hex).
+//! - `--tint GROUP:RRGGBB:WEIGHT`: tint the figure's Gaussian group
+//!   `GROUP` (its `_GROUP`) toward the sRGB colour `RRGGBB` at `WEIGHT`;
+//!   repeat for more groups. A figure's eyes as a group, tinted toward its
+//!   skin at 0, 0.5 and 1, are a blink.
 //! - `--pose-out`: write `pose.json`, every rig joint's world transform at
 //!   the capture time, for a CPU check of the skinning.
 //!
@@ -91,6 +96,7 @@ struct Arguments {
     centre: Option<String>,
     web_views: Option<f64>,
     times: Vec<f64>,
+    tints: Vec<SplatGroupTint>,
 }
 
 fn numbers<const N: usize>(text: &str, flag: &str) -> Result<[f32; N], String> {
@@ -190,6 +196,26 @@ fn arguments() -> Result<Arguments, String> {
                 };
             }
             "--palette" => arguments.palette = palette(&value()?)?,
+            "--tint" => {
+                let text = value()?;
+                let parsed = || -> Option<SplatGroupTint> {
+                    let mut parts = text.split(':');
+                    let group = parts.next()?.parse().ok()?;
+                    let bits =
+                        u32::from_str_radix(parts.next()?.trim_start_matches('#'), 16).ok()?;
+                    let weight = parts.next()?.parse().ok()?;
+                    Some(SplatGroupTint {
+                        group,
+                        target: [16, 8, 0].map(|shift| ((bits >> shift) & 255) as f32 / 255.0),
+                        weight,
+                    })
+                };
+                let tint = parsed().ok_or("--tint is GROUP:RRGGBB:WEIGHT")?;
+                if let Some(refusal) = tint.refusal() {
+                    return Err(format!("--tint {text}: {refusal}"));
+                }
+                arguments.tints.push(tint);
+            }
             "--pose-out" => arguments.pose_out = true,
             "--track-joints" => {
                 arguments.track_joints = Some(
@@ -356,6 +382,7 @@ fn main() {
                     shadow_caster: arguments.caster,
                     ..SplatAppearance::default()
                 },
+                splat_groups: arguments.tints.clone(),
                 asset: asset.asset.clone(),
                 transform: Transform::IDENTITY,
                 visible: true,

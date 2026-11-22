@@ -1704,6 +1704,12 @@ pub enum RenderDiff {
         handle: RenderHandle,
         appearance: crate::SplatAppearance,
     },
+    /// Replaces the tints of the instance's splat Gaussian groups; empty
+    /// draws every group as baked.
+    SetSplatGroupTints {
+        handle: RenderHandle,
+        tints: Vec<crate::SplatGroupTint>,
+    },
     SetAnimatedMeshPlayback {
         handle: RenderHandle,
         playback: AnimatedMeshPlaybackCommand,
@@ -1867,6 +1873,7 @@ impl RenderFrameDiff {
                 | RenderDiff::CreateScatterPatch { .. }
                 | RenderDiff::SetAnimatedMeshInspection { .. }
                 | RenderDiff::SetSplatAppearance { .. }
+                | RenderDiff::SetSplatGroupTints { .. }
                 | RenderDiff::SetAnimatedMeshPlayback { .. }
                 | RenderDiff::SetAnimatedMeshPose { .. }
                 | RenderDiff::SetEvaluatedPose { .. }

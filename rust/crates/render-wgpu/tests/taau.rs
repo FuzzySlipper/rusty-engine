@@ -385,6 +385,7 @@ fn runner_against_a_fresh_frame(antialiasing: Antialiasing) -> (Option<UpscaleMe
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
                 splat: Default::default(),
+                splat_groups: Vec::new(),
                 playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: body.asset.clone(),
@@ -528,6 +529,7 @@ fn splat_figure_against_a_fresh_frame(speed: f32) -> (f64, usize) {
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
                 splat: Default::default(),
+                splat_groups: Vec::new(),
                 playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: figure.asset.clone(),

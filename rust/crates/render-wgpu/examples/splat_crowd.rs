@@ -12,6 +12,7 @@
 //!     --clip-pack PATH --clip ID --fit JOINT:K,A --out DIR
 //!     [--counts 1,8,16,32] [--size 1920x1080] [--warm 2] [--frames 240]
 //!     [--lights] [--lit FLOOR] [--caster splats|ellipsoids]
+//!     [--tint GROUP:RRGGBB --tinted N]
 //! ```
 //!
 //! - `--fit JOINT:K,A`: the clip's translation of `JOINT` becomes
@@ -26,6 +27,9 @@
 //!   their baked colour.
 //! - `--caster`: the figures cast as their Gaussians or as an ellipsoid per
 //!   joint (none by default).
+//! - `--tint GROUP:RRGGBB`, `--tinted N`: every Nth figure, from the first,
+//!   blinks its Gaussian group `GROUP` (its `_GROUP`) toward the sRGB
+//!   colour `RRGGBB`, its weight set anew every frame (a blink a second).
 //!
 //! Writes `crowd.json`: per count, each timed pass's median GPU time (over
 //! the last 120 frames; `world` spans the splats' passes, which run inside
@@ -72,6 +76,8 @@ struct Arguments {
     lights: bool,
     lit: Option<f32>,
     caster: SplatShadowCaster,
+    /// The group, its target, and every how many figures blink it.
+    tint: Option<(u8, [f32; 3], usize)>,
 }
 
 fn arguments() -> Result<Arguments, String> {
@@ -79,6 +85,7 @@ fn arguments() -> Result<Arguments, String> {
     let mut counts = vec![1, 8, 16, 32];
     let (mut size, mut warm, mut frames) = ((1920, 1080), 2.0, 240);
     let (mut lights, mut lit, mut caster) = (false, None, SplatShadowCaster::None);
+    let (mut tint, mut tinted) = (None, 1);
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
         let mut value = || args.next().ok_or(format!("{flag} takes a value"));
@@ -124,6 +131,25 @@ fn arguments() -> Result<Arguments, String> {
                     _ => return Err("--caster is splats, ellipsoids or none".to_owned()),
                 };
             }
+            "--tint" => {
+                let text = value()?;
+                let parsed = || -> Option<(u8, [f32; 3])> {
+                    let (group, colour) = text.split_once(':')?;
+                    let bits = u32::from_str_radix(colour.trim_start_matches('#'), 16).ok()?;
+                    Some((
+                        group.parse().ok().filter(|group| *group > 0)?,
+                        [16, 8, 0].map(|shift| ((bits >> shift) & 255) as f32 / 255.0),
+                    ))
+                };
+                tint = Some(parsed().ok_or("--tint is GROUP:RRGGBB, GROUP 1 to 255")?);
+            }
+            "--tinted" => {
+                tinted = value()?
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|every| *every > 0)
+                    .ok_or("--tinted takes a whole number above 0")?;
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -140,6 +166,7 @@ fn arguments() -> Result<Arguments, String> {
         lights,
         lit,
         caster,
+        tint: tint.map(|(group, target)| (group, target, tinted)),
     })
 }
 
@@ -331,6 +358,7 @@ fn main() {
                         shadow_caster: arguments.caster,
                         ..SplatAppearance::default()
                     },
+                    splat_groups: Vec::new(),
                     asset: asset.asset.clone(),
                     transform: Transform {
                         translation: [x as f32, 0.0, z as f32],
@@ -388,11 +416,38 @@ fn main() {
             near: 0.05,
             far: 200.0,
         };
+        // The blinking figures' tints at `frame`: closed for a fifth of each
+        // second, opening and closing over the next fifths.
+        let blink = |frame: usize| -> Vec<RenderDiff> {
+            let Some((group, target, every)) = arguments.tint else {
+                return Vec::new();
+            };
+            let phase = (frame % FRAME_RATE as usize) as f32 / FRAME_RATE as f32;
+            let weight = (1.0 - (phase * 5.0 - 1.0).abs()).clamp(0.0, 1.0);
+            (0..count)
+                .step_by(every)
+                .map(|index| RenderDiff::SetSplatGroupTints {
+                    handle: RenderHandle::new(100 + index as u64),
+                    tints: if weight > 0.0 {
+                        vec![SplatGroupTint {
+                            group,
+                            target,
+                            weight,
+                        }]
+                    } else {
+                        Vec::new()
+                    },
+                })
+                .collect()
+        };
         let warm = (arguments.warm * FRAME_RATE).round() as usize;
         let mut frame = 0usize;
         let mut cpu = Vec::with_capacity(arguments.frames);
         for _ in 0..warm {
             frame += 1;
+            if arguments.tint.is_some() {
+                harness.apply(blink(frame));
+            }
             harness.at(frame as f64 / FRAME_RATE);
             harness.renderer.render_offscreen(&view, &harness.target);
         }
@@ -402,6 +457,9 @@ fn main() {
         for _ in 0..arguments.frames {
             let started = Instant::now();
             frame += 1;
+            if arguments.tint.is_some() {
+                harness.apply(blink(frame));
+            }
             harness.at(frame as f64 / FRAME_RATE);
             harness.renderer.render_offscreen(&view, &harness.target);
             cpu.push(started.elapsed().as_secs_f64() * 1000.0);

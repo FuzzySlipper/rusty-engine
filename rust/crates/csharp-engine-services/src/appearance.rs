@@ -1651,6 +1651,11 @@ struct AnimationInstance {
     /// The target and pose (the product's controls, then the ragdoll's layer)
     /// last sent to the renderer.
     pose_sent: Option<(RenderHandle, AnimatedMeshPose)>,
+    /// Its splats' Gaussian group tints (`SetSplatGroupTint`), each a
+    /// different group, in the order first set.
+    splat_groups: Vec<render_model::SplatGroupTint>,
+    /// The target and tints last sent to the renderer.
+    splat_groups_sent: Option<(RenderHandle, Vec<render_model::SplatGroupTint>)>,
 }
 
 #[derive(Clone)]
@@ -6411,6 +6416,48 @@ impl RuntimeAppearanceBridge {
         }
     }
 
+    fn set_splat_group_tint(
+        &mut self,
+        request: &NativeSplatGroupTintRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let tint = render_model::SplatGroupTint {
+            group: request.group,
+            target: [request.target.r, request.target.g, request.target.b],
+            weight: request.weight,
+        };
+        let refused =
+            |message: &str| CsharpEngineServicesError::new("CSHARP_SPLAT_GROUP_TINT", message);
+        if let Some(refusal) = tint.refusal() {
+            return Err(refused(refusal));
+        }
+        let tints = &mut self
+            .staged_mut()?
+            .state
+            .animation_instances
+            .get_mut(&request.instance.value)
+            .ok_or_else(|| {
+                CsharpEngineServicesError::new(
+                    "CSHARP_ANIMATION_INSTANCE",
+                    "animation instance is not live",
+                )
+            })?
+            .splat_groups;
+        match tints.iter().position(|held| held.group == tint.group) {
+            Some(at) if tint.weight == 0.0 => {
+                tints.remove(at);
+            }
+            Some(at) => tints[at] = tint,
+            None if tint.weight == 0.0 => {}
+            None if tints.len() < render_model::SPLAT_GROUP_TINTS_MAX => tints.push(tint),
+            None => {
+                return Err(refused(
+                    "an instance tints at most 8 Gaussian groups at once; clear one with weight 0 first",
+                ))
+            }
+        }
+        Ok(())
+    }
+
     fn create_animated_mesh_appearance(
         &mut self,
         request: NativeAnimatedMeshAppearanceRequest,
@@ -6484,6 +6531,8 @@ impl RuntimeAppearanceBridge {
                 ragdoll: None,
                 cuts: BTreeMap::new(),
                 pose_sent: None,
+                splat_groups: Vec::new(),
+                splat_groups_sent: None,
             },
         );
         Ok(NativeAnimationInstanceHandle { value: handle })
@@ -6594,6 +6643,18 @@ impl RuntimeAppearanceBridge {
                 render_model::RenderDiff::SetAnimatedMeshPose {
                     handle: target,
                     pose: AnimatedMeshPose::default(),
+                },
+            ]);
+            push_extra_frame(staged, frame);
+        }
+        if let Some((target, _)) = instance.splat_groups_sent.filter(|(target, tints)| {
+            !tints.is_empty()
+                && staged.state.projector.object_handle(instance.object_id) == Some(*target)
+        }) {
+            let frame = render_model::RenderFrameDiff::from_ops(vec![
+                render_model::RenderDiff::SetSplatGroupTints {
+                    handle: target,
+                    tints: Vec::new(),
                 },
             ]);
             push_extra_frame(staged, frame);
@@ -9544,6 +9605,20 @@ pub(crate) unsafe extern "C" fn set_splat_appearance(
         })
     })
 }
+pub(crate) unsafe extern "C" fn set_splat_group_tint(
+    context: *mut c_void,
+    request: *const NativeSplatGroupTintRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    appearance_operation(context, operation_error, || {
+        if context.is_null() || request.is_null() {
+            return 0;
+        }
+        animation_void(context, |bridge| {
+            bridge.set_splat_group_tint(unsafe { &*request })
+        })
+    })
+}
 pub(crate) unsafe extern "C" fn create_animated_mesh_appearance(
     context: *mut c_void,
     request: *const NativeAnimatedMeshAppearanceRequest,
@@ -9936,6 +10011,7 @@ pub(crate) fn animation_api(bridge: &mut RuntimeAppearanceBridge) -> NativeAnima
         replace_animated_mesh_appearance,
         set_mesh_inspection,
         set_splat_appearance,
+        set_splat_group_tint,
         update_animated_mesh_materials,
         update_animated_mesh_material_factors,
         destroy_appearance: destroy_animated_mesh_appearance,

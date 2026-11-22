@@ -42,6 +42,7 @@ fn splat_instance(handle: u64, asset: &AnimatedMeshAsset, translation: [f32; 3])
         parent: None,
         instance: AnimatedMeshInstanceDescriptor {
             splat: Default::default(),
+            splat_groups: Vec::new(),
             playback_fade: None,
             inspection: AnimatedMeshInspection::default(),
             asset: asset.asset.clone(),
@@ -493,6 +494,69 @@ fn the_splat_multiplier_scales_colour_in_linear_light() {
         [scaled(200, 0.5), scaled(100, 0.5), scaled(50, 0.25)],
         2,
     );
+}
+
+/// A tinted Gaussian group of one instance draws `lerp(baked, target,
+/// weight)` in display space; the instance's other Gaussians and another
+/// instance of the same resource draw as baked, and clearing the tints
+/// draws it baked again.
+#[test]
+fn a_tinted_group_draws_its_target_and_the_rest_draw_as_baked() {
+    let mut harness = Harness::new(RendererOptions::default());
+    // Left: group 3, red. Right: no group, green.
+    let figure = [
+        Gaussian {
+            group: 3,
+            ..Gaussian::round([-0.4, 0.0, 0.0], 0.1, [200, 40, 40, 255])
+        },
+        Gaussian::round([0.4, 0.0, 0.0], 0.1, [40, 200, 40, 255]),
+    ];
+    let asset = admit(&mut harness, "grouped", splat_glb(&figure, [0.0; 3]));
+    harness.apply(vec![
+        RenderDiff::DefineAnimatedMesh {
+            asset: asset.clone(),
+        },
+        // The tinted instance above the view's centre, the other below.
+        splat_instance(1, &asset, [0.0, 0.4, -3.0]),
+        splat_instance(2, &asset, [0.0, -0.4, -3.0]),
+    ]);
+    let focal = (HEIGHT as f32 / 2.0) / 30f32.to_radians().tan();
+    let reach = (focal * 0.4 / 3.0).round() as u32;
+    let (left, right) = (CENTRE.0 - reach, CENTRE.0 + reach);
+    let (upper, lower) = (CENTRE.1 - reach, CENTRE.1 + reach);
+    let tint = |weight: f32| RenderDiff::SetSplatGroupTints {
+        handle: RenderHandle::new(1),
+        tints: vec![
+            // A group the figure does not have changes nothing.
+            SplatGroupTint {
+                group: 7,
+                target: [1.0, 1.0, 1.0],
+                weight: 1.0,
+            },
+            SplatGroupTint {
+                group: 3,
+                target: [40.0 / 255.0, 40.0 / 255.0, 200.0 / 255.0],
+                weight,
+            },
+        ],
+    };
+    harness.apply(vec![tint(1.0)]);
+    let (_, rgba) = harness.render(&front());
+    assert_near(at(&rgba, (left, upper)), [40, 40, 200], 3);
+    assert_near(at(&rgba, (right, upper)), [40, 200, 40], 3);
+    assert_near(at(&rgba, (left, lower)), [200, 40, 40], 3);
+    assert_near(at(&rgba, (right, lower)), [40, 200, 40], 3);
+    // Half way, in display space as the colours are baked.
+    harness.apply(vec![tint(0.5)]);
+    let (_, rgba) = harness.render(&front());
+    assert_near(at(&rgba, (left, upper)), [120, 40, 120], 3);
+    assert_near(at(&rgba, (left, lower)), [200, 40, 40], 3);
+    harness.apply(vec![RenderDiff::SetSplatGroupTints {
+        handle: RenderHandle::new(1),
+        tints: Vec::new(),
+    }]);
+    let (_, rgba) = harness.render(&front());
+    assert_near(at(&rgba, (left, upper)), [200, 40, 40], 3);
 }
 
 /// On a pixel grid a figure draws in whole blocks anchored at its origin's

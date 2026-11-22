@@ -1330,7 +1330,15 @@ impl Renderer {
         }
         // Gaussian splats in their posed bounds.
         for &(glb_node, set) in &asset.splat_nodes {
-            let draw = splat_draw(instance, asset, glb_node, set, world, [1.0; 3]);
+            let draw = splat_draw(
+                instance,
+                asset,
+                glb_node,
+                set,
+                world,
+                [1.0; 3],
+                crate::splats::GroupTints::default(),
+            );
             bounds = bounds.union(&posed_splat_bounds(&asset.splat_sets[set], &draw));
         }
         let finite = bounds.min.is_finite() && bounds.max.is_finite();
@@ -1366,11 +1374,19 @@ impl Renderer {
                 _ => None,
             };
             let multiplier = appearance.map_or([1.0; 3], |appearance| appearance.multiplier);
+            let groups = match &node.kind {
+                NodeKind::AnimatedMesh(descriptor) => {
+                    crate::splats::GroupTints::of(&descriptor.splat_groups)
+                }
+                _ => crate::splats::GroupTints::default(),
+            };
             let mut bounds = Aabb::EMPTY;
             let mut sets = Vec::with_capacity(asset.splat_nodes.len());
             for &(glb_node, set) in &asset.splat_nodes {
                 let splat_set = &asset.splat_sets[set];
-                let draw = splat_draw(instance, asset, glb_node, set, node.world, multiplier);
+                let draw = splat_draw(
+                    instance, asset, glb_node, set, node.world, multiplier, groups,
+                );
                 bounds = bounds.union(&posed_splat_bounds(splat_set, &draw));
                 sets.push(draw);
             }
@@ -2017,6 +2033,7 @@ fn splat_draw(
     set: usize,
     world: Mat4,
     multiplier: [f32; 3],
+    groups: crate::splats::GroupTints,
 ) -> crate::splats::SplatDraw {
     let splat_set = &asset.splat_sets[set];
     let skin = asset.model.nodes[glb_node]
@@ -2065,6 +2082,7 @@ fn splat_draw(
         model,
         palette,
         multiplier,
+        groups,
     }
 }
 

@@ -239,6 +239,24 @@ pub struct NativeSplatAppearanceRequest {
     pub shadow_caster: NativeSplatShadowCaster,
 }
 
+/// Tints one Gaussian group of an animation instance's splats
+/// (`docs/splat-characters.md`): each Gaussian whose `_GROUP` is `group`
+/// draws `lerp(baked, target, weight)`, before lighting, the pixel grid and
+/// its palette, at its baked opacity. Other instances of the resource and
+/// the instance's other Gaussians draw as they did. The tint holds until
+/// changed; an instance tints at most 8 groups at once.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSplatGroupTintRequest {
+    pub instance: NativeAnimationInstanceHandle,
+    /// The `_GROUP` value of the Gaussians it tints, 1 to 255.
+    pub group: u8,
+    /// sRGB-encoded display colour, as `_COLOR`, 0 to 1 (alpha unread).
+    pub target: NativeColor,
+    /// 0 to 1; 0 clears the group's tint.
+    pub weight: f32,
+}
+
 /// How a splat appearance casts shadows.
 #[repr(u32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

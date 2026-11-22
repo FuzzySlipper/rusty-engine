@@ -420,6 +420,7 @@ fn animated_meshes_are_passed_by_unless_the_decal_asks() {
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
                 splat: Default::default(),
+                splat_groups: Vec::new(),
                 playback_fade: None,
                 inspection: AnimatedMeshInspection::default(),
                 asset: imported.asset.clone(),

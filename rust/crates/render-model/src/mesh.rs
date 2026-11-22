@@ -1498,6 +1498,10 @@ pub struct AnimatedMeshInstanceDescriptor {
     /// How its Gaussian splats draw, if its mesh has any.
     #[serde(default, skip_serializing_if = "SplatAppearance::is_default")]
     pub splat: SplatAppearance,
+    /// The tints of its splats' Gaussian groups (`_GROUP`), at most
+    /// `SPLAT_GROUP_TINTS_MAX`, each a different group.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub splat_groups: Vec<SplatGroupTint>,
     pub asset: String,
     pub transform: Transform,
     pub visible: bool,
@@ -1557,6 +1561,43 @@ pub struct SplatAppearance {
     /// default), as its own Gaussians, or as an ellipsoid per joint.
     #[serde(default, skip_serializing_if = "SplatShadowCaster::is_none")]
     pub shadow_caster: SplatShadowCaster,
+}
+
+/// The most Gaussian groups one splat instance tints at once.
+pub const SPLAT_GROUP_TINTS_MAX: usize = 8;
+
+/// One Gaussian group's tint on a splat instance
+/// (`docs/splat-characters.md`): each Gaussian whose `_GROUP` is `group`
+/// draws `lerp(baked, target, weight)`, before lighting and the pixel grid,
+/// its opacity as baked.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SplatGroupTint {
+    /// 1 to 255.
+    pub group: u8,
+    /// sRGB-encoded display colour, as `_COLOR`, 0 to 1.
+    pub target: [f32; 3],
+    /// Above 0 and at most 1.
+    pub weight: f32,
+}
+
+impl SplatGroupTint {
+    /// Why a tint is refused: group 0 (no group), or a target or weight
+    /// outside 0 to 1. A weight of 0 is the request that clears a tint.
+    pub fn refusal(&self) -> Option<&'static str> {
+        if self.group == 0 {
+            return Some("splat Gaussian groups are 1 to 255; 0 is no group");
+        }
+        if !self
+            .target
+            .iter()
+            .chain([&self.weight])
+            .all(|value| (0.0..=1.0).contains(value))
+        {
+            return Some("a splat group tint's target and weight are from 0 to 1");
+        }
+        None
+    }
 }
 
 /// How a splat instance casts shadows (`docs/splat-characters.md`).

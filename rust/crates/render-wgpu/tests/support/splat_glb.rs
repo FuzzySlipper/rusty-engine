@@ -1,6 +1,7 @@
 //! Splat GLBs written for the splat fixtures (`docs/splat-characters.md`):
 //! one node drawing one `POINTS` primitive of Gaussians with `POSITION`,
-//! `_ROTATION`, `_SCALE` and `_COLOR`, as an asset writer exports them.
+//! `_ROTATION`, `_SCALE` and `_COLOR` (and `_ALBEDO` and `_GROUP` when any
+//! Gaussian has one), as an asset writer exports them.
 
 use serde_json::json;
 
@@ -16,6 +17,8 @@ pub struct Gaussian {
     /// `_ALBEDO`, sRGB-encoded (alpha unread), written when any Gaussian
     /// of a GLB has one (its colour standing in for those without).
     pub albedo: Option<[u8; 4]>,
+    /// `_GROUP`, written when any Gaussian of a GLB is in a group.
+    pub group: u8,
 }
 
 impl Gaussian {
@@ -27,6 +30,7 @@ impl Gaussian {
             scale: [sigma; 3],
             color,
             albedo: None,
+            group: 0,
         }
     }
 }
@@ -70,6 +74,10 @@ pub fn splat_glb(gaussians: &[Gaussian], translation: [f32; 3]) -> Vec<u8> {
                 .collect(),
         )
     });
+    let groups = gaussians
+        .iter()
+        .any(|g| g.group != 0)
+        .then(|| push_view(&mut bin, gaussians.iter().map(|g| g.group).collect()));
     let mut min = [f32::MAX; 3];
     let mut max = [f32::MIN; 3];
     for gaussian in gaussians {
@@ -79,8 +87,13 @@ pub fn splat_glb(gaussians: &[Gaussian], translation: [f32; 3]) -> Vec<u8> {
         }
     }
     let mut attributes = json!({"POSITION": 0, "_ROTATION": 1, "_SCALE": 2, "_COLOR": 3});
+    let mut next = 4;
     if albedos.is_some() {
-        attributes["_ALBEDO"] = json!(4);
+        attributes["_ALBEDO"] = json!(next);
+        next += 1;
+    }
+    if groups.is_some() {
+        attributes["_GROUP"] = json!(next);
     }
     let mut document = json!({
         "asset": {"version": "2.0", "generator": "render-wgpu splat fixtures"},
@@ -109,6 +122,14 @@ pub fn splat_glb(gaussians: &[Gaussian], translation: [f32; 3]) -> Vec<u8> {
             .push(json!(
                 {"bufferView": view, "componentType": 5121, "normalized": true, "count": count,
                  "type": "VEC4"}
+            ));
+    }
+    if let Some(view) = groups {
+        document["accessors"]
+            .as_array_mut()
+            .expect("accessors")
+            .push(json!(
+                {"bufferView": view, "componentType": 5121, "count": count, "type": "SCALAR"}
             ));
     }
     glb(&document, &bin)

@@ -1157,6 +1157,11 @@ pub type NativeSetSplatAppearance = unsafe extern "C" fn(
     *const NativeSplatAppearanceRequest,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetSplatGroupTint = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSplatGroupTintRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCreateAnimatedMeshAppearance = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAnimatedMeshAppearanceRequest,
@@ -2009,6 +2014,7 @@ pub struct NativeAnimationApi {
     pub replace_animated_mesh_appearance: NativeReplaceAnimatedMeshAppearance,
     pub set_mesh_inspection: NativeSetAnimatedMeshInspection,
     pub set_splat_appearance: NativeSetSplatAppearance,
+    pub set_splat_group_tint: NativeSetSplatGroupTint,
     pub update_animated_mesh_materials: NativeUpdateAnimatedMeshMaterials,
     pub update_animated_mesh_material_factors: NativeUpdateAnimatedMeshMaterialFactors,
     pub destroy_appearance: NativeDestroyAppearance,

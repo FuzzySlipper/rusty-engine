@@ -61,6 +61,7 @@ fn animated(
         parent: parent.map(RenderHandle::new),
         instance: AnimatedMeshInstanceDescriptor {
             splat: Default::default(),
+            splat_groups: Vec::new(),
             playback_fade: None,
             inspection: AnimatedMeshInspection::default(),
             asset: asset.asset.clone(),

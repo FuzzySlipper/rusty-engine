@@ -73,6 +73,11 @@ struct Project {
     tint: vec4<f32>,
     // NDC to the target's pixels as the pass rasterises them: xy + ndc·zw.
     pixels: vec4<f32>,
+    // The instance's tinted Gaussian groups: x and y the groups a byte
+    // each, four to a word, lowest first; z how many (at most 8).
+    groups: vec4<u32>,
+    // Each tinted group's target, sRGB-encoded, in rgb and its weight in w.
+    group_tints: array<vec4<f32>, 8>,
 };
 
 // The indirect draw of a run's layer: 4 vertices per visible Gaussian.
@@ -114,7 +119,8 @@ const INVALID: u32 = 0xffffffffu;
 @group(1) @binding(1) var<storage, read> skins: array<vec2<u32>>;
 // What a lit run reads of a Gaussian: x its unit normal in the set's
 // space, octahedral (snorm16 pair); y its albedo (`_ALBEDO`), sRGB unorm8
-// rgb, its colour without baked shading.
+// rgb, its colour without baked shading, and in its top byte its group
+// (`_GROUP`, 0 for none), which a tinted instance reads.
 @group(1) @binding(2) var<storage, read> surfaces: array<vec2<u32>>;
 
 @group(0) @binding(10) var<uniform> sort: Sort;
@@ -244,6 +250,18 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     // opacity.
     if project.range.w == 1u {
         color = vec4<f32>(unpack4x8unorm(surfaces[index].y).rgb, color.a);
+    }
+    // A tinted group's Gaussians move toward its target, in display space as
+    // the colour is baked, at its weight.
+    if project.groups.z > 0u {
+        let group = surfaces[index].y >> 24u;
+        for (var tinted = 0u; group != 0u && tinted < project.groups.z; tinted = tinted + 1u) {
+            if ((project.groups[tinted / 4u] >> (8u * (tinted % 4u))) & 0xffu) == group {
+                let tint = project.group_tints[tinted];
+                color = vec4<f32>(mix(color.rgb, tint.rgb, tint.w), color.a);
+                break;
+            }
+        }
     }
     // The multiplier scales the colour in linear light; the layer keeps it
     // in display space.

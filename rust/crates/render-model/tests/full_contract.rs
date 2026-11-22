@@ -288,6 +288,7 @@ fn every_retained_operation_frame() -> RenderFrameDiff {
             parent: None,
             instance: AnimatedMeshInstanceDescriptor {
                 splat: Default::default(),
+                splat_groups: Vec::new(),
                 playback_fade: None,
                 inspection: Default::default(),
                 asset: animated_mesh.asset.clone(),

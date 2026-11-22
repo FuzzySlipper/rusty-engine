@@ -807,6 +807,11 @@ impl Renderer {
                     descriptor.splat = appearance.clone();
                 }
             }
+            RenderDiff::SetSplatGroupTints { handle, tints } => {
+                if let NodeKind::AnimatedMesh(descriptor) = &mut self.node_mut(*handle)?.kind {
+                    descriptor.splat_groups.clone_from(tints);
+                }
+            }
             // What an instance plays and its pose controls are the Engine's
             // to evaluate; the renderer draws the pose it evaluated.
             RenderDiff::SetAnimatedMeshPlayback { .. } | RenderDiff::SetAnimatedMeshPose { .. } => {
@@ -3697,6 +3702,7 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::CreateScatterPatch { .. } => "createScatterPatch",
         RenderDiff::SetAnimatedMeshInspection { .. } => "setAnimatedMeshInspection",
         RenderDiff::SetSplatAppearance { .. } => "setSplatAppearance",
+        RenderDiff::SetSplatGroupTints { .. } => "setSplatGroupTints",
         RenderDiff::SetAnimatedMeshPlayback { .. } => "setAnimatedMeshPlayback",
         RenderDiff::SetAnimatedMeshPose { .. } => "setAnimatedMeshPose",
         RenderDiff::SetEvaluatedPose { .. } => "setEvaluatedPose",

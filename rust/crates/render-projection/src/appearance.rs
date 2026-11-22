@@ -834,6 +834,7 @@ pub(crate) fn create_node(
             parent,
             instance: AnimatedMeshInstanceDescriptor {
                 splat: splat.clone(),
+                splat_groups: Vec::new(),
                 playback_fade: None,
                 inspection: inspection.clone(),
                 asset: asset.clone(),

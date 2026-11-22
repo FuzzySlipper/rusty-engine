@@ -721,8 +721,9 @@ impl RuntimeAppearanceBridge {
     }
 }
 
-/// Send each instance's pose to its current target when either changed.
-/// Runs as the call settles, after every other write of the call.
+/// Send each instance's pose, and its splat group tints, to its current
+/// target when either changed. Runs as the call settles, after every other
+/// write of the call.
 pub(super) fn settle_poses(
     staged: &mut RuntimeAppearanceCall,
 ) -> Result<(), CsharpEngineServicesError> {
@@ -734,6 +735,23 @@ pub(super) fn settle_poses(
         let Some(target) = state.projector.object_handle(instance.object_id) else {
             continue;
         };
+        let tints_changed = match &instance.splat_groups_sent {
+            Some((sent, tints)) if *sent == target => *tints != instance.splat_groups,
+            _ => !instance.splat_groups.is_empty(),
+        };
+        if tints_changed {
+            let tints = instance.splat_groups.clone();
+            ops.push(RenderDiff::SetSplatGroupTints {
+                handle: target,
+                tints: tints.clone(),
+            });
+            state
+                .animation_instances
+                .get_mut(&handle)
+                .expect("listed above")
+                .splat_groups_sent = Some((target, tints));
+        }
+        let instance = &state.animation_instances[&handle];
         let mut pose = instance.pose.clone();
         pose.clip_layers.clone_from(&instance.clip_layers);
         pose.layers.extend(instance.ragdoll.iter().cloned());
@@ -1809,5 +1827,87 @@ mod tests {
         assert_eq!(pose_ops(&bridge), [AnimatedMeshPose::default()]);
         assert!(bridge.read_animation_joint_pose(instance).is_err());
         end_call_posed(&mut bridge, &mut world, 0.25);
+    }
+
+    /// A group tint is held on its instance, sent as the call settles only
+    /// when it changed, refused past the cap, and cleared from a target the
+    /// instance leaves.
+    #[test]
+    fn splat_group_tints_are_held_sent_when_they_change_capped_and_cleared() {
+        let mut content_resources = BTreeMap::new();
+        content_resources.insert(
+            "body.glb".to_owned(),
+            crate::ContentBytes::from(CHARACTER_GLB),
+        );
+        let mut bridge =
+            RuntimeAppearanceBridge::new(RuntimeAppearanceCatalog::default(), content_resources);
+        let mut world = render_presentation::PresentationWorld::default();
+        bridge.begin_call();
+        let (instance, _) = character_for_test(&mut bridge);
+        let tint = |group: u8, weight: f32| NativeSplatGroupTintRequest {
+            instance,
+            group,
+            target: NativeColor {
+                r: 0.2,
+                g: 0.1,
+                b: 0.05,
+                a: 1.0,
+            },
+            weight,
+        };
+        let sent = |call: &RuntimeAppearanceCall| -> Vec<Vec<render_model::SplatGroupTint>> {
+            call.render_ops()
+                .into_iter()
+                .filter_map(|op| match op {
+                    RenderDiff::SetSplatGroupTints { tints, .. } => Some(tints),
+                    _ => None,
+                })
+                .collect()
+        };
+        for refused in [tint(0, 1.0), tint(1, 1.5), tint(1, f32::NAN)] {
+            let error = bridge.set_splat_group_tint(&refused).unwrap_err();
+            assert_eq!(error.code(), "CSHARP_SPLAT_GROUP_TINT");
+        }
+        for group in 1..=8 {
+            bridge.set_splat_group_tint(&tint(group, 0.5)).unwrap();
+        }
+        let capped = bridge.set_splat_group_tint(&tint(9, 0.5)).unwrap_err();
+        assert_eq!(capped.code(), "CSHARP_SPLAT_GROUP_TINT");
+        // A held group changes and clears; a cleared one frees its place.
+        bridge.set_splat_group_tint(&tint(8, 1.0)).unwrap();
+        bridge.set_splat_group_tint(&tint(1, 0.0)).unwrap();
+        bridge.set_splat_group_tint(&tint(9, 0.25)).unwrap();
+        let call = bridge.take_staged_call();
+        let tints = sent(&call);
+        assert_eq!(tints.len(), 1);
+        let groups: Vec<(u8, f32)> = tints[0].iter().map(|t| (t.group, t.weight)).collect();
+        assert_eq!(
+            groups,
+            [
+                (2, 0.5),
+                (3, 0.5),
+                (4, 0.5),
+                (5, 0.5),
+                (6, 0.5),
+                (7, 0.5),
+                (8, 1.0),
+                (9, 0.25)
+            ]
+        );
+        settle_call_posed(&mut bridge, call, &mut world, 0.0);
+
+        // Set again unchanged, it is not sent again.
+        bridge.begin_call();
+        bridge.set_splat_group_tint(&tint(9, 0.25)).unwrap();
+        let call = bridge.take_staged_call();
+        assert!(sent(&call).is_empty());
+        settle_call_posed(&mut bridge, call, &mut world, 0.0);
+
+        // Destroying the instance clears the tints it left on the target.
+        bridge.begin_call();
+        bridge.destroy_animation_instance(instance).unwrap();
+        let call = bridge.take_staged_call();
+        assert_eq!(sent(&call), [Vec::new()]);
+        settle_call_posed(&mut bridge, call, &mut world, 0.0);
     }
 }

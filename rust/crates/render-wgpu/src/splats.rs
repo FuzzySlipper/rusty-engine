@@ -183,6 +183,35 @@ pub(crate) struct SplatDraw {
     pub palette: Vec<[f32; 12]>,
     /// Linear-light colour multiplier (`SplatAppearance`).
     pub multiplier: [f32; 3],
+    /// Its instance's Gaussian group tints.
+    pub groups: GroupTints,
+}
+
+/// An instance's Gaussian group tints as its sets' projection reads them
+/// (`splats.wgsl` `Project.groups`, `group_tints`): the groups a byte each,
+/// four to a word, their count, and each one's sRGB target and weight.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct GroupTints {
+    ids: [u32; 2],
+    count: u32,
+    tints: [[f32; 4]; render_model::SPLAT_GROUP_TINTS_MAX],
+}
+
+impl GroupTints {
+    pub fn of(tints: &[render_model::SplatGroupTint]) -> Self {
+        let mut out = Self::default();
+        for (index, tint) in tints
+            .iter()
+            .take(render_model::SPLAT_GROUP_TINTS_MAX)
+            .enumerate()
+        {
+            out.ids[index / 4] |= u32::from(tint.group) << (8 * (index % 4));
+            let [r, g, b] = tint.target;
+            out.tints[index] = [r, g, b, tint.weight];
+            out.count += 1;
+        }
+        out
+    }
 }
 
 /// A set of a run, resolved for drawing.
@@ -813,6 +842,7 @@ impl Splats {
                         skin: [palette_first, u32::from(skinned), palette_first, 0],
                         tint: [1.0, 1.0, 1.0, 0.0],
                         pixels: [0.0; 4],
+                        groups: GroupTints::default(),
                     };
                     out.sets
                         .push((bytes.len() as u32, set.count, set.group.clone()));
@@ -1456,6 +1486,7 @@ impl Splats {
                     ],
                     tint: [r, g, b, 0.0],
                     pixels,
+                    groups: draw.groups,
                 };
                 sets.push(bytes.len() as u32);
                 bytes.extend_from_slice(&slot.bytes());
@@ -2221,6 +2252,7 @@ struct ProjectSlot {
     skin: [u32; 4],
     tint: [f32; 4],
     pixels: [f32; 4],
+    groups: GroupTints,
 }
 
 impl ProjectSlot {
@@ -2236,6 +2268,13 @@ impl ProjectSlot {
             slot.extend_from_slice(&value.to_le_bytes());
         }
         for value in self.tint.into_iter().chain(self.pixels) {
+            slot.extend_from_slice(&value.to_le_bytes());
+        }
+        let groups = self.groups;
+        for value in [groups.ids[0], groups.ids[1], groups.count, 0] {
+            slot.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in groups.tints.into_iter().flatten() {
             slot.extend_from_slice(&value.to_le_bytes());
         }
         slot.resize(PARAMS_SLOT as usize, 0);
@@ -2378,17 +2417,24 @@ fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<JointReach>)> {
     Some((words, bounds))
 }
 
-/// Each Gaussian's surface stream (`splats.wgsl` `surfaces`), what a lit
-/// run reads: its normal (`normal_words`), then its albedo as sRGB unorm8
-/// rgb (`_ALBEDO`, 0 without one). One stream of two words keeps the
-/// projection within a stage's eight storage buffers.
+/// Each Gaussian's surface stream (`splats.wgsl` `surfaces`): its normal
+/// (`normal_words`), which a lit run reads, then its albedo as sRGB unorm8
+/// rgb (`_ALBEDO`, 0 without one), which a lit run reads, and its group
+/// (`_GROUP`, 0 without one) in the top byte, which a tinted instance
+/// reads. One stream of two words keeps the projection within a stage's
+/// eight storage buffers.
 fn surface_words(splats: &GlbSplats) -> Vec<u32> {
     let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
     let albedo = |index: usize| {
-        splats.albedos.as_ref().map_or(0, |albedos| {
-            let color = albedos[index];
-            unorm(color[0]) | unorm(color[1]) << 8 | unorm(color[2]) << 16
-        })
+        let group = splats
+            .groups
+            .as_ref()
+            .map_or(0, |groups| u32::from(groups[index]));
+        group << 24
+            | splats.albedos.as_ref().map_or(0, |albedos| {
+                let color = albedos[index];
+                unorm(color[0]) | unorm(color[1]) << 8 | unorm(color[2]) << 16
+            })
     };
     normal_words(splats)
         .into_iter()
@@ -2534,6 +2580,7 @@ mod tests {
             colors: Vec::new(),
             normals: None,
             albedos: None,
+            groups: None,
             joints: None,
             weights: None,
         };
@@ -2623,6 +2670,7 @@ mod tests {
             colors: vec![[1.0; 4]; 2],
             normals: None,
             albedos: None,
+            groups: None,
             joints: Some(vec![[3, 0, 0, 0]; 2]),
             weights: Some(vec![[1.0, 0.0, 0.0, 0.0]; 2]),
         };
@@ -2699,6 +2747,7 @@ mod tests {
             model,
             palette: Vec::new(),
             multiplier: [1.0; 3],
+            groups: GroupTints::default(),
         };
         let draws = [draw(Mat4::IDENTITY), draw(shift)];
         let run = vec![
