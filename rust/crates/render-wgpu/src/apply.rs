@@ -272,6 +272,26 @@ impl Renderer {
             RenderDiff::RemoveFogVolume { id } => {
                 self.tables.fog_volumes.remove(id);
             }
+            RenderDiff::SetFogRegion { id, region } => {
+                if self.tables.fog_regions.len() < render_model::FogRegionDescriptor::MAX_REGIONS
+                    || self.tables.fog_regions.contains_key(id)
+                {
+                    self.tables.fog_regions.insert(*id, *region);
+                }
+            }
+            RenderDiff::RemoveFogRegion { id } => {
+                self.tables.fog_regions.remove(id);
+            }
+            RenderDiff::SetFogStirrer { id, stirrer } => {
+                if self.tables.fog_stirrers.len() < render_model::FogStirrerDescriptor::MAX_STIRRERS
+                    || self.tables.fog_stirrers.contains_key(id)
+                {
+                    self.tables.fog_stirrers.insert(*id, *stirrer);
+                }
+            }
+            RenderDiff::RemoveFogStirrer { id } => {
+                self.tables.fog_stirrers.remove(id);
+            }
             RenderDiff::SetDecal { id, decal } => self.decals.set(*id, *decal),
             RenderDiff::RemoveDecal { id } => self.decals.remove(*id),
             RenderDiff::SetDecalAtlas { atlas } => self.decals.set_atlas(atlas.clone()),
@@ -3679,6 +3699,10 @@ fn op_name(op: &RenderDiff) -> &'static str {
         RenderDiff::SetVolumetricFog { .. } => "setVolumetricFog",
         RenderDiff::SetFogVolume { .. } => "setFogVolume",
         RenderDiff::RemoveFogVolume { .. } => "removeFogVolume",
+        RenderDiff::SetFogRegion { .. } => "setFogRegion",
+        RenderDiff::RemoveFogRegion { .. } => "removeFogRegion",
+        RenderDiff::SetFogStirrer { .. } => "setFogStirrer",
+        RenderDiff::RemoveFogStirrer { .. } => "removeFogStirrer",
         RenderDiff::SetDecal { .. } => "setDecal",
         RenderDiff::RemoveDecal { .. } => "removeDecal",
         RenderDiff::SetDecalAtlas { .. } => "setDecalAtlas",

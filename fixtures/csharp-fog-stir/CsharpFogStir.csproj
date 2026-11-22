@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RustyEngineSdkPackageVersion>$(RustyEngineFixtureSdkVersion)</RustyEngineSdkPackageVersion>
+    <RustyEngineProductDefaultWorldLights>disabled</RustyEngineProductDefaultWorldLights>
+    <RustyEngineProductVolumetricFog>low</RustyEngineProductVolumetricFog>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+    <RustyEngineProductEntryType>CsharpFogStir.Product</RustyEngineProductEntryType>
+    <RustyEngineProductId>csharp-fog-stir</RustyEngineProductId>
+    <RustyEngineProductTitle>C# Fog Stir</RustyEngineProductTitle>
+    <RustyEngineProductUiRoot>$(MSBuildProjectDirectory)/product-ui</RustyEngineProductUiRoot>
+    <RustyEngineProductContentRoot>$(MSBuildProjectDirectory)/content</RustyEngineProductContentRoot>
+    <RustyEngineProductUiEntry>main.js</RustyEngineProductUiEntry>
+    <RustyEngineProductFixedStepHz>60</RustyEngineProductFixedStepHz>
+    <RustyEngineProductFixedStepMaxCatchUpSteps>4</RustyEngineProductFixedStepMaxCatchUpSteps>
+    <RustyEngineStagedProductDirectory>$(MSBuildProjectDirectory)/obj/Rusty.Engine/Product</RustyEngineStagedProductDirectory>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Rusty.Engine" Version="$(RustyEngineFixtureSdkVersion)" />
+  </ItemGroup>
+</Project>

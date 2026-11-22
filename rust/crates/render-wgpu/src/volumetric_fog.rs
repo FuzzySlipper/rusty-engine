@@ -16,14 +16,23 @@
 //! samples cell centres with no history. A reading beside the output's
 //! frames (a tool's capture, `FogView::reading`) lights against a matching
 //! view's history but keeps nothing.
+//!
+//! Fog regions (`fog_regions.rs`) add to the medium like fog volumes; the
+//! light pass reads their cells from the same row buffer as the volumes,
+//! after the volume and region rows, and an output frame moves the cells on
+//! before it lights them.
+
+use std::collections::BTreeMap;
 
 use render_model::{
-    FogVolumeDescriptor, FogVolumeShape, VolumetricFogDescriptor, VolumetricFogQuality,
+    FogRegionDescriptor, FogStirrerDescriptor, FogVolumeDescriptor, FogVolumeShape,
+    VolumetricFogDescriptor, VolumetricFogQuality,
 };
 
 use glam::{Mat4, Vec3};
 
 use crate::camera::CameraMatrices;
+use crate::fog_regions::{FogRegions, CELL_BYTES};
 use crate::timing::{GpuPassTiming, PassTimer};
 use crate::Gpu;
 
@@ -44,8 +53,13 @@ const CUT_SHARE: f32 = 0.1;
 const JITTER_PERIOD: u32 = 16;
 /// A view's history unused for this many fogged views is dropped.
 const HISTORY_KEPT: u64 = 240;
-/// `FogVolume`: six vectors.
-const VOLUME_BYTES: u64 = 96;
+/// `FogVolume`, and `FogRegion`: six vectors.
+const ROW_BYTES: u64 = 96;
+/// The volume rows, then the region rows; the regions' cells follow (a
+/// multiple of 256 bytes, so the cells bind at that offset).
+const REGION_ROWS_BYTE: u64 = ROW_BYTES * FogVolumeDescriptor::MAX_VOLUMES as u64;
+const FIRST_CELL_BYTE: u64 =
+    ROW_BYTES * (FogVolumeDescriptor::MAX_VOLUMES + FogRegionDescriptor::MAX_REGIONS) as u64;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 /// Cells across, down and deep at a quality.
@@ -68,6 +82,15 @@ pub(crate) struct FogView<'a> {
     pub reading: bool,
 }
 
+/// The scene's fog: its medium, fog volumes, fog regions and the stirrers
+/// moving them.
+pub(crate) struct FogScene<'a> {
+    pub medium: &'a VolumetricFogDescriptor,
+    pub volumes: &'a BTreeMap<u32, FogVolumeDescriptor>,
+    pub regions: &'a BTreeMap<u32, FogRegionDescriptor>,
+    pub stirrers: &'a BTreeMap<u32, FogStirrerDescriptor>,
+}
+
 /// What the finish pass needs to read a view's fog.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct FogLookup {
@@ -86,6 +109,11 @@ pub struct VolumetricFogReadout {
     pub grid: Option<[u32; 3]>,
     /// The fog volumes it took.
     pub volumes: u32,
+    /// The fog regions it took, their cells together, and the stirrers
+    /// moving them.
+    pub regions: u32,
+    pub region_cells: u32,
+    pub stirrers: u32,
 }
 
 /// A grid's views keep its textures.
@@ -131,7 +159,11 @@ pub(crate) struct VolumetricFog {
     light_layout: wgpu::BindGroupLayout,
     integrate_layout: wgpu::BindGroupLayout,
     params: wgpu::Buffer,
-    volumes: wgpu::Buffer,
+    /// The volume and region rows, then the regions' cells: as many as
+    /// `cell_capacity`.
+    rows: wgpu::Buffer,
+    cell_capacity: u64,
+    regions: FogRegions,
     grid: Option<Grid>,
     histories: Vec<History>,
     /// Fogged views drawn, for dropping unused histories.
@@ -143,6 +175,18 @@ pub(crate) struct VolumetricFog {
     timer: Option<PassTimer>,
     last_grid: Option<[u32; 3]>,
     last_volumes: u32,
+    last_regions: (u32, u32, u32),
+}
+
+fn rows_buffer(device: &wgpu::Device, cells: u64) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("render-wgpu fog rows"),
+        size: FIRST_CELL_BYTE + cells * CELL_BYTES,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
+        mapped_at_creation: false,
+    })
 }
 
 fn texture_3d(
@@ -168,9 +212,12 @@ fn texture_3d(
 }
 
 impl VolumetricFog {
+    /// `shader` lights and integrates the grid; `region_shader` moves the
+    /// fog regions' cells.
     pub fn new(
         gpu: &Gpu,
         shader: wgpu::ShaderModule,
+        region_shader: wgpu::ShaderModule,
         frame_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let device = &gpu.device;
@@ -290,6 +337,7 @@ impl VolumetricFog {
                 depth_or_array_layers: 1,
             },
         );
+        let regions = FogRegions::new(gpu, region_shader, refused.is_some());
         let buffer = |label, size, usage| {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
@@ -308,11 +356,9 @@ impl VolumetricFog {
                 PARAMS_BYTES,
                 wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             ),
-            volumes: buffer(
-                "render-wgpu fog volumes",
-                VOLUME_BYTES * FogVolumeDescriptor::MAX_VOLUMES as u64,
-                wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            ),
+            rows: rows_buffer(device, 0),
+            cell_capacity: 0,
+            regions,
             grid: None,
             histories: Vec::new(),
             views_drawn: 0,
@@ -329,6 +375,7 @@ impl VolumetricFog {
             timer: PassTimer::new(gpu, PASS),
             last_grid: None,
             last_volumes: 0,
+            last_regions: (0, 0, 0),
         }
     }
 
@@ -427,7 +474,7 @@ impl VolumetricFog {
                         },
                         wgpu::BindGroupEntry {
                             binding: 1,
-                            resource: self.volumes.as_entire_binding(),
+                            resource: self.rows.as_entire_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 2,
@@ -469,15 +516,95 @@ impl VolumetricFog {
         (index, frames)
     }
 
-    /// Whether a view would draw fog at `quality` with this medium and
-    /// this many volumes: the device takes it and there is fog to light.
-    pub fn would_draw(
-        &self,
-        quality: VolumetricFogQuality,
-        medium: &VolumetricFogDescriptor,
-        volumes: usize,
-    ) -> bool {
-        grid(quality).is_some() && self.pipelines.is_some() && (medium.density > 0.0 || volumes > 0)
+    /// Whether a view would draw fog at `quality` with this scene's fog:
+    /// the device takes it and there is fog to light.
+    pub fn would_draw(&self, quality: VolumetricFogQuality, scene: &FogScene<'_>) -> bool {
+        grid(quality).is_some()
+            && self.pipelines.is_some()
+            && (scene.medium.density > 0.0
+                || !scene.volumes.is_empty()
+                || !scene.regions.is_empty())
+    }
+
+    /// Lays the scene's regions out in the row buffer, growing it (and
+    /// starting the histories, which bind it, over) when they need more
+    /// cells than it holds; returns their rows.
+    fn lay_out_regions(
+        &mut self,
+        gpu: &Gpu,
+        regions: &BTreeMap<u32, FogRegionDescriptor>,
+    ) -> Vec<[f32; 24]> {
+        if !self.regions.available() {
+            return Vec::new();
+        }
+        let placed = crate::fog_regions::lay_out(regions);
+        if placed.is_empty() {
+            self.regions.clear();
+            return Vec::new();
+        }
+        let cells: u64 = placed
+            .iter()
+            .map(|placed| u64::from(placed.cells.iter().product::<u32>()))
+            .sum();
+        let grown = cells > self.cell_capacity;
+        if grown {
+            // Room for the scene's limit at once past a first small region,
+            // so growing happens at most twice.
+            self.cell_capacity = if self.cell_capacity == 0 {
+                cells
+            } else {
+                u64::from(FogRegionDescriptor::MAX_SCENE_CELLS)
+            };
+            self.rows = rows_buffer(&gpu.device, self.cell_capacity);
+            self.histories.clear();
+        }
+        self.regions.lay_out(
+            gpu,
+            &self.rows,
+            grown,
+            FIRST_CELL_BYTE,
+            self.cell_capacity,
+            placed,
+        );
+        self.regions
+            .placed()
+            .iter()
+            .map(|placed| {
+                let region = &placed.region;
+                let [cx, cy, cz] = region.center;
+                let [hx, hy, hz] = region.half_extents;
+                let [ar, ag, ab] = region.albedo;
+                let [er, eg, eb] = region.emission;
+                let [vx, vy, vz] = region.current;
+                let [nx, ny, nz] = placed.cells.map(|n| n as f32);
+                [
+                    cx,
+                    cy,
+                    cz,
+                    region.yaw_degrees.to_radians(),
+                    hx,
+                    hy,
+                    hz,
+                    placed.first as f32,
+                    region.density,
+                    region.edge,
+                    region.noise_scale,
+                    region.noise_strength,
+                    ar,
+                    ag,
+                    ab,
+                    nx,
+                    er,
+                    eg,
+                    eb,
+                    ny,
+                    vx,
+                    vy,
+                    vz,
+                    nz,
+                ]
+            })
+            .collect()
     }
 
     /// Lights and integrates a world view's fog into the grid before its
@@ -485,23 +612,26 @@ impl VolumetricFog {
     /// pass needs to read it; `None` when the view draws none (off, refused,
     /// or no medium and no volumes).
     #[allow(clippy::too_many_arguments)]
-    pub fn encode<'a>(
+    pub fn encode(
         &mut self,
         gpu: &Gpu,
         encoder: &mut wgpu::CommandEncoder,
         frame_group: &wgpu::BindGroup,
         view: FogView<'_>,
         quality: VolumetricFogQuality,
-        medium: &VolumetricFogDescriptor,
-        volumes: impl Iterator<Item = &'a FogVolumeDescriptor>,
+        scene: FogScene<'_>,
         time_seconds: f64,
         timed: bool,
     ) -> Option<FogLookup> {
         self.last_grid = None;
         self.last_volumes = 0;
+        self.last_regions = (0, 0, 0);
         let size = grid(quality)?;
         self.pipelines.as_ref()?;
-        let rows: Vec<[f32; 24]> = volumes
+        let medium = scene.medium;
+        let rows: Vec<[f32; 24]> = scene
+            .volumes
+            .values()
             .take(FogVolumeDescriptor::MAX_VOLUMES)
             .map(|volume| {
                 let [cx, cy, cz] = volume.center;
@@ -541,7 +671,8 @@ impl VolumetricFog {
                 ]
             })
             .collect();
-        if medium.density <= 0.0 && rows.is_empty() {
+        let region_rows = self.lay_out_regions(gpu, scene.regions);
+        if medium.density <= 0.0 && rows.is_empty() && region_rows.is_empty() {
             return None;
         }
         if let Some(timer) = &mut self.timer {
@@ -589,7 +720,7 @@ impl VolumetricFog {
             medium.ambient,
             // Presentation time wraps hourly, so noise keeps its precision.
             (time_seconds % 3600.0) as f32,
-            0.0,
+            region_rows.len() as f32,
             0.0,
         ];
         let temporal = history
@@ -608,7 +739,26 @@ impl VolumetricFog {
             .write_buffer(&self.params, 0, bytemuck::cast_slice(&params));
         if !rows.is_empty() {
             gpu.queue
-                .write_buffer(&self.volumes, 0, bytemuck::cast_slice(&rows));
+                .write_buffer(&self.rows, 0, bytemuck::cast_slice(&rows));
+        }
+        if !region_rows.is_empty() {
+            gpu.queue.write_buffer(
+                &self.rows,
+                REGION_ROWS_BYTE,
+                bytemuck::cast_slice(&region_rows),
+            );
+            // An output frame moves the cells on before lighting them; a
+            // reading draws them as they are.
+            if !view.reading {
+                self.regions.step(
+                    gpu,
+                    encoder,
+                    &self.rows,
+                    scene.stirrers.values(),
+                    time_seconds,
+                    timed,
+                );
+            }
         }
         let light_group = self.histories[index].light_group.clone();
         let grid = self.grid.as_ref().expect("made above");
@@ -677,6 +827,19 @@ impl VolumetricFog {
         }
         self.last_grid = Some(size);
         self.last_volumes = rows.len() as u32;
+        self.last_regions = (
+            region_rows.len() as u32,
+            self.regions
+                .placed()
+                .iter()
+                .map(|placed| placed.cells.iter().product::<u32>())
+                .sum(),
+            if region_rows.is_empty() {
+                0
+            } else {
+                scene.stirrers.len().min(FogStirrerDescriptor::MAX_STIRRERS) as u32
+            },
+        );
         Some(FogLookup {
             distance: medium.distance,
             slices: size[2],
@@ -697,12 +860,17 @@ impl VolumetricFog {
         if let Some(timer) = &mut self.timer {
             timer.submitted();
         }
+        self.regions.submitted();
     }
 
-    pub fn timing(&self) -> GpuPassTiming {
-        self.timer
-            .as_ref()
-            .map_or_else(|| crate::timing::untimed(PASS), PassTimer::readout)
+    /// The light and integrate passes', and the fog regions' step.
+    pub fn timings(&self) -> [GpuPassTiming; 2] {
+        [
+            self.timer
+                .as_ref()
+                .map_or_else(|| crate::timing::untimed(PASS), PassTimer::readout),
+            self.regions.timing(),
+        ]
     }
 
     pub fn readout(&self) -> VolumetricFogReadout {
@@ -710,6 +878,9 @@ impl VolumetricFog {
             refused: self.refused.clone(),
             grid: self.last_grid,
             volumes: self.last_volumes,
+            regions: self.last_regions.0,
+            region_cells: self.last_regions.1,
+            stirrers: self.last_regions.2,
         }
     }
 }

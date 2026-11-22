@@ -6,7 +6,7 @@
 //! and `shade` are importable modules (`#import rusty::lighting::standard_radiance`);
 //! `world`, `sky`, `shadow`, `effects`, `ghost`, `compose`,
 //! `ambient_occlusion`, `finish_pass`, `post`, `sky_light`, `light_clusters`,
-//! `cull`, `distance_field`, `volumetric_fog` and `upscale` are the entry shaders built
+//! `cull`, `distance_field`, `volumetric_fog`, `fog_region` and `upscale` are the entry shaders built
 //! from them.
 //! A material's features are shader defs, so a variant only carries the
 //! samples and branches its material uses.
@@ -498,6 +498,9 @@ pub enum Entry {
     /// Volumetric fog: a view's froxel grid lit and integrated
     /// (`volumetric_fog.wgsl`, compute).
     VolumetricFog,
+    /// Fog regions' cells moved one step by their flow and stirrers
+    /// (`fog_region.wgsl`, compute).
+    FogRegion,
     /// Scatter runs' copies selected into indirect draws by distance,
     /// thinning and the frustum (`scatter_select.wgsl`, compute).
     ScatterSelect,
@@ -583,6 +586,10 @@ impl Entry {
             Self::VolumetricFog => (
                 "shaders/volumetric_fog.wgsl",
                 include_str!("shaders/volumetric_fog.wgsl"),
+            ),
+            Self::FogRegion => (
+                "shaders/fog_region.wgsl",
+                include_str!("shaders/fog_region.wgsl"),
             ),
             Self::DistanceField => (
                 "shaders/distance_field.wgsl",
@@ -1058,6 +1065,7 @@ mod tests {
             Entry::ShadowRestore,
             Entry::Precipitation,
             Entry::VolumetricFog,
+            Entry::FogRegion,
             Entry::ScatterSelect,
             Entry::ImpostorBake,
             Entry::Hiz,

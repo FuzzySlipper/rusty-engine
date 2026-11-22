@@ -837,6 +837,9 @@ fn run() -> Result<(), String> {
                 "refused": gpu_readout.volumetric_fog.refused,
                 "grid": gpu_readout.volumetric_fog.grid,
                 "volumes": gpu_readout.volumetric_fog.volumes,
+                "regions": gpu_readout.volumetric_fog.regions,
+                "regionCells": gpu_readout.volumetric_fog.region_cells,
+                "stirrers": gpu_readout.volumetric_fog.stirrers,
             },
             "lightClusters": {
                 "enabled": gpu_readout.light_clusters.enabled,

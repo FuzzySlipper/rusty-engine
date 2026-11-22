@@ -162,6 +162,10 @@ pub(crate) struct RuntimeCameraViewCall {
     /// Cloud regions placed (`Some`) or removed (`None`) in call order.
     pub(crate) cloud_regions: Vec<(u32, Option<render_model::CloudRegionDescriptor>)>,
     pub(crate) fog_volumes: Vec<(u32, Option<render_model::FogVolumeDescriptor>)>,
+    /// Fog regions and stirrers placed (`Some`) or removed (`None`) in call
+    /// order.
+    pub(crate) fog_regions: Vec<(u32, Option<render_model::FogRegionDescriptor>)>,
+    pub(crate) fog_stirrers: Vec<(u32, Option<render_model::FogStirrerDescriptor>)>,
     pub(crate) precipitation: Option<Option<PrecipitationDescriptor>>,
     /// The image effect as the product asked for it; its resources are
     /// resolved when the frame is built.
@@ -375,6 +379,8 @@ impl RuntimeCameraViewBridge {
             volumetric_fog: None,
             cloud_regions: Vec::new(),
             fog_volumes: Vec::new(),
+            fog_regions: Vec::new(),
+            fog_stirrers: Vec::new(),
             precipitation: None,
             image_effect: None,
             decals: Vec::new(),
@@ -1589,6 +1595,77 @@ impl RuntimeCameraViewBridge {
         Ok(())
     }
 
+    fn set_fog_region(
+        &mut self,
+        request: NativeFogRegionRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let vec3 = |value: NativeVec3| [value.x, value.y, value.z];
+        let region = render_model::FogRegionDescriptor {
+            center: vec3(request.center),
+            half_extents: vec3(request.half_extents),
+            yaw_degrees: request.yaw_degrees,
+            cell_size: request.cell_size,
+            density: request.density,
+            albedo: vec3(request.albedo),
+            emission: vec3(request.emission),
+            edge: request.edge.clamp(0.0, 1.0),
+            noise_scale: request.noise_scale,
+            noise_strength: request.noise_strength.clamp(0.0, 1.0),
+            current: vec3(request.current),
+            settle_seconds: request.settle_seconds,
+        };
+        if !region.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_FOG_REGION",
+                "a fog region needs finite values: half extents, cell size and settle seconds above 0, a non-negative density, albedo, emission and noise scale, and at most 128 cells along an axis and 131072 in all",
+            ));
+        }
+        self.staged_mut()?
+            .fog_regions
+            .push((request.id, Some(region)));
+        Ok(())
+    }
+
+    fn remove_fog_region(
+        &mut self,
+        request: NativeFogRegionRemoval,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.staged_mut()?.fog_regions.push((request.id, None));
+        Ok(())
+    }
+
+    fn set_fog_stirrer(
+        &mut self,
+        request: NativeFogStirrerRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        let vec3 = |value: NativeVec3| [value.x, value.y, value.z];
+        let stirrer = render_model::FogStirrerDescriptor {
+            position: vec3(request.position),
+            velocity: vec3(request.velocity),
+            radius: request.radius,
+            push: request.push.clamp(0.0, 1.0),
+            clear: request.clear.clamp(0.0, 1.0),
+        };
+        if !stirrer.valid() {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_FOG_STIRRER",
+                "a fog stirrer needs a finite position and velocity and a radius above 0",
+            ));
+        }
+        self.staged_mut()?
+            .fog_stirrers
+            .push((request.id, Some(stirrer)));
+        Ok(())
+    }
+
+    fn remove_fog_stirrer(
+        &mut self,
+        request: NativeFogStirrerRemoval,
+    ) -> Result<(), CsharpEngineServicesError> {
+        self.staged_mut()?.fog_stirrers.push((request.id, None));
+        Ok(())
+    }
+
     fn set_image_effect(
         &mut self,
         request: NativeImageEffectRequest,
@@ -2165,6 +2242,24 @@ pub(crate) fn environment_frame(
                 volume: *volume,
             },
             None => RenderDiff::RemoveFogVolume { id: *id },
+        });
+    }
+    for (id, region) in &call.fog_regions {
+        operations.push(match region {
+            Some(region) => RenderDiff::SetFogRegion {
+                id: *id,
+                region: *region,
+            },
+            None => RenderDiff::RemoveFogRegion { id: *id },
+        });
+    }
+    for (id, stirrer) in &call.fog_stirrers {
+        operations.push(match stirrer {
+            Some(stirrer) => RenderDiff::SetFogStirrer {
+                id: *id,
+                stirrer: *stirrer,
+            },
+            None => RenderDiff::RemoveFogStirrer { id: *id },
         });
     }
     if let Some(request) = call.decal_atlas {
@@ -3183,6 +3278,90 @@ pub(crate) unsafe extern "C" fn remove_fog_volume(
     }
     let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
     match bridge.remove_fog_volume(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_fog_region(
+    context: *mut c_void,
+    request: *const NativeFogRegionRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_fog_region(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn remove_fog_region(
+    context: *mut c_void,
+    request: *const NativeFogRegionRemoval,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.remove_fog_region(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn set_fog_stirrer(
+    context: *mut c_void,
+    request: *const NativeFogStirrerRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.set_fog_stirrer(unsafe { *request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn remove_fog_stirrer(
+    context: *mut c_void,
+    request: *const NativeFogStirrerRemoval,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeCameraViewBridge>() };
+    match bridge.remove_fog_stirrer(unsafe { *request }) {
         Ok(()) => ABI_OK,
         Err(error) => {
             bridge.operation_diagnostics.retain(&error, operation_error);

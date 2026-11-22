@@ -997,6 +997,10 @@ pub(crate) struct Tables {
     /// (`volumetric_fog.rs`).
     pub volumetric_fog: render_model::VolumetricFogDescriptor,
     pub fog_volumes: std::collections::BTreeMap<u32, render_model::FogVolumeDescriptor>,
+    /// The fog regions the volumetric fog moves, and the stirrers moving
+    /// them (`fog_regions.rs`).
+    pub fog_regions: std::collections::BTreeMap<u32, render_model::FogRegionDescriptor>,
+    pub fog_stirrers: std::collections::BTreeMap<u32, render_model::FogStirrerDescriptor>,
     /// The precipitation around the camera (`precipitation.rs`).
     pub precipitation: Option<render_model::PrecipitationDescriptor>,
     /// The image effect over each primary view (`image_effect.rs`).
@@ -1082,6 +1086,8 @@ impl Tables {
             cloud_regions: std::collections::BTreeMap::new(),
             volumetric_fog: render_model::VolumetricFogDescriptor::DEFAULT,
             fog_volumes: std::collections::BTreeMap::new(),
+            fog_regions: std::collections::BTreeMap::new(),
+            fog_stirrers: std::collections::BTreeMap::new(),
             precipitation: None,
             image_effect: None,
             indirect_light: None,

@@ -97,7 +97,8 @@ milliseconds of each renderer pass that is timed, in the frames that draw it,
 with the adapter's compute limits beside them:
 - the compute passes: `gpu-cull`, `occluder-select`, `occlusion` (the
   pyramid), `scatter-select`, `backdrop-scatter-select`,
-  `light-clusters`, `volumetric-fog`, the ambient occlusion passes
+  `light-clusters`, `volumetric-fog`, `fog-regions`
+  ([fog regions](lighting-and-sky.md#fog-regions-and-stirrers)), the ambient occlusion passes
   (`ao-prepass`, `ao-occlusion`, `ao-blur`) and a frame's share of building
   [the sky's light](lighting-and-sky.md#the-skys-light) (`sky-light`);
 - the occluder depth pass, `occlusion-depth`

@@ -652,6 +652,123 @@ impl FogVolumeDescriptor {
     }
 }
 
+/// A fog region (`CameraView.SetFogRegion`): a box of mist, like a box fog
+/// volume, whose medium the Engine moves. It keeps a grid of cells
+/// `cell_size` metres across over the box, each holding a flow and a
+/// density factor that rests at 1. The flow carries both, so a stirrer
+/// (`FogStirrerDescriptor`) passing through parts and clears the mist and
+/// leaves a wake the flow carries off; over `settle_seconds` the density
+/// refills and the flow returns to `current`. The region's noise drifts
+/// with `current` and bends where the flow strays from it. It is lit and
+/// added to the medium like a fog volume; positions are in the renderer's
+/// world space.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FogRegionDescriptor {
+    pub center: [f32; 3],
+    /// Half the size along each axis, metres (above 0).
+    pub half_extents: [f32; 3],
+    /// Turn about the vertical axis, degrees.
+    pub yaw_degrees: f32,
+    /// One cell's size, metres (above 0); at most `MAX_CELLS_PER_AXIS` cells
+    /// along each axis and `MAX_CELLS` in all.
+    pub cell_size: f32,
+    /// Extinction per metre at rest (0 or more).
+    pub density: f32,
+    /// The colour it scatters, linear (0 or more a channel).
+    pub albedo: [f32; 3],
+    /// Light it gives off per unit of density, linear (0 or more a channel).
+    pub emission: [f32; 3],
+    /// The share of the half extent over which the edge fades (0 to 1).
+    pub edge: f32,
+    /// The size of one noise cell, metres (0: no noise).
+    pub noise_scale: f32,
+    /// How much the noise thins it (0 to 1).
+    pub noise_strength: f32,
+    /// The flow at rest, metres per second.
+    pub current: [f32; 3],
+    /// How long a disturbance takes to settle, seconds (above 0): about two
+    /// thirds of it is gone after this long.
+    pub settle_seconds: f32,
+}
+
+impl FogRegionDescriptor {
+    /// The most fog regions a scene holds.
+    pub const MAX_REGIONS: usize = 8;
+    /// The most cells along one axis of a region.
+    pub const MAX_CELLS_PER_AXIS: u32 = 128;
+    /// The most cells in one region.
+    pub const MAX_CELLS: u32 = 131_072;
+    /// The most cells in a scene's regions together; regions past it, in id
+    /// order, are not drawn.
+    pub const MAX_SCENE_CELLS: u32 = 262_144;
+
+    /// Its cells along each axis: enough to cover the box, at least 2.
+    pub fn cells(&self) -> [u32; 3] {
+        self.half_extents.map(|half| {
+            (2.0 * half / self.cell_size)
+                .ceil()
+                .clamp(2.0, u32::MAX as f32) as u32
+        })
+    }
+
+    /// Finite values: half extents, cell size and settle time above 0; a
+    /// non-negative density, albedo, emission and noise scale; an edge and
+    /// noise strength within `0..=1`; and cells within a region's limits.
+    pub fn valid(&self) -> bool {
+        let finite = |values: &[f32]| values.iter().all(|value| value.is_finite());
+        let values = finite(&self.center)
+            && finite(&self.current)
+            && self.yaw_degrees.is_finite()
+            && self.half_extents.iter().all(|&half| positive(half))
+            && positive(self.cell_size)
+            && positive(self.settle_seconds)
+            && non_negative(self.density)
+            && self.albedo.iter().all(|&channel| non_negative(channel))
+            && self.emission.iter().all(|&channel| non_negative(channel))
+            && (0.0..=1.0).contains(&self.edge)
+            && non_negative(self.noise_scale)
+            && (0.0..=1.0).contains(&self.noise_strength);
+        values && {
+            let cells = self.cells();
+            cells.iter().all(|&n| n <= Self::MAX_CELLS_PER_AXIS)
+                && cells.iter().product::<u32>() <= Self::MAX_CELLS
+        }
+    }
+}
+
+/// A fog stirrer (`CameraView.SetFogStirrer`): a moving body in the fog
+/// regions it overlaps, a sphere of `radius` metres at `position` moving at
+/// `velocity` (metres per second, as the product knows it). `push`, from 0
+/// to 1, is how strongly it drags the flow round it, so the mist parts
+/// ahead and swirls in behind; `clear`, from 0 to 1, how much it empties
+/// the mist inside it, leaving a wake that fills back in. A still stirrer
+/// that clears is a clear pocket.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FogStirrerDescriptor {
+    pub position: [f32; 3],
+    pub velocity: [f32; 3],
+    /// Metres (above 0).
+    pub radius: f32,
+    pub push: f32,
+    pub clear: f32,
+}
+
+impl FogStirrerDescriptor {
+    /// The most fog stirrers a scene holds.
+    pub const MAX_STIRRERS: usize = 32;
+
+    /// Finite values, a radius above 0, and a push and clear within `0..=1`.
+    pub fn valid(&self) -> bool {
+        self.position.iter().all(|value| value.is_finite())
+            && self.velocity.iter().all(|value| value.is_finite())
+            && positive(self.radius)
+            && (0.0..=1.0).contains(&self.push)
+            && (0.0..=1.0).contains(&self.clear)
+    }
+}
+
 /// What falls in a precipitation volume (`PrecipitationDescriptor`): thin
 /// streaks stretched along their velocity (rain), or round flakes facing
 /// the camera (snow, ash, glitter).
@@ -1607,6 +1724,24 @@ pub enum RenderDiff {
     RemoveFogVolume {
         id: u32,
     },
+    /// Places or replaces fog region `id`.
+    SetFogRegion {
+        id: u32,
+        region: FogRegionDescriptor,
+    },
+    /// Removes fog region `id`.
+    RemoveFogRegion {
+        id: u32,
+    },
+    /// Places or moves fog stirrer `id`.
+    SetFogStirrer {
+        id: u32,
+        stirrer: FogStirrerDescriptor,
+    },
+    /// Removes fog stirrer `id`.
+    RemoveFogStirrer {
+        id: u32,
+    },
     /// Places or replaces decal `id`.
     SetDecal {
         id: u64,
@@ -1853,6 +1988,10 @@ impl RenderFrameDiff {
                 | RenderDiff::SetVolumetricFog { .. }
                 | RenderDiff::SetFogVolume { .. }
                 | RenderDiff::RemoveFogVolume { .. }
+                | RenderDiff::SetFogRegion { .. }
+                | RenderDiff::RemoveFogRegion { .. }
+                | RenderDiff::SetFogStirrer { .. }
+                | RenderDiff::RemoveFogStirrer { .. }
                 | RenderDiff::SetDecal { .. }
                 | RenderDiff::RemoveDecal { .. }
                 | RenderDiff::SetDecalAtlas { .. }

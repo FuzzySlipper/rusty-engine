@@ -41,6 +41,7 @@ mod draw_args;
 mod driver;
 mod effects;
 mod finish;
+mod fog_regions;
 mod frame;
 mod ghost;
 mod glb;
@@ -922,6 +923,11 @@ impl Renderer {
                 Entry::VolumetricFog,
                 Features::default(),
             )),
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::FogRegion,
+                Features::default(),
+            )),
             &layouts.frame,
         );
         let precipitation = precipitation::Precipitation::new(
@@ -1425,10 +1431,9 @@ impl Renderer {
                         timing::PassTimer::readout,
                     ),
                     self.light_clusters.timing(),
-                    self.volumetric_fog.timing(),
-                    self.culling.timing(),
-                    self.culling.selection_timing(),
                 ])
+                .chain(self.volumetric_fog.timings())
+                .chain([self.culling.timing(), self.culling.selection_timing()])
                 .chain(self.occlusion.timings())
                 .chain([
                     self.scatter_select.timing(),
@@ -1518,9 +1523,11 @@ impl Renderer {
     }
 
     /// Whether the scene has fog for volumetric fog to light: a medium with
-    /// density, or fog volumes.
+    /// density, fog volumes or fog regions.
     pub fn has_volumetric_fog(&self) -> bool {
-        self.tables.volumetric_fog.density > 0.0 || !self.tables.fog_volumes.is_empty()
+        self.tables.volumetric_fog.density > 0.0
+            || !self.tables.fog_volumes.is_empty()
+            || !self.tables.fog_regions.is_empty()
     }
 
     pub fn set_indirect_light(&mut self, indirect_light: Option<IndirectLightDescriptor>) {

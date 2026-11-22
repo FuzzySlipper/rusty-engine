@@ -157,6 +157,8 @@ struct RetainedGraphics {
     volumetric_fog: Option<VolumetricFogDescriptor>,
     cloud_regions: BTreeMap<u32, CloudRegionDescriptor>,
     fog_volumes: BTreeMap<u32, FogVolumeDescriptor>,
+    fog_regions: BTreeMap<u32, render_model::FogRegionDescriptor>,
+    fog_stirrers: BTreeMap<u32, render_model::FogStirrerDescriptor>,
     decals: BTreeMap<u64, render_model::DecalDescriptor>,
     decal_atlas: Option<render_model::DecalAtlasDescriptor>,
     precipitation: Option<PrecipitationDescriptor>,
@@ -575,6 +577,10 @@ impl PresentationWorld {
                 || matches!(&op, RenderDiff::SetVolumetricFog { fog } if self.retained.volumetric_fog.as_ref() == Some(fog))
                 || matches!(&op, RenderDiff::SetFogVolume { id, volume } if self.retained.fog_volumes.get(id) == Some(volume))
                 || matches!(&op, RenderDiff::RemoveFogVolume { id } if !self.retained.fog_volumes.contains_key(id))
+                || matches!(&op, RenderDiff::SetFogRegion { id, region } if self.retained.fog_regions.get(id) == Some(region))
+                || matches!(&op, RenderDiff::RemoveFogRegion { id } if !self.retained.fog_regions.contains_key(id))
+                || matches!(&op, RenderDiff::SetFogStirrer { id, stirrer } if self.retained.fog_stirrers.get(id) == Some(stirrer))
+                || matches!(&op, RenderDiff::RemoveFogStirrer { id } if !self.retained.fog_stirrers.contains_key(id))
                 || matches!(&op, RenderDiff::SetDecal { id, decal } if self.retained.decals.get(id) == Some(decal))
                 || matches!(&op, RenderDiff::RemoveDecal { id } if !self.retained.decals.contains_key(id))
                 || matches!(&op, RenderDiff::SetDecalAtlas { atlas } if &self.retained.decal_atlas == atlas)
@@ -869,6 +875,8 @@ impl PresentationWorld {
             volumetric_fog,
             cloud_regions,
             fog_volumes,
+            fog_regions,
+            fog_stirrers,
             decals,
             decal_atlas,
             precipitation,
@@ -1039,6 +1047,8 @@ impl PresentationWorld {
                 volumetric_fog: *volumetric_fog,
                 cloud_regions: cloud_regions.clone(),
                 fog_volumes: fog_volumes.clone(),
+                fog_regions: fog_regions.clone(),
+                fog_stirrers: fog_stirrers.clone(),
                 decals: decals.clone(),
                 decal_atlas: decal_atlas.clone(),
                 precipitation: *precipitation,
@@ -1215,6 +1225,18 @@ impl PresentationWorld {
             ops.push(RenderDiff::SetFogVolume {
                 id: *id,
                 volume: *volume,
+            });
+        }
+        for (id, region) in &self.retained.fog_regions {
+            ops.push(RenderDiff::SetFogRegion {
+                id: *id,
+                region: *region,
+            });
+        }
+        for (id, stirrer) in &self.retained.fog_stirrers {
+            ops.push(RenderDiff::SetFogStirrer {
+                id: *id,
+                stirrer: *stirrer,
             });
         }
         if self.retained.decal_atlas.is_some() {
@@ -1960,6 +1982,18 @@ impl PresentationWorld {
             }
             RenderDiff::RemoveFogVolume { id } => {
                 self.retained.fog_volumes.remove(id);
+            }
+            RenderDiff::SetFogRegion { id, region } => {
+                self.retained.fog_regions.insert(*id, *region);
+            }
+            RenderDiff::RemoveFogRegion { id } => {
+                self.retained.fog_regions.remove(id);
+            }
+            RenderDiff::SetFogStirrer { id, stirrer } => {
+                self.retained.fog_stirrers.insert(*id, *stirrer);
+            }
+            RenderDiff::RemoveFogStirrer { id } => {
+                self.retained.fog_stirrers.remove(id);
             }
             RenderDiff::SetDecal { id, decal } => {
                 self.retained.decals.insert(*id, *decal);

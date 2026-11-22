@@ -2808,15 +2808,21 @@ impl Renderer {
         }
     }
 
+    /// The scene's fog, as the volumetric fog lights it.
+    fn fog_scene(&self) -> crate::volumetric_fog::FogScene<'_> {
+        crate::volumetric_fog::FogScene {
+            medium: &self.tables.volumetric_fog,
+            volumes: &self.tables.fog_volumes,
+            regions: &self.tables.fog_regions,
+            stirrers: &self.tables.fog_stirrers,
+        }
+    }
+
     /// How far the volumetric fog a world view draws reaches, when it draws
     /// some.
     fn volumetric_fog_reach(&self) -> Option<f32> {
         self.volumetric_fog
-            .would_draw(
-                self.options.volumetric_fog,
-                &self.tables.volumetric_fog,
-                self.tables.fog_volumes.len(),
-            )
+            .would_draw(self.options.volumetric_fog, &self.fog_scene())
             .then_some(self.tables.volumetric_fog.distance)
     }
 
@@ -4753,8 +4759,12 @@ impl Renderer {
                     reading: self.reading,
                 },
                 self.options.volumetric_fog,
-                &self.tables.volumetric_fog,
-                self.tables.fog_volumes.values(),
+                crate::volumetric_fog::FogScene {
+                    medium: &self.tables.volumetric_fog,
+                    volumes: &self.tables.fog_volumes,
+                    regions: &self.tables.fog_regions,
+                    stirrers: &self.tables.fog_stirrers,
+                },
                 self.presentation_time,
                 world_layer,
             )

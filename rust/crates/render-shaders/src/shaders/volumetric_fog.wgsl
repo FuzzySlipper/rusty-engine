@@ -1,7 +1,9 @@
 // Volumetric fog (render-wgpu `volumetric_fog.rs`): a froxel grid over a
 // world view, its cells spaced quadratically in distance from the camera
 // out to the medium's reach. `cs_light` gives each cell its fog (the medium,
-// thinning with height, plus every fog volume it stands in) and the light
+// thinning with height, plus every fog volume and fog region it stands in;
+// a region's density and flow come from its cells, which
+// `fog_region.wgsl` moves) and the light
 // that fog scatters toward the camera: every light row of the pass through
 // its shadows, the sun and moon through the cloud layer, and the ambient and
 // sky light, weighted by a Henyey–Greenstein phase. `cs_integrate` walks each
@@ -29,7 +31,7 @@ struct FogParams {
     // rgb: the medium's albedo; w: the phase's anisotropy.
     albedo: vec4<f32>,
     // x: the share of ambient and sky light scattered; y: the Engine's
-    // presentation time, seconds.
+    // presentation time, seconds; z: fog regions.
     extra: vec4<f32>,
     // The previous frame's view-projection and eye, for reprojection.
     prev_view_proj: mat4x4<f32>,
@@ -54,7 +56,9 @@ struct FogVolume {
 };
 
 @group(1) @binding(0) var<uniform> fog: FogParams;
-@group(1) @binding(1) var<storage, read> volumes: array<FogVolume>;
+// Six rows a fog volume (`MAX_VOLUMES` of them), then six a fog region
+// (`MAX_REGIONS`), then the regions' cells (`fog_regions.rs`).
+@group(1) @binding(1) var<storage, read> rows: array<vec4<f32>>;
 @group(1) @binding(2) var scatter_out: texture_storage_3d<rgba16float, write>;
 @group(1) @binding(3) var scatter_in: texture_3d<f32>;
 @group(1) @binding(4) var integrated_out: texture_storage_3d<rgba16float, write>;
@@ -93,6 +97,105 @@ fn value_noise(p: vec3<f32>) -> f32 {
 // Two octaves, 0 to 1.
 fn fog_noise(p: vec3<f32>) -> f32 {
     return 0.65 * value_noise(p) + 0.35 * value_noise(p * 2.03 + vec3<f32>(17.0, 3.0, 29.0));
+}
+
+const MAX_VOLUMES: u32 = 64u;
+const MAX_REGIONS: u32 = 8u;
+const ROWS: u32 = 6u;
+const FIRST_CELL: u32 = (MAX_VOLUMES + MAX_REGIONS) * ROWS;
+// The period over which a region's noise follows its flow before it starts
+// over (two phases half a period apart, crossfaded), seconds.
+const FLOW_PERIOD: f32 = 1.5;
+
+fn volume_at(index: u32) -> FogVolume {
+    let at = index * ROWS;
+    return FogVolume(rows[at], rows[at + 1u], rows[at + 2u], rows[at + 3u], rows[at + 4u], rows[at + 5u]);
+}
+
+struct FogRegion {
+    // xyz: centre; w: turn about the vertical, radians.
+    center: vec4<f32>,
+    // xyz: half extents; w: its first cell.
+    half_first: vec4<f32>,
+    // x: density at rest, y: the edge's share of the half extent, z: one
+    // noise cell's size (0: none), w: the noise's strength.
+    density: vec4<f32>,
+    // rgb: albedo; w: cells across.
+    albedo: vec4<f32>,
+    // rgb: emission; w: cells up.
+    emission: vec4<f32>,
+    // xyz: the current, metres per second; w: cells along.
+    current: vec4<f32>,
+};
+
+fn region_at(index: u32) -> FogRegion {
+    let at = (MAX_VOLUMES + index) * ROWS;
+    return FogRegion(rows[at], rows[at + 1u], rows[at + 2u], rows[at + 3u], rows[at + 4u], rows[at + 5u]);
+}
+
+// Region `r`'s cells at `local` (region space, metres), trilinear, clamped
+// to its outer cells: the flow and the density factor.
+fn region_cells(r: FogRegion, local: vec3<f32>) -> vec4<f32> {
+    let half = r.half_first.xyz;
+    let counts = vec3<u32>(u32(r.albedo.w), u32(r.emission.w), u32(r.current.w));
+    let n = vec3<f32>(counts);
+    let g = clamp((local + half) / (2.0 * half) * n - 0.5, vec3<f32>(0.0), n - 1.0);
+    let low = vec3<u32>(floor(g));
+    let high = min(low + 1u, counts - 1u);
+    let f = g - floor(g);
+    let nx = counts.x;
+    let nxy = counts.x * counts.y;
+    let base = FIRST_CELL + u32(r.half_first.w);
+    let c000 = rows[base + low.x + nx * low.y + nxy * low.z];
+    let c100 = rows[base + high.x + nx * low.y + nxy * low.z];
+    let c010 = rows[base + low.x + nx * high.y + nxy * low.z];
+    let c110 = rows[base + high.x + nx * high.y + nxy * low.z];
+    let c001 = rows[base + low.x + nx * low.y + nxy * high.z];
+    let c101 = rows[base + high.x + nx * low.y + nxy * high.z];
+    let c011 = rows[base + low.x + nx * high.y + nxy * high.z];
+    let c111 = rows[base + high.x + nx * high.y + nxy * high.z];
+    return mix(
+        mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
+        mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y),
+        f.z,
+    );
+}
+
+// Fog region `r`'s density at `p`: its density at rest fading over its
+// edge, times its cells' density factor, thinned by noise that drifts with
+// the current and follows the flow where it strays from the current.
+fn region_density(r: FogRegion, p: vec3<f32>) -> f32 {
+    let offset = p - r.center.xyz;
+    let c = cos(r.center.w);
+    let s = sin(r.center.w);
+    let local = vec3<f32>(c * offset.x - s * offset.z, offset.y, s * offset.x + c * offset.z);
+    let q = local / r.half_first.xyz;
+    let inside = 1.0 - max(abs(q.x), max(abs(q.y), abs(q.z)));
+    if inside <= 0.0 {
+        return 0.0;
+    }
+    let cell = region_cells(r, local);
+    var density = r.density.x * smoothstep(0.0, max(r.density.y, 1e-3), inside) * cell.w;
+    if r.density.z > 0.0 && density > 0.0 {
+        let time = fog.extra.y;
+        let drifted = p - r.current.xyz * time;
+        let stray = cell.xyz - r.current.xyz;
+        var n: f32;
+        if dot(stray, stray) < 1e-4 {
+            n = fog_noise(drifted / r.density.z);
+        } else {
+            // A flow map: two samples carried along the stray flow, each
+            // restarting every period, crossfaded so neither restart shows;
+            // both meet the plain drift as the stray flow goes.
+            let phase = fract(time / FLOW_PERIOD);
+            let other = fract(phase + 0.5);
+            let a = fog_noise((drifted - stray * phase * FLOW_PERIOD) / r.density.z);
+            let b = fog_noise((drifted - stray * other * FLOW_PERIOD) / r.density.z);
+            n = mix(b, a, 1.0 - abs(1.0 - 2.0 * phase));
+        }
+        density = density * (1.0 - r.density.w * (1.0 - n));
+    }
+    return density;
 }
 
 // Fog volume `v`'s density at `p`: full inside, fading over its edge,
@@ -212,12 +315,22 @@ fn cs_light(@builtin(global_invocation_id) id: vec3<u32>) {
     var scattering = fog.albedo.rgb * density;
     var emission = vec3<f32>(0.0);
     for (var index = 0u; index < fog.grid.w; index = index + 1u) {
-        let volume = volumes[index];
+        let volume = volume_at(index);
         let amount = volume_density(volume, p);
         if amount > 0.0 {
             density += amount;
             scattering += volume.albedo.rgb * amount;
             emission += volume.emission.rgb * amount;
+        }
+    }
+    let regions = u32(fog.extra.z);
+    for (var index = 0u; index < regions; index = index + 1u) {
+        let region = region_at(index);
+        let amount = region_density(region, p);
+        if amount > 0.0 {
+            density += amount;
+            scattering += region.albedo.rgb * amount;
+            emission += region.emission.rgb * amount;
         }
     }
     var current = vec4<f32>(0.0);

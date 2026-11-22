@@ -733,6 +733,70 @@ pub struct NativeFogVolumeRemoval {
     pub id: u32,
 }
 
+/// A fog region, placed or replaced by `id`: a box of mist the Engine moves,
+/// in the renderer's world space (as a fog volume's centre). `half_extents`
+/// (above 0), turned `yaw_degrees` about the vertical, is covered by cells
+/// `cell_size` metres across (above 0; at most 128 along an axis and
+/// 131,072 in all), each holding a flow and a density factor resting at 1.
+/// The flow carries both, so a fog stirrer passing through parts and
+/// clears the mist and leaves a wake the flow carries off; over
+/// `settle_seconds` (above 0) the density refills and the flow returns to
+/// `current` (metres per second). `density` at rest, `albedo`, `emission`,
+/// `edge` (0 to 1, clamped) and noise as a fog volume's; the noise drifts
+/// with the current and bends where the flow strays from it. At most 8
+/// regions, and 262,144 cells together: regions past that, in id order,
+/// are not drawn.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeFogRegionRequest {
+    pub id: u32,
+    pub center: NativeVec3,
+    pub half_extents: NativeVec3,
+    pub yaw_degrees: f32,
+    pub cell_size: f32,
+    pub density: f32,
+    /// Linear RGB.
+    pub albedo: NativeVec3,
+    /// Linear RGB light per unit of density.
+    pub emission: NativeVec3,
+    pub edge: f32,
+    pub noise_scale: f32,
+    pub noise_strength: f32,
+    pub current: NativeVec3,
+    pub settle_seconds: f32,
+}
+
+/// Removes fog region `id`; removing one not placed does nothing.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeFogRegionRemoval {
+    pub id: u32,
+}
+
+/// A fog stirrer, placed or moved by `id`: a body moving through the fog
+/// regions it overlaps, a sphere of `radius` metres (above 0) at
+/// `position`, moving at `velocity` metres per second. `push` (0 to 1,
+/// clamped) drags the flow along and around it, so the mist parts ahead and
+/// swirls into its wake; `clear` (0 to 1, clamped) empties the mist inside
+/// it. A product moves it each step its body moves. At most 32 stirrers.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeFogStirrerRequest {
+    pub id: u32,
+    pub position: NativeVec3,
+    pub velocity: NativeVec3,
+    pub radius: f32,
+    pub push: f32,
+    pub clear: f32,
+}
+
+/// Removes fog stirrer `id`; removing one not placed does nothing.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeFogStirrerRemoval {
+    pub id: u32,
+}
+
 /// The star field in the sky: the stars of `catalogue`, a resource opened
 /// from a `.stars.json` file (`{"format": "rusty.stars.v1", "stars": [[x,
 /// y, z, magnitude, r, g, b], ...]}`: toward each star in the catalogue's

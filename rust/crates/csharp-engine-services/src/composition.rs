@@ -237,6 +237,10 @@ fn engine_api(
             set_volumetric_fog: crate::camera_view::set_volumetric_fog,
             set_fog_volume: crate::camera_view::set_fog_volume,
             remove_fog_volume: crate::camera_view::remove_fog_volume,
+            set_fog_region: crate::camera_view::set_fog_region,
+            remove_fog_region: crate::camera_view::remove_fog_region,
+            set_fog_stirrer: crate::camera_view::set_fog_stirrer,
+            remove_fog_stirrer: crate::camera_view::remove_fog_stirrer,
             set_decal: crate::camera_view::set_decal,
             remove_decal: crate::camera_view::remove_decal,
             set_decal_atlas: crate::camera_view::set_decal_atlas,
@@ -3999,6 +4003,102 @@ mod tests {
                 ] if fog.density == 0.02 && fog.falloff_height == 20.0
                     && volume.half_extents == [4.0, 2.0, 4.0]
                     && volume.shape == render_model::FogVolumeShape::Box
+            ),
+            "{ops:?}"
+        );
+    }
+
+    /// Fog regions and stirrers publish in call order; a region with too
+    /// many cells along an axis and a stirrer without a radius are refused.
+    #[test]
+    fn fog_regions_and_stirrers_publish_in_call_order_and_bad_values_are_refused() {
+        use crate::operation_diagnostics::{empty_receipt, receipt_codes};
+        let mut services = EngineServiceSet::new(
+            parse_runtime_appearance_catalog(None).expect("default catalog"),
+            BTreeMap::new(),
+            None,
+            RuntimeDiagnosticsSink::new(Default::default()).unwrap(),
+        )
+        .expect("service set");
+        services.begin_call(binding());
+        let api = services.api();
+        let vec3 = |x, y, z| NativeVec3 { x, y, z };
+        // A 30 x 6 x 4 m sump at quarter-metre cells: 120 x 24 x 16.
+        let region = |id, cell_size| NativeFogRegionRequest {
+            id,
+            center: vec3(0.0, 3.0, 0.0),
+            half_extents: vec3(15.0, 3.0, 2.0),
+            yaw_degrees: 0.0,
+            cell_size,
+            density: 0.6,
+            albedo: vec3(0.6, 0.6, 0.65),
+            emission: vec3(0.0, 0.0, 0.0),
+            edge: 2.0,
+            noise_scale: 1.5,
+            noise_strength: 0.5,
+            current: vec3(0.3, 0.0, 0.0),
+            settle_seconds: 3.0,
+        };
+        let stirrer = |id, radius| NativeFogStirrerRequest {
+            id,
+            position: vec3(-10.0, 1.0, 0.0),
+            velocity: vec3(3.0, 0.0, 0.0),
+            radius,
+            push: 0.8,
+            clear: 1.5,
+        };
+        unsafe {
+            let view = &api.camera_view;
+            assert_eq!(
+                (view.set_fog_region)(view.context, &region(1, 0.25), std::ptr::null_mut()),
+                ABI_OK
+            );
+            assert_eq!(
+                (view.set_fog_stirrer)(view.context, &stirrer(7, 0.6), std::ptr::null_mut()),
+                ABI_OK
+            );
+            assert_eq!(
+                (view.remove_fog_stirrer)(
+                    view.context,
+                    &NativeFogStirrerRemoval { id: 7 },
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+            assert_eq!(
+                (view.remove_fog_region)(
+                    view.context,
+                    &NativeFogRegionRemoval { id: 1 },
+                    std::ptr::null_mut()
+                ),
+                ABI_OK
+            );
+            // 30 m at 0.2 m is 150 cells along x.
+            let mut refusal = empty_receipt();
+            assert_eq!(
+                (view.set_fog_region)(view.context, &region(2, 0.2), &mut refusal),
+                0
+            );
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_FOG_REGION"]);
+            let mut refusal = empty_receipt();
+            assert_eq!(
+                (view.set_fog_stirrer)(view.context, &stirrer(8, 0.0), &mut refusal),
+                0
+            );
+            assert_eq!(receipt_codes(&refusal), ["CSHARP_FOG_STIRRER"]);
+        }
+        let mut call = services.finish_call().expect("fog call");
+        let ops = &call.take_output().frames[0].ops;
+        assert!(
+            matches!(
+                ops.as_slice(),
+                [
+                    render_model::RenderDiff::SetFogRegion { id: 1, region },
+                    render_model::RenderDiff::RemoveFogRegion { id: 1 },
+                    render_model::RenderDiff::SetFogStirrer { id: 7, stirrer },
+                    render_model::RenderDiff::RemoveFogStirrer { id: 7 },
+                ] if region.cells() == [120, 24, 16] && region.edge == 1.0
+                    && stirrer.clear == 1.0 && stirrer.velocity == [3.0, 0.0, 0.0]
             ),
             "{ops:?}"
         );

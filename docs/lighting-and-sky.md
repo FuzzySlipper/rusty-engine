@@ -1939,9 +1939,82 @@ engine.CameraView.RemoveFogVolume(new(1));
   a pixel.
 - It needs compute shaders on a GPU: a device without them, or a software
   adapter, refuses the setting (`NoComputeShaders`, `SoftwareAdapter`) and
-  draws the analytic fog alone. Off, or on with no medium and no volumes, it
-  draws exactly as without it. The medium and the volumes are retained
-  camera-view state, kept by a rebaseline and recorded by a scene snapshot.
+  draws the analytic fog alone. Off, or on with no medium, volumes or
+  regions, it draws exactly as without it. The medium, the volumes, and the
+  fog regions and stirrers below are retained camera-view state, kept by a
+  rebaseline and recorded by a scene snapshot.
+
+### Fog regions and stirrers
+
+Mist that moves where something passes: a sump whose mist parts around a
+creature and closes into a swirling wake behind it, or a pocket kept clear
+around a lantern. A fog region is a box of mist like a box fog volume, but
+the Engine keeps a grid of cells over it, each with a flow and a density
+factor that rests at 1, and moves them every frame. Stirrers are moving
+bodies the product places in it.
+
+```csharp
+// A 30 x 6 x 4 m sump at quarter-metre cells (120 x 24 x 16), drifting along +x.
+engine.CameraView.SetFogRegion(new(Id: 1, Center: new(0, 3, 0), HalfExtents: new(15, 3, 2),
+    YawDegrees: 0, CellSize: .25f, Density: .45f, Albedo: new(.62f, .64f, .7f),
+    Emission: Vector3.Zero, Edge: .08f, NoiseScale: 1.4f, NoiseStrength: .55f,
+    Current: new(.35f, 0, 0), SettleSeconds: 3));
+// Each step a foe moves: where it is, how fast it goes, how big it is.
+engine.CameraView.SetFogStirrer(new(Id: 7, Position: foe, Velocity: foeVelocity, Radius: .7f,
+    Push: .8f, Clear: .7f));
+engine.CameraView.RemoveFogStirrer(new(7));
+engine.CameraView.RemoveFogRegion(new(1));
+```
+
+- **A region** (`SetFogRegion`, at most 8, by `Id`): `Density` at rest,
+  `Albedo`, `Emission`, `Edge` and the noise as a fog volume's, turned
+  `YawDegrees` about the vertical. `CellSize` (above 0) sets its cells: at
+  most 128 along an axis and 131,072 in all, or the call is refused; all
+  regions together hold at most 262,144, and a region that would go past
+  that, in id order, is not drawn. `Current` (metres per second) is the
+  flow at rest: it carries the noise as a fog volume's `NoiseVelocity`
+  does. Over `SettleSeconds` (above 0; about two thirds gone after that
+  long) a disturbance settles: density refills to 1 and the flow returns
+  to the current.
+- **A stirrer** (`SetFogStirrer`, at most 32 in the scene, by `Id`) is a
+  sphere of `Radius` metres at `Position` moving at `Velocity`, which the
+  product gives; it acts on every region it overlaps. `Push` (0 to 1)
+  drags the flow toward the flow round a moving sphere out to three radii:
+  forward ahead of it and behind it, backward at its sides, so the mist
+  parts ahead and swirls in behind. `Clear` (0 to 1) empties the mist
+  inside it. Inside it the flow is the current, so the hole it clears stays
+  where it was made, a wake trailing it that fills back in as it settles.
+  A still stirrer that clears is a clear pocket. A product moves its
+  stirrers each step its bodies move; an unchanged one is not sent again.
+- **The noise follows the flow.** Where a region's flow strays from its
+  current (in a wake, around a body), its noise is carried along with it, so
+  a passing body bends and swirls the detail already there, not only the
+  density.
+- **The light.** The froxel pass adds a region to the medium like a fog
+  volume and lights it the same way: the lantern and point lights scatter in
+  it through their shadows, and its own `Emission` glows. Positions are in
+  the renderer's world space, so a product places a region in a separate
+  space as it places that space's fog volumes.
+- **How it moves.** Each output frame a compute step, timed as
+  `fog-regions`, moves every region's cells on by the time since the last
+  frame (at most 1/20 s): each cell takes what its flow brought from
+  upstream, from the rest state beyond the region, settles, and is dragged
+  and cleared by the stirrers within reach. A region placed anew, or moved,
+  turned, resized or given a new cell size, starts at rest; changing its
+  density, colours, noise, current or settle time keeps its cells. A
+  reading (a tool's capture, a snapshot render) draws the cells as they are
+  and moves nothing, so the output's frames are the same with or without
+  one. The cells cost 16 bytes each, twice (the step reads a copy); the
+  scene's limit is 8 MiB.
+- **Cost.** The step costs per cell and stirrer and does not follow the
+  froxel grid or the output size; the light pass reads a region's cells
+  only in the froxels inside its box, which then cost about as a box fog
+  volume's do, plus a second noise sample where the flow strays from the
+  current. A sump-sized region with a few stirrers adds a few thousandths of
+  a millisecond on a desktop GPU at either quality.
+- It draws with the volumetric fog, at its quality, and is refused with it
+  (a software adapter, a device without compute shaders). `fixtures/csharp-fog-stir`
+  shows a body crossing a sump under a sweeping lantern.
 
 ## The backdrop
 

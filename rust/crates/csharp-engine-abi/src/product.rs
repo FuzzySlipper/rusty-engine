@@ -1512,6 +1512,26 @@ pub type NativeRemoveFogVolume = unsafe extern "C" fn(
     *const NativeFogVolumeRemoval,
     *mut crate::NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetFogRegion = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeFogRegionRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeRemoveFogRegion = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeFogRegionRemoval,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeSetFogStirrer = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeFogStirrerRequest,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeRemoveFogStirrer = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeFogStirrerRemoval,
+    *mut crate::NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeSetImageEffect = unsafe extern "C" fn(
     *mut c_void,
     *const NativeImageEffectRequest,
@@ -2124,6 +2144,10 @@ pub struct NativeCameraViewApi {
     pub set_volumetric_fog: NativeSetVolumetricFog,
     pub set_fog_volume: NativeSetFogVolume,
     pub remove_fog_volume: NativeRemoveFogVolume,
+    pub set_fog_region: NativeSetFogRegion,
+    pub remove_fog_region: NativeRemoveFogRegion,
+    pub set_fog_stirrer: NativeSetFogStirrer,
+    pub remove_fog_stirrer: NativeRemoveFogStirrer,
     pub set_decal: NativeSetDecal,
     pub remove_decal: NativeRemoveDecal,
     pub set_decal_atlas: NativeSetDecalAtlas,
