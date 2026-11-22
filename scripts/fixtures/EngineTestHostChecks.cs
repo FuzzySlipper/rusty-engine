@@ -292,6 +292,7 @@ internal static class EngineTestHostChecks
         DeferredCollisionResidency(host);
         DeferredCollisionNavigation(host);
         SurfaceCrawler(host);
+        SurfaceNavigation(host);
         DeferredContentResidency(host);
         Bundles(library);
     }
@@ -489,6 +490,110 @@ internal static class EngineTestHostChecks
         ExpectRefusal(() => engine.Spatial.ProposeCrawlerStep(new(session, position, motion, config with { Radius = 0 },
             new(Vector3.Zero, true, 1f / 60, ++sequence))), "invalid-crawler-config");
     });
+
+    /// <summary>
+    /// A surface grid over a room whose floor and side walls a trench cuts in two, joined only by
+    /// the ceiling: derived on a worker, it routes floor, wall, ceiling, wall, floor and a crawler
+    /// follows the route; planar requests refuse it, the grid list names its kind, and the edge
+    /// explanation names the corner a shelf over a lip blocks.
+    /// </summary>
+    private static void SurfaceNavigation(EngineTestHost host)
+    {
+        const ulong Grid = 21;
+        SpatialSession? session = null;
+        host.Call(engine =>
+        {
+            session = engine.Spatial.CreateSession(new(1, 8, VoxelSurfaceMode.GreedyCubes));
+            var room = new List<VoxelEdit>();
+            for (int x = -4; x <= 3; x++)
+                for (int y = 0; y <= 5; y++)
+                    for (int z = -4; z <= 3; z++)
+                    {
+                        bool inside = x >= -3 && x <= 2 && y >= 1 && y <= 4 && z >= -3 && z <= 2;
+                        bool trench = x is -1 or 0 && y < 5;
+                        if (!inside && !trench) room.Add(new(VoxelEditKind.Set, new(x, y, z), 1));
+                    }
+            engine.Voxel.ApplyEdits(new(session, room.ToArray()));
+            SurfaceNavigationConfig config = engine.Spatial.DefaultSurfaceNavigationConfig() with { GridId = Grid };
+            Require(config.CellSize == 1 && config.WallCost == 2 && config.CeilingCost == 3, $"default surface navigation config: {config}");
+            SurfaceNavigationReplaceReceipt pending = engine.Spatial.ReplaceSurfaceNavigation(new(session, new(-3, 1, -3), new(3, 5, 3), config, true));
+            Require(pending.Pending && pending.SurfaceCellCount == 0, $"a deferred surface grid: {pending}");
+        });
+        SurfaceNavigationReadout installed = default;
+        for (int call = 0; ; call++)
+        {
+            host.Call(engine => installed = engine.Spatial.ReadSurfaceNavigation(new(session!, Grid)));
+            if (!installed.Pending) break;
+            Require(call < 20_000, "The deferred surface grid never installed.");
+            System.Threading.Thread.Sleep(1);
+        }
+        host.Call(engine =>
+        {
+            Require(!installed.Refused && installed.Installed.SurfaceCellCount > 0 && installed.Installed.ComponentCount == 1,
+                $"the installed surface grid: {installed}");
+            SurfaceNavigationPathResult route = engine.Spatial.RequestSurfaceNavigationPath(new(session!, Grid,
+                new(-2.5f, 1.27f, 0.5f), new(2.5f, 1.27f, 0.5f), 10_000));
+            SurfaceWaypoint[] waypoints = route.Waypoints.ToArray();
+            var runs = new List<CrawlerSurface>();
+            foreach (SurfaceWaypoint waypoint in waypoints)
+                if (runs.Count == 0 || runs[^1] != waypoint.Surface) runs.Add(waypoint.Surface);
+            Require(route.Outcome == SurfaceNavigationPathOutcome.Reached
+                    && runs.SequenceEqual(new[] { CrawlerSurface.Floor, CrawlerSurface.Wall, CrawlerSurface.Ceiling, CrawlerSurface.Wall, CrawlerSurface.Floor }),
+                $"the route across the trench: {route.Outcome} {string.Join(",", runs)}");
+
+            // Phase 1's movement follows it, leaning into a waypoint's surface round a concave corner.
+            CrawlerConfig crawler = engine.Spatial.DefaultCrawlerConfig();
+            Vector3 position = waypoints[0].Position;
+            CrawlerMotion motion = default;
+            var crossed = new List<CrawlerSurface>();
+            int next = 1;
+            for (ulong sequence = 1; sequence <= 3000 && next < waypoints.Length; sequence++)
+            {
+                Vector3 toward = waypoints[next].Position - position;
+                if (toward.Length() < (next + 1 == waypoints.Length ? 0.1f : 0.35f)) { next++; continue; }
+                Vector3 direction = Vector3.Normalize(toward), normal = waypoints[next].Normal;
+                if (Vector3.Dot(normal, motion.Up) < 0.9f && Vector3.Dot(normal, position - waypoints[next].Position) >= -1e-3f)
+                    direction -= normal;
+                CrawlerStepReceipt step = engine.Spatial.ProposeCrawlerStep(new(session!, position, motion, crawler, new(direction, true, 1f / 60, sequence)));
+                position = step.Position;
+                motion = step.Motion;
+                if (step.Surface != CrawlerSurface.None && (crossed.Count == 0 || crossed[^1] != step.Surface)) crossed.Add(step.Surface);
+            }
+            Require(next == waypoints.Length && crossed.SequenceEqual(runs), $"followed to {position}: {string.Join(",", crossed)}");
+
+            ExpectRefusal(() => engine.Spatial.RequestNavigationPath(new(session!, new(-3, 1, 0), new(-2, 1, 0), 100, Grid)), "navigation-grid-is-surface");
+            NavigationGridInfo listed = engine.Spatial.ReadNavigationGrids(new(session!)).ToArray().Single();
+            Require(listed.GridId == Grid && listed.Kind == NavigationProjectionKind.CollisionSurface
+                    && listed.WalkableCellCount == installed.Installed.SurfaceCellCount, $"the grid list: {listed}");
+            engine.Spatial.ClearNavigation(new(session!, Grid));
+            Require(engine.Spatial.RequestSurfaceNavigationPath(new(session!, Grid, waypoints[0].Position, waypoints[^1].Position, 100)).Outcome
+                    == SurfaceNavigationPathOutcome.Unavailable, "a cleared surface grid is unavailable");
+            session!.Dispose();
+
+            // A step a metre high for x >= 0, and a shelf beside its lip that the ball cannot round.
+            using SpatialSession step = engine.Spatial.CreateSession(new(1, 8, VoxelSurfaceMode.GreedyCubes));
+            var voxels = new List<VoxelEdit>();
+            for (int x = -6; x < 6; x++)
+                for (int z = -3; z < 3; z++)
+                {
+                    voxels.Add(new(VoxelEditKind.Set, new(x, 0, z), 1));
+                    if (x >= 0) voxels.Add(new(VoxelEditKind.Set, new(x, 1, z), 1));
+                    if (x == -1) voxels.Add(new(VoxelEditKind.Set, new(x, 2, z), 1));
+                }
+            engine.Voxel.ApplyEdits(new(step, voxels.ToArray()));
+            engine.Spatial.ReplaceSurfaceNavigation(new(step, new(-3, 0, -1), new(3, 4, 2), engine.Spatial.DefaultSurfaceNavigationConfig() with { GridId = Grid }, false));
+            SurfaceCell top = new(0, 2, 0, SurfaceFace.PositiveY), side = new(-1, 1, 0, SurfaceFace.NegativeX);
+            SurfaceNavigationCellReadout cell = engine.Spatial.ExplainSurfaceNavigationCell(new(step, Grid, top));
+            Require(cell.Outcome == SurfaceCellOutcome.Surface && cell.Admitted && cell.Surface == CrawlerSurface.Floor
+                    && cell.SurfaceContact.SourceKind == CharacterCollisionSourceKind.VoxelChunk, $"the lip's top: {cell}");
+            SurfaceNavigationEdgeReadout corner = engine.Spatial.ExplainSurfaceNavigationEdge(new(step, Grid, top, side));
+            Require(corner.Kind == SurfaceEdgeKind.Convex && corner.Outcome == SurfaceEdgeOutcome.Blocked && !corner.Admitted
+                    && corner.CornerPresent && Near(corner.Corner, new(0, 2, 0.5f)) && corner.Blocker.Present && corner.Blocker.Point.Y >= 2 - 1e-4f,
+                $"the blocked lip: {corner}");
+            ExpectRefusal(() => engine.Spatial.ReplaceSurfaceNavigation(new(step, new(-3, 0, -1), new(3, 4, 2),
+                engine.Spatial.DefaultSurfaceNavigationConfig() with { GridId = 0 }, false)), "invalid-surface-navigation-config");
+        });
+    }
 
     private static void DeferredCollisionNavigation(EngineTestHost host)
     {

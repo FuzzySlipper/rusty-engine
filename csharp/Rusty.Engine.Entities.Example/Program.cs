@@ -771,6 +771,12 @@ sealed class SpatialServiceFake : ISpatialService
     public CharacterContinuationCheckpoint CaptureCharacterContinuation(CharacterContinuationCaptureRequest arg0) => throw new NotSupportedException();
     public CrawlerConfig DefaultCrawlerConfig() => default;
     public CrawlerStepReceipt ProposeCrawlerStep(CrawlerStepRequest arg0) => throw new NotSupportedException();
+    public SurfaceNavigationConfig DefaultSurfaceNavigationConfig() => default;
+    public SurfaceNavigationReplaceReceipt ReplaceSurfaceNavigation(SurfaceNavigationReplaceRequest arg0) => throw new NotSupportedException();
+    public SurfaceNavigationReadout ReadSurfaceNavigation(SurfaceNavigationReadRequest arg0) => default;
+    public SurfaceNavigationPathResult RequestSurfaceNavigationPath(SurfaceNavigationPathRequest arg0) => throw new NotSupportedException();
+    public SurfaceNavigationCellReadout ExplainSurfaceNavigationCell(SurfaceNavigationCellRequest arg0) => throw new NotSupportedException();
+    public SurfaceNavigationEdgeReadout ExplainSurfaceNavigationEdge(SurfaceNavigationEdgeRequest arg0) => throw new NotSupportedException();
 
     public CharacterStepReceipt ProposeCharacterStep(CharacterStepRequest request)
     {

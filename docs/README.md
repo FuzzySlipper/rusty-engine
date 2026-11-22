@@ -87,7 +87,8 @@ The root [README](../README.md) is the repository landing page and
   world, pinned, driven, attached to bodies or bones, blown by wind and drawn
   by the Engine.
 - [Surface crawlers](surface-crawlers.md): small movers whose up follows the
-  floor, wall or ceiling under them, over edges, letting go to fall.
+  floor, wall or ceiling under them, over edges, letting go to fall, and
+  surface grids that route them across floors, walls and ceilings.
 - [Contact queries and melee](contact-queries.md): every actor a volume
   overlaps, ordered per-part contacts of a turning swing, and poses sampled
   at simulation time.

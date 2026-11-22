@@ -1055,7 +1055,9 @@ one grid never names it, and a product with several must, or a later publication
 changes what it reads. `ClearNavigation` with a `GridId` clears that grid, and
 when it was the one published last the highest left takes its place; without
 one it clears them all. `ReadNavigationGrids` lists what the session holds: each
-grid's kind, cells, agent, and the columns it covers. `ReplaceNavigation` and
+grid's kind, cells, agent, and the columns it covers. A crawler's
+[surface grid](surface-crawlers.md#navigation) stands beside them on its own
+id, listed as `CollisionSurface`. `ReplaceNavigation` and
 `ReplaceVoxelNavigation` hold a session alone: they replace every grid, and a
 collision-derived grid then replaces them. A
 [composition of placed artifacts](#placed-artifacts-side-by-side) stands

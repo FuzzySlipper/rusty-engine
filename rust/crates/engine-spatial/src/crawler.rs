@@ -262,61 +262,61 @@ impl CrawlerConfig {
 
 /// A small f64 vector for the solve; the scene is f64 and the boundary f32.
 #[derive(Debug, Clone, Copy, PartialEq)]
-struct V([f64; 3]);
+pub(crate) struct V(pub(crate) [f64; 3]);
 
 impl V {
-    const ZERO: V = V([0.0; 3]);
-    const Y: V = V([0.0, 1.0, 0.0]);
+    pub(crate) const ZERO: V = V([0.0; 3]);
+    pub(crate) const Y: V = V([0.0, 1.0, 0.0]);
 
-    fn of(value: Vec3) -> Self {
+    pub(crate) fn of(value: Vec3) -> Self {
         V([f64::from(value.x), f64::from(value.y), f64::from(value.z)])
     }
-    fn world(value: WorldVec) -> Self {
+    pub(crate) fn world(value: WorldVec) -> Self {
         V([value.x, value.y, value.z])
     }
-    fn at(value: WorldPos) -> Self {
+    pub(crate) fn at(value: WorldPos) -> Self {
         V([value.x, value.y, value.z])
     }
-    fn vec3(self) -> Vec3 {
+    pub(crate) fn vec3(self) -> Vec3 {
         Vec3::new(self.0[0] as f32, self.0[1] as f32, self.0[2] as f32)
     }
-    fn pos(self) -> WorldPos {
+    pub(crate) fn pos(self) -> WorldPos {
         WorldPos::new(self.0[0], self.0[1], self.0[2])
     }
-    fn wvec(self) -> WorldVec {
+    pub(crate) fn wvec(self) -> WorldVec {
         WorldVec::new(self.0[0], self.0[1], self.0[2])
     }
-    fn add(self, o: V) -> V {
+    pub(crate) fn add(self, o: V) -> V {
         V([self.0[0] + o.0[0], self.0[1] + o.0[1], self.0[2] + o.0[2]])
     }
-    fn sub(self, o: V) -> V {
+    pub(crate) fn sub(self, o: V) -> V {
         V([self.0[0] - o.0[0], self.0[1] - o.0[1], self.0[2] - o.0[2]])
     }
-    fn mul(self, s: f64) -> V {
+    pub(crate) fn mul(self, s: f64) -> V {
         V([self.0[0] * s, self.0[1] * s, self.0[2] * s])
     }
-    fn dot(self, o: V) -> f64 {
+    pub(crate) fn dot(self, o: V) -> f64 {
         self.0[0] * o.0[0] + self.0[1] * o.0[1] + self.0[2] * o.0[2]
     }
-    fn cross(self, o: V) -> V {
+    pub(crate) fn cross(self, o: V) -> V {
         V([
             self.0[1] * o.0[2] - self.0[2] * o.0[1],
             self.0[2] * o.0[0] - self.0[0] * o.0[2],
             self.0[0] * o.0[1] - self.0[1] * o.0[0],
         ])
     }
-    fn length(self) -> f64 {
+    pub(crate) fn length(self) -> f64 {
         self.dot(self).sqrt()
     }
-    fn normalized(self) -> Option<V> {
+    pub(crate) fn normalized(self) -> Option<V> {
         let length = self.length();
         (length > EPSILON).then(|| self.mul(1.0 / length))
     }
     /// The part of `self` along the plane whose normal is `normal`.
-    fn along_plane(self, normal: V) -> V {
+    pub(crate) fn along_plane(self, normal: V) -> V {
         self.sub(normal.mul(self.dot(normal)))
     }
-    fn limited(self, maximum: f64) -> V {
+    pub(crate) fn limited(self, maximum: f64) -> V {
         let length = self.length();
         if length > maximum && length > 0.0 {
             self.mul(maximum / length)
@@ -324,7 +324,7 @@ impl V {
             self
         }
     }
-    fn finite(self) -> bool {
+    pub(crate) fn finite(self) -> bool {
         self.0.iter().all(|value| value.is_finite())
     }
 }

@@ -485,6 +485,38 @@ pub type NativeProposeCrawlerStep = unsafe extern "C" fn(
     *mut NativeCrawlerStepReceipt,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeDefaultSurfaceNavigationConfig =
+    unsafe extern "C" fn(*mut c_void, *mut NativeSurfaceNavigationConfig) -> i32;
+pub type NativeReplaceSurfaceNavigation = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSurfaceNavigationReplaceRequest,
+    *mut NativeSurfaceNavigationReplaceReceipt,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeReadSurfaceNavigation = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSurfaceNavigationReadRequest,
+    *mut NativeSurfaceNavigationReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeRequestSurfaceNavigationPath = unsafe extern "C" fn(
+    *mut c_void,
+    NativeSurfaceNavigationPathRequest,
+    *mut NativeSurfaceNavigationPathResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeExplainSurfaceNavigationCell = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSurfaceNavigationCellRequest,
+    *mut NativeSurfaceNavigationCellReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeExplainSurfaceNavigationEdge = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeSurfaceNavigationEdgeRequest,
+    *mut NativeSurfaceNavigationEdgeReadout,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeCaptureCharacterContinuation = unsafe extern "C" fn(
     *mut c_void,
     NativeCharacterContinuationCaptureRequest,
@@ -1757,6 +1789,12 @@ pub struct NativeSpatialApi {
     pub read_character_controller: NativeReadCharacterController,
     pub default_crawler_config: NativeDefaultCrawlerConfig,
     pub propose_crawler_step: NativeProposeCrawlerStep,
+    pub default_surface_navigation_config: NativeDefaultSurfaceNavigationConfig,
+    pub replace_surface_navigation: NativeReplaceSurfaceNavigation,
+    pub read_surface_navigation: NativeReadSurfaceNavigation,
+    pub request_surface_navigation_path: NativeRequestSurfaceNavigationPath,
+    pub explain_surface_navigation_cell: NativeExplainSurfaceNavigationCell,
+    pub explain_surface_navigation_edge: NativeExplainSurfaceNavigationEdge,
     pub evaluate_navigation_step: NativeEvaluateNavigationStep,
     pub read_projection: NativeReadSpatialProjection,
     pub contains_point: NativeSpatialContainsPoint,

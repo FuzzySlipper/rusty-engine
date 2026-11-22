@@ -784,7 +784,7 @@ fn lane_threads(lane: Lane, cores: usize) -> usize {
 /// result does not depend on the split. On a worker lane it uses
 /// [`lane_threads`], runs below normal priority on Windows, and stops between
 /// runs once cancelled, returning `None`.
-fn in_parallel<T: Sync, R: Send>(
+pub(super) fn in_parallel<T: Sync, R: Send>(
     items: &[T],
     lane: Lane,
     work: impl Fn(&T) -> R + Sync,
@@ -1473,7 +1473,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeCollisionNavigationColumnRequest,
     ) -> Result<NativeCollisionNavigationColumnResult, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let key = session
             .grid_cache(request.grid_id)
             .ok_or_else(unpublished)?
@@ -1505,7 +1505,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: &NativeCollisionNavigationEdgeRequest,
     ) -> Result<NativeCollisionNavigationEdgeReadout, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let cache = session
             .grid_cache(request.grid_id)
             .ok_or_else(unpublished)?;

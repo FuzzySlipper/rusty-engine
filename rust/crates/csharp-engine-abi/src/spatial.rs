@@ -912,6 +912,9 @@ pub enum NativeNavigationProjectionKind {
     HostWalkableCells = 1,
     VoxelDerived = 2,
     CollisionDerived = 3,
+    /// Places on floors, walls and ceilings for a surface crawler
+    /// (`ReplaceSurfaceNavigation`); planar requests refuse it.
+    CollisionSurface = 4,
 }
 
 /// Typed, non-exceptional navigation query outcomes. A query failure is an
@@ -2137,6 +2140,288 @@ pub struct NativeCrawlerStepReceipt {
     pub displacement: NativeVec3,
     /// The sub-steps the command was solved as.
     pub sub_steps: u32,
+}
+
+/// Which way a surface faces: its open side, where a crawler's ball rests.
+/// `PositiveY` is a floor and `NegativeY` a ceiling.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeSurfaceFace {
+    #[default]
+    PositiveX = 0,
+    NegativeX = 1,
+    PositiveY = 2,
+    NegativeY = 3,
+    PositiveZ = 4,
+    NegativeZ = 5,
+}
+
+/// One place of a surface grid: a cell and the facing of the surface in it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct NativeSurfaceCell {
+    pub x: i64,
+    pub y: i64,
+    pub z: i64,
+    pub face: NativeSurfaceFace,
+}
+
+/// A surface grid's crawler, cells and costs. The default configuration
+/// (`default_surface_navigation_config`) is a starting point to vary one
+/// option at a time.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSurfaceNavigationConfig {
+    /// Not 0, and not a planar grid's; the default is 0, so the product
+    /// names it.
+    pub grid_id: u64,
+    /// At least the ball's diameter plus its skin on both sides.
+    pub cell_size: f64,
+    /// The most cells the region may cover.
+    pub maximum_cells: u32,
+    /// The crawler the grid is for: its radius, contact skin and floor
+    /// slope; the rest is movement.
+    pub crawler: NativeCrawlerConfig,
+    /// What a path pays to enter a place on a floor, wall or ceiling (at
+    /// least 1).
+    pub floor_cost: u32,
+    pub wall_cost: u32,
+    pub ceiling_cost: u32,
+    /// How far a path's start or goal may lie from the centre of the ball
+    /// resting on a place and still start or end there.
+    pub snap_distance: f64,
+}
+
+/// Replaces the surface grid `config.grid_id` names, derived from the
+/// session's voxel and static-mesh collision in the explicit finite world
+/// region. Every publication derives the whole region.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSurfaceNavigationReplaceRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub world_min: NativeVec3,
+    pub world_max: NativeVec3,
+    pub config: NativeSurfaceNavigationConfig,
+    /// Derive on an Engine worker from the session's collision as it is at
+    /// the call, as a deferred collision-derived grid does: the receipt says
+    /// `Pending`, the grid installs at the start of the first Engine call
+    /// after it is derived, and `ReadSurfaceNavigation` says when.
+    pub deferred: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSurfaceNavigationReplaceReceipt {
+    pub surface_cell_count: u64,
+    /// Directed edges: each joined pair counts twice.
+    pub edge_count: u64,
+    /// Pairs of neighbouring places swept to test an edge.
+    pub edge_test_count: u64,
+    /// Groups of places with no edge between groups: a path across groups
+    /// is `NoPath` without a search.
+    pub component_count: u64,
+    pub navigation_revision: u64,
+    pub derivation_microseconds: u64,
+    /// A deferred request's derivation has started and every other field is
+    /// 0.
+    pub pending: bool,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeSurfaceNavigationReadRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub grid_id: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSurfaceNavigationReadout {
+    /// A deferred derivation of the grid is running or waits to install.
+    pub pending: bool,
+    /// The grid's latest deferred derivation failed and changed nothing; the
+    /// host log says why.
+    pub refused: bool,
+    /// The installed publication's receipt; all 0 when there is none.
+    pub installed: NativeSurfaceNavigationReplaceReceipt,
+}
+
+/// How a path enters a place from the one before.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeSurfaceEdgeKind {
+    /// Along one facing to the next cell, or one up or down a slope; also
+    /// the path's first place.
+    #[default]
+    Along = 0,
+    /// Into another facing in the same cell, as floor into wall.
+    Concave = 1,
+    /// Over a lip onto the facing beyond.
+    Convex = 2,
+}
+
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeSurfaceNavigationPathOutcome {
+    #[default]
+    Reached = 0,
+    /// No path joins them; `nearest` is the reachable place nearest the goal.
+    NoPath = 1,
+    /// The search visited `max_visited` places first; `nearest` is the
+    /// visited place estimated nearest the goal.
+    BudgetExhausted = 2,
+    /// No place lies within the snap distance of the start.
+    StartOffSurface = 3,
+    GoalOffSurface = 4,
+    /// The session holds no surface grid with this id.
+    Unavailable = 5,
+}
+
+/// One place of a surface path.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSurfaceWaypoint {
+    pub cell: NativeSurfaceCell,
+    /// The ball's centre resting on the place: steer a crawler toward it.
+    pub position: NativeVec3,
+    pub normal: NativeVec3,
+    pub surface: NativeCrawlerSurface,
+    /// How it is entered from the waypoint before.
+    pub edge: NativeSurfaceEdgeKind,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSurfaceNavigationPathRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub grid_id: u64,
+    /// World positions, each snapped to the nearest place.
+    pub from: NativeVec3,
+    pub to: NativeVec3,
+    pub max_visited: u32,
+}
+
+/// Borrowed until the next Spatial call; the generated binding copies it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSurfaceNavigationPathResult {
+    /// Start to goal when reached; empty otherwise.
+    pub waypoints: *const NativeSurfaceWaypoint,
+    pub waypoints_len: usize,
+    pub outcome: NativeSurfaceNavigationPathOutcome,
+    /// What entering each waypoint after the first costs, summed.
+    pub total_cost: u64,
+    pub visited: u32,
+    /// The goal when reached; else the place nearest it (see `outcome`).
+    pub nearest: NativeSurfaceWaypoint,
+    pub navigation_revision: u64,
+}
+
+impl Default for NativeSurfaceNavigationPathResult {
+    fn default() -> Self {
+        Self {
+            waypoints: std::ptr::null(),
+            waypoints_len: 0,
+            outcome: Default::default(),
+            total_cost: 0,
+            visited: 0,
+            nearest: Default::default(),
+            navigation_revision: 0,
+        }
+    }
+}
+
+/// Why a cell of a surface grid holds a surface of a facing or not.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeSurfaceCellOutcome {
+    #[default]
+    Surface = 0,
+    /// The cell's line meets no surface of this facing in the cell.
+    NoSurface = 1,
+    /// The surface there is tilted more than 45° from the facing: another
+    /// facing holds it.
+    OtherFacing = 2,
+    /// The ball resting on it overlaps collision; `overlap` says what.
+    BallOverlap = 3,
+    /// Outside the grid's region.
+    OutsideGrid = 4,
+    /// The resting ball's centre is inside collision: the cell's line met the
+    /// surface from inside rock.
+    InsideCollision = 5,
+}
+
+/// One place of a surface grid, sampled again against current collision
+/// with the published crawler and region.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSurfaceNavigationCellRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub grid_id: u64,
+    pub cell: NativeSurfaceCell,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSurfaceNavigationCellReadout {
+    pub outcome: NativeSurfaceCellOutcome,
+    /// The installed grid holds the place.
+    pub admitted: bool,
+    /// The surface the cell's line meets, its source and the ball's
+    /// distance from it; absent with no surface.
+    pub surface_contact: NativeCrawlerContact,
+    /// The ball's centre resting on it.
+    pub position: NativeVec3,
+    pub surface: NativeCrawlerSurface,
+    /// For `BallOverlap`: what the resting ball overlaps and where.
+    pub overlap: NativeCrawlerContact,
+    pub navigation_revision: u64,
+}
+
+/// Why an edge between two places of a surface grid is or is not
+/// traversable.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NativeSurfaceEdgeOutcome {
+    #[default]
+    Traversable = 0,
+    FromNotSurface = 1,
+    ToNotSurface = 2,
+    /// Not neighbours: neither beside each other on one facing, in one cell,
+    /// nor either side of a lip.
+    NotNeighbor = 3,
+    /// The ball meets collision on the way; `blocker` says what and where,
+    /// and a concave or convex edge names its `corner`.
+    Blocked = 4,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeSurfaceNavigationEdgeRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub grid_id: u64,
+    pub from: NativeSurfaceCell,
+    pub to: NativeSurfaceCell,
+}
+
+/// The edge swept again against current collision; `admitted` says whether
+/// the installed grid holds it.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeSurfaceNavigationEdgeReadout {
+    pub outcome: NativeSurfaceEdgeOutcome,
+    pub kind: NativeSurfaceEdgeKind,
+    pub admitted: bool,
+    /// What entering `to` costs a path.
+    pub cost: u32,
+    /// Where the two surfaces meet, for a concave or convex edge.
+    pub corner_present: bool,
+    pub corner: NativeVec3,
+    /// The ball's centre where it stopped, for `Blocked`.
+    pub blocked_at: NativeVec3,
+    /// For `Blocked`: the collision met, its normal and source.
+    pub blocker: NativeCrawlerContact,
+    pub navigation_revision: u64,
 }
 
 #[repr(C)]

@@ -12,7 +12,7 @@ fn vec3(value: NativeVec3) -> Vec3 {
     Vec3::new(value.x, value.y, value.z)
 }
 
-fn config(value: NativeCrawlerConfig) -> CrawlerConfig {
+pub(super) fn config(value: NativeCrawlerConfig) -> CrawlerConfig {
     let mut config = CrawlerConfig::default();
     config.radius = value.radius;
     config.contact_skin = value.contact_skin;
@@ -26,7 +26,7 @@ fn config(value: NativeCrawlerConfig) -> CrawlerConfig {
     config
 }
 
-fn native_config(value: CrawlerConfig) -> NativeCrawlerConfig {
+pub(super) fn native_config(value: CrawlerConfig) -> NativeCrawlerConfig {
     NativeCrawlerConfig {
         radius: value.radius,
         contact_skin: value.contact_skin,
@@ -69,7 +69,7 @@ fn native_motion(value: CrawlerMotion) -> NativeCrawlerMotion {
     }
 }
 
-fn native_contact(value: Option<CrawlerContact>) -> NativeCrawlerContact {
+pub(super) fn native_contact(value: Option<CrawlerContact>) -> NativeCrawlerContact {
     let Some(contact) = value else {
         return NativeCrawlerContact::default();
     };
@@ -103,16 +103,20 @@ fn native_contact(value: Option<CrawlerContact>) -> NativeCrawlerContact {
     native
 }
 
+pub(super) fn native_surface(value: CrawlerSurface) -> NativeCrawlerSurface {
+    match value {
+        CrawlerSurface::None => NativeCrawlerSurface::None,
+        CrawlerSurface::Floor => NativeCrawlerSurface::Floor,
+        CrawlerSurface::Wall => NativeCrawlerSurface::Wall,
+        CrawlerSurface::Ceiling => NativeCrawlerSurface::Ceiling,
+    }
+}
+
 fn native_receipt(value: CrawlerStepReceipt) -> NativeCrawlerStepReceipt {
     NativeCrawlerStepReceipt {
         position: native_vec3(value.position),
         rotation: native_quat(value.rotation),
-        surface: match value.surface {
-            CrawlerSurface::None => NativeCrawlerSurface::None,
-            CrawlerSurface::Floor => NativeCrawlerSurface::Floor,
-            CrawlerSurface::Wall => NativeCrawlerSurface::Wall,
-            CrawlerSurface::Ceiling => NativeCrawlerSurface::Ceiling,
-        },
+        surface: native_surface(value.surface),
         transition: match value.transition {
             CrawlerTransition::None => NativeCrawlerTransition::None,
             CrawlerTransition::Concave => NativeCrawlerTransition::Concave,

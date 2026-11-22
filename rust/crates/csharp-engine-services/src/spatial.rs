@@ -6,6 +6,7 @@ mod crawler;
 mod heightfield_collider;
 mod inspection;
 mod static_deferred;
+mod surface_navigation;
 mod vegetation_collider;
 
 use std::{
@@ -659,6 +660,11 @@ pub(crate) struct SpatialSession {
     derivations: BTreeMap<u64, PendingDerivation>,
     /// Grids whose latest deferred derivation was refused.
     refused_derivations: BTreeSet<u64>,
+    /// Surface-crawler grids, by grid id, beside the planar ones.
+    surface_grids: BTreeMap<u64, surface_navigation::SurfaceGrid>,
+    /// Surface grids deriving on workers; dropping one cancels it.
+    surface_derivations: BTreeMap<u64, surface_navigation::PendingSurfaceDerivation>,
+    refused_surface_derivations: BTreeSet<u64>,
     content: SpatialContentComposition,
     controller: CharacterControllerService,
     last_character_receipt: Option<CharacterControllerReceipt>,
@@ -1040,6 +1046,7 @@ impl SpatialSession {
         {
             cache.rebase(before, after, shift);
         }
+        self.rebase_surface_grids(shift);
     }
 
     /// The grid a request names; 0 is the one published last.
@@ -1183,6 +1190,7 @@ impl SpatialSession {
     /// Clears one grid. When it was the latest, the highest grid left takes
     /// its place.
     fn clear_grid(&mut self, grid_id: u64) {
+        self.clear_surface_grid(grid_id);
         self.derivations.remove(&grid_id);
         if self
             .content_grid()
@@ -1843,6 +1851,9 @@ impl RuntimeSpatialBridge {
             if !session.derivations.is_empty() {
                 session.install_derived_navigation();
             }
+            if !session.surface_derivations.is_empty() {
+                session.install_surface_derivations();
+            }
         }
         let handles: Vec<_> = self
             .sessions
@@ -2030,6 +2041,9 @@ impl RuntimeSpatialBridge {
                 grids_beside: BTreeMap::new(),
                 derivations: BTreeMap::new(),
                 refused_derivations: BTreeSet::new(),
+                surface_grids: BTreeMap::new(),
+                surface_derivations: BTreeMap::new(),
+                refused_surface_derivations: BTreeSet::new(),
                 content: SpatialContentComposition::default(),
                 controller: CharacterControllerService::default(),
                 last_character_receipt: None,
@@ -2744,6 +2758,8 @@ impl RuntimeSpatialBridge {
         request: &NativeNavigationReplaceRequest,
     ) -> Result<NativeNavigationReplaceReceipt, CsharpEngineServicesError> {
         self.settle_deferred(request.session)?;
+        self.session_mut(request.session)?
+            .refuse_surface_grid(request.config.grid_id)?;
         let cells =
             unsafe { borrowed_slice(request.cells, request.cells_len, "navigation cells") }?;
         let dimensions = ChunkDims::cubic(request.config.chunk_size).ok_or_else(|| {
@@ -2816,6 +2832,8 @@ impl RuntimeSpatialBridge {
         request: &NativeNavigationVoxelReplaceRequest,
     ) -> Result<NativeNavigationReplaceReceipt, CsharpEngineServicesError> {
         self.settle_deferred(request.session)?;
+        self.session_mut(request.session)?
+            .refuse_surface_grid(request.config.grid_id)?;
         let solids = unsafe {
             borrowed_slice(
                 request.solid_cells,
@@ -2888,6 +2906,8 @@ impl RuntimeSpatialBridge {
     ) -> Result<NativeCollisionNavigationReplaceReceipt, CsharpEngineServicesError> {
         // Checking the request reads no session state; only a synchronous
         // derivation installs the deferred batches first (below).
+        self.session_mut(request.session)?
+            .refuse_surface_grid(request.config.grid_id)?;
         let (world_min, world_max) = (
             native_vec3_value(request.world_min),
             native_vec3_value(request.world_max),
@@ -3109,7 +3129,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeCollisionNavigationReadRequest,
     ) -> Result<NativeCollisionNavigationReadout, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let installed = match session.navigation.as_ref() {
             Some(latest) if latest.grid_id() == request.grid_id => Some(latest),
             _ => session
@@ -3149,7 +3169,7 @@ impl RuntimeSpatialBridge {
             .map_err(|error| {
                 CsharpEngineServicesError::new("CSHARP_NAVIGATION_TRAVERSAL", error.label())
             })?;
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let navigation_revision = session.navigation_revision + 1;
         let navigation = session.grid_mut(request.grid_id).ok_or_else(|| {
             CsharpEngineServicesError::new(
@@ -3173,7 +3193,7 @@ impl RuntimeSpatialBridge {
         request: NativeNavigationTraversalClearRequest,
     ) -> Result<NativeNavigationTraversalReplaceReceipt, CsharpEngineServicesError> {
         self.settle_deferred(request.session)?;
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let navigation_revision = session.navigation_revision + 1;
         let navigation = session.grid_mut(request.grid_id).ok_or_else(|| {
             CsharpEngineServicesError::new(
@@ -3211,7 +3231,7 @@ impl RuntimeSpatialBridge {
                 cost: cell.traversal_cost,
             }
         }));
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let source_hash = session
             .grid(request.grid_id)
             .ok_or_else(|| {
@@ -3248,7 +3268,7 @@ impl RuntimeSpatialBridge {
         request: NativeNavigationVolumetricTraversalClearRequest,
     ) -> Result<NativeNavigationVolumetricTraversalReplaceReceipt, CsharpEngineServicesError> {
         self.settle_deferred(request.session)?;
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let source_hash = session
             .grid(request.grid_id)
             .ok_or_else(|| {
@@ -3294,6 +3314,7 @@ impl RuntimeSpatialBridge {
                     .iter()
                     .map(|latest| session.grid_info(latest, true)),
             )
+            .chain(session.surface_grid_infos())
             .collect();
         grids.sort_unstable_by_key(|grid| grid.grid_id);
         let grids = grids.into_boxed_slice();
@@ -3309,7 +3330,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeNavigationProjectionReadRequest,
     ) -> Result<NativeNavigationProjectionReadout, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let Some(navigation) = session.grid(request.grid_id) else {
             return Ok(NativeNavigationProjectionReadout {
                 navigation_revision: session.navigation_revision,
@@ -3334,7 +3355,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeNavigationPathRequest,
     ) -> Result<NativeNavigationPathResult, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let Some(navigation) = session.grid_mut(request.grid_id) else {
             return Ok(NativeNavigationPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
@@ -3392,7 +3413,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeNavigationWeightedPathRequest,
     ) -> Result<NativeNavigationWeightedPathResult, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let Some(navigation) = session.grid_mut(request.grid_id) else {
             return Ok(NativeNavigationWeightedPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
@@ -3464,7 +3485,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeNavigationVolumetricPathRequest,
     ) -> Result<NativeNavigationPathResult, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let Some(navigation) = session.grid_mut(request.grid_id) else {
             return Ok(NativeNavigationPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
@@ -3529,7 +3550,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeNavigationVolumetricWeightedPathRequest,
     ) -> Result<NativeNavigationVolumetricWeightedPathResult, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let Some(navigation) = session.grid_mut(request.grid_id) else {
             return Ok(NativeNavigationVolumetricWeightedPathResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
@@ -3614,6 +3635,7 @@ impl RuntimeSpatialBridge {
         session.navigation = None;
         session.grids_beside.clear();
         session.derivations.clear();
+        session.clear_surface_grids();
         session.content = SpatialContentComposition::default();
         Ok(())
     }
@@ -3622,7 +3644,7 @@ impl RuntimeSpatialBridge {
         &mut self,
         request: NativeNavigationStepRequest,
     ) -> Result<NativeNavigationStepResult, CsharpEngineServicesError> {
-        let session = self.session_mut(request.session)?;
+        let session = self.planar_session(request.session, request.grid_id)?;
         let Some(navigation) = session.grid(request.grid_id) else {
             return Ok(NativeNavigationStepResult {
                 outcome: NativeNavigationPathOutcome::ProjectionUnavailable,
@@ -6373,6 +6395,12 @@ pub(crate) fn api(bridge: &mut RuntimeSpatialBridge) -> NativeSpatialApi {
         read_character_controller,
         default_crawler_config: crawler::default_config,
         propose_crawler_step: crawler::propose_step,
+        default_surface_navigation_config: surface_navigation::default_config,
+        replace_surface_navigation: surface_navigation::replace,
+        read_surface_navigation: surface_navigation::read,
+        request_surface_navigation_path: surface_navigation::request_path,
+        explain_surface_navigation_cell: surface_navigation::explain_cell,
+        explain_surface_navigation_edge: surface_navigation::explain_edge,
         evaluate_navigation_step,
         read_projection,
         contains_point,

@@ -25,6 +25,14 @@ mod perception;
 mod physics;
 mod rigid_body;
 mod surface_collision;
+mod surface_navigation;
+pub use surface_navigation::{
+    derive_surface_navigation, sample_surface_line, surface_corner, surface_edge,
+    surface_edge_kind, surface_lines, surface_neighbors, SurfaceBlock, SurfaceCell, SurfaceEdge,
+    SurfaceEdgeKind, SurfaceEdgeOutcome, SurfaceFace, SurfaceLine, SurfaceNavigation,
+    SurfaceNavigationConfig, SurfaceNavigationError, SurfaceNode, SurfaceRegion, SurfaceSample,
+    SurfaceSampleOutcome,
+};
 mod trigger;
 mod voxel_density;
 mod voxel_edit;
@@ -1148,6 +1156,58 @@ impl VoxelCollisionScene {
             }
             (chunk, local) = below;
             cell.y -= 1;
+        }
+    }
+
+    /// Where the run of collidable voxels containing `point` ends along
+    /// `axis` (0 X, 1 Y, 2 Z), toward positive or negative, as that axis's
+    /// coordinate; `None` when `point` is not in a collidable voxel. The walk
+    /// stops `limit` along. [`Self::collidable_voxel_run_bottom`] is the
+    /// downward walk the planar columns take.
+    pub fn collidable_voxel_run_end(
+        &self,
+        point: [f64; 3],
+        axis: usize,
+        positive: bool,
+        limit: f64,
+    ) -> Option<f64> {
+        let grid = self.voxel_world.grid();
+        let solid = |cell: VoxelCoord| {
+            let (coordinate, local) = grid.voxel_to_chunk_local(cell);
+            self.voxel_world
+                .get(coordinate)
+                .and_then(|chunk| chunk.get(local))
+                .is_some_and(|value| {
+                    value.material().is_some_and(|material| {
+                        !self.noncollidable_materials.contains(&material.raw())
+                    })
+                })
+        };
+        let mut cell = grid.world_to_voxel(WorldPos::new(point[0], point[1], point[2]));
+        if !solid(cell) {
+            return None;
+        }
+        let size = grid.voxel_size();
+        let start = point[axis];
+        loop {
+            let low = [
+                grid.voxel_min_world(cell).x,
+                grid.voxel_min_world(cell).y,
+                grid.voxel_min_world(cell).z,
+            ][axis];
+            let end = if positive { low + size } else { low };
+            if (end - start).abs() >= limit {
+                return Some(end);
+            }
+            let step = if positive { 1 } else { -1 };
+            match axis {
+                0 => cell.x += step,
+                1 => cell.y += step,
+                _ => cell.z += step,
+            }
+            if !solid(cell) {
+                return Some(end);
+            }
         }
     }
 

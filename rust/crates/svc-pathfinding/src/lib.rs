@@ -10,6 +10,9 @@
 #![forbid(unsafe_code)]
 
 mod columns;
+mod surface;
+
+pub use surface::{find_surface_path, SurfaceGraph, SurfacePath, SurfacePathOutcome};
 
 use std::{
     cell::RefCell,
