@@ -571,7 +571,7 @@ internal static class EngineTestHostChecks
             session!.Dispose();
 
             // A step a metre high for x >= 0, and a shelf beside its lip that the ball cannot round.
-            using SpatialSession step = engine.Spatial.CreateSession(new(1, 8, VoxelSurfaceMode.GreedyCubes));
+            using SpatialSession ledge = engine.Spatial.CreateSession(new(1, 8, VoxelSurfaceMode.GreedyCubes));
             var voxels = new List<VoxelEdit>();
             for (int x = -6; x < 6; x++)
                 for (int z = -3; z < 3; z++)
@@ -580,17 +580,17 @@ internal static class EngineTestHostChecks
                     if (x >= 0) voxels.Add(new(VoxelEditKind.Set, new(x, 1, z), 1));
                     if (x == -1) voxels.Add(new(VoxelEditKind.Set, new(x, 2, z), 1));
                 }
-            engine.Voxel.ApplyEdits(new(step, voxels.ToArray()));
-            engine.Spatial.ReplaceSurfaceNavigation(new(step, new(-3, 0, -1), new(3, 4, 2), engine.Spatial.DefaultSurfaceNavigationConfig() with { GridId = Grid }, false));
+            engine.Voxel.ApplyEdits(new(ledge, voxels.ToArray()));
+            engine.Spatial.ReplaceSurfaceNavigation(new(ledge, new(-3, 0, -1), new(3, 4, 2), engine.Spatial.DefaultSurfaceNavigationConfig() with { GridId = Grid }, false));
             SurfaceCell top = new(0, 2, 0, SurfaceFace.PositiveY), side = new(-1, 1, 0, SurfaceFace.NegativeX);
-            SurfaceNavigationCellReadout cell = engine.Spatial.ExplainSurfaceNavigationCell(new(step, Grid, top));
+            SurfaceNavigationCellReadout cell = engine.Spatial.ExplainSurfaceNavigationCell(new(ledge, Grid, top));
             Require(cell.Outcome == SurfaceCellOutcome.Surface && cell.Admitted && cell.Surface == CrawlerSurface.Floor
                     && cell.SurfaceContact.SourceKind == CharacterCollisionSourceKind.VoxelChunk, $"the lip's top: {cell}");
-            SurfaceNavigationEdgeReadout corner = engine.Spatial.ExplainSurfaceNavigationEdge(new(step, Grid, top, side));
+            SurfaceNavigationEdgeReadout corner = engine.Spatial.ExplainSurfaceNavigationEdge(new(ledge, Grid, top, side));
             Require(corner.Kind == SurfaceEdgeKind.Convex && corner.Outcome == SurfaceEdgeOutcome.Blocked && !corner.Admitted
                     && corner.CornerPresent && Near(corner.Corner, new(0, 2, 0.5f)) && corner.Blocker.Present && corner.Blocker.Point.Y >= 2 - 1e-4f,
                 $"the blocked lip: {corner}");
-            ExpectRefusal(() => engine.Spatial.ReplaceSurfaceNavigation(new(step, new(-3, 0, -1), new(3, 4, 2),
+            ExpectRefusal(() => engine.Spatial.ReplaceSurfaceNavigation(new(ledge, new(-3, 0, -1), new(3, 4, 2),
                 engine.Spatial.DefaultSurfaceNavigationConfig() with { GridId = 0 }, false)), "invalid-surface-navigation-config");
         });
     }
