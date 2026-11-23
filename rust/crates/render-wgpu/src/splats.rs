@@ -263,10 +263,13 @@ pub struct SplatReadout {
     pub gaussians: u64,
     /// Cards projected.
     pub cards: u64,
-    /// Of the splats projected, those sorted and drawn: in the view and,
-    /// with occlusion culling, not hidden behind its opaque depth. Read
-    /// back from the GPU, so from a frame or two before the others.
-    pub surviving: u64,
+    /// Of the Gaussians projected, those sorted and drawn: in the view
+    /// and, with occlusion culling, not hidden behind its opaque depth.
+    /// Read back from the GPU, so from a frame or two before the others.
+    pub surviving_gaussians: u64,
+    /// Of the cards projected, those sorted and drawn, read back as
+    /// `surviving_gaussians` is.
+    pub surviving_cards: u64,
     /// Splat instances that had no room in their run
     /// ([`MAX_RUN_GAUSSIANS`]) and drew nothing.
     pub refused_instances: u32,
@@ -1280,7 +1283,8 @@ impl Splats {
     pub fn readout(&self) -> SplatReadout {
         SplatReadout {
             refused: self.refusal.clone(),
-            surviving: self.tally.last,
+            surviving_gaussians: self.tally.last[0],
+            surviving_cards: self.tally.last[1],
             ..self.last.clone()
         }
     }
@@ -1659,9 +1663,11 @@ impl Splats {
             let total: u32 = run.iter().map(|entry| entry.set.count).sum();
             let blocks = total.div_ceil(TILE);
             let sort = bytes.len() as u32;
+            // The compaction tallies a card run's survivors apart.
+            let cards = u32::from(run.first().is_some_and(|entry| entry.set.cards.is_some()));
             for shift in SORT_SHIFTS {
                 let mut slot = Vec::with_capacity(PARAMS_SLOT as usize);
-                for value in [total, blocks, shift, 0] {
+                for value in [total, blocks, shift, cards] {
                     slot.extend_from_slice(&value.to_le_bytes());
                 }
                 slot.resize(PARAMS_SLOT as usize, 0);
@@ -2637,23 +2643,30 @@ impl Pipelines {
     }
 }
 
-/// The splats a frame's runs kept (`splats.wgsl` `Compacted::tally`), read
-/// back as a pass timer's stamps are: cleared before the frame's first run,
-/// copied after each view's, and mapped at the next frame. Its counter is
-/// the third word of the buffer whose first two are the run's compacted
-/// sizes.
-/// Where the tally stands in its buffer.
-const TALLY_OFFSET: u64 = 8;
-
+/// The Gaussians and the cards a frame's runs kept (`splats.wgsl`
+/// `Compacted::tally`), read back as a pass timer's stamps are: cleared
+/// before the frame's first run, copied after each view's, and mapped at
+/// the next frame. A frame with no runs kept none, so it reads as nothing
+/// kept, and a readback from before it is dropped. The counters are the
+/// third and fourth words of the buffer whose first two are the run's
+/// compacted sizes.
 struct Tally {
     counter: wgpu::Buffer,
     readback: wgpu::Buffer,
-    /// This frame cleared the counter, and copied it.
+    /// This frame drew runs, cleared the counters, and copied them.
+    drew: bool,
     cleared: bool,
     copied: bool,
     pending: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
-    last: u64,
+    /// The pending readback is from before a frame that kept nothing.
+    stale: bool,
+    /// Gaussians, then cards.
+    last: [u64; 2],
 }
+
+/// Where the counters stand in their buffer, and their bytes.
+const TALLY_OFFSET: u64 = 8;
+const TALLY_BYTES: u64 = 8;
 
 impl Tally {
     fn new(device: &wgpu::Device) -> Self {
@@ -2668,27 +2681,34 @@ impl Tally {
         Self {
             counter: buffer(
                 "render-wgpu splat sizes",
-                16,
+                TALLY_OFFSET + TALLY_BYTES,
                 wgpu::BufferUsages::STORAGE
                     | wgpu::BufferUsages::COPY_DST
                     | wgpu::BufferUsages::COPY_SRC,
             ),
             readback: buffer(
                 "render-wgpu splats tally readback",
-                4,
+                TALLY_BYTES,
                 wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             ),
+            drew: false,
             cleared: false,
             copied: false,
             pending: None,
-            last: 0,
+            stale: false,
+            last: [0; 2],
         }
     }
 
     /// At the start of a frame: map the last frame's copy, or take the
-    /// count it mapped to, without waiting.
+    /// counts it mapped to, without waiting; after a frame with no runs,
+    /// nothing kept.
     fn collect(&mut self, gpu: &Gpu) {
         self.cleared = false;
+        if !std::mem::take(&mut self.drew) {
+            self.last = [0; 2];
+            self.stale = self.pending.is_some();
+        }
         if std::mem::take(&mut self.copied) {
             let (sender, receiver) = std::sync::mpsc::channel();
             self.readback
@@ -2707,30 +2727,43 @@ impl Tally {
             Err(std::sync::mpsc::TryRecvError::Empty) => return,
             Ok(Ok(())) => {
                 if let Ok(mapped) = self.readback.slice(..).get_mapped_range() {
-                    self.last = u64::from(u32::from_le_bytes(
-                        mapped[..4].try_into().expect("four bytes"),
-                    ));
+                    if !self.stale {
+                        let word = |at: usize| {
+                            u64::from(u32::from_le_bytes(
+                                mapped[at..at + 4].try_into().expect("four bytes"),
+                            ))
+                        };
+                        self.last = [word(0), word(4)];
+                    }
                 }
                 self.readback.unmap();
             }
             Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
         }
         self.pending = None;
+        self.stale = false;
     }
 
-    /// Before a view's runs: the frame's first clears the counter, unless
+    /// Before a view's runs: the frame's first clears the counters, unless
     /// the last copy is still being read.
     fn begin_view(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        self.drew = true;
         if !self.cleared && self.pending.is_none() {
-            encoder.clear_buffer(&self.counter, TALLY_OFFSET, Some(4));
+            encoder.clear_buffer(&self.counter, TALLY_OFFSET, Some(TALLY_BYTES));
             self.cleared = true;
         }
     }
 
-    /// After a view's runs: copy the frame's count so far.
+    /// After a view's runs: copy the frame's counts so far.
     fn end_view(&mut self, encoder: &mut wgpu::CommandEncoder) {
         if self.cleared {
-            encoder.copy_buffer_to_buffer(&self.counter, TALLY_OFFSET, &self.readback, 0, Some(4));
+            encoder.copy_buffer_to_buffer(
+                &self.counter,
+                TALLY_OFFSET,
+                &self.readback,
+                0,
+                Some(TALLY_BYTES),
+            );
             self.copied = true;
         }
     }

@@ -522,10 +522,11 @@ fn main() {
             .map(|(pass, ms)| format!("\"{pass}\": {ms:.4}"))
             .collect();
         let row = format!(
-            "{{\"count\": {count}, \"gaussians\": {}, \"cards\": {}, \"surviving\": {}, \"runs\": {}, \"size\": [{width}, {height}], \"passes\": {{{}}}, \"frame_ms\": {throughput:.4}, \"fps\": {:.1}, \"cpu_ms_p50\": {:.4}, \"cpu_ms_p95\": {:.4}, \"frames\": {}, \"distance\": {distance:.3}}}",
+            "{{\"count\": {count}, \"gaussians\": {}, \"cards\": {}, \"surviving_gaussians\": {}, \"surviving_cards\": {}, \"runs\": {}, \"size\": [{width}, {height}], \"passes\": {{{}}}, \"frame_ms\": {throughput:.4}, \"fps\": {:.1}, \"cpu_ms_p50\": {:.4}, \"cpu_ms_p95\": {:.4}, \"frames\": {}, \"distance\": {distance:.3}}}",
             readout.splats.gaussians,
             readout.splats.cards,
-            readout.splats.surviving,
+            readout.splats.surviving_gaussians,
+            readout.splats.surviving_cards,
             readout.splats.runs,
             passes.join(", "),
             1000.0 / throughput,

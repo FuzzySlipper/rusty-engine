@@ -51,7 +51,8 @@ struct Projected {
 
 struct Sort {
     // x: the run's splats; y: its blocks of `TILE` (the compaction's);
-    // z: a sort pass's digit shift.
+    // z: a sort pass's digit shift; w: 1 for a run of cards, whose kept
+    // splats the compaction tallies apart.
     sizes: vec4<u32>,
 };
 
@@ -97,7 +98,8 @@ const COMPACT_ITEMS: u32 = 16u;
 struct Compacted {
     count: u32,
     blocks: u32,
-    tally: atomic<u32>,
+    // The frame's kept Gaussians, then its kept cards.
+    tally: array<atomic<u32>, 2>,
 };
 
 @group(0) @binding(22) var<storage, read_write> compacted: Compacted;
@@ -522,7 +524,7 @@ fn cs_compact_scan(@builtin(local_invocation_index) local: u32) {
         compacted.blocks = sorted_blocks;
         dispatches = Dispatches(vec4<u32>(sorted_blocks, 1u, 1u, 0u), vec4<u32>(groups, 1u, 1u, 0u));
         draw_words[1] = running;
-        atomicAdd(&compacted.tally, running);
+        atomicAdd(&compacted.tally[sort.sizes.w], running);
     }
 }
 

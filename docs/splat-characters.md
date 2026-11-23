@@ -546,9 +546,10 @@ binding's.
 - **Limit.** A run sorts at most 4,194,304 Gaussians. An instance that does
   not fit draws nothing, and the readout counts it.
 - **Readout.** `GpuReadout.splats` reports the last frame's runs, instances,
-  Gaussians and cards, summed over its views, and how many of them were
-  sorted and drawn (`surviving`), read back from the GPU a frame or two
-  later. The `splats` pass timer covers the projection, sort and layers of
+  Gaussians and cards, summed over its views, and how many of each were
+  sorted and drawn (`surviving_gaussians`, `surviving_cards`), read back
+  from the GPU a frame or two later; a frame that draws no splats keeps
+  none. The `splats` pass timer covers the projection, sort and layers of
   the frame's first view with a run.
 - **Only what can show is sorted.** A run sorts only the splats its
   projection kept, in the order they stand in the run, so splats at the same

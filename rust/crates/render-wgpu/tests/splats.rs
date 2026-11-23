@@ -2088,7 +2088,13 @@ fn culled_and_not(
             rgba = harness.render(&front()).1;
         }
         let readout = harness.renderer.gpu_readout().splats;
-        (rgba, (readout.gaussians + readout.cards, readout.surviving))
+        (
+            rgba,
+            (
+                readout.gaussians + readout.cards,
+                readout.surviving_gaussians + readout.surviving_cards,
+            ),
+        )
     };
     let (open, (projected, kept)) = frame(false);
     assert_eq!(
@@ -2421,5 +2427,68 @@ fn a_card_without_normals_lights_by_its_outward_guess() {
     assert!(
         luminance(lit) > luminance(dark) + 150,
         "right {lit:?}, left {dark:?}"
+    );
+}
+
+/// The readout keeps Gaussians and cards apart: a wall hiding the
+/// Gaussians and not the cards beside them leaves every card and few
+/// Gaussians kept.
+#[test]
+fn surviving_gaussians_and_cards_are_counted_apart() {
+    let mut harness = Harness::new(RendererOptions {
+        occlusion_culling: true,
+        ..RendererOptions::default()
+    });
+    // Gaussians behind the wall on the left, cards in the open on the right.
+    let mut ops = splats(&mut harness, 1, &sheet(0.05), [-1.2, 0.0, -4.0]);
+    ops.extend(cards(
+        &mut harness,
+        2,
+        &[
+            Card::facing([0.0; 3], 0.2, [0, 0]),
+            Card::facing([0.3, 0.0, 0.0], 0.2, [0, 0]),
+        ],
+        [1.2, 0.0, -4.0],
+    ));
+    ops.extend(wall());
+    harness.apply(ops);
+    for _ in 0..4 {
+        harness.render(&front());
+    }
+    let readout = harness.renderer.gpu_readout().splats;
+    assert_eq!(readout.surviving_cards, readout.cards, "{readout:?}");
+    assert!(
+        readout.surviving_gaussians < readout.gaussians / 4,
+        "{readout:?}"
+    );
+}
+
+/// Once a view draws no splats, the readout keeps none: its counts from
+/// the frames that drew them do not linger.
+#[test]
+fn the_kept_counts_clear_when_no_splats_draw() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let ops = splats(&mut harness, 1, &sheet(0.05), [0.0, 0.0, -4.0]);
+    harness.apply(ops);
+    for _ in 0..4 {
+        harness.render(&front());
+    }
+    let drawn = harness.renderer.gpu_readout().splats;
+    assert!(drawn.surviving_gaussians > 0, "{drawn:?}");
+    harness.apply(vec![RenderDiff::Destroy {
+        handle: RenderHandle::new(1),
+    }]);
+    for _ in 0..4 {
+        harness.render(&front());
+    }
+    let empty = harness.renderer.gpu_readout().splats;
+    assert_eq!(
+        (
+            empty.gaussians,
+            empty.surviving_gaussians,
+            empty.surviving_cards
+        ),
+        (0, 0, 0),
+        "{empty:?}"
     );
 }
