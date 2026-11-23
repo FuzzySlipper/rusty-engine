@@ -175,12 +175,18 @@ fifth of the 32k's, and sort in about half and a third, as there are
 fewer of them. A card costs about twice a Gaussian to project (four
 corners, and twice the record).
 
-**Against a skinned mesh.** The same crowd with villager 381 as his
-scaffold mesh, the triangle mesh his splats were fitted to: 45,684
-triangles on its own 36-joint rig, walking its own walk clip, untextured,
-and the same mesh decimated in Blender to 10,000 triangles, a usual game
-character's budget. GPU is the `world` pass, the splats' passes inside it,
-plus the `skinning` pass for a mesh, which poses every figure every frame.
+**Against a skinned mesh.** The same crowd with villager 381 as a
+triangle mesh, his scaffold, the mesh his splats were fitted to. Two versions:
+- **10k triangles:** the scaffold decimated to a usual game character's budget,
+  textured with his colour bake. It is on the splat body's own 22 Mixamo joints
+  (nodes, skin and inverse binds as `381.glb`), walking the same clip as the
+  splat bodies. Admitting it needs a clip of its own until #11009, so the timed
+  copy carries a two-keyframe rest clip it never plays.
+- **45.7k triangles:** the whole scaffold, untextured, on its own 36-joint rig
+  and walk clip.
+
+GPU is the `world` pass, the splats' passes inside it, plus the `skinning`
+pass for a mesh, which poses every figure every frame.
 CPU is a frame's, the mesh's skinned on the GPU / on the CPU (as before
 #11006, `splat_crowd --cpu-skinning`). The default scene, no shadows; ms,
 median of three rounds, on an RTX 3080 at 1920 × 1080:
@@ -190,30 +196,30 @@ median of three rounds, on an RTX 3080 at 1920 × 1080:
 | 1 | cards (6,144) | 0.43 | 0.30 | 0.20 | 0.25 |
 | 1 | 16k Gaussians | 0.39 | 0.29 | 0.22 | 0.25 |
 | 1 | 32k Gaussians | 0.44 | 0.33 | 0.25 | 0.25 |
-| 1 | mesh, 10k triangles | 0.10 | 0.21 / 0.6 | 0.04 | 0.21 / 0.6 |
+| 1 | mesh, 10k triangles | 0.10 | 0.20 / 0.6 | 0.04 | 0.20 / 0.6 |
 | 1 | mesh, 45.7k triangles | 0.12 | 0.20 / 1.8 | 0.06 | 0.21 / 2.0 |
 | 8 | cards (6,144) | 0.79 | 0.38 | 0.32 | 0.32 |
 | 8 | 16k Gaussians | 0.71 | 0.37 | 0.43 | 0.35 |
 | 8 | 32k Gaussians | 1.00 | 0.42 | 0.60 | 0.39 |
-| 8 | mesh, 10k triangles | 0.16 | 0.26 / 3.4 | 0.08 | 0.27 / 3.5 |
+| 8 | mesh, 10k triangles | 0.16 | 0.25 / 3.4 | 0.09 | 0.26 / 3.4 |
 | 8 | mesh, 45.7k triangles | 0.28 | 0.27 / 15.7 | 0.21 | 0.26 / 18.4 |
 | 16 | cards (6,144) | 0.95 | 0.45 | 0.37 | 0.40 |
 | 16 | 16k Gaussians | 0.93 | 0.45 | 0.51 | 0.42 |
 | 16 | 32k Gaussians | 1.30 | 0.46 | 0.80 | 0.45 |
-| 16 | mesh, 10k triangles | 0.20 | 0.32 / 6.5 | 0.13 | 0.41 / 8.5 |
+| 16 | mesh, 10k triangles | 0.20 | 0.39 / 8.9 | 0.12 | 0.41 / 9.5 |
 | 16 | mesh, 45.7k triangles | 0.40 | 0.34 / 37.4 | 0.32 | 0.41 / 37.6 |
 | 32 | cards (6,144) | 1.14 | 0.59 | 0.53 | 0.55 |
 | 32 | 16k Gaussians | 1.28 | 0.59 | 0.85 | 0.58 |
 | 32 | 32k Gaussians | 1.91 | 0.60 | 1.41 | 0.60 |
-| 32 | mesh, 10k triangles | 0.25 | 0.45 / 23.7 | 0.21 | 0.45 / 23.7 |
+| 32 | mesh, 10k triangles | 0.28 | 0.44 / 24.7 | 0.20 | 0.43 / 24.8 |
 | 32 | mesh, 45.7k triangles | 0.66 | 0.49 / 91.1 | 0.58 | 0.49 / 81.3 |
 
-Skinned on the GPU, 32 figures of the 10k mesh take 0.25 ms of GPU close
-and 0.21 at 42 m, a fifth of the cards' close and two fifths far. The
+Skinned on the GPU, 32 figures of the 10k mesh take 0.28 ms of GPU close
+and 0.20 at 42 m, a quarter of the cards' close and two fifths far. The
 45.7k mesh takes 0.66 and 0.58, about half the cards' close and about the
 cards' far, where the splat bodies draw few pixels. Either mesh takes about
 0.1 ms less CPU a frame than a splat body. Skinned on the CPU, as every
-skinned mesh was before #11006, 32 of the 10k mesh take 24 ms a frame and of
+skinned mesh was before #11006, 32 of the 10k mesh take 25 ms a frame and of
 the 45.7k mesh 81 to 91 ms. With the scene's lights (a sun casting through
 its cascades), 32 figures close cast for 0.22 ms (10k mesh) and 0.83 ms
 (45.7k mesh) in the `shadows` pass, against 0.10 to 0.12 ms for the splat
