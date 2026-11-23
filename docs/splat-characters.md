@@ -123,7 +123,7 @@ A card's depth is its plane's at each pixel, not its centre's.
 - **Readout.** `GpuReadout.splats` counts cards apart from Gaussians.
 
 **Cost.** Villager 381 walking in `examples/splat_crowd`'s layout, as
-6,144 cards and as his 15,908-Gaussian body, on an RTX 3080 at 1920 ×
+6,144 cards and as his 15,908- and 31,798-Gaussian bodies, on an RTX 3080 at 1920 ×
 1080: the `splats` pass, and the run's projection, sort and draw timed
 apart, ms, median of three rounds. Close is the crowd's default camera
 (3.3 to 10.7 m away); far is 42 m, the figures about 60 pixels tall.
@@ -132,18 +132,24 @@ apart, ms, median of three rounds. Close is the crowd's default camera
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | cards | 0.24 | 0.006 | 0.046 | 0.170 | 0.08 | 0.006 | 0.046 | 0.014 |
 | 1 | 16k Gaussians | 0.20 | 0.007 | 0.046 | 0.128 | 0.10 | 0.007 | 0.046 | 0.029 |
+| 1 | 32k Gaussians | 0.24 | 0.010 | 0.047 | 0.171 | 0.12 | 0.009 | 0.047 | 0.052 |
 | 8 | cards | 0.65 | 0.036 | 0.051 | 0.545 | 0.18 | 0.036 | 0.051 | 0.076 |
 | 8 | 16k Gaussians | 0.57 | 0.044 | 0.063 | 0.443 | 0.29 | 0.044 | 0.063 | 0.169 |
+| 8 | 32k Gaussians | 0.80 | 0.058 | 0.090 | 0.626 | 0.49 | 0.058 | 0.090 | 0.328 |
 | 16 | cards | 0.81 | 0.073 | 0.058 | 0.657 | 0.23 | 0.083 | 0.066 | 0.099 |
 | 16 | 16k Gaussians | 0.78 | 0.088 | 0.090 | 0.589 | 0.40 | 0.088 | 0.091 | 0.206 |
+| 16 | 32k Gaussians | 1.15 | 0.119 | 0.149 | 0.869 | 0.68 | 0.118 | 0.147 | 0.404 |
 | 32 | cards | 0.98 | 0.147 | 0.080 | 0.739 | 0.40 | 0.144 | 0.078 | 0.164 |
 | 32 | 16k Gaussians | 1.12 | 0.174 | 0.147 | 0.788 | 0.73 | 0.174 | 0.147 | 0.393 |
+| 32 | 32k Gaussians | 1.74 | 0.233 | 0.248 | 1.243 | 1.27 | 0.233 | 0.248 | 0.770 |
 
 Drawing dominates up close, and there a card costs about what the
-Gaussians it replaces do: most of a tile is transparent, and each of its
-fragments still samples the atlas. At crowd distance cards draw in about
-half the time, and the sort takes about half as long, as there are fewer
-of them to sort. A card costs about twice a Gaussian to project (four
+16k body's Gaussians do: most of a tile is transparent, and each of its
+fragments still samples the atlas. Against the 32k body, 32 card figures
+take 0.98 ms against 1.74 close and 0.40 against 1.27 at crowd distance.
+At crowd distance cards draw in about half the 16k body's time and a
+fifth of the 32k's, and sort in about half and a third, as there are
+fewer of them. A card costs about twice a Gaussian to project (four
 corners, and twice the record).
 
 Against a CPU reference of asset-pipeline's Workbench card renderer at the
