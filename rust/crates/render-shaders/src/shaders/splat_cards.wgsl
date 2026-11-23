@@ -17,7 +17,7 @@
 // colour is: the layer blends it as it is and only the composite decodes it.
 
 #import rusty::splat_layer::{srgb_to_linear, linear_to_srgb}
-#import rusty::splat_common::{project, draw_args, skins, ALPHA_MIN, rotation_matrix, half_float, blended_rows, moved, cull, group_tint, keep, hidden}
+#import rusty::splat_common::{project, draw_args, skins, surfaces, ALPHA_MIN, rotation_matrix, half_float, blended_rows, moved, cull, octahedral, group_tint, keep, hidden}
 
 // One card of a card resource, two words of four:
 // [0] centre xyz (f32 bits), its tile's top-left texel (x, y as u16, x
@@ -32,9 +32,11 @@ struct Card {
 
 // One projected card of a run. `centre`, `u`, `v`: its centre and half-axes
 // in the pass's clip space; `motion`: xy its centre's motion in target
-// pixels; `multiplier`: rgb its instance's colour multiplier in linear
-// light; `look`: x its tile's top-left texel (as the resource's), y the
-// tile's side, z its group's tint (sRGB target rgb and weight, unorm8).
+// pixels, zw in a lit run its normal's view-space xy; `multiplier`: rgb its
+// instance's colour multiplier in linear light; `look`: x its tile's
+// top-left texel (as the resource's), y the tile's side, z its group's tint
+// (sRGB target rgb and weight, unorm8), w 1 when it draws its colour from
+// the albedo atlas.
 struct ProjectedCard {
     centre: vec4<f32>,
     u: vec4<f32>,
@@ -49,9 +51,12 @@ struct ProjectedCard {
 
 @group(0) @binding(20) var<storage, read> drawn: array<ProjectedCard>;
 @group(0) @binding(21) var<storage, read> order: array<u32>;
-// The run's atlas: Rgba8Unorm, one level, sampled linearly and clamped.
+// The run's atlas: Rgba8Unorm, one level, sampled linearly and clamped; and
+// its albedo atlas, on the same tiles, which a lit run draws its colour from
+// (the colour atlas where the asset has none).
 @group(1) @binding(40) var atlas: texture_2d<f32>;
 @group(1) @binding(41) var atlas_sampler: sampler;
+@group(1) @binding(42) var albedo_atlas: texture_2d<f32>;
 
 @compute @workgroup_size(256)
 fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -72,6 +77,8 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
     // Skinned: the linear blend of its joints' matrices moves its centre and
     // carries its half-axes, as it carries the figure around the card.
     var previous_centre = centre;
+    // What carries its normal: the blend, when skinned.
+    var carried = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
     if project.skin.y == 1u {
         let skin = skins[index];
         let rows = blended_rows(project.skin.x, skin);
@@ -85,6 +92,7 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
             let blend = transpose(mat3x3<f32>(rows[0].xyz, rows[1].xyz, rows[2].xyz)) * (1.0 / rows[3].w);
             u = blend * u;
             v = blend * v;
+            carried = blend;
         }
     }
     let clip = project.clip_from_model * vec4<f32>(centre, 1.0);
@@ -129,13 +137,24 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
             motion = project.pixels.xy + clip.xy / clip.w * project.pixels.zw - previous.xy / previous.w;
         }
     }
+    // A lit run's normal (the asset's, or the card's outward guess,
+    // `splats.rs` `card_normals`), carried as the card is, in view space.
+    var normal = vec2<f32>(0.0);
+    if project.depth.w > 0.5 {
+        let to_view = mat3x3<f32>(
+            project.model_view[0].xyz,
+            project.model_view[1].xyz,
+            project.model_view[2].xyz,
+        );
+        normal = normalize(to_view * (carried * octahedral(surfaces[index].x))).xy;
+    }
     projected[slot] = ProjectedCard(
         clip,
         clip_u,
         clip_v,
-        vec4<f32>(motion, 0.0, 0.0),
+        vec4<f32>(motion, normal),
         vec4<f32>(project.tint.rgb, 0.0),
-        vec4<u32>(card.centre_tile.w, card.frame.w, pack4x8unorm(group_tint(index)), 0u),
+        vec4<u32>(card.centre_tile.w, card.frame.w, pack4x8unorm(group_tint(index)), project.range.w),
     );
     keep(slot, depth);
 }
@@ -146,6 +165,8 @@ struct CardVarying {
     @location(1) @interpolate(flat) tint: vec4<f32>,
     @location(2) @interpolate(flat) multiplier: vec3<f32>,
     @location(3) @interpolate(flat) motion: vec2<f32>,
+    @location(4) @interpolate(flat) normal: vec2<f32>,
+    @location(5) @interpolate(flat) albedo: u32,
 };
 
 @vertex
@@ -163,20 +184,28 @@ fn vs_card(
     out.tint = unpack4x8unorm(card.look.z);
     out.multiplier = card.multiplier.rgb;
     out.motion = card.motion.xy;
+    out.normal = card.motion.zw;
+    out.albedo = card.look.w;
     return out;
 }
 
-// The card's premultiplied display colour at the fragment: its texel, its
-// alpha at most 0.99 as the cards were trained, moved toward its group's
-// tint in display space and scaled by the multiplier in linear light.
-// Fragments too faint to show are discarded.
+// The card's premultiplied display colour at the fragment: its texel (from
+// the albedo atlas when a lit run draws one), its alpha the colour atlas's,
+// at most 0.99 as the cards were trained, moved toward its group's tint in
+// display space and scaled by the multiplier in linear light. Fragments
+// too faint to show are discarded.
 fn card_colour(in: CardVarying) -> vec4<f32> {
     let texel = textureSample(atlas, atlas_sampler, in.uv);
     let alpha = min(0.99, texel.a);
     if alpha < ALPHA_MIN {
         discard;
     }
-    var rgb = mix(texel.rgb, in.tint.rgb, in.tint.a);
+    var colour = texel.rgb;
+    if in.albedo == 1u {
+        // One level: an explicit level samples outside uniform control flow.
+        colour = textureSampleLevel(albedo_atlas, atlas_sampler, in.uv, 0.0).rgb;
+    }
+    var rgb = mix(colour, in.tint.rgb, in.tint.a);
     if any(in.multiplier != vec3<f32>(1.0)) {
         rgb = linear_to_srgb(srgb_to_linear(rgb) * in.multiplier);
     }
@@ -195,6 +224,32 @@ struct CardOut {
 fn fs_card(in: CardVarying) -> CardOut {
     let color = card_colour(in);
     return CardOut(color, vec4<f32>(vec3<f32>(1.0 - in.position.z, in.motion) * color.a, color.a));
+}
+
+// A lit run without motion: its normal's xy beside its depth.
+@fragment
+fn fs_card_lit(in: CardVarying) -> CardOut {
+    let color = card_colour(in);
+    return CardOut(color, vec4<f32>(vec3<f32>(1.0 - in.position.z, in.normal) * color.a, color.a));
+}
+
+struct CardLitMotionOut {
+    @location(0) color: vec4<f32>,
+    @location(1) surface: vec4<f32>,
+    // The normal's view-space xy, premultiplied by alpha, and the alpha its
+    // blend takes: the RG16F target keeps xy.
+    @location(2) normal: vec4<f32>,
+};
+
+// A lit run under motion: its normal in a target of its own.
+@fragment
+fn fs_card_lit_motion(in: CardVarying) -> CardLitMotionOut {
+    let color = card_colour(in);
+    return CardLitMotionOut(
+        color,
+        vec4<f32>(vec3<f32>(1.0 - in.position.z, in.motion) * color.a, color.a),
+        vec4<f32>(in.normal * color.a, 0.0, color.a),
+    );
 }
 
 // A layer that keeps no surface: nothing after its run reads the view's

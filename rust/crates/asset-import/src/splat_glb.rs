@@ -344,9 +344,9 @@ fn check_card_primitive(
             "remove the empty primitive",
         ));
     }
-    for name in CARD_ATTRIBUTES.iter().chain(&["GROUP"]) {
+    for name in CARD_ATTRIBUTES.iter().chain(&["GROUP", "NORMAL"]) {
         let Some(accessor) = primitive.get(&gltf::Semantic::Extras((*name).to_owned())) else {
-            if *name == "GROUP" {
+            if matches!(*name, "GROUP" | "NORMAL") {
                 continue;
             }
             return Err(ImportDiagnostic::error(
@@ -402,8 +402,28 @@ fn check_card_primitive(
         ));
     }
     // The GLB's images are embedded (`animated_glb.rs` refuses others).
-    let texture = whole("atlasTexture").and_then(|index| document.textures().nth(index as usize));
-    match texture.filter(|texture| texture.source().is_some()) {
+    let with_image = |index: u64| {
+        document
+            .textures()
+            .nth(index as usize)
+            .filter(|texture| texture.source().is_some())
+    };
+    // A lit figure's colour without its baked shading, on the same tiles.
+    if let Some(albedo) = bbsplat
+        .as_ref()
+        .and_then(|bbsplat| bbsplat.get("albedoTexture"))
+    {
+        if albedo.as_u64().and_then(with_image).is_none() {
+            return Err(ImportDiagnostic::error(
+                ImportCode::MalformedSource,
+                format!("{path}.extras.bbsplat.albedoTexture"),
+                "a card primitive's albedo atlas is a texture with an image",
+                "write extras.bbsplat.albedoTexture, the index of the albedo atlas's texture, or leave it out",
+            ));
+        }
+    }
+    let texture = whole("atlasTexture").and_then(with_image);
+    match texture {
         Some(texture) => Ok(texture.index()),
         None => Err(ImportDiagnostic::error(
             ImportCode::MalformedSource,
@@ -1134,6 +1154,42 @@ mod tests {
         );
         let rig = mesh.rig.expect("a skinned card GLB names its rig");
         assert_eq!(rig.joints[0].id, "hips");
+    }
+
+    /// A lit card GLB, its normals (`_NORMAL`) and albedo atlas
+    /// (`extras.bbsplat.albedoTexture`) beside its colour atlas, is
+    /// admitted; normals of another length, or an albedo atlas that names no
+    /// texture, are refused.
+    #[test]
+    fn lit_card_glbs_are_admitted_and_malformed_ones_refused() {
+        let lit = |normals: usize, albedo: u64| {
+            import(&cards_glb(
+                false,
+                |attributes| attributes["_NORMAL"] = serde_json::json!(normals),
+                move |document| {
+                    document["meshes"][0]["primitives"][0]["extras"]["bbsplat"]["albedoTexture"] =
+                        serde_json::json!(albedo);
+                    document["accessors"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!(
+                            {"bufferView": 0, "componentType": 5126, "count": 1, "type": "VEC3"}
+                        ));
+                },
+            ))
+        };
+        // The normals read the centres' floats; the albedo is the atlas.
+        let admitted = lit(0, 0);
+        assert!(admitted.assets.is_some(), "{:?}", admitted.diagnostics);
+        let short = lit(7, 0);
+        assert!(short.diagnostics.iter().any(|d| {
+            d.code == ImportCode::AttributeLengthMismatch && d.message.contains("_NORMAL")
+        }));
+        let nameless = lit(0, 4);
+        assert!(nameless
+            .diagnostics
+            .iter()
+            .any(|d| d.code == ImportCode::MalformedSource && d.message.contains("albedo")));
     }
 
     /// A card primitive without its tiles, with tiles of the wrong type or

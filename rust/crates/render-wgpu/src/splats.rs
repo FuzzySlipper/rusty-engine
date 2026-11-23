@@ -161,6 +161,8 @@ pub(crate) struct SplatSet {
 #[derive(Clone)]
 pub(crate) struct CardAtlas {
     group: wgpu::BindGroup,
+    /// It has an albedo atlas.
+    albedo: bool,
 }
 
 impl SplatSet {
@@ -861,7 +863,8 @@ impl Splats {
             bounds,
             joint_bounds: skin.map(|(_, bounds)| bounds),
             ellipsoids: ellipsoids(splats),
-            albedo: splats.albedos.is_some(),
+            // A card set's albedo is its atlas's.
+            albedo: splats.albedos.is_some() || cards.as_ref().is_some_and(|atlas| atlas.albedo),
             cards,
             group,
         })
@@ -869,39 +872,18 @@ impl Splats {
 
     /// A card asset's atlas: display-referred colour and straight alpha,
     /// kept as it is (`Rgba8Unorm`, one level), sampled linearly and
-    /// clamped. `None` on a device that draws no splats.
+    /// clamped; and its albedo atlas when it has one, which a lit figure
+    /// draws its colour from. `None` on a device that draws no splats.
     pub fn card_atlas(
         &self,
         gpu: &Gpu,
         label: &str,
         image: &crate::resources::DecodedImage,
+        albedo: Option<&crate::resources::DecodedImage>,
     ) -> Option<CardAtlas> {
         let pipelines = self.pipelines.as_ref()?;
-        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(label),
-            size: wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        gpu.queue.write_texture(
-            texture.as_image_copy(),
-            &image.rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(image.width * 4),
-                rows_per_image: Some(image.height),
-            },
-            texture.size(),
-        );
-        let view = texture.create_view(&Default::default());
+        let view = atlas_view(gpu, label, image);
+        let albedo = albedo.map(|albedo| atlas_view(gpu, &format!("{label} albedo"), albedo));
         let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
             layout: &pipelines.atlas_layout,
@@ -914,9 +896,17 @@ impl Splats {
                     binding: 41,
                     resource: wgpu::BindingResource::Sampler(&pipelines.atlas_sampler),
                 },
+                // Without an albedo atlas the colour stands in, unread.
+                wgpu::BindGroupEntry {
+                    binding: 42,
+                    resource: wgpu::BindingResource::TextureView(albedo.as_ref().unwrap_or(&view)),
+                },
             ],
         });
-        Some(CardAtlas { group })
+        Some(CardAtlas {
+            group,
+            albedo: albedo.is_some(),
+        })
     }
 
     /// At the start of a frame: take the last frame's counts and timing,
@@ -2164,16 +2154,16 @@ impl Splats {
         self.draws
             .entry((samples, tested, surface, lit, cards))
             .or_insert_with(|| {
-                // Cards draw unlit (`frame.rs` keeps them from lit runs).
                 let (module, layout, vertex, fragment) = if cards {
                     (
                         &pipelines.cards_module,
                         &pipelines.card_draw_pipeline_layout,
                         "vs_card",
-                        if surface.is_some() {
-                            "fs_card"
-                        } else {
-                            "fs_card_colour"
+                        match (surface, lit) {
+                            (None, _) => "fs_card_colour",
+                            (Some(_), false) => "fs_card",
+                            (Some(false), true) => "fs_card_lit",
+                            (Some(true), true) => "fs_card_lit_motion",
                         },
                     )
                 } else {
@@ -2524,6 +2514,16 @@ impl Pipelines {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 42,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         );
         let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -2734,6 +2734,36 @@ impl Tally {
             self.copied = true;
         }
     }
+}
+
+/// An atlas image as the cards sample it: as it is (`Rgba8Unorm`), one
+/// level.
+fn atlas_view(gpu: &Gpu, label: &str, image: &crate::resources::DecodedImage) -> wgpu::TextureView {
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d {
+            width: image.width,
+            height: image.height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    gpu.queue.write_texture(
+        texture.as_image_copy(),
+        &image.rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(image.width * 4),
+            rows_per_image: Some(image.height),
+        },
+        texture.size(),
+    );
+    texture.create_view(&Default::default())
 }
 
 /// The projection's group 2 over a depth pyramid.
@@ -3011,12 +3041,14 @@ fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<JointReach>)> {
 /// reads. One stream of two words keeps the projection within a stage's
 /// eight storage buffers.
 fn surface_words(splats: &GlbSplats) -> Vec<u32> {
-    // A card reads only its group.
+    // A card reads its normal and its group.
     if splats.cards.is_some() {
-        return (0..splats.centres.len())
-            .flat_map(|index| {
+        return card_normals(splats)
+            .into_iter()
+            .enumerate()
+            .flat_map(|(index, normal)| {
                 let group = splats.groups.as_ref().map_or(0, |groups| groups[index]);
-                [0, u32::from(group) << 24]
+                [normal, u32::from(group) << 24]
             })
             .collect();
     }
@@ -3036,6 +3068,49 @@ fn surface_words(splats: &GlbSplats) -> Vec<u32> {
         .into_iter()
         .enumerate()
         .flat_map(|(index, normal)| [normal, albedo(index)])
+        .collect()
+}
+
+/// Each card's unit normal, octahedral: the asset's `_NORMAL` when it has
+/// one, otherwise the direction from the centre of the cards its heaviest
+/// joint carries (of the whole set when unskinned) to the card's: a smooth
+/// outward guess. A card's own plane is not one: trained cards lie at any
+/// angle to the surface they paint.
+fn card_normals(splats: &GlbSplats) -> Vec<u32> {
+    if let Some(normals) = &splats.normals {
+        return normals
+            .iter()
+            .map(|normal| octahedral(Vec3::from(*normal).normalize_or(Vec3::Z)))
+            .collect();
+    }
+    let heaviest = |index: usize| -> usize {
+        match (&splats.joints, &splats.weights) {
+            (Some(joints), Some(weights)) => {
+                let slot = (0..4)
+                    .max_by(|a, b| weights[index][*a].total_cmp(&weights[index][*b]))
+                    .unwrap_or(0);
+                usize::from(joints[index][slot])
+            }
+            _ => 0,
+        }
+    };
+    let mut sums: Vec<(Vec3, f32)> = Vec::new();
+    for (index, centre) in splats.centres.iter().enumerate() {
+        let joint = heaviest(index);
+        if sums.len() <= joint {
+            sums.resize(joint + 1, (Vec3::ZERO, 0.0));
+        }
+        sums[joint].0 += Vec3::from(*centre);
+        sums[joint].1 += 1.0;
+    }
+    splats
+        .centres
+        .iter()
+        .enumerate()
+        .map(|(index, centre)| {
+            let (sum, count) = sums[heaviest(index)];
+            octahedral((Vec3::from(*centre) - sum / count.max(1.0)).normalize_or(Vec3::Z))
+        })
         .collect()
 }
 

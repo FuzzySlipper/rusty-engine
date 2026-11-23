@@ -81,6 +81,10 @@ pub struct GlbCards {
     pub tiles: Vec<[u16; 2]>,
     pub tile_pixels: u32,
     pub atlas: usize,
+    /// The albedo atlas's texture (`extras.bbsplat.albedoTexture`), which a
+    /// lit figure draws: the colour without its baked shading, on the same
+    /// tiles.
+    pub albedo: Option<usize>,
 }
 
 pub struct GlbSkin {
@@ -573,7 +577,7 @@ fn decode_splats<'a, 's>(
     )?;
     let rotations = floats::<4>(attribute("ROTATION")?, data.clone())?;
     let cards = card_extras(primitive)
-        .map(|(tile_pixels, atlas)| {
+        .map(|(tile_pixels, atlas, albedo)| {
             let accessor = attribute("TILE_ORIGIN")?;
             let index = accessor.index();
             let tiles = gltf::accessor::Iter::<[u16; 2]>::new(accessor, data.clone())
@@ -583,6 +587,7 @@ fn decode_splats<'a, 's>(
                 tiles,
                 tile_pixels,
                 atlas,
+                albedo,
             })
         })
         .transpose()?;
@@ -695,9 +700,9 @@ fn extras(primitive: &gltf::Primitive<'_>) -> Option<gltf::json::Value> {
     gltf::json::deserialize::from_str(primitive.extras().as_ref()?.get()).ok()
 }
 
-/// A card primitive's tile side and atlas texture (`extras.splatKind =
+/// A card primitive's tile side, atlas texture and albedo atlas (`extras.splatKind =
 /// "billboard"`, `extras.bbsplat`), or `None` for Gaussians.
-fn card_extras(primitive: &gltf::Primitive<'_>) -> Option<(u32, usize)> {
+fn card_extras(primitive: &gltf::Primitive<'_>) -> Option<(u32, usize, Option<usize>)> {
     let extras = extras(primitive)?;
     if extras.get("splatKind")?.as_str()? != "billboard" {
         return None;
@@ -706,6 +711,9 @@ fn card_extras(primitive: &gltf::Primitive<'_>) -> Option<(u32, usize)> {
     Some((
         u32::try_from(bbsplat.get("tilePx")?.as_u64()?).ok()?,
         usize::try_from(bbsplat.get("atlasTexture")?.as_u64()?).ok()?,
+        bbsplat
+            .get("albedoTexture")
+            .and_then(|albedo| usize::try_from(albedo.as_u64()?).ok()),
     ))
 }
 

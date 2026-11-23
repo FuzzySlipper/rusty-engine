@@ -86,12 +86,16 @@ of:
 | `_TILE_ORIGIN` | unsigned short VEC2 | Its tile, in tiles from the atlas's top left. |
 | `JOINTS_0`, `WEIGHTS_0` | as glTF | The skin, on a skinned node. |
 | `_GROUP` (optional) | unsigned byte SCALAR | Its group, which a product may [tint](#group-tints). |
+| `_NORMAL` (optional) | float or normalized signed VEC3 | The surface normal at the card, unit, pointing out of the figure (not the card's own plane), for [lighting](#lighting). |
 
 `extras.bbsplat.tilePx` is a tile's side in atlas pixels and
 `extras.bbsplat.atlasTexture` the index of the atlas's texture, whose
 image is embedded in the GLB (PNG). Its `atlasW` and `atlasH` are not read:
 the image's own size is. The atlas holds display-referred colour and
 straight alpha, as `_COLOR` does. Cards have no `_COLOR` and no material.
+`extras.bbsplat.albedoTexture` (optional) names a second atlas on the same
+tiles: the colour without its baked shading, sRGB-encoded as `_ALBEDO`,
+which a lit figure draws.
 
 - **The card.** Corner c in {−1, +1}² stands at
   `centre + c.x·u + c.y·v`, u and v the card's half-axes. It reads its tile
@@ -116,8 +120,26 @@ A card's depth is its plane's at each pixel, not its centre's.
 - **Runs.** A run is one card character's instances, sorted card by card
   together. Different card characters, and cards and Gaussians, draw in
   runs apart, ordered by distance as runs are.
-- **Unlit.** Cards draw unlit, also when their appearance asks for
-  `SplatLighting.Lit`.
+- **Lit** as Gaussians are ([lighting](#lighting)): each card blends its
+  normal beside its depth, and the composite lights the figure per pixel.
+  A lit card draws its albedo atlas where the asset has one, at the colour
+  atlas's alpha; otherwise its colour atlas, its baked shading multiplied
+  by the light. Without `_NORMAL`, a card's normal points from the centre
+  of the cards its heaviest joint carries to its own: a smooth outward
+  guess, as a trained card's own plane is not.
+
+  381 lit as cards (with `_NORMAL` and an albedo atlas) and as his
+  15,908-Gaussian body, walking, under a sun, ambient light and a point
+  light (`splat_capture --lit 0.15 --lit-scene`): the figure's mean colour
+  differs by at most 1.5 levels from the front, sides and three-quarter,
+  and the cards' back reads about 6 levels darker. In `splat_crowd
+  --lights`, ms of the `splats` pass, RTX 3080, 1080p, median of three
+  rounds:
+
+  | 32 figures | Unlit cards | Lit cards | Lit 16k Gaussians | Lit 32k Gaussians |
+  | --- | --- | --- | --- | --- |
+  | close | 1.04 | 1.71 | 1.97 | 3.05 |
+  | 42 m | 0.46 | 0.58 | 1.18 | 2.00 |
 - **Shadows.** A card figure casts as ellipsoids for `Splats` and
   `Ellipsoids`, and as its [core](#the-core) for `Core`.
 - **Readout.** `GpuReadout.splats` counts cards apart from Gaussians.
@@ -187,10 +209,9 @@ the figure's bounds.
 
 - **Drawn** in the world's opaque pass, posed with the figure, writing
   depth and, under a temporal stage, motion.
-- **Unlit**, it draws `COLOR_0` times the appearance's multiplier. **Lit**
-  (a lit Gaussian figure), it draws `_ALBEDO` (or `COLOR_0` without one)
-  under the world's lights, rough and not metallic. Card figures draw
-  unlit, so their cores do too.
+- **Unlit**, it draws `COLOR_0` times the appearance's multiplier. **Lit**,
+  it draws `_ALBEDO` (or `COLOR_0` without one) under the world's lights,
+  rough and not metallic.
 - **Pixel grid.** A figure on a pixel grid draws no core: its blocks test
   each pixel against the world's depth, and its core would cut them.
 - **Shadows.** A core casts only for `SplatShadowCaster.Core`

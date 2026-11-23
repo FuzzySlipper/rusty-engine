@@ -1681,7 +1681,7 @@ fn cards(
     let asset = admit(
         harness,
         &format!("cards-{handle}"),
-        cards_glb(cards, 16, (width, height, &rgba), [0.0; 3]),
+        cards_glb(cards, 16, (width, height, &rgba), None, [0.0; 3]),
     );
     vec![
         RenderDiff::DefineAnimatedMesh {
@@ -2226,5 +2226,200 @@ fn gaussians_behind_a_core_are_culled_without_a_change() {
     assert!(
         kept >= projected / 2 && kept < projected * 3 / 4,
         "{kept} of {projected} kept"
+    );
+}
+
+/// A card facing the camera three metres ahead, carrying tile (0, 0) (red
+/// in its left half), with its normal `normal` when given, lit when `lit`
+/// with a light floor of `floor`, under a sun shining along `sun`, its
+/// colour drawn from `albedo` (an atlas of the same tiles) when given.
+fn lit_card(
+    harness: &mut Harness,
+    lit: bool,
+    floor: f32,
+    sun: [f32; 3],
+    normal: Option<[f32; 3]>,
+    albedo: Option<&[u8]>,
+) {
+    let (width, height, rgba) = atlas();
+    let card = Card {
+        normal,
+        ..Card::facing([0.0; 3], 0.5, [0, 0])
+    };
+    let asset = admit(
+        harness,
+        "lit-card",
+        cards_glb(&[card], 16, (width, height, &rgba), albedo, [0.0; 3]),
+    );
+    harness.apply(vec![
+        RenderDiff::DefineAnimatedMesh {
+            asset: asset.clone(),
+        },
+        splat_instance(1, &asset, [0.0, 0.0, -3.0]),
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(20),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0; 3],
+                intensity: 3.0,
+                enabled: true,
+                direction: sun,
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        },
+        RenderDiff::SetSplatAppearance {
+            handle: RenderHandle::new(1),
+            appearance: SplatAppearance {
+                lighting: if lit {
+                    SplatLighting::Lit
+                } else {
+                    SplatLighting::Unlit
+                },
+                light_floor: floor,
+                ..SplatAppearance::default()
+            },
+        },
+    ]);
+}
+
+/// Lit, a card takes the world's light at its normal: bright with the sun
+/// before it, its light floor with the sun behind, its hue kept, and the
+/// same under a temporal stage, where its normal takes a target of its own.
+#[test]
+fn a_lit_card_takes_the_suns_light_at_its_normal_down_to_its_floor() {
+    let options = RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    };
+    let left = (CENTRE.0 - 8, CENTRE.1);
+    let render = |lit, sun| {
+        let mut harness = Harness::new(options);
+        lit_card(&mut harness, lit, 0.25, sun, Some([0.0, 0.0, 1.0]), None);
+        at(&harness.render(&front()).1, left)
+    };
+    assert_near(render(false, [0.0, 0.0, -1.0]), [230, 40, 40], 3);
+    let before = render(true, [0.0, 0.0, -1.0]);
+    let behind = render(true, [0.0, 0.0, 1.0]);
+    assert!(
+        luminance(before) > luminance(behind) + 150,
+        "sun before {before:?}, behind {behind:?}"
+    );
+    // Behind, a quarter of the baked colour in linear light (its alpha
+    // 0.99 lets a hundredth of the dark background through).
+    let quarter = |byte: u8| encode(decode(byte) * 0.25);
+    assert_near(behind, [quarter(230), quarter(40), quarter(40)], 3);
+    assert!(before[0] > before[1] + 40, "{before:?}");
+    let temporal = |sun| {
+        let mut harness = Harness::new(options);
+        lit_card(&mut harness, true, 0.25, sun, Some([0.0, 0.0, 1.0]), None);
+        harness.apply(vec![RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                antialiasing: Antialiasing::Temporal,
+                render_scale: 1.0,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        }]);
+        let samples = harness.renderer.samples();
+        harness.target = render_wgpu::OffscreenTarget::new(&harness.gpu, WIDTH, HEIGHT, samples);
+        let mut rgba = Vec::new();
+        for _ in 0..16 {
+            rgba = harness.render(&front()).1;
+        }
+        at(&rgba, left)
+    };
+    assert_near(temporal([0.0, 0.0, -1.0]), before, 3);
+    assert_near(temporal([0.0, 0.0, 1.0]), behind, 3);
+}
+
+/// Lit, a card draws its colour from its albedo atlas; unlit, from its
+/// colour atlas.
+#[test]
+fn a_lit_card_draws_its_albedo_atlas_and_an_unlit_one_its_colour() {
+    let options = RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    };
+    // The albedo: every texel blue, opaque.
+    let (_, _, colour) = atlas();
+    let blue: Vec<u8> = colour
+        .chunks(4)
+        .flat_map(|_| [40u8, 60, 220, 255])
+        .collect();
+    let render = |lit| {
+        let mut harness = Harness::new(options);
+        lit_card(
+            &mut harness,
+            lit,
+            0.0,
+            [0.0, 0.0, -1.0],
+            Some([0.0, 0.0, 1.0]),
+            Some(&blue),
+        );
+        at(&harness.render(&front()).1, (CENTRE.0 - 8, CENTRE.1))
+    };
+    assert_near(render(false), [230, 40, 40], 3);
+    let lit = render(true);
+    assert!(
+        lit[2] > lit[1] && lit[2] > lit[0],
+        "lit {lit:?} draws the albedo's blue"
+    );
+}
+
+/// Without `_NORMAL` a card's normal is its outward guess, from the centre
+/// of its joint's cards to its own, not its own plane: two cards facing
+/// the camera side by side, the sun from the right, light the right card
+/// and leave the left at its floor.
+#[test]
+fn a_card_without_normals_lights_by_its_outward_guess() {
+    let options = RendererOptions {
+        default_world_lights: false,
+        ..RendererOptions::default()
+    };
+    let mut harness = Harness::new(options);
+    let (width, height, rgba) = atlas();
+    let pair = [
+        Card::facing([-0.5, 0.0, 0.0], 0.2, [0, 0]),
+        Card::facing([0.5, 0.0, 0.0], 0.2, [0, 0]),
+    ];
+    let asset = admit(
+        &mut harness,
+        "guessed-cards",
+        cards_glb(&pair, 16, (width, height, &rgba), None, [0.0; 3]),
+    );
+    harness.apply(vec![
+        RenderDiff::DefineAnimatedMesh {
+            asset: asset.clone(),
+        },
+        splat_instance(1, &asset, [0.0, 0.0, -3.0]),
+        RenderDiff::CreateLight {
+            handle: RenderHandle::new(20),
+            parent: None,
+            light: LightDescriptor::Directional {
+                color: [1.0; 3],
+                intensity: 3.0,
+                enabled: true,
+                direction: [-1.0, 0.0, 0.0],
+                range: None,
+                shadow_intent: LightShadowIntent::Disabled,
+                shadow: Default::default(),
+            },
+        },
+        RenderDiff::SetSplatAppearance {
+            handle: RenderHandle::new(1),
+            appearance: SplatAppearance {
+                lighting: SplatLighting::Lit,
+                light_floor: 0.25,
+                ..SplatAppearance::default()
+            },
+        },
+    ]);
+    let rgba = harness.render(&front()).1;
+    let (left, right) = (ahead(-0.55, 0.0, -3.0), ahead(0.45, 0.0, -3.0));
+    let (lit, dark) = (at(&rgba, right), at(&rgba, left));
+    assert!(
+        luminance(lit) > luminance(dark) + 150,
+        "right {lit:?}, left {dark:?}"
     );
 }

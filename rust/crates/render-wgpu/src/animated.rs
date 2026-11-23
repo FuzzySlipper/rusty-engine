@@ -546,10 +546,14 @@ impl Renderer {
                         .entry(cards.atlas)
                         .or_insert_with(|| {
                             let image = model.textures.get(cards.atlas)?.image.as_ref()?;
+                            let albedo = cards
+                                .albedo
+                                .and_then(|albedo| model.textures.get(albedo)?.image.as_ref());
                             self.splats.card_atlas(
                                 &self.gpu,
                                 &format!("{label} card atlas {}", cards.atlas),
                                 image,
+                                albedo,
                             )
                         })
                         .clone()
@@ -999,7 +1003,7 @@ impl Renderer {
             .pose
             .as_ref()
             .map_or(&[][..], |pose| pose.pieces.as_slice());
-        let core_lit = core_look(&self.tables, handle, asset) == Some(true);
+        let core_lit = core_look(&self.tables, handle) == Some(true);
         let mut updates = Vec::new();
         for &node_index in &asset.model.order {
             let node = &asset.model.nodes[node_index];
@@ -1492,7 +1496,7 @@ impl Renderer {
                     palette: appearance.palette.clone(),
                     origin: node.world.w_axis.truncate(),
                 });
-            // Cards draw unlit, in runs of their asset's instances.
+            // Cards draw in runs of their asset's instances.
             let cards = asset
                 .splat_sets
                 .first()
@@ -1500,7 +1504,6 @@ impl Renderer {
                 .map(|_| instance.slot);
             let light = appearance
                 .filter(|appearance| appearance.lighting == render_model::SplatLighting::Lit)
-                .filter(|_| cards.is_none())
                 .map(|appearance| appearance.light_floor);
             let casts = match &node.kind {
                 NodeKind::AnimatedMesh(descriptor) => descriptor.shadow_casting.is_cast(),
@@ -1789,7 +1792,7 @@ impl Renderer {
             _ => BTreeMap::new(),
         };
         let matte = instance.inspection.matte;
-        let core_lit = core_look(&self.tables, handle, asset);
+        let core_lit = core_look(&self.tables, handle);
         // The core's colour multiplier, and whether it casts.
         let (multiplier, core_casts) = match self.tables.nodes.get(&handle).map(|node| &node.kind) {
             Some(NodeKind::AnimatedMesh(descriptor)) => (
@@ -2127,14 +2130,10 @@ pub(crate) type AnimatedPart = (
 const LIT_CORE: u32 = 1 << 31;
 
 /// How an instance draws its splat core: lit (`true`) when its appearance
-/// is lit and its splats are Gaussians (cards draw unlit), unlit (`false`)
-/// otherwise, and not at all (`None`) on a pixel grid, whose blocks test
-/// every pixel against the world's depth and would be cut by it.
-fn core_look(
-    tables: &crate::tables::Tables,
-    handle: RenderHandle,
-    asset: &AnimatedAssetRow,
-) -> Option<bool> {
+/// is lit, unlit (`false`) otherwise, and not at all (`None`) on a pixel
+/// grid, whose blocks test every pixel against the world's depth and would
+/// be cut by it.
+fn core_look(tables: &crate::tables::Tables, handle: RenderHandle) -> Option<bool> {
     let appearance = match tables.nodes.get(&handle).map(|node| &node.kind) {
         Some(NodeKind::AnimatedMesh(descriptor)) => Some(&descriptor.splat),
         _ => None,
@@ -2142,14 +2141,9 @@ fn core_look(
     if appearance.is_some_and(|appearance| appearance.pixel_grid > 0) {
         return None;
     }
-    let cards = asset
-        .splat_sets
-        .first()
-        .is_some_and(|set| set.cards.is_some());
     Some(
-        !cards
-            && appearance
-                .is_some_and(|appearance| appearance.lighting == render_model::SplatLighting::Lit),
+        appearance
+            .is_some_and(|appearance| appearance.lighting == render_model::SplatLighting::Lit),
     )
 }
 

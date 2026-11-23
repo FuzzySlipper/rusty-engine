@@ -434,6 +434,8 @@ pub struct Card {
     pub tile: [u16; 2],
     /// `_GROUP`, written when any card of a GLB is in a group.
     pub group: u8,
+    /// `_NORMAL`, written when every card of a GLB has one.
+    pub normal: Option<[f32; 3]>,
 }
 
 impl Card {
@@ -445,17 +447,20 @@ impl Card {
             half: [half; 2],
             tile,
             group: 0,
+            normal: None,
         }
     }
 }
 
 /// A card GLB whose one node, at `translation`, draws `cards` with tiles
 /// of `tile_pixels` from an atlas of `width` × `height` RGBA texels,
-/// embedded as a PNG (`extras.splatKind = "billboard"`).
+/// embedded as a PNG (`extras.splatKind = "billboard"`), with an albedo
+/// atlas of the same size when `albedo` is given.
 pub fn cards_glb(
     cards: &[Card],
     tile_pixels: u32,
     (width, height, atlas): (u32, u32, &[u8]),
+    albedo: Option<&[u8]>,
     translation: [f32; 3],
 ) -> Vec<u8> {
     let count = cards.len();
@@ -486,6 +491,18 @@ pub fn cards_glb(
             .collect(),
     );
     let image = push_view(&mut bin, png);
+    let albedo_image = albedo.map(|albedo| {
+        push_view(
+            &mut bin,
+            render_wgpu::encode_png(width, height, albedo).expect("the albedo atlas encodes"),
+        )
+    });
+    let normals = cards.iter().all(|c| c.normal.is_some()).then(|| {
+        push_view(
+            &mut bin,
+            floats(&mut cards.iter().flat_map(|c| c.normal.unwrap_or_default())),
+        )
+    });
     let groups = cards
         .iter()
         .any(|c| c.group != 0)
@@ -499,8 +516,13 @@ pub fn cards_glb(
         }
     }
     let mut attributes = json!({"POSITION": 0, "_ROTATION": 1, "_SCALE": 2, "_TILE_ORIGIN": 3});
+    let mut next = 4;
     if groups.is_some() {
-        attributes["_GROUP"] = json!(4);
+        attributes["_GROUP"] = json!(next);
+        next += 1;
+    }
+    if normals.is_some() {
+        attributes["_NORMAL"] = json!(next);
     }
     let mut document = json!({
         "asset": {"version": "2.0", "generator": "render-wgpu card fixtures"},
@@ -532,6 +554,25 @@ pub fn cards_glb(
             .push(json!(
                 {"bufferView": view, "componentType": 5121, "count": count, "type": "SCALAR"}
             ));
+    }
+    if let Some(view) = normals {
+        document["accessors"]
+            .as_array_mut()
+            .expect("accessors")
+            .push(json!(
+                {"bufferView": view, "componentType": 5126, "count": count, "type": "VEC3"}
+            ));
+    }
+    if let Some(view) = albedo_image {
+        document["images"]
+            .as_array_mut()
+            .expect("images")
+            .push(json!({"bufferView": view, "mimeType": "image/png"}));
+        document["textures"]
+            .as_array_mut()
+            .expect("textures")
+            .push(json!({"source": 1}));
+        document["meshes"][0]["primitives"][0]["extras"]["bbsplat"]["albedoTexture"] = json!(1);
     }
     glb(&document, &bin)
 }
