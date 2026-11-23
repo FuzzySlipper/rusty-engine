@@ -664,11 +664,9 @@ fn decode_core<'a, 's>(
     primitive: &'a gltf::Primitive<'a>,
     data: impl Clone + Fn(gltf::Buffer<'a>) -> Option<&'s [u8]>,
 ) -> Result<Option<GlbCore>, String> {
-    let core = primitive
-        .extras()
-        .as_ref()
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok())
-        .is_some_and(|extras| extras.get("splatCore") == Some(&serde_json::Value::Bool(true)));
+    let core = extras(primitive).is_some_and(|extras| {
+        extras.get("splatCore").and_then(|core| core.as_bool()) == Some(true)
+    });
     if !core {
         return Ok(None);
     }
@@ -692,11 +690,15 @@ fn decode_core<'a, 's>(
     Ok(Some(GlbCore { albedo }))
 }
 
+/// A primitive's `extras`, read as glTF reads its JSON.
+fn extras(primitive: &gltf::Primitive<'_>) -> Option<gltf::json::Value> {
+    gltf::json::deserialize::from_str(primitive.extras().as_ref()?.get()).ok()
+}
+
 /// A card primitive's tile side and atlas texture (`extras.splatKind =
 /// "billboard"`, `extras.bbsplat`), or `None` for Gaussians.
 fn card_extras(primitive: &gltf::Primitive<'_>) -> Option<(u32, usize)> {
-    let extras: serde_json::Value =
-        serde_json::from_str(primitive.extras().as_ref()?.get()).ok()?;
+    let extras = extras(primitive)?;
     if extras.get("splatKind")?.as_str()? != "billboard" {
         return None;
     }
