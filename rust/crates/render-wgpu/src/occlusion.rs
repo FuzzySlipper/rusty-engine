@@ -29,7 +29,7 @@ const PASS: &str = "occlusion";
 const DEPTH_PASS: &str = "occlusion-depth";
 const WORKGROUP: u32 = 8;
 /// `Seed` in hiz.wgsl.
-const SEED_BYTES: u64 = 16;
+const SEED_BYTES: u64 = 32;
 const PYRAMID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
 
 /// The occlusion test of the last world view, for diagnostics.
@@ -57,7 +57,9 @@ pub(crate) struct Occluders<'a> {
     pub levels: u32,
 }
 
-struct Pipelines {
+/// The pyramid's pipelines (`hiz.wgsl`), which the splats' occlusion test
+/// builds its own pyramid with (`splats.rs`).
+pub(crate) struct Pipelines {
     seed_layout: wgpu::BindGroupLayout,
     seed_samples_layout: wgpu::BindGroupLayout,
     reduce_layout: wgpu::BindGroupLayout,
@@ -73,13 +75,184 @@ struct Pyramid {
     level_views: Vec<wgpu::TextureView>,
 }
 
-pub(crate) struct Occlusion {
-    pipelines: Result<Pipelines, String>,
+/// A depth texture's region reduced to a farthest-depth pyramid
+/// (`hiz.wgsl`): level 0 the region, padded with the far plane to powers of
+/// two, each level above the farthest of the four texels under it.
+pub(crate) struct DepthPyramid {
     seed: wgpu::Buffer,
     pyramid: Option<Pyramid>,
+    region: [u32; 2],
+}
+
+impl DepthPyramid {
+    pub fn new(device: &wgpu::Device) -> Self {
+        Self {
+            seed: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("render-wgpu occlusion seed"),
+                size: SEED_BYTES,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            pyramid: None,
+            region: [0, 0],
+        }
+    }
+
+    /// Reduce `depth` (with `samples` per pixel) over `region`, a level-0
+    /// texel the farthest of a `block` by `block` square of its pixels,
+    /// timed by `timer` when given; returns the pyramid's level-0 size and
+    /// levels.
+    #[allow(clippy::too_many_arguments, reason = "one reduction's inputs")]
+    pub fn build(
+        &mut self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        pipelines: &Pipelines,
+        (depth, samples): (&wgpu::TextureView, u32),
+        region: PixelRect,
+        block: u32,
+        timer: Option<&PassTimer>,
+    ) -> ([u32; 2], u32) {
+        let size = (
+            region.width.div_ceil(block).max(1).next_power_of_two(),
+            region.height.div_ceil(block).max(1).next_power_of_two(),
+        );
+        if self
+            .pyramid
+            .as_ref()
+            .is_none_or(|pyramid| pyramid.size != size)
+        {
+            let levels = size.0.max(size.1).ilog2() + 1;
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("render-wgpu occlusion pyramid"),
+                size: wgpu::Extent3d {
+                    width: size.0,
+                    height: size.1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: levels,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: PYRAMID_FORMAT,
+                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let level_views = (0..levels)
+                .map(|level| {
+                    texture.create_view(&wgpu::TextureViewDescriptor {
+                        base_mip_level: level,
+                        mip_level_count: Some(1),
+                        ..Default::default()
+                    })
+                })
+                .collect();
+            self.pyramid = Some(Pyramid {
+                size,
+                levels,
+                all: texture.create_view(&Default::default()),
+                level_views,
+            });
+        }
+        let pyramid = self.pyramid.as_ref().expect("made above");
+        let mut seed = Vec::with_capacity(SEED_BYTES as usize);
+        for value in [
+            region.x,
+            region.y,
+            region.width,
+            region.height,
+            block,
+            0,
+            0,
+            0,
+        ] {
+            seed.extend_from_slice(&value.to_le_bytes());
+        }
+        gpu.queue.write_buffer(&self.seed, 0, &seed);
+        let groups = |level: u32| {
+            (
+                (size.0 >> level).max(1).div_ceil(WORKGROUP),
+                (size.1 >> level).max(1).div_ceil(WORKGROUP),
+            )
+        };
+        let (seed_pipeline, seed_layout, depth_binding) = if samples > 1 {
+            (&pipelines.seed_samples, &pipelines.seed_samples_layout, 5)
+        } else {
+            (&pipelines.seed, &pipelines.seed_layout, 1)
+        };
+        let seed_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render-wgpu occlusion seed"),
+            layout: seed_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.seed.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: depth_binding,
+                    resource: wgpu::BindingResource::TextureView(depth),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&pyramid.level_views[0]),
+                },
+            ],
+        });
+        let last = pyramid.levels - 1;
+        for level in 0..pyramid.levels {
+            let writes =
+                timer.and_then(|timer| timer.compute_writes_between(level == 0, level == last));
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some(PASS),
+                timestamp_writes: writes,
+            });
+            let (x, y) = groups(level);
+            if level == 0 {
+                pass.set_pipeline(seed_pipeline);
+                pass.set_bind_group(0, &seed_group, &[]);
+            } else {
+                let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("render-wgpu occlusion reduce"),
+                    layout: &pipelines.reduce_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(
+                                &pyramid.level_views[level as usize - 1],
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: wgpu::BindingResource::TextureView(
+                                &pyramid.level_views[level as usize],
+                            ),
+                        },
+                    ],
+                });
+                pass.set_pipeline(&pipelines.reduce);
+                pass.set_bind_group(0, &group, &[]);
+            }
+            pass.dispatch_workgroups(x, y, 1);
+        }
+        self.region = [region.width, region.height];
+        ([pyramid.size.0, pyramid.size.1], pyramid.levels)
+    }
+
+    /// The pyramid, the region's size in its level-0 texels, and its
+    /// levels.
+    pub fn occluders(&self) -> Option<Occluders<'_>> {
+        self.pyramid.as_ref().map(|pyramid| Occluders {
+            pyramid: &pyramid.all,
+            region: self.region,
+            levels: pyramid.levels,
+        })
+    }
+}
+
+pub(crate) struct Occlusion {
+    pipelines: Result<Pipelines, String>,
+    pyramid: DepthPyramid,
     /// The views' occluder depth: its size, samples per pixel and view.
     depth: Option<((u32, u32), u32, wgpu::TextureView)>,
-    region: [u32; 2],
     timer: Option<PassTimer>,
     depth_timer: Option<PassTimer>,
     readout: OcclusionReadout,
@@ -177,20 +350,13 @@ impl Occlusion {
             }
         };
         Self {
-            seed: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("render-wgpu occlusion seed"),
-                size: SEED_BYTES,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
+            pyramid: DepthPyramid::new(device),
             readout: OcclusionReadout {
                 refused: pipelines.as_ref().err().cloned(),
                 ..Default::default()
             },
             pipelines,
-            pyramid: None,
             depth: None,
-            region: [0, 0],
             timer: PassTimer::new(gpu, PASS),
             depth_timer: PassTimer::new(gpu, DEPTH_PASS),
         }
@@ -290,140 +456,36 @@ impl Occlusion {
         };
         let (_, samples, depth) = self.depth.as_ref().expect("prepare_depth made it");
         let (samples, depth) = (*samples, depth.clone());
-        let size = (
-            region.width.max(1).next_power_of_two(),
-            region.height.max(1).next_power_of_two(),
+        let (size, levels) = self.pyramid.build(
+            gpu,
+            encoder,
+            pipelines,
+            (&depth, samples),
+            region,
+            1,
+            self.timer.as_ref(),
         );
-        if self
-            .pyramid
-            .as_ref()
-            .is_none_or(|pyramid| pyramid.size != size)
-        {
-            let levels = size.0.max(size.1).ilog2() + 1;
-            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("render-wgpu occlusion pyramid"),
-                size: wgpu::Extent3d {
-                    width: size.0,
-                    height: size.1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: levels,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: PYRAMID_FORMAT,
-                usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            let level_views = (0..levels)
-                .map(|level| {
-                    texture.create_view(&wgpu::TextureViewDescriptor {
-                        base_mip_level: level,
-                        mip_level_count: Some(1),
-                        ..Default::default()
-                    })
-                })
-                .collect();
-            self.pyramid = Some(Pyramid {
-                size,
-                levels,
-                all: texture.create_view(&Default::default()),
-                level_views,
-            });
-        }
-        let pyramid = self.pyramid.as_ref().expect("made above");
-        let mut seed = Vec::with_capacity(SEED_BYTES as usize);
-        for value in [region.x, region.y, region.width, region.height] {
-            seed.extend_from_slice(&value.to_le_bytes());
-        }
-        gpu.queue.write_buffer(&self.seed, 0, &seed);
-        let groups = |level: u32| {
-            (
-                (size.0 >> level).max(1).div_ceil(WORKGROUP),
-                (size.1 >> level).max(1).div_ceil(WORKGROUP),
-            )
-        };
-        let (seed_pipeline, seed_layout, depth_binding) = if samples > 1 {
-            (&pipelines.seed_samples, &pipelines.seed_samples_layout, 5)
-        } else {
-            (&pipelines.seed, &pipelines.seed_layout, 1)
-        };
-        let seed_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("render-wgpu occlusion seed"),
-            layout: seed_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.seed.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: depth_binding,
-                    resource: wgpu::BindingResource::TextureView(&depth),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&pyramid.level_views[0]),
-                },
-            ],
-        });
-        let last = pyramid.levels - 1;
-        for level in 0..pyramid.levels {
-            let writes = self
-                .timer
-                .as_ref()
-                .and_then(|timer| timer.compute_writes_between(level == 0, level == last));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some(PASS),
-                timestamp_writes: writes,
-            });
-            let (x, y) = groups(level);
-            if level == 0 {
-                pass.set_pipeline(seed_pipeline);
-                pass.set_bind_group(0, &seed_group, &[]);
-            } else {
-                let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("render-wgpu occlusion reduce"),
-                    layout: &pipelines.reduce_layout,
-                    entries: &[
-                        wgpu::BindGroupEntry {
-                            binding: 3,
-                            resource: wgpu::BindingResource::TextureView(
-                                &pyramid.level_views[level as usize - 1],
-                            ),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: wgpu::BindingResource::TextureView(
-                                &pyramid.level_views[level as usize],
-                            ),
-                        },
-                    ],
-                });
-                pass.set_pipeline(&pipelines.reduce);
-                pass.set_bind_group(0, &group, &[]);
-            }
-            pass.dispatch_workgroups(x, y, 1);
-        }
         if let Some(timer) = &mut self.timer {
             timer.resolve(encoder);
         }
-        self.region = [region.width, region.height];
         self.readout = OcclusionReadout {
             enabled: true,
             parts,
             refused: None,
-            size: [size.0, size.1],
-            levels: pyramid.levels,
+            size,
+            levels,
             samples,
         };
     }
 
     /// The pyramid this view's tests read.
     pub fn occluders(&self) -> Option<Occluders<'_>> {
-        self.pyramid.as_ref().map(|pyramid| Occluders {
-            pyramid: &pyramid.all,
-            region: self.region,
-            levels: pyramid.levels,
-        })
+        self.pyramid.occluders()
+    }
+
+    /// The pyramid's pipelines, on a device that builds one.
+    pub fn pipelines(&self) -> Option<&Pipelines> {
+        self.pipelines.as_ref().ok()
     }
 
     /// The last world view did not test: its passes report no time.

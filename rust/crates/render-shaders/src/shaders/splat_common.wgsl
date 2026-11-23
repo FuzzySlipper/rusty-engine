@@ -38,12 +38,18 @@ struct Project {
     groups: vec4<u32>,
     // Each tinted group's target, sRGB-encoded, in rgb and its weight in w.
     group_tints: array<vec4<f32>, 8>,
+    // The view's post-opaque farthest-depth pyramid (`hiz`): x the side in
+    // target pixels of a level-0 texel's block when the set's splats are
+    // tested against it, 0 when not; y its levels; zw the target pixel its
+    // level 0 starts at.
+    occlusion: vec4<f32>,
 };
 
-// The indirect draw of a run's layer: 4 vertices per visible splat.
+// The indirect draw of a run's layer: 4 vertices per visible splat, the
+// count the compaction writes.
 struct DrawArgs {
     vertex_count: u32,
-    instance_count: atomic<u32>,
+    instance_count: u32,
     first_vertex: u32,
     first_instance: u32,
 };
@@ -63,6 +69,10 @@ const ALPHA_MIN: f32 = 1.0 / 255.0;
 // A splat's skin: four joints (a byte each, lowest first) and their four
 // weights (unorm8).
 @group(1) @binding(1) var<storage, read> skins: array<vec2<u32>>;
+// The view's depth after its opaque pass, reduced to a farthest-depth
+// pyramid (render-wgpu `occlusion.rs` `DepthPyramid`).
+@group(2) @binding(0) var hiz: texture_2d<f32>;
+
 // What a lit run reads of a Gaussian: x its unit normal in the set's
 // space, octahedral (snorm16 pair); y its albedo (`_ALBEDO`), sRGB unorm8
 // rgb, its colour without baked shading, and in its top byte its group
@@ -151,11 +161,41 @@ fn group_tint(index: u32) -> vec4<f32> {
     return vec4<f32>(0.0);
 }
 
+// Whether a splat drawn within the target pixels `low` to `high`, at depths
+// no nearer than `nearest` (NDC), lies wholly behind the view's opaque depth:
+// farther than the farthest depth over the 2×2 texels of the pyramid level
+// whose texels are at least the box's size. Every fragment it would draw
+// fails the layer's depth test, so dropping it changes nothing.
+fn hidden(low: vec2<f32>, high: vec2<f32>, nearest: f32) -> bool {
+    let block = project.occlusion.x;
+    if block < 0.5 {
+        return false;
+    }
+    let origin = project.occlusion.zw;
+    let lo = max(low - origin, vec2<f32>(0.0)) / block;
+    let hi = (high - origin) / block;
+    if any(hi < lo) {
+        return false;
+    }
+    let levels = u32(project.occlusion.y);
+    let extent = max(max(hi.x - lo.x, hi.y - lo.y), 1.0);
+    let level = min(u32(ceil(log2(extent))), levels - 1u);
+    let last = vec2<i32>(textureDimensions(hiz, level)) - 1;
+    let scale = 1.0 / f32(1u << level);
+    let a = min(vec2<i32>(floor(lo * scale)), last);
+    let b = min(vec2<i32>(floor(hi * scale)), last);
+    let farthest = max(
+        max(textureLoad(hiz, a, level).r, textureLoad(hiz, vec2<i32>(b.x, a.y), level).r),
+        max(textureLoad(hiz, vec2<i32>(a.x, b.y), level).r, textureLoad(hiz, b, level).r),
+    );
+    return nearest > farthest;
+}
+
 // A visible splat in `slot` at view depth `depth`, sorted back to front:
-// the farthest first.
+// the farthest first. The run's compaction (`splats.wgsl` `cs_compact_*`)
+// counts the visible ones for the draw.
 fn keep(slot: u32, depth: f32) {
     let along = clamp((depth - project.depth.x) * project.depth.y, 0.0, 1.0);
     project_keys[slot] = u32(round((1.0 - along) * KEY_SPAN));
     project_values[slot] = slot;
-    atomicAdd(&draw_args.instance_count, 1u);
 }

@@ -26,7 +26,7 @@
 // reactive mask.
 
 #import rusty::splat_layer::{layer, surface_layer, grid, srgb_to_linear, linear_to_srgb, block_sums, snapped}
-#import rusty::splat_common::{project, project_keys, project_values, draw_args, palettes, skins, surfaces, ALPHA_MIN, rotation_matrix, half_float, blended_rows, moved, cull, octahedral, group_tint, keep}
+#import rusty::splat_common::{project, project_keys, project_values, draw_args, palettes, skins, surfaces, CULLED, ALPHA_MIN, rotation_matrix, half_float, blended_rows, moved, cull, octahedral, group_tint, keep, hidden}
 
 // One Gaussian of a splat resource, two words of four:
 // [0] centre xyz (f32 bits), colour (r, g, b, opacity as unorm8, r lowest);
@@ -50,9 +50,23 @@ struct Projected {
 };
 
 struct Sort {
-    // x: Gaussians in the run; y: its blocks of `TILE`; z: the pass's
-    // digit shift.
+    // x: the run's splats; y: its blocks of `TILE` (the compaction's);
+    // z: a sort pass's digit shift.
     sizes: vec4<u32>,
+};
+
+// What the run's compaction leaves for its sort: the splats that survived
+// and their blocks of `TILE`.
+struct Sizes {
+    count: u32,
+    blocks: u32,
+};
+
+// The sort's indirect dispatches: by blocks, and by groups of `TILE` digit
+// counts.
+struct Dispatches {
+    by_blocks: vec4<u32>,
+    by_groups: vec4<u32>,
 };
 
 const WORKGROUP: u32 = 256u;
@@ -61,6 +75,9 @@ const TILE: u32 = 1024u;
 const DIGITS: u32 = 256u;
 const DIGIT_BITS: u32 = 8u;
 const INVALID: u32 = 0xffffffffu;
+// Blocks' counts each invocation scans: 256 · 16 = 4096 blocks of `TILE`,
+// a run's most.
+const COMPACT_ITEMS: u32 = 16u;
 
 @group(0) @binding(1) var<storage, read_write> projected: array<Projected>;
 @group(1) @binding(0) var<storage, read> gaussians: array<Gaussian>;
@@ -72,6 +89,20 @@ const INVALID: u32 = 0xffffffffu;
 @group(0) @binding(14) var<storage, read_write> values_out: array<u32>;
 @group(0) @binding(15) var<storage, read_write> counts: array<u32>;
 @group(0) @binding(16) var<storage, read_write> sums: array<u32>;
+@group(0) @binding(17) var<storage, read> sizes: Sizes;
+
+// The compaction's own: the sizes it writes, and beside them the splats
+// every run of the frame kept, for the readout; the run's draw (`DrawArgs`)
+// as words, whose count it writes; and the sort's dispatches.
+struct Compacted {
+    count: u32,
+    blocks: u32,
+    tally: atomic<u32>,
+};
+
+@group(0) @binding(22) var<storage, read_write> compacted: Compacted;
+@group(0) @binding(18) var<storage, read_write> draw_words: array<u32, 4>;
+@group(0) @binding(23) var<storage, read_write> dispatches: Dispatches;
 
 @group(0) @binding(20) var<storage, read> drawn: array<Projected>;
 @group(0) @binding(21) var<storage, read> order: array<u32>;
@@ -205,6 +236,13 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     let to_ndc = 2.0 / size;
     let axis1 = l1 * direction * to_ndc;
     let axis2 = l2 * vec2<f32>(direction.y, -direction.x) * to_ndc;
+    // Its quad's box in target pixels, all of it at its centre's depth.
+    let centre_pixel = project.pixels.xy + ndc.xy * project.pixels.zw;
+    let half_box = (abs(axis1) + abs(axis2)) * abs(project.pixels.zw);
+    if hidden(centre_pixel - half_box, centre_pixel + half_box, ndc.z) {
+        cull(slot);
+        return;
+    }
     // The centre's motion: from where it stood to where the pass draws it.
     var motion = vec2<f32>(0.0);
     if project.skin.w == 1u {
@@ -268,12 +306,12 @@ fn cs_sort_count(
     let first = block.x * TILE + local * ITEMS;
     for (var item = 0u; item < ITEMS; item = item + 1u) {
         let index = first + item;
-        if index < sort.sizes.x {
+        if index < sizes.count {
             atomicAdd(&digit_counts[digit_of(keys_in[index])], 1u);
         }
     }
     workgroupBarrier();
-    counts[local * sort.sizes.y + block.x] = atomicLoad(&digit_counts[local]);
+    counts[local * sizes.blocks + block.x] = atomicLoad(&digit_counts[local]);
 }
 
 // `counts` scanned within each group of `TILE`, each group's total to `sums`.
@@ -282,7 +320,7 @@ fn cs_scan_local(
     @builtin(local_invocation_index) local: u32,
     @builtin(workgroup_id) group: vec3<u32>,
 ) {
-    let entries = DIGITS * sort.sizes.y;
+    let entries = DIGITS * sizes.blocks;
     let first = group.x * TILE + local * ITEMS;
     var values: array<u32, 4>;
     var total = 0u;
@@ -311,7 +349,7 @@ fn cs_scan_local(
 // The groups' totals scanned in one workgroup (at most `TILE` groups).
 @compute @workgroup_size(256)
 fn cs_scan_sums(@builtin(local_invocation_index) local: u32) {
-    let groups = (DIGITS * sort.sizes.y + TILE - 1u) / TILE;
+    let groups = (DIGITS * sizes.blocks + TILE - 1u) / TILE;
     let first = local * ITEMS;
     var values: array<u32, 4>;
     var total = 0u;
@@ -339,7 +377,7 @@ fn cs_scan_add(
     @builtin(local_invocation_index) local: u32,
     @builtin(workgroup_id) group: vec3<u32>,
 ) {
-    let entries = DIGITS * sort.sizes.y;
+    let entries = DIGITS * sizes.blocks;
     let first = group.x * TILE + local * ITEMS;
     let add = sums[group.x];
     for (var item = 0u; item < ITEMS; item = item + 1u) {
@@ -360,7 +398,7 @@ fn cs_sort_scatter(
     var values: array<u32, 4>;
     for (var item = 0u; item < ITEMS; item = item + 1u) {
         let index = first + item;
-        if index < sort.sizes.x {
+        if index < sizes.count {
             keys[item] = keys_in[index];
             values[item] = values_in[index];
         } else {
@@ -415,9 +453,100 @@ fn cs_sort_scatter(
         }
         let digit = digit_of(keys[item]);
         let rank = local * ITEMS + item - digit_starts[digit];
-        let destination = counts[digit * sort.sizes.y + block.x] + rank;
+        let destination = counts[digit * sizes.blocks + block.x] + rank;
         keys_out[destination] = keys[item];
         values_out[destination] = values[item];
+    }
+}
+
+// --- Compaction --------------------------------------------------------------
+//
+// The projection writes each splat's key at its slot, `CULLED` where it is
+// hidden. Before the sort, the visible keys are copied in slot order into
+// the sort's input (`cs_compact_count` counts each block of `TILE`,
+// `cs_compact_scan` gives each block its first place, `cs_compact_scatter`
+// copies), so the sort orders only them, and equal keys stay in slot order
+// frame after frame as they did uncompacted. Here `keys_in`/`values_in` are
+// the projection's, `keys_out`/`values_out` the sort's input, `counts` each
+// block's visible keys and then its first place, and `sort.sizes` the
+// run's splats and blocks.
+
+@compute @workgroup_size(256)
+fn cs_compact_count(
+    @builtin(local_invocation_index) local: u32,
+    @builtin(workgroup_id) block: vec3<u32>,
+) {
+    var visible = 0u;
+    let first = block.x * TILE + local * ITEMS;
+    for (var item = 0u; item < ITEMS; item = item + 1u) {
+        let index = first + item;
+        if index < sort.sizes.x && keys_in[index] != CULLED {
+            visible = visible + 1u;
+        }
+    }
+    let before = exclusive_scan(local, visible);
+    if local == WORKGROUP - 1u {
+        counts[block.x] = before + visible;
+    }
+}
+
+// The blocks' counts scanned into their first places in one workgroup (at
+// most `TILE · TILE / DIGITS / TILE` = 4096 blocks), and the sort's sizes.
+@compute @workgroup_size(256)
+fn cs_compact_scan(@builtin(local_invocation_index) local: u32) {
+    let blocks = sort.sizes.y;
+    let first = local * COMPACT_ITEMS;
+    var values: array<u32, 16>;
+    var total = 0u;
+    for (var item = 0u; item < COMPACT_ITEMS; item = item + 1u) {
+        let index = first + item;
+        var value = 0u;
+        if index < blocks {
+            value = counts[index];
+        }
+        values[item] = value;
+        total = total + value;
+    }
+    var running = exclusive_scan(local, total);
+    for (var item = 0u; item < COMPACT_ITEMS; item = item + 1u) {
+        let index = first + item;
+        if index < blocks {
+            counts[index] = running;
+        }
+        running = running + values[item];
+    }
+    if local == WORKGROUP - 1u {
+        let sorted_blocks = (running + TILE - 1u) / TILE;
+        let groups = (DIGITS * sorted_blocks + TILE - 1u) / TILE;
+        compacted.count = running;
+        compacted.blocks = sorted_blocks;
+        dispatches = Dispatches(vec4<u32>(sorted_blocks, 1u, 1u, 0u), vec4<u32>(groups, 1u, 1u, 0u));
+        draw_words[1] = running;
+        atomicAdd(&compacted.tally, running);
+    }
+}
+
+@compute @workgroup_size(256)
+fn cs_compact_scatter(
+    @builtin(local_invocation_index) local: u32,
+    @builtin(workgroup_id) block: vec3<u32>,
+) {
+    let first = block.x * TILE + local * ITEMS;
+    var visible = 0u;
+    for (var item = 0u; item < ITEMS; item = item + 1u) {
+        let index = first + item;
+        if index < sort.sizes.x && keys_in[index] != CULLED {
+            visible = visible + 1u;
+        }
+    }
+    var place = counts[block.x] + exclusive_scan(local, visible);
+    for (var item = 0u; item < ITEMS; item = item + 1u) {
+        let index = first + item;
+        if index < sort.sizes.x && keys_in[index] != CULLED {
+            keys_out[place] = keys_in[index];
+            values_out[place] = values_in[index];
+            place = place + 1u;
+        }
     }
 }
 

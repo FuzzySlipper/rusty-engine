@@ -524,9 +524,23 @@ binding's.
   and the readout says why. Software adapters draw them, slowly.
 - **Limit.** A run sorts at most 4,194,304 Gaussians. An instance that does
   not fit draws nothing, and the readout counts it.
-- **Readout.** `GpuReadout.splats` reports the last frame's runs, instances
-  and Gaussians, summed over its views. The `splats` pass timer covers the
-  projection, sort and layers of the frame's first view with a run.
+- **Readout.** `GpuReadout.splats` reports the last frame's runs, instances,
+  Gaussians and cards, summed over its views, and how many of them were
+  sorted and drawn (`surviving`), read back from the GPU a frame or two
+  later. The `splats` pass timer covers the projection, sort and layers of
+  the frame's first view with a run.
+- **Only what can show is sorted.** A run sorts only the splats its
+  projection kept, in the order they stand in the run, so splats at the same
+  depth draw in the same order every frame.
+- **Occlusion culling.** With `RendererSettings.OcclusionCulling`, a view
+  reduces its depth after its opaque pass (the world and the figures'
+  [cores](#the-core)) to a farthest-depth pyramid, timed as
+  `splats-occlusion`, and a splat lying wholly behind it is dropped before
+  the sort. A Gaussian is tested at its centre's depth over its quad, a
+  card at its nearest corner's over its four corners. Every fragment of a
+  dropped splat would have failed the depth test, so the frame is the same
+  to the pixel. A figure on a pixel grid is not tested: its layer is drawn
+  whole.
 - **Measured cost.** One 48,000-Gaussian figure walking at
   1920 × 1080 takes 0.31 ms of GPU time on an RX 9070 XT about 750 pixels
   tall (2.2 m away), and 0.19 ms at 3.6 m. Drawing the layer dominates, and

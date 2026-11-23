@@ -2048,3 +2048,183 @@ fn a_core_casts_only_as_the_cores_caster() {
         "a faint Gaussian's ellipsoid, not its core: open {open}, {ellipsoids}"
     );
 }
+
+/// A sheet of Gaussians, 21 by 13, `spacing` apart in x and y, coloured by
+/// row and opaque, facing the camera.
+fn sheet(spacing: f32) -> Vec<Gaussian> {
+    (-10..=10)
+        .flat_map(|i| (-6..=6).map(move |j| (i, j)))
+        .map(|(i, j)| {
+            Gaussian::round(
+                [i as f32 * spacing, j as f32 * spacing, 0.0],
+                spacing * 0.6,
+                [(120 + i * 6) as u8, 100, (120 + j * 8) as u8, 255],
+            )
+        })
+        .collect()
+}
+
+/// The frame `ops` draw from the front with `antialiasing`, with occlusion
+/// culling off and on, and with it on the splats projected and kept (the
+/// kept count is read back a frame or two late, so several frames are
+/// drawn).
+fn culled_and_not(
+    antialiasing: Antialiasing,
+    ops: impl Fn(&mut Harness) -> Vec<RenderDiff>,
+) -> (Vec<u8>, Vec<u8>, (u64, u64)) {
+    let frame = |occlusion_culling: bool| {
+        let mut harness = Harness::new(RendererOptions::default());
+        let mut diffs = ops(&mut harness);
+        diffs.push(RenderDiff::SetRendererSettings {
+            settings: RendererSettingsDescriptor {
+                antialiasing,
+                occlusion_culling,
+                ..RendererSettingsDescriptor::DEFAULT
+            },
+        });
+        harness.apply(diffs);
+        let mut rgba = Vec::new();
+        for _ in 0..4 {
+            rgba = harness.render(&front()).1;
+        }
+        let readout = harness.renderer.gpu_readout().splats;
+        (rgba, (readout.gaussians + readout.cards, readout.surviving))
+    };
+    let (open, (projected, kept)) = frame(false);
+    assert_eq!(
+        projected, kept,
+        "without culling every splat in view is kept"
+    );
+    let (culled, counts) = frame(true);
+    (open, culled, counts)
+}
+
+/// An opaque wall before the left half of the view.
+fn wall() -> Vec<RenderDiff> {
+    vec![
+        RenderDiff::DefineMaterial {
+            material: RenderMaterialDescriptor {
+                unlit: true,
+                ..material("material/wall", [0.2, 0.6, 0.3, 1.0], None)
+            },
+        },
+        static_mesh(
+            "mesh/wall",
+            box_mesh([-3.0, -2.0, -0.1], [0.0, 2.0, 0.1], |_| 0),
+            "material/wall",
+        ),
+        instance(
+            40,
+            None,
+            "mesh/wall",
+            transform([0.0, 0.0, -2.5], 0.0, [1.0; 3]),
+        ),
+    ]
+}
+
+/// With occlusion culling, Gaussians behind the opaque world are dropped
+/// before the sort, and the frame is the same to the byte, without and with
+/// MSAA: a wall hides the left half of a sheet of Gaussians, a pillar a
+/// strip of it.
+#[test]
+fn gaussians_hidden_behind_the_world_are_culled_without_a_change() {
+    for antialiasing in [Antialiasing::Off, Antialiasing::Msaa4] {
+        gaussians_behind_the_world(antialiasing);
+    }
+}
+
+fn gaussians_behind_the_world(antialiasing: Antialiasing) {
+    let (open, culled, (projected, kept)) = culled_and_not(antialiasing, |harness| {
+        let mut ops = splats(harness, 1, &sheet(0.1), [0.0, 0.0, -4.0]);
+        ops.extend(wall());
+        ops.extend([
+            static_mesh(
+                "mesh/pillar",
+                box_mesh([0.4, -2.0, -0.1], [0.5, 2.0, 0.1], |_| 0),
+                "material/wall",
+            ),
+            instance(
+                41,
+                None,
+                "mesh/pillar",
+                transform([0.0, 0.0, -3.0], 0.0, [1.0; 3]),
+            ),
+        ]);
+        ops
+    });
+    assert!(open == culled, "culling changed the frame");
+    assert!(
+        kept < projected * 2 / 3 && kept > projected / 4,
+        "{kept} of {projected} kept"
+    );
+}
+
+/// Cards behind the wall are culled by their nearest corner's depth, and
+/// cards turned toward it, reaching through it, are kept.
+#[test]
+fn cards_hidden_behind_the_world_are_culled_without_a_change() {
+    let turn = 40f32.to_radians();
+    let cards_sheet: Vec<Card> = (-10i32..=10)
+        .flat_map(|i| (-6..=6).map(move |j| (i, j)))
+        .map(|(i, j)| Card {
+            // Every third column turned about y, its near edge reaching
+            // toward the wall.
+            rotation: if i % 3 == 0 {
+                [0.0, turn.sin(), 0.0, turn.cos()]
+            } else {
+                [0.0, 0.0, 0.0, 1.0]
+            },
+            ..Card::facing(
+                [i as f32 * 0.1, j as f32 * 0.1, 0.0],
+                0.06,
+                [(i + j).rem_euclid(2) as u16, 0],
+            )
+        })
+        .collect();
+    let (open, culled, (projected, kept)) = culled_and_not(Antialiasing::Off, |harness| {
+        let mut ops = cards(harness, 1, &cards_sheet, [0.0, 0.0, -4.0]);
+        ops.extend(wall());
+        ops
+    });
+    assert!(open == culled, "culling changed the frame");
+    assert!(kept < projected * 7 / 10, "{kept} of {projected} kept");
+}
+
+/// A figure's core hides the Gaussians behind it: they are culled, and the
+/// frame is the same.
+#[test]
+fn gaussians_behind_a_core_are_culled_without_a_change() {
+    let (open, culled, (projected, kept)) = culled_and_not(Antialiasing::Off, |harness| {
+        // A sheet in front of the core and one behind it.
+        let mut figure: Vec<Gaussian> = sheet(0.03)
+            .into_iter()
+            .map(|g| Gaussian {
+                centre: [g.centre[0], g.centre[1], 0.05],
+                color: [g.color[0], g.color[1], g.color[2], 128],
+                ..g
+            })
+            .collect();
+        figure.extend(sheet(0.03).into_iter().map(|g| Gaussian {
+            centre: [g.centre[0], g.centre[1], -0.2],
+            ..g
+        }));
+        let asset = admit(
+            harness,
+            "cored-culled",
+            splat_glb_with_core(&figure, blue_core()),
+        );
+        vec![
+            RenderDiff::DefineAnimatedMesh {
+                asset: asset.clone(),
+            },
+            splat_instance(1, &asset, [0.0, 0.0, -3.0]),
+        ]
+    });
+    assert!(open == culled, "culling changed the frame");
+    // The front sheet is kept whole; of the back one, all but what the
+    // test's coarse texels cannot rule out at the core's edge is culled.
+    assert!(
+        kept >= projected / 2 && kept < projected * 3 / 4,
+        "{kept} of {projected} kept"
+    );
+}

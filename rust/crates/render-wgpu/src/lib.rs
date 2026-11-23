@@ -1451,6 +1451,7 @@ impl Renderer {
                     self.water.timing(),
                     self.effects.grid_timing(),
                     self.splats.timing(),
+                    self.splats.occlusion_timing(),
                 ])
                 .chain(
                     self.ray_scene

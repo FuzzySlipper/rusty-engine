@@ -17,7 +17,7 @@
 // colour is: the layer blends it as it is and only the composite decodes it.
 
 #import rusty::splat_layer::{srgb_to_linear, linear_to_srgb}
-#import rusty::splat_common::{project, draw_args, skins, ALPHA_MIN, rotation_matrix, half_float, blended_rows, moved, cull, group_tint, keep}
+#import rusty::splat_common::{project, draw_args, skins, ALPHA_MIN, rotation_matrix, half_float, blended_rows, moved, cull, group_tint, keep, hidden}
 
 // One card of a card resource, two words of four:
 // [0] centre xyz (f32 bits), its tile's top-left texel (x, y as u16, x
@@ -96,16 +96,28 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
         cull(slot);
         return;
     }
-    // Dropped when all four corners lie beyond one side of the view.
+    // Dropped when all four corners lie beyond one side of the view, or
+    // when, all in front of the eye, they lie behind the opaque depth over
+    // their box from their nearest depth on.
     var beyond = vec3<bool>(true);
     var behind = vec3<bool>(true);
+    var in_front = true;
+    var low = vec2<f32>(1e30);
+    var high = vec2<f32>(-1e30);
+    var nearest = 1.0;
     for (var corner = 0u; corner < 4u; corner = corner + 1u) {
         let c = vec2<f32>(f32(corner & 1u), f32(corner >> 1u)) * 2.0 - 1.0;
         let p = clip + c.x * clip_u + c.y * clip_v;
         beyond = beyond & (p.xyz > vec3<f32>(p.w));
         behind = behind & (p.xyz < vec3<f32>(-p.w, -p.w, 0.0));
+        in_front = in_front && p.w > 1e-6;
+        let ndc = p.xyz / max(p.w, 1e-6);
+        let pixel = project.pixels.xy + ndc.xy * project.pixels.zw;
+        low = min(low, pixel);
+        high = max(high, pixel);
+        nearest = min(nearest, ndc.z);
     }
-    if any(beyond) || any(behind) {
+    if any(beyond) || any(behind) || (in_front && hidden(low, high, nearest)) {
         cull(slot);
         return;
     }

@@ -1,14 +1,16 @@
-// A world view's occluder depth reduced to a farthest-depth pyramid
-// (render-wgpu `occlusion.rs`) for the scatter selection's occlusion test.
-// Level 0 is the depth over the view's region, each pixel's farthest sample
-// (the depth samples as the world pass does), padded with the far plane to
-// a power of two; each level above holds the farthest of the four texels
-// under it.
+// A world view's depth reduced to a farthest-depth pyramid (render-wgpu
+// `occlusion.rs`) for the occlusion tests. Level 0 is the depth over the
+// view's region, each texel the farthest sample of its block of pixels (one
+// pixel for the parts' test, four by four for the splats'), padded with the
+// far plane to a power of two; each level above holds the farthest of the
+// four texels under it.
 
 struct Seed {
     // The view's region in the depth texture: origin and size.
     origin: vec2<u32>,
     size: vec2<u32>,
+    // The side of the block of pixels a level-0 texel covers.
+    block: u32,
 };
 
 @group(0) @binding(0) var<uniform> seed: Seed;
@@ -26,8 +28,15 @@ fn cs_seed(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     var value = 1.0;
-    if all(id.xy < seed.size) {
-        value = textureLoad(depth, seed.origin + id.xy, 0);
+    let first = id.xy * seed.block;
+    if all(first < seed.size) {
+        value = 0.0;
+        let last = min(first + seed.block, seed.size);
+        for (var y = first.y; y < last.y; y++) {
+            for (var x = first.x; x < last.x; x++) {
+                value = max(value, textureLoad(depth, seed.origin + vec2<u32>(x, y), 0));
+            }
+        }
     }
     textureStore(level_zero, id.xy, vec4<f32>(value, 0.0, 0.0, 0.0));
 }
@@ -38,10 +47,19 @@ fn cs_seed_samples(@builtin(global_invocation_id) id: vec3<u32>) {
         return;
     }
     var value = 1.0;
-    if all(id.xy < seed.size) {
+    let first = id.xy * seed.block;
+    if all(first < seed.size) {
         value = 0.0;
-        for (var sample = 0u; sample < textureNumSamples(depth_samples); sample++) {
-            value = max(value, textureLoad(depth_samples, seed.origin + id.xy, i32(sample)));
+        let last = min(first + seed.block, seed.size);
+        for (var y = first.y; y < last.y; y++) {
+            for (var x = first.x; x < last.x; x++) {
+                for (var sample = 0u; sample < textureNumSamples(depth_samples); sample++) {
+                    value = max(
+                        value,
+                        textureLoad(depth_samples, seed.origin + vec2<u32>(x, y), i32(sample)),
+                    );
+                }
+            }
         }
     }
     textureStore(level_zero, id.xy, vec4<f32>(value, 0.0, 0.0, 0.0));

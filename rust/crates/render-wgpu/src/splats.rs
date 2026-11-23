@@ -88,6 +88,11 @@ const SKIN_BYTES: u64 = 8;
 pub(crate) const MAX_SKIN_JOINTS: usize = 256;
 /// Bytes of one projected Gaussian (`splats.wgsl` `Projected`).
 const PROJECTED_BYTES: u64 = 48;
+/// The side, in target pixels, of the block a level-0 texel of the splats'
+/// depth pyramid covers: a splat's box spans at least a few pixels, so the
+/// test never reads a finer level, and a coarser first level is a sixteenth
+/// of the pyramid to write.
+const OCCLUSION_BLOCK: u32 = 4;
 /// Bytes of one projected card (`splat_cards.wgsl` `ProjectedCard`).
 const PROJECTED_CARD_BYTES: u64 = 96;
 /// One dynamic uniform slot of the parameters buffer (`splats.wgsl`
@@ -252,10 +257,14 @@ pub struct SplatReadout {
     pub runs: u32,
     /// Splat instances drawn.
     pub instances: u32,
-    /// Gaussians projected and sorted.
+    /// Gaussians projected.
     pub gaussians: u64,
-    /// Cards projected and sorted.
+    /// Cards projected.
     pub cards: u64,
+    /// Of the splats projected, those sorted and drawn: in the view and,
+    /// with occlusion culling, not hidden behind its opaque depth. Read
+    /// back from the GPU, so from a frame or two before the others.
+    pub surviving: u64,
     /// Splat instances that had no room in their run
     /// ([`MAX_RUN_GAUSSIANS`]) and drew nothing.
     pub refused_instances: u32,
@@ -458,6 +467,10 @@ pub(crate) struct SplatTarget<'a> {
     pub render_scale: f32,
     /// While the view draws motion: its previous projection.
     pub motion: Option<SplatMotion>,
+    /// With occlusion culling (`RendererOptions::occlusion_culling`): the
+    /// pyramid's pipelines, with which splats hidden behind the view's
+    /// opaque depth are dropped before the sort.
+    pub occlusion: Option<&'a crate::occlusion::Pipelines>,
 }
 
 /// A view's previous projection (`motion.rs` `MotionPass`), for the motion
@@ -586,6 +599,9 @@ struct Pipelines {
     project_layout: wgpu::BindGroupLayout,
     gaussian_layout: wgpu::BindGroupLayout,
     sort_layout: wgpu::BindGroupLayout,
+    compact_layout: wgpu::BindGroupLayout,
+    /// The projection's group 2: the view's depth pyramid.
+    occlusion_layout: wgpu::BindGroupLayout,
     draw_layout: wgpu::BindGroupLayout,
     composite_layout: wgpu::BindGroupLayout,
     draw_pipeline_layout: wgpu::PipelineLayout,
@@ -606,6 +622,9 @@ struct Pipelines {
     scan_sums: wgpu::ComputePipeline,
     scan_add: wgpu::ComputePipeline,
     sort_scatter: wgpu::ComputePipeline,
+    compact_count: wgpu::ComputePipeline,
+    compact_scan: wgpu::ComputePipeline,
+    compact_scatter: wgpu::ComputePipeline,
 }
 
 /// The buffers a run is projected and sorted in, reused by every run.
@@ -621,8 +640,13 @@ struct RunBuffers {
     keys: wgpu::Buffer,
     values: wgpu::Buffer,
     args: wgpu::Buffer,
+    /// The sort's indirect dispatches, which the compaction writes.
+    dispatches: wgpu::Buffer,
+    /// The projection writes its keys and values into the second pair;
+    /// the compaction copies the visible ones into the first.
     project_group: wgpu::BindGroup,
-    /// Pass 0 sorts the projection's keys into the second pair, pass 1 back.
+    compact_group: wgpu::BindGroup,
+    /// Pass 0 sorts the compacted keys into the second pair, pass 1 back.
     sort_groups: [wgpu::BindGroup; 2],
     draw_group: wgpu::BindGroup,
 }
@@ -684,6 +708,12 @@ pub(crate) struct Splats {
     /// A software adapter casts ellipsoids for `SplatShadowCaster::Splats`.
     software: bool,
     timer: Option<PassTimer>,
+    /// The views' post-opaque depth pyramid the projection tests against,
+    /// its time, and the empty one it reads when untested.
+    pyramid: crate::occlusion::DepthPyramid,
+    pyramid_timer: Option<PassTimer>,
+    unoccluded: Option<wgpu::BindGroup>,
+    tally: Tally,
     timed: bool,
     counts: SplatReadout,
     last: SplatReadout,
@@ -713,9 +743,28 @@ impl Splats {
         let pipelines = refusal
             .is_none()
             .then(|| Pipelines::new(device, module, light_module, cards_module, frame_layout));
+        // An empty pyramid for projections that are not tested.
+        let unoccluded = pipelines.as_ref().map(|pipelines| {
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("render-wgpu splats unoccluded"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R32Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            occlusion_group(device, pipelines, &texture.create_view(&Default::default()))
+        });
         Self {
             pipelines,
             refusal,
+            unoccluded,
             run: None,
             params: params_buffer(device, 16),
             params_slots: 16,
@@ -733,6 +782,9 @@ impl Splats {
             casters: Casters::new(device),
             software: gpu.is_software(),
             timer: PassTimer::new(gpu, "splats"),
+            pyramid: crate::occlusion::DepthPyramid::new(device),
+            pyramid_timer: PassTimer::new(gpu, "splats-occlusion"),
+            tally: Tally::new(device),
             timed: false,
             counts: SplatReadout::default(),
             last: SplatReadout::default(),
@@ -870,11 +922,15 @@ impl Splats {
     /// At the start of a frame: take the last frame's counts and timing,
     /// and drop the layers the last frame did not draw into.
     pub fn begin_frame(&mut self, gpu: &Gpu) {
-        if let Some(timer) = &mut self.timer {
+        for timer in [&mut self.timer, &mut self.pyramid_timer]
+            .into_iter()
+            .flatten()
+        {
             timer.collect(gpu);
         }
         self.timed = false;
         self.last = std::mem::take(&mut self.counts);
+        self.tally.collect(gpu);
         self.layers.truncate(std::mem::take(&mut self.layers_used));
     }
 
@@ -950,6 +1006,7 @@ impl Splats {
                         tint: [1.0, 1.0, 1.0, 0.0],
                         pixels: [0.0; 4],
                         groups: GroupTints::default(),
+                        occlusion: [0.0; 4],
                     };
                     out.sets
                         .push((bytes.len() as u32, set.count, set.group.clone()));
@@ -1080,7 +1137,11 @@ impl Splats {
             label: Some("render-wgpu splat casters project"),
             timestamp_writes: None,
         });
+        let Some(unoccluded) = &self.unoccluded else {
+            return;
+        };
         pass.set_pipeline(&pipelines.project);
+        pass.set_bind_group(2, unoccluded, &[]);
         for (offset, count, group) in &layer.sets {
             pass.set_bind_group(0, project, &[*offset]);
             pass.set_bind_group(1, group, &[]);
@@ -1229,6 +1290,7 @@ impl Splats {
     pub fn readout(&self) -> SplatReadout {
         SplatReadout {
             refused: self.refusal.clone(),
+            surviving: self.tally.last,
             ..self.last.clone()
         }
     }
@@ -1237,6 +1299,14 @@ impl Splats {
         self.timer
             .as_ref()
             .map_or_else(|| crate::timing::untimed("splats"), PassTimer::readout)
+    }
+
+    /// The post-opaque depth pyramid's build, for the occlusion test.
+    pub fn occlusion_timing(&self) -> crate::timing::GpuPassTiming {
+        self.pyramid_timer.as_ref().map_or_else(
+            || crate::timing::untimed("splats-occlusion"),
+            PassTimer::readout,
+        )
     }
 
     /// Instances refused for want of room in a run.
@@ -1525,6 +1595,38 @@ impl Splats {
         }
         self.layers_used = self.layers_used.max(runs.len());
 
+        // With occlusion culling, the view's depth as its opaque pass left it
+        // (the world and the figures' cores) reduced to a pyramid, which the
+        // runs whose layers are tested against the world test their splats
+        // against. A gridded run's layer is drawn untested.
+        let tested = self.finishes.iter().any(Finish::tested);
+        let occluded = match target.occlusion.filter(|_| tested) {
+            Some(occlusion) => {
+                let (_, levels) = self.pyramid.build(
+                    gpu,
+                    encoder,
+                    occlusion,
+                    (target.depth, target.samples),
+                    target.viewport,
+                    OCCLUSION_BLOCK,
+                    self.pyramid_timer.as_ref().filter(|_| !self.timed),
+                );
+                let pipelines = self.pipelines.as_ref().expect("checked above");
+                self.pyramid.occluders().map(|occluders| {
+                    (
+                        occlusion_group(&gpu.device, pipelines, occluders.pyramid),
+                        levels,
+                    )
+                })
+            }
+            None => None,
+        };
+        if occluded.is_some() && !self.timed {
+            if let Some(timer) = &mut self.pyramid_timer {
+                timer.resolve(encoder);
+            }
+        }
+
         // Every slot this view's dispatches read, written at once: for each
         // run its two sort passes, then its sets.
         let viewport = target.viewport;
@@ -1558,10 +1660,11 @@ impl Splats {
         let mut offsets = Vec::with_capacity(runs.len());
         let mut palette_index = palette_firsts.iter().copied();
         let mut previous_models = previous.iter();
-        for ((run, &(near, far)), lit) in runs
+        for (((run, &(near, far)), lit), run_tested) in runs
             .iter()
             .zip(splat_runs.iter().map(|run| &run.depth_range))
             .zip(self.finishes.iter().map(Finish::lit))
+            .zip(self.finishes.iter().map(Finish::tested))
         {
             let total: u32 = run.iter().map(|entry| entry.set.count).sum();
             let blocks = total.div_ceil(TILE);
@@ -1613,6 +1716,15 @@ impl Splats {
                     tint: [r, g, b, 0.0],
                     pixels,
                     groups: draw.groups,
+                    occlusion: match &occluded {
+                        Some((_, levels)) if run_tested => [
+                            OCCLUSION_BLOCK as f32,
+                            *levels as f32,
+                            viewport.x as f32,
+                            viewport.y as f32,
+                        ],
+                        _ => [0.0; 4],
+                    },
                 };
                 sets.push(bytes.len() as u32);
                 bytes.extend_from_slice(&slot.bytes());
@@ -1626,11 +1738,11 @@ impl Splats {
             gpu.queue.write_buffer(&self.palettes, 0, &palette_bytes);
         }
 
+        self.tally.begin_view(encoder);
         let pipelines = self.pipelines.as_ref().expect("checked above");
         let buffers = self.run.as_ref().expect("ensured above");
         let timer = self.timer.as_ref().filter(|_| !self.timed);
         for (index, (run, (sort, sets, total, blocks))) in runs.iter().zip(&offsets).enumerate() {
-            let groups = (DIGITS * blocks).div_ceil(TILE);
             let atlas = atlases[index];
             encoder.clear_buffer(&buffers.args, 0, None);
             {
@@ -1645,23 +1757,38 @@ impl Splats {
                 } else {
                     &pipelines.project
                 });
+                let unoccluded = self.unoccluded.as_ref().expect("made with the pipelines");
+                pass.set_bind_group(
+                    2,
+                    occluded.as_ref().map_or(unoccluded, |(group, _)| group),
+                    &[],
+                );
                 for (entry, offset) in run.iter().zip(sets) {
                     pass.set_bind_group(0, &buffers.project_group, &[*offset]);
                     pass.set_bind_group(1, &entry.set.group, &[]);
                     pass.dispatch_workgroups(entry.set.count.div_ceil(WORKGROUP).max(1), 1, 1);
                 }
+                // The visible keys, in slot order, are the sort's input;
+                // the sort runs over as many blocks as they fill.
+                pass.set_bind_group(0, &buffers.compact_group, &[*sort]);
+                pass.set_pipeline(&pipelines.compact_count);
+                pass.dispatch_workgroups(*blocks, 1, 1);
+                pass.set_pipeline(&pipelines.compact_scan);
+                pass.dispatch_workgroups(1, 1, 1);
+                pass.set_pipeline(&pipelines.compact_scatter);
+                pass.dispatch_workgroups(*blocks, 1, 1);
                 for (step, group) in buffers.sort_groups.iter().enumerate() {
                     pass.set_bind_group(0, group, &[sort + step as u32 * PARAMS_SLOT as u32]);
                     pass.set_pipeline(&pipelines.sort_count);
-                    pass.dispatch_workgroups(*blocks, 1, 1);
+                    pass.dispatch_workgroups_indirect(&buffers.dispatches, 0);
                     pass.set_pipeline(&pipelines.scan_local);
-                    pass.dispatch_workgroups(groups, 1, 1);
+                    pass.dispatch_workgroups_indirect(&buffers.dispatches, 16);
                     pass.set_pipeline(&pipelines.scan_sums);
                     pass.dispatch_workgroups(1, 1, 1);
                     pass.set_pipeline(&pipelines.scan_add);
-                    pass.dispatch_workgroups(groups, 1, 1);
+                    pass.dispatch_workgroups_indirect(&buffers.dispatches, 16);
                     pass.set_pipeline(&pipelines.sort_scatter);
-                    pass.dispatch_workgroups(*blocks, 1, 1);
+                    pass.dispatch_workgroups_indirect(&buffers.dispatches, 0);
                 }
             }
             let layer = &self.layers[index];
@@ -1747,6 +1874,7 @@ impl Splats {
                 self.counts.gaussians += u64::from(*total);
             }
         }
+        self.tally.end_view(encoder);
         if !self.timed {
             if let Some(timer) = &mut self.timer {
                 timer.resolve(encoder);
@@ -1762,7 +1890,10 @@ impl Splats {
 
     /// After the encoder holding a view's runs was submitted.
     pub fn submitted(&mut self) {
-        if let Some(timer) = &mut self.timer {
+        for timer in [&mut self.timer, &mut self.pyramid_timer]
+            .into_iter()
+            .flatten()
+        {
             timer.submitted();
         }
     }
@@ -1932,6 +2063,14 @@ impl Splats {
             16,
             wgpu::BufferUsages::INDIRECT | wgpu::BufferUsages::COPY_DST | readable,
         );
+        // The splats the compaction kept and their blocks (and the frame's
+        // tally, `Tally`), and the sort's dispatches by blocks and by groups.
+        let sizes = &self.tally.counter;
+        let dispatches = storage(
+            "render-wgpu splat sort dispatches",
+            32,
+            wgpu::BufferUsages::INDIRECT,
+        );
         let params = wgpu::BindingResource::Buffer(wgpu::BufferBinding {
             buffer: &self.params,
             offset: 0,
@@ -1946,10 +2085,25 @@ impl Splats {
             entries: &[
                 entry(0, params.clone()),
                 entry(1, projected.as_entire_binding()),
-                entry(2, keys[0].as_entire_binding()),
-                entry(3, values[0].as_entire_binding()),
+                entry(2, keys[1].as_entire_binding()),
+                entry(3, values[1].as_entire_binding()),
                 entry(4, args.as_entire_binding()),
                 entry(5, self.palettes.as_entire_binding()),
+            ],
+        });
+        let compact_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("render-wgpu splats compact"),
+            layout: &pipelines.compact_layout,
+            entries: &[
+                entry(10, params.clone()),
+                entry(11, keys[1].as_entire_binding()),
+                entry(12, values[1].as_entire_binding()),
+                entry(13, keys[0].as_entire_binding()),
+                entry(14, values[0].as_entire_binding()),
+                entry(15, counts.as_entire_binding()),
+                entry(18, args.as_entire_binding()),
+                entry(22, sizes.as_entire_binding()),
+                entry(23, dispatches.as_entire_binding()),
             ],
         });
         let sort_group = |from: usize, to: usize| {
@@ -1964,6 +2118,7 @@ impl Splats {
                     entry(14, values[to].as_entire_binding()),
                     entry(15, counts.as_entire_binding()),
                     entry(16, sums.as_entire_binding()),
+                    entry(17, sizes.as_entire_binding()),
                 ],
             })
         };
@@ -1985,7 +2140,9 @@ impl Splats {
             keys: keys[0].clone(),
             values: values[0].clone(),
             args,
+            dispatches,
             project_group,
+            compact_group,
             sort_groups,
             draw_group,
         });
@@ -2314,6 +2471,21 @@ impl Pipelines {
                 storage(14, false, compute),
                 storage(15, false, compute),
                 storage(16, false, compute),
+                storage(17, true, compute),
+            ],
+        );
+        let compact_layout = layout(
+            "render-wgpu splats compact",
+            &[
+                params(10),
+                storage(11, true, compute),
+                storage(12, true, compute),
+                storage(13, false, compute),
+                storage(14, false, compute),
+                storage(15, false, compute),
+                storage(18, false, compute),
+                storage(22, false, compute),
+                storage(23, false, compute),
             ],
         );
         let draw_layout = layout(
@@ -2378,12 +2550,31 @@ impl Pipelines {
                 immediate_size: 0,
             })
         };
+        let occlusion_layout = layout(
+            "render-wgpu splats occlusion",
+            &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: compute,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        );
         let project_pipeline_layout = pipeline_layout(
             "render-wgpu splats project",
-            &[Some(&project_layout), Some(&gaussian_layout)],
+            &[
+                Some(&project_layout),
+                Some(&gaussian_layout),
+                Some(&occlusion_layout),
+            ],
         );
         let sort_pipeline_layout =
             pipeline_layout("render-wgpu splats sort", &[Some(&sort_layout)]);
+        let compact_pipeline_layout =
+            pipeline_layout("render-wgpu splats compact", &[Some(&compact_layout)]);
         let draw_pipeline_layout =
             pipeline_layout("render-wgpu splats draw", &[Some(&draw_layout)]);
         let card_draw_pipeline_layout = pipeline_layout(
@@ -2413,10 +2604,15 @@ impl Pipelines {
         let scan_sums = kernel(&sort_pipeline_layout, "cs_scan_sums");
         let scan_add = kernel(&sort_pipeline_layout, "cs_scan_add");
         let sort_scatter = kernel(&sort_pipeline_layout, "cs_sort_scatter");
+        let compact_count = kernel(&compact_pipeline_layout, "cs_compact_count");
+        let compact_scan = kernel(&compact_pipeline_layout, "cs_compact_scan");
+        let compact_scatter = kernel(&compact_pipeline_layout, "cs_compact_scatter");
         Self {
             project_layout,
             gaussian_layout,
             sort_layout,
+            compact_layout,
+            occlusion_layout,
             draw_layout,
             composite_layout,
             draw_pipeline_layout,
@@ -2434,8 +2630,126 @@ impl Pipelines {
             scan_sums,
             scan_add,
             sort_scatter,
+            compact_count,
+            compact_scan,
+            compact_scatter,
         }
     }
+}
+
+/// The splats a frame's runs kept (`splats.wgsl` `Compacted::tally`), read
+/// back as a pass timer's stamps are: cleared before the frame's first run,
+/// copied after each view's, and mapped at the next frame. Its counter is
+/// the third word of the buffer whose first two are the run's compacted
+/// sizes.
+/// Where the tally stands in its buffer.
+const TALLY_OFFSET: u64 = 8;
+
+struct Tally {
+    counter: wgpu::Buffer,
+    readback: wgpu::Buffer,
+    /// This frame cleared the counter, and copied it.
+    cleared: bool,
+    copied: bool,
+    pending: Option<std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>>,
+    last: u64,
+}
+
+impl Tally {
+    fn new(device: &wgpu::Device) -> Self {
+        let buffer = |label: &str, size, usage| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size,
+                usage,
+                mapped_at_creation: false,
+            })
+        };
+        Self {
+            counter: buffer(
+                "render-wgpu splat sizes",
+                16,
+                wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
+            ),
+            readback: buffer(
+                "render-wgpu splats tally readback",
+                4,
+                wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            ),
+            cleared: false,
+            copied: false,
+            pending: None,
+            last: 0,
+        }
+    }
+
+    /// At the start of a frame: map the last frame's copy, or take the
+    /// count it mapped to, without waiting.
+    fn collect(&mut self, gpu: &Gpu) {
+        self.cleared = false;
+        if std::mem::take(&mut self.copied) {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            self.readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    let _ = sender.send(result);
+                });
+            self.pending = Some(receiver);
+            return;
+        }
+        let Some(receiver) = &self.pending else {
+            return;
+        };
+        let _ = gpu.device.poll(wgpu::PollType::Poll);
+        match receiver.try_recv() {
+            Err(std::sync::mpsc::TryRecvError::Empty) => return,
+            Ok(Ok(())) => {
+                if let Ok(mapped) = self.readback.slice(..).get_mapped_range() {
+                    self.last = u64::from(u32::from_le_bytes(
+                        mapped[..4].try_into().expect("four bytes"),
+                    ));
+                }
+                self.readback.unmap();
+            }
+            Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {}
+        }
+        self.pending = None;
+    }
+
+    /// Before a view's runs: the frame's first clears the counter, unless
+    /// the last copy is still being read.
+    fn begin_view(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if !self.cleared && self.pending.is_none() {
+            encoder.clear_buffer(&self.counter, TALLY_OFFSET, Some(4));
+            self.cleared = true;
+        }
+    }
+
+    /// After a view's runs: copy the frame's count so far.
+    fn end_view(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if self.cleared {
+            encoder.copy_buffer_to_buffer(&self.counter, TALLY_OFFSET, &self.readback, 0, Some(4));
+            self.copied = true;
+        }
+    }
+}
+
+/// The projection's group 2 over a depth pyramid.
+fn occlusion_group(
+    device: &wgpu::Device,
+    pipelines: &Pipelines,
+    pyramid: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("render-wgpu splats occlusion"),
+        layout: &pipelines.occlusion_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::TextureView(pyramid),
+        }],
+    })
 }
 
 fn params_buffer(device: &wgpu::Device, slots: u64) -> wgpu::Buffer {
@@ -2469,6 +2783,9 @@ struct ProjectSlot {
     tint: [f32; 4],
     pixels: [f32; 4],
     groups: GroupTints,
+    /// Tested against the view's depth pyramid, its levels and the target
+    /// pixel its level 0 starts at (`splat_common.wgsl` `occlusion`).
+    occlusion: [f32; 4],
 }
 
 impl ProjectSlot {
@@ -2491,6 +2808,9 @@ impl ProjectSlot {
             slot.extend_from_slice(&value.to_le_bytes());
         }
         for value in groups.tints.into_iter().flatten() {
+            slot.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in self.occlusion {
             slot.extend_from_slice(&value.to_le_bytes());
         }
         slot.resize(PARAMS_SLOT as usize, 0);
@@ -2965,8 +3285,9 @@ mod tests {
         assert!(from_octahedral(words[1]).dot(-Vec3::Z) > 0.999);
     }
 
-    /// The GPU's radix sort orders a run of two sets as a stable sort by
-    /// key does, the culled Gaussians last, and the draw counts the rest.
+    /// The GPU's radix sort orders a run of two sets' visible Gaussians as
+    /// a stable sort by key does, the culled ones compacted away, and the
+    /// draw counts the visible.
     #[test]
     fn a_run_sorts_back_to_front_as_a_stable_cpu_sort_does() {
         let gpu = Gpu::headless().expect("a wgpu adapter");
@@ -3070,6 +3391,7 @@ mod tests {
                 camera,
                 render_scale: 1.0,
                 motion: None,
+                occlusion: None,
             },
         );
         gpu.queue.submit([encoder.finish()]);
@@ -3105,11 +3427,17 @@ mod tests {
             };
             expected.push((key, slot as u32));
         }
-        let visible = expected.iter().filter(|(key, _)| *key != 0xffff).count();
+        expected.retain(|(key, _)| *key != 0xffff);
+        let visible = expected.len();
         assert_eq!(drawn[0], 4, "four vertices a Gaussian");
         assert_eq!(drawn[1] as usize, visible, "the draw counts the visible");
         expected.sort_by_key(|&(key, _)| key);
-        let gpu_order: Vec<(u32, u32)> = keys.iter().copied().zip(values.iter().copied()).collect();
+        let gpu_order: Vec<(u32, u32)> = keys
+            .iter()
+            .copied()
+            .zip(values.iter().copied())
+            .take(visible)
+            .collect();
         // Keys can differ from the CPU's by a rounding step; the order must
         // be ascending, stable and hold every slot once.
         for pair in gpu_order.windows(2) {
@@ -3128,6 +3456,10 @@ mod tests {
                 "slot {value} once"
             );
         }
+        assert!(
+            expected.iter().all(|(_, slot)| seen[*slot as usize]),
+            "every visible slot sorted"
+        );
         let mut gpu_keys = vec![0u32; total];
         for &(key, value) in &gpu_order {
             gpu_keys[value as usize] = key;

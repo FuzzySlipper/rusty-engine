@@ -4611,6 +4611,11 @@ impl Renderer {
                                     previous_eye,
                                 }
                             }),
+                            occlusion: self
+                                .options
+                                .occlusion_culling
+                                .then(|| self.occlusion.pipelines())
+                                .flatten(),
                         },
                     );
                     self.splats

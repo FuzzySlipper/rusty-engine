@@ -13,6 +13,7 @@
 //!     [--counts 1,8,16,32] [--size 1920x1080] [--warm 2] [--frames 240]
 //!     [--lights] [--lit FLOOR] [--caster splats|ellipsoids]
 //!     [--tint GROUP:RRGGBB --tinted N] [--distance METRES]
+//!     [--occlusion] [--wall]
 //! ```
 //!
 //! - `--fit JOINT:K,A`: the clip's translation of `JOINT` becomes
@@ -30,6 +31,10 @@
 //! - `--tint GROUP:RRGGBB`, `--tinted N`: every Nth figure, from the first,
 //!   blinks its Gaussian group `GROUP` (its `_GROUP`) toward the sRGB
 //!   colour `RRGGBB`, its weight set anew every frame (a blink a second).
+//! - `--occlusion`: occlusion culling on: splats hidden behind the opaque
+//!   depth are dropped before they are sorted.
+//! - `--wall`: an opaque wall 3 m tall before the group's left half, a row
+//!   in front of it.
 //! - `--distance METRES`: the camera at least this far from the group's
 //!   centre, for figures at crowd distance (a 1.8 m figure is about 60
 //!   pixels tall 42 m away at 1080 rows).
@@ -83,6 +88,8 @@ struct Arguments {
     tint: Option<(u8, [f32; 3], usize)>,
     /// The camera's least distance from the group's centre.
     distance: f64,
+    occlusion: bool,
+    wall: bool,
 }
 
 fn arguments() -> Result<Arguments, String> {
@@ -91,6 +98,7 @@ fn arguments() -> Result<Arguments, String> {
     let (mut size, mut warm, mut frames) = ((1920, 1080), 2.0, 240);
     let (mut lights, mut lit, mut caster) = (false, None, SplatShadowCaster::None);
     let mut least_distance = 0.0;
+    let (mut occlusion, mut wall) = (false, false);
     let (mut tint, mut tinted) = (None, 1);
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -156,6 +164,8 @@ fn arguments() -> Result<Arguments, String> {
                     .filter(|every| *every > 0)
                     .ok_or("--tinted takes a whole number above 0")?;
             }
+            "--occlusion" => occlusion = true,
+            "--wall" => wall = true,
             "--distance" => {
                 least_distance = value()?.parse().map_err(|_| "--distance takes metres")?;
             }
@@ -177,6 +187,8 @@ fn arguments() -> Result<Arguments, String> {
         caster,
         tint: tint.map(|(group, target)| (group, target, tinted)),
         distance: least_distance,
+        occlusion,
+        wall,
     })
 }
 
@@ -317,6 +329,7 @@ fn main() {
         let mut harness = Harness::new(RendererOptions {
             default_world_lights: !arguments.lights,
             shadows: arguments.lights,
+            occlusion_culling: arguments.occlusion,
             ..RendererOptions::default()
         });
         harness.target = OffscreenTarget::new(&harness.gpu, width, height, 1);
@@ -343,6 +356,11 @@ fn main() {
                 "material/floor",
             ),
             instance(1, None, "mesh/floor", transform([0.0; 3], 0.0, [1.0; 3])),
+            static_mesh(
+                "mesh/wall",
+                box_mesh([-30.0, 0.0, -0.1], [0.0, 3.0, 0.1], |_| 0),
+                "material/floor",
+            ),
             RenderDiff::DefineAnimatedMesh {
                 asset: asset.clone(),
             },
@@ -395,6 +413,14 @@ fn main() {
                     shadow_casting: Default::default(),
                 },
             });
+        }
+        if arguments.wall {
+            ops.push(instance(
+                2,
+                None,
+                "mesh/wall",
+                transform([0.0, 0.0, SPACING as f32], 0.0, [1.0; 3]),
+            ));
         }
         if arguments.lights {
             ops.extend(lights());
@@ -496,9 +522,10 @@ fn main() {
             .map(|(pass, ms)| format!("\"{pass}\": {ms:.4}"))
             .collect();
         let row = format!(
-            "{{\"count\": {count}, \"gaussians\": {}, \"cards\": {}, \"runs\": {}, \"size\": [{width}, {height}], \"passes\": {{{}}}, \"frame_ms\": {throughput:.4}, \"fps\": {:.1}, \"cpu_ms_p50\": {:.4}, \"cpu_ms_p95\": {:.4}, \"frames\": {}, \"distance\": {distance:.3}}}",
+            "{{\"count\": {count}, \"gaussians\": {}, \"cards\": {}, \"surviving\": {}, \"runs\": {}, \"size\": [{width}, {height}], \"passes\": {{{}}}, \"frame_ms\": {throughput:.4}, \"fps\": {:.1}, \"cpu_ms_p50\": {:.4}, \"cpu_ms_p95\": {:.4}, \"frames\": {}, \"distance\": {distance:.3}}}",
             readout.splats.gaussians,
             readout.splats.cards,
+            readout.splats.surviving,
             readout.splats.runs,
             passes.join(", "),
             1000.0 / throughput,
