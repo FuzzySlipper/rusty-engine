@@ -532,7 +532,8 @@ binding's.
 - **Only what can show is sorted.** A run sorts only the splats its
   projection kept, in the order they stand in the run, so splats at the same
   depth draw in the same order every frame.
-- **Occlusion culling.** With `RendererSettings.OcclusionCulling`, a view
+- **Occlusion culling.** With `RendererSettings.OcclusionCulling` (the
+  product's `RustyEngineProductOcclusionCulling`), a view
   reduces its depth after its opaque pass (the world and the figures'
   [cores](#the-core)) to a farthest-depth pyramid, timed as
   `splats-occlusion`, and a splat lying wholly behind it is dropped before
@@ -541,6 +542,23 @@ binding's.
   dropped splat would have failed the depth test, so the frame is the same
   to the pixel. A figure on a pixel grid is not tested: its layer is drawn
   whole.
+
+  The pyramid costs about 0.04 ms a view on an RTX 3080 at 1920 × 1080.
+  What it saves depends on what hides the splats. Walking 381s in
+  `examples/splat_crowd`'s layout, 32 figures close, ms, median of three
+  rounds:
+
+  | Figures | Kept | Sort, off / on | Draw, off / on |
+  | --- | --- | --- | --- |
+  | 16k Gaussians, half behind a wall | 47 % | 0.196 / 0.133 | 0.423 / 0.359 |
+  | cards, half behind a wall | 48 % | 0.122 / 0.098 | 0.366 / 0.348 |
+  | 16k Gaussians with 2,400-triangle cores | 85 % | 0.197 / 0.183 | 0.516 / 0.482 |
+  | cards with cores | 93 % | 0.120 / 0.119 | 0.405 / 0.398 |
+
+  Fragments behind a core or a wall already failed early depth tests, so
+  the draw gains less than the share dropped; the sort and projection's
+  vertex work are what culling takes off. A crowd with nothing hidden pays
+  the pyramid for nothing.
 - **Measured cost.** One 48,000-Gaussian figure walking at
   1920 × 1080 takes 0.31 ms of GPU time on an RX 9070 XT about 750 pixels
   tall (2.2 m away), and 0.19 ms at 3.6 m. Drawing the layer dominates, and

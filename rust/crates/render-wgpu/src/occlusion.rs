@@ -197,14 +197,13 @@ impl DepthPyramid {
                 },
             ],
         });
-        let last = pyramid.levels - 1;
+        // One pass: each level's dispatch reads the level below, which the
+        // dispatch before it wrote.
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(PASS),
+            timestamp_writes: timer.and_then(PassTimer::compute_writes),
+        });
         for level in 0..pyramid.levels {
-            let writes =
-                timer.and_then(|timer| timer.compute_writes_between(level == 0, level == last));
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some(PASS),
-                timestamp_writes: writes,
-            });
             let (x, y) = groups(level);
             if level == 0 {
                 pass.set_pipeline(seed_pipeline);
@@ -233,6 +232,7 @@ impl DepthPyramid {
             }
             pass.dispatch_workgroups(x, y, 1);
         }
+        drop(pass);
         self.region = [region.width, region.height];
         ([pyramid.size.0, pyramid.size.1], pyramid.levels)
     }
