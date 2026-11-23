@@ -161,8 +161,9 @@ A sound reaches the listener the louder of two ways:
   averaged with two rays 0.3 m to either side, so the edge of a wall muffles
   part of a sound rather than all of it at once. A static mesh is solid
   behind its triangles' front faces (wound outward by the right-hand rule, as
-  a renderer culls them); overlapping meshes count once, and a sound inside
-  rock counts the rock it starts in.
+  a renderer culls them); overlapping or touching meshes count once, a line
+  that only grazes a face or edge crosses no solid, and a sound inside rock
+  counts the rock it starts in.
 - **Round, by open air.** A search over 1 m air cells joined where the
   segment between their centres is clear finds the shortest open path; the
   sound falls off with that path's length, unfiltered, and is heard from the

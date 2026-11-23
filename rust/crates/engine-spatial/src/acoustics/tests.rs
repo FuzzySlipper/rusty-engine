@@ -159,26 +159,159 @@ fn overlapping_meshes_count_as_one_solid() {
     assert!((out - 1.5).abs() < 1e-6, "{out}");
 }
 
+/// The solid a line along x at (`y`, `z`) crosses, checked both ways: `depth`
+/// through the solid. A line in a face's plane only grazes the solid; it
+/// may count as in or out, but the same both ways.
+fn assert_depth_along_x(scene: &VoxelCollisionScene, y: f64, z: f64, depth: f64, grazing: bool) {
+    let near = [0.5, y, z];
+    let far = [9.5, y, z];
+    let there = scene.solid_metres(near, far);
+    let back = scene.solid_metres(far, near);
+    assert!(
+        (there - back).abs() < 1e-6,
+        "({y}, {z}): {there} there, {back} back"
+    );
+    let allowed = if grazing {
+        vec![0.0, depth]
+    } else {
+        vec![depth]
+    };
+    assert!(
+        allowed
+            .iter()
+            .any(|expected| (there - expected).abs() < 1e-6),
+        "({y}, {z}): {there}, expected {allowed:?}"
+    );
+}
+
 #[test]
 fn touching_meshes_cross_their_shared_face() {
-    let near = [0.5, 0.0, 0.0];
-    let far = [9.5, 0.0, 0.0];
     let a = [[4.0, -2.0, -2.0], [5.0, 2.0, 2.0]];
     let b = [[5.0, -2.0, -2.0], [6.0, 2.0, 2.0]];
     // In one mesh, and as two instances.
     for scene in [mesh_boxes(&[a, b]), mesh_instances(&[a, b])] {
-        for (from, to) in [(near, far), (far, near)] {
-            let crossed = scene.solid_metres(from, to);
+        // Through the middle, along the faces' triangle seam (y = z), off it.
+        for (y, z) in [(0.0, 0.0), (0.5, 0.5), (0.1, 0.0), (0.7, -1.3)] {
+            assert_depth_along_x(&scene, y, z, 2.0, false);
+        }
+        // Along a side face, and along an edge.
+        for (y, z) in [(0.0, 2.0), (2.0, 2.0), (-2.0, 0.0), (-2.0, -2.0)] {
+            assert_depth_along_x(&scene, y, z, 2.0, true);
+        }
+    }
+}
+
+#[test]
+fn overlapping_meshes_sharing_a_face_count_as_one_solid() {
+    // Both boxes' front faces lie at x = 4; the union is 3 m deep.
+    let boxes = [
+        [[4.0, -2.0, -2.0], [6.0, 2.0, 2.0]],
+        [[4.0, -2.0, -2.0], [7.0, 2.0, 2.0]],
+    ];
+    for scene in [mesh_boxes(&boxes), mesh_instances(&boxes)] {
+        for (y, z) in [(0.0, 0.0), (1.0, 1.0), (0.1, 0.0), (0.7, -1.3)] {
+            assert_depth_along_x(&scene, y, z, 3.0, false);
+        }
+        for (y, z) in [(2.0, 0.0), (2.0, 2.0), (-2.0, -2.0)] {
+            assert_depth_along_x(&scene, y, z, 3.0, true);
+        }
+    }
+}
+
+#[test]
+fn a_line_through_shared_vertices_crosses_the_surface_once() {
+    // An octahedron from x 4 to 6: the line along its axis meets each apex,
+    // where four triangles meet.
+    let positions = vec![
+        [4.0, 0.0, 0.0],
+        [6.0, 0.0, 0.0],
+        [5.0, 1.0, 0.0],
+        [5.0, -1.0, 0.0],
+        [5.0, 0.0, 1.0],
+        [5.0, 0.0, -1.0],
+    ];
+    let mut triangles = Vec::new();
+    for (apex, toward) in [(0_u32, -1.0_f64), (1, 1.0)] {
+        for [p, q] in [[2_u32, 4], [4, 3], [3, 5], [5, 2]] {
+            // Outward: the normal points away from the octahedron's centre.
+            let corners = [
+                positions[apex as usize],
+                positions[p as usize],
+                positions[q as usize],
+            ];
+            let ab = sub(corners[1], corners[0]);
+            let ac = sub(corners[2], corners[0]);
+            let normal_x = ab[1] * ac[2] - ab[2] * ac[1];
+            triangles.push(if normal_x * toward > 0.0 {
+                [apex, p, q]
+            } else {
+                [apex, q, p]
+            });
+        }
+    }
+    let scene = mesh_scene(vec![(positions, triangles)]);
+    assert_depth_along_x(&scene, 0.0, 0.0, 2.0, false);
+    assert_depth_along_x(&scene, 0.2, 0.1, 1.4, false);
+}
+
+#[test]
+fn random_lines_measure_the_exact_union_of_overlapping_boxes() {
+    // Boxes that overlap, touch and share faces, in one mesh and as many.
+    let boxes = [
+        [[4.0, -2.0, -2.0], [6.0, 2.0, 2.0]],
+        [[4.0, -2.0, -2.0], [7.0, 2.0, 2.0]],
+        [[7.0, -1.0, -1.0], [8.0, 1.0, 1.0]],
+        [[5.0, 0.0, -3.0], [5.5, 3.0, 3.0]],
+        [[1.0, -1.0, 1.0], [3.0, 1.0, 4.0]],
+    ];
+    // The exact union along a segment, from each box's slab interval.
+    let exact = |from: [f64; 3], to: [f64; 3]| {
+        let along = sub(to, from);
+        let mut spans: Vec<(f64, f64)> = boxes
+            .iter()
+            .filter_map(|[min, max]| {
+                let (mut enter, mut leave) = (0.0_f64, 1.0_f64);
+                for axis in 0..3 {
+                    if along[axis] == 0.0 {
+                        if from[axis] < min[axis] || from[axis] > max[axis] {
+                            return None;
+                        }
+                        continue;
+                    }
+                    let a = (min[axis] - from[axis]) / along[axis];
+                    let b = (max[axis] - from[axis]) / along[axis];
+                    enter = enter.max(a.min(b));
+                    leave = leave.min(a.max(b));
+                }
+                (enter < leave).then_some((enter, leave))
+            })
+            .collect();
+        union_length(&mut spans) * distance(from, to)
+    };
+    let mut state = 0x9e37_79b9_7f4a_7c15_u64;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1_u64 << 53) as f64
+    };
+    for scene in [mesh_boxes(&boxes), mesh_instances(&boxes)] {
+        for line in 0..600 {
+            // Half the lines lie in the plane y = z, through the seams the
+            // boxes' end faces are split along.
+            let seam = line % 2 == 1;
+            let mut point = || {
+                let (x, y) = (next() * 10.0 - 1.0, next() * 8.0 - 4.0);
+                [x, y, if seam { y } else { next() * 8.0 - 4.0 }]
+            };
+            let (from, to) = (point(), point());
+            let measured = scene.solid_metres(from, to);
+            let expected = exact(from, to);
             assert!(
-                (crossed - 2.0).abs() < 1e-6,
-                "{from:?} to {to:?}: {crossed}"
+                (measured - expected).abs() < 1e-6,
+                "{from:?} to {to:?}: {measured}, exactly {expected}"
             );
         }
-        // Through the edge two faces share, and through a corner.
-        let edge = scene.solid_metres([0.5, 0.0, 2.0], [9.5, 0.0, 2.0]);
-        assert!((edge - 2.0).abs() < 1e-6, "{edge}");
-        let corner = scene.solid_metres([0.5, 2.0, 2.0], [9.5, 2.0, 2.0]);
-        assert!((corner - 2.0).abs() < 1e-6, "{corner}");
     }
 }
 

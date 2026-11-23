@@ -635,10 +635,15 @@ impl StaticMeshCollisionProjection {
     /// Every surface the ray crosses within `max_distance`, nearest first:
     /// its distance, and +1 where the ray goes into its mesh (the triangle's
     /// own winding, outward by the right-hand rule and turned by a mirroring
-    /// transform, faces against the ray) or -1 where it comes out. Faces
-    /// that coincide all count, so blocks that touch leave and enter at
-    /// their shared face; a ray through an edge or vertex its triangles
-    /// share counts that surface once.
+    /// transform, faces against the ray) or -1 where it comes out; at one
+    /// distance, entries first.
+    ///
+    /// The test is watertight: seen along the ray, a ray through an edge two
+    /// triangles share is claimed by exactly one of them, and one through a
+    /// vertex by exactly one triangle of its fan ([`claims_edge`]). So every
+    /// closed surface counts each crossing once whatever its triangulation,
+    /// and coincident faces of separate solids (touching blocks, overlapping
+    /// boxes in one mesh) each count.
     pub fn crossings(&self, ray: Ray, max_distance: f64) -> Vec<(f64, i32)> {
         let mut crossings = Vec::new();
         let len = ray.dir.length();
@@ -650,6 +655,29 @@ impl StaticMeshCollisionProjection {
         let origin = world_to_point(ray.origin);
         let dir = Vector::new(direction.x, direction.y, direction.z);
         let parry_ray = ParryRay::new(origin, dir);
+        // A frame across the ray, the same for every triangle and for the
+        // line run either way, so a line and its reverse claim the same
+        // edges.
+        let line = if [dir.x, dir.y, dir.z]
+            .into_iter()
+            .find(|component| *component != 0.0)
+            .is_some_and(|component| component < 0.0)
+        {
+            -dir
+        } else {
+            dir
+        };
+        let across = if line.x.abs() < 0.9 {
+            line.cross(Vector::X)
+        } else {
+            line.cross(Vector::Y)
+        }
+        .normalize();
+        let up = line.cross(across);
+        let flat = |point: Vector| {
+            let offset = point - origin;
+            [offset.dot(across), offset.dot(up)]
+        };
         for instance in self.instances.values() {
             if instance
                 .bounds
@@ -661,38 +689,47 @@ impl StaticMeshCollisionProjection {
                 continue;
             };
             let mirrored = instance.transform.scale.iter().product::<f64>() < 0.0;
-            // (distance, turn, through an edge or vertex)
-            let mut met: Vec<(f64, i32, bool)> = mesh
+            for leaf in mesh
                 .bvh()
                 .leaves(|node| node.cast_ray(&parry_ray, max_distance) <= max_distance)
-                .filter_map(|leaf| {
-                    let triangle = mesh.triangle(leaf);
-                    let (distance, normal, on_edge) =
-                        cross_triangle(origin, dir, triangle.a, triangle.b, triangle.c)?;
-                    (distance <= max_distance).then(|| {
-                        let entering = (normal.dot(dir) < 0.0) != mirrored;
-                        (distance, if entering { 1 } else { -1 }, on_edge)
-                    })
-                })
-                .collect();
-            met.sort_by(|left, right| left.0.total_cmp(&right.0));
-            for (index, &(distance, turn, on_edge)) in met.iter().enumerate() {
-                // Triangles sharing the edge or vertex the ray passes through
-                // all report it; the surface is crossed once.
-                let repeated = on_edge
-                    && met[..index]
-                        .iter()
-                        .rev()
-                        .take_while(|&&(earlier, _, _)| distance - earlier <= CROSSING_TOLERANCE)
-                        .any(|&(_, earlier_turn, earlier_edge)| {
-                            earlier_turn == turn && earlier_edge
-                        });
-                if !repeated {
-                    crossings.push((distance, turn));
+            {
+                let triangle = mesh.triangle(leaf);
+                let corners = [flat(triangle.a), flat(triangle.b), flat(triangle.c)];
+                if !covers_ray(corners) {
+                    continue;
                 }
+                let normal = (triangle.b - triangle.a).cross(triangle.c - triangle.a);
+                let facing = normal.dot(dir);
+                if facing == 0.0 {
+                    continue;
+                }
+                let distance = normal.dot(triangle.a - origin) / facing;
+                if !(0.0..=max_distance).contains(&distance) {
+                    continue;
+                }
+                let entering = (facing < 0.0) != mirrored;
+                crossings.push((distance, if entering { 1 } else { -1 }));
             }
         }
         crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
+        // Crossings a rounding apart are at one distance, entries first: a
+        // line touching a solid at an edge goes in and out there, through no
+        // solid, whichever of the two faces' distances rounded lower.
+        let mut start = 0;
+        while start < crossings.len() {
+            let at = crossings[start].0;
+            let end = start
+                + crossings[start..]
+                    .iter()
+                    .take_while(|(distance, _)| distance - at <= COINCIDENT_METRES)
+                    .count();
+            let run = &mut crossings[start..end];
+            run.sort_by_key(|crossing| std::cmp::Reverse(crossing.1));
+            for crossing in run {
+                crossing.0 = at;
+            }
+            start = end;
+        }
         crossings
     }
 
@@ -740,43 +777,41 @@ const BOUNDS_SLACK: f64 = 1.0e-6;
 
 /// Whether a ray from `origin` along the unit `direction` meets `bounds`
 /// within `max_distance` (slab test, bounds widened by [`BOUNDS_SLACK`]).
-/// Crossings this close along a ray are one point.
-const CROSSING_TOLERANCE: f64 = 1e-7;
+/// Crossings closer than this along a ray are at one distance.
+const COINCIDENT_METRES: f64 = 1e-9;
 
-/// Where the ray meets a triangle (both sides): the distance, the
-/// triangle's own winding normal, and whether the point lies on its edge.
-fn cross_triangle(
-    origin: Vector,
-    dir: Vector,
-    a: Vector,
-    b: Vector,
-    c: Vector,
-) -> Option<(f64, Vector, bool)> {
-    const EDGE: f64 = 1e-9;
-    let ab = b - a;
-    let ac = c - a;
-    let p = dir.cross(ac);
-    let det = ab.dot(p);
-    if det.abs() < 1e-14 {
-        return None;
-    }
-    let inverse = 1.0 / det;
-    let to_origin = origin - a;
-    let u = to_origin.dot(p) * inverse;
-    if !(-EDGE..=1.0 + EDGE).contains(&u) {
-        return None;
-    }
-    let q = to_origin.cross(ab);
-    let v = dir.dot(q) * inverse;
-    if v < -EDGE || u + v > 1.0 + EDGE {
-        return None;
-    }
-    let distance = ac.dot(q) * inverse;
-    if distance < 0.0 {
-        return None;
-    }
-    let on_edge = u <= EDGE || v <= EDGE || u + v >= 1.0 - EDGE;
-    Some((distance, ab.cross(ac), on_edge))
+/// The 2D cross product `p × q`: twice the signed area of the origin, `p`
+/// and `q`. Swapping `p` and `q` negates it exactly.
+fn cross_2d(p: [f64; 2], q: [f64; 2]) -> f64 {
+    p[0] * q[1] - p[1] * q[0]
+}
+
+/// Whether a triangle edge running `p` to `q` (counter-clockwise round its
+/// triangle) owns the points on it: those running up, or level and to the
+/// left. Of an edge's two directions exactly one owns it, so two triangles
+/// sharing an edge never both or neither count a point on it.
+fn claims_edge(p: [f64; 2], q: [f64; 2]) -> bool {
+    let (dx, dy) = (q[0] - p[0], q[1] - p[1]);
+    dy > 0.0 || (dy == 0.0 && dx < 0.0)
+}
+
+/// Whether a triangle seen along the ray (the ray at the origin) covers it,
+/// either way round, with points on an edge or vertex going to the triangle
+/// that owns them ([`claims_edge`]). Edge-on triangles cover nothing.
+fn covers_ray(corners: [[f64; 2]; 3]) -> bool {
+    let [a, b, c] = corners;
+    let area = cross_2d(a, b) + cross_2d(b, c) + cross_2d(c, a);
+    let [a, b, c] = if area > 0.0 {
+        [a, b, c]
+    } else if area < 0.0 {
+        [a, c, b]
+    } else {
+        return false;
+    };
+    [(a, b), (b, c), (c, a)].into_iter().all(|(p, q)| {
+        let side = cross_2d(p, q);
+        side > 0.0 || (side == 0.0 && claims_edge(p, q))
+    })
 }
 
 fn segment_meets(
