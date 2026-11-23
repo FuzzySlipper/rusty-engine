@@ -787,6 +787,22 @@ pub type NativeReadAudioVoice = unsafe extern "C" fn(
     *mut NativeAudioVoiceReadout,
     *mut NativeOperationErrorReceipt,
 ) -> i32;
+pub type NativeSetAudioAcousticSpace = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioAcousticSpaceRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeClearAudioAcousticSpace = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioClearAcousticSpaceRequest,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
+pub type NativeQueryAudioArrival = unsafe extern "C" fn(
+    *mut c_void,
+    *const NativeAudioArrivalRequest,
+    *mut NativeAudioArrivalResult,
+    *mut NativeOperationErrorReceipt,
+) -> i32;
 pub type NativeReadAudioBus = unsafe extern "C" fn(
     *mut c_void,
     *const NativeAudioBusReadRequest,
@@ -2088,6 +2104,9 @@ pub struct NativeAudioApi {
     pub read_voice: NativeReadAudioVoice,
     pub read_bus: NativeReadAudioBus,
     pub read_realization: NativeReadAudioRealization,
+    pub set_acoustic_space: NativeSetAudioAcousticSpace,
+    pub clear_acoustic_space: NativeClearAudioAcousticSpace,
+    pub query_arrival: NativeQueryAudioArrival,
 }
 
 #[repr(C)]

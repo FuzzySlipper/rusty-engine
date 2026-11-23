@@ -6,17 +6,10 @@ use kira::info::Info;
 use kira::Frame;
 use render_presentation::AudioRolloff;
 
-/// Emitters within this distance play at full volume, as the browser
-/// panner's reference distance of 1.
-const REFERENCE_DISTANCE: f32 = 1.0;
-/// The level `LinearDecibels` falls to at the maximum distance.
-const SILENCE_DECIBELS: f32 = -60.0;
-
-/// The amplitude a spatial voice plays at by distance from the listener: one
-/// within `min(1, max / 2)`, falling by its model to zero at `max`.
+/// The amplitude a spatial voice plays at by distance from the listener
+/// ([`AudioRolloff::gain`]).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct DistanceRolloff {
-    reference: f32,
     max: f32,
     model: AudioRolloff,
 }
@@ -24,21 +17,13 @@ pub(crate) struct DistanceRolloff {
 impl DistanceRolloff {
     pub(crate) fn new(max_distance: f32, model: AudioRolloff) -> Self {
         Self {
-            reference: REFERENCE_DISTANCE.min(max_distance * 0.5),
             max: max_distance,
             model,
         }
     }
 
     pub(crate) fn gain(self, distance: f32) -> f32 {
-        if distance >= self.max {
-            return 0.0;
-        }
-        let fraction = ((distance - self.reference) / (self.max - self.reference)).clamp(0.0, 1.0);
-        match self.model {
-            AudioRolloff::Linear => 1.0 - fraction,
-            AudioRolloff::LinearDecibels => 10.0_f32.powf(SILENCE_DECIBELS * fraction / 20.0),
-        }
+        self.model.gain(self.max, distance)
     }
 }
 

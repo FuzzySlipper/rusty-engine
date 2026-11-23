@@ -107,6 +107,9 @@ pub struct AudioSourceDescriptor {
     pub rolloff: AudioRolloff,
     pub pan: f32,
     pub emitter: AudioEmitter,
+    /// Whether the world's geometry acts on a spatial source.
+    #[serde(default)]
+    pub acoustics: AudioAcoustics,
 }
 
 /// How a spatial source's level falls from full volume at the reference
@@ -120,6 +123,41 @@ pub enum AudioRolloff {
     LinearDecibels,
 }
 
+/// Spatial sources within this distance play at full volume (the browser
+/// panner's reference distance of 1), or within half their range if less.
+const ROLLOFF_REFERENCE_DISTANCE: f32 = 1.0;
+/// The level `LinearDecibels` falls to at the maximum distance.
+const ROLLOFF_SILENCE_DECIBELS: f32 = -60.0;
+
+impl AudioRolloff {
+    /// The amplitude a spatial source with this range plays at `distance`
+    /// from the listener: one within `min(1, max_distance / 2)`, falling by
+    /// the model to zero at `max_distance`.
+    pub fn gain(self, max_distance: f32, distance: f32) -> f32 {
+        if distance >= max_distance {
+            return 0.0;
+        }
+        let reference = ROLLOFF_REFERENCE_DISTANCE.min(max_distance * 0.5);
+        let fraction = ((distance - reference) / (max_distance - reference)).clamp(0.0, 1.0);
+        match self {
+            Self::Linear => 1.0 - fraction,
+            Self::LinearDecibels => 10.0_f32.powf(ROLLOFF_SILENCE_DECIBELS * fraction / 20.0),
+        }
+    }
+}
+
+/// Whether the world's geometry acts on a spatial source, once the product
+/// names an acoustic space: solid between it and the listener muffles it,
+/// open passages carry it, and the listener's space adds reverb.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AudioAcoustics {
+    #[default]
+    World,
+    /// Plays as if nothing stood in the way, with no reverb.
+    Dry,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AudioSourcePatch {
@@ -131,6 +169,8 @@ pub struct AudioSourcePatch {
     pub rolloff: Option<AudioRolloff>,
     pub pan: Option<f32>,
     pub emitter: Option<AudioEmitter>,
+    #[serde(default)]
+    pub acoustics: Option<AudioAcoustics>,
 }
 
 /// The desired presentation state for a retained voice.
@@ -637,6 +677,9 @@ fn apply_patch(
     }
     if let Some(value) = &patch.emitter {
         descriptor.emitter = value.clone();
+    }
+    if let Some(value) = patch.acoustics {
+        descriptor.acoustics = value;
     }
     descriptor
 }

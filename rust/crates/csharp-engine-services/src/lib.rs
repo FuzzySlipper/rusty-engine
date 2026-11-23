@@ -1,5 +1,6 @@
 //! Concrete Engine capability adapters behind the trusted NativeAOT ABI.
 
+pub mod acoustics;
 mod appearance;
 mod audio;
 mod authored_content;

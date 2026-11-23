@@ -17,7 +17,7 @@ use render_presentation::{
 use render_presentation::MAX_AUDIO_DIAGNOSTICS;
 
 use crate::{
-    composition::{borrowed_utf8, ABI_OK},
+    composition::{borrowed_slice, borrowed_utf8, ABI_OK},
     content::{ContentIdentity, RetainedContent, RuntimeContentBridge},
     render_resources::CsharpRenderResource,
     CsharpEngineServicesError,
@@ -91,6 +91,16 @@ struct AudioState {
     next_clip: u64,
     next_voice: u64,
     next_signal: u64,
+    /// The spatial session whose geometry acts on spatial sources, and how
+    /// much reverb its spaces add.
+    acoustic_space: Option<AcousticSpace>,
+}
+
+/// The spatial session the listener and spatial sources are in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct AcousticSpace {
+    pub(crate) session: u64,
+    pub(crate) reverb_level: f32,
 }
 
 impl AudioState {
@@ -209,6 +219,8 @@ pub(crate) struct RuntimeAudioBridge {
     diagnostics_sink: Option<RuntimeDiagnosticsSink>,
     reported_recoverable_codes: BTreeSet<&'static str>,
     content: Option<*const RuntimeContentBridge>,
+    /// The spatial sessions' collision, which acoustics read.
+    collision: Option<crate::spatial::SpatialCollisionSource>,
     /// Backing of the latest borrowed Audio result.
     borrowed: crate::operation_diagnostics::BorrowedResult,
 }
@@ -229,6 +241,7 @@ impl RuntimeAudioBridge {
                 next_clip: 1,
                 next_voice: 1,
                 next_signal: 1,
+                acoustic_space: None,
             },
             content_resources,
             staged: None,
@@ -240,6 +253,7 @@ impl RuntimeAudioBridge {
             diagnostics_sink: None,
             reported_recoverable_codes: BTreeSet::new(),
             content: None,
+            collision: None,
             borrowed: Default::default(),
         }
     }
@@ -687,6 +701,10 @@ impl RuntimeAudioBridge {
             },
             pan: value.pan,
             emitter,
+            acoustics: match value.acoustics {
+                NativeAudioAcoustics::World => render_presentation::AudioAcoustics::World,
+                NativeAudioAcoustics::Dry => render_presentation::AudioAcoustics::Dry,
+            },
         })
     }
 
@@ -825,6 +843,7 @@ impl RuntimeAudioBridge {
                 rolloff: Some(descriptor.rolloff),
                 pan: Some(descriptor.pan),
                 emitter,
+                acoustics: Some(descriptor.acoustics),
             },
         })
     }
@@ -1118,6 +1137,114 @@ impl RuntimeAudioBridge {
                 AudioClock::Host => NativeAudioClock::Host,
             },
         })
+    }
+
+    /// Lets acoustics read the spatial sessions' collision.
+    pub(crate) fn set_collision_source(&mut self, source: crate::spatial::SpatialCollisionSource) {
+        self.collision = Some(source);
+    }
+
+    /// The acoustic space committed by the last call.
+    pub(crate) fn acoustic_space(&self) -> Option<AcousticSpace> {
+        self.state.acoustic_space
+    }
+
+    fn collision(
+        &self,
+    ) -> Result<&crate::spatial::SpatialCollisionSource, CsharpEngineServicesError> {
+        self.collision.as_ref().ok_or_else(|| {
+            CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_ACOUSTICS",
+                "audio acoustics have no spatial collision in this host",
+            )
+        })
+    }
+
+    fn set_acoustic_space(
+        &mut self,
+        request: &NativeAudioAcousticSpaceRequest,
+    ) -> Result<(), CsharpEngineServicesError> {
+        // An unknown session refuses here rather than playing dry silently.
+        self.collision()?.scene(request.session)?;
+        let reverb_level = if request.reverb_level.is_finite() {
+            request.reverb_level.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+        self.staged_mut()?.state.acoustic_space = Some(AcousticSpace {
+            session: request.session.value,
+            reverb_level,
+        });
+        Ok(())
+    }
+
+    fn clear_acoustic_space(&mut self) -> Result<(), CsharpEngineServicesError> {
+        self.staged_mut()?.state.acoustic_space = None;
+        Ok(())
+    }
+
+    fn query_arrival(
+        &mut self,
+        request: &NativeAudioArrivalRequest,
+    ) -> Result<NativeAudioArrivalResult, CsharpEngineServicesError> {
+        let points =
+            unsafe { borrowed_slice(request.points, request.points_len, "audio arrival points") }?;
+        if points.len() > crate::acoustics::QUERY_POINTS {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_ARRIVAL_POINTS",
+                "an audio arrival query takes at most 64 points",
+            ));
+        }
+        if !(request.range.is_finite() && request.range > 0.0) {
+            return Err(CsharpEngineServicesError::new(
+                "CSHARP_AUDIO_ARRIVAL_RANGE",
+                "an audio arrival query's range must be positive and finite",
+            ));
+        }
+        let scene = self.collision()?.scene(request.session)?;
+        let vector = |value: NativeVec3| [value.x as f64, value.y as f64, value.z as f64];
+        let points: Vec<[f64; 3]> = points.iter().map(|point| vector(*point)).collect();
+        let outcome = crate::acoustics::query(
+            &scene,
+            vector(request.source),
+            request.range,
+            match request.rolloff {
+                NativeAudioRolloff::Linear => AudioRolloff::Linear,
+                NativeAudioRolloff::LinearDecibels => AudioRolloff::LinearDecibels,
+            },
+            &points,
+        );
+        let arrivals: Vec<NativeAudioArrival> = outcome
+            .arrivals
+            .iter()
+            .map(|(arrival, from)| NativeAudioArrival {
+                path: match arrival.path {
+                    crate::acoustics::ArrivalPath::Silent => NativeAudioArrivalPath::Silent,
+                    crate::acoustics::ArrivalPath::Open => NativeAudioArrivalPath::Open,
+                    crate::acoustics::ArrivalPath::Occluded => NativeAudioArrivalPath::Occluded,
+                    crate::acoustics::ArrivalPath::Around => NativeAudioArrivalPath::Around,
+                },
+                gain: arrival.gain,
+                low_pass_hz: arrival
+                    .low_pass_hz
+                    .unwrap_or(crate::acoustics::OPEN_CUTOFF_HZ),
+                path_metres: arrival.metres as f32,
+                arrives_from: NativeVec3 {
+                    x: from[0] as f32,
+                    y: from[1] as f32,
+                    z: from[2] as f32,
+                },
+            })
+            .collect();
+        let result = NativeAudioArrivalResult {
+            arrivals: arrivals.as_ptr(),
+            arrivals_len: arrivals.len(),
+            cells_searched: outcome.cells_searched,
+            rays_cast: outcome.rays_cast,
+            truncated: outcome.truncated,
+        };
+        self.borrowed.hold(arrivals);
+        Ok(result)
     }
 }
 
@@ -1634,6 +1761,75 @@ pub(crate) unsafe extern "C" fn read_audio_realization(
     }
 }
 
+pub(crate) unsafe extern "C" fn set_audio_acoustic_space(
+    context: *mut c_void,
+    request: *const NativeAudioAcousticSpaceRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.set_acoustic_space(unsafe { &*request }) {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn clear_audio_acoustic_space(
+    context: *mut c_void,
+    request: *const NativeAudioClearAcousticSpaceRequest,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.clear_acoustic_space() {
+        Ok(()) => ABI_OK,
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
+pub(crate) unsafe extern "C" fn query_audio_arrival(
+    context: *mut c_void,
+    request: *const NativeAudioArrivalRequest,
+    result: *mut NativeAudioArrivalResult,
+    operation_error: *mut NativeOperationErrorReceipt,
+) -> i32 {
+    if !operation_error.is_null() {
+        unsafe { *operation_error = std::mem::zeroed() };
+    }
+    if context.is_null() || request.is_null() || result.is_null() {
+        return 0;
+    }
+    let bridge = unsafe { &mut *context.cast::<RuntimeAudioBridge>() };
+    match bridge.query_arrival(unsafe { &*request }) {
+        Ok(value) => {
+            unsafe {
+                *result = value;
+            }
+            ABI_OK
+        }
+        Err(error) => {
+            bridge.operation_diagnostics.retain(&error, operation_error);
+            0
+        }
+    }
+}
+
 pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
     NativeAudioApi {
         context: (bridge as *mut RuntimeAudioBridge).cast(),
@@ -1655,6 +1851,9 @@ pub(crate) fn api(bridge: &mut RuntimeAudioBridge) -> NativeAudioApi {
         read_voice: read_audio_voice,
         read_bus: read_audio_bus,
         read_realization: read_audio_realization,
+        set_acoustic_space: set_audio_acoustic_space,
+        clear_acoustic_space: clear_audio_acoustic_space,
+        query_arrival: query_audio_arrival,
     }
 }
 
@@ -1857,6 +2056,7 @@ mod tests {
             position: NativeVec3::default(),
             entity: 0,
             offset: NativeVec3::default(),
+            acoustics: NativeAudioAcoustics::World,
         }
     }
 
@@ -3005,5 +3205,118 @@ mod tests {
         bridge
             .destroy_clip(clip)
             .expect("owner reset cancels outstanding one-shots");
+    }
+
+    #[test]
+    fn an_acoustic_space_names_a_live_session_and_a_query_answers_each_point() {
+        let mut spatial_bridge = crate::spatial::RuntimeSpatialBridge::new();
+        let spatial_api = crate::spatial::api(&mut spatial_bridge);
+        let mut session = NativeSpatialSessionHandle::default();
+        assert_eq!(
+            unsafe {
+                (spatial_api.create_session)(
+                    spatial_api.context,
+                    NativeSpatialSessionConfig {
+                        collision_voxel_size: 1.0,
+                        collision_chunk_size: 8,
+                        voxel_surface_mode: NativeVoxelSurfaceMode::GreedyCubes,
+                    },
+                    &mut session,
+                    std::ptr::null_mut(),
+                )
+            },
+            ABI_OK
+        );
+        let mut bridge = RuntimeAudioBridge::new(BTreeMap::new());
+        bridge.set_collision_source(spatial_bridge.collision_source());
+        let audio = api(&mut bridge);
+        let mut error: NativeOperationErrorReceipt = unsafe { std::mem::zeroed() };
+        let unknown = NativeAudioAcousticSpaceRequest {
+            session: NativeSpatialSessionHandle { value: 999 },
+            reverb_level: 1.0,
+        };
+        let bridge = unsafe { &mut *audio.context.cast::<RuntimeAudioBridge>() };
+        bridge.begin_call();
+        assert_eq!(
+            unsafe { (audio.set_acoustic_space)(audio.context, &unknown, &mut error) },
+            0
+        );
+        let named = NativeAudioAcousticSpaceRequest {
+            session,
+            reverb_level: 0.5,
+        };
+        assert_eq!(
+            unsafe { (audio.set_acoustic_space)(audio.context, &named, &mut error) },
+            ABI_OK
+        );
+        let near = NativeVec3 {
+            x: 4.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        let far = NativeVec3 {
+            x: 40.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        let points = [near, far];
+        let request = NativeAudioArrivalRequest {
+            session,
+            source: NativeVec3::default(),
+            range: 20.0,
+            rolloff: NativeAudioRolloff::Linear,
+            points: points.as_ptr(),
+            points_len: points.len(),
+        };
+        let mut result = NativeAudioArrivalResult {
+            arrivals: std::ptr::null(),
+            arrivals_len: 0,
+            cells_searched: 0,
+            rays_cast: 0,
+            truncated: false,
+        };
+        assert_eq!(
+            unsafe { (audio.query_arrival)(audio.context, &request, &mut result, &mut error) },
+            ABI_OK
+        );
+        let arrivals = copied(result.arrivals, result.arrivals_len);
+        assert_eq!(arrivals.len(), 2);
+        assert_eq!(arrivals[0].path, NativeAudioArrivalPath::Open);
+        assert!((arrivals[0].gain - AudioRolloff::Linear.gain(20.0, 4.0)).abs() < 1e-6);
+        assert_eq!(arrivals[0].low_pass_hz, crate::acoustics::OPEN_CUTOFF_HZ);
+        assert_eq!(arrivals[1].path, NativeAudioArrivalPath::Silent);
+        assert_eq!(arrivals[1].gain, 0.0);
+        assert_eq!(result.cells_searched, 0);
+        let many = [near; 65];
+        let too_many = NativeAudioArrivalRequest {
+            points: many.as_ptr(),
+            points_len: many.len(),
+            ..request
+        };
+        assert_eq!(
+            unsafe { (audio.query_arrival)(audio.context, &too_many, &mut result, &mut error) },
+            0
+        );
+        bridge.end_call();
+        assert_eq!(
+            bridge.acoustic_space(),
+            Some(AcousticSpace {
+                session: session.value,
+                reverb_level: 0.5,
+            })
+        );
+        bridge.begin_call();
+        assert_eq!(
+            unsafe {
+                (audio.clear_acoustic_space)(
+                    audio.context,
+                    &NativeAudioClearAcousticSpaceRequest::default(),
+                    &mut error,
+                )
+            },
+            ABI_OK
+        );
+        bridge.end_call();
+        assert_eq!(bridge.acoustic_space(), None);
     }
 }

@@ -6061,6 +6061,7 @@ mod tests {
                             position: NativeVec3::default(),
                             entity: 0,
                             offset: NativeVec3::default(),
+                            acoustics: NativeAudioAcoustics::World,
                         },
                     },
                     &mut signal,

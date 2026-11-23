@@ -33,6 +33,7 @@ fn audio_descriptor() -> AudioSourceDescriptor {
         emitter: AudioEmitter::World3d {
             position: [1.0, 2.0, 3.0],
         },
+        acoustics: render_presentation::AudioAcoustics::World,
     }
 }
 

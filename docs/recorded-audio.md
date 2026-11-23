@@ -142,5 +142,64 @@ source has no range. To change a retained voice's range, `UpdateVoice` with the
 new descriptor: the device replays it from its cursor with the new range. The
 product chooses a source's range and any rule that scales it.
 
+## World acoustics
+
+`Audio.SetAcousticSpace(session, reverbLevel)` names the spatial session the
+listener and every spatial source are in; its collision (voxels and static
+meshes, built work and heightfield tiles included; entity boxes take no part)
+then acts on every `World3d` and `EntityAttached` source whose descriptor's
+`Acoustics` is `World`, the default. `Dry` plays a source as before. A product
+that moves the player into another session (a dungeon) names that one;
+`ClearAcousticSpace`, or that session's disposal, plays everything dry again.
+
+A sound reaches the listener the louder of two ways:
+
+- **Straight through.** It falls off with distance, and solid on the line
+  costs 6 dB plus 10 dB per metre and low-passes it from 20 kHz, halving the
+  cutoff every 0.25 m down to 250 Hz: a metre of rock is about -16 dB at
+  1.25 kHz, muffled rather than silent. Through solid, the centre ray is
+  averaged with two rays 0.3 m to either side, so the edge of a wall muffles
+  part of a sound rather than all of it at once.
+- **Round, by open air.** A search over 1 m air cells joined where the
+  segment between their centres is clear finds the shortest open path; the
+  sound falls off with that path's length, unfiltered, and is heard from the
+  way the path leaves the listener.
+
+The listener's space adds reverb on each bus by how enclosed it is: thirteen
+24 m rays (up, eight level bearings, four rising) set the send (the share
+that meets collision, times `reverbLevel`) and how long it rings (their mean
+free length). Open ground does not ring; a cave does. A bus's reverb follows
+its volume and mute.
+
+`Audio.QueryArrival(session, source, range, points, rolloff)` answers, by the
+same model, how a sound made at `source` arrives at each point: its `Gain`
+(the amplitude playback would play it at, before the source's volume and
+bus), `LowPassHz`, `Path` (`Silent`, `Open`, `Occluded` or `Around`),
+`PathMetres` and `ArrivesFrom` (about three metres back along its path, or
+the source). The product owns what loud means: its range, any threshold, and
+what a listener does with what arrives.
+
+Limits and cost:
+
+- Playback refreshes acoustics ten times a second for the 32 nearest audible
+  sounds, and for a new sound in the call that starts it; changes glide over
+  100 ms. One open-air search from the listener serves every occluded sound
+  and is rebuilt at most four times a second as the listener moves or the
+  collision changes.
+- An open-air search settles at most 4096 cells and follows paths no longer
+  than the range; a query's readout reports `CellsSearched`, `RaysCast` and
+  `Truncated`. A query takes at most 64 points; it searches only when a point
+  in range is occluded. There is no per-update query limit.
+- The listener's search runs on its own worker thread; the update only casts
+  each sound's straight rays and looks its path up. In a 96 × 24 × 96 m
+  cave on den-agents (busy, release), a refresh costs about 2 µs per
+  occluded sound with voxel rock and 8 µs with static-mesh rock, and the
+  worker's search 2.5–4.7 ms. A query costs well under a microsecond when its
+  points are in the open, and 2–5 ms, on the calling update, when it must
+  search round rock to them.
+
+Kira realizes the filtering, sends and reverb for both outputs: the device,
+and the stream the viewing page plays, so both hear the same mix.
+
 See [fixture provenance](../fixtures/audio-containers/README.md). Product code
 chooses tracks, loops, crossfades and music policy.

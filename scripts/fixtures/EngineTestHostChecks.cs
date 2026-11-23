@@ -292,6 +292,7 @@ internal static class EngineTestHostChecks
         DeferredCollisionResidency(host);
         DeferredCollisionNavigation(host);
         SurfaceCrawler(host);
+        SoundArrival(host);
         SurfaceNavigation(host);
         DeferredContentResidency(host);
         Bundles(library);
@@ -421,6 +422,45 @@ internal static class EngineTestHostChecks
     // z -3..3, y 1..5): floor, up the +X wall, across the ceiling, down the -X
     // wall; it lets go of the ceiling on request and lands, and is lost when
     // the wall it holds is cut away.
+    /// <summary>
+    /// A noise in a closed room, heard through the room's wall by the session's acoustics: muffled
+    /// beyond it, carried once a doorway is cut, and silent past its range; the acoustic space
+    /// names only a live session.
+    /// </summary>
+    private static void SoundArrival(EngineTestHost host) => host.Call(engine =>
+    {
+        SpatialSession session = engine.Spatial.CreateSession(new(1, 8, VoxelSurfaceMode.GreedyCubes));
+        var room = new List<VoxelEdit>();
+        for (int x = -1; x <= 16; x++)
+            for (int y = -1; y <= 4; y++)
+                for (int z = -1; z <= 8; z++)
+                    if (y is -1 or 4 || x is -1 or 16 || z is -1 or 8 || x == 8)
+                        room.Add(new(VoxelEditKind.Set, new(x, y, z), 1));
+        engine.Voxel.ApplyEdits(new(session, room.ToArray()));
+        Vector3 source = new(4.5f, 1.5f, 3.5f);
+        Vector3[] points = [new(4.5f, 1.5f, 6.5f), new(12.5f, 1.5f, 3.5f), new(60f, 1.5f, 3.5f)];
+        AudioArrival[] walled = engine.Audio.QueryArrival(session, source, 30f, points).Arrivals.ToArray();
+        Require(walled.Length == 3 && walled[0].Path == AudioArrivalPath.Open && walled[0].LowPassHz == 20000f,
+            $"same side of the wall: {walled[0]}");
+        Require(walled[1].Path == AudioArrivalPath.Occluded && walled[1].LowPassHz < 2000f && walled[1].Audible
+            && walled[1].Decibels < walled[0].Decibels - 15f, $"through the wall: {walled[1]}");
+        Require(walled[2].Path == AudioArrivalPath.Silent && !walled[2].Audible, $"out of range: {walled[2]}");
+        var door = new List<VoxelEdit>();
+        for (int y = 0; y <= 2; y++)
+            for (int z = 6; z <= 7; z++)
+                door.Add(new(VoxelEditKind.Clear, new(8, y, z), 0));
+        engine.Voxel.ApplyEdits(new(session, door.ToArray()));
+        AudioArrivalResult opened = engine.Audio.QueryArrival(session, source, 30f, points);
+        AudioArrival carried = opened.Arrivals.Span[1];
+        Require(carried.Path == AudioArrivalPath.Around && carried.Gain > walled[1].Gain && carried.PathMetres > 8f
+            && carried.ArrivesFrom.Z > 4f && opened.CellsSearched > 0, $"round by the doorway: {carried}, {opened}");
+        ExpectRefusal(() => engine.Audio.QueryArrival(session, source, 30f, new Vector3[65]), "CSHARP_AUDIO_ARRIVAL_POINTS");
+        engine.Audio.SetAcousticSpace(session, 0.5f);
+        engine.Audio.ClearAcousticSpace();
+        session.Dispose();
+        ExpectRefusal(() => engine.Audio.SetAcousticSpace(session), "CSHARP_SPATIAL_SESSION");
+    });
+
     private static void SurfaceCrawler(EngineTestHost host) => host.Call(engine =>
     {
         using SpatialSession session = engine.Spatial.CreateSession(new(1, 8, VoxelSurfaceMode.GreedyCubes));

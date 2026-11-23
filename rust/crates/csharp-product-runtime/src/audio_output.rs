@@ -20,13 +20,16 @@
 //! node published for their entity. A playing video clip's own sound plays
 //! here too, from the clip's start, beside the picture this process draws.
 
+use csharp_engine_services::acoustics::{ListenerAcoustics, Sounding};
 use csharp_engine_services::{AudioRealizationFact, EngineServiceSet};
 use product_host::RuntimePublication;
 use std::sync::Arc;
+use std::time::Instant;
 
 use product_host::{ProductHostAudioStream, PRODUCT_HOST_AUDIO_SAMPLE_RATE};
 use render_audio::{
-    AudioClipSource, AudioEntityPositions, AudioRealizer, RealizedAudioFact, StreamBackend,
+    AcousticSource, AudioBackend, AudioClipSource, AudioEntityPositions, AudioRealizer,
+    RealizedAudioFact, SpaceReverb, StreamBackend, VoiceAcoustics,
 };
 use render_host_contracts::{RendererViewComposition, RendererViewTarget};
 use render_presentation::{PresentationFrameDiff, PresentationOp, VideoProjectionOp};
@@ -41,7 +44,126 @@ pub(crate) struct AudioOutput {
     world: Option<WorldTime>,
     /// The Engine world time the device last caught up with.
     world_seconds: f64,
+    /// Where the listener is, as the primary view's camera last put it.
+    listener: Option<[f32; 3]>,
+    /// What the acoustic space's geometry does to playing sounds.
+    acoustics: Acoustics,
 }
+
+/// Playback's side of the world's acoustics: refreshed for the nearest
+/// [`ACOUSTIC_SOUNDS`] audible sounds every [`ACOUSTIC_REFRESH_SECONDS`],
+/// and for a new sound in the call that starts it.
+struct Acoustics {
+    listener: ListenerAcoustics,
+    /// The steady clock refreshes are paced on.
+    clock: Instant,
+    /// When acoustics last refreshed every sound, on `clock`.
+    refreshed: Option<f64>,
+    /// Acoustics act on some sound or the space's reverb.
+    active: bool,
+}
+
+/// Acoustics refresh this often.
+const ACOUSTIC_REFRESH_SECONDS: f64 = 0.1;
+/// The most sounds one refresh hears, nearest first; further ones keep
+/// what they last had.
+const ACOUSTIC_SOUNDS: usize = 32;
+
+impl Acoustics {
+    fn new() -> Self {
+        Self {
+            listener: ListenerAcoustics::default(),
+            clock: Instant::now(),
+            refreshed: None,
+            active: false,
+        }
+    }
+
+    /// Hears the realizer's playing sounds through the named acoustic
+    /// space's geometry, or clears what it did once none is named.
+    fn follow<B: AudioBackend>(
+        &mut self,
+        realizer: &mut AudioRealizer<B>,
+        space: Option<(Arc<csharp_engine_services::acoustics::Scene>, f32)>,
+        listener: Option<[f32; 3]>,
+        entities: &impl AudioEntityPositions,
+    ) {
+        let (Some((scene, level)), Some(listener)) = (space, listener) else {
+            if self.active {
+                realizer.clear_acoustics(entities);
+                self.active = false;
+                self.listener = ListenerAcoustics::default();
+            }
+            return;
+        };
+        self.active = true;
+        let now = self.clock.elapsed().as_secs_f64();
+        let due = self
+            .refreshed
+            .is_none_or(|at| now - at >= ACOUSTIC_REFRESH_SECONDS);
+        let mut sources = realizer.acoustic_sources(entities);
+        if !due && !sources.iter().any(|source| source.fresh) {
+            return;
+        }
+        if due {
+            self.refreshed = Some(now);
+            let (send, feedback) = self.listener.space(&scene, listener, level);
+            realizer.set_space_reverb(Some(SpaceReverb { send, feedback }));
+        } else {
+            sources.retain(|source| source.fresh);
+        }
+        let distance = |source: &AcousticSource| {
+            let offset = [
+                source.position[0] - listener[0],
+                source.position[1] - listener[1],
+                source.position[2] - listener[2],
+            ];
+            (offset[0] * offset[0] + offset[1] * offset[1] + offset[2] * offset[2]).sqrt()
+        };
+        // Out of range a sound is silent whatever the geometry; it plays
+        // from its emitter again.
+        let (mut audible, silent): (Vec<_>, Vec<_>) = sources
+            .into_iter()
+            .partition(|source| distance(source) < source.max_distance);
+        for source in silent {
+            realizer.set_acoustics(source.key, Some(OPEN), entities);
+        }
+        audible.sort_by(|left, right| {
+            right
+                .fresh
+                .cmp(&left.fresh)
+                .then(distance(left).total_cmp(&distance(right)))
+        });
+        audible.truncate(ACOUSTIC_SOUNDS);
+        let sounds: Vec<Sounding> = audible
+            .iter()
+            .map(|source| Sounding {
+                position: source.position,
+                max_distance: source.max_distance,
+                rolloff: source.rolloff,
+            })
+            .collect();
+        let heard = self.listener.hear(&scene, listener, &sounds, now);
+        for (source, heard) in audible.iter().zip(heard) {
+            realizer.set_acoustics(
+                source.key,
+                Some(VoiceAcoustics {
+                    heard_at: heard.heard_at,
+                    transmission: heard.transmission,
+                    low_pass_hz: heard.low_pass_hz,
+                }),
+                entities,
+            );
+        }
+    }
+}
+
+/// A sound nothing stands in front of.
+const OPEN: VoiceAcoustics = VoiceAcoustics {
+    heard_at: None,
+    transmission: 1.0,
+    low_pass_hz: None,
+};
 
 /// What the device follows of the runtime's time.
 #[derive(Clone, Copy, PartialEq)]
@@ -157,6 +279,8 @@ impl AudioOutput {
             next_fact_id: 1,
             world: None,
             world_seconds: 0.0,
+            listener: None,
+            acoustics: Acoustics::new(),
         }))
     }
 
@@ -203,6 +327,26 @@ impl AudioOutput {
             );
         }
         self.realizer.refresh(&entities);
+        self.follow_acoustics(services, &entities);
+    }
+
+    /// Hears playing sounds through the acoustic space's geometry.
+    fn follow_acoustics(
+        &mut self,
+        services: &EngineServiceSet,
+        entities: &impl AudioEntityPositions,
+    ) {
+        let space = services.audio_acoustic_space();
+        match &mut self.realizer {
+            Realizer::Device(realizer) => {
+                self.acoustics
+                    .follow(realizer, space, self.listener, entities)
+            }
+            Realizer::Stream { realizer, .. } => {
+                self.acoustics
+                    .follow(realizer, space, self.listener, entities)
+            }
+        }
     }
 
     /// Replaces the realization with the committed baseline after the
@@ -272,6 +416,7 @@ impl AudioOutput {
     fn follow_camera(&mut self, composition: &RendererViewComposition) {
         if let Some((position, forward, up)) = primary_listener(composition) {
             self.realizer.set_listener_pose(position, forward, up);
+            self.listener = Some(position);
         }
     }
 
@@ -422,6 +567,9 @@ fn recount(frame: &mut PresentationFrameDiff) {
 }
 
 #[cfg(test)]
+mod sound_world;
+
+#[cfg(test)]
 mod tests {
     use render_presentation::{
         AudioBus, AudioBusControl, AudioProjectionOp, PresentationOpMeta, VideoPlaybackHandle,
@@ -457,6 +605,7 @@ mod tests {
             position: NativeVec3::default(),
             entity: 0,
             offset: NativeVec3::default(),
+            acoustics: NativeAudioAcoustics::World,
         }
     }
 

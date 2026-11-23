@@ -516,6 +516,7 @@ impl EngineServiceSet {
         let mut audio = RuntimeAudioBridge::new(content_resources.clone());
         audio.bind_diagnostics_sink(diagnostics_sink.clone());
         audio.bind_content(&content);
+        audio.set_collision_source(spatial.collision_source());
         let mut video = RuntimeVideoBridge::new(content_resources.clone());
         video.bind_content(&content);
         let mut voxel_content = RuntimeVoxelContentBridge::new();
@@ -1184,6 +1185,23 @@ impl EngineServiceSet {
             .map(|clip| clip.shared_bytes().shared())
     }
 
+    /// The scene of the spatial session the product named as the acoustic
+    /// space, with its reverb level: `None` while none is named, or once
+    /// that session is gone.
+    pub fn audio_acoustic_space(
+        &self,
+    ) -> Option<(std::sync::Arc<engine_spatial::VoxelCollisionScene>, f32)> {
+        let space = self.audio.acoustic_space()?;
+        let scene = self
+            .spatial
+            .collision_source()
+            .scene(NativeSpatialSessionHandle {
+                value: space.session,
+            })
+            .ok()?;
+        Some((scene, space.reverb_level))
+    }
+
     /// Whether an audio clip is still admitted.
     pub fn has_audio_clip(&self, content_hash: &str) -> bool {
         self.audio.clip_by_content_hash(content_hash).is_some()
@@ -1842,6 +1860,7 @@ mod tests {
             position: NativeVec3::default(),
             entity: 0,
             offset: NativeVec3::default(),
+            acoustics: NativeAudioAcoustics::World,
         };
         assert_eq!(
             unsafe {

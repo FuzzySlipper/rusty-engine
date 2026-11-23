@@ -66,6 +66,7 @@ fn descriptor(hash: &str, looping: bool) -> AudioSourceDescriptor {
         rolloff: render_presentation::AudioRolloff::Linear,
         pan: 0.0,
         emitter: AudioEmitter::Global2d,
+        acoustics: render_presentation::AudioAcoustics::World,
     }
 }
 

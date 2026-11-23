@@ -19,7 +19,11 @@ pub use crawler::{
     step_crawler, CrawlerCommand, CrawlerConfig, CrawlerContact, CrawlerError, CrawlerMotion,
     CrawlerStepReceipt, CrawlerSurface, CrawlerTransition,
 };
+mod acoustics;
 mod entity_motion;
+pub use acoustics::{
+    AirReach, AirSearch, Enclosure, AIR_CELL_METRES, AIR_SEARCH_CELLS, ENCLOSURE_METRES,
+};
 mod occlusion;
 mod perception;
 mod physics;

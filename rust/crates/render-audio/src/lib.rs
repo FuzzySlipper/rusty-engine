@@ -11,6 +11,7 @@
 //!
 //! Only this crate depends on kira and cpal.
 
+mod offline;
 mod opus;
 mod rolloff;
 mod soundtrack;
@@ -21,25 +22,32 @@ use std::io::Cursor;
 use std::sync::Arc;
 
 use kira::backend::Backend;
+use kira::effect::filter::{FilterBuilder, FilterHandle};
+use kira::effect::reverb::{ReverbBuilder, ReverbHandle};
 use kira::listener::ListenerHandle;
 use kira::sound::static_sound::{StaticSoundData, StaticSoundHandle, StaticSoundSettings};
 use kira::sound::streaming::{StreamingSoundData, StreamingSoundHandle, StreamingSoundSettings};
 use kira::sound::{FromFileError, PlaybackState, Region};
-use kira::track::{SpatialTrackBuilder, SpatialTrackHandle, TrackBuilder, TrackHandle};
+use kira::track::{
+    SendTrackBuilder, SendTrackHandle, SpatialTrackBuilder, SpatialTrackHandle, TrackBuilder,
+    TrackHandle,
+};
 use kira::{
-    AudioManager, AudioManagerSettings, Capacities, Decibels, Easing, Panning, PlaybackRate,
+    AudioManager, AudioManagerSettings, Capacities, Decibels, Easing, Mix, Panning, PlaybackRate,
     StartTime, Tween,
 };
 use render_model::AudioContainer;
 use render_presentation::{
-    AudioBus, AudioBusControl, AudioClipRef, AudioClock, AudioEmitter, AudioHandle,
+    AudioAcoustics, AudioBus, AudioBusControl, AudioClipRef, AudioClock, AudioEmitter, AudioHandle,
     AudioProjectionDiagnostic, AudioProjectionDiagnosticCode, AudioProjectionOp, AudioSignalHandle,
     AudioSourceDescriptor, AudioSourcePatch, AudioVoiceControl, AudioVoiceDesiredState,
     PresentationOp,
 };
 
 pub use kira::backend::mock::{MockBackend, MockBackendSettings};
+pub use kira::backend::Backend as AudioBackend;
 pub use kira::DefaultBackend;
+pub use offline::{OfflineBackend, OfflineBackendSettings};
 pub use stream::{AudioBlockSink, StreamBackend, StreamBackendSettings};
 
 /// kira preallocates its realtime arenas. Each spatial voice or one-shot
@@ -52,6 +60,20 @@ const IMMEDIATE: Tween = Tween {
     duration: std::time::Duration::ZERO,
     easing: Easing::Linear,
 };
+/// Acoustic changes to a playing sound glide over this long, so a refresh
+/// never steps its level or tone.
+const ACOUSTIC_TWEEN: Tween = Tween {
+    start_time: StartTime::Immediate,
+    duration: std::time::Duration::from_millis(100),
+    easing: Easing::Linear,
+};
+/// A low-pass filter at or above this cutoff leaves the sound as it is.
+const OPEN_CUTOFF_HZ: f32 = 20_000.0;
+/// How quickly a space's reverb loses its high frequencies.
+const REVERB_DAMPING: f64 = 0.4;
+/// kira's reverb takes its input at a low fixed gain; a full send is lifted
+/// by this much so a closed space's reverb sits some 10 dB under the sound.
+const REVERB_SEND_DECIBELS: f32 = 9.0;
 const BUSES: [AudioBus; 4] = [
     AudioBus::Sfx,
     AudioBus::Ambient,
@@ -122,6 +144,49 @@ pub struct AudioRealizationReadout {
     pub decoded_clips: usize,
 }
 
+/// What the world's geometry does to one spatial sound on its way to the
+/// listener ([`AudioRealizer::set_acoustics`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VoiceAcoustics {
+    /// Where the sound is heard from when it arrives by an open path round
+    /// the solid: the listener's position moved along the way the path
+    /// leaves it by the path's length. `None` hears it at its emitter.
+    pub heard_at: Option<[f32; 3]>,
+    /// The amplitude left after the solid it crosses, in 0..=1.
+    pub transmission: f32,
+    /// The low-pass cutoff the solid leaves, in hertz; `None` leaves the
+    /// sound unfiltered.
+    pub low_pass_hz: Option<f32>,
+}
+
+/// The listener's space: how much of each acoustic sound feeds its bus's
+/// reverb, and how long that reverb rings ([`AudioRealizer::set_space_reverb`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpaceReverb {
+    /// Send amplitude in 0..=1.
+    pub send: f32,
+    /// kira reverb feedback in 0..1: larger rings longer.
+    pub feedback: f64,
+}
+
+/// One playing sound the world's geometry acts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AcousticKey {
+    Voice(AudioHandle),
+    OneShot(AudioSignalHandle),
+}
+
+/// A playing spatial sound with acoustics, where its emitter is now.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AcousticSource {
+    pub key: AcousticKey,
+    pub position: [f32; 3],
+    pub max_distance: f32,
+    pub rolloff: render_presentation::AudioRolloff,
+    /// Its playback has had no acoustics set yet.
+    pub fresh: bool,
+}
+
 /// Clip data shared by every playback of one clip. WAV decodes once, as the
 /// browser buffer path does; compressed containers stay encoded and each
 /// playback streams its own decoder, as the browser media-element path does.
@@ -165,6 +230,12 @@ macro_rules! each_sound {
 struct Playback {
     sound: Sound,
     spatial: Option<SpatialTrackHandle>,
+    /// The spatial track's low-pass filter, open until solid closes it.
+    filter: Option<FilterHandle>,
+    /// What the world's geometry does to it, as last set.
+    acoustics: Option<VoiceAcoustics>,
+    /// Acoustics were set at least once for this playback.
+    evaluated: bool,
     duration: Option<f64>,
     /// The descriptor's own rate, before the world rate scales it.
     pitch: f64,
@@ -261,6 +332,41 @@ impl Playback {
             track.set_spatialization_strength(descriptor.spatial_blend, IMMEDIATE);
         }
     }
+
+    /// Applies what the world's geometry does to it; `None` is nothing.
+    /// `emitter` is where the emitter is, heard there when no path moves it.
+    fn set_acoustics(&mut self, acoustics: Option<VoiceAcoustics>, emitter: Option<[f32; 3]>) {
+        let tween = if self.evaluated {
+            ACOUSTIC_TWEEN
+        } else {
+            IMMEDIATE
+        };
+        self.evaluated = acoustics.is_some();
+        self.acoustics = acoustics;
+        let Some(track) = self.spatial.as_mut() else {
+            return;
+        };
+        let transmission = acoustics.map_or(1.0, |acoustics| acoustics.transmission);
+        track.set_volume(amplitude_to_decibels(transmission), tween);
+        if let Some(position) = acoustics
+            .and_then(|acoustics| acoustics.heard_at)
+            .or(emitter)
+        {
+            track.set_position(mint::Vector3::from(position), tween);
+        }
+        if let Some(filter) = self.filter.as_mut() {
+            match acoustics.and_then(|acoustics| acoustics.low_pass_hz) {
+                Some(cutoff) if cutoff < OPEN_CUTOFF_HZ => {
+                    filter.set_cutoff(f64::from(cutoff), tween);
+                    filter.set_mix(Mix::WET, tween);
+                }
+                _ => {
+                    filter.set_cutoff(f64::from(OPEN_CUTOFF_HZ), tween);
+                    filter.set_mix(Mix::DRY, tween);
+                }
+            }
+        }
+    }
 }
 
 struct Voice {
@@ -310,6 +416,10 @@ pub struct AudioRealizer<B: Backend = DefaultBackend> {
     manager: AudioManager<B>,
     listener: ListenerHandle,
     buses: [TrackHandle; BUSES.len()],
+    /// Each bus's reverb, fed by its acoustic sounds and following its gain.
+    reverbs: [(SendTrackHandle, ReverbHandle); BUSES.len()],
+    /// The listener's space, while one is set.
+    space: Option<SpaceReverb>,
     bus_states: [BusState; BUSES.len()],
     clips: HashMap<String, ClipData>,
     voices: BTreeMap<AudioHandle, Voice>,
@@ -391,10 +501,22 @@ impl<B: Backend> AudioRealizer<B> {
                 .map_err(|error| error.to_string())
         };
         let buses = [bus()?, bus()?, bus()?, bus()?];
+        let mut reverb = || {
+            let mut builder = SendTrackBuilder::new();
+            let handle =
+                builder.add_effect(ReverbBuilder::new().damping(REVERB_DAMPING).mix(Mix::WET));
+            manager
+                .add_send_track(builder)
+                .map(|track| (track, handle))
+                .map_err(|error| error.to_string())
+        };
+        let reverbs = [reverb()?, reverb()?, reverb()?, reverb()?];
         Ok(Self {
             manager,
             listener,
             buses,
+            reverbs,
+            space: None,
             bus_states: BUSES.map(BusState::new),
             clips: HashMap::new(),
             voices: BTreeMap::new(),
@@ -884,6 +1006,13 @@ impl<B: Backend> AudioRealizer<B> {
                 }
                 continue;
             }
+            if playback
+                .acoustics
+                .is_some_and(|acoustics| acoustics.heard_at.is_some())
+            {
+                // Heard along its path until acoustics move it again.
+                continue;
+            }
             if let (AudioEmitter::EntityAttached { entity, offset }, Some(track)) =
                 (&voice.descriptor.emitter, playback.spatial.as_mut())
             {
@@ -896,6 +1025,147 @@ impl<B: Backend> AudioRealizer<B> {
 
     pub fn take_facts(&mut self) -> Vec<RealizedAudioFact> {
         std::mem::take(&mut self.facts)
+    }
+
+    /// The playing spatial sounds the world's geometry acts on (not `Dry`),
+    /// with where their emitters are now.
+    pub fn acoustic_sources(&self, entities: &impl AudioEntityPositions) -> Vec<AcousticSource> {
+        let voices = self.voices.iter().filter_map(|(handle, voice)| {
+            (voice.state == RealizedVoiceState::Playing)
+                .then_some(())
+                .and(voice.playback.as_ref())
+                .map(|playback| (AcousticKey::Voice(*handle), playback))
+        });
+        let one_shots = self.one_shots.iter().map(|one_shot| {
+            (
+                AcousticKey::OneShot(one_shot.signal_handle),
+                &one_shot.playback,
+            )
+        });
+        voices
+            .chain(one_shots)
+            .filter(|(_, playback)| {
+                playback.spatial.is_some()
+                    && playback.descriptor.acoustics == AudioAcoustics::World
+                    && !playback.finished()
+            })
+            .filter_map(|(key, playback)| {
+                Some(AcousticSource {
+                    key,
+                    position: emitter_position(&playback.descriptor.emitter, entities)?,
+                    max_distance: playback.descriptor.max_distance,
+                    rolloff: playback.descriptor.rolloff,
+                    fresh: !playback.evaluated,
+                })
+            })
+            .collect()
+    }
+
+    /// Sets what the world's geometry does to one playing sound; `None`
+    /// clears it. A sound's first acoustics apply at once, later ones glide.
+    pub fn set_acoustics(
+        &mut self,
+        key: AcousticKey,
+        acoustics: Option<VoiceAcoustics>,
+        entities: &impl AudioEntityPositions,
+    ) {
+        if let Some(playback) = self.playback_mut(key) {
+            let emitter = emitter_position(&playback.descriptor.emitter, entities);
+            playback.set_acoustics(acoustics, emitter);
+        }
+    }
+
+    /// What the world's geometry does to one playing sound, as last set.
+    pub fn acoustics(&self, key: AcousticKey) -> Option<VoiceAcoustics> {
+        match key {
+            AcousticKey::Voice(handle) => self.voices.get(&handle)?.playback.as_ref()?.acoustics,
+            AcousticKey::OneShot(signal) => {
+                self.one_shots
+                    .iter()
+                    .find(|one_shot| one_shot.signal_handle == signal)?
+                    .playback
+                    .acoustics
+            }
+        }
+    }
+
+    /// Clears every sound's acoustics and the space's reverb, as when no
+    /// acoustic space is named.
+    pub fn clear_acoustics(&mut self, entities: &impl AudioEntityPositions) {
+        let playbacks = self
+            .voices
+            .values_mut()
+            .filter_map(|voice| voice.playback.as_mut())
+            .chain(
+                self.one_shots
+                    .iter_mut()
+                    .map(|one_shot| &mut one_shot.playback),
+            );
+        for playback in playbacks {
+            if playback.acoustics.is_some() || playback.evaluated {
+                let emitter = emitter_position(&playback.descriptor.emitter, entities);
+                playback.set_acoustics(None, emitter);
+            }
+        }
+        self.set_space_reverb(None);
+    }
+
+    /// Sets the listener's space: every acoustic sound feeds its bus's reverb
+    /// by `send`. `None` sends nothing.
+    pub fn set_space_reverb(&mut self, space: Option<SpaceReverb>) {
+        if self.space == space {
+            return;
+        }
+        self.space = space;
+        if let Some(space) = space {
+            for (_, reverb) in &mut self.reverbs {
+                reverb.set_feedback(space.feedback, ACOUSTIC_TWEEN);
+            }
+        }
+        let send = self.space_send();
+        let reverbs = self.reverbs.each_ref().map(|(track, _)| track.id());
+        let playbacks = self
+            .voices
+            .values_mut()
+            .filter_map(|voice| voice.playback.as_mut())
+            .chain(
+                self.one_shots
+                    .iter_mut()
+                    .map(|one_shot| &mut one_shot.playback),
+            );
+        for playback in playbacks {
+            if playback.descriptor.acoustics != AudioAcoustics::World {
+                continue;
+            }
+            let reverb = reverbs[bus_index(playback.descriptor.bus)];
+            if let Some(track) = playback.spatial.as_mut() {
+                // Only acoustic spatial tracks are built with this route.
+                let _ = track.set_send(reverb, send, ACOUSTIC_TWEEN);
+            }
+        }
+    }
+
+    /// The listener's space, while one is set.
+    pub fn space_reverb(&self) -> Option<SpaceReverb> {
+        self.space
+    }
+
+    fn space_send(&self) -> Decibels {
+        match self.space.map_or(0.0, |space| space.send) {
+            send if send > 0.0 => Decibels(amplitude_to_decibels(send).0 + REVERB_SEND_DECIBELS),
+            _ => Decibels::SILENCE,
+        }
+    }
+
+    fn playback_mut(&mut self, key: AcousticKey) -> Option<&mut Playback> {
+        match key {
+            AcousticKey::Voice(handle) => self.voices.get_mut(&handle)?.playback.as_mut(),
+            AcousticKey::OneShot(signal) => self
+                .one_shots
+                .iter_mut()
+                .find(|one_shot| one_shot.signal_handle == signal)
+                .map(|one_shot| &mut one_shot.playback),
+        }
     }
 
     pub fn voice_state(&self, handle: AudioHandle) -> Option<RealizedVoiceState> {
@@ -937,7 +1207,7 @@ impl<B: Backend> AudioRealizer<B> {
                 descriptor,
                 ..
             } => {
-                let playback = self.play(descriptor, 0.0, clips, entities)?;
+                let playback = self.play(descriptor, 0.0, clips, entities, None)?;
                 self.one_shots.push(OneShot {
                     sequence,
                     signal_handle: *signal_handle,
@@ -1016,7 +1286,7 @@ impl<B: Backend> AudioRealizer<B> {
             AudioVoiceDesiredState::Playing if finished => (RealizedVoiceState::Completed, None),
             AudioVoiceDesiredState::Playing => (
                 RealizedVoiceState::Playing,
-                Some(self.play(descriptor, cursor, clips, entities)?),
+                Some(self.play(descriptor, cursor, clips, entities, None)?),
             ),
             AudioVoiceDesiredState::Paused => (RealizedVoiceState::Paused, None),
         };
@@ -1063,12 +1333,19 @@ impl<B: Backend> AudioRealizer<B> {
         let rebuild = is_spatial(&previous) != is_spatial(&voice.descriptor)
             || previous.max_distance != voice.descriptor.max_distance
             || previous.rolloff != voice.descriptor.rolloff
+            || previous.acoustics != voice.descriptor.acoustics
             || (is_spatial(&previous) && patch.emitter.is_some());
         if !rebuild {
             playback.apply(&voice.descriptor, clock_rate);
             return Ok(());
         }
         let cursor = playback.cursor(previous.looping);
+        // A moved emitter or a changed range needs acoustics set again.
+        let acoustics = (previous.acoustics == voice.descriptor.acoustics
+            && previous.max_distance == voice.descriptor.max_distance
+            && patch.emitter.is_none())
+        .then_some(playback.acoustics)
+        .flatten();
         playback.stop();
         voice.playback = None;
         if voice.state != RealizedVoiceState::Playing {
@@ -1077,7 +1354,7 @@ impl<B: Backend> AudioRealizer<B> {
             return Ok(());
         }
         let descriptor = voice.descriptor.clone();
-        let playback = self.play(&descriptor, cursor, clips, entities)?;
+        let playback = self.play(&descriptor, cursor, clips, entities, acoustics)?;
         if let Some(voice) = self.voices.get_mut(&handle) {
             voice.playback = Some(playback);
         }
@@ -1133,8 +1410,12 @@ impl<B: Backend> AudioRealizer<B> {
                 0.0
             }
         };
+        let acoustics = voice
+            .playback
+            .as_ref()
+            .and_then(|playback| playback.acoustics);
         let descriptor = voice.descriptor.clone();
-        let playback = self.play(&descriptor, restart_at, clips, entities)?;
+        let playback = self.play(&descriptor, restart_at, clips, entities, acoustics)?;
         if let Some(voice) = self.voices.get_mut(&handle) {
             voice.playback = Some(playback);
             voice.state = RealizedVoiceState::Playing;
@@ -1143,8 +1424,10 @@ impl<B: Backend> AudioRealizer<B> {
     }
 
     fn apply_bus_gain(&mut self, bus: AudioBus) {
-        let gain = self.bus_states[bus_index(bus)].gain();
-        self.buses[bus_index(bus)].set_volume(amplitude_to_decibels(gain), IMMEDIATE);
+        let gain = amplitude_to_decibels(self.bus_states[bus_index(bus)].gain());
+        self.buses[bus_index(bus)].set_volume(gain, IMMEDIATE);
+        // The reverb a bus feeds is the bus's sound too.
+        self.reverbs[bus_index(bus)].0.set_volume(gain, IMMEDIATE);
     }
 
     fn clip(
@@ -1187,21 +1470,28 @@ impl<B: Backend> AudioRealizer<B> {
         })
     }
 
+    /// Starts a playback. `acoustics` carries a replaced playback's, so the
+    /// new one sounds as the old one did until acoustics are set again.
     fn play(
         &mut self,
         descriptor: &AudioSourceDescriptor,
         cursor: f64,
         clips: &impl AudioClipSource,
         entities: &impl AudioEntityPositions,
+        acoustics: Option<VoiceAcoustics>,
     ) -> Result<Playback, OpError> {
         let data = self.clip(&descriptor.clip, clips)?;
         let bus = bus_index(descriptor.bus);
+        let mut filter = None;
         let mut spatial = if is_spatial(descriptor) {
-            let position = emitter_position(&descriptor.emitter, entities).ok_or((
+            let emitter = emitter_position(&descriptor.emitter, entities).ok_or((
                 AudioProjectionDiagnosticCode::HostFailure,
                 "entity-attached audio source has no projected position".to_owned(),
             ))?;
-            let builder = SpatialTrackBuilder::new()
+            let position = acoustics
+                .and_then(|acoustics| acoustics.heard_at)
+                .unwrap_or(emitter);
+            let mut builder = SpatialTrackBuilder::new()
                 .attenuation_function(None)
                 .with_effect(rolloff::DistanceRolloff::new(
                     descriptor.max_distance,
@@ -1209,6 +1499,23 @@ impl<B: Backend> AudioRealizer<B> {
                 ))
                 .spatialization_strength(descriptor.spatial_blend)
                 .persist_until_sounds_finish(true);
+            if descriptor.acoustics == AudioAcoustics::World {
+                let cutoff = acoustics
+                    .and_then(|acoustics| acoustics.low_pass_hz)
+                    .filter(|cutoff| *cutoff < OPEN_CUTOFF_HZ);
+                filter = Some(
+                    builder.add_effect(
+                        FilterBuilder::new()
+                            .cutoff(f64::from(cutoff.unwrap_or(OPEN_CUTOFF_HZ)))
+                            .mix(if cutoff.is_some() { Mix::WET } else { Mix::DRY }),
+                    ),
+                );
+                builder = builder
+                    .volume(amplitude_to_decibels(
+                        acoustics.map_or(1.0, |acoustics| acoustics.transmission),
+                    ))
+                    .with_send(self.reverbs[bus].0.id(), self.space_send());
+            }
             let listener = self.listener.id();
             Some(
                 self.buses[bus]
@@ -1266,6 +1573,9 @@ impl<B: Backend> AudioRealizer<B> {
         let mut playback = Playback {
             sound,
             spatial,
+            filter,
+            evaluated: acoustics.is_some(),
+            acoustics,
             duration,
             pitch,
             descriptor: descriptor.clone(),
@@ -1293,7 +1603,9 @@ impl<B: Backend> AudioRealizer<B> {
         };
         if matches!(playback.sound, Sound::Streaming(_)) {
             let descriptor = playback.descriptor.clone();
-            if let Ok(replacement) = self.play(&descriptor, position, clips, entities) {
+            if let Ok(replacement) =
+                self.play(&descriptor, position, clips, entities, playback.acoustics)
+            {
                 playback.stop();
                 return replacement;
             }
@@ -1421,6 +1733,9 @@ fn patched(
     }
     if let Some(value) = &patch.emitter {
         descriptor.emitter = value.clone();
+    }
+    if let Some(value) = patch.acoustics {
+        descriptor.acoustics = value;
     }
     descriptor
 }

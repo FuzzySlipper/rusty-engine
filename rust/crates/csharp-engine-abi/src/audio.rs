@@ -6,7 +6,9 @@
 //! operation with the signal returned by `Emit`; the Engine then ends that
 //! playback and releases its pending clip owner.
 
-use crate::{NativeContentReferenceHandle, NativeUtf8Slice, NativeVec3};
+use crate::{
+    NativeContentReferenceHandle, NativeSpatialSessionHandle, NativeUtf8Slice, NativeVec3,
+};
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -65,6 +67,18 @@ pub enum NativeAudioRolloff {
     Linear = 0,
     /// Level falls linearly in decibels, to -60 dB (silence).
     LinearDecibels = 1,
+}
+
+/// Whether the world's geometry acts on a spatial source once an acoustic
+/// space is set: solid muffles it, open paths carry it round, and the
+/// listener's space adds reverb.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeAudioAcoustics {
+    #[default]
+    World = 0,
+    /// Plays as if nothing stood in the way, with no reverb.
+    Dry = 1,
 }
 
 #[repr(u32)]
@@ -162,6 +176,7 @@ pub struct NativeAudioSourceDescriptor {
     pub position: NativeVec3,
     pub entity: u64,
     pub offset: NativeVec3,
+    pub acoustics: NativeAudioAcoustics,
 }
 
 #[repr(C)]
@@ -336,4 +351,78 @@ impl Default for NativeAudioDiagnostic {
             voice_value: 0,
         }
     }
+}
+
+/// Names the spatial session whose collision the listener and every
+/// spatial source are in, so its geometry acts on them. `reverb_level`
+/// scales the reverb the listener's space adds, 0 to 1.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioAcousticSpaceRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub reverb_level: f32,
+}
+
+/// Explicit empty requests keep the generated direct API uniformly typed.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeAudioClearAcousticSpaceRequest {
+    pub reserved: u32,
+}
+
+/// How a sound made at `source`, audible to `range` with `rolloff`, arrives
+/// at each of `points` through `session`'s collision, as playback would play
+/// it. At most 64 points.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioArrivalRequest {
+    pub session: NativeSpatialSessionHandle,
+    pub source: NativeVec3,
+    pub range: f32,
+    pub rolloff: NativeAudioRolloff,
+    pub points: *const NativeVec3,
+    pub points_len: usize,
+}
+
+/// The way a sound reaches a point.
+#[repr(u32)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NativeAudioArrivalPath {
+    /// Beyond its range.
+    #[default]
+    Silent = 0,
+    /// Straight, through nothing.
+    Open = 1,
+    /// Straight, through solid: quieter and low-passed.
+    Occluded = 2,
+    /// By an open path round the solid.
+    Around = 3,
+}
+
+/// How a sound arrives at one point. `gain` is the amplitude playback would
+/// play it at, before the source's own volume and bus; `low_pass_hz` is
+/// 20000 when unfiltered; `arrives_from` is a point about three metres back
+/// along the path it takes, or the source when it comes straight.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NativeAudioArrival {
+    pub path: NativeAudioArrivalPath,
+    pub gain: f32,
+    pub low_pass_hz: f32,
+    pub path_metres: f32,
+    pub arrives_from: NativeVec3,
+}
+
+/// Borrowed query result: `arrivals` matches the request's points in order
+/// and stays valid until the next call on the same context. The open-air
+/// search settled `cells_searched` cells; `rays_cast` counts straight rays
+/// and search segments; `truncated` says the search stopped at its cap.
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct NativeAudioArrivalResult {
+    pub arrivals: *const NativeAudioArrival,
+    pub arrivals_len: usize,
+    pub cells_searched: u32,
+    pub rays_cast: u32,
+    pub truncated: bool,
 }
