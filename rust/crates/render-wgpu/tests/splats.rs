@@ -9,7 +9,7 @@ mod support;
 use asset_import::{import_animated_glb_asset, ImportContext, SourceUri};
 use render_model::*;
 use render_wgpu::RendererOptions;
-use support::splat_glb::{cards_glb, splat_glb, Card, Gaussian};
+use support::splat_glb::{cards_glb, splat_glb, splat_glb_with_core, Card, Core, Gaussian};
 use support::*;
 
 /// Admit a splat GLB and hold its runtime resource.
@@ -1853,5 +1853,198 @@ fn cards_and_gaussians_draw_in_runs_of_their_own_fogged_at_their_distance() {
             readout.gaussians
         ),
         (2, 2, 1, 1)
+    );
+}
+
+/// A blue core, its linear `COLOR_0` and sRGB `_ALBEDO` the same colour,
+/// 5 cm behind a figure's origin.
+const CORE_BLUE: [u8; 4] = [40, 40, 200, 255];
+
+fn blue_core() -> Core {
+    Core {
+        half: 0.4,
+        z: -0.05,
+        color: [
+            decode(CORE_BLUE[0]),
+            decode(CORE_BLUE[1]),
+            decode(CORE_BLUE[2]),
+            1.0,
+        ],
+        albedo: Some(CORE_BLUE),
+    }
+}
+
+/// A figure from `gaussians`, with `core` when given, as instance 1 three
+/// metres ahead, its appearance `appearance`.
+fn cored(
+    harness: &mut Harness,
+    gaussians: &[Gaussian],
+    core: Option<Core>,
+    appearance: SplatAppearance,
+) -> Vec<u8> {
+    let bytes = match core {
+        Some(core) => splat_glb_with_core(gaussians, core),
+        None => splat_glb(gaussians, [0.0; 3]),
+    };
+    let asset = admit(harness, &format!("cored-{}", core.is_some()), bytes);
+    harness.apply(vec![
+        RenderDiff::DefineAnimatedMesh {
+            asset: asset.clone(),
+        },
+        splat_instance(1, &asset, [0.0, 0.0, -3.0]),
+        RenderDiff::SetSplatAppearance {
+            handle: RenderHandle::new(1),
+            appearance,
+        },
+    ]);
+    harness.render(&front()).1
+}
+
+/// A core seals a translucent figure: where a Gaussian 60% opaque stands
+/// before it, the figure's own colour shows through rather than the world
+/// behind, unlit (blended in linear light, as the layer composites) and
+/// lit.
+#[test]
+fn a_core_seals_a_translucent_figure_unlit_and_lit() {
+    let figure = [Gaussian::round([0.0; 3], 0.3, [200, 100, 50, 153])];
+    let alpha = 153.0 / 255.0;
+    let mut harness = Harness::new(RendererOptions::default());
+    let background = at(&harness.render(&front()).1, CENTRE);
+    let over = |under: [f32; 3]| {
+        [0, 1, 2].map(|c| encode(decode([200, 100, 50][c]) * alpha + under[c] * (1.0 - alpha)))
+    };
+    let open = cored(&mut harness, &figure, None, SplatAppearance::default());
+    let world = background.map(|c| decode(c as u8));
+    assert_near(at(&open, CENTRE), over(world), 3);
+    let mut harness = Harness::new(RendererOptions::default());
+    let sealed = cored(
+        &mut harness,
+        &figure,
+        Some(blue_core()),
+        SplatAppearance::default(),
+    );
+    let blue = [0, 1, 2].map(|c| decode(CORE_BLUE[c]));
+    assert_near(at(&sealed, CENTRE), over(blue), 3);
+    // Lit: the core takes the light, and still no world shows through.
+    let lit = SplatAppearance {
+        lighting: SplatLighting::Lit,
+        ..SplatAppearance::default()
+    };
+    let mut harness = Harness::new(RendererOptions::default());
+    let open = at(&cored(&mut harness, &figure, None, lit.clone()), CENTRE);
+    let mut harness = Harness::new(RendererOptions::default());
+    let sealed = at(
+        &cored(&mut harness, &figure, Some(blue_core()), lit),
+        CENTRE,
+    );
+    assert!(
+        sealed[2] - sealed[0] > open[2] - open[0] + 10,
+        "the blue core shows through, lit: {sealed:?} against {open:?}"
+    );
+}
+
+/// A core is opaque and writes the depth: a Gaussian behind it inside the
+/// figure is hidden, and the core draws its colour times the multiplier.
+#[test]
+fn a_core_hides_the_gaussians_behind_it_and_takes_the_multiplier() {
+    let figure = [Gaussian::round([0.0, 0.0, -0.2], 0.3, [40, 200, 40, 255])];
+    let mut harness = Harness::new(RendererOptions::default());
+    let multiplier = [0.5, 1.0, 1.0];
+    let rgba = cored(
+        &mut harness,
+        &figure,
+        Some(blue_core()),
+        SplatAppearance {
+            multiplier,
+            ..SplatAppearance::default()
+        },
+    );
+    assert_near(
+        at(&rgba, CENTRE),
+        [0, 1, 2].map(|c| encode(decode(CORE_BLUE[c]) * multiplier[c])),
+        2,
+    );
+}
+
+/// On a pixel grid a figure draws no core: its blocks are as a figure
+/// without one draws them.
+#[test]
+fn a_gridded_figure_draws_as_without_its_core() {
+    let figure = [Gaussian::round([0.0; 3], 0.3, [200, 100, 50, 153])];
+    let gridded = SplatAppearance {
+        pixel_grid: 4,
+        pixel_coverage: 0.5,
+        ..SplatAppearance::default()
+    };
+    let mut harness = Harness::new(RendererOptions::default());
+    let without = cored(&mut harness, &figure, None, gridded.clone());
+    let mut harness = Harness::new(RendererOptions::default());
+    let with = cored(&mut harness, &figure, Some(blue_core()), gridded);
+    assert!(with == without, "a gridded figure's core draws nothing");
+}
+
+/// A core casts only when its figure casts as its core: a horizontal core a
+/// metre over the floor, the sun slanting past it, darkens the floor with
+/// `SplatShadowCaster::Core` and leaves it lit otherwise.
+#[test]
+fn a_core_casts_only_as_the_cores_caster() {
+    let options = RendererOptions {
+        default_world_lights: false,
+        shadows: true,
+        ..RendererOptions::default()
+    };
+    // A faint, tiny Gaussian: the shadow is the core's.
+    let figure = [Gaussian::round([0.0; 3], 0.005, [200, 200, 200, 8])];
+    let view = camera([1.0, 4.0, 0.0], 0.0, -89.9);
+    let floor_at = |caster: SplatShadowCaster| {
+        let mut harness = Harness::new(options);
+        let asset = admit(
+            &mut harness,
+            "cored-caster",
+            splat_glb_with_core(&figure, blue_core()),
+        );
+        // Turned to lie flat a metre over the floor, facing down: the
+        // shadow pass draws a caster's back faces, as a closed core's are.
+        let turn = std::f32::consts::FRAC_PI_4;
+        let mut create = splat_instance(1, &asset, [0.0, 1.0, 0.0]);
+        if let RenderDiff::CreateAnimatedMeshInstance { instance, .. } = &mut create {
+            instance.transform.rotation = [turn.sin(), 0.0, 0.0, turn.cos()];
+            instance.splat.shadow_caster = caster;
+        }
+        harness.apply(vec![
+            RenderDiff::DefineAnimatedMesh { asset },
+            create,
+            RenderDiff::CreateLight {
+                handle: RenderHandle::new(20),
+                parent: None,
+                light: LightDescriptor::Directional {
+                    color: [1.0; 3],
+                    intensity: 3.0,
+                    enabled: true,
+                    direction: [1.0, -1.0, 0.05],
+                    range: None,
+                    shadow_intent: LightShadowIntent::Requested,
+                    shadow: Default::default(),
+                },
+            },
+            RenderDiff::DefineMaterial {
+                material: material("material/floor", [0.6, 0.6, 0.6, 1.0], None),
+            },
+            static_mesh(
+                "mesh/floor",
+                box_mesh([-5.0, -0.1, -5.0], [5.0, 0.0, 5.0], |_| 0),
+                "material/floor",
+            ),
+            instance(30, None, "mesh/floor", transform([0.0; 3], 0.0, [1.0; 3])),
+        ]);
+        luminance(at(&harness.render(&view).1, CENTRE))
+    };
+    let open = floor_at(SplatShadowCaster::None);
+    let ellipsoids = floor_at(SplatShadowCaster::Ellipsoids);
+    let core = floor_at(SplatShadowCaster::Core);
+    assert!(open > core + 100, "open {open}, under its core {core}");
+    assert!(
+        (ellipsoids - open).abs() < 30,
+        "a faint Gaussian's ellipsoid, not its core: open {open}, {ellipsoids}"
     );
 }

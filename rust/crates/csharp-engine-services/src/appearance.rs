@@ -6384,6 +6384,7 @@ impl RuntimeAppearanceBridge {
                 NativeSplatShadowCaster::None => render_model::SplatShadowCaster::None,
                 NativeSplatShadowCaster::Splats => render_model::SplatShadowCaster::Splats,
                 NativeSplatShadowCaster::Ellipsoids => render_model::SplatShadowCaster::Ellipsoids,
+                NativeSplatShadowCaster::Core => render_model::SplatShadowCaster::Core,
             },
         };
         if let Some(refusal) = appearance.refusal() {

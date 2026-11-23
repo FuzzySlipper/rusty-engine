@@ -535,3 +535,90 @@ pub fn cards_glb(
     }
     glb(&document, &bin)
 }
+
+/// A splat figure's matte inset core for the fixtures: a square of side
+/// `2·half` facing +z at depth `z` in the figure's space.
+#[derive(Clone, Copy, Debug)]
+pub struct Core {
+    pub half: f32,
+    pub z: f32,
+    /// `COLOR_0`, linear.
+    pub color: [f32; 4],
+    /// `_ALBEDO`, sRGB-encoded, when the core has one.
+    pub albedo: Option<[u8; 4]>,
+}
+
+/// [`splat_glb`]'s figure with `core` as a second primitive of its mesh
+/// (`extras.splatCore`).
+pub fn splat_glb_with_core(gaussians: &[Gaussian], core: Core) -> Vec<u8> {
+    let bytes = splat_glb(gaussians, [0.0; 3]);
+    let json_length = u32::from_le_bytes(bytes[12..16].try_into().unwrap()) as usize;
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&bytes[20..20 + json_length]).expect("the fixture's JSON");
+    let mut bin = bytes[28 + json_length..].to_vec();
+    let mut push_view = |bin: &mut Vec<u8>, bytes: Vec<u8>| {
+        let offset = bin.len();
+        bin.extend_from_slice(&bytes);
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        let views = document["bufferViews"].as_array_mut().expect("views");
+        views.push(json!({"buffer": 0, "byteOffset": offset, "byteLength": bytes.len()}));
+        views.len() - 1
+    };
+    let (h, z) = (core.half, core.z);
+    let corners = [[-h, -h, z], [h, -h, z], [h, h, z], [-h, h, z]];
+    let floats =
+        |values: Vec<f32>| -> Vec<u8> { values.into_iter().flat_map(f32::to_le_bytes).collect() };
+    let positions = push_view(
+        &mut bin,
+        floats(corners.iter().flatten().copied().collect()),
+    );
+    let normals = push_view(&mut bin, floats([0.0, 0.0, 1.0].repeat(4)));
+    let colors = push_view(&mut bin, floats(core.color.repeat(4)));
+    let albedo = core
+        .albedo
+        .map(|albedo| push_view(&mut bin, albedo.repeat(4)));
+    let indices = push_view(
+        &mut bin,
+        [0u32, 1, 2, 0, 2, 3]
+            .iter()
+            .flat_map(|i| i.to_le_bytes())
+            .collect(),
+    );
+    let accessors = document["accessors"].as_array_mut().expect("accessors");
+    let mut accessor = |value: serde_json::Value| {
+        accessors.push(value);
+        accessors.len() - 1
+    };
+    let position = accessor(
+        json!({"bufferView": positions, "componentType": 5126, "count": 4,
+        "type": "VEC3", "min": [-h, -h, z], "max": [h, h, z]}),
+    );
+    let normal =
+        accessor(json!({"bufferView": normals, "componentType": 5126, "count": 4, "type": "VEC3"}));
+    let color =
+        accessor(json!({"bufferView": colors, "componentType": 5126, "count": 4, "type": "VEC4"}));
+    let albedo = albedo.map(|view| {
+        accessor(
+            json!({"bufferView": view, "componentType": 5121, "normalized": true, "count": 4,
+            "type": "VEC4"}),
+        )
+    });
+    let index = accessor(
+        json!({"bufferView": indices, "componentType": 5125, "count": 6, "type": "SCALAR"}),
+    );
+    let mut attributes = json!({"POSITION": position, "NORMAL": normal, "COLOR_0": color});
+    if let Some(albedo) = albedo {
+        attributes["_ALBEDO"] = json!(albedo);
+    }
+    document["meshes"][0]["primitives"]
+        .as_array_mut()
+        .expect("primitives")
+        .push(
+            json!({"mode": 4, "attributes": attributes, "indices": index,
+            "extras": {"splatCore": true}}),
+        );
+    document["buffers"][0]["byteLength"] = json!(bin.len());
+    glb(&document, &bin)
+}

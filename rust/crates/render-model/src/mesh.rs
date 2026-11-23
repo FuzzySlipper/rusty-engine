@@ -1613,6 +1613,9 @@ pub enum SplatShadowCaster {
     /// An ellipsoid around the Gaussians each joint carries, posed with the
     /// joint: a smooth stand-in, cheap at any count.
     Ellipsoids,
+    /// Its matte inset core, the figure's own shape at a mesh's cost; a
+    /// figure without a core casts nothing.
+    Core,
 }
 
 impl SplatShadowCaster {

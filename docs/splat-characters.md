@@ -118,8 +118,8 @@ A card's depth is its plane's at each pixel, not its centre's.
   runs apart, ordered by distance as runs are.
 - **Unlit.** Cards draw unlit, also when their appearance asks for
   `SplatLighting.Lit`.
-- **Shadows.** A card figure casts as ellipsoids, for either
-  `SplatShadowCaster`.
+- **Shadows.** A card figure casts as ellipsoids for `Splats` and
+  `Ellipsoids`, and as its [core](#the-core) for `Core`.
 - **Readout.** `GpuReadout.splats` counts cards apart from Gaussians.
 
 **Cost.** Villager 381 walking in `examples/splat_crowd`'s layout, as
@@ -157,6 +157,67 @@ same camera and pose (381, 1920 × 1080, front, at rest and at two moments
 of his Mixamo walk), the figure's mean colour differs by 0.14 to 0.26
 levels a channel, and pixels at least half covered by a median of 0 and a
 99th percentile of 1.
+
+## The core
+
+A splat figure may carry a matte inset core: a closed mesh of a few hundred
+triangles just inside its splats, drawn opaque in the figure's colours.
+Front splats often stop short of full opacity and lean on those behind
+them; where the figure is thin or hollow (a hood around a face), the world
+shows through. The core fills those gaps with the figure's own colour, and
+since it writes depth, the GPU skips the figure's splats behind it before
+shading them. asset-pipeline extracts it from the character's scaffold.
+
+A core is a `TRIANGLES` primitive marked `extras.splatCore = true` in the
+mesh of a figure's splats (Gaussians or cards), on the same skin:
+
+| Attribute | Type | Meaning |
+| --- | --- | --- |
+| `POSITION` | float VEC3 | In the node's space (bind space on a skinned node). |
+| `NORMAL` | float VEC3 | Unit, pointing out. |
+| `COLOR_0` | as glTF | The figure's colour there, **linear**, as an unlit figure draws it. |
+| `_ALBEDO` (optional) | float or normalized unsigned VEC4 | **sRGB-encoded**, as the Gaussians' `_ALBEDO`: what a lit figure's core draws. |
+| `JOINTS_0`, `WEIGHTS_0` | as glTF | The skin, on a skinned node. |
+
+Indices as glTF. A splat mesh has at most one core. Admission refuses a
+core without `NORMAL` or `COLOR_0`, attributes of different lengths,
+non-finite positions or normals, a joint outside the skin and an index
+past the vertices. The core stands inside the splats: it does not widen
+the figure's bounds.
+
+- **Drawn** in the world's opaque pass, posed with the figure, writing
+  depth and, under a temporal stage, motion.
+- **Unlit**, it draws `COLOR_0` times the appearance's multiplier. **Lit**
+  (a lit Gaussian figure), it draws `_ALBEDO` (or `COLOR_0` without one)
+  under the world's lights, rough and not metallic. Card figures draw
+  unlit, so their cores do too.
+- **Pixel grid.** A figure on a pixel grid draws no core: its blocks test
+  each pixel against the world's depth, and its core would cut them.
+- **Shadows.** A core casts only for `SplatShadowCaster.Core`
+  ([casting](#lighting)): the figure's own shape, at a mesh's cost.
+- A figure without a core draws as it did.
+
+**Seal.** The share of a figure's interior (8 pixels in from its outline,
+above the hips, five views at 1920 × 1080) that a wall behind it changes
+by more than 4 levels, without and with its core: villager 021, 3.6 to
+0.13 % from the front and 6.1 to 0.25 % from the back; 381, 4.2 to 3.5 %
+from the front and 1.0 to 0.3 % from the side. What is left is where the
+figure has no core behind it (arms, hands, a staff) and its outline.
+
+**Cost.** The core is skinned on the CPU each frame, as every animated
+mesh is: about 35 to 40 ns a vertex a figure. It saves GPU time by
+hiding the splats behind it, and costs CPU time per vertex. Walking
+figures in `examples/splat_crowd`'s layout on an RTX 3080 at 1920 ×
+1080, 32 figures close, ms, median of three rounds:
+
+| Figure | Core | World pass (GPU), without / with | CPU a frame, without / with |
+| --- | --- | --- | --- |
+| villager 021, 31,817 Gaussians | 380 vertices, 800 triangles | 2.04 / 1.58 | 0.51 / 0.97 |
+| villager 381, 15,908 Gaussians | 1,202 vertices, 2,400 triangles | 1.23 / 0.98 | 0.56 / 1.85 |
+| villager 381, 6,144 cards | the same | 1.09 / 0.77 | 0.54 / 1.76 |
+
+An 800-triangle core about breaks even at 32 figures, its CPU cost about
+what it saves on the GPU; asset-pipeline's cores aim at 800 triangles.
 
 ## Posing
 
@@ -339,6 +400,7 @@ casts. Lit or unlit, a figure casts only when it is asked to.
 | `None` (default) | nothing | | |
 | `Ellipsoids` | an ellipsoid around the Gaussians each joint carries, posed with it | a smooth mannequin: no hood, pouch or hem | +0.04 ms at 32 figures |
 | `Splats` | its Gaussians, re-projected for each shadow layer and cut where their alpha falls under 0.3 | its own silhouette, hood and stride included | about 0.15 ms a figure: +0.3 ms at 1, +5 ms at 32 |
+| `Core` | its [core](#the-core), as the world's meshes cast; nothing without one | its own shape, without the splats' soft edge | a mesh of a few hundred triangles a figure |
 
 **Lit crowds.** Walking 48,000-Gaussian townsmen in the web crowd layout
 (`examples/splat_crowd --lights`) under a sun casting through four cascades,

@@ -32,6 +32,15 @@ pub struct GlbPrimitive {
     pub weights: Option<Vec<[f32; 4]>>,
     pub indices: Vec<u32>,
     pub material: Option<usize>,
+    /// For a splat figure's matte inset core (`extras.splatCore`), drawn
+    /// opaque inside its splats: what it draws lit.
+    pub core: Option<GlbCore>,
+}
+
+/// A splat figure's core as a lit figure draws it: `_ALBEDO`, decoded to
+/// linear light, in place of `COLOR_0`, when the core has one.
+pub struct GlbCore {
+    pub albedo: Option<Vec<[f32; 4]>>,
 }
 
 /// A `POINTS` primitive of Gaussian splats (`docs/splat-characters.md`):
@@ -306,6 +315,7 @@ pub(crate) fn decode(bytes: &[u8], with_clips: bool) -> Result<GlbModel, String>
                 normals,
                 indices,
                 material: primitive.material().index(),
+                core: decode_core(&primitive, data)?,
             });
         }
         meshes.push(primitives);
@@ -649,6 +659,39 @@ fn decode_splats<'a, 's>(
     })
 }
 
+/// A splat core's lit colour, or `None` for any other primitive.
+fn decode_core<'a, 's>(
+    primitive: &'a gltf::Primitive<'a>,
+    data: impl Clone + Fn(gltf::Buffer<'a>) -> Option<&'s [u8]>,
+) -> Result<Option<GlbCore>, String> {
+    let core = primitive
+        .extras()
+        .as_ref()
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw.get()).ok())
+        .is_some_and(|extras| extras.get("splatCore") == Some(&serde_json::Value::Bool(true)));
+    if !core {
+        return Ok(None);
+    }
+    let albedo = primitive
+        .get(&gltf::Semantic::Extras("ALBEDO".to_owned()))
+        .map(|accessor| floats::<4>(accessor, data))
+        .transpose()?
+        .map(|albedo| {
+            albedo
+                .into_iter()
+                .map(|[r, g, b, _]| {
+                    [
+                        crate::srgb_to_linear(r),
+                        crate::srgb_to_linear(g),
+                        crate::srgb_to_linear(b),
+                        1.0,
+                    ]
+                })
+                .collect()
+        });
+    Ok(Some(GlbCore { albedo }))
+}
+
 /// A card primitive's tile side and atlas texture (`extras.splatKind =
 /// "billboard"`, `extras.bbsplat`), or `None` for Gaussians.
 fn card_extras(primitive: &gltf::Primitive<'_>) -> Option<(u32, usize)> {
@@ -778,6 +821,7 @@ mod tests {
             weights: None,
             indices: vec![0, 1, 2, 0, 2, 3],
             material: None,
+            core: None,
         };
         for tangent in generated_tangents(&quad([0.0, 1.0, 1.0, 0.0]), 0).unwrap() {
             assert!(

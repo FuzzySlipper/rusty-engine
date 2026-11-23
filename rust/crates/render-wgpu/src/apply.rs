@@ -824,7 +824,8 @@ impl Renderer {
             // What the splats read at their next frame (`splat_instances`).
             RenderDiff::SetSplatAppearance { handle, appearance } => {
                 if let NodeKind::AnimatedMesh(descriptor) = &mut self.node_mut(*handle)?.kind {
-                    descriptor.splat = appearance.clone();
+                    let before = std::mem::replace(&mut descriptor.splat, appearance.clone());
+                    self.splat_appearance_changed(*handle, &before);
                 }
             }
             RenderDiff::SetSplatGroupTints { handle, tints } => {
@@ -1031,6 +1032,9 @@ impl Renderer {
         let mut level_starts: Vec<f32> = Vec::new();
         // Which parts draw impostor cards, and the last level that is a mesh.
         let mut part_impostors: Vec<bool> = Vec::new();
+        // Which parts are splat cores that cast no shadow
+        // (`SplatShadowCaster::Core` casts them).
+        let mut part_cores: Vec<bool> = Vec::new();
         let mut last_mesh_level = 0u8;
         match &node.kind {
             NodeKind::Primitive {
@@ -1211,8 +1215,14 @@ impl Renderer {
                     .animated
                     .get(&handle)
                     .map(|instance| &instance.parameters);
-                for (mesh, index_count, material, slot) in animated_parts {
+                for (mesh, index_count, material, slot, core) in animated_parts {
                     let (color, emission) = match &material {
+                        // A splat core: its vertex colours scaled by the
+                        // splat multiplier, in linear light.
+                        _ if core.is_some() => {
+                            let ([r, g, b], _) = core.unwrap_or(([1.0; 3], false));
+                            ([r, g, b, 1.0], [0.0; 3])
+                        }
                         MaterialRef::Retained(id) => match materials.get(*id) {
                             Some(row) => instance_colors(
                                 &row.descriptor,
@@ -1225,6 +1235,8 @@ impl Renderer {
                     };
                     let mut row = PartRow::new(color, emission);
                     row.fade = crate::tables::ANIMATED_PART_FADE;
+                    part_cores.resize(parts.len(), false);
+                    part_cores.push(core.is_some_and(|(_, casts)| !casts));
                     parts.push((
                         Part {
                             mesh,
@@ -1390,6 +1402,7 @@ impl Renderer {
             parts.clear();
             part_levels.clear();
             part_impostors.clear();
+            part_cores.clear();
             level_starts.clear();
             scattered = None;
         }
@@ -1462,6 +1475,7 @@ impl Renderer {
                 MaterialRef::LitFallback => (None, Features::default()),
             };
             let impostor = part_impostors.get(index).copied().unwrap_or(false);
+            let core = part_cores.get(index).copied().unwrap_or(false);
             let billboard = mesh.billboard && scattered.is_some() && !impostor;
             let mut features = (features | mesh.features())
                 .with(Features::SCATTER, scattered.is_some())
@@ -1480,6 +1494,7 @@ impl Renderer {
                 // last mesh level (`scatter_select.wgsl`).
                 shadow: !impostor
                     && !billboard
+                    && !core
                     && descriptor.is_none_or(|descriptor| {
                         !blends(descriptor) || descriptor.translucent_shadow
                     }),

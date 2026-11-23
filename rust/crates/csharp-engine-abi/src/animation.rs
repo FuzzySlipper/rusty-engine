@@ -269,6 +269,9 @@ pub enum NativeSplatShadowCaster {
     /// An ellipsoid around the Gaussians each joint carries: a smooth
     /// stand-in, cheap at any count.
     Ellipsoids = 2,
+    /// Its matte inset core, the figure's own shape at a mesh's cost; a
+    /// figure without a core casts nothing.
+    Core = 3,
 }
 
 /// How a splat appearance's colour meets the world's light.

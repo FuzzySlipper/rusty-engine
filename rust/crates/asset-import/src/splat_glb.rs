@@ -25,6 +25,15 @@ const CARD_ATTRIBUTES: [&str; 3] = ["ROTATION", "SCALE", "TILE_ORIGIN"];
 /// What a card primitive's `extras.splatKind` says.
 const CARD_KIND: &str = "billboard";
 
+/// Whether `primitive` is a splat figure's matte inset core: `TRIANGLES`
+/// marked `extras.splatCore = true`.
+pub(crate) fn is_core_primitive(primitive: &gltf::Primitive<'_>) -> bool {
+    primitive.mode() == gltf::mesh::Mode::Triangles
+        && extras(primitive).is_some_and(|extras| {
+            extras.get("splatCore").and_then(|core| core.as_bool()) == Some(true)
+        })
+}
+
 /// Whether `primitive` is a splat primitive: `POINTS` with `_SCALE`, or
 /// `POINTS` marked as cards.
 pub(crate) fn is_splat_primitive(primitive: &gltf::Primitive<'_>) -> bool {
@@ -78,17 +87,39 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
             "export the clips as a clip pack and the splats without animations",
         ));
     }
+    let blob = parsed.blob.as_deref();
+    let data = |buffer: gltf::Buffer<'_>| match buffer.source() {
+        gltf::buffer::Source::Bin => blob,
+        gltf::buffer::Source::Uri(_) => None,
+    };
     // Cards draw in runs by their atlas, so one GLB's cards share one, and a
     // GLB is cards or Gaussians.
     let mut kinds = (false, false);
     let mut atlas = None;
     for mesh in document.meshes() {
+        // A core stands inside its mesh's splats: one, beside them.
+        let cores = mesh.primitives().filter(is_core_primitive).count();
+        let splats = mesh
+            .primitives()
+            .any(|primitive| is_splat_primitive(&primitive));
+        if cores > 1 || (cores == 1 && !splats) {
+            return Err(ImportDiagnostic::error(
+                ImportCode::UnsupportedFeature,
+                format!("source.meshes[{}]", mesh.index()),
+                "a splat mesh has at most one core, beside its splats",
+                "export one core primitive in the mesh of the splats it fills",
+            ));
+        }
         for primitive in mesh.primitives() {
             let path = format!(
                 "source.meshes[{}].primitives[{}]",
                 mesh.index(),
                 primitive.index()
             );
+            if is_core_primitive(&primitive) {
+                check_core_primitive(document, &mesh, &primitive, &path, data)?;
+                continue;
+            }
             if !is_splat_primitive(&primitive) {
                 return Err(ImportDiagnostic::error(
                     ImportCode::UnsupportedFeature,
@@ -123,11 +154,6 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
             }
         }
     }
-    let blob = parsed.blob.as_deref();
-    let data = |buffer: gltf::Buffer<'_>| match buffer.source() {
-        gltf::buffer::Source::Bin => blob,
-        gltf::buffer::Source::Uri(_) => None,
-    };
     let parents = parents(document);
     let mut min = [f64::MAX; 3];
     let mut max = [f64::MIN; 3];
@@ -140,7 +166,11 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
         } else {
             model_matrix(document, &parents, node.index())
         };
-        for primitive in mesh.primitives() {
+        // A core stands inside the splats and does not widen their bounds.
+        for primitive in mesh
+            .primitives()
+            .filter(|primitive| !is_core_primitive(primitive))
+        {
             let attribute = |semantic: gltf::Semantic| {
                 primitive
                     .get(&semantic)
@@ -182,6 +212,112 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
         ));
     }
     Ok(MeshSourceBounds { min, max })
+}
+
+/// Check a core primitive: its attributes, one value per vertex, finite
+/// positions and normals, its joints within the skin of every node drawing
+/// its mesh, and its indices within its vertices (the renderer skins and
+/// draws it as they are).
+fn check_core_primitive<'a, 's>(
+    document: &gltf::Document,
+    mesh: &gltf::Mesh<'_>,
+    primitive: &'a gltf::Primitive<'a>,
+    path: &str,
+    data: impl Clone + Fn(gltf::Buffer<'a>) -> Option<&'s [u8]>,
+) -> Result<(), ImportDiagnostic> {
+    let refused = |locus: String, message: String| {
+        ImportDiagnostic::error(
+            ImportCode::MalformedSource,
+            locus,
+            message,
+            "write POSITION, NORMAL and COLOR_0 (and _ALBEDO, JOINTS_0 and WEIGHTS_0) for every core vertex",
+        )
+    };
+    let Some(positions) = primitive.get(&gltf::Semantic::Positions) else {
+        return Err(refused(
+            format!("{path}.attributes.POSITION"),
+            "a splat core needs POSITION".to_owned(),
+        ));
+    };
+    let vertices = positions.count();
+    for (name, semantic, required) in [
+        ("NORMAL", gltf::Semantic::Normals, true),
+        ("COLOR_0", gltf::Semantic::Colors(0), true),
+        (
+            "_ALBEDO",
+            gltf::Semantic::Extras("ALBEDO".to_owned()),
+            false,
+        ),
+        ("JOINTS_0", gltf::Semantic::Joints(0), false),
+        ("WEIGHTS_0", gltf::Semantic::Weights(0), false),
+    ] {
+        match primitive.get(&semantic) {
+            None if required => {
+                return Err(refused(
+                    format!("{path}.attributes.{name}"),
+                    format!("a splat core needs {name}"),
+                ))
+            }
+            Some(accessor) if accessor.count() != vertices => {
+                return Err(ImportDiagnostic::error(
+                    ImportCode::AttributeLengthMismatch,
+                    format!("{path}.attributes.{name}"),
+                    format!(
+                        "{name} has {} values for {vertices} core vertices",
+                        accessor.count()
+                    ),
+                    "write one value of each attribute per core vertex",
+                ))
+            }
+            _ => {}
+        }
+    }
+    let reader = primitive.reader(data.clone());
+    let finite = |values: &mut dyn Iterator<Item = [f32; 3]>| values.flatten().all(f32::is_finite);
+    if !reader
+        .read_positions()
+        .is_some_and(|mut positions| finite(&mut positions))
+        || !reader
+            .read_normals()
+            .is_some_and(|mut normals| finite(&mut normals))
+    {
+        return Err(ImportDiagnostic::error(
+            ImportCode::NonFiniteValue,
+            path.to_owned(),
+            "a splat core's positions and normals are finite",
+            "write finite core positions and normals",
+        ));
+    }
+    if let Some(joints) = reader.read_joints(0) {
+        let highest = joints.into_u16().flatten().max().unwrap_or(0);
+        let skins = document
+            .nodes()
+            .filter(|node| {
+                node.mesh()
+                    .is_some_and(|drawn| drawn.index() == mesh.index())
+            })
+            .filter_map(|node| node.skin());
+        for skin in skins {
+            if usize::from(highest) >= skin.joints().count() {
+                return Err(refused(
+                    format!("{path}.attributes.JOINTS_0"),
+                    format!(
+                        "a splat core names joint {highest} of a skin of {} joints",
+                        skin.joints().count()
+                    ),
+                ));
+            }
+        }
+    }
+    if let Some(indices) = reader.read_indices() {
+        if indices.into_u32().any(|index| index as usize >= vertices) {
+            return Err(refused(
+                format!("{path}.indices"),
+                format!("a splat core's indices reach past its {vertices} vertices"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Check a card primitive's attributes and atlas; returns the atlas's
@@ -509,6 +645,7 @@ mod tests {
         bin.extend(floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
         bin.extend(floats(&[0.05; 6]));
         bin.extend([200, 100, 50, 255, 50, 100, 200, 255]);
+        bin.extend(core_bytes());
         let view = |offset: usize, length: usize| serde_json::json!({"buffer": 0, "byteOffset": offset, "byteLength": length});
         let mut attributes =
             serde_json::json!({"POSITION": 0, "_ROTATION": 1, "_SCALE": 2, "_COLOR": 3});
@@ -681,6 +818,209 @@ mod tests {
         assert!(clips.assets.is_none());
     }
 
+    /// A core's bytes, appended to a test GLB's BIN chunk: three vertices'
+    /// positions, normals and linear colours (floats), joints and weights
+    /// (bytes, joint 0 whole) and three u32 indices.
+    fn core_bytes() -> Vec<u8> {
+        let floats = |values: &[f32]| {
+            values
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>()
+        };
+        let mut bytes = floats(&[0.0, 1.0, 0.0, 0.1, 1.0, 0.0, 0.0, 1.1, 0.0]);
+        bytes.extend(floats(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
+        bytes.extend(floats(&[0.5; 12]));
+        bytes.extend([0u8; 12]);
+        bytes.extend([255u8, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0]);
+        bytes.extend([0u32, 1, 2].iter().flat_map(|v| v.to_le_bytes()));
+        bytes
+    }
+
+    /// Add a core to a test GLB's mesh 0, from [`core_bytes`] at `offset`
+    /// in its BIN chunk, skinned when `skinned`, its attributes edited by
+    /// `edit`.
+    fn add_core(
+        document: &mut serde_json::Value,
+        offset: usize,
+        skinned: bool,
+        edit: impl FnOnce(&mut serde_json::Value),
+    ) {
+        let views = document["bufferViews"].as_array_mut().unwrap();
+        let first_view = views.len();
+        for (start, length) in [(0, 36), (36, 36), (72, 48), (120, 12), (132, 12), (144, 12)] {
+            views.push(serde_json::json!(
+                {"buffer": 0, "byteOffset": offset + start, "byteLength": length}
+            ));
+        }
+        let accessors = document["accessors"].as_array_mut().unwrap();
+        let first = accessors.len();
+        for (view, component, kind, normalized) in [
+            (0, 5126, "VEC3", false),
+            (1, 5126, "VEC3", false),
+            (2, 5126, "VEC4", false),
+            (3, 5121, "VEC4", false),
+            (4, 5121, "VEC4", true),
+            (5, 5125, "SCALAR", false),
+        ] {
+            accessors.push(
+                serde_json::json!({"bufferView": first_view + view, "componentType": component,
+                "count": 3, "type": kind, "normalized": normalized}),
+            );
+        }
+        accessors[first]["min"] = serde_json::json!([0.0, 1.0, 0.0]);
+        accessors[first]["max"] = serde_json::json!([0.1, 1.1, 0.0]);
+        let mut attributes = serde_json::json!(
+            {"POSITION": first, "NORMAL": first + 1, "COLOR_0": first + 2}
+        );
+        if skinned {
+            attributes["JOINTS_0"] = serde_json::json!(first + 3);
+            attributes["WEIGHTS_0"] = serde_json::json!(first + 4);
+        }
+        edit(&mut attributes);
+        document["meshes"][0]["primitives"]
+            .as_array_mut()
+            .unwrap()
+            .push(
+                serde_json::json!({"mode": 4, "attributes": attributes, "indices": first + 5,
+                "extras": {"splatCore": true}}),
+            );
+    }
+
+    /// A core beside Gaussians, and beside skinned cards, is admitted, and
+    /// does not widen the splats' bounds.
+    #[test]
+    fn a_core_beside_gaussians_or_cards_is_admitted_inside_their_bounds() {
+        let plain = import(&glb(|_| {}, |_| {})).assets.unwrap().animated_mesh;
+        let outcome = import(&glb(
+            |_| {},
+            |document| add_core(document, 88, false, |_| {}),
+        ));
+        let mesh = outcome
+            .assets
+            .unwrap_or_else(|| panic!("admitted: {:?}", outcome.diagnostics))
+            .animated_mesh;
+        assert_eq!(mesh.bounds.min, plain.bounds.min);
+        assert_eq!(mesh.bounds.max, plain.bounds.max);
+        let outcome = import(&cards_glb(
+            true,
+            |_| {},
+            |document| add_core(document, 160, true, |_| {}),
+        ));
+        assert!(outcome.assets.is_some(), "{:?}", outcome.diagnostics);
+    }
+
+    /// A core without its normals or colours, with attributes of another
+    /// length, a joint outside its skin or an index past its vertices, a
+    /// second core, or a core in a mesh without splats is refused.
+    #[test]
+    fn malformed_cores_are_refused() {
+        let refused = |bytes: Vec<u8>, code: ImportCode, word: &str| {
+            let outcome = import(&bytes);
+            assert!(outcome.assets.is_none(), "{word}");
+            assert!(
+                outcome
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code == code && d.message.contains(word)),
+                "{word}: {:?}",
+                outcome.diagnostics
+            );
+        };
+        let cards = |edit: fn(&mut serde_json::Value), extra: fn(&mut serde_json::Value)| {
+            cards_glb(
+                true,
+                |_| {},
+                move |document| {
+                    add_core(document, 160, true, edit);
+                    extra(document);
+                },
+            )
+        };
+        refused(
+            cards(
+                |attributes| {
+                    attributes.as_object_mut().unwrap().remove("NORMAL");
+                },
+                |_| {},
+            ),
+            ImportCode::MalformedSource,
+            "NORMAL",
+        );
+        refused(
+            cards(
+                |attributes| {
+                    attributes.as_object_mut().unwrap().remove("COLOR_0");
+                },
+                |_| {},
+            ),
+            ImportCode::MalformedSource,
+            "COLOR_0",
+        );
+        // The core's colours read as two values.
+        refused(
+            cards(
+                |_| {},
+                |document| document["accessors"][9]["count"] = serde_json::json!(2),
+            ),
+            ImportCode::AttributeLengthMismatch,
+            "COLOR_0",
+        );
+        // Joint 255 of a skin of one: the joints read the weights' bytes.
+        refused(
+            cards(
+                |_| {},
+                |document| {
+                    document["accessors"][10]["componentType"] = serde_json::json!(5121);
+                    document["accessors"][10]["bufferView"] = serde_json::json!(12);
+                },
+            ),
+            ImportCode::MalformedSource,
+            "joint 255",
+        );
+        // Index 3 of three vertices: the indices read the colours' bytes.
+        refused(
+            cards(
+                |_| {},
+                |document| document["accessors"][12]["bufferView"] = serde_json::json!(10),
+            ),
+            ImportCode::MalformedSource,
+            "indices",
+        );
+        refused(
+            cards(
+                |_| {},
+                |document| {
+                    let core = document["meshes"][0]["primitives"][1].clone();
+                    document["meshes"][0]["primitives"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(core);
+                },
+            ),
+            ImportCode::UnsupportedFeature,
+            "at most one core",
+        );
+        refused(
+            cards(
+                |_| {},
+                |document| {
+                    // The core in a mesh of its own.
+                    let core = document["meshes"][0]["primitives"]
+                        .as_array_mut()
+                        .unwrap()
+                        .remove(1);
+                    document["meshes"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!({"primitives": [core]}));
+                },
+            ),
+            ImportCode::UnsupportedFeature,
+            "beside its splats",
+        );
+    }
+
     /// A GLB of two cards on one node, skinned to one joint when `skinned`,
     /// its primitive's attributes edited by `edit` and the document by
     /// `extra`. Its atlas's bytes are not an image: admission does not
@@ -705,6 +1045,7 @@ mod tests {
         bin.extend(floats(&[
             1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
         ]));
+        bin.extend(core_bytes());
         let view = |offset: usize, length: usize| serde_json::json!({"buffer": 0, "byteOffset": offset, "byteLength": length});
         let mut attributes = serde_json::json!(
             {"POSITION": 0, "_ROTATION": 1, "_SCALE": 2, "_TILE_ORIGIN": 3}

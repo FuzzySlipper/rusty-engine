@@ -453,6 +453,7 @@ impl Renderer {
                 }
                 let vertices = interleave(
                     primitive,
+                    primitive.colors.as_deref(),
                     &primitive.positions,
                     &primitive.normals,
                     &|vertex| vertex,
@@ -475,6 +476,29 @@ impl Renderer {
                 .map(|extra| self.vertex_buffer(&format!("{label} tangents"), &extra, false))
                 .transpose()?;
                 rigid.insert((mesh_index as u32, primitive_index as u32), mesh);
+                // An unskinned core's lit colours, for lit instances.
+                if let Some(albedo) = primitive
+                    .core
+                    .as_ref()
+                    .and_then(|core| core.albedo.as_deref())
+                {
+                    let vertices = interleave(
+                        primitive,
+                        Some(albedo),
+                        &primitive.positions,
+                        &primitive.normals,
+                        &|vertex| vertex,
+                    );
+                    let mesh = self.upload_vertices(
+                        &format!("{label} core {mesh_index}/{primitive_index} lit"),
+                        &vertices,
+                        &primitive.indices,
+                        Topology::Triangles,
+                        vec![(0, 0, primitive.indices.len() as u32)],
+                        BTreeMap::new(),
+                    )?;
+                    rigid.insert((mesh_index as u32, primitive_index as u32 | LIT_CORE), mesh);
+                }
             }
         }
         // A material drawn with the second stream or skinned needs its own
@@ -803,6 +827,48 @@ impl Renderer {
         Ok(())
     }
 
+    /// An instance's splat appearance changed from `before`: its core, if
+    /// its asset has one, draws as the new one says (`core_look`), its
+    /// colours skinned again when it turns lit or unlit.
+    pub(crate) fn splat_appearance_changed(
+        &mut self,
+        handle: RenderHandle,
+        before: &render_model::SplatAppearance,
+    ) {
+        let Some(instance) = self.tables.animated.get(&handle) else {
+            return;
+        };
+        let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
+            return;
+        };
+        let cored = asset
+            .model
+            .meshes
+            .iter()
+            .flatten()
+            .any(|primitive| primitive.core.is_some());
+        let Some(NodeKind::AnimatedMesh(descriptor)) =
+            self.tables.nodes.get(&handle).map(|node| &node.kind)
+        else {
+            return;
+        };
+        let now = &descriptor.splat;
+        let looked = |appearance: &render_model::SplatAppearance| {
+            (
+                appearance.pixel_grid > 0,
+                appearance.lighting == render_model::SplatLighting::Lit,
+                appearance.shadow_caster == render_model::SplatShadowCaster::Core,
+            )
+        };
+        if !cored || (looked(before) == looked(now) && before.multiplier == now.multiplier) {
+            return;
+        }
+        if let Some(instance) = self.tables.animated.get_mut(&handle) {
+            instance.pose_pending = true;
+        }
+        self.rebuild_parts(handle);
+    }
+
     /// Skin every instance whose pose arrived since it was last drawn, and
     /// write its parts. Runs after transforms propagate.
     pub(crate) fn realize_poses(&mut self) {
@@ -933,6 +999,7 @@ impl Renderer {
             .pose
             .as_ref()
             .map_or(&[][..], |pose| pose.pieces.as_slice());
+        let core_lit = core_look(&self.tables, handle, asset) == Some(true);
         let mut updates = Vec::new();
         for &node_index in &asset.model.order {
             let node = &asset.model.nodes[node_index];
@@ -1029,7 +1096,15 @@ impl Renderer {
                     None => output,
                     Some(copy) => copies[copy].0 as usize,
                 };
-                let vertices = interleave(primitive, &positions, &normals, &source);
+                let colors = match primitive
+                    .core
+                    .as_ref()
+                    .and_then(|core| core.albedo.as_deref())
+                {
+                    Some(albedo) if core_lit => Some(albedo),
+                    _ => primitive.colors.as_deref(),
+                };
+                let vertices = interleave(primitive, colors, &positions, &normals, &source);
                 let extra = extra_stream(
                     &asset.model,
                     primitive,
@@ -1501,7 +1576,12 @@ impl Renderer {
                     camera.eye,
                 )
                 .into_iter()
-                .filter(|instance| instance.caster.is_some())
+                // A core casts through the opaque meshes' shadow pass.
+                .filter(|instance| {
+                    instance
+                        .caster
+                        .is_some_and(|caster| caster != render_model::SplatShadowCaster::Core)
+                })
                 .filter(|instance| {
                     reach.is_none_or(|(at, range)| {
                         let bounds = &instance.bounds;
@@ -1680,11 +1760,14 @@ impl Renderer {
     /// the materials it names, defined or not, are noted in `used`. A
     /// primitive whose mesh is not uploaded (skinned joints without
     /// weights) draws nothing.
+    /// Each part: its mesh, index count, material and material slot, and
+    /// for a splat core the colour multiplier it draws with and whether it
+    /// casts (`SplatShadowCaster::Core`).
     pub(crate) fn animated_parts(
         &mut self,
         handle: RenderHandle,
         used: &mut Vec<u32>,
-    ) -> Vec<(crate::tables::MeshRef, u32, MaterialRef, Option<u16>)> {
+    ) -> Vec<AnimatedPart> {
         let Some(instance) = self.tables.animated.get(&handle) else {
             return Vec::new();
         };
@@ -1706,6 +1789,15 @@ impl Renderer {
             _ => BTreeMap::new(),
         };
         let matte = instance.inspection.matte;
+        let core_lit = core_look(&self.tables, handle, asset);
+        // The core's colour multiplier, and whether it casts.
+        let (multiplier, core_casts) = match self.tables.nodes.get(&handle).map(|node| &node.kind) {
+            Some(NodeKind::AnimatedMesh(descriptor)) => (
+                descriptor.splat.multiplier,
+                descriptor.splat.shadow_caster == render_model::SplatShadowCaster::Core,
+            ),
+            _ => ([1.0; 3], false),
+        };
         let mut parts = Vec::new();
         let mut part_nodes = Vec::new();
         let mut mattes = Vec::new();
@@ -1713,6 +1805,12 @@ impl Renderer {
             let node = &asset.model.nodes[node_index];
             let Some(mesh) = node.mesh else { continue };
             for (primitive_index, primitive) in asset.model.meshes[mesh].iter().enumerate() {
+                // A splat core draws unlit or lit, or not on a pixel grid.
+                let core = match (&primitive.core, core_lit) {
+                    (None, _) => None,
+                    (Some(_), None) => continue,
+                    (Some(core), Some(lit)) => Some(lit && core.albedo.is_some()),
+                };
                 let mesh_ref = if primitive.joints.is_some() && node.skin.is_some() {
                     crate::tables::MeshRef::AnimatedSkinned(
                         handle,
@@ -1723,16 +1821,17 @@ impl Renderer {
                     crate::tables::MeshRef::AnimatedRigid(
                         instance.slot,
                         mesh as u32,
-                        primitive_index as u32,
+                        primitive_index as u32 | if core == Some(true) { LIT_CORE } else { 0 },
                     )
                 };
                 let uploaded = match &mesh_ref {
                     crate::tables::MeshRef::AnimatedSkinned(_, node, primitive) => {
                         instance.skinned.contains_key(&(*node, *primitive))
                     }
-                    _ => asset
-                        .rigid
-                        .contains_key(&(mesh as u32, primitive_index as u32)),
+                    crate::tables::MeshRef::AnimatedRigid(_, mesh, primitive) => {
+                        asset.rigid.contains_key(&(*mesh, *primitive))
+                    }
+                    _ => false,
                 };
                 if !uploaded {
                     continue;
@@ -1744,23 +1843,32 @@ impl Renderer {
                         .find(|(_, source)| **source == glb_material)
                         .map(|(slot, _)| *slot)
                 });
-                let material = match primitive.material {
-                    Some(glb_material) => {
-                        let overridden = slot.and_then(|slot| overrides.get(&slot));
-                        let id = overridden
-                            .cloned()
-                            .unwrap_or_else(|| asset.materials[glb_material].clone());
-                        used.push(self.tables.names.id(&id));
-                        if matte {
-                            let matte_id = self.tables.names.id(&format!("{id}#matte"));
-                            used.push(matte_id);
-                            mattes.push(id);
-                            MaterialRef::Retained(matte_id)
-                        } else {
-                            MaterialRef::Retained(self.tables.names.id(&id))
+                let material = match (
+                    core_lit.filter(|_| primitive.core.is_some()),
+                    primitive.material,
+                ) {
+                    // Lit, the core takes the world's light, roughness 1 and
+                    // no metal; unlit, its colour as it is.
+                    (Some(true), _) => MaterialRef::LitFallback,
+                    (Some(false), _) => MaterialRef::Unlit,
+                    (None, material) => match material {
+                        Some(glb_material) => {
+                            let overridden = slot.and_then(|slot| overrides.get(&slot));
+                            let id = overridden
+                                .cloned()
+                                .unwrap_or_else(|| asset.materials[glb_material].clone());
+                            used.push(self.tables.names.id(&id));
+                            if matte {
+                                let matte_id = self.tables.names.id(&format!("{id}#matte"));
+                                used.push(matte_id);
+                                mattes.push(id);
+                                MaterialRef::Retained(matte_id)
+                            } else {
+                                MaterialRef::Retained(self.tables.names.id(&id))
+                            }
                         }
-                    }
-                    None => MaterialRef::LitFallback,
+                        None => MaterialRef::LitFallback,
+                    },
                 };
                 let index_count = match &mesh_ref {
                     crate::tables::MeshRef::AnimatedSkinned(_, node, primitive) => instance
@@ -1769,7 +1877,13 @@ impl Renderer {
                         .map_or(0, |mesh| mesh.cpu.indices.len()),
                     _ => primitive.indices.len(),
                 };
-                parts.push((mesh_ref, index_count as u32, material, slot));
+                parts.push((
+                    mesh_ref,
+                    index_count as u32,
+                    material,
+                    slot,
+                    core.map(|_| (multiplier, core_casts)),
+                ));
                 part_nodes.push(node_index);
             }
         }
@@ -1997,9 +2111,51 @@ fn extra_stream(
 }
 
 /// Interleave a primitive's streams into the renderer's vertex layout; each
-/// output vertex takes the other streams of its `source` vertex.
+/// output vertex takes the other streams of its `source` vertex, its
+/// colour from `colors`.
+/// An animated instance's part (`animated_parts`).
+pub(crate) type AnimatedPart = (
+    crate::tables::MeshRef,
+    u32,
+    MaterialRef,
+    Option<u16>,
+    Option<([f32; 3], bool)>,
+);
+
+/// Set in a rigid core's primitive index (`AnimatedAssetRow::rigid`,
+/// `MeshRef::AnimatedRigid`): its lit colours' upload.
+const LIT_CORE: u32 = 1 << 31;
+
+/// How an instance draws its splat core: lit (`true`) when its appearance
+/// is lit and its splats are Gaussians (cards draw unlit), unlit (`false`)
+/// otherwise, and not at all (`None`) on a pixel grid, whose blocks test
+/// every pixel against the world's depth and would be cut by it.
+fn core_look(
+    tables: &crate::tables::Tables,
+    handle: RenderHandle,
+    asset: &AnimatedAssetRow,
+) -> Option<bool> {
+    let appearance = match tables.nodes.get(&handle).map(|node| &node.kind) {
+        Some(NodeKind::AnimatedMesh(descriptor)) => Some(&descriptor.splat),
+        _ => None,
+    };
+    if appearance.is_some_and(|appearance| appearance.pixel_grid > 0) {
+        return None;
+    }
+    let cards = asset
+        .splat_sets
+        .first()
+        .is_some_and(|set| set.cards.is_some());
+    Some(
+        !cards
+            && appearance
+                .is_some_and(|appearance| appearance.lighting == render_model::SplatLighting::Lit),
+    )
+}
+
 fn interleave(
     primitive: &glb::GlbPrimitive,
+    colors: Option<&[[f32; 4]]>,
     positions: &[[f32; 3]],
     normals: &[[f32; 3]],
     source: &dyn Fn(usize) -> usize,
@@ -2013,11 +2169,7 @@ fn interleave(
             Some(uv) => vertices.extend_from_slice(uv),
             None => vertices.extend_from_slice(&[0.0, 0.0]),
         }
-        match primitive
-            .colors
-            .as_ref()
-            .and_then(|colors| colors.get(vertex))
-        {
+        match colors.and_then(|colors| colors.get(vertex)) {
             Some(color) => vertices.extend_from_slice(color),
             None => vertices.extend_from_slice(&[1.0; 4]),
         }
