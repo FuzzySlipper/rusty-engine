@@ -13,7 +13,7 @@
 //!     [--counts 1,8,16,32] [--size 1920x1080] [--warm 2] [--frames 240]
 //!     [--lights] [--lit FLOOR] [--caster splats|ellipsoids]
 //!     [--tint GROUP:RRGGBB --tinted N] [--distance METRES]
-//!     [--occlusion] [--wall]
+//!     [--occlusion] [--wall] [--cpu-skinning]
 //! ```
 //!
 //! - `--fit JOINT:K,A`: the clip's translation of `JOINT` becomes
@@ -38,6 +38,11 @@
 //! - `--distance METRES`: the camera at least this far from the group's
 //!   centre, for figures at crowd distance (a 1.8 m figure is about 60
 //!   pixels tall 42 m away at 1080 rows).
+//! - `--cpu-skinning`: a skinned mesh's vertices skinned on the CPU, as
+//!   before #11006, instead of on the GPU (`RendererOptions::cpu_skinning`),
+//!   for timing a mesh character against the splat bodies both ways. The
+//!   GLB may be a skinned triangle mesh without splats, and its own clips
+//!   may be its clip pack.
 //!
 //! Writes `crowd.json`: per count, each timed pass's median GPU time (over
 //! the last 120 frames; `world` spans the splats' passes, which run inside
@@ -90,6 +95,7 @@ struct Arguments {
     distance: f64,
     occlusion: bool,
     wall: bool,
+    cpu_skinning: bool,
 }
 
 fn arguments() -> Result<Arguments, String> {
@@ -98,7 +104,7 @@ fn arguments() -> Result<Arguments, String> {
     let (mut size, mut warm, mut frames) = ((1920, 1080), 2.0, 240);
     let (mut lights, mut lit, mut caster) = (false, None, SplatShadowCaster::None);
     let mut least_distance = 0.0;
-    let (mut occlusion, mut wall) = (false, false);
+    let (mut occlusion, mut wall, mut cpu_skinning) = (false, false, false);
     let (mut tint, mut tinted) = (None, 1);
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -166,6 +172,7 @@ fn arguments() -> Result<Arguments, String> {
             }
             "--occlusion" => occlusion = true,
             "--wall" => wall = true,
+            "--cpu-skinning" => cpu_skinning = true,
             "--distance" => {
                 least_distance = value()?.parse().map_err(|_| "--distance takes metres")?;
             }
@@ -189,6 +196,7 @@ fn arguments() -> Result<Arguments, String> {
         distance: least_distance,
         occlusion,
         wall,
+        cpu_skinning,
     })
 }
 
@@ -330,6 +338,7 @@ fn main() {
             default_world_lights: !arguments.lights,
             shadows: arguments.lights,
             occlusion_culling: arguments.occlusion,
+            cpu_skinning: arguments.cpu_skinning,
             ..RendererOptions::default()
         });
         harness.target = OffscreenTarget::new(&harness.gpu, width, height, 1);
