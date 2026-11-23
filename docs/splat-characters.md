@@ -108,7 +108,8 @@ which a lit figure draws.
 - **Refused:** a missing attribute, attributes of different lengths,
   non-finite values, a `_TILE_ORIGIN` that is not two unsigned shorts, no
   `tilePx`, an `atlasTexture` that names no texture. A GLB is Gaussians or
-  cards, not both, and its card primitives share one atlas.
+  cards, not both, and its card primitives share one atlas and one albedo
+  atlas (or none).
 - **Bounds.** Each card's centre to its half-diagonal.
 
 Cards draw as Gaussians do: posed by the `Animation` service, projected

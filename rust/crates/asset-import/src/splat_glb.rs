@@ -130,16 +130,17 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
             }
             if is_card_primitive(&primitive) {
                 kinds.1 = true;
-                let texture = check_card_primitive(document, &primitive, &path)?;
-                if atlas.is_some_and(|atlas| atlas != texture) {
+                // The atlas and the albedo atlas (or none) a run draws with.
+                let pair = check_card_primitive(document, &primitive, &path)?;
+                if atlas.is_some_and(|atlas| atlas != pair) {
                     return Err(ImportDiagnostic::error(
                         ImportCode::UnsupportedFeature,
-                        format!("{path}.extras.bbsplat.atlasTexture"),
-                        "a GLB's card primitives share one atlas",
-                        "pack every card primitive's tiles into one atlas texture",
+                        format!("{path}.extras.bbsplat"),
+                        "a GLB's card primitives share one atlas and one albedo atlas, or none",
+                        "pack every card primitive's tiles into one atlas, and its albedo into one albedo atlas on the same tiles",
                     ));
                 }
-                atlas = Some(texture);
+                atlas = Some(pair);
             } else {
                 kinds.0 = true;
                 check_splat_primitive(&primitive, &path)?;
@@ -320,13 +321,13 @@ fn check_core_primitive<'a, 's>(
     Ok(())
 }
 
-/// Check a card primitive's attributes and atlas; returns the atlas's
-/// texture.
+/// Check a card primitive's attributes and atlases; returns the atlas's
+/// texture and the albedo atlas's, if it has one.
 fn check_card_primitive(
     document: &gltf::Document,
     primitive: &gltf::Primitive<'_>,
     path: &str,
-) -> Result<usize, ImportDiagnostic> {
+) -> Result<(usize, Option<usize>), ImportDiagnostic> {
     let remedy = "write POSITION, _ROTATION, _SCALE and _TILE_ORIGIN for every card";
     let Some(positions) = primitive.get(&gltf::Semantic::Positions) else {
         return Err(ImportDiagnostic::error(
@@ -409,22 +410,26 @@ fn check_card_primitive(
             .filter(|texture| texture.source().is_some())
     };
     // A lit figure's colour without its baked shading, on the same tiles.
-    if let Some(albedo) = bbsplat
+    let albedo = match bbsplat
         .as_ref()
         .and_then(|bbsplat| bbsplat.get("albedoTexture"))
     {
-        if albedo.as_u64().and_then(with_image).is_none() {
-            return Err(ImportDiagnostic::error(
-                ImportCode::MalformedSource,
-                format!("{path}.extras.bbsplat.albedoTexture"),
-                "a card primitive's albedo atlas is a texture with an image",
-                "write extras.bbsplat.albedoTexture, the index of the albedo atlas's texture, or leave it out",
-            ));
-        }
-    }
+        None => None,
+        Some(albedo) => match albedo.as_u64().and_then(with_image) {
+            Some(texture) => Some(texture.index()),
+            None => {
+                return Err(ImportDiagnostic::error(
+                    ImportCode::MalformedSource,
+                    format!("{path}.extras.bbsplat.albedoTexture"),
+                    "a card primitive's albedo atlas is a texture with an image",
+                    "write extras.bbsplat.albedoTexture, the index of the albedo atlas's texture, or leave it out",
+                ))
+            }
+        },
+    };
     let texture = whole("atlasTexture").and_then(with_image);
     match texture {
-        Some(texture) => Ok(texture.index()),
+        Some(texture) => Ok((texture.index(), albedo)),
         None => Err(ImportDiagnostic::error(
             ImportCode::MalformedSource,
             format!("{path}.extras.bbsplat.atlasTexture"),
@@ -1190,6 +1195,57 @@ mod tests {
             .diagnostics
             .iter()
             .any(|d| d.code == ImportCode::MalformedSource && d.message.contains("albedo")));
+    }
+
+    /// A GLB's card primitives share one atlas pair: a second primitive on
+    /// the same atlas with another albedo atlas, or with one where the
+    /// first has none, is refused; the same pair is admitted.
+    #[test]
+    fn card_primitives_share_one_atlas_and_one_albedo_atlas() {
+        let pair = |first: Option<u64>, second: Option<u64>| {
+            import(&cards_glb(
+                false,
+                |_| {},
+                move |document| {
+                    let mut other = document["meshes"][0]["primitives"][0].clone();
+                    if let Some(albedo) = second {
+                        other["extras"]["bbsplat"]["albedoTexture"] = serde_json::json!(albedo);
+                    }
+                    if let Some(albedo) = first {
+                        document["meshes"][0]["primitives"][0]["extras"]["bbsplat"]
+                            ["albedoTexture"] = serde_json::json!(albedo);
+                    }
+                    document["meshes"][0]["primitives"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(other);
+                    // A second texture, on the same image, as an albedo.
+                    document["textures"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!({"source": 0}));
+                },
+            ))
+        };
+        for (first, second) in [(None, Some(1)), (Some(1), None), (Some(0), Some(1))] {
+            let refused = pair(first, second);
+            assert!(refused.assets.is_none(), "{first:?}, {second:?}");
+            assert!(
+                refused.diagnostics.iter().any(|d| {
+                    d.code == ImportCode::UnsupportedFeature && d.message.contains("albedo atlas")
+                }),
+                "{first:?}, {second:?}: {:?}",
+                refused.diagnostics
+            );
+        }
+        for (first, second) in [(None, None), (Some(1), Some(1))] {
+            let admitted = pair(first, second);
+            assert!(
+                admitted.assets.is_some(),
+                "{first:?}, {second:?}: {:?}",
+                admitted.diagnostics
+            );
+        }
     }
 
     /// A card primitive without its tiles, with tiles of the wrong type or

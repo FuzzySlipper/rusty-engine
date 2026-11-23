@@ -543,7 +543,7 @@ impl Renderer {
             for (primitive_index, splats) in splats.iter().enumerate() {
                 let atlas = splats.cards.as_ref().and_then(|cards| {
                     atlases
-                        .entry(cards.atlas)
+                        .entry((cards.atlas, cards.albedo))
                         .or_insert_with(|| {
                             let image = model.textures.get(cards.atlas)?.image.as_ref()?;
                             let albedo = cards
