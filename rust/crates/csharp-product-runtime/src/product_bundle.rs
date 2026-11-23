@@ -599,6 +599,8 @@ struct ManifestRenderer {
     #[serde(default)]
     gpu_culling: Option<String>,
     #[serde(default)]
+    occlusion_culling: Option<String>,
+    #[serde(default)]
     antialiasing: Option<String>,
     #[serde(default)]
     vsync: Option<String>,
@@ -858,8 +860,10 @@ impl ProductRendererSettings {
                     }
                 },
                 gpu_culling: switch(value.gpu_culling.as_deref(), "renderer.gpuCulling")?,
-                // Products turn it on through `RendererSettings.Set`.
-                occlusion_culling: false,
+                occlusion_culling: switch(
+                    value.occlusion_culling.as_deref(),
+                    "renderer.occlusionCulling",
+                )?,
                 volumetric_fog,
                 volumetric_clouds,
                 water_reflections,
@@ -1658,6 +1662,33 @@ mod tests {
         )
         .unwrap();
         assert!(read(&root).unwrap_err().contains("renderer.gpuCulling"));
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn reads_and_validates_occlusion_culling_selection() {
+        let root = fixture_root("occlusion-culling");
+        write_manifest(&root, "native/product.so");
+        let path = root.join(PRODUCT_MANIFEST_NAME);
+        let original = fs::read_to_string(&path).unwrap();
+        assert!(
+            !read(&root).unwrap().renderer_settings().occlusion_culling,
+            "absent: off"
+        );
+        let marker = "\"uiProjection\":{\"expectedStream\":\"fixture.terrain\",\"expectedContract\":\"fixture.terrain.v1\"}";
+        fs::write(
+            &path,
+            original.replace(marker, "\"renderer\":{\"occlusionCulling\":\"enabled\"}"),
+        )
+        .unwrap();
+        assert!(read(&root).unwrap().renderer_settings().occlusion_culling);
+        fs::write(
+            &path,
+            original.replace(marker, "\"renderer\":{\"occlusionCulling\":\"maybe\"}"),
+        )
+        .unwrap();
+        assert!(read(&root)
+            .unwrap_err()
+            .contains("renderer.occlusionCulling"));
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

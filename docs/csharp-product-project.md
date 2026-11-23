@@ -1303,3 +1303,14 @@ The default is
 `disabled`; a device without indirect draws keeps the CPU list regardless.
 This writes `renderer.gpuCulling` in the staged manifest. `engine.renderer`
 reports the candidates, visible instances, batches and the cull's GPU time.
+
+### Occlusion culling
+
+`RustyEngineProductOcclusionCulling` set to `enabled` starts the product
+with the renderer setting `OcclusionCulling` on: each world view skips the
+opaque parts, scatter copies and splats hidden behind nearer opaque
+geometry ([performance](performance.md#occlusion-culling),
+[splat characters](splat-characters.md#devices-and-cost)). The default is
+`disabled`. The player's video option and `RendererSettings.Set` apply over
+it, so it stays the switch to turn the culling off. This writes
+`renderer.occlusionCulling` in the staged manifest.

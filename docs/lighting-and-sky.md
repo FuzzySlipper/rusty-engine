@@ -417,7 +417,7 @@ frame's size and are upscaled into it by the `upscale` pass, bilinearly
 unless the temporal stage draws, while a playing video and the browser or
 window UI keep their full size), vsync, the window mode (`Windowed`,
 `Maximized` or `Fullscreen`, borderless; [the window](desktop-shell.md#shape)),
-and the clustered lighting and GPU culling switches. The product manifest's
+and the clustered lighting, GPU culling and occlusion culling switches. The product manifest's
 `RustyEngineProduct*` properties are the initial values
 ([the product project](csharp-product-project.md#renderer-settings)), so a
 graphics menu starts from `Read().Requested`, changes what it offers and sets

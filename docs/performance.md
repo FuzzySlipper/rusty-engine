@@ -225,7 +225,8 @@ Any other wgpu error is a renderer bug and panics.
 
 ## Occlusion culling
 
-With the renderer setting `OcclusionCulling` (`RendererSettings.Set(... with
+With the renderer setting `OcclusionCulling` (`RustyEngineProductOcclusionCulling`
+in the product project, `RendererSettings.Set(... with
 { OcclusionCulling = true })`, or the player's video option *Occlusion
 culling*), a world view skips the opaque parts and scattered copies hidden
 behind nearer opaque geometry. The world layer's opaque parts are then
