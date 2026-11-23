@@ -22,13 +22,9 @@ pub const AIR_SEARCH_CELLS: usize = 4096;
 const PATH_BEARING_METRES: f64 = 3.0;
 /// How far an enclosure ray looks.
 pub const ENCLOSURE_METRES: f64 = 24.0;
-/// The most static-mesh surfaces one solid measurement crosses.
-const MESH_CROSSINGS: usize = 24;
 /// How far past a segment's end a solid measurement reads surfaces to learn
 /// whether the segment starts inside a mesh.
 const MESH_BEYOND: f64 = 64.0;
-/// How far past a surface a measurement starts its next cast.
-const MESH_STEP: f64 = 1e-3;
 const NO_CELL: u32 = u32::MAX;
 
 /// The six neighbours of an air cell.
@@ -204,28 +200,14 @@ impl VoxelCollisionScene {
         length: f64,
         spans: &mut Vec<(f64, f64)>,
     ) {
-        let meshes = self.static_mesh_projection();
-        let reach = length + MESH_BEYOND;
-        let mut surfaces: Vec<(f64, i32)> = Vec::new();
-        let mut at = 0.0;
-        while surfaces.len() < MESH_CROSSINGS {
-            let origin = add(from, scale(direction, at));
-            let Some((hit, entering)) = meshes.raycast_oriented(ray(origin, direction), reach - at)
-            else {
-                break;
-            };
-            let surface = at + hit.distance;
-            surfaces.push((surface, if entering { 1 } else { -1 }));
-            at = surface + MESH_STEP;
-            if at >= reach {
-                break;
-            }
-        }
+        let surfaces = self
+            .static_mesh_projection()
+            .crossings(ray(from, direction), length + MESH_BEYOND);
         if surfaces.is_empty() {
             return;
         }
         // Out of every mesh past the last surface; never below zero inside.
-        let total: i32 = surfaces.iter().map(|(_, turn)| turn).sum();
+        let total: i32 = surfaces.iter().map(|(_, turn)| *turn).sum();
         let lowest = surfaces
             .iter()
             .scan(0, |count, (_, turn)| {
@@ -635,10 +617,6 @@ fn union_length(spans: &mut [(f64, f64)]) -> f64 {
 
 fn sub(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
     [left[0] - right[0], left[1] - right[1], left[2] - right[2]]
-}
-
-fn add(left: [f64; 3], right: [f64; 3]) -> [f64; 3] {
-    [left[0] + right[0], left[1] + right[1], left[2] + right[2]]
 }
 
 fn scale(value: [f64; 3], by: f64) -> [f64; 3] {

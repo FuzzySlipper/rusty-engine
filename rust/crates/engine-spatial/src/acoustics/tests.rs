@@ -38,8 +38,12 @@ fn solid_metres_measures_the_rock_a_line_crosses() {
     assert!((back - 2.0).abs() < 1e-9, "{back}");
 }
 
-/// A scene whose static collision is closed boxes, each `[min, max]`.
-fn mesh_boxes(boxes: &[[[f64; 3]; 2]]) -> VoxelCollisionScene {
+/// A triangle mesh's positions and triangles.
+type Geometry = (Vec<[f64; 3]>, Vec<[u32; 3]>);
+
+/// Closed boxes, each `[min, max]`, as one triangle mesh wound outward by
+/// the right-hand rule.
+fn box_geometry(boxes: &[[[f64; 3]; 2]]) -> Geometry {
     let mut positions = Vec::new();
     let mut triangles = Vec::new();
     for [min, max] in boxes {
@@ -59,26 +63,50 @@ fn mesh_boxes(boxes: &[[[f64; 3]; 2]]) -> VoxelCollisionScene {
             [0, 1, 3, 2],
             [4, 6, 7, 5],
         ] {
-            // Wound outward by the right-hand rule.
             triangles.push([base + a, base + c, base + b]);
             triangles.push([base + a, base + d, base + c]);
         }
     }
+    (positions, triangles)
+}
+
+/// A scene whose static collision is the given meshes, each its own instance.
+fn mesh_scene(meshes: Vec<Geometry>) -> VoxelCollisionScene {
+    let (assets, instances): (Vec<_>, Vec<_>) = meshes
+        .into_iter()
+        .enumerate()
+        .map(|(index, (positions, triangles))| {
+            let id = index as u64 + 1;
+            (
+                crate::StaticMeshColliderAsset::new(
+                    crate::StaticMeshAssetId(id),
+                    positions,
+                    triangles,
+                )
+                .unwrap(),
+                crate::StaticMeshColliderInstance {
+                    id: crate::StaticMeshInstanceId(id),
+                    asset: crate::StaticMeshAssetId(id),
+                    transform: Default::default(),
+                },
+            )
+        })
+        .unzip();
     let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
-    let asset =
-        crate::StaticMeshColliderAsset::new(crate::StaticMeshAssetId(1), positions, triangles)
-            .unwrap();
     scene
-        .replace_static_mesh_colliders(
-            [asset],
-            [crate::StaticMeshColliderInstance {
-                id: crate::StaticMeshInstanceId(1),
-                asset: crate::StaticMeshAssetId(1),
-                transform: Default::default(),
-            }],
-        )
+        .replace_static_mesh_colliders(assets, instances)
         .unwrap();
     scene
+}
+
+/// Closed boxes in one static mesh.
+fn mesh_boxes(boxes: &[[[f64; 3]; 2]]) -> VoxelCollisionScene {
+    mesh_scene(vec![box_geometry(boxes)])
+}
+
+/// Closed boxes, each its own static mesh.
+fn mesh_instances(boxes: &[[[f64; 3]; 2]]) -> VoxelCollisionScene {
+    mesh_scene(boxes.iter().map(|one| box_geometry(&[*one])).collect())
 }
 
 #[test]
@@ -129,6 +157,29 @@ fn overlapping_meshes_count_as_one_solid() {
     // Starting inside the overlap.
     let out = overlapping.solid_metres([5.5, 0.0, 0.0], far);
     assert!((out - 1.5).abs() < 1e-6, "{out}");
+}
+
+#[test]
+fn touching_meshes_cross_their_shared_face() {
+    let near = [0.5, 0.0, 0.0];
+    let far = [9.5, 0.0, 0.0];
+    let a = [[4.0, -2.0, -2.0], [5.0, 2.0, 2.0]];
+    let b = [[5.0, -2.0, -2.0], [6.0, 2.0, 2.0]];
+    // In one mesh, and as two instances.
+    for scene in [mesh_boxes(&[a, b]), mesh_instances(&[a, b])] {
+        for (from, to) in [(near, far), (far, near)] {
+            let crossed = scene.solid_metres(from, to);
+            assert!(
+                (crossed - 2.0).abs() < 1e-6,
+                "{from:?} to {to:?}: {crossed}"
+            );
+        }
+        // Through the edge two faces share, and through a corner.
+        let edge = scene.solid_metres([0.5, 0.0, 2.0], [9.5, 0.0, 2.0]);
+        assert!((edge - 2.0).abs() < 1e-6, "{edge}");
+        let corner = scene.solid_metres([0.5, 2.0, 2.0], [9.5, 2.0, 2.0]);
+        assert!((corner - 2.0).abs() < 1e-6, "{corner}");
+    }
 }
 
 #[test]

@@ -584,14 +584,6 @@ impl StaticMeshCollisionProjection {
     }
 
     pub fn raycast(&self, ray: Ray, max_distance: f64) -> Option<StaticMeshHit> {
-        self.raycast_oriented(ray, max_distance).map(|(hit, _)| hit)
-    }
-
-    /// The nearest hit, and whether the ray goes into its mesh there: the
-    /// struck triangle's own winding (outward by the right-hand rule, turned
-    /// by a mirroring transform) faces against the ray. The hit's `normal`
-    /// cannot say, as it is turned to face the ray whichever side it struck.
-    pub fn raycast_oriented(&self, ray: Ray, max_distance: f64) -> Option<(StaticMeshHit, bool)> {
         let len = ray.dir.length();
         if !len.is_finite() || len <= 0.0 || !max_distance.is_finite() || max_distance <= 0.0 {
             return None;
@@ -603,7 +595,7 @@ impl StaticMeshCollisionProjection {
             Vector::new(direction.x, direction.y, direction.z),
         );
         let pose = identity();
-        let mut best: Option<(StaticMeshHit, bool)> = None;
+        let mut best = None;
         for (instance_id, instance) in &self.instances {
             // An instance whose bounds the segment misses has no triangle it
             // meets, so its mesh is not descended.
@@ -620,35 +612,88 @@ impl StaticMeshCollisionProjection {
             {
                 if best
                     .as_ref()
-                    .is_none_or(|(current, _)| hit.time_of_impact < current.distance)
+                    .is_none_or(|current: &StaticMeshHit| hit.time_of_impact < current.distance)
                 {
-                    let mirrored = instance.transform.scale.iter().product::<f64>() < 0.0;
-                    let facing = instance
-                        .shape
-                        .as_trimesh()
-                        .and_then(|mesh| mesh.triangle(hit.subshape).normal())
-                        .map(|normal| normal.dot(parry_ray.dir))
-                        .unwrap_or(0.0);
-                    let entering = (facing < 0.0) != mirrored;
-                    best = Some((
-                        StaticMeshHit {
-                            instance: *instance_id,
-                            asset: instance.asset,
-                            geometry_hash: instance.geometry_hash,
-                            point: WorldPos::new(
-                                ray.origin.x + direction.x * hit.time_of_impact,
-                                ray.origin.y + direction.y * hit.time_of_impact,
-                                ray.origin.z + direction.z * hit.time_of_impact,
-                            ),
-                            normal: WorldVec::new(hit.normal.x, hit.normal.y, hit.normal.z),
-                            distance: hit.time_of_impact,
-                        },
-                        entering,
-                    ));
+                    best = Some(StaticMeshHit {
+                        instance: *instance_id,
+                        asset: instance.asset,
+                        geometry_hash: instance.geometry_hash,
+                        point: WorldPos::new(
+                            ray.origin.x + direction.x * hit.time_of_impact,
+                            ray.origin.y + direction.y * hit.time_of_impact,
+                            ray.origin.z + direction.z * hit.time_of_impact,
+                        ),
+                        normal: WorldVec::new(hit.normal.x, hit.normal.y, hit.normal.z),
+                        distance: hit.time_of_impact,
+                    });
                 }
             }
         }
         best
+    }
+
+    /// Every surface the ray crosses within `max_distance`, nearest first:
+    /// its distance, and +1 where the ray goes into its mesh (the triangle's
+    /// own winding, outward by the right-hand rule and turned by a mirroring
+    /// transform, faces against the ray) or -1 where it comes out. Faces
+    /// that coincide all count, so blocks that touch leave and enter at
+    /// their shared face; a ray through an edge or vertex its triangles
+    /// share counts that surface once.
+    pub fn crossings(&self, ray: Ray, max_distance: f64) -> Vec<(f64, i32)> {
+        let mut crossings = Vec::new();
+        let len = ray.dir.length();
+        if !len.is_finite() || len <= 0.0 || !max_distance.is_finite() || max_distance <= 0.0 {
+            return crossings;
+        }
+        let inv = 1.0 / len;
+        let direction = WorldVec::new(ray.dir.x * inv, ray.dir.y * inv, ray.dir.z * inv);
+        let origin = world_to_point(ray.origin);
+        let dir = Vector::new(direction.x, direction.y, direction.z);
+        let parry_ray = ParryRay::new(origin, dir);
+        for instance in self.instances.values() {
+            if instance
+                .bounds
+                .is_some_and(|bounds| !segment_meets(bounds, ray.origin, direction, max_distance))
+            {
+                continue;
+            }
+            let Some(mesh) = instance.shape.as_trimesh() else {
+                continue;
+            };
+            let mirrored = instance.transform.scale.iter().product::<f64>() < 0.0;
+            // (distance, turn, through an edge or vertex)
+            let mut met: Vec<(f64, i32, bool)> = mesh
+                .bvh()
+                .leaves(|node| node.cast_ray(&parry_ray, max_distance) <= max_distance)
+                .filter_map(|leaf| {
+                    let triangle = mesh.triangle(leaf);
+                    let (distance, normal, on_edge) =
+                        cross_triangle(origin, dir, triangle.a, triangle.b, triangle.c)?;
+                    (distance <= max_distance).then(|| {
+                        let entering = (normal.dot(dir) < 0.0) != mirrored;
+                        (distance, if entering { 1 } else { -1 }, on_edge)
+                    })
+                })
+                .collect();
+            met.sort_by(|left, right| left.0.total_cmp(&right.0));
+            for (index, &(distance, turn, on_edge)) in met.iter().enumerate() {
+                // Triangles sharing the edge or vertex the ray passes through
+                // all report it; the surface is crossed once.
+                let repeated = on_edge
+                    && met[..index]
+                        .iter()
+                        .rev()
+                        .take_while(|&&(earlier, _, _)| distance - earlier <= CROSSING_TOLERANCE)
+                        .any(|&(_, earlier_turn, earlier_edge)| {
+                            earlier_turn == turn && earlier_edge
+                        });
+                if !repeated {
+                    crossings.push((distance, turn));
+                }
+            }
+        }
+        crossings.sort_by(|left, right| left.0.total_cmp(&right.0));
+        crossings
     }
 
     pub fn aabb_overlaps(&self, min: WorldPos, max: WorldPos) -> bool {
@@ -695,6 +740,45 @@ const BOUNDS_SLACK: f64 = 1.0e-6;
 
 /// Whether a ray from `origin` along the unit `direction` meets `bounds`
 /// within `max_distance` (slab test, bounds widened by [`BOUNDS_SLACK`]).
+/// Crossings this close along a ray are one point.
+const CROSSING_TOLERANCE: f64 = 1e-7;
+
+/// Where the ray meets a triangle (both sides): the distance, the
+/// triangle's own winding normal, and whether the point lies on its edge.
+fn cross_triangle(
+    origin: Vector,
+    dir: Vector,
+    a: Vector,
+    b: Vector,
+    c: Vector,
+) -> Option<(f64, Vector, bool)> {
+    const EDGE: f64 = 1e-9;
+    let ab = b - a;
+    let ac = c - a;
+    let p = dir.cross(ac);
+    let det = ab.dot(p);
+    if det.abs() < 1e-14 {
+        return None;
+    }
+    let inverse = 1.0 / det;
+    let to_origin = origin - a;
+    let u = to_origin.dot(p) * inverse;
+    if !(-EDGE..=1.0 + EDGE).contains(&u) {
+        return None;
+    }
+    let q = to_origin.cross(ab);
+    let v = dir.dot(q) * inverse;
+    if v < -EDGE || u + v > 1.0 + EDGE {
+        return None;
+    }
+    let distance = ac.dot(q) * inverse;
+    if distance < 0.0 {
+        return None;
+    }
+    let on_edge = u <= EDGE || v <= EDGE || u + v >= 1.0 - EDGE;
+    Some((distance, ab.cross(ac), on_edge))
+}
+
 fn segment_meets(
     bounds: WorldAabb,
     origin: WorldPos,
