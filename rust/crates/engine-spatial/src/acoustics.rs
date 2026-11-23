@@ -187,8 +187,11 @@ impl VoxelCollisionScene {
         }
     }
 
-    /// Spans inside static meshes along the ray: each surface met enters or
-    /// leaves by which way it faces.
+    /// Spans inside static meshes along the ray. A static-mesh hit's normal
+    /// is turned to face the ray whichever side it struck, so it cannot say
+    /// in from out; the surfaces met alternate instead, the segment starting
+    /// outside: in at the first, out at the second, and so on, and in to its
+    /// end after an odd count.
     fn mesh_spans(
         &self,
         from: [f64; 3],
@@ -205,14 +208,9 @@ impl VoxelCollisionScene {
                 break;
             };
             let surface = at + hit.distance;
-            let facing = hit.normal.x * direction[0]
-                + hit.normal.y * direction[1]
-                + hit.normal.z * direction[2];
-            if facing < 0.0 {
-                entered.get_or_insert(surface);
-            } else {
-                // Leaving a mesh not seen entered: the segment began inside.
-                spans.push((entered.take().unwrap_or(0.0), surface));
+            match entered.take() {
+                Some(start) => spans.push((start, surface)),
+                None => entered = Some(surface),
             }
             at = surface + MESH_STEP;
             if at >= length {

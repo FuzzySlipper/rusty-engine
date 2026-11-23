@@ -192,9 +192,9 @@ Limits and cost:
   in range is occluded. There is no per-update query limit.
 - The listener's search runs on its own worker thread; the update only casts
   each sound's straight rays and looks its path up. In a 96 × 24 × 96 m
-  cave on den-agents (busy, release), a refresh costs about 2 µs per
-  occluded sound with voxel rock and 8 µs with static-mesh rock, and the
-  worker's search 2.5–4.7 ms. A query costs well under a microsecond when its
+  cave on den-agents (busy, release), a refresh costs about 2–4 µs per
+  occluded sound with voxel rock and 8–13 µs with static-mesh rock, and the
+  worker's search 2.5–5 ms. A query costs well under a microsecond when its
   points are in the open, and 2–5 ms, on the calling update, when it must
   search round rock to them.
 

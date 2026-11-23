@@ -38,6 +38,86 @@ fn solid_metres_measures_the_rock_a_line_crosses() {
     assert!((back - 2.0).abs() < 1e-9, "{back}");
 }
 
+/// A scene whose static collision is closed boxes, each `[min, max]`.
+fn mesh_boxes(boxes: &[[[f64; 3]; 2]]) -> VoxelCollisionScene {
+    let mut positions = Vec::new();
+    let mut triangles = Vec::new();
+    for [min, max] in boxes {
+        let base = positions.len() as u32;
+        for corner in 0..8 {
+            positions.push([
+                if corner & 1 == 0 { min[0] } else { max[0] },
+                if corner & 2 == 0 { min[1] } else { max[1] },
+                if corner & 4 == 0 { min[2] } else { max[2] },
+            ]);
+        }
+        for [a, b, c, d] in [
+            [0, 2, 6, 4],
+            [1, 5, 7, 3],
+            [0, 4, 5, 1],
+            [2, 3, 7, 6],
+            [0, 1, 3, 2],
+            [4, 6, 7, 5],
+        ] {
+            triangles.push([base + a, base + b, base + c]);
+            triangles.push([base + a, base + c, base + d]);
+        }
+    }
+    let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
+    let asset =
+        crate::StaticMeshColliderAsset::new(crate::StaticMeshAssetId(1), positions, triangles)
+            .unwrap();
+    scene
+        .replace_static_mesh_colliders(
+            [asset],
+            [crate::StaticMeshColliderInstance {
+                id: crate::StaticMeshInstanceId(1),
+                asset: crate::StaticMeshAssetId(1),
+                transform: Default::default(),
+            }],
+        )
+        .unwrap();
+    scene
+}
+
+#[test]
+fn solid_metres_measures_static_mesh_walls_either_way() {
+    let wall = [[4.0, -2.0, -2.0], [5.0, 2.0, 2.0]];
+    let near = [0.5, 0.0, 0.0];
+    let far = [9.5, 0.0, 0.0];
+    let one = mesh_boxes(&[wall]);
+    // The air beyond the wall's far face is air, whichever way the line runs.
+    for (from, to) in [(near, far), (far, near)] {
+        let crossed = one.solid_metres(from, to);
+        assert!(
+            (crossed - 1.0).abs() < 1e-6,
+            "{from:?} to {to:?}: {crossed}"
+        );
+    }
+    assert!(!one.segment_clear(near, far));
+    assert!(one.segment_clear([0.5, 3.0, 0.0], [9.5, 3.0, 0.0]));
+    // Ending inside the wall counts the rock up to the end.
+    let into = one.solid_metres(near, [4.5, 0.0, 0.0]);
+    assert!((into - 0.5).abs() < 1e-6, "{into}");
+    let two = mesh_boxes(&[wall, [[7.0, -2.0, -2.0], [8.0, 2.0, 2.0]]]);
+    for (from, to) in [(near, far), (far, near)] {
+        let crossed = two.solid_metres(from, to);
+        assert!(
+            (crossed - 2.0).abs() < 1e-6,
+            "{from:?} to {to:?}: {crossed}"
+        );
+    }
+}
+
+#[test]
+fn a_voxel_and_a_mesh_in_one_place_count_once() {
+    let mut scene = mesh_boxes(&[[[4.0, 0.0, 0.0], [5.0, 1.0, 1.0]]]);
+    let voxel = VoxelCollisionScene::from_solid_voxels(1.0, 8, [[4, 0, 0]]).unwrap();
+    scene.voxel_world = voxel.voxel_world.clone();
+    let crossed = scene.solid_metres([0.5, 0.5, 0.5], [9.5, 0.5, 0.5]);
+    assert!((crossed - 1.0).abs() < 1e-6, "{crossed}");
+}
+
 #[test]
 fn air_search_follows_a_bending_passage() {
     let scene = bending_passage();
