@@ -565,7 +565,7 @@ binding's.
   to the pixel. A figure on a pixel grid is not tested: its layer is drawn
   whole.
 
-  The pyramid costs about 0.04 ms a view on an RTX 3080 at 1920 × 1080.
+  The pyramid costs about 0.03 ms a view on an RTX 3080 at 1920 × 1080.
   What it saves depends on what hides the splats. Walking 381s in
   `examples/splat_crowd`'s layout, 32 figures close, ms, median of three
   rounds:

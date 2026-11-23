@@ -171,6 +171,8 @@ pub(crate) struct GpuCulling {
     refused: Option<String>,
     layout: wgpu::BindGroupLayout,
     pyramid_layout: wgpu::BindGroupLayout,
+    /// The cull's group over the occlusion pyramid, made when it was.
+    pyramid_group: Option<(wgpu::TextureView, wgpu::BindGroup)>,
     params: wgpu::Buffer,
     /// Every part slot's world bounds.
     pub bounds: wgpu::Buffer,
@@ -356,6 +358,7 @@ impl GpuCulling {
             refused,
             layout,
             pyramid_layout,
+            pyramid_group: None,
             params: buffer(
                 "render-wgpu gpu cull params",
                 PARAMS_STRIDE * 2,
@@ -743,16 +746,27 @@ impl GpuCulling {
         let device = &gpu.device;
         self.bind_group(device, instances, layer);
         self.write_params(gpu, 0, candidates, view_proj, false, occluders.as_ref());
-        let pyramid = occluders.as_ref().map(|occluders| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("render-wgpu gpu cull occluders"),
-                layout: &self.pyramid_layout,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(occluders.pyramid),
-                }],
-            })
-        });
+        if let Some(occluders) = &occluders {
+            if self
+                .pyramid_group
+                .as_ref()
+                .is_none_or(|(pyramid, _)| pyramid != occluders.pyramid)
+            {
+                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("render-wgpu gpu cull occluders"),
+                    layout: &self.pyramid_layout,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(occluders.pyramid),
+                    }],
+                });
+                self.pyramid_group = Some((occluders.pyramid.clone(), group));
+            }
+        }
+        let pyramid = occluders
+            .as_ref()
+            .and(self.pyramid_group.as_ref())
+            .map(|(_, group)| group);
         let buffers = &self.layers[layer as usize];
         let count = candidates.list.ids.len() as u32;
         let template_bytes = candidates.template.len() as u64;
@@ -776,7 +790,7 @@ impl GpuCulling {
                 timestamp_writes: self.timer.as_ref().and_then(PassTimer::compute_writes),
             });
             pass.set_bind_group(0, buffers.bind_group.as_ref().expect("bound above"), &[0]);
-            match &pyramid {
+            match pyramid {
                 Some(pyramid) => {
                     pass.set_pipeline(&pipelines.occluded);
                     pass.set_bind_group(1, pyramid, &[]);

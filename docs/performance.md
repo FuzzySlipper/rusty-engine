@@ -261,15 +261,26 @@ without the test. The shadows' lists and the backdrop are not tested.
 
 **When it pays.** It saves GPU time where nearer opaque geometry hides much
 of what is in the frustum and the frame waits on the GPU's world pass. It
-costs GPU time for the depth pass and pyramid, and renderer CPU for
-encoding the depth pass:
+costs GPU time for the depth pass and pyramid:
 
-| Scene (RTX 3080, 1920×1080, 4×) | `world` without → with | the cull's passes | renderer CPU |
-| --- | --- | --- | --- |
-| Daggerfall city at noon (37k of 38k parts in view hidden) | 22.1 → 16.6 ms | 0.3 ms | +0.3 ms |
-| the same, clustered lighting | 1.8 → 1.1 ms | 0.5 ms | +0.2 ms |
-| CraftSurvive forest (123 of 678 hidden) | 11.6 → 10.9 ms | 0.2 ms | +0.6 ms |
-| CraftSurvive open terrain (1 of 63 hidden) | 8.2 → 8.1 ms | 0.2 ms | +0.4 ms |
+| Scene (RTX 3080, 1920×1080, 4×) | `world` without → with | the cull's passes |
+| --- | --- | --- |
+| Daggerfall city at noon (37k of 38k parts in view hidden) | 22.1 → 16.6 ms | 0.3 ms |
+| the same, clustered lighting | 1.8 → 1.1 ms | 0.5 ms |
+| CraftSurvive forest (123 of 678 hidden) | 11.6 → 10.9 ms | 0.2 ms |
+| CraftSurvive open terrain (1 of 63 hidden) | 8.2 → 8.1 ms | 0.2 ms |
+
+It also costs renderer CPU. A world view records its occlusion passes:
+the selection, the depth pass, the pyramid, the test and, when it draws
+[splat figures](splat-characters.md#how-it-draws), their own pyramid.
+Each pyramid takes four dispatches (level 0, then four levels a dispatch)
+over bind groups made once for its size. The recording is a fixed cost,
+mostly wgpu's work in `encoder.finish()` and the submit, about 0.02 to
+0.03 ms a pass on a Ryzen 7 3700X. On that CPU with an RTX 3080 at
+1920×1080, `examples/splat_crowd` takes 0.15 ms more a frame with one figure
+and 0.16 ms more with 32. The depth pass's recording also grows with the
+occluders it draws: the CraftSurvive forest above (436 of them) takes
+0.44 ms more, 3.23 → 3.67 ms.
 
 With clustered lighting a city's world pass is already cheap, and the cull
 roughly breaks even; in open country it is a small loss. Turn it on for

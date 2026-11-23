@@ -718,6 +718,8 @@ pub(crate) struct Splats {
     /// its time, and the empty one it reads when untested.
     pyramid: crate::occlusion::DepthPyramid,
     pyramid_timer: Option<PassTimer>,
+    /// The projection's group over the pyramid, made when it was.
+    occluded: Option<(wgpu::TextureView, wgpu::BindGroup)>,
     unoccluded: Option<wgpu::BindGroup>,
     tally: Tally,
     timed: bool,
@@ -788,8 +790,9 @@ impl Splats {
             casters: Casters::new(device),
             software: gpu.is_software(),
             timer: PassTimer::new(gpu, "splats"),
-            pyramid: crate::occlusion::DepthPyramid::new(device),
+            pyramid: crate::occlusion::DepthPyramid::new(),
             pyramid_timer: PassTimer::new(gpu, "splats-occlusion"),
+            occluded: None,
             tally: Tally::new(device),
             timed: false,
             counts: SplatReadout::default(),
@@ -1607,14 +1610,26 @@ impl Splats {
                     self.pyramid_timer.as_ref().filter(|_| !self.timed),
                 );
                 let pipelines = self.pipelines.as_ref().expect("checked above");
+                let cached = &mut self.occluded;
                 self.pyramid.occluders().map(|occluders| {
-                    (
-                        occlusion_group(&gpu.device, pipelines, occluders.pyramid),
-                        levels,
-                    )
+                    if cached
+                        .as_ref()
+                        .is_none_or(|(pyramid, _)| pyramid != occluders.pyramid)
+                    {
+                        *cached = Some((
+                            occluders.pyramid.clone(),
+                            occlusion_group(&gpu.device, pipelines, occluders.pyramid),
+                        ));
+                    }
+                    (cached.as_ref().expect("made above").1.clone(), levels)
                 })
             }
-            None => None,
+            None => {
+                if target.occlusion.is_none() {
+                    self.pyramid.release_depth();
+                }
+                None
+            }
         };
         if occluded.is_some() && !self.timed {
             if let Some(timer) = &mut self.pyramid_timer {
