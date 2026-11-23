@@ -1988,12 +1988,12 @@ impl Renderer {
                 } else {
                     &mesh.indices
                 };
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_vertex_buffer(0, mesh.vertex_slice());
                 if let Some(second) = mesh.second_stream() {
-                    pass.set_vertex_buffer(1, second.slice(..));
+                    pass.set_vertex_buffer(1, second);
                 }
                 if let Some(previous) = mesh.previous_stream() {
-                    pass.set_vertex_buffer(mesh.previous_slot(), previous.slice(..));
+                    pass.set_vertex_buffer(mesh.previous_slot(), previous);
                 }
                 pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
                 pool_bound = false;
@@ -2357,9 +2357,9 @@ impl Renderer {
                     pool_bound = true;
                 }
             } else {
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_vertex_buffer(0, mesh.vertex_slice());
                 if let Some(second) = mesh.second_stream() {
-                    pass.set_vertex_buffer(1, second.slice(..));
+                    pass.set_vertex_buffer(1, second);
                 }
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pool_bound = false;
@@ -2492,12 +2492,12 @@ impl Renderer {
                 let (first, count) = (part.first_index, part.index_count);
                 (&mesh.indices, first..first + count)
             };
-            pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+            pass.set_vertex_buffer(0, mesh.vertex_slice());
             if let Some(second) = mesh.second_stream() {
-                pass.set_vertex_buffer(1, second.slice(..));
+                pass.set_vertex_buffer(1, second);
             }
             if let Some(previous) = mesh.previous_stream() {
-                pass.set_vertex_buffer(mesh.previous_slot(), previous.slice(..));
+                pass.set_vertex_buffer(mesh.previous_slot(), previous);
             }
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             pool_bound = false;

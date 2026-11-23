@@ -226,20 +226,19 @@ by more than 4 levels, without and with its core: villager 021, 3.6 to
 from the front and 1.0 to 0.3 % from the side. What is left is where the
 figure has no core behind it (arms, hands, a staff) and its outline.
 
-**Cost.** The core is skinned on the CPU each frame, as every animated
-mesh is: about 35 to 40 ns a vertex a figure. It saves GPU time by
-hiding the splats behind it, and costs CPU time per vertex. Walking
-figures in `examples/splat_crowd`'s layout on an RTX 3080 at 1920 ×
-1080, 32 figures close, ms, median of three rounds:
+**Cost.** The core is skinned on the GPU, as every animated mesh is
+([skeleton poses](skeleton-poses.md)): 32 figures' cores take about 0.01 ms
+of the `skinning` pass, and on the CPU a core costs its palette and a job,
+about 6 µs a figure whatever its size. It saves GPU time by hiding the
+splats behind it. Walking figures in `examples/splat_crowd`'s layout on an
+RTX 3080 at 1920 × 1080, 32 figures close, ms, the CPU the median of three
+rounds and the GPU the least of them:
 
 | Figure | Core | World pass (GPU), without / with | CPU a frame, without / with |
 | --- | --- | --- | --- |
-| villager 021, 31,817 Gaussians | 380 vertices, 800 triangles | 2.04 / 1.58 | 0.51 / 0.97 |
-| villager 381, 15,908 Gaussians | 1,202 vertices, 2,400 triangles | 1.23 / 0.98 | 0.56 / 1.85 |
-| villager 381, 6,144 cards | the same | 1.09 / 0.77 | 0.54 / 1.76 |
-
-An 800-triangle core about breaks even at 32 figures, its CPU cost about
-what it saves on the GPU; asset-pipeline's cores aim at 800 triangles.
+| villager 021, 31,817 Gaussians | 380 vertices, 800 triangles | 2.10 / 1.63 | 0.68 / 0.86 |
+| villager 381, 15,908 Gaussians | 1,202 vertices, 2,400 triangles | 1.27 / 1.02 | 0.75 / 0.96 |
+| villager 381, 6,144 cards | the same | 1.14 / 0.81 | 0.64 / 0.74 |
 
 ## Posing
 

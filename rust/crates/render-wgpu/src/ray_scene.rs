@@ -270,9 +270,11 @@ struct BlasKey {
 
 struct BlasEntry {
     blas: wgpu::Blas,
-    /// The geometry it was built from: a mesh whose geometry is another
-    /// (a replaced payload, a new pose) builds again.
+    /// The geometry it was built from, and the pose the GPU skinned it in
+    /// (`GpuMesh::revision`): a mesh whose geometry is another (a replaced
+    /// payload, a new pose) builds again.
     source: Weak<CpuGeometry>,
+    revision: u64,
     triangles: u64,
     bytes: u64,
     compaction: Compaction,
@@ -710,10 +712,9 @@ impl Renderer {
                 continue;
             }
             let key = blas_key(part, state);
-            let current = scene
-                .blases
-                .get(&key)
-                .is_some_and(|entry| ptr_eq(&entry.source, &mesh.cpu));
+            let current = scene.blases.get(&key).is_some_and(|entry| {
+                ptr_eq(&entry.source, &mesh.cpu) && entry.revision == mesh.revision
+            });
             if !current && used.insert(key.clone()) {
                 let since = *scene.waiting_since.entry(key.clone()).or_insert(walk);
                 wanted.push((key.clone(), u64::from(part.index_count / 3), since));
@@ -802,7 +803,7 @@ impl Renderer {
             };
             let size = wgpu::BlasTriangleGeometrySizeDescriptor {
                 vertex_format: wgpu::VertexFormat::Float32x3,
-                vertex_count: (mesh.vertices.size() / VERTEX_BYTES) as u32,
+                vertex_count: (mesh.vertices.size / VERTEX_BYTES) as u32,
                 index_format: Some(wgpu::IndexFormat::Uint32),
                 index_count: Some(key.index_count),
                 flags: if key.opaque {
@@ -842,8 +843,8 @@ impl Renderer {
                 geometry: wgpu::BlasGeometries::TriangleGeometries(vec![
                     wgpu::BlasTriangleGeometry {
                         size,
-                        vertex_buffer: &mesh.vertices,
-                        first_vertex: 0,
+                        vertex_buffer: &mesh.vertices.buffer,
+                        first_vertex: (mesh.vertices.offset / VERTEX_BYTES) as u32,
                         vertex_stride: VERTEX_BYTES,
                         index_buffer: Some(&mesh.indices),
                         first_index: Some(key.first_index),
@@ -885,6 +886,7 @@ impl Renderer {
                 BlasEntry {
                     blas,
                     source: Arc::downgrade(&mesh.cpu),
+                    revision: mesh.revision,
                     triangles: u64::from(key.index_count / 3),
                     bytes,
                     compaction: if compactable {

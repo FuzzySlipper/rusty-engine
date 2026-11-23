@@ -1527,7 +1527,7 @@ impl Effects {
         };
         if let (true, Some(cube)) = (effects.cubes > 0, cube) {
             pass.set_pipeline(&set.cube);
-            pass.set_vertex_buffer(0, cube.vertices.slice(..));
+            pass.set_vertex_buffer(0, cube.vertex_slice());
             pass.set_vertex_buffer(1, self.cube_rows.buffer.slice(..));
             pass.set_index_buffer(cube.indices.slice(..), wgpu::IndexFormat::Uint32);
             let count = cube.groups.first().map_or(0, |group| group.2);

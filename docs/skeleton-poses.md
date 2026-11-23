@@ -209,5 +209,6 @@ that decides them, in the test host as well. See
 A pose is evaluated only when it can change: while a clip plays or fades,
 while a controller drives it, after a command, or when the instance moves and
 its controls read its placement. An unchanged pose is not sent to realizers
-again, and the renderer's CPU skinning runs only on frames that show a new
-pose.
+again, and the renderer skins only on frames that show a new pose: on the
+GPU, from each skin's joint palette, or on the CPU on an adapter without
+compute shaders.

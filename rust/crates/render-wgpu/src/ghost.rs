@@ -341,6 +341,8 @@ impl Renderer {
                 water_reflections: render_model::WaterReflectionsQuality::Off,
                 ray_traced_shadows: false,
                 global_illumination: render_model::GlobalIllumination::Off,
+                // Skinned as the scene it was captured from is.
+                cpu_skinning: self.options.cpu_skinning,
             },
         ));
         source.set_animation_time(self.animation_time);
@@ -518,16 +520,17 @@ impl Renderer {
                 let Some(meta) = self.tables.parts.meta[*part as usize].as_ref() else {
                     continue;
                 };
-                let Some(mesh) = self.mesh(&meta.mesh) else {
+                // A mesh skinned on the GPU is posed on the CPU here.
+                let Some(cpu) = self.posed_geometry(&meta.mesh) else {
                     continue;
                 };
                 let world = Mat4::from_cols_slice(
                     &self.tables.parts.gpu[*part as usize * crate::tables::PART_ROW_FLOATS..][..16],
                 );
                 let first = meta.first_index as usize;
-                let last = (first + meta.index_count as usize).min(mesh.cpu.indices.len());
-                for index in &mesh.cpu.indices[first..last] {
-                    bounds.include(world.transform_point3(mesh.cpu.positions[*index as usize]));
+                let last = (first + meta.index_count as usize).min(cpu.indices.len());
+                for index in &cpu.indices[first..last] {
+                    bounds.include(world.transform_point3(cpu.positions[*index as usize]));
                 }
             }
         }
@@ -591,7 +594,7 @@ impl Renderer {
                 let Some(mesh) = source.mesh(&part.mesh) else {
                     continue;
                 };
-                pass.set_vertex_buffer(0, mesh.vertices.slice(..));
+                pass.set_vertex_buffer(0, mesh.vertex_slice());
                 pass.set_index_buffer(mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(
                     part.first_index..part.first_index + part.index_count,

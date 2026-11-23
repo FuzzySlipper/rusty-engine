@@ -315,7 +315,7 @@ impl Renderer {
                 multiview_mask: None,
             });
             pass.set_pipeline(pipeline);
-            pass.set_vertex_buffer(0, vertices.slice(..));
+            pass.set_vertex_buffer(0, vertices.slice());
             pass.set_index_buffer(indices.slice(..), wgpu::IndexFormat::Uint32);
             let mut offset = 0u64;
             for view in 0..VIEWS * VIEWS {

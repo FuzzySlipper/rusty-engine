@@ -208,8 +208,9 @@ pub(crate) struct SplatDraw {
     /// GLB node's place under it for a rigid one.
     pub model: Mat4,
     /// A skinned set's joint matrices in the instance's space, scale
-    /// removed, after the inverse binds: rows 0 to 2 of each.
-    pub palette: Vec<[f32; 12]>,
+    /// removed, after the inverse binds: rows 0 to 2 of each. Made once per
+    /// pose and shared by every view (`animated.rs` `cache_splat_palettes`).
+    pub palette: std::sync::Arc<[[f32; 12]]>,
     /// Linear-light colour multiplier (`SplatAppearance`).
     pub multiplier: [f32; 3],
     /// Its instance's Gaussian group tints.
@@ -495,7 +496,7 @@ pub(crate) struct SplatMotion {
 #[derive(Clone)]
 struct Placed {
     model: Mat4,
-    palette: Vec<[f32; 12]>,
+    palette: std::sync::Arc<[[f32; 12]]>,
 }
 
 /// A set's placing in the last frame that drew motion and in the one
@@ -983,7 +984,7 @@ impl Splats {
                 };
                 for (set, draw) in &layer.splats {
                     let palette_first = (palettes.len() / 4) as u32;
-                    for joint in &draw.palette {
+                    for joint in draw.palette.iter() {
                         palettes.extend_from_slice(joint);
                     }
                     let skinned = set.joint_bounds.is_some() && !draw.palette.is_empty();
@@ -1171,7 +1172,7 @@ impl Splats {
         if let (false, Some(sphere)) = (layer.ellipsoids.is_empty(), sphere) {
             let count = sphere.groups.first().map_or(0, |group| group.2);
             pass.set_pipeline(ellipsoids);
-            pass.set_vertex_buffer(0, sphere.vertices.slice(..));
+            pass.set_vertex_buffer(0, sphere.vertex_slice());
             pass.set_vertex_buffer(1, self.casters.ellipsoids.slice(..));
             pass.set_index_buffer(sphere.indices.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..count, 0, layer.ellipsoids.clone());
@@ -1442,7 +1443,7 @@ impl Splats {
         let mut palette_firsts = Vec::new();
         for (entry, previous) in runs.iter().copied().flatten().zip(&previous) {
             let first = (palettes.len() / 4) as u32;
-            for joint in &entry.draw.palette {
+            for joint in entry.draw.palette.iter() {
                 palettes.extend_from_slice(joint);
             }
             let previous_first = match previous {
@@ -1451,7 +1452,7 @@ impl Splats {
                         && previous.palette != entry.draw.palette =>
                 {
                     let at = (palettes.len() / 4) as u32;
-                    for joint in &previous.palette {
+                    for joint in previous.palette.iter() {
                         palettes.extend_from_slice(joint);
                     }
                     at
@@ -3461,7 +3462,7 @@ mod tests {
         let draw = |model: Mat4| SplatDraw {
             set: SetRef { slot: 0, set: 0 },
             model,
-            palette: Vec::new(),
+            palette: std::sync::Arc::from([]),
             multiplier: [1.0; 3],
             groups: GroupTints::default(),
         };

@@ -1292,7 +1292,11 @@ impl Renderer {
                 bounds: state.world_bounds,
             };
             if keep(&source) {
-                sources.push(source);
+                // A mesh skinned on the GPU is posed on the CPU here.
+                let cpu = self
+                    .posed_geometry(&part.mesh)
+                    .unwrap_or(source.cpu.clone());
+                sources.push(Source { cpu, ..source });
             }
         }
         sources

@@ -102,20 +102,20 @@ impl MeshPool {
             return None;
         }
         if let Some(entry) = self.entries.get_mut(at) {
-            if entry.source == mesh.vertices {
+            if entry.source == mesh.vertices.buffer {
                 entry.used = true;
                 return Some((entry.base_vertex, entry.first_index));
             }
         }
-        let vertices = (mesh.vertices.size() / VERTEX_BYTES) as u32;
+        let vertices = (mesh.vertices.size / VERTEX_BYTES) as u32;
         let indices = (mesh.indices.size() / INDEX_BYTES) as u32;
         if !self.reserve(gpu, encoder, vertices, indices) {
             return None;
         }
         let (base_vertex, first_index) = (self.vertex_end, self.index_end);
         encoder.copy_buffer_to_buffer(
-            &mesh.vertices,
-            0,
+            &mesh.vertices.buffer,
+            mesh.vertices.offset,
             &self.vertices,
             u64::from(base_vertex) * VERTEX_BYTES,
             Some(u64::from(vertices) * VERTEX_BYTES),
@@ -132,7 +132,7 @@ impl MeshPool {
         self.entries.insert(
             at.clone(),
             Entry {
-                source: mesh.vertices.clone(),
+                source: mesh.vertices.buffer.clone(),
                 base_vertex,
                 first_index,
                 vertices,

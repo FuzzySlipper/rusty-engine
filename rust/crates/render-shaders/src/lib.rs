@@ -544,6 +544,9 @@ pub enum Entry {
     /// Splat characters casting into a shadow layer: their Gaussians or an
     /// ellipsoid per joint (`splat_caster.wgsl`).
     SplatCaster,
+    /// Animated instances' skinned primitives posed from their joint
+    /// palettes (`skin.wgsl`, compute).
+    Skin,
 }
 
 impl Entry {
@@ -624,6 +627,7 @@ impl Entry {
                 "shaders/splat_caster.wgsl",
                 include_str!("shaders/splat_caster.wgsl"),
             ),
+            Self::Skin => ("shaders/skin.wgsl", include_str!("shaders/skin.wgsl")),
             Self::Upscale => ("shaders/upscale.wgsl", include_str!("shaders/upscale.wgsl")),
             Self::RayProbe => (
                 "shaders/ray_probe.wgsl",
@@ -1090,6 +1094,7 @@ mod tests {
             Entry::SplatCards,
             Entry::SplatLight,
             Entry::SplatCaster,
+            Entry::Skin,
         ] {
             compose_case(&mut shaders, entry, Features::default());
         }

@@ -108,8 +108,42 @@ pub(crate) struct MeshField {
     pub slot: Option<u32>,
 }
 
+/// A mesh's vertex stream: all of its own buffer, or its range of a buffer
+/// it shares (the skin arena, `skin.rs`), whose range it holds.
+#[derive(Clone)]
+pub(crate) struct VertexStream {
+    pub buffer: wgpu::Buffer,
+    /// Where the stream starts in `buffer`, and its bytes.
+    pub offset: u64,
+    pub size: u64,
+    /// The arena range it holds (never read), returned to the arena when
+    /// its last holder drops.
+    pub _slot: Option<std::sync::Arc<crate::skin::Slot>>,
+}
+
+impl VertexStream {
+    /// All of `buffer`.
+    pub fn own(buffer: wgpu::Buffer) -> Self {
+        Self {
+            size: buffer.size(),
+            buffer,
+            offset: 0,
+            _slot: None,
+        }
+    }
+
+    pub fn slice(&self) -> wgpu::BufferSlice<'_> {
+        self.buffer.slice(self.offset..self.offset + self.size)
+    }
+
+    /// Whether it is the same range of the same buffer as `other`.
+    pub fn same(&self, other: &Self) -> bool {
+        self.buffer == other.buffer && self.offset == other.offset
+    }
+}
+
 pub(crate) struct GpuMesh {
-    pub vertices: wgpu::Buffer,
+    pub vertices: VertexStream,
     pub indices: wgpu::Buffer,
     pub topology: Topology,
     /// (material slot, first index, index count)
@@ -125,7 +159,7 @@ pub(crate) struct GpuMesh {
     pub edges: std::sync::OnceLock<wgpu::Buffer>,
     /// A second vertex stream, tangent (xyz, handedness w) and `TEXCOORD_1`
     /// per vertex: only GLB primitives whose material reads them.
-    pub extra: Option<wgpu::Buffer>,
+    pub extra: Option<VertexStream>,
     /// The payload's texture space, for triplanar materials.
     pub texture_space: Option<render_model::MeshTextureSpace>,
     /// The payload's distance field: its atlas brick and its box in mesh
@@ -155,6 +189,9 @@ pub(crate) struct GpuMesh {
     /// (`apply.rs` `deformed_history`): what a pass writing motion reads as
     /// their previous frame's pose or shape.
     pub skinned: Option<SkinnedHistory>,
+    /// Counts the poses the GPU has written into `vertices` (`skin.rs`):
+    /// with `cpu`, what a ray scene BLAS built from them was built from.
+    pub revision: u64,
 }
 
 /// A skinned mesh's vertices as the last frame with motion drew them
@@ -166,12 +203,12 @@ pub(crate) struct GpuMesh {
 pub(crate) struct SkinnedHistory {
     /// The vertices the last frame with motion drew, while a newer pose is
     /// in `GpuMesh::vertices`; none once that one has been drawn.
-    pub previous: Option<wgpu::Buffer>,
+    pub previous: Option<VertexStream>,
     /// `previous`'s positions, for laying them out again when the cuts
     /// change which vertices the mesh holds.
     pub previous_positions: Option<std::sync::Arc<CpuGeometry>>,
     /// The other buffer, kept for the next pose while `previous` is none.
-    pub spare: Option<wgpu::Buffer>,
+    pub spare: Option<VertexStream>,
 }
 
 /// A mesh's morph targets on the GPU (`MORPH`, the second vertex stream:
@@ -206,9 +243,14 @@ impl GpuMesh {
     /// What a skinned mesh binds as its previous vertices
     /// (`pipelines::mesh_buffers`): the last frame's, or its own while its
     /// pose has not changed since.
-    pub fn previous_stream(&self) -> Option<&wgpu::Buffer> {
+    pub fn previous_stream(&self) -> Option<wgpu::BufferSlice<'_>> {
         let skinned = self.skinned.as_ref()?;
-        Some(skinned.previous.as_ref().unwrap_or(&self.vertices))
+        Some(skinned.previous.as_ref().unwrap_or(&self.vertices).slice())
+    }
+
+    /// Its vertices in their buffer, for a vertex buffer binding.
+    pub fn vertex_slice(&self) -> wgpu::BufferSlice<'_> {
+        self.vertices.slice()
     }
 
     /// The previous vertices' slot: after the mesh's own streams.
@@ -218,11 +260,12 @@ impl GpuMesh {
 
     /// The vertex stream bound after the interleaved one: tangents, a
     /// morph's targets, or product data.
-    pub fn second_stream(&self) -> Option<&wgpu::Buffer> {
+    pub fn second_stream(&self) -> Option<wgpu::BufferSlice<'_>> {
         self.extra
             .as_ref()
-            .or(self.morph.as_ref().map(|morph| &morph.targets))
-            .or(self.product_data.as_ref())
+            .map(VertexStream::slice)
+            .or(self.morph.as_ref().map(|morph| morph.targets.slice(..)))
+            .or(self.product_data.as_ref().map(|data| data.slice(..)))
     }
 }
 

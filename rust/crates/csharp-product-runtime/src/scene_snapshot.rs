@@ -274,6 +274,8 @@ impl From<SceneSnapshotOptions> for render_wgpu::RendererOptions {
             water_reflections: options.water_reflections,
             ray_traced_shadows: options.ray_traced_shadows,
             global_illumination: options.global_illumination,
+            // Skinned as the live frame is (`skin.rs`).
+            cpu_skinning: false,
         }
     }
 }

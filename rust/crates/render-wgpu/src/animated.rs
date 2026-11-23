@@ -62,6 +62,8 @@ pub(crate) struct AnimatedAssetRow {
     rest: Vec<Mat4>,
     /// Uploaded unskinned primitives, by (mesh, primitive).
     rigid: HashMap<(u32, u32), GpuMesh>,
+    /// Skinned primitives at rest for the GPU to pose, by (mesh, primitive).
+    skin_sources: HashMap<(u32, u32), crate::skin::SkinSource>,
     /// Retained material id per GLB material.
     materials: Vec<String>,
     textures: Vec<String>,
@@ -96,6 +98,12 @@ pub(crate) struct AnimatedInstance {
     owners: Vec<Option<usize>>,
     /// Per-instance skinned vertex buffers, by (node, primitive).
     skinned: HashMap<(u32, u32), GpuMesh>,
+    /// What those of them posed on the GPU bind (`skin.rs`), by (node,
+    /// primitive); a primitive skinned on the CPU has none.
+    gpu_skins: HashMap<(u32, u32), crate::skin::SkinTarget>,
+    /// Each skinned splat set's palette in the current pose, by its GLB node
+    /// and set (`splat_draw`): made once per pose, read by every view.
+    splat_palettes: Vec<SplatPalette>,
     /// The frames with motion drawn when `skinned` was last written
     /// (`Temporal::motion_frames`): a later frame has drawn it.
     skinned_at: u64,
@@ -115,11 +123,37 @@ pub(crate) struct AnimatedInstance {
     refusal: Option<String>,
 }
 
-/// A skinned mesh's vertices as the last frame with motion drew them: their
-/// positions, and the index of each copy by its source vertex and cut joint.
+/// A skinned splat set's palette for a pose: its GLB node, its set, and
+/// each joint's rows (`splat_palette`).
+type SplatPalette = (usize, usize, std::sync::Arc<[[f32; 12]]>);
+
+/// A skinned mesh's vertices as the last frame with motion drew them, and
+/// by each copy's source vertex and cut joint, its index and its cut.
 struct DrawnVertices {
-    positions: std::sync::Arc<crate::tables::CpuGeometry>,
-    copies: HashMap<(u32, u32), usize>,
+    drawn: Drawn,
+    copies: HashMap<(u32, u32), (usize, usize)>,
+}
+
+/// How a skinned mesh was drawn: its positions (skinned on the CPU), or the
+/// palettes the GPU skinned it with.
+enum Drawn {
+    Positions(std::sync::Arc<crate::tables::CpuGeometry>),
+    Palettes(std::sync::Arc<crate::skin::SkinPose>),
+}
+
+/// A skinned primitive's new pose: its vertices skinned on the CPU, or what
+/// the GPU poses it with.
+enum Skinned {
+    Cpu {
+        vertices: Vec<f32>,
+        extra: Option<Vec<f32>>,
+    },
+    Gpu {
+        pose: std::sync::Arc<crate::skin::SkinPose>,
+        bounds: Aabb,
+        own: u32,
+        lit: bool,
+    },
 }
 
 /// The triangles of each skinned primitive split by an instance's cuts
@@ -501,6 +535,48 @@ impl Renderer {
                 }
             }
         }
+        // Skinned primitives at rest, which the GPU poses every instance of
+        // from (`skin.rs`).
+        let mut skin_sources = HashMap::new();
+        for (mesh_index, primitives) in model.meshes.iter().enumerate() {
+            for (primitive_index, primitive) in primitives.iter().enumerate() {
+                if primitive.joints.is_none() || primitive.weights.is_none() {
+                    continue;
+                }
+                let at_rest = |colors| {
+                    interleave(
+                        primitive,
+                        colors,
+                        &primitive.positions,
+                        &primitive.normals,
+                        &|vertex| vertex,
+                    )
+                };
+                let lit = primitive
+                    .core
+                    .as_ref()
+                    .and_then(|core| core.albedo.as_deref())
+                    .map(|albedo| at_rest(Some(albedo)));
+                let extra = extra_stream(
+                    &model,
+                    primitive,
+                    primitive.positions.len(),
+                    &|vertex| vertex,
+                    primitive.tangents.as_deref(),
+                );
+                // Without room, the primitive is skinned on the CPU.
+                if let Some(source) = self.skinning.source(
+                    &self.gpu,
+                    &format!("{label} skin {mesh_index}/{primitive_index}"),
+                    primitive,
+                    &at_rest(primitive.colors.as_deref()),
+                    lit.as_deref(),
+                    extra.as_deref(),
+                ) {
+                    skin_sources.insert((mesh_index as u32, primitive_index as u32), source);
+                }
+            }
+        }
         // A material drawn with the second stream or skinned needs its own
         // pipelines: make them now rather than at its first draw.
         let streamed: BTreeSet<(usize, crate::shaders::Features)> = model
@@ -597,6 +673,7 @@ impl Renderer {
                 model,
                 rest,
                 rigid,
+                skin_sources,
                 materials,
                 textures,
                 linear_textures,
@@ -686,6 +763,8 @@ impl Renderer {
                 pose_pending: false,
                 owners: Vec::new(),
                 skinned: HashMap::new(),
+                gpu_skins: HashMap::new(),
+                splat_palettes: Vec::new(),
                 skinned_at: 0,
                 part_nodes: Vec::new(),
                 split: None,
@@ -705,6 +784,7 @@ impl Renderer {
     fn reset_animated_instance(&mut self, handle: RenderHandle) -> Option<String> {
         let instance = self.tables.animated.get_mut(&handle)?;
         instance.skinned.clear();
+        instance.gpu_skins.clear();
         instance.refused.clear();
         instance.split = None;
         instance.pose_pending = false;
@@ -813,6 +893,7 @@ impl Renderer {
         }
         instance.pose = Some(pose.clone());
         instance.pose_pending = true;
+        instance.splat_palettes.clear();
         // A changed pose is a scene change: cached composition targets must
         // redraw it.
         self.scene_generation += 1;
@@ -873,8 +954,9 @@ impl Renderer {
         self.rebuild_parts(handle);
     }
 
-    /// Skin every instance whose pose arrived since it was last drawn, and
-    /// write its parts. Runs after transforms propagate.
+    /// Skin every shown instance whose pose arrived since it was last
+    /// drawn, and write its parts; a hidden one waits until it is shown.
+    /// Runs after transforms propagate.
     pub(crate) fn realize_poses(&mut self) {
         let pending: Vec<RenderHandle> = self
             .tables
@@ -882,16 +964,35 @@ impl Renderer {
             .iter()
             .filter(|(_, instance)| instance.pose_pending)
             .map(|(handle, _)| *handle)
+            .filter(|handle| {
+                self.tables
+                    .nodes
+                    .get(handle)
+                    .is_none_or(|node| node.world_visible)
+            })
             .collect();
         for handle in pending {
             self.realize_pose(handle);
         }
+        self.skinning.flush(&self.gpu);
+    }
+
+    /// Make every animated instance's skinned meshes again: the options
+    /// changed where they are skinned.
+    pub(crate) fn reset_animated_instances(&mut self) {
+        self.skinned_settling.clear();
+        let handles: Vec<RenderHandle> = self.tables.animated.keys().copied().collect();
+        for handle in handles {
+            let _ = self.reset_animated_instance(handle);
+        }
+        self.skinning.flush(&self.gpu);
     }
 
     fn realize_pose(&mut self, handle: RenderHandle) {
         if let Some(instance) = self.tables.animated.get_mut(&handle) {
             instance.pose_pending = false;
         }
+        self.cache_splat_palettes(handle);
         if self.skin_animated_instance(handle) {
             // The cuts changed the skinned triangles, so the parts' index
             // counts. The parts are the same primitives in the same order,
@@ -908,6 +1009,29 @@ impl Renderer {
             self.temporal.carry(&before, &parts(self));
         }
         self.write_animated_parts(handle);
+    }
+
+    /// Make an instance's skinned splat sets' palettes for its pose, once,
+    /// for every view that draws or casts them until the next pose.
+    fn cache_splat_palettes(&mut self, handle: RenderHandle) {
+        let Some(instance) = self.tables.animated.get(&handle) else {
+            return;
+        };
+        let Some(asset) = self.tables.animated_assets.get(instance.slot) else {
+            return;
+        };
+        let palettes = asset
+            .splat_nodes
+            .iter()
+            .filter(|(_, set)| asset.splat_sets[*set].joint_bounds.is_some())
+            .filter_map(|&(node, set)| {
+                let skin = asset.model.skins.get(asset.model.nodes[node].skin?)?;
+                Some((node, set, splat_palette(instance, asset, skin).into()))
+            })
+            .collect();
+        if let Some(instance) = self.tables.animated.get_mut(&handle) {
+            instance.splat_palettes = palettes;
+        }
     }
 
     /// Answer pending bounds requests from the posed, propagated world
@@ -932,18 +1056,27 @@ impl Renderer {
             }
             self.report_animated_bounds(handle);
         }
+        self.skinning.flush(&self.gpu);
     }
 
-    /// CPU-skin every skinned primitive into the instance's vertex buffers,
-    /// with its severed pieces' triangles skinned where each piece is.
-    /// Returns whether the cuts changed which triangles each draws: the
-    /// buffers are then made again and the parts must be.
+    /// Whether skinned primitives are posed on the GPU (`skin.rs`): on a
+    /// device with compute shaders, unless the options ask for the CPU.
+    pub(crate) fn skins_on_gpu(&self) -> bool {
+        self.skinning.available() && !self.options.cpu_skinning
+    }
+
+    /// Skin every skinned primitive into the instance's vertex buffers, with
+    /// its severed pieces' triangles skinned where each piece is: queued for
+    /// the GPU (`skin.rs`), or on the CPU without it. Returns whether the
+    /// cuts changed which triangles each draws: the buffers are then made
+    /// again and the parts must be.
     fn skin_animated_instance(&mut self, handle: RenderHandle) -> bool {
         // While frames draw motion, vertices a frame has drawn stay as they
         // were for the next frame's motion, and the new pose goes into the
         // other buffer.
         let keep = self.temporal.keeps_history();
         let frames = self.temporal.motion_frames();
+        let on_gpu = self.skins_on_gpu();
         let Some(instance) = self.tables.animated.get_mut(&handle) else {
             return false;
         };
@@ -967,42 +1100,57 @@ impl Renderer {
         if resplit {
             if keep {
                 for (key, mesh) in &instance.skinned {
-                    let positions = if drawn {
-                        Some(mesh.cpu.clone())
-                    } else {
-                        mesh.skinned
-                            .as_ref()
-                            .and_then(|history| history.previous_positions.clone())
+                    // Skinned on the GPU, the palettes it was drawn with;
+                    // on the CPU, its positions.
+                    let drawn_as = match instance.gpu_skins.get(key) {
+                        Some(target) => if drawn {
+                            target.pose.clone()
+                        } else {
+                            target.previous_pose.clone()
+                        }
+                        .map(Drawn::Palettes),
+                        None => if drawn {
+                            Some(mesh.cpu.clone())
+                        } else {
+                            mesh.skinned
+                                .as_ref()
+                                .and_then(|history| history.previous_positions.clone())
+                        }
+                        .map(Drawn::Positions),
                     };
-                    let Some(positions) = positions else { continue };
+                    let Some(drawn_as) = drawn_as else { continue };
+                    let own = mesh.cpu.positions.len();
                     let copies = instance
                         .split
                         .as_ref()
                         .and_then(|split| Some((split, split.primitives.get(key)?)))
                         .map(|(split, primitive)| {
-                            let own = positions.positions.len() - primitive.copies.len();
+                            let own = own - primitive.copies.len();
                             primitive
                                 .copies
                                 .iter()
                                 .enumerate()
                                 .map(|(index, (vertex, cut))| {
-                                    ((*vertex, split.joints[*cut]), own + index)
+                                    ((*vertex, split.joints[*cut]), (own + index, *cut))
                                 })
                                 .collect()
                         })
                         .unwrap_or_default();
-                    drawn_before.insert(*key, DrawnVertices { positions, copies });
+                    drawn_before.insert(
+                        *key,
+                        DrawnVertices {
+                            drawn: drawn_as,
+                            copies,
+                        },
+                    );
                 }
             }
             instance.split =
                 (!joints.is_empty()).then(|| CutSplit::new(&asset.model, &asset.rig, joints));
             instance.skinned.clear();
+            instance.gpu_skins.clear();
         }
         let instance = &self.tables.animated[&handle];
-        let pieces = instance
-            .pose
-            .as_ref()
-            .map_or(&[][..], |pose| pose.pieces.as_slice());
         let core_lit = core_look(&self.tables, handle) == Some(true);
         let mut updates = Vec::new();
         for &node_index in &asset.model.order {
@@ -1011,95 +1159,59 @@ impl Renderer {
                 continue;
             };
             let skin = &asset.model.skins[skin];
-            let palette: Vec<Mat4> = skin
-                .joints
-                .iter()
-                .zip(&skin.inverse_binds)
-                .map(|(joint, inverse)| node_matrix(instance, asset, *joint) * *inverse)
-                .collect();
-            // Each piece's palette: every joint in the piece's own frozen
-            // pose where the piece is, so a vertex weighted partly to a
-            // joint another cut owns stays rigid with this piece.
-            let pieces: Vec<Vec<Mat4>> = pieces
-                .iter()
-                .map(|piece| {
-                    skin.joints
-                        .iter()
-                        .zip(&skin.inverse_binds)
-                        .map(|(joint, inverse)| {
-                            piece
-                                .nodes
-                                .get(*joint)
-                                .map_or(Mat4::IDENTITY, Mat4::from_cols_array)
-                                * *inverse
-                        })
-                        .collect()
-                })
-                .collect();
+            let (palette, piece_palettes) = skin_palettes(instance, asset, skin);
+            // The palette sets a GPU pose reads: the instance's, then each
+            // piece's.
+            let mut pose = None;
             for (primitive_index, primitive) in asset.model.meshes[mesh].iter().enumerate() {
-                let (Some(joints), Some(weights)) = (&primitive.joints, &primitive.weights) else {
+                let (Some(_), Some(_)) = (&primitive.joints, &primitive.weights) else {
                     continue;
                 };
-                if instance
-                    .refused
-                    .contains(&(node_index as u32, primitive_index as u32))
-                {
+                let key = (node_index as u32, primitive_index as u32);
+                if instance.refused.contains(&key) {
                     continue;
                 }
-                let split = instance.split.as_ref().and_then(|split| {
-                    split
-                        .primitives
-                        .get(&(node_index as u32, primitive_index as u32))
-                });
+                let split = instance
+                    .split
+                    .as_ref()
+                    .and_then(|split| split.primitives.get(&key));
                 let copies = split.map_or(&[][..], |split| split.copies.as_slice());
-                let own = primitive.positions.len();
-                let count = own + copies.len();
-                let mut positions = Vec::with_capacity(count);
-                let mut normals = Vec::with_capacity(count);
-                let mut tangents =
-                    Vec::with_capacity(primitive.tangents.as_ref().map_or(0, |_| count));
-                for output in 0..count {
-                    let (vertex, palette) = match output.checked_sub(own) {
-                        None => (output, &palette),
-                        Some(copy) => {
-                            let (vertex, cut) = copies[copy];
-                            (vertex as usize, &pieces[cut])
-                        }
-                    };
-                    let position = &primitive.positions[vertex];
-                    let mut matrix = Mat4::ZERO;
-                    for influence in 0..4 {
-                        let weight = weights[vertex][influence];
-                        if weight > 0.0 {
-                            let joint = usize::from(joints[vertex][influence]);
-                            if let Some(joint_matrix) = palette.get(joint) {
-                                matrix += *joint_matrix * weight;
-                            }
+                let source = asset
+                    .skin_sources
+                    .get(&(mesh as u32, primitive_index as u32))
+                    .filter(|_| on_gpu);
+                if let Some(source) = source {
+                    let pose = pose
+                        .get_or_insert_with(|| {
+                            std::sync::Arc::new(crate::skin::SkinPose {
+                                palettes: palette
+                                    .iter()
+                                    .chain(piece_palettes.iter().flatten())
+                                    .copied()
+                                    .collect(),
+                                joints: palette.len(),
+                            })
+                        })
+                        .clone();
+                    // Each piece that draws copies of this primitive's
+                    // vertices bounds them where it is.
+                    let mut bounds = source.bounds(&palette);
+                    for (cut, piece) in piece_palettes.iter().enumerate() {
+                        if copies.iter().any(|(_, copy_cut)| *copy_cut == cut) {
+                            bounds = bounds.union(&source.bounds(piece));
                         }
                     }
-                    positions.push(
-                        matrix
-                            .transform_point3(crate::convert::vec3(*position))
-                            .to_array(),
-                    );
-                    let normal = matrix
-                        .transform_vector3(crate::convert::vec3(primitive.normals[vertex]))
-                        .normalize_or(Vec3::Y);
-                    normals.push(normal.to_array());
-                    if let Some([x, y, z, w]) =
-                        primitive.tangents.as_ref().map(|tangents| tangents[vertex])
-                    {
-                        let [x, y, z] = matrix
-                            .transform_vector3(Vec3::new(x, y, z))
-                            .normalize_or(Vec3::X)
-                            .to_array();
-                        tangents.push([x, y, z, w]);
-                    }
+                    updates.push((
+                        key,
+                        Skinned::Gpu {
+                            pose,
+                            bounds,
+                            own: primitive.positions.len() as u32,
+                            lit: core_lit,
+                        },
+                    ));
+                    continue;
                 }
-                let source = |output: usize| match output.checked_sub(own) {
-                    None => output,
-                    Some(copy) => copies[copy].0 as usize,
-                };
                 let colors = match primitive
                     .core
                     .as_ref()
@@ -1108,19 +1220,19 @@ impl Renderer {
                     Some(albedo) if core_lit => Some(albedo),
                     _ => primitive.colors.as_deref(),
                 };
-                let vertices = interleave(primitive, colors, &positions, &normals, &source);
-                let extra = extra_stream(
+                let (vertices, extra) = skin_on_cpu(
                     &asset.model,
                     primitive,
-                    count,
-                    &source,
-                    (!tangents.is_empty()).then_some(tangents.as_slice()),
+                    colors,
+                    &palette,
+                    &piece_palettes,
+                    copies,
                 );
-                updates.push(((node_index as u32, primitive_index as u32), vertices, extra));
+                updates.push((key, Skinned::Cpu { vertices, extra }));
             }
         }
         let mut kept = drawn;
-        for (key, vertices, extra) in updates {
+        for (key, skinned) in updates {
             let gpu = &self.gpu;
             let instance = self
                 .tables
@@ -1128,9 +1240,14 @@ impl Renderer {
                 .get_mut(&handle)
                 .expect("the instance skinned above");
             if let Some(mesh) = instance.skinned.get_mut(&key) {
+                let target = instance.gpu_skins.get_mut(&key);
+                let in_arena = target.is_some();
                 let history = mesh.skinned.get_or_insert_default();
                 if !keep {
                     *history = SkinnedHistory::default();
+                    if let Some(target) = target {
+                        target.previous_pose = None;
+                    }
                 } else if drawn {
                     let next = history
                         .previous
@@ -1138,24 +1255,22 @@ impl Renderer {
                         .or_else(|| history.spare.take())
                         .map_or_else(
                             || {
-                                crate::gpu::allocating(&gpu.device, || {
-                                    gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                                        label: Some("render-wgpu skinned vertices"),
-                                        size: mesh.vertices.size(),
-                                        usage: wgpu::BufferUsages::VERTEX
-                                            | wgpu::BufferUsages::COPY_DST
-                                            | crate::ray_scene::mesh_input(&gpu.device),
-                                        mapped_at_creation: false,
-                                    })
-                                })
-                                .ok()
+                                let count = (mesh.vertices.size / VERTEX_BYTES) as usize;
+                                if in_arena {
+                                    self.skinning.vertices(&gpu.device, count)
+                                } else {
+                                    own_vertex_buffer(gpu, mesh.vertices.size)
+                                }
                             },
                             Some,
                         );
                     match next {
                         Some(next) => {
                             history.previous = Some(std::mem::replace(&mut mesh.vertices, next));
-                            history.previous_positions = Some(mesh.cpu.clone());
+                            match target {
+                                Some(target) => target.previous_pose = target.pose.take(),
+                                None => history.previous_positions = Some(mesh.cpu.clone()),
+                            }
                         }
                         // No room for a second buffer: the mesh draws
                         // without motion history, as on a frame without
@@ -1163,17 +1278,55 @@ impl Renderer {
                         None => *history = SkinnedHistory::default(),
                     }
                 }
-                gpu.queue
-                    .write_buffer(&mesh.vertices, 0, bytemuck::cast_slice(&vertices));
-                if let (Some(buffer), Some(extra)) = (&mesh.extra, &extra) {
-                    gpu.queue
-                        .write_buffer(buffer, 0, bytemuck::cast_slice(extra));
+                match skinned {
+                    Skinned::Cpu { vertices, extra } => {
+                        gpu.queue.write_buffer(
+                            &mesh.vertices.buffer,
+                            mesh.vertices.offset,
+                            bytemuck::cast_slice(&vertices),
+                        );
+                        if let (Some(stream), Some(extra)) = (&mesh.extra, &extra) {
+                            gpu.queue.write_buffer(
+                                &stream.buffer,
+                                stream.offset,
+                                bytemuck::cast_slice(extra),
+                            );
+                        }
+                        mesh.bounds = vertex_bounds(&vertices);
+                        mesh.cpu = std::sync::Arc::new(crate::tables::CpuGeometry {
+                            positions: vertex_positions(&vertices),
+                            indices: mesh.cpu.indices.clone(),
+                        });
+                    }
+                    Skinned::Gpu {
+                        pose,
+                        bounds,
+                        own,
+                        lit,
+                    } => {
+                        let (Some(target), Some(source)) = (
+                            instance.gpu_skins.get_mut(&key),
+                            self.tables
+                                .animated_assets
+                                .get(instance.slot)
+                                .and_then(|asset| gpu_source(asset, key)),
+                        ) else {
+                            continue;
+                        };
+                        self.skinning.queue(
+                            source,
+                            lit,
+                            target.copies.as_ref(),
+                            &pose,
+                            own,
+                            &mesh.vertices,
+                            mesh.extra.as_ref(),
+                        );
+                        target.pose = Some(pose);
+                        mesh.bounds = bounds;
+                        mesh.revision += 1;
+                    }
                 }
-                mesh.bounds = vertex_bounds(&vertices);
-                mesh.cpu = std::sync::Arc::new(crate::tables::CpuGeometry {
-                    positions: vertex_positions(&vertices),
-                    indices: mesh.cpu.indices.clone(),
-                });
             } else {
                 let slot = instance.slot;
                 let asset = self
@@ -1182,22 +1335,45 @@ impl Renderer {
                     .get(slot)
                     .expect("a skinned instance's asset is defined");
                 let node = &asset.model.nodes[key.0 as usize];
-                let primitive = &asset.model.meshes[node.mesh.expect("skinned node has a mesh")]
-                    [key.1 as usize];
-                let indices = self.tables.animated[&handle]
+                let mesh_index = node.mesh.expect("skinned node has a mesh");
+                let primitive = &asset.model.meshes[mesh_index][key.1 as usize];
+                let split = self.tables.animated[&handle]
                     .split
                     .as_ref()
-                    .and_then(|split| split.primitives.get(&key))
-                    .map_or_else(|| primitive.indices.clone(), |split| split.indices.clone());
+                    .and_then(|split| split.primitives.get(&key));
+                let indices =
+                    split.map_or_else(|| primitive.indices.clone(), |split| split.indices.clone());
                 let label = format!("animated {} skin {}/{}", handle.raw(), key.0, key.1);
-                let uploaded = self
-                    .upload_dynamic_vertices(&label, &vertices, &indices)
-                    .and_then(|mut mesh| {
-                        mesh.extra = extra
-                            .map(|extra| self.vertex_buffer(&label, &extra, true))
-                            .transpose()?;
-                        Ok(mesh)
-                    });
+                let uploaded = match &skinned {
+                    Skinned::Cpu { vertices, extra } => self
+                        .upload_dynamic_vertices(&label, vertices, &indices)
+                        .and_then(|mut mesh| {
+                            mesh.extra = extra
+                                .as_ref()
+                                .map(|extra| self.vertex_buffer(&label, extra, true))
+                                .transpose()?;
+                            Ok(mesh)
+                        }),
+                    Skinned::Gpu { bounds, .. } => {
+                        let copies = split.map_or(&[][..], |split| split.copies.as_slice());
+                        let positions = primitive
+                            .positions
+                            .iter()
+                            .copied()
+                            .chain(
+                                copies
+                                    .iter()
+                                    .map(|(vertex, _)| primitive.positions[*vertex as usize]),
+                            )
+                            .map(crate::convert::vec3)
+                            .collect();
+                        let extra = asset
+                            .skin_sources
+                            .get(&(mesh_index as u32, key.1))
+                            .is_some_and(|source| source.extra.is_some());
+                        self.gpu_skinned_mesh(&label, positions, indices, extra, *bounds)
+                    }
+                };
                 let mut mesh = match uploaded {
                     Ok(mesh) => mesh,
                     Err(refusal) => {
@@ -1208,6 +1384,38 @@ impl Renderer {
                         continue;
                     }
                 };
+                // Skinned on the GPU: its copies' source vertices and palette
+                // sets, then the dispatch that poses it.
+                let mut target = None;
+                if let Skinned::Gpu { pose, own, lit, .. } = &skinned {
+                    let copies: Vec<u32> = split
+                        .map_or(&[][..], |split| split.copies.as_slice())
+                        .iter()
+                        .flat_map(|(vertex, cut)| [*vertex, *cut as u32 + 1])
+                        .collect();
+                    let made = crate::skin::SkinTarget {
+                        copies: (!copies.is_empty()).then(|| copies.into()),
+                        ..Default::default()
+                    };
+                    let source = self
+                        .tables
+                        .animated_assets
+                        .get(slot)
+                        .and_then(|asset| gpu_source(asset, key))
+                        .expect("a source skinned on the GPU");
+                    self.skinning.queue(
+                        source,
+                        *lit,
+                        made.copies.as_ref(),
+                        pose,
+                        *own,
+                        &mesh.vertices,
+                        mesh.extra.as_ref(),
+                    );
+                    let mut made = made;
+                    made.pose = Some(pose.clone());
+                    target = Some(made);
+                }
                 // Made for new cuts: each vertex's previous position is where
                 // the last frame drew it, a copy's where its source vertex
                 // was, in its cut's piece or in the body.
@@ -1225,52 +1433,102 @@ impl Renderer {
                                 .map(|(vertex, cut)| (*vertex, split.joints[*cut]))
                                 .collect()
                         });
-                    let current = vertex_positions(&vertices);
-                    let positions: Vec<Vec3> = (0..current.len())
-                        .map(|output| {
-                            let index = match output.checked_sub(own) {
-                                None => output,
-                                Some(copy) => {
-                                    let (vertex, joint) = copies[copy];
-                                    before
-                                        .copies
-                                        .get(&(vertex, joint))
+                    match (&before.drawn, target.as_mut()) {
+                        (Drawn::Positions(drawn), None) => {
+                            let current = mesh.cpu.positions.clone();
+                            let positions: Vec<Vec3> = (0..current.len())
+                                .map(|output| {
+                                    let index = match output.checked_sub(own) {
+                                        None => output,
+                                        Some(copy) => {
+                                            let (vertex, joint) = copies[copy];
+                                            before
+                                                .copies
+                                                .get(&(vertex, joint))
+                                                .map_or(vertex as usize, |(index, _)| *index)
+                                        }
+                                    };
+                                    drawn
+                                        .positions
+                                        .get(index)
                                         .copied()
-                                        .unwrap_or(vertex as usize)
-                                }
-                            };
-                            before
-                                .positions
-                                .positions
-                                .get(index)
-                                .copied()
-                                .unwrap_or(current[output])
-                        })
-                        .collect();
-                    let mut previous = vec![0.0; positions.len() * VERTEX_FLOATS];
-                    for (vertex, position) in previous
-                        .as_chunks_mut::<VERTEX_FLOATS>()
-                        .0
-                        .iter_mut()
-                        .zip(&positions)
-                    {
-                        vertex[..3].copy_from_slice(&position.to_array());
-                    }
-                    // Without room for it, the mesh draws without motion
-                    // history.
-                    if let Ok(buffer) = self.vertex_buffer(&label, &previous, true) {
-                        let history = mesh.skinned.get_or_insert_default();
-                        history.previous = Some(buffer);
-                        history.previous_positions =
-                            Some(std::sync::Arc::new(crate::tables::CpuGeometry {
-                                positions,
-                                indices: Vec::new(),
-                            }));
-                        kept = true;
+                                        .unwrap_or(current[output])
+                                })
+                                .collect();
+                            let mut previous = vec![0.0; positions.len() * VERTEX_FLOATS];
+                            for (vertex, position) in previous
+                                .as_chunks_mut::<VERTEX_FLOATS>()
+                                .0
+                                .iter_mut()
+                                .zip(&positions)
+                            {
+                                vertex[..3].copy_from_slice(&position.to_array());
+                            }
+                            // Without room for it, the mesh draws without
+                            // motion history.
+                            if let Ok(buffer) = self.vertex_buffer(&label, &previous, true) {
+                                let history = mesh.skinned.get_or_insert_default();
+                                history.previous = Some(buffer);
+                                history.previous_positions =
+                                    Some(std::sync::Arc::new(crate::tables::CpuGeometry {
+                                        positions,
+                                        indices: Vec::new(),
+                                    }));
+                                kept = true;
+                            }
+                        }
+                        // The previous vertices skinned again by the drawn
+                        // palettes: a copy by its piece's, when the last
+                        // cuts had one of its vertex for its joint, else by
+                        // the body's.
+                        (Drawn::Palettes(drawn), Some(made)) => {
+                            let previous_copies: Vec<u32> = copies
+                                .iter()
+                                .flat_map(|(vertex, joint)| {
+                                    let set = before
+                                        .copies
+                                        .get(&(*vertex, *joint))
+                                        .map_or(0, |(_, cut)| *cut as u32 + 1);
+                                    [*vertex, set]
+                                })
+                                .collect();
+                            let previous = self.skinning.vertices(
+                                &self.gpu.device,
+                                (mesh.vertices.size / VERTEX_BYTES) as usize,
+                            );
+                            let table: Option<std::sync::Arc<[u32]>> =
+                                (!previous_copies.is_empty()).then(|| previous_copies.into());
+                            if let (Some(previous), Some(source)) = (
+                                previous,
+                                self.tables
+                                    .animated_assets
+                                    .get(slot)
+                                    .and_then(|asset| gpu_source(asset, key)),
+                            ) {
+                                self.skinning.queue(
+                                    source,
+                                    matches!(&skinned, Skinned::Gpu { lit: true, .. }),
+                                    table.as_ref(),
+                                    drawn,
+                                    own as u32,
+                                    &previous,
+                                    None,
+                                );
+                                mesh.skinned.get_or_insert_default().previous = Some(previous);
+                                made.previous_pose = Some(drawn.clone());
+                                kept = true;
+                            }
+                        }
+                        // Skinned the other way before (the options
+                        // changed): no previous vertices.
+                        _ => {}
                     }
                 }
                 if let Some(instance) = self.tables.animated.get_mut(&handle) {
                     instance.skinned.insert(key, mesh);
+                    if let Some(target) = target {
+                        instance.gpu_skins.insert(key, target);
+                    }
                 }
             }
         }
@@ -1307,6 +1565,9 @@ impl Renderer {
                 }
                 history.previous_positions = None;
             }
+            for target in instance.gpu_skins.values_mut() {
+                target.previous_pose = None;
+            }
             false
         });
     }
@@ -1322,6 +1583,14 @@ impl Renderer {
             .filter_map(|mesh| mesh.skinned.as_mut())
         {
             *history = SkinnedHistory::default();
+        }
+        for target in self
+            .tables
+            .animated
+            .values_mut()
+            .flat_map(|instance| instance.gpu_skins.values_mut())
+        {
+            target.previous_pose = None;
         }
     }
 
@@ -1406,11 +1675,25 @@ impl Renderer {
             let node = &asset.model.nodes[node_index];
             let Some(mesh) = node.mesh else { continue };
             for (primitive_index, primitive) in asset.model.meshes[mesh].iter().enumerate() {
-                if let Some(skinned) = instance
-                    .skinned
-                    .get(&(node_index as u32, primitive_index as u32))
-                {
-                    let skinned = skinned.bounds.transformed(&world);
+                let key = (node_index as u32, primitive_index as u32);
+                if let Some(skinned) = instance.skinned.get(&key) {
+                    // Skinned on the GPU, its bounds are its joints' reach:
+                    // a bounds request poses its vertices here.
+                    let local = if instance.gpu_skins.contains_key(&key) {
+                        self.posed_geometry(&crate::tables::MeshRef::AnimatedSkinned(
+                            handle, key.0, key.1,
+                        ))
+                        .map_or(skinned.bounds, |posed| {
+                            let mut bounds = Aabb::EMPTY;
+                            for position in &posed.positions {
+                                bounds.include(*position);
+                            }
+                            bounds
+                        })
+                    } else {
+                        skinned.bounds
+                    };
+                    let skinned = local.transformed(&world);
                     if !skinned.is_empty() {
                         bounds.include(skinned.min);
                         bounds.include(skinned.max);
@@ -1922,7 +2205,7 @@ impl Renderer {
         label: &str,
         data: &[f32],
         dynamic: bool,
-    ) -> Result<wgpu::Buffer, String> {
+    ) -> Result<crate::tables::VertexStream, String> {
         let device = &self.gpu.device;
         // A rewritable stream may become a skinned mesh's vertices, which
         // the ray scene builds from.
@@ -1943,6 +2226,7 @@ impl Renderer {
                 },
             )
         })
+        .map(crate::tables::VertexStream::own)
         .map_err(|error| format!("{label} could not be uploaded: {error}"))
     }
 
@@ -1996,12 +2280,124 @@ impl Renderer {
             morph: None,
             product_data: None,
             skinned: Some(SkinnedHistory::default()),
-            vertices: vertex_buffer,
+            revision: 0,
+            vertices: crate::tables::VertexStream::own(vertex_buffer),
             indices: index_buffer,
             topology: Topology::Triangles,
             groups: vec![(0, 0, indices.len() as u32)],
             slots: BTreeMap::new(),
         })
+    }
+
+    /// A skinned primitive's mesh for the GPU to pose (`skin.rs`): its
+    /// vertex buffers, written by the pass, its indices, and its vertices at
+    /// rest for `cpu` (posed ones are made when a reading asks:
+    /// `posed_geometry`). Refused when the device has no room for it.
+    fn gpu_skinned_mesh(
+        &self,
+        label: &str,
+        positions: Vec<Vec3>,
+        indices: Vec<u32>,
+        extra: bool,
+        bounds: Aabb,
+    ) -> Result<GpuMesh, String> {
+        let device = &self.gpu.device;
+        let refused = || format!("{label} has no room in the skinned vertex arena");
+        let vertices = self
+            .skinning
+            .vertices(device, positions.len())
+            .ok_or_else(refused)?;
+        let extra = match extra {
+            true => Some(
+                self.skinning
+                    .extra(device, positions.len())
+                    .ok_or_else(refused)?,
+            ),
+            false => None,
+        };
+        let index_buffer = crate::gpu::allocating(device, || {
+            crate::gpu::buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some(label),
+                    contents: bytemuck::cast_slice(&indices),
+                    usage: wgpu::BufferUsages::INDEX | crate::ray_scene::mesh_input(device),
+                },
+            )
+        })
+        .map_err(|error| format!("{label} could not be uploaded: {error}"))?;
+        let groups = vec![(0, 0, indices.len() as u32)];
+        Ok(GpuMesh {
+            bounds,
+            cpu: std::sync::Arc::new(crate::tables::CpuGeometry { positions, indices }),
+            edges: Default::default(),
+            extra,
+            texture_space: None,
+            distance_field: None,
+            layer_weights: false,
+            layer_palette: Vec::new(),
+            billboard: false,
+            vertex_occlusion: false,
+            morph: None,
+            product_data: None,
+            skinned: Some(SkinnedHistory::default()),
+            revision: 0,
+            vertices,
+            indices: index_buffer,
+            topology: Topology::Triangles,
+            groups,
+            slots: BTreeMap::new(),
+        })
+    }
+
+    /// Posed positions of a mesh as drawn, for a reading on the CPU: a
+    /// mesh skinned on the GPU is skinned again here, positions only;
+    /// any other mesh's are its own.
+    pub(crate) fn posed_geometry(
+        &self,
+        mesh_ref: &crate::tables::MeshRef,
+    ) -> Option<std::sync::Arc<crate::tables::CpuGeometry>> {
+        let mesh = self.mesh(mesh_ref)?;
+        let crate::tables::MeshRef::AnimatedSkinned(handle, node, primitive) = mesh_ref else {
+            return Some(mesh.cpu.clone());
+        };
+        let instance = self.tables.animated.get(handle)?;
+        if !instance.gpu_skins.contains_key(&(*node, *primitive)) {
+            return Some(mesh.cpu.clone());
+        }
+        let asset = self.tables.animated_assets.get(instance.slot)?;
+        let glb_node = asset.model.nodes.get(*node as usize)?;
+        let skin = asset.model.skins.get(glb_node.skin?)?;
+        let glb_primitive = asset
+            .model
+            .meshes
+            .get(glb_node.mesh?)?
+            .get(*primitive as usize)?;
+        let (joints, weights) = (
+            glb_primitive.joints.as_ref()?,
+            glb_primitive.weights.as_ref()?,
+        );
+        let (palette, pieces) = skin_palettes(instance, asset, skin);
+        let copies = instance
+            .split
+            .as_ref()
+            .and_then(|split| split.primitives.get(&(*node, *primitive)))
+            .map_or(&[][..], |split| split.copies.as_slice());
+        let own = glb_primitive.positions.len();
+        let positions = (0..own + copies.len())
+            .map(|output| {
+                let (vertex, palette) = match output.checked_sub(own) {
+                    None => (output, palette.as_slice()),
+                    Some(copy) => (copies[copy].0 as usize, pieces[copies[copy].1].as_slice()),
+                };
+                blended(palette, &joints[vertex], &weights[vertex])
+                    .transform_point3(crate::convert::vec3(glb_primitive.positions[vertex]))
+            })
+            .collect();
+        Some(std::sync::Arc::new(crate::tables::CpuGeometry {
+            positions,
+            indices: mesh.cpu.indices.clone(),
+        }))
     }
 
     /// The GPU mesh an animated part draws.
@@ -2057,6 +2453,143 @@ fn node_matrix(instance: &AnimatedInstance, asset: &AnimatedAssetRow, node: usiz
         None => asset.rest[node],
     }
 }
+
+/// A skin's palette in an instance's pose, and each severed piece's: every
+/// joint in the piece's own frozen pose where the piece is, so a vertex
+/// weighted partly to a joint another cut owns stays rigid with its piece.
+fn skin_palettes(
+    instance: &AnimatedInstance,
+    asset: &AnimatedAssetRow,
+    skin: &glb::GlbSkin,
+) -> (Vec<Mat4>, Vec<Vec<Mat4>>) {
+    let palette = skin
+        .joints
+        .iter()
+        .zip(&skin.inverse_binds)
+        .map(|(joint, inverse)| node_matrix(instance, asset, *joint) * *inverse)
+        .collect();
+    let pieces = instance
+        .pose
+        .as_ref()
+        .map_or(&[][..], |pose| pose.pieces.as_slice())
+        .iter()
+        .map(|piece| {
+            skin.joints
+                .iter()
+                .zip(&skin.inverse_binds)
+                .map(|(joint, inverse)| {
+                    piece
+                        .nodes
+                        .get(*joint)
+                        .map_or(Mat4::IDENTITY, Mat4::from_cols_array)
+                        * *inverse
+                })
+                .collect()
+        })
+        .collect();
+    (palette, pieces)
+}
+
+/// A vertex's blend of its joints' palette matrices.
+fn blended(palette: &[Mat4], joints: &[u16; 4], weights: &[f32; 4]) -> Mat4 {
+    let mut matrix = Mat4::ZERO;
+    for influence in 0..4 {
+        let weight = weights[influence];
+        if weight > 0.0 {
+            if let Some(joint_matrix) = palette.get(usize::from(joints[influence])) {
+                matrix += *joint_matrix * weight;
+            }
+        }
+    }
+    matrix
+}
+
+/// Skin a primitive on the CPU, its own vertices by `palette` and each copy
+/// by its cut's piece palette: its vertices in the renderer's layout, with
+/// `colors`, and its extra stream.
+fn skin_on_cpu(
+    model: &GlbModel,
+    primitive: &glb::GlbPrimitive,
+    colors: Option<&[[f32; 4]]>,
+    palette: &[Mat4],
+    pieces: &[Vec<Mat4>],
+    copies: &[(u32, usize)],
+) -> (Vec<f32>, Option<Vec<f32>>) {
+    let (Some(joints), Some(weights)) = (&primitive.joints, &primitive.weights) else {
+        return (Vec::new(), None);
+    };
+    let own = primitive.positions.len();
+    let count = own + copies.len();
+    let mut positions = Vec::with_capacity(count);
+    let mut normals = Vec::with_capacity(count);
+    let mut tangents = Vec::with_capacity(primitive.tangents.as_ref().map_or(0, |_| count));
+    for output in 0..count {
+        let (vertex, palette) = match output.checked_sub(own) {
+            None => (output, palette),
+            Some(copy) => {
+                let (vertex, cut) = copies[copy];
+                (vertex as usize, pieces[cut].as_slice())
+            }
+        };
+        let matrix = blended(palette, &joints[vertex], &weights[vertex]);
+        positions.push(
+            matrix
+                .transform_point3(crate::convert::vec3(primitive.positions[vertex]))
+                .to_array(),
+        );
+        let normal = matrix
+            .transform_vector3(crate::convert::vec3(primitive.normals[vertex]))
+            .normalize_or(Vec3::Y);
+        normals.push(normal.to_array());
+        if let Some([x, y, z, w]) = primitive.tangents.as_ref().map(|tangents| tangents[vertex]) {
+            let [x, y, z] = matrix
+                .transform_vector3(Vec3::new(x, y, z))
+                .normalize_or(Vec3::X)
+                .to_array();
+            tangents.push([x, y, z, w]);
+        }
+    }
+    let source = |output: usize| match output.checked_sub(own) {
+        None => output,
+        Some(copy) => copies[copy].0 as usize,
+    };
+    let vertices = interleave(primitive, colors, &positions, &normals, &source);
+    let extra = extra_stream(
+        model,
+        primitive,
+        count,
+        &source,
+        (!tangents.is_empty()).then_some(tangents.as_slice()),
+    );
+    (vertices, extra)
+}
+
+/// The rest data a skinned primitive of `asset`, by (node, primitive), is
+/// posed from on the GPU.
+fn gpu_source(asset: &AnimatedAssetRow, key: (u32, u32)) -> Option<&crate::skin::SkinSource> {
+    let mesh = asset.model.nodes.get(key.0 as usize)?.mesh?;
+    asset.skin_sources.get(&(mesh as u32, key.1))
+}
+
+/// A buffer of its own for `size` bytes of a mesh skinned on the CPU: its
+/// next pose's while the last one's is kept for motion. None without room.
+fn own_vertex_buffer(gpu: &crate::Gpu, size: u64) -> Option<crate::tables::VertexStream> {
+    crate::gpu::allocating(&gpu.device, || {
+        gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("render-wgpu skinned vertices"),
+            size,
+            usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::COPY_DST
+                | crate::ray_scene::mesh_input(&gpu.device),
+            mapped_at_creation: false,
+        })
+    })
+    .ok()
+    .map(crate::tables::VertexStream::own)
+}
+
+/// Bytes per vertex in the renderer's layout.
+const VERTEX_BYTES: u64 = (VERTEX_FLOATS * 4) as u64;
 
 /// A node as drawn: placed by the severed piece that owns it, if any.
 fn placed_node(instance: &AnimatedInstance, asset: &AnimatedAssetRow, node: usize) -> Mat4 {
@@ -2212,27 +2745,17 @@ fn splat_draw(
         .filter(|_| splat_set.joint_bounds.is_some())
         .and_then(|skin| asset.model.skins.get(skin));
     let (model, palette) = match skin {
+        // The pose's palette, made once per pose (`cache_splat_palettes`).
         Some(skin) => (
             world,
-            skin.joints
+            instance
+                .splat_palettes
                 .iter()
-                .zip(&skin.inverse_binds)
-                .map(|(joint, inverse)| {
-                    // A joint's scale never inflates the Gaussians.
-                    let matrix = node_matrix(instance, asset, *joint);
-                    let unscaled = Mat4::from_cols(
-                        matrix.x_axis.truncate().normalize_or_zero().extend(0.0),
-                        matrix.y_axis.truncate().normalize_or_zero().extend(0.0),
-                        matrix.z_axis.truncate().normalize_or_zero().extend(0.0),
-                        matrix.w_axis,
-                    ) * *inverse;
-                    let row = |r: usize| unscaled.row(r).to_array();
-                    let [a, b, c] = [row(0), row(1), row(2)];
-                    [
-                        a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], c[0], c[1], c[2], c[3],
-                    ]
-                })
-                .collect(),
+                .find(|(node, cached, _)| *node == glb_node && *cached == set)
+                .map_or_else(
+                    || splat_palette(instance, asset, skin).into(),
+                    |(.., palette)| palette.clone(),
+                ),
         ),
         // Unskinned, or a skin the set cannot index: in its node's place.
         None => (
@@ -2242,7 +2765,7 @@ fn splat_draw(
                 } else {
                     placed_node(instance, asset, glb_node)
                 },
-            Vec::new(),
+            std::sync::Arc::from([]),
         ),
     };
     crate::splats::SplatDraw {
@@ -2255,6 +2778,33 @@ fn splat_draw(
         multiplier,
         groups,
     }
+}
+
+/// A skinned splat set's palette in `instance`'s pose: each joint's rows
+/// 0 to 2, without the joint's scale, which never inflates the Gaussians.
+fn splat_palette(
+    instance: &AnimatedInstance,
+    asset: &AnimatedAssetRow,
+    skin: &glb::GlbSkin,
+) -> Vec<[f32; 12]> {
+    skin.joints
+        .iter()
+        .zip(&skin.inverse_binds)
+        .map(|(joint, inverse)| {
+            let matrix = node_matrix(instance, asset, *joint);
+            let unscaled = Mat4::from_cols(
+                matrix.x_axis.truncate().normalize_or_zero().extend(0.0),
+                matrix.y_axis.truncate().normalize_or_zero().extend(0.0),
+                matrix.z_axis.truncate().normalize_or_zero().extend(0.0),
+                matrix.w_axis,
+            ) * *inverse;
+            let row = |r: usize| unscaled.row(r).to_array();
+            let [a, b, c] = [row(0), row(1), row(2)];
+            [
+                a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], c[0], c[1], c[2], c[3],
+            ]
+        })
+        .collect()
 }
 
 /// `set`'s world bounds as `draw` places it: each joint's Gaussians moved by

@@ -135,13 +135,13 @@ impl Pool {
         let first_vertex = match held {
             Some(first) => first,
             None => {
-                let count = mesh.vertices.size() / VERTEX_BYTES;
+                let count = mesh.vertices.size / VERTEX_BYTES;
                 if (self.vertex_end + count) * VERTEX_BYTES > self.vertices.size() {
                     return None;
                 }
                 encoder.copy_buffer_to_buffer(
-                    &mesh.vertices,
-                    0,
+                    &mesh.vertices.buffer,
+                    mesh.vertices.offset,
                     &self.vertices,
                     self.vertex_end * VERTEX_BYTES,
                     count * VERTEX_BYTES,
@@ -599,7 +599,7 @@ impl Renderer {
             let vertices: u64 = meshes
                 .iter()
                 .filter_map(|mesh| self.mesh(mesh))
-                .map(|mesh| mesh.vertices.size() / VERTEX_BYTES)
+                .map(|mesh| mesh.vertices.size / VERTEX_BYTES)
                 .sum();
             let indices: u64 = drawn.iter().map(|(_, _, count)| u64::from(*count)).sum();
             shadows.pool = Pool::new(

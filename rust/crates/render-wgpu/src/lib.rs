@@ -71,6 +71,7 @@ mod scatter;
 mod scatter_select;
 mod shaders;
 mod shadows;
+mod skin;
 mod sky_light;
 mod splats;
 mod stars;
@@ -385,6 +386,10 @@ pub struct RendererOptions {
     /// `RustyEngineProductGlobalIllumination`: trace the world's indirect
     /// light (`ray_gi.rs`).
     pub global_illumination: render_model::GlobalIllumination,
+    /// Skin animated meshes on the CPU, as a device without compute shaders
+    /// does, instead of on the GPU (`skin.rs`): for comparing the two. Not
+    /// a product setting.
+    pub cpu_skinning: bool,
 }
 
 impl Default for RendererOptions {
@@ -410,6 +415,7 @@ impl Default for RendererOptions {
             water_reflections: render_model::WaterReflectionsQuality::Off,
             ray_traced_shadows: false,
             global_illumination: render_model::GlobalIllumination::Off,
+            cpu_skinning: false,
         }
     }
 }
@@ -661,6 +667,8 @@ pub struct Renderer {
     /// Animated instances whose skinned vertices hold a previous pose for
     /// the motion (`animated.rs` `settle_skinned_history`).
     skinned_settling: Vec<render_model::RenderHandle>,
+    /// Skinned meshes posed on the GPU (`skin.rs`).
+    skinning: skin::Skinning,
     /// Static mesh instances whose replaced payload holds the shape the
     /// last frame with motion drew, and the motion frame each new shape was
     /// written for (`apply.rs` `deformed_history`).
@@ -903,6 +911,13 @@ impl Renderer {
                 Features::default(),
             )),
         );
+        let skinning = skin::Skinning::new(gpu, || {
+            pipelines::standard(
+                layouts
+                    .shaders
+                    .module(device, Entry::Skin, Features::default()),
+            )
+        });
         let splats = splats::Splats::new(
             gpu,
             pipelines::standard(
@@ -1031,6 +1046,7 @@ impl Renderer {
             animation_facts: Vec::new(),
             animation_generations: HashMap::new(),
             skinned_settling: Vec::new(),
+            skinning,
             deformed_settling: HashMap::new(),
             ghosts: HashMap::new(),
             ghost_pipelines: ghost::GhostPipelines::new(device, ghost_shader),
@@ -1151,7 +1167,11 @@ impl Renderer {
         if options.dlss {
             self.upscale.prepare_dlss(&self.gpu);
         }
+        let reskin = options.cpu_skinning != self.options.cpu_skinning;
         self.options = options;
+        if reskin {
+            self.reset_animated_instances();
+        }
         self.tables.lights_dirty = true;
         if was != now {
             self.field_entries = None;
@@ -1452,6 +1472,7 @@ impl Renderer {
                     self.effects.grid_timing(),
                     self.splats.timing(),
                     self.splats.occlusion_timing(),
+                    self.skinning.timing(),
                 ])
                 .chain(
                     self.ray_scene
@@ -1594,7 +1615,7 @@ impl Renderer {
         let mut seen = std::collections::HashSet::new();
         let mut count = |mesh: &tables::GpuMesh| {
             memory.meshes += 1;
-            memory.gpu_bytes += mesh.vertices.size() + mesh.indices.size();
+            memory.gpu_bytes += mesh.vertices.size + mesh.indices.size();
             if seen.insert(std::sync::Arc::as_ptr(&mesh.cpu)) {
                 memory.cpu_geometry_bytes +=
                     (mesh.cpu.positions.len() * 12 + mesh.cpu.indices.len() * 4) as u64;

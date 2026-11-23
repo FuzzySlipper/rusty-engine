@@ -1732,6 +1732,78 @@ fn a_cut_made_or_cleared_as_the_pose_moves_keeps_the_motion() {
     );
 }
 
+/// Another cut added as the pose moves keeps the motion of a piece already
+/// cut: the head cut and placed 0.3 m aside, then everything moved 0.1 m
+/// while the right hand is cut as well, draws the motion of the same moves
+/// with the head cut alone. The head's copies, laid out again for the new
+/// cuts, take their previous positions from the head's piece, not the body.
+#[test]
+fn a_cut_added_as_the_pose_moves_keeps_a_cut_pieces_motion() {
+    let body_asset =
+        |harness: &mut Harness| admit(harness, "csharp-joint-attachments/content/body.glb");
+    let run = |second_cut: bool| {
+        let mut harness = motion_harness();
+        character_scene(&mut harness);
+        let body = body_asset(&mut harness);
+        let (head, hand) = (rig_joint(&body, "Head"), rig_joint(&body, "RightHand"));
+        let view = character_view();
+        harness.render(&view);
+        harness.render(&view);
+        let RenderDiff::SetEvaluatedPose { handle, pose } = shifted_pose(&harness, 0.0) else {
+            unreachable!("a pose")
+        };
+        let shifted = |x: f32| -> std::sync::Arc<[[f32; 16]]> {
+            pose.nodes
+                .iter()
+                .map(|node| {
+                    let mut node = *node;
+                    node[12] += x;
+                    node
+                })
+                .collect()
+        };
+        let mut set = |x: f32, hand_cut: bool| {
+            let mut pieces = vec![EvaluatedPiece {
+                joint: head,
+                nodes: shifted(x + 0.3),
+            }];
+            if hand_cut {
+                pieces.push(EvaluatedPiece {
+                    joint: hand,
+                    nodes: shifted(x),
+                });
+            }
+            let pose = EvaluatedPose {
+                nodes: shifted(x),
+                pieces,
+                ..pose.clone()
+            };
+            let issues = harness.renderer.apply(
+                &RenderFrameDiff::from_ops(vec![RenderDiff::SetEvaluatedPose { handle, pose }]),
+                &harness.resources,
+            );
+            assert!(issues.is_empty(), "{issues:?}");
+            motions(&harness.render(&view).1)
+        };
+        set(0.0, false);
+        set(0.0, false);
+        set(0.1, second_cut)
+    };
+    let added = run(true);
+    let alone = run(false);
+    assert!(
+        alone.iter().filter(|motion| moving(motion)).count() > 1000,
+        "the character moves"
+    );
+    let (difference, at) = largest_difference(&added, &alone);
+    assert!(
+        difference <= 0.25,
+        "pixel {at}: {:?} with the hand cut too, {:?} with the head alone",
+        added[at],
+        alone[at]
+    );
+}
+
 /// A cut made as the instance moves keeps its motion: the head cut in place
 /// in the change that moves the instance 0.1 m draws what that move draws
 /// without the cut, though the cut makes the instance's parts again.

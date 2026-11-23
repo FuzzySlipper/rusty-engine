@@ -100,7 +100,9 @@ with the adapter's compute limits beside them:
   `light-clusters`, `volumetric-fog`, `fog-regions`
   ([fog regions](lighting-and-sky.md#fog-regions-and-stirrers)), the ambient occlusion passes
   (`ao-prepass`, `ao-occlusion`, `ao-blur`) and a frame's share of building
-  [the sky's light](lighting-and-sky.md#the-skys-light) (`sky-light`);
+  [the sky's light](lighting-and-sky.md#the-skys-light) (`sky-light`), and
+  `skinning`, which poses every skinned mesh with a new pose from its joint
+  palette;
 - the occluder depth pass, `occlusion-depth`
   ([occlusion culling](#occlusion-culling));
 - the frame's shadow-layer passes together (`shadows`, and `backdrop-shadows`
