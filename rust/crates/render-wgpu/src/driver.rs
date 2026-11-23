@@ -369,7 +369,11 @@ impl SceneDriver {
                 );
             }
             Edit::Rebaseline(baseline, now) => {
+                // The fog regions' cells are the renderer's, not the
+                // scene's: the new renderer starts from the old one's.
+                let fog_field = scene.renderer.read_fog_field();
                 scene.renderer = Renderer::new(&self.gpu, self.options);
+                scene.renderer.seed_fog_field(fog_field);
                 let observer = scene.observer;
                 scene.renderer.set_observer(observer);
                 let anchors = scene.viewport_anchors.clone();
@@ -827,6 +831,18 @@ impl SceneDriver {
     /// Waits for every deferred texture and mesh being prepared and takes
     /// them in, so the scene shows everything committed: what a snapshot
     /// does before it is written. Every reading shows them from then on.
+    /// The fog regions' cells as the renderer evolved them, for a snapshot
+    /// to carry ([`Renderer::read_fog_field`]).
+    pub fn fog_field(&self) -> crate::FogField {
+        self.scene().renderer.read_fog_field()
+    }
+
+    /// Seeds the renderer's fog regions with cells a snapshot carried
+    /// ([`Renderer::seed_fog_field`]).
+    pub fn seed_fog_field(&self, field: crate::FogField) {
+        self.scene().renderer.seed_fog_field(field);
+    }
+
     pub fn settle_prepared(&self) {
         let mut scene = self.scene();
         let before = scene.renderer.preparation_readout();

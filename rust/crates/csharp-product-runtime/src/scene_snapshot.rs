@@ -6,7 +6,9 @@
 //! state it reaches, and every renderer resource the Engine holds. The file
 //! is a Product container (`product_container`): `scene.json` names where it
 //! came from, `changes.json` is the baseline as serde of the existing types,
-//! and each resource is `resources/<identity>`. Inline mesh streams are moved
+//! and each resource is `resources/<identity>`. The fog regions' cells, as the
+//! live renderer evolved them, are `fog-field.bin` (`render_wgpu::FogField`),
+//! so the snapshot draws the same wakes. Inline mesh streams are moved
 //! into packed binary mesh resources on the way (`pack_mesh_resources`), so
 //! geometry is binary and the descriptors are ones the renderer already
 //! accepts. `rusty-scene-render` draws a snapshot on a fresh renderer.
@@ -26,6 +28,7 @@ use serde::{Deserialize, Serialize};
 const METADATA: &str = "scene.json";
 const CHANGES: &str = "changes.json";
 const RESOURCES: &str = "resources";
+const FOG_FIELD: &str = "fog-field.bin";
 
 /// Where a snapshot came from and the state its baseline reaches.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -335,13 +338,15 @@ pub struct SceneSnapshotReport {
     pub write_ms: f64,
 }
 
-/// Writes the baseline `publications` (the renderer's changes among them) and
-/// `resources` (identity, bytes) to `path`, replacing any file there.
+/// Writes the baseline `publications` (the renderer's changes among them),
+/// `resources` (identity, bytes) and the fog regions' cells `fog_field` to
+/// `path`, replacing any file there.
 pub fn write_scene_snapshot<'a>(
     path: &Path,
     metadata: &SceneSnapshotMetadata,
     publications: &[RuntimePublication],
     resources: impl IntoIterator<Item = (&'a str, &'a [u8])>,
+    fog_field: &render_wgpu::FogField,
 ) -> Result<SceneSnapshotReport, String> {
     let started = Instant::now();
     let mut changes: Vec<SceneSnapshotChange> = publications
@@ -379,6 +384,14 @@ pub fn write_scene_snapshot<'a>(
             body: Body::Bytes(&changes_json),
         },
     ];
+    let fog_field = (!fog_field.is_empty()).then(|| fog_field.to_bytes());
+    if let Some(bytes) = &fog_field {
+        entries.push(NewEntry {
+            path: FOG_FIELD.to_owned(),
+            bundle: None,
+            body: Body::Bytes(bytes),
+        });
+    }
     let mut all: BTreeMap<&str, &[u8]> = resources.into_iter().collect();
     all.extend(
         packed
@@ -491,6 +504,16 @@ impl SceneSnapshot {
             .iter()
             .map(SceneSnapshotChange::scene_change)
             .collect()
+    }
+
+    /// The fog regions' cells the live renderer had evolved, to seed the
+    /// renderer drawing the snapshot with; empty in a snapshot without.
+    pub fn fog_field(&self) -> Result<render_wgpu::FogField, String> {
+        match self.container.get(FOG_FIELD) {
+            Ok(bytes) => render_wgpu::FogField::from_bytes(&bytes)
+                .ok_or_else(|| format!("{FOG_FIELD}: not a whole fog field")),
+            Err(_) => Ok(render_wgpu::FogField::default()),
+        }
     }
 
     pub fn resource_count(&self) -> usize {
@@ -615,18 +638,33 @@ mod tests {
             options: render_wgpu::RendererOptions::default().into(),
             player_settings: Default::default(),
         };
+        // A region's cells as a live renderer evolved them.
+        let field = render_wgpu::FogField {
+            regions: vec![render_wgpu::FogFieldRegion {
+                id: 4,
+                center: [1.0, 2.0, -3.0],
+                half_extents: [1.5, 1.0, 0.5],
+                yaw_degrees: 30.0,
+                cells: [3, 2, 2],
+                data: (0..12)
+                    .map(|cell| [cell as f32, 0.5, -0.25, 0.1 * cell as f32])
+                    .collect(),
+            }],
+        };
         let path = directory.path().join("scene.rscene");
         let report = write_scene_snapshot(
             &path,
             &metadata,
             &[RuntimePublication::Frame(frame)],
             [("texture-resource/abc", b"png".as_slice())],
+            &field,
         )
         .unwrap();
         assert_eq!((report.resources, report.packed_meshes), (2, 1));
 
         let snapshot = SceneSnapshot::open(&path).unwrap();
         assert_eq!(snapshot.metadata.state.step, 150);
+        assert_eq!(snapshot.fog_field().unwrap(), field);
         assert_eq!(snapshot.resource_count(), 2);
         assert_eq!(
             snapshot.bytes("texture-resource/abc").unwrap().as_ref(),
@@ -653,7 +691,7 @@ mod tests {
         let mut faint = metadata.clone();
         faint.options.ambient_occlusion.strength = -1.0;
         for metadata in [scaled, faint] {
-            write_scene_snapshot(&path, &metadata, &[], []).unwrap();
+            write_scene_snapshot(&path, &metadata, &[], [], &Default::default()).unwrap();
             let error = SceneSnapshot::open(&path).err().expect("refused");
             assert!(error.contains("not valid renderer settings"), "{error}");
         }

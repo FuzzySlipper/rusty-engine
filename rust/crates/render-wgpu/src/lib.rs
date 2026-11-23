@@ -147,6 +147,7 @@ pub struct ScatterUploadReadout {
     pub apply_microseconds: u64,
     pub row_bytes: u64,
 }
+pub use fog_regions::{FogField, FogFieldRegion};
 pub use ghost::GhostPlateReadout;
 pub use gpu::{AdapterSummary, ComputeLimits, Gpu, GpuError};
 pub use inspection::InspectionView;
@@ -1528,6 +1529,22 @@ impl Renderer {
         self.tables.volumetric_fog.density > 0.0
             || !self.tables.fog_volumes.is_empty()
             || !self.tables.fog_regions.is_empty()
+    }
+
+    /// The fog regions' cells as this renderer evolved them, waiting for
+    /// the GPU: what a renderer built afresh from the same scene (a
+    /// rebaseline, a snapshot drawn offline) is seeded with
+    /// ([`Self::seed_fog_field`]) so it shows the same wakes. Empty
+    /// without regions laid out.
+    pub fn read_fog_field(&self) -> FogField {
+        self.volumetric_fog.read_field(&self.gpu)
+    }
+
+    /// Starts each fog region `field` holds cells for, at the same place
+    /// with the same cells, from them instead of at rest, when it is first
+    /// laid out.
+    pub fn seed_fog_field(&mut self, field: FogField) {
+        self.volumetric_fog.seed_field(field);
     }
 
     pub fn set_indirect_light(&mut self, indirect_light: Option<IndirectLightDescriptor>) {

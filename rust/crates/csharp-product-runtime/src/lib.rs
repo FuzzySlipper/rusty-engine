@@ -2707,7 +2707,20 @@ impl CsharpProductRuntime {
             .services
             .renderer_resources()
             .map(|resource| (resource.identity(), resource.bytes()));
-        scene_snapshot::write_scene_snapshot(Path::new(path), &metadata, &baseline, resources)
+        // The fog regions' cells are the live renderer's realization, not
+        // the committed scene's: the snapshot carries them as they are.
+        let fog_field = self
+            .frame_output
+            .as_ref()
+            .map(|frames| frames.driver().fog_field())
+            .unwrap_or_default();
+        scene_snapshot::write_scene_snapshot(
+            Path::new(path),
+            &metadata,
+            &baseline,
+            resources,
+            &fog_field,
+        )
     }
 
     /// Snapshots the view into `<directory>/scene.rscene` and starts

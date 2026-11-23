@@ -505,6 +505,8 @@ fn run() -> Result<(), String> {
         entities: world.entity_world_positions(),
         state: snapshot.metadata.state.into(),
     });
+    // The fog regions start from the cells the live renderer had evolved.
+    driver.seed_fog_field(snapshot.fog_field()?);
     // A snapshot's deferred textures and meshes were drawn when it was
     // written: the frames wait for them.
     driver.settle_prepared();

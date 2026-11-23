@@ -863,6 +863,18 @@ impl VolumetricFog {
         self.regions.submitted();
     }
 
+    /// The fog regions' cells as the GPU holds them now
+    /// ([`crate::Renderer::read_fog_field`]).
+    pub fn read_field(&self, gpu: &Gpu) -> crate::FogField {
+        self.regions.read(gpu, &self.rows)
+    }
+
+    /// Starts the regions `field` fits from its cells when they are next
+    /// laid out.
+    pub fn seed_field(&mut self, field: crate::FogField) {
+        self.regions.seed(field);
+    }
+
     /// The light and integrate passes', and the fog regions' step.
     pub fn timings(&self) -> [GpuPassTiming; 2] {
         [

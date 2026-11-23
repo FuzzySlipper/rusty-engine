@@ -12,6 +12,12 @@
 //! anew, or moved, turned, resized or recelled, starts at rest (the current
 //! and density 1), written when it is laid out whatever frame sees it first,
 //! so what output frames draw does not depend on readings between them.
+//!
+//! The cells are not in the committed scene, so a renderer built afresh from
+//! it (a rebaseline, a snapshot drawn offline) would start every region at
+//! rest. Instead the cells cross with the scene as a [`FogField`]: read from
+//! the renderer that evolved them and seeded into the fresh one, whose
+//! regions that match one in the field start from its cells.
 
 use std::collections::BTreeMap;
 
@@ -60,6 +66,99 @@ impl Placed {
     }
 }
 
+/// The fog regions' cells as a renderer evolved them
+/// ([`crate::Renderer::read_fog_field`]), to seed a fresh renderer with
+/// ([`crate::Renderer::seed_fog_field`]).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct FogField {
+    pub regions: Vec<FogFieldRegion>,
+}
+
+/// One region's cells: its id and the place and cells they mean, and each
+/// cell's flow (world metres per second) and density factor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FogFieldRegion {
+    pub id: u32,
+    pub center: [f32; 3],
+    pub half_extents: [f32; 3],
+    pub yaw_degrees: f32,
+    pub cells: [u32; 3],
+    pub data: Vec<[f32; 4]>,
+}
+
+impl FogFieldRegion {
+    /// Whether these cells mean the places `placed`'s do.
+    fn fits(&self, placed: &Placed) -> bool {
+        self.id == placed.id
+            && self.cells == placed.cells
+            && self.center == placed.region.center
+            && self.half_extents == placed.region.half_extents
+            && self.yaw_degrees == placed.region.yaw_degrees
+            && self.data.len() == placed.count() as usize
+    }
+}
+
+/// The words of a field's region header: id, cells (3), centre (3), half
+/// extents (3), yaw.
+const FIELD_HEADER_WORDS: usize = 11;
+
+impl FogField {
+    pub fn is_empty(&self) -> bool {
+        self.regions.is_empty()
+    }
+
+    /// Little-endian words: the region count, then per region its header
+    /// and its cells, four floats each.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut words: Vec<u32> = vec![self.regions.len() as u32];
+        for region in &self.regions {
+            words.push(region.id);
+            words.extend(region.cells);
+            words.extend(region.center.map(f32::to_bits));
+            words.extend(region.half_extents.map(f32::to_bits));
+            words.push(region.yaw_degrees.to_bits());
+            words.extend(region.data.iter().flatten().map(|value| value.to_bits()));
+        }
+        words.iter().flat_map(|word| word.to_le_bytes()).collect()
+    }
+
+    /// A field from [`Self::to_bytes`]; `None` when the bytes do not hold
+    /// one whole.
+    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
+        let (words, tail) = bytes.as_chunks::<4>();
+        if !tail.is_empty() {
+            return None;
+        }
+        let words: Vec<u32> = words.iter().map(|word| u32::from_le_bytes(*word)).collect();
+        let (&count, mut rest) = words.split_first()?;
+        let float = f32::from_bits;
+        let mut regions = Vec::new();
+        for _ in 0..count {
+            let header = rest.get(..FIELD_HEADER_WORDS)?;
+            let cells = [header[1], header[2], header[3]];
+            let count = cells
+                .iter()
+                .try_fold(1usize, |all, &n| all.checked_mul(n as usize))?;
+            let data = rest.get(FIELD_HEADER_WORDS..FIELD_HEADER_WORDS + 4 * count)?;
+            regions.push(FogFieldRegion {
+                id: header[0],
+                cells,
+                center: [float(header[4]), float(header[5]), float(header[6])],
+                half_extents: [float(header[7]), float(header[8]), float(header[9])],
+                yaw_degrees: float(header[10]),
+                data: data
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|cell| cell.map(float))
+                    .collect(),
+            });
+            rest = &rest[FIELD_HEADER_WORDS + 4 * count..];
+        }
+        rest.is_empty().then_some(Self { regions })
+    }
+}
+
 /// The regions laid out in id order, each while the scene's cells still
 /// hold it.
 pub(crate) fn lay_out(regions: &BTreeMap<u32, FogRegionDescriptor>) -> Vec<Placed> {
@@ -97,6 +196,9 @@ pub(crate) struct FogRegions {
     placed: Vec<Placed>,
     /// The presentation time the cells were last moved to.
     moved_to: Option<f64>,
+    /// Cells a fresh renderer starts the matching regions from, when they
+    /// are first laid out.
+    seed: FogField,
     timer: Option<PassTimer>,
 }
 
@@ -173,6 +275,7 @@ impl FogRegions {
             group: None,
             placed: Vec::new(),
             moved_to: None,
+            seed: FogField::default(),
             timer: PassTimer::new(gpu, PASS),
         }
     }
@@ -194,7 +297,7 @@ impl FogRegions {
     /// Takes `placed` (some regions) as the regions' layout in `rows`, whose
     /// cells start at `first_cell_byte` and hold `capacity` cells (some): a
     /// region new to its cells, or every region when `rows` is new, starts
-    /// at rest.
+    /// from the seed's cells that fit it, or else at rest.
     pub fn lay_out(
         &mut self,
         gpu: &Gpu,
@@ -249,15 +352,80 @@ impl FogRegions {
             if self.placed.iter().any(|known| known.same_cells(region)) {
                 continue;
             }
+            let offset = first_cell_byte + u64::from(region.first) * CELL_BYTES;
+            if let Some(seeded) = self.seed.regions.iter().find(|seeded| seeded.fits(region)) {
+                gpu.queue
+                    .write_buffer(rows, offset, bytemuck::cast_slice(&seeded.data));
+                continue;
+            }
             let [x, y, z] = region.region.current;
             let rest: Vec<[f32; 4]> = vec![[x, y, z, 1.0]; region.count() as usize];
-            gpu.queue.write_buffer(
-                rows,
-                first_cell_byte + u64::from(region.first) * CELL_BYTES,
-                bytemuck::cast_slice(&rest),
-            );
+            gpu.queue
+                .write_buffer(rows, offset, bytemuck::cast_slice(&rest));
         }
+        self.seed.regions.clear();
         self.placed = placed;
+    }
+
+    /// Starts the regions `field` fits, when they are next laid out, from
+    /// its cells.
+    pub fn seed(&mut self, field: FogField) {
+        self.seed = field;
+    }
+
+    /// The laid-out regions' cells in `rows` as the GPU holds them now,
+    /// waiting for them; or, before they are laid out, the seed still
+    /// waiting to be.
+    pub fn read(&self, gpu: &Gpu, rows: &wgpu::Buffer) -> FogField {
+        let cells: u32 = self.placed.iter().map(Placed::count).sum();
+        if cells == 0 {
+            return self.seed.clone();
+        }
+        let bytes = u64::from(cells) * CELL_BYTES;
+        let staging = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("render-wgpu fog field readback"),
+            size: bytes,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = gpu
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("render-wgpu fog field readback"),
+            });
+        encoder.copy_buffer_to_buffer(rows, self.first_cell_byte, &staging, 0, bytes);
+        gpu.queue.submit([encoder.finish()]);
+        let slice = staging.slice(..);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = sender.send(result);
+        });
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        if !matches!(receiver.recv(), Ok(Ok(()))) {
+            return FogField::default();
+        }
+        let Ok(mapped) = slice.get_mapped_range() else {
+            return FogField::default();
+        };
+        let all: &[[f32; 4]] = bytemuck::cast_slice(&mapped);
+        let regions = self
+            .placed
+            .iter()
+            .map(|placed| {
+                let first = placed.first as usize;
+                FogFieldRegion {
+                    id: placed.id,
+                    center: placed.region.center,
+                    half_extents: placed.region.half_extents,
+                    yaw_degrees: placed.region.yaw_degrees,
+                    cells: placed.cells,
+                    data: all[first..first + placed.count() as usize].to_vec(),
+                }
+            })
+            .collect();
+        drop(mapped);
+        staging.unmap();
+        FogField { regions }
     }
 
     /// Moves the cells on to `time` by its distance from the last time

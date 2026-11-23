@@ -2002,10 +2002,16 @@ engine.CameraView.RemoveFogRegion(new(1));
   and cleared by the stirrers within reach. A region placed anew, or moved,
   turned, resized or given a new cell size, starts at rest; changing its
   density, colours, noise, current or settle time keeps its cells. A
-  reading (a tool's capture, a snapshot render) draws the cells as they are
-  and moves nothing, so the output's frames are the same with or without
-  one. The cells cost 16 bytes each, twice (the step reads a copy); the
-  scene's limit is 8 MiB.
+  reading (a tool's capture) draws the cells as they are and moves nothing,
+  so the output's frames are the same with or without one. The cells cost
+  16 bytes each, twice (the step reads a copy); the scene's limit is 8 MiB.
+- **Snapshots and new renderers.** The cells are the renderer's, not part of
+  the committed scene, so they cross with it: `engine.renderer.snapshot`
+  writes them as the live renderer evolved them (`fog-field.bin`), and
+  `rusty-scene-render` starts the snapshot's regions from them, so it draws
+  the same wakes; a renderer that replaces another (a rebaseline) starts
+  from the old one's. A region at another place or with other cells than
+  the carried ones starts at rest.
 - **Cost.** The step costs per cell and stirrer and does not follow the
   froxel grid or the output size; the light pass reads a region's cells
   only in the froxels inside its box, which then cost about as a box fog

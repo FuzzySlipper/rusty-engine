@@ -1,14 +1,19 @@
 //! Fog regions (`fog_regions.rs`, `fog_region.wgsl`, `volumetric_fog.wgsl`):
 //! a stirrer crossing a dense region clears a hole that trails behind it
 //! and fills back in once it has gone; readings between output frames leave
-//! what the output draws as it was; the region and its step are reported.
+//! what the output draws as it was; the region and its step are reported; a
+//! renderer built afresh from the same scene (a snapshot drawn offline, a
+//! rebaseline) and seeded with the evolved cells shows the same wake.
 //! Same harness as
 //! `tests/volumetric_fog.rs`.
 
 mod support;
 
 use render_model::*;
-use render_wgpu::RendererOptions;
+use render_wgpu::{
+    CommittedCall, FogField, NoResources, OffscreenTarget, Renderer, RendererOptions, SceneChange,
+    SceneDriver, SceneState,
+};
 use support::*;
 
 /// Output frames a second.
@@ -241,4 +246,120 @@ fn readings_between_output_frames_do_not_move_a_regions_cells() {
             "frame {frame}: a reading moved the region's cells"
         );
     }
+}
+
+/// The wake's darkest density factor in `field`'s one region.
+fn emptiest(field: &FogField) -> f32 {
+    field.regions[0]
+        .data
+        .iter()
+        .map(|cell| cell[3])
+        .fold(f32::INFINITY, f32::min)
+}
+
+#[test]
+fn a_fresh_renderer_seeded_with_the_evolved_cells_shows_the_same_wake() {
+    let mut harness = scene();
+    if harness.renderer.settings_readout().volumetric_fog.is_some() {
+        return;
+    }
+    harness.apply(vec![region()]);
+    let (_, time) = run(&mut harness, 1.0 / RATE, 2, None);
+    // (The pictures themselves differ by the fog's temporal filtering: a
+    // fresh renderer's first frame samples cell centres with no history.)
+    let (_, time) = run(&mut harness, time, 3, Some(-6.0));
+    let field = harness.renderer.read_fog_field();
+    assert_eq!(field.regions.len(), 1);
+    assert!(
+        emptiest(&field) < 0.2,
+        "the live wake is in the cells: {}",
+        emptiest(&field)
+    );
+    // A renderer built from the retained scene, as a snapshot is drawn, and
+    // one more frame at the time the live one reached: unseeded, every cell
+    // is at rest and the wake is gone; seeded, the cells are the live ones
+    // and the wake is where it was.
+    let fresh = |seed: Option<FogField>| {
+        let mut renderer = Renderer::new(&harness.gpu, harness.renderer.options());
+        let issues = renderer.apply(&harness.world.snapshot().frame, &harness.resources);
+        assert!(issues.is_empty(), "{issues:?}");
+        if let Some(seed) = seed {
+            renderer.seed_fog_field(seed);
+        }
+        renderer.set_presentation_time(time);
+        renderer.render_offscreen(&camera([0.0, 1.5, 0.0], 0.0, 0.0), &harness.target);
+        (
+            renderer.read_fog_field(),
+            harness.target.read_rgba(&harness.gpu),
+        )
+    };
+    let (rest, unseeded) = fresh(None);
+    assert_eq!(emptiest(&rest), 1.0, "unseeded, every cell is at rest");
+    let (seeded_field, seeded) = fresh(Some(field.clone()));
+    assert_eq!(seeded_field, field, "seeded, the cells are the live ones");
+    keep("region-fresh-unseeded", &unseeded);
+    keep("region-fresh-seeded", &seeded);
+    assert!(
+        at(&seeded, -2.0) < at(&unseeded, -2.0) - 8.0,
+        "the seeded renderer draws the wake: {:.1} against {:.1} at rest",
+        at(&seeded, -2.0),
+        at(&unseeded, -2.0)
+    );
+    // A seed for a region the scene does not hold at that place starts
+    // nothing: a moved region starts at rest.
+    let mut moved = field;
+    moved.regions[0].center[0] += 1.0;
+    assert_eq!(emptiest(&fresh(Some(moved)).0), 1.0);
+}
+
+#[test]
+fn a_rebaseline_keeps_the_regions_cells() {
+    let gpu = render_wgpu::Gpu::headless().expect("a headless adapter");
+    let driver = SceneDriver::new(gpu.clone(), options());
+    if driver.settings_readout().volumetric_fog.is_some() {
+        return;
+    }
+    let state = |step: u64| SceneState {
+        elapsed_seconds: step as f64 / RATE,
+        world_revision: step,
+        step,
+        held: false,
+        lead: None,
+        preparation_batch: 0,
+    };
+    let call = |ops: Vec<RenderDiff>, step| CommittedCall {
+        changes: vec![
+            SceneChange::Frame(RenderFrameDiff {
+                publication: None,
+                ops,
+            }),
+            SceneChange::ViewComposition(composition_of(camera([0.0, 1.5, 0.0], 0.0, 0.0))),
+        ],
+        resources: Box::new(NoResources),
+        entities: Default::default(),
+        state: state(step),
+    };
+    let target = OffscreenTarget::new(&gpu, WIDTH, HEIGHT, 1);
+    driver.apply(call(vec![region()], 0));
+    for frame in 0..48u32 {
+        let time = f64::from(frame) / RATE;
+        driver.apply(call(
+            vec![stirrer(-6.0 + 4.0 * time as f32)],
+            u64::from(frame),
+        ));
+        driver.draw(|renderer, _| {
+            renderer.set_presentation_time(time);
+            renderer.render_view_composition(&target, time);
+        });
+    }
+    let field = driver.fog_field();
+    assert!(emptiest(&field) < 0.2, "the wake is in the cells");
+    // The baseline holds the region but no stirrer: a new renderer, built
+    // from it, starts from the old one's cells.
+    driver.rebaseline(call(vec![region()], 48));
+    driver.draw(|renderer, _| {
+        renderer.set_presentation_time(48.0 / RATE);
+        renderer.render_view_composition(&target, 48.0 / RATE);
+    });
+    assert_eq!(driver.fog_field(), field);
 }
