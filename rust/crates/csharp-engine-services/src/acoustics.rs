@@ -3,15 +3,26 @@
 //!
 //! A sound reaches a point the louder of two ways. Straight through, it falls
 //! off with distance and loses level and treble to the solid it crosses.
-//! Through open air (an [`AirSearch`] round the solid), it falls off with
-//! the path's length, unfiltered. The listener's space adds reverb by how
-//! enclosed it is. Entity boxes take no part.
+//! Through open air (a route over the session's air graph round the
+//! solid), it falls off with the path's length, unfiltered. The listener's
+//! space adds reverb by how enclosed it is. Entity boxes take no part.
 
-use engine_spatial::{AirReach, AirSearch, Enclosure, VoxelCollisionScene, ENCLOSURE_METRES};
+use std::sync::Arc;
+
+use engine_spatial::{AirGraph, AirRoute, Enclosure, VoxelCollisionScene, ENCLOSURE_METRES};
 use render_presentation::AudioRolloff;
 
 /// The collision a sound travels through.
 pub use engine_spatial::VoxelCollisionScene as Scene;
+
+/// The acoustic space playback hears through: a session's collision, its
+/// air graph, and how much reverb its spaces add.
+#[derive(Clone)]
+pub struct AcousticWorld {
+    pub scene: Arc<Scene>,
+    pub air: crate::air::AirReader,
+    pub reverb_level: f32,
+}
 
 /// Crossing any solid costs this much level.
 pub const OCCLUSION_DECIBELS: f32 = 6.0;
@@ -68,7 +79,38 @@ pub struct Arrival {
     /// The length of the path it takes.
     pub metres: f64,
     /// The open path, when it takes one.
-    pub around: Option<AirReach>,
+    pub around: Option<AroundPath>,
+}
+
+/// An open path round solid, as an arrival reads it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AroundPath {
+    pub metres: f64,
+    /// A point about three metres along it from the sound.
+    pub near_source: [f64; 3],
+    /// A point about three metres back along it from where it is heard:
+    /// the way it arrives.
+    pub near_point: [f64; 3],
+}
+
+impl AroundPath {
+    /// A route from the sound to the point.
+    fn from_sound(route: &AirRoute) -> Self {
+        Self {
+            metres: route.metres,
+            near_source: route.near_start(),
+            near_point: route.near_end(),
+        }
+    }
+
+    /// A route from the point to the sound.
+    fn to_sound(route: &AirRoute) -> Self {
+        Self {
+            metres: route.metres,
+            near_source: route.near_end(),
+            near_point: route.near_start(),
+        }
+    }
 }
 
 /// The level and cutoff left after crossing `solid_metres` of solid.
@@ -123,7 +165,7 @@ pub fn direct(scene: &VoxelCollisionScene, source: [f64; 3], point: [f64; 3]) ->
 /// and the open path to the point, if any.
 pub fn arrival(
     direct: &Direct,
-    around: Option<AirReach>,
+    around: Option<AroundPath>,
     max_distance: f32,
     rolloff: AudioRolloff,
 ) -> Arrival {
@@ -187,10 +229,11 @@ pub struct QueryOutcome {
 }
 
 /// How a sound made at `source` arrives at each of `points`, with the way
-/// it arrives from at each. An open-air search runs only when a point within
+/// it arrives from at each. A route over `air` runs only when a point within
 /// range is occluded.
 pub fn query(
     scene: &VoxelCollisionScene,
+    air: &AirGraph,
     source: [f64; 3],
     range: f32,
     rolloff: AudioRolloff,
@@ -212,37 +255,44 @@ pub fn query(
             }
         })
         .collect();
-    let mut rays: u32 = directs.iter().map(|direct| direct.rays).sum();
-    let occluded: Vec<[f64; 3]> = points
+    let rays: u32 = directs.iter().map(|direct| direct.rays).sum();
+    let occluded: Vec<usize> = directs
         .iter()
-        .zip(&directs)
+        .enumerate()
         .filter(|(_, direct)| direct.distance < f64::from(range) && direct.transmission < 1.0)
-        .map(|(point, _)| *point)
+        .map(|(index, _)| index)
         .collect();
-    let search =
-        (!occluded.is_empty()).then(|| AirSearch::run(scene, source, f64::from(range), &occluded));
-    let arrivals = points
+    let targets: Vec<[f64; 3]> = occluded.iter().map(|index| points[*index]).collect();
+    let routes =
+        (!targets.is_empty()).then(|| air.route(scene, source, &targets, f64::from(range)));
+    let mut around = vec![None; points.len()];
+    if let Some(routes) = &routes {
+        for (index, route) in occluded.iter().zip(&routes.routes) {
+            around[*index] = route.as_ref().ok().map(AroundPath::from_sound);
+        }
+    }
+    let arrivals = directs
         .iter()
-        .zip(&directs)
-        .map(|(point, direct)| {
-            let around = (direct.transmission < 1.0)
-                .then(|| search.as_ref()?.reach(scene, *point))
-                .flatten();
+        .zip(around)
+        .map(|(direct, around)| {
             let arrival = arrival(direct, around, range, rolloff);
-            let from = arrival.around.map_or(source, |reach| reach.near_point);
+            let from = arrival.around.map_or(source, |path| path.near_point);
             (arrival, from)
         })
         .collect();
-    if let Some(search) = &search {
-        rays = rays.saturating_add(search.segments);
-    }
     QueryOutcome {
         arrivals,
-        cells_searched: search
+        cells_searched: routes
             .as_ref()
-            .map_or(0, |search| search.settled_cells() as u32),
+            .map_or(0, |routes| routes.ports_settled + routes.cells_marched),
         rays_cast: rays,
-        truncated: search.as_ref().is_some_and(|search| search.truncated),
+        truncated: routes.as_ref().is_some_and(|routes| {
+            routes.incomplete
+                || routes
+                    .routes
+                    .iter()
+                    .any(|route| route == &Err(engine_spatial::AirRouteFailure::NotBuilt))
+        }),
     }
 }
 
@@ -266,59 +316,91 @@ pub struct Sounding {
     pub rolloff: AudioRolloff,
 }
 
-/// A listener search is rebuilt at most this often while the listener moves
-/// or the scene changes.
-const LISTENER_SEARCH_SECONDS: f64 = 0.25;
-/// Searches cover ranges in steps of this many metres, so small range
-/// changes reuse one.
-const SEARCH_RANGE_STEP: f64 = 8.0;
-
-/// The listener's side of playback acoustics: one open-air search from the
-/// listener, shared by every occluded sound since a path is as long either
-/// way, and the listener's space. The search runs on its own worker thread,
-/// off the update; sounds are heard by the latest one finished.
+/// The listener's side of playback acoustics: routes from the listener to
+/// its occluded sounds over the session's air graph, found on a worker
+/// thread off the update and kept while nothing they were found from
+/// changes, and the listener's space. Sounds are heard by the latest routes
+/// found.
 #[derive(Default)]
 pub struct ListenerAcoustics {
-    search: Option<ListenerSearch>,
-    worker: Option<SearchWorker>,
-    /// A search was sent to the worker and has not come back.
-    searching: bool,
+    routes: Option<Routes>,
+    worker: Option<RouteWorker>,
+    /// Routes were asked of the worker and have not come back.
+    routing: bool,
     space: Option<(SceneKey, [i64; 3], Enclosure)>,
 }
 
-/// The listener search's worker thread: it takes a search, runs it and
-/// hands it back, and ends when its owner drops.
-struct SearchWorker {
-    jobs: Option<std::sync::mpsc::Sender<SearchJob>>,
-    done: std::sync::mpsc::Receiver<ListenerSearch>,
+/// Routes from the listener, by each occluded sound's air cell and range.
+struct Routes {
+    key: RouteKey,
+    around: std::collections::HashMap<([i64; 3], u32), Option<AroundPath>>,
+}
+
+/// What a set of listener routes was found from: the scene and graph, and
+/// the air cells of the listener and of each occluded sound.
+#[derive(Debug, Clone, PartialEq)]
+struct RouteKey {
+    scene: SceneKey,
+    air: u64,
+    listener: [i64; 3],
+    sounds: Vec<([i64; 3], u32)>,
+}
+
+struct RouteJob {
+    key: RouteKey,
+    scene: Arc<VoxelCollisionScene>,
+    air: Arc<AirGraph>,
+    listener: [f64; 3],
+    targets: Vec<[f64; 3]>,
+}
+
+impl RouteJob {
+    fn run(self) -> Routes {
+        let range = self
+            .key
+            .sounds
+            .iter()
+            .map(|(_, range)| f64::from(f32::from_bits(*range)))
+            .fold(0.0, f64::max);
+        let routes = self
+            .air
+            .route(&self.scene, self.listener, &self.targets, range);
+        Routes {
+            around: self
+                .key
+                .sounds
+                .iter()
+                .copied()
+                .zip(
+                    routes
+                        .routes
+                        .iter()
+                        .map(|route| route.as_ref().ok().map(AroundPath::to_sound)),
+                )
+                .collect(),
+            key: self.key,
+        }
+    }
+}
+
+/// The listener routes' worker thread: it takes a job, routes it and hands
+/// the routes back, and ends when its owner drops.
+struct RouteWorker {
+    jobs: Option<std::sync::mpsc::Sender<RouteJob>>,
+    done: std::sync::mpsc::Receiver<Routes>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
-struct SearchJob {
-    scene: std::sync::Arc<VoxelCollisionScene>,
-    root: [f64; 3],
-    range: f64,
-    at: f64,
-}
-
-impl SearchWorker {
+impl RouteWorker {
     fn start() -> Option<Self> {
-        let (jobs, inbox) = std::sync::mpsc::channel::<SearchJob>();
+        let (jobs, inbox) = std::sync::mpsc::channel::<RouteJob>();
         let (outbox, done) = std::sync::mpsc::channel();
         let thread = std::thread::Builder::new()
             .name("rusty-audio-acoustics".to_owned())
             .spawn(move || {
                 crate::worker_priority::below_normal();
                 while let Ok(job) = inbox.recv() {
-                    let search = AirSearch::run(&job.scene, job.root, job.range, &[]);
-                    let finished = ListenerSearch {
-                        search,
-                        scene: SceneKey::of(&job.scene),
-                        cell: air_cell(job.root),
-                        range: job.range,
-                        at: job.at,
-                    };
-                    if outbox.send(finished).is_err() {
+                    if outbox.send(job.run()).is_err() {
                         break;
                     }
                 }
@@ -332,7 +414,7 @@ impl SearchWorker {
     }
 }
 
-impl Drop for SearchWorker {
+impl Drop for RouteWorker {
     fn drop(&mut self) {
         self.jobs = None;
         if let Some(thread) = self.thread.take() {
@@ -341,26 +423,49 @@ impl Drop for SearchWorker {
     }
 }
 
-struct ListenerSearch {
-    search: AirSearch,
-    scene: SceneKey,
-    cell: [i64; 3],
-    range: f64,
-    /// Seconds on the caller's clock when it ran.
-    at: f64,
-}
-
 /// One scene's collision as it stands: replaced scenes and edits differ.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct SceneKey(usize, u64, u64);
 
 impl SceneKey {
-    fn of(scene: &std::sync::Arc<VoxelCollisionScene>) -> Self {
+    fn of(scene: &Arc<VoxelCollisionScene>) -> Self {
         Self(
-            std::sync::Arc::as_ptr(scene) as usize,
+            Arc::as_ptr(scene) as usize,
             scene.projection_version(),
             scene.static_mesh_collision_revision(),
         )
+    }
+}
+
+impl ListenerAcoustics {
+    /// Whether routes are being found on the worker.
+    pub fn routing(&mut self) -> bool {
+        self.collect_routes();
+        self.routing
+    }
+
+    fn collect_routes(&mut self) {
+        let Some(worker) = &self.worker else {
+            return;
+        };
+        while let Ok(routes) = worker.done.try_recv() {
+            self.routes = Some(routes);
+            self.routing = false;
+        }
+    }
+
+    fn start_routes(&mut self, job: RouteJob) {
+        if self.worker.is_none() {
+            self.worker = RouteWorker::start();
+        }
+        match self.worker.as_ref().and_then(|worker| worker.jobs.as_ref()) {
+            Some(jobs) => match jobs.send(job) {
+                Ok(()) => self.routing = true,
+                Err(std::sync::mpsc::SendError(job)) => self.routes = Some(job.run()),
+            },
+            // No worker thread: route here.
+            None => self.routes = Some(job.run()),
+        }
     }
 }
 
@@ -369,7 +474,7 @@ impl ListenerAcoustics {
     /// listener changes cell or the scene changes.
     pub fn space(
         &mut self,
-        scene: &std::sync::Arc<VoxelCollisionScene>,
+        scene: &Arc<VoxelCollisionScene>,
         listener: [f32; 3],
         level: f32,
     ) -> (f32, f64) {
@@ -387,66 +492,79 @@ impl ListenerAcoustics {
         space_reverb(enclosure, level)
     }
 
-    /// How each of `sounds` is heard at `listener`. `now` is seconds on any
-    /// steady clock; the listener's search is rebuilt at most every
-    /// quarter second as the listener moves.
+    /// How each of `sounds` is heard at `listener`: straight, or round
+    /// solid by the latest routes found over `air`.
     pub fn hear(
         &mut self,
-        scene: &std::sync::Arc<VoxelCollisionScene>,
+        scene: &Arc<VoxelCollisionScene>,
+        air: &Arc<AirGraph>,
         listener: [f32; 3],
         sounds: &[Sounding],
-        now: f64,
     ) -> Vec<Heard> {
         let at = widen(listener);
-        self.collect_search();
-
         let directs: Vec<Direct> = sounds
             .iter()
             .map(|sound| direct(scene, widen(sound.position), at))
             .collect();
-        let range = sounds
+        let occluded: Vec<usize> = directs
             .iter()
-            .zip(&directs)
+            .enumerate()
             .filter(|(_, direct)| direct.transmission < 1.0)
-            .map(|(sound, _)| f64::from(sound.max_distance))
-            .fold(0.0, f64::max);
-        if range > 0.0 {
-            let range = (range / SEARCH_RANGE_STEP).ceil() * SEARCH_RANGE_STEP;
-            let key = SceneKey::of(scene);
-            let cell = air_cell(at);
-            let stale = match &self.search {
-                None => true,
-                Some(held) => {
-                    held.range < range
-                        || ((held.scene != key || held.cell != cell)
-                            && now - held.at >= LISTENER_SEARCH_SECONDS)
-                }
+            .map(|(index, _)| index)
+            .collect();
+        self.collect_routes();
+        let mut around_by_sound = vec![None; sounds.len()];
+        if !occluded.is_empty() {
+            let sound_keys: Vec<([i64; 3], u32)> = occluded
+                .iter()
+                .map(|index| {
+                    (
+                        air_cell(widen(sounds[*index].position)),
+                        sounds[*index].max_distance.to_bits(),
+                    )
+                })
+                .collect();
+            let key = RouteKey {
+                scene: SceneKey::of(scene),
+                air: air.revision(),
+                listener: air_cell(at),
+                sounds: sound_keys.clone(),
             };
-            if stale && !self.searching {
-                self.start_search(scene, at, range, now);
+            let current = self.routes.as_ref().is_some_and(|routes| routes.key == key);
+            if !current && !self.routing {
+                self.start_routes(RouteJob {
+                    key,
+                    scene: Arc::clone(scene),
+                    air: Arc::clone(air),
+                    listener: at,
+                    targets: occluded
+                        .iter()
+                        .map(|index| widen(sounds[*index].position))
+                        .collect(),
+                });
+            }
+            if let Some(routes) = &self.routes {
+                for (index, sound_key) in occluded.iter().zip(sound_keys) {
+                    around_by_sound[*index] = routes.around.get(&sound_key).copied().flatten();
+                }
             }
         }
         sounds
             .iter()
             .zip(&directs)
-            .map(|(sound, direct)| {
-                let around = (direct.transmission < 1.0)
-                    .then(|| {
-                        let search = &self.search.as_ref()?.search;
-                        search.reach(scene, widen(sound.position))
-                    })
-                    .flatten();
+            .zip(around_by_sound)
+            .map(|((sound, direct), around)| {
                 let arrival = arrival(direct, around, sound.max_distance, sound.rolloff);
                 match (arrival.path, arrival.around) {
-                    (ArrivalPath::Around, Some(reach)) => {
-                        let leaves = sub(reach.near_root, at);
+                    (ArrivalPath::Around, Some(path)) => {
+                        let leaves = sub(path.near_point, at);
                         let leaves = if length(leaves) > 1e-6 {
                             leaves
                         } else {
                             sub(widen(sound.position), at)
                         };
                         let size = length(leaves).max(1e-9);
-                        let heard_at = add(at, leaves.map(|value| value / size * reach.metres));
+                        let heard_at = add(at, leaves.map(|value| value / size * path.metres));
                         Heard {
                             heard_at: Some(heard_at.map(|value| value as f32)),
                             transmission: 1.0,
@@ -469,61 +587,6 @@ impl ListenerAcoustics {
                 }
             })
             .collect()
-    }
-}
-
-impl ListenerAcoustics {
-    /// Whether a listener search is running on the worker.
-    pub fn searching(&mut self) -> bool {
-        self.collect_search();
-        self.searching
-    }
-
-    /// Cells the latest finished listener search settled.
-    pub fn searched_cells(&self) -> Option<usize> {
-        self.search.as_ref().map(|held| held.search.settled_cells())
-    }
-
-    fn collect_search(&mut self) {
-        let Some(worker) = &self.worker else {
-            return;
-        };
-        while let Ok(finished) = worker.done.try_recv() {
-            self.search = Some(finished);
-            self.searching = false;
-        }
-    }
-
-    fn start_search(
-        &mut self,
-        scene: &std::sync::Arc<VoxelCollisionScene>,
-        root: [f64; 3],
-        range: f64,
-        now: f64,
-    ) {
-        if self.worker.is_none() {
-            self.worker = SearchWorker::start();
-        }
-        let job = SearchJob {
-            scene: std::sync::Arc::clone(scene),
-            root,
-            range,
-            at: now,
-        };
-        match self.worker.as_ref().and_then(|worker| worker.jobs.as_ref()) {
-            Some(jobs) if jobs.send(job).is_ok() => self.searching = true,
-            // No worker thread: search here.
-            _ => {
-                let search = AirSearch::run(scene, root, range, &[]);
-                self.search = Some(ListenerSearch {
-                    search,
-                    scene: SceneKey::of(scene),
-                    cell: air_cell(root),
-                    range,
-                    at: now,
-                });
-            }
-        }
     }
 }
 

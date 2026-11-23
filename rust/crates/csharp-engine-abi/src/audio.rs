@@ -414,9 +414,10 @@ pub struct NativeAudioArrival {
 }
 
 /// Borrowed query result: `arrivals` matches the request's points in order
-/// and stays valid until the next call on the same context. The open-air
-/// search settled `cells_searched` cells; `rays_cast` counts straight rays
-/// and search segments; `truncated` says the search stopped at its cap.
+/// and stays valid until the next call on the same context. The route
+/// round solid settled `cells_searched` ports and cells of the session's air
+/// graph; `rays_cast` counts straight rays; `truncated` says the route met
+/// air not yet built into the graph, which reads as occluded.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct NativeAudioArrivalResult {

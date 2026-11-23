@@ -164,10 +164,9 @@ A sound reaches the listener the louder of two ways:
   a renderer culls them); overlapping or touching meshes count once, a line
   that only grazes a face or edge crosses no solid, and a sound inside rock
   counts the rock it starts in.
-- **Round, by open air.** A search over 1 m air cells joined where the
-  segment between their centres is clear finds the shortest open path; the
-  sound falls off with that path's length, unfiltered, and is heard from the
-  way the path leaves the listener.
+- **Round, by open air.** A route over the session's air graph (below)
+  finds the shortest open path; the sound falls off with that path's length,
+  unfiltered, and is heard from the way the path leaves the listener.
 
 The listener's space adds reverb on each bus by how enclosed it is: thirteen
 24 m rays (up, eight level bearings, four rising) set the send (the share
@@ -183,24 +182,52 @@ bus), `LowPassHz`, `Path` (`Silent`, `Open`, `Occluded` or `Around`),
 the source). The product owns what loud means: its range, any threshold, and
 what a listener does with what arrives.
 
+### The air graph
+
+Each spatial session that acoustics use keeps a graph of its open air on an
+Engine worker thread. Space is cut into 16 m chunks of 0.5 m cells: a cell is
+open when no collidable solid holds its centre, and two neighbouring cells
+join when nothing solid lies on the segment between their centres, so a door
+thinner than a cell still closes its doorway. A gap wider than 0.5 m always
+stays open; a slit narrower than that may close. Each chunk keeps its
+**pockets** (the air its joined cells connect) and its **ports**, where a
+pocket meets a chunk face, in tiles 4 m square. A chunk with no solid in it,
+or no air, is kept without cells. A route runs over ports between chunks and
+reads cells only in the chunks at its two ends.
+
+Chunks are built within 64 m of the listener and of recent query sources,
+nearest first, and dropped once all of those are 80 m away; at most 512
+chunks holding both air and solid are kept. A collision change (a voxel
+edit, static-mesh residency such as a door, built work or a heightfield
+tile) rebuilds the chunks it reaches. Until then, and where a chunk is not
+yet built, a sound reads as occluded; a query's `Truncated` says its route
+met unbuilt air. A static mesh is read as solid as above, so rock admitted
+only as surfaces facing the air reads as air deep inside wherever no line
+through a cell meets a surface: such pockets never join real air, but they
+cost build time. Admit rock as closed meshes.
+
 Limits and cost:
 
 - Playback refreshes acoustics ten times a second for the 32 nearest audible
   sounds, and for a new sound in the call that starts it; changes glide over
-  100 ms. One open-air search from the listener serves every occluded sound
-  and is rebuilt at most four times a second as the listener moves or the
-  collision changes.
-- An open-air search settles at most 4096 cells and follows paths no longer
-  than the range; a query's readout reports `CellsSearched`, `RaysCast` and
-  `Truncated`. A query takes at most 64 points; it searches only when a point
-  in range is occluded. There is no per-update query limit.
-- The listener's search runs on its own worker thread; the update only casts
-  each sound's straight rays and looks its path up. In a 96 × 24 × 96 m
-  cave on den-agents (busy, release), a refresh costs about 2–4 µs per
-  occluded sound with voxel rock and 8–13 µs with static-mesh rock, and the
-  worker's search 2.5–5 ms. A query costs a few microseconds when its
-  points are in the open, and 2–5 ms, on the calling update, when it must
-  search round rock to them.
+  100 ms. Routes from the listener to its occluded sounds are found on a
+  worker thread whenever the listener, an occluded sound or the graph moves
+  on; the update casts each sound's straight rays and reads the latest
+  routes.
+- A query routes on the calling update. It takes at most 64 points and
+  routes only when a point in range is occluded; its readout reports
+  `CellsSearched` (ports and cells the route settled), `RaysCast` and
+  `Truncated`. There is no per-update query limit.
+- In a 96 × 24 × 96 m cave, measured on a quiet Ryzen 7 3700X (release):
+  a query to one occluded point costs about 70 µs on the update and one to
+  eight about 0.2–0.3 ms; a refresh costs about 4 µs per occluded sound with
+  voxel rock and 13 µs with static-mesh rock, and the listener's routes
+  about 0.5 ms on their worker. The graph round the listener (428 chunks, 119
+  holding air and solid, about 60 KB each, 7 MB in all) builds in about a
+  second on its worker: 4–6 ms for a chunk holding air and solid, at most
+  about 27 ms, and 1.5 ms for an open one. A door rebuilds 2 chunks and
+  shows in 13–23 ms; a 2 m voxel edit rebuilds 8–12 chunks and shows in
+  about 85 ms.
 
 Kira realizes the filtering, sends and reverb for both outputs: the device,
 and the stream the viewing page plays, so both hear the same mix.

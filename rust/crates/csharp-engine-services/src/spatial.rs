@@ -1619,6 +1619,9 @@ pub(crate) struct SpatialCollisionSource {
     /// services that resolve world positions into its local frame (a
     /// backdrop's anchor).
     origins: Rc<RefCell<BTreeMap<u64, core_space::WorldOrigin>>>,
+    /// The air graphs kept for sessions a service asked one of, told of
+    /// each scene their session publishes.
+    airs: Rc<RefCell<BTreeMap<u64, crate::air::AirKeeper>>>,
 }
 
 struct SpatialCollisionSceneState {
@@ -1632,7 +1635,24 @@ impl SpatialCollisionSource {
             scenes: Rc::new(RefCell::new(BTreeMap::new())),
             next_cursor_identity: Rc::new(RefCell::new(1)),
             origins: Rc::new(RefCell::new(BTreeMap::new())),
+            airs: Rc::new(RefCell::new(BTreeMap::new())),
         }
+    }
+
+    /// The session's air graph, kept from the first time it is asked for
+    /// until the session goes.
+    pub(crate) fn air(
+        &self,
+        handle: NativeSpatialSessionHandle,
+    ) -> Result<crate::air::AirReader, CsharpEngineServicesError> {
+        if let Some(keeper) = self.airs.borrow().get(&handle.value) {
+            return Ok(keeper.reader());
+        }
+        let scene = self.scene(handle)?;
+        let keeper = crate::air::AirKeeper::new(&scene);
+        let reader = keeper.reader();
+        self.airs.borrow_mut().insert(handle.value, keeper);
+        Ok(reader)
     }
 
     /// The session's world origin, while it lives.
@@ -1736,6 +1756,9 @@ impl SpatialCollisionSource {
         handle: NativeSpatialSessionHandle,
         scene: Arc<VoxelCollisionScene>,
     ) {
+        if let Some(keeper) = self.airs.borrow_mut().get_mut(&handle.value) {
+            keeper.scene_changed(&scene);
+        }
         let mut next_identity = self.next_cursor_identity.borrow_mut();
         let cursor_identity = *next_identity;
         *next_identity += 1;
@@ -5453,6 +5476,11 @@ unsafe extern "C" fn destroy_spatial_session(
         bridge
             .collision_source
             .scenes
+            .borrow_mut()
+            .remove(&handle.value);
+        bridge
+            .collision_source
+            .airs
             .borrow_mut()
             .remove(&handle.value);
         bridge

@@ -21,8 +21,13 @@ pub use crawler::{
 };
 mod acoustics;
 mod entity_motion;
-pub use acoustics::{
-    AirReach, AirSearch, Enclosure, AIR_CELL_METRES, AIR_SEARCH_CELLS, ENCLOSURE_METRES,
+pub use acoustics::{Enclosure, ENCLOSURE_METRES};
+mod air_graph;
+pub use air_graph::{
+    chunk_distance as air_chunk_distance, chunks_within as air_chunks_within, AirChunk,
+    AirChunkKey, AirGraph, AirOpening, AirPocket, AirPocketId, AirRoute, AirRouteFailure,
+    AirRoutes, AirSceneChange, AirSceneWatch, AIR_BEARING_METRES, AIR_CELL_METRES, AIR_CHUNK_CELLS,
+    AIR_CHUNK_METRES, AIR_PORT_METRES,
 };
 mod occlusion;
 mod perception;

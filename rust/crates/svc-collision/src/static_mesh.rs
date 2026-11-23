@@ -19,6 +19,9 @@ pub struct StaticMeshAssetId(pub u64);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StaticMeshInstanceId(pub u64);
 
+/// A box's minimum and maximum corners in world space.
+pub type StaticMeshBounds = ([f64; 3], [f64; 3]);
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StaticMeshColliderAsset {
     pub id: StaticMeshAssetId,
@@ -325,6 +328,25 @@ impl StaticMeshCollisionProjection {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Each instance's identity as placed (its asset, geometry and pose
+    /// together) and its world bounds, `None` where the bounds could not be
+    /// computed: what a reader keeps to learn which instances a later
+    /// revision placed, moved or removed, and where.
+    pub fn instance_footprints(
+        &self,
+    ) -> impl Iterator<Item = (StaticMeshInstanceId, u64, Option<StaticMeshBounds>)> + '_ {
+        self.instances.iter().map(|(id, instance)| {
+            (
+                *id,
+                instance.posed_topology,
+                instance.bounds.map(|bounds| {
+                    let (min, max) = bounds.corners();
+                    ([min.x, min.y, min.z], [max.x, max.y, max.z])
+                }),
+            )
+        })
     }
 
     /// Every instance moved by `delta`; their triangles are rebaked.

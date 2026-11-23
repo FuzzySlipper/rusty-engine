@@ -82,9 +82,10 @@ pub use soft_body::{
 pub use soft_body_skin::DynamicsSoftBodySkin;
 
 pub use static_mesh::{
-    StaticMeshAssetId, StaticMeshBaked, StaticMeshColliderAsset, StaticMeshColliderInstance,
-    StaticMeshCollisionError, StaticMeshCollisionProjection, StaticMeshCollisionReceipt,
-    StaticMeshHit, StaticMeshInstanceId, StaticMeshResidencyPlan, StaticMeshTransform,
+    StaticMeshAssetId, StaticMeshBaked, StaticMeshBounds, StaticMeshColliderAsset,
+    StaticMeshColliderInstance, StaticMeshCollisionError, StaticMeshCollisionProjection,
+    StaticMeshCollisionReceipt, StaticMeshHit, StaticMeshInstanceId, StaticMeshResidencyPlan,
+    StaticMeshTransform,
 };
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -335,6 +336,10 @@ pub(crate) struct WorldAabb {
 }
 
 impl WorldAabb {
+    pub(crate) fn corners(self) -> (WorldPos, WorldPos) {
+        (self.min, self.max)
+    }
+
     fn intersects(self, other: Self) -> bool {
         self.min.x <= other.max.x
             && self.max.x >= other.min.x

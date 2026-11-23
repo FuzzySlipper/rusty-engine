@@ -84,11 +84,11 @@ impl Acoustics {
     fn follow<B: AudioBackend>(
         &mut self,
         realizer: &mut AudioRealizer<B>,
-        space: Option<(Arc<csharp_engine_services::acoustics::Scene>, f32)>,
+        space: Option<csharp_engine_services::acoustics::AcousticWorld>,
         listener: Option<[f32; 3]>,
         entities: &impl AudioEntityPositions,
     ) {
-        let (Some((scene, level)), Some(listener)) = (space, listener) else {
+        let (Some(world), Some(listener)) = (space, listener) else {
             if self.active {
                 realizer.clear_acoustics(entities);
                 self.active = false;
@@ -97,6 +97,7 @@ impl Acoustics {
             return;
         };
         self.active = true;
+        world.air.focus(listener.map(f64::from));
         let now = self.clock.elapsed().as_secs_f64();
         let due = self
             .refreshed
@@ -107,7 +108,9 @@ impl Acoustics {
         }
         if due {
             self.refreshed = Some(now);
-            let (send, feedback) = self.listener.space(&scene, listener, level);
+            let (send, feedback) = self
+                .listener
+                .space(&world.scene, listener, world.reverb_level);
             realizer.set_space_reverb(Some(SpaceReverb { send, feedback }));
         } else {
             sources.retain(|source| source.fresh);
@@ -143,7 +146,9 @@ impl Acoustics {
                 rolloff: source.rolloff,
             })
             .collect();
-        let heard = self.listener.hear(&scene, listener, &sounds, now);
+        let heard = self
+            .listener
+            .hear(&world.scene, &world.air.latest(), listener, &sounds);
         for (source, heard) in audible.iter().zip(heard) {
             realizer.set_acoustics(
                 source.key,

@@ -342,48 +342,6 @@ fn a_voxel_and_a_mesh_in_one_place_count_once() {
 }
 
 #[test]
-fn air_search_follows_a_bending_passage() {
-    let scene = bending_passage();
-    let start = [3.0, 2.0, 3.0];
-    let end = [15.0, 2.0, 15.0];
-    assert!(!scene.segment_clear(start, end));
-    let straight = distance(start, end);
-    let search = AirSearch::run(&scene, start, 40.0, &[end]);
-    let reach = search
-        .reach(&scene, end)
-        .expect("the passage reaches its end");
-    // Round the inside corner at (14, 4) the path is about 22 m, against
-    // 17 m straight through the rock.
-    assert!(reach.metres > straight, "{reach:?}");
-    assert!((21.0..25.5).contains(&reach.metres), "{reach:?}");
-    // It leaves the start along +x and arrives at the end along +z.
-    assert!(reach.near_root[0] > start[0] + 1.5, "{reach:?}");
-    assert!(reach.near_point[2] < end[2] - 1.5, "{reach:?}");
-    assert!(!search.truncated);
-    assert!(search.settled_cells() < 200, "{}", search.settled_cells());
-    // Searching toward the end finds the same path as searching everywhere.
-    let everywhere = AirSearch::run(&scene, start, 40.0, &[]);
-    let full = everywhere.reach(&scene, end).unwrap();
-    assert!(
-        (full.metres - reach.metres).abs() < 0.02 * full.metres,
-        "{full:?} {reach:?}"
-    );
-}
-
-#[test]
-fn air_search_does_not_reach_a_sealed_room() {
-    // The passage's two legs, with the rock between them left whole.
-    let scene = rock(|x, y, z| {
-        (1..3).contains(&y)
-            && (((2..12).contains(&x) && (2..4).contains(&z))
-                || ((14..16).contains(&x) && (8..16).contains(&z)))
-    });
-    let search = AirSearch::run(&scene, [3.0, 2.0, 3.0], 60.0, &[[15.0, 2.0, 15.0]]);
-    assert!(search.reach(&scene, [15.0, 2.0, 15.0]).is_none());
-    assert!(!search.truncated);
-}
-
-#[test]
 fn enclosure_tells_a_closed_passage_from_open_ground() {
     let scene = bending_passage();
     let inside = scene.enclosure([3.0, 2.0, 3.0]);

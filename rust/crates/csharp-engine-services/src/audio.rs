@@ -1165,7 +1165,8 @@ impl RuntimeAudioBridge {
         request: &NativeAudioAcousticSpaceRequest,
     ) -> Result<(), CsharpEngineServicesError> {
         // An unknown session refuses here rather than playing dry silently.
-        self.collision()?.scene(request.session)?;
+        // Its air graph starts building before the first sound needs it.
+        self.collision()?.air(request.session)?;
         let reverb_level = if request.reverb_level.is_finite() {
             request.reverb_level.clamp(0.0, 1.0)
         } else {
@@ -1202,10 +1203,13 @@ impl RuntimeAudioBridge {
             ));
         }
         let scene = self.collision()?.scene(request.session)?;
+        let air = self.collision()?.air(request.session)?;
         let vector = |value: NativeVec3| [value.x as f64, value.y as f64, value.z as f64];
         let points: Vec<[f64; 3]> = points.iter().map(|point| vector(*point)).collect();
+        air.focus(vector(request.source));
         let outcome = crate::acoustics::query(
             &scene,
+            &air.latest(),
             vector(request.source),
             request.range,
             match request.rolloff {

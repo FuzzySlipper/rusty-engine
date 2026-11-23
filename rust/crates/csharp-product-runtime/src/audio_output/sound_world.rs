@@ -7,7 +7,8 @@
 
 use std::sync::Arc;
 
-use csharp_engine_services::acoustics::{query, ArrivalPath, Scene};
+use csharp_engine_services::acoustics::{query, AcousticWorld, ArrivalPath, Scene};
+use csharp_engine_services::air::AirKeeper;
 use render_audio::{
     AcousticKey, AudioRealizer, NoEntityPositions, OfflineBackend, OfflineBackendSettings,
 };
@@ -139,16 +140,34 @@ fn measure(case: &Case) -> Measured {
         &NoEntityPositions,
     );
     let mut acoustics = Acoustics::new();
-    let space = Some((Arc::clone(&case.scene), case.reverb_level));
+    // The session's air graph, as its spatial service keeps it.
+    let keeper = AirKeeper::new(&case.scene);
+    let space = Some(AcousticWorld {
+        scene: Arc::clone(&case.scene),
+        air: keeper.reader(),
+        reverb_level: case.reverb_level,
+    });
     acoustics.follow(
         &mut realizer,
         space.clone(),
         Some(case.listener),
         &NoEntityPositions,
     );
-    // The listener's open-air search runs on its worker; the next refresh
+    // The graph builds round the listener on its worker; the next refresh
     // hears by it.
-    while acoustics.listener.searching() {
+    assert!(keeper
+        .reader()
+        .wait_idle(std::time::Duration::from_secs(60)));
+    // Routes from the listener are found on their worker; the refresh after
+    // hears by them.
+    acoustics.refreshed = None;
+    acoustics.follow(
+        &mut realizer,
+        space.clone(),
+        Some(case.listener),
+        &NoEntityPositions,
+    );
+    while acoustics.listener.routing() {
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
     acoustics.refreshed = None;
@@ -163,6 +182,7 @@ fn measure(case: &Case) -> Measured {
     let widen = |value: [f32; 3]| value.map(f64::from);
     let answered = query(
         &case.scene,
+        &keeper.reader().latest(),
         widen(case.emitter),
         case.range,
         AudioRolloff::LinearDecibels,

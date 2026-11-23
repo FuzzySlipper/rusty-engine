@@ -424,8 +424,8 @@ internal static class EngineTestHostChecks
     // the wall it holds is cut away.
     /// <summary>
     /// A noise in a closed room, heard through the room's wall by the session's acoustics: muffled
-    /// beyond it, carried once a doorway is cut, and silent past its range; the acoustic space
-    /// names only a live session.
+    /// beyond it, carried once a doorway is cut and the air graph shows it, and silent past its
+    /// range; the acoustic space names only a live session.
     /// </summary>
     private static void SoundArrival(EngineTestHost host) => host.Call(engine =>
     {
@@ -450,7 +450,14 @@ internal static class EngineTestHostChecks
             for (int z = 6; z <= 7; z++)
                 door.Add(new(VoxelEditKind.Clear, new(8, y, z), 0));
         engine.Voxel.ApplyEdits(new(session, door.ToArray()));
+        // The session's air graph rebuilds where the doorway was cut off the
+        // update; a query reads the latest one built.
         AudioArrivalResult opened = engine.Audio.QueryArrival(session, source, 30f, points);
+        for (int attempt = 0; attempt < 500 && opened.Arrivals.Span[1].Path != AudioArrivalPath.Around; attempt++)
+        {
+            System.Threading.Thread.Sleep(4);
+            opened = engine.Audio.QueryArrival(session, source, 30f, points);
+        }
         AudioArrival carried = opened.Arrivals.Span[1];
         Require(carried.Path == AudioArrivalPath.Around && carried.Gain > walled[1].Gain && carried.PathMetres > 8f
             && carried.ArrivesFrom.Z > 4f && opened.CellsSearched > 0, $"round by the doorway: {carried}, {opened}");

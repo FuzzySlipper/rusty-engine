@@ -1185,21 +1185,20 @@ impl EngineServiceSet {
             .map(|clip| clip.shared_bytes().shared())
     }
 
-    /// The scene of the spatial session the product named as the acoustic
-    /// space, with its reverb level: `None` while none is named, or once
-    /// that session is gone.
-    pub fn audio_acoustic_space(
-        &self,
-    ) -> Option<(std::sync::Arc<engine_spatial::VoxelCollisionScene>, f32)> {
+    /// The spatial session the product named as the acoustic space: its
+    /// scene, its air graph and its reverb level; `None` while none is
+    /// named, or once that session is gone.
+    pub fn audio_acoustic_space(&self) -> Option<crate::acoustics::AcousticWorld> {
         let space = self.audio.acoustic_space()?;
-        let scene = self
-            .spatial
-            .collision_source()
-            .scene(NativeSpatialSessionHandle {
-                value: space.session,
-            })
-            .ok()?;
-        Some((scene, space.reverb_level))
+        let handle = NativeSpatialSessionHandle {
+            value: space.session,
+        };
+        let source = self.spatial.collision_source();
+        Some(crate::acoustics::AcousticWorld {
+            scene: source.scene(handle).ok()?,
+            air: source.air(handle).ok()?,
+            reverb_level: space.reverb_level,
+        })
     }
 
     /// Whether an audio clip is still admitted.
