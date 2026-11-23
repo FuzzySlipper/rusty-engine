@@ -88,6 +88,8 @@ const SKIN_BYTES: u64 = 8;
 pub(crate) const MAX_SKIN_JOINTS: usize = 256;
 /// Bytes of one projected Gaussian (`splats.wgsl` `Projected`).
 const PROJECTED_BYTES: u64 = 48;
+/// Bytes of one projected card (`splat_cards.wgsl` `ProjectedCard`).
+const PROJECTED_CARD_BYTES: u64 = 96;
 /// One dynamic uniform slot of the parameters buffer (`splats.wgsl`
 /// `Project` within it).
 const PARAMS_SLOT: u64 = 512;
@@ -144,7 +146,27 @@ pub(crate) struct SplatSet {
     pub ellipsoids: Vec<Ellipsoid>,
     /// It has an albedo stream (`_ALBEDO`), which a lit run draws.
     pub albedo: bool,
+    /// Cards rather than Gaussians: the atlas their run draws with.
+    pub cards: Option<CardAtlas>,
     group: wgpu::BindGroup,
+}
+
+/// A card asset's atlas, as its runs' draws bind it (`splat_cards.wgsl`
+/// `atlas`): every set of one asset shares it.
+#[derive(Clone)]
+pub(crate) struct CardAtlas {
+    group: wgpu::BindGroup,
+}
+
+impl SplatSet {
+    /// Bytes of one of its splats' projected records.
+    fn projected_bytes(&self) -> u64 {
+        if self.cards.is_some() {
+            PROJECTED_CARD_BYTES
+        } else {
+            PROJECTED_BYTES
+        }
+    }
 }
 
 /// An ellipsoid caster: the box of the centres whose heaviest joint is
@@ -232,6 +254,8 @@ pub struct SplatReadout {
     pub instances: u32,
     /// Gaussians projected and sorted.
     pub gaussians: u64,
+    /// Cards projected and sorted.
+    pub cards: u64,
     /// Splat instances that had no room in their run
     /// ([`MAX_RUN_GAUSSIANS`]) and drew nothing.
     pub refused_instances: u32,
@@ -259,6 +283,9 @@ pub(crate) struct SplatInstance {
     pub light: Option<f32>,
     /// How it casts into shadow layers, when it casts.
     pub caster: Option<render_model::SplatShadowCaster>,
+    /// For cards, its asset's slot: it draws in runs of that asset's
+    /// instances, which share an atlas.
+    pub cards: Option<u32>,
 }
 
 /// A set by its asset's slot and its index among the asset's sets.
@@ -566,7 +593,14 @@ struct Pipelines {
     module: wgpu::ShaderModule,
     /// `splat_light.wgsl`: a lit run's composite.
     light_module: wgpu::ShaderModule,
+    /// `splat_cards.wgsl`: a card run's projection and draw.
+    cards_module: wgpu::ShaderModule,
+    /// A card run's draw: the run buffers, then its atlas.
+    atlas_layout: wgpu::BindGroupLayout,
+    card_draw_pipeline_layout: wgpu::PipelineLayout,
+    atlas_sampler: wgpu::Sampler,
     project: wgpu::ComputePipeline,
+    project_card: wgpu::ComputePipeline,
     sort_count: wgpu::ComputePipeline,
     scan_local: wgpu::ComputePipeline,
     scan_sums: wgpu::ComputePipeline,
@@ -577,6 +611,9 @@ struct Pipelines {
 /// The buffers a run is projected and sorted in, reused by every run.
 struct RunBuffers {
     capacity: u32,
+    /// Bytes the projected records hold: a card's record is larger than a
+    /// Gaussian's.
+    projected_bytes: u64,
     /// The projection's records, and its keys and values: two passes sort
     /// them back into that pair (a test reads them back). A shadow layer's
     /// casters are projected into the same buffers, unsorted.
@@ -624,9 +661,9 @@ pub(crate) struct Splats {
     /// the next.
     layers_used: usize,
     /// By samples, whether the layer is tested against the world's depth,
-    /// when it keeps its surface whether that holds motion, and whether the
-    /// run is lit.
-    draws: HashMap<(u32, bool, Option<bool>, bool), wgpu::RenderPipeline>,
+    /// when it keeps its surface whether that holds motion, whether the run
+    /// is lit, and whether it is cards.
+    draws: HashMap<(u32, bool, Option<bool>, bool, bool), wgpu::RenderPipeline>,
     /// How each of the view's runs is composited.
     finishes: Vec<Finish>,
     /// The viewport the view's runs were drawn for, which a grid's scissor
@@ -657,6 +694,7 @@ impl Splats {
         gpu: &Gpu,
         module: wgpu::ShaderModule,
         light_module: wgpu::ShaderModule,
+        cards_module: wgpu::ShaderModule,
         frame_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let device = &gpu.device;
@@ -674,7 +712,7 @@ impl Splats {
             });
         let pipelines = refusal
             .is_none()
-            .then(|| Pipelines::new(device, module, light_module, frame_layout));
+            .then(|| Pipelines::new(device, module, light_module, cards_module, frame_layout));
         Self {
             pipelines,
             refusal,
@@ -706,11 +744,21 @@ impl Splats {
         self.pipelines.is_some()
     }
 
-    /// Upload a splat primitive's Gaussians, or `None` on a device that
-    /// draws no splats.
-    pub fn upload(&self, gpu: &Gpu, label: &str, splats: &GlbSplats) -> Option<SplatSet> {
+    /// Upload a splat primitive's Gaussians or cards, or `None` on a device
+    /// that draws no splats. Cards draw with `atlas`, their asset's
+    /// ([`Self::card_atlas`]).
+    pub fn upload(
+        &self,
+        gpu: &Gpu,
+        label: &str,
+        splats: &GlbSplats,
+        atlas: Option<&CardAtlas>,
+    ) -> Option<SplatSet> {
         let pipelines = self.pipelines.as_ref()?;
-        let (words, bounds) = gaussian_words(splats);
+        let (words, bounds) = match &splats.cards {
+            Some(cards) => card_words(splats, cards),
+            None => gaussian_words(splats),
+        };
         let count = splats.centres.len() as u32;
         let skin = skin_words(splats);
         let storage = |words: &[u32], room: usize| {
@@ -750,14 +798,73 @@ impl Splats {
                 },
             ],
         });
+        let cards = match (&splats.cards, atlas) {
+            (Some(_), Some(atlas)) => Some(atlas.clone()),
+            // Cards without their atlas draw nothing.
+            (Some(_), None) => return None,
+            (None, _) => None,
+        };
         Some(SplatSet {
             count,
             bounds,
             joint_bounds: skin.map(|(_, bounds)| bounds),
             ellipsoids: ellipsoids(splats),
             albedo: splats.albedos.is_some(),
+            cards,
             group,
         })
+    }
+
+    /// A card asset's atlas: display-referred colour and straight alpha,
+    /// kept as it is (`Rgba8Unorm`, one level), sampled linearly and
+    /// clamped. `None` on a device that draws no splats.
+    pub fn card_atlas(
+        &self,
+        gpu: &Gpu,
+        label: &str,
+        image: &crate::resources::DecodedImage,
+    ) -> Option<CardAtlas> {
+        let pipelines = self.pipelines.as_ref()?;
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: image.width,
+                height: image.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        gpu.queue.write_texture(
+            texture.as_image_copy(),
+            &image.rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(image.width * 4),
+                rows_per_image: Some(image.height),
+            },
+            texture.size(),
+        );
+        let view = texture.create_view(&Default::default());
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &pipelines.atlas_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 40,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 41,
+                    resource: wgpu::BindingResource::Sampler(&pipelines.atlas_sampler),
+                },
+            ],
+        });
+        Some(CardAtlas { group })
     }
 
     /// At the start of a frame: take the last frame's counts and timing,
@@ -799,7 +906,7 @@ impl Splats {
             .max()
             .unwrap_or(0);
         if largest > 0 {
-            self.ensure_run(&gpu.device, largest);
+            self.ensure_run(&gpu.device, largest, u64::from(largest) * PROJECTED_BYTES);
         }
         let (mut bytes, mut palettes, mut rows) = (Vec::new(), Vec::<f32>::new(), Vec::new());
         for layer in layers {
@@ -1240,6 +1347,15 @@ impl Splats {
             .map(|run| run.iter().map(|entry| entry.set.count).sum::<u32>())
             .max()
             .unwrap_or(0);
+        let largest_bytes = runs
+            .iter()
+            .map(|run| {
+                run.iter()
+                    .map(|entry| u64::from(entry.set.count) * entry.set.projected_bytes())
+                    .sum::<u64>()
+            })
+            .max()
+            .unwrap_or(0);
         let slots = runs.iter().map(|run| run.len() as u64 + 2).sum::<u64>();
         // Each set's placing in the previous frame that drew motion; sets
         // the last frame did not draw are forgotten.
@@ -1282,7 +1398,11 @@ impl Splats {
         }
         self.ensure_params(&gpu.device, slots);
         self.ensure_palettes(&gpu.device, palettes.len().max(4) as u64 * 4);
-        self.ensure_run(&gpu.device, largest.max(1));
+        self.ensure_run(
+            &gpu.device,
+            largest.max(1),
+            largest_bytes.max(PROJECTED_BYTES),
+        );
         let motion = target.motion.is_some();
         // A grid's blocks take blocks of whole output pixels, so of the render
         // pixels a scaled view draws, at least one.
@@ -1325,13 +1445,19 @@ impl Splats {
                     }),
             );
         self.viewport = target.viewport;
-        for finish in self.finishes.clone() {
+        // A card run draws with its asset's atlas.
+        let atlases: Vec<Option<&CardAtlas>> = runs
+            .iter()
+            .map(|run| run.first().and_then(|entry| entry.set.cards.as_ref()))
+            .collect();
+        for (finish, atlas) in self.finishes.clone().iter().zip(&atlases) {
             self.ensure_draw(
                 &gpu.device,
                 target.samples,
                 finish.tested(),
                 finish.keeps_surface().then_some(motion),
                 finish.lit(),
+                atlas.is_some(),
             );
         }
         for (index, finish) in self.finishes.clone().iter().enumerate() {
@@ -1505,6 +1631,7 @@ impl Splats {
         let timer = self.timer.as_ref().filter(|_| !self.timed);
         for (index, (run, (sort, sets, total, blocks))) in runs.iter().zip(&offsets).enumerate() {
             let groups = (DIGITS * blocks).div_ceil(TILE);
+            let atlas = atlases[index];
             encoder.clear_buffer(&buffers.args, 0, None);
             {
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1513,7 +1640,11 @@ impl Splats {
                         .filter(|_| index == 0)
                         .and_then(|timer| timer.compute_writes_between(true, false)),
                 });
-                pass.set_pipeline(&pipelines.project);
+                pass.set_pipeline(if atlas.is_some() {
+                    &pipelines.project_card
+                } else {
+                    &pipelines.project
+                });
                 for (entry, offset) in run.iter().zip(sets) {
                     pass.set_bind_group(0, &buffers.project_group, &[*offset]);
                     pass.set_bind_group(1, &entry.set.group, &[]);
@@ -1541,6 +1672,7 @@ impl Splats {
                 finish.tested(),
                 kept.then_some(motion),
                 finish.lit(),
+                atlas.is_some(),
             )];
             let attachments = [
                 Some(wgpu::RenderPassColorAttachment {
@@ -1603,10 +1735,17 @@ impl Splats {
             );
             pass.set_pipeline(draw);
             pass.set_bind_group(0, &buffers.draw_group, &[]);
+            if let Some(atlas) = atlas {
+                pass.set_bind_group(1, &atlas.group, &[]);
+            }
             pass.draw_indirect(&buffers.args, 0);
             drop(pass);
             self.counts.runs += 1;
-            self.counts.gaussians += u64::from(*total);
+            if atlas.is_some() {
+                self.counts.cards += u64::from(*total);
+            } else {
+                self.counts.gaussians += u64::from(*total);
+            }
         }
         if !self.timed {
             if let Some(timer) = &mut self.timer {
@@ -1730,16 +1869,29 @@ impl Splats {
         self.run = None;
     }
 
-    fn ensure_run(&mut self, device: &wgpu::Device, gaussians: u32) {
+    /// Run buffers for `splats` splats whose projected records take
+    /// `projected_bytes`.
+    fn ensure_run(&mut self, device: &wgpu::Device, splats: u32, projected_bytes: u64) {
         if self
             .run
             .as_ref()
-            .is_some_and(|run| run.capacity >= gaussians)
+            .is_some_and(|run| run.capacity >= splats && run.projected_bytes >= projected_bytes)
         {
             return;
         }
         let pipelines = self.pipelines.as_ref().expect("a device that draws splats");
-        let capacity = gaussians.next_power_of_two().max(TILE);
+        // Grown together, so neither shrinks the other's room.
+        let (splats, projected_bytes) = match &self.run {
+            Some(run) => (
+                splats.max(run.capacity),
+                projected_bytes.max(run.projected_bytes),
+            ),
+            None => (splats, projected_bytes),
+        };
+        let capacity = splats.next_power_of_two().max(TILE);
+        let projected_bytes = projected_bytes
+            .next_power_of_two()
+            .max(u64::from(capacity) * PROJECTED_BYTES);
         let blocks = capacity.div_ceil(TILE);
         let storage = |label: &str, bytes: u64, usage: wgpu::BufferUsages| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -1754,7 +1906,7 @@ impl Splats {
         let readable = wgpu::BufferUsages::COPY_SRC;
         let projected = storage(
             "render-wgpu splats projected",
-            u64::from(capacity) * PROJECTED_BYTES,
+            projected_bytes,
             wgpu::BufferUsages::empty(),
         );
         let keys = [
@@ -1828,6 +1980,7 @@ impl Splats {
         self.run_generation += 1;
         self.run = Some(RunBuffers {
             capacity,
+            projected_bytes,
             projected,
             keys: keys[0].clone(),
             values: values[0].clone(),
@@ -1848,11 +2001,37 @@ impl Splats {
         tested: bool,
         surface: Option<bool>,
         lit: bool,
+        cards: bool,
     ) {
         let pipelines = self.pipelines.as_ref().expect("a device that draws splats");
         self.draws
-            .entry((samples, tested, surface, lit))
+            .entry((samples, tested, surface, lit, cards))
             .or_insert_with(|| {
+                // Cards draw unlit (`frame.rs` keeps them from lit runs).
+                let (module, layout, vertex, fragment) = if cards {
+                    (
+                        &pipelines.cards_module,
+                        &pipelines.card_draw_pipeline_layout,
+                        "vs_card",
+                        if surface.is_some() {
+                            "fs_card"
+                        } else {
+                            "fs_card_colour"
+                        },
+                    )
+                } else {
+                    (
+                        &pipelines.module,
+                        &pipelines.draw_pipeline_layout,
+                        "vs_splat",
+                        match (surface, lit) {
+                            (None, _) => "fs_splat_colour",
+                            (Some(_), false) => "fs_splat",
+                            (Some(false), true) => "fs_splat_lit",
+                            (Some(true), true) => "fs_splat_lit_motion",
+                        },
+                    )
+                };
                 let colour = Some(wgpu::ColorTargetState {
                     format: LAYER_FORMAT,
                     blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
@@ -1873,10 +2052,10 @@ impl Splats {
                 ];
                 device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                     label: Some("render-wgpu splat layer"),
-                    layout: Some(&pipelines.draw_pipeline_layout),
+                    layout: Some(layout),
                     vertex: wgpu::VertexState {
-                        module: &pipelines.module,
-                        entry_point: Some("vs_splat"),
+                        module,
+                        entry_point: Some(vertex),
                         compilation_options: Default::default(),
                         buffers: &[],
                     },
@@ -1900,13 +2079,8 @@ impl Splats {
                         ..Default::default()
                     },
                     fragment: Some(wgpu::FragmentState {
-                        module: &pipelines.module,
-                        entry_point: Some(match (surface, lit) {
-                            (None, _) => "fs_splat_colour",
-                            (Some(_), false) => "fs_splat",
-                            (Some(false), true) => "fs_splat_lit",
-                            (Some(true), true) => "fs_splat_lit_motion",
-                        }),
+                        module,
+                        entry_point: Some(fragment),
                         compilation_options: Default::default(),
                         targets: &targets
                             [..1 + usize::from(surface.is_some()) + usize::from(normal)],
@@ -2079,6 +2253,7 @@ impl Pipelines {
         device: &wgpu::Device,
         module: wgpu::ShaderModule,
         light_module: wgpu::ShaderModule,
+        cards_module: wgpu::ShaderModule,
         frame_layout: &wgpu::BindGroupLayout,
     ) -> Self {
         let storage = |binding: u32, read_only: bool, visibility: wgpu::ShaderStages| {
@@ -2158,6 +2333,35 @@ impl Pipelines {
             },
             count: None,
         };
+        let atlas_layout = layout(
+            "render-wgpu splat card atlas",
+            &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 40,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 41,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        );
+        let atlas_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("render-wgpu splat card atlas"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let composite_layout = layout(
             "render-wgpu splat composite",
             &[
@@ -2182,21 +2386,28 @@ impl Pipelines {
             pipeline_layout("render-wgpu splats sort", &[Some(&sort_layout)]);
         let draw_pipeline_layout =
             pipeline_layout("render-wgpu splats draw", &[Some(&draw_layout)]);
+        let card_draw_pipeline_layout = pipeline_layout(
+            "render-wgpu splat cards draw",
+            &[Some(&draw_layout), Some(&atlas_layout)],
+        );
         let composite_pipeline_layout = pipeline_layout(
             "render-wgpu splat composite",
             &[Some(frame_layout), Some(&composite_layout)],
         );
-        let kernel = |layout: &wgpu::PipelineLayout, entry: &str| {
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some(entry),
-                layout: Some(layout),
-                module: &module,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                cache: None,
-            })
-        };
+        let kernel_of =
+            |module: &wgpu::ShaderModule, layout: &wgpu::PipelineLayout, entry: &str| {
+                device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some(entry),
+                    layout: Some(layout),
+                    module,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    cache: None,
+                })
+            };
+        let kernel = |layout: &wgpu::PipelineLayout, entry: &str| kernel_of(&module, layout, entry);
         let project = kernel(&project_pipeline_layout, "cs_project");
+        let project_card = kernel_of(&cards_module, &project_pipeline_layout, "cs_project_card");
         let sort_count = kernel(&sort_pipeline_layout, "cs_sort_count");
         let scan_local = kernel(&sort_pipeline_layout, "cs_scan_local");
         let scan_sums = kernel(&sort_pipeline_layout, "cs_scan_sums");
@@ -2212,7 +2423,12 @@ impl Pipelines {
             composite_pipeline_layout,
             module,
             light_module,
+            cards_module,
+            atlas_layout,
+            card_draw_pipeline_layout,
+            atlas_sampler,
             project,
+            project_card,
             sort_count,
             scan_local,
             scan_sums,
@@ -2345,20 +2561,14 @@ pub(crate) fn gaussian_words(splats: &GlbSplats) -> (Vec<u32>, Aabb) {
         let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
         let packed_color =
             unorm(color[0]) | unorm(color[1]) << 8 | unorm(color[2]) << 16 | unorm(color[3]) << 24;
-        let length = rotation.iter().map(|c| c * c).sum::<f32>().sqrt();
-        let rotation = if length > 1e-8 {
-            rotation.map(|c| c / length)
-        } else {
-            [0.0, 0.0, 0.0, 1.0]
-        };
-        let snorm = |value: f32| ((value.clamp(-1.0, 1.0) * 32767.0).round() as i16) as u16 as u32;
+        let [rotation_xy, rotation_zw] = rotation_words(*rotation);
         words.extend_from_slice(&[
             centre[0].to_bits(),
             centre[1].to_bits(),
             centre[2].to_bits(),
             packed_color,
-            snorm(rotation[0]) | snorm(rotation[1]) << 16,
-            snorm(rotation[2]) | snorm(rotation[3]) << 16,
+            rotation_xy,
+            rotation_zw,
             u32::from(half_bits(scale[0])) | u32::from(half_bits(scale[1])) << 16,
             u32::from(half_bits(scale[2])),
         ]);
@@ -2368,6 +2578,66 @@ pub(crate) fn gaussian_words(splats: &GlbSplats) -> (Vec<u32>, Aabb) {
         bounds.include(centre + Vec3::splat(reach));
     }
     (words, bounds)
+}
+
+/// The GPU words of a card primitive's cards (`splat_cards.wgsl` `Card`)
+/// and their bounds, each card's centre to its half-diagonal.
+fn card_words(splats: &GlbSplats, cards: &crate::glb::GlbCards) -> (Vec<u32>, Aabb) {
+    let mut words = Vec::with_capacity(splats.centres.len() * 8);
+    let mut bounds = Aabb::EMPTY;
+    let side = cards.tile_pixels.min(u32::from(u16::MAX));
+    for (index, ((centre, rotation), tile)) in splats
+        .centres
+        .iter()
+        .zip(&splats.rotations)
+        .zip(&cards.tiles)
+        .enumerate()
+    {
+        let texel = |tile: u16| (u32::from(tile) * side).min(u32::from(u16::MAX));
+        let (x, y) = (splats.scales[index][0], splats.scales[index][1]);
+        words.extend_from_slice(&[
+            centre[0].to_bits(),
+            centre[1].to_bits(),
+            centre[2].to_bits(),
+            texel(tile[0]) | texel(tile[1]) << 16,
+        ]);
+        words.extend_from_slice(&rotation_words(*rotation));
+        words.extend_from_slice(&[
+            u32::from(half_bits(x)) | u32::from(half_bits(y)) << 16,
+            side,
+        ]);
+        let centre = Vec3::from(*centre);
+        let reach = Vec3::splat(splat_reach(splats, index));
+        bounds.include(centre - reach);
+        bounds.include(centre + reach);
+    }
+    (words, bounds)
+}
+
+/// A unit quaternion xyzw as two snorm16 pairs.
+fn rotation_words(rotation: [f32; 4]) -> [u32; 2] {
+    let length = rotation.iter().map(|c| c * c).sum::<f32>().sqrt();
+    let rotation = if length > 1e-8 {
+        rotation.map(|c| c / length)
+    } else {
+        [0.0, 0.0, 0.0, 1.0]
+    };
+    let snorm = |value: f32| ((value.clamp(-1.0, 1.0) * 32767.0).round() as i16) as u16 as u32;
+    [
+        snorm(rotation[0]) | snorm(rotation[1]) << 16,
+        snorm(rotation[2]) | snorm(rotation[3]) << 16,
+    ]
+}
+
+/// How far splat `index` reaches past its centre: a Gaussian
+/// `BOUNDS_SIGMAS` along its longest axis, a card its half-diagonal.
+fn splat_reach(splats: &GlbSplats, index: usize) -> f32 {
+    let scale = splats.scales[index];
+    if splats.cards.is_some() {
+        scale[0].hypot(scale[1])
+    } else {
+        BOUNDS_SIGMAS * scale.iter().fold(0.0f32, |a, b| a.max(b.abs()))
+    }
 }
 
 /// A skinned primitive's skin words (`splats.wgsl` `skins`) and each
@@ -2402,10 +2672,7 @@ fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<JointReach>)> {
                 | unorm(weight[3]) << 24,
         );
         let centre = Vec3::from(splats.centres[index]);
-        let reach = BOUNDS_SIGMAS
-            * splats.scales[index]
-                .iter()
-                .fold(0.0f32, |a, b| a.max(b.abs()));
+        let reach = splat_reach(splats, index);
         for (joint, weight) in joint.iter().zip(weight) {
             if *weight > 0.0 {
                 let joint = &mut bounds[usize::from(*joint)];
@@ -2424,6 +2691,15 @@ fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<JointReach>)> {
 /// reads. One stream of two words keeps the projection within a stage's
 /// eight storage buffers.
 fn surface_words(splats: &GlbSplats) -> Vec<u32> {
+    // A card reads only its group.
+    if splats.cards.is_some() {
+        return (0..splats.centres.len())
+            .flat_map(|index| {
+                let group = splats.groups.as_ref().map_or(0, |groups| groups[index]);
+                [0, u32::from(group) << 24]
+            })
+            .collect();
+    }
     let unorm = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u32;
     let albedo = |index: usize| {
         let group = splats
@@ -2583,6 +2859,7 @@ mod tests {
             groups: None,
             joints: None,
             weights: None,
+            cards: None,
         };
         for index in 0..count {
             // Every 97th behind the camera; every 89th invisible.
@@ -2673,6 +2950,7 @@ mod tests {
             groups: None,
             joints: Some(vec![[3, 0, 0, 0]; 2]),
             weights: Some(vec![[1.0, 0.0, 0.0, 0.0]; 2]),
+            cards: None,
         };
         let words = normal_words(&splats);
         assert!(from_octahedral(words[0]).dot(-Vec3::X) > 0.999);
@@ -2704,19 +2982,28 @@ mod tests {
             render_shaders::Entry::SplatLight,
             render_shaders::Features::default(),
         ));
+        let cards_module = crate::pipelines::standard(shaders.module(
+            device,
+            render_shaders::Entry::SplatCards,
+            render_shaders::Features::default(),
+        ));
         let frame_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
             entries: &[],
         });
-        let mut splats = Splats::new(&gpu, module, light_module, &frame_layout);
+        let mut splats = Splats::new(&gpu, module, light_module, cards_module, &frame_layout);
         if let Some(refusal) = &splats.refusal {
             panic!("splats refused on this adapter: {refusal}");
         }
         let first = scattered(40_000, 7);
         let second = scattered(33_123, 11);
         let sets = [
-            splats.upload(&gpu, "first", &first).expect("uploaded"),
-            splats.upload(&gpu, "second", &second).expect("uploaded"),
+            splats
+                .upload(&gpu, "first", &first, None)
+                .expect("uploaded"),
+            splats
+                .upload(&gpu, "second", &second, None)
+                .expect("uploaded"),
         ];
         let depth = device
             .create_texture(&wgpu::TextureDescriptor {

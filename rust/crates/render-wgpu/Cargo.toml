@@ -9,6 +9,7 @@ edition.workspace = true
 unsafe_code = "deny"
 
 [dependencies]
+serde_json.workspace = true
 render-model.workspace = true
 # The pose evaluator, shared with simulation-time sampling.
 animation-pose.workspace = true

@@ -2579,6 +2579,7 @@ impl Renderer {
         let mut run_gaussians = 0u32;
         let mut run_gridded = false;
         let mut run_light: Option<f32> = None;
+        let mut run_cards: Option<u32> = None;
         let mut refused = 0u32;
         let (mut part, mut sprite, mut splat) = (0, 0, 0);
         loop {
@@ -2611,14 +2612,19 @@ impl Renderer {
                     // its composite averages its layer by blocks. Lit and
                     // unlit instances, and lit ones of different floors,
                     // draw in runs apart: a run's composite is lit or not.
+                    // Cards draw in runs of their asset's instances, which
+                    // share its atlas, apart from Gaussians.
                     let gridded = splats[splat].grid.is_some();
                     let light = splats[splat].light;
+                    let cards = splats[splat].cards;
                     let continues = matches!(order.last(), Some(Blended::Splats(_)))
                         && !run_gridded
                         && !gridded
-                        && run_light == light;
+                        && run_light == light
+                        && run_cards == cards;
                     run_gridded = gridded;
                     run_light = light;
+                    run_cards = cards;
                     if continues
                         && run_gaussians.saturating_add(gaussians)
                             <= crate::splats::MAX_RUN_GAUSSIANS

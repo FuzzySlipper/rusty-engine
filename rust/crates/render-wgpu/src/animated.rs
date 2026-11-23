@@ -513,12 +513,28 @@ impl Renderer {
         }
         let mut splat_sets = Vec::new();
         let mut uploaded_splats = HashMap::new();
+        // Card primitives' atlases, uploaded once each.
+        let mut atlases = HashMap::new();
         for (mesh_index, splats) in model.splats.iter().enumerate() {
             for (primitive_index, splats) in splats.iter().enumerate() {
+                let atlas = splats.cards.as_ref().and_then(|cards| {
+                    atlases
+                        .entry(cards.atlas)
+                        .or_insert_with(|| {
+                            let image = model.textures.get(cards.atlas)?.image.as_ref()?;
+                            self.splats.card_atlas(
+                                &self.gpu,
+                                &format!("{label} card atlas {}", cards.atlas),
+                                image,
+                            )
+                        })
+                        .clone()
+                });
                 let Some(set) = self.splats.upload(
                     &self.gpu,
                     &format!("{label} splats {mesh_index}/{primitive_index}"),
                     splats,
+                    atlas.as_ref(),
                 ) else {
                     continue;
                 };
@@ -1401,8 +1417,15 @@ impl Renderer {
                     palette: appearance.palette.clone(),
                     origin: node.world.w_axis.truncate(),
                 });
+            // Cards draw unlit, in runs of their asset's instances.
+            let cards = asset
+                .splat_sets
+                .first()
+                .filter(|set| set.cards.is_some())
+                .map(|_| instance.slot);
             let light = appearance
                 .filter(|appearance| appearance.lighting == render_model::SplatLighting::Lit)
+                .filter(|_| cards.is_none())
                 .map(|appearance| appearance.light_floor);
             let casts = match &node.kind {
                 NodeKind::AnimatedMesh(descriptor) => descriptor.shadow_casting.is_cast(),
@@ -1419,6 +1442,7 @@ impl Renderer {
                 grid,
                 light,
                 caster,
+                cards,
             });
         }
         instances.sort_by(|a, b| {
@@ -1535,7 +1559,8 @@ impl Renderer {
                         let Some(set) = splat_set(&self.tables, draw.set) else {
                             continue;
                         };
-                        if as_gaussians {
+                        // Cards cast as ellipsoids.
+                        if as_gaussians && set.cards.is_none() {
                             splats.push((set, draw));
                         } else {
                             ellipsoids.push((set, draw));
@@ -2109,10 +2134,16 @@ fn posed_joint_bounds(joints: &[crate::splats::JointReach], palette: &[[f32; 12]
         }
         // The palette moves the centres; the Gaussians keep their reach in
         // the instance's space. The blend the shader turns them by has unit
-        // columns, which stretch no direction by more than √3.
+        // columns, which stretch no direction by more than √3. Cards are
+        // carried by the blend itself, whose columns are at most the
+        // palette's longest.
         let matrix = Mat4::from_cols_array(&rows_to_columns(rows));
         let mut posed = reach.centres.transformed(&matrix);
-        let reach = Vec3::splat(reach.reach * 3f32.sqrt());
+        let longest = [matrix.x_axis, matrix.y_axis, matrix.z_axis]
+            .iter()
+            .map(|column| column.truncate().length())
+            .fold(1.0f32, f32::max);
+        let reach = Vec3::splat(reach.reach * 3f32.sqrt() * longest);
         posed.include(posed.min - reach);
         posed.include(posed.max + reach);
         bounds = bounds.union(&posed);

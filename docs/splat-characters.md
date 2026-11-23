@@ -5,7 +5,9 @@ rather than triangles: each point a small soft ellipsoid with its own
 colour, as asset-pipeline bakes characters from paintings and orbit videos.
 The Engine admits it like any animated GLB, poses it with the
 `Animation` service, skins its Gaussians on the GPU and draws them,
-sorted back to front and blended into the world.
+sorted back to front and blended into the world. A character may instead
+be [cards](#cards): a few thousand small textured rectangles in place of
+tens of thousands of Gaussians, for crowds.
 
 ## The asset
 
@@ -66,6 +68,89 @@ RenderResource body = engine.Animation.OpenAnimatedMeshFromContent(new(bodySourc
 
 `CreateAnimatedMeshAppearance` and `CreateInstance` place it, and every
 instance of one resource reads the same resident Gaussians.
+
+## Cards
+
+A card character draws each point as a card: a small rectangle in 3D,
+turned and sized by its point, carrying one tile of the character's atlas.
+asset-pipeline distils them from the same bakes as its Gaussian bodies
+(villager 381 is 6,144 cards). A card primitive is a `POINTS` primitive
+marked `extras.splatKind = "billboard"`, with one value per card in each
+of:
+
+| Attribute | Type | Meaning |
+| --- | --- | --- |
+| `POSITION` | float VEC3 | Centre, in the node's space (bind space on a skinned node). |
+| `_ROTATION` | float or normalized signed VEC4 | Orientation, a unit quaternion xyzw: the card's local x and y lie in it, z is its normal. |
+| `_SCALE` | float VEC2 | Half-extents along its local x and y, in metres. |
+| `_TILE_ORIGIN` | unsigned short VEC2 | Its tile, in tiles from the atlas's top left. |
+| `JOINTS_0`, `WEIGHTS_0` | as glTF | The skin, on a skinned node. |
+| `_GROUP` (optional) | unsigned byte SCALAR | Its group, which a product may [tint](#group-tints). |
+
+`extras.bbsplat.tilePx` is a tile's side in atlas pixels and
+`extras.bbsplat.atlasTexture` the index of the atlas's texture, whose
+image is embedded in the GLB (PNG). Its `atlasW` and `atlasH` are not read:
+the image's own size is. The atlas holds display-referred colour and
+straight alpha, as `_COLOR` does. Cards have no `_COLOR` and no material.
+
+- **The card.** Corner c in {−1, +1}² stands at
+  `centre + c.x·u + c.y·v`, u and v the card's half-axes. It reads its tile
+  at `(tile·tilePx + 0.5 + (c + 1) / 2 · (tilePx − 1)) / atlas size`,
+  perspective-correct across it, sampled linearly, so it never reaches a
+  neighbouring tile. A fragment's alpha is the texel's, at most 0.99, and
+  under 1/255 it draws nothing. Cards are drawn from both sides.
+- **Skinned**, the blend of a card's joints moves its centre and carries
+  its half-axes, as it carries the figure around it.
+- **Refused:** a missing attribute, attributes of different lengths,
+  non-finite values, a `_TILE_ORIGIN` that is not two unsigned shorts, no
+  `tilePx`, an `atlasTexture` that names no texture. A GLB is Gaussians or
+  cards, not both, and its card primitives share one atlas.
+- **Bounds.** Each card's centre to its half-diagonal.
+
+Cards draw as Gaussians do: posed by the `Animation` service, projected
+and radix-sorted on the GPU, drawn into the same display-space layer and
+composited, keeping depth and motion where something reads them, with
+`SetSplatAppearance`'s multiplier and pixel grid and `SetSplatGroupTint`.
+A card's depth is its plane's at each pixel, not its centre's.
+
+- **Runs.** A run is one card character's instances, sorted card by card
+  together. Different card characters, and cards and Gaussians, draw in
+  runs apart, ordered by distance as runs are.
+- **Unlit.** Cards draw unlit, also when their appearance asks for
+  `SplatLighting.Lit`.
+- **Shadows.** A card figure casts as ellipsoids, for either
+  `SplatShadowCaster`.
+- **Readout.** `GpuReadout.splats` counts cards apart from Gaussians.
+
+**Cost.** Villager 381 walking in `examples/splat_crowd`'s layout, as
+6,144 cards and as his 15,908-Gaussian body, on an RTX 3080 at 1920 ×
+1080: the `splats` pass, and the run's projection, sort and draw timed
+apart, ms, median of three rounds. Close is the crowd's default camera
+(3.3 to 10.7 m away); far is 42 m, the figures about 60 pixels tall.
+
+| Figures | Body | Close: splats | project | sort | draw | Far: splats | project | sort | draw |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | cards | 0.24 | 0.006 | 0.046 | 0.170 | 0.08 | 0.006 | 0.046 | 0.014 |
+| 1 | 16k Gaussians | 0.20 | 0.007 | 0.046 | 0.128 | 0.10 | 0.007 | 0.046 | 0.029 |
+| 8 | cards | 0.65 | 0.036 | 0.051 | 0.545 | 0.18 | 0.036 | 0.051 | 0.076 |
+| 8 | 16k Gaussians | 0.57 | 0.044 | 0.063 | 0.443 | 0.29 | 0.044 | 0.063 | 0.169 |
+| 16 | cards | 0.81 | 0.073 | 0.058 | 0.657 | 0.23 | 0.083 | 0.066 | 0.099 |
+| 16 | 16k Gaussians | 0.78 | 0.088 | 0.090 | 0.589 | 0.40 | 0.088 | 0.091 | 0.206 |
+| 32 | cards | 0.98 | 0.147 | 0.080 | 0.739 | 0.40 | 0.144 | 0.078 | 0.164 |
+| 32 | 16k Gaussians | 1.12 | 0.174 | 0.147 | 0.788 | 0.73 | 0.174 | 0.147 | 0.393 |
+
+Drawing dominates up close, and there a card costs about what the
+Gaussians it replaces do: most of a tile is transparent, and each of its
+fragments still samples the atlas. At crowd distance cards draw in about
+half the time, and the sort takes about half as long, as there are fewer
+of them to sort. A card costs about twice a Gaussian to project (four
+corners, and twice the record).
+
+Against a CPU reference of asset-pipeline's Workbench card renderer at the
+same camera and pose (381, 1920 × 1080, front, at rest and at two moments
+of his Mixamo walk), the figure's mean colour differs by 0.14 to 0.26
+levels a channel, and pixels at least half covered by a median of 0 and a
+99th percentile of 1.
 
 ## Posing
 

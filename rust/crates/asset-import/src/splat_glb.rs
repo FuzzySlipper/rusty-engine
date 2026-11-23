@@ -1,9 +1,12 @@
 //! Splat primitives in an animated GLB (`docs/splat-characters.md`): a
 //! `POINTS` primitive whose points are Gaussians, with `POSITION` (centres),
 //! `_ROTATION` (xyzw), `_SCALE` (standard deviations in metres) and `_COLOR`
-//! (sRGB-encoded rgb, linear opacity), skinned by `JOINTS_0`/`WEIGHTS_0`
-//! when the node that draws it has a skin. The renderer reads the bytes as
-//! admitted (`render-wgpu` `glb.rs`); admission measures the bounds.
+//! (sRGB-encoded rgb, linear opacity), or cards (`extras.splatKind =
+//! "billboard"`): textured rectangles with `POSITION`, `_ROTATION`, `_SCALE`
+//! (half-extents) and `_TILE_ORIGIN` (their tile of an embedded atlas). Either
+//! is skinned by `JOINTS_0`/`WEIGHTS_0` when the node that draws it has a
+//! skin. The renderer reads the bytes as admitted (`render-wgpu` `glb.rs`);
+//! admission measures the bounds.
 
 use voxel_convert::{MeshSourceBounds, ParsedGltf};
 
@@ -16,12 +19,36 @@ const BOUNDS_SIGMAS: f64 = 3.0;
 /// The attributes a splat primitive carries besides `POSITION`.
 const SPLAT_ATTRIBUTES: [&str; 3] = ["ROTATION", "SCALE", "COLOR"];
 
-/// Whether `primitive` is a splat primitive: `POINTS` with `_SCALE`.
+/// The attributes a card primitive carries besides `POSITION`.
+const CARD_ATTRIBUTES: [&str; 3] = ["ROTATION", "SCALE", "TILE_ORIGIN"];
+
+/// What a card primitive's `extras.splatKind` says.
+const CARD_KIND: &str = "billboard";
+
+/// Whether `primitive` is a splat primitive: `POINTS` with `_SCALE`, or
+/// `POINTS` marked as cards.
 pub(crate) fn is_splat_primitive(primitive: &gltf::Primitive<'_>) -> bool {
     primitive.mode() == gltf::mesh::Mode::Points
-        && primitive
+        && (primitive
             .get(&gltf::Semantic::Extras("SCALE".to_owned()))
             .is_some()
+            || is_card_primitive(primitive))
+}
+
+/// Whether `primitive` is a card primitive: `POINTS` with
+/// `extras.splatKind = "billboard"`.
+pub(crate) fn is_card_primitive(primitive: &gltf::Primitive<'_>) -> bool {
+    primitive.mode() == gltf::mesh::Mode::Points
+        && extras(primitive).is_some_and(|extras| {
+            extras.get("splatKind").and_then(|kind| kind.as_str()) == Some(CARD_KIND)
+        })
+}
+
+fn extras(primitive: &gltf::Primitive<'_>) -> Option<serde_json::Value> {
+    primitive
+        .extras()
+        .as_ref()
+        .and_then(|raw| serde_json::from_str(raw.get()).ok())
 }
 
 /// `None` for a GLB without splat primitives. For one with them: the
@@ -51,6 +78,10 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
             "export the clips as a clip pack and the splats without animations",
         ));
     }
+    // Cards draw in runs by their atlas, so one GLB's cards share one, and a
+    // GLB is cards or Gaussians.
+    let mut kinds = (false, false);
+    let mut atlas = None;
     for mesh in document.meshes() {
         for primitive in mesh.primitives() {
             let path = format!(
@@ -66,7 +97,30 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
                     "export triangle meshes in a GLB of their own",
                 ));
             }
-            check_splat_primitive(&primitive, &path)?;
+            if is_card_primitive(&primitive) {
+                kinds.1 = true;
+                let texture = check_card_primitive(document, &primitive, &path)?;
+                if atlas.is_some_and(|atlas| atlas != texture) {
+                    return Err(ImportDiagnostic::error(
+                        ImportCode::UnsupportedFeature,
+                        format!("{path}.extras.bbsplat.atlasTexture"),
+                        "a GLB's card primitives share one atlas",
+                        "pack every card primitive's tiles into one atlas texture",
+                    ));
+                }
+                atlas = Some(texture);
+            } else {
+                kinds.0 = true;
+                check_splat_primitive(&primitive, &path)?;
+            }
+            if kinds.0 && kinds.1 {
+                return Err(ImportDiagnostic::error(
+                    ImportCode::UnsupportedFeature,
+                    path,
+                    "a GLB with splat primitives has Gaussians or cards, not both",
+                    "export the Gaussians and the cards in GLBs of their own",
+                ));
+            }
         }
     }
     let blob = parsed.blob.as_deref();
@@ -93,9 +147,21 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
                     .expect("checked by check_splat_primitive")
             };
             let centres = floats::<3>(attribute(gltf::Semantic::Positions), data)?;
-            let scales = floats::<3>(attribute(gltf::Semantic::Extras("SCALE".to_owned())), data)?;
-            for (centre, scale) in centres.iter().zip(&scales) {
-                let reach = BOUNDS_SIGMAS * scale.iter().fold(0.0f64, |a, b| a.max(b.abs()));
+            let scale = attribute(gltf::Semantic::Extras("SCALE".to_owned()));
+            // A Gaussian reaches three standard deviations along its longest
+            // axis; a card its half-diagonal.
+            let reaches: Vec<f64> = if is_card_primitive(&primitive) {
+                floats::<2>(scale, data)?
+                    .iter()
+                    .map(|half| half[0].hypot(half[1]))
+                    .collect()
+            } else {
+                floats::<3>(scale, data)?
+                    .iter()
+                    .map(|scale| BOUNDS_SIGMAS * scale.iter().fold(0.0f64, |a, b| a.max(b.abs())))
+                    .collect()
+            };
+            for (centre, reach) in centres.iter().zip(&reaches) {
                 let point = transform_point(&model, *centre);
                 // The reach is a sphere; under the model's scale it reaches
                 // as far as its largest axis stretches it.
@@ -116,6 +182,100 @@ fn measure_splats(parsed: &ParsedGltf<'_>) -> Result<MeshSourceBounds, ImportDia
         ));
     }
     Ok(MeshSourceBounds { min, max })
+}
+
+/// Check a card primitive's attributes and atlas; returns the atlas's
+/// texture.
+fn check_card_primitive(
+    document: &gltf::Document,
+    primitive: &gltf::Primitive<'_>,
+    path: &str,
+) -> Result<usize, ImportDiagnostic> {
+    let remedy = "write POSITION, _ROTATION, _SCALE and _TILE_ORIGIN for every card";
+    let Some(positions) = primitive.get(&gltf::Semantic::Positions) else {
+        return Err(ImportDiagnostic::error(
+            ImportCode::MalformedSource,
+            format!("{path}.attributes.POSITION"),
+            "a card primitive needs POSITION, its cards' centres",
+            remedy,
+        ));
+    };
+    if positions.count() == 0 {
+        return Err(ImportDiagnostic::error(
+            ImportCode::MalformedSource,
+            format!("{path}.attributes.POSITION"),
+            "a card primitive has no cards",
+            "remove the empty primitive",
+        ));
+    }
+    for name in CARD_ATTRIBUTES.iter().chain(&["GROUP"]) {
+        let Some(accessor) = primitive.get(&gltf::Semantic::Extras((*name).to_owned())) else {
+            if *name == "GROUP" {
+                continue;
+            }
+            return Err(ImportDiagnostic::error(
+                ImportCode::MalformedSource,
+                format!("{path}.attributes._{name}"),
+                format!("a card primitive needs _{name}"),
+                remedy,
+            ));
+        };
+        if accessor.count() != positions.count() {
+            return Err(ImportDiagnostic::error(
+                ImportCode::AttributeLengthMismatch,
+                format!("{path}.attributes._{name}"),
+                format!(
+                    "_{name} has {} values for {} cards",
+                    accessor.count(),
+                    positions.count()
+                ),
+                "write one value of each attribute per card",
+            ));
+        }
+    }
+    check_groups(primitive, path)?;
+    // A tile is two whole numbers the renderer reads as they are.
+    let tiles = primitive
+        .get(&gltf::Semantic::Extras("TILE_ORIGIN".to_owned()))
+        .expect("checked above");
+    if tiles.dimensions() != gltf::accessor::Dimensions::Vec2
+        || tiles.data_type() != gltf::accessor::DataType::U16
+        || tiles.normalized()
+        || tiles.view().is_none()
+    {
+        return Err(ImportDiagnostic::error(
+            ImportCode::MalformedSource,
+            format!("{path}.attributes._TILE_ORIGIN"),
+            "_TILE_ORIGIN is two unsigned shorts per card (VEC2, UNSIGNED_SHORT, not normalized)",
+            "write each card's tile, in tiles from the atlas's top left",
+        ));
+    }
+    let bbsplat = extras(primitive).and_then(|extras| extras.get("bbsplat").cloned());
+    let whole = |name: &str| {
+        bbsplat
+            .as_ref()
+            .and_then(|bbsplat| bbsplat.get(name))
+            .and_then(serde_json::Value::as_u64)
+    };
+    if whole("tilePx").is_none_or(|pixels| pixels == 0) {
+        return Err(ImportDiagnostic::error(
+            ImportCode::MalformedSource,
+            format!("{path}.extras.bbsplat.tilePx"),
+            "a card primitive needs its tiles' side in atlas pixels",
+            "write extras.bbsplat.tilePx, a whole number above 0",
+        ));
+    }
+    // The GLB's images are embedded (`animated_glb.rs` refuses others).
+    let texture = whole("atlasTexture").and_then(|index| document.textures().nth(index as usize));
+    match texture.filter(|texture| texture.source().is_some()) {
+        Some(texture) => Ok(texture.index()),
+        None => Err(ImportDiagnostic::error(
+            ImportCode::MalformedSource,
+            format!("{path}.extras.bbsplat.atlasTexture"),
+            "a card primitive names its atlas, a texture with an image",
+            "write extras.bbsplat.atlasTexture, the index of the atlas's texture",
+        )),
+    }
 }
 
 fn check_splat_primitive(
@@ -163,7 +323,11 @@ fn check_splat_primitive(
             ));
         }
     }
-    // A group is a byte the renderer reads as it is.
+    check_groups(primitive, path)
+}
+
+/// A group is a byte the renderer reads as it is.
+fn check_groups(primitive: &gltf::Primitive<'_>, path: &str) -> Result<(), ImportDiagnostic> {
     if let Some(groups) = primitive.get(&gltf::Semantic::Extras("GROUP".to_owned())) {
         if groups.dimensions() != gltf::accessor::Dimensions::Scalar
             || groups.data_type() != gltf::accessor::DataType::U8
@@ -172,8 +336,8 @@ fn check_splat_primitive(
             return Err(ImportDiagnostic::error(
                 ImportCode::MalformedSource,
                 format!("{path}.attributes._GROUP"),
-                "_GROUP is one unsigned byte per Gaussian (SCALAR, UNSIGNED_BYTE)",
-                "write each Gaussian's group, 0 for none, as an unsigned byte",
+                "_GROUP is one unsigned byte per splat (SCALAR, UNSIGNED_BYTE)",
+                "write each splat's group, 0 for none, as an unsigned byte",
             ));
         }
     }
@@ -515,6 +679,219 @@ mod tests {
             },
         ));
         assert!(clips.assets.is_none());
+    }
+
+    /// A GLB of two cards on one node, skinned to one joint when `skinned`,
+    /// its primitive's attributes edited by `edit` and the document by
+    /// `extra`. Its atlas's bytes are not an image: admission does not
+    /// decode it.
+    fn cards_glb(
+        skinned: bool,
+        edit: impl FnOnce(&mut serde_json::Value),
+        extra: impl FnOnce(&mut serde_json::Value),
+    ) -> Vec<u8> {
+        let floats = |values: &[f32]| {
+            values
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<u8>>()
+        };
+        let mut bin = floats(&[0.0, 1.0, 0.0, 0.2, 1.1, 0.0]);
+        bin.extend(floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
+        bin.extend(floats(&[0.03, 0.04, 0.03, 0.04]));
+        bin.extend([0u16, 0, 1, 0].iter().flat_map(|v| v.to_le_bytes()));
+        bin.extend([0u8; 8]);
+        bin.extend([255u8, 0, 0, 0, 255, 0, 0, 0]);
+        bin.extend(floats(&[
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ]));
+        let view = |offset: usize, length: usize| serde_json::json!({"buffer": 0, "byteOffset": offset, "byteLength": length});
+        let mut attributes = serde_json::json!(
+            {"POSITION": 0, "_ROTATION": 1, "_SCALE": 2, "_TILE_ORIGIN": 3}
+        );
+        if skinned {
+            attributes["JOINTS_0"] = serde_json::json!(4);
+            attributes["WEIGHTS_0"] = serde_json::json!(5);
+        }
+        edit(&mut attributes);
+        let mut document = serde_json::json!({
+            "asset": {"version": "2.0"},
+            "scene": 0,
+            "scenes": [{"nodes": [0, 1]}],
+            "nodes": [
+                {"name": "body", "mesh": 0, "translation": [0.0, 0.0, 2.0]},
+                {"name": "hips"},
+            ],
+            "meshes": [{"primitives": [{
+                "mode": 0,
+                "attributes": attributes,
+                "extras": {"splatKind": "billboard", "bbsplat": {"tilePx": 16, "atlasW": 32, "atlasH": 16, "atlasTexture": 0}},
+            }]}],
+            "accessors": [
+                {"bufferView": 0, "componentType": 5126, "count": 2, "type": "VEC3",
+                 "min": [0.0, 1.0, 0.0], "max": [0.2, 1.1, 0.0]},
+                {"bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC4"},
+                {"bufferView": 2, "componentType": 5126, "count": 2, "type": "VEC2"},
+                {"bufferView": 3, "componentType": 5123, "count": 2, "type": "VEC2"},
+                {"bufferView": 4, "componentType": 5121, "count": 2, "type": "VEC4"},
+                {"bufferView": 5, "componentType": 5121, "normalized": true, "count": 2, "type": "VEC4"},
+                {"bufferView": 6, "componentType": 5126, "count": 1, "type": "MAT4"},
+            ],
+            "bufferViews": [view(0, 24), view(24, 32), view(56, 16), view(72, 8), view(80, 8),
+                            view(88, 8), view(96, 64), view(0, 8)],
+            "buffers": [{"byteLength": bin.len()}],
+            "images": [{"bufferView": 7, "mimeType": "image/png"}],
+            "textures": [{"source": 0}],
+        });
+        if skinned {
+            document["nodes"][0]["skin"] = serde_json::json!(0);
+            document["skins"] = serde_json::json!([{"joints": [1], "inverseBindMatrices": 6}]);
+        }
+        extra(&mut document);
+        let mut json = serde_json::to_vec(&document).unwrap();
+        json.resize(json.len().div_ceil(4) * 4, b' ');
+        let mut out = Vec::new();
+        out.extend_from_slice(b"glTF");
+        out.extend_from_slice(&2u32.to_le_bytes());
+        out.extend_from_slice(&((28 + json.len() + bin.len()) as u32).to_le_bytes());
+        out.extend_from_slice(&(json.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"JSON");
+        out.extend_from_slice(&json);
+        out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
+        out.extend_from_slice(b"BIN\0");
+        out.extend_from_slice(&bin);
+        out
+    }
+
+    /// A card GLB is admitted with its cards' half-diagonals as their
+    /// reach, unskinned in model space and skinned in bind space with its
+    /// rig named.
+    #[test]
+    fn a_card_glb_is_admitted_with_its_cards_bounds() {
+        let outcome = import(&cards_glb(false, |_| {}, |_| {}));
+        let mesh = outcome
+            .assets
+            .unwrap_or_else(|| panic!("admitted: {:?}", outcome.diagnostics))
+            .animated_mesh;
+        // Centres reaching hypot(0.03, 0.04) = 0.05, moved by the node.
+        assert_eq!(
+            mesh.bounds.min.map(|v| (v * 1000.0).round()),
+            [-50.0, 950.0, 1950.0]
+        );
+        assert_eq!(
+            mesh.bounds.max.map(|v| (v * 1000.0).round()),
+            [250.0, 1150.0, 2050.0]
+        );
+        let skinned = import(&cards_glb(true, |_| {}, |_| {}));
+        let mesh = skinned
+            .assets
+            .unwrap_or_else(|| panic!("admitted: {:?}", skinned.diagnostics))
+            .animated_mesh;
+        assert_eq!(
+            mesh.bounds.min.map(|v| (v * 1000.0).round()),
+            [-50.0, 950.0, -50.0]
+        );
+        let rig = mesh.rig.expect("a skinned card GLB names its rig");
+        assert_eq!(rig.joints[0].id, "hips");
+    }
+
+    /// A card primitive without its tiles, with tiles of the wrong type or
+    /// count, without a tile size or naming no atlas texture is refused,
+    /// and so are cards beside Gaussians.
+    #[test]
+    fn malformed_card_glbs_are_refused() {
+        let refused = |bytes: Vec<u8>, code: ImportCode, word: &str| {
+            let outcome = import(&bytes);
+            assert!(outcome.assets.is_none(), "{word}");
+            assert!(
+                outcome
+                    .diagnostics
+                    .iter()
+                    .any(|d| d.code == code && d.message.contains(word)),
+                "{word}: {:?}",
+                outcome.diagnostics
+            );
+        };
+        refused(
+            cards_glb(
+                false,
+                |attributes| {
+                    attributes.as_object_mut().unwrap().remove("_TILE_ORIGIN");
+                },
+                |_| {},
+            ),
+            ImportCode::MalformedSource,
+            "_TILE_ORIGIN",
+        );
+        refused(
+            cards_glb(
+                false,
+                |_| {},
+                |document| {
+                    document["accessors"][3]["componentType"] = serde_json::json!(5126);
+                },
+            ),
+            ImportCode::MalformedSource,
+            "_TILE_ORIGIN",
+        );
+        refused(
+            cards_glb(
+                false,
+                |_| {},
+                |document| document["accessors"][3]["count"] = serde_json::json!(1),
+            ),
+            ImportCode::AttributeLengthMismatch,
+            "_TILE_ORIGIN",
+        );
+        refused(
+            cards_glb(
+                false,
+                |_| {},
+                |document| {
+                    document["meshes"][0]["primitives"][0]["extras"]["bbsplat"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("tilePx");
+                },
+            ),
+            ImportCode::MalformedSource,
+            "tiles' side",
+        );
+        refused(
+            cards_glb(
+                false,
+                |_| {},
+                |document| {
+                    document["meshes"][0]["primitives"][0]["extras"]["bbsplat"]["atlasTexture"] =
+                        serde_json::json!(3);
+                },
+            ),
+            ImportCode::MalformedSource,
+            "atlas",
+        );
+        refused(
+            cards_glb(
+                false,
+                |_| {},
+                |document| {
+                    // A Gaussian primitive beside the cards, reading the
+                    // cards' streams.
+                    document["accessors"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!(
+                            {"bufferView": 1, "componentType": 5126, "count": 2, "type": "VEC3"}
+                        ));
+                    document["meshes"][0]["primitives"]
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::json!({"mode": 0, "attributes":
+                            {"POSITION": 0, "_ROTATION": 1, "_SCALE": 7, "_COLOR": 5}}));
+                },
+            ),
+            ImportCode::UnsupportedFeature,
+            "not both",
+        );
     }
 
     /// A skinned splat GLB without clips names its rig, held in place, so

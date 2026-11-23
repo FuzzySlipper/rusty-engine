@@ -915,6 +915,11 @@ impl Renderer {
                 Entry::SplatLight,
                 Features::default(),
             )),
+            pipelines::standard(layouts.shaders.module(
+                device,
+                Entry::SplatCards,
+                Features::default(),
+            )),
             &layouts.frame,
         );
         let volumetric_fog = volumetric_fog::VolumetricFog::new(

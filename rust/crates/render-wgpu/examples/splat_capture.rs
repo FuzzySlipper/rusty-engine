@@ -710,10 +710,11 @@ fn main() {
         .map(|timing| format!("\"{}\": {:.4}", timing.pass, timing.median_gpu_ms))
         .collect();
     let report = format!(
-        "{{\"runs\": {}, \"instances\": {}, \"gaussians\": {}, \"refused\": {:?}, \"splats_pass\": {:?}, \"passes\": {{{}}}, \"adapter\": {:?}}}\n",
+        "{{\"runs\": {}, \"instances\": {}, \"gaussians\": {}, \"cards\": {}, \"refused\": {:?}, \"splats_pass\": {:?}, \"passes\": {{{}}}, \"adapter\": {:?}}}\n",
         readout.splats.runs,
         readout.splats.instances,
         readout.splats.gaussians,
+        readout.splats.cards,
         readout.splats.refused,
         timing,
         passes.join(", "),

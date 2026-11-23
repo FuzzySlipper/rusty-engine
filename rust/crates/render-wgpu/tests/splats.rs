@@ -1,14 +1,15 @@
-//! Gaussian splats (#10805): splat GLBs admitted by `asset-import` as the
-//! runtime admits them and drawn as Gaussians, blended in display space,
-//! sorted back to front on the GPU and tested against the opaque world.
-//! The GLBs are written here (`support::splat_glb`); no character bytes.
+//! Gaussian splats (#10805) and cards (#11002): splat GLBs admitted by
+//! `asset-import` as the runtime admits them and drawn as Gaussians or
+//! textured cards, blended in display space, sorted back to front on the GPU
+//! and tested against the opaque world. The GLBs are written here
+//! (`support::splat_glb`); no character bytes.
 
 mod support;
 
 use asset_import::{import_animated_glb_asset, ImportContext, SourceUri};
 use render_model::*;
 use render_wgpu::RendererOptions;
-use support::splat_glb::{splat_glb, Gaussian};
+use support::splat_glb::{cards_glb, splat_glb, Card, Gaussian};
 use support::*;
 
 /// Admit a splat GLB and hold its runtime resource.
@@ -1647,4 +1648,210 @@ fn write_the_splat_fixtures() {
     for (path, bytes) in committed_fixtures() {
         std::fs::write(&path, bytes).expect("write the fixture");
     }
+}
+
+const RED: [u8; 4] = [230, 40, 40, 255];
+const GREEN: [u8; 4] = [40, 200, 40, 255];
+const HALF_BLUE: [u8; 4] = [40, 40, 220, 128];
+
+/// A card atlas of two 16-texel tiles side by side: tile (0, 0) red in its
+/// left half and green in its right, tile (1, 0) half-transparent blue.
+fn atlas() -> (u32, u32, Vec<u8>) {
+    let mut rgba = Vec::with_capacity(32 * 16 * 4);
+    for _ in 0..16 {
+        for x in 0..32 {
+            rgba.extend_from_slice(match x {
+                0..8 => &RED,
+                8..16 => &GREEN,
+                _ => &HALF_BLUE,
+            });
+        }
+    }
+    (32, 16, rgba)
+}
+
+/// `cards` as instance `handle` at `translation`, admitted as `name`.
+fn cards(
+    harness: &mut Harness,
+    handle: u64,
+    cards: &[Card],
+    translation: [f32; 3],
+) -> Vec<RenderDiff> {
+    let (width, height, rgba) = atlas();
+    let asset = admit(
+        harness,
+        &format!("cards-{handle}"),
+        cards_glb(cards, 16, (width, height, &rgba), [0.0; 3]),
+    );
+    vec![
+        RenderDiff::DefineAnimatedMesh {
+            asset: asset.clone(),
+        },
+        splat_instance(handle, &asset, translation),
+    ]
+}
+
+/// A card's tile is perspective-correct across it: turned 70° away, its
+/// tile's middle, where red meets green, stands at the card's centre, not
+/// at the middle of its corners on the screen (6 pixels nearer the near
+/// edge here).
+#[test]
+fn a_turned_cards_tile_is_perspective_correct() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let (_, empty) = harness.render(&front());
+    let turn = 35f32.to_radians();
+    let ops = cards(
+        &mut harness,
+        1,
+        &[Card {
+            rotation: [0.0, turn.sin(), 0.0, turn.cos()],
+            ..Card::facing([0.0; 3], 1.0, [0, 0])
+        }],
+        [0.0, 0.0, -3.0],
+    );
+    harness.apply(ops);
+    let (_, rgba) = harness.render(&front());
+    let (x, y) = CENTRE;
+    assert_near(at(&rgba, (x - 3, y)), [230, 40, 40], 3);
+    assert_near(at(&rgba, (x + 3, y)), [40, 200, 40], 3);
+    // Past its near edge (134 pixels in) the frame is as it was.
+    assert_eq!(at(&rgba, (x - 30, y)), at(&empty, (x - 30, y)));
+    let readout = harness.renderer.gpu_readout().splats;
+    assert_eq!(readout.refused, None);
+    harness.render(&front());
+    let readout = harness.renderer.gpu_readout().splats;
+    assert_eq!(
+        (
+            readout.runs,
+            readout.instances,
+            readout.cards,
+            readout.gaussians
+        ),
+        (1, 1, 1, 0)
+    );
+}
+
+/// Of two cards the nearer draws over the farther whichever the GLB wrote
+/// first, and a half-transparent one blends over the other in display
+/// space, as the cards were trained to.
+#[test]
+fn a_translucent_card_blends_over_a_farther_one_in_display_space() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let ops = cards(
+        &mut harness,
+        1,
+        &[
+            Card::facing([0.0, 0.0, 1.0], 0.5, [1, 0]),
+            Card::facing([0.0; 3], 0.5, [0, 0]),
+        ],
+        [0.0, 0.0, -4.0],
+    );
+    harness.apply(ops);
+    let (_, rgba) = harness.render(&front());
+    let over = |under: [u8; 4]| {
+        let a = f32::from(HALF_BLUE[3]) / 255.0;
+        [0, 1, 2]
+            .map(|c| (a * f32::from(HALF_BLUE[c]) + (1.0 - a) * f32::from(under[c])).round() as i32)
+    };
+    let (x, y) = CENTRE;
+    assert_near(at(&rgba, (x - 8, y)), over(RED), 3);
+    assert_near(at(&rgba, (x + 8, y)), over(GREEN), 3);
+}
+
+/// A card's group tint and the multiplier apply as to Gaussians: the
+/// tinted group draws its target in display space, and the multiplier
+/// scales the colour in linear light.
+#[test]
+fn a_cards_group_tint_and_multiplier_apply_as_to_gaussians() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let mut ops = cards(
+        &mut harness,
+        1,
+        &[Card {
+            group: 2,
+            ..Card::facing([0.0; 3], 0.5, [0, 0])
+        }],
+        [0.0, 0.0, -3.0],
+    );
+    ops.push(RenderDiff::SetSplatGroupTints {
+        handle: RenderHandle::new(1),
+        tints: vec![SplatGroupTint {
+            group: 2,
+            target: [40.0 / 255.0, 40.0 / 255.0, 200.0 / 255.0],
+            weight: 0.5,
+        }],
+    });
+    ops.push(RenderDiff::SetSplatAppearance {
+        handle: RenderHandle::new(1),
+        appearance: SplatAppearance {
+            multiplier: [0.5, 1.0, 1.0],
+            ..SplatAppearance::default()
+        },
+    });
+    harness.apply(ops);
+    let (_, rgba) = harness.render(&front());
+    let (x, y) = CENTRE;
+    // Red half way to blue, then its red halved in linear light.
+    assert_near(
+        at(&rgba, (x - 8, y)),
+        [encode(decode(135) * 0.5), 40, 120],
+        3,
+    );
+}
+
+/// A card figure and a Gaussian figure draw in runs of their own, each
+/// fogged at its own distance: a card writes the depth under it as a
+/// Gaussian does.
+#[test]
+fn cards_and_gaussians_draw_in_runs_of_their_own_fogged_at_their_distance() {
+    let mut harness = Harness::new(RendererOptions::default());
+    let fog = [0.5, 0.25, 0.75];
+    let mut ops = cards(
+        &mut harness,
+        1,
+        &[Card::facing([0.0; 3], 0.5, [0, 0])],
+        [-1.0, 0.0, -5.0],
+    );
+    let color = [200, 100, 50, 255];
+    ops.extend(splats(
+        &mut harness,
+        2,
+        &[Gaussian::round([0.0; 3], 0.4, color)],
+        [1.5, 0.0, -8.0],
+    ));
+    ops.push(RenderDiff::SetFog {
+        fog: Some(FogDescriptor::Linear {
+            color: fog,
+            start: 0.0,
+            end: 10.0,
+        }),
+    });
+    harness.apply(ops);
+    let (_, rgba) = harness.render(&front());
+    let fogged = |color: [u8; 4], distance: f32| -> [i32; 3] {
+        let visibility = 1.0 - distance / 10.0;
+        [0, 1, 2].map(|c| encode(decode(color[c]) * visibility + fog[c] * (1.0 - visibility)))
+    };
+    // The card's red half, a little left of its centre: fogged at the
+    // distance to the card's plane along that pixel's ray.
+    let (x, y) = ahead(-1.1, 0.0, -5.0);
+    let distance = 5.0 * (1.0 + (1.1f32 / 5.0).powi(2)).sqrt();
+    assert_near(at(&rgba, (x, y)), fogged(RED, distance), 3);
+    let far = ahead(1.5, 0.0, -8.0);
+    assert_near(
+        at(&rgba, far),
+        fogged(color, (1.5f32 * 1.5 + 64.0).sqrt()),
+        3,
+    );
+    harness.render(&front());
+    let readout = harness.renderer.gpu_readout().splats;
+    assert_eq!(
+        (
+            readout.runs,
+            readout.instances,
+            readout.cards,
+            readout.gaussians
+        ),
+        (2, 2, 1, 1)
+    );
 }

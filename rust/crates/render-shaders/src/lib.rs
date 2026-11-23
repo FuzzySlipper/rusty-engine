@@ -404,7 +404,7 @@ impl BitOr for Features {
 }
 
 /// Importable modules, each after the modules it imports.
-const MODULES: [(&str, &str); 15] = [
+const MODULES: [(&str, &str); 16] = [
     ("shaders/types.wgsl", include_str!("shaders/types.wgsl")),
     ("shaders/view.wgsl", include_str!("shaders/view.wgsl")),
     ("shaders/motion.wgsl", include_str!("shaders/motion.wgsl")),
@@ -428,6 +428,10 @@ const MODULES: [(&str, &str); 15] = [
     (
         "shaders/splat_layer.wgsl",
         include_str!("shaders/splat_layer.wgsl"),
+    ),
+    (
+        "shaders/splat_common.wgsl",
+        include_str!("shaders/splat_common.wgsl"),
     ),
 ];
 
@@ -531,6 +535,9 @@ pub enum Entry {
     /// Gaussian splats: projected, radix-sorted, drawn into a run's layer
     /// and composited (`splats.wgsl`; compute and raster).
     Splats,
+    /// Card splats: projected and drawn into a run's layer
+    /// (`splat_cards.wgsl`; compute and raster), sorted by `Splats`.
+    SplatCards,
     /// A lit splat run's composite: its layer lit by the world's lights
     /// (`splat_light.wgsl`).
     SplatLight,
@@ -605,6 +612,10 @@ impl Entry {
             ),
             Self::Hiz => ("shaders/hiz.wgsl", include_str!("shaders/hiz.wgsl")),
             Self::Splats => ("shaders/splats.wgsl", include_str!("shaders/splats.wgsl")),
+            Self::SplatCards => (
+                "shaders/splat_cards.wgsl",
+                include_str!("shaders/splat_cards.wgsl"),
+            ),
             Self::SplatLight => (
                 "shaders/splat_light.wgsl",
                 include_str!("shaders/splat_light.wgsl"),
@@ -1076,6 +1087,7 @@ mod tests {
             Entry::RayGi,
             Entry::RayGiComposite,
             Entry::Splats,
+            Entry::SplatCards,
             Entry::SplatLight,
             Entry::SplatCaster,
         ] {

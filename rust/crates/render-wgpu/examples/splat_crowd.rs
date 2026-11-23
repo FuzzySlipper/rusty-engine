@@ -12,7 +12,7 @@
 //!     --clip-pack PATH --clip ID --fit JOINT:K,A --out DIR
 //!     [--counts 1,8,16,32] [--size 1920x1080] [--warm 2] [--frames 240]
 //!     [--lights] [--lit FLOOR] [--caster splats|ellipsoids]
-//!     [--tint GROUP:RRGGBB --tinted N]
+//!     [--tint GROUP:RRGGBB --tinted N] [--distance METRES]
 //! ```
 //!
 //! - `--fit JOINT:K,A`: the clip's translation of `JOINT` becomes
@@ -30,6 +30,9 @@
 //! - `--tint GROUP:RRGGBB`, `--tinted N`: every Nth figure, from the first,
 //!   blinks its Gaussian group `GROUP` (its `_GROUP`) toward the sRGB
 //!   colour `RRGGBB`, its weight set anew every frame (a blink a second).
+//! - `--distance METRES`: the camera at least this far from the group's
+//!   centre, for figures at crowd distance (a 1.8 m figure is about 60
+//!   pixels tall 42 m away at 1080 rows).
 //!
 //! Writes `crowd.json`: per count, each timed pass's median GPU time (over
 //! the last 120 frames; `world` spans the splats' passes, which run inside
@@ -78,6 +81,8 @@ struct Arguments {
     caster: SplatShadowCaster,
     /// The group, its target, and every how many figures blink it.
     tint: Option<(u8, [f32; 3], usize)>,
+    /// The camera's least distance from the group's centre.
+    distance: f64,
 }
 
 fn arguments() -> Result<Arguments, String> {
@@ -85,6 +90,7 @@ fn arguments() -> Result<Arguments, String> {
     let mut counts = vec![1, 8, 16, 32];
     let (mut size, mut warm, mut frames) = ((1920, 1080), 2.0, 240);
     let (mut lights, mut lit, mut caster) = (false, None, SplatShadowCaster::None);
+    let mut least_distance = 0.0;
     let (mut tint, mut tinted) = (None, 1);
     let mut args = std::env::args().skip(1);
     while let Some(flag) = args.next() {
@@ -150,6 +156,9 @@ fn arguments() -> Result<Arguments, String> {
                     .filter(|every| *every > 0)
                     .ok_or("--tinted takes a whole number above 0")?;
             }
+            "--distance" => {
+                least_distance = value()?.parse().map_err(|_| "--distance takes metres")?;
+            }
             other => return Err(format!("unknown flag {other}")),
         }
     }
@@ -167,6 +176,7 @@ fn arguments() -> Result<Arguments, String> {
         lit,
         caster,
         tint: tint.map(|(group, target)| (group, target, tinted)),
+        distance: least_distance,
     })
 }
 
@@ -393,7 +403,7 @@ fn main() {
         // In front of the group (the figures face +z), far enough back to
         // fit its columns across and its rows behind.
         let aspect = f64::from(width) / f64::from(height);
-        let distance = NEAREST.max(
+        let distance = NEAREST.max(arguments.distance).max(
             columns as f64 * SPACING / (2.0 * (FOV_Y_DEGREES / 2.0).to_radians().tan() * aspect)
                 + rows_deep as f64 * SPACING / 2.0,
         );
@@ -486,8 +496,9 @@ fn main() {
             .map(|(pass, ms)| format!("\"{pass}\": {ms:.4}"))
             .collect();
         let row = format!(
-            "{{\"count\": {count}, \"gaussians\": {}, \"runs\": {}, \"size\": [{width}, {height}], \"passes\": {{{}}}, \"frame_ms\": {throughput:.4}, \"fps\": {:.1}, \"cpu_ms_p50\": {:.4}, \"cpu_ms_p95\": {:.4}, \"frames\": {}, \"distance\": {distance:.3}}}",
+            "{{\"count\": {count}, \"gaussians\": {}, \"cards\": {}, \"runs\": {}, \"size\": [{width}, {height}], \"passes\": {{{}}}, \"frame_ms\": {throughput:.4}, \"fps\": {:.1}, \"cpu_ms_p50\": {:.4}, \"cpu_ms_p95\": {:.4}, \"frames\": {}, \"distance\": {distance:.3}}}",
             readout.splats.gaussians,
+            readout.splats.cards,
             readout.splats.runs,
             passes.join(", "),
             1000.0 / throughput,

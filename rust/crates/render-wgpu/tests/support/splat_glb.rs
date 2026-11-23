@@ -421,3 +421,117 @@ pub fn wrapped_hips_pack_glb() -> Vec<u8> {
     });
     glb(&document, &bin)
 }
+
+/// A card: a textured rectangle carrying one tile of its GLB's atlas.
+#[derive(Clone, Copy, Debug)]
+pub struct Card {
+    pub centre: [f32; 3],
+    /// xyzw: local x along the card's first half-axis, y its second.
+    pub rotation: [f32; 4],
+    /// Half-extents along its local x and y, in metres.
+    pub half: [f32; 2],
+    /// Its tile, in tiles from the atlas's top left.
+    pub tile: [u16; 2],
+    /// `_GROUP`, written when any card of a GLB is in a group.
+    pub group: u8,
+}
+
+impl Card {
+    /// A card facing +z of half-extent `half` carrying `tile`.
+    pub fn facing(centre: [f32; 3], half: f32, tile: [u16; 2]) -> Self {
+        Self {
+            centre,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            half: [half; 2],
+            tile,
+            group: 0,
+        }
+    }
+}
+
+/// A card GLB whose one node, at `translation`, draws `cards` with tiles
+/// of `tile_pixels` from an atlas of `width` × `height` RGBA texels,
+/// embedded as a PNG (`extras.splatKind = "billboard"`).
+pub fn cards_glb(
+    cards: &[Card],
+    tile_pixels: u32,
+    (width, height, atlas): (u32, u32, &[u8]),
+    translation: [f32; 3],
+) -> Vec<u8> {
+    let count = cards.len();
+    let png = render_wgpu::encode_png(width, height, atlas).expect("the atlas encodes");
+    let mut bin = Vec::new();
+    let mut views = Vec::new();
+    let mut push_view = |bin: &mut Vec<u8>, bytes: Vec<u8>| {
+        let offset = bin.len();
+        bin.extend_from_slice(&bytes);
+        while !bin.len().is_multiple_of(4) {
+            bin.push(0);
+        }
+        views.push(json!({"buffer": 0, "byteOffset": offset, "byteLength": bytes.len()}));
+        views.len() - 1
+    };
+    let floats = |values: &mut dyn Iterator<Item = f32>| -> Vec<u8> {
+        values.flat_map(f32::to_le_bytes).collect()
+    };
+    let positions = push_view(&mut bin, floats(&mut cards.iter().flat_map(|c| c.centre)));
+    let rotations = push_view(&mut bin, floats(&mut cards.iter().flat_map(|c| c.rotation)));
+    let halves = push_view(&mut bin, floats(&mut cards.iter().flat_map(|c| c.half)));
+    let tiles = push_view(
+        &mut bin,
+        cards
+            .iter()
+            .flat_map(|c| c.tile)
+            .flat_map(u16::to_le_bytes)
+            .collect(),
+    );
+    let image = push_view(&mut bin, png);
+    let groups = cards
+        .iter()
+        .any(|c| c.group != 0)
+        .then(|| push_view(&mut bin, cards.iter().map(|c| c.group).collect()));
+    let mut min = [f32::MAX; 3];
+    let mut max = [f32::MIN; 3];
+    for card in cards {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(card.centre[axis]);
+            max[axis] = max[axis].max(card.centre[axis]);
+        }
+    }
+    let mut attributes = json!({"POSITION": 0, "_ROTATION": 1, "_SCALE": 2, "_TILE_ORIGIN": 3});
+    if groups.is_some() {
+        attributes["_GROUP"] = json!(4);
+    }
+    let mut document = json!({
+        "asset": {"version": "2.0", "generator": "render-wgpu card fixtures"},
+        "scene": 0,
+        "scenes": [{"nodes": [0]}],
+        "nodes": [{"name": "cards", "mesh": 0, "translation": translation}],
+        "meshes": [{"name": "cards", "primitives": [{
+            "mode": 0,
+            "attributes": attributes,
+            "extras": {"splatKind": "billboard", "bbsplat": {
+                "tilePx": tile_pixels, "atlasW": width, "atlasH": height, "atlasTexture": 0}},
+        }]}],
+        "accessors": [
+            {"bufferView": positions, "componentType": 5126, "count": count, "type": "VEC3",
+             "min": min, "max": max},
+            {"bufferView": rotations, "componentType": 5126, "count": count, "type": "VEC4"},
+            {"bufferView": halves, "componentType": 5126, "count": count, "type": "VEC2"},
+            {"bufferView": tiles, "componentType": 5123, "count": count, "type": "VEC2"},
+        ],
+        "bufferViews": views,
+        "buffers": [{"byteLength": bin.len()}],
+        "images": [{"bufferView": image, "mimeType": "image/png"}],
+        "textures": [{"source": 0}],
+    });
+    if let Some(view) = groups {
+        document["accessors"]
+            .as_array_mut()
+            .expect("accessors")
+            .push(json!(
+                {"bufferView": view, "componentType": 5121, "count": count, "type": "SCALAR"}
+            ));
+    }
+    glb(&document, &bin)
+}

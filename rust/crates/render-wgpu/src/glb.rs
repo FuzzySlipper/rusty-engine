@@ -59,6 +59,19 @@ pub struct GlbSplats {
     pub joints: Option<Vec<[u16; 4]>>,
     /// Normalized to sum 1 (a zero sum becomes `(1, 0, 0, 0)`).
     pub weights: Option<Vec<[f32; 4]>>,
+    /// For cards (`extras.splatKind = "billboard"`): their tiles and atlas.
+    /// A card's `_SCALE` is its half-extents in x and y (z 0), and it has
+    /// no `_COLOR` (`colors` is empty).
+    pub cards: Option<GlbCards>,
+}
+
+/// A card primitive's tiles: each card's `_TILE_ORIGIN`, in tiles from
+/// the atlas's top left, the tiles' side in atlas pixels and the atlas's
+/// texture (`extras.bbsplat`).
+pub struct GlbCards {
+    pub tiles: Vec<[u16; 2]>,
+    pub tile_pixels: u32,
+    pub atlas: usize,
 }
 
 pub struct GlbSkin {
@@ -524,7 +537,8 @@ fn generated_tangents(primitive: &GlbPrimitive, set: u32) -> Option<Vec<[f32; 4]
     Some(faces.tangents)
 }
 
-/// Whether `primitive` is a splat primitive: `POINTS` with `_SCALE`.
+/// Whether `primitive` is a splat primitive: `POINTS` with `_SCALE`
+/// (Gaussians, or cards as admission requires).
 pub(crate) fn is_splat_primitive(primitive: &gltf::Primitive<'_>) -> bool {
     primitive.mode() == gltf::mesh::Mode::Points
         && primitive
@@ -548,8 +562,33 @@ fn decode_splats<'a, 's>(
         data.clone(),
     )?;
     let rotations = floats::<4>(attribute("ROTATION")?, data.clone())?;
-    let scales = floats::<3>(attribute("SCALE")?, data.clone())?;
-    let colors = floats::<4>(attribute("COLOR")?, data.clone())?;
+    let cards = card_extras(primitive)
+        .map(|(tile_pixels, atlas)| {
+            let accessor = attribute("TILE_ORIGIN")?;
+            let index = accessor.index();
+            let tiles = gltf::accessor::Iter::<[u16; 2]>::new(accessor, data.clone())
+                .map(Iterator::collect::<Vec<_>>)
+                .ok_or_else(|| format!("glb: accessor {index} has no data"))?;
+            Ok::<_, String>(GlbCards {
+                tiles,
+                tile_pixels,
+                atlas,
+            })
+        })
+        .transpose()?;
+    // A card's half-extents in x and y; it has no colour of its own.
+    let (scales, colors) = if cards.is_some() {
+        let halves = floats::<2>(attribute("SCALE")?, data.clone())?;
+        (
+            halves.into_iter().map(|[x, y]| [x, y, 0.0]).collect(),
+            Vec::new(),
+        )
+    } else {
+        (
+            floats::<3>(attribute("SCALE")?, data.clone())?,
+            floats::<4>(attribute("COLOR")?, data.clone())?,
+        )
+    };
     let normals = attribute("NORMAL")
         .ok()
         .map(|accessor| floats::<3>(accessor, data.clone()))
@@ -568,8 +607,10 @@ fn decode_splats<'a, 's>(
         })
         .transpose()?;
     let count = centres.len();
-    if [rotations.len(), scales.len(), colors.len()]
+    if [rotations.len(), scales.len()]
         .iter()
+        .chain(cards.is_none().then_some(colors.len()).as_ref())
+        .chain(cards.as_ref().map(|cards| cards.tiles.len()).as_ref())
         .chain(normals.as_ref().map(Vec::len).as_ref())
         .chain(albedos.as_ref().map(Vec::len).as_ref())
         .chain(groups.as_ref().map(Vec::len).as_ref())
@@ -604,7 +645,23 @@ fn decode_splats<'a, 's>(
         groups,
         joints,
         weights,
+        cards,
     })
+}
+
+/// A card primitive's tile side and atlas texture (`extras.splatKind =
+/// "billboard"`, `extras.bbsplat`), or `None` for Gaussians.
+fn card_extras(primitive: &gltf::Primitive<'_>) -> Option<(u32, usize)> {
+    let extras: serde_json::Value =
+        serde_json::from_str(primitive.extras().as_ref()?.get()).ok()?;
+    if extras.get("splatKind")?.as_str()? != "billboard" {
+        return None;
+    }
+    let bbsplat = extras.get("bbsplat")?;
+    Some((
+        u32::try_from(bbsplat.get("tilePx")?.as_u64()?).ok()?,
+        usize::try_from(bbsplat.get("atlasTexture")?.as_u64()?).ok()?,
+    ))
 }
 
 /// An accessor of `N` components as floats: f32 as it is, normalized
