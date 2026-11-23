@@ -159,7 +159,10 @@ A sound reaches the listener the louder of two ways:
   cutoff every 0.25 m down to 250 Hz: a metre of rock is about -16 dB at
   1.25 kHz, muffled rather than silent. Through solid, the centre ray is
   averaged with two rays 0.3 m to either side, so the edge of a wall muffles
-  part of a sound rather than all of it at once.
+  part of a sound rather than all of it at once. A static mesh is solid
+  behind its triangles' front faces (wound outward by the right-hand rule, as
+  a renderer culls them); overlapping meshes count once, and a sound inside
+  rock counts the rock it starts in.
 - **Round, by open air.** A search over 1 m air cells joined where the
   segment between their centres is clear finds the shortest open path; the
   sound falls off with that path's length, unfiltered, and is heard from the
@@ -194,7 +197,7 @@ Limits and cost:
   each sound's straight rays and looks its path up. In a 96 × 24 × 96 m
   cave on den-agents (busy, release), a refresh costs about 2–4 µs per
   occluded sound with voxel rock and 8–13 µs with static-mesh rock, and the
-  worker's search 2.5–5 ms. A query costs well under a microsecond when its
+  worker's search 2.5–5 ms. A query costs a few microseconds when its
   points are in the open, and 2–5 ms, on the calling update, when it must
   search round rock to them.
 

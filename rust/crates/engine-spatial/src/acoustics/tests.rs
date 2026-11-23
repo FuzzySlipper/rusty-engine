@@ -59,8 +59,9 @@ fn mesh_boxes(boxes: &[[[f64; 3]; 2]]) -> VoxelCollisionScene {
             [0, 1, 3, 2],
             [4, 6, 7, 5],
         ] {
-            triangles.push([base + a, base + b, base + c]);
-            triangles.push([base + a, base + c, base + d]);
+            // Wound outward by the right-hand rule.
+            triangles.push([base + a, base + c, base + b]);
+            triangles.push([base + a, base + d, base + c]);
         }
     }
     let mut scene = VoxelCollisionScene::from_solid_voxels(1.0, 8, []).unwrap();
@@ -104,6 +105,44 @@ fn solid_metres_measures_static_mesh_walls_either_way() {
         let crossed = two.solid_metres(from, to);
         assert!(
             (crossed - 2.0).abs() < 1e-6,
+            "{from:?} to {to:?}: {crossed}"
+        );
+    }
+}
+
+#[test]
+fn overlapping_meshes_count_as_one_solid() {
+    // Two boxes overlapping over x 5..6: 3 m of rock, not 2.
+    let near = [0.5, 0.0, 0.0];
+    let far = [9.5, 0.0, 0.0];
+    let overlapping = mesh_boxes(&[
+        [[4.0, -2.0, -2.0], [6.0, 2.0, 2.0]],
+        [[5.0, -2.0, -2.0], [7.0, 2.0, 2.0]],
+    ]);
+    for (from, to) in [(near, far), (far, near)] {
+        let crossed = overlapping.solid_metres(from, to);
+        assert!(
+            (crossed - 3.0).abs() < 1e-6,
+            "{from:?} to {to:?}: {crossed}"
+        );
+    }
+    // Starting inside the overlap.
+    let out = overlapping.solid_metres([5.5, 0.0, 0.0], far);
+    assert!((out - 1.5).abs() < 1e-6, "{out}");
+}
+
+#[test]
+fn a_segment_starting_in_a_mesh_counts_the_rock_it_starts_in() {
+    let one = mesh_boxes(&[[[4.0, -2.0, -2.0], [5.0, 2.0, 2.0]]]);
+    for (from, to, expected) in [
+        ([4.5, 0.0, 0.0], [0.5, 0.0, 0.0], 0.5),
+        ([4.5, 0.0, 0.0], [9.5, 0.0, 0.0], 0.5),
+        ([0.5, 0.0, 0.0], [4.5, 0.0, 0.0], 0.5),
+        ([4.2, 0.0, 0.0], [4.8, 0.0, 0.0], 0.6),
+    ] {
+        let crossed = one.solid_metres(from, to);
+        assert!(
+            (crossed - expected).abs() < 1e-6,
             "{from:?} to {to:?}: {crossed}"
         );
     }

@@ -23,7 +23,10 @@ const PATH_BEARING_METRES: f64 = 3.0;
 /// How far an enclosure ray looks.
 pub const ENCLOSURE_METRES: f64 = 24.0;
 /// The most static-mesh surfaces one solid measurement crosses.
-const MESH_CROSSINGS: usize = 16;
+const MESH_CROSSINGS: usize = 24;
+/// How far past a segment's end a solid measurement reads surfaces to learn
+/// whether the segment starts inside a mesh.
+const MESH_BEYOND: f64 = 64.0;
 /// How far past a surface a measurement starts its next cast.
 const MESH_STEP: f64 = 1e-3;
 const NO_CELL: u32 = u32::MAX;
@@ -187,11 +190,13 @@ impl VoxelCollisionScene {
         }
     }
 
-    /// Spans inside static meshes along the ray. A static-mesh hit's normal
-    /// is turned to face the ray whichever side it struck, so it cannot say
-    /// in from out; the surfaces met alternate instead, the segment starting
-    /// outside: in at the first, out at the second, and so on, and in to its
-    /// end after an odd count.
+    /// Spans inside static meshes along the ray, overlapping meshes as one.
+    /// Each surface met adds one to a winding count going in (its triangle
+    /// faces against the ray) and takes one off coming out; the ray is in
+    /// solid wherever the count is above zero. The count the segment starts
+    /// at is read from every surface on past its end to [`MESH_BEYOND`]
+    /// metres, where the line is taken to be out of every mesh again, so a
+    /// segment that starts in rock counts it.
     fn mesh_spans(
         &self,
         from: [f64; 3],
@@ -200,21 +205,49 @@ impl VoxelCollisionScene {
         spans: &mut Vec<(f64, f64)>,
     ) {
         let meshes = self.static_mesh_projection();
+        let reach = length + MESH_BEYOND;
+        let mut surfaces: Vec<(f64, i32)> = Vec::new();
         let mut at = 0.0;
-        let mut entered: Option<f64> = None;
-        for _ in 0..MESH_CROSSINGS {
+        while surfaces.len() < MESH_CROSSINGS {
             let origin = add(from, scale(direction, at));
-            let Some(hit) = meshes.raycast(ray(origin, direction), length - at) else {
+            let Some((hit, entering)) = meshes.raycast_oriented(ray(origin, direction), reach - at)
+            else {
                 break;
             };
             let surface = at + hit.distance;
-            match entered.take() {
-                Some(start) => spans.push((start, surface)),
-                None => entered = Some(surface),
-            }
+            surfaces.push((surface, if entering { 1 } else { -1 }));
             at = surface + MESH_STEP;
-            if at >= length {
+            if at >= reach {
                 break;
+            }
+        }
+        if surfaces.is_empty() {
+            return;
+        }
+        // Out of every mesh past the last surface; never below zero inside.
+        let total: i32 = surfaces.iter().map(|(_, turn)| turn).sum();
+        let lowest = surfaces
+            .iter()
+            .scan(0, |count, (_, turn)| {
+                *count += turn;
+                Some(*count)
+            })
+            .min()
+            .unwrap_or(0);
+        let mut count = (-total).max(-lowest).max(0);
+        let mut entered = (count > 0).then_some(0.0);
+        for (surface, turn) in surfaces {
+            if surface >= length {
+                break;
+            }
+            count += turn;
+            match (entered, count > 0) {
+                (None, true) => entered = Some(surface),
+                (Some(start), false) => {
+                    spans.push((start, surface));
+                    entered = None;
+                }
+                _ => {}
             }
         }
         if let Some(start) = entered {

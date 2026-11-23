@@ -584,6 +584,14 @@ impl StaticMeshCollisionProjection {
     }
 
     pub fn raycast(&self, ray: Ray, max_distance: f64) -> Option<StaticMeshHit> {
+        self.raycast_oriented(ray, max_distance).map(|(hit, _)| hit)
+    }
+
+    /// The nearest hit, and whether the ray goes into its mesh there: the
+    /// struck triangle's own winding (outward by the right-hand rule, turned
+    /// by a mirroring transform) faces against the ray. The hit's `normal`
+    /// cannot say, as it is turned to face the ray whichever side it struck.
+    pub fn raycast_oriented(&self, ray: Ray, max_distance: f64) -> Option<(StaticMeshHit, bool)> {
         let len = ray.dir.length();
         if !len.is_finite() || len <= 0.0 || !max_distance.is_finite() || max_distance <= 0.0 {
             return None;
@@ -595,7 +603,7 @@ impl StaticMeshCollisionProjection {
             Vector::new(direction.x, direction.y, direction.z),
         );
         let pose = identity();
-        let mut best = None;
+        let mut best: Option<(StaticMeshHit, bool)> = None;
         for (instance_id, instance) in &self.instances {
             // An instance whose bounds the segment misses has no triangle it
             // meets, so its mesh is not descended.
@@ -612,20 +620,31 @@ impl StaticMeshCollisionProjection {
             {
                 if best
                     .as_ref()
-                    .is_none_or(|current: &StaticMeshHit| hit.time_of_impact < current.distance)
+                    .is_none_or(|(current, _)| hit.time_of_impact < current.distance)
                 {
-                    best = Some(StaticMeshHit {
-                        instance: *instance_id,
-                        asset: instance.asset,
-                        geometry_hash: instance.geometry_hash,
-                        point: WorldPos::new(
-                            ray.origin.x + direction.x * hit.time_of_impact,
-                            ray.origin.y + direction.y * hit.time_of_impact,
-                            ray.origin.z + direction.z * hit.time_of_impact,
-                        ),
-                        normal: WorldVec::new(hit.normal.x, hit.normal.y, hit.normal.z),
-                        distance: hit.time_of_impact,
-                    });
+                    let mirrored = instance.transform.scale.iter().product::<f64>() < 0.0;
+                    let facing = instance
+                        .shape
+                        .as_trimesh()
+                        .and_then(|mesh| mesh.triangle(hit.subshape).normal())
+                        .map(|normal| normal.dot(parry_ray.dir))
+                        .unwrap_or(0.0);
+                    let entering = (facing < 0.0) != mirrored;
+                    best = Some((
+                        StaticMeshHit {
+                            instance: *instance_id,
+                            asset: instance.asset,
+                            geometry_hash: instance.geometry_hash,
+                            point: WorldPos::new(
+                                ray.origin.x + direction.x * hit.time_of_impact,
+                                ray.origin.y + direction.y * hit.time_of_impact,
+                                ray.origin.z + direction.z * hit.time_of_impact,
+                            ),
+                            normal: WorldVec::new(hit.normal.x, hit.normal.y, hit.normal.z),
+                            distance: hit.time_of_impact,
+                        },
+                        entering,
+                    ));
                 }
             }
         }
