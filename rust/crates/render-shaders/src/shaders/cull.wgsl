@@ -13,6 +13,8 @@
 // the parts the last cull found visible (`cs_occluders`), so a part the
 // test drops is hidden behind geometry this frame draws.
 
+#import rusty::hiz_common::{Hiz, hiz_level_size, hiz_index}
+
 struct CullParams {
     // Inward-pointing frustum planes for wgpu clip space.
     planes: array<vec4<f32>, 6>,
@@ -62,7 +64,7 @@ struct DrawArgs {
 
 // The view's farthest-depth pyramid: level 0 covers the view's region from
 // its top-left texel.
-@group(1) @binding(0) var occluders: texture_2d<f32>;
+@group(1) @binding(0) var<storage, read> occluders: Hiz;
 
 const WORKGROUP: u32 = 64u;
 const NO_OCCLUDER: u32 = 0x80000000u;
@@ -131,10 +133,12 @@ fn occluded(bounds: Bounds) -> bool {
     }
     let texel_a = vec2<u32>(a) >> vec2<u32>(level);
     let texel_b = vec2<u32>(b) >> vec2<u32>(level);
+    let start = occluders.starts[level];
+    let width = hiz_level_size(occluders.size, level).x;
     var farthest = 0.0;
     for (var y = texel_a.y; y <= texel_b.y; y++) {
         for (var x = texel_a.x; x <= texel_b.x; x++) {
-            farthest = max(farthest, textureLoad(occluders, vec2<u32>(x, y), i32(level)).r);
+            farthest = max(farthest, occluders.depth[hiz_index(start, width, vec2<u32>(x, y))]);
         }
     }
     // In wgpu's depth (0 near, 1 far, far beyond near), 1 - depth falls

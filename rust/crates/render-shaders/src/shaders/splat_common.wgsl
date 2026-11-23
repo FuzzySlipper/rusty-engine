@@ -1,5 +1,7 @@
 #define_import_path rusty::splat_common
 
+#import rusty::hiz_common::{Hiz, hiz_level_size, hiz_index}
+
 // What a splat run's projection shares (render-wgpu `splats.rs`): a set's
 // parameters, the run's sort keys and draw, the skinning palettes, a set's
 // skin and surface streams, and the skinning and group-tint helpers. A run is
@@ -71,7 +73,7 @@ const ALPHA_MIN: f32 = 1.0 / 255.0;
 @group(1) @binding(1) var<storage, read> skins: array<vec2<u32>>;
 // The view's depth after its opaque pass, reduced to a farthest-depth
 // pyramid (render-wgpu `occlusion.rs` `DepthPyramid`).
-@group(2) @binding(0) var hiz: texture_2d<f32>;
+@group(2) @binding(0) var<storage, read> hiz: Hiz;
 
 // What a lit run reads of a Gaussian: x its unit normal in the set's
 // space, octahedral (snorm16 pair); y its albedo (`_ALBEDO`), sRGB unorm8
@@ -180,13 +182,21 @@ fn hidden(low: vec2<f32>, high: vec2<f32>, nearest: f32) -> bool {
     let levels = u32(project.occlusion.y);
     let extent = max(max(hi.x - lo.x, hi.y - lo.y), 1.0);
     let level = min(u32(ceil(log2(extent))), levels - 1u);
-    let last = vec2<i32>(textureDimensions(hiz, level)) - 1;
+    let size = hiz_level_size(hiz.size, level);
+    let last = vec2<i32>(size) - 1;
     let scale = 1.0 / f32(1u << level);
-    let a = min(vec2<i32>(floor(lo * scale)), last);
-    let b = min(vec2<i32>(floor(hi * scale)), last);
+    let a = vec2<u32>(min(vec2<i32>(floor(lo * scale)), last));
+    let b = vec2<u32>(min(vec2<i32>(floor(hi * scale)), last));
+    let start = hiz.starts[level];
     let farthest = max(
-        max(textureLoad(hiz, a, level).r, textureLoad(hiz, vec2<i32>(b.x, a.y), level).r),
-        max(textureLoad(hiz, vec2<i32>(a.x, b.y), level).r, textureLoad(hiz, b, level).r),
+        max(
+            hiz.depth[hiz_index(start, size.x, a)],
+            hiz.depth[hiz_index(start, size.x, vec2<u32>(b.x, a.y))],
+        ),
+        max(
+            hiz.depth[hiz_index(start, size.x, vec2<u32>(a.x, b.y))],
+            hiz.depth[hiz_index(start, size.x, b)],
+        ),
     );
     return nearest > farthest;
 }

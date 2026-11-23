@@ -17,6 +17,7 @@
 // last mesh level), whole.
 
 #import rusty::types::{Part, ScatterCopy}
+#import rusty::hiz_common::{Hiz, hiz_level_size, hiz_index}
 
 struct Params {
     // Inward-pointing frustum planes for wgpu clip space.
@@ -93,7 +94,7 @@ struct DrawArgs {
 @group(0) @binding(8) var<storage, read_write> stats: array<atomic<u32>, 9>;
 // The view's farthest-depth pyramid (render-wgpu `occlusion.rs`): level 0
 // covers the view's region from its top-left texel.
-@group(0) @binding(9) var occluders: texture_2d<f32>;
+@group(0) @binding(9) var<storage, read> occluders: Hiz;
 // The pass's working words: each copy's decision (from 0); each chunk's
 // copies in each list (`Params::scratch.x`), then where they start in their
 // run's; each run's copies in each list (y); each level part's first entry
@@ -181,10 +182,12 @@ fn occluded(center: vec3<f32>, radius: f32) -> bool {
     }
     let texel_a = vec2<u32>(a) >> vec2<u32>(level);
     let texel_b = vec2<u32>(b) >> vec2<u32>(level);
+    let start = occluders.starts[level];
+    let width = hiz_level_size(occluders.size, level).x;
     var farthest = 0.0;
     for (var y = texel_a.y; y <= texel_b.y; y++) {
         for (var x = texel_a.x; x <= texel_b.x; x++) {
-            farthest = max(farthest, textureLoad(occluders, vec2<u32>(x, y), i32(level)).r);
+            farthest = max(farthest, occluders.depth[hiz_index(start, width, vec2<u32>(x, y))]);
         }
     }
     return low.z > farthest;

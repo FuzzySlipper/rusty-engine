@@ -5,10 +5,13 @@
 // far plane to a power of two; each level above holds the farthest of the
 // four texels under it.
 //
-// The seed (`cs_seed`) writes level 0 from the depth. Each reduction
-// (`cs_reduce`) writes four levels: the first from the level below it, each
-// workgroup an eight by eight tile of it, and the three above from that tile
-// in workgroup memory.
+// The pyramid lies in a storage buffer (`rusty::hiz_common`). The seed
+// (`cs_seed`) writes level 0 from the depth. Each reduction (`cs_reduce`)
+// writes four levels: the first from the level below it, each workgroup an
+// eight by eight tile of it, and the three above from that tile in workgroup
+// memory.
+
+#import rusty::hiz_common::{Hiz, hiz_level_size, hiz_index}
 
 struct Params {
     // The view's region in the depth texture: origin and size.
@@ -16,41 +19,29 @@ struct Params {
     size: vec2<u32>,
     // The side of the block of pixels a level-0 texel covers.
     block: u32,
-    // How many of `out0`..`out3` a reduction writes: the pyramid's last may
-    // have fewer than four levels left, and binds a spare texel in place of
-    // the rest.
+    // The levels a reduction writes, from `first`: the pyramid's last may
+    // have fewer than four left.
     levels: u32,
+    first: u32,
 };
 
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var depth: texture_depth_2d;
 @group(0) @binding(5) var depth_samples: texture_depth_multisampled_2d;
-@group(0) @binding(3) var below: texture_2d<f32>;
-@group(0) @binding(6) var out0: texture_storage_2d<r32float, write>;
-@group(0) @binding(7) var out1: texture_storage_2d<r32float, write>;
-@group(0) @binding(8) var out2: texture_storage_2d<r32float, write>;
-@group(0) @binding(9) var out3: texture_storage_2d<r32float, write>;
+@group(0) @binding(2) var<storage, read_write> pyramid: Hiz;
 
 const TILE: u32 = 8u;
 
 var<workgroup> tile: array<f32, 64>;
 
 fn store(level: u32, at: vec2<u32>, value: f32) {
-    let texel = vec4<f32>(value, 0.0, 0.0, 0.0);
-    switch level {
-        case 0u: {
-            textureStore(out0, at, texel);
-        }
-        case 1u: {
-            textureStore(out1, at, texel);
-        }
-        case 2u: {
-            textureStore(out2, at, texel);
-        }
-        default: {
-            textureStore(out3, at, texel);
-        }
-    }
+    let width = hiz_level_size(pyramid.size, level).x;
+    pyramid.depth[hiz_index(pyramid.starts[level], width, at)] = value;
+}
+
+fn load(level: u32, at: vec2<u32>) -> f32 {
+    let width = hiz_level_size(pyramid.size, level).x;
+    return pyramid.depth[hiz_index(pyramid.starts[level], width, at)];
 }
 
 // This invocation's texel of the reduction's first level (`value`, stored
@@ -59,10 +50,10 @@ fn store(level: u32, at: vec2<u32>, value: f32) {
 // square keeping its last texel along that side, as when read from the
 // level below.
 fn store_levels(local: vec2<u32>, group: vec2<u32>, value: f32) {
-    let size = textureDimensions(out0);
+    let size = hiz_level_size(pyramid.size, params.first);
     let first = group * TILE + local;
     if all(first < size) {
-        store(0u, first, value);
+        store(params.first, first, value);
     }
     tile[local.y * TILE + local.x] = value;
     var width = TILE;
@@ -88,7 +79,7 @@ fn store_levels(local: vec2<u32>, group: vec2<u32>, value: f32) {
             let at = group * width + local;
             let level_size = max(size >> vec2<u32>(level), vec2<u32>(1u));
             if level < params.levels && all(at < level_size) {
-                store(level, at, above);
+                store(params.first + level, at, above);
             }
         }
     }
@@ -96,7 +87,7 @@ fn store_levels(local: vec2<u32>, group: vec2<u32>, value: f32) {
 
 @compute @workgroup_size(8, 8)
 fn cs_seed(@builtin(global_invocation_id) id: vec3<u32>) {
-    if any(id.xy >= textureDimensions(out0)) {
+    if any(id.xy >= pyramid.size) {
         return;
     }
     var value = 1.0;
@@ -110,12 +101,12 @@ fn cs_seed(@builtin(global_invocation_id) id: vec3<u32>) {
             }
         }
     }
-    textureStore(out0, id.xy, vec4<f32>(value, 0.0, 0.0, 0.0));
+    store(0u, id.xy, value);
 }
 
 @compute @workgroup_size(8, 8)
 fn cs_seed_samples(@builtin(global_invocation_id) id: vec3<u32>) {
-    if any(id.xy >= textureDimensions(out0)) {
+    if any(id.xy >= pyramid.size) {
         return;
     }
     var value = 1.0;
@@ -134,7 +125,7 @@ fn cs_seed_samples(@builtin(global_invocation_id) id: vec3<u32>) {
             }
         }
     }
-    textureStore(out0, id.xy, vec4<f32>(value, 0.0, 0.0, 0.0));
+    store(0u, id.xy, value);
 }
 
 @compute @workgroup_size(8, 8)
@@ -143,12 +134,13 @@ fn cs_reduce(
     @builtin(workgroup_id) group: vec3<u32>,
 ) {
     let id = group.xy * TILE + local.xy;
-    let last = textureDimensions(below) - 1u;
+    let last = hiz_level_size(pyramid.size, params.first - 1u) - 1u;
     let at = min(id * 2u, last);
     let next = min(id * 2u + 1u, last);
+    let below = params.first - 1u;
     let value = max(
-        max(textureLoad(below, at, 0).r, textureLoad(below, vec2<u32>(next.x, at.y), 0).r),
-        max(textureLoad(below, vec2<u32>(at.x, next.y), 0).r, textureLoad(below, next, 0).r),
+        max(load(below, at), load(below, vec2<u32>(next.x, at.y))),
+        max(load(below, vec2<u32>(at.x, next.y)), load(below, next)),
     );
     store_levels(local.xy, group.xy, value);
 }

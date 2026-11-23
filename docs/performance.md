@@ -273,14 +273,14 @@ costs GPU time for the depth pass and pyramid:
 It also costs renderer CPU. A world view records its occlusion passes:
 the selection, the depth pass, the pyramid, the test and, when it draws
 [splat figures](splat-characters.md#how-it-draws), their own pyramid.
-Each pyramid takes four dispatches (level 0, then four levels a dispatch)
-over bind groups made once for its size. The recording is a fixed cost,
-mostly wgpu's work in `encoder.finish()` and the submit, about 0.02 to
-0.03 ms a pass on a Ryzen 7 3700X. On that CPU with an RTX 3080 at
-1920×1080, `examples/splat_crowd` takes 0.15 ms more a frame with one figure
-and 0.16 ms more with 32. The depth pass's recording also grows with the
-occluders it draws: the CraftSurvive forest above (436 of them) takes
-0.44 ms more, 3.23 → 3.67 ms.
+Each pyramid lies in one storage buffer and takes four dispatches (level 0,
+then four levels a dispatch) over bind groups made once for its size. The
+recording is a fixed cost, mostly wgpu's work in `encoder.finish()` and the
+submit, about 0.02 ms a pass on a Ryzen 7 3700X. On that CPU with an RTX
+3080 at 1920×1080, `examples/splat_crowd` takes 0.13 ms more a frame with
+one figure and 0.14 ms more with 32. The depth pass's recording also grows
+with the occluders it draws: the CraftSurvive forest above (436 of them)
+takes 0.41 ms more, 3.24 → 3.65 ms.
 
 With clustered lighting a city's world pass is already cheap, and the cull
 roughly breaks even; in open country it is a small loss. Turn it on for

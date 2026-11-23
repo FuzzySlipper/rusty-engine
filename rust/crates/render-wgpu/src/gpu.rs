@@ -441,7 +441,8 @@ impl Gpu {
 /// wgpu's default limits at the adapter's resolution, with the adapter's
 /// largest storage binding and buffer, so dense scatter holds as many
 /// copies as the device can bind (at most `binding_limit` bytes), the
-/// sampled textures a world pass with decals binds, when the adapter has
+/// nine storage buffers the splats' projection binds and the sampled
+/// textures a world pass with decals binds, when the adapter has
 /// them (at most `texture_limit`), and the adapter's colour attachment
 /// bytes a sample, which the guide targets pass (`motion.rs`; at most
 /// `color_bytes_limit`).
@@ -465,6 +466,12 @@ fn limits(
             .min(crate::decals::WORLD_SAMPLED_TEXTURES)
             .max(defaults.max_sampled_textures_per_shader_stage)
             .min(texture_limit.unwrap_or(u32::MAX)),
+        // The splats' projection binds nine with its occlusion pyramid
+        // (`splats.rs`), where the adapter has them.
+        max_storage_buffers_per_shader_stage: adapter
+            .max_storage_buffers_per_shader_stage
+            .min(9)
+            .max(defaults.max_storage_buffers_per_shader_stage),
         ..defaults.using_resolution(adapter.clone())
     }
 }

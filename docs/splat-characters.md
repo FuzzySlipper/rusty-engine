@@ -591,8 +591,9 @@ binding's.
 ## Devices and cost
 
 - **Requirements.** Splats need compute shaders, storage buffers read in
-  vertex shaders and indirect draws. A device without them draws no splats,
-  and the readout says why. Software adapters draw them, slowly.
+  vertex shaders, nine storage buffers bound to a compute stage and
+  indirect draws. A device without them draws no splats, and the readout
+  says why. Software adapters draw them, slowly.
 - **Limit.** A run sorts at most 4,194,304 Gaussians. An instance that does
   not fit draws nothing, and the readout counts it.
 - **Readout.** `GpuReadout.splats` reports the last frame's runs, instances,

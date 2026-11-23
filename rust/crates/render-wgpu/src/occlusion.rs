@@ -30,23 +30,28 @@ const DEPTH_PASS: &str = "occlusion-depth";
 const WORKGROUP: u32 = 8;
 /// `tile` in hiz.wgsl: a workgroup's texels of its reduction's first level.
 const SHARED_BYTES: u32 = WORKGROUP * WORKGROUP * 4;
-/// The levels a reduction writes (`out0`..`out3` in hiz.wgsl): as many
-/// storage textures as WebGPU lets a stage bind.
+/// The levels a reduction writes: as many as an 8×8 tile reduces to.
 const LEVELS_PER_REDUCTION: u32 = 4;
 /// `Params` in hiz.wgsl.
 const PARAMS_BYTES: u64 = 32;
 /// Each dispatch's params at its own offset: the most any device asks
 /// uniform offsets to align to.
 const PARAMS_STRIDE: u64 = 256;
-const PYRAMID_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R32Float;
+/// `Hiz` in hiz_common.wgsl: its size, levels and each level's start, the
+/// most levels a pyramid can have, then the depth.
+const MAX_LEVELS: u32 = 16;
+const HEADER_BYTES: u64 = 16 + MAX_LEVELS as u64 * 4;
+/// The smallest pyramid buffer a reader binds: the header and one texel,
+/// rounded to the struct's 8-byte alignment.
+pub(crate) const MIN_PYRAMID_BYTES: u64 = HEADER_BYTES + 8;
 #[cfg(not(test))]
-const PYRAMID_USAGE: wgpu::TextureUsages =
-    wgpu::TextureUsages::STORAGE_BINDING.union(wgpu::TextureUsages::TEXTURE_BINDING);
+const PYRAMID_USAGE: wgpu::BufferUsages =
+    wgpu::BufferUsages::STORAGE.union(wgpu::BufferUsages::COPY_DST);
 /// The tests read the levels back.
 #[cfg(test)]
-const PYRAMID_USAGE: wgpu::TextureUsages = wgpu::TextureUsages::STORAGE_BINDING
-    .union(wgpu::TextureUsages::TEXTURE_BINDING)
-    .union(wgpu::TextureUsages::COPY_SRC);
+const PYRAMID_USAGE: wgpu::BufferUsages = wgpu::BufferUsages::STORAGE
+    .union(wgpu::BufferUsages::COPY_DST)
+    .union(wgpu::BufferUsages::COPY_SRC);
 
 /// The occlusion test of the last world view, for diagnostics.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -68,7 +73,7 @@ pub struct OcclusionReadout {
 /// What the selection tests against: the pyramid and the size of the
 /// view's region in its level-0 texels, and its levels.
 pub(crate) struct Occluders<'a> {
-    pub pyramid: &'a wgpu::TextureView,
+    pub pyramid: &'a wgpu::Buffer,
     pub region: [u32; 2],
     pub levels: u32,
 }
@@ -84,20 +89,18 @@ pub(crate) struct Pipelines {
     reduce: wgpu::ComputePipeline,
 }
 
-/// A pyramid's texture with the groups that build it, made once for its
-/// size.
+/// A pyramid's buffer (`Hiz` in hiz_common.wgsl) with the groups that
+/// build it, made once for its size.
 struct Pyramid {
     size: (u32, u32),
     levels: u32,
-    all: wgpu::TextureView,
-    level_zero: wgpu::TextureView,
+    buffer: wgpu::Buffer,
     /// Each dispatch's params, a slot each: the seed's, then each
     /// reduction's.
     params: wgpu::Buffer,
     /// What the params hold: the region and the block side.
     written: Option<(PixelRect, u32)>,
-    /// Each reduction's first level and group: over the level below it,
-    /// writing up to four levels.
+    /// Each reduction's first level and group.
     reductions: Vec<(u32, wgpu::BindGroup)>,
     /// The seed's group, for the depth it reads.
     seed: Option<(wgpu::TextureView, wgpu::BindGroup)>,
@@ -106,8 +109,10 @@ struct Pyramid {
 /// A depth texture's region reduced to a farthest-depth pyramid
 /// (`hiz.wgsl`): level 0 the region, padded with the far plane to powers of
 /// two, each level above the farthest of the four texels under it. The
-/// seed writes level 0 and each reduction four levels above it, so a 1080p
-/// view's pyramid takes four dispatches.
+/// levels lie in one storage buffer, which the tests read whole, rather
+/// than a texture's mips, which wgpu tracks one by one. The seed writes
+/// level 0 and each reduction four levels above it, so a 1080p view's
+/// pyramid takes four dispatches.
 pub(crate) struct DepthPyramid {
     pyramid: Option<Pyramid>,
     region: [u32; 2],
@@ -167,8 +172,8 @@ impl DepthPyramid {
                 layout,
                 &pyramid.params,
                 0,
-                (depth_binding, depth),
-                &[&pyramid.level_zero],
+                &pyramid.buffer,
+                Some((depth_binding, depth)),
             );
             pyramid.seed = Some((depth.clone(), group));
         }
@@ -209,7 +214,7 @@ impl DepthPyramid {
     /// levels.
     pub fn occluders(&self) -> Option<Occluders<'_>> {
         self.pyramid.as_ref().map(|pyramid| Occluders {
-            pyramid: &pyramid.all,
+            pyramid: &pyramid.buffer,
             region: self.region,
             levels: pyramid.levels,
         })
@@ -228,46 +233,24 @@ impl Pyramid {
     fn new(gpu: &Gpu, pipelines: &Pipelines, size: (u32, u32)) -> Self {
         let device = &gpu.device;
         let levels = size.0.max(size.1).ilog2() + 1;
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
+        let mut header = Vec::with_capacity(HEADER_BYTES as usize);
+        for value in [size.0, size.1, levels, 0] {
+            header.extend_from_slice(&value.to_le_bytes());
+        }
+        let mut texels = 0u64;
+        for level in 0..MAX_LEVELS {
+            header.extend_from_slice(&(texels as u32).to_le_bytes());
+            if level < levels {
+                texels += u64::from((size.0 >> level).max(1)) * u64::from((size.1 >> level).max(1));
+            }
+        }
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("render-wgpu occlusion pyramid"),
-            size: wgpu::Extent3d {
-                width: size.0,
-                height: size.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: levels,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: PYRAMID_FORMAT,
+            size: (HEADER_BYTES + texels * 4).max(MIN_PYRAMID_BYTES),
             usage: PYRAMID_USAGE,
-            view_formats: &[],
+            mapped_at_creation: false,
         });
-        // Bound in place of the levels past the top.
-        let spare = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("render-wgpu occlusion pyramid spare"),
-                size: wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: PYRAMID_FORMAT,
-                usage: wgpu::TextureUsages::STORAGE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&Default::default());
-        let level_views: Vec<wgpu::TextureView> = (0..levels)
-            .map(|level| {
-                texture.create_view(&wgpu::TextureViewDescriptor {
-                    base_mip_level: level,
-                    mip_level_count: Some(1),
-                    ..Default::default()
-                })
-            })
-            .collect();
+        gpu.queue.write_buffer(&buffer, 0, &header);
         let firsts: Vec<u32> = (1..levels).step_by(LEVELS_PER_REDUCTION as usize).collect();
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("render-wgpu occlusion pyramid params"),
@@ -279,17 +262,13 @@ impl Pyramid {
             .iter()
             .enumerate()
             .map(|(index, &first)| {
-                let written: [&wgpu::TextureView; LEVELS_PER_REDUCTION as usize] =
-                    std::array::from_fn(|level| {
-                        level_views.get(first as usize + level).unwrap_or(&spare)
-                    });
                 let group = pyramid_group(
                     gpu,
                     &pipelines.reduce_layout,
                     &params,
                     (index as u64 + 1) * PARAMS_STRIDE,
-                    (3, &level_views[first as usize - 1]),
-                    &written,
+                    &buffer,
+                    None,
                 );
                 (first, group)
             })
@@ -297,8 +276,7 @@ impl Pyramid {
         Self {
             size,
             levels,
-            all: texture.create_view(&Default::default()),
-            level_zero: level_views[0].clone(),
+            buffer,
             params,
             written: None,
             reductions,
@@ -309,13 +287,13 @@ impl Pyramid {
     /// Each dispatch's params for `region` and `block`: the seed's, then
     /// each reduction's with the levels it writes.
     fn write_params(&mut self, gpu: &Gpu, region: PixelRect, block: u32) {
-        let dispatches = std::iter::once(1).chain(
+        let dispatches = std::iter::once((0, 1)).chain(
             self.reductions
                 .iter()
-                .map(|(first, _)| (self.levels - first).min(LEVELS_PER_REDUCTION)),
+                .map(|(first, _)| (*first, (self.levels - first).min(LEVELS_PER_REDUCTION))),
         );
         let mut params = Vec::new();
-        for levels in dispatches {
+        for (first, levels) in dispatches {
             let start = params.len();
             for value in [
                 region.x,
@@ -324,6 +302,7 @@ impl Pyramid {
                 region.height,
                 block,
                 levels,
+                first,
             ] {
                 params.extend_from_slice(&value.to_le_bytes());
             }
@@ -334,15 +313,39 @@ impl Pyramid {
     }
 }
 
-/// A dispatch's group: its params at `offset`, what it reads at `input`'s
-/// binding, and the levels it writes from `out0` on.
+/// A test's binding of the pyramid (`Hiz` in hiz_common.wgsl), read-only.
+pub(crate) fn pyramid_entry(binding: u32) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only: true },
+            has_dynamic_offset: false,
+            min_binding_size: wgpu::BufferSize::new(MIN_PYRAMID_BYTES),
+        },
+        count: None,
+    }
+}
+
+/// Bound in place of a pyramid where a test has none; it never reads it.
+pub(crate) fn no_pyramid(device: &wgpu::Device, label: &str) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: MIN_PYRAMID_BYTES,
+        usage: wgpu::BufferUsages::STORAGE,
+        mapped_at_creation: false,
+    })
+}
+
+/// A dispatch's group: its params at `offset`, the pyramid, and for the
+/// seed the depth it reads at its binding.
 fn pyramid_group(
     gpu: &Gpu,
     layout: &wgpu::BindGroupLayout,
     params: &wgpu::Buffer,
     offset: u64,
-    input: (u32, &wgpu::TextureView),
-    written: &[&wgpu::TextureView],
+    pyramid: &wgpu::Buffer,
+    depth: Option<(u32, &wgpu::TextureView)>,
 ) -> wgpu::BindGroup {
     let mut entries = vec![
         wgpu::BindGroupEntry {
@@ -354,19 +357,16 @@ fn pyramid_group(
             }),
         },
         wgpu::BindGroupEntry {
-            binding: input.0,
-            resource: wgpu::BindingResource::TextureView(input.1),
+            binding: 2,
+            resource: pyramid.as_entire_binding(),
         },
     ];
-    entries.extend(
-        written
-            .iter()
-            .zip(6..)
-            .map(|(view, binding)| wgpu::BindGroupEntry {
-                binding,
-                resource: wgpu::BindingResource::TextureView(view),
-            }),
-    );
+    if let Some((binding, view)) = depth {
+        entries.push(wgpu::BindGroupEntry {
+            binding,
+            resource: wgpu::BindingResource::TextureView(view),
+        });
+    }
     gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("render-wgpu occlusion pyramid"),
         layout,
@@ -400,9 +400,9 @@ impl Occlusion {
                     },
                     count: None,
                 };
-                // The params, what the dispatch reads, and the levels it
-                // writes.
-                let layout = |label, input, written: u32| {
+                // The params, the pyramid, and for the seed the depth it
+                // reads.
+                let layout = |label, depth: Option<wgpu::BindGroupLayoutEntry>| {
                     let mut entries = vec![
                         wgpu::BindGroupLayoutEntry {
                             binding: 0,
@@ -414,18 +414,18 @@ impl Occlusion {
                             },
                             count: None,
                         },
-                        input,
-                    ];
-                    entries.extend((6..6 + written).map(|binding| wgpu::BindGroupLayoutEntry {
-                        binding,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::StorageTexture {
-                            access: wgpu::StorageTextureAccess::WriteOnly,
-                            format: PYRAMID_FORMAT,
-                            view_dimension: wgpu::TextureViewDimension::D2,
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 2,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: wgpu::BufferSize::new(MIN_PYRAMID_BYTES),
+                            },
+                            count: None,
                         },
-                        count: None,
-                    }));
+                    ];
+                    entries.extend(depth);
                     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                         label: Some(label),
                         entries: &entries,
@@ -433,23 +433,13 @@ impl Occlusion {
                 };
                 let seed_layout = layout(
                     "render-wgpu occlusion seed",
-                    texture(1, wgpu::TextureSampleType::Depth, false),
-                    1,
+                    Some(texture(1, wgpu::TextureSampleType::Depth, false)),
                 );
                 let seed_samples_layout = layout(
                     "render-wgpu occlusion seed",
-                    texture(5, wgpu::TextureSampleType::Depth, true),
-                    1,
+                    Some(texture(5, wgpu::TextureSampleType::Depth, true)),
                 );
-                let reduce_layout = layout(
-                    "render-wgpu occlusion reduce",
-                    texture(
-                        3,
-                        wgpu::TextureSampleType::Float { filterable: false },
-                        false,
-                    ),
-                    LEVELS_PER_REDUCTION,
-                );
+                let reduce_layout = layout("render-wgpu occlusion reduce", None);
                 let pipeline = |layout: &wgpu::BindGroupLayout, entry| {
                     let pipeline_layout =
                         device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -804,6 +794,23 @@ mod tests {
             .collect()
     }
 
+    /// `buffer`'s bytes.
+    fn read_buffer(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<u8> {
+        let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: buffer.size(),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(buffer, 0, &readback, 0, None);
+        gpu.queue.submit([encoder.finish()]);
+        readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let mapped = readback.slice(..).get_mapped_range().expect("mapped");
+        mapped.to_vec()
+    }
+
     /// The pyramid as `hiz.wgsl` describes it, from `depth` (`width` wide).
     fn reference(
         depth: &[f32],
@@ -910,15 +917,14 @@ mod tests {
             gpu.queue.submit([encoder.finish()]);
             let expected = reference(&values, size.0, region, block, (built[0], built[1]));
             assert_eq!(levels as usize, expected.len());
-            let texture = pyramid
-                .pyramid
-                .as_ref()
-                .expect("built")
-                .all
-                .texture()
-                .clone();
+            let buffer = &pyramid.pyramid.as_ref().expect("built").buffer;
+            let words = read_buffer(&gpu, buffer);
+            let header: &[u32] = bytemuck::cast_slice(&words[..HEADER_BYTES as usize]);
+            assert_eq!(&header[..3], &[built[0], built[1], levels]);
+            let depth: &[f32] = bytemuck::cast_slice(&words[HEADER_BYTES as usize..]);
             for (level, expected) in expected.iter().enumerate() {
-                let got = read(&gpu, &texture, level as u32, wgpu::TextureAspect::All);
+                let start = header[4 + level] as usize;
+                let got = &depth[start..start + expected.len()];
                 assert!(
                     got.iter()
                         .zip(expected)

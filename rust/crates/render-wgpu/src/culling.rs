@@ -172,7 +172,7 @@ pub(crate) struct GpuCulling {
     layout: wgpu::BindGroupLayout,
     pyramid_layout: wgpu::BindGroupLayout,
     /// The cull's group over the occlusion pyramid, made when it was.
-    pyramid_group: Option<(wgpu::TextureView, wgpu::BindGroup)>,
+    pyramid_group: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     params: wgpu::Buffer,
     /// Every part slot's world bounds.
     pub bounds: wgpu::Buffer,
@@ -292,16 +292,7 @@ impl GpuCulling {
         });
         let pyramid_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("render-wgpu gpu cull occluders"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            entries: &[crate::occlusion::pyramid_entry(0)],
         });
         let mut refused = gpu.compute_refusal([WORKGROUP, 1, 1], 0);
         if refused.is_none()
@@ -757,7 +748,7 @@ impl GpuCulling {
                     layout: &self.pyramid_layout,
                     entries: &[wgpu::BindGroupEntry {
                         binding: 0,
-                        resource: wgpu::BindingResource::TextureView(occluders.pyramid),
+                        resource: occluders.pyramid.as_entire_binding(),
                     }],
                 });
                 self.pyramid_group = Some((occluders.pyramid.clone(), group));

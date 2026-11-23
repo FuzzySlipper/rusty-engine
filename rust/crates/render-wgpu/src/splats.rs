@@ -93,6 +93,9 @@ const PROJECTED_BYTES: u64 = 48;
 /// test never reads a finer level, and a coarser first level is a sixteenth
 /// of the pyramid to write.
 const OCCLUSION_BLOCK: u32 = 4;
+/// The storage buffers a projection binds, its occlusion pyramid among them
+/// (`gpu.rs` asks the device for them).
+const PROJECT_STORAGE_BUFFERS: u32 = 9;
 /// Bytes of one projected card (`splat_cards.wgsl` `ProjectedCard`).
 const PROJECTED_CARD_BYTES: u64 = 96;
 /// One dynamic uniform slot of the parameters buffer (`splats.wgsl`
@@ -719,7 +722,7 @@ pub(crate) struct Splats {
     pyramid: crate::occlusion::DepthPyramid,
     pyramid_timer: Option<PassTimer>,
     /// The projection's group over the pyramid, made when it was.
-    occluded: Option<(wgpu::TextureView, wgpu::BindGroup)>,
+    occluded: Option<(wgpu::Buffer, wgpu::BindGroup)>,
     unoccluded: Option<wgpu::BindGroup>,
     tally: Tally,
     timed: bool,
@@ -747,27 +750,23 @@ impl Splats {
                             "the adapter cannot draw from GPU-written indirect arguments".to_owned()
                         })
                     })
+                    .or_else(|| {
+                        (device.limits().max_storage_buffers_per_shader_stage
+                            < PROJECT_STORAGE_BUFFERS)
+                            .then(|| {
+                                format!(
+                                    "the device binds fewer than {PROJECT_STORAGE_BUFFERS} storage buffers to a compute stage"
+                                )
+                            })
+                    })
             });
         let pipelines = refusal
             .is_none()
             .then(|| Pipelines::new(device, module, light_module, cards_module, frame_layout));
         // An empty pyramid for projections that are not tested.
         let unoccluded = pipelines.as_ref().map(|pipelines| {
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some("render-wgpu splats unoccluded"),
-                size: wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R32Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            });
-            occlusion_group(device, pipelines, &texture.create_view(&Default::default()))
+            let empty = crate::occlusion::no_pyramid(device, "render-wgpu splats unoccluded");
+            occlusion_group(device, pipelines, &empty)
         });
         Self {
             pipelines,
@@ -2574,16 +2573,7 @@ impl Pipelines {
         };
         let occlusion_layout = layout(
             "render-wgpu splats occlusion",
-            &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: compute,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
-                },
-                count: None,
-            }],
+            &[crate::occlusion::pyramid_entry(0)],
         );
         let project_pipeline_layout = pipeline_layout(
             "render-wgpu splats project",
@@ -2819,14 +2809,14 @@ fn atlas_view(gpu: &Gpu, label: &str, image: &crate::resources::DecodedImage) ->
 fn occlusion_group(
     device: &wgpu::Device,
     pipelines: &Pipelines,
-    pyramid: &wgpu::TextureView,
+    pyramid: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("render-wgpu splats occlusion"),
         layout: &pipelines.occlusion_layout,
         entries: &[wgpu::BindGroupEntry {
             binding: 0,
-            resource: wgpu::BindingResource::TextureView(pyramid),
+            resource: pyramid.as_entire_binding(),
         }],
     })
 }

@@ -58,8 +58,8 @@ const STATS: usize = 9;
 const ROW_CHUNKS: u32 = 65_535;
 /// The lists a copy may enter: the camera's levels, then the shadows'.
 const LISTS: u32 = 8;
-/// The storage buffers the busiest kernel binds.
-const STORAGE_BUFFERS: u32 = 6;
+/// The storage buffers the busiest kernel binds, the pyramid among them.
+const STORAGE_BUFFERS: u32 = 7;
 /// The most parts an entry can name (20 bits).
 const MAX_PART: u32 = 1 << 20;
 
@@ -193,7 +193,7 @@ pub(crate) struct ScatterSelect {
     stats: wgpu::Buffer,
     stats_readback: wgpu::Buffer,
     /// Bound in place of a view's occluder pyramid when it has none.
-    no_occluders: wgpu::TextureView,
+    no_occluders: wgpu::Buffer,
     pending_stats: Option<Receiver<Result<(), wgpu::BufferAsyncError>>>,
     timer: Option<PassTimer>,
     /// The draws, in order (by features, mesh and material).
@@ -245,11 +245,7 @@ impl ScatterSelect {
                             has_dynamic_offset: false,
                             min_binding_size: None,
                         },
-                        Binding::Pyramid => wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
+                        Binding::Pyramid => crate::occlusion::pyramid_entry(binding).ty,
                     },
                     count: None,
                 })
@@ -347,22 +343,10 @@ impl ScatterSelect {
                 wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             ),
             pending_stats: None,
-            no_occluders: device
-                .create_texture(&wgpu::TextureDescriptor {
-                    label: Some("render-wgpu scatter select no occluders"),
-                    size: wgpu::Extent3d {
-                        width: 1,
-                        height: 1,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::R32Float,
-                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                    view_formats: &[],
-                })
-                .create_view(&Default::default()),
+            no_occluders: crate::occlusion::no_pyramid(
+                device,
+                "render-wgpu scatter select no occluders",
+            ),
             timer: PassTimer::new(
                 gpu,
                 if layer == ViewLayer::Backdrop {
@@ -860,7 +844,7 @@ impl ScatterSelect {
             6 => self.args.as_entire_binding(),
             7 => instances.as_entire_binding(),
             8 => self.stats.as_entire_binding(),
-            9 => wgpu::BindingResource::TextureView(pyramid),
+            9 => pyramid.as_entire_binding(),
             10 => wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                 buffer: &self.scratch,
                 offset: 0,
