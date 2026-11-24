@@ -254,16 +254,20 @@ pub fn import_animated_glb(source: &[u8]) -> Result<ImportedAnimatedModel, crate
     import::import_animated_glb(
         &crate::import::parse_glb(source)?,
         crate::source_sha256(source),
+        true,
     )
 }
 
 /// [`import_animated_glb`] for a caller that already parsed the source and
-/// computed its [`crate::source_sha256`].
+/// computed its [`crate::source_sha256`]. Without `clips_required`, a
+/// skinned model with no clips of its own imports with none: its bind pose
+/// is all a visual resource measures, and a clip pack drives it.
 pub(crate) fn import_parsed_animated_glb(
     parsed: &crate::ParsedGltf<'_>,
     source_sha256: String,
+    clips_required: bool,
 ) -> Result<ImportedAnimatedModel, crate::ConversionError> {
-    import::import_animated_glb(parsed, source_sha256)
+    import::import_animated_glb(parsed, source_sha256, clips_required)
 }
 
 pub fn sample_animation_clip(

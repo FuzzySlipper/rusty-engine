@@ -19,9 +19,10 @@ pub(super) fn import_clips(
     document: &gltf::Document,
     blob: &[u8],
     nodes: &[ImportedAnimationNode],
+    required: bool,
 ) -> Result<Vec<ImportedAnimationClip>, ConversionError> {
     let clip_count = document.animations().count();
-    if clip_count == 0 {
+    if clip_count == 0 && required {
         return Err(ConversionError::one(
             "conversion.invalidAnimation",
             "source.animations",

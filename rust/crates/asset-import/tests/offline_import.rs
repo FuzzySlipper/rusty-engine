@@ -812,6 +812,81 @@ fn zero_clip_unlit_glb_uses_the_existing_mesh_resource_lifecycle() {
     assert_eq!(imported.receipt.primitive_count, 1);
 }
 
+/// `source` with its `animations` removed from the JSON chunk: a skinned
+/// mesh with no clips of its own (#11009). Buffers and nodes are untouched.
+fn without_clips(source: &[u8]) -> Vec<u8> {
+    let json_length = u32::from_le_bytes(source[12..16].try_into().unwrap()) as usize;
+    let mut root: serde_json::Value =
+        serde_json::from_slice(&source[20..20 + json_length]).unwrap();
+    root.as_object_mut().unwrap().remove("animations");
+    let mut json = serde_json::to_vec(&root).unwrap();
+    json.resize(json.len().next_multiple_of(4), b' ');
+    let binary = &source[20 + json_length..];
+    let mut glb = Vec::with_capacity(20 + json.len() + binary.len());
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&((20 + json.len() + binary.len()) as u32).to_le_bytes());
+    glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json);
+    glb.extend_from_slice(binary);
+    glb
+}
+
+/// A skinned triangle mesh without clips of its own admits, measured as an
+/// animated mesh in its bind pose, with the rig its skin names: the same
+/// joints the GLB with its clips names, so a clip pack binds to it by joint
+/// names. Static mesh import still refuses a skin, and converting an animated
+/// object still needs clips (#11009).
+#[test]
+fn a_skinned_mesh_without_clips_admits_with_the_rig_its_skin_names() {
+    let uri = SourceUri::RelativePath("content/actors/character-medium-clipless.glb".to_owned());
+    let clipless = without_clips(ANIMATED_GLB);
+    let admitted = import_animated_glb_asset(&uri, &clipless, &ImportContext::default());
+    let imported = admitted
+        .assets
+        .unwrap_or_else(|| panic!("admitted: {:?}", admitted.diagnostics));
+    assert_eq!(imported.receipt.animation_kind, GlbAnimationKind::Static);
+    assert_eq!(imported.receipt.clip_count, 0);
+    assert!(imported.receipt.skin_count > 0);
+    let descriptor = &imported.animated_mesh;
+    descriptor.validate().unwrap();
+    assert!(descriptor.clips.is_empty());
+    assert_eq!(descriptor.default_clip, None);
+    let rig = descriptor.rig.as_ref().expect("its skin names a rig");
+    assert!(rig.designated_motion_root_ids.is_empty(), "held in place");
+
+    // The same skin with its clips names the same joints, in the same
+    // hierarchy: a clip pack made from it binds by joint names.
+    let clipped = import_animated_glb_asset(&uri, ANIMATED_GLB, &ImportContext::default())
+        .assets
+        .unwrap();
+    let ids = |rig: &render_model::AnimationRigSignature| {
+        rig.joints
+            .iter()
+            .map(|joint| (joint.id.clone(), joint.parent.clone()))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(rig), ids(clipped.animated_mesh.rig.as_ref().unwrap()));
+    assert_eq!(descriptor.bounds, clipped.animated_mesh.bounds);
+
+    // Only the visual resource may lack clips.
+    let static_mesh = import_mesh_source(&MeshSourceImportRequest {
+        source_asset_id: "mesh/clipless".to_owned(),
+        asset_version: 1,
+        source_path: uri.value().to_owned(),
+        format: MeshSourceFormat::Glb,
+        source_bytes: clipless.as_slice().into(),
+        expected_source_sha256: None,
+        mesh_primitive: None,
+    });
+    assert!(static_mesh.is_err(), "static mesh import refuses a skin");
+    assert!(
+        voxel_convert::import_animated_glb(&clipless).is_err(),
+        "an animated object to convert needs clips"
+    );
+}
+
 #[test]
 fn gltf_closure_converges_with_glb_for_static_and_animated_sources() {
     let static_glb = static_triangle_glb();

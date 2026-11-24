@@ -18,6 +18,7 @@ mod clip;
 pub(super) fn import_animated_glb(
     parsed: &crate::ParsedGltf<'_>,
     source_sha256: String,
+    clips_required: bool,
 ) -> Result<ImportedAnimatedModel, ConversionError> {
     let scene = import_animated_glb_scene(parsed)?;
     let blob = parsed
@@ -29,7 +30,7 @@ pub(super) fn import_animated_glb(
     let nodes = import_nodes(&parsed.document, &scene, &mesh_morph_target_counts)?;
     let skins = import_skins(&parsed.document, blob, &scene, &nodes)?;
     validate_skin_bindings(&scene, &nodes, &skins, &primitive_deformations)?;
-    let clips = clip::import_clips(&parsed.document, blob, &nodes)?;
+    let clips = clip::import_clips(&parsed.document, blob, &nodes, clips_required)?;
 
     Ok(ImportedAnimatedModel {
         source_sha256,

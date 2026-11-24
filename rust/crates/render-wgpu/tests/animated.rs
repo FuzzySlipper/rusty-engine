@@ -790,6 +790,115 @@ fn a_skinned_character_and_its_held_weapon_cast_shadows_that_follow_the_pose() {
     );
 }
 
+/// `source` with its `animations` removed from the JSON chunk: a skinned
+/// mesh with no clips of its own. Buffers and nodes are untouched.
+fn without_clips(source: &[u8]) -> Vec<u8> {
+    let json_length = u32::from_le_bytes(source[12..16].try_into().unwrap()) as usize;
+    let mut root: serde_json::Value =
+        serde_json::from_slice(&source[20..20 + json_length]).unwrap();
+    root.as_object_mut().unwrap().remove("animations");
+    let mut json = serde_json::to_vec(&root).unwrap();
+    json.resize(json.len().next_multiple_of(4), b' ');
+    let binary = &source[20 + json_length..];
+    let mut glb = Vec::with_capacity(20 + json.len() + binary.len());
+    glb.extend_from_slice(b"glTF");
+    glb.extend_from_slice(&2u32.to_le_bytes());
+    glb.extend_from_slice(&((20 + json.len() + binary.len()) as u32).to_le_bytes());
+    glb.extend_from_slice(&(json.len() as u32).to_le_bytes());
+    glb.extend_from_slice(b"JSON");
+    glb.extend_from_slice(&json);
+    glb.extend_from_slice(binary);
+    glb
+}
+
+/// A skinned mesh without clips of its own is driven by a clip pack
+/// (#11009): the joint attachment body with its clips stripped, given the
+/// body's GLB as a clip pack bound by joint names, draws each sampled pose of
+/// `run` as the body playing its own clip draws it.
+#[test]
+fn a_skinned_mesh_without_clips_plays_a_clip_pack_as_its_own_clips() {
+    const PATH: &str = "csharp-joint-attachments/content/body.glb";
+    let render = |clipless: bool, normalized_time: f32| -> Vec<u8> {
+        let mut harness = Harness::new(RendererOptions::default());
+        let mut body = admit(&mut harness, PATH);
+        if clipless {
+            let pack = body.clone();
+            let bytes = without_clips(&fixture(PATH));
+            let imported = import_animated_glb_asset(
+                &SourceUri::RelativePath("body-clipless.glb".to_owned()),
+                &bytes,
+                &ImportContext::default(),
+            );
+            body = imported
+                .assets
+                .unwrap_or_else(|| panic!("admitted: {:?}", imported.diagnostics))
+                .animated_mesh;
+            assert!(body.clips.is_empty());
+            let hash = body.content_hash.clone().expect("content hash");
+            harness.resources.insert(
+                &format!(
+                    "animated-mesh-resource/{}",
+                    hash.trim_start_matches("sha256:")
+                ),
+                bytes,
+            );
+            let pack_hash = pack.content_hash.clone().expect("content hash");
+            harness.resources.insert(
+                &format!(
+                    "clip-pack-resource/{}",
+                    pack_hash.trim_start_matches("sha256:")
+                ),
+                fixture(PATH),
+            );
+            body.clip_packs.push(AnimationClipPack {
+                asset: format!(
+                    "animation-clip-pack/{}",
+                    pack_hash.trim_start_matches("sha256:")
+                ),
+                runtime_format: pack.runtime_format,
+                content_hash: pack_hash.clone(),
+                rig: pack.rig.clone().expect("the body names its rig"),
+                clips: pack.clips.clone(),
+                provenance: AnimationClipPackProvenance {
+                    producer: "fixture".to_owned(),
+                    source_hash: pack_hash,
+                    target_hash: hash,
+                    license: "CC0".to_owned(),
+                },
+                binding: AnimationClipPackBinding::JointNames,
+                translation_fits: Vec::new(),
+            });
+        }
+        harness.apply(vec![
+            RenderDiff::DefineAnimatedMesh {
+                asset: body.clone(),
+            },
+            animated(
+                BODY,
+                None,
+                &body,
+                Transform::IDENTITY,
+                Some(sample("run", normalized_time)),
+            ),
+        ]);
+        harness.render(&character_view()).1
+    };
+    for normalized_time in [0.2, 0.6] {
+        assert_eq!(
+            differing_pixels(
+                &render(true, normalized_time),
+                &render(false, normalized_time)
+            ),
+            0,
+            "at {normalized_time} the clipless body draws as the body playing its own clip"
+        );
+    }
+    assert!(
+        differing_pixels(&render(true, 0.2), &render(true, 0.6)) > 500,
+        "the clip pack moves it"
+    );
+}
+
 /// The admitted rig's joint index of `name` (joints sorted by id).
 fn rig_joint(asset: &AnimatedMeshAsset, name: &str) -> u32 {
     asset

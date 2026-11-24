@@ -292,9 +292,13 @@ fn import_glb(
                 return failed(diagnostics);
             }
         }
-    } else if parsed.document.animations().next().is_some() {
+    } else if parsed.document.animations().next().is_some() || skinned_meshes(parsed) {
         // A GLB with a skeleton and clips but no geometry is a clip pack: it
         // has no bind-pose mesh to measure, no materials and empty bounds.
+        // A skinned mesh without clips of its own is measured as an animated
+        // one and named by its rig, as a skinned splat GLB is, so a clip pack
+        // can drive it.
+        let clipless = parsed.document.animations().next().is_none();
         let skeleton_only = parsed.document.meshes().next().is_none();
         let conversion_failed = |error: voxel_convert::ConversionError| {
             error
@@ -375,7 +379,12 @@ fn import_glb(
             .flat_map(|clip| &clip.channels)
             .map(|channel| channel.timestamps_microseconds.len() as u64)
             .sum::<u64>();
-        let rig = match derive_animation_rig_signature(&model, &json_document) {
+        let rig = if clipless {
+            derive_clipless_rig_signature(&json_document, parsed)
+        } else {
+            derive_animation_rig_signature(&model, &json_document)
+        };
+        let rig = match rig {
             Ok(Some(rig)) => Some(rig),
             Ok(None) if skeleton_only => {
                 diagnostics.push(ImportDiagnostic::error(
@@ -411,7 +420,12 @@ fn import_glb(
             }
         };
         (
-            GlbAnimationKind::Animated,
+            // `Static` is a GLB without clips of its own.
+            if clipless {
+                GlbAnimationKind::Static
+            } else {
+                GlbAnimationKind::Animated
+            },
             source_bounds,
             source_material_slots,
             clips,
@@ -422,7 +436,8 @@ fn import_glb(
     } else {
         // `voxel-convert` retains separate static and animated source parsers.
         // This uses the existing bounded static scene parser only to validate
-        // and measure a zero-clip GLB; publication remains the same GLB mesh
+        // and measure a zero-clip GLB without skinned meshes; publication
+        // remains the same GLB mesh
         // descriptor/resource lifecycle below.
         let static_request = MeshSourceImportRequest {
             source_asset_id: format!("mesh/{source_hash_hex}"),
@@ -541,6 +556,14 @@ fn import_glb(
         }),
         diagnostics,
     }
+}
+
+/// Whether a node of the GLB draws a mesh through a skin.
+fn skinned_meshes(parsed: &ParsedGltf<'_>) -> bool {
+    parsed
+        .document
+        .nodes()
+        .any(|node| node.mesh().is_some() && node.skin().is_some())
 }
 
 /// Derives the exact renderer compatibility signature from the already

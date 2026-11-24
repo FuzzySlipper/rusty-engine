@@ -180,8 +180,7 @@ triangle mesh, his scaffold, the mesh his splats were fitted to. Two versions:
 - **10k triangles:** the scaffold decimated to a usual game character's budget,
   textured with his colour bake. It is on the splat body's own 22 Mixamo joints
   (nodes, skin and inverse binds as `381.glb`), walking the same clip as the
-  splat bodies. Admitting it needs a clip of its own until #11009, so the timed
-  copy carries a two-keyframe rest clip it never plays.
+  splat bodies, with no clips of its own.
 - **45.7k triangles:** the whole scaffold, untextured, on its own 36-joint rig
   and walk clip.
 

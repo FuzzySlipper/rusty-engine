@@ -241,7 +241,13 @@ fn import_animated_mesh_source_with(
                     &owned
                 }
             };
-            crate::animation::import_parsed_animated_glb(parsed, source_hash.clone())?
+            // A visual resource may have no clips of its own (a clip pack
+            // drives it); converting an animated object needs them.
+            crate::animation::import_parsed_animated_glb(
+                parsed,
+                source_hash.clone(),
+                !visual_metadata,
+            )?
         }
     };
     let bind_request = AnimationBindPoseRequest {

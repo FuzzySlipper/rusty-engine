@@ -125,6 +125,10 @@ skeleton with the same joint names and rest rotations but other bone
 lengths, or wrapped in nodes of its own, binds by joint names instead
 ([splat characters](splat-characters.md#posing)).
 
+The character itself needs no clips of its own. A skinned mesh without
+clips opens as any GLB does, named by its skin's joints and held in place
+until a pack's clip plays on it.
+
 ```csharp
 RenderResource body = engine.Animation.OpenAnimatedMeshFromContent(new(bodySource));
 RenderResource pack = engine.Animation.OpenAnimationClipPackFromContent(new(packSource));
