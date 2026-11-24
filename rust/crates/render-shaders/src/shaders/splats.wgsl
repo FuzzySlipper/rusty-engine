@@ -26,7 +26,7 @@
 // reactive mask.
 
 #import rusty::splat_layer::{layer, surface_layer, grid, srgb_to_linear, linear_to_srgb, block_sums, snapped}
-#import rusty::splat_common::{project, project_keys, project_values, draw_args, palettes, skins, surfaces, CULLED, ALPHA_MIN, rotation_matrix, half_float, blended_rows, moved, cull, octahedral, group_tint, keep, hidden}
+#import rusty::splat_common::{project, project_keys, project_values, draw_args, palettes, skin_of, surface_of, CULLED, ALPHA_MIN, rotation_matrix, half_float, blended_rows, moved, cull, octahedral, group_tint, keep, hidden}
 
 // One Gaussian of a splat resource, two words of four:
 // [0] centre xyz (f32 bits), colour (r, g, b, opacity as unorm8, r lowest);
@@ -134,7 +134,7 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     // Where it stood in the previous frame, in the previous instance space.
     var previous_centre = centre;
     if project.skin.y == 1u {
-        let skin = skins[index];
+        let skin = skin_of(index);
         let rows = blended_rows(project.skin.x, skin);
         if rows[3].w > 0.0 {
             let rest = centre;
@@ -158,7 +158,7 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     // A lit run draws the albedo where the set has one, at the colour's
     // opacity.
     if project.range.w == 1u {
-        color = vec4<f32>(unpack4x8unorm(surfaces[index].y).rgb, color.a);
+        color = vec4<f32>(unpack4x8unorm(surface_of(index).y).rgb, color.a);
     }
     // A tinted group's Gaussians move toward its target, in display space as
     // the colour is baked, at its weight.
@@ -256,7 +256,7 @@ fn cs_project(@builtin(global_invocation_id) id: vec3<u32>) {
     // A lit run's normal, turned as the Gaussian is, in view space.
     var normal = vec2<f32>(0.0);
     if project.depth.w > 0.5 {
-        normal = normalize(to_view * (turn * octahedral(surfaces[index].x))).xy;
+        normal = normalize(to_view * (turn * octahedral(surface_of(index).x))).xy;
     }
     projected[slot] = Projected(ndc, pack4x8unorm(color), vec4<f32>(axis1, axis2), vec4<f32>(motion, normal));
 

@@ -17,7 +17,7 @@
 // colour is: the layer blends it as it is and only the composite decodes it.
 
 #import rusty::splat_layer::{srgb_to_linear, linear_to_srgb}
-#import rusty::splat_common::{project, draw_args, skins, surfaces, ALPHA_MIN, rotation_matrix, half_float, blended_rows, moved, cull, octahedral, group_tint, keep, hidden}
+#import rusty::splat_common::{project, draw_args, skin_of, surface_of, ALPHA_MIN, rotation_matrix, half_float, blended_rows, moved, cull, octahedral, group_tint, keep, hidden}
 
 // One card of a card resource, two words of four:
 // [0] centre xyz (f32 bits), its tile's top-left texel (x, y as u16, x
@@ -80,7 +80,7 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
     // What carries its normal: the blend, when skinned.
     var carried = mat3x3<f32>(vec3<f32>(1.0, 0.0, 0.0), vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(0.0, 0.0, 1.0));
     if project.skin.y == 1u {
-        let skin = skins[index];
+        let skin = skin_of(index);
         let rows = blended_rows(project.skin.x, skin);
         if rows[3].w > 0.0 {
             let rest = centre;
@@ -146,7 +146,7 @@ fn cs_project_card(@builtin(global_invocation_id) id: vec3<u32>) {
             project.model_view[1].xyz,
             project.model_view[2].xyz,
         );
-        normal = normalize(to_view * (carried * octahedral(surfaces[index].x))).xy;
+        normal = normalize(to_view * (carried * octahedral(surface_of(index).x))).xy;
     }
     projected[slot] = ProjectedCard(
         clip,

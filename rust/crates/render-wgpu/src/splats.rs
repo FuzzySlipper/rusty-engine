@@ -81,9 +81,9 @@ use crate::Gpu;
 
 /// Bytes of one resident Gaussian (`splats.wgsl` `Gaussian`).
 const GAUSSIAN_BYTES: u64 = 32;
-/// Bytes of one Gaussian's skin (`splats.wgsl` `skins`): four joints and
-/// four weights, a byte each.
-const SKIN_BYTES: u64 = 8;
+/// Bytes of one splat's streams (`splat_common.wgsl` `streams`): its skin
+/// (four joints and four weights, a byte each) and its surface.
+const STREAM_BYTES: u64 = 16;
 /// The most joints a skinned set's Gaussians index: a joint is one byte.
 pub(crate) const MAX_SKIN_JOINTS: usize = 256;
 /// Bytes of one projected Gaussian (`splats.wgsl` `Projected`).
@@ -93,9 +93,6 @@ const PROJECTED_BYTES: u64 = 48;
 /// test never reads a finer level, and a coarser first level is a sixteenth
 /// of the pyramid to write.
 const OCCLUSION_BLOCK: u32 = 4;
-/// The storage buffers a projection binds, its occlusion pyramid among them
-/// (`gpu.rs` asks the device for them).
-const PROJECT_STORAGE_BUFFERS: u32 = 9;
 /// Bytes of one projected card (`splat_cards.wgsl` `ProjectedCard`).
 const PROJECTED_CARD_BYTES: u64 = 96;
 /// One dynamic uniform slot of the parameters buffer (`splats.wgsl`
@@ -750,15 +747,6 @@ impl Splats {
                             "the adapter cannot draw from GPU-written indirect arguments".to_owned()
                         })
                     })
-                    .or_else(|| {
-                        (device.limits().max_storage_buffers_per_shader_stage
-                            < PROJECT_STORAGE_BUFFERS)
-                            .then(|| {
-                                format!(
-                                    "the device binds fewer than {PROJECT_STORAGE_BUFFERS} storage buffers to a compute stage"
-                                )
-                            })
-                    })
             });
         let pipelines = refusal
             .is_none()
@@ -835,10 +823,12 @@ impl Splats {
             )
         };
         let gaussians = storage(&words, GAUSSIAN_BYTES as usize);
-        let surfaces = storage(&surface_words(splats), 8);
-        let skin_buffer = storage(
-            skin.as_ref().map_or(&[][..], |(words, _)| words.as_slice()),
-            SKIN_BYTES as usize,
+        let streams = storage(
+            &stream_words(
+                skin.as_ref().map(|(words, _)| words.as_slice()),
+                &surface_words(splats),
+            ),
+            STREAM_BYTES as usize,
         );
         let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
@@ -850,11 +840,7 @@ impl Splats {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: skin_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: surfaces.as_entire_binding(),
+                    resource: streams.as_entire_binding(),
                 },
             ],
         });
@@ -2466,11 +2452,7 @@ impl Pipelines {
         );
         let gaussian_layout = layout(
             "render-wgpu splat gaussians",
-            &[
-                storage(0, true, compute),
-                storage(1, true, compute),
-                storage(2, true, compute),
-            ],
+            &[storage(0, true, compute), storage(1, true, compute)],
         );
         let sort_layout = layout(
             "render-wgpu splats sort",
@@ -3029,7 +3011,7 @@ fn splat_reach(splats: &GlbSplats, index: usize) -> f32 {
     }
 }
 
-/// A skinned primitive's skin words (`splats.wgsl` `skins`) and each
+/// A skinned primitive's skin words (`splat_common.wgsl` `skin_of`) and each
 /// joint's bounds in bind space, or `None` for an unskinned one or one
 /// indexing more than [`MAX_SKIN_JOINTS`] joints (drawn in bind space).
 fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<JointReach>)> {
@@ -3073,12 +3055,26 @@ fn skin_words(splats: &GlbSplats) -> Option<(Vec<u32>, Vec<JointReach>)> {
     Some((words, bounds))
 }
 
-/// Each Gaussian's surface stream (`splats.wgsl` `surfaces`): its normal
-/// (`normal_words`), which a lit run reads, then its albedo as sRGB unorm8
-/// rgb (`_ALBEDO`, 0 without one), which a lit run reads, and its group
-/// (`_GROUP`, 0 without one) in the top byte, which a tinted instance
-/// reads. One stream of two words keeps the projection within a stage's
-/// eight storage buffers.
+/// Each splat's skin (two words, zero without one) and surface (two words)
+/// interleaved, four words a splat (`splat_common.wgsl` `streams`): one
+/// binding keeps the projection within a stage's eight storage buffers,
+/// its occlusion pyramid among them.
+fn stream_words(skin: Option<&[u32]>, surface: &[u32]) -> Vec<u32> {
+    let splats = surface.len() / 2;
+    let mut words = Vec::with_capacity(splats * 4);
+    for index in 0..splats {
+        let skin = skin.map_or([0, 0], |skin| [skin[2 * index], skin[2 * index + 1]]);
+        words.extend_from_slice(&skin);
+        words.extend_from_slice(&surface[2 * index..2 * index + 2]);
+    }
+    words
+}
+
+/// Each Gaussian's surface words (`splat_common.wgsl` `surface_of`): its
+/// normal (`normal_words`), which a lit run reads, then its albedo as sRGB
+/// unorm8 rgb (`_ALBEDO`, 0 without one), which a lit run reads, and its
+/// group (`_GROUP`, 0 without one) in the top byte, which a tinted instance
+/// reads.
 fn surface_words(splats: &GlbSplats) -> Vec<u32> {
     // A card reads its normal and its group.
     if splats.cards.is_some() {

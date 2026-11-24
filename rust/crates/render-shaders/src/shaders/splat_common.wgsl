@@ -68,19 +68,28 @@ const ALPHA_MIN: f32 = 1.0 / 255.0;
 // Three rows a joint: a skinned set's joint matrices (instance space, scale
 // removed, after the inverse binds).
 @group(0) @binding(5) var<storage, read> palettes: array<vec4<f32>>;
-// A splat's skin: four joints (a byte each, lowest first) and their four
-// weights (unorm8).
-@group(1) @binding(1) var<storage, read> skins: array<vec2<u32>>;
+// Each splat's streams, in one binding so the projection keeps within a
+// stage's eight storage buffers: xy its skin, zw its surface (`skin_of`,
+// `surface_of`).
+@group(1) @binding(1) var<storage, read> streams: array<vec4<u32>>;
 // The view's depth after its opaque pass, reduced to a farthest-depth
 // pyramid (render-wgpu `occlusion.rs` `DepthPyramid`).
 @group(2) @binding(0) var<storage, read> hiz: Hiz;
+
+// A splat's skin: four joints (a byte each, lowest first) and their four
+// weights (unorm8); zero in a set without one.
+fn skin_of(index: u32) -> vec2<u32> {
+    return streams[index].xy;
+}
 
 // What a lit run reads of a Gaussian: x its unit normal in the set's
 // space, octahedral (snorm16 pair); y its albedo (`_ALBEDO`), sRGB unorm8
 // rgb, its colour without baked shading, and in its top byte its group
 // (`_GROUP`, 0 for none), which a tinted instance reads. A card reads only
 // its group.
-@group(1) @binding(2) var<storage, read> surfaces: array<vec2<u32>>;
+fn surface_of(index: u32) -> vec2<u32> {
+    return streams[index].zw;
+}
 
 fn rotation_matrix(q: vec4<f32>) -> mat3x3<f32> {
     let x = q.x;
@@ -154,7 +163,7 @@ fn group_tint(index: u32) -> vec4<f32> {
     if project.groups.z == 0u {
         return vec4<f32>(0.0);
     }
-    let group = surfaces[index].y >> 24u;
+    let group = surface_of(index).y >> 24u;
     for (var tinted = 0u; group != 0u && tinted < project.groups.z; tinted = tinted + 1u) {
         if ((project.groups[tinted / 4u] >> (8u * (tinted % 4u))) & 0xffu) == group {
             return project.group_tints[tinted];
