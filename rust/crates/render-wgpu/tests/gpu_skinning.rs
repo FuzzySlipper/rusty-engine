@@ -14,6 +14,23 @@ use render_model::*;
 use render_wgpu::{Gpu, OverlayShown, RendererOptions};
 use support::*;
 
+/// The binary's one device, with ray queries, and a turn on it: every test
+/// takes the turn, so one test draws at a time. The Vulkan loader before
+/// 1.4.345 reads freed memory when a thread names an object (as a debug
+/// build does every object) while another thread makes or destroys a device
+/// (KhronosGroup/Vulkan-Loader#1863, #11065), so no test makes or drops a
+/// device of its own; and tests sharing a ray-query device at once hang on
+/// RADV (`ray_gi.rs`).
+fn device() -> (std::sync::MutexGuard<'static, ()>, Gpu) {
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static GPU: std::sync::OnceLock<Gpu> = std::sync::OnceLock::new();
+    let turn = TURN
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let gpu = GPU.get_or_init(|| Gpu::headless_with_ray_queries().expect("a device"));
+    (turn, gpu.clone())
+}
+
 const BODY: u64 = 1;
 const WEAPON: u64 = 2;
 const RUNNER: u64 = 3;
@@ -241,8 +258,9 @@ fn skinned_on_the_gpu(harnesses: &[Harness; 2]) {
 
 #[test]
 fn a_character_skinned_on_the_gpu_draws_as_one_skinned_on_the_cpu() {
+    let (_turn, gpu) = device();
     let mut harnesses = pair(
-        &gpu(),
+        &gpu,
         RendererOptions {
             default_world_lights: false,
             ..RendererOptions::default()
@@ -260,8 +278,9 @@ fn a_character_skinned_on_the_gpu_draws_as_one_skinned_on_the_cpu() {
 
 #[test]
 fn shadows_cast_by_a_character_skinned_on_the_gpu_fall_as_the_cpus_do() {
+    let (_turn, gpu) = device();
     let mut harnesses = pair(
-        &gpu(),
+        &gpu,
         RendererOptions {
             default_world_lights: false,
             shadows: true,
@@ -278,7 +297,7 @@ fn shadows_cast_by_a_character_skinned_on_the_gpu_fall_as_the_cpus_do() {
 
 #[test]
 fn traced_shadows_of_a_character_skinned_on_the_gpu_fall_as_the_cpus_do() {
-    let gpu = Gpu::headless_with_ray_queries().expect("a device");
+    let (_turn, gpu) = device();
     let mut harnesses = pair(
         &gpu,
         RendererOptions {
@@ -311,7 +330,8 @@ fn traced_shadows_of_a_character_skinned_on_the_gpu_fall_as_the_cpus_do() {
 
 #[test]
 fn the_motion_of_a_character_skinned_on_the_gpu_is_the_cpus() {
-    let mut harnesses = pair(&gpu(), RendererOptions::default());
+    let (_turn, gpu) = device();
+    let mut harnesses = pair(&gpu, RendererOptions::default());
     for harness in &mut harnesses {
         harness.renderer.set_overlay_shown(OverlayShown {
             motion: true,
@@ -335,8 +355,9 @@ fn the_motion_of_a_character_skinned_on_the_gpu_is_the_cpus() {
 #[test]
 fn an_output_capture_of_a_character_skinned_on_the_gpu_is_the_cpus() {
     use render_host_contracts::{RenderOutputJob, RenderOutputOperation};
+    let (_turn, gpu) = device();
     let harnesses = pair(
-        &gpu(),
+        &gpu,
         RendererOptions {
             default_world_lights: false,
             ..RendererOptions::default()

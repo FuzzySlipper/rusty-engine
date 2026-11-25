@@ -314,7 +314,9 @@ fn a_fresh_renderer_seeded_with_the_evolved_cells_shows_the_same_wake() {
 
 #[test]
 fn a_rebaseline_keeps_the_regions_cells() {
-    let gpu = render_wgpu::Gpu::headless().expect("a headless adapter");
+    // The binary's one device (`support::gpu`): a device made beside
+    // tests that draw can crash the Vulkan loader (#11065).
+    let gpu = gpu();
     let driver = SceneDriver::new(gpu.clone(), options());
     if driver.settings_readout().volumetric_fog.is_some() {
         return;
