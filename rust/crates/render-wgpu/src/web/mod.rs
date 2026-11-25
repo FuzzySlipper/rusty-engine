@@ -1056,7 +1056,7 @@ mod tests {
         // A red block at the top-left; the rest of the page is transparent.
         const PAGE: &str = "data:text/html,<body style='margin:0'>\
             <div style='width:64px;height:32px;background:rgb(255,0,0)'></div>";
-        let gpu = Gpu::headless().expect("a GPU");
+        let (_turn, gpu) = crate::gpu::test_device::shared();
         let runtime = WebRuntime::initialize(
             WebRuntimeConfig {
                 engine: WebEngine::Servo {

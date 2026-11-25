@@ -641,3 +641,39 @@ pub(crate) fn buffer_init(
     }
     buffer
 }
+
+/// The lib tests' one device, never dropped, and their turns on it.
+///
+/// The Vulkan loader before 1.4.345, which Ubuntu 26.04 ships, reads freed
+/// memory when a thread names an object (as a debug build names every one)
+/// while another thread makes or destroys a device
+/// (KhronosGroup/Vulkan-Loader#1863, #11065, #11066). So no lib test makes a
+/// device of its own: each takes this one, which has ray queries where the
+/// adapter has them. A test that traces rays takes it [`alone`]: tests
+/// tracing beside others on one device hang on RADV (`tests/ray_gi.rs`).
+#[cfg(test)]
+pub(crate) mod test_device {
+    use std::sync::{OnceLock, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+
+    use super::Gpu;
+
+    static GPU: OnceLock<Gpu> = OnceLock::new();
+    static TURN: RwLock<()> = RwLock::new(());
+
+    fn gpu() -> Gpu {
+        GPU.get_or_init(|| Gpu::headless_with_ray_queries().expect("a wgpu adapter"))
+            .clone()
+    }
+
+    /// The device, beside the other tests that share it.
+    pub(crate) fn shared() -> (RwLockReadGuard<'static, ()>, Gpu) {
+        let turn = TURN.read().unwrap_or_else(PoisonError::into_inner);
+        (turn, gpu())
+    }
+
+    /// The device, with no other test on it: for a test that traces rays.
+    pub(crate) fn alone() -> (RwLockWriteGuard<'static, ()>, Gpu) {
+        let turn = TURN.write().unwrap_or_else(PoisonError::into_inner);
+        (turn, gpu())
+    }
+}

@@ -870,7 +870,7 @@ mod tests {
     /// blocks of one pixel and four, with one sample a pixel and four.
     #[test]
     fn each_level_is_the_farthest_depth_under_it() {
-        let gpu = Gpu::headless().expect("a headless device");
+        let (_turn, gpu) = crate::gpu::test_device::shared();
         let shader = Shaders::new()
             .module(&gpu.device, Entry::Hiz, Features::default())
             .expect("hiz.wgsl");

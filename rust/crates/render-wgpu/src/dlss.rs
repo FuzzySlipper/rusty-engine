@@ -1165,7 +1165,7 @@ mod tests {
     #[test]
     fn a_ray_reconstruction_frame_refused_as_it_runs_draws_the_world_scaled() {
         const SIZE: (u32, u32) = (128, 72);
-        let gpu = Gpu::headless_with_ray_queries().expect("a wgpu adapter");
+        let (_turn, gpu) = crate::gpu::test_device::alone();
         if gpu.is_software() {
             return;
         }
@@ -1230,7 +1230,7 @@ mod tests {
     /// refuses DLSS from then on.
     #[test]
     fn a_dlss_frame_refused_as_it_runs_reports_the_taau_that_drew() {
-        let gpu = Gpu::headless().expect("a wgpu adapter");
+        let (_turn, gpu) = crate::gpu::test_device::shared();
         if gpu.is_software() {
             return;
         }

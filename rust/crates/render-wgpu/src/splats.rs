@@ -3467,7 +3467,7 @@ mod tests {
     /// draw counts the visible.
     #[test]
     fn a_run_sorts_back_to_front_as_a_stable_cpu_sort_does() {
-        let gpu = Gpu::headless().expect("a wgpu adapter");
+        let (_turn, gpu) = crate::gpu::test_device::shared();
         let device = &gpu.device;
         let mut shaders = crate::shaders::Shaders::new();
         let module = crate::pipelines::standard(shaders.module(

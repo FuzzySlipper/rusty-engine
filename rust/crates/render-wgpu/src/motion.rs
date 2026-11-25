@@ -863,7 +863,7 @@ mod tests {
     /// view's previous camera, and the resets.
     #[test]
     fn frames_jitter_through_their_phases_and_reset_when_their_history_breaks() {
-        let gpu = Gpu::headless().expect("a wgpu adapter");
+        let (_turn, gpu) = crate::gpu::test_device::shared();
         let parts = Parts::default();
         let mut temporal = Temporal::new(&gpu);
         let options = RendererOptions::default();
@@ -948,7 +948,7 @@ mod tests {
         };
         use render_model::*;
 
-        let gpu = Gpu::headless().expect("a wgpu adapter");
+        let (_turn, gpu) = crate::gpu::test_device::shared();
         let mut renderer = crate::Renderer::new(&gpu, RendererOptions::default());
         let mut world = render_presentation::PresentationWorld::default();
         let magenta = [1.0, 0.0, 1.0, 1.0];
